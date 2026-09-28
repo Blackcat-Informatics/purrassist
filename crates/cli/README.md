@@ -13,7 +13,7 @@ purrassist mcp --root /path/to/workspace
 
 `call TOOL --root DIRECTORY` accepts a JSON argument object on stdin. Tools
 include `decode_json`, `match_strings`, `match_embeddings`, `plan_replacement`, `plan_diff`,
-`inspect_code`, `render_markdown`, `inspect_markdown`, `plan_markdown_table_cell`,
+`inspect_code`, `render_markdown`, `inspect_markdown`, `plan_markdown_table_cell`, `plan_markdown_table_row`,
 `read_file`, `apply_file`, and `undo_file`. Planning tools return
 source-bound proposals with explicit uncertainty; they do not write files.
 
@@ -25,6 +25,9 @@ array replaces dialect defaults. GFM tag filtering is not a general sanitizer.
 `plan_markdown_table_cell` accepts `source`, a nested table `path`, zero-based
 `row`/`column`, and replacement inline `markdown`. Row zero is the header.
 The proposal preserves surrounding bytes and is reparsed before it is returned.
+`plan_markdown_table_row` uses a table `path`, `action` (`insert` or `remove`),
+and zero-based body `index`. Insertion supplies `cells` matching the header width;
+an index equal to the row count appends. The header and delimiter are not body rows.
 
 Pre-release implementation. See the
 [repository](https://github.com/Blackcat-Informatics/purrassist) for current

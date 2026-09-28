@@ -27,6 +27,57 @@ fn offset(node: &Node) -> usize {
     number.to_usize().unwrap()
 }
 #[test]
+fn table_row_tool_has_validation_and_exact_undo() {
+    let root =
+        std::env::temp_dir().join(format!("purrassist-table-row-tool-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let tools = Tools::new(&root).unwrap();
+    let source = "> | A |\r\n> | --- |\r\n> | tea |\r\n";
+    let result = call(
+        &tools,
+        "plan_markdown_table_row",
+        source,
+        r#"{"path":[0,0],"action":"insert","index":1,"cells":["café"]}"#,
+    );
+    assert_eq!(apply(&result, source), format!("{source}> | café |\r\n"));
+    assert_eq!(
+        result
+            .pointer("/receipt/validations/0/validator")
+            .unwrap()
+            .as_str(),
+        Some("markdown.table-structure.v1")
+    );
+    let removed = call(
+        &tools,
+        "plan_markdown_table_row",
+        source,
+        r#"{"path":[0,0],"action":"remove","index":0}"#,
+    );
+    assert_eq!(apply(&removed, source), "> | A |\r\n> | --- |\r\n");
+    for invalid in [
+        r#"{"source":"x","path":[0],"action":"insert","index":0}"#,
+        r#"{"source":"x","path":[0],"action":"remove","index":0,"cells":["a"]}"#,
+    ] {
+        assert!(
+            tools
+                .call("plan_markdown_table_row", &json::parse(invalid).unwrap())
+                .is_err()
+        );
+    }
+    let rejected = call(
+        &tools,
+        "plan_markdown_table_row",
+        source,
+        r#"{"path":[0,0],"action":"insert","index":0,"cells":["a|b"]}"#,
+    );
+    assert_eq!(rejected.get("status").unwrap().as_str(), Some("unresolved"));
+    assert_eq!(
+        rejected.pointer("/receipt/validations").unwrap().to_json(),
+        "[]"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+#[test]
 fn nested_table_cell_tool_preserves_source_and_validates_structure() {
     let root = std::env::temp_dir().join(format!("purrassist-table-tool-{}", std::process::id()));
     std::fs::create_dir(&root).unwrap();

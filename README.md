@@ -137,6 +137,13 @@ These operations take exact `source` and optional `effort`, retain admitted sour
 return receipts. Edit plans in `value` bind to the source digest and do not write
 files. Block indices come from inspection of the same source version.
 Markdown editing operations retain the original source and support exact undo.
+`plan_markdown_table_row` inserts or removes body rows. Supply a table `path`,
+`action` (`insert` or `remove`), and zero-based body `index`; insertion also requires
+`cells` with exactly the header width. Inserting at the row count appends.
+New rows use canonical `| cell |` spacing, the delimiter line's container prefix
+and newline style, and preserve EOF's final-newline convention. Existing bytes
+outside the edit remain exact. Cell and row plans include structural validation
+in their receipts. Header/delimiter removal and column edits are separate work.
 The Rust `markdown::InlineFragment` layer retains exact byte spans and renders
 code spans, emphasis, strong emphasis, inline links/images, escapes, line breaks,
 autolinks, and raw inline HTML. Explicit dialect selection preserves the pinned

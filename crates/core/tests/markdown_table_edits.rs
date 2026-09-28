@@ -74,12 +74,12 @@ fn cell_edits_preserve_nested_prefixes_margins_and_undo() {
             Outcome::Unresolved
         );
         let updated = Document::parse(&applied.text, &mut g).unwrap();
-        assert!(
+        assert_eq!(
             updated
                 .replace_table_cell(&path, row, column, replacement, &mut g)
                 .unwrap()
-                .edits
-                .is_empty()
+                .edits,
+            []
         );
     }
 }

@@ -169,12 +169,30 @@ container prefixes, and line endings. It reparses proposals and compares the
 complete selected table against the expected single-cell change. Focused tests
 cover CRLF, Unicode, escaped pipes, empty cells, header edits, nested quotes/lists,
 exact undo, stale sources, invalid selection, cancellation, and work exhaustion.
-Implicit padded cells, extra cells beyond header width, and row/column insertion
+Implicit padded cells, extra cells beyond header width, and column insertion
 or removal require further structural operations.
 The full local Rust 1.98.0 `make check` gate passed, including the official
 Markdown corpora and CLI/MCP equivalence for this operation. The optimized CLI
 executed `examples/markdown-table-cell.json` and returned the expected single-cell
 proposal.
+
+Table body-row insertion/removal now uses nested paths and explicit body indices.
+Insertion requires the header width, inherits container prefixes and line endings,
+and preserves EOF's final-newline convention. Proposals are reparsed and compared
+with the expected table. Both cell and row tools emit structural validation
+receipts. Focused tests cover nested lists/quotes, LF/CRLF/CR, unterminated EOF,
+empty tables/cells, escaped pipes, header preservation, exact undo/stale rejection,
+invalid row/cell selection, cancellation, and storage exhaustion.
+Hosted CI for cell checkpoint `e54dce71692e5b2c132287fc2168e7f8fe303258` failed
+nightly Clippy's empty-collection assertion lint. The assertion is corrected in
+this row checkpoint; a new hosted run must establish the final result.
+The final row source passed the complete local Rust 1.98.0 `make check` gate and
+workspace/all-target Clippy on nightly-2026-09-14. This includes the new row tests,
+CLI/MCP equivalence, official Markdown corpora, and Rustdoc. The rebuilt CLI
+executed `examples/markdown-table-row.json` and returned the expected inserted row
+and structural-validation receipt. An earlier local attempt invoked a stale CLI
+artifact after the host Cargo wrapper republished it; the final gate rebuilt the
+CLI and passed with explicit toolchain binaries.
 
 ## Remaining release work
 

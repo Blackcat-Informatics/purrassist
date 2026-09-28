@@ -60,6 +60,12 @@ const DEFINITIONS: &[Definition] = &[
         writes: false,
     },
     Definition {
+        name: "plan_markdown_table_row",
+        description: "Plan insertion or removal of a GFM body row by nested table path and zero-based body index",
+        schema: r#"{"type":"object","required":["source","path","action","index"],"oneOf":[{"properties":{"action":{"const":"insert"}},"required":["cells"]},{"properties":{"action":{"const":"remove"}},"not":{"required":["cells"]}}],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"path":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"integer","minimum":0}},"action":{"enum":["insert","remove"]},"index":{"type":"integer","minimum":0},"cells":{"type":"array","minItems":1,"items":{"type":"string"}}},"additionalProperties":false}"#,
+        writes: false,
+    },
+    Definition {
         name: "plan_markdown_table_cell",
         description: "Plan a source-preserving GFM cell edit by nested block path; row zero is the header",
         schema: r#"{"type":"object","required":["source","path","row","column","markdown"],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"path":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"integer","minimum":0}},"row":{"type":"integer","minimum":0},"column":{"type":"integer","minimum":0},"markdown":{"type":"string"}},"additionalProperties":false}"#,
@@ -199,6 +205,7 @@ impl Tools {
             | "markdown_context"
             | "plan_markdown_section"
             | "plan_markdown_table_cell"
+            | "plan_markdown_table_row"
             | "plan_markdown_task" => markdown::call(name, args),
             "plan_replacement" => {
                 let max_edits = match args.get("max_edits").map(|node| &node.value) {

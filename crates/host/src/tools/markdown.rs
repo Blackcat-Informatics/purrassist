@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Source-preserving Markdown operations shared by CLI and MCP.
 mod render;
+mod table;
 use purrassist::{
     AssistResult, Governor, Outcome, Receipt, StopReason,
     contract::Resource,
@@ -28,6 +29,9 @@ pub(super) fn call(name: &str, args: &Node) -> Result<Node, String> {
             size(source.len()).saturating_mul(4).saturating_add(1),
         )?;
         let value = operation(name, args, &document, &mut governor)?;
+        if matches!(name, "plan_markdown_table_cell" | "plan_markdown_table_row") {
+            table::record(&document, &mut receipt, &mut governor)?;
+        }
         if name == "render_markdown" {
             governor.charge(Resource::EvidenceEntries, 1)?;
             governor.charge(Resource::ScratchBytes, 512)?;
@@ -106,6 +110,7 @@ fn operation(
             super::field(args, "markdown").map_err(StopReason::InvalidInput)?,
             governor,
         )?)),
+        "plan_markdown_table_row" => table::row(args, document, governor),
         "plan_markdown_task" => {
             let Some(Value::Bool(checked)) = args.get("checked").map(|node| &node.value) else {
                 return Err(StopReason::InvalidInput("checked must be boolean".into()));
