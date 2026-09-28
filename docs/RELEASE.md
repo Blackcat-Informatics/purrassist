@@ -15,7 +15,9 @@ runs in `make check` and `make package`.
 On `rust-vVERSION` tags, the release-qualification workflow checks the tag
 against the workspace, runs the full local gate on stable Rust 1.98.0, packages
 all five crates with Cargo verification enabled, and audits the archives and
-license notices. It does **not** publish, attest, or create a GitHub release.
+license notices. Packaging uses a commit-scoped Cargo home so a previously
+packaged crate at the same version cannot satisfy a later crate's verification.
+It does **not** publish, attest, or create a GitHub release.
 The former SLSA template produced provenance for placeholder text files; it
 was removed because those files were unrelated to the crates.
 

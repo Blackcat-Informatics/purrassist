@@ -33,8 +33,7 @@ syntax-oracles:
 
 package:
 	python3 scripts/check-release.py
-	cargo package --workspace --locked
-	python3 scripts/check-packages.py
+	python3 scripts/package-workspace.py
 
 resources:
 	python3 scripts/test-resource-report.py
