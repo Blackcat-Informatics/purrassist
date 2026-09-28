@@ -75,6 +75,7 @@ fn render(
             destination,
             title,
             children,
+            ..
         } => {
             output.push_str("<a href=\"");
             escape(&angle::uri(destination), output);
@@ -88,6 +89,7 @@ fn render(
             destination,
             title,
             children,
+            ..
         } => {
             output.push_str("<img src=\"");
             escape(&angle::uri(destination), output);

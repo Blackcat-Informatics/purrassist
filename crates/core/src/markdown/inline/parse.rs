@@ -5,7 +5,11 @@ use super::{Inline, InlineKind, angle, emphasis, entities, links, normalize_line
 use crate::{Governor, StopReason, contract::Resource};
 use std::collections::BTreeMap;
 
-pub(super) fn run(source: &str, governor: &mut Governor) -> Result<Vec<Inline>, StopReason> {
+pub(super) fn run(
+    source: &str,
+    references: &super::References,
+    governor: &mut Governor,
+) -> Result<Vec<Inline>, StopReason> {
     let ticks = backticks(source, governor)?;
     let mut tokens = Vec::new();
     let mut cursor = 0;
@@ -14,7 +18,14 @@ pub(super) fn run(source: &str, governor: &mut Governor) -> Result<Vec<Inline>, 
     while cursor < source.len() {
         governor.charge(Resource::Work, 1)?;
         if source.as_bytes()[cursor] == b']'
-            && let Some(end) = links::close(source, cursor, &mut tokens, &mut brackets, governor)?
+            && let Some(end) = links::close(
+                source,
+                cursor,
+                &mut tokens,
+                &mut brackets,
+                references,
+                governor,
+            )?
         {
             cursor = end;
             previous_marker = false;

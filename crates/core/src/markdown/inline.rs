@@ -7,8 +7,10 @@ mod entities;
 mod entity_data;
 mod links;
 mod parse;
+mod references;
 mod render;
 use crate::{Governor, StopReason, contract::Resource, digest::Digest};
+pub use references::{ReferenceDefinition, ReferenceOrigin, References};
 use std::ops::Range;
 
 /// Markdown dialect for parsing and HTML-output conventions.
@@ -53,12 +55,14 @@ pub enum InlineKind {
         /// Nested content with ranges in the original fragment.
         children: Vec<Inline>,
     },
-    /// An inline link; references are resolved by a later document-level phase.
+    /// An inline or reference link.
     Link {
         /// Decoded destination before URI serialization.
         destination: String,
         /// Optional decoded title.
         title: Option<String>,
+        /// Definition source for a reference link; absent for an inline link.
+        reference: Option<ReferenceOrigin>,
         /// Link label with ranges in the original fragment.
         children: Vec<Inline>,
     },
@@ -68,6 +72,8 @@ pub enum InlineKind {
         destination: String,
         /// Optional decoded title.
         title: Option<String>,
+        /// Definition source for a reference image; absent for an inline image.
+        reference: Option<ReferenceOrigin>,
         /// Alternative-label content with original fragment ranges.
         children: Vec<Inline>,
     },
@@ -81,7 +87,7 @@ pub enum InlineKind {
 /// Exact inline source and a contiguous token index.
 ///
 /// Recognizes code spans, escapes, breaks, autolinks, raw HTML, emphasis, and
-/// inline links/images. Reference links remain to be implemented; their syntax remains literal.
+/// inline links/images. Reference links use an explicit definition collection.
 /// Named and numeric character references are decoded after syntax recognition. This is not a complete renderer.
 #[derive(Clone, Debug)]
 pub struct InlineFragment {
@@ -127,6 +133,30 @@ impl InlineFragment {
         dialect: Dialect,
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
+        Self::parse_with_references(source, dialect, &References::default(), governor)
+    }
+    /// Parse an inline fragment using document-ordered reference definitions.
+    ///
+    /// Full, collapsed, and shortcut references resolve only against supplied
+    /// definitions. The original fragment and definition origin remain available.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, markdown::{Dialect, InlineFragment, References}};
+    /// let mut g = Governor::new(Budget::default());
+    /// let refs = References::parse_blocks(&["[tea]: /tea\n"], &mut g)?;
+    /// let text = InlineFragment::parse_with_references("[Tea]", Dialect::CommonMark, &refs, &mut g)?;
+    /// assert_eq!(text.render_html(&mut g)?, "<a href=\"/tea\">Tea</a>");
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns explicit resource exhaustion or cancellation, without a partial tree.
+    pub fn parse_with_references(
+        source: &str,
+        dialect: Dialect,
+        references: &References,
+        governor: &mut Governor,
+    ) -> Result<Self, StopReason> {
         governor.charge(Resource::InputBytes, super::size(source.len()))?;
         governor.charge(Resource::Work, super::size(source.len()).saturating_mul(4))?;
         governor.charge(
@@ -138,7 +168,7 @@ impl InlineFragment {
         Ok(Self {
             source: source.into(),
             digest: Digest::of(source.as_bytes()),
-            tokens: parse::run(source, governor)?,
+            tokens: parse::run(source, references, governor)?,
             dialect,
         })
     }

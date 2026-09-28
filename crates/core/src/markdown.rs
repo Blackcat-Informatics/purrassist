@@ -8,7 +8,9 @@ mod context;
 mod html;
 mod inline;
 pub use context::Context;
-pub use inline::{Dialect, Inline, InlineFragment, InlineKind};
+pub use inline::{
+    Dialect, Inline, InlineFragment, InlineKind, ReferenceDefinition, ReferenceOrigin, References,
+};
 
 use crate::{
     Governor, StopReason,

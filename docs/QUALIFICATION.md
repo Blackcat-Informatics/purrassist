@@ -38,8 +38,8 @@ guess reporting, and exhaustion before a complete ledger can be returned.
 Local package verification has built all five packages. A local release CLI was
 installed into a disposable checkout cache and exercised on the published example
 inputs, including exact-source retention. This does not verify downloadable registry
-packages. Hosted CI passed for checkpoint `ddb6277e97bfc96f457835e7ae2732874d54cf8c`:
-[run 36401791324](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36401791324)
+packages. Hosted CI passed for checkpoint `fa30c00eefdbc97a96ae15af54635c2e0a717c8f`:
+[run 36402629184](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36402629184)
 completed the Linux/macOS local gates, MSRV workspace tests, Windows core/syntax
 tests, and native/WASI comparisons. This is evidence for that checkpoint only;
 subsequent changes need their own qualification.
@@ -96,19 +96,30 @@ Additional regressions check CRLF/Unicode source spans, selected nested edits an
 exact undo, backslash hard breaks, NUL replacement in autolinks, cancellation,
 storage/depth exhaustion, and bounded lookahead. This increment passed the full
 local Rust 1.98.0 gate, including optimized workspace tests and Rustdoc.
-The emphasis/link checkpoint passed hosted CI, including nightly analysis, as
-recorded above. This is not full inline or document conformance: reference links,
-GFM extensions, and complete document rendering remain open.
+The entity checkpoint passed hosted CI, including nightly analysis, as
+recorded above. This is not full inline or document conformance: GFM extensions
+and complete document rendering remain open.
 
 Named/numeric entity decoding passes all 2,125 semicolon-terminated WHATWG names,
 24 official inline-only entity examples, and numeric digit-limit/scalar tests.
 The tests use the retained upstream JSON independently of the generated lookup.
 Additional cases cover escaped ampersands, single-pass decoding, syntax
 non-reinterpretation, titles/destinations, and preservation in code/HTML/autolinks.
-Document-level entity cases in reference definitions, fences, and lists await the
+Document-level entity cases in fences and lists await the
 complete block renderer. Data, generated output, and upstream notices are pinned
 and checked; generation uses no network. The full local Rust 1.98.0 gate passed
 for this increment, including optimized workspace tests and Rustdoc.
+
+Reference-aware parsing passes all 221 link/image examples from both corpora and
+45 paragraph-level definition examples, comparing exact HTML. The harness supplies
+paragraph blocks explicitly; the remaining definition cases require code blocks,
+headings, or blockquotes and do not yet qualify full-document behavior. Regressions
+cover duplicate-first precedence, Unicode case folding and whitespace, 999-character
+labels, escape/entity distinction, exact source retention and winning-definition
+provenance, cancellation, and work exhaustion. Definitions retain every occurrence,
+including shadowed duplicates, and links/images retain the selected source digest
+and definition range. The full local Rust 1.98.0 gate passed, including optimized
+workspace tests and Rustdoc. Automatic container-aware collection remains open.
 
 ## Remaining release work
 
