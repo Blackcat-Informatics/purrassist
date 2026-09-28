@@ -75,7 +75,11 @@ Exhaustion is explicit and never proves that a schema is unsatisfiable.
 the same operation used by MCP. `match_paths` takes a `query`, caller-supplied `paths`,
 optional directory `context`, effort, and score/margin thresholds. It returns
 `resolved`, `best_guess`, `ambiguous`, or `unresolved` with methods and a receipt.
-It matches names only; choosing a path does not grant file access. File tools reject stale versions and record
+It matches names only; choosing a path does not grant file access. `resolve_intent`
+takes `input`, an explicit `domain` (identity, phrase rules, ignored words), and
+`concepts` (identities, labels, attribute maps). It applies the declared rules,
+retains the request, and returns concept interpretations with evidence. Unknown
+words are errors; effort bounds work without changing domain meanings. File tools reject stale versions and record
 transaction identities for undo. The portable filesystem layer coordinates
 cooperating writers; it is not a sandbox against malicious directory replacement
 or an atomic multi-file transaction.

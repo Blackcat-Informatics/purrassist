@@ -100,3 +100,21 @@ fn scaled_cosine_handles_extreme_values_and_rejects_invalid_vectors() {
     assert!(cosine_similarity(&[0.0], &[1.0], &mut governor).is_err());
     assert!(cosine_similarity(&[1.0], &[1.0, 2.0], &mut governor).is_err());
 }
+
+#[test]
+fn shared_governor_retains_source_and_preserves_cancellation() {
+    let (domain, concepts) = drinks();
+    let mut governor = Governor::new(Budget::default());
+    let result = domain.resolve_governed("hot tea", &concepts, &mut governor);
+    assert!(matches!(result.outcome, Outcome::Resolved(_)));
+    assert_eq!(result.receipt.sources[0].text, "hot tea");
+    assert_eq!(result.receipt.usage, governor.usage());
+    governor.cancel();
+    let result = domain.resolve_governed("hot tea", &concepts, &mut governor);
+    assert_eq!(result.outcome, Outcome::Unresolved);
+    assert_eq!(
+        result.receipt.stopped,
+        purrassist_core::StopReason::Cancelled
+    );
+    assert_eq!(result.receipt.sources, Vec::new());
+}

@@ -38,8 +38,8 @@ guess reporting, and exhaustion before a complete ledger can be returned.
 Local package verification has built all five packages. A local release CLI was
 installed into a disposable checkout cache and exercised on the published example
 inputs, including exact-source retention. This does not verify downloadable registry
-packages. Hosted CI passed for checkpoint `6788ccb9e9e03697c0ee7ce7be701026e1fea15c`:
-[run 36394052901](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36394052901)
+packages. Hosted CI passed for checkpoint `093d333f88179c0466908ba18900eb64193777dc`:
+[run 36394839933](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36394839933)
 completed the Linux/macOS local gates, MSRV workspace tests, Windows core/syntax
 tests, and native/WASI comparisons. This is evidence for that checkpoint only;
 subsequent changes need their own qualification.
@@ -76,9 +76,10 @@ passed for this checkpoint, including nightly analysis, as recorded above.
   schema compilation, and helper preparation. Bound external parser allocations;
   progress cancellation alone is not a hard memory limit.
 - Extend alternative-specific ledgers beyond JSON recovery and finish uniform
-  Rust/CLI/MCP access to semantic and document operations. Path resolution now uses
-  the shared tool dispatcher, including epistemic status and one governor across
-  index admission and resolution.
+  Rust/CLI/MCP access to document operations and embedding similarity. Domain-rule
+  intent resolution and path resolution now use the shared tool dispatcher,
+  including epistemic status and one governor across domain/index admission
+  and resolution.
 - Expand independent oracle and adversarial corpora, coverage-guided fuzzing,
   memory/allocation measurements, build/artifact metrics, and representative
   incorrect-correction evaluation beyond the small baseline.

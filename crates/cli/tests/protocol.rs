@@ -33,6 +33,7 @@ fn stdio_lifecycle_and_recovery_use_real_tool_operations() {
         "{\"jsonrpc\":\"2.0\",\"id\":7,\"id\":8,\"method\":\"ping\"}\n",
         "{\"jsonrpc\":\"2.0\",\"id\":9.5,\"method\":\"ping\"}\n",
         "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{\"name\":\"match_paths\",\"arguments\":{\"query\":\"raeder.rs\",\"context\":\"src\",\"paths\":[\"src/reader.rs\",\"tests/reader.rs\"]}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/call\",\"params\":{\"name\":\"resolve_intent\",\"arguments\":{\"input\":\"hot tea cooled\",\"domain\":{\"id\":\"drinks.v1\",\"rules\":[{\"id\":\"hot\",\"phrase\":\"hot\",\"assignments\":{\"temperature\":\"hot\"}},{\"id\":\"tea\",\"phrase\":\"tea\",\"assignments\":{\"drink\":\"tea\"}},{\"id\":\"cooled\",\"phrase\":\"cooled\",\"assignments\":{\"temperature\":\"cold\"}}]},\"concepts\":[{\"id\":\"iced-tea\",\"label\":\"cup of iced tea\",\"attributes\":{\"drink\":\"tea\",\"temperature\":\"cold\"}}]}}}\n",
     );
     child
         .stdin
@@ -53,7 +54,7 @@ fn stdio_lifecycle_and_recovery_use_real_tool_operations() {
         .collect();
     assert_eq!(
         messages.len(),
-        10,
+        11,
         "MCP responses: {messages:?}; binary {}",
         env!("CARGO_BIN_EXE_purrassist")
     );
@@ -126,5 +127,17 @@ fn assert_tool_responses(messages: &[Node]) {
             .pointer("/result/structuredContent/value/path")
             .and_then(Node::as_str),
         Some("src/reader.rs")
+    );
+    assert_eq!(
+        messages[10]
+            .pointer("/result/structuredContent/status")
+            .and_then(Node::as_str),
+        Some("resolved")
+    );
+    assert_eq!(
+        messages[10]
+            .pointer("/result/structuredContent/value/concept/id")
+            .and_then(Node::as_str),
+        Some("iced-tea")
     );
 }

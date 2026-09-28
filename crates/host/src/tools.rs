@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Shared Rust, CLI, and MCP operations with schema-validated arguments.
+mod intent;
 mod paths;
 
 use crate::files::Store;
@@ -42,6 +43,12 @@ const DEFINITIONS: &[Definition] = &[
         name: "match_paths",
         description: "Resolve caller-supplied relative paths with context, explicit ambiguity, and guess receipts; never opens or authorizes a matched path",
         schema: r#"{"type":"object","required":["query","paths"],"properties":{"query":{"type":"string"},"paths":{"type":"array","items":{"type":"string"}},"context":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"minimum_score":{"type":"integer","minimum":0,"maximum":10000},"minimum_margin":{"type":"integer","minimum":0,"maximum":20000}},"additionalProperties":false}"#,
+        writes: false,
+    },
+    Definition {
+        name: "resolve_intent",
+        description: "Resolve explicit semantic domain rules against caller concepts; unknown words fail, conflicting interpretations remain ambiguous, and no model is contacted",
+        schema: r#"{"type":"object","required":["input","domain","concepts"],"properties":{"input":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"domain":{"type":"object","required":["id","rules"],"properties":{"id":{"type":"string"},"rules":{"type":"array","items":{"type":"object","required":["id","phrase","assignments"],"properties":{"id":{"type":"string"},"phrase":{"type":"string"},"assignments":{"type":"object","additionalProperties":{"type":"string"}}},"additionalProperties":false}},"ignored_words":{"type":"array","items":{"type":"string"}}},"additionalProperties":false},"concepts":{"type":"array","items":{"type":"object","required":["id","label","attributes"],"properties":{"id":{"type":"string"},"label":{"type":"string"},"attributes":{"type":"object","additionalProperties":{"type":"string"}}},"additionalProperties":false}}},"additionalProperties":false}"#,
         writes: false,
     },
     Definition {
@@ -141,6 +148,7 @@ impl Tools {
             "decode_json" => decode(args),
             "match_strings" => rank(args),
             "match_paths" => paths::resolve(args),
+            "resolve_intent" => intent::resolve(args),
             "plan_replacement" => {
                 let max_edits = match args.get("max_edits").map(|node| &node.value) {
                     Some(Value::Number(number)) => {

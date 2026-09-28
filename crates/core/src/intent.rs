@@ -65,14 +65,36 @@ impl Domain {
         concepts: &[Concept],
         budget: Budget,
     ) -> AssistResult<Interpretation> {
+        self.resolve_governed(query, concepts, &mut Governor::new(budget))
+    }
+    /// Resolve with a governor shared with caller-side domain preparation.
+    ///
+    /// Exact query bytes are retained after admission. Invalid vocabulary and
+    /// exhausted budgets produce `Unresolved` with an explicit receipt reason.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, Outcome, intent::Domain};
+    /// let mut governor = Governor::new(Budget::default());
+    /// let result = Domain::default().resolve_governed("unknown", &[], &mut governor);
+    /// assert_eq!(result.outcome, Outcome::Unresolved);
+    /// assert_eq!(result.receipt.sources[0].text, "unknown");
+    /// ```
+    #[must_use]
+    pub fn resolve_governed(
+        &self,
+        query: &str,
+        concepts: &[Concept],
+        governor: &mut Governor,
+    ) -> AssistResult<Interpretation> {
         let mut receipt = Receipt::new(
             query.as_bytes(),
             "intent.resolve.v1",
             Effort::Standard,
-            budget,
+            *governor.limits(),
         );
-        let mut governor = Governor::new(budget);
-        let result = self.resolve_with(query, concepts, &mut governor);
+        let result = receipt
+            .retain_source(query, governor)
+            .and_then(|()| self.resolve_with(query, concepts, governor));
         let outcome = match result {
             Ok((answers, evidence)) => {
                 receipt.evidence = evidence;
