@@ -38,8 +38,8 @@ guess reporting, and exhaustion before a complete ledger can be returned.
 Local package verification has built all five packages. A local release CLI was
 installed into a disposable checkout cache and exercised on the published example
 inputs, including exact-source retention. This does not verify downloadable registry
-packages. Hosted CI passed for checkpoint `093d333f88179c0466908ba18900eb64193777dc`:
-[run 36394839933](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36394839933)
+packages. Hosted CI passed for checkpoint `3c05c502ab4910fb97872160efb5aa3d03a67047`:
+[run 36395848426](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36395848426)
 completed the Linux/macOS local gates, MSRV workspace tests, Windows core/syntax
 tests, and native/WASI comparisons. This is evidence for that checkpoint only;
 subsequent changes need their own qualification.
@@ -63,6 +63,12 @@ The container/context/task checkpoint passed the full `make check` gate on Rust
 1.98.0, including optimized workspace tests and Rustdoc. Hosted CI subsequently
 passed for this checkpoint, including nightly analysis, as recorded above.
 
+The shared Markdown adapters passed the full local gate on Rust 1.98.0.
+Tests exercise CRLF/Unicode context, nested block encoding, section-body and
+checkbox plans, no-op edits, exact undo, stale-plan rejection, invalid selections,
+resource exhaustion, and identical CLI/MCP context results. These transport and
+editing checks do not extend the parser conformance claim.
+
 ## Remaining release work
 
 - Complete CommonMark/GFM container and inline parsing and structural editing;
@@ -76,10 +82,11 @@ passed for this checkpoint, including nightly analysis, as recorded above.
   schema compilation, and helper preparation. Bound external parser allocations;
   progress cancellation alone is not a hard memory limit.
 - Extend alternative-specific ledgers beyond JSON recovery and finish uniform
-  Rust/CLI/MCP access to document operations and embedding similarity. Domain-rule
+  Rust/CLI/MCP access to embedding similarity and remaining document operations. Domain-rule
   intent resolution and path resolution now use the shared tool dispatcher,
   including epistemic status and one governor across domain/index admission
-  and resolution.
+  and resolution. Markdown inspection, context extraction, section-body plans,
+  and root task-checkbox plans also share the tool dispatcher.
 - Expand independent oracle and adversarial corpora, coverage-guided fuzzing,
   memory/allocation measurements, build/artifact metrics, and representative
   incorrect-correction evaluation beyond the small baseline.

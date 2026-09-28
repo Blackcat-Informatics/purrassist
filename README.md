@@ -79,8 +79,18 @@ It matches names only; choosing a path does not grant file access. `resolve_inte
 takes `input`, an explicit `domain` (identity, phrase rules, ignored words), and
 `concepts` (identities, labels, attribute maps). It applies the declared rules,
 retains the request, and returns concept interpretations with evidence. Unknown
-words are errors; effort bounds work without changing domain meanings. File tools reject stale versions and record
-transaction identities for undo. The portable filesystem layer coordinates
+words are errors; effort bounds work without changing domain meanings.
+
+`inspect_markdown` returns nested blocks and root sections. `markdown_context`
+takes UTF-8 byte offsets `start`/`end` and optional neighboring-block count.
+`plan_markdown_section` replaces the body of a root `heading` block;
+`plan_markdown_task` sets a root task `block` to the supplied `checked` state.
+All four take exact `source` and optional `effort`, retain admitted source, and
+return receipts. Edit plans in `value` bind to the source digest and do not write
+files. Block indices come from inspection of the same source version. This
+Markdown editing index is not yet a conforming CommonMark/GFM renderer.
+
+File tools reject stale versions and record transaction identities for undo. The portable filesystem layer coordinates
 cooperating writers; it is not a sandbox against malicious directory replacement
 or an atomic multi-file transaction.
 

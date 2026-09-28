@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Shared Rust, CLI, and MCP operations with schema-validated arguments.
 mod intent;
+mod markdown;
 mod paths;
 
 use crate::files::Store;
@@ -27,6 +28,30 @@ struct Definition {
     writes: bool,
 }
 const DEFINITIONS: &[Definition] = &[
+    Definition {
+        name: "inspect_markdown",
+        description: "Index exact Markdown block ranges, nested containers, and sections; this is an editing index, not a conforming renderer",
+        schema: r#"{"type":"object","required":["source"],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]}},"additionalProperties":false}"#,
+        writes: false,
+    },
+    Definition {
+        name: "markdown_context",
+        description: "Extract exact block-aligned Markdown context and enclosing sections",
+        schema: r#"{"type":"object","required":["source","start","end"],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"start":{"type":"integer","minimum":0},"end":{"type":"integer","minimum":0},"neighbors":{"type":"integer","minimum":0}},"additionalProperties":false}"#,
+        writes: false,
+    },
+    Definition {
+        name: "plan_markdown_section",
+        description: "Plan replacement of a Markdown section body selected by root heading block index",
+        schema: r#"{"type":"object","required":["source","heading","body"],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"heading":{"type":"integer","minimum":0},"body":{"type":"string"}},"additionalProperties":false}"#,
+        writes: false,
+    },
+    Definition {
+        name: "plan_markdown_task",
+        description: "Plan a single checkbox-state edit selected by root task block index",
+        schema: r#"{"type":"object","required":["source","block","checked"],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"block":{"type":"integer","minimum":0},"checked":{"type":"boolean"}},"additionalProperties":false}"#,
+        writes: false,
+    },
     Definition {
         name: "decode_json",
         description: "Recover schema-valid JSON with effort bounds, ambiguity, and inference receipts",
@@ -149,6 +174,10 @@ impl Tools {
             "match_strings" => rank(args),
             "match_paths" => paths::resolve(args),
             "resolve_intent" => intent::resolve(args),
+            "inspect_markdown"
+            | "markdown_context"
+            | "plan_markdown_section"
+            | "plan_markdown_task" => markdown::call(name, args),
             "plan_replacement" => {
                 let max_edits = match args.get("max_edits").map(|node| &node.value) {
                     Some(Value::Number(number)) => {
