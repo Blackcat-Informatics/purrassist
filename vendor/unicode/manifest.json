@@ -18,5 +18,37 @@
   "confusables.txt": {
     "url": "https://www.unicode.org/Public/17.0.0/security/confusables.txt",
     "sha256": "091c7f82fc39ef208faf8f94d29c244de99254675e09de163160c810d13ef22a"
+  },
+  "Scripts.txt": {
+    "url": "https://www.unicode.org/Public/17.0.0/ucd/Scripts.txt",
+    "sha256": "9f5e50d3abaee7d6ce09480f325c706f485ae3240912527e651954d2d6b035bf"
+  },
+  "ScriptExtensions.txt": {
+    "url": "https://www.unicode.org/Public/17.0.0/ucd/ScriptExtensions.txt",
+    "sha256": "ec2107e58825a1586acee8e0911ce18260394ac8b87e535ca325f1ccbeb06bc6"
+  },
+  "PropertyValueAliases.txt": {
+    "url": "https://www.unicode.org/Public/17.0.0/ucd/PropertyValueAliases.txt",
+    "sha256": "64e9a5f76f7a1e8b5a47d6a1f9a26522a251208f5276bdfa1559dac7cf2e827a"
+  },
+  "PropertyAliases.txt": {
+    "url": "https://www.unicode.org/Public/17.0.0/ucd/PropertyAliases.txt",
+    "sha256": "4441f573caf952ffece1d7c892e7715bd7136dfc26f96eb6f268bf1e474715fb"
+  },
+  "PropList.txt": {
+    "url": "https://www.unicode.org/Public/17.0.0/ucd/PropList.txt",
+    "sha256": "130dcddcaadaf071008bdfce1e7743e04fdfbc910886f017d9f9ac931d8c64dd"
+  },
+  "DerivedCoreProperties.txt": {
+    "url": "https://www.unicode.org/Public/17.0.0/ucd/DerivedCoreProperties.txt",
+    "sha256": "24c7fed1195c482faaefd5c1e7eb821c5ee1fb6de07ecdbaa64b56a99da22c08"
+  },
+  "emoji-data.txt": {
+    "url": "https://www.unicode.org/Public/17.0.0/ucd/emoji/emoji-data.txt",
+    "sha256": "2cb2bb9455cda83e8481541ecf5b6dfda66a3bb89efa3fa7c5297eccf607b72b"
+  },
+  "IdnaMappingTable.txt": {
+    "url": "https://www.unicode.org/Public/17.0.0/idna/IdnaMappingTable.txt",
+    "sha256": "87f05505dc026fdb2bff16132bdc68a8014675836882a9a2b1844540ad3be382"
   }
 }

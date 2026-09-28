@@ -11,6 +11,7 @@ scope in `IMPLEMENTATION.md` remains required. No registry publication is claime
 | --- | --- | --- |
 | Local gate | `make check` | Formatting, provenance, Clippy, optimized tests, Rustdoc |
 | Schema | `cargo test -p purrassist-core --test schema_conformance` | 1,301 main Draft 2020-12 tests; 121 selected optional tests |
+| Pattern engine | `cargo test -p purrassist-core --test pattern` | 441-fixture test262 property-escapes census (Unicode 17); pathological `(a+)+b` linear-time check; 10,000-pair derivative/backtracking differential; `generate` witness/emptiness properties |
 | Unicode | `cargo test -p purrassist-core --test unicode_conformance` | 20,034 Unicode 17 normalization cases |
 | Portability | `make wasm-test` | Executed native/WASI recovery and all five grammar transcripts; browser-WASM core build |
 | Independent syntax | `make syntax-oracles` | 15 fixed positive/negative probes against Python, rustc, Node, and TypeScript 5.9.3 |
@@ -351,8 +352,44 @@ protocol behavior, not a maximum response latency or global allocator bound.
   adversarial/preservation qualification.
   Full HTML-output comparison against the pinned official corpora now passes;
   this does not finish structural editing or resource/performance qualification.
-- Extend composed recovery/witness generation and regex coverage; audit recursive
-  schemas and resource-sensitive compilation. Qualify unsupported vocabulary and
+- Regex coverage is complete: `crates/core/src/pattern/` implements the full
+  ECMA-262 `u`-mode grammar (named groups with the ECMA duplicate-name
+  mutual-exclusive-alternative early-error rule, `\k<name>` resolved at
+  match time to whichever same-named group actually participated — at most
+  one can, since duplicates are mutually exclusive — matching empty when
+  none did, `\u{...}`, surrogate-pair escape combination, `\p{...}`/`\P{...}`
+  for `General_Category`, `Script`, `Script_Extensions`, and every
+  ECMA-262 binary Unicode property; lone
+  braces, a class range ending in a class escape, and an identity escape of
+  anything but a syntax character or `/` are `SyntaxError`s) over two engines
+  selected per pattern and recorded as evidence
+  (`pattern.engine.derivative-v1`/`pattern.engine.backtrack-v1`): Antimirov/
+  Brzozowski derivatives over Unicode interval-set predicates with minterm
+  partitioning and a governed, lazily-built state cache (linear-time; used
+  for every pattern without a backreference or lookaround) for
+  `Pattern::is_match` and `Pattern::generate`, falling back to the
+  Work-charged-per-step backtracking evaluator only for backreferences and
+  lookaround (neither is a regular language). `cargo test -p
+  purrassist-core --test pattern` runs the complete vendored test262
+  `built-ins/RegExp/property-escapes/generated` set (commit
+  `834912b0a6b1d973244a5e8a1baad25d6b9ef238`, Unicode-17-aligned; 441
+  fixtures, BSD-3-Clause, `crates/core/tests/data/test262/`) with a
+  bidirectional census (every supported property has a fixture; every
+  fixture names a supported property), asserts `(a+)+b` on 10,000 `a`s
+  completes under the Standard effort budget and returns `false`
+  (catastrophic backtracking is a backtracking-engine failure mode this
+  primary engine does not have), asserts the derivative and backtracking
+  engines agree on 10,000 deterministic generated (pattern, input) pairs
+  without backreferences/lookarounds, and asserts `Pattern::generate`'s
+  witnesses always match and never match an `avoid` pattern, proving
+  emptiness (rather than assuming it) for both an intersection with a
+  pattern's own complement and `[^\s\S]`. The single Unicode 17 generator
+  (`scripts/generate-unicode.py`) now also produces the `Script`,
+  `Script_Extensions`, and ECMA-262 binary-property tables plus the IDNA/
+  UTS-46 mapping table for the format work below, all pinned by URL and
+  SHA-256 in `vendor/unicode/manifest.json`.
+- Extend composed recovery/witness generation; audit recursive schemas and
+  resource-sensitive compilation. Qualify unsupported vocabulary and
   format behavior without silently weakening assertions.
 - Complete allocation/work accounting throughout candidate generation, receipts,
   schema compilation, and helper preparation. Schema compilation now shares a

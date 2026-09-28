@@ -23,6 +23,27 @@ is linked. Source URLs, versions, and
 SHA-256 digests are recorded in the manifests listed in
 `vendor/dependencies.json`. These assets are not relicensed as first-party code.
 
+The same generator (`scripts/generate-unicode.py`) also produces the pattern
+engine's Unicode property tables: `Script`, `Script_Extensions` (from
+`Scripts.txt`, `ScriptExtensions.txt`, and the `sc` value aliases in
+`PropertyValueAliases.txt`), and every ECMA-262 binary Unicode property (from
+`PropList.txt`, `DerivedCoreProperties.txt`, `emoji/emoji-data.txt`,
+`DerivedNormalizationProps.txt`, and the property aliases in
+`PropertyAliases.txt`; `ASCII`, `Any`, `Assigned`, and `Bidi_Mirrored` are
+computed rather than sourced from one file). It also produces the IDNA/
+UTS-46 mapping table (`idna/IdnaMappingTable.txt`) the Task 7 hostname/
+idn-hostname format validators consume. All are Unicode-3.0, pinned by URL
+and SHA-256 in `vendor/unicode/manifest.json` alongside the other Unicode
+Character Database inputs; the generated Rust tables carry the same license
+header. The pattern engine's test262 RegExp `property-escapes/generated`
+conformance fixtures (`crates/core/tests/data/test262/`) are vendored
+verbatim at a pinned commit (`834912b0a6b1d973244a5e8a1baad25d6b9ef238`,
+"Add tests for Unicode 17 property escapes") under their original
+BSD-3-Clause license (Ecma International); a first-party Rust parser in
+`crates/core/tests/pattern.rs` reads their `matchSymbols`/`nonMatchSymbols`
+literals directly (no JavaScript engine is linked or invoked). None of this
+data is relicensed as first-party code.
+
 The accepted grammar-parser exception is Tree-sitter and its Python, Rust,
 JavaScript, and TypeScript grammar family. The pinned integration currently resolves 10 external runtime packages and 27
 packages in the full Cargo graph. Tree-sitter also brings regex/query support,

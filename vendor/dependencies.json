@@ -56,6 +56,20 @@
       "license": "BSD-3-Clause (incorporated source); CC-BY-4.0 (original data)",
       "manifest": "vendor/entities/manifest.json",
       "justification": "Complete standardized entity names without a runtime library dependency; generated sorted lookup table, no third-party executable code."
+    },
+    {
+      "name": "Unicode Script, Script_Extensions, and ECMA-262 binary Unicode properties",
+      "version": "17.0.0",
+      "license": "Unicode-3.0",
+      "manifest": "vendor/unicode/manifest.json",
+      "justification": "First-party \\p{...}/\\P{...} property tables for the pattern derivative and backtracking engines (Task 6); generated interval-set lookup tables only, no third-party executable code."
+    },
+    {
+      "name": "Unicode IDNA Compatibility Processing mapping table (UTS #46)",
+      "version": "17.0.0",
+      "license": "Unicode-3.0",
+      "manifest": "vendor/unicode/manifest.json",
+      "justification": "First-party IDNA/UTS-46 mapping table for the Task 7 hostname/idn-hostname format validators; generated lookup table only, no third-party executable code."
     }
   ],
   "test_data": [
@@ -81,6 +95,12 @@
       "version": "CommonMark 0.31.2; cmark-gfm 0.29.0.gfm.13",
       "license": "CC-BY-SA-4.0",
       "manifest": "crates/core/tests/data/markdown/manifest.json"
+    },
+    {
+      "name": "test262 RegExp property-escapes generated conformance tests",
+      "version": "commit 834912b0a6b1d973244a5e8a1baad25d6b9ef238 (\"Add tests for Unicode 17 property escapes\"; Unicode-17-aligned generated fixtures)",
+      "license": "BSD-3-Clause",
+      "manifest": "crates/core/tests/data/test262/manifest.json"
     }
   ],
   "cargo_details": [

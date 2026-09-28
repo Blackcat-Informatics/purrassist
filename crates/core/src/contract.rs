@@ -507,6 +507,7 @@ scratch_charge!(String, 24); // `Vec<u8>`'s (ptr, len, cap) layout.
 scratch_charge!(crate::json::Node, 56);
 scratch_charge!(crate::json::Member, 104);
 scratch_charge!(crate::provenance::NodeId, 4);
+scratch_charge!(crate::pattern::derive::Term, 32); // largest variant: `Repeat(u32, u64, u64, bool)`.
 scratch_charge!(crate::provenance::ProvenanceNode, 160);
 
 /// Round `bytes` up to the next 8-byte word, the same rounding an
