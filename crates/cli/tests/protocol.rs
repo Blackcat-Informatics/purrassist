@@ -222,6 +222,12 @@ fn shared_operations_are_identical_through_cli_and_mcp() {
             "tea",
         ),
         (
+            "resolve_string",
+            r#"{"query":"iced tea","candidates":[{"id":"tea","text":"cold tea","aliases":["iced tea"]}],"english_phonetics":false}"#,
+            "/value/id",
+            "tea",
+        ),
+        (
             "plan_markdown_task",
             r#"{"source":"> - [x] tea\r\n","path":[0,0],"checked":false}"#,
             "/value/edits/0/replacement",

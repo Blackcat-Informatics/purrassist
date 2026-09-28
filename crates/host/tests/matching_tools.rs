@@ -88,3 +88,49 @@ fn string_tool_admits_legacy_and_identified_candidates() {
     assert_eq!(exhausted.pointer("/matches").unwrap().to_json(), "[]");
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn selection_tool_exposes_exact_guess_ambiguity_and_failure() {
+    let root = std::env::temp_dir().join(format!("purrassist-select-tool-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let tools = Tools::new(&root).unwrap();
+    let call = |request| {
+        tools
+            .call("resolve_string", &json::parse(request).unwrap())
+            .unwrap()
+    };
+    let exact = call(
+        r#"{"query":"reader","candidates":[{"id":"right","text":"reader"},{"id":"near","text":"readers"}]}"#,
+    );
+    assert_eq!(exact.pointer("/status").unwrap().as_str(), Some("resolved"));
+    assert_eq!(exact.pointer("/value/id").unwrap().as_str(), Some("right"));
+    let guess = call(
+        r#"{"query":"iced tea","candidates":[{"id":"tea","text":"cold tea","aliases":["iced tea"]}]}"#,
+    );
+    assert_eq!(
+        guess.pointer("/status").unwrap().as_str(),
+        Some("best_guess")
+    );
+    assert_eq!(guess.pointer("/value/id").unwrap().as_str(), Some("tea"));
+    assert_eq!(
+        guess
+            .pointer("/receipt/inferences/0/kind")
+            .unwrap()
+            .as_str(),
+        Some("guess")
+    );
+    let tie = call(
+        r#"{"query":"reader","candidates":[{"id":"a","text":"reader"},{"id":"b","text":"reader"}],"minimum_margin":0}"#,
+    );
+    assert_eq!(tie.pointer("/status").unwrap().as_str(), Some("ambiguous"));
+    let Value::Array(alternatives) = &tie.pointer("/receipt/alternatives").unwrap().value else {
+        panic!("missing alternatives")
+    };
+    assert_eq!(alternatives.len(), 2);
+    let weak = call(r#"{"query":"unrelated","candidates":["tea"]}"#);
+    assert_eq!(
+        weak.pointer("/status").unwrap().as_str(),
+        Some("unresolved")
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

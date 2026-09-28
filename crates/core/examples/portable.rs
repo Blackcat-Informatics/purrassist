@@ -11,7 +11,7 @@ use purrassist_core::{
     markdown::{
         Alignment, Dialect, Document, ListItemEdit, References, TableColumnEdit, TableRowEdit,
     },
-    matching::{self, Candidate, MatchRequest},
+    matching::{self, Candidate, MatchRequest, RankedMatch},
     paths::{PathIndex, PathMatch},
     schema::{Schema, recovery::RecoveryRequest},
     text::{self, Normalization},
@@ -60,6 +60,7 @@ fn main() {
     assert_eq!(text::comparison_key("Straße"), "strasse");
     transcript.push(string(text::normalize("\u{212b}각ﬃ", Normalization::Nfkc)));
     transcript.push(matching_transcript());
+    transcript.push(string_selection_transcript());
     transcript.push(embedding_transcript());
     transcript.push(path_transcript());
     transcript.push(markdown_transcript());
@@ -90,6 +91,36 @@ fn matching_transcript() -> Node {
     object([
         ("operation", string("matching")),
         ("score", integer(u64::from(values[0].score))),
+        ("receipt", result.receipt.to_node()),
+    ])
+}
+
+fn string_selection_transcript() -> Node {
+    let candidates = [
+        Candidate::new("first", "reader"),
+        Candidate::new("second", "reader"),
+    ];
+    let result = matching::resolve(
+        "reader",
+        &candidates,
+        &MatchRequest::default(),
+        matching::SelectionPolicy {
+            minimum_score: 10_000,
+            minimum_margin: 0,
+        },
+    );
+    let Outcome::Ambiguous(values) = result.outcome else {
+        panic!("expected tied exact strings")
+    };
+    for (value, ledger) in values.iter().zip(&result.receipt.alternatives) {
+        assert_eq!(
+            ledger.output,
+            Digest::of(value.to_node().to_json().as_bytes())
+        );
+    }
+    object([
+        ("operation", string("string-selection")),
+        ("values", array(values.iter().map(RankedMatch::to_node))),
         ("receipt", result.receipt.to_node()),
     ])
 }

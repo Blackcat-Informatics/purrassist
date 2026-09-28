@@ -6,6 +6,11 @@ use crate::contract::{
     AssistResult, Budget, Effort, Evidence, Governor, Outcome, Receipt, Resource, StopReason,
 };
 use crate::text::{comparison_key, depunctuate, lexical_tokens};
+use crate::{
+    digest::Digest,
+    json::Node,
+    wire::{array, integer, object, string},
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// A caller-owned identity with a human-readable spelling.
@@ -50,6 +55,227 @@ pub struct RankedMatch {
     pub score: u32,
     /// Evidence from exact, lexical, distance, phonetic, and alias comparisons.
     pub signals: Vec<Signal>,
+}
+impl RankedMatch {
+    /// Serialize the selected identity and its signals. These exact JSON bytes
+    /// identify an alternative in the receipt.
+    ///
+    /// ```
+    /// use purrassist_core::{Outcome, matching::{self, Candidate, MatchRequest, SelectionPolicy}};
+    /// let result = matching::resolve("tea", &[Candidate::new("tea-id", "tea")],
+    ///     &MatchRequest::default(), SelectionPolicy::default());
+    /// let Outcome::Resolved(answer) = result.outcome else { panic!("expected exact match") };
+    /// assert_eq!(answer.to_node().pointer("/id").unwrap().as_str(), Some("tea-id"));
+    /// ```
+    #[must_use]
+    pub fn to_node(&self) -> Node {
+        object([
+            ("id", string(&self.candidate.id)),
+            ("text", string(&self.candidate.text)),
+            ("score", integer(u64::from(self.score))),
+            ("aliases", array(self.candidate.aliases.iter().map(string))),
+            (
+                "signals",
+                array(self.signals.iter().map(|signal| {
+                    object([
+                        ("method", string(signal.method)),
+                        ("score", integer(u64::from(signal.score))),
+                        ("detail", string(&signal.detail)),
+                    ])
+                })),
+            ),
+        ])
+    }
+}
+
+/// Explicit acceptance and separation thresholds for choosing one string.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SelectionPolicy {
+    /// Minimum ranking score, from zero through 10,000.
+    pub minimum_score: u32,
+    /// Scores within this many units of the winner remain ambiguous. Ties
+    /// remain ambiguous even at zero margin.
+    pub minimum_margin: u32,
+}
+impl Default for SelectionPolicy {
+    fn default() -> Self {
+        Self {
+            minimum_score: 7500,
+            minimum_margin: 500,
+        }
+    }
+}
+
+/// Select a string under the request's resource limits.
+///
+/// A unique byte-exact spelling is resolved; all other accepted selections
+/// are labeled guesses. No score is treated as a probability. Invalid policy,
+/// exhaustion, cancellation, and no acceptable candidate return `Unresolved`
+/// with the cause in the receipt.
+#[must_use]
+pub fn resolve(
+    query: &str,
+    candidates: &[Candidate],
+    request: &MatchRequest,
+    policy: SelectionPolicy,
+) -> AssistResult<RankedMatch> {
+    resolve_governed(
+        query,
+        candidates,
+        request,
+        policy,
+        &mut Governor::new(request.budget),
+    )
+}
+
+/// Select with cumulative caller-owned limits and cancellation. Exhaustion
+/// discards partial alternatives and returns an explicit unresolved receipt.
+///
+/// ```
+/// use purrassist_core::{Outcome, matching::{self, Candidate, MatchRequest, SelectionPolicy}};
+/// let answer = matching::resolve("raeder", &[Candidate::new("reader", "reader")],
+///     &MatchRequest::default(), SelectionPolicy::default());
+/// assert!(matches!(answer.outcome, Outcome::BestGuess(_)));
+/// ```
+#[must_use]
+pub fn resolve_governed(
+    query: &str,
+    candidates: &[Candidate],
+    request: &MatchRequest,
+    policy: SelectionPolicy,
+    governor: &mut Governor,
+) -> AssistResult<RankedMatch> {
+    let mut receipt = Receipt::new(
+        query.as_bytes(),
+        "matching/resolve-v1",
+        request.effort,
+        *governor.limits(),
+    );
+    if policy.minimum_score > 10_000 || policy.minimum_margin > 10_000 {
+        receipt.stopped =
+            StopReason::InvalidInput("string selection thresholds exceed ranking bounds".into());
+        receipt.usage = governor.usage();
+        return AssistResult {
+            outcome: Outcome::Unresolved,
+            receipt,
+        };
+    }
+    let mut full_request = request.clone();
+    full_request.limit = candidates.len().max(1);
+    let ranked = rank_governed(query, candidates, &full_request, governor);
+    if ranked.receipt.stopped != StopReason::Completed
+        && ranked.receipt.stopped != StopReason::NoCandidate
+    {
+        receipt.stopped = ranked.receipt.stopped;
+        receipt.usage = governor.usage();
+        return AssistResult {
+            outcome: Outcome::Unresolved,
+            receipt,
+        };
+    }
+    let Outcome::Resolved(mut matches) = ranked.outcome else {
+        receipt.stopped = StopReason::NoCandidate;
+        receipt.usage = governor.usage();
+        return AssistResult {
+            outcome: Outcome::Unresolved,
+            receipt,
+        };
+    };
+    let exact = matches.iter().filter(|entry| entry.score == 10_000).count();
+    let best = matches[0].score;
+    matches.retain(|entry| {
+        if exact > 0 {
+            entry.score == 10_000
+        } else {
+            entry.score >= policy.minimum_score
+                && (entry.score == best || best - entry.score < policy.minimum_margin)
+        }
+    });
+    let outcome = if matches.is_empty() {
+        receipt.stopped = StopReason::NoCandidate;
+        Outcome::Unresolved
+    } else {
+        let recorded = record_selection(&matches, policy, governor, &mut receipt);
+        match recorded {
+            Err(reason) => {
+                receipt.stopped = reason;
+                receipt.alternatives.clear();
+                receipt.evidence.clear();
+                receipt.inferences.clear();
+                Outcome::Unresolved
+            }
+            Ok(()) if matches.len() > 1 => Outcome::Ambiguous(matches),
+            Ok(()) => matches
+                .into_iter()
+                .next()
+                .map_or(Outcome::Unresolved, |answer| {
+                    if answer.score == 10_000 {
+                        Outcome::Resolved(answer)
+                    } else {
+                        Outcome::BestGuess(answer)
+                    }
+                }),
+        }
+    };
+    receipt.usage = governor.usage();
+    AssistResult { outcome, receipt }
+}
+
+fn record_selection(
+    matches: &[RankedMatch],
+    policy: SelectionPolicy,
+    governor: &mut Governor,
+    receipt: &mut Receipt,
+) -> Result<(), StopReason> {
+    for entry in matches {
+        let serialized = entry.to_node().to_json();
+        let storage = size(serialized.len()).saturating_mul(4).saturating_add(512);
+        governor.charge(Resource::Work, storage)?;
+        governor.charge(Resource::ScratchBytes, storage)?;
+        governor.charge(
+            Resource::EvidenceEntries,
+            1 + u64::from(entry.score != 10_000),
+        )?;
+        let evidence = Evidence {
+            rule: "matching.selection-v1".into(),
+            explanation: format!(
+                "score {}; signals {:?}; selection policy {policy:?}",
+                entry.score,
+                entry
+                    .signals
+                    .iter()
+                    .map(|signal| signal.method)
+                    .collect::<Vec<_>>()
+            ),
+            span: None,
+            destination: entry.candidate.id.clone(),
+        };
+        let inferences = if entry.score == 10_000 {
+            Vec::new()
+        } else {
+            vec![crate::contract::Inference {
+                evidence: evidence.clone(),
+                kind: crate::contract::InferenceKind::Guess,
+                value: entry.candidate.id.clone(),
+            }]
+        };
+        if matches.len() > 1 {
+            receipt
+                .alternatives
+                .push(crate::contract::AlternativeReceipt {
+                    output: Digest::of(serialized.as_bytes()),
+                    cost: 0,
+                    evidence: vec![evidence],
+                    losses: Vec::new(),
+                    inferences,
+                    validations: Vec::new(),
+                });
+        } else {
+            receipt.evidence.push(evidence);
+            receipt.inferences.extend(inferences);
+        }
+    }
+    Ok(())
 }
 
 /// Caller-selected matching behavior.

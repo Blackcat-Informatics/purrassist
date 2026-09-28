@@ -65,6 +65,7 @@ Current surfaces include:
 cargo run -p purrassist-cli -- --help
 cargo run -p purrassist-cli -- match raeder reader writer
 cargo run -p purrassist-cli -- call match_strings --root . < examples/match-strings.json
+cargo run -p purrassist-cli -- call resolve_string --root . < examples/resolve-string.json
 cargo run -p purrassist-cli -- decode --schema examples/temperature.schema.json \
   --input examples/temperature.input.txt
 cargo run -p purrassist-cli -- mcp --root /path/to/workspace
@@ -85,6 +86,13 @@ or objects with stable `id`, `text`, and caller-declared `aliases`. Optional
 `effort`, `english_phonetics`, and `limit` control ranking. Its results retain
 each identity, score, aliases, and comparison signals; scores are ranking units,
 not proof of semantic equivalence. See [the example](examples/match-strings.json).
+`resolve_string` applies caller-adjustable `minimum_score` and `minimum_margin`
+thresholds to all candidates, even when ranking would normally return only its
+first ten. A unique byte-exact spelling is `resolved`; a unique accepted
+approximation is `best_guess`; close alternatives remain `ambiguous` with
+separate digest-bound inference ledgers; weak matches and exhaustion are
+`unresolved`. Aliases are caller-declared and count as guesses when selected.
+Thresholds are policy on ranking units, not calibrated confidence.
 `match_paths` takes a `query`, caller-supplied `paths`,
 optional directory `context`, effort, and score/margin thresholds. It returns
 `resolved`, `best_guess`, `ambiguous`, or `unresolved` with methods and a receipt.

@@ -14,7 +14,7 @@ use purrassist::{
     contract::Resource,
     edits::{EditPlan, TextEdit},
     json::{self, Node, Value},
-    matching::{self, Candidate, MatchRequest},
+    matching::{self, Candidate, MatchRequest, SelectionPolicy as StringSelectionPolicy},
     syntax::{self, Language},
     wire::{array, integer, object, string},
 };
@@ -108,6 +108,12 @@ const DEFINITIONS: &[Definition] = &[
         name: "match_strings",
         description: "Rank caller-identified strings and aliases using exact, Unicode, lexical, distance, and optional English phonetic evidence",
         schema: r#"{"type":"object","required":["query","candidates"],"properties":{"query":{"type":"string"},"candidates":{"type":"array","maxItems":8192,"items":{"oneOf":[{"type":"string"},{"type":"object","required":["id","text"],"properties":{"id":{"type":"string","minLength":1},"text":{"type":"string"},"aliases":{"type":"array","maxItems":256,"items":{"type":"string"}}},"additionalProperties":false}]}},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"english_phonetics":{"type":"boolean"},"limit":{"type":"integer","minimum":1,"maximum":8192}},"additionalProperties":false}"#,
+        writes: false,
+    },
+    Definition {
+        name: "resolve_string",
+        description: "Select a caller-identified string with explicit exact, guess, ambiguity, and weak-match outcomes",
+        schema: r#"{"type":"object","required":["query","candidates"],"properties":{"query":{"type":"string"},"candidates":{"type":"array","maxItems":8192,"items":{"oneOf":[{"type":"string"},{"type":"object","required":["id","text"],"properties":{"id":{"type":"string","minLength":1},"text":{"type":"string"},"aliases":{"type":"array","maxItems":256,"items":{"type":"string"}}},"additionalProperties":false}]}},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"english_phonetics":{"type":"boolean"},"minimum_score":{"type":"integer","minimum":0,"maximum":10000},"minimum_margin":{"type":"integer","minimum":0,"maximum":10000}},"additionalProperties":false}"#,
         writes: false,
     },
     Definition {
@@ -271,6 +277,7 @@ impl Tools {
         match name {
             "decode_json" => decode(args, cancellation),
             "match_strings" => rank(args, cancellation),
+            "resolve_string" => resolve_string(args, cancellation),
             "match_paths" => paths::resolve(args, cancellation),
             "resolve_intent" => intent::resolve(args, cancellation),
             "match_embeddings" => embeddings::call(args, cancellation),
@@ -465,11 +472,7 @@ fn rank(args: &Node, cancellation: Option<&CancellationToken>) -> Result<Node, S
         None => MatchRequest::default().limit,
         _ => return Err("invalid match limit".into()),
     };
-    let english_phonetics = match args.get("english_phonetics").map(|value| &value.value) {
-        Some(Value::Bool(value)) => *value,
-        None => true,
-        _ => return Err("invalid english_phonetics".into()),
-    };
+    let english_phonetics = english_phonetics(args)?;
     let request = MatchRequest {
         effort,
         budget: effort.budget(),
@@ -505,27 +508,80 @@ fn rank(args: &Node, cancellation: Option<&CancellationToken>) -> Result<Node, S
     Ok(object([
         (
             "matches",
-            array(values.iter().map(|value| {
-                object([
-                    ("id", string(&value.candidate.id)),
-                    ("text", string(&value.candidate.text)),
-                    ("score", integer(u64::from(value.score))),
-                    ("aliases", array(value.candidate.aliases.iter().map(string))),
-                    (
-                        "signals",
-                        array(value.signals.iter().map(|signal| {
-                            object([
-                                ("method", string(signal.method)),
-                                ("score", integer(u64::from(signal.score))),
-                                ("detail", string(&signal.detail)),
-                            ])
-                        })),
-                    ),
-                ])
-            })),
+            array(values.iter().map(matching::RankedMatch::to_node)),
         ),
         ("receipt", result.receipt.to_node()),
     ]))
+}
+fn english_phonetics(args: &Node) -> Result<bool, String> {
+    match args.get("english_phonetics").map(|value| &value.value) {
+        Some(Value::Bool(value)) => Ok(*value),
+        None => Ok(true),
+        _ => Err("invalid english_phonetics".into()),
+    }
+}
+fn resolve_string(args: &Node, cancellation: Option<&CancellationToken>) -> Result<Node, String> {
+    let query = field(args, "query")?;
+    let effort = effort(args)?;
+    let request = MatchRequest {
+        effort,
+        budget: effort.budget(),
+        english_phonetics: english_phonetics(args)?,
+        ..MatchRequest::default()
+    };
+    let threshold = |name: &str, default: u32| -> Result<u32, String> {
+        match args.get(name).map(|value| &value.value) {
+            Some(Value::Number(value)) => value
+                .to_usize()
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| format!("invalid {name}")),
+            None => Ok(default),
+            _ => Err(format!("invalid {name}")),
+        }
+    };
+    let policy = StringSelectionPolicy {
+        minimum_score: threshold("minimum_score", 7500)?,
+        minimum_margin: threshold("minimum_margin", 500)?,
+    };
+    let mut governor = governor(request.budget, cancellation);
+    let Some(Node {
+        value: Value::Array(values),
+        ..
+    }) = args.get("candidates")
+    else {
+        return Err("missing candidates".into());
+    };
+    let result = match prepare_match_candidates(values, &mut governor) {
+        Ok(candidates) => {
+            matching::resolve_governed(query, &candidates, &request, policy, &mut governor)
+        }
+        Err(reason) => {
+            let mut receipt = Receipt::new(
+                query.as_bytes(),
+                "matching/resolve-v1",
+                effort,
+                request.budget,
+            );
+            receipt.stopped = reason;
+            receipt.usage = governor.usage();
+            AssistResult {
+                outcome: Outcome::Unresolved,
+                receipt,
+            }
+        }
+    };
+    let result = AssistResult {
+        outcome: match result.outcome {
+            Outcome::Resolved(value) => Outcome::Resolved(value.to_node()),
+            Outcome::BestGuess(value) => Outcome::BestGuess(value.to_node()),
+            Outcome::Ambiguous(values) => {
+                Outcome::Ambiguous(values.iter().map(matching::RankedMatch::to_node).collect())
+            }
+            Outcome::Unresolved => Outcome::Unresolved,
+        },
+        receipt: result.receipt,
+    };
+    Ok(result.to_node())
 }
 fn prepare_match_candidates(
     values: &[Node],

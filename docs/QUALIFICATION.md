@@ -389,6 +389,13 @@ protocol behavior, not a maximum response latency or global allocator bound.
   unrestricted Damerau-Levenshtein on all 225 ordered pairs of binary strings
   up to three characters, with a separate Unicode transposition case. This
   finite oracle does not qualify arbitrary strings or ranking thresholds.
+  String selection now applies score and margin policy across the complete
+  caller candidate set, with exact precedence, weak-match rejection, guess
+  status, and separate digest-bound ledgers for ambiguous alternatives. The
+  `resolve_string` tool uses the same Rust operation through CLI and MCP.
+  Focused tests cover exact, alias, weak, tie, invalid-policy, cancellation,
+  and ledger-exhaustion behavior. Thresholds remain uncalibrated ranking
+  policy; representative incorrect-correction evaluation is still required.
 - Qualify Windows filesystem durability and crash boundaries. Unix tests and a
   configured Windows engine job do not establish Windows host support.
 - Execute hosted CI, audit final package contents and notices, configure trusted
