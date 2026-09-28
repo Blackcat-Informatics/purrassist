@@ -1,0 +1,5 @@
+{
+  "source": "# Tea\n\n- [x] ~~hot~~ cooled\n\n[Recipe]\n\n> [recipe]: /tea\n",
+  "dialect": "gfm",
+  "effort": "standard"
+}

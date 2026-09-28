@@ -38,8 +38,8 @@ guess reporting, and exhaustion before a complete ledger can be returned.
 Local package verification has built all five packages. A local release CLI was
 installed into a disposable checkout cache and exercised on the published example
 inputs, including exact-source retention. This does not verify downloadable registry
-packages. Hosted CI passed for checkpoint `dbf69e0963a442f89daa78f7c01e6bafb51eafb2`:
-[run 36403769680](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36403769680)
+packages. Hosted CI passed for checkpoint `f4f1871fac255b161d3917a99f36a43816481b34`:
+[run 36406037564](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36406037564)
 completed the Linux/macOS local gates, MSRV workspace tests, Windows core/syntax
 tests, and native/WASI comparisons. This is evidence for that checkpoint only;
 subsequent changes need their own qualification.
@@ -96,7 +96,7 @@ Additional regressions check CRLF/Unicode source spans, selected nested edits an
 exact undo, backslash hard breaks, NUL replacement in autolinks, cancellation,
 storage/depth exhaustion, and bounded lookahead. This increment passed the full
 local Rust 1.98.0 gate, including optimized workspace tests and Rustdoc.
-The reference checkpoint passed hosted CI, including nightly analysis, as
+The document-rendering checkpoint passed hosted CI, including nightly analysis, as
 recorded above. Those focused inline tests are supplemented by the full-document
 comparison described below.
 
@@ -133,10 +133,19 @@ proof for arbitrary input; broader generated/adversarial testing remains require
 The full local Rust 1.98.0 gate passed for this document-rendering increment,
 including optimized workspace tests, Rustdoc examples, and documentation builds.
 
+The shared `render_markdown` operation exposes the same renderer through Rust,
+CLI, and MCP. Its result includes renderer/specification identities, a canonical
+effective extension profile, HTML and output digest, plus original-source identity.
+The receipt retains exact input and records the rendering decision. Tests cover
+default/overridden profiles, Unicode/CRLF retention, invalid/duplicate extensions,
+exhaustion without partial output, source line maps, and CLI/MCP wire equivalence.
+The full local Rust 1.98.0 gate passed for the shared operation; the documented
+rendering example also executed successfully with the verification-profile CLI.
+
 ## Remaining release work
 
-- Extend Markdown structural editing beyond root sections/tasks, expose rendering
-  through shared CLI/MCP tools, and broaden adversarial/preservation qualification.
+- Extend Markdown structural editing beyond root sections/tasks and broaden
+  adversarial/preservation qualification.
   Full HTML-output comparison against the pinned official corpora now passes;
   this does not finish structural editing or resource/performance qualification.
 - Extend composed recovery/witness generation and regex coverage; audit recursive

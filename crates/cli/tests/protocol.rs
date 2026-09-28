@@ -143,76 +143,93 @@ fn assert_tool_responses(messages: &[Node]) {
 }
 
 #[test]
-fn markdown_context_is_identical_through_cli_and_mcp() {
-    let directory = std::env::temp_dir().join(format!(
-        "purrassist-markdown-protocol-{}",
-        std::process::id()
-    ));
-    fs::create_dir(&directory).unwrap();
-    let arguments = r##"{"source":"# Tea\r\n- [ ] café\r\n","start":13,"end":18}"##;
-    let mut cli = Command::new(env!("CARGO_BIN_EXE_purrassist"))
-        .args(["call", "markdown_context", "--root"])
-        .arg(&directory)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    cli.stdin
-        .take()
-        .unwrap()
-        .write_all(arguments.as_bytes())
-        .unwrap();
-    let output = cli.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let direct = json::parse(&String::from_utf8(output.stdout).unwrap()).unwrap();
-    let mut mcp = Command::new(env!("CARGO_BIN_EXE_purrassist"))
-        .args(["mcp", "--root"])
-        .arg(&directory)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let frames = format!(
-        concat!(
-            "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"test\",\"version\":\"1\"}}}}}}\n",
-            "{{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}}\n",
-            "{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{{\"name\":\"markdown_context\",\"arguments\":{}}}}}\n"
+fn markdown_operations_are_identical_through_cli_and_mcp() {
+    for (operation, arguments, pointer, expected) in [
+        (
+            "markdown_context",
+            r##"{"source":"# Tea\r\n- [ ] café\r\n","start":13,"end":18}"##,
+            "/value/text",
+            "- [ ] café\r\n",
         ),
-        arguments
-    );
-    mcp.stdin
-        .take()
-        .unwrap()
-        .write_all(frames.as_bytes())
-        .unwrap();
-    let output = mcp.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let output = String::from_utf8(output.stdout).unwrap();
-    let messages: Vec<_> = output
-        .lines()
-        .map(|line| json::parse(line).unwrap())
-        .collect();
-    assert_eq!(messages.len(), 2);
-    assert_eq!(
-        messages[1]
-            .pointer("/result/structuredContent")
+        (
+            "render_markdown",
+            r#"{"source":"~~café~~\r\n","dialect":"gfm"}"#,
+            "/value/html",
+            "<p><del>café</del></p>\n",
+        ),
+        (
+            "render_markdown",
+            r#"{"source":"~~café~~\r\n","dialect":"gfm","extensions":[]}"#,
+            "/value/html",
+            "<p>~~café~~</p>\n",
+        ),
+    ] {
+        let directory = std::env::temp_dir().join(format!(
+            "purrassist-markdown-protocol-{}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let mut cli = Command::new(env!("CARGO_BIN_EXE_purrassist"))
+            .args(["call", operation, "--root"])
+            .arg(&directory)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        cli.stdin
+            .take()
             .unwrap()
-            .to_json(),
-        direct.to_json()
-    );
-    assert_eq!(
-        direct.pointer("/value/text").unwrap().as_str(),
-        Some("- [ ] café\r\n")
-    );
-    fs::remove_dir_all(directory).unwrap();
+            .write_all(arguments.as_bytes())
+            .unwrap();
+        let output = cli.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let direct = json::parse(&String::from_utf8(output.stdout).unwrap()).unwrap();
+        let mut mcp = Command::new(env!("CARGO_BIN_EXE_purrassist"))
+            .args(["mcp", "--root"])
+            .arg(&directory)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let frames = format!(
+            concat!(
+                "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"test\",\"version\":\"1\"}}}}}}\n",
+                "{{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}}\n",
+                "{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{{\"name\":\"{}\",\"arguments\":{}}}}}\n"
+            ),
+            operation, arguments
+        );
+        mcp.stdin
+            .take()
+            .unwrap()
+            .write_all(frames.as_bytes())
+            .unwrap();
+        let output = mcp.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let output = String::from_utf8(output.stdout).unwrap();
+        let messages: Vec<_> = output
+            .lines()
+            .map(|line| json::parse(line).unwrap())
+            .collect();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(
+            messages[1]
+                .pointer("/result/structuredContent")
+                .unwrap()
+                .to_json(),
+            direct.to_json()
+        );
+        assert_eq!(direct.pointer(pointer).unwrap().as_str(), Some(expected));
+        fs::remove_dir_all(directory).unwrap();
+    }
 }

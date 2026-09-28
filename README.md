@@ -90,7 +90,19 @@ digests, supporting rules, derived values, and validation references. Duplicate
 outputs retain the first supporting rule derivation; rejected branches do not
 contribute evidence to accepted answers.
 
-`inspect_markdown` returns nested blocks and root sections. `markdown_context`
+`render_markdown` takes `source`, optional `dialect` (`commonmark` by default or
+`gfm`), optional `extensions`, and `effort`. Omitting extensions uses the dialect's
+default profile; an explicit array replaces it, including `[]` to disable all.
+Names are `autolinks`, `strikethrough`, `tables`, `task_lists`, and `tag_filter`.
+Results include HTML, source/output digests, renderer/specification identities,
+effective extensions, and a receipt retaining the original source. Tag filtering
+is not a general HTML or URL sanitizer. For example:
+
+```sh
+purrassist call render_markdown --root . < examples/render-markdown.json
+```
+
+`inspect_markdown` returns nested blocks, original line maps, and root sections. `markdown_context`
 takes UTF-8 byte offsets `start`/`end` and optional neighboring-block count.
 `plan_markdown_section` replaces the body of a root `heading` block;
 `plan_markdown_task` sets a root task `block` to the supplied `checked` state.

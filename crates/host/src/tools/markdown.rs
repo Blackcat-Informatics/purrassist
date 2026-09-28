@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Source-preserving Markdown operations shared by CLI and MCP.
+mod render;
 use purrassist::{
     AssistResult, Governor, Outcome, Receipt, StopReason,
     contract::Resource,
@@ -26,7 +27,18 @@ pub(super) fn call(name: &str, args: &Node) -> Result<Node, String> {
             Resource::Work,
             size(source.len()).saturating_mul(4).saturating_add(1),
         )?;
-        operation(name, args, &document, &mut governor)
+        let value = operation(name, args, &document, &mut governor)?;
+        if name == "render_markdown" {
+            governor.charge(Resource::EvidenceEntries, 1)?;
+            governor.charge(Resource::ScratchBytes, 512)?;
+            receipt.evidence.push(purrassist::contract::Evidence {
+                rule: "markdown.render.v1".into(),
+                explanation: "Rendered using the dialect and effective extensions reported in the output; original source remains retained. HTML is not sanitized.".into(),
+                span: Some(purrassist::contract::SourceSpan { source: document.digest(), bytes: 0..source.len() }),
+                destination: "/html".into(),
+            });
+        }
+        Ok(value)
     });
     let outcome = match result {
         Ok(value) => Outcome::Resolved(value),
@@ -45,6 +57,7 @@ fn operation(
     governor: &mut Governor,
 ) -> Result<Node, StopReason> {
     match name {
+        "render_markdown" => render::render(args, document, governor),
         "inspect_markdown" => Ok(object([
             ("source", string(document.digest().to_string())),
             ("blocks", array(document.blocks().iter().map(block))),
@@ -130,6 +143,18 @@ fn plan(value: purrassist::edits::EditPlan) -> Node {
 fn block(value: &Block) -> Node {
     object([
         ("span", span(&value.span)),
+        (
+            "lines",
+            array(
+                value
+                    .lines
+                    .iter()
+                    .zip(&value.line_padding)
+                    .map(|(range, padding)| {
+                        object([("span", span(range)), ("padding", integer(size(*padding)))])
+                    }),
+            ),
+        ),
         ("kind", kind(&value.kind)),
         ("children", array(value.children.iter().map(block))),
     ])

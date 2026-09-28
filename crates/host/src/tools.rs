@@ -29,8 +29,14 @@ struct Definition {
 }
 const DEFINITIONS: &[Definition] = &[
     Definition {
+        name: "render_markdown",
+        description: "Render exact Markdown source to HTML with a source-retaining receipt, dialect, and explicit extension profile; preserves raw HTML/URI schemes except selected GFM tag filtering and is not a sanitizer",
+        schema: r#"{"type":"object","required":["source"],"properties":{"source":{"type":"string"},"dialect":{"enum":["commonmark","gfm"]},"extensions":{"type":"array","maxItems":5,"uniqueItems":true,"items":{"enum":["autolinks","strikethrough","tables","task_lists","tag_filter"]}},"effort":{"enum":["exact","quick","standard","deep","maximum"]}},"additionalProperties":false}"#,
+        writes: false,
+    },
+    Definition {
         name: "inspect_markdown",
-        description: "Index exact Markdown block ranges, nested containers, and sections; this is an editing index, not a conforming renderer",
+        description: "Index exact Markdown block ranges, source line maps, nested containers, and sections",
         schema: r#"{"type":"object","required":["source"],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]}},"additionalProperties":false}"#,
         writes: false,
     },
@@ -174,7 +180,8 @@ impl Tools {
             "match_strings" => rank(args),
             "match_paths" => paths::resolve(args),
             "resolve_intent" => intent::resolve(args),
-            "inspect_markdown"
+            "render_markdown"
+            | "inspect_markdown"
             | "markdown_context"
             | "plan_markdown_section"
             | "plan_markdown_task" => markdown::call(name, args),

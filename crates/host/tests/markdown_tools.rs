@@ -165,3 +165,92 @@ fn document_tools_preserve_crlf_unicode_context_and_edit_identity() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn rendering_profiles_receipts_and_schema_rejection() {
+    let root = std::env::temp_dir().join(format!("purrassist-render-tool-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let tools = Tools::new(&root).unwrap();
+    let source = "~~café~~ www.example.org\r\n";
+    for (args, expected) in [
+        ("{}", "<p>~~café~~ www.example.org</p>\n"),
+        (
+            r#"{"dialect":"gfm"}"#,
+            "<p><del>café</del> <a href=\"http://www.example.org\">www.example.org</a></p>\n",
+        ),
+        (
+            r#"{"dialect":"gfm","extensions":[]}"#,
+            "<p>~~café~~ www.example.org</p>\n",
+        ),
+        (
+            r#"{"extensions":["strikethrough"]}"#,
+            "<p><del>café</del> www.example.org</p>\n",
+        ),
+    ] {
+        let result = call(&tools, "render_markdown", source, args);
+        assert_eq!(
+            result.pointer("/status").unwrap().as_str(),
+            Some("resolved")
+        );
+        assert_eq!(
+            result.pointer("/value/html").unwrap().as_str(),
+            Some(expected)
+        );
+        assert_eq!(
+            result.pointer("/receipt/sources/0/text").unwrap().as_str(),
+            Some(source)
+        );
+        assert_eq!(
+            result.pointer("/value/source").unwrap().as_str(),
+            Some(Digest::of(source.as_bytes()).to_string().as_str())
+        );
+        assert_eq!(
+            result.pointer("/value/output").unwrap().as_str(),
+            Some(Digest::of(expected.as_bytes()).to_string().as_str())
+        );
+        assert_eq!(
+            result.pointer("/receipt/evidence/0/rule").unwrap().as_str(),
+            Some("markdown.render.v1")
+        );
+    }
+    for invalid in [
+        r#"{"source":"x","dialect":"other"}"#,
+        r#"{"source":"x","extensions":["tables","tables"]}"#,
+        r#"{"source":"x","extensions":["unknown"]}"#,
+        r#"{"source":"x","extensions":false}"#,
+    ] {
+        assert!(
+            tools
+                .call("render_markdown", &json::parse(invalid).unwrap())
+                .is_err()
+        );
+    }
+    let failed = call(
+        &tools,
+        "render_markdown",
+        &"x".repeat(50_000),
+        r#"{"effort":"exact"}"#,
+    );
+    assert_eq!(
+        failed.pointer("/status").unwrap().as_str(),
+        Some("unresolved")
+    );
+    assert_eq!(failed.get("value").unwrap().value, Value::Null);
+    assert_eq!(
+        failed
+            .pointer("/receipt/termination/kind")
+            .unwrap()
+            .as_str(),
+        Some("budget_exceeded")
+    );
+    let index = call(&tools, "inspect_markdown", ">\t\tcode\n", "{}");
+    assert_eq!(
+        offset(
+            index
+                .pointer("/value/blocks/0/children/0/lines/0/padding")
+                .unwrap()
+        ),
+        2
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
