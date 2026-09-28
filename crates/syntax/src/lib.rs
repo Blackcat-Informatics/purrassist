@@ -11,6 +11,7 @@ use purrassist_core::{
     contract::{Evidence, Resource, Validation},
     digest::Digest,
     edits::{AppliedEdit, EditPlan, TextEdit},
+    provenance::{Derivation, Forest},
 };
 use std::ops::{ControlFlow, Range};
 
@@ -283,7 +284,7 @@ fn checked(
     if report.valid {
         return Ok(Outcome::Resolved(applied.clone()));
     }
-    let mut accepted = Vec::new();
+    let mut accepted: Vec<(AppliedEdit, Evidence)> = Vec::new();
     let changed = changed_ranges(plan);
     for issue in &report.issues {
         if !issue.missing
@@ -316,11 +317,7 @@ fn checked(
                     replacement: source.into(),
                 }],
             };
-            accepted.push(AppliedEdit {
-                text: repaired.text,
-                inverse,
-            });
-            receipt.evidence.push(Evidence {
+            let evidence = Evidence {
                 rule: "syntax.missing-punctuation.v1".into(),
                 explanation: format!(
                     "insert parser-indicated {:?} at byte {} and revalidate",
@@ -328,17 +325,61 @@ fn checked(
                 ),
                 span: None,
                 destination: format!("bytes:{}", issue.span.start),
-            });
+            };
+            accepted.push((
+                AppliedEdit {
+                    text: repaired.text,
+                    inverse,
+                },
+                evidence,
+            ));
         }
     }
-    Ok(match accepted.as_slice() {
-        [] => {
+    Ok(match accepted.len() {
+        0 => {
             receipt.stopped = StopReason::NoCandidate;
             Outcome::Unresolved
         }
-        [answer] => Outcome::Resolved(answer.clone()),
-        _ => Outcome::Ambiguous(accepted),
+        1 => {
+            let (answer, evidence) = accepted.remove(0);
+            receipt.evidence.push(evidence);
+            Outcome::Resolved(answer)
+        }
+        // Every accepted repair inserted a different parser-indicated token
+        // at a different byte offset, but publish through the derivation
+        // forest anyway so any evidence that happens to be identical across
+        // repairs (rather than the ordinarily-distinguishing byte offset) is
+        // promoted once instead of duplicated into every alternative.
+        _ => populate_repair_alternatives(accepted, governor, receipt)?,
     })
+}
+/// Build one derivation per accepted repair and publish shared vs.
+/// per-repair evidence through the derivation forest.
+///
+/// # Errors
+/// Returns `BudgetExceeded` before any ledger is committed to `receipt`.
+fn populate_repair_alternatives(
+    accepted: Vec<(AppliedEdit, Evidence)>,
+    governor: &mut Governor,
+    receipt: &mut Receipt,
+) -> Result<Outcome<AppliedEdit>, StopReason> {
+    let mut forest = Forest::new(governor);
+    let mut derivations = Vec::with_capacity(accepted.len());
+    let mut outputs = Vec::with_capacity(accepted.len());
+    for (answer, evidence) in accepted {
+        let output = Digest::of(answer.to_node().to_json().as_bytes());
+        let mut derivation = Derivation::new(output, 0);
+        derivation.push(forest.evidence(governor, evidence)?);
+        derivations.push(derivation);
+        outputs.push(answer);
+    }
+    let published = forest.publish(&derivations, governor)?;
+    // `receipt.evidence` already carries the original edit plan's own
+    // evidence (from `EditPlan::apply_governed`, called before this repair
+    // search); extend rather than replace it.
+    receipt.evidence.extend(published.evidence);
+    receipt.alternatives = published.alternatives;
+    Ok(Outcome::Ambiguous(outputs))
 }
 fn validation(receipt: &mut Receipt, report: &Report) {
     receipt.validations.push(Validation {
@@ -374,4 +415,83 @@ fn changed_ranges(plan: &EditPlan) -> Vec<Range<usize>> {
 }
 fn size(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::populate_repair_alternatives;
+    use purrassist_core::{
+        Budget, Governor, Outcome,
+        contract::Evidence,
+        digest::Digest,
+        edits::{AppliedEdit, EditPlan},
+    };
+
+    /// `checked` only accepts a repair when reparsing is *globally* valid, so
+    /// two genuinely independent missing-token defects can never both be
+    /// individually sufficient (fixing one always leaves the other's error
+    /// in place) — confirmed by direct experimentation against tree-sitter's
+    /// JavaScript and Rust grammars (compound unclosed-block recovery even
+    /// reports the same byte offset twice for two still-independently-needed
+    /// closers). This test instead exercises exactly the code path `checked`
+    /// hands off to once it *has* collected two or more accepted repairs
+    /// (`populate_repair_alternatives`), with two realistic, independently
+    /// valid `AppliedEdit`s standing in for that scenario.
+    #[test]
+    fn ambiguous_repairs_publish_one_alternative_per_accepted_repair() {
+        let mut governor = Governor::new(Budget::default());
+        let shared = Evidence {
+            rule: "syntax.missing-punctuation.v1".into(),
+            explanation: "insert parser-indicated \";\" at byte 5 and revalidate".into(),
+            span: None,
+            destination: "bytes:5".into(),
+        };
+        let first = AppliedEdit {
+            text: "fn f() { 1; }".into(),
+            inverse: EditPlan {
+                source: Digest::of(b"fn f() { 1; }"),
+                edits: Vec::new(),
+            },
+        };
+        let second = AppliedEdit {
+            text: "fn f() { 2; }".into(),
+            inverse: EditPlan {
+                source: Digest::of(b"fn f() { 2; }"),
+                edits: Vec::new(),
+            },
+        };
+        let mut receipt = purrassist_core::Receipt::new(
+            b"probe",
+            "syntax.apply.v1",
+            purrassist_core::Effort::default(),
+            Budget::default(),
+        );
+        let outcome = populate_repair_alternatives(
+            vec![(first, shared.clone()), (second, shared)],
+            &mut governor,
+            &mut receipt,
+        )
+        .unwrap();
+        let Outcome::Ambiguous(answers) = outcome else {
+            panic!("expected ambiguous outcome")
+        };
+        assert_eq!(answers.len(), 2);
+        assert_eq!(receipt.alternatives.len(), answers.len());
+        for (answer, ledger) in answers.iter().zip(&receipt.alternatives) {
+            assert_eq!(
+                ledger.output,
+                Digest::of(answer.to_node().to_json().as_bytes())
+            );
+        }
+        // The two repairs' evidence was byte-identical: it is shared by
+        // every alternative and promoted to the top-level ledger, leaving
+        // each alternative's own ledger empty.
+        assert_eq!(receipt.evidence.len(), 1);
+        assert!(
+            receipt
+                .alternatives
+                .iter()
+                .all(|ledger| ledger.evidence.is_empty())
+        );
+    }
 }

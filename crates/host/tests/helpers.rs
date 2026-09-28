@@ -49,6 +49,25 @@ fn public_wire_formats_produce_locally_validated_explicit_guesses() {
     }
 }
 #[test]
+fn completed_usage_merges_every_phase_including_scratch_and_candidates() {
+    // `Pending::complete` combines three independently governed phases
+    // (request preparation, response extraction, and local schema recovery
+    // of the proposed value) via `Usage::merge`. Preparation alone charges
+    // no `Resource::Candidates` (recovery is what proposes candidates), so a
+    // nonzero count here proves the local-recovery phase's usage was folded
+    // in, not dropped; likewise `total_scratch_charged` (a monotone sum,
+    // unlike the high-water `peak_scratch_bytes` also asserted elsewhere)
+    // must reflect real charges from more than one phase.
+    let result = prepare(Provider::AnthropicMessages).complete(
+        200,
+        r#"{"stop_reason":"end_turn","content":[{"type":"text","text":"42"}]}"#,
+    );
+    assert!(matches!(result.outcome, Outcome::BestGuess(_)));
+    assert!(result.receipt.usage.candidates > 0);
+    assert!(result.receipt.usage.total_scratch_charged > 0);
+    assert!(result.receipt.usage.total_scratch_charged >= result.receipt.usage.peak_scratch_bytes);
+}
+#[test]
 fn helpers_are_disabled_by_default_and_refusals_are_not_reinterpreted() {
     let mut governor = Governor::new(Budget::default());
     assert!(

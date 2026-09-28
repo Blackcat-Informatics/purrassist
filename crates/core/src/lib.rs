@@ -13,8 +13,8 @@ pub mod schema;
 pub mod text;
 
 pub use contract::{
-    AssistResult, Budget, CancellationToken, Effort, Governor, Outcome, Receipt, ScratchLease,
-    ScratchMap, ScratchMeter, ScratchString, ScratchVec, StopReason,
+    AssistResult, Budget, CancellationToken, Effort, Governor, Outcome, RECEIPT_VERSION, Receipt,
+    ScratchLease, ScratchMap, ScratchMeter, ScratchString, ScratchVec, StopReason,
 };
 
 pub mod wire;
@@ -25,5 +25,7 @@ pub mod intent;
 pub mod paths;
 
 pub mod edits;
+
+pub mod provenance;
 
 pub mod markdown;

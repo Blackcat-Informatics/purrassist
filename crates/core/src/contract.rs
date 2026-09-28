@@ -53,7 +53,22 @@ impl CancellationToken {
 }
 
 /// Version of the machine-readable receipt contract.
-pub const RECEIPT_VERSION: u32 = 1;
+///
+/// # History
+/// - `1`: initial wire shape (see `docs/schema/receipt.schema.json` history
+///   for the exact JSON Schema of each version, and
+///   `crates/core/tests/data/receipts/` for one golden fixture per version).
+/// - `2`: `usage` gained `total_scratch_charged` (the monotone cumulative
+///   scratch counter, distinct from the existing high-water
+///   `peak_scratch_bytes`; see [`Usage::total_scratch_charged`]).
+///   `AlternativeReceipt.evidence`/`.losses`/`.inferences` now hold only what
+///   that alternative alone depends on: evidence, losses, and inferences
+///   shared by *every* competing alternative are promoted to the top-level
+///   `evidence`/`losses`/`inferences` ledgers instead of being duplicated
+///   into each alternative (see `crate::provenance`). Callers that assumed
+///   an alternative's ledgers were self-contained must also read the
+///   top-level ledgers to see shared transformations.
+pub const RECEIPT_VERSION: u32 = 2;
 
 /// Increasing recovery effort; all presets remain finite.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -189,6 +204,43 @@ pub struct Usage {
     pub evidence_entries: u64,
     /// Helper requests charged.
     pub helper_calls: u64,
+}
+
+impl Usage {
+    /// Combine two independently measured `Usage` values into the usage of
+    /// their combined operation: `work`, `candidates`, `evidence_entries`,
+    /// `helper_calls`, and `total_scratch_charged` (all monotone counters)
+    /// sum, while `peak_scratch_bytes` (a high-water mark, not a counter)
+    /// takes the larger of the two, since the two measurements' live scratch
+    /// was never necessarily simultaneous.
+    ///
+    /// Use this instead of merging individual fields by hand when combining
+    /// the usage of two governors that covered sequential phases of the same
+    /// logical operation (for example, a helper request's preparation and
+    /// its completion; see `purrassist_host::helpers`).
+    ///
+    /// ```
+    /// use purrassist_core::contract::Usage;
+    /// let first = Usage { work: 10, peak_scratch_bytes: 100, total_scratch_charged: 100, ..Usage::default() };
+    /// let second = Usage { work: 5, peak_scratch_bytes: 40, total_scratch_charged: 40, ..Usage::default() };
+    /// let merged = first.merge(&second);
+    /// assert_eq!(merged.work, 15);
+    /// assert_eq!(merged.peak_scratch_bytes, 100);
+    /// assert_eq!(merged.total_scratch_charged, 140);
+    /// ```
+    #[must_use]
+    pub fn merge(&self, other: &Self) -> Self {
+        Self {
+            work: self.work.saturating_add(other.work),
+            candidates: self.candidates.saturating_add(other.candidates),
+            peak_scratch_bytes: self.peak_scratch_bytes.max(other.peak_scratch_bytes),
+            total_scratch_charged: self
+                .total_scratch_charged
+                .saturating_add(other.total_scratch_charged),
+            evidence_entries: self.evidence_entries.saturating_add(other.evidence_entries),
+            helper_calls: self.helper_calls.saturating_add(other.helper_calls),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1172,7 +1224,38 @@ pub struct AssistResult<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Budget, Governor, Resource, StopReason};
+    use super::{Budget, Governor, Resource, StopReason, Usage};
+
+    #[test]
+    fn usage_merge_sums_counters_and_maxes_the_high_water_mark() {
+        let first = Usage {
+            work: 10,
+            candidates: 3,
+            peak_scratch_bytes: 100,
+            total_scratch_charged: 150,
+            evidence_entries: 2,
+            helper_calls: 1,
+        };
+        let second = Usage {
+            work: 5,
+            candidates: 7,
+            peak_scratch_bytes: 40,
+            total_scratch_charged: 40,
+            evidence_entries: 4,
+            helper_calls: 0,
+        };
+        let merged = first.merge(&second);
+        assert_eq!(merged.work, 15);
+        assert_eq!(merged.candidates, 10);
+        assert_eq!(merged.peak_scratch_bytes, 100); // max, not sum: never simultaneously live.
+        assert_eq!(merged.total_scratch_charged, 190); // sum: a monotone cumulative counter.
+        assert_eq!(merged.evidence_entries, 6);
+        assert_eq!(merged.helper_calls, 1);
+        // Merging is commutative for every field used here (sums and max both are).
+        assert_eq!(merged, second.merge(&first));
+        // Merging with a default identity changes nothing.
+        assert_eq!(first.merge(&Usage::default()), first);
+    }
 
     #[test]
     fn exhaustion_is_sticky_and_never_overcharges() {

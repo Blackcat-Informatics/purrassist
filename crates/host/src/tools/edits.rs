@@ -8,7 +8,6 @@ use purrassist::{
     edits::{AppliedEdit, EditPlan, TextEdit},
     json::{Node, Value},
     syntax::{self, Language},
-    wire::{array, integer, object, string},
 };
 
 pub(super) fn apply(args: &Node, cancellation: Option<&CancellationToken>) -> Result<Node, String> {
@@ -61,12 +60,10 @@ pub(super) fn apply(args: &Node, cancellation: Option<&CancellationToken>) -> Re
     result.receipt.usage = governor.usage();
     result.receipt.effort = effort;
     Ok(AssistResult {
-        outcome: match result.outcome {
+        outcome: match &result.outcome {
             Outcome::Resolved(value) => Outcome::Resolved(applied(value)),
             Outcome::BestGuess(value) => Outcome::BestGuess(applied(value)),
-            Outcome::Ambiguous(values) => {
-                Outcome::Ambiguous(values.into_iter().map(applied).collect())
-            }
+            Outcome::Ambiguous(values) => Outcome::Ambiguous(values.iter().map(applied).collect()),
             Outcome::Unresolved => Outcome::Unresolved,
         },
         receipt: result.receipt,
@@ -155,27 +152,8 @@ fn admit_output(
     )
 }
 
-fn applied(value: AppliedEdit) -> Node {
-    object([
-        ("text", string(value.text)),
-        ("inverse", encode_plan(value.inverse)),
-    ])
-}
-
-pub(super) fn encode_plan(plan: EditPlan) -> Node {
-    object([
-        ("source", string(plan.source.to_string())),
-        (
-            "edits",
-            array(plan.edits.into_iter().map(|edit| {
-                object([
-                    ("start", integer(size(edit.range.start))),
-                    ("end", integer(size(edit.range.end))),
-                    ("replacement", string(edit.replacement)),
-                ])
-            })),
-        ),
-    ])
+fn applied(value: &AppliedEdit) -> Node {
+    value.to_node()
 }
 fn size(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)

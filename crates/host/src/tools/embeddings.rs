@@ -3,7 +3,7 @@
 //! Governed embedding admission, selection, and independent alternative ledgers.
 use purrassist::{
     AssistResult, Governor, Outcome, Receipt, StopReason,
-    contract::{AlternativeReceipt, Evidence, Inference, InferenceKind, Resource, Validation},
+    contract::{Evidence, Inference, InferenceKind, Resource, Validation},
     digest::Digest,
     embeddings::{Embedding, EmbeddingIndex, EmbeddingMatch, EmbeddingPolicy},
     json::{Node, Value},
@@ -94,21 +94,34 @@ fn select(
             Ok(Outcome::BestGuess(output))
         }
         Outcome::Ambiguous(values) => {
-            let mut outputs = Vec::new();
-            let mut alternatives = Vec::new();
+            // Route through the derivation forest: every tied candidate's
+            // cosine evidence and derived-score inference (identical text
+            // whenever their scores tie exactly, as ties require) are
+            // promoted once to the shared, top-level ledgers instead of
+            // being duplicated into every alternative. Each candidate's own
+            // Guess inference (which identity it proposes) always differs
+            // and stays alternative-specific.
+            let mut forest = purrassist::provenance::Forest::new(governor);
+            let mut derivations = Vec::with_capacity(values.len());
+            let mut outputs = Vec::with_capacity(values.len());
             for value in values {
                 let (output, evidence, inferences) = ledger(space, value, governor)?;
-                alternatives.push(AlternativeReceipt {
-                    output: Digest::of(output.to_json().as_bytes()),
-                    cost: 0,
-                    evidence: vec![evidence],
-                    losses: Vec::new(),
-                    inferences,
-                    validations: vec![0],
-                });
+                let mut derivation = purrassist::provenance::Derivation::new(
+                    Digest::of(output.to_json().as_bytes()),
+                    0,
+                );
+                derivation.push(forest.evidence(governor, evidence)?);
+                for inference in inferences {
+                    derivation.push(forest.inference(governor, inference)?);
+                }
+                derivation.push(forest.validation(governor, 0, true)?);
+                derivations.push(derivation);
                 outputs.push(output);
             }
-            receipt.alternatives = alternatives;
+            let published = forest.publish(&derivations, governor)?;
+            receipt.evidence.extend(published.evidence);
+            receipt.inferences.extend(published.inferences);
+            receipt.alternatives = published.alternatives;
             Ok(Outcome::Ambiguous(outputs))
         }
         Outcome::Unresolved => Ok(Outcome::Unresolved),

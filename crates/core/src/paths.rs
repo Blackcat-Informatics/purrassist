@@ -3,7 +3,7 @@
 //! Pure candidate-path resolution. Matching never opens or authorizes a file.
 use crate::{
     AssistResult, Effort, Governor, Outcome, Receipt, StopReason,
-    contract::{AlternativeReceipt, Evidence, Inference, InferenceKind, Resource},
+    contract::{Evidence, Inference, InferenceKind, Resource},
     digest::Digest,
     json::Node,
     matching::{self, Candidate, MatchRequest},
@@ -322,6 +322,8 @@ fn record_matches(
     receipt: &mut Receipt,
 ) -> Result<(), StopReason> {
     let ambiguous = matches.len() > 1;
+    let mut forest = ambiguous.then(|| crate::provenance::Forest::new(governor));
+    let mut derivations = Vec::with_capacity(matches.len());
     for entry in matches {
         let signal_bytes = entry
             .methods
@@ -360,19 +362,26 @@ fn record_matches(
                 value: entry.path.clone(),
             }]
         };
-        if ambiguous {
-            receipt.alternatives.push(AlternativeReceipt {
-                output: Digest::of(entry.to_node().to_json().as_bytes()),
-                cost: 0,
-                evidence: vec![evidence],
-                losses: Vec::new(),
-                inferences,
-                validations: Vec::new(),
-            });
+        if let Some(forest) = forest.as_mut() {
+            let mut derivation = crate::provenance::Derivation::new(
+                Digest::of(entry.to_node().to_json().as_bytes()),
+                0,
+            );
+            derivation.push(forest.evidence(governor, evidence)?);
+            for inference in inferences {
+                derivation.push(forest.inference(governor, inference)?);
+            }
+            derivations.push(derivation);
         } else {
             receipt.evidence.push(evidence);
             receipt.inferences.extend(inferences);
         }
+    }
+    if let Some(forest) = forest {
+        let published = forest.publish(&derivations, governor)?;
+        receipt.evidence.extend(published.evidence);
+        receipt.inferences.extend(published.inferences);
+        receipt.alternatives = published.alternatives;
     }
     Ok(())
 }

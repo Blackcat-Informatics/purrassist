@@ -180,11 +180,7 @@ impl Pending {
             Ok(text) => text,
             Err(reason) => {
                 receipt.stopped = reason;
-                receipt.usage.work = receipt.usage.work.saturating_add(governor.usage().work);
-                receipt.usage.peak_scratch_bytes = receipt
-                    .usage
-                    .peak_scratch_bytes
-                    .saturating_add(governor.usage().peak_scratch_bytes);
+                receipt.usage = receipt.usage.merge(&governor.usage());
                 return AssistResult {
                     outcome: Outcome::Unresolved,
                     receipt,
@@ -231,24 +227,16 @@ impl Pending {
         recovered.receipt.sources.extend(receipt.sources);
         recovered.receipt.operation = receipt.operation;
         recovered.receipt.budget = self.budget;
-        recovered.receipt.usage.helper_calls = 1;
-        recovered.receipt.usage.evidence_entries = recovered
+        // Combine this helper round's three phases of independently measured
+        // usage (request preparation, response extraction, and local
+        // recovery of the proposed value) into one reported total: counters
+        // sum, and `peak_scratch_bytes` takes the largest of the three,
+        // since their live scratch was never simultaneously held.
+        recovered.receipt.usage = recovered
             .receipt
             .usage
-            .evidence_entries
-            .saturating_add(self.usage.evidence_entries);
-        recovered.receipt.usage.peak_scratch_bytes = recovered
-            .receipt
-            .usage
-            .peak_scratch_bytes
-            .saturating_add(self.usage.peak_scratch_bytes)
-            .saturating_add(governor.usage().peak_scratch_bytes);
-        recovered.receipt.usage.work = recovered
-            .receipt
-            .usage
-            .work
-            .saturating_add(self.usage.work)
-            .saturating_add(governor.usage().work);
+            .merge(&self.usage)
+            .merge(&governor.usage());
         recovered
     }
 }

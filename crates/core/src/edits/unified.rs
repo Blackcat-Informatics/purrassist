@@ -81,8 +81,25 @@ pub fn plan_unified_governed(
     );
     let result = plan(source, patch, governor, &mut receipt);
     let outcome = match result {
-        Ok(mut plans) if plans.len() == 1 => Outcome::Resolved(plans.remove(0)),
-        Ok(plans) if !plans.is_empty() => Outcome::Ambiguous(plans),
+        Ok(mut plans) if plans.len() == 1 => {
+            let (plan, evidence) = plans.remove(0);
+            receipt.evidence.extend(evidence);
+            Outcome::Resolved(plan)
+        }
+        // Every surviving combination matched its context at a complete
+        // line boundary; leave that per-plan context evidence out of the
+        // top-level ledger and publish it through the derivation forest
+        // instead, promoting whatever context happens to be identical
+        // across every combination and keeping the rest alternative-specific.
+        Ok(plans) if !plans.is_empty() => {
+            match populate_unified_alternatives(plans, governor, &mut receipt) {
+                Ok(plans) => Outcome::Ambiguous(plans),
+                Err(reason) => {
+                    receipt.stopped = reason;
+                    Outcome::Unresolved
+                }
+            }
+        }
         Ok(_) => {
             receipt.stopped = StopReason::NoCandidate;
             Outcome::Unresolved
@@ -95,6 +112,33 @@ pub fn plan_unified_governed(
     receipt.usage = governor.usage();
     AssistResult { outcome, receipt }
 }
+/// Build one derivation per surviving hunk-placement combination and publish
+/// shared vs. per-combination context evidence through the derivation forest.
+///
+/// # Errors
+/// Returns `BudgetExceeded` before any ledger is committed to `receipt`.
+fn populate_unified_alternatives(
+    plans: Vec<(EditPlan, Vec<Evidence>)>,
+    governor: &mut Governor,
+    receipt: &mut Receipt,
+) -> Result<Vec<EditPlan>, StopReason> {
+    let mut forest = crate::provenance::Forest::new(governor);
+    let mut derivations = Vec::with_capacity(plans.len());
+    let mut outputs = Vec::with_capacity(plans.len());
+    for (plan, evidence) in plans {
+        let output = crate::digest::Digest::of(plan.to_node().to_json().as_bytes());
+        let mut derivation = crate::provenance::Derivation::new(output, 0);
+        for entry in evidence {
+            derivation.push(forest.evidence(governor, entry)?);
+        }
+        derivations.push(derivation);
+        outputs.push(plan);
+    }
+    let published = forest.publish(&derivations, governor)?;
+    receipt.evidence = published.evidence;
+    receipt.alternatives = published.alternatives;
+    Ok(outputs)
+}
 
 fn invalid(message: &str) -> StopReason {
     StopReason::InvalidInput(message.into())
@@ -105,7 +149,7 @@ fn plan(
     patch: &str,
     governor: &mut Governor,
     receipt: &mut Receipt,
-) -> Result<Vec<EditPlan>, StopReason> {
+) -> Result<Vec<(EditPlan, Vec<Evidence>)>, StopReason> {
     receipt.retain_source(source, governor)?;
     receipt.retain_source(patch, governor)?;
     governor.charge(
@@ -176,12 +220,13 @@ fn plan(
     }
     let mut plans = Vec::new();
     for (plan, _) in partials {
-        if plans.contains(&plan) {
+        if plans.iter().any(|(existing, _)| existing == &plan) {
             continue;
         }
+        let mut evidence = Vec::with_capacity(plan.edits.len());
         for edit in &plan.edits {
             governor.charge(Resource::EvidenceEntries, 1)?;
-            receipt.evidence.push(Evidence {
+            evidence.push(Evidence {
                 rule: "text.unified-context.v1".into(),
                 explanation: "old-side content matched at a complete line boundary".into(),
                 span: Some(SourceSpan {
@@ -191,7 +236,7 @@ fn plan(
                 destination: format!("bytes:{}..{}", edit.range.start, edit.range.end),
             });
         }
-        plans.push(plan);
+        plans.push((plan, evidence));
     }
     Ok(plans)
 }

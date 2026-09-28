@@ -721,7 +721,7 @@ fn planned(result: purrassist::AssistResult<EditPlan>) -> Node {
     };
     object([
         ("status", string(status)),
-        ("plans", array(plans.into_iter().map(edits::encode_plan))),
+        ("plans", array(plans.iter().map(EditPlan::to_node))),
         ("receipt", result.receipt.to_node()),
     ])
 }

@@ -4,6 +4,7 @@
 use crate::contract::{
     AssistResult, Budget, Evidence, Inference, InferenceKind, Loss, Outcome, Receipt, StopReason,
 };
+use crate::edits::{AppliedEdit, EditPlan};
 use crate::json::{Member, Node, Number, Value};
 
 /// Construct an ordered JSON object from unique field names supplied by the caller.
@@ -143,6 +144,10 @@ impl Receipt {
                     ("work", integer(self.usage.work)),
                     ("candidates", integer(self.usage.candidates)),
                     ("peak_scratch_bytes", integer(self.usage.peak_scratch_bytes)),
+                    (
+                        "total_scratch_charged",
+                        integer(self.usage.total_scratch_charged),
+                    ),
                     ("evidence_entries", integer(self.usage.evidence_entries)),
                     ("helper_calls", integer(self.usage.helper_calls)),
                 ]),
@@ -177,6 +182,56 @@ impl Receipt {
                     ("detail", string(self.stopped.to_string())),
                 ]),
             ),
+        ])
+    }
+}
+impl EditPlan {
+    /// Serialize this plan's exact source identity and edits. These exact
+    /// JSON bytes are the identity hashed by `AlternativeReceipt::output`
+    /// wherever an ambiguous edit-planning operation publishes this plan as
+    /// one of its alternatives.
+    ///
+    /// ```
+    /// use purrassist_core::{digest::Digest, edits::{EditPlan, TextEdit}};
+    /// let plan = EditPlan {
+    ///     source: Digest::of(b"hello"),
+    ///     edits: vec![TextEdit { range: 0..1, replacement: "H".into() }],
+    /// };
+    /// assert_eq!(plan.to_node().pointer("/edits/0/replacement").unwrap().as_str(), Some("H"));
+    /// ```
+    #[must_use]
+    pub fn to_node(&self) -> Node {
+        object([
+            ("source", string(self.source.to_string())),
+            (
+                "edits",
+                array(self.edits.iter().map(|edit| {
+                    object([
+                        (
+                            "start",
+                            integer(u64::try_from(edit.range.start).unwrap_or(u64::MAX)),
+                        ),
+                        (
+                            "end",
+                            integer(u64::try_from(edit.range.end).unwrap_or(u64::MAX)),
+                        ),
+                        ("replacement", string(&edit.replacement)),
+                    ])
+                })),
+            ),
+        ])
+    }
+}
+impl AppliedEdit {
+    /// Serialize the applied text and its conditional inverse plan. These
+    /// exact JSON bytes are the identity hashed by `AlternativeReceipt::output`
+    /// wherever an ambiguous syntax-checked application publishes this value
+    /// as one of its alternatives.
+    #[must_use]
+    pub fn to_node(&self) -> Node {
+        object([
+            ("text", string(&self.text)),
+            ("inverse", self.inverse.to_node()),
         ])
     }
 }

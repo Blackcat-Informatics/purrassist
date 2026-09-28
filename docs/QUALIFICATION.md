@@ -431,6 +431,51 @@ protocol behavior, not a maximum response latency or global allocator bound.
   nested task-checkbox plans, and buffer/conditional-file plan application also
   share the tool dispatcher. Ambiguous path matches now carry one output-digest-bound
   evidence and guess ledger per path; an exhausted ledger returns no partial set.
+- Replace ad hoc per-site ambiguous-ledger construction with a single
+  deduplicated derivation forest (`crates/core/src/provenance.rs`): evidence,
+  losses, inferences, and validation references intern to a content-addressed
+  node id once, charging `EvidenceEntries`/`ScratchBytes` once per distinct
+  node rather than once per alternative. `Forest::publish` partitions every
+  reachable node into what every derivation shares (promoted to the
+  top-level, selected-result ledgers) and what one derivation alone depends
+  on (that derivation's `AlternativeReceipt`); `Forest::distinguishing`
+  answers "why is this ambiguous" as the symmetric difference between two
+  derivations, and `Forest::rank`/`multiplicity`/`valid` are the tropical,
+  counting, and Boolean semiring readings of the same forest. JSON recovery,
+  semantic resolution, path matching, string selection, and the embedding
+  tool now build their alternatives through the forest; conflicting semantic
+  interpretations that share an identically-matched rule now show that rule
+  once at the top level instead of once per alternative
+  (`conflicting_rules_have_separate_output_bound_ledgers`). Four sites that
+  previously published no per-alternative ledger at all, or leaked
+  per-candidate evidence into the top-level ledger regardless of ambiguity,
+  now populate one forest-published alternative per candidate: exact-match
+  location (`edits::locate_governed`), fuzzy substring location
+  (`edits::locate_fuzzy_governed`), unified-diff hunk placement
+  (`edits::plan_unified_governed`), and Tree-sitter punctuation repair
+  (`purrassist_syntax::apply_checked_governed`). `EditPlan`/`AppliedEdit` JSON
+  encoding moved from a host-only helper into `crate::wire`
+  (`EditPlan::to_node`/`AppliedEdit::to_node`), so every alternative's
+  `output` digest is computed from the same encoder the host and CLI/MCP
+  surfaces serialize. The receipt wire version is now 2: `usage` gained
+  `total_scratch_charged`; a golden fixture
+  (`crates/core/tests/data/receipts/v2-json-recover-ambiguous-duplicate-keys.json`)
+  and `docs/schema/receipt.schema.json` (validated by this crate's own Draft
+  2020-12 engine, not an external validator) pin the exact wire shape.
+  `crates/host/src/helpers.rs`'s two hand-merged `Usage` sites now call a
+  single `Usage::merge` (sums the monotone counters, takes the larger of the
+  two `peak_scratch_bytes` high-water marks) instead of duplicating that
+  arithmetic. Exhaustion mid-build never publishes a partial alternative
+  list at any of these sites; a forest with N alternatives sharing E
+  evidence nodes charges E, not N times E. A natural, tree-sitter-generated
+  ambiguous *input* for the punctuation-repair site was not found: a single
+  missing-token repair must reparse to a *globally* valid tree, so two
+  genuinely independent missing-token defects can never both be
+  independently sufficient (confirmed by direct experimentation, including
+  against tree-sitter's own duplicate-position recovery for compound
+  unclosed blocks, which still requires both closers); that site's
+  ambiguous-publication path is instead exercised by a direct unit test with
+  two realistic, independently valid repairs.
 - Expand independent oracle and adversarial corpora, coverage-guided fuzzing beyond
   the bounded JSON campaign,
   memory/allocation measurements, build/artifact metrics, and representative

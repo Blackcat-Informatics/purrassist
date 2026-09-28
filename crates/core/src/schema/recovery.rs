@@ -4,8 +4,8 @@
 mod proposals;
 use super::Schema;
 use crate::contract::{
-    AlternativeReceipt, AssistResult, Budget, Effort, Evidence, Governor, Inference, InferenceKind,
-    Loss, Outcome, Receipt, Resource, SourceSpan, StopReason, Validation,
+    AssistResult, Budget, Effort, Evidence, Governor, Inference, InferenceKind, Loss, Outcome,
+    Receipt, Resource, SourceSpan, StopReason, Validation,
 };
 use crate::json::{Node, ParseFailure, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -228,38 +228,54 @@ impl Search<'_> {
             .iter()
             .any(|(candidate, _)| !candidate.inferences.is_empty());
         let ambiguous = accepted.len() > 1;
-        // Admit the new records before publishing any of them. Existing ledger
-        // entries are moved, preserving their original resource charges.
+        let mut nodes = Vec::with_capacity(accepted.len());
         if ambiguous {
-            self.governor
-                .charge(Resource::EvidenceEntries, size(accepted.len()))?;
-            self.governor.charge(
-                Resource::ScratchBytes,
-                size(accepted.len()).saturating_mul(256),
-            )?;
-        }
-        let mut nodes = Vec::new();
-        let mut alternatives = Vec::new();
-        for (candidate, validation) in accepted {
-            if ambiguous {
+            // Route through the derivation forest: evidence, losses, and
+            // inferences reachable from *every* accepted candidate (for
+            // example, an admission-level correction applied identically
+            // regardless of which later proposal was chosen) are promoted
+            // once to the shared, top-level ledgers instead of being
+            // duplicated into every alternative. Nothing is admitted to
+            // `self.receipt` until every candidate is interned and the whole
+            // forest is published, so exhaustion here never leaves a partial
+            // alternative list.
+            let mut forest = crate::provenance::Forest::new(self.governor);
+            let mut derivations = Vec::with_capacity(accepted.len());
+            for (candidate, validation) in accepted {
                 let output = candidate.node.to_json();
                 self.governor.charge(Resource::Work, size(output.len()))?;
-                alternatives.push(AlternativeReceipt {
-                    output: crate::digest::Digest::of(output.as_bytes()),
-                    cost: candidate.cost,
-                    evidence: candidate.evidence,
-                    losses: candidate.losses,
-                    inferences: candidate.inferences,
-                    validations: vec![validation],
-                });
-            } else {
-                self.receipt.evidence.extend(candidate.evidence);
-                self.receipt.losses.extend(candidate.losses);
-                self.receipt.inferences.extend(candidate.inferences);
+                let mut derivation = crate::provenance::Derivation::new(
+                    crate::digest::Digest::of(output.as_bytes()),
+                    candidate.cost,
+                );
+                for evidence in candidate.evidence {
+                    derivation.push(forest.evidence(self.governor, evidence)?);
+                }
+                for loss in candidate.losses {
+                    derivation.push(forest.loss(self.governor, loss)?);
+                }
+                for inference in candidate.inferences {
+                    derivation.push(forest.inference(self.governor, inference)?);
+                }
+                derivation.push(forest.validation(self.governor, validation, true)?);
+                derivations.push(derivation);
+                nodes.push(candidate.node);
             }
+            let published = forest.publish(&derivations, self.governor)?;
+            self.receipt.evidence = published.evidence;
+            self.receipt.losses = published.losses;
+            self.receipt.inferences = published.inferences;
+            self.receipt.alternatives = published.alternatives;
+        } else {
+            let (candidate, _validation) = accepted
+                .into_iter()
+                .next()
+                .expect("exactly one accepted candidate");
+            self.receipt.evidence.extend(candidate.evidence);
+            self.receipt.losses.extend(candidate.losses);
+            self.receipt.inferences.extend(candidate.inferences);
             nodes.push(candidate.node);
         }
-        self.receipt.alternatives = alternatives;
         Ok(if nodes.len() > 1 {
             Outcome::Ambiguous(nodes)
         } else if guesses {

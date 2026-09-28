@@ -46,7 +46,14 @@ recovery. Search exhaustion does not prove unsatisfiability.
 
 Receipts identify sources, spans, transforms, alternatives, scores, validations,
 rules, schemas, parsers, policies, helpers, consumed resources, and termination.
-Losses and inferences are separate ledgers. Receipt serialization is versioned.
+Losses and inferences are separate ledgers. Receipt serialization is versioned;
+`docs/schema/receipt.schema.json` is the JSON Schema for the current version,
+validated against this crate's own schema engine in
+`crates/core/tests/receipt_wire.rs`. Evidence, losses, inferences, and
+validation references shared by every competing alternative of an ambiguous
+operation are deduplicated into a derivation forest
+(`crates/core/src/provenance.rs`) and promoted once to the top-level ledgers,
+rather than duplicated into each `AlternativeReceipt`.
 Core operations are synchronous and resumable around supplied helper responses.
 
 ## Workspace boundaries

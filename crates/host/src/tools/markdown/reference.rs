@@ -54,7 +54,7 @@ pub(super) fn call(
             ));
         }
     };
-    Ok(super::plan(document.replace_reference(
+    Ok(super::plan(&document.replace_reference(
         &super::block_path(args)?,
         super::index(args, "occurrence")?,
         super::super::field(args, "destination").map_err(StopReason::InvalidInput)?,

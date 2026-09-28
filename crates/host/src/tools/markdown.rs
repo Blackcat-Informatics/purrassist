@@ -140,9 +140,9 @@ fn operation(
             } else {
                 vec![index(args, "heading")?]
             };
-            Ok(plan(document.replace_section_at(&path, body, governor)?))
+            Ok(plan(&document.replace_section_at(&path, body, governor)?))
         }
-        "plan_markdown_table_cell" => Ok(plan(document.replace_table_cell(
+        "plan_markdown_table_cell" => Ok(plan(&document.replace_table_cell(
             &block_path(args)?,
             index(args, "row")?,
             index(args, "column")?,
@@ -157,7 +157,7 @@ fn operation(
                 return Err(StopReason::InvalidInput("checked must be boolean".into()));
             };
             let path = block_path(args)?;
-            Ok(plan(document.set_task_at(&path, *checked, governor)?))
+            Ok(plan(&document.set_task_at(&path, *checked, governor)?))
         }
         _ => Err(StopReason::InvalidInput(
             "unknown Markdown operation".into(),
@@ -209,8 +209,8 @@ fn section(value: &Section) -> Node {
         ("body", span(&value.body)),
     ])
 }
-fn plan(value: purrassist::edits::EditPlan) -> Node {
-    super::edits::encode_plan(value)
+fn plan(value: &purrassist::edits::EditPlan) -> Node {
+    value.to_node()
 }
 
 fn block(value: &Block, path: &[usize]) -> Node {

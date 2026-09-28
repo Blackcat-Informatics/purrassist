@@ -1,0 +1,130 @@
+{
+  "version": 2,
+  "source": "sha256:d38245cfdb5d2239d67fe2a719312768b668a6928d8d97d04fbce83215e50b44",
+  "sources": [
+    {
+      "digest": "sha256:d38245cfdb5d2239d67fe2a719312768b668a6928d8d97d04fbce83215e50b44",
+      "text": "{\"x\":1,\"x\":2}"
+    }
+  ],
+  "alternatives": [
+    {
+      "output": "sha256:5e2b030a4a0f1582d78c0fd9924511cd6b1f2df9879e574f5ea1406c94052418",
+      "cost": 10,
+      "evidence": [
+        {
+          "rule": "json.key.resolve-duplicate",
+          "explanation": "replace with {\"x\":2}",
+          "destination": "",
+          "span": {
+            "source": "sha256:d38245cfdb5d2239d67fe2a719312768b668a6928d8d97d04fbce83215e50b44",
+            "start": 0,
+            "end": 13
+          }
+        }
+      ],
+      "losses": [
+        {
+          "evidence": {
+            "rule": "json.key.resolve-duplicate",
+            "explanation": "replace with {\"x\":2}",
+            "destination": "",
+            "span": {
+              "source": "sha256:d38245cfdb5d2239d67fe2a719312768b668a6928d8d97d04fbce83215e50b44",
+              "start": 0,
+              "end": 13
+            }
+          },
+          "original": "{\"x\":1,\"x\":2}"
+        }
+      ],
+      "inferences": [],
+      "validations": [
+        1
+      ]
+    },
+    {
+      "output": "sha256:5041bf1f713df204784353e82f6a4a535931cb64f1f4b4a5aeaffcb720918b22",
+      "cost": 10,
+      "evidence": [
+        {
+          "rule": "json.key.resolve-duplicate",
+          "explanation": "replace with {\"x\":1}",
+          "destination": "",
+          "span": {
+            "source": "sha256:d38245cfdb5d2239d67fe2a719312768b668a6928d8d97d04fbce83215e50b44",
+            "start": 0,
+            "end": 13
+          }
+        }
+      ],
+      "losses": [
+        {
+          "evidence": {
+            "rule": "json.key.resolve-duplicate",
+            "explanation": "replace with {\"x\":1}",
+            "destination": "",
+            "span": {
+              "source": "sha256:d38245cfdb5d2239d67fe2a719312768b668a6928d8d97d04fbce83215e50b44",
+              "start": 0,
+              "end": 13
+            }
+          },
+          "original": "{\"x\":1,\"x\":2}"
+        }
+      ],
+      "inferences": [],
+      "validations": [
+        2
+      ]
+    }
+  ],
+  "operation": "json.recover.v1",
+  "effort": "standard",
+  "budget": {
+    "work": 1000000,
+    "candidates": 128,
+    "input_bytes": 16777216,
+    "scratch_bytes": 67108864,
+    "depth": 128,
+    "evidence_entries": 65536,
+    "helper_calls": 0
+  },
+  "usage": {
+    "work": 79,
+    "candidates": 3,
+    "peak_scratch_bytes": 10654,
+    "total_scratch_charged": 15506,
+    "evidence_entries": 12,
+    "helper_calls": 0
+  },
+  "evidence": [],
+  "losses": [],
+  "inferences": [],
+  "validations": [
+    {
+      "validator": "purrassist.schema.draft2020-12.v1",
+      "constraint": "sha256:2580007aae761a5903706ac08d27485f89c36dabb02cbf10c97be711264f4dae",
+      "passed": false,
+      "diagnostics": [
+        ": object has ambiguous duplicate member occurrences (urn:purrassist:root#/duplicate-members)"
+      ]
+    },
+    {
+      "validator": "purrassist.schema.draft2020-12.v1",
+      "constraint": "sha256:2580007aae761a5903706ac08d27485f89c36dabb02cbf10c97be711264f4dae",
+      "passed": true,
+      "diagnostics": []
+    },
+    {
+      "validator": "purrassist.schema.draft2020-12.v1",
+      "constraint": "sha256:2580007aae761a5903706ac08d27485f89c36dabb02cbf10c97be711264f4dae",
+      "passed": true,
+      "diagnostics": []
+    }
+  ],
+  "termination": {
+    "kind": "completed",
+    "detail": "completed"
+  }
+}

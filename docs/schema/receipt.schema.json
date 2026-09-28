@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://purrassist.dev/schema/receipt.schema.json",
+  "title": "PurRAssist receipt",
+  "description": "Wire shape of `purrassist_core::contract::Receipt::to_node()`. Versioned by `receipt.version` (see `purrassist_core::contract::RECEIPT_VERSION` for the history of each version). This schema describes version 2.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "source",
+    "sources",
+    "alternatives",
+    "operation",
+    "effort",
+    "budget",
+    "usage",
+    "evidence",
+    "losses",
+    "inferences",
+    "validations",
+    "termination"
+  ],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 2
+    },
+    "source": { "$ref": "#/$defs/digest" },
+    "sources": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/sourceDocument" }
+    },
+    "alternatives": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/alternativeReceipt" }
+    },
+    "operation": { "type": "string" },
+    "effort": {
+      "type": "string",
+      "enum": ["exact", "quick", "standard", "deep", "maximum"]
+    },
+    "budget": { "$ref": "#/$defs/budget" },
+    "usage": { "$ref": "#/$defs/usage" },
+    "evidence": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/evidence" }
+    },
+    "losses": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/loss" }
+    },
+    "inferences": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/inference" }
+    },
+    "validations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/validation" }
+    },
+    "termination": { "$ref": "#/$defs/termination" }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "sourceDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "text"],
+      "properties": {
+        "digest": { "$ref": "#/$defs/digest" },
+        "text": { "type": "string" }
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "start", "end"],
+      "properties": {
+        "source": { "$ref": "#/$defs/digest" },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule", "explanation", "destination", "span"],
+      "properties": {
+        "rule": { "type": "string" },
+        "explanation": { "type": "string" },
+        "destination": { "type": "string" },
+        "span": {
+          "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/span" }]
+        }
+      }
+    },
+    "loss": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence", "original"],
+      "properties": {
+        "evidence": { "$ref": "#/$defs/evidence" },
+        "original": { "type": "string" }
+      }
+    },
+    "inference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence", "kind", "value"],
+      "properties": {
+        "evidence": { "$ref": "#/$defs/evidence" },
+        "kind": { "type": "string", "enum": ["derived", "guess"] },
+        "value": { "type": "string" }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["validator", "constraint", "passed", "diagnostics"],
+      "properties": {
+        "validator": { "type": "string" },
+        "constraint": { "type": "string" },
+        "passed": { "type": "boolean" },
+        "diagnostics": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "alternativeReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["output", "cost", "evidence", "losses", "inferences", "validations"],
+      "properties": {
+        "output": { "$ref": "#/$defs/digest" },
+        "cost": { "type": "integer", "minimum": 0 },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidence" }
+        },
+        "losses": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/loss" }
+        },
+        "inferences": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/inference" }
+        },
+        "validations": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "work",
+        "candidates",
+        "input_bytes",
+        "scratch_bytes",
+        "depth",
+        "evidence_entries",
+        "helper_calls"
+      ],
+      "properties": {
+        "work": { "type": "integer", "minimum": 0 },
+        "candidates": { "type": "integer", "minimum": 0 },
+        "input_bytes": { "type": "integer", "minimum": 0 },
+        "scratch_bytes": { "type": "integer", "minimum": 0 },
+        "depth": { "type": "integer", "minimum": 0 },
+        "evidence_entries": { "type": "integer", "minimum": 0 },
+        "helper_calls": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "work",
+        "candidates",
+        "peak_scratch_bytes",
+        "total_scratch_charged",
+        "evidence_entries",
+        "helper_calls"
+      ],
+      "properties": {
+        "work": { "type": "integer", "minimum": 0 },
+        "candidates": { "type": "integer", "minimum": 0 },
+        "peak_scratch_bytes": { "type": "integer", "minimum": 0 },
+        "total_scratch_charged": { "type": "integer", "minimum": 0 },
+        "evidence_entries": { "type": "integer", "minimum": 0 },
+        "helper_calls": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "termination": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "detail"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["completed", "no_candidate", "budget_exceeded", "cancelled", "invalid_input"]
+        },
+        "detail": { "type": "string" }
+      }
+    }
+  }
+}

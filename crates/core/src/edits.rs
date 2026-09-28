@@ -228,25 +228,53 @@ pub fn locate_governed(
                     Resource::ScratchBytes,
                     size(replacement.len()).saturating_add(128),
                 )?;
-                plans.push(EditPlan {
-                    source: receipt.source,
-                    edits: vec![TextEdit {
-                        range: position..position + needle.len(),
-                        replacement: replacement.into(),
-                    }],
-                });
+                let range = position..position + needle.len();
+                governor.charge(Resource::EvidenceEntries, 1)?;
+                governor.charge(
+                    Resource::ScratchBytes,
+                    size(needle.len()).saturating_mul(4).saturating_add(256),
+                )?;
+                let evidence = Evidence {
+                    rule: "text.locate.v1".into(),
+                    explanation: format!("exact occurrence of {needle:?}"),
+                    span: Some(SourceSpan {
+                        source: receipt.source,
+                        bytes: range.clone(),
+                    }),
+                    destination: format!("bytes:{}..{}", range.start, range.end),
+                };
+                plans.push((
+                    EditPlan {
+                        source: receipt.source,
+                        edits: vec![TextEdit {
+                            range,
+                            replacement: replacement.into(),
+                        }],
+                    },
+                    evidence,
+                ));
             }
         }
         Ok(plans)
     })();
     let outcome = match result {
-        Ok(plans) => match plans.as_slice() {
-            [] => {
+        Ok(mut plans) => match plans.len() {
+            0 => {
                 receipt.stopped = StopReason::NoCandidate;
                 Outcome::Unresolved
             }
-            [plan] => Outcome::Resolved(plan.clone()),
-            _ => Outcome::Ambiguous(plans),
+            1 => {
+                let (plan, evidence) = plans.remove(0);
+                receipt.evidence.push(evidence);
+                Outcome::Resolved(plan)
+            }
+            _ => match populate_locate_alternatives(plans, governor, &mut receipt) {
+                Ok(plans) => Outcome::Ambiguous(plans),
+                Err(reason) => {
+                    receipt.stopped = reason;
+                    Outcome::Unresolved
+                }
+            },
         },
         Err(reason) => {
             receipt.stopped = reason;
@@ -255,6 +283,31 @@ pub fn locate_governed(
     };
     receipt.usage = governor.usage();
     AssistResult { outcome, receipt }
+}
+/// Build one derivation per candidate occurrence and publish shared vs.
+/// per-occurrence evidence through the derivation forest.
+///
+/// # Errors
+/// Returns `BudgetExceeded` before any ledger is committed to `receipt`.
+fn populate_locate_alternatives(
+    plans: Vec<(EditPlan, Evidence)>,
+    governor: &mut Governor,
+    receipt: &mut Receipt,
+) -> Result<Vec<EditPlan>, StopReason> {
+    let mut forest = crate::provenance::Forest::new(governor);
+    let mut derivations = Vec::with_capacity(plans.len());
+    let mut outputs = Vec::with_capacity(plans.len());
+    for (plan, evidence) in plans {
+        let output = Digest::of(plan.to_node().to_json().as_bytes());
+        let mut derivation = crate::provenance::Derivation::new(output, 0);
+        derivation.push(forest.evidence(governor, evidence)?);
+        derivations.push(derivation);
+        outputs.push(plan);
+    }
+    let published = forest.publish(&derivations, governor)?;
+    receipt.evidence = published.evidence;
+    receipt.alternatives = published.alternatives;
+    Ok(outputs)
 }
 fn size(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)

@@ -22,7 +22,7 @@ pub(super) fn row(
         "remove" => TableRowEdit::Remove { index },
         _ => return Err(StopReason::InvalidInput("unknown table row action".into())),
     };
-    Ok(super::plan(document.edit_table_row(
+    Ok(super::plan(&document.edit_table_row(
         &super::block_path(args)?,
         &edit,
         governor,
@@ -108,7 +108,7 @@ pub(super) fn column(
             ));
         }
     };
-    Ok(super::plan(document.edit_table_column(
+    Ok(super::plan(&document.edit_table_column(
         &super::block_path(args)?,
         &edit,
         governor,
