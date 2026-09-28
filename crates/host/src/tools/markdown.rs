@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Source-preserving Markdown operations shared by CLI and MCP.
+mod reference;
 mod render;
 mod table;
 use purrassist::{
@@ -29,6 +30,7 @@ pub(super) fn call(name: &str, args: &Node) -> Result<Node, String> {
             size(source.len()).saturating_mul(4).saturating_add(1),
         )?;
         let value = operation(name, args, &document, &mut governor)?;
+        if name == "plan_markdown_reference" { reference::record(&document, &mut receipt, &mut governor)?; }
         if matches!(name, "plan_markdown_table_cell" | "plan_markdown_table_row" | "plan_markdown_table_column") {
             table::record(&document, &mut receipt, &mut governor)?;
         }
@@ -75,6 +77,7 @@ fn operation(
                 ),
             ),
             ("sections", array(document.sections().iter().map(section))),
+            ("references", reference::sites(document, governor)?),
         ])),
         "markdown_context" => {
             let context = document.context(
@@ -112,6 +115,7 @@ fn operation(
         )?)),
         "plan_markdown_table_row" => table::row(args, document, governor),
         "plan_markdown_table_column" => table::column(args, document, governor),
+        "plan_markdown_reference" => reference::call(args, document, governor),
         "plan_markdown_task" => {
             let Some(Value::Bool(checked)) = args.get("checked").map(|node| &node.value) else {
                 return Err(StopReason::InvalidInput("checked must be boolean".into()));

@@ -146,6 +146,12 @@ fn assert_tool_responses(messages: &[Node]) {
 fn shared_operations_are_identical_through_cli_and_mcp() {
     for (operation, arguments, pointer, expected) in [
         (
+            "plan_markdown_reference",
+            r#"{"source":"> [tea]: /hot\n","path":[0,0],"occurrence":0,"destination":"/iced","title":null}"#,
+            "/value/edits/0/replacement",
+            "<\\/iced>",
+        ),
+        (
             "plan_markdown_table_column",
             r#"{"source":"| A |\n| --- |\n","path":[0],"action":"align","index":0,"alignment":"center"}"#,
             "/value/edits/0/replacement",

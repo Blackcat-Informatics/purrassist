@@ -114,7 +114,8 @@ is not a general HTML or URL sanitizer. For example:
 purrassist call render_markdown --root . < examples/render-markdown.json
 ```
 
-`inspect_markdown` returns nested blocks, original line maps, and root sections. `markdown_context`
+`inspect_markdown` returns nested blocks, original line maps, root sections, and
+reference-definition occurrences with original field spans. `markdown_context`
 takes UTF-8 byte offsets `start`/`end` and optional neighboring-block count.
 `plan_markdown_section` replaces the body of a root `heading` block;
 `plan_markdown_task` sets the supplied `checked` state using either a root
@@ -152,6 +153,15 @@ Insert/remove preserves existing cell spelling, makes implicit padding explicit,
 keeps ignored extra cells beyond the new header width, and adds outer pipes when
 absent. Alignment changes preserve delimiter margins. Every proposal is reparsed
 and supports exact conditional undo. See `examples/markdown-table-column.json`.
+`plan_markdown_reference` selects a definition by its inspection `path` and
+`occurrence`, including shadowed duplicate labels. Supply decoded `destination`
+and an explicit `title` (string or `null` to remove it). The plan encodes these
+values safely for Markdown syntax, preserves label spelling and surrounding
+source, and reparses every definition to check that unselected values stay exact.
+Multiline destination/title regions can collapse to one physical line; newline
+and tab values use entities. NUL values are rejected because Markdown cannot
+retain them. Equal decoded fields produce an empty plan. See
+`examples/markdown-reference.json`.
 The Rust `markdown::InlineFragment` layer retains exact byte spans and renders
 code spans, emphasis, strong emphasis, inline links/images, escapes, line breaks,
 autolinks, and raw inline HTML. Explicit dialect selection preserves the pinned

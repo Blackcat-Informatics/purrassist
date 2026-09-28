@@ -54,6 +54,7 @@ fn main() {
     transcript.push(string(text::normalize("\u{212b}각ﬃ", Normalization::Nfkc)));
     transcript.push(embedding_transcript());
     transcript.push(markdown_transcript());
+    transcript.push(reference_transcript());
     let output = array(transcript).to_json();
     println!("{}", Digest::of(output.as_bytes()));
     println!("{output}");
@@ -255,4 +256,32 @@ fn apply_edit(plan: &EditPlan, source: &str, transcript: &mut Vec<Node>) -> Stri
         ("stale_receipt", stale.receipt.to_node()),
     ]));
     value.text
+}
+
+fn reference_transcript() -> Node {
+    let mut results = Vec::new();
+    let mut g = Governor::new(Budget::default());
+    let source = "> [Tea]: /hot\r\n> [tea]: /shadow\r\n>\r\n> [TEA]\r\n";
+    let doc = Document::parse(source, &mut g).expect("references");
+    let sites = doc.reference_sites(&mut g).expect("reference sites");
+    assert_eq!(sites.len(), 2);
+    assert_eq!(sites[0].path, [0, 0]);
+    assert_eq!(&source[sites[0].destination_span.clone()], "/hot");
+    let plan = doc
+        .replace_reference(&sites[0].path, 0, "/iced", Some("iced\ntea"), &mut g)
+        .expect("reference edit");
+    let output = apply_edit(&plan, source, &mut results);
+    let updated = Document::parse(&output, &mut g).expect("updated references");
+    let sites = updated.reference_sites(&mut g).expect("updated sites");
+    assert_eq!(sites[0].title.as_deref(), Some("iced\ntea"));
+    assert_eq!(sites[1].destination, "/shadow");
+    results.push(string(
+        updated
+            .render_html(Dialect::Gfm, &mut g)
+            .expect("reference rendering"),
+    ));
+    object([
+        ("operation", string("reference definitions")),
+        ("results", array(results)),
+    ])
 }

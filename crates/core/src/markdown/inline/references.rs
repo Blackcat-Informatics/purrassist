@@ -24,8 +24,12 @@ pub struct ReferenceDefinition {
     pub label: String,
     /// Destination after escapes and entities are decoded.
     pub destination: String,
+    /// Destination syntax, including angle delimiters when present, within the supplied block.
+    pub destination_span: Range<usize>,
     /// Optional decoded title.
     pub title: Option<String>,
+    /// Title syntax including its delimiters, within the supplied block.
+    pub title_span: Option<Range<usize>>,
 }
 /// Definitions collected from paragraph prefixes in document order.
 ///
@@ -69,22 +73,26 @@ impl References {
             governor.charge(Resource::Work, size.saturating_mul(4).saturating_add(1))?;
             let digest = Digest::of(source.as_bytes());
             let mut cursor = 0;
-            while let Some((end, label, destination, title)) = definition(source, cursor, governor)?
-            {
-                let key = label_key(&label);
+            while let Some(parsed) = definition(source, cursor, governor)? {
+                // Reserve definition-vector capacity and label-index metadata
+                // separately from retained/decoded text, including new field spans.
+                governor.charge(Resource::ScratchBytes, 512)?;
+                let key = label_key(&parsed.label);
                 let id = result.definitions.len();
                 result.index.entry(key).or_insert(id);
                 result.definitions.push(ReferenceDefinition {
                     block,
                     origin: ReferenceOrigin {
                         source: digest,
-                        span: cursor..end,
+                        span: cursor..parsed.end,
                     },
-                    label,
-                    destination,
-                    title,
+                    label: parsed.label,
+                    destination: parsed.destination,
+                    destination_span: parsed.destination_span,
+                    title: parsed.title,
+                    title_span: parsed.title_span,
                 });
-                cursor = end;
+                cursor = parsed.end;
             }
             result.sources.push((*source).into());
             result.consumed.push(cursor);
@@ -161,7 +169,14 @@ pub(super) fn label_end(source: &str, start: usize) -> Option<usize> {
     }
     None
 }
-type Definition = (usize, String, String, Option<String>);
+struct Definition {
+    end: usize,
+    label: String,
+    destination: String,
+    destination_span: Range<usize>,
+    title: Option<String>,
+    title_span: Option<Range<usize>>,
+}
 fn definition(
     source: &str,
     start: usize,
@@ -198,24 +213,26 @@ fn definition(
         return Ok(None);
     }
     let after = links::spaces(source, end);
-    let (finish, title_value) = if after > end
+    let (finish, title_value, title_span) = if after > end
         && !blank_line(&source[end..after])
         && let Some((title_end, title)) = links::title(source, after)
         && let Some(end) = line_end(source, title_end)
     {
-        (Some(end), Some(title))
+        (Some(end), Some(title), Some(after..title_end))
     } else {
-        (line_end(source, end), None)
+        (line_end(source, end), None, None)
     };
     let Some(finish) = finish else {
         return Ok(None);
     };
-    Ok(Some((
-        finish,
-        source[opening + 1..close].into(),
+    Ok(Some(Definition {
+        end: finish,
+        label: source[opening + 1..close].into(),
         destination,
-        title_value,
-    )))
+        destination_span: destination_start..end,
+        title: title_value,
+        title_span,
+    }))
 }
 fn line_end(source: &str, start: usize) -> Option<usize> {
     let end = start

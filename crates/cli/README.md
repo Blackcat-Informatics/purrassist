@@ -32,6 +32,10 @@ an index equal to the row count appends. The header and delimiter are not body r
 `insert`, `remove`, or `align`. Insert supplies `header`, `alignment`, and one
 `cells` value per body row; align supplies `alignment`. Plans preserve existing
 cell spelling and validate the resulting table before returning.
+`inspect_markdown` also returns reference occurrences and their original field
+spans. `plan_markdown_reference` takes `path`, `occurrence`, decoded `destination`,
+and explicit `title` (string or `null`). It preserves the selected label and all
+unselected definitions, with a structural-validation receipt and conditional undo.
 
 Pre-release implementation. See the
 [repository](https://github.com/Blackcat-Informatics/purrassist) for current

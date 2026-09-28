@@ -15,6 +15,8 @@ pub use table_columns::TableColumnEdit;
 pub use table_rows::TableRowEdit;
 mod inline;
 mod projection;
+mod references;
+pub use references::ReferenceSite;
 mod render;
 pub use context::Context;
 pub use inline::{

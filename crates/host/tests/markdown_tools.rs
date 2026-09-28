@@ -27,6 +27,64 @@ fn offset(node: &Node) -> usize {
     number.to_usize().unwrap()
 }
 #[test]
+fn reference_inspection_selects_duplicates_and_edits_decoded_fields() {
+    let root =
+        std::env::temp_dir().join(format!("purrassist-reference-tool-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let tools = Tools::new(&root).unwrap();
+    let source = "> [Tea]: /hot 'Warm'\r\n> [tea]: /shadow\r\n";
+    let inspection = call(&tools, "inspect_markdown", source, "{}");
+    assert_eq!(
+        inspection
+            .pointer("/value/references/1/path")
+            .unwrap()
+            .to_json(),
+        "[0,0]"
+    );
+    assert_eq!(
+        inspection
+            .pointer("/value/references/1/occurrence")
+            .unwrap()
+            .to_json(),
+        "1"
+    );
+    assert_eq!(
+        inspection
+            .pointer("/value/references/0/destination")
+            .unwrap()
+            .as_str(),
+        Some("/hot")
+    );
+    let result = call(
+        &tools,
+        "plan_markdown_reference",
+        source,
+        r#"{"path":[0,0],"occurrence":1,"destination":"/iced","title":"Cold"}"#,
+    );
+    let updated = apply(&result, source);
+    assert_eq!(
+        updated,
+        "> [Tea]: /hot 'Warm'\r\n> [tea]: <\\/iced> \"Cold\"\r\n"
+    );
+    assert_eq!(
+        result
+            .pointer("/receipt/validations/0/validator")
+            .unwrap()
+            .as_str(),
+        Some("markdown.reference-definition.v1")
+    );
+    assert!(
+        tools
+            .call(
+                "plan_markdown_reference",
+                &json::parse(r#"{"source":"x","path":[0],"occurrence":0,"destination":"/new"}"#)
+                    .unwrap()
+            )
+            .is_err()
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+#[test]
 fn table_column_tool_preserves_cells_and_validates_action_fields() {
     let root = std::env::temp_dir().join(format!(
         "purrassist-table-column-tool-{}",

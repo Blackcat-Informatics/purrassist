@@ -1,0 +1,7 @@
+{
+  "source": "> [Tea]: /hot 'Warm'\r\n> [tea]: /shadow\r\n>\r\n> [TEA]\r\n",
+  "path": [0, 0],
+  "occurrence": 0,
+  "destination": "/iced",
+  "title": "Cold tea"
+}

@@ -38,8 +38,8 @@ guess reporting, and exhaustion before a complete ledger can be returned.
 Local package verification has built all five packages. A local release CLI was
 installed into a disposable checkout cache and exercised on the published example
 inputs, including exact-source retention. This does not verify downloadable registry
-packages. Hosted CI passed for checkpoint `7104c1837b5918d8451a1f4349aef7ca3fad6bdf`:
-[run 36412285113](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36412285113)
+packages. Hosted CI passed for checkpoint `97f69cdae6170d97fcdfaf9e6e48932e4c3a5f61`:
+[run 36414217944](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36414217944)
 completed the Linux/macOS local gates, MSRV workspace tests, Windows core/syntax
 tests, and native/WASI comparisons. This is evidence for that checkpoint only;
 subsequent changes need their own qualification.
@@ -216,6 +216,20 @@ the browser-WASM core build passed. These are executed fixtures, not a proof for
 all floating-point inputs or browser execution. The expanded example passed the
 full Rust 1.98.0 local gate and nightly-2026-09-14 all-target Clippy.
 
+Reference occurrence inspection now exposes original document field spans and
+nested selectors, retaining duplicate labels. Destination/title plans use decoded
+values, preserve label spelling and surrounding bytes, encode syntax safely, and
+reparse every definition to check unselected values. Tests cover nested quote/list
+prefixes, tabs, Unicode, multiline labels/titles, CRLF, entities, empty destinations
+and titles, title removal, shadowed duplicates, no-op edits, exact undo, stale
+sources, NUL rejection, cancellation, and work exhaustion. Definition metadata is
+reserved separately from text. The expanded native/WASI reference transcript,
+complete edit/undo receipts, browser-WASM build, and nightly Clippy passed.
+The final reference source passed the full local Rust 1.98.0 `make check` gate,
+including official Markdown corpora, reference regressions, CLI/MCP equivalence,
+and Rustdoc. The optimized CLI executed `examples/markdown-reference.json` and
+returned the expected field replacement and structural-validation receipt.
+
 ## Remaining release work
 
 - Extend Markdown section, list, table, and reference structural editing and broaden
@@ -232,6 +246,9 @@ full Rust 1.98.0 local gate and nightly-2026-09-14 all-target Clippy.
   avoids subtree cloning for reference-only targets. These accounting additions
   do not establish measured allocator bounds or complete the allocation audit. Bound external parser allocations;
   progress cancellation alone is not a hard memory limit.
+  Reference parsing currently reserves work against the remaining block suffix
+  for each definition; replace this conservative quadratic reservation with
+  governed consumed-work accounting.
 - Extend alternative-specific ledgers beyond JSON recovery and semantic resolution,
   and finish uniform
   Rust/CLI/MCP access to remaining document operations. Domain-rule

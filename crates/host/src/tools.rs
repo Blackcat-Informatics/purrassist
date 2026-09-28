@@ -60,6 +60,12 @@ const DEFINITIONS: &[Definition] = &[
         writes: false,
     },
     Definition {
+        name: "plan_markdown_reference",
+        description: "Plan replacement of a selected Markdown reference definition's decoded destination and title",
+        schema: r#"{"type":"object","required":["source","path","occurrence","destination","title"],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"path":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"integer","minimum":0}},"occurrence":{"type":"integer","minimum":0},"destination":{"type":"string"},"title":{"type":["string","null"]}},"additionalProperties":false}"#,
+        writes: false,
+    },
+    Definition {
         name: "plan_markdown_table_column",
         description: "Plan a nested GFM column insertion, removal, or alignment change with structural validation",
         schema: r#"{"type":"object","required":["source","path","action","index"],"oneOf":[{"properties":{"action":{"const":"insert"}},"required":["header","alignment","cells"]},{"properties":{"action":{"const":"remove"},"header":false,"alignment":false,"cells":false}},{"properties":{"action":{"const":"align"},"header":false,"cells":false},"required":["alignment"]}],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"path":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"integer","minimum":0}},"action":{"enum":["insert","remove","align"]},"index":{"type":"integer","minimum":0},"header":{"type":"string"},"alignment":{"enum":["default","left","right","center"]},"cells":{"type":"array","items":{"type":"string"}}},"additionalProperties":false}"#,
@@ -213,6 +219,7 @@ impl Tools {
             | "plan_markdown_table_cell"
             | "plan_markdown_table_row"
             | "plan_markdown_table_column"
+            | "plan_markdown_reference"
             | "plan_markdown_task" => markdown::call(name, args),
             "plan_replacement" => {
                 let max_edits = match args.get("max_edits").map(|node| &node.value) {
