@@ -168,7 +168,7 @@ rustfmt. No commit-verification bypass is permitted.
 
 ```sh
 make check       # formatting, attribution/dependencies, lint, optimized tests, docs
-make wasm-test   # execute and compare native/WASI core and grammar transcripts
+make wasm-test   # compare native/WASI recovery, embeddings, Markdown, and grammars
 make syntax-oracles  # compare fixed syntax probes to independent compilers
 make benchmark  # recovery quality assertions and latency baseline
 ```

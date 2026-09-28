@@ -2,12 +2,17 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Deterministic native/WASI acceptance transcript using the actual core engines.
 use purrassist_core::{
-    Effort, Governor, Outcome,
+    Budget, Effort, Governor, Outcome, StopReason,
+    contract::Resource,
     digest::Digest,
+    edits::EditPlan,
+    embeddings::{Embedding, EmbeddingIndex, EmbeddingMatch, EmbeddingPolicy},
+    json::Node,
+    markdown::{Dialect, Document, TableRowEdit},
     matching,
     schema::{Schema, recovery::RecoveryRequest},
     text::{self, Normalization},
-    wire::{array, object, string},
+    wire::{array, integer, object, string},
 };
 
 fn main() {
@@ -47,7 +52,175 @@ fn main() {
     assert_eq!(distance, 2);
     assert_eq!(text::comparison_key("Straße"), "strasse");
     transcript.push(string(text::normalize("\u{212b}각ﬃ", Normalization::Nfkc)));
+    transcript.push(embedding_transcript());
+    transcript.push(markdown_transcript());
     let output = array(transcript).to_json();
     println!("{}", Digest::of(output.as_bytes()));
     println!("{output}");
+}
+
+fn embedding_transcript() -> Node {
+    let mut g = Governor::new(Budget::default());
+    let index = EmbeddingIndex::new(
+        "portable-v1",
+        &[
+            Embedding {
+                id: "large".into(),
+                vector: vec![1e308, 5e307, -2e307],
+            },
+            Embedding {
+                id: "small".into(),
+                vector: vec![-1e-308, 2e-308, 3e-308],
+            },
+        ],
+        &mut g,
+    )
+    .expect("index");
+    let mut results = Vec::new();
+    for (query, expected) in [([0.5, 0.25, -0.1], "large"), ([-0.1, 0.2, 0.3], "small")] {
+        let result = index
+            .select(&query, EmbeddingPolicy::default(), &mut g)
+            .expect("query");
+        assert!(matches!(&result, Outcome::BestGuess(value) if value.id == expected));
+        results.push(embedding_outcome(result));
+    }
+    let tied = EmbeddingIndex::new(
+        "ties-v1",
+        &[
+            Embedding {
+                id: "first".into(),
+                vector: vec![1.0, 0.0],
+            },
+            Embedding {
+                id: "second".into(),
+                vector: vec![2.0, 0.0],
+            },
+        ],
+        &mut g,
+    )
+    .expect("tied index");
+    let result = tied
+        .select(&[1.0, 0.0], EmbeddingPolicy::default(), &mut g)
+        .expect("ties");
+    assert!(
+        matches!(&result, Outcome::Ambiguous(values) if values.len() == 2 && values[0].id == "first" && values[1].id == "second")
+    );
+    results.push(embedding_outcome(result));
+    let weak = tied
+        .select(&[0.0, 1.0], EmbeddingPolicy::default(), &mut g)
+        .expect("weak query");
+    assert_eq!(weak, Outcome::Unresolved);
+    results.push(embedding_outcome(weak));
+    let mut exhausted = Governor::new(Budget {
+        candidates: 1,
+        ..Budget::default()
+    });
+    let failure = tied
+        .select(&[1.0, 0.0], EmbeddingPolicy::default(), &mut exhausted)
+        .expect_err("complete-search budget");
+    assert_eq!(failure, StopReason::BudgetExceeded(Resource::Candidates));
+    results.push(string(failure.to_string()));
+    let invalid = tied
+        .select(&[0.0, 0.0], EmbeddingPolicy::default(), &mut g)
+        .expect_err("zero vector");
+    assert!(matches!(invalid, StopReason::InvalidInput(_)));
+    results.push(string(invalid.to_string()));
+    object([
+        ("operation", string("embeddings")),
+        ("results", array(results)),
+    ])
+}
+
+fn embedding_outcome(value: Outcome<EmbeddingMatch>) -> Node {
+    let (status, values) = match value {
+        Outcome::Resolved(_) => panic!("numerical matches cannot prove semantic intent"),
+        Outcome::BestGuess(value) => ("best_guess", vec![value]),
+        Outcome::Ambiguous(values) => ("ambiguous", values),
+        Outcome::Unresolved => ("unresolved", Vec::new()),
+    };
+    object([
+        ("status", string(status)),
+        (
+            "values",
+            array(values.into_iter().map(|value| {
+                object([
+                    ("id", string(value.id)),
+                    // No epsilon or rounding masks target-specific floating-point results.
+                    ("score_bits", integer(value.score.to_bits())),
+                ])
+            })),
+        ),
+    ])
+}
+
+fn markdown_transcript() -> Node {
+    let mut results = Vec::new();
+    for newline in ["\n", "\r\n", "\r"] {
+        let source = format!("> | Drink | State |{newline}> | --- | --- |{newline}> | tea | hot |");
+        let mut g = Governor::new(Budget::default());
+        let doc = Document::parse(&source, &mut g).expect("table");
+        let plan = doc
+            .replace_table_cell(&[0, 0], 1, 1, "**iced**", &mut g)
+            .expect("cell");
+        let updated = apply_edit(&plan, &source, &mut results);
+        assert_eq!(updated, source.replace("hot", "**iced**"));
+        let doc = Document::parse(&updated, &mut g).expect("updated table");
+        let plan = doc
+            .edit_table_row(
+                &[0, 0],
+                &TableRowEdit::Insert {
+                    index: 1,
+                    cells: vec!["café".into(), "a\\|b".into()],
+                },
+                &mut g,
+            )
+            .expect("insert row");
+        let inserted = apply_edit(&plan, &updated, &mut results);
+        assert_eq!(inserted, format!("{updated}{newline}> | café | a\\|b |"));
+        let doc = Document::parse(&inserted, &mut g).expect("inserted table");
+        results.push(string(
+            doc.render_html(Dialect::Gfm, &mut g).expect("render"),
+        ));
+        let plan = doc
+            .edit_table_row(&[0, 0], &TableRowEdit::Remove { index: 0 }, &mut g)
+            .expect("remove row");
+        let removed = apply_edit(&plan, &inserted, &mut results);
+        assert!(!removed.contains("tea"));
+        assert!(removed.contains("café"));
+    }
+    let source = "> - [ ] café\r\n>   - [X] child\r\n";
+    let mut g = Governor::new(Budget::default());
+    let doc = Document::parse(source, &mut g).expect("tasks");
+    let plan = doc
+        .set_task_at(&[0, 0, 1], false, &mut g)
+        .expect("nested task");
+    assert_eq!(
+        apply_edit(&plan, source, &mut results),
+        source.replace("[X]", "[ ]")
+    );
+    object([
+        ("operation", string("markdown")),
+        ("results", array(results)),
+    ])
+}
+
+fn apply_edit(plan: &EditPlan, source: &str, transcript: &mut Vec<Node>) -> String {
+    let result = plan.apply(source, Budget::default());
+    let Outcome::Resolved(value) = result.outcome else {
+        panic!("apply failed")
+    };
+    let undone = value.inverse.apply(&value.text, Budget::default());
+    let Outcome::Resolved(original) = undone.outcome else {
+        panic!("undo failed")
+    };
+    assert_eq!(original.text, source);
+    let stale = plan.apply(&format!("{source}changed"), Budget::default());
+    assert_eq!(stale.outcome, Outcome::Unresolved);
+    transcript.push(object([
+        ("text", string(&value.text)),
+        ("receipt", result.receipt.to_node()),
+        ("inverse_receipt", undone.receipt.to_node()),
+        ("stale_receipt", stale.receipt.to_node()),
+    ]));
+    value.text
 }

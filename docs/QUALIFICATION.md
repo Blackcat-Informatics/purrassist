@@ -157,8 +157,8 @@ zero vectors, candidate exhaustion, cancellation, retained decimal inputs, and
 independent alternative ledgers. Numerical winners remain semantic guesses.
 No embedding model or transport is used. The tool explicitly converts decimal
 coordinates to binary64 and rejects overflow/nonzero underflow; cosine scores
-are not probabilities. Embedding-specific cross-target and measured performance
-qualification remain to be broadened.
+are not probabilities. Measured performance and broader vector/target coverage
+remain to be qualified.
 The full local Rust 1.98.0 `make check` gate passed, including the embedding
 regressions and CLI/MCP wire equivalence. The documented embedding example was
 executed through the optimized CLI and returned `tea` as a best guess.
@@ -193,6 +193,17 @@ executed `examples/markdown-table-row.json` and returned the expected inserted r
 and structural-validation receipt. An earlier local attempt invoked a stale CLI
 artifact after the host Cargo wrapper republished it; the final gate rebuilt the
 CLI and passed with explicit toolchain binaries.
+
+The executed native/WASI core transcript now includes embedding selection at
+extreme finite scales, exact binary64 score bits, ordered ties, weak matches,
+zero-vector rejection, and candidate exhaustion. It also includes nested Markdown
+cell edits, body-row insertion/removal, task edits, GFM rendering, LF/CRLF/CR,
+Unicode/escaped pipes, unterminated EOF, exact inverse replay, stale-source
+rejection, and complete edit/undo/failure receipts. The transcripts matched
+byte-for-byte on native Linux and WASI. The syntax transcript also matched, and
+the browser-WASM core build passed. These are executed fixtures, not a proof for
+all floating-point inputs or browser execution. The expanded example passed the
+full Rust 1.98.0 local gate and nightly-2026-09-14 all-target Clippy.
 
 ## Remaining release work
 
