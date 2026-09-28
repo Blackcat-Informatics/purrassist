@@ -38,8 +38,8 @@ guess reporting, and exhaustion before a complete ledger can be returned.
 Local package verification has built all five packages. A local release CLI was
 installed into a disposable checkout cache and exercised on the published example
 inputs, including exact-source retention. This does not verify downloadable registry
-packages. Hosted CI passed for checkpoint `3c05c502ab4910fb97872160efb5aa3d03a67047`:
-[run 36395848426](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36395848426)
+packages. Hosted CI passed for checkpoint `440761176fe9de7846e99f25858bd97b5f3dc91e`:
+[run 36396443293](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36396443293)
 completed the Linux/macOS local gates, MSRV workspace tests, Windows core/syntax
 tests, and native/WASI comparisons. This is evidence for that checkpoint only;
 subsequent changes need their own qualification.
@@ -69,6 +69,12 @@ checkbox plans, no-op edits, exact undo, stale-plan rejection, invalid selection
 resource exhaustion, and identical CLI/MCP context results. These transport and
 editing checks do not extend the parser conformance claim.
 
+Governed schema compilation passed the full local gate on Rust 1.98.0, including
+both official schema suites and regressions distinguishing invalid schemas from
+work/storage/input/depth exhaustion and cancellation. Tests cover cumulative
+external-resource/dialect preparation, unused-resource hashing admission, shared
+compilation/recovery limits, and tool-level exhaustion reporting.
+
 ## Remaining release work
 
 - Complete CommonMark/GFM container and inline parsing and structural editing;
@@ -79,7 +85,11 @@ editing checks do not extend the parser conformance claim.
   schemas and resource-sensitive compilation. Qualify unsupported vocabulary and
   format behavior without silently weakening assertions.
 - Complete allocation/work accounting throughout candidate generation, receipts,
-  schema compilation, and helper preparation. Bound external parser allocations;
+  schema compilation, and helper preparation. Schema compilation now shares a
+  governor across root/external/dialect parsing, indexing, pattern preparation,
+  bundle hashing, and subsequent recovery. It exposes typed resource errors and
+  avoids subtree cloning for reference-only targets. These accounting additions
+  do not establish measured allocator bounds or complete the allocation audit. Bound external parser allocations;
   progress cancellation alone is not a hard memory limit.
 - Extend alternative-specific ledgers beyond JSON recovery and finish uniform
   Rust/CLI/MCP access to embedding similarity and remaining document operations. Domain-rule

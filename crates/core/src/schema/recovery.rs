@@ -40,7 +40,7 @@ struct Candidate {
 struct Search<'a> {
     schema: &'a Schema,
     request: RecoveryRequest,
-    governor: Governor,
+    governor: &'a mut Governor,
     receipt: Receipt,
     queue: BTreeMap<(u64, u64), Candidate>,
     seen: BTreeMap<String, u64>,
@@ -69,10 +69,36 @@ impl Schema {
     #[must_use]
     pub fn recover(&self, input: &str, request: RecoveryRequest) -> AssistResult<Node> {
         let budget = request.budget.unwrap_or_else(|| request.effort.budget());
+        self.recover_governed(input, request, &mut Governor::new(budget))
+    }
+
+    /// Recover using the same governor as schema compilation or caller preparation.
+    ///
+    /// The governor's limits are authoritative; `request.budget` is ignored here.
+    /// Effort still selects allowed recovery rules. Cancellation and exhaustion
+    /// return `Unresolved` with cumulative usage and an explicit termination reason.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, Outcome, schema::{Schema, recovery::RecoveryRequest}};
+    /// let mut governor = Governor::new(Budget::default());
+    /// let schema = Schema::compile_governed(r#"{"type":"integer"}"#, &mut governor)?;
+    /// let result = schema.recover_governed("[[42]]", RecoveryRequest::default(), &mut governor);
+    /// assert!(matches!(result.outcome, Outcome::Resolved(_)));
+    /// assert_eq!(result.receipt.usage, governor.usage());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn recover_governed(
+        &self,
+        input: &str,
+        request: RecoveryRequest,
+        governor: &mut Governor,
+    ) -> AssistResult<Node> {
+        let budget = *governor.limits();
         let mut search = Search {
             schema: self,
             request,
-            governor: Governor::new(budget),
+            governor,
             receipt: Receipt::new(input.as_bytes(), "json.recover.v1", request.effort, budget),
             queue: BTreeMap::new(),
             seen: BTreeMap::new(),
@@ -125,10 +151,10 @@ impl Search<'_> {
         Ok(())
     }
     fn run(&mut self, input: &str) -> Result<Outcome<Node>, StopReason> {
-        self.receipt.retain_source(input, &mut self.governor)?;
+        self.receipt.retain_source(input, self.governor)?;
         self.governor
             .charge(Resource::InputBytes, size(input.len()))?;
-        match crate::json::parse_with(input, &mut self.governor) {
+        match crate::json::parse_with(input, self.governor) {
             Ok(node) => self.enqueue(Candidate {
                 node,
                 cost: 0,
@@ -148,9 +174,7 @@ impl Search<'_> {
             if winning_cost.is_some_and(|winner| cost > winner) {
                 break;
             }
-            let report = self
-                .schema
-                .validate_with(&candidate.node, &mut self.governor)?;
+            let report = self.schema.validate_with(&candidate.node, self.governor)?;
             self.governor.charge(Resource::EvidenceEntries, 1)?;
             self.receipt.validations.push(Validation {
                 validator: "purrassist.schema.draft2020-12.v1".into(),
@@ -244,7 +268,7 @@ impl Search<'_> {
         for start in starts {
             self.governor.charge(Resource::Work, 1)?;
             let (mut node, consumed, edits) =
-                match crate::json::recover_syntax(&input[start..], &mut self.governor) {
+                match crate::json::recover_syntax(&input[start..], self.governor) {
                     Ok(result) => result,
                     Err(StopReason::InvalidInput(_)) => continue,
                     Err(reason) => return Err(reason),

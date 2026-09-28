@@ -193,7 +193,7 @@ impl Search<'_> {
                     ),
                 )?;
             }
-            Value::String(text) => match crate::json::parse_with(text, &mut self.governor) {
+            Value::String(text) => match crate::json::parse_with(text, self.governor) {
                 Ok(mut decoded) => {
                     clear_spans(&mut decoded);
                     self.change(
@@ -226,7 +226,7 @@ impl Search<'_> {
         if crate::text::depunctuate(&left) == crate::text::depunctuate(&right) {
             return Ok(Some(3));
         }
-        let distance = crate::matching::damerau_levenshtein(&left, &right, &mut self.governor)?;
+        let distance = crate::matching::damerau_levenshtein(&left, &right, self.governor)?;
         let length = left.chars().count().max(right.chars().count());
         Ok(
             (distance <= 2 && distance.saturating_mul(3) <= length.max(3))

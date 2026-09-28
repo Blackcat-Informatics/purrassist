@@ -70,6 +70,11 @@ cargo run -p purrassist-cli -- mcp --root /path/to/workspace
 `decode` returns the answer and receipt as JSON. `Exact` performs no recovery;
 `Quick`, `Standard`, `Deep`, and `Maximum` increase finite search budgets.
 Exhaustion is explicit and never proves that a schema is unsatisfiable.
+`Schema::compile_governed` and `with_resources_governed` return typed
+`CompilationError` values separating invalid schemas from resource failures.
+Pass the same governor to `recover_governed` to share the total preparation and
+recovery budget. The `decode_json` tool does this automatically. The convenience
+compilation methods use the default finite budget.
 
 `call TOOL --root DIRECTORY` reads a JSON argument object from stdin and invokes
 the same operation used by MCP. `match_paths` takes a `query`, caller-supplied `paths`,

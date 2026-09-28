@@ -289,23 +289,47 @@ fn effort(args: &Node) -> Result<Effort, String> {
     )
 }
 fn decode(args: &Node) -> Result<Node, String> {
-    let schema = Schema::compile(&args.get("schema").ok_or("missing schema")?.to_json())
-        .map_err(|e| e.to_string())?;
     let effort = effort(args)?;
+    let input = field(args, "input")?;
+    let mut governor = Governor::new(effort.budget());
+    let schema_text = args.get("schema").ok_or("missing schema")?.to_json();
+    let schema = match Schema::compile_governed(&schema_text, &mut governor) {
+        Ok(schema) => schema,
+        Err(purrassist::schema::CompilationError::InvalidSchema(error)) => {
+            return Err(error.to_string());
+        }
+        Err(purrassist::schema::CompilationError::Resource(reason)) => {
+            let mut receipt = purrassist::Receipt::new(
+                input.as_bytes(),
+                "json.recover.v1",
+                effort,
+                effort.budget(),
+            );
+            receipt.stopped = reason;
+            receipt.usage = governor.usage();
+            return Ok(purrassist::AssistResult::<Node> {
+                outcome: Outcome::Unresolved,
+                receipt,
+            }
+            .to_node());
+        }
+    };
     let allow_guesses = args
         .get("allow_guesses")
         .is_none_or(|node| node.value == Value::Bool(true));
     Ok(schema
-        .recover(
-            field(args, "input")?,
+        .recover_governed(
+            input,
             RecoveryRequest {
                 effort,
                 allow_guesses,
                 budget: None,
             },
+            &mut governor,
         )
         .to_node())
 }
+
 fn rank(args: &Node) -> Result<Node, String> {
     let Some(Node {
         value: Value::Array(values),

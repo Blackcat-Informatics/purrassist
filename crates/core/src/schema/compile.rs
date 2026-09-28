@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-use super::{Index, Location, SchemaError, Vocabularies};
+use super::{CompilationError, Index, Location, SchemaError, Vocabularies, build::Context};
+use crate::contract::Resource;
 use crate::json::{Node, Value, pointer_segment};
 use crate::pattern::Pattern;
 use std::collections::{BTreeMap, BTreeSet};
@@ -12,14 +13,17 @@ pub(super) fn walk(
     pointer: &str,
     parent_base: &str,
     index: &mut Index,
-    resources: &BTreeMap<String, String>,
-) -> Result<usize, SchemaError> {
+    context: &mut Context<'_>,
+) -> Result<usize, CompilationError> {
+    admit_location(node, route, pointer, parent_base, context)?;
     if let Some(id) = index.by_route.get(&(document, route.to_vec())) {
         return Ok(*id);
     }
-    let fail = |message: String| SchemaError {
-        location: format!("{parent_base}#{pointer}"),
-        message,
+    let fail = |message: String| {
+        CompilationError::InvalidSchema(SchemaError {
+            location: format!("{parent_base}#{pointer}"),
+            message,
+        })
     };
     if !matches!(node.value, Value::Bool(_) | Value::Object(_)) {
         return Err(fail("schema must be an object or boolean".into()));
@@ -45,7 +49,7 @@ pub(super) fn walk(
         .get("$schema")
         .and_then(Node::as_str)
         .map_or(Ok(inherited), |dialect| {
-            Vocabularies::load(dialect, resources)
+            Vocabularies::load(dialect, context)
         })?;
     check_keywords(node, vocabularies, &fail)?;
     let id = index.locations.len();
@@ -91,34 +95,36 @@ pub(super) fn walk(
     if vocabularies.validation
         && let Some(pattern) = node.get("pattern").and_then(Node::as_str)
     {
-        index.locations[id].patterns.insert(
-            "pattern".into(),
-            Pattern::compile(pattern).map_err(|error| fail(error.to_string()))?,
-        );
+        index.locations[id]
+            .patterns
+            .insert("pattern".into(), compile_pattern(pattern, &fail, context)?);
     }
-    compile_children(node, id, index, resources)?;
+    compile_children(node, id, index, context)?;
     Ok(id)
 }
 fn compile_children(
     node: &Node,
     id: usize,
     index: &mut Index,
-    resources: &BTreeMap<String, String>,
-) -> Result<(), SchemaError> {
-    let location = index.locations[id].clone();
+    context: &mut Context<'_>,
+) -> Result<(), CompilationError> {
+    let location = clone_location(&index.locations[id], context)?;
     let document = location.document;
     let route = location.route;
     let pointer = location.pointer;
     let base = location.base;
     let vocabularies = location.vocabularies;
-    let fail = |message: String| SchemaError {
-        location: format!("{base}#{pointer}"),
-        message,
+    let fail = |message: String| {
+        CompilationError::InvalidSchema(SchemaError {
+            location: format!("{base}#{pointer}"),
+            message,
+        })
     };
     let Value::Object(members) = &node.value else {
         return Ok(());
     };
     for (position, member) in members.iter().enumerate() {
+        context.charge(Resource::Work, member.key.len().saturating_add(1))?;
         if !vocabularies.enabled(&member.key) {
             continue;
         }
@@ -144,7 +150,7 @@ fn compile_children(
                     &child_pointer,
                     &base,
                     index,
-                    resources,
+                    context,
                 )?;
                 index.locations[id]
                     .children
@@ -157,11 +163,9 @@ fn compile_children(
                 for (child_position, child) in children.iter().enumerate() {
                     let name = format!("{}/{}", member.key, pointer_segment(&child.key));
                     if member.key == "patternProperties" {
-                        index.locations[id].patterns.insert(
-                            name.clone(),
-                            Pattern::compile(&child.key)
-                                .map_err(|error| fail(error.to_string()))?,
-                        );
+                        index.locations[id]
+                            .patterns
+                            .insert(name.clone(), compile_pattern(&child.key, &fail, context)?);
                     }
                     let mut next_route = child_route.clone();
                     next_route.push(child_position);
@@ -172,18 +176,13 @@ fn compile_children(
                         &format!("{child_pointer}/{}", pointer_segment(&child.key)),
                         &base,
                         index,
-                        resources,
+                        context,
                     )?;
                     index.locations[id].children.insert(name, child_id);
                 }
             }
             "allOf" | "anyOf" | "oneOf" | "prefixItems" => {
-                let Value::Array(children) = &member.value.value else {
-                    return Err(fail(format!("{} must be an array", member.key)));
-                };
-                if children.is_empty() {
-                    return Err(fail(format!("{} must not be empty", member.key)));
-                }
+                let children = schema_array(&member.value, &member.key, &fail)?;
                 for (child_position, child) in children.iter().enumerate() {
                     let mut next_route = child_route.clone();
                     next_route.push(child_position);
@@ -194,7 +193,7 @@ fn compile_children(
                         &format!("{child_pointer}/{child_position}"),
                         &base,
                         index,
-                        resources,
+                        context,
                     )?;
                     index.locations[id]
                         .children
@@ -209,8 +208,8 @@ fn compile_children(
 fn check_keywords(
     node: &Node,
     vocabularies: Vocabularies,
-    fail: &impl Fn(String) -> SchemaError,
-) -> Result<(), SchemaError> {
+    fail: &impl Fn(String) -> CompilationError,
+) -> Result<(), CompilationError> {
     let Value::Object(members) = &node.value else {
         return Ok(());
     };
@@ -311,4 +310,96 @@ fn string_set(node: &Node) -> bool {
 }
 pub(super) fn resolve_uri(base: &str, reference: &str) -> String {
     super::uri::resolve(base, reference)
+}
+
+fn compile_pattern(
+    pattern: &str,
+    fail: &impl Fn(String) -> CompilationError,
+    context: &mut Context<'_>,
+) -> Result<Pattern, CompilationError> {
+    context.charge(
+        Resource::Work,
+        pattern.len().saturating_mul(16).saturating_add(1),
+    )?;
+    context.charge(
+        Resource::ScratchBytes,
+        pattern.len().saturating_mul(256).saturating_add(256),
+    )?;
+    Pattern::compile(pattern).map_err(|error| fail(error.to_string()))
+}
+
+fn admit_location(
+    node: &Node,
+    route: &[usize],
+    pointer: &str,
+    parent_base: &str,
+    context: &mut Context<'_>,
+) -> Result<(), CompilationError> {
+    context.charge(Resource::Depth, route.len())?;
+    // Routes and inherited vocabulary lookups are quadratic in nesting length.
+    context.charge(
+        Resource::Work,
+        route.len().saturating_mul(route.len()).saturating_add(1),
+    )?;
+    context.charge(
+        Resource::ScratchBytes,
+        route
+            .len()
+            .saturating_mul(route.len())
+            .saturating_mul(8)
+            .saturating_add(512),
+    )?;
+    let spelling = match &node.value {
+        Value::Object(members) => members.iter().fold(0usize, |sum, member| {
+            sum.saturating_add(member.key.len())
+                .saturating_add(member.value.as_str().map_or(0, str::len))
+                .saturating_add(1)
+        }),
+        _ => 1,
+    };
+    context.charge(
+        Resource::Work,
+        spelling
+            .saturating_mul(32)
+            .saturating_add(pointer.len())
+            .saturating_add(parent_base.len()),
+    )?;
+    context.charge(
+        Resource::ScratchBytes,
+        spelling
+            .saturating_mul(16)
+            .saturating_add(pointer.len().saturating_mul(8))
+            .saturating_add(parent_base.len().saturating_mul(8)),
+    )?;
+    Ok(())
+}
+
+fn clone_location(
+    location: &Location,
+    context: &mut Context<'_>,
+) -> Result<Location, CompilationError> {
+    context.charge(
+        Resource::ScratchBytes,
+        location
+            .base
+            .len()
+            .saturating_add(location.pointer.len())
+            .saturating_add(location.route.len().saturating_mul(8))
+            .saturating_add(256),
+    )?;
+    Ok(location.clone())
+}
+
+fn schema_array<'a>(
+    node: &'a Node,
+    keyword: &str,
+    fail: &impl Fn(String) -> CompilationError,
+) -> Result<&'a [Node], CompilationError> {
+    let Value::Array(children) = &node.value else {
+        return Err(fail(format!("{keyword} must be an array")));
+    };
+    if children.is_empty() {
+        return Err(fail(format!("{keyword} must not be empty")));
+    }
+    Ok(children)
 }

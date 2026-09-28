@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Compiled JSON Schema constraints and source-addressed validation.
+mod build;
 mod builtin;
+pub use build::CompilationError;
 mod compile;
 mod evaluate;
 pub mod recovery;
@@ -107,86 +109,62 @@ impl Schema {
         source: &str,
         resources: &BTreeMap<String, String>,
     ) -> Result<Self, SchemaError> {
-        let root = crate::json::parse(source).map_err(|error| SchemaError {
-            location: String::new(),
-            message: error.to_string(),
-        })?;
-        let mut index = Index::default();
-        compile::walk(
-            &root,
-            0,
-            &[],
-            "",
-            "urn:purrassist:root",
-            &mut index,
-            resources,
-        )?;
-        let mut schema = Self {
-            documents: vec![root],
-            index,
-            root: 0,
-            digest: bundle_digest(source, resources),
-        };
-        let mut cursor = 0;
-        while cursor < schema.index.locations.len() {
-            for keyword in ["$ref", "$dynamicRef"] {
-                let Some(reference) = schema
-                    .body(cursor)
-                    .get(keyword)
-                    .and_then(Node::as_str)
-                    .map(str::to_owned)
-                else {
-                    continue;
-                };
-                let base = schema.index.locations[cursor].base.clone();
-                let uri = compile::resolve_uri(&base, &reference);
-                let resource = uri.split('#').next().unwrap_or(&uri);
-                if !schema.index.resources.contains_key(resource) {
-                    let text = builtin::resource(resource)
-                        .or_else(|| resources.get(resource).map(String::as_str))
-                        .ok_or_else(|| SchemaError {
-                            location: uri.clone(),
-                            message: "unresolved resource; supply it explicitly".into(),
-                        })?;
-                    let node = crate::json::parse(text).map_err(|error| SchemaError {
-                        location: resource.into(),
-                        message: error.to_string(),
-                    })?;
-                    let document = schema.documents.len();
-                    let id = compile::walk(
-                        &node,
-                        document,
-                        &[],
-                        "",
-                        resource,
-                        &mut schema.index,
-                        resources,
-                    )?;
-                    schema.index.resources.insert(resource.into(), id);
-                    schema.documents.push(node);
-                }
-                let target = schema.reference_target(&base, &reference)?;
-                if !schema
-                    .index
-                    .by_route
-                    .contains_key(&(target.document, target.route.clone()))
-                {
-                    let node = at_route(&schema.documents[target.document], &target.route).clone();
-                    compile::walk(
-                        &node,
-                        target.document,
-                        &target.route,
-                        &target.pointer,
-                        &target.base,
-                        &mut schema.index,
-                        resources,
-                    )?;
-                }
-                schema.resolve(&base, &reference)?;
-            }
-            cursor += 1;
-        }
-        Ok(schema)
+        Self::with_resources_governed(source, resources, &mut Governor::new(Budget::default()))
+            .map_err(|error| match error {
+                CompilationError::InvalidSchema(error) => error,
+                CompilationError::Resource(reason) => SchemaError {
+                    location: String::new(),
+                    message: reason.to_string(),
+                },
+            })
+    }
+
+    /// Compile with a caller-owned governor shared with later validation or recovery.
+    ///
+    /// # Errors
+    /// Distinguishes invalid schemas from sticky resource exhaustion or cancellation.
+    /// No partially compiled schema is returned.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, schema::Schema, json};
+    /// let mut governor = Governor::new(Budget::default());
+    /// let schema = Schema::compile_governed(r#"{"type":"integer"}"#, &mut governor)?;
+    /// assert!(schema.validate_with(&json::parse("42")?, &mut governor)?.valid);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn compile_governed(
+        source: &str,
+        governor: &mut Governor,
+    ) -> Result<Self, CompilationError> {
+        Self::with_resources_governed(source, &BTreeMap::new(), governor)
+    }
+
+    /// Compile root and explicit resources using one cumulative resource budget.
+    ///
+    /// Unused supplied resources still count toward identity hashing work. No I/O
+    /// occurs. Dialect loading, reference indexing, and pattern preparation share
+    /// this governor; failure leaves it stopped when a resource limit was exceeded.
+    ///
+    /// ```
+    /// use std::collections::BTreeMap;
+    /// use purrassist_core::{Budget, Governor, schema::Schema};
+    /// let resources = BTreeMap::from([("urn:integer".into(), r#"{"type":"integer"}"#.into())]);
+    /// let mut governor = Governor::new(Budget::default());
+    /// let schema = Schema::with_resources_governed(
+    ///     r#"{"$ref":"urn:integer"}"#, &resources, &mut governor,
+    /// )?;
+    /// assert!(schema.validate_with(&purrassist_core::json::parse("42")?, &mut governor)?.valid);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns an invalid-schema error or an explicit resource/cancellation error.
+    pub fn with_resources_governed(
+        source: &str,
+        resources: &BTreeMap<String, String>,
+        governor: &mut Governor,
+    ) -> Result<Self, CompilationError> {
+        build::compile(source, resources, governor)
     }
 
     /// Root schema document, preserving source spans and annotations.

@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-use super::{DIALECT, SchemaError};
+use super::{CompilationError, DIALECT, SchemaError, build::Context};
 use crate::json::{Node, Value};
-use std::collections::BTreeMap;
 
 #[expect(
     clippy::struct_excessive_bools,
@@ -26,22 +25,22 @@ impl Default for Vocabularies {
     }
 }
 impl Vocabularies {
-    pub(super) fn load(
-        dialect: &str,
-        resources: &BTreeMap<String, String>,
-    ) -> Result<Self, SchemaError> {
+    pub(super) fn load(dialect: &str, context: &mut Context<'_>) -> Result<Self, CompilationError> {
         let uri = dialect.trim_end_matches('#');
         if uri == DIALECT {
             return Ok(Self::default());
         }
-        let error = |message: String| SchemaError {
-            location: uri.into(),
-            message,
+        let error = |message: String| {
+            CompilationError::InvalidSchema(SchemaError {
+                location: uri.into(),
+                message,
+            })
         };
-        let source = resources
+        let source = context
+            .resources
             .get(uri)
             .ok_or_else(|| error("unresolved dialect; supply its meta-schema explicitly".into()))?;
-        let meta = crate::json::parse(source).map_err(|e| error(e.to_string()))?;
+        let meta = context.parse(source, uri)?;
         let Some(declaration) = meta.get("$vocabulary") else {
             return Ok(Self::default());
         };
