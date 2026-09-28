@@ -165,11 +165,11 @@ fn retry(
     Outcome::Busy
 }
 
-fn is_posix_unsupported(code: u32) -> bool {
+const fn is_posix_unsupported(code: u32) -> bool {
     code == ERROR_INVALID_PARAMETER || code == ERROR_NOT_SUPPORTED
 }
 
-fn is_sharing_violation(code: u32) -> bool {
+const fn is_sharing_violation(code: u32) -> bool {
     matches!(
         code,
         ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION | ERROR_ACCESS_DENIED
@@ -239,11 +239,15 @@ impl RenameBuffer {
     fn new(name: &[u16], flags: u32) -> Result<Self, Error> {
         let header = std::mem::size_of::<FILE_RENAME_INFO>();
         let name_bytes = name.len().saturating_mul(std::mem::size_of::<u16>());
+        let file_name_length = u32::try_from(name_bytes)
+            .map_err(|_| Error::Invalid("rename target path too long".into()))?;
         let declared = std::mem::size_of::<u16>(); // `FileName: [u16; 1]` already reserves this much.
         let extra = name_bytes.saturating_sub(declared);
         let size = header
             .checked_add(extra)
             .ok_or_else(|| Error::Invalid("rename target path too long".into()))?;
+        let len = u32::try_from(size)
+            .map_err(|_| Error::Invalid("rename target path too long".into()))?;
         let layout = Layout::from_size_align(size, std::mem::align_of::<FILE_RENAME_INFO>())
             .map_err(|_| Error::Invalid("rename target path too long".into()))?;
         // SAFETY: `layout` has a non-zero size (`FILE_RENAME_INFO` alone is
@@ -261,17 +265,16 @@ impl RenameBuffer {
         // array is the documented Win32 flexible-array-member convention
         // for this struct.
         unsafe {
+            // `layout` uses `align_of::<FILE_RENAME_INFO>()`, so the byte
+            // pointer returned by `alloc_zeroed` is suitably aligned for it.
+            #[allow(clippy::cast_ptr_alignment)]
             let info = ptr.cast::<FILE_RENAME_INFO>();
             (*info).Anonymous.Flags = flags;
             (*info).RootDirectory = std::ptr::null_mut();
-            (*info).FileNameLength = u32::try_from(name_bytes).unwrap_or(u32::MAX);
+            (*info).FileNameLength = file_name_length;
             std::ptr::copy_nonoverlapping(name.as_ptr(), (*info).FileName.as_mut_ptr(), name.len());
         }
-        Ok(Self {
-            ptr,
-            layout,
-            len: u32::try_from(size).unwrap_or(u32::MAX),
-        })
+        Ok(Self { ptr, layout, len })
     }
 }
 impl Drop for RenameBuffer {

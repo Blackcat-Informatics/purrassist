@@ -94,7 +94,7 @@ pub enum DirectorySync {
     /// durability boundary instead.
     AccessDeniedFallback,
 }
-fn worse(a: DirectorySync, b: DirectorySync) -> DirectorySync {
+const fn worse(a: DirectorySync, b: DirectorySync) -> DirectorySync {
     if matches!((a, b), (DirectorySync::Flushed, DirectorySync::Flushed)) {
         DirectorySync::Flushed
     } else {
@@ -381,13 +381,13 @@ impl Store {
         directory_sync = worse(directory_sync, sync_directory(&self.journal)?);
         directory_sync = worse(directory_sync, sync_directory(&self.root)?);
         fire(CrashPoint::AfterJournalSync);
-        let rename = if current.digest != after {
+        let rename = if current.digest == after {
+            RenameMethod::AlreadyCurrent
+        } else {
             let (method, replace_sync) =
                 self.replace(&before.path, before.digest, replacement, &id)?;
             directory_sync = worse(directory_sync, replace_sync);
             method
-        } else {
-            RenameMethod::AlreadyCurrent
         };
         fire(CrashPoint::BeforeCommittedMarker);
         if !directory.join("committed").exists() {
@@ -443,7 +443,7 @@ impl Store {
             };
             if id.len() != 64 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                 results.push(Recovery::Corrupt {
-                    id: id.clone(),
+                    id,
                     reason: "journal directory name is not a transaction identity".into(),
                 });
                 continue;
@@ -697,8 +697,8 @@ fn recovery_id(recovery: &Recovery) -> &str {
         Recovery::Finalized(id)
         | Recovery::NotApplied(id)
         | Recovery::Conflict(id)
-        | Recovery::OrphanRemoved(id) => id,
-        Recovery::Corrupt { id, .. } => id,
+        | Recovery::OrphanRemoved(id)
+        | Recovery::Corrupt { id, .. } => id,
         Recovery::OrphanUnknown(name) => name,
     }
 }

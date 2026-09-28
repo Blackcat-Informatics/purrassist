@@ -53,7 +53,7 @@ impl Scratch {
         std::fs::write(path.join(FILE_NAME), BEFORE_TEXT).unwrap();
         Self(path)
     }
-    fn original_before(&self) -> Snapshot {
+    fn original_before() -> Snapshot {
         Snapshot {
             path: FILE_NAME.to_string(),
             text: BEFORE_TEXT.to_string(),
@@ -106,7 +106,7 @@ struct Expected {
     finalized: bool,
     orphan: bool,
 }
-fn expected_outcome(point: CrashPoint) -> Expected {
+const fn expected_outcome(point: CrashPoint) -> Expected {
     match point {
         CrashPoint::AfterJournalBefore
         | CrashPoint::AfterJournalAfter
@@ -201,7 +201,7 @@ fn run_crash_point(point: CrashPoint) {
 
     // Retrying the original transaction (regardless of which partial state
     // the crash left) must complete idempotently and land on exactly AFTER.
-    let original_before = scratch.original_before();
+    let original_before = Scratch::original_before();
     let commit = store.commit(&original_before, AFTER_TEXT).unwrap();
     assert_eq!(
         std::fs::read(scratch.0.join(FILE_NAME)).unwrap(),
