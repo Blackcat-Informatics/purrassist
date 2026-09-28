@@ -48,3 +48,68 @@ These operations use the shared `Tools` dispatcher from Rust, CLI `call`, and
 MCP `tools/call`. `apply_edit` is advertised as read-only; `apply_file` remains
 a destructive file operation. File scope, cooperating-writer locks, stale checks,
 and crash-recovery limitations are unchanged.
+
+## Filesystem durability
+
+`purrassist_host::files::Store` commits a replacement in three phases: a
+journal (`before`/`after`/`prepared.json`, each written then synced), the
+atomic replacement of the target file, and a `committed` marker. Every
+`commit` returns `Commit::durability`, evidence of which platform-specific
+mechanism actually reached durability for that call; it is exposed on the
+wire under `apply_file`/`undo_file`'s `commit.durability` object as
+`rename` (`posix_semantics`, `move_file_ex_fallback`, or `already_current`
+for an idempotent retry that needed no rename) and `directory_sync`
+(`flushed` or `access_denied_fallback`).
+
+On Unix, replacement is `rename(2)` and directory durability is `fsync` on
+an open directory handle; both are unconditional and always succeed or the
+commit fails outright. The target's Unix permission bits are copied onto
+the replacement file.
+
+On Windows (`crates/host/src/files/windows.rs`), the temporary file is
+opened with the write-through flag, so every write it accepts is durable as
+soon as it returns, before any rename is attempted. Replacement then tries
+`SetFileInformationByHandle` with `FileRenameInfoEx` and
+`FILE_RENAME_FLAG_POSIX_SEMANTICS | FILE_RENAME_FLAG_REPLACE_IF_EXISTS` on
+that still-open handle. If the filesystem rejects POSIX rename semantics
+(`ERROR_INVALID_PARAMETER` or `ERROR_NOT_SUPPORTED`), the handle is closed
+and replacement falls back to `MoveFileExW` with
+`MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`. Either attempt that
+instead fails with a sharing/lock violation (`ERROR_SHARING_VIOLATION`,
+`ERROR_LOCK_VIOLATION`, or `ERROR_ACCESS_DENIED` — commonly an antivirus
+scanner or search indexer holding a brief handle open) is retried a small
+fixed number of times, yielding the calling thread
+(`std::thread::yield_now`) between attempts and never sleeping, before
+returning an explicit `Busy` error. Directory durability opens the
+directory with `FILE_FLAG_BACKUP_SEMANTICS` and calls `FlushFileBuffers`;
+some filesystems deny this (`ERROR_ACCESS_DENIED`, at open or at flush),
+which is reported as `access_denied_fallback` evidence rather than treated
+as a failure, since the write-through rename already made the replacement
+durable on its own.
+
+Windows has no permission-bit concept to preserve. The replacement file is
+created fresh in the target's containing directory and inherits that
+directory's ACL, which is ordinary Windows file-creation behavior requiring
+no code here; nothing analogous to the Unix `0700`/`0600` journal modes is
+set explicitly on Windows, and none is needed for the same reason.
+
+`Store::recover` never aborts on one bad journal: a torn, truncated, or
+otherwise unreadable `prepared.json` or piece file is reported as
+`Recovery::Corrupt { id, reason }` for that transaction only, and every
+other journal is still recovered. It also scans the store root for
+`.purrassist-<id>.tmp` replacement temporary files left behind by an
+interrupted commit: ones whose id matches a known journal are removed and
+reported as `Recovery::OrphanRemoved`; ones matching no known journal are
+reported as `Recovery::OrphanUnknown` and left in place.
+
+`crates/host/tests/crash_recovery.rs` proves this by re-executing its own
+test binary as a child process that installs a crash hook
+(`purrassist_host::files::install_crash_hook`, a `#[doc(hidden)]` test-only
+seam with a default no-op) and calls `std::process::abort` at one of eight
+named checkpoints inside `commit` (after each journal piece write, after
+the journal directory syncs, after the temporary file is written, before
+and after the rename, and before the `committed` marker). The parent then
+runs `recover` and a retry against the exact bytes left on disk and asserts
+the file is exactly the before or exactly the after version — never
+mixed — that the classification matches, and that the retry completes
+idempotently.

@@ -19,3 +19,12 @@ workspace = true
 
 [dependencies]
 purrassist.workspace = true
+
+# Windows-only durable-replace/rename primitives (`crates/host/src/files/windows.rs`);
+# see docs/DEPENDENCIES.md for the registration and unsafe_code exception rationale.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", default-features = false, features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_WindowsProgramming",
+] }

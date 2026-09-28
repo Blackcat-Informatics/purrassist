@@ -6,6 +6,14 @@
 //! Atomic replacement covers one file; a batch is not an atomic multi-file commit.
 //! Canonical root and symlink checks prevent accidental escapes; this portable API
 //! is not a sandbox against malicious concurrent directory replacement.
+//!
+//! Unix durability uses `rename(2)` plus directory `fsync`. Windows durability
+//! (`crates/host/src/files/windows.rs`) uses `SetFileInformationByHandle` with
+//! POSIX rename semantics on a write-through handle, falls back to
+//! `MoveFileExW` where the filesystem rejects that, retries sharing/lock
+//! violations a bounded number of times before reporting [`Error::Busy`], and
+//! records the mechanism actually used in [`Commit::durability`]. See
+//! `docs/EDIT-APPLICATION.md` for the full design.
 use purrassist::{
     digest::Digest,
     json::{self, Node},
@@ -47,6 +55,114 @@ impl From<std::io::Error> for Error {
     }
 }
 
+#[cfg(windows)]
+mod windows;
+
+/// Evidence describing which durability mechanism a commit actually used.
+///
+/// Unix always uses `rename(2)` and a directory `fsync`, so both fields are
+/// constant there. On Windows the rename may fall back from POSIX rename
+/// semantics to `MoveFileExW`, and a directory metadata flush may be denied
+/// by the filesystem; both are reported as evidence instead of being
+/// silently assumed or ignored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Durability {
+    /// How the target file's replacement became visible.
+    pub rename: RenameMethod,
+    /// Whether every directory this commit synced actually flushed its metadata.
+    pub directory: DirectorySync,
+}
+/// The mechanism used to atomically replace the target file for one commit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenameMethod {
+    /// Unix `rename(2)`, or on Windows `SetFileInformationByHandle` with
+    /// `FileRenameInfoEx` and POSIX rename semantics.
+    PosixSemantics,
+    /// Windows `MoveFileExW` with write-through, used because the target
+    /// filesystem rejected POSIX rename semantics.
+    MoveFileExFallback,
+    /// The target already held the committed bytes; no rename ran this call.
+    AlreadyCurrent,
+}
+/// Whether a directory's metadata flush actually reached durable storage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirectorySync {
+    /// The directory handle's `fsync`/`FlushFileBuffers` succeeded.
+    Flushed,
+    /// The platform denied the directory flush (observed on some Windows
+    /// filesystems/handles); the write-through file rename is the
+    /// durability boundary instead.
+    AccessDeniedFallback,
+}
+fn worse(a: DirectorySync, b: DirectorySync) -> DirectorySync {
+    if matches!((a, b), (DirectorySync::Flushed, DirectorySync::Flushed)) {
+        DirectorySync::Flushed
+    } else {
+        DirectorySync::AccessDeniedFallback
+    }
+}
+
+/// Named checkpoints inside [`Store::commit`] where `crates/host/tests/crash_recovery.rs`
+/// injects a process abort to prove [`Store::recover`] classifies every
+/// partial on-disk state correctly. Production code never triggers these
+/// except through the default no-op hook.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CrashPoint {
+    /// Immediately after the `before` journal piece is written and synced.
+    AfterJournalBefore,
+    /// Immediately after the `after` journal piece is written and synced.
+    AfterJournalAfter,
+    /// Immediately after the `prepared.json` journal piece is written and synced.
+    AfterJournalPrepared,
+    /// Immediately after the journal directory, journal root, and store root are directory-synced.
+    AfterJournalSync,
+    /// Immediately after the replacement temporary file is written and synced.
+    AfterTempWrite,
+    /// Immediately before the temporary file replaces the target.
+    BeforeRename,
+    /// Immediately after the temporary file has replaced the target.
+    AfterRename,
+    /// Immediately before the journal's `committed` marker is written.
+    BeforeCommittedMarker,
+}
+impl CrashPoint {
+    /// Every checkpoint, in the order [`Store::commit`] reaches them.
+    #[doc(hidden)]
+    pub const ALL: [Self; 8] = [
+        Self::AfterJournalBefore,
+        Self::AfterJournalAfter,
+        Self::AfterJournalPrepared,
+        Self::AfterJournalSync,
+        Self::AfterTempWrite,
+        Self::BeforeRename,
+        Self::AfterRename,
+        Self::BeforeCommittedMarker,
+    ];
+}
+static CRASH_HOOK: std::sync::OnceLock<fn(CrashPoint)> = std::sync::OnceLock::new();
+/// Install a process-global crash-injection hook for `crates/host/tests/crash_recovery.rs`.
+///
+/// This is a test-only seam, not a production extension point: nothing
+/// outside this crate's own tests calls it, and the default (nothing
+/// installed) is a no-op. Proving exact crash-recovery behavior requires
+/// aborting the process at a precise point inside [`Store::commit`] and then
+/// running [`Store::recover`] against the exact bytes left on disk; that
+/// cannot be done by unwinding a panic, only by re-executing this test
+/// binary as a child process that installs this hook and calls
+/// [`std::process::abort`]. `OnceLock` only ever accepts the first `set`, so
+/// a second call is a no-op — fine, since each test-binary process installs
+/// this at most once.
+#[doc(hidden)]
+pub fn install_crash_hook(hook: fn(CrashPoint)) {
+    let _ = CRASH_HOOK.set(hook);
+}
+fn fire(point: CrashPoint) {
+    if let Some(hook) = CRASH_HOOK.get() {
+        hook(point);
+    }
+}
+
 /// Explicitly selected filesystem root and persistent journal location.
 #[derive(Clone, Debug)]
 pub struct Store {
@@ -65,7 +181,7 @@ pub struct Snapshot {
     pub digest: Digest,
 }
 /// Successful durable replacement and the journal needed for conditional undo.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Commit {
     /// Deterministic transaction identity.
     pub id: String,
@@ -75,7 +191,20 @@ pub struct Commit {
     pub before: Digest,
     /// Written version.
     pub after: Digest,
+    /// Evidence of which platform-specific durability mechanism this call
+    /// used. Excluded from equality: two commits sharing a transaction
+    /// identity are equal regardless of which path reached durability.
+    pub durability: Durability,
 }
+impl PartialEq for Commit {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.path == other.path
+            && self.before == other.before
+            && self.after == other.after
+    }
+}
+impl Eq for Commit {}
 /// One independently journaled result in a non-atomic batch.
 #[derive(Debug)]
 pub struct BatchOutcome {
@@ -86,7 +215,8 @@ pub struct BatchOutcome {
     /// Per-file durable success or explicit failure; errors are never discarded.
     pub result: Result<Commit, Error>,
 }
-/// Recovery observation for one prepared journal.
+/// Recovery observation for one prepared journal, or for a leftover
+/// replacement temporary file found while recovering.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Recovery {
     /// Replacement bytes are present; journal finalized.
@@ -95,6 +225,26 @@ pub enum Recovery {
     NotApplied(String),
     /// Neither version matches; caller must resolve the conflict.
     Conflict(String),
+    /// The journal for this transaction id exists but is unreadable: torn,
+    /// truncated, or otherwise inconsistent (invalid JSON, a digest that
+    /// does not match its recorded piece, a non-UTF-8 or malformed
+    /// identity). The target file is never touched before every journal
+    /// piece is fully written and synced, so this never implies the target
+    /// itself was left in a partial state — only that this journal cannot
+    /// certify which version the target holds.
+    Corrupt {
+        /// Transaction identity the journal directory claims.
+        id: String,
+        /// Human-readable reason the journal could not be read.
+        reason: String,
+    },
+    /// A leftover `.purrassist-<id>.tmp` replacement temporary file whose id
+    /// matched a known journal was removed as evidence-bearing cleanup.
+    OrphanRemoved(String),
+    /// A leftover `.purrassist-<id>.tmp` replacement temporary file matched
+    /// no known journal and was left in place; the path is root-relative
+    /// with forward-slash separators on every platform.
+    OrphanUnknown(String),
 }
 
 impl Store {
@@ -162,7 +312,13 @@ impl Store {
     /// The original and proposed bytes are synced to a prepared journal before
     /// replacement. A sibling temporary file is synced and renamed onto the target.
     /// If a later sync/marker fails, `recover` inspects actual bytes; an error does
-    /// not imply the target was untouched. Original permissions are preserved.
+    /// not imply the target was untouched. On Unix, the target's original
+    /// permission bits are copied onto the replacement. On Windows there are
+    /// no permission bits to copy: the new file inherits its ACL from the
+    /// containing directory, which is that platform's normal file-creation
+    /// behavior and requires no code here (see `docs/EDIT-APPLICATION.md`).
+    /// The returned `Commit::durability` records which platform-specific
+    /// rename mechanism and directory-flush outcome this call actually used.
     ///
     /// # Errors
     /// Returns busy, stale, path, size, or I/O errors. Noncooperating writers can
@@ -216,23 +372,37 @@ impl Store {
         // A retry may finish a prefix left by a failed write before preparation.
         // Divergent or symlinked artifacts remain errors, never overwritten.
         prepare_piece(&directory.join("before"), before.text.as_bytes())?;
+        fire(CrashPoint::AfterJournalBefore);
         prepare_piece(&directory.join("after"), replacement.as_bytes())?;
+        fire(CrashPoint::AfterJournalAfter);
         prepare_piece(&directory.join("prepared.json"), key.as_bytes())?;
-        sync_directory(&directory)?;
-        sync_directory(&self.journal)?;
-        sync_directory(&self.root)?;
-        if current.digest != after {
-            self.replace(&before.path, before.digest, replacement, &id)?;
-        }
+        fire(CrashPoint::AfterJournalPrepared);
+        let mut directory_sync = sync_directory(&directory)?;
+        directory_sync = worse(directory_sync, sync_directory(&self.journal)?);
+        directory_sync = worse(directory_sync, sync_directory(&self.root)?);
+        fire(CrashPoint::AfterJournalSync);
+        let rename = if current.digest != after {
+            let (method, replace_sync) =
+                self.replace(&before.path, before.digest, replacement, &id)?;
+            directory_sync = worse(directory_sync, replace_sync);
+            method
+        } else {
+            RenameMethod::AlreadyCurrent
+        };
+        fire(CrashPoint::BeforeCommittedMarker);
         if !directory.join("committed").exists() {
             write_new(&directory.join("committed"), b"1\n")?;
         }
-        sync_directory(&directory)?;
+        directory_sync = worse(directory_sync, sync_directory(&directory)?);
         Ok(Commit {
             id,
             path: before.path.clone(),
             before: before.digest,
             after,
+            durability: Durability {
+                rename,
+                directory: directory_sync,
+            },
         })
     }
     /// Undo only if the current file still contains the exact committed output.
@@ -255,31 +425,61 @@ impl Store {
     pub fn recover(&self) -> Result<Vec<Recovery>, Error> {
         let _lock = self.lock()?;
         let mut results = Vec::new();
+        let mut known_ids = Vec::new();
         for directory in fs::read_dir(&self.journal)? {
             let directory = directory?;
             if !directory.file_type()?.is_dir() {
                 continue;
             }
-            let id = directory
-                .file_name()
-                .into_string()
-                .map_err(|_| Error::Invalid("journal identity is not UTF-8".into()))?;
+            let id = match directory.file_name().into_string() {
+                Ok(id) => id,
+                Err(raw) => {
+                    results.push(Recovery::Corrupt {
+                        id: raw.to_string_lossy().into_owned(),
+                        reason: "journal identity is not UTF-8".into(),
+                    });
+                    continue;
+                }
+            };
+            if id.len() != 64 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                results.push(Recovery::Corrupt {
+                    id: id.clone(),
+                    reason: "journal directory name is not a transaction identity".into(),
+                });
+                continue;
+            }
+            known_ids.push(id.clone());
             if !directory.path().join("prepared.json").exists() {
                 results.push(Recovery::NotApplied(id));
                 continue;
             }
-            let entry = self.entry(&id)?;
-            let current = self.read(&entry.path)?;
-            if current.digest == Digest::of(entry.after.as_bytes()) {
-                if !directory.path().join("committed").exists() {
-                    write_new(&directory.path().join("committed"), b"1\n")?;
-                    sync_directory(&directory.path())?;
+            let outcome = (|| -> Result<Recovery, Error> {
+                let entry = self.entry(&id)?;
+                let current = self.read(&entry.path)?;
+                if current.digest == Digest::of(entry.after.as_bytes()) {
+                    if !directory.path().join("committed").exists() {
+                        write_new(&directory.path().join("committed"), b"1\n")?;
+                        sync_directory(&directory.path())?;
+                    }
+                    Ok(Recovery::Finalized(id.clone()))
+                } else if current.digest == Digest::of(entry.before.as_bytes()) {
+                    Ok(Recovery::NotApplied(id.clone()))
+                } else {
+                    Ok(Recovery::Conflict(id.clone()))
                 }
-                results.push(Recovery::Finalized(id));
-            } else if current.digest == Digest::of(entry.before.as_bytes()) {
-                results.push(Recovery::NotApplied(id));
-            } else {
-                results.push(Recovery::Conflict(id));
+            })();
+            results.push(outcome.unwrap_or_else(|error| Recovery::Corrupt {
+                id: id.clone(),
+                reason: error.to_string(),
+            }));
+        }
+        for orphan in self.scan_orphans(&known_ids)? {
+            match orphan {
+                Orphan::Known { id, path } => {
+                    fs::remove_file(&path)?;
+                    results.push(Recovery::OrphanRemoved(id));
+                }
+                Orphan::Unknown { name } => results.push(Recovery::OrphanUnknown(name)),
             }
         }
         results.sort_by(|a, b| recovery_id(a).cmp(recovery_id(b)));
@@ -332,13 +532,16 @@ impl Store {
         })?;
         Ok(file)
     }
+    /// Write the replacement bytes into a sibling temporary file and make it
+    /// visible at `target`, returning which rename mechanism completed and
+    /// whether the containing directory's own flush actually succeeded.
     fn replace(
         &self,
         relative: &str,
         expected: Digest,
         replacement: &str,
         id: &str,
-    ) -> Result<(), Error> {
+    ) -> Result<(RenameMethod, DirectorySync), Error> {
         let target = self.resolve(relative)?;
         let parent = target
             .parent()
@@ -357,20 +560,83 @@ impl Store {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(windows)]
+        windows::prepare_temporary_options(&mut options);
+        let mut file = options.open(&temporary)?;
+        #[cfg(unix)]
         file.set_permissions(fs::metadata(&target)?.permissions())?;
-        let mut file = file;
         file.write_all(replacement.as_bytes())?;
         file.sync_all()?;
+        fire(CrashPoint::AfterTempWrite);
         if self.read(relative)?.digest != expected {
             fs::remove_file(&temporary)?;
             return Err(Error::Stale);
         }
-        fs::rename(&temporary, &target)?;
-        sync_directory(parent)?;
+        fire(CrashPoint::BeforeRename);
+        #[cfg(windows)]
+        let method = windows::replace(file, &temporary, &target)?;
+        // Every other platform, including wasm32-wasip1, uses the portable
+        // `rename(2)`-equivalent; only directory durability (`sync_directory`
+        // below) is unproven off Unix/Windows and stays an explicit error there.
+        #[cfg(not(windows))]
+        let method = {
+            fs::rename(&temporary, &target)?;
+            RenameMethod::PosixSemantics
+        };
+        fire(CrashPoint::AfterRename);
+        let directory_sync = sync_directory(parent)?;
+        Ok((method, directory_sync))
+    }
+    /// Recursively find `.purrassist-<id>.tmp` replacement temporary files
+    /// under the store root, classifying each by whether its id matches a
+    /// known journal directory.
+    fn scan_orphans(&self, known: &[String]) -> Result<Vec<Orphan>, Error> {
+        let mut findings = Vec::new();
+        self.walk_orphans(&self.root, known, &mut findings)?;
+        Ok(findings)
+    }
+    fn walk_orphans(
+        &self,
+        directory: &Path,
+        known: &[String],
+        findings: &mut Vec<Orphan>,
+    ) -> Result<(), Error> {
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path == self.journal {
+                continue;
+            }
+            let file_type = entry.file_type()?;
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                self.walk_orphans(&path, known, findings)?;
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let Ok(name) = entry.file_name().into_string() else {
+                continue;
+            };
+            let Some(id) = orphan_id(&name) else {
+                continue;
+            };
+            if known.iter().any(|candidate| candidate == &id) {
+                findings.push(Orphan::Known { id, path });
+            } else {
+                let relative = path
+                    .strip_prefix(&self.root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                findings.push(Orphan::Unknown { name: relative });
+            }
+        }
         Ok(())
     }
     fn entry(&self, id: &str) -> Result<Entry, Error> {
@@ -412,9 +678,28 @@ struct Entry {
     before: String,
     after: String,
 }
+/// One `.purrassist-<id>.tmp` replacement temporary file found while
+/// recovering, classified by whether its id matches a known journal.
+enum Orphan {
+    /// Matches a known journal directory; safe to remove.
+    Known { id: String, path: PathBuf },
+    /// Matches no known journal; reported but never deleted.
+    Unknown { name: String },
+}
+/// Parse a `.purrassist-<id>.tmp` file name into its transaction id, or
+/// `None` if the name does not match that exact convention.
+fn orphan_id(name: &str) -> Option<String> {
+    let id = name.strip_prefix(".purrassist-")?.strip_suffix(".tmp")?;
+    (id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit())).then(|| id.to_string())
+}
 fn recovery_id(recovery: &Recovery) -> &str {
     match recovery {
-        Recovery::Finalized(id) | Recovery::NotApplied(id) | Recovery::Conflict(id) => id,
+        Recovery::Finalized(id)
+        | Recovery::NotApplied(id)
+        | Recovery::Conflict(id)
+        | Recovery::OrphanRemoved(id) => id,
+        Recovery::Corrupt { id, .. } => id,
+        Recovery::OrphanUnknown(name) => name,
     }
 }
 fn read_bounded(path: &Path, limit: u64) -> Result<String, Error> {
@@ -484,19 +769,28 @@ fn prepare_piece(path: &Path, expected: &[u8]) -> Result<(), Error> {
     write_new(path, expected)
 }
 #[cfg(unix)]
-fn sync_directory(path: &Path) -> Result<(), Error> {
+fn sync_directory(path: &Path) -> Result<DirectorySync, Error> {
     File::open(path)?.sync_all()?;
-    Ok(())
+    Ok(DirectorySync::Flushed)
 }
-#[cfg(not(unix))]
-fn sync_directory(_path: &Path) -> Result<(), Error> {
+#[cfg(windows)]
+fn sync_directory(path: &Path) -> Result<DirectorySync, Error> {
+    windows::sync_directory(path)
+}
+#[cfg(not(any(unix, windows)))]
+fn sync_directory(_path: &Path) -> Result<DirectorySync, Error> {
     Err(Error::Invalid(
         "durable directory sync is not implemented on this platform".into(),
     ))
 }
 
 fn create_private_directory(path: &Path) -> Result<(), Error> {
+    // Windows has no permission-bit concept to set here; the new directory
+    // inherits its ACL from its parent (see docs/EDIT-APPLICATION.md).
+    #[cfg(unix)]
     let mut builder = fs::DirBuilder::new();
+    #[cfg(not(unix))]
+    let builder = fs::DirBuilder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;

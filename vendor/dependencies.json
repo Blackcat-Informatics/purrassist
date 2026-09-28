@@ -26,6 +26,8 @@
     "tree-sitter-typescript@0.23.2",
     "tree-sitter@0.27.0",
     "unicode-ident@1.0.26",
+    "windows-link@0.2.1",
+    "windows-sys@0.61.2",
     "zmij@1.0.23"
   ],
   "generated_data": [
@@ -466,6 +468,38 @@
         "vendor/licenses/unicode-ident-1.0.26/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
         "vendor/licenses/unicode-ident-1.0.26/LICENSE-UNICODE": "f7db81051789b729fea528a63ec4c938fdcb93d9d61d97dc8cc2e9df6d47f2a1"
       }
+    },
+    {
+      "name": "windows-link",
+      "version": "0.2.1",
+      "license": "MIT OR Apache-2.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "repository": "https://github.com/microsoft/windows-rs",
+      "notices": [
+        "vendor/licenses/windows-link-0.2.1/LICENSE-APACHE",
+        "vendor/licenses/windows-link-0.2.1/LICENSE-MIT"
+      ],
+      "notice_sha256": {
+        "vendor/licenses/windows-link-0.2.1/LICENSE-APACHE": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b",
+        "vendor/licenses/windows-link-0.2.1/LICENSE-MIT": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+      },
+      "justification": "Transitive dependency of purrassist-host's Windows-only windows-sys dependency (extern-fn linking shim); pulled on every platform in the resolved Cargo graph, compiled only under cfg(windows)."
+    },
+    {
+      "name": "windows-sys",
+      "version": "0.61.2",
+      "license": "MIT OR Apache-2.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "repository": "https://github.com/microsoft/windows-rs",
+      "notices": [
+        "vendor/licenses/windows-sys-0.61.2/LICENSE-APACHE",
+        "vendor/licenses/windows-sys-0.61.2/LICENSE-MIT"
+      ],
+      "notice_sha256": {
+        "vendor/licenses/windows-sys-0.61.2/LICENSE-APACHE": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b",
+        "vendor/licenses/windows-sys-0.61.2/LICENSE-MIT": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+      },
+      "justification": "purrassist-host's only Windows-only dependency ([target.'cfg(windows)'.dependencies], default-features = false, Win32_Foundation + Win32_Storage_FileSystem only), providing raw kernel32 bindings (SetFileInformationByHandle, MoveFileExW, FlushFileBuffers) for R6 Windows filesystem durability (crates/host/src/files/windows.rs). Header-generated FFI signatures and constants only; no runtime logic beyond linking. Resolved on every platform because Cargo includes target-specific dependencies in the lock file regardless of the host running cargo metadata; compiled only under cfg(windows)."
     },
     {
       "name": "zmij",

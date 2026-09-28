@@ -710,6 +710,27 @@ fn commit_node(commit: crate::files::Commit) -> Node {
         ("path", string(commit.path)),
         ("before", string(commit.before.to_string())),
         ("after", string(commit.after.to_string())),
+        ("durability", durability_node(commit.durability)),
+    ])
+}
+fn durability_node(durability: crate::files::Durability) -> Node {
+    use crate::files::{DirectorySync, RenameMethod};
+    object([
+        (
+            "rename",
+            string(match durability.rename {
+                RenameMethod::PosixSemantics => "posix_semantics",
+                RenameMethod::MoveFileExFallback => "move_file_ex_fallback",
+                RenameMethod::AlreadyCurrent => "already_current",
+            }),
+        ),
+        (
+            "directory_sync",
+            string(match durability.directory {
+                DirectorySync::Flushed => "flushed",
+                DirectorySync::AccessDeniedFallback => "access_denied_fallback",
+            }),
+        ),
     ])
 }
 fn planned(result: purrassist::AssistResult<EditPlan>) -> Node {

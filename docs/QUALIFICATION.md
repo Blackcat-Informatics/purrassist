@@ -516,8 +516,24 @@ protocol behavior, not a maximum response latency or global allocator bound.
   Focused tests cover exact, alias, weak, tie, invalid-policy, cancellation,
   and ledger-exhaustion behavior. Thresholds remain uncalibrated ranking
   policy; representative incorrect-correction evaluation is still required.
-- Qualify Windows filesystem durability and crash boundaries. Unix tests and a
-  configured Windows engine job do not establish Windows host support.
+- Windows filesystem durability is implemented (`crates/host/src/files/windows.rs`:
+  POSIX-semantics rename via `SetFileInformationByHandle`/`FileRenameInfoEx` on
+  a write-through handle, `MoveFileExW` fallback, bounded sharing-violation
+  retry, `FlushFileBuffers` directory durability with explicit
+  access-denied evidence) and `Store::recover` now reports corrupt/torn
+  journals per transaction and orphaned replacement temporaries instead of
+  failing recovery outright. `crates/host/tests/crash_recovery.rs` proves
+  exact-version crash/recovery/retry outcomes at eight commit checkpoints by
+  re-executing its own test binary and aborting at each one; it runs on both
+  Unix and Windows (no `cfg(unix)` gating beyond the pre-existing
+  symlink/permission test). `cargo check -p purrassist-host -p
+  purrassist-cli --target x86_64-pc-windows-gnu --all-targets` is clean
+  locally. The `windows-engines` CI job now also runs `cargo test -p
+  purrassist-host -p purrassist-cli --locked`. Hosted execution on a real
+  Windows runner is the actual proof of this behavior and is still pending
+  for this change on this branch; a green `windows-engines` run for the
+  commit that lands this is the acceptance evidence, not the local
+  cross-compile check alone.
 - Execute hosted CI, audit final package contents and notices, configure trusted
   publishing, verify downloadable packages and installed behavior, and only then
   make a release. No remote publication settings have been changed.

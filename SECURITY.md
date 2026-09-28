@@ -14,9 +14,16 @@ budgets, misleading correction receipts, file transactions, MCP framing, and
 dependency provenance. A validated guess remains a guess. File tools coordinate
 cooperating writers; their portable path checks are not a hostile-process sandbox.
 
-`crates/syntax/src/alloc.rs` is the workspace's one `unsafe_code` exception
-(`unsafe_code = "deny"` everywhere else, including the rest of
-`purrassist-syntax`), registered in `docs/DEPENDENCIES.md`. It implements
+The workspace denies `unsafe_code` everywhere except two registered
+exceptions in `docs/DEPENDENCIES.md`: `crates/syntax/src/alloc.rs` and
+`crates/host/src/files/windows.rs` (`unsafe_code = "deny"` stays in force
+everywhere else, including the rest of `purrassist-syntax` and
+`purrassist-host`). `crates/host/src/files/windows.rs` calls `kernel32`
+through `windows-sys` (`SetFileInformationByHandle`, `MoveFileExW`,
+`FlushFileBuffers`) to implement Windows filesystem durability — these are
+raw FFI calls with no safe std equivalent, each with a `SAFETY` comment.
+
+`crates/syntax/src/alloc.rs` implements
 `malloc`/`calloc`/`realloc`/`free` wrappers over `std::alloc::System` so
 tree-sitter's own C allocations can be charged to the caller's governor
 instead of remaining external to it. `tree_sitter::set_allocator` replaces

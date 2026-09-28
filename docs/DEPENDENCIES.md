@@ -84,6 +84,51 @@ rather than a thread-local counter (frees can happen on any thread; see
 wrapper, client request, or profiler library is linked for this; it is
 first-party code exercising a public, documented tree-sitter API.
 
+`purrassist-host` has one Windows-only Cargo dependency, declared under
+`[target.'cfg(windows)'.dependencies]` with `default-features = false` and
+pinned to an exact version: `windows-sys = "=0.61.2"`, features
+`Win32_Foundation`, `Win32_Storage_FileSystem`, and
+`Win32_System_WindowsProgramming` (the last only for the
+`FILE_RENAME_FLAG_POSIX_SEMANTICS`/`FILE_RENAME_FLAG_REPLACE_IF_EXISTS`
+constants). It brings one
+transitive dependency, `windows-link@0.2.1` (an extern-fn linking shim; no
+executable logic). Both are MIT OR Apache-2.0, from
+`https://github.com/microsoft/windows-rs`, with license notices vendored
+under `vendor/licenses/windows-sys-0.61.2/` and
+`vendor/licenses/windows-link-0.2.1/`. `cargo metadata` resolves target-gated
+dependencies on every host platform regardless of which platform invokes it
+(Cargo does not filter `packages` by the running OS unless
+`--filter-platform` is passed, and `scripts/check-repository.py` never passes
+it), so `windows-sys`/`windows-link` appear in the dependency inventory and
+are checked on Linux and macOS exactly like every other resolved package,
+even though the code that uses them only compiles under `cfg(windows)`.
+`windows-sys` provides raw `kernel32` FFI signatures and constants only
+(`SetFileInformationByHandle`, `MoveFileExW`, `FlushFileBuffers`, and their
+associated flag/error constants); it contains no logic of its own. It backs
+R6 Windows filesystem durability in `crates/host/src/files/windows.rs`:
+POSIX-semantics rename via `FileRenameInfoEx` on a write-through handle,
+falling back to `MoveFileExW` where the filesystem rejects POSIX semantics,
+and `FlushFileBuffers` for directory metadata flush. No provider SDK, HTTP
+client, TLS stack, async runtime, or model runtime is linked by this
+dependency; it is the narrowest possible surface for the Win32 calls the
+durability contract requires, since `std::fs` exposes no write-through or
+POSIX-rename-semantics primitive.
+
+`crates/host/src/files/windows.rs` is the workspace's second `unsafe_code`
+exception (`#![allow(unsafe_code)]` scoped to that one file; the workspace
+deny stays in force everywhere else, including the rest of
+`purrassist-host`; the first exception is `crates/syntax/src/alloc.rs`,
+documented above). The rationale: calling `kernel32` functions through
+`windows-sys` — `SetFileInformationByHandle`, `MoveFileExW`,
+`FlushFileBuffers`, `GetLastError` — is inherently `unsafe` (they are raw
+`extern "C"` FFI calls whose safety the compiler cannot check), and building
+the variable-length `FILE_RENAME_INFO` buffer for the rename call requires
+raw-pointer writes into a manually allocated, correctly aligned buffer (a
+`Vec<u8>` is not guaranteed aligned for a struct containing a `HANDLE`
+field). Every `unsafe` block carries a `SAFETY` comment. No allocator
+wrapper, client request, or profiler library is linked for this; it is
+first-party code calling public, documented Win32 APIs.
+
 Coverage-guided JSON qualification uses installed LLVM 22.1.8 `llvm-cov` and
 `llvm-profdata` tools with the Rust compiler's matching coverage runtime. Only
 the qualification example is instrumented. LLVM's Apache-2.0 WITH LLVM-exception
