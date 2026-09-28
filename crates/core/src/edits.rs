@@ -8,9 +8,9 @@ use crate::{
 };
 use std::ops::Range;
 mod fuzzy;
-pub use fuzzy::locate_fuzzy;
+pub use fuzzy::{locate_fuzzy, locate_fuzzy_governed};
 mod unified;
-pub use unified::plan_unified;
+pub use unified::{plan_unified, plan_unified_governed};
 
 /// Replace exactly one half-open UTF-8 byte range.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -180,10 +180,34 @@ pub fn locate(
     replacement: &str,
     budget: Budget,
 ) -> AssistResult<EditPlan> {
+    locate_governed(source, needle, replacement, &mut Governor::new(budget))
+}
+
+/// Run the same planning operation with cumulative caller-owned limits and cancellation.
+///
+/// Returns `Unresolved` on cancellation or exhaustion; the receipt records the
+/// governor's effective limits and cumulative usage. Completed plans remain
+/// proposals and perform no filesystem effects.
+///
+/// ```
+/// use purrassist_core::{Budget, Governor, Outcome, StopReason, edits};
+/// let mut governor = Governor::new(Budget::default());
+/// governor.cancel();
+/// let result = edits::locate_governed("tea", "tea", "coffee", &mut governor);
+/// assert!(matches!(result.outcome, Outcome::Unresolved));
+/// assert_eq!(result.receipt.stopped, StopReason::Cancelled);
+/// ```
+#[must_use]
+pub fn locate_governed(
+    source: &str,
+    needle: &str,
+    replacement: &str,
+    governor: &mut Governor,
+) -> AssistResult<EditPlan> {
+    let budget = *governor.limits();
     let mut receipt = Receipt::new(source.as_bytes(), "text.locate.v1", Effort::Exact, budget);
-    let mut governor = Governor::new(budget);
     let result = (|| {
-        receipt.retain_source(source, &mut governor)?;
+        receipt.retain_source(source, governor)?;
         governor.charge(Resource::InputBytes, size(source.len()))?;
         governor.charge(
             Resource::Work,
@@ -197,6 +221,7 @@ pub fn locate(
         let mut plans = Vec::new();
         // Include overlapping occurrences; match_indices alone omits them.
         for (position, _) in source.char_indices() {
+            governor.check()?;
             if source[position..].starts_with(needle) {
                 governor.charge(Resource::Candidates, 1)?;
                 governor.charge(

@@ -9,11 +9,14 @@ use purrassist::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(super) fn resolve(args: &Node) -> Result<Node, String> {
+pub(super) fn resolve(
+    args: &Node,
+    cancellation: Option<&purrassist::CancellationToken>,
+) -> Result<Node, String> {
     let input = super::field(args, "input")?;
     let effort = super::effort(args)?;
     let budget = effort.budget();
-    let mut governor = Governor::new(budget);
+    let mut governor = super::governor(budget, cancellation);
     if let Err(reason) = admit(args, &mut governor, 0) {
         let mut receipt = Receipt::new(input.as_bytes(), "intent.resolve.v1", effort, budget);
         receipt.stopped = reason;

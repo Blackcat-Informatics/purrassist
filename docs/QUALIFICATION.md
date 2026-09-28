@@ -315,6 +315,11 @@ hard memory limits.
 
 ## Remaining release work
 
+Caller-owned cancellation now reaches the governor, governed matching/edit/syntax
+entry points, and `Tools::call_with_cancellation`. The source and filesystem
+boundaries are documented in `CANCELLATION.md`; this does not yet qualify live
+stdio MCP cancellation or a maximum response latency.
+
 - Extend Markdown section, list, table, and reference structural editing and broaden
   adversarial/preservation qualification.
   Full HTML-output comparison against the pinned official corpora now passes;
@@ -336,6 +341,8 @@ hard memory limits.
   including epistemic status and one governor across domain/index admission
   and resolution. Markdown inspection, context extraction, section-body plans,
   and root task-checkbox plans also share the tool dispatcher.
+- Handle MCP cancellation notifications during active requests using the shared
+  cancellation path, preserving transaction outcomes and bounded transport state.
 - Expand independent oracle and adversarial corpora, coverage-guided fuzzing beyond
   the bounded JSON campaign,
   memory/allocation measurements, build/artifact metrics, and representative

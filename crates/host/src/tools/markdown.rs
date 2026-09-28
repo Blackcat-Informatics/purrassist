@@ -14,10 +14,14 @@ use purrassist::{
 };
 use std::ops::Range;
 
-pub(super) fn call(name: &str, args: &Node) -> Result<Node, String> {
+pub(super) fn call(
+    name: &str,
+    args: &Node,
+    cancellation: Option<&purrassist::CancellationToken>,
+) -> Result<Node, String> {
     let source = super::field(args, "source")?;
     let effort = super::effort(args)?;
-    let mut governor = Governor::new(effort.budget());
+    let mut governor = super::governor(effort.budget(), cancellation);
     let mut receipt = Receipt::new(source.as_bytes(), name, effort, effort.budget());
     let result = receipt.retain_source(source, &mut governor).and_then(|()| {
         let document = Document::parse(source, &mut governor)?;

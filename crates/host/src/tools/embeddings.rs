@@ -10,9 +10,12 @@ use purrassist::{
     wire::{object, string},
 };
 
-pub(super) fn call(args: &Node) -> Result<Node, String> {
+pub(super) fn call(
+    args: &Node,
+    cancellation: Option<&purrassist::CancellationToken>,
+) -> Result<Node, String> {
     let effort = super::effort(args)?;
-    let mut governor = Governor::new(effort.budget());
+    let mut governor = super::governor(effort.budget(), cancellation);
     let bound = admission(args, &mut governor).map_err(|error| error.to_string())?;
     governor
         .charge(Resource::InputBytes, bound)

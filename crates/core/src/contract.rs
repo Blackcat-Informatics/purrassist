@@ -6,6 +6,45 @@
 use crate::digest::Digest;
 use core::fmt;
 use core::ops::Range;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+
+/// Caller-owned, monotonic cancellation signal shared by related operations.
+///
+/// Clones share one signal. Cancelling never undoes completed effects; governed
+/// operations observe it at their next check or charge. No background task,
+/// clock, or ambient process state is consulted. Create a new token for a retry.
+///
+/// ```
+/// use purrassist_core::{Budget, CancellationToken, Governor, StopReason};
+/// let token = CancellationToken::new();
+/// let governor = Governor::with_cancellation(Budget::default(), token.clone());
+/// token.cancel();
+/// assert_eq!(governor.check(), Err(StopReason::Cancelled));
+/// ```
+#[derive(Clone, Debug, Default)]
+pub struct CancellationToken(Arc<AtomicBool>);
+
+impl CancellationToken {
+    /// Create an uncancelled signal. Allocation belongs to the caller.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Irreversibly request cancellation for every clone and attached governor.
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether cancellation has been requested. This is not an effect rollback.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
 
 /// Version of the machine-readable receipt contract.
 pub const RECEIPT_VERSION: u32 = 1;
@@ -144,6 +183,7 @@ pub struct Governor {
     usage: Usage,
     scratch: u64,
     stopped: Option<StopReason>,
+    cancellation: Option<CancellationToken>,
 }
 
 impl Governor {
@@ -161,6 +201,20 @@ impl Governor {
             },
             scratch: 0,
             stopped: None,
+            cancellation: None,
+        }
+    }
+
+    /// Start with explicit limits and a caller-owned cancellation signal.
+    ///
+    /// Usage and local exhaustion remain independent between governors sharing
+    /// a token. An already recorded exhaustion retains precedence over a later
+    /// cancellation request. Checks do not admit new work after cancellation.
+    #[must_use]
+    pub fn with_cancellation(limits: Budget, cancellation: CancellationToken) -> Self {
+        Self {
+            cancellation: Some(cancellation),
+            ..Self::new(limits)
         }
     }
 
@@ -178,7 +232,7 @@ impl Governor {
 
     /// Cancel future work without changing completed evidence.
     pub fn cancel(&mut self) {
-        self.stopped = Some(StopReason::Cancelled);
+        self.stopped.get_or_insert(StopReason::Cancelled);
     }
 
     /// Check whether the operation can proceed.
@@ -186,7 +240,17 @@ impl Governor {
     /// # Errors
     /// Returns the first exhaustion reason, or cancellation.
     pub fn check(&self) -> Result<(), StopReason> {
-        self.stopped.clone().map_or(Ok(()), Err)
+        if let Some(reason) = &self.stopped {
+            return Err(reason.clone());
+        }
+        if self
+            .cancellation
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            return Err(StopReason::Cancelled);
+        }
+        Ok(())
     }
 
     /// Charge before performing work or allocating reserved storage.

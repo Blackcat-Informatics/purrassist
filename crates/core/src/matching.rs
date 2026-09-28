@@ -83,7 +83,7 @@ pub fn rank(
     candidates: &[Candidate],
     request: &MatchRequest,
 ) -> AssistResult<Vec<RankedMatch>> {
-    rank_with(
+    rank_governed(
         query,
         candidates,
         request,
@@ -91,7 +91,21 @@ pub fn rank(
     )
 }
 
-pub(crate) fn rank_with(
+/// Rank with caller-owned cumulative limits and cancellation.
+///
+/// The governor overrides `request.budget`. Exhaustion or cancellation returns
+/// `Unresolved` with the cumulative usage and termination reason in its receipt.
+///
+/// ```
+/// use purrassist_core::{Budget, Governor, Outcome, matching::{self, Candidate, MatchRequest}};
+/// let mut governor = Governor::new(Budget::default());
+/// let result = matching::rank_governed("tea", &[Candidate::new("1", "tea")],
+///     &MatchRequest::default(), &mut governor);
+/// assert!(matches!(result.outcome, Outcome::Resolved(_)));
+/// assert_eq!(result.receipt.usage, governor.usage());
+/// ```
+#[must_use]
+pub fn rank_governed(
     query: &str,
     candidates: &[Candidate],
     request: &MatchRequest,
@@ -101,7 +115,7 @@ pub(crate) fn rank_with(
         query.as_bytes(),
         "matching/rank-v1",
         request.effort,
-        request.budget,
+        *governor.limits(),
     );
     let mut identities = BTreeSet::new();
     let mut ranked = Vec::new();

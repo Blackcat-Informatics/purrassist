@@ -2,14 +2,17 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Pure path resolution shared by host, CLI, and MCP dispatch.
 use purrassist::{
-    AssistResult, Governor, Outcome, Receipt,
+    AssistResult, Outcome, Receipt,
     json::{Node, Value},
     matching::MatchRequest,
     paths::{PathIndex, PathMatch, SelectionPolicy},
     wire::{array, integer, object, string},
 };
 
-pub(super) fn resolve(args: &Node) -> Result<Node, String> {
+pub(super) fn resolve(
+    args: &Node,
+    cancellation: Option<&purrassist::CancellationToken>,
+) -> Result<Node, String> {
     let query = super::field(args, "query")?;
     let effort = super::effort(args)?;
     let request = MatchRequest {
@@ -17,7 +20,7 @@ pub(super) fn resolve(args: &Node) -> Result<Node, String> {
         budget: effort.budget(),
         ..MatchRequest::default()
     };
-    let mut governor = Governor::new(request.budget);
+    let mut governor = super::governor(request.budget, cancellation);
     let Some(Node {
         value: Value::Array(paths),
         ..

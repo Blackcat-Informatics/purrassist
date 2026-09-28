@@ -49,14 +49,37 @@ struct SourceLine<'a> {
 /// ```
 #[must_use]
 pub fn plan_unified(source: &str, patch: &str, budget: Budget) -> AssistResult<EditPlan> {
+    plan_unified_governed(source, patch, &mut Governor::new(budget))
+}
+
+/// Run the same planning operation with cumulative caller-owned limits and cancellation.
+///
+/// Returns `Unresolved` on cancellation or exhaustion; the receipt records the
+/// governor's effective limits and cumulative usage. Completed plans remain
+/// proposals and perform no filesystem effects.
+///
+/// ```
+/// use purrassist_core::{Budget, Governor, Outcome, StopReason, edits};
+/// let mut governor = Governor::new(Budget::default());
+/// governor.cancel();
+/// let result = edits::plan_unified_governed("tea", "", &mut governor);
+/// assert!(matches!(result.outcome, Outcome::Unresolved));
+/// assert_eq!(result.receipt.stopped, StopReason::Cancelled);
+/// ```
+#[must_use]
+pub fn plan_unified_governed(
+    source: &str,
+    patch: &str,
+    governor: &mut Governor,
+) -> AssistResult<EditPlan> {
+    let budget = *governor.limits();
     let mut receipt = Receipt::new(
         source.as_bytes(),
         "text.unified-diff.v1",
         Effort::Standard,
         budget,
     );
-    let mut governor = Governor::new(budget);
-    let result = plan(source, patch, &mut governor, &mut receipt);
+    let result = plan(source, patch, governor, &mut receipt);
     let outcome = match result {
         Ok(mut plans) if plans.len() == 1 => Outcome::Resolved(plans.remove(0)),
         Ok(plans) if !plans.is_empty() => Outcome::Ambiguous(plans),

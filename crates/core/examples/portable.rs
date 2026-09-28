@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Deterministic native/WASI acceptance transcript using the actual core engines.
 use purrassist_core::{
-    Budget, Effort, Governor, Outcome, StopReason,
+    Budget, CancellationToken, Effort, Governor, Outcome, StopReason,
     contract::Resource,
     digest::Digest,
     edits::EditPlan,
@@ -18,6 +18,10 @@ use purrassist_core::{
 };
 
 fn main() {
+    let cancellation = CancellationToken::new();
+    let cancelled = Governor::with_cancellation(Budget::default(), cancellation.clone());
+    cancellation.cancel();
+    assert_eq!(cancelled.check(), Err(StopReason::Cancelled));
     let schema = Schema::compile(r#"{"type":"object","required":["temperature","drink"],"properties":{"temperature":{"type":"number"},"drink":{"enum":["tea","coffee"]}},"additionalProperties":false}"#).expect("schema");
     let mut transcript = Vec::new();
     for source in [

@@ -222,8 +222,32 @@ pub fn apply_checked(
     language: Language,
     budget: Budget,
 ) -> AssistResult<AppliedEdit> {
-    let mut governor = Governor::new(budget);
-    let mut result = plan.apply_governed(source, &mut governor);
+    apply_checked_governed(source, plan, language, &mut Governor::new(budget))
+}
+
+/// Apply and syntax-validate using one caller-owned governor.
+///
+/// Cancellation and exhaustion return `Unresolved` with cumulative usage. No
+/// disk writes occur; the caller decides whether to commit a resolved result.
+///
+/// ```
+/// use purrassist_core::{Budget, Governor, Outcome, StopReason, edits::EditPlan, digest::Digest};
+/// use purrassist_syntax::{apply_checked_governed, Language};
+/// let mut governor = Governor::new(Budget::default());
+/// governor.cancel();
+/// let plan = EditPlan { source: Digest::of(b""), edits: vec![] };
+/// let result = apply_checked_governed("", &plan, Language::Rust, &mut governor);
+/// assert!(matches!(result.outcome, Outcome::Unresolved));
+/// assert_eq!(result.receipt.stopped, StopReason::Cancelled);
+/// ```
+#[must_use]
+pub fn apply_checked_governed(
+    source: &str,
+    plan: &EditPlan,
+    language: Language,
+    governor: &mut Governor,
+) -> AssistResult<AppliedEdit> {
+    let mut result = plan.apply_governed(source, governor);
     result.receipt.operation = "syntax.apply.v1".into();
     let Outcome::Resolved(applied) = &result.outcome else {
         return result;
@@ -233,7 +257,7 @@ pub fn apply_checked(
         plan,
         applied,
         language,
-        &mut governor,
+        governor,
         &mut result.receipt,
     );
     result.outcome = match operation {

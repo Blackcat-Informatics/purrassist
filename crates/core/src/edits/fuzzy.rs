@@ -31,16 +31,47 @@ pub fn locate_fuzzy(
     max_edits: usize,
     budget: Budget,
 ) -> AssistResult<EditPlan> {
+    locate_fuzzy_governed(
+        source,
+        needle,
+        replacement,
+        max_edits,
+        &mut Governor::new(budget),
+    )
+}
+
+/// Run the same planning operation with cumulative caller-owned limits and cancellation.
+///
+/// Returns `Unresolved` on cancellation or exhaustion; the receipt records the
+/// governor's effective limits and cumulative usage. Completed plans remain
+/// proposals and perform no filesystem effects.
+///
+/// ```
+/// use purrassist_core::{Budget, Governor, Outcome, StopReason, edits};
+/// let mut governor = Governor::new(Budget::default());
+/// governor.cancel();
+/// let result = edits::locate_fuzzy_governed("tea", "tea", "coffee", 1, &mut governor);
+/// assert!(matches!(result.outcome, Outcome::Unresolved));
+/// assert_eq!(result.receipt.stopped, StopReason::Cancelled);
+/// ```
+#[must_use]
+pub fn locate_fuzzy_governed(
+    source: &str,
+    needle: &str,
+    replacement: &str,
+    max_edits: usize,
+    governor: &mut Governor,
+) -> AssistResult<EditPlan> {
+    let budget = *governor.limits();
     let mut receipt = Receipt::new(
         source.as_bytes(),
         "text.locate-fuzzy.v1",
         Effort::Standard,
         budget,
     );
-    let mut governor = Governor::new(budget);
     let result = receipt
-        .retain_source(source, &mut governor)
-        .and_then(|()| regions(source, needle, max_edits, &mut governor))
+        .retain_source(source, governor)
+        .and_then(|()| regions(source, needle, max_edits, governor))
         .and_then(|(distance, ranges)| {
             let mut plans = Vec::new();
             for range in ranges {
@@ -121,6 +152,7 @@ pub(super) fn regions(
     }
     let mut ranges = Vec::new();
     for (start, _) in source.char_indices() {
+        governor.check()?;
         if source[start..].starts_with(needle) {
             retain(&mut ranges, start..start + needle.len(), governor)?;
         }

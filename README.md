@@ -226,3 +226,6 @@ Resource profiling is available with `make resources`; see [measurement scope an
 
 Coverage-guided JSON campaigns are available with `make fuzz-json`; see
 [properties, replay, and qualification limits](docs/FUZZING.md).
+
+Governed engines and host tools accept [caller-owned cancellation](docs/CANCELLATION.md),
+with explicit transaction boundaries. Live MCP cancellation remains in progress.

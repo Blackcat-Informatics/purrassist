@@ -251,7 +251,8 @@ impl PathIndex {
             .collect();
         let mut matching_request = request.clone();
         matching_request.limit = self.paths.len().max(1);
-        let result = matching::rank_with(basename(query), &candidates, &matching_request, governor);
+        let result =
+            matching::rank_governed(basename(query), &candidates, &matching_request, governor);
         if result.receipt.stopped != StopReason::Completed
             && result.receipt.stopped != StopReason::NoCandidate
         {

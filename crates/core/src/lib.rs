@@ -12,7 +12,9 @@ pub mod pattern;
 pub mod schema;
 pub mod text;
 
-pub use contract::{AssistResult, Budget, Effort, Governor, Outcome, Receipt, StopReason};
+pub use contract::{
+    AssistResult, Budget, CancellationToken, Effort, Governor, Outcome, Receipt, StopReason,
+};
 
 pub mod wire;
 

@@ -8,7 +8,7 @@ mod paths;
 
 use crate::files::Store;
 use purrassist::{
-    Budget, Effort, Governor, Outcome, RecoveryRequest, Schema,
+    Budget, CancellationToken, Effort, Governor, Outcome, RecoveryRequest, Schema,
     edits::{EditPlan, TextEdit},
     json::{self, Node, Value},
     matching::{self, Candidate, MatchRequest},
@@ -200,12 +200,59 @@ impl Tools {
     /// # Errors
     /// Rejects unknown operations, schema-invalid arguments, stale writes, and execution errors.
     pub fn call(&self, name: &str, args: &Node) -> Result<Node, String> {
+        self.call_controlled(name, args, None)
+    }
+
+    /// Invoke with a caller-owned cooperative cancellation signal.
+    ///
+    /// Argument validation and governed engines observe cancellation at checks
+    /// and charges. File reads may finish their current OS operation. Mutations
+    /// check before entering the journaled commit/undo; once entered, they finish
+    /// that transaction and report its actual outcome rather than imply rollback.
+    /// This method starts no thread or listener.
+    ///
+    /// ```no_run
+    /// use purrassist::{CancellationToken, json};
+    /// use purrassist_host::tools::Tools;
+    /// let tools = Tools::new(".")?;
+    /// let token = CancellationToken::new();
+    /// token.cancel();
+    /// let args = json::parse(r#"{"path":"example.txt"}"#)?;
+    /// assert_eq!(tools.call_with_cancellation("read_file", &args, &token),
+    ///     Err("cancelled".into()));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns the same errors as `call`, plus cancellation during argument
+    /// validation or before a filesystem operation. Engine receipts preserve
+    /// their typed cancellation outcome.
+    pub fn call_with_cancellation(
+        &self,
+        name: &str,
+        args: &Node,
+        cancellation: &CancellationToken,
+    ) -> Result<Node, String> {
+        self.call_controlled(name, args, Some(cancellation))
+    }
+
+    fn call_controlled(
+        &self,
+        name: &str,
+        args: &Node,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<Node, String> {
+        let mut validation_governor = governor(Budget::default(), cancellation);
+        validation_governor.check().map_err(|e| e.to_string())?;
         let definition = DEFINITIONS
             .iter()
             .find(|definition| definition.name == name)
             .ok_or_else(|| format!("unknown tool {name:?}"))?;
-        let schema = Schema::compile(definition.schema).map_err(|e| e.to_string())?;
-        let validation = schema.validate(args).map_err(|e| e.to_string())?;
+        let schema = Schema::compile_governed(definition.schema, &mut validation_governor)
+            .map_err(|e| e.to_string())?;
+        let validation = schema
+            .validate_with(args, &mut validation_governor)
+            .map_err(|e| e.to_string())?;
         if !validation.valid {
             return Err(format!(
                 "tool arguments violate schema: {:?}",
@@ -213,11 +260,11 @@ impl Tools {
             ));
         }
         match name {
-            "decode_json" => decode(args),
-            "match_strings" => rank(args),
-            "match_paths" => paths::resolve(args),
-            "resolve_intent" => intent::resolve(args),
-            "match_embeddings" => embeddings::call(args),
+            "decode_json" => decode(args, cancellation),
+            "match_strings" => rank(args, cancellation),
+            "match_paths" => paths::resolve(args, cancellation),
+            "resolve_intent" => intent::resolve(args, cancellation),
+            "match_embeddings" => embeddings::call(args, cancellation),
             "render_markdown"
             | "inspect_markdown"
             | "markdown_context"
@@ -227,7 +274,7 @@ impl Tools {
             | "plan_markdown_table_row"
             | "plan_markdown_table_column"
             | "plan_markdown_reference"
-            | "plan_markdown_task" => markdown::call(name, args),
+            | "plan_markdown_task" => markdown::call(name, args, cancellation),
             "plan_replacement" => {
                 let max_edits = match args.get("max_edits").map(|node| &node.value) {
                     Some(Value::Number(number)) => {
@@ -236,21 +283,22 @@ impl Tools {
                     None => 0,
                     _ => return Err("max_edits must be an integer".into()),
                 };
-                Ok(planned(purrassist::edits::locate_fuzzy(
+                Ok(planned(purrassist::edits::locate_fuzzy_governed(
                     field(args, "source")?,
                     field(args, "needle")?,
                     field(args, "replacement")?,
                     max_edits,
-                    Budget::default(),
+                    &mut governor(Budget::default(), cancellation),
                 )))
             }
-            "plan_diff" => Ok(planned(purrassist::edits::plan_unified(
+            "plan_diff" => Ok(planned(purrassist::edits::plan_unified_governed(
                 field(args, "source")?,
                 field(args, "patch")?,
-                Budget::default(),
+                &mut governor(Budget::default(), cancellation),
             ))),
-            "inspect_code" => inspect(args),
+            "inspect_code" => inspect(args, cancellation),
             "read_file" => {
+                validation_governor.check().map_err(|e| e.to_string())?;
                 let snapshot = self
                     .store
                     .read(field(args, "path")?)
@@ -261,8 +309,9 @@ impl Tools {
                     ("digest", string(snapshot.digest.to_string())),
                 ]))
             }
-            "apply_file" => self.apply(args),
+            "apply_file" => self.apply(args, cancellation),
             "undo_file" => {
+                validation_governor.check().map_err(|e| e.to_string())?;
                 let commit = self
                     .store
                     .undo(field(args, "transaction")?)
@@ -272,7 +321,9 @@ impl Tools {
             _ => Err("tool dispatch invariant failed".into()),
         }
     }
-    fn apply(&self, args: &Node) -> Result<Node, String> {
+    fn apply(&self, args: &Node, cancellation: Option<&CancellationToken>) -> Result<Node, String> {
+        let mut governor = governor(Budget::default(), cancellation);
+        governor.check().map_err(|e| e.to_string())?;
         let path = field(args, "path")?;
         let snapshot = self.store.read(path).map_err(|e| e.to_string())?;
         if field(args, "expected_digest")? != snapshot.digest.to_string() {
@@ -297,16 +348,18 @@ impl Tools {
                 "tsx" => Some(Language::Tsx),
                 _ => None,
             });
-        let result = language.map_or_else(
-            || plan.apply(&snapshot.text, Budget::default()),
-            |language| syntax::apply_checked(&snapshot.text, &plan, language, Budget::default()),
-        );
+        let result = if let Some(language) = language {
+            syntax::apply_checked_governed(&snapshot.text, &plan, language, &mut governor)
+        } else {
+            plan.apply_governed(&snapshot.text, &mut governor)
+        };
         let Outcome::Resolved(applied) = result.outcome else {
             return Err(format!(
                 "edit was not unambiguously validated: {}",
                 result.receipt.to_node().to_json()
             ));
         };
+        governor.check().map_err(|e| e.to_string())?;
         let commit = self
             .store
             .commit(&snapshot, &applied.text)
@@ -317,6 +370,13 @@ impl Tools {
         ]))
     }
 }
+fn governor(budget: Budget, cancellation: Option<&CancellationToken>) -> Governor {
+    cancellation.map_or_else(
+        || Governor::new(budget),
+        |token| Governor::with_cancellation(budget, token.clone()),
+    )
+}
+
 fn field<'a>(node: &'a Node, name: &str) -> Result<&'a str, String> {
     node.get(name)
         .and_then(Node::as_str)
@@ -338,10 +398,10 @@ fn effort(args: &Node) -> Result<Effort, String> {
         },
     )
 }
-fn decode(args: &Node) -> Result<Node, String> {
+fn decode(args: &Node, cancellation: Option<&CancellationToken>) -> Result<Node, String> {
     let effort = effort(args)?;
     let input = field(args, "input")?;
-    let mut governor = Governor::new(effort.budget());
+    let mut governor = governor(effort.budget(), cancellation);
     let schema_text = args.get("schema").ok_or("missing schema")?.to_json();
     let schema = match Schema::compile_governed(&schema_text, &mut governor) {
         Ok(schema) => schema,
@@ -380,7 +440,7 @@ fn decode(args: &Node) -> Result<Node, String> {
         .to_node())
 }
 
-fn rank(args: &Node) -> Result<Node, String> {
+fn rank(args: &Node, cancellation: Option<&CancellationToken>) -> Result<Node, String> {
     let Some(Node {
         value: Value::Array(values),
         ..
@@ -398,7 +458,12 @@ fn rank(args: &Node) -> Result<Node, String> {
                 .ok_or("candidate must be a string")
         })
         .collect::<Result<_, _>>()?;
-    let result = matching::rank(field(args, "query")?, &candidates, &MatchRequest::default());
+    let result = matching::rank_governed(
+        field(args, "query")?,
+        &candidates,
+        &MatchRequest::default(),
+        &mut governor(Budget::default(), cancellation),
+    );
     let values = match result.outcome {
         Outcome::Resolved(values) | Outcome::BestGuess(values) => values,
         _ => Vec::new(),
@@ -417,7 +482,7 @@ fn rank(args: &Node) -> Result<Node, String> {
         ("receipt", result.receipt.to_node()),
     ]))
 }
-fn inspect(args: &Node) -> Result<Node, String> {
+fn inspect(args: &Node, cancellation: Option<&CancellationToken>) -> Result<Node, String> {
     let language = match field(args, "language")? {
         "python" => Language::Python,
         "rust" => Language::Rust,
@@ -429,7 +494,7 @@ fn inspect(args: &Node) -> Result<Node, String> {
     let report = syntax::inspect(
         field(args, "source")?,
         language,
-        &mut Governor::new(Budget::default()),
+        &mut governor(Budget::default(), cancellation),
     )
     .map_err(|e| e.to_string())?;
     Ok(object([
