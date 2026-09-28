@@ -45,6 +45,8 @@ impl Default for SelectionPolicy {
 }
 impl PathIndex {
     /// Build exact-path and normalized-basename indexes under explicit limits.
+    /// Supplied identities consume input, work, and storage budgets; candidate
+    /// proposals are charged when resolving, rather than during index admission.
     ///
     /// # Errors
     /// Rejects duplicate identities, absolute paths, traversal, empty components,
@@ -60,7 +62,6 @@ impl PathIndex {
         };
         for path in paths {
             portable(&path)?;
-            governor.charge(Resource::Candidates, 1)?;
             governor.charge(Resource::InputBytes, size(path.len()))?;
             governor.charge(Resource::Work, size(path.len()))?;
             governor.charge(Resource::ScratchBytes, size(path.len()).saturating_mul(128))?;
@@ -116,14 +117,47 @@ impl PathIndex {
         request: &MatchRequest,
         policy: SelectionPolicy,
     ) -> AssistResult<PathMatch> {
+        self.resolve_governed(
+            query,
+            context,
+            request,
+            policy,
+            &mut Governor::new(request.budget),
+        )
+    }
+    /// Resolve using a governor shared with index construction or other operations.
+    ///
+    /// The governor's limits are authoritative and its cumulative usage is reported.
+    /// Exhaustion or cancellation returns `Unresolved`, including when an exact
+    /// indexed path exists. No filesystem access or authorization is performed.
+    ///
+    /// ```
+    /// use purrassist_core::{Governor, Outcome, matching::MatchRequest,
+    ///     paths::{PathIndex, SelectionPolicy}};
+    /// let request = MatchRequest::default();
+    /// let mut governor = Governor::new(request.budget);
+    /// let index = PathIndex::new(["src/reader.rs".into()], &mut governor).unwrap();
+    /// let answer = index.resolve_governed("src/reader.rs", "", &request,
+    ///     SelectionPolicy::default(), &mut governor);
+    /// assert!(matches!(answer.outcome, Outcome::Resolved(_)));
+    /// assert_eq!(answer.receipt.usage, governor.usage());
+    /// ```
+    #[must_use]
+    pub fn resolve_governed(
+        &self,
+        query: &str,
+        context: &str,
+        request: &MatchRequest,
+        policy: SelectionPolicy,
+        governor: &mut Governor,
+    ) -> AssistResult<PathMatch> {
         let mut receipt = Receipt::new(
             query.as_bytes(),
             "paths.resolve.v1",
             request.effort,
-            request.budget,
+            *governor.limits(),
         );
-        let mut governor = Governor::new(request.budget);
-        let result = self.resolve_with(query, context, request, policy, &mut governor);
+        let result = self.resolve_with(query, context, request, policy, governor);
         let outcome = match result {
             Ok(matches) => {
                 for entry in &matches {
@@ -182,6 +216,7 @@ impl PathIndex {
         }
         governor.charge(Resource::InputBytes, size(query.len()))?;
         if let Some(&position) = self.exact.get(query) {
+            governor.charge(Resource::Candidates, 1)?;
             governor.charge(Resource::Work, size(query.len()))?;
             governor.charge(Resource::EvidenceEntries, 1)?;
             return Ok(vec![PathMatch {

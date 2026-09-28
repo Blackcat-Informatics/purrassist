@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Shared Rust, CLI, and MCP operations with schema-validated arguments.
+mod paths;
+
 use crate::files::Store;
 use purrassist::{
     Budget, Effort, Governor, Outcome, RecoveryRequest, Schema,
@@ -34,6 +36,12 @@ const DEFINITIONS: &[Definition] = &[
         name: "match_strings",
         description: "Rank candidate strings using exact, Unicode, lexical, distance, and phonetic evidence",
         schema: r#"{"type":"object","required":["query","candidates"],"properties":{"query":{"type":"string"},"candidates":{"type":"array","items":{"type":"string"}}},"additionalProperties":false}"#,
+        writes: false,
+    },
+    Definition {
+        name: "match_paths",
+        description: "Resolve caller-supplied relative paths with context, explicit ambiguity, and guess receipts; never opens or authorizes a matched path",
+        schema: r#"{"type":"object","required":["query","paths"],"properties":{"query":{"type":"string"},"paths":{"type":"array","items":{"type":"string"}},"context":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"minimum_score":{"type":"integer","minimum":0,"maximum":10000},"minimum_margin":{"type":"integer","minimum":0,"maximum":20000}},"additionalProperties":false}"#,
         writes: false,
     },
     Definition {
@@ -132,6 +140,7 @@ impl Tools {
         match name {
             "decode_json" => decode(args),
             "match_strings" => rank(args),
+            "match_paths" => paths::resolve(args),
             "plan_replacement" => {
                 let max_edits = match args.get("max_edits").map(|node| &node.value) {
                     Some(Value::Number(number)) => {
@@ -226,21 +235,26 @@ fn field<'a>(node: &'a Node, name: &str) -> Result<&'a str, String> {
         .and_then(Node::as_str)
         .ok_or_else(|| format!("missing string argument {name}"))
 }
+fn effort(args: &Node) -> Result<Effort, String> {
+    Ok(
+        match args
+            .get("effort")
+            .and_then(Node::as_str)
+            .unwrap_or("standard")
+        {
+            "exact" => Effort::Exact,
+            "quick" => Effort::Quick,
+            "standard" => Effort::Standard,
+            "deep" => Effort::Deep,
+            "maximum" => Effort::Maximum,
+            _ => return Err("unknown effort".into()),
+        },
+    )
+}
 fn decode(args: &Node) -> Result<Node, String> {
     let schema = Schema::compile(&args.get("schema").ok_or("missing schema")?.to_json())
         .map_err(|e| e.to_string())?;
-    let effort = match args
-        .get("effort")
-        .and_then(Node::as_str)
-        .unwrap_or("standard")
-    {
-        "exact" => Effort::Exact,
-        "quick" => Effort::Quick,
-        "standard" => Effort::Standard,
-        "deep" => Effort::Deep,
-        "maximum" => Effort::Maximum,
-        _ => return Err("unknown effort".into()),
-    };
+    let effort = effort(args)?;
     let allow_guesses = args
         .get("allow_guesses")
         .is_none_or(|node| node.value == Value::Bool(true));

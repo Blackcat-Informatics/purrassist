@@ -32,6 +32,7 @@ fn stdio_lifecycle_and_recovery_use_real_tool_operations() {
         "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"unknown_tool\",\"arguments\":{}}}\n",
         "{\"jsonrpc\":\"2.0\",\"id\":7,\"id\":8,\"method\":\"ping\"}\n",
         "{\"jsonrpc\":\"2.0\",\"id\":9.5,\"method\":\"ping\"}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{\"name\":\"match_paths\",\"arguments\":{\"query\":\"raeder.rs\",\"context\":\"src\",\"paths\":[\"src/reader.rs\",\"tests/reader.rs\"]}}}\n",
     );
     child
         .stdin
@@ -52,7 +53,7 @@ fn stdio_lifecycle_and_recovery_use_real_tool_operations() {
         .collect();
     assert_eq!(
         messages.len(),
-        9,
+        10,
         "MCP responses: {messages:?}; binary {}",
         env!("CARGO_BIN_EXE_purrassist")
     );
@@ -71,6 +72,11 @@ fn stdio_lifecycle_and_recovery_use_real_tool_operations() {
             .iter()
             .any(|tool| tool.get("name").and_then(Node::as_str) == Some("apply_file"))
     );
+    assert_tool_responses(&messages);
+    fs::remove_dir_all(directory).unwrap();
+}
+
+fn assert_tool_responses(messages: &[Node]) {
     assert_eq!(
         messages[3]
             .pointer("/result/structuredContent/status")
@@ -109,5 +115,16 @@ fn stdio_lifecycle_and_recovery_use_real_tool_operations() {
             code
         );
     }
-    fs::remove_dir_all(directory).unwrap();
+    assert_eq!(
+        messages[9]
+            .pointer("/result/structuredContent/status")
+            .and_then(Node::as_str),
+        Some("best_guess")
+    );
+    assert_eq!(
+        messages[9]
+            .pointer("/result/structuredContent/value/path")
+            .and_then(Node::as_str),
+        Some("src/reader.rs")
+    );
 }

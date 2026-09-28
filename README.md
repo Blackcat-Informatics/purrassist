@@ -72,7 +72,10 @@ cargo run -p purrassist-cli -- mcp --root /path/to/workspace
 Exhaustion is explicit and never proves that a schema is unsatisfiable.
 
 `call TOOL --root DIRECTORY` reads a JSON argument object from stdin and invokes
-the same operation used by MCP. File tools reject stale versions and record
+the same operation used by MCP. `match_paths` takes a `query`, caller-supplied `paths`,
+optional directory `context`, effort, and score/margin thresholds. It returns
+`resolved`, `best_guess`, `ambiguous`, or `unresolved` with methods and a receipt.
+It matches names only; choosing a path does not grant file access. File tools reject stale versions and record
 transaction identities for undo. The portable filesystem layer coordinates
 cooperating writers; it is not a sandbox against malicious directory replacement
 or an atomic multi-file transaction.

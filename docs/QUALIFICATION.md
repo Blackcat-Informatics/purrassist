@@ -38,8 +38,8 @@ guess reporting, and exhaustion before a complete ledger can be returned.
 Local package verification has built all five packages. A local release CLI was
 installed into a disposable checkout cache and exercised on the published example
 inputs, including exact-source retention. This does not verify downloadable registry
-packages. Hosted CI passed for checkpoint `b87ac540462db8f9dc8abef27cbd2cc26afa5af8`:
-[run 36390611576](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36390611576)
+packages. Hosted CI passed for checkpoint `6788ccb9e9e03697c0ee7ce7be701026e1fea15c`:
+[run 36394052901](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36394052901)
 completed the Linux/macOS local gates, MSRV workspace tests, Windows core/syntax
 tests, and native/WASI comparisons. This is evidence for that checkpoint only;
 subsequent changes need their own qualification.
@@ -60,8 +60,8 @@ and nested-range preservation for every example, first-block classification for
 checks are narrower than full rendering conformance; passing them does not prove
 inline semantics, list tightness, tab-column handling, or complete GFM behavior.
 The container/context/task checkpoint passed the full `make check` gate on Rust
-1.98.0, including optimized workspace tests and Rustdoc. Nightly and hosted CI
-qualification of this increment remain separate from that MSRV gate.
+1.98.0, including optimized workspace tests and Rustdoc. Hosted CI subsequently
+passed for this checkpoint, including nightly analysis, as recorded above.
 
 ## Remaining release work
 
@@ -76,7 +76,9 @@ qualification of this increment remain separate from that MSRV gate.
   schema compilation, and helper preparation. Bound external parser allocations;
   progress cancellation alone is not a hard memory limit.
 - Extend alternative-specific ledgers beyond JSON recovery and finish uniform
-  Rust/CLI/MCP access to path, semantic, and document operations.
+  Rust/CLI/MCP access to semantic and document operations. Path resolution now uses
+  the shared tool dispatcher, including epistemic status and one governor across
+  index admission and resolution.
 - Expand independent oracle and adversarial corpora, coverage-guided fuzzing,
   memory/allocation measurements, build/artifact metrics, and representative
   incorrect-correction evaluation beyond the small baseline.

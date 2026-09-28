@@ -82,3 +82,31 @@ fn traversal_and_exhaustion_never_become_a_selected_path() {
         StopReason::BudgetExceeded(_)
     ));
 }
+
+#[test]
+fn shared_governor_reports_construction_and_sticky_exhaustion() {
+    let request = MatchRequest::default();
+    let mut governor = Governor::new(request.budget);
+    let index = PathIndex::new(["src/reader.rs".into()], &mut governor).unwrap();
+    let construction = governor.usage();
+    let result = index.resolve_governed(
+        "src/reader.rs",
+        "",
+        &request,
+        purrassist_core::paths::SelectionPolicy::default(),
+        &mut governor,
+    );
+    assert!(matches!(result.outcome, Outcome::Resolved(_)));
+    assert_eq!(result.receipt.usage.candidates, construction.candidates + 1);
+    assert!(result.receipt.usage.work > construction.work);
+    governor.cancel();
+    let cancelled = index.resolve_governed(
+        "src/reader.rs",
+        "",
+        &request,
+        purrassist_core::paths::SelectionPolicy::default(),
+        &mut governor,
+    );
+    assert_eq!(cancelled.outcome, Outcome::Unresolved);
+    assert_eq!(cancelled.receipt.stopped, StopReason::Cancelled);
+}
