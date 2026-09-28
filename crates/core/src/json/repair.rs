@@ -11,9 +11,16 @@ pub(super) fn recover(
     governor: &mut Governor,
 ) -> Result<(Node, usize, Vec<SyntaxEdit>), StopReason> {
     governor.charge(Resource::InputBytes, size(input.len()))?;
+    // Every repaired bare/malformed token (`json.syntax.bare-key`,
+    // `json.syntax.literal-case`, `json.syntax.bare-string`, ...) re-encodes
+    // its replacement through `Node::to_json`, allocating a new String per
+    // occurrence on top of the parsed tree itself; a token as short as one
+    // byte can still cost tens of bytes once quoted/escaped and boxed into a
+    // `SyntaxEdit`, so this bound is per-byte generous rather than a flat
+    // per-input-length guess.
     governor.charge(
         Resource::ScratchBytes,
-        size(input.len()).saturating_mul(32).saturating_add(256),
+        size(input.len()).saturating_mul(96).saturating_add(4096),
     )?;
     let mut parser = Parser {
         input,

@@ -3,7 +3,7 @@
 
 //! Budgeted regular-expression evaluation for schema patterns.
 //! Implements Unicode-scalar matching with ECMA-262 character-class semantics.
-use crate::contract::{Governor, Resource, StopReason};
+use crate::contract::{Budget, Governor, Resource, StopReason};
 use core::fmt;
 
 /// A compiled pattern; no ambient regex engine or platform-dependent dialect.
@@ -68,22 +68,107 @@ struct State {
     position: usize,
     captures: Vec<Option<(usize, usize)>>,
 }
-struct Parser {
+struct Parser<'g> {
     chars: Vec<char>,
     position: usize,
     captures: usize,
+    governor: &'g mut Governor,
+}
+
+/// Governed pattern compilation failure: either the pattern itself is
+/// malformed, or compiling it exceeded the caller's resource limits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PatternCompileError {
+    /// The pattern's syntax is invalid or uses an unsupported construct.
+    Syntax(PatternError),
+    /// Compilation stopped before a complete pattern was available.
+    Resource(StopReason),
+}
+impl fmt::Display for PatternCompileError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Syntax(error) => error.fmt(formatter),
+            Self::Resource(reason) => reason.fmt(formatter),
+        }
+    }
+}
+impl std::error::Error for PatternCompileError {}
+impl From<PatternError> for PatternCompileError {
+    fn from(error: PatternError) -> Self {
+        Self::Syntax(error)
+    }
+}
+impl From<StopReason> for PatternCompileError {
+    fn from(reason: StopReason) -> Self {
+        Self::Resource(reason)
+    }
 }
 
 impl Pattern {
     /// Compile the pattern, refusing unsupported constructs rather than weakening it.
     ///
+    /// Delegates to [`Pattern::compile_governed`] with a default, unshared
+    /// [`Governor`]. Prefer `compile_governed` to bound compilation against a
+    /// caller-owned budget shared with the rest of an operation.
+    ///
     /// # Errors
     /// Returns malformed syntax, excessive nesting, or an unsupported escape.
+    /// A resource limit exceeded under the default budget is reported as a
+    /// syntax error naming the exhausted resource, since this entry point
+    /// cannot report resource usage separately.
     pub fn compile(source: &str) -> Result<Self, PatternError> {
+        match Self::compile_governed(source, &mut Governor::new(Budget::default())) {
+            Ok(pattern) => Ok(pattern),
+            Err(PatternCompileError::Syntax(error)) => Err(error),
+            Err(PatternCompileError::Resource(reason)) => Err(PatternError {
+                offset: 0,
+                message: format!("resource exhausted during compilation: {reason}"),
+            }),
+        }
+    }
+
+    /// Compile the pattern against a caller-owned governor.
+    ///
+    /// Charges `InputBytes` for the pattern's own length and `ScratchBytes`
+    /// for the retained character buffer and syntax tree before building
+    /// them, then charges `Depth`/`Work` for each nesting level and
+    /// alternation parsed. The compiled pattern is retained by the caller, so
+    /// its charge is never released, matching other permanently retained
+    /// compiled artifacts (schemas, receipts).
+    ///
+    /// # Errors
+    /// Returns [`PatternCompileError::Syntax`] for malformed patterns and
+    /// [`PatternCompileError::Resource`] before any allocation once the
+    /// governor's limits (or a shared cancellation token) would be exceeded.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, pattern::{Pattern, PatternCompileError}};
+    /// let mut governor = Governor::new(Budget {
+    ///     scratch_bytes: 4,
+    ///     ..Budget::default()
+    /// });
+    /// let error = Pattern::compile_governed("a+", &mut governor).unwrap_err();
+    /// assert!(matches!(error, PatternCompileError::Resource(_)));
+    /// ```
+    pub fn compile_governed(
+        source: &str,
+        governor: &mut Governor,
+    ) -> Result<Self, PatternCompileError> {
+        let length = u64::try_from(source.len()).unwrap_or(u64::MAX);
+        governor.charge(Resource::InputBytes, length)?;
+        let scalars = u64::try_from(source.chars().count()).unwrap_or(u64::MAX);
+        governor.charge(
+            Resource::ScratchBytes,
+            scalars
+                .saturating_mul(4) // the retained `chars: Vec<char>` buffer.
+                .saturating_add(length.saturating_mul(48)) // an estimated AST.
+                .saturating_add(256),
+        )?;
         let mut parser = Parser {
             chars: source.chars().collect(),
             position: 0,
             captures: 0,
+            governor,
         };
         let expression = parser.alternate(0)?;
         if parser.position != parser.chars.len() {
@@ -104,8 +189,11 @@ impl Pattern {
             Resource::InputBytes,
             u64::try_from(text.len()).unwrap_or(u64::MAX),
         )?;
-        governor.charge(
-            Resource::ScratchBytes,
+        // The scalar buffer and per-position capture states below are all
+        // transient to this one search; the lease releases them on every
+        // return path (match, exhaustion, or error) so a repeated search on
+        // the same governor never accumulates live scratch.
+        let _lease = governor.lease_scratch(
             u64::try_from(text.len())
                 .unwrap_or(u64::MAX)
                 .saturating_mul(4),
@@ -123,7 +211,7 @@ impl Pattern {
         Ok(false)
     }
 }
-impl Parser {
+impl Parser<'_> {
     fn current(&self) -> Option<char> {
         self.chars.get(self.position).copied()
     }
@@ -132,16 +220,18 @@ impl Parser {
         self.position += 1;
         Some(character)
     }
-    fn fail<T>(&self, message: &str) -> Result<T, PatternError> {
-        Err(PatternError {
+    fn fail<T>(&self, message: &str) -> Result<T, PatternCompileError> {
+        Err(PatternCompileError::Syntax(PatternError {
             offset: self.position,
             message: message.into(),
-        })
+        }))
     }
-    fn alternate(&mut self, depth: usize) -> Result<Expr, PatternError> {
-        if depth > 128 {
-            return self.fail("pattern nesting exceeds 128");
-        }
+    fn alternate(&mut self, depth: usize) -> Result<Expr, PatternCompileError> {
+        // The governor's `Depth` limit (128 by default) supersedes the fixed
+        // nesting cap this pattern engine used before governed compilation.
+        self.governor
+            .charge(Resource::Depth, u64::try_from(depth).unwrap_or(u64::MAX))?;
+        self.governor.charge(Resource::Work, 1)?;
         let mut choices = vec![self.sequence(depth)?];
         while self.current() == Some('|') {
             self.position += 1;
@@ -153,7 +243,8 @@ impl Parser {
             Ok(Expr::Alternate(choices))
         }
     }
-    fn sequence(&mut self, depth: usize) -> Result<Expr, PatternError> {
+    fn sequence(&mut self, depth: usize) -> Result<Expr, PatternCompileError> {
+        self.governor.charge(Resource::Work, 1)?;
         let mut items = Vec::new();
         while !matches!(self.current(), None | Some('|' | ')')) {
             let atom = self.atom(depth)?;
@@ -210,7 +301,7 @@ impl Parser {
             _ => Ok(Expr::Sequence(items)),
         }
     }
-    fn count(&mut self) -> Result<usize, PatternError> {
+    fn count(&mut self) -> Result<usize, PatternCompileError> {
         let mut count = 0_usize;
         let start = self.position;
         while let Some(digit) = self.current().and_then(|character| character.to_digit(10)) {
@@ -228,7 +319,7 @@ impl Parser {
         }
         Ok(count)
     }
-    fn atom(&mut self, depth: usize) -> Result<Expr, PatternError> {
+    fn atom(&mut self, depth: usize) -> Result<Expr, PatternCompileError> {
         match self.next() {
             Some('^') => Ok(Expr::Start),
             Some('$') => Ok(Expr::End),
@@ -280,7 +371,7 @@ impl Parser {
             None => self.fail("expected an atom"),
         }
     }
-    fn escape(&mut self, in_class: bool) -> Result<Expr, PatternError> {
+    fn escape(&mut self, in_class: bool) -> Result<Expr, PatternCompileError> {
         match self.next() {
             Some('d') => Ok(Expr::Class(vec![ClassItem::Digit(true)], false)),
             Some('D') => Ok(Expr::Class(vec![ClassItem::Digit(false)], false)),
@@ -311,9 +402,11 @@ impl Parser {
                     index = index
                         .checked_mul(10)
                         .and_then(|index| index.checked_add(usize::try_from(digit).ok()?))
-                        .ok_or_else(|| PatternError {
-                            offset: self.position,
-                            message: "backreference too large".into(),
+                        .ok_or_else(|| {
+                            PatternCompileError::Syntax(PatternError {
+                                offset: self.position,
+                                message: "backreference too large".into(),
+                            })
                         })?;
                     self.position += 1;
                 }
@@ -335,9 +428,11 @@ impl Parser {
                     .strip_prefix("General_Category=")
                     .or_else(|| name.strip_prefix("gc="))
                     .unwrap_or(&name);
-                let category = category_alias(name).ok_or_else(|| PatternError {
-                    offset: start,
-                    message: format!("unsupported Unicode property: {name}"),
+                let category = category_alias(name).ok_or_else(|| {
+                    PatternCompileError::Syntax(PatternError {
+                        offset: start,
+                        message: format!("unsupported Unicode property: {name}"),
+                    })
                 })?;
                 Ok(Expr::Class(
                     vec![ClassItem::Category(category.into(), kind == 'p')],
@@ -348,9 +443,11 @@ impl Parser {
                 let letter = self
                     .next()
                     .filter(char::is_ascii_alphabetic)
-                    .ok_or_else(|| PatternError {
-                        offset: self.position,
-                        message: "control escape requires an ASCII letter".into(),
+                    .ok_or_else(|| {
+                        PatternCompileError::Syntax(PatternError {
+                            offset: self.position,
+                            message: "control escape requires an ASCII letter".into(),
+                        })
                     })?;
                 Ok(Expr::Literal(char::from(
                     u8::try_from(u32::from(letter)).expect("ASCII letter") % 32,
@@ -361,7 +458,7 @@ impl Parser {
             None => self.fail("trailing escape"),
         }
     }
-    fn hex_escape(&mut self, count: usize) -> Result<Expr, PatternError> {
+    fn hex_escape(&mut self, count: usize) -> Result<Expr, PatternCompileError> {
         let mut value = 0;
         for _ in 0..count {
             let Some(digit) = self.next().and_then(|character| character.to_digit(16)) else {
@@ -369,21 +466,23 @@ impl Parser {
             };
             value = (value << 4) | digit;
         }
-        char::from_u32(value)
-            .map(Expr::Literal)
-            .ok_or_else(|| PatternError {
+        char::from_u32(value).map(Expr::Literal).ok_or_else(|| {
+            PatternCompileError::Syntax(PatternError {
                 offset: self.position,
                 message: "surrogate escape requires a Unicode scalar".into(),
             })
+        })
     }
-    fn class_atom(&mut self) -> Result<Vec<ClassItem>, PatternError> {
+    fn class_atom(&mut self) -> Result<Vec<ClassItem>, PatternCompileError> {
         let expression = if self.current() == Some('\\') {
             self.position += 1;
             self.escape(true)?
         } else {
-            Expr::Literal(self.next().ok_or_else(|| PatternError {
-                offset: self.position,
-                message: "unterminated character class".into(),
+            Expr::Literal(self.next().ok_or_else(|| {
+                PatternCompileError::Syntax(PatternError {
+                    offset: self.position,
+                    message: "unterminated character class".into(),
+                })
             })?)
         };
         match expression {
@@ -392,7 +491,7 @@ impl Parser {
             _ => self.fail("invalid character class atom"),
         }
     }
-    fn class(&mut self) -> Result<Expr, PatternError> {
+    fn class(&mut self) -> Result<Expr, PatternCompileError> {
         let negative = self.current() == Some('^');
         if negative {
             self.position += 1;
@@ -458,8 +557,10 @@ fn evaluate(
 ) -> Result<Vec<State>, StopReason> {
     governor.charge(Resource::Work, 1)?;
     governor.charge(Resource::Depth, u64::from(depth))?;
-    governor.charge(
-        Resource::ScratchBytes,
+    // Released on every exit from this call (there are many, across the
+    // match below and inside `assertion`/`repeat`), so a bounded but deep
+    // backtracking search never leaves scratch charged once it unwinds.
+    let _lease = governor.lease_scratch(
         u64::try_from(state.captures.len())
             .unwrap_or(u64::MAX)
             .saturating_mul(32)
@@ -601,6 +702,21 @@ fn repeat(
     let bound = repetition
         .max
         .unwrap_or_else(|| text.len().saturating_add(repetition.min).saturating_add(1));
+    // Every iteration below can clone `state` (once to keep exploring, once
+    // to record an `Accept` frame) before `evaluate`'s own per-call lease
+    // charges for the clone it receives; bracket the whole backtracking
+    // search's `stack`/`results` growth and those extra clones in one lease,
+    // released when this call returns (matching `evaluate`'s own pattern),
+    // so a long repeated match never leaves scratch charged once `is_match`
+    // returns.
+    let clone_bytes = u64::try_from(state.captures.len().saturating_add(1))
+        .unwrap_or(u64::MAX)
+        .saturating_mul(32);
+    let _lease = governor.lease_scratch(
+        u64::try_from(bound)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(clone_bytes.saturating_mul(3).saturating_add(64)),
+    )?;
     let mut stack = vec![Frame::Expand(state, 0)];
     let mut results = Vec::new();
     while let Some(frame) = stack.pop() {

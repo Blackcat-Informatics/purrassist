@@ -555,16 +555,18 @@ fn protected_class_violations(
         size(query.len().saturating_add(text.len())).saturating_mul(8),
     )?;
     // Every class's extraction allocates a handful of Strings proportional to
-    // input length; charge a conservative bound before allocating any of them.
+    // input length (the negation class additionally tokenizes both strings,
+    // each tokenization allocating a comparison key, a token vector, and a
+    // dedup set); charge a conservative bound before allocating any of them,
+    // released automatically once this function returns.
     let reservation = size(query.len().saturating_add(text.len()))
-        .saturating_mul(96)
+        .saturating_mul(160)
         .saturating_add(512);
-    governor.charge(Resource::ScratchBytes, reservation)?;
+    let _lease = governor.lease_scratch(reservation)?;
     let violations = ProtectedClass::ALL
         .into_iter()
         .filter(|class| protected_tokens(query, *class) != protected_tokens(text, *class))
         .collect();
-    governor.release_scratch(reservation)?;
     Ok(violations)
 }
 
@@ -728,10 +730,13 @@ pub fn rank_governed(
                 }
             }
             let mut signals = signals(query, &candidate.text, request, governor)?;
-            let alias_storage =
+            let alias_lease =
                 append_alias_signals(query, candidate, request, governor, &mut signals)?;
             let score = signals.iter().map(|signal| signal.score).max().unwrap_or(0);
             if score > 0 {
+                // The alias reservation now backs a kept, ranked match:
+                // retain it permanently instead of releasing it.
+                alias_lease.retain();
                 reserve_ranked(candidate, &signals, alias_bytes, governor)?;
                 for signal in &signals {
                     receipt.evidence.push(Evidence {
@@ -746,9 +751,7 @@ pub fn rank_governed(
                     score,
                     signals,
                 });
-            } else {
-                governor.release_scratch(alias_storage)?;
-            }
+            } // else: `alias_lease` drops here, releasing its charge.
         }
         Ok(())
     })();
@@ -792,9 +795,9 @@ fn append_alias_signals(
     request: &MatchRequest,
     governor: &mut Governor,
     signals: &mut Vec<Signal>,
-) -> Result<u64, StopReason> {
+) -> Result<crate::contract::ScratchLease, StopReason> {
     if request.effort == Effort::Exact {
-        return Ok(0);
+        return Ok(governor.scratch_lease_for(0));
     }
     let mut alias_storage = 0_u64;
     for alias in &candidate.aliases {
@@ -810,7 +813,7 @@ fn append_alias_signals(
             });
         }
     }
-    Ok(alias_storage)
+    Ok(governor.scratch_lease_for(alias_storage))
 }
 
 fn reserve_ranked(
@@ -866,11 +869,13 @@ fn signals(
     // Reserve a conservative bound covering every normalized key this
     // refinement lattice allocates for both strings, before allocating any
     // of them: NFC, case-fold, the width/compatibility-fold comparison key,
-    // diacritic-stripped keys, UTS-39 skeletons, and depunctuated keys.
+    // diacritic-stripped keys, UTS-39 skeletons, depunctuated keys, and (at
+    // `Standard` effort and above) the lexical-Jaccard token sets, each of
+    // which tokenizes both strings into a vector and a dedup set.
     let reservation = size(query.len().saturating_add(text.len()))
-        .saturating_mul(192)
+        .saturating_mul(320)
         .saturating_add(512);
-    governor.charge(Resource::ScratchBytes, reservation)?;
+    let _lease = governor.lease_scratch(reservation)?;
     governor.charge(
         Resource::Work,
         size(query.len().saturating_add(text.len())).saturating_mul(8),
@@ -925,7 +930,6 @@ fn signals(
             ),
         });
     }
-    governor.release_scratch(reservation)?;
     Ok(output)
 }
 /// Test the query/text pair against the refinement lattice finer than the

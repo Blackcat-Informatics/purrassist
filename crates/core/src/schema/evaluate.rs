@@ -5,6 +5,10 @@ use crate::contract::{Governor, Resource, StopReason};
 use crate::json::{Member, Node, Value, pointer_segment};
 use std::collections::BTreeSet;
 
+fn size(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
 #[derive(Default)]
 struct Evaluation {
     errors: Vec<Violation>,
@@ -55,16 +59,31 @@ impl Evaluator<'_, '_> {
     ) -> Result<(), StopReason> {
         self.governor.charge(Resource::EvidenceEntries, 1)?;
         let location = &self.schema.index.locations[id];
+        let schema_path = format!(
+            "{}#{}/{}",
+            location.base,
+            location.pointer,
+            pointer_segment(keyword)
+        );
+        let message = message.into();
+        // A `Violation` may be a transient search diagnostic or the actual
+        // output an external `Schema::validate` caller retains indefinitely.
+        // Since that is not known here, its strings are charged directly and
+        // never released, like `retain_source`: safe to over-count, never to
+        // under-count or to release memory a caller may still be holding.
+        self.governor.charge(
+            Resource::ScratchBytes,
+            size(path.len())
+                .saturating_add(size(schema_path.len()))
+                .saturating_add(size(keyword.len()))
+                .saturating_add(size(message.len()))
+                .saturating_add(64),
+        )?;
         result.errors.push(Violation {
             instance_path: path.into(),
-            schema_path: format!(
-                "{}#{}/{}",
-                location.base,
-                location.pointer,
-                pointer_segment(keyword)
-            ),
+            schema_path,
             keyword: keyword.into(),
-            message: message.into(),
+            message,
         });
         Ok(())
     }
@@ -77,6 +96,13 @@ impl Evaluator<'_, '_> {
     ) -> Result<Evaluation, StopReason> {
         self.governor.charge(Resource::Work, 1)?;
         self.governor.charge(Resource::Depth, u64::from(depth))?;
+        // The active-recursion key retains two `String` copies of `path`
+        // (one moved into the set, one kept here to remove it later);
+        // charge before allocating either. Released when this call returns,
+        // matching the unconditional `self.active.remove(&key)` below.
+        let _lease = self
+            .governor
+            .lease_scratch(size(path.len()).saturating_mul(2).saturating_add(48))?;
         let key = (id, path.to_string());
         if !self.active.insert(key.clone()) {
             return Err(StopReason::InvalidInput(

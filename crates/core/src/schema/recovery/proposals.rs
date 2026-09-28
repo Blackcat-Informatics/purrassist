@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 use super::{Candidate, Search, size};
-use crate::contract::{Effort, Resource, StopReason};
+use crate::contract::{Effort, Resource, ScratchMap, ScratchVec, StopReason};
 use crate::json::{Member, Node, ParseFailure, Value, pointer_segment};
 use std::collections::BTreeSet;
 
@@ -279,6 +279,7 @@ impl Search<'_> {
                         continue;
                     }
                     if let Some(cost) = self.name_cost(&member.key, &property.key)? {
+                        let _lease = self.governor.lease_scratch(members_weight(members))?;
                         let mut replacement = members.to_vec();
                         replacement[position].key.clone_from(&property.key);
                         replacement[position].key_span = None;
@@ -299,6 +300,7 @@ impl Search<'_> {
                     .get("additionalProperties")
                     .is_some_and(|n| n.value == Value::Bool(false))
                 {
+                    let _lease = self.governor.lease_scratch(members_weight(members))?;
                     let mut replacement = members.to_vec();
                     replacement.remove(position);
                     self.change(
@@ -320,6 +322,7 @@ impl Search<'_> {
             {
                 for remove in 0..=position {
                     if members[remove].key == member.key {
+                        let _lease = self.governor.lease_scratch(members_weight(members))?;
                         let mut replacement = members.to_vec();
                         replacement.remove(remove);
                         self.change(
@@ -368,6 +371,11 @@ impl Search<'_> {
                             .enumerate()
                             .filter(|(_, child)| child.key == name)
                         {
+                            let _lease = self.governor.lease_scratch(
+                                members_weight(members)
+                                    .saturating_add(size(child.key.len()))
+                                    .saturating_add(child.value.estimated_bytes()),
+                            )?;
                             let mut replacement = members.to_vec();
                             if let Value::Object(children) = &mut replacement[position].value.value
                             {
@@ -398,6 +406,9 @@ impl Search<'_> {
                         vec![Node::new(Value::Null)]
                     };
                     for value in values {
+                        let _lease = self.governor.lease_scratch(
+                            members_weight(members).saturating_add(value.estimated_bytes()),
+                        )?;
                         let mut replacement = members.to_vec();
                         replacement.push(Member {
                             key: name.into(),
@@ -434,10 +445,15 @@ impl Search<'_> {
         }
         let schema = self.schema;
         let body = schema.keywords(schema_id);
-        let mut values = Vec::new();
+        // `values` is discarded once the finest-refinement selection above
+        // picks at most one entry, or drained by an `into_iter()` caller: its
+        // backing buffer is transient, unlike the `Node`s it moves out.
+        let mut values: ScratchVec<Node> = ScratchVec::new(self.governor);
         for keyword in ["const", "default"] {
             if let Some(value) = body.get(keyword) {
-                values.push(value.clone());
+                self.governor
+                    .charge(Resource::ScratchBytes, value.estimated_bytes())?;
+                values.push(value.clone())?;
             }
         }
         if let Some(Node {
@@ -445,13 +461,17 @@ impl Search<'_> {
             ..
         }) = body.get("enum")
         {
-            values.extend(choices.clone());
+            for choice in choices {
+                self.governor
+                    .charge(Resource::ScratchBytes, choice.estimated_bytes())?;
+                values.push(choice.clone())?;
+            }
         }
         if let Some(reference) = body.get("$ref").and_then(Node::as_str) {
             let target = schema
                 .resolve(&schema.index.locations[schema_id].base, reference)
                 .map_err(|e| StopReason::InvalidInput(e.to_string()))?;
-            values.extend(self.witnesses(target, depth + 1, visited)?);
+            values.extend(self.witnesses(target, depth + 1, visited)?)?;
         }
         for keyword in ["anyOf", "oneOf", "allOf"] {
             if let Some(Node {
@@ -460,19 +480,34 @@ impl Search<'_> {
             }) = body.get(keyword)
             {
                 for position in 0..branches.len() {
-                    values.extend(self.witnesses(
+                    let branch = self.witnesses(
                         schema.child(schema_id, &format!("{keyword}/{position}")),
                         depth + 1,
                         visited,
-                    )?);
+                    )?;
+                    values.extend(branch)?;
                 }
             }
         }
-        values.extend(self.typed_witnesses(schema_id, depth, visited)?);
+        let typed = self.typed_witnesses(schema_id, depth, visited)?;
+        values.extend(typed)?;
         visited.remove(&schema_id);
-        let mut distinct = BTreeSet::new();
-        values.retain(|node| distinct.insert(node.to_json()));
-        Ok(values)
+        // Dedupe by serialized form; charge the retained keys before
+        // allocating them (`distinct` is dropped, and its charge released,
+        // when this function returns).
+        let mut distinct: ScratchMap<String, ()> = ScratchMap::new(self.governor);
+        let mut unique = Vec::with_capacity(values.len());
+        for node in values.into_vec() {
+            self.governor.charge(
+                Resource::ScratchBytes,
+                node.estimated_bytes().saturating_add(48),
+            )?;
+            let key = node.to_json();
+            if distinct.insert(key, ())?.is_none() {
+                unique.push(node);
+            }
+        }
+        Ok(unique)
     }
     fn typed_witnesses(
         &mut self,
@@ -482,28 +517,30 @@ impl Search<'_> {
     ) -> Result<Vec<Node>, StopReason> {
         let schema = self.schema;
         let body = schema.keywords(schema_id);
-        let mut values = Vec::new();
+        let mut values: ScratchVec<Node> = ScratchVec::new(self.governor);
         match body.get("type").and_then(Node::as_str) {
             Some("boolean") => {
-                values.push(Node::new(Value::Bool(false)));
-                values.push(Node::new(Value::Bool(true)));
+                values.push(Node::new(Value::Bool(false)))?;
+                values.push(Node::new(Value::Bool(true)))?;
             }
             Some("number" | "integer") => {
                 for keyword in ["minimum", "maximum", "multipleOf"] {
                     if let Some(value) = body.get(keyword) {
-                        values.push(value.clone());
+                        self.governor
+                            .charge(Resource::ScratchBytes, value.estimated_bytes())?;
+                        values.push(value.clone())?;
                     }
                 }
-                values.push(Node::new(Value::Number("0".parse().expect("zero"))));
+                values.push(Node::new(Value::Number("0".parse().expect("zero"))))?;
             }
             Some("string") => {
                 let count = count(body.get("minLength"))?;
                 self.governor.charge(Resource::ScratchBytes, size(count))?;
                 self.governor.charge(Resource::Work, size(count))?;
-                values.push(Node::new(Value::String(" ".repeat(count))));
+                values.push(Node::new(Value::String(" ".repeat(count))))?;
             }
             Some("object") => {
-                let mut members = Vec::new();
+                let mut members: ScratchVec<Member> = ScratchVec::new(self.governor);
                 if let Some(Node {
                     value: Value::Array(required),
                     ..
@@ -519,20 +556,22 @@ impl Search<'_> {
                             vec![Node::new(Value::Null)]
                         };
                         if let Some(value) = choices.into_iter().next() {
+                            self.governor.charge(
+                                Resource::ScratchBytes,
+                                size(name.len()).saturating_add(value.estimated_bytes()),
+                            )?;
                             members.push(Member {
                                 key: name.into(),
                                 key_span: None,
                                 value,
-                            });
+                            })?;
                         }
                     }
                 }
-                values.push(Node::new(Value::Object(members)));
+                values.push(Node::new(Value::Object(members.into_vec())))?;
             }
             Some("array") => {
                 let count = count(body.get("minItems"))?;
-                self.governor
-                    .charge(Resource::ScratchBytes, size(count).saturating_mul(128))?;
                 self.governor.charge(Resource::Work, size(count))?;
                 let item =
                     if let Some(&child) = schema.index.locations[schema_id].children.get("items") {
@@ -543,12 +582,30 @@ impl Search<'_> {
                     } else {
                         Node::new(Value::Null)
                     };
-                values.push(Node::new(Value::Array(vec![item; count])));
+                // Charge by the actual item's estimated size, not a flat
+                // per-element guess: a large `items` witness repeated
+                // `minItems` times must not be under-charged.
+                self.governor.charge(
+                    Resource::ScratchBytes,
+                    size(count).saturating_mul(item.estimated_bytes().max(24)),
+                )?;
+                values.push(Node::new(Value::Array(vec![item; count])))?;
             }
-            _ => values.push(Node::new(Value::Null)),
+            _ => values.push(Node::new(Value::Null))?,
         }
-        Ok(values)
+        Ok(values.into_vec())
     }
+}
+/// A conservative byte-size estimate for a member slice, used to charge
+/// scratch before `.to_vec()`-ing it to build a proposal.
+fn members_weight(members: &[Member]) -> u64 {
+    let mut total = size(members.len()).saturating_mul(size(core::mem::size_of::<Member>()));
+    for member in members {
+        total = total
+            .saturating_add(size(member.key.len()))
+            .saturating_add(member.value.estimated_bytes());
+    }
+    total
 }
 fn count(node: Option<&Node>) -> Result<usize, StopReason> {
     match node.map(|node| &node.value) {

@@ -44,6 +44,144 @@ missing summaries, and malformed snapshots fail the run. Reports are written onl
 after every workload passes. `scripts/test-resource-report.py` checks the parsers
 and fail-closed behavior and runs before profiling through the Make target.
 
+## Type-enforced scratch accounting
+
+`crates/core/src/contract.rs` charges scratch through a shared, atomic
+`ScratchMeter` rather than a plain counter on `Governor`. `ScratchVec<T>`,
+`ScratchString`, and `ScratchMap<K, V>` charge the meter (via
+`try_reserve_exact`) before growing their backing storage, and release
+exactly what they charged when dropped; `into_vec`/`into_string`/`into_pairs`
+skip the release, permanently retaining the charge for content the caller now
+owns outside scratch tracking. `ScratchLease` does the same for one opaque
+byte reservation, and `ScratchLease::retain` keeps it permanently instead of
+releasing it. Exhaustion from any of these is sticky on the governor that
+issued them, even though they charge the meter directly rather than going
+through `Governor::charge`: `Governor::check` also consults the meter's own
+sticky-exhausted flag. `Governor` is `Clone`, but a clone gets its own
+independent scratch-meter snapshot; only a lease or collection issued *from
+one governor instance* shares that governor's live meter, so it keeps
+charging the governor's budget after the call that created it returns.
+
+Recovery's per-candidate cloning (`schema/recovery.rs`, `schema/recovery/
+proposals.rs`), the evaluator's violation/active-path strings
+(`schema/evaluate.rs`), regex compilation (`pattern::Pattern::compile_governed`,
+which `Pattern::compile` now delegates to with a default governor), repeated
+`Pattern::is_match` searches (including the backtracking search's own
+per-iteration state clones in `repeat`), the lexical-Jaccard token sets
+`matching.rs` computes for both strings at `Standard` effort and above, the
+malformed-token replacements JSON syntax repair re-encodes per repair
+(`json/repair.rs`), the lease/release sites in `matching.rs` and
+`edits/fuzzy.rs`, Markdown's rendered-HTML output buffer
+(`markdown/render.rs`, via `ScratchString::reserve`/`into_string`), and helper
+request preparation (`crates/host/src/helpers.rs::Pending::prepare`, which now
+takes the caller's own governor instead of building an unshared one
+internally) charge scratch before allocating rather than after, or not at
+all. Permanently retained output (a compiled schema or pattern, a receipt's
+retained source, a validation's diagnostic strings, an `EditPlan`'s
+replacement text) is still charged with a direct, never-released
+`Governor::charge` (or a `ScratchString`/`ScratchLease` whose charge is
+explicitly retained past the call, e.g. `ScratchString::into_string`),
+matching `Receipt::retain_source`: the new collection types release when the
+memory they charged for is genuinely transient scratch this crate's own call
+stack controls, not memory a caller may go on holding indefinitely.
+
+## Measured-allocation oracle
+
+`crates/core/tests/allocation_oracle.rs` installs a test-only counting
+`#[global_allocator]` (that file only; no dependencies; `#![allow(unsafe_code)]`
+scoped to the file) and asserts, for every governed public operation, **at
+two deterministically generated input scales — a base size and a size at
+least 16x larger** — that real allocator bytes never exceed
+
+```
+measured_bytes_allocated_during_op ≤ governor.usage().total_scratch_charged + input_len + K
+```
+
+with the *same* `K` at both scales. `total_scratch_charged`
+(`Usage::total_scratch_charged`, backed by `ScratchMeter::total_charged`) is
+the monotone sum of every scratch byte a governor has ever charged, never
+reduced by a release — unlike `peak_scratch_bytes`, a high-water mark of only
+*simultaneously* live scratch, which stays low for an operation that charges
+and releases scratch many times in a loop (the fuzzy edit-distance region
+scan, regex backtracking, per-candidate ranking) even though the allocator
+performs one real call per iteration and those bytes sum over the whole
+operation. Because both sides of the inequality now scale with input size,
+holding `K` constant across a 16x input-size change is a real falsifiability
+property, not a numerically convenient one: an uncharged allocation that
+grows with input size, at any multiplier, is caught at the larger scale even
+if a generously chosen `K` hid it at the smaller one. This oracle caught and
+led to fixing three such regressions during this task, each confirmed fixed
+by measuring the per-unit gap across four to five scales, not just the two
+the committed test asserts:
+
+- `matching.rs`'s lexical-Jaccard token sets (`lexical_tokens`, called twice
+  per candidate at `Standard` effort and above) were tokenized and
+  deduplicated without any charge; the reservations in `signals` and
+  `protected_class_violations` now include that cost.
+- `pattern.rs`'s bounded backtracking search (`repeat`) clones its capture
+  state on every iteration of a repetition, in addition to the clone
+  `evaluate`'s own per-call lease already covers; `repeat` now leases a bound
+  covering its whole stack/results growth, released when it returns.
+- `json/repair.rs`'s syntax recovery re-encodes every repaired bare/malformed
+  token's replacement through `Node::to_json`, one allocation per repaired
+  token, against a flat, too-small per-input-byte precharge; the precharge
+  is now sized against a per-token cost, not a per-byte guess.
+
+`K` still covers a smaller, now genuinely scale-invariant residual: fixed,
+per-call overhead (`Parser`/`Renderer` construction, digest computation) that
+does not grow with input size, plus any remaining retained-output structure
+this task did not individually convert to a charged type (index/children maps
+built during schema compilation, small result vectors). A regression that
+reintroduces an uncounted allocation *proportional to input size* — however
+small at the base scale — fails at the 16x scale even with a generous `K`,
+because `K` cannot absorb a term that itself grows with input.
+
+The oracle measures the current thread's process-wide allocator traffic; since
+`cargo test` runs this file's tests as separate threads that can be reused
+across test functions, each test acquires a file-wide `Mutex` for its *entire
+body*, not just the measured call, so no other test's ordinary, unmeasured
+setup work can add to the same global counter mid-measurement. Each governor
+is constructed fresh inside the measured closure (never shared across the
+warm-up and measured calls, and never across the two scales), so
+`total_scratch_charged` is exactly one call's charge, not a running total; and
+each measured operation runs once, unmeasured, before the timed call, to
+absorb one-time per-thread costs (lazy statics, `std::fmt` machinery) that are
+not the operation's own.
+
+| Operation | Base workload | 16x-larger workload | K (bytes) |
+| --- | --- | --- | --- |
+| `schema_compile` | Object schema, 2 extra properties, nested `pattern` | 32 extra properties | 4,096 |
+| `schema_validate` | Object instance, 2 properties | 32 properties | 2,048 |
+| `recover` | One malformed key, 2 valid padding properties | 32 padding properties | 8,192 |
+| `recover_composed_ambiguous` | Duplicate-key array, 2 elements | 32 elements | 4,096 |
+| `json_parse` | Object, 2 extra key/value pairs | 32 pairs | 1,024 |
+| `json_recover_syntax` | Unquoted/single-quoted object, 2 extra keys | 32 extra keys | 2,048 |
+| `pattern_compile` | `^[A-Za-z]{2}$`-shaped pattern | 32 repeated atoms | 2,048 |
+| `pattern_match` | `identifier_` doubled against `^[A-Za-z_]+$` | repeated 32x | 8,192 |
+| `markdown_render` | Heading, 2-item list, 2-row table, 2 references | 32 of each | 4,096 |
+| `markdown_plan_section` | 2 sections, replace section 0 | 32 sections | 4,096 |
+| `markdown_plan_list` | 2-item list, insert after item 0 | 32 items | 4,096 |
+| `markdown_plan_table_row` | 2-row GFM table, insert row 0 | 32 rows | 4,096 |
+| `markdown_plan_table_cell` | 2-row GFM table, replace one cell | 32 rows | 4,096 |
+| `markdown_plan_reference` | 2 reference definitions, edit occurrence 0 | 32 definitions | 4,096 |
+| `matching_rank` | 2 non-matching candidates plus an exact one | 32 candidates | 8,192 |
+| `matching_resolve` | 2 non-matching candidates plus an exact one | 32 candidates | 8,192 |
+| `paths` | 2-path index, resolve path 0 | 32 paths | 4,096 |
+| `edits_exact` | Padded source, locate an exact substring | 32x padding | 2,048 |
+| `edits_fuzzy` | Padded source, locate within one edit | 32x padding | 8,192 |
+| `edits_unified` | One hunk, 2 padding lines before it | 32 padding lines | 2,048 |
+| `embeddings` | 2 non-matching candidates plus an exact one | 32 candidates | 2,048 |
+| `intent` | 2 unrelated rules plus a matching one | 32 rules | 2,048 |
+
+These `K` values, the workloads at both scales, and the inequality above are
+asserted by `allocation_oracle.rs` itself; a regression that undercounts real
+allocation by more than its row's `K`, at either scale, fails that test. They
+are not a certification that any *other* input to these operations stays
+within the same bound (an input shaped very differently from the oracle's
+generators, or scaled far beyond 16x, could still expose a gap this two-point
+check does not sample), and they do not replace `make resources`' broader,
+allocator-agnostic measurements above.
+
 ## Loader compatibility
 
 A loader compiled with instructions unsupported by Valgrind can fail before the

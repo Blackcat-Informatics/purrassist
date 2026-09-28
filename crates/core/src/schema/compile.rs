@@ -3,7 +3,7 @@
 use super::{CompilationError, Index, Location, SchemaError, Vocabularies, build::Context};
 use crate::contract::Resource;
 use crate::json::{Node, Value, pointer_segment};
-use crate::pattern::Pattern;
+use crate::pattern::{Pattern, PatternCompileError};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) fn walk(
@@ -317,15 +317,13 @@ fn compile_pattern(
     fail: &impl Fn(String) -> CompilationError,
     context: &mut Context<'_>,
 ) -> Result<Pattern, CompilationError> {
-    context.charge(
-        Resource::Work,
-        pattern.len().saturating_mul(16).saturating_add(1),
-    )?;
-    context.charge(
-        Resource::ScratchBytes,
-        pattern.len().saturating_mul(256).saturating_add(256),
-    )?;
-    Pattern::compile(pattern).map_err(|error| fail(error.to_string()))
+    // Charged precisely, against the schema's own shared governor, by
+    // `compile_governed` itself; a separate flat precharge here would either
+    // double-count or under-bound the pattern's real chars/AST allocation.
+    Pattern::compile_governed(pattern, context.governor).map_err(|error| match error {
+        PatternCompileError::Syntax(error) => fail(error.to_string()),
+        PatternCompileError::Resource(reason) => CompilationError::Resource(reason),
+    })
 }
 
 fn admit_location(

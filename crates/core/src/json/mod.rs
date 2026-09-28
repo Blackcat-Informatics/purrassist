@@ -23,6 +23,10 @@ pub(crate) fn recover_syntax(
     repair::recover(input, governor)
 }
 
+fn size(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
 /// A JSON value occurrence with an optional original byte span.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Node {
@@ -166,6 +170,48 @@ impl Node {
         let mut output = String::new();
         self.write_json(&mut output);
         output
+    }
+
+    /// Estimate this value's heap footprint without serializing or cloning it.
+    ///
+    /// A conservative upper bound on the bytes a `.clone()` or a `.to_json()`
+    /// call would need, computed by the same O(size) traversal those
+    /// operations perform but without allocating anything: engines charge
+    /// scratch with this estimate *before* cloning or serializing a value
+    /// whose exact size is not otherwise known.
+    ///
+    /// ```
+    /// use purrassist_core::json::{Node, Value};
+    /// let node = Node::new(Value::String("hello".into()));
+    /// assert!(node.estimated_bytes() >= 5);
+    /// ```
+    #[must_use]
+    pub fn estimated_bytes(&self) -> u64 {
+        let mut total = size(core::mem::size_of::<Self>());
+        match &self.value {
+            Value::Null | Value::Bool(_) => {}
+            Value::Number(number) => total = total.saturating_add(size(number.as_str().len())),
+            Value::String(text) => total = total.saturating_add(size(text.len())),
+            Value::Array(items) => {
+                total = total.saturating_add(
+                    size(items.len()).saturating_mul(size(core::mem::size_of::<Self>())),
+                );
+                for item in items {
+                    total = total.saturating_add(item.estimated_bytes());
+                }
+            }
+            Value::Object(members) => {
+                total = total.saturating_add(
+                    size(members.len()).saturating_mul(size(core::mem::size_of::<Member>())),
+                );
+                for member in members {
+                    total = total
+                        .saturating_add(size(member.key.len()))
+                        .saturating_add(member.value.estimated_bytes());
+                }
+            }
+        }
+        total
     }
 
     fn write_json(&self, output: &mut String) {

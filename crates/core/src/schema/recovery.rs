@@ -176,6 +176,17 @@ impl Search<'_> {
             }
             let report = self.schema.validate_with(&candidate.node, self.governor)?;
             self.governor.charge(Resource::EvidenceEntries, 1)?;
+            // Every violation's diagnostic line is permanently retained in the
+            // receipt (never released), so it is charged directly, before the
+            // `format!` calls that build it, like `retain_source`.
+            let diagnostic_bytes = report.violations.iter().fold(0_u64, |sum, violation| {
+                sum.saturating_add(size(violation.instance_path.len()))
+                    .saturating_add(size(violation.message.len()))
+                    .saturating_add(size(violation.schema_path.len()))
+                    .saturating_add(8)
+            });
+            self.governor
+                .charge(Resource::ScratchBytes, diagnostic_bytes)?;
             self.receipt.validations.push(Validation {
                 validator: "purrassist.schema.draft2020-12.v1".into(),
                 constraint: self.schema.digest.to_string(),
@@ -304,6 +315,12 @@ impl Search<'_> {
                     });
                 }
                 if !range.is_empty() {
+                    // Charge the retained loss copy (and its evidence clone)
+                    // before allocating either.
+                    self.governor.charge(
+                        Resource::ScratchBytes,
+                        size(range.len()).saturating_add(128),
+                    )?;
                     candidate.losses.push(Loss {
                         evidence: evidence.clone(),
                         original: input[range].into(),
@@ -323,6 +340,10 @@ impl Search<'_> {
                         }),
                         destination: String::new(),
                     };
+                    self.governor.charge(
+                        Resource::ScratchBytes,
+                        size(range.len()).saturating_add(128),
+                    )?;
                     candidate.losses.push(Loss {
                         evidence: evidence.clone(),
                         original: input[range.clone()].into(),
@@ -358,6 +379,16 @@ impl Search<'_> {
         if original.equivalent(&replacement) {
             return Ok(());
         }
+        // `parent.clone()` duplicates the whole candidate (node tree and
+        // every ledger so far); `original`/`replacement` are each serialized
+        // at least once below. Charge a bound on all of it before any of
+        // those allocations happen, and release exactly that bound once this
+        // change either lands in the queue or is discarded as a duplicate.
+        let clone_bytes = candidate_weight(parent)
+            .saturating_add(original.estimated_bytes())
+            .saturating_add(replacement.estimated_bytes().saturating_mul(3))
+            .saturating_add(512);
+        let _lease = self.governor.lease_scratch(clone_bytes)?;
         let evidence = self.evidence(
             original,
             path,
@@ -384,6 +415,16 @@ impl Search<'_> {
 }
 fn size(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
+}
+/// A conservative byte-size estimate for a whole candidate, used to charge
+/// scratch before `.clone()`-ing it while exploring a proposal.
+fn candidate_weight(candidate: &Candidate) -> u64 {
+    candidate.node.estimated_bytes().saturating_add(
+        size(candidate.evidence.len())
+            .saturating_add(size(candidate.losses.len()))
+            .saturating_add(size(candidate.inferences.len()))
+            .saturating_mul(256),
+    )
 }
 fn at<'a>(mut node: &'a Node, route: &[usize]) -> &'a Node {
     for &index in route {

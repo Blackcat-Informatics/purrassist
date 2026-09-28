@@ -163,7 +163,7 @@ pub(super) fn regions(
     let storage = size(source.len())
         .saturating_add(size(needle.len()))
         .saturating_mul(32);
-    governor.charge(Resource::ScratchBytes, storage)?;
+    let _lease = governor.lease_scratch(storage)?;
     let mut boundaries: Vec<_> = source.char_indices().map(|(offset, _)| offset).collect();
     boundaries.push(source.len());
     let mut best = max_edits;
@@ -185,7 +185,6 @@ pub(super) fn regions(
             }
         }
     }
-    governor.release_scratch(storage)?;
     Ok((best, ranges))
 }
 

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Document rendering over source-addressed container blocks.
 use super::{Alignment, Block, BlockKind, Dialect, Document, InlineFragment, References, inline};
-use crate::{Governor, StopReason, contract::Resource};
+use crate::{Governor, ScratchString, StopReason, contract::Resource};
 use std::fmt::Write;
 
 impl Document {
@@ -58,11 +58,18 @@ impl Document {
                 .saturating_mul(16)
                 .saturating_add(1),
         )?;
-        governor.charge(
-            Resource::ScratchBytes,
-            super::size(self.source.len())
-                .saturating_mul(64)
-                .saturating_add(256),
+        // The rendered HTML output is charged and reserved through
+        // `ScratchString` before any of it is written, rather than growing an
+        // ordinary `String` behind an unrelated flat guess; `into_string`
+        // permanently retains the charge, since the caller keeps this output.
+        let mut buffer = ScratchString::new(governor);
+        buffer.reserve(
+            usize::try_from(
+                super::size(self.source.len())
+                    .saturating_mul(64)
+                    .saturating_add(256),
+            )
+            .unwrap_or(usize::MAX),
         )?;
         let mut definitions = Vec::new();
         collect(&self.source, &self.blocks, &mut definitions);
@@ -74,7 +81,7 @@ impl Document {
             extensions,
             refs: &refs,
             governor,
-            output: String::new(),
+            output: buffer.into_string(),
         };
         renderer.blocks(&self.blocks, false, 0)?;
         Ok(

@@ -1,20 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Fixed public-provider transcripts; no model, network, or credential is used.
-use purrassist::{Budget, Outcome, Schema, json};
+use purrassist::{Budget, Governor, Outcome, Schema, StopReason, contract::Resource, json};
 use purrassist_host::helpers::{Pending, Provider};
 
 fn prepare(provider: Provider) -> Pending {
+    let mut governor = Governor::new(Budget {
+        helper_calls: 1,
+        ..Budget::default()
+    });
     Pending::prepare(
         provider,
         "caller-selected-model",
         "forty two",
         &Schema::compile(r#"{"type":"integer","minimum":40}"#).unwrap(),
         512,
-        Budget {
-            helper_calls: 1,
-            ..Budget::default()
-        },
+        &mut governor,
     )
     .unwrap()
 }
@@ -49,6 +50,7 @@ fn public_wire_formats_produce_locally_validated_explicit_guesses() {
 }
 #[test]
 fn helpers_are_disabled_by_default_and_refusals_are_not_reinterpreted() {
+    let mut governor = Governor::new(Budget::default());
     assert!(
         Pending::prepare(
             Provider::OpenAiResponses,
@@ -56,7 +58,7 @@ fn helpers_are_disabled_by_default_and_refusals_are_not_reinterpreted() {
             "input",
             &Schema::compile("true").unwrap(),
             512,
-            Budget::default()
+            &mut governor,
         )
         .is_err()
     );
@@ -81,5 +83,42 @@ fn helpers_are_disabled_by_default_and_refusals_are_not_reinterpreted() {
             )
             .outcome,
         Outcome::Unresolved
+    );
+}
+#[test]
+fn helper_preparation_exhaustion_yields_budget_exceeded_and_no_request() {
+    // Enough helper calls to pass that check, but not enough scratch budget
+    // for the schema/prompt precharge: preparation must fail before
+    // allocating the request body, not with a partially built request.
+    let mut governor = Governor::new(Budget {
+        helper_calls: 1,
+        scratch_bytes: 4,
+        ..Budget::default()
+    });
+    let outcome = Pending::prepare(
+        Provider::AnthropicMessages,
+        "caller-selected-model",
+        "forty two",
+        &Schema::compile(r#"{"type":"integer","minimum":40}"#).unwrap(),
+        512,
+        &mut governor,
+    );
+    assert_eq!(
+        outcome.err(),
+        Some(StopReason::BudgetExceeded(Resource::ScratchBytes))
+    );
+    // Nothing was admitted beyond the checks preceding the precharge: no
+    // request body was serialized, and a fresh helper call is still refused
+    // by the now-sticky governor, never silently retried.
+    assert!(
+        Pending::prepare(
+            Provider::AnthropicMessages,
+            "caller-selected-model",
+            "forty two",
+            &Schema::compile(r#"{"type":"integer"}"#).unwrap(),
+            512,
+            &mut governor,
+        )
+        .is_err()
     );
 }
