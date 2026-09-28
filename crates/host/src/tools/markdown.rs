@@ -31,12 +31,18 @@ pub(super) fn call(name: &str, args: &Node) -> Result<Node, String> {
         )?;
         let value = operation(name, args, &document, &mut governor)?;
         if name == "plan_markdown_section" {
-            governor.charge(Resource::EvidenceEntries, 1)?;
-            governor.charge(Resource::ScratchBytes, 512)?;
+            governor.charge(Resource::EvidenceEntries, 2)?;
+            governor.charge(Resource::ScratchBytes, 1024)?;
             receipt.validations.push(purrassist::contract::Validation {
                 validator: "markdown.section-structure.v1".into(),
-                constraint: "selected heading, section boundary, and surrounding block structure remain unchanged after reparsing".into(),
+                constraint: "selected heading, section boundary, ancestors, and surrounding block structure remain unchanged after reparsing".into(),
                 passed: true, diagnostics: Vec::new(),
+            });
+            receipt.evidence.push(purrassist::contract::Evidence {
+                rule: "markdown.section-body.v1".into(),
+                explanation: "Replaced the selected body; nested lines receive canonical outer container prefixes. Identical logical bodies keep original spelling. Outside bytes remain exact and original source is retained.".into(),
+                span: Some(purrassist::contract::SourceSpan { source: document.digest(), bytes: 0..source.len() }),
+                destination: "/edits".into(),
             });
         }
         if name == "plan_markdown_reference" { reference::record(&document, &mut receipt, &mut governor)?; }
@@ -87,6 +93,20 @@ fn operation(
             ),
             ("sections", array(document.sections().iter().map(section))),
             ("references", reference::sites(document, governor)?),
+            (
+                "section_sites",
+                array(document.section_sites(governor)?.iter().map(|site| {
+                    object([
+                        ("source", string(site.source.to_string())),
+                        (
+                            "path",
+                            array(site.path.iter().map(|index| integer(size(*index)))),
+                        ),
+                        ("span", span(&site.span)),
+                        ("body", span(&site.body)),
+                    ])
+                })),
+            ),
         ])),
         "markdown_context" => {
             let context = document.context(
@@ -108,11 +128,12 @@ fn operation(
         }
         "plan_markdown_section" => {
             let body = super::field(args, "body").map_err(StopReason::InvalidInput)?;
-            Ok(plan(document.replace_section_governed(
-                index(args, "heading")?,
-                body,
-                governor,
-            )?))
+            let path = if args.get("path").is_some() {
+                block_path(args)?
+            } else {
+                vec![index(args, "heading")?]
+            };
+            Ok(plan(document.replace_section_at(&path, body, governor)?))
         }
         "plan_markdown_table_cell" => Ok(plan(document.replace_table_cell(
             &block_path(args)?,

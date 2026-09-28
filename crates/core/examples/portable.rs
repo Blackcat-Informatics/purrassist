@@ -154,23 +154,44 @@ fn embedding_outcome(value: Outcome<EmbeddingMatch>) -> Node {
     ])
 }
 
+fn section_transcript(newline: &str, results: &mut Vec<Node>) {
+    let nested_source =
+        format!("> - # Tea{newline}>   Hot{newline}>   # Keep{newline}>   Tail{newline}");
+    let mut nested_g = Governor::new(Budget::default());
+    let nested = Document::parse(&nested_source, &mut nested_g).expect("nested section");
+    let site = &nested.section_sites(&mut nested_g).expect("section sites")[0];
+    assert_eq!(site.path, [0, 0, 0]);
+    let nested_body = format!("Cold café.{newline}## Child{newline}Ready{newline}");
+    let nested_plan = nested
+        .replace_section_at(&site.path, &nested_body, &mut nested_g)
+        .expect("nested plan");
+    let nested_output = apply_edit(&nested_plan, &nested_source, results);
+    assert_eq!(
+        nested_output,
+        format!(
+            "> - # Tea{newline}>   Cold café.{newline}>   ## Child{newline}>   Ready{newline}>   # Keep{newline}>   Tail{newline}"
+        )
+    );
+    let section_source = format!("# Tea{newline}Old{newline}# Keep{newline}Tail");
+    let mut section_g = Governor::new(Budget::default());
+    let section = Document::parse(&section_source, &mut section_g).expect("section");
+    let body = format!("Cold café.{newline}## Child{newline}Ready{newline}");
+    let section_plan = section
+        .replace_section_governed(0, &body, &mut section_g)
+        .expect("section plan");
+    let edited = apply_edit(&section_plan, &section_source, results);
+    assert_eq!(edited, format!("# Tea{newline}{body}# Keep{newline}Tail"));
+    assert!(
+        section
+            .replace_section_governed(0, "```\n", &mut section_g)
+            .is_err()
+    );
+}
+
 fn markdown_transcript() -> Node {
     let mut results = Vec::new();
     for newline in ["\n", "\r\n", "\r"] {
-        let section_source = format!("# Tea{newline}Old{newline}# Keep{newline}Tail");
-        let mut section_g = Governor::new(Budget::default());
-        let section = Document::parse(&section_source, &mut section_g).expect("section");
-        let body = format!("Cold café.{newline}## Child{newline}Ready{newline}");
-        let section_plan = section
-            .replace_section_governed(0, &body, &mut section_g)
-            .expect("section plan");
-        let edited = apply_edit(&section_plan, &section_source, &mut results);
-        assert_eq!(edited, format!("# Tea{newline}{body}# Keep{newline}Tail"));
-        assert!(
-            section
-                .replace_section_governed(0, "```\n", &mut section_g)
-                .is_err()
-        );
+        section_transcript(newline, &mut results);
         let source = format!("> | Drink | State |{newline}> | --- | --- |{newline}> | tea | hot |");
         let mut g = Governor::new(Budget::default());
         let doc = Document::parse(&source, &mut g).expect("table");

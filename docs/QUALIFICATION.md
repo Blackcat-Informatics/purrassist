@@ -38,8 +38,8 @@ guess reporting, and exhaustion before a complete ledger can be returned.
 Local package verification has built all five packages. A local release CLI was
 installed into a disposable checkout cache and exercised on the published example
 inputs, including exact-source retention. This does not verify downloadable registry
-packages. Hosted CI passed for checkpoint `d27422b0cf0d80655c57110af05f4aeba189c1b7`:
-[run 36418032620](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36418032620)
+packages. Hosted CI passed for checkpoint `2bd04dcdede114098187984e171300620ecf5beb`:
+[run 36419162096](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36419162096)
 completed the Linux/macOS local gates, MSRV workspace tests, Windows core/syntax
 tests, and native/WASI comparisons. This is evidence for that checkpoint only;
 subsequent changes need their own qualification.
@@ -250,10 +250,23 @@ Rust convenience method uses the same checked implementation. CLI/MCP plans
 record `markdown.section-structure.v1` validation. Regression cases cover ATX
 and setext headings, changed lower-ranked subsections, exact undo/stale checks,
 CR/LF/CRLF, empty/no-op/final sections, missing separators, peer-heading injection,
-and unclosed fences/HTML that capture the following section. These operations
-remain rooted at top-level heading indices; nested section and list editing
-remain release work. The full Rust 1.98.0 `make check` gate, nightly Clippy,
+and unclosed fences/HTML that capture the following section. These root-section regressions establish the original checked API. The full Rust 1.98.0 `make check` gate, nightly Clippy,
 expanded native/WASI edit/undo transcripts, and browser-WASM build passed.
+
+Nested section inspection and replacement now use digest-bound paths into quote
+and list containers. Replacement bodies omit outer prefixes; inserted lines
+receive canonical quote markers and list-continuation spaces. Reparsing checks
+body structure and leaf text, the selected heading, section boundary, ancestors,
+and outside siblings. Tests cover mixed nesting, ordered markers, tabbed container
+prefixes, setext headings, CR/LF/CRLF, no-op spelling preservation, empty/final
+sections, exact undo, rejected container escape, and tool selector validation.
+Bodies with trailing blanks that escape list items or column-sensitive tabs that
+change body structure are explicitly rejected; broader layout recovery remains
+open. List insertion/removal and other structural operations remain release work.
+The full Rust 1.98.0 local gate, nightly Clippy, native/WASI nested edit and undo
+transcripts, and browser-WASM build passed. The optimized CLI executed
+`examples/markdown-section.json` with the expected prefixed replacement and
+structural-validation receipt.
 
 ## Remaining release work
 

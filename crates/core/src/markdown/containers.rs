@@ -139,7 +139,7 @@ fn item_lines(source: &str, lines: &[Range<usize>], cursor: usize) -> (Vec<Range
     }
     (inner, end)
 }
-fn item_prefix(text: &str) -> (usize, usize) {
+pub(super) fn item_prefix(text: &str) -> (usize, usize) {
     let stripped = unindent(text).expect("recognized list item");
     let leading = text.len() - stripped.len();
     let width = if stripped.as_bytes()[0].is_ascii_digit() {

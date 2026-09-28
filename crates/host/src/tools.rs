@@ -55,8 +55,8 @@ const DEFINITIONS: &[Definition] = &[
     },
     Definition {
         name: "plan_markdown_section",
-        description: "Plan replacement of a Markdown section body selected by root heading block index",
-        schema: r#"{"type":"object","required":["source","heading","body"],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"heading":{"type":"integer","minimum":0},"body":{"type":"string"}},"additionalProperties":false}"#,
+        description: "Plan a structurally validated Markdown section body replacement selected by root heading index or nested path",
+        schema: r#"{"type":"object","required":["source","body"],"oneOf":[{"required":["heading"],"properties":{"path":false}},{"required":["path"],"properties":{"heading":false}}],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"heading":{"type":"integer","minimum":0},"path":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"integer","minimum":0}},"body":{"type":"string"}},"additionalProperties":false}"#,
         writes: false,
     },
     Definition {

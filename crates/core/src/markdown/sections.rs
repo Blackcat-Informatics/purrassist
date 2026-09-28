@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Reparsed section-body edits with surrounding block preservation.
+mod nested;
 use super::{Block, BlockKind, Document, size};
 use crate::{
     Budget, Governor, StopReason,
     contract::Resource,
     edits::{EditPlan, TextEdit},
 };
+pub use nested::SectionSite;
 
 impl Document {
     /// Replace a root section body using the standard resource budget.

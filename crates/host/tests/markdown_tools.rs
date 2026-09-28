@@ -493,3 +493,61 @@ fn nested_task_tool_uses_paths_from_inspection() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn nested_section_tool_selects_inspected_paths_and_retains_validation() {
+    let root = std::env::temp_dir().join(format!("purrassist-section-tool-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let tools = Tools::new(&root).unwrap();
+    let source = "> - # Tea\r\n>   Hot\r\n>   # Keep\r\n>   Tail\r\n";
+    let inspected = call(&tools, "inspect_markdown", source, "{}");
+    assert_eq!(
+        inspected
+            .pointer("/value/section_sites/0/path")
+            .unwrap()
+            .to_json(),
+        "[0,0,0]"
+    );
+    let plan = call(
+        &tools,
+        "plan_markdown_section",
+        source,
+        r#"{"path":[0,0,0],"body":"Cold café.\r\n"}"#,
+    );
+    assert_eq!(apply(&plan, source), source.replace("Hot", "Cold café."));
+    assert_eq!(
+        plan.pointer("/receipt/validations/0/validator")
+            .unwrap()
+            .as_str(),
+        Some("markdown.section-structure.v1")
+    );
+    let rejected = call(
+        &tools,
+        "plan_markdown_section",
+        source,
+        r#"{"path":[0,0,0],"body":"```\r\n"}"#,
+    );
+    assert_eq!(
+        rejected.pointer("/status").unwrap().as_str(),
+        Some("unresolved")
+    );
+    for extra in [
+        r#"{"path":[],"body":""}"#,
+        r#"{"path":[0,0,0],"heading":0,"body":""}"#,
+        r#"{"body":""}"#,
+    ] {
+        let Value::Object(mut fields) = json::parse(extra).unwrap().value else {
+            panic!("object");
+        };
+        let Value::Object(base) = object([("source", string(source))]).value else {
+            panic!("object");
+        };
+        fields.extend(base);
+        assert!(
+            tools
+                .call("plan_markdown_section", &Node::new(Value::Object(fields)))
+                .is_err()
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}

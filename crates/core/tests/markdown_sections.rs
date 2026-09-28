@@ -104,3 +104,155 @@ fn exhausted_governor_cannot_return_a_plan_even_for_noop() {
         StopReason::BudgetExceeded(Resource::Work)
     );
 }
+
+#[test]
+fn nested_sections_follow_container_paths_and_preserve_outside_bytes() {
+    for newline in ["\n", "\r\n", "\r"] {
+        for (source, path, prefix) in [
+            (
+                "> # Tea\n> Old\n> # Keep\n> Tail\nOutside\n",
+                vec![0, 0],
+                "> ",
+            ),
+            (
+                "- # Tea\n  Old\n  # Keep\n  Tail\n- Outside\n",
+                vec![0, 0],
+                "  ",
+            ),
+            (
+                "> 12. # Tea\n>     Old\n>     # Keep\n>     Tail\n> 13. Outside\n",
+                vec![0, 0, 0],
+                ">     ",
+            ),
+            (
+                "- > # Tea\n  > Old\n  > # Keep\n  > Tail\n- Outside\n",
+                vec![0, 0, 0],
+                "  > ",
+            ),
+            (
+                "> - > Tea\n>   > ===\n>   > Old\n>   > # Keep\n>   > Tail\n",
+                vec![0, 0, 0, 0],
+                ">   > ",
+            ),
+            (
+                "-\t# Tea\n\tOld\n\t# Keep\n\tTail\n- Outside\n",
+                vec![0, 0],
+                "    ",
+            ),
+        ] {
+            let source = source.replace('\n', newline);
+            let body = format!("Cold café.{newline}{newline}## Child{newline}Ready{newline}");
+            let mut g = Governor::new(Budget::default());
+            let doc = Document::parse(&source, &mut g).unwrap();
+            let sites = doc.section_sites(&mut g).unwrap();
+            let site = sites.iter().find(|site| site.path == path).unwrap();
+            assert_eq!(site.source, doc.digest());
+            let plan = doc
+                .replace_section_at(&path, &body, &mut g)
+                .unwrap_or_else(|err| panic!("{source:?} {err:?}"));
+            assert_eq!(plan.edits[0].range, site.body);
+            let replacement = format!(
+                "{prefix}Cold café.{newline}{prefix}{newline}{prefix}## Child{newline}{prefix}Ready{newline}"
+            );
+            assert_eq!(plan.edits[0].replacement, replacement);
+            let Outcome::Resolved(applied) = plan.apply(&source, Budget::default()).outcome else {
+                panic!("apply");
+            };
+            let mut expected = source.clone();
+            expected.replace_range(site.body.clone(), &replacement);
+            assert_eq!(applied.text, expected);
+            let Outcome::Resolved(undo) = applied
+                .inverse
+                .apply(&applied.text, Budget::default())
+                .outcome
+            else {
+                panic!("undo");
+            };
+            assert_eq!(undo.text, source);
+        }
+    }
+}
+
+#[test]
+fn nested_noops_and_invalid_bodies_keep_original_prefix_spelling() {
+    let source = "># Tea\n>Old\n># Keep\n>Tail\n";
+    let mut g = Governor::new(Budget::default());
+    let doc = Document::parse(source, &mut g).unwrap();
+    assert_eq!(
+        doc.replace_section_at(&[0, 0], "Old\n", &mut g)
+            .unwrap()
+            .edits,
+        []
+    );
+    for body in ["# Peer\n", "```\n", "<!--\n", "no ending"] {
+        assert!(
+            matches!(
+                doc.replace_section_at(&[0, 0], body, &mut g),
+                Err(StopReason::InvalidInput(_))
+            ),
+            "{body:?}"
+        );
+    }
+    assert!(matches!(
+        doc.replace_section_at(&[], "", &mut g),
+        Err(StopReason::InvalidInput(_))
+    ));
+    assert!(matches!(
+        doc.replace_section_at(&[0, 1], "", &mut g),
+        Err(StopReason::InvalidInput(_))
+    ));
+    let mut exhausted = Governor::new(Budget {
+        work: 0,
+        ..Budget::default()
+    });
+    assert_eq!(
+        doc.replace_section_at(&[0, 0], "Old\n", &mut exhausted)
+            .unwrap_err(),
+        StopReason::BudgetExceeded(Resource::Work)
+    );
+}
+
+#[test]
+fn nested_final_sections_empty_bodies_and_container_escape_checks() {
+    for (source, path, expected) in [
+        ("> # Tea\n> Old\n", vec![0, 0], "> # Tea\n"),
+        ("- # Tea\n  Old\n- Keep\n", vec![0, 0], "- # Tea\n- Keep\n"),
+        (
+            "> - # Tea\n>   Old\n> - Keep\n",
+            vec![0, 0, 0],
+            "> - # Tea\n> - Keep\n",
+        ),
+    ] {
+        let mut g = Governor::new(Budget::default());
+        let doc = Document::parse(source, &mut g).unwrap();
+        let plan = doc.replace_section_at(&path, "", &mut g).unwrap();
+        let Outcome::Resolved(applied) = plan.apply(source, Budget::default()).outcome else {
+            panic!("apply");
+        };
+        assert_eq!(applied.text, expected);
+    }
+    for (source, path, prefix) in [
+        ("> # Tea\n", vec![0, 0], "> "),
+        ("- # Tea\n", vec![0, 0], "  "),
+    ] {
+        let mut g = Governor::new(Budget::default());
+        let doc = Document::parse(source, &mut g).unwrap();
+        let plan = doc.replace_section_at(&path, "```\ncode", &mut g).unwrap();
+        assert_eq!(
+            plan.edits[0].replacement,
+            format!("{prefix}```\n{prefix}code")
+        );
+    }
+    let mut g = Governor::new(Budget::default());
+    let doc = Document::parse("- # Tea\n  Old\n- Keep\n", &mut g).unwrap();
+    assert!(matches!(
+        doc.replace_section_at(&[0, 0], "Cold\n\n", &mut g),
+        Err(StopReason::InvalidInput(_))
+    ));
+    // A tab's indentation depends on physical columns. Reject changed structure.
+    let quote = Document::parse("> # Tea\n> Old\n", &mut g).unwrap();
+    assert!(matches!(
+        quote.replace_section_at(&[0, 0], "\tcode\n", &mut g),
+        Err(StopReason::InvalidInput(_))
+    ));
+}

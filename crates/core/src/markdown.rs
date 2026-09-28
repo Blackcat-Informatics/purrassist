@@ -23,6 +23,7 @@ pub use context::Context;
 pub use inline::{
     Dialect, Inline, InlineFragment, InlineKind, ReferenceDefinition, ReferenceOrigin, References,
 };
+pub use sections::SectionSite;
 
 use crate::{Governor, StopReason, contract::Resource, digest::Digest};
 use std::ops::Range;

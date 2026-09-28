@@ -114,14 +114,18 @@ is not a general HTML or URL sanitizer. For example:
 purrassist call render_markdown --root . < examples/render-markdown.json
 ```
 
-`inspect_markdown` returns nested blocks, original line maps, root sections, and
+`inspect_markdown` returns nested blocks, original line maps, root sections, nested `section_sites`, and
 reference-definition occurrences with original field spans. `markdown_context`
 takes UTF-8 byte offsets `start`/`end` and optional neighboring-block count.
-`plan_markdown_section` replaces the body of a root `heading` block verbatim,
-then reparses to preserve the heading, section boundary, and outside block
-structure. Supply separators and line endings explicitly; unclosed constructs
-that capture the next section and new peer headings are rejected. Identical
-bodies yield empty plans.
+`plan_markdown_section` selects either a root `heading` index or a nested `path`
+from `section_sites`. Root bodies are inserted verbatim. Nested bodies omit outer
+container markers; new lines receive quote prefixes and list-continuation spaces.
+Reparsing preserves the heading, section boundary, ancestors, and outside blocks.
+Supply line endings and separators explicitly. Bodies that capture following
+sections, introduce peer headings, or change structure under container prefixes
+are rejected; this includes trailing blanks that leave a list item and some
+column-sensitive tab indentation. Identical logical bodies preserve original
+prefix spelling and yield empty plans. See `examples/markdown-section.json`.
 `plan_markdown_task` sets the supplied `checked` state using either a root
 `block` index or a nested `path` from inspection (for example `[0,0,1]`).
 Exactly one selector is required; paths follow successive child indices.
