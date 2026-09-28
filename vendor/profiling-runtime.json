@@ -2,7 +2,7 @@
   "name": "Arch Linux glibc",
   "version": "2.44+r50+g1848099f063e-1",
   "architecture": "x86_64",
-  "url": "https://geo.mirror.pkgbuild.com/core/os/x86_64/glibc-2.44+r50+g1848099f063e-1-x86_64.pkg.tar.zst",
+  "url": "https://archive.archlinux.org/packages/g/glibc/glibc-2.44+r50+g1848099f063e-1-x86_64.pkg.tar.zst",
   "sha256": "e8e4d50d45cb2bd21c9f7eabacc6a01bd5eb93dbd476f3f44d44038fc1eba417",
   "license": "LGPL-2.1-or-later AND GPL-2.0-or-later",
   "members": [

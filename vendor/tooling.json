@@ -52,7 +52,7 @@
     "name": "profiling-glibc",
     "version": "2.44+r50+g1848099f063e-1",
     "license": "LGPL-2.1-or-later AND GPL-2.0-or-later",
-    "source": "https://geo.mirror.pkgbuild.com/core/os/x86_64/glibc-2.44+r50+g1848099f063e-1-x86_64.pkg.tar.zst",
+    "source": "https://archive.archlinux.org/packages/g/glibc/glibc-2.44+r50+g1848099f063e-1-x86_64.pkg.tar.zst",
     "scope": "External isolated profiling support only; not linked or packaged into PurRAssist crates.",
     "notices": {
       "vendor/licenses/profiling-glibc/GPL-2.0-or-later.txt": "aaf135472f81c5b4a0dca9367e5bb5e9750032b5bebe5442b36e4c0a47430df3",

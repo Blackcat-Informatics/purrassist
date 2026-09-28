@@ -1,0 +1,190 @@
+{
+  "format": "purrassist.resources.v1",
+  "source": {
+    "commit": "c2f5d18f218033bae408ba28a543f0926cdfa7cb",
+    "dirty": false,
+    "nonignored_file_tree_sha256": "8d8d187a3ccd391b87cfc77d1c474dae0c559dcdcc259c13e2ba84f6117b309f"
+  },
+  "platform": {
+    "system": "Linux",
+    "architecture": "x86_64",
+    "libc": [
+      "glibc",
+      "2.44"
+    ]
+  },
+  "tools": {
+    "valgrind": "valgrind-3.25.1",
+    "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)"
+  },
+  "scope": "One process per workload and profiler; includes startup, construction, assertions, output, and teardown. Native elapsed time is not per-operation latency. Heap excludes stacks and mappings; Massif overhead is estimated. RSS is the native workload VmHWM, including a small procfs read used to obtain it. These observations are not hard memory bounds or representative quality evaluation.",
+  "rss_observation": "VmHWM after workload and before final teardown; includes native-only procfs read",
+  "runtime": {
+    "kind": "isolated pinned loader and libc; other libraries supplied by host",
+    "name": "Arch Linux glibc",
+    "version": "2.44+r50+g1848099f063e-1",
+    "archive_sha256": "e8e4d50d45cb2bd21c9f7eabacc6a01bd5eb93dbd476f3f44d44038fc1eba417",
+    "files_sha256": {
+      "usr/lib/ld-linux-x86-64.so.2": "f5e11cc62f8f2c24dff532982559f4303dba3b17e7450551372a88c8e7ea8757",
+      "usr/lib/libc.so.6": "02c8c3d06180beee9c7d0392aa85736c7d19f274a81e7f8f0b3d9e28e0641524"
+    },
+    "extractor": "bsdtar 3.8.9 - libarchive 3.8.9 zlib/1.3.1.zlib-ng liblzma/5.8.3 bz2lib/1.0.8 liblz4/1.10.0 libzstd/1.5.7 openssl/3.6.3 libb2/bundled libacl/2.4.0"
+  },
+  "builds": [
+    {
+      "target": "resources",
+      "command": [
+        "cargo",
+        "bench",
+        "-p",
+        "purrassist-core",
+        "--bench",
+        "resources",
+        "--no-run",
+        "--locked",
+        "--config",
+        "profile.bench.debug=1",
+        "--config",
+        "profile.bench.strip=false"
+      ],
+      "elapsed_ns": 259854509,
+      "cache_state": "not cleaned; fresh artifact counts are observed Cargo events",
+      "fresh_artifacts": 2,
+      "built_artifacts": 0,
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 1,
+        "debug_assertions": false,
+        "overflow_checks": true,
+        "test": true
+      },
+      "executable_bytes": 7958080,
+      "executable_sha256": "946eaf1f43cf6541a49c25e4a8bf43ef8a892a9695667bffa62fff1b5ee9d733"
+    },
+    {
+      "target": "purrassist",
+      "command": [
+        "cargo",
+        "build",
+        "-p",
+        "purrassist-cli",
+        "--release",
+        "--locked"
+      ],
+      "elapsed_ns": 39442513,
+      "cache_state": "not cleaned; fresh artifact counts are observed Cargo events",
+      "fresh_artifacts": 35,
+      "built_artifacts": 0,
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 0,
+        "debug_assertions": false,
+        "overflow_checks": true,
+        "test": false
+      },
+      "executable_bytes": 7316832,
+      "executable_sha256": "fa3910bb1aec965d90b9d14363d4fbf680de676c8aec4ff51fcb82447216cd60"
+    }
+  ],
+  "workloads": [
+    {
+      "case": "empty",
+      "process_elapsed_ns": 851204,
+      "process_peak_rss_bytes": 3293184,
+      "allocation_calls": 13,
+      "free_calls": 12,
+      "total_allocated_bytes": 3766,
+      "observed_peak_requested_heap_bytes": 1736,
+      "observed_peak_heap_plus_estimated_overhead_bytes": 1768,
+      "snapshots": 26
+    },
+    {
+      "case": "schema_compile",
+      "process_elapsed_ns": 1249272,
+      "process_peak_rss_bytes": 3670016,
+      "allocation_calls": 105,
+      "free_calls": 104,
+      "total_allocated_bytes": 9061,
+      "observed_peak_requested_heap_bytes": 4482,
+      "observed_peak_heap_plus_estimated_overhead_bytes": 5056,
+      "snapshots": 207
+    },
+    {
+      "case": "json_parse",
+      "process_elapsed_ns": 1733178,
+      "process_peak_rss_bytes": 3825664,
+      "allocation_calls": 1573,
+      "free_calls": 1572,
+      "total_allocated_bytes": 235990,
+      "observed_peak_requested_heap_bytes": 173150,
+      "observed_peak_heap_plus_estimated_overhead_bytes": 195784,
+      "snapshots": 629
+    },
+    {
+      "case": "json_composed",
+      "process_elapsed_ns": 1689649,
+      "process_peak_rss_bytes": 3883008,
+      "allocation_calls": 844,
+      "free_calls": 843,
+      "total_allocated_bytes": 90691,
+      "observed_peak_requested_heap_bytes": 40156,
+      "observed_peak_heap_plus_estimated_overhead_bytes": 45384,
+      "snapshots": 594
+    },
+    {
+      "case": "json_ambiguous",
+      "process_elapsed_ns": 2256712,
+      "process_peak_rss_bytes": 3784704,
+      "allocation_calls": 309,
+      "free_calls": 308,
+      "total_allocated_bytes": 23628,
+      "observed_peak_requested_heap_bytes": 12132,
+      "observed_peak_heap_plus_estimated_overhead_bytes": 13208,
+      "snapshots": 582
+    },
+    {
+      "case": "markdown_render",
+      "process_elapsed_ns": 2080577,
+      "process_peak_rss_bytes": 3977216,
+      "allocation_calls": 3785,
+      "free_calls": 3784,
+      "total_allocated_bytes": 665496,
+      "observed_peak_requested_heap_bytes": 114883,
+      "observed_peak_heap_plus_estimated_overhead_bytes": 125864,
+      "snapshots": 766
+    },
+    {
+      "case": "markdown_list",
+      "process_elapsed_ns": 2576182,
+      "process_peak_rss_bytes": 3993600,
+      "allocation_calls": 1903,
+      "free_calls": 1902,
+      "total_allocated_bytes": 217925,
+      "observed_peak_requested_heap_bytes": 151980,
+      "observed_peak_heap_plus_estimated_overhead_bytes": 163288,
+      "snapshots": 654
+    },
+    {
+      "case": "unicode",
+      "process_elapsed_ns": 2993309,
+      "process_peak_rss_bytes": 3657728,
+      "allocation_calls": 23,
+      "free_calls": 22,
+      "total_allocated_bytes": 125880,
+      "observed_peak_requested_heap_bytes": 68955,
+      "observed_peak_heap_plus_estimated_overhead_bytes": 69048,
+      "snapshots": 46
+    },
+    {
+      "case": "matching",
+      "process_elapsed_ns": 2285201,
+      "process_peak_rss_bytes": 3862528,
+      "allocation_calls": 5464,
+      "free_calls": 5463,
+      "total_allocated_bytes": 524546,
+      "observed_peak_requested_heap_bytes": 101905,
+      "observed_peak_heap_plus_estimated_overhead_bytes": 125136,
+      "snapshots": 830
+    }
+  ]
+}

@@ -293,7 +293,8 @@ index removed the diagnostic. All 20,034 Unicode normalization cases, the full
 Rust 1.98.0 gate, nightly Clippy, native/WASI comparisons, and browser-WASM build
 passed. The six-case latency baseline still passed 200/200 assertions per case.
 Measurement definitions, runtime identity, cache caveats, and limitations are in
-`RESOURCES.md`; these observations do not complete the allocation audit or prove
+`RESOURCES.md`, with a saved clean-commit baseline under
+`docs/qualification/resources-linux-x86_64.json`; these observations do not complete the allocation audit or prove
 hard memory limits.
 
 ## Remaining release work

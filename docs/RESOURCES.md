@@ -68,3 +68,28 @@ The measurement definitions follow the upstream
 recording depends on deallocations; observed peaks are not a universal memory
 bound. External profiling tool/runtime provenance is in `docs/DEPENDENCIES.md`
 and `vendor/tooling.json`.
+
+## Recorded baseline
+
+[Linux x86_64 resource baseline](qualification/resources-linux-x86_64.json) was
+measured from clean commit `c2f5d18f218033bae408ba28a543f0926cdfa7cb`. It records the
+isolated runtime and executable identities. Build artifacts were already cached;
+its build durations are not cold-build measurements.
+
+| Workload | Allocation calls | Total allocated bytes | Observed requested-heap peak | Native reported RSS |
+| --- | ---: | ---: | ---: | ---: |
+| empty | 13 | 3,766 | 1,736 | 3,293,184 |
+| schema_compile | 105 | 9,061 | 4,482 | 3,670,016 |
+| json_parse | 1,573 | 235,990 | 173,150 | 3,825,664 |
+| json_composed | 844 | 90,691 | 40,156 | 3,883,008 |
+| json_ambiguous | 309 | 23,628 | 12,132 | 3,784,704 |
+| markdown_render | 3,785 | 665,496 | 114,883 | 3,977,216 |
+| markdown_list | 1,903 | 217,925 | 151,980 | 3,993,600 |
+| unicode | 23 | 125,880 | 68,955 | 3,657,728 |
+| matching | 5,464 | 524,546 | 101,905 | 3,862,528 |
+
+Values include the full benchmark process as described above. They are not
+per-function allocation counts, portable guarantees, or a production sizing rule.
+The release CLI executable in this snapshot is 7,316,832 bytes; the instrumentable
+benchmark executable includes retained debug information and is not a release
+CLI size comparison.
