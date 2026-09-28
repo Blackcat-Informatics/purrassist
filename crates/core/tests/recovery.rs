@@ -95,15 +95,91 @@ fn duplicate_values_remain_ambiguous() {
     )
     .unwrap();
     let result = schema.recover(r#"{"x":1,"x":2}"#, RecoveryRequest::default());
-    let Outcome::Ambiguous(choices) = result.outcome else {
+    let Outcome::Ambiguous(choices) = &result.outcome else {
         panic!("{result:?}");
     };
     assert_eq!(choices.len(), 2);
+    assert_eq!(result.receipt.alternatives.len(), choices.len());
+    assert_eq!(result.receipt.evidence, Vec::new());
+    assert_eq!(result.receipt.losses, Vec::new());
+    for (choice, ledger) in choices.iter().zip(&result.receipt.alternatives) {
+        assert_eq!(
+            ledger.output,
+            purrassist_core::digest::Digest::of(choice.to_json().as_bytes())
+        );
+        assert_eq!(ledger.cost, 10);
+        assert_eq!(ledger.evidence.len(), 1);
+        assert_eq!(
+            ledger.evidence[0].explanation,
+            format!("replace with {}", choice.to_json())
+        );
+        assert_eq!(ledger.losses[0].original, r#"{"x":1,"x":2}"#);
+        assert_eq!(ledger.inferences, Vec::new());
+        assert_eq!(ledger.validations.len(), 1);
+        assert!(result.receipt.validations[ledger.validations[0]].passed);
+    }
+    let encoded = result.to_node();
+    let json::Value::Array(ledgers) = &encoded
+        .get("receipt")
+        .unwrap()
+        .get("alternatives")
+        .unwrap()
+        .value
+    else {
+        panic!("missing alternative ledgers");
+    };
+    assert_eq!(ledgers.len(), choices.len());
+    for (ledger, choice) in ledgers.iter().zip(choices) {
+        assert_eq!(
+            ledger.get("output").unwrap().as_str().unwrap(),
+            purrassist_core::digest::Digest::of(choice.to_json().as_bytes()).to_string()
+        );
+    }
     assert!(
         choices
             .iter()
             .all(|node| schema.validate(node).unwrap().valid)
     );
+}
+#[test]
+fn ambiguous_guesses_keep_their_own_inferences() {
+    let schema =
+        Schema::compile(r#"{"type":"object","required":["x"],"properties":{"x":{"enum":[1,2]}}}"#)
+            .unwrap();
+    let result = schema.recover("{}", RecoveryRequest::default());
+    let Outcome::Ambiguous(choices) = &result.outcome else {
+        panic!("{result:?}")
+    };
+    assert!(result.receipt.contains_guesses());
+    assert_eq!(result.receipt.inferences, Vec::new());
+    for (choice, ledger) in choices.iter().zip(&result.receipt.alternatives) {
+        assert_eq!(ledger.inferences.len(), 1);
+        assert_eq!(ledger.inferences[0].value, choice.to_json());
+    }
+    for budget in [
+        Budget {
+            work: result.receipt.usage.work - 1,
+            ..Budget::default()
+        },
+        Budget {
+            evidence_entries: result.receipt.usage.evidence_entries - 1,
+            ..Budget::default()
+        },
+    ] {
+        let exhausted = schema.recover(
+            "{}",
+            RecoveryRequest {
+                budget: Some(budget),
+                ..RecoveryRequest::default()
+            },
+        );
+        assert_eq!(exhausted.outcome, Outcome::Unresolved);
+        assert!(matches!(
+            exhausted.receipt.stopped,
+            StopReason::BudgetExceeded(_)
+        ));
+        assert_eq!(exhausted.receipt.alternatives, Vec::new());
+    }
 }
 #[test]
 fn required_invention_is_a_guess_and_can_be_disabled() {

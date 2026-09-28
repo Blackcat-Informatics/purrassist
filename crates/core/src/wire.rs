@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Versioned JSON representations shared by command-line and protocol surfaces.
 use crate::contract::{
-    AssistResult, Budget, Evidence, InferenceKind, Outcome, Receipt, StopReason,
+    AssistResult, Budget, Evidence, Inference, InferenceKind, Loss, Outcome, Receipt, StopReason,
 };
 use crate::json::{Member, Node, Number, Value};
 
@@ -61,6 +61,29 @@ fn evidence(entry: &Evidence) -> Node {
         ),
     ])
 }
+fn losses(entries: &[Loss]) -> Node {
+    array(entries.iter().map(|entry| {
+        object([
+            ("evidence", evidence(&entry.evidence)),
+            ("original", string(&entry.original)),
+        ])
+    }))
+}
+fn inferences(entries: &[Inference]) -> Node {
+    array(entries.iter().map(|entry| {
+        object([
+            ("evidence", evidence(&entry.evidence)),
+            (
+                "kind",
+                string(match entry.kind {
+                    InferenceKind::Derived => "derived",
+                    InferenceKind::Guess => "guess",
+                }),
+            ),
+            ("value", string(&entry.value)),
+        ])
+    }))
+}
 fn budget(value: Budget) -> Node {
     object([
         ("work", integer(value.work)),
@@ -88,6 +111,26 @@ impl Receipt {
                     ])
                 })),
             ),
+            (
+                "alternatives",
+                array(self.alternatives.iter().map(|entry| {
+                    object([
+                        ("output", string(entry.output.to_string())),
+                        ("cost", integer(entry.cost)),
+                        ("evidence", array(entry.evidence.iter().map(evidence))),
+                        ("losses", losses(&entry.losses)),
+                        ("inferences", inferences(&entry.inferences)),
+                        (
+                            "validations",
+                            array(
+                                entry.validations.iter().map(|index| {
+                                    integer(u64::try_from(*index).unwrap_or(u64::MAX))
+                                }),
+                            ),
+                        ),
+                    ])
+                })),
+            ),
             ("operation", string(&self.operation)),
             (
                 "effort",
@@ -105,31 +148,8 @@ impl Receipt {
                 ]),
             ),
             ("evidence", array(self.evidence.iter().map(evidence))),
-            (
-                "losses",
-                array(self.losses.iter().map(|entry| {
-                    object([
-                        ("evidence", evidence(&entry.evidence)),
-                        ("original", string(&entry.original)),
-                    ])
-                })),
-            ),
-            (
-                "inferences",
-                array(self.inferences.iter().map(|entry| {
-                    object([
-                        ("evidence", evidence(&entry.evidence)),
-                        (
-                            "kind",
-                            string(match entry.kind {
-                                InferenceKind::Derived => "derived",
-                                InferenceKind::Guess => "guess",
-                            }),
-                        ),
-                        ("value", string(&entry.value)),
-                    ])
-                })),
-            ),
+            ("losses", losses(&self.losses)),
+            ("inferences", inferences(&self.inferences)),
             (
                 "validations",
                 array(self.validations.iter().map(|entry| {

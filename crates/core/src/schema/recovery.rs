@@ -4,8 +4,8 @@
 mod proposals;
 use super::Schema;
 use crate::contract::{
-    AssistResult, Budget, Effort, Evidence, Governor, Inference, InferenceKind, Loss, Outcome,
-    Receipt, Resource, SourceSpan, StopReason, Validation,
+    AlternativeReceipt, AssistResult, Budget, Effort, Evidence, Governor, Inference, InferenceKind,
+    Loss, Outcome, Receipt, Resource, SourceSpan, StopReason, Validation,
 };
 use crate::json::{Node, ParseFailure, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -53,6 +53,19 @@ impl Schema {
     /// valid interpretations remain ambiguous. Resource exhaustion returns
     /// `Unresolved` with an explicit termination reason, even if an unranked valid
     /// candidate has been encountered. Invented values are never `Resolved`.
+    /// Ambiguous answers have separate `receipt.alternatives` ledgers in output
+    /// order, with output digests and indices into the receipt's validation log.
+    ///
+    /// ```
+    /// use purrassist_core::{Outcome, schema::{Schema, recovery::RecoveryRequest}};
+    /// let schema = Schema::compile(r#"{"type":"object"}"#).unwrap();
+    /// let result = schema.recover(r#"{"x":1,"x":2}"#, RecoveryRequest::default());
+    /// let Outcome::Ambiguous(choices) = result.outcome else { panic!("expected alternatives") };
+    /// assert_eq!(choices.len(), result.receipt.alternatives.len());
+    /// for ledger in &result.receipt.alternatives {
+    ///     assert!(result.receipt.validations[ledger.validations[0]].passed);
+    /// }
+    /// ```
     #[must_use]
     pub fn recover(&self, input: &str, request: RecoveryRequest) -> AssistResult<Node> {
         let budget = request.budget.unwrap_or_else(|| request.effort.budget());
@@ -156,7 +169,7 @@ impl Search<'_> {
             });
             if report.valid {
                 winning_cost = Some(cost);
-                accepted.push(candidate);
+                accepted.push((candidate, self.receipt.validations.len() - 1));
             } else if self.request.effort != Effort::Exact && winning_cost.is_none() {
                 let mut visited = BTreeSet::new();
                 self.propose(
@@ -169,20 +182,49 @@ impl Search<'_> {
                 )?;
             }
         }
+        self.finish(accepted)
+    }
+    fn finish(&mut self, accepted: Vec<(Candidate, usize)>) -> Result<Outcome<Node>, StopReason> {
         if accepted.is_empty() {
             self.receipt.stopped = StopReason::NoCandidate;
             return Ok(Outcome::Unresolved);
         }
         let guesses = accepted
             .iter()
-            .any(|candidate| !candidate.inferences.is_empty());
+            .any(|(candidate, _)| !candidate.inferences.is_empty());
+        let ambiguous = accepted.len() > 1;
+        // Admit the new records before publishing any of them. Existing ledger
+        // entries are moved, preserving their original resource charges.
+        if ambiguous {
+            self.governor
+                .charge(Resource::EvidenceEntries, size(accepted.len()))?;
+            self.governor.charge(
+                Resource::ScratchBytes,
+                size(accepted.len()).saturating_mul(256),
+            )?;
+        }
         let mut nodes = Vec::new();
-        for candidate in accepted {
-            self.receipt.evidence.extend(candidate.evidence);
-            self.receipt.losses.extend(candidate.losses);
-            self.receipt.inferences.extend(candidate.inferences);
+        let mut alternatives = Vec::new();
+        for (candidate, validation) in accepted {
+            if ambiguous {
+                let output = candidate.node.to_json();
+                self.governor.charge(Resource::Work, size(output.len()))?;
+                alternatives.push(AlternativeReceipt {
+                    output: crate::digest::Digest::of(output.as_bytes()),
+                    cost: candidate.cost,
+                    evidence: candidate.evidence,
+                    losses: candidate.losses,
+                    inferences: candidate.inferences,
+                    validations: vec![validation],
+                });
+            } else {
+                self.receipt.evidence.extend(candidate.evidence);
+                self.receipt.losses.extend(candidate.losses);
+                self.receipt.inferences.extend(candidate.inferences);
+            }
             nodes.push(candidate.node);
         }
+        self.receipt.alternatives = alternatives;
         Ok(if nodes.len() > 1 {
             Outcome::Ambiguous(nodes)
         } else if guesses {

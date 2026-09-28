@@ -30,6 +30,11 @@ writes, interrupted journal/temp writes, independent batch outcomes, provider
 transcripts, and the actual CLI/MCP subprocess. Mutation probes exercise 2,000
 reproducible malformed JSON inputs; this is not coverage-guided fuzz qualification.
 
+Ambiguous JSON recovery results carry separate ordered alternative ledgers with
+output digests, search costs, transformations, losses, inferences, and indices into
+the actual validation log. Regressions check candidate association, wire encoding,
+guess reporting, and exhaustion before a complete ledger can be returned.
+
 Local package verification has built all five packages. A local release CLI was
 installed into a disposable checkout cache and exercised on the published example
 inputs, including exact-source retention. This does not verify downloadable registry
@@ -53,8 +58,8 @@ corrections to arbitrary AI output.
 - Complete allocation/work accounting throughout candidate generation, receipts,
   schema compilation, and helper preparation. Bound external parser allocations;
   progress cancellation alone is not a hard memory limit.
-- Bind ambiguous alternatives to their own transformation/validation ledgers and
-  finish uniform Rust/CLI/MCP access to path, semantic, and document operations.
+- Extend alternative-specific ledgers beyond JSON recovery and finish uniform
+  Rust/CLI/MCP access to path, semantic, and document operations.
 - Expand independent oracle and adversarial corpora, coverage-guided fuzzing,
   memory/allocation measurements, build/artifact metrics, and representative
   incorrect-correction evaluation beyond the small baseline.

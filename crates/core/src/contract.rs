@@ -314,6 +314,27 @@ pub struct SourceDocument {
     pub text: String,
 }
 
+/// Evidence belonging to one competing JSON recovery interpretation.
+///
+/// Records follow the order of `Outcome::Ambiguous`. Their output identities hash
+/// `Node::to_json()` bytes, not the original input or an equivalence-normalized JSON
+/// value. Validation indices refer to the enclosing receipt's validation log.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AlternativeReceipt {
+    /// Digest of this alternative's serialized JSON output.
+    pub output: Digest,
+    /// Recovery search cost; comparable within this operation only.
+    pub cost: u64,
+    /// Transformations that produced this alternative.
+    pub evidence: Vec<Evidence>,
+    /// Information discarded by this alternative alone.
+    pub losses: Vec<Loss>,
+    /// Derived or invented values belonging to this alternative.
+    pub inferences: Vec<Inference>,
+    /// Indices of validations actually performed on this output.
+    pub validations: Vec<usize>,
+}
+
 /// An ordered, versioned audit receipt. Ledgers contain no hidden model reasoning.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Receipt {
@@ -340,6 +361,10 @@ pub struct Receipt {
     pub inferences: Vec<Inference>,
     /// Actual validation results.
     pub validations: Vec<Validation>,
+    /// Per-alternative JSON recovery ledgers in outcome order. Empty for other
+    /// operations or a single answer. Mutually exclusive transformations stay here
+    /// rather than being combined into the top-level selected-result ledgers.
+    pub alternatives: Vec<AlternativeReceipt>,
     /// Why processing stopped.
     pub stopped: StopReason,
 }
@@ -360,6 +385,7 @@ impl Receipt {
             losses: Vec::new(),
             inferences: Vec::new(),
             validations: Vec::new(),
+            alternatives: Vec::new(),
             stopped: StopReason::Completed,
         }
     }
@@ -385,12 +411,18 @@ impl Receipt {
         Ok(())
     }
 
-    /// Whether any selected result value was explicitly guessed.
+    /// Whether any selected result or competing alternative was explicitly guessed.
     #[must_use]
     pub fn contains_guesses(&self) -> bool {
         self.inferences
             .iter()
             .any(|entry| entry.kind == InferenceKind::Guess)
+            || self.alternatives.iter().any(|alternative| {
+                alternative
+                    .inferences
+                    .iter()
+                    .any(|entry| entry.kind == InferenceKind::Guess)
+            })
     }
 }
 
