@@ -60,6 +60,12 @@ const DEFINITIONS: &[Definition] = &[
         writes: false,
     },
     Definition {
+        name: "plan_markdown_table_cell",
+        description: "Plan a source-preserving GFM cell edit by nested block path; row zero is the header",
+        schema: r#"{"type":"object","required":["source","path","row","column","markdown"],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"path":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"integer","minimum":0}},"row":{"type":"integer","minimum":0},"column":{"type":"integer","minimum":0},"markdown":{"type":"string"}},"additionalProperties":false}"#,
+        writes: false,
+    },
+    Definition {
         name: "plan_markdown_task",
         description: "Plan a single checkbox-state edit selected by root block index or nested block path",
         schema: r#"{"type":"object","required":["source","checked"],"oneOf":[{"required":["block"]},{"required":["path"]}],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"block":{"type":"integer","minimum":0},"path":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"integer","minimum":0}},"checked":{"type":"boolean"}},"additionalProperties":false}"#,
@@ -192,6 +198,7 @@ impl Tools {
             | "inspect_markdown"
             | "markdown_context"
             | "plan_markdown_section"
+            | "plan_markdown_table_cell"
             | "plan_markdown_task" => markdown::call(name, args),
             "plan_replacement" => {
                 let max_edits = match args.get("max_edits").map(|node| &node.value) {

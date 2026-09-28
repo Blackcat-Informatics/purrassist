@@ -99,36 +99,44 @@ fn operation(
                 document.replace_section(index(args, "heading")?, body)?,
             ))
         }
+        "plan_markdown_table_cell" => Ok(plan(document.replace_table_cell(
+            &block_path(args)?,
+            index(args, "row")?,
+            index(args, "column")?,
+            super::field(args, "markdown").map_err(StopReason::InvalidInput)?,
+            governor,
+        )?)),
         "plan_markdown_task" => {
             let Some(Value::Bool(checked)) = args.get("checked").map(|node| &node.value) else {
                 return Err(StopReason::InvalidInput("checked must be boolean".into()));
             };
-            let path = if let Some(Node {
-                value: Value::Array(values),
-                ..
-            }) = args.get("path")
-            {
-                values
-                    .iter()
-                    .map(|node| match &node.value {
-                        Value::Number(value) => value.to_usize().ok_or_else(|| {
-                            StopReason::InvalidInput(
-                                "block path index exceeds address space".into(),
-                            )
-                        }),
-                        _ => Err(StopReason::InvalidInput(
-                            "block path must contain indices".into(),
-                        )),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?
-            } else {
-                vec![index(args, "block")?]
-            };
+            let path = block_path(args)?;
             Ok(plan(document.set_task_at(&path, *checked, governor)?))
         }
         _ => Err(StopReason::InvalidInput(
             "unknown Markdown operation".into(),
         )),
+    }
+}
+fn block_path(args: &Node) -> Result<Vec<usize>, StopReason> {
+    if let Some(Node {
+        value: Value::Array(values),
+        ..
+    }) = args.get("path")
+    {
+        values
+            .iter()
+            .map(|node| match &node.value {
+                Value::Number(value) => value.to_usize().ok_or_else(|| {
+                    StopReason::InvalidInput("block path index exceeds address space".into())
+                }),
+                _ => Err(StopReason::InvalidInput(
+                    "block path must contain indices".into(),
+                )),
+            })
+            .collect::<Result<Vec<_>, _>>()
+    } else {
+        Ok(vec![index(args, "block")?])
     }
 }
 fn index(args: &Node, name: &str) -> Result<usize, StopReason> {

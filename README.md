@@ -120,10 +120,23 @@ takes UTF-8 byte offsets `start`/`end` and optional neighboring-block count.
 `plan_markdown_task` sets the supplied `checked` state using either a root
 `block` index or a nested `path` from inspection (for example `[0,0,1]`).
 Exactly one selector is required; paths follow successive child indices.
-All four take exact `source` and optional `effort`, retain admitted source, and
+`plan_markdown_table_cell` selects a table by `path`, with zero-based `row` and
+`column` (row zero is the header). Its `markdown` replaces one explicitly present
+cell; surrounding whitespace, pipes, container prefixes, and line endings remain
+exact. Leading/trailing replacement whitespace is trimmed. Escape literal pipes
+as `\|`; line breaks and proposals that change table structure are rejected after
+reparsing. Implicit padding cells and columns beyond the header width are not
+editable through this operation.
+For an executable nested-table example:
+
+```sh
+purrassist call plan_markdown_table_cell --root . < examples/markdown-table-cell.json
+```
+
+These operations take exact `source` and optional `effort`, retain admitted source, and
 return receipts. Edit plans in `value` bind to the source digest and do not write
-files. Block indices come from inspection of the same source version. This
-Markdown editing operations retain the original source and exact undo.
+files. Block indices come from inspection of the same source version.
+Markdown editing operations retain the original source and support exact undo.
 The Rust `markdown::InlineFragment` layer retains exact byte spans and renders
 code spans, emphasis, strong emphasis, inline links/images, escapes, line breaks,
 autolinks, and raw inline HTML. Explicit dialect selection preserves the pinned

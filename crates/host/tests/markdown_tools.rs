@@ -26,6 +26,28 @@ fn offset(node: &Node) -> usize {
     };
     number.to_usize().unwrap()
 }
+#[test]
+fn nested_table_cell_tool_preserves_source_and_validates_structure() {
+    let root = std::env::temp_dir().join(format!("purrassist-table-tool-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let tools = Tools::new(&root).unwrap();
+    let source = "> | A | B |\r\n> | --- | --- |\r\n> | café | keep |\r\n";
+    let result = call(
+        &tools,
+        "plan_markdown_table_cell",
+        source,
+        r#"{"path":[0,0],"row":1,"column":0,"markdown":"**tea**"}"#,
+    );
+    assert_eq!(apply(&result, source), source.replace("café", "**tea**"));
+    let invalid = call(
+        &tools,
+        "plan_markdown_table_cell",
+        source,
+        r#"{"path":[0,0],"row":1,"column":0,"markdown":"a|b"}"#,
+    );
+    assert_eq!(invalid.get("status").unwrap().as_str(), Some("unresolved"));
+    std::fs::remove_dir_all(root).unwrap();
+}
 fn apply(result: &Node, source: &str) -> String {
     assert_eq!(
         result.pointer("/status").unwrap().as_str(),

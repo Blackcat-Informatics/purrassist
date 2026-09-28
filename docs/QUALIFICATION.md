@@ -38,8 +38,8 @@ guess reporting, and exhaustion before a complete ledger can be returned.
 Local package verification has built all five packages. A local release CLI was
 installed into a disposable checkout cache and exercised on the published example
 inputs, including exact-source retention. This does not verify downloadable registry
-packages. Hosted CI passed for checkpoint `b6825592429bc354cbeeb52bab0c27b5dc00a37b`:
-[run 36407539675](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36407539675)
+packages. Hosted CI passed for checkpoint `792cd882eb6d685853cc39168426e902601c7f40`:
+[run 36408969760](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36408969760)
 completed the Linux/macOS local gates, MSRV workspace tests, Windows core/syntax
 tests, and native/WASI comparisons. This is evidence for that checkpoint only;
 subsequent changes need their own qualification.
@@ -162,6 +162,19 @@ qualification remain to be broadened.
 The full local Rust 1.98.0 `make check` gate passed, including the embedding
 regressions and CLI/MCP wire equivalence. The documented embedding example was
 executed through the optimized CLI and returned `tea` as a best guess.
+
+GFM table cell planning now selects nested tables through block paths and edits
+explicit header/body cells while preserving their source margins, delimiters,
+container prefixes, and line endings. It reparses proposals and compares the
+complete selected table against the expected single-cell change. Focused tests
+cover CRLF, Unicode, escaped pipes, empty cells, header edits, nested quotes/lists,
+exact undo, stale sources, invalid selection, cancellation, and work exhaustion.
+Implicit padded cells, extra cells beyond header width, and row/column insertion
+or removal require further structural operations.
+The full local Rust 1.98.0 `make check` gate passed, including the official
+Markdown corpora and CLI/MCP equivalence for this operation. The optimized CLI
+executed `examples/markdown-table-cell.json` and returned the expected single-cell
+proposal.
 
 ## Remaining release work
 

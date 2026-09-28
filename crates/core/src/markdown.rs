@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Source-preserving Markdown block indexing and section edits.
 //!
-//! This is an editing index, not yet a conforming CommonMark/GFM renderer.
+//! Includes CommonMark/GFM rendering and source-bound structural edit planning.
 mod containers;
 mod context;
 mod extensions;
 mod html;
+mod table;
 pub use extensions::{Extension, Extensions};
 mod inline;
 mod projection;
@@ -464,6 +465,13 @@ fn list_item(text: &str) -> Option<BlockKind> {
     Some(BlockKind::ListItem { ordinal, checked })
 }
 fn cells(text: &str) -> Vec<String> {
+    cell_ranges(text)
+        .into_iter()
+        .map(|range| text[range].trim().into())
+        .collect()
+}
+fn cell_ranges(text: &str) -> Vec<Range<usize>> {
+    let offset = text.len() - text.trim_start().len();
     let text = text.trim();
     let mut result = Vec::new();
     let mut start = 0;
@@ -476,11 +484,11 @@ fn cells(text: &str) -> Vec<String> {
         if character == '\\' {
             escaped = true;
         } else if character == '|' {
-            result.push(text[start..position].trim().into());
+            result.push(offset + start..offset + position);
             start = position + 1;
         }
     }
-    result.push(text[start..].trim().into());
+    result.push(offset + start..offset + text.len());
     if start == text.len() && start > 0 {
         result.pop();
     }
