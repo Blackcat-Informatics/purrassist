@@ -11,7 +11,8 @@
 //! (`crates/host/src/files/windows.rs`) uses `SetFileInformationByHandle` with
 //! POSIX rename semantics on a write-through handle, falls back to
 //! `MoveFileExW` where the filesystem rejects that, retries sharing/lock
-//! violations a bounded number of times before reporting [`Error::Busy`], and
+//! violations a bounded number of times before reporting the last
+//! operating-system error as [`Error::Io`], and
 //! records the mechanism actually used in [`Commit::durability`]. See
 //! `docs/EDIT-APPLICATION.md` for the full design.
 use purrassist::{

@@ -75,12 +75,15 @@ that still-open handle. If the filesystem rejects POSIX rename semantics
 (`ERROR_INVALID_PARAMETER` or `ERROR_NOT_SUPPORTED`), the handle is closed
 and replacement falls back to `MoveFileExW` with
 `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`. Either attempt that
-instead fails with a sharing/lock violation (`ERROR_SHARING_VIOLATION`,
-`ERROR_LOCK_VIOLATION`, or `ERROR_ACCESS_DENIED` — commonly an antivirus
-scanner or search indexer holding a brief handle open) is retried a small
-fixed number of times, yielding the calling thread
-(`std::thread::yield_now`) between attempts and never sleeping, before
-returning an explicit `Busy` error. Directory durability opens the
+instead fails with a sharing/lock violation (`ERROR_SHARING_VIOLATION` or
+`ERROR_LOCK_VIOLATION` — commonly an antivirus scanner or search indexer
+holding a brief handle open) is retried a small fixed number of times,
+yielding the calling thread (`std::thread::yield_now`) between attempts and
+never sleeping, before returning the last operating-system error; any other
+failure is reported immediately. The temporary file is opened with
+`GENERIC_WRITE | DELETE` access because renaming through a handle requires
+`DELETE`. `Busy` is reserved for the cooperating-writer lock. Directory
+durability opens the
 directory with `FILE_FLAG_BACKUP_SEMANTICS` and calls `FlushFileBuffers`;
 some filesystems deny this (`ERROR_ACCESS_DENIED`, at open or at flush),
 which is reported as `access_denied_fallback` evidence rather than treated

@@ -24,11 +24,16 @@
 //! handle — a rename-by-path can otherwise fail with a sharing violation
 //! against our own open handle — and falls back to `MoveFileExW` with
 //! `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`. Either attempt that
-//! instead fails with `ERROR_SHARING_VIOLATION`, `ERROR_LOCK_VIOLATION`, or
-//! `ERROR_ACCESS_DENIED` (antivirus scanners and search indexers commonly
-//! hold a brief handle open) is retried [`RENAME_ATTEMPTS`] times, yielding
-//! the calling thread between attempts via [`std::thread::yield_now`] —
-//! never sleeping — before giving up with [`Error::Busy`].
+//! instead fails with `ERROR_SHARING_VIOLATION` or `ERROR_LOCK_VIOLATION`
+//! (antivirus scanners and search indexers commonly hold a brief handle open)
+//! is retried [`RENAME_ATTEMPTS`] times, yielding the calling thread between
+//! attempts via [`std::thread::yield_now`] — never sleeping — before giving up
+//! with an [`Error::Io`] carrying the last operating-system error. Any other
+//! failure, including `ERROR_ACCESS_DENIED`, is reported immediately.
+//!
+//! Renaming through a handle requires `DELETE` access on that handle, so the
+//! temporary file is opened with `GENERIC_WRITE | DELETE` (see
+//! [`prepare_temporary_options`]); plain `OpenOptions::write` does not grant it.
 //!
 //! [`sync_directory`] opens the directory with `FILE_FLAG_BACKUP_SEMANTICS`
 //! and calls `FlushFileBuffers` on it. Some filesystems deny this
@@ -47,12 +52,12 @@ use std::{
 use windows_sys::Win32::{
     Foundation::{
         ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, ERROR_LOCK_VIOLATION, ERROR_NOT_SUPPORTED,
-        ERROR_SHARING_VIOLATION, GetLastError, HANDLE,
+        ERROR_SHARING_VIOLATION, GENERIC_WRITE, GetLastError, HANDLE,
     },
     Storage::FileSystem::{
-        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_WRITE_THROUGH, FILE_RENAME_INFO, FileRenameInfoEx,
-        FlushFileBuffers, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
-        SetFileInformationByHandle,
+        DELETE, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_WRITE_THROUGH, FILE_RENAME_INFO,
+        FileRenameInfoEx, FlushFileBuffers, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        MoveFileExW, SetFileInformationByHandle,
     },
     System::WindowsProgramming::{
         FILE_RENAME_FLAG_POSIX_SEMANTICS, FILE_RENAME_FLAG_REPLACE_IF_EXISTS,
@@ -65,11 +70,15 @@ use windows_sys::Win32::{
 /// wall-clock time.
 const RENAME_ATTEMPTS: u32 = 5;
 
-/// Add the write-through flag to the temporary file's create options so
-/// every write it accepts bypasses the cache and is durable as soon as
-/// `write_all` returns, before any rename is attempted.
+/// Configure the temporary file's create options: write-through, so every
+/// accepted write bypasses the cache and is durable as soon as `write_all`
+/// returns, and `GENERIC_WRITE | DELETE` access, because
+/// `SetFileInformationByHandle` renames through this handle and Windows
+/// requires `DELETE` access for that.
 pub(super) fn prepare_temporary_options(options: &mut std::fs::OpenOptions) {
-    options.custom_flags(FILE_FLAG_WRITE_THROUGH);
+    options
+        .access_mode(GENERIC_WRITE | DELETE)
+        .custom_flags(FILE_FLAG_WRITE_THROUGH);
 }
 
 /// Replace `target` with the bytes already written to `temporary` through
@@ -82,8 +91,7 @@ pub(super) fn replace(file: File, temporary: &Path, target: &Path) -> Result<Ren
     let buffer = RenameBuffer::new(&target_name, flags)?;
     match retry(|| set_rename_info(&file, &buffer), is_posix_unsupported) {
         Outcome::Success => return Ok(RenameMethod::PosixSemantics),
-        Outcome::Busy => return Err(Error::Busy),
-        Outcome::Io(code) => return Err(win_io_error(code)),
+        Outcome::Contended(code) | Outcome::Io(code) => return Err(win_io_error(code)),
         Outcome::Unsupported => {}
     }
     // The filesystem rejected POSIX rename semantics. Close our own handle
@@ -95,8 +103,7 @@ pub(super) fn replace(file: File, temporary: &Path, target: &Path) -> Result<Ren
     let destination: Vec<u16> = wide_null(target);
     match retry(|| move_file_ex(&existing, &destination), |_| false) {
         Outcome::Success => Ok(RenameMethod::MoveFileExFallback),
-        Outcome::Busy => Err(Error::Busy),
-        Outcome::Io(code) => Err(win_io_error(code)),
+        Outcome::Contended(code) | Outcome::Io(code) => Err(win_io_error(code)),
         Outcome::Unsupported => unreachable!("MoveFileExW fallback never reports Unsupported"),
     }
 }
@@ -135,16 +142,18 @@ fn is_access_denied(error: &std::io::Error) -> bool {
 
 enum Outcome {
     Success,
-    Busy,
+    /// Still sharing- or lock-violated after every bounded attempt; carries
+    /// the last operating-system error code.
+    Contended(u32),
     Io(u32),
     Unsupported,
 }
 
 /// Run `attempt` up to [`RENAME_ATTEMPTS`] times. `is_unsupported` classifies
-/// a capability rejection (no retry, no busy: the caller should fall back);
-/// `ERROR_SHARING_VIOLATION`/`ERROR_LOCK_VIOLATION`/`ERROR_ACCESS_DENIED`
-/// are treated as transient and retried after yielding the thread; any
-/// other code is reported immediately as an I/O error.
+/// a capability rejection (no retry: the caller should fall back);
+/// `ERROR_SHARING_VIOLATION`/`ERROR_LOCK_VIOLATION` are treated as transient
+/// and retried after yielding the thread; any other code is reported
+/// immediately as an I/O error.
 fn retry(
     mut attempt: impl FnMut() -> Result<(), u32>,
     is_unsupported: impl Fn(u32) -> bool,
@@ -155,14 +164,14 @@ fn retry(
             Err(code) if is_unsupported(code) => return Outcome::Unsupported,
             Err(code) if is_sharing_violation(code) => {
                 if remaining == 0 {
-                    return Outcome::Busy;
+                    return Outcome::Contended(code);
                 }
                 std::thread::yield_now();
             }
             Err(code) => return Outcome::Io(code),
         }
     }
-    Outcome::Busy
+    Outcome::Contended(ERROR_SHARING_VIOLATION)
 }
 
 const fn is_posix_unsupported(code: u32) -> bool {
@@ -170,10 +179,7 @@ const fn is_posix_unsupported(code: u32) -> bool {
 }
 
 const fn is_sharing_violation(code: u32) -> bool {
-    matches!(
-        code,
-        ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION | ERROR_ACCESS_DENIED
-    )
+    matches!(code, ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)
 }
 
 fn win_io_error(code: u32) -> Error {
