@@ -450,6 +450,97 @@ impl Drop for ScratchLease {
     }
 }
 
+/// A type's portable, target-independent scratch charge.
+///
+/// [`ScratchVec`] and [`ScratchMap`] must charge the same number of bytes for
+/// the same workload on every compilation target so a governor makes the
+/// same admit/reject decision, and a receipt reports the same
+/// `peak_scratch_bytes`/`total_scratch_charged`, on 32-bit WASM as on 64-bit
+/// native (see `docs/QUALIFICATION.md`). `core::mem::size_of::<T>()` is the
+/// wrong tool for that: it varies with pointer width for any `T` containing
+/// a `String`, `Vec`, `Box`, or reference, which is exactly the shape of the
+/// element types these containers hold.
+///
+/// [`ScratchCharge::CHARGE`] is instead a literal byte count fixed at its
+/// *64-bit* layout size, hand-measured once and never recomputed from
+/// `size_of`. Every implementation is paired with a compile-time assertion
+/// (`scratch_charge!` generates it; the blanket tuple impl below inlines it)
+/// that `size_of::<T>() <= T::CHARGE` on whichever target is actually being
+/// compiled, so the portable charge can only ever *over*-count a target
+/// narrower than 64 bits, never under-count real memory.
+pub trait ScratchCharge {
+    /// This type's charge, in bytes, under the 64-bit layout.
+    const CHARGE: usize;
+}
+
+/// Implement [`ScratchCharge`] for a concrete (non-generic) type with a
+/// literal charge, and assert that charge never undercounts `size_of::<T>()`
+/// on the target actually compiling this crate.
+macro_rules! scratch_charge {
+    ($ty:ty, $charge:expr) => {
+        impl ScratchCharge for $ty {
+            const CHARGE: usize = $charge;
+        }
+        const _: () = assert!(
+            core::mem::size_of::<$ty>() <= <$ty as ScratchCharge>::CHARGE,
+            concat!(
+                "ScratchCharge for ",
+                stringify!($ty),
+                " undercounts size_of on this target"
+            )
+        );
+    };
+}
+
+// Primitive element types actually stored in a `ScratchVec`/`ScratchMap`
+// (directly, or as a tuple component) anywhere in this crate's production
+// code, its tests, or its doctests. Each charge is that type's `size_of` on
+// a 64-bit target, so these constants never change even when this crate is
+// compiled for wasm32.
+scratch_charge!((), 0);
+scratch_charge!(bool, 1);
+scratch_charge!(u32, 4);
+scratch_charge!(u64, 8);
+scratch_charge!(usize, 8);
+scratch_charge!(&'static str, 16); // a `&str` is a two-word (ptr, len) fat pointer.
+scratch_charge!(String, 24); // `Vec<u8>`'s (ptr, len, cap) layout.
+scratch_charge!(crate::json::Node, 56);
+scratch_charge!(crate::json::Member, 104);
+scratch_charge!(crate::provenance::NodeId, 4);
+scratch_charge!(crate::provenance::ProvenanceNode, 160);
+
+/// Round `bytes` up to the next 8-byte word, the same rounding an
+/// 8-byte-aligned struct field's own size implicitly gets.
+const fn round_up_to_word(bytes: usize) -> usize {
+    (bytes + 7) & !7
+}
+
+/// Every field of a tuple, struct, or enum used as one `ScratchVec`/
+/// `ScratchMap` element charges as if each of its fields were individually
+/// padded out to an 8-byte word, which only ever over-counts a real,
+/// field-reordered layout's size (Rust already minimizes padding by
+/// reordering fields; summing each field's *own* rounded size can only add
+/// more slack than that reordering leaves). `(K, V)` is the only such
+/// composite [`ScratchMap`] needs charged this way, since a `ScratchMap` is
+/// backed by `Vec<(K, V)>` (see [`ScratchMap`]'s doc comment).
+impl<A: ScratchCharge, B: ScratchCharge> ScratchCharge for (A, B) {
+    const CHARGE: usize = round_up_to_word(A::CHARGE) + round_up_to_word(B::CHARGE);
+}
+const _: () = {
+    // Every concrete tuple instantiation actually used as a `ScratchMap`
+    // element in this crate, checked eagerly here rather than only at its
+    // (possibly untested) call site.
+    assert!(core::mem::size_of::<(String, ())>() <= <(String, ()) as ScratchCharge>::CHARGE);
+    assert!(
+        core::mem::size_of::<(String, crate::provenance::NodeId)>()
+            <= <(String, crate::provenance::NodeId) as ScratchCharge>::CHARGE
+    );
+    assert!(
+        core::mem::size_of::<(u32, &'static str)>()
+            <= <(u32, &'static str) as ScratchCharge>::CHARGE
+    );
+};
+
 /// Growth strategy shared by [`ScratchVec`], [`ScratchString`], and
 /// [`ScratchMap`]: charge for doubled capacity before reserving it, so a
 /// sequence of pushes amortizes to O(1) charges like `Vec`'s own growth.
@@ -469,13 +560,14 @@ fn reserve_failure(error: &TryReserveError) -> StopReason {
 /// requested from the allocator, and whose charge is released exactly once,
 /// on drop.
 ///
-/// Growth charges `capacity_delta * size_of::<T>()` bytes, then calls
-/// [`Vec::try_reserve_exact`]; on the rare allocator failure the just-charged
-/// bytes are released and `BudgetExceeded(ScratchBytes)` is returned — this
-/// type never aborts on allocation failure. Charging only covers the vector's
-/// own backing buffer: an element that owns further heap memory (a `String`
-/// inside a `ScratchVec<String>`, for example) must be charged separately
-/// before it is constructed.
+/// Growth charges `capacity_delta * T::CHARGE` bytes (see [`ScratchCharge`],
+/// *not* `size_of::<T>()`, so the charge is the same on every target), then
+/// calls [`Vec::try_reserve_exact`]; on the rare allocator failure the
+/// just-charged bytes are released and `BudgetExceeded(ScratchBytes)` is
+/// returned — this type never aborts on allocation failure. Charging only
+/// covers the vector's own backing buffer: an element that owns further heap
+/// memory (a `String` inside a `ScratchVec<String>`, for example) must be
+/// charged separately before it is constructed.
 ///
 /// ```
 /// use purrassist_core::{Budget, Governor, ScratchVec};
@@ -495,7 +587,7 @@ pub struct ScratchVec<T> {
     reserved: u64,
 }
 
-impl<T> ScratchVec<T> {
+impl<T: ScratchCharge> ScratchVec<T> {
     /// An empty vector charging against `governor`'s scratch meter.
     #[must_use]
     pub fn new(governor: &Governor) -> Self {
@@ -519,7 +611,7 @@ impl<T> ScratchVec<T> {
         if target == capacity {
             return Ok(());
         }
-        let delta = size(target - capacity).saturating_mul(size(mem::size_of::<T>().max(1)));
+        let delta = size(target - capacity).saturating_mul(size(T::CHARGE.max(1)));
         self.meter.charge(delta)?;
         self.reserved = self.reserved.saturating_add(delta);
         if let Err(error) = self.inner.try_reserve_exact(target - self.inner.len()) {
@@ -724,7 +816,7 @@ pub struct ScratchMap<K, V> {
     reserved: u64,
 }
 
-impl<K: Ord, V> ScratchMap<K, V> {
+impl<K: Ord + ScratchCharge, V: ScratchCharge> ScratchMap<K, V> {
     /// An empty map charging against `governor`'s scratch meter.
     #[must_use]
     pub fn new(governor: &Governor) -> Self {
@@ -770,7 +862,7 @@ impl<K: Ord, V> ScratchMap<K, V> {
         if target == capacity {
             return Ok(());
         }
-        let delta = size(target - capacity).saturating_mul(size(mem::size_of::<(K, V)>().max(1)));
+        let delta = size(target - capacity).saturating_mul(size(<(K, V)>::CHARGE.max(1)));
         self.meter.charge(delta)?;
         self.reserved = self.reserved.saturating_add(delta);
         if let Err(error) = self.inner.try_reserve_exact(target - self.inner.len()) {

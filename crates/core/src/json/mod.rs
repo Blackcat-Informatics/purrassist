@@ -187,22 +187,28 @@ impl Node {
     /// ```
     #[must_use]
     pub fn estimated_bytes(&self) -> u64 {
-        let mut total = size(core::mem::size_of::<Self>());
+        // Uses `Self`/`Member`'s portable `ScratchCharge::CHARGE`, never
+        // `size_of`, so this estimate (and every governor decision and
+        // reported scratch usage it feeds) is identical on every target.
+        let mut total = size(<Self as crate::contract::ScratchCharge>::CHARGE);
         match &self.value {
             Value::Null | Value::Bool(_) => {}
             Value::Number(number) => total = total.saturating_add(size(number.as_str().len())),
             Value::String(text) => total = total.saturating_add(size(text.len())),
             Value::Array(items) => {
-                total = total.saturating_add(
-                    size(items.len()).saturating_mul(size(core::mem::size_of::<Self>())),
-                );
+                total =
+                    total
+                        .saturating_add(size(items.len()).saturating_mul(size(
+                            <Self as crate::contract::ScratchCharge>::CHARGE,
+                        )));
                 for item in items {
                     total = total.saturating_add(item.estimated_bytes());
                 }
             }
             Value::Object(members) => {
                 total = total.saturating_add(
-                    size(members.len()).saturating_mul(size(core::mem::size_of::<Member>())),
+                    size(members.len())
+                        .saturating_mul(size(<Member as crate::contract::ScratchCharge>::CHARGE)),
                 );
                 for member in members {
                     total = total

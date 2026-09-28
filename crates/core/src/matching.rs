@@ -20,7 +20,8 @@
 //! text is, unless one of the candidate's caller-declared aliases matches the
 //! query exactly. See `docs/MATCHING-QUALITY.md` for the curated evidence set.
 use crate::contract::{
-    AssistResult, Budget, Effort, Evidence, Governor, Outcome, Receipt, Resource, StopReason,
+    AssistResult, Budget, Effort, Evidence, Governor, Outcome, Receipt, Resource, ScratchCharge,
+    StopReason,
 };
 use crate::text::{
     Normalization, case_fold, comparison_key, depunctuate, general_category, lexical_tokens,
@@ -1064,9 +1065,10 @@ pub fn damerau_levenshtein(
         .checked_mul(columns + 2)
         .ok_or(StopReason::BudgetExceeded(Resource::ScratchBytes))?;
     governor.charge(Resource::Work, size(cells))?;
-    // Charge at least 64-bit cells so the same request has the same governor
+    // Charge the portable, 64-bit-layout cell size (`usize::CHARGE`, never
+    // `size_of::<usize>()`) so the same request has the same governor
     // decision on native 64-bit and WASM 32-bit targets.
-    let cell_bytes = core::mem::size_of::<usize>().max(8);
+    let cell_bytes = usize::CHARGE;
     let scratch = size(cells)
         .saturating_mul(size(cell_bytes))
         .saturating_add(size(rows + columns).saturating_mul(128));

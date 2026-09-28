@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 use super::{Candidate, Search, size};
-use crate::contract::{Effort, Resource, ScratchMap, ScratchVec, StopReason};
+use crate::contract::{Effort, Resource, ScratchCharge, ScratchMap, ScratchVec, StopReason};
 use crate::json::{Member, Node, ParseFailure, Value, pointer_segment};
 use std::collections::BTreeSet;
 
@@ -599,7 +599,8 @@ impl Search<'_> {
 /// A conservative byte-size estimate for a member slice, used to charge
 /// scratch before `.to_vec()`-ing it to build a proposal.
 fn members_weight(members: &[Member]) -> u64 {
-    let mut total = size(members.len()).saturating_mul(size(core::mem::size_of::<Member>()));
+    // Portable, target-independent charge: `Member::CHARGE`, not `size_of`.
+    let mut total = size(members.len()).saturating_mul(size(Member::CHARGE));
     for member in members {
         total = total
             .saturating_add(size(member.key.len()))

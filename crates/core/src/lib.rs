@@ -14,7 +14,7 @@ pub mod text;
 
 pub use contract::{
     AssistResult, Budget, CancellationToken, Effort, Governor, Outcome, RECEIPT_VERSION, Receipt,
-    ScratchLease, ScratchMap, ScratchMeter, ScratchString, ScratchVec, StopReason,
+    ScratchCharge, ScratchLease, ScratchMap, ScratchMeter, ScratchString, ScratchVec, StopReason,
 };
 
 pub mod wire;

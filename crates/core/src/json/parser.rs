@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 use super::{Member, Node, Value};
-use crate::contract::{Budget, Governor, Resource, StopReason};
+use crate::contract::{Budget, Governor, Resource, ScratchCharge, StopReason};
 use core::fmt;
 
 /// A syntax error at an exact original byte offset.
@@ -109,8 +109,12 @@ impl Parser<'_, '_> {
     }
     fn value(&mut self, depth: u32) -> Result<Node, ParseFailure> {
         self.governor.charge(Resource::Depth, u64::from(depth))?;
+        // `Node::CHARGE` is a portable, target-independent literal (see
+        // `ScratchCharge`): using `size_of::<Node>()` here would make this
+        // charge, and thus the governor's decision, differ between 64-bit
+        // native and 32-bit WASM builds for the same input.
         self.governor
-            .charge(Resource::ScratchBytes, size(core::mem::size_of::<Node>()))?;
+            .charge(Resource::ScratchBytes, size(Node::CHARGE))?;
         let start = self.position;
         let value = match self.byte() {
             Some(b'n') => {
@@ -298,12 +302,12 @@ impl Parser<'_, '_> {
         }
         Ok(Value::Object(members))
     }
-    fn reserve<T>(&mut self, values: &mut Vec<T>) -> Result<(), ParseFailure> {
+    fn reserve<T: ScratchCharge>(&mut self, values: &mut Vec<T>) -> Result<(), ParseFailure> {
         if values.len() == values.capacity() {
             let capacity = values.capacity().saturating_mul(2).max(4);
             self.governor.charge(
                 Resource::ScratchBytes,
-                size((capacity - values.capacity()).saturating_mul(core::mem::size_of::<T>())),
+                size((capacity - values.capacity()).saturating_mul(T::CHARGE)),
             )?;
             values
                 .try_reserve_exact(capacity - values.len())
