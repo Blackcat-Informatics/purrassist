@@ -90,6 +90,18 @@ digests, supporting rules, derived values, and validation references. Duplicate
 outputs retain the first supporting rule derivation; rejected branches do not
 contribute evidence to accepted answers.
 
+`match_embeddings` takes a caller-declared `space`, a numeric `query` vector,
+and `candidates` containing unique `id`/`vector` pairs. No model is loaded.
+`minimum_score` defaults to `0.75`; `minimum_margin` defaults to `0.05`.
+A unique qualifying cosine winner is a best guess, ties/near ties remain
+ambiguous, and weak matches remain unresolved. Scores are not probabilities.
+Vectors must be finite, nonzero, and dimensionally consistent. JSON decimals are
+converted to binary64; overflow and nonzero underflow are rejected. Admitted
+requests retain their structured JSON input in receipts, with separate ledgers
+for ambiguous alternatives. Admission failures can return a tool error before
+retention. `embeddings::EmbeddingIndex` provides reusable normalized vectors to
+Rust callers. See `examples/match-embeddings.json` for an illustrative input.
+
 `render_markdown` takes `source`, optional `dialect` (`commonmark` by default or
 `gfm`), optional `extensions`, and `effort`. Omitting extensions uses the dialect's
 default profile; an explicit array replaces it, including `[]` to disable all.

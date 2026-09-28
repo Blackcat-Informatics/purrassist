@@ -16,6 +16,7 @@ pub use contract::{AssistResult, Budget, Effort, Governor, Outcome, Receipt, Sto
 
 pub mod wire;
 
+pub mod embeddings;
 pub mod intent;
 
 pub mod paths;

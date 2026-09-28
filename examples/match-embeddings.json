@@ -1,0 +1,11 @@
+{
+  "space": "illustrative-two-dimensional-v1",
+  "query": [1, 0],
+  "candidates": [
+    {"id": "tea", "vector": [0.99, 0.01]},
+    {"id": "coffee", "vector": [0, 1]}
+  ],
+  "minimum_score": 0.75,
+  "minimum_margin": 0.05,
+  "effort": "standard"
+}

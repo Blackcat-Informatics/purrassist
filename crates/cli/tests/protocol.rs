@@ -143,8 +143,14 @@ fn assert_tool_responses(messages: &[Node]) {
 }
 
 #[test]
-fn markdown_operations_are_identical_through_cli_and_mcp() {
+fn shared_operations_are_identical_through_cli_and_mcp() {
     for (operation, arguments, pointer, expected) in [
+        (
+            "match_embeddings",
+            r#"{"space":"caller-v1","query":[1,0],"candidates":[{"id":"tea","vector":[1,0]},{"id":"other","vector":[0,1]}]}"#,
+            "/value/id",
+            "tea",
+        ),
         (
             "plan_markdown_task",
             r#"{"source":"> - [x] tea\r\n","path":[0,0],"checked":false}"#,

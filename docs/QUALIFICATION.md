@@ -38,8 +38,8 @@ guess reporting, and exhaustion before a complete ledger can be returned.
 Local package verification has built all five packages. A local release CLI was
 installed into a disposable checkout cache and exercised on the published example
 inputs, including exact-source retention. This does not verify downloadable registry
-packages. Hosted CI passed for checkpoint `c81d9ac6bd89644a9c7a23e115dfbd26e596bf66`:
-[run 36406749181](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36406749181)
+packages. Hosted CI passed for checkpoint `b6825592429bc354cbeeb52bab0c27b5dc00a37b`:
+[run 36407539675](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36407539675)
 completed the Linux/macOS local gates, MSRV workspace tests, Windows core/syntax
 tests, and native/WASI comparisons. This is evidence for that checkpoint only;
 subsequent changes need their own qualification.
@@ -150,6 +150,19 @@ no-op states, invalid selectors, cancellation, and shared tool path selection.
 The full local Rust 1.98.0 gate passed, including CLI/MCP equivalence for nested
 paths, optimized workspace tests, Rustdoc examples, and documentation builds.
 
+Caller-owned embedding matching now has a reusable normalized core index and the
+shared `match_embeddings` tool. Tests cover extreme scales, ties and margin
+selection, weak matches, duplicate identities, invalid dimensions/coordinates,
+zero vectors, candidate exhaustion, cancellation, retained decimal inputs, and
+independent alternative ledgers. Numerical winners remain semantic guesses.
+No embedding model or transport is used. The tool explicitly converts decimal
+coordinates to binary64 and rejects overflow/nonzero underflow; cosine scores
+are not probabilities. Embedding-specific cross-target and measured performance
+qualification remain to be broadened.
+The full local Rust 1.98.0 `make check` gate passed, including the embedding
+regressions and CLI/MCP wire equivalence. The documented embedding example was
+executed through the optimized CLI and returned `tea` as a best guess.
+
 ## Remaining release work
 
 - Extend Markdown section, list, table, and reference structural editing and broaden
@@ -168,7 +181,7 @@ paths, optimized workspace tests, Rustdoc examples, and documentation builds.
   progress cancellation alone is not a hard memory limit.
 - Extend alternative-specific ledgers beyond JSON recovery and semantic resolution,
   and finish uniform
-  Rust/CLI/MCP access to embedding similarity and remaining document operations. Domain-rule
+  Rust/CLI/MCP access to remaining document operations. Domain-rule
   intent resolution and path resolution now use the shared tool dispatcher,
   including epistemic status and one governor across domain/index admission
   and resolution. Markdown inspection, context extraction, section-body plans,

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Shared Rust, CLI, and MCP operations with schema-validated arguments.
+mod embeddings;
 mod intent;
 mod markdown;
 mod paths;
@@ -28,6 +29,12 @@ struct Definition {
     writes: bool,
 }
 const DEFINITIONS: &[Definition] = &[
+    Definition {
+        name: "match_embeddings",
+        description: "Match caller-supplied vectors in a named embedding space; unique cosine winners are best guesses, ties remain ambiguous, and no model is loaded",
+        schema: r#"{"type":"object","required":["space","query","candidates"],"properties":{"space":{"type":"string","minLength":1},"query":{"type":"array","minItems":1,"items":{"type":"number"}},"candidates":{"type":"array","items":{"type":"object","required":["id","vector"],"properties":{"id":{"type":"string","minLength":1},"vector":{"type":"array","minItems":1,"items":{"type":"number"}}},"additionalProperties":false}},"minimum_score":{"type":"number","minimum":-1,"maximum":1},"minimum_margin":{"type":"number","minimum":0,"maximum":2},"effort":{"enum":["exact","quick","standard","deep","maximum"]}},"additionalProperties":false}"#,
+        writes: false,
+    },
     Definition {
         name: "render_markdown",
         description: "Render exact Markdown source to HTML with a source-retaining receipt, dialect, and explicit extension profile; preserves raw HTML/URI schemes except selected GFM tag filtering and is not a sanitizer",
@@ -180,6 +187,7 @@ impl Tools {
             "match_strings" => rank(args),
             "match_paths" => paths::resolve(args),
             "resolve_intent" => intent::resolve(args),
+            "match_embeddings" => embeddings::call(args),
             "render_markdown"
             | "inspect_markdown"
             | "markdown_context"
