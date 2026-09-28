@@ -23,16 +23,20 @@ for package in metadata['packages']:
         for required in ('README.md', 'LICENSE-MIT', 'LICENSE-APACHE', 'LICENSE-MULAN', 'Cargo.toml', 'Cargo.toml.orig'):
             if required not in members:
                 raise SystemExit(f'{identity}: missing {required}')
+        generated = {'Cargo.toml', 'Cargo.lock', '.cargo_vcs_info.json'}
         for name, member in members.items():
             if Path(name).is_absolute() or '..' in Path(name).parts:
                 raise SystemExit(f'{identity}: nonportable member path {name}')
             local = crate_root / ('Cargo.toml' if name == 'Cargo.toml.orig' else name)
-            if name != 'Cargo.toml' and name != 'Cargo.lock' and local.is_file():
+            if name not in generated:
+                if not local.is_file():
+                    raise SystemExit(f'{identity}: packaged file has no checkout source: {name}')
                 if source.extractfile(member).read() != local.read_bytes():
                     raise SystemExit(f'{identity}: stale packaged source {name}')
-        for local in (crate_root / 'src').rglob('*'):
-            if local.is_file() and str(local.relative_to(crate_root)) not in members:
-                raise SystemExit(f'{identity}: omitted source file {local.relative_to(crate_root)}')
+        for directory_name in ('src', 'tests', 'examples', 'benches'):
+            for local in (crate_root / directory_name).rglob('*'):
+                if local.is_file() and str(local.relative_to(crate_root)) not in members:
+                    raise SystemExit(f'{identity}: omitted {directory_name} file {local.relative_to(crate_root)}')
         manifest = tomllib.loads(source.extractfile(members['Cargo.toml']).read().decode())
         if manifest['package']['license'] != 'MIT OR Apache-2.0 OR MulanPSL-2.0':
             raise SystemExit(f'{identity}: unexpected first-party license')

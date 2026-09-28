@@ -61,6 +61,16 @@ completed the Linux/macOS local gates, MSRV workspace tests, Windows core/syntax
 tests, and native/WASI comparisons. This is evidence for that checkpoint only;
 subsequent changes need their own qualification.
 
+At `4103c50a041cc81e8a01af47af97f55819018815`, `make package` constructed
+and Cargo-verified all five archives. The package auditor found the expected
+first-party licenses and upstream notices, zero core dependencies, and source
+files identical to the checkout. A fresh local release-profile install of
+`purrassist-cli` passed the example JSON decode, source-bound `apply_edit`, and
+stdio MCP initialize/decode smoke. Hosted [CI run 36432747721](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36432747721)
+passed for that same commit. These are checkout artifacts, not downloaded
+registry packages. The release-qualification workflow is package-only pending
+the publication and registry gates described in `RELEASE.md`.
+
 The initial six-case baseline observed approximately 2 microseconds median for
 exact integer recovery and 42 microseconds for composed syntax/key/wrapper/type
 repair. These are single-machine observations, not portable performance guarantees.

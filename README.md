@@ -15,6 +15,8 @@ is still a guess. Ambiguous alternatives remain visible.
 qualification requirements are in [the implementation contract](docs/IMPLEMENTATION.md).
 This repository has not been published or release-qualified.
 
+The [release procedure](docs/RELEASE.md) records the package and registry gates.
+
 ```rust
 use purrassist::{Outcome, RecoveryRequest, Schema};
 

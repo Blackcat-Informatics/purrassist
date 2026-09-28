@@ -10,6 +10,7 @@ fmt:
 
 hygiene:
 	python3 scripts/check-repository.py
+	python3 scripts/check-release.py
 	python3 scripts/test-fuzz-json.py
 
 lint:
@@ -31,6 +32,7 @@ syntax-oracles:
 	python3 scripts/check-syntax-oracles.py
 
 package:
+	python3 scripts/check-release.py
 	cargo package --workspace --locked
 	python3 scripts/check-packages.py
 
