@@ -8,7 +8,7 @@ use purrassist_core::{
     edits::EditPlan,
     embeddings::{Embedding, EmbeddingIndex, EmbeddingMatch, EmbeddingPolicy},
     json::Node,
-    markdown::{Alignment, Dialect, Document, TableColumnEdit, TableRowEdit},
+    markdown::{Alignment, Dialect, Document, References, TableColumnEdit, TableRowEdit},
     matching,
     schema::{Schema, recovery::RecoveryRequest},
     text::{self, Normalization},
@@ -260,6 +260,15 @@ fn apply_edit(plan: &EditPlan, source: &str, transcript: &mut Vec<Node>) -> Stri
 
 fn reference_transcript() -> Node {
     let mut results = Vec::new();
+    let many = "[tea]: /hot\n".repeat(1024);
+    let mut budgeted = Governor::new(Budget::default());
+    let indexed =
+        References::parse_blocks(&[&many], &mut budgeted).expect("linear reference budget");
+    assert_eq!(indexed.definitions().len(), 1024);
+    results.push(object([(
+        "many_reference_work",
+        integer(budgeted.usage().work),
+    )]));
     let mut g = Governor::new(Budget::default());
     let source = "> [Tea]: /hot\r\n> [tea]: /shadow\r\n>\r\n> [TEA]\r\n";
     let doc = Document::parse(source, &mut g).expect("references");

@@ -38,8 +38,8 @@ guess reporting, and exhaustion before a complete ledger can be returned.
 Local package verification has built all five packages. A local release CLI was
 installed into a disposable checkout cache and exercised on the published example
 inputs, including exact-source retention. This does not verify downloadable registry
-packages. Hosted CI passed for checkpoint `97f69cdae6170d97fcdfaf9e6e48932e4c3a5f61`:
-[run 36414217944](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36414217944)
+packages. Hosted CI passed for checkpoint `cf84338586cff67a51fe080a4a3a23fee9815824`:
+[run 36416124778](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36416124778)
 completed the Linux/macOS local gates, MSRV workspace tests, Windows core/syntax
 tests, and native/WASI comparisons. This is evidence for that checkpoint only;
 subsequent changes need their own qualification.
@@ -230,6 +230,20 @@ including official Markdown corpora, reference regressions, CLI/MCP equivalence,
 and Rustdoc. The optimized CLI executed `examples/markdown-reference.json` and
 returned the expected field replacement and structural-validation receipt.
 
+Reference and inline-link parsing now charge scanned labels, whitespace,
+destinations, and titles, plus decoding/indexing and token grouping, instead of
+repeatedly reserving unrelated remaining input. Blank-line detection scans without
+allocating normalized copies and preserves LF, CRLF, and CR behavior. Regression
+tests cover 256/512/1,024 definitions and repeated links under standard effort,
+with less than 2.5x work growth when input doubles. At 1,024 unique definitions,
+parsing consumes 228,414 work units; document parsing plus occurrence inspection
+consumes 657,534, within the standard 1,000,000-unit limit. These are logical
+budget measurements, not elapsed-time or allocator bounds. Long malformed
+destinations, titles, and whitespace exhaust work inside their scans with typed
+errors. The full Rust 1.98.0 `make check` gate and nightly Clippy passed.
+Native/WASI transcripts, including the repeated-definition budget record, match;
+the browser-WASM core build also passed.
+
 ## Remaining release work
 
 - Extend Markdown section, list, table, and reference structural editing and broaden
@@ -246,9 +260,6 @@ returned the expected field replacement and structural-validation receipt.
   avoids subtree cloning for reference-only targets. These accounting additions
   do not establish measured allocator bounds or complete the allocation audit. Bound external parser allocations;
   progress cancellation alone is not a hard memory limit.
-  Reference parsing currently reserves work against the remaining block suffix
-  for each definition; replace this conservative quadratic reservation with
-  governed consumed-work accounting.
 - Extend alternative-specific ledgers beyond JSON recovery and semantic resolution,
   and finish uniform
   Rust/CLI/MCP access to remaining document operations. Domain-rule

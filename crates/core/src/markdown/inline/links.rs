@@ -40,10 +40,7 @@ pub(super) fn close(
     if !bracket.active {
         return Ok(None);
     }
-    governor.charge(
-        Resource::Work,
-        super::super::size(source.len() - position).saturating_mul(4),
-    )?;
+    governor.charge(Resource::Work, 1)?;
     let inline = if source.as_bytes().get(position + 1) == Some(&b'(') {
         target(source, position + 2, governor)?
     } else {
@@ -73,6 +70,14 @@ pub(super) fn close(
             Some(definition.origin.clone()),
         )
     };
+    let children_count = super::super::size(tokens.len() - bracket.index - 1);
+    governor.charge(
+        Resource::Work,
+        children_count
+            .saturating_mul(2)
+            .saturating_add(super::super::size(brackets.len())),
+    )?;
+    governor.charge(Resource::ScratchBytes, children_count.saturating_mul(256))?;
     let children = tokens.split_off(bracket.index + 1);
     let opening = tokens.pop().expect("indexed opening bracket");
     let children = emphasis::resolve(source, children, strike, governor)?;
@@ -104,11 +109,11 @@ fn target(
     start: usize,
     governor: &mut Governor,
 ) -> Result<Option<Target>, StopReason> {
-    let mut cursor = spaces(source, start);
+    let mut cursor = spaces(source, start, governor)?;
     if cursor > start
-        && let Some((end, title)) = title(source, cursor)
+        && let Some((end, title)) = title(source, cursor, governor)?
     {
-        let end = spaces(source, end);
+        let end = spaces(source, end, governor)?;
         if source.as_bytes().get(end) == Some(&b')') {
             return Ok(Some((end + 1, String::new(), Some(title))));
         }
@@ -117,11 +122,11 @@ fn target(
         return Ok(None);
     };
     cursor = end;
-    let after = spaces(source, cursor);
+    let after = spaces(source, cursor, governor)?;
     let (end, title) = if after > cursor
-        && let Some((end, title)) = title(source, after)
+        && let Some((end, title)) = title(source, after, governor)?
     {
-        (spaces(source, end), Some(title))
+        (spaces(source, end, governor)?, Some(title))
     } else {
         (after, None)
     };
@@ -132,12 +137,14 @@ pub(super) fn destination(
     start: usize,
     governor: &mut Governor,
 ) -> Result<Option<(usize, String)>, StopReason> {
+    governor.charge(Resource::Work, 1)?;
     let destination_start = start;
     let mut cursor = start;
     let destination = if source.as_bytes().get(cursor) == Some(&b'<') {
         cursor += 1;
         let begin = cursor;
         while cursor < source.len() {
+            governor.charge(Resource::Work, 1)?;
             match source.as_bytes()[cursor] {
                 b'>' => break,
                 b'<' | b'\r' | b'\n' => return Ok(None),
@@ -147,6 +154,7 @@ pub(super) fn destination(
                         .get(cursor + 1)
                         .is_some_and(u8::is_ascii_punctuation) =>
                 {
+                    governor.charge(Resource::Work, 1)?;
                     cursor += 1;
                 }
                 _ => {}
@@ -156,12 +164,17 @@ pub(super) fn destination(
         if cursor == source.len() {
             return Ok(None);
         }
+        governor.charge(
+            Resource::Work,
+            super::super::size(cursor - begin).saturating_mul(4),
+        )?;
         let result = entities::text(&source[begin..cursor]);
         cursor += 1;
         result
     } else {
         let mut depth = 0usize;
         while cursor < source.len() {
+            governor.charge(Resource::Work, 1)?;
             let byte = source.as_bytes()[cursor];
             match byte {
                 b'\\'
@@ -170,6 +183,7 @@ pub(super) fn destination(
                         .get(cursor + 1)
                         .is_some_and(u8::is_ascii_punctuation) =>
                 {
+                    governor.charge(Resource::Work, 1)?;
                     cursor += 1;
                 }
                 b'(' => {
@@ -186,36 +200,64 @@ pub(super) fn destination(
         if depth != 0 {
             return Ok(None);
         }
+        governor.charge(
+            Resource::Work,
+            super::super::size(cursor - destination_start).saturating_mul(4),
+        )?;
         entities::text(&source[destination_start..cursor])
     };
     Ok(Some((cursor, destination)))
 }
 
-pub(super) fn spaces(source: &str, start: usize) -> usize {
-    start
-        + source[start..]
-            .bytes()
-            .take_while(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
-            .count()
+pub(super) fn spaces(
+    source: &str,
+    start: usize,
+    governor: &mut Governor,
+) -> Result<usize, StopReason> {
+    governor.charge(Resource::Work, 1)?;
+    let mut end = start;
+    while matches!(
+        source.as_bytes().get(end),
+        Some(b' ' | b'\t' | b'\r' | b'\n')
+    ) {
+        governor.charge(Resource::Work, 1)?;
+        end += 1;
+    }
+    Ok(end)
 }
-pub(super) fn title(source: &str, start: usize) -> Option<(usize, String)> {
-    let opening = *source.as_bytes().get(start)?;
+pub(super) fn title(
+    source: &str,
+    start: usize,
+    governor: &mut Governor,
+) -> Result<Option<(usize, String)>, StopReason> {
+    governor.charge(Resource::Work, 1)?;
+    let Some(&opening) = source.as_bytes().get(start) else {
+        return Ok(None);
+    };
     let closing = match opening {
         b'\'' | b'"' => opening,
         b'(' => b')',
-        _ => return None,
+        _ => return Ok(None),
     };
     let mut cursor = start + 1;
     while cursor < source.len() {
+        governor.charge(Resource::Work, 1)?;
         let byte = source.as_bytes()[cursor];
         if byte == closing {
-            if super::references::blank_line(&source[start + 1..cursor]) {
-                return None;
+            if super::references::blank_line(&source[start + 1..cursor], governor)? {
+                return Ok(None);
             }
-            return Some((cursor + 1, entities::text(&source[start + 1..cursor])));
+            governor.charge(
+                Resource::Work,
+                super::super::size(cursor - start).saturating_mul(4),
+            )?;
+            return Ok(Some((
+                cursor + 1,
+                entities::text(&source[start + 1..cursor]),
+            )));
         }
         if opening == b'(' && byte == b'(' {
-            return None;
+            return Ok(None);
         }
         if byte == b'\\'
             && source
@@ -223,11 +265,12 @@ pub(super) fn title(source: &str, start: usize) -> Option<(usize, String)> {
                 .get(cursor + 1)
                 .is_some_and(u8::is_ascii_punctuation)
         {
+            governor.charge(Resource::Work, 1)?;
             cursor += 1;
         }
         cursor += 1;
     }
-    None
+    Ok(None)
 }
 
 fn reference_target<'a>(
@@ -239,13 +282,13 @@ fn reference_target<'a>(
 ) -> Result<Option<(usize, &'a super::ReferenceDefinition)>, StopReason> {
     let after = close + 1;
     if source.as_bytes().get(after) == Some(&b'[')
-        && let Some(end) = super::references::label_end(source, after + 1)
+        && let Some(end) = super::references::label_end(source, after + 1, governor)?
     {
         return Ok(references
             .lookup(&source[after + 1..end], governor)?
             .map(|definition| (end + 1, definition)));
     }
-    if super::references::label_end(source, start) != Some(close) {
+    if super::references::label_end(source, start, governor)? != Some(close) {
         return Ok(None);
     }
     let end = if source[after..].starts_with("[]") {

@@ -77,6 +77,18 @@ impl References {
                 // Reserve definition-vector capacity and label-index metadata
                 // separately from retained/decoded text, including new field spans.
                 governor.charge(Resource::ScratchBytes, 512)?;
+                governor.charge(
+                    Resource::Work,
+                    super::super::size(parsed.label.len())
+                        .saturating_mul(
+                            16 + u64::from(
+                                super::super::size(result.index.len())
+                                    .saturating_add(1)
+                                    .ilog2(),
+                            ),
+                        )
+                        .saturating_add(1),
+                )?;
                 let key = label_key(&parsed.label);
                 let id = result.definitions.len();
                 result.index.entry(key).or_insert(id);
@@ -147,27 +159,36 @@ fn label_key(label: &str) -> String {
         .join(" ")
 }
 /// Return the closing bracket offset; no unescaped brackets, at most 999 characters.
-pub(super) fn label_end(source: &str, start: usize) -> Option<usize> {
+pub(super) fn label_end(
+    source: &str,
+    start: usize,
+    governor: &mut Governor,
+) -> Result<Option<usize>, StopReason> {
+    governor.charge(Resource::Work, 1)?;
     let mut escaped = false;
     let mut count = 0;
     let mut nonspace = false;
     for (offset, character) in source[start..].char_indices() {
+        governor.charge(
+            Resource::Work,
+            super::super::size(character.len_utf8()).saturating_add(1),
+        )?;
         if !escaped {
             if character == ']' {
-                return (count > 0 && nonspace).then_some(start + offset);
+                return Ok((count > 0 && nonspace).then_some(start + offset));
             }
             if character == '[' {
-                return None;
+                return Ok(None);
             }
         }
         count += 1;
         if count > 999 {
-            return None;
+            return Ok(None);
         }
         nonspace |= !whitespace(character);
         escaped = !escaped && character == '\\';
     }
-    None
+    Ok(None)
 }
 struct Definition {
     end: usize,
@@ -182,28 +203,24 @@ fn definition(
     start: usize,
     governor: &mut Governor,
 ) -> Result<Option<Definition>, StopReason> {
-    governor.charge(
-        Resource::Work,
-        super::super::size(source.len() - start)
-            .saturating_mul(8)
-            .saturating_add(1),
-    )?;
-    let indent = source[start..]
-        .bytes()
-        .take_while(|byte| *byte == b' ')
-        .count();
+    governor.charge(Resource::Work, 1)?;
+    let mut indent = 0;
+    while indent < 4 && source.as_bytes().get(start + indent) == Some(&b' ') {
+        governor.charge(Resource::Work, 1)?;
+        indent += 1;
+    }
     let opening = start + indent;
     if indent > 3 || source.as_bytes().get(opening) != Some(&b'[') {
         return Ok(None);
     }
-    let Some(close) = label_end(source, opening + 1) else {
+    let Some(close) = label_end(source, opening + 1, governor)? else {
         return Ok(None);
     };
     if source.as_bytes().get(close + 1) != Some(&b':') {
         return Ok(None);
     }
-    let destination_start = links::spaces(source, close + 2);
-    if blank_line(&source[close + 2..destination_start]) {
+    let destination_start = links::spaces(source, close + 2, governor)?;
+    if blank_line(&source[close + 2..destination_start], governor)? {
         return Ok(None);
     }
     let Some((end, destination)) = links::destination(source, destination_start, governor)? else {
@@ -212,15 +229,15 @@ fn definition(
     if end == destination_start {
         return Ok(None);
     }
-    let after = links::spaces(source, end);
+    let after = links::spaces(source, end, governor)?;
     let (finish, title_value, title_span) = if after > end
-        && !blank_line(&source[end..after])
-        && let Some((title_end, title)) = links::title(source, after)
-        && let Some(end) = line_end(source, title_end)
+        && !blank_line(&source[end..after], governor)?
+        && let Some((title_end, title)) = links::title(source, after, governor)?
+        && let Some(end) = line_end(source, title_end, governor)?
     {
         (Some(end), Some(title), Some(after..title_end))
     } else {
-        (line_end(source, end), None, None)
+        (line_end(source, end, governor)?, None, None)
     };
     let Some(finish) = finish else {
         return Ok(None);
@@ -234,28 +251,49 @@ fn definition(
         title_span,
     }))
 }
-fn line_end(source: &str, start: usize) -> Option<usize> {
-    let end = start
-        + source[start..]
-            .bytes()
-            .take_while(|byte| matches!(byte, b' ' | b'\t'))
-            .count();
-    match source.as_bytes().get(end) {
+fn line_end(
+    source: &str,
+    start: usize,
+    governor: &mut Governor,
+) -> Result<Option<usize>, StopReason> {
+    governor.charge(Resource::Work, 1)?;
+    let mut end = start;
+    while matches!(source.as_bytes().get(end), Some(b' ' | b'\t')) {
+        governor.charge(Resource::Work, 1)?;
+        end += 1;
+    }
+    Ok(match source.as_bytes().get(end) {
         None => Some(end),
         Some(b'\n') => Some(end + 1),
         Some(b'\r') => Some(end + 1 + usize::from(source.as_bytes().get(end + 1) == Some(&b'\n'))),
         _ => None,
-    }
+    })
 }
-pub(super) fn blank_line(source: &str) -> bool {
-    let normalized = source.replace("\r\n", "\n").replace('\r', "\n");
-    let mut lines = normalized.split('\n');
-    lines.next();
-    let mut lines = lines.peekable();
-    while let Some(line) = lines.next() {
-        if lines.peek().is_some() && line.bytes().all(|byte| matches!(byte, b' ' | b'\t')) {
-            return true;
+pub(super) fn blank_line(source: &str, governor: &mut Governor) -> Result<bool, StopReason> {
+    governor.charge(Resource::Work, 1)?;
+    let mut cursor = 0;
+    let mut first = true;
+    let mut whitespace = true;
+    while cursor < source.len() {
+        governor.charge(Resource::Work, 1)?;
+        match source.as_bytes()[cursor] {
+            b'\r' | b'\n' => {
+                if !first && whitespace {
+                    return Ok(true);
+                }
+                first = false;
+                whitespace = true;
+                if source.as_bytes()[cursor] == b'\r'
+                    && source.as_bytes().get(cursor + 1) == Some(&b'\n')
+                {
+                    governor.charge(Resource::Work, 1)?;
+                    cursor += 1;
+                }
+            }
+            b' ' | b'\t' => {}
+            _ => whitespace = false,
         }
+        cursor += 1;
     }
-    false
+    Ok(false)
 }
