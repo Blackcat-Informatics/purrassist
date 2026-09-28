@@ -9,6 +9,7 @@ use crate::{
     edits::{EditPlan, TextEdit},
 };
 pub use nested::SectionSite;
+pub(super) use nested::{prefix, same_shape};
 
 impl Document {
     /// Replace a root section body using the standard resource budget.
@@ -114,7 +115,7 @@ impl Document {
     }
 }
 
-fn shift(block: &mut Block, old: usize, new: usize) {
+pub(super) fn shift(block: &mut Block, old: usize, new: usize) {
     let range = |span: &mut std::ops::Range<usize>| {
         span.start = span.start - old + new;
         span.end = span.end - old + new;

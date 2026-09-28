@@ -7,6 +7,8 @@ mod containers;
 mod context;
 mod extensions;
 mod html;
+mod lists;
+pub use lists::ListItemEdit;
 mod table;
 mod table_columns;
 mod table_rows;

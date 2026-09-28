@@ -54,6 +54,12 @@ const DEFINITIONS: &[Definition] = &[
         writes: false,
     },
     Definition {
+        name: "plan_markdown_list_item",
+        description: "Insert, replace, or remove a root or nested Markdown list item with structural validation and exact source identity",
+        schema: r#"{"type":"object","required":["source","path","action"],"oneOf":[{"properties":{"action":{"enum":["before","after"]}},"required":["marker","body"]},{"properties":{"action":{"const":"replace"},"marker":false},"required":["body"]},{"properties":{"action":{"const":"remove"},"marker":false,"body":false}}],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"path":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"integer","minimum":0}},"action":{"enum":["before","after","replace","remove"]},"marker":{"type":"string"},"body":{"type":"string"}},"additionalProperties":false}"#,
+        writes: false,
+    },
+    Definition {
         name: "plan_markdown_section",
         description: "Plan a structurally validated Markdown section body replacement selected by root heading index or nested path",
         schema: r#"{"type":"object","required":["source","body"],"oneOf":[{"required":["heading"],"properties":{"path":false}},{"required":["path"],"properties":{"heading":false}}],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"heading":{"type":"integer","minimum":0},"path":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"integer","minimum":0}},"body":{"type":"string"}},"additionalProperties":false}"#,
@@ -215,6 +221,7 @@ impl Tools {
             "render_markdown"
             | "inspect_markdown"
             | "markdown_context"
+            | "plan_markdown_list_item"
             | "plan_markdown_section"
             | "plan_markdown_table_cell"
             | "plan_markdown_table_row"

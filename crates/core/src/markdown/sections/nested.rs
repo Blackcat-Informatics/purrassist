@@ -281,7 +281,12 @@ fn same_tail(old: &[Block], new: &[Block], old_end: usize, new_end: usize) -> bo
     }
     expected == new
 }
-fn same_shape(left_source: &str, left: &[Block], right_source: &str, right: &[Block]) -> bool {
+pub(in crate::markdown) fn same_shape(
+    left_source: &str,
+    left: &[Block],
+    right_source: &str,
+    right: &[Block],
+) -> bool {
     left.len() == right.len()
         && left.iter().zip(right).all(|(a, b)| {
             let kind = match (&a.kind, &b.kind) {
@@ -322,7 +327,11 @@ fn line_start(source: &str, offset: usize) -> usize {
         .rfind(['\r', '\n'])
         .map_or(0, |position| position + 1)
 }
-fn prefix(doc: &Document, path: &[usize], governor: &mut Governor) -> Result<String, StopReason> {
+pub(in crate::markdown) fn prefix(
+    doc: &Document,
+    path: &[usize],
+    governor: &mut Governor,
+) -> Result<String, StopReason> {
     governor.charge(
         Resource::Work,
         size(path.len()).saturating_mul(size(path.len())),

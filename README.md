@@ -129,6 +129,14 @@ prefix spelling and yield empty plans. See `examples/markdown-section.json`.
 `plan_markdown_task` sets the supplied `checked` state using either a root
 `block` index or a nested `path` from inspection (for example `[0,0,1]`).
 Exactly one selector is required; paths follow successive child indices.
+`plan_markdown_list_item` selects an item by `path` and accepts `before`, `after`,
+`replace`, or `remove`. Insertions require an explicit `marker` (`-`, `+`, `*`,
+`1.`, or `1)` through nine-digit ordinals) and logical `body`; replacement uses
+`body` and retains the selected marker. Existing items are never renumbered.
+New lines receive container prefixes and continuation indentation; required
+separators follow the anchor's newline style and EOF convention. Removing the
+only item can leave an empty container line. Every plan reparses the intended
+item and checks outside siblings and ancestors. See `examples/markdown-list-item.json`.
 `plan_markdown_table_cell` selects a table by `path`, with zero-based `row` and
 `column` (row zero is the header). Its `markdown` replaces one explicitly present
 cell; surrounding whitespace, pipes, container prefixes, and line endings remain

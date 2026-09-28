@@ -38,8 +38,8 @@ guess reporting, and exhaustion before a complete ledger can be returned.
 Local package verification has built all five packages. A local release CLI was
 installed into a disposable checkout cache and exercised on the published example
 inputs, including exact-source retention. This does not verify downloadable registry
-packages. Hosted CI passed for checkpoint `2bd04dcdede114098187984e171300620ecf5beb`:
-[run 36419162096](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36419162096)
+packages. Hosted CI passed for checkpoint `4bd9055739ec929c83b7d670b4ffbe24290b9512`:
+[run 36420979796](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36420979796)
 completed the Linux/macOS local gates, MSRV workspace tests, Windows core/syntax
 tests, and native/WASI comparisons. This is evidence for that checkpoint only;
 subsequent changes need their own qualification.
@@ -262,11 +262,24 @@ prefixes, setext headings, CR/LF/CRLF, no-op spelling preservation, empty/final
 sections, exact undo, rejected container escape, and tool selector validation.
 Bodies with trailing blanks that escape list items or column-sensitive tabs that
 change body structure are explicitly rejected; broader layout recovery remains
-open. List insertion/removal and other structural operations remain release work.
+open. Further structural layout recovery remains release work.
 The full Rust 1.98.0 local gate, nightly Clippy, native/WASI nested edit and undo
 transcripts, and browser-WASM build passed. The optimized CLI executed
 `examples/markdown-section.json` with the expected prefixed replacement and
 structural-validation receipt.
+
+List-item edits now support before/after insertion with explicit markers, body
+replacement retaining marker spelling, and removal at root or nested paths.
+Reparsing checks the isolated intended item, outside siblings, and ancestor
+identity. Existing items retain their numbering; generated lines use canonical
+spacing and container prefixes. Tests cover CR/LF/CRLF, indented lists, mixed
+quote/list nesting, ordered-marker spelling, task bodies, nested headings, EOF
+insertion, only-item removal retaining a container, exact undo/stale rejection,
+invalid markers, extra sibling blocks, exhaustion, and shared tool schemas.
+The full Rust 1.98.0 gate, nightly Clippy, native/WASI list edit/undo transcript,
+and browser-WASM build passed. The optimized CLI executed
+`examples/markdown-list-item.json` and returned the expected nested task insertion
+and `markdown.list-item-structure.v1` validation.
 
 ## Remaining release work
 

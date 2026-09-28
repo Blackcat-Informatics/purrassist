@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Source-preserving Markdown operations shared by CLI and MCP.
+mod list;
 mod reference;
 mod render;
 mod table;
@@ -45,6 +46,7 @@ pub(super) fn call(name: &str, args: &Node) -> Result<Node, String> {
                 destination: "/edits".into(),
             });
         }
+        if name == "plan_markdown_list_item" { list::record(&document, &mut receipt, &mut governor)?; }
         if name == "plan_markdown_reference" { reference::record(&document, &mut receipt, &mut governor)?; }
         if matches!(name, "plan_markdown_table_cell" | "plan_markdown_table_row" | "plan_markdown_table_column") {
             table::record(&document, &mut receipt, &mut governor)?;
@@ -126,6 +128,7 @@ fn operation(
                 ("sections", array(context.sections.iter().map(section))),
             ]))
         }
+        "plan_markdown_list_item" => list::call(args, document, governor),
         "plan_markdown_section" => {
             let body = super::field(args, "body").map_err(StopReason::InvalidInput)?;
             let path = if args.get("path").is_some() {

@@ -551,3 +551,64 @@ fn nested_section_tool_selects_inspected_paths_and_retains_validation() {
     }
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn list_item_tool_inserts_replaces_and_removes_nested_items() {
+    let root = std::env::temp_dir().join(format!("purrassist-list-tool-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let tools = Tools::new(&root).unwrap();
+    let source = "> - hot\r\n> - keep\r\n";
+    let inserted = call(
+        &tools,
+        "plan_markdown_list_item",
+        source,
+        r#"{"path":[0,0],"action":"after","marker":"-","body":"[x] café"}"#,
+    );
+    assert_eq!(
+        apply(&inserted, source),
+        "> - hot\r\n> - [x] café\r\n> - keep\r\n"
+    );
+    assert_eq!(
+        inserted
+            .pointer("/receipt/validations/0/validator")
+            .unwrap()
+            .as_str(),
+        Some("markdown.list-item-structure.v1")
+    );
+    let replaced = call(
+        &tools,
+        "plan_markdown_list_item",
+        source,
+        r#"{"path":[0,0],"action":"replace","body":"cold"}"#,
+    );
+    assert_eq!(apply(&replaced, source), "> - cold\r\n> - keep\r\n");
+    let removed = call(
+        &tools,
+        "plan_markdown_list_item",
+        source,
+        r#"{"path":[0,0],"action":"remove"}"#,
+    );
+    assert_eq!(apply(&removed, source), "> - keep\r\n");
+    for extra in [
+        r#"{"action":"after","body":"x"}"#,
+        r#"{"action":"remove","body":"x"}"#,
+        r#"{"action":"replace","marker":"-","body":"x"}"#,
+    ] {
+        let Value::Object(mut fields) = json::parse(extra).unwrap().value else {
+            panic!("object");
+        };
+        let Value::Object(base) = json::parse(r#"{"source":"- a\n","path":[0]}"#)
+            .unwrap()
+            .value
+        else {
+            panic!("object");
+        };
+        fields.extend(base);
+        assert!(
+            tools
+                .call("plan_markdown_list_item", &Node::new(Value::Object(fields)))
+                .is_err()
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}

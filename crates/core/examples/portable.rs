@@ -8,7 +8,9 @@ use purrassist_core::{
     edits::EditPlan,
     embeddings::{Embedding, EmbeddingIndex, EmbeddingMatch, EmbeddingPolicy},
     json::Node,
-    markdown::{Alignment, Dialect, Document, References, TableColumnEdit, TableRowEdit},
+    markdown::{
+        Alignment, Dialect, Document, ListItemEdit, References, TableColumnEdit, TableRowEdit,
+    },
     matching,
     schema::{Schema, recovery::RecoveryRequest},
     text::{self, Normalization},
@@ -54,6 +56,7 @@ fn main() {
     transcript.push(string(text::normalize("\u{212b}각ﬃ", Normalization::Nfkc)));
     transcript.push(embedding_transcript());
     transcript.push(markdown_transcript());
+    transcript.push(list_transcript());
     transcript.push(reference_transcript());
     let output = array(transcript).to_json();
     println!("{}", Digest::of(output.as_bytes()));
@@ -326,6 +329,39 @@ fn reference_transcript() -> Node {
     ));
     object([
         ("operation", string("reference definitions")),
+        ("results", array(results)),
+    ])
+}
+
+fn list_transcript() -> Node {
+    let mut results = Vec::new();
+    for newline in ["\n", "\r\n", "\r"] {
+        let source = format!("> - hot{newline}> - keep{newline}");
+        let mut g = Governor::new(Budget::default());
+        let doc = Document::parse(&source, &mut g).expect("list");
+        let plan = doc
+            .edit_list_item(
+                &[0, 0],
+                &ListItemEdit::After {
+                    marker: "-".into(),
+                    body: "[x] iced café".into(),
+                },
+                &mut g,
+            )
+            .expect("insert item");
+        let inserted = apply_edit(&plan, &source, &mut results);
+        assert_eq!(
+            inserted,
+            format!("> - hot{newline}> - [x] iced café{newline}> - keep{newline}")
+        );
+        let doc = Document::parse(&inserted, &mut g).expect("inserted list");
+        let removed = doc
+            .edit_list_item(&[0, 1], &ListItemEdit::Remove, &mut g)
+            .expect("remove item");
+        assert_eq!(apply_edit(&removed, &inserted, &mut results), source);
+    }
+    object([
+        ("operation", string("list items")),
         ("results", array(results)),
     ])
 }
