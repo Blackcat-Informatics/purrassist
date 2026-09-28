@@ -38,7 +38,11 @@ guess reporting, and exhaustion before a complete ledger can be returned.
 Local package verification has built all five packages. A local release CLI was
 installed into a disposable checkout cache and exercised on the published example
 inputs, including exact-source retention. This does not verify downloadable registry
-packages. Hosted CI is configured but has not run against this implementation.
+packages. Hosted CI passed for checkpoint `b87ac540462db8f9dc8abef27cbd2cc26afa5af8`:
+[run 36390611576](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36390611576)
+completed the Linux/macOS local gates, MSRV workspace tests, Windows core/syntax
+tests, and native/WASI comparisons. This is evidence for that checkpoint only;
+subsequent changes need their own qualification.
 
 The initial six-case baseline observed approximately 2 microseconds median for
 exact integer recovery and 42 microseconds for composed syntax/key/wrapper/type
@@ -47,11 +51,24 @@ Reported scratch usage is governor accounting, not measured allocator consumptio
 Run the benchmark on the target platform; do not generalize its zero incorrect
 corrections to arbitrary AI output.
 
+## Markdown qualification in progress
+
+The pinned corpora contain 652 CommonMark 0.31.2 examples and 672 GFM examples.
+`cargo test -p purrassist-core --test markdown_corpus` exercises complete-source
+and nested-range preservation for every example, first-block classification for
+228 leaf-block examples, and quote hierarchy for 50 blockquote examples. These
+checks are narrower than full rendering conformance; passing them does not prove
+inline semantics, list tightness, tab-column handling, or complete GFM behavior.
+The container/context/task checkpoint passed the full `make check` gate on Rust
+1.98.0, including optimized workspace tests and Rustdoc. Nightly and hosted CI
+qualification of this increment remain separate from that MSRV gate.
+
 ## Remaining release work
 
-- Complete CommonMark/GFM container and inline parsing, structural editing and
-  context extraction; execute the full official conformance corpora. The current
-  Markdown module is explicitly an editing index.
+- Complete CommonMark/GFM container and inline parsing and structural editing;
+  execute full HTML-output conformance against the pinned official corpora. The
+  Markdown module remains an editing index; block-aligned context extraction and
+  checkbox-state edits are implemented, with full-source identity and exact undo.
 - Extend composed recovery/witness generation and regex coverage; audit recursive
   schemas and resource-sensitive compilation. Qualify unsupported vocabulary and
   format behavior without silently weakening assertions.

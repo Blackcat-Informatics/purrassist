@@ -36,3 +36,9 @@ crate's first-party license copies. It refuses any dependency in the core. No op
 dependency. Development tools are separate from linked runtime dependencies:
 Rust/Cargo/Clippy/rustfmt, Python 3 for repository verification, and Node.js for
 executed WASI comparisons. None is invoked by the pure core.
+
+Official CommonMark 0.31.2 and GFM 0.29.0.gfm.13 examples are qualification-only
+fixtures under CC-BY-SA-4.0, separately attributed to John MacFarlane and the GFM
+specification contributors. The manifest retains upstream and normalized digests,
+source URLs, and extraction details; accompanying upstream license notices remain
+beside the examples. These test strings are not linked into the runtime engine.

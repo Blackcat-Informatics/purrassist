@@ -3,6 +3,11 @@
 //! Source-preserving Markdown block indexing and section edits.
 //!
 //! This is an editing index, not yet a conforming CommonMark/GFM renderer.
+mod containers;
+mod context;
+mod html;
+pub use context::Context;
+
 use crate::{
     Governor, StopReason,
     contract::Resource,
@@ -18,6 +23,10 @@ pub struct Block {
     pub span: Range<usize>,
     /// Structural classification.
     pub kind: BlockKind,
+    /// Nested quote or list-item blocks. Ranges refer to the original document;
+    /// the first container prefix is outside each child range. Interior prefixes
+    /// remain inside a multi-line child's bounding range.
+    pub children: Vec<Self>,
 }
 /// Editing-oriented block classification.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,9 +51,9 @@ pub enum BlockKind {
     IndentedCode,
     /// A thematic break.
     ThematicBreak,
-    /// Consecutive quote-prefixed source lines.
+    /// A block quote, including any lazy paragraph continuation lines.
     Quote,
-    /// A list item start; continuation lines retain their own source blocks.
+    /// A list item with nested body blocks and continuation lines.
     ListItem {
         /// Ordered-list ordinal, absent for bullets.
         ordinal: Option<u64>,
@@ -102,7 +111,7 @@ impl Document {
     /// Index source blocks while preserving every byte, including CRLF/CR endings.
     ///
     /// # Errors
-    /// Returns explicit input, work, or storage exhaustion.
+    /// Returns explicit input, work, storage, or container-depth exhaustion.
     pub fn parse(source: &str, governor: &mut Governor) -> Result<Self, StopReason> {
         governor.charge(Resource::InputBytes, size(source.len()))?;
         governor.charge(Resource::Work, size(source.len()).saturating_mul(4))?;
@@ -111,16 +120,7 @@ impl Document {
             size(source.len()).saturating_mul(128).saturating_add(128),
         )?;
         let lines = lines(source);
-        let mut blocks = Vec::new();
-        let mut cursor = 0;
-        while cursor < lines.len() {
-            let (kind, end) = classify(source, &lines, cursor);
-            blocks.push(Block {
-                span: lines[cursor].start..lines[end - 1].end,
-                kind,
-            });
-            cursor = end;
-        }
+        let blocks = containers::index(source, &lines, governor, 0)?;
         Ok(Self {
             source: source.into(),
             digest: Digest::of(source.as_bytes()),
@@ -145,11 +145,28 @@ impl Document {
     /// Section boundaries; nested lower-ranked headings belong to the parent body.
     #[must_use]
     pub fn sections(&self) -> Vec<Section> {
-        self.blocks.iter().enumerate().filter_map(|(index, block)| {
-            let BlockKind::Heading { level, .. } = block.kind else { return None; };
-            let end = self.blocks[index + 1..].iter().find(|next| matches!(next.kind, BlockKind::Heading { level: next_level, .. } if next_level <= level)).map_or(self.source.len(), |next| next.span.start);
-            Some(Section { heading: index, span: block.span.start..end, body: block.span.end..end })
-        }).collect()
+        let mut sections: Vec<Section> = Vec::new();
+        let mut open: Vec<(u8, usize)> = Vec::new();
+        for (heading, block) in self.blocks.iter().enumerate() {
+            let BlockKind::Heading { level, .. } = block.kind else {
+                continue;
+            };
+            while let Some(&(prior, index)) = open.last() {
+                if prior < level {
+                    break;
+                }
+                open.pop();
+                sections[index].span.end = block.span.start;
+                sections[index].body.end = block.span.start;
+            }
+            open.push((level, sections.len()));
+            sections.push(Section {
+                heading,
+                span: block.span.start..self.source.len(),
+                body: block.span.end..self.source.len(),
+            });
+        }
+        sections
     }
     /// Propose replacing a section body, preserving its heading and surrounding bytes.
     ///
@@ -245,6 +262,20 @@ fn thematic(text: &str) -> bool {
     let chars: Vec<_> = text.chars().filter(|c| !matches!(c, ' ' | '\t')).collect();
     chars.len() >= 3 && matches!(chars[0], '*' | '-' | '_') && chars.iter().all(|c| *c == chars[0])
 }
+fn code_indent(text: &str) -> bool {
+    let mut column = 0;
+    for byte in text.bytes() {
+        match byte {
+            b' ' => column += 1,
+            b'\t' => column += 4 - column % 4,
+            _ => return false,
+        }
+        if column >= 4 {
+            return true;
+        }
+    }
+    false
+}
 fn classify(source: &str, lines: &[Range<usize>], cursor: usize) -> (BlockKind, usize) {
     let text = line(source, &lines[cursor]);
     if text.trim_matches([' ', '\t']).is_empty() {
@@ -262,7 +293,10 @@ fn classify(source: &str, lines: &[Range<usize>], cursor: usize) -> (BlockKind, 
             }
             end += 1;
         }
-        let content_end = lines.get(end).map_or(source.len(), |range| range.start);
+        let content_end = lines.get(end).map_or_else(
+            || lines.last().map_or(0, |range| range.end),
+            |range| range.start,
+        );
         return (
             BlockKind::CodeFence {
                 info: info.into(),
@@ -278,21 +312,24 @@ fn classify(source: &str, lines: &[Range<usize>], cursor: usize) -> (BlockKind, 
     if thematic(text) {
         return (BlockKind::ThematicBreak, cursor + 1);
     }
-    if text.starts_with("    ") || text.starts_with('\t') {
+    if code_indent(text) {
         let mut end = cursor + 1;
         while end < lines.len() && {
             let next = line(source, &lines[end]);
-            next.starts_with("    ") || next.starts_with('\t') || next.trim().is_empty()
+            code_indent(next) || next.trim_matches([' ', '\t']).is_empty()
         } {
             end += 1;
         }
         return (BlockKind::IndentedCode, end);
     }
-    if let Some(close) = html_closer(text) {
+    if let Some(ending) = html::start(text, false) {
         let mut end = cursor + 1;
-        if !text.contains(close) {
+        if !ending.closes(text) {
             while end < lines.len() {
-                let done = line(source, &lines[end]).contains(close);
+                let done = ending.closes(line(source, &lines[end]));
+                if done && matches!(ending, html::End::Blank) {
+                    break;
+                }
                 end += 1;
                 if done {
                     break;
@@ -349,7 +386,40 @@ fn paragraph(source: &str, lines: &[Range<usize>], cursor: usize) -> (BlockKind,
             );
         }
     }
-    (BlockKind::Paragraph, cursor + 1)
+    let mut end = cursor + 1;
+    while end < lines.len() {
+        let next = line(source, &lines[end]);
+        if let Some(level) = setext(next) {
+            let title = lines[cursor..end]
+                .iter()
+                .map(|range| line(source, range).trim())
+                .collect::<Vec<_>>()
+                .join("\n");
+            return (BlockKind::Heading { level, title }, end + 1);
+        }
+        if interrupts_paragraph(next) {
+            break;
+        }
+        end += 1;
+    }
+    (BlockKind::Paragraph, end)
+}
+fn interrupts_paragraph(text: &str) -> bool {
+    text.trim_matches([' ', '\t']).is_empty()
+        || heading(text).is_some()
+        || fence(text).is_some()
+        || thematic(text)
+        || html::start(text, true).is_some()
+        || unindent(text).is_some_and(|s| s.starts_with('>'))
+        || list_item(text).is_some_and(|item| {
+            let BlockKind::ListItem { ordinal, .. } = item else {
+                return false;
+            };
+            let rest = text.trim_start().trim_start_matches(|c: char| {
+                c.is_ascii_digit() || matches!(c, '.' | ')' | '-' | '+' | '*')
+            });
+            (ordinal.is_none() || ordinal == Some(1)) && !rest.trim().is_empty()
+        })
 }
 fn list_item(text: &str) -> Option<BlockKind> {
     let text = unindent(text)?;
@@ -377,24 +447,6 @@ fn list_item(text: &str) -> Option<BlockKind> {
         None
     };
     Some(BlockKind::ListItem { ordinal, checked })
-}
-fn html_closer(text: &str) -> Option<&'static str> {
-    let text = unindent(text)?;
-    if text.starts_with("<!--") {
-        Some("-->")
-    } else if text.starts_with("<?") {
-        Some("?>")
-    } else if text.starts_with("<![CDATA[") {
-        Some("]]>")
-    } else if text.starts_with("<script") {
-        Some("</script>")
-    } else if text.starts_with("<pre") {
-        Some("</pre>")
-    } else if text.starts_with("<style") {
-        Some("</style>")
-    } else {
-        None
-    }
 }
 fn cells(text: &str) -> Vec<String> {
     let text = text.trim();

@@ -53,6 +53,12 @@
       "version": "17.0.0",
       "license": "Unicode-3.0",
       "manifest": "vendor/unicode/manifest.json"
+    },
+    {
+      "name": "CommonMark and GFM specification examples",
+      "version": "CommonMark 0.31.2; cmark-gfm 0.29.0.gfm.13",
+      "license": "CC-BY-SA-4.0",
+      "manifest": "crates/core/tests/data/markdown/manifest.json"
     }
   ],
   "cargo_details": [

@@ -1,0 +1,27 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "purpose": "Official specification examples for conformance qualification only; no runtime linkage",
+  "normalization": "JSON formatted with two-space indentation; GFM example pairs extracted from pinned spec text and arrow tab notation decoded; license trailing whitespace normalized",
+  "files": {
+    "commonmark-0.31.2.json": {
+      "url": "https://spec.commonmark.org/0.31.2/spec.json",
+      "upstream_sha256": "d431b29d97b6f73e69d547109cf5081578fac931e72afe95639ebe766c1b2a20",
+      "sha256": "1ee44e648e75cba1f2ee49caf4d51379c847ba550f325454468aaff900372782"
+    },
+    "gfm-0.29.0.gfm.13.json": {
+      "url": "https://raw.githubusercontent.com/github/cmark-gfm/587a12bb54d95ac37241377e6ddc93ea0e45439b/test/spec.txt",
+      "upstream_sha256": "7d8e5814befec287ac116786d81ff14e0adc9b13295b4494649e995408fd871c",
+      "sha256": "8e40c76f874406251d653c768cbbbe046e8fcde250d887a9f848129085581053"
+    },
+    "LICENSE-commonmark": {
+      "url": "https://raw.githubusercontent.com/commonmark/commonmark-spec/0.31.2/LICENSE",
+      "upstream_sha256": "3e4806ba6f20073e8ce40da5a0c4b59f7f44287965f538e195a4d734d833557b",
+      "sha256": "3e4806ba6f20073e8ce40da5a0c4b59f7f44287965f538e195a4d734d833557b"
+    },
+    "LICENSE-gfm": {
+      "url": "https://raw.githubusercontent.com/github/cmark-gfm/587a12bb54d95ac37241377e6ddc93ea0e45439b/COPYING",
+      "upstream_sha256": "c22e885f33b821bddb24cf007145e5540655b6c0f403e49e6c76a93c28e6d9a9",
+      "sha256": "c22e885f33b821bddb24cf007145e5540655b6c0f403e49e6c76a93c28e6d9a9"
+    }
+  }
+}

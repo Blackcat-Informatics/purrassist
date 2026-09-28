@@ -27,7 +27,7 @@ for source in ['crates', 'scripts']:
         if 'SPDX-License-Identifier:' not in header or 'SPDX-FileCopyrightText:' not in header:
             errors.append(f'{path.relative_to(ROOT)}: missing attribution')
 
-for directory in ['crates/core/src/schema/metaschemas', 'crates/core/tests/data/json-schema']:
+for directory in ['crates/core/src/schema/metaschemas', 'crates/core/tests/data/json-schema', 'crates/core/tests/data/markdown']:
     root = ROOT / directory
     manifest = json.loads((root / 'manifest.json').read_text())
     entries = manifest.get('files', manifest)
