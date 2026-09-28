@@ -132,6 +132,10 @@ pub(super) fn start(text: &str, interrupts: bool) -> Option<End> {
 // Type 7 is one complete open/close tag followed only by whitespace. Unlike
 // type 6, a quoted '>' does not close the tag and invalid attributes reject it.
 fn complete_tag(text: &str) -> bool {
+    tag_end(text).is_some_and(|end| text[end..].bytes().all(|b| matches!(b, b' ' | b'\t')))
+}
+
+pub(super) fn tag_end(text: &str) -> Option<usize> {
     let bytes = text.as_bytes();
     let mut cursor = 1;
     let closing = bytes.get(cursor) == Some(&b'/');
@@ -139,7 +143,7 @@ fn complete_tag(text: &str) -> bool {
         cursor += 1;
     }
     if !bytes.get(cursor).is_some_and(u8::is_ascii_alphabetic) {
-        return false;
+        return None;
     }
     cursor += 1;
     while bytes
@@ -150,16 +154,14 @@ fn complete_tag(text: &str) -> bool {
     }
     loop {
         let before = cursor;
-        spaces(bytes, &mut cursor);
+        if !spaces(bytes, &mut cursor) {
+            return None;
+        }
         if bytes.get(cursor) == Some(&b'>') {
-            return bytes[cursor + 1..]
-                .iter()
-                .all(|b| matches!(b, b' ' | b'\t'));
+            return Some(cursor + 1);
         }
         if !closing && bytes.get(cursor..cursor + 2) == Some(b"/>") {
-            return bytes[cursor + 2..]
-                .iter()
-                .all(|b| matches!(b, b' ' | b'\t'));
+            return Some(cursor + 2);
         }
         if closing
             || before == cursor
@@ -167,7 +169,7 @@ fn complete_tag(text: &str) -> bool {
                 .get(cursor)
                 .is_some_and(|b| b.is_ascii_alphabetic() || matches!(b, b'_' | b':'))
         {
-            return false;
+            return None;
         }
         cursor += 1;
         while bytes
@@ -177,13 +179,17 @@ fn complete_tag(text: &str) -> bool {
             cursor += 1;
         }
         let after_name = cursor;
-        spaces(bytes, &mut cursor);
+        if !spaces(bytes, &mut cursor) {
+            return None;
+        }
         if bytes.get(cursor) != Some(&b'=') {
             cursor = after_name;
             continue;
         }
         cursor += 1;
-        spaces(bytes, &mut cursor);
+        if !spaces(bytes, &mut cursor) {
+            return None;
+        }
         match bytes.get(cursor) {
             Some(quote @ (b'\'' | b'"')) => {
                 cursor += 1;
@@ -191,30 +197,43 @@ fn complete_tag(text: &str) -> bool {
                     cursor += 1;
                 }
                 if bytes.get(cursor) != Some(quote) {
-                    return false;
+                    return None;
                 }
                 cursor += 1;
             }
             Some(_) => {
                 let begin = cursor;
                 while bytes.get(cursor).is_some_and(|b| {
-                    !matches!(b, b' ' | b'\t' | b'"' | b'\'' | b'=' | b'<' | b'>' | b'`')
+                    !matches!(
+                        b,
+                        b' ' | b'\t' | b'\r' | b'\n' | b'"' | b'\'' | b'=' | b'<' | b'>' | b'`'
+                    )
                 }) {
                     cursor += 1;
                 }
                 if cursor == begin {
-                    return false;
+                    return None;
                 }
             }
-            None => return false,
+            None => return None,
         }
     }
 }
-fn spaces(bytes: &[u8], cursor: &mut usize) {
-    while bytes
-        .get(*cursor)
-        .is_some_and(|b| matches!(b, b' ' | b'\t'))
-    {
-        *cursor += 1;
+fn spaces(bytes: &[u8], cursor: &mut usize) -> bool {
+    let mut lines = 0;
+    while let Some(byte) = bytes.get(*cursor) {
+        match byte {
+            b' ' | b'\t' => *cursor += 1,
+            b'\r' | b'\n' => {
+                lines += 1;
+                if lines > 1 {
+                    return false;
+                }
+                let crlf = bytes.get(*cursor..*cursor + 2) == Some(b"\r\n");
+                *cursor += if crlf { 2 } else { 1 };
+            }
+            _ => break,
+        }
     }
+    true
 }

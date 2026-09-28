@@ -6,7 +6,9 @@
 mod containers;
 mod context;
 mod html;
+mod inline;
 pub use context::Context;
+pub use inline::{Inline, InlineFragment, InlineKind};
 
 use crate::{
     Governor, StopReason,

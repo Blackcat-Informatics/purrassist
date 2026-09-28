@@ -82,6 +82,19 @@ attributes, host wire/digest association, and atomic failure on ledger exhaustio
 Semantic alternative costs are zero because the surviving interpretations are
 not ranked against each other.
 
+The first inline layer is checked against 106 complete examples: code spans,
+autolinks, and soft breaks from both pinned corpora, plus CommonMark 0.31.2's
+raw-HTML section. It follows the [CommonMark inline rules](https://spec.commonmark.org/0.31.2/#inlines).
+The tests compare exact HTML, including precedence, code whitespace, URI escaping,
+and malformed tags. Additional regressions check CRLF/Unicode source spans,
+backslash hard breaks, NUL replacement in autolinks, cancellation, storage
+exhaustion, and bounded lookahead. All 1,324 examples also pass inline byte-span
+partition checks. The final source passed the full local gate on Rust 1.98.0.
+The previous semantic checkpoint's nightly CI failed on empty-collection test
+assertions; this checkpoint corrects them, pending its own hosted verification.
+This is not full inline or document conformance: emphasis, entities, explicit
+links/images, legacy GFM HTML differences, and document rendering remain open.
+
 ## Remaining release work
 
 - Complete CommonMark/GFM container and inline parsing and structural editing;

@@ -144,8 +144,8 @@ fn conflicting_rules_have_separate_output_bound_ledgers() {
     };
     assert_eq!(answers.len(), 2);
     assert_eq!(result.receipt.alternatives.len(), answers.len());
-    assert!(result.receipt.evidence.is_empty());
-    assert!(result.receipt.inferences.is_empty());
+    assert_eq!(result.receipt.evidence, Vec::new());
+    assert_eq!(result.receipt.inferences, Vec::new());
     for (answer, ledger) in answers.iter().zip(&result.receipt.alternatives) {
         assert_eq!(
             ledger.output,
@@ -213,7 +213,7 @@ fn rejected_and_duplicate_derivations_do_not_pollute_selected_evidence() {
             .all(|entry| !entry.rule.ends_with("::wrong") && !entry.rule.ends_with("::duplicate"))
     );
     assert_eq!(result.receipt.validations.len(), 1);
-    assert!(result.receipt.alternatives.is_empty());
+    assert_eq!(result.receipt.alternatives, Vec::new());
 }
 #[test]
 fn semantic_ledger_exhaustion_never_publishes_partial_alternatives() {
@@ -235,7 +235,7 @@ fn semantic_ledger_exhaustion_never_publishes_partial_alternatives() {
         limited.receipt.stopped,
         StopReason::BudgetExceeded(Resource::EvidenceEntries)
     );
-    assert!(limited.receipt.alternatives.is_empty());
-    assert!(limited.receipt.validations.is_empty());
-    assert!(limited.receipt.evidence.is_empty());
+    assert_eq!(limited.receipt.alternatives, Vec::new());
+    assert_eq!(limited.receipt.validations, Vec::new());
+    assert_eq!(limited.receipt.evidence, Vec::new());
 }
