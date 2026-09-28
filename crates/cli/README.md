@@ -28,6 +28,10 @@ The proposal preserves surrounding bytes and is reparsed before it is returned.
 `plan_markdown_table_row` uses a table `path`, `action` (`insert` or `remove`),
 and zero-based body `index`. Insertion supplies `cells` matching the header width;
 an index equal to the row count appends. The header and delimiter are not body rows.
+`plan_markdown_table_column` selects a table `path` and column `index` with action
+`insert`, `remove`, or `align`. Insert supplies `header`, `alignment`, and one
+`cells` value per body row; align supplies `alignment`. Plans preserve existing
+cell spelling and validate the resulting table before returning.
 
 Pre-release implementation. See the
 [repository](https://github.com/Blackcat-Informatics/purrassist) for current

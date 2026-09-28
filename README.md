@@ -143,7 +143,15 @@ Markdown editing operations retain the original source and support exact undo.
 New rows use canonical `| cell |` spacing, the delimiter line's container prefix
 and newline style, and preserve EOF's final-newline convention. Existing bytes
 outside the edit remain exact. Cell and row plans include structural validation
-in their receipts. Header/delimiter removal and column edits are separate work.
+in their receipts.
+`plan_markdown_table_column` takes a table `path`, zero-based column `index`, and
+`action` (`insert`, `remove`, or `align`). Insertion requires `header`, `alignment`
+(`default`, `left`, `right`, or `center`), and one `cells` value per body row;
+alignment changes require only `alignment`. Removing the final column is rejected.
+Insert/remove preserves existing cell spelling, makes implicit padding explicit,
+keeps ignored extra cells beyond the new header width, and adds outer pipes when
+absent. Alignment changes preserve delimiter margins. Every proposal is reparsed
+and supports exact conditional undo. See `examples/markdown-table-column.json`.
 The Rust `markdown::InlineFragment` layer retains exact byte spans and renders
 code spans, emphasis, strong emphasis, inline links/images, escapes, line breaks,
 autolinks, and raw inline HTML. Explicit dialect selection preserves the pinned

@@ -8,7 +8,7 @@ use purrassist_core::{
     edits::EditPlan,
     embeddings::{Embedding, EmbeddingIndex, EmbeddingMatch, EmbeddingPolicy},
     json::Node,
-    markdown::{Dialect, Document, TableRowEdit},
+    markdown::{Alignment, Dialect, Document, TableColumnEdit, TableRowEdit},
     matching,
     schema::{Schema, recovery::RecoveryRequest},
     text::{self, Normalization},
@@ -187,6 +187,38 @@ fn markdown_transcript() -> Node {
         let removed = apply_edit(&plan, &inserted, &mut results);
         assert!(!removed.contains("tea"));
         assert!(removed.contains("café"));
+        let doc = Document::parse(&removed, &mut g).expect("remaining table");
+        let plan = doc
+            .edit_table_column(
+                &[0, 0],
+                &TableColumnEdit::Insert {
+                    index: 0,
+                    header: "Origin".into(),
+                    alignment: Alignment::Left,
+                    cells: vec!["caller".into()],
+                },
+                &mut g,
+            )
+            .expect("insert column");
+        let widened = apply_edit(&plan, &removed, &mut results);
+        assert!(widened.contains("| Origin | Drink | State |"));
+        let doc = Document::parse(&widened, &mut g).expect("widened table");
+        let plan = doc
+            .edit_table_column(
+                &[0, 0],
+                &TableColumnEdit::Align {
+                    index: 0,
+                    alignment: Alignment::Right,
+                },
+                &mut g,
+            )
+            .expect("align column");
+        let aligned = apply_edit(&plan, &widened, &mut results);
+        let doc = Document::parse(&aligned, &mut g).expect("aligned table");
+        let plan = doc
+            .edit_table_column(&[0, 0], &TableColumnEdit::Remove { index: 0 }, &mut g)
+            .expect("remove column");
+        assert_eq!(apply_edit(&plan, &aligned, &mut results), removed);
     }
     let source = "> - [ ] café\r\n>   - [X] child\r\n";
     let mut g = Governor::new(Budget::default());

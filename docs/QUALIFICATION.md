@@ -38,8 +38,8 @@ guess reporting, and exhaustion before a complete ledger can be returned.
 Local package verification has built all five packages. A local release CLI was
 installed into a disposable checkout cache and exercised on the published example
 inputs, including exact-source retention. This does not verify downloadable registry
-packages. Hosted CI passed for checkpoint `792cd882eb6d685853cc39168426e902601c7f40`:
-[run 36408969760](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36408969760)
+packages. Hosted CI passed for checkpoint `7104c1837b5918d8451a1f4349aef7ca3fad6bdf`:
+[run 36412285113](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36412285113)
 completed the Linux/macOS local gates, MSRV workspace tests, Windows core/syntax
 tests, and native/WASI comparisons. This is evidence for that checkpoint only;
 subsequent changes need their own qualification.
@@ -169,8 +169,7 @@ container prefixes, and line endings. It reparses proposals and compares the
 complete selected table against the expected single-cell change. Focused tests
 cover CRLF, Unicode, escaped pipes, empty cells, header edits, nested quotes/lists,
 exact undo, stale sources, invalid selection, cancellation, and work exhaustion.
-Implicit padded cells, extra cells beyond header width, and column insertion
-or removal require further structural operations.
+Direct cell edits still reject implicit padded cells and cells beyond header width.
 The full local Rust 1.98.0 `make check` gate passed, including the official
 Markdown corpora and CLI/MCP equivalence for this operation. The optimized CLI
 executed `examples/markdown-table-cell.json` and returned the expected single-cell
@@ -183,21 +182,33 @@ with the expected table. Both cell and row tools emit structural validation
 receipts. Focused tests cover nested lists/quotes, LF/CRLF/CR, unterminated EOF,
 empty tables/cells, escaped pipes, header preservation, exact undo/stale rejection,
 invalid row/cell selection, cancellation, and storage exhaustion.
-Hosted CI for cell checkpoint `e54dce71692e5b2c132287fc2168e7f8fe303258` failed
-nightly Clippy's empty-collection assertion lint. The assertion is corrected in
-this row checkpoint; a new hosted run must establish the final result.
 The final row source passed the complete local Rust 1.98.0 `make check` gate and
 workspace/all-target Clippy on nightly-2026-09-14. This includes the new row tests,
 CLI/MCP equivalence, official Markdown corpora, and Rustdoc. The rebuilt CLI
 executed `examples/markdown-table-row.json` and returned the expected inserted row
-and structural-validation receipt. An earlier local attempt invoked a stale CLI
-artifact after the host Cargo wrapper republished it; the final gate rebuilt the
-CLI and passed with explicit toolchain binaries.
+and structural-validation receipt.
+
+Nested table-column plans now insert/remove columns and change alignment across
+the shared Rust/CLI/MCP surface. Insert/remove preserves existing cell spelling,
+materializes implicit padding, retains ignored extra cells beyond the new header
+width, and adds outer pipes when needed. Sparse-table padding growth is budgeted
+before allocation. Tests cover insertion boundaries, nested containers, CRLF,
+escaped pipes, Unicode, ragged rows, exact undo, stale-source rejection, invalid
+action fields, final-column removal rejection, no-op alignment, and exhaustion.
+Alignment-only edits do not reserve rectangular padding growth. Column operations
+and their complete edit/undo receipts also matched in the executed native/WASI
+transcript; nightly Clippy and the browser-WASM core build passed.
+The final column source passed the complete local Rust 1.98.0 `make check` gate,
+including the sparse-alignment budget regression, CLI/MCP equivalence, official
+Markdown corpora, and Rustdoc. The optimized CLI executed
+`examples/markdown-table-column.json` and returned the expected three source-bound
+edits and structural-validation receipt.
 
 The executed native/WASI core transcript now includes embedding selection at
 extreme finite scales, exact binary64 score bits, ordered ties, weak matches,
 zero-vector rejection, and candidate exhaustion. It also includes nested Markdown
-cell edits, body-row insertion/removal, task edits, GFM rendering, LF/CRLF/CR,
+cell edits, body-row and column insertion/removal, alignment changes, task edits,
+GFM rendering, LF/CRLF/CR,
 Unicode/escaped pipes, unterminated EOF, exact inverse replay, stale-source
 rejection, and complete edit/undo/failure receipts. The transcripts matched
 byte-for-byte on native Linux and WASI. The syntax transcript also matched, and

@@ -1,0 +1,9 @@
+{
+  "source": "> | Drink |\r\n> | --- |\r\n> | tea |\r\n",
+  "path": [0, 0],
+  "action": "insert",
+  "index": 1,
+  "header": "Temperature",
+  "alignment": "center",
+  "cells": ["**iced**"]
+}

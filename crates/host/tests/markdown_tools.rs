@@ -27,6 +27,60 @@ fn offset(node: &Node) -> usize {
     number.to_usize().unwrap()
 }
 #[test]
+fn table_column_tool_preserves_cells_and_validates_action_fields() {
+    let root = std::env::temp_dir().join(format!(
+        "purrassist-table-column-tool-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let tools = Tools::new(&root).unwrap();
+    let source = "> | A |\r\n> | --- |\r\n> | café |\r\n";
+    let result = call(
+        &tools,
+        "plan_markdown_table_column",
+        source,
+        r#"{"path":[0,0],"action":"insert","index":1,"header":"B","alignment":"right","cells":["cold"]}"#,
+    );
+    let inserted = apply(&result, source);
+    assert_eq!(
+        inserted,
+        "> | A | B |\r\n> | --- | ---: |\r\n> | café | cold |\r\n"
+    );
+    assert_eq!(
+        result
+            .pointer("/receipt/validations/0/validator")
+            .unwrap()
+            .as_str(),
+        Some("markdown.table-structure.v1")
+    );
+    let removed = call(
+        &tools,
+        "plan_markdown_table_column",
+        &inserted,
+        r#"{"path":[0,0],"action":"remove","index":1}"#,
+    );
+    assert_eq!(apply(&removed, &inserted), source);
+    let aligned = call(
+        &tools,
+        "plan_markdown_table_column",
+        source,
+        r#"{"path":[0,0],"action":"align","index":0,"alignment":"center"}"#,
+    );
+    assert_eq!(apply(&aligned, source), source.replace("---", ":---:"));
+    for extra in [
+        r#"{"source":"x","path":[0],"action":"remove","index":0,"alignment":"left"}"#,
+        r#"{"source":"x","path":[0],"action":"align","index":0}"#,
+        r#"{"source":"x","path":[0],"action":"insert","index":0,"header":"B","cells":[]}"#,
+    ] {
+        assert!(
+            tools
+                .call("plan_markdown_table_column", &json::parse(extra).unwrap())
+                .is_err()
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+#[test]
 fn table_row_tool_has_validation_and_exact_undo() {
     let root =
         std::env::temp_dir().join(format!("purrassist-table-row-tool-{}", std::process::id()));

@@ -29,7 +29,7 @@ pub(super) fn call(name: &str, args: &Node) -> Result<Node, String> {
             size(source.len()).saturating_mul(4).saturating_add(1),
         )?;
         let value = operation(name, args, &document, &mut governor)?;
-        if matches!(name, "plan_markdown_table_cell" | "plan_markdown_table_row") {
+        if matches!(name, "plan_markdown_table_cell" | "plan_markdown_table_row" | "plan_markdown_table_column") {
             table::record(&document, &mut receipt, &mut governor)?;
         }
         if name == "render_markdown" {
@@ -111,6 +111,7 @@ fn operation(
             governor,
         )?)),
         "plan_markdown_table_row" => table::row(args, document, governor),
+        "plan_markdown_table_column" => table::column(args, document, governor),
         "plan_markdown_task" => {
             let Some(Value::Bool(checked)) = args.get("checked").map(|node| &node.value) else {
                 return Err(StopReason::InvalidInput("checked must be boolean".into()));
