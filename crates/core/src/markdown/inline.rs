@@ -2,9 +2,23 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Source-preserving inline parsing foundation; full inline conformance is in progress.
 mod angle;
+mod emphasis;
+mod links;
 mod parse;
+mod render;
 use crate::{Governor, StopReason, contract::Resource, digest::Digest};
 use std::ops::Range;
+
+/// Markdown dialect for parsing and HTML-output conventions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Dialect {
+    /// `CommonMark` 0.31.2, retaining nested strong-emphasis tags.
+    #[default]
+    CommonMark,
+    /// Pinned GFM 0.29.0.gfm.13, suppressing directly nested strong tags.
+    /// Extension parsing is still in progress; selecting this does not claim conformance.
+    Gfm,
+}
 
 /// One inline element with an exact range in the original fragment.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -14,7 +28,7 @@ pub struct Inline {
     /// Interpreted content; original bytes remain available from the fragment.
     pub kind: InlineKind,
 }
-/// Inline forms currently recognized before emphasis and explicit-link parsing.
+/// Source-addressed inline forms and nested content.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InlineKind {
     /// Literal text with backslash escapes interpreted.
@@ -30,6 +44,31 @@ pub enum InlineKind {
     },
     /// Raw inline HTML, with line endings normalized.
     Html(String),
+    /// Emphasized content; children exclude the consumed delimiter bytes.
+    Emphasis {
+        /// Two delimiters produce strong emphasis; one produces ordinary emphasis.
+        strong: bool,
+        /// Nested content with ranges in the original fragment.
+        children: Vec<Inline>,
+    },
+    /// An inline link; references are resolved by a later document-level phase.
+    Link {
+        /// Decoded destination before URI serialization.
+        destination: String,
+        /// Optional decoded title.
+        title: Option<String>,
+        /// Link label with ranges in the original fragment.
+        children: Vec<Inline>,
+    },
+    /// An inline image whose nested label supplies alternative text.
+    Image {
+        /// Decoded image destination before URI serialization.
+        destination: String,
+        /// Optional decoded title.
+        title: Option<String>,
+        /// Alternative-label content with original fragment ranges.
+        children: Vec<Inline>,
+    },
     /// A soft line ending.
     SoftBreak,
     /// A two-space or backslash hard line break.
@@ -39,14 +78,15 @@ pub enum InlineKind {
 }
 /// Exact inline source and a contiguous token index.
 ///
-/// Recognizes code spans, backslash escapes, line breaks, autolinks, and raw HTML.
-/// Emphasis, explicit links/images, and entity decoding remain to be implemented;
-/// their syntax currently remains literal text. This is not a complete renderer.
+/// Recognizes code spans, escapes, breaks, autolinks, raw HTML, emphasis, and
+/// inline links/images. Reference links and entity decoding remain to be
+/// implemented; their syntax remains literal. This is not a complete renderer.
 #[derive(Clone, Debug)]
 pub struct InlineFragment {
     source: String,
     digest: Digest,
     tokens: Vec<Inline>,
+    dialect: Dialect,
 }
 impl InlineFragment {
     /// Parse the contents of one paragraph or heading, preserving original bytes.
@@ -66,6 +106,25 @@ impl InlineFragment {
     /// # Errors
     /// Returns explicit admission, work, or storage exhaustion and cancellation.
     pub fn parse(source: &str, governor: &mut Governor) -> Result<Self, StopReason> {
+        Self::parse_with_dialect(source, Dialect::CommonMark, governor)
+    }
+    /// Parse with an explicit dialect while retaining the same source-span contract.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, markdown::{Dialect, InlineFragment}};
+    /// let mut governor = Governor::new(Budget::default());
+    /// let fragment = InlineFragment::parse_with_dialect("****tea****", Dialect::Gfm, &mut governor)?;
+    /// assert_eq!(fragment.render_html(&mut governor)?, "<strong>tea</strong>");
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns resource exhaustion or cancellation before publishing a partial tree.
+    pub fn parse_with_dialect(
+        source: &str,
+        dialect: Dialect,
+        governor: &mut Governor,
+    ) -> Result<Self, StopReason> {
         governor.charge(Resource::InputBytes, super::size(source.len()))?;
         governor.charge(Resource::Work, super::size(source.len()).saturating_mul(4))?;
         governor.charge(
@@ -78,6 +137,7 @@ impl InlineFragment {
             source: source.into(),
             digest: Digest::of(source.as_bytes()),
             tokens: parse::run(source, governor)?,
+            dialect,
         })
     }
     /// Exact source before inline interpretation.
@@ -116,27 +176,7 @@ impl InlineFragment {
                 .saturating_add(256),
         )?;
         let mut output = String::new();
-        for token in &self.tokens {
-            match &token.kind {
-                InlineKind::Text(text) => escape(text, &mut output),
-                InlineKind::Code(text) => {
-                    output.push_str("<code>");
-                    escape(text, &mut output);
-                    output.push_str("</code>");
-                }
-                InlineKind::Html(text) => output.push_str(text),
-                InlineKind::Autolink { destination, label } => {
-                    output.push_str("<a href=\"");
-                    escape(&angle::uri(destination), &mut output);
-                    output.push_str("\">");
-                    escape(label, &mut output);
-                    output.push_str("</a>");
-                }
-                InlineKind::SoftBreak => output.push('\n'),
-                InlineKind::HardBreak => output.push_str("<br />\n"),
-                InlineKind::Boundary => {}
-            }
-        }
+        render::tokens(&self.tokens, &mut output, governor, 0, self.dialect, false)?;
         Ok(output)
     }
 }

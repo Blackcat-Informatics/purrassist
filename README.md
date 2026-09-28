@@ -99,8 +99,10 @@ return receipts. Edit plans in `value` bind to the source digest and do not writ
 files. Block indices come from inspection of the same source version. This
 Markdown editing index is not yet a conforming CommonMark/GFM renderer.
 The Rust `markdown::InlineFragment` layer retains exact byte spans and renders
-code spans, escapes, line breaks, autolinks, and raw inline HTML. Emphasis,
-entities, and explicit links/images remain literal until their parsers are added.
+code spans, emphasis, strong emphasis, inline links/images, escapes, line breaks,
+autolinks, and raw inline HTML. Explicit dialect selection preserves the pinned
+CommonMark/GFM rendering differences. Entities and reference links remain literal;
+full document rendering is still in progress.
 
 File tools reject stale versions and record transaction identities for undo. The portable filesystem layer coordinates
 cooperating writers; it is not a sandbox against malicious directory replacement

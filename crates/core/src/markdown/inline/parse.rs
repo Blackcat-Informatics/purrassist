@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Inline tokenization with indexed backtick runs and bounded angle lookahead.
-use super::{Inline, InlineKind, angle, normalize_lines};
+use super::{Inline, InlineKind, angle, emphasis, links, normalize_lines};
 use crate::{Governor, StopReason, contract::Resource};
 use std::collections::BTreeMap;
 
@@ -9,11 +9,24 @@ pub(super) fn run(source: &str, governor: &mut Governor) -> Result<Vec<Inline>, 
     let ticks = backticks(source, governor)?;
     let mut tokens = Vec::new();
     let mut cursor = 0;
+    let mut brackets = Vec::new();
+    let mut previous_marker = false;
     while cursor < source.len() {
         governor.charge(Resource::Work, 1)?;
+        if source.as_bytes()[cursor] == b']'
+            && let Some(end) = links::close(source, cursor, &mut tokens, &mut brackets, governor)?
+        {
+            cursor = end;
+            previous_marker = false;
+            continue;
+        }
         let start = cursor;
         let rest = &source[cursor..];
+        let marker = matches!(source.as_bytes()[cursor], b'*' | b'_' | b'[' | b']' | b'!');
         let (end, kind) = match source.as_bytes()[cursor] {
+            b'*' | b'_' => delimiter(source, cursor),
+            b'!' if rest.starts_with("![") => (cursor + 2, InlineKind::Text("![".into())),
+            b'[' | b']' | b'!' => literal(source, cursor),
             b'`' => code(source, cursor, &ticks),
             b'\\' => escaped(source, cursor),
             b' ' | b'\t' | b'\r' | b'\n' => whitespace(source, cursor),
@@ -27,10 +40,25 @@ pub(super) fn run(source: &str, governor: &mut Governor) -> Result<Vec<Inline>, 
                     |(width, kind)| (cursor + width, kind),
                 )
             }
-            _ => literal(source, cursor),
+            _ => text_run(source, cursor),
         };
         cursor = end;
-        if let InlineKind::Text(text) = &kind
+        if matches!(kind, InlineKind::Autolink { .. }) {
+            links::deactivate(&mut brackets);
+        }
+        if source.as_bytes()[start] == b'[' || source[start..].starts_with("![") {
+            governor.charge(
+                Resource::Depth,
+                super::super::size(brackets.len().saturating_add(1)),
+            )?;
+            brackets.push(links::Bracket::new(
+                tokens.len(),
+                source.as_bytes()[start] == b'!',
+            ));
+        }
+        if !marker
+            && !previous_marker
+            && let InlineKind::Text(text) = &kind
             && let Some(Inline {
                 span,
                 kind: InlineKind::Text(prior),
@@ -44,7 +72,10 @@ pub(super) fn run(source: &str, governor: &mut Governor) -> Result<Vec<Inline>, 
                 kind,
             });
         }
+        previous_marker = marker;
     }
+    let tokens = emphasis::resolve(source, tokens, governor)?;
+    super::render::check(&tokens, governor)?;
     Ok(tokens)
 }
 fn literal(source: &str, start: usize) -> (usize, InlineKind) {
@@ -176,5 +207,26 @@ fn whitespace(source: &str, start: usize) -> (usize, InlineKind) {
         } else {
             InlineKind::Text(source[start..cursor].into())
         },
+    )
+}
+
+fn delimiter(source: &str, start: usize) -> (usize, InlineKind) {
+    let marker = source.as_bytes()[start];
+    let end = start
+        + source[start..]
+            .bytes()
+            .take_while(|byte| *byte == marker)
+            .count();
+    (end, InlineKind::Text(source[start..end].into()))
+}
+fn text_run(source: &str, start: usize) -> (usize, InlineKind) {
+    let width = source[start..]
+        .find([
+            '*', '_', '[', ']', '!', '`', '\\', '<', ' ', '\t', '\r', '\n',
+        ])
+        .unwrap_or(source.len() - start);
+    (
+        start + width,
+        InlineKind::Text(source[start..start + width].replace('\0', "\u{fffd}")),
     )
 }

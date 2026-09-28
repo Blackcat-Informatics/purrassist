@@ -38,8 +38,8 @@ guess reporting, and exhaustion before a complete ledger can be returned.
 Local package verification has built all five packages. A local release CLI was
 installed into a disposable checkout cache and exercised on the published example
 inputs, including exact-source retention. This does not verify downloadable registry
-packages. Hosted CI passed for checkpoint `c67c67feb4bfdb2d731b508f6c61850e32b7b7c2`:
-[run 36397449872](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36397449872)
+packages. Hosted CI passed for checkpoint `4d3d204b0fd8bd3075808dc4cb3e3604cc15340d`:
+[run 36399984984](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36399984984)
 completed the Linux/macOS local gates, MSRV workspace tests, Windows core/syntax
 tests, and native/WASI comparisons. This is evidence for that checkpoint only;
 subsequent changes need their own qualification.
@@ -82,18 +82,24 @@ attributes, host wire/digest association, and atomic failure on ledger exhaustio
 Semantic alternative costs are zero because the surviving interpretations are
 not ranked against each other.
 
-The first inline layer is checked against 106 complete examples: code spans,
-autolinks, and soft breaks from both pinned corpora, plus CommonMark 0.31.2's
-raw-HTML section. It follows the [CommonMark inline rules](https://spec.commonmark.org/0.31.2/#inlines).
-The tests compare exact HTML, including precedence, code whitespace, URI escaping,
-and malformed tags. Additional regressions check CRLF/Unicode source spans,
-backslash hard breaks, NUL replacement in autolinks, cancellation, storage
-exhaustion, and bounded lookahead. All 1,324 examples also pass inline byte-span
-partition checks. The final source passed the full local gate on Rust 1.98.0.
-The previous semantic checkpoint's nightly CI failed on empty-collection test
-assertions; this checkpoint corrects them, pending its own hosted verification.
-This is not full inline or document conformance: emphasis, entities, explicit
-links/images, legacy GFM HTML differences, and document rendering remain open.
+The inline layer is checked against 389 complete examples: emphasis and strong
+emphasis, code spans, autolinks, soft breaks, and raw HTML from both pinned corpora.
+It follows the [CommonMark inline rules](https://spec.commonmark.org/0.31.2/#inlines).
+Tests compare exact HTML, including link/emphasis precedence, Unicode delimiter
+flanking, code whitespace, URI escaping, and malformed tags. Explicit dialect
+selection preserves the pinned GFM corpus's suppression of directly nested strong
+tags while CommonMark retains them. Inline links/images have additional focused
+coverage for nested labels, escaped destinations, titles, and link precedence.
+
+All 1,324 examples also pass recursive inline byte-span partition checks.
+Additional regressions check CRLF/Unicode source spans, selected nested edits and
+exact undo, backslash hard breaks, NUL replacement in autolinks, cancellation,
+storage/depth exhaustion, and bounded lookahead. This increment passed the full
+local Rust 1.98.0 gate, including optimized workspace tests and Rustdoc.
+The prior inline foundation
+passed hosted CI, including the corrected nightly test assertions, as recorded
+above. This is not full inline or document conformance: entities, reference links,
+GFM extensions, and complete document rendering remain open.
 
 ## Remaining release work
 
