@@ -117,7 +117,11 @@ purrassist call render_markdown --root . < examples/render-markdown.json
 `inspect_markdown` returns nested blocks, original line maps, root sections, and
 reference-definition occurrences with original field spans. `markdown_context`
 takes UTF-8 byte offsets `start`/`end` and optional neighboring-block count.
-`plan_markdown_section` replaces the body of a root `heading` block;
+`plan_markdown_section` replaces the body of a root `heading` block verbatim,
+then reparses to preserve the heading, section boundary, and outside block
+structure. Supply separators and line endings explicitly; unclosed constructs
+that capture the next section and new peer headings are rejected. Identical
+bodies yield empty plans.
 `plan_markdown_task` sets the supplied `checked` state using either a root
 `block` index or a nested `path` from inspection (for example `[0,0,1]`).
 Exactly one selector is required; paths follow successive child indices.

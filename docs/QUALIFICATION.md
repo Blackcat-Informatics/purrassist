@@ -38,8 +38,8 @@ guess reporting, and exhaustion before a complete ledger can be returned.
 Local package verification has built all five packages. A local release CLI was
 installed into a disposable checkout cache and exercised on the published example
 inputs, including exact-source retention. This does not verify downloadable registry
-packages. Hosted CI passed for checkpoint `cf84338586cff67a51fe080a4a3a23fee9815824`:
-[run 36416124778](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36416124778)
+packages. Hosted CI passed for checkpoint `d27422b0cf0d80655c57110af05f4aeba189c1b7`:
+[run 36418032620](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36418032620)
 completed the Linux/macOS local gates, MSRV workspace tests, Windows core/syntax
 tests, and native/WASI comparisons. This is evidence for that checkpoint only;
 subsequent changes need their own qualification.
@@ -243,6 +243,17 @@ destinations, titles, and whitespace exhaust work inside their scans with typed
 errors. The full Rust 1.98.0 `make check` gate and nightly Clippy passed.
 Native/WASI transcripts, including the repeated-definition budget record, match;
 the browser-WASM core build also passed.
+
+Section-body replacement now shares a caller governor through proposal parsing
+and rejects changed section boundaries or outside block structure. The standard
+Rust convenience method uses the same checked implementation. CLI/MCP plans
+record `markdown.section-structure.v1` validation. Regression cases cover ATX
+and setext headings, changed lower-ranked subsections, exact undo/stale checks,
+CR/LF/CRLF, empty/no-op/final sections, missing separators, peer-heading injection,
+and unclosed fences/HTML that capture the following section. These operations
+remain rooted at top-level heading indices; nested section and list editing
+remain release work. The full Rust 1.98.0 `make check` gate, nightly Clippy,
+expanded native/WASI edit/undo transcripts, and browser-WASM build passed.
 
 ## Remaining release work
 

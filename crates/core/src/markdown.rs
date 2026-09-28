@@ -18,17 +18,13 @@ mod projection;
 mod references;
 pub use references::ReferenceSite;
 mod render;
+mod sections;
 pub use context::Context;
 pub use inline::{
     Dialect, Inline, InlineFragment, InlineKind, ReferenceDefinition, ReferenceOrigin, References,
 };
 
-use crate::{
-    Governor, StopReason,
-    contract::Resource,
-    digest::Digest,
-    edits::{EditPlan, TextEdit},
-};
+use crate::{Governor, StopReason, contract::Resource, digest::Digest};
 use std::ops::Range;
 
 /// Recognized source block, retaining the exact original byte range.
@@ -195,24 +191,6 @@ impl Document {
             });
         }
         sections
-    }
-    /// Propose replacing a section body, preserving its heading and surrounding bytes.
-    ///
-    /// # Errors
-    /// Rejects a block index that is not a heading in this document.
-    pub fn replace_section(&self, heading: usize, body: &str) -> Result<EditPlan, StopReason> {
-        let section = self
-            .sections()
-            .into_iter()
-            .find(|section| section.heading == heading)
-            .ok_or_else(|| StopReason::InvalidInput("section heading does not exist".into()))?;
-        Ok(EditPlan {
-            source: self.digest,
-            edits: vec![TextEdit {
-                range: section.body,
-                replacement: body.into(),
-            }],
-        })
     }
 }
 fn size(value: usize) -> u64 {

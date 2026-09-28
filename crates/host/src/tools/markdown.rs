@@ -30,6 +30,15 @@ pub(super) fn call(name: &str, args: &Node) -> Result<Node, String> {
             size(source.len()).saturating_mul(4).saturating_add(1),
         )?;
         let value = operation(name, args, &document, &mut governor)?;
+        if name == "plan_markdown_section" {
+            governor.charge(Resource::EvidenceEntries, 1)?;
+            governor.charge(Resource::ScratchBytes, 512)?;
+            receipt.validations.push(purrassist::contract::Validation {
+                validator: "markdown.section-structure.v1".into(),
+                constraint: "selected heading, section boundary, and surrounding block structure remain unchanged after reparsing".into(),
+                passed: true, diagnostics: Vec::new(),
+            });
+        }
         if name == "plan_markdown_reference" { reference::record(&document, &mut receipt, &mut governor)?; }
         if matches!(name, "plan_markdown_table_cell" | "plan_markdown_table_row" | "plan_markdown_table_column") {
             table::record(&document, &mut receipt, &mut governor)?;
@@ -99,12 +108,11 @@ fn operation(
         }
         "plan_markdown_section" => {
             let body = super::field(args, "body").map_err(StopReason::InvalidInput)?;
-            governor.charge(Resource::InputBytes, size(body.len()))?;
-            governor.charge(Resource::Work, size(body.len()))?;
-            governor.charge(Resource::ScratchBytes, size(body.len()).saturating_mul(4))?;
-            Ok(plan(
-                document.replace_section(index(args, "heading")?, body)?,
-            ))
+            Ok(plan(document.replace_section_governed(
+                index(args, "heading")?,
+                body,
+                governor,
+            )?))
         }
         "plan_markdown_table_cell" => Ok(plan(document.replace_table_cell(
             &block_path(args)?,

@@ -157,6 +157,20 @@ fn embedding_outcome(value: Outcome<EmbeddingMatch>) -> Node {
 fn markdown_transcript() -> Node {
     let mut results = Vec::new();
     for newline in ["\n", "\r\n", "\r"] {
+        let section_source = format!("# Tea{newline}Old{newline}# Keep{newline}Tail");
+        let mut section_g = Governor::new(Budget::default());
+        let section = Document::parse(&section_source, &mut section_g).expect("section");
+        let body = format!("Cold café.{newline}## Child{newline}Ready{newline}");
+        let section_plan = section
+            .replace_section_governed(0, &body, &mut section_g)
+            .expect("section plan");
+        let edited = apply_edit(&section_plan, &section_source, &mut results);
+        assert_eq!(edited, format!("# Tea{newline}{body}# Keep{newline}Tail"));
+        assert!(
+            section
+                .replace_section_governed(0, "```\n", &mut section_g)
+                .is_err()
+        );
         let source = format!("> | Drink | State |{newline}> | --- | --- |{newline}> | tea | hot |");
         let mut g = Governor::new(Budget::default());
         let doc = Document::parse(&source, &mut g).expect("table");

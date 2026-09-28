@@ -305,6 +305,13 @@ fn document_tools_preserve_crlf_unicode_context_and_edit_identity() {
         apply(&section, source),
         "# Tea\r\nServed cold.\r\n# Other\r\nKeep\r\n"
     );
+    assert_eq!(
+        section
+            .pointer("/receipt/validations/0/validator")
+            .unwrap()
+            .as_str(),
+        Some("markdown.section-structure.v1")
+    );
     let unchanged = call(
         &tools,
         "plan_markdown_task",
@@ -316,6 +323,7 @@ fn document_tools_preserve_crlf_unicode_context_and_edit_identity() {
         ("markdown_context", r#"{"start":16,"end":17}"#),
         ("markdown_context", r#"{"start":10,"end":4}"#),
         ("plan_markdown_section", r#"{"heading":1,"body":"no"}"#),
+        ("plan_markdown_section", r#"{"heading":0,"body":"```\n"}"#),
         ("plan_markdown_task", r#"{"block":0,"checked":true}"#),
     ] {
         let failed = call(&tools, name, source, args);
