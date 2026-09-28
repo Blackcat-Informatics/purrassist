@@ -205,6 +205,7 @@ make check       # formatting, attribution/dependencies, lint, optimized tests, 
 make wasm-test   # compare native/WASI recovery, embeddings, Markdown, and grammars
 make syntax-oracles  # compare fixed syntax probes to independent compilers
 make benchmark  # recovery quality assertions and latency baseline
+make fuzz-json  # source-region coverage-guided JSON campaign; matching LLVM tools required
 ```
 
 The checked-in main Draft 2020-12 corpus contains 1,301 tests, with another 121
@@ -222,3 +223,6 @@ PurRAssist shares Blackcat Informatics' cat silhouette and palette with PurRDF;
 the braces and validation mark are this crate's service emblem.
 
 Resource profiling is available with `make resources`; see [measurement scope and prerequisites](docs/RESOURCES.md). It uses external profilers and adds no crate runtime dependencies.
+
+Coverage-guided JSON campaigns are available with `make fuzz-json`; see
+[properties, replay, and qualification limits](docs/FUZZING.md).

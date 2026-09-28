@@ -58,3 +58,10 @@ runtime license notices are registered in `vendor/tooling.json`. This adds no
 Cargo dependency or crate runtime dependency. Profiling requires appropriate
 loader debug symbols; installed debuginfod configuration is inherited, without
 embedding any endpoint in repository configuration or reports.
+
+Coverage-guided JSON qualification uses installed LLVM 22.1.8 `llvm-cov` and
+`llvm-profdata` tools with the Rust compiler's matching coverage runtime. Only
+the qualification example is instrumented. LLVM's Apache-2.0 WITH LLVM-exception
+notice and exact tool version are recorded in `vendor/tooling.json`. The
+first-party mutation runner uses Python's standard library; it adds no Cargo
+dependency, vendored fuzzing engine, or instrumentation to production crates.

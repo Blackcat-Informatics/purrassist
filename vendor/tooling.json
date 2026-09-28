@@ -71,5 +71,19 @@
       "vendor/licenses/libarchive-3.8.9/BSD-4-Clause-UC.txt": "e2d8e88f20fc73195792b45502399fa7c012a91bf07ec6c9ee015b5f78a8b709"
     },
     "notice_normalization": "LF; trailing whitespace and final blank lines removed."
+  },
+  {
+    "name": "llvm-coverage",
+    "version": "22.1.8",
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "source": "https://github.com/llvm/llvm-project/tree/llvmorg-22.1.8",
+    "scope": "Installed llvm-cov and llvm-profdata tools and rustc-provided coverage runtime for instrumented qualification binaries only. No Cargo dependency or production instrumentation. Tool LLVM versions must match rustc.",
+    "notices": {
+      "vendor/licenses/llvm-22.1.8/LICENSE": "3340babe8ac7bc6ae294d93aa01c310a250d43d5b760e5c12954882d4e5c83c7"
+    },
+    "upstream_notice_sha256": {
+      "vendor/licenses/llvm-22.1.8/LICENSE": "8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee"
+    },
+    "notice_normalization": "LF; trailing whitespace and final blank lines removed from installed LLVM project license."
   }
 ]

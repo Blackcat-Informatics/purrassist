@@ -16,6 +16,7 @@ scope in `IMPLEMENTATION.md` remains required. No registry publication is claime
 | Independent syntax | `make syntax-oracles` | 15 fixed positive/negative probes against Python, rustc, Node, and TypeScript 5.9.3 |
 | Baseline | `make benchmark` | Six deterministic recovery cases, 200 samples each, quality assertions and latency |
 | Resources | `make resources` | Nine assertion-backed processes, Memcheck allocations, Massif heap observations, native RSS, and native executable/build measurements; Linux prerequisites in `RESOURCES.md` |
+| Coverage-guided JSON | `make fuzz-json` | Source-region feedback, retained mutation corpus, round-trip/schema/receipt properties, explicit failures and replay; prerequisites and limits in `FUZZING.md` |
 | MSRV | `rustup run 1.98.0 cargo test --workspace --locked` | Workspace tests on Rust 1.98 |
 | Packages | `make package` | Cargo package construction and verification in dependency order |
 
@@ -29,7 +30,11 @@ inferences, exhaustion, Unicode/path matching, fuzzy replacement minima, unified
 diff relocation, CRLF preservation, no-final-newline markers, exact undo, stale
 writes, interrupted journal/temp writes, independent batch outcomes, provider
 transcripts, and the actual CLI/MCP subprocess. Mutation probes exercise 2,000
-reproducible malformed JSON inputs; this is not coverage-guided fuzz qualification.
+reproducible malformed JSON inputs; those unit probes have no coverage feedback.
+The separate `make fuzz-json` campaign uses LLVM source-region coverage to retain
+new inputs and select subsequent mutation parents. It checks four fixed schemas
+with bounded recovery and retains failures for replay. This does not qualify
+arbitrary schemas, every effort policy, or the document/matching engines.
 
 Ambiguous JSON recovery results carry separate ordered alternative ledgers with
 output digests, search costs, transformations, losses, inferences, and indices into
@@ -320,7 +325,8 @@ hard memory limits.
   including epistemic status and one governor across domain/index admission
   and resolution. Markdown inspection, context extraction, section-body plans,
   and root task-checkbox plans also share the tool dispatcher.
-- Expand independent oracle and adversarial corpora, coverage-guided fuzzing,
+- Expand independent oracle and adversarial corpora, coverage-guided fuzzing beyond
+  the bounded JSON campaign,
   memory/allocation measurements, build/artifact metrics, and representative
   incorrect-correction evaluation beyond the small baseline.
 - Qualify Windows filesystem durability and crash boundaries. Unix tests and a
