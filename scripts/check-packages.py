@@ -4,7 +4,7 @@
 """Audit locally built crate archives without claiming registry publication."""
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import subprocess
 import sys
 import tarfile
@@ -19,14 +19,21 @@ for package in metadata['packages']:
     archive = directory / f'{identity}.crate'
     crate_root = Path(package['manifest_path']).parent
     with tarfile.open(archive) as source:
-        members = {member.name.removeprefix(identity + '/'): member for member in source.getmembers() if member.isfile()}
+        members = {}
+        for member in source.getmembers():
+            if not member.isfile() or not member.name.startswith(identity + '/'):
+                raise SystemExit(f'{identity}: unexpected archive entry {member.name}')
+            name = member.name.removeprefix(identity + '/')
+            path = PurePosixPath(name)
+            if (not name or path.is_absolute() or '..' in path.parts or '\\' in name
+                    or path.as_posix() != name or name in members):
+                raise SystemExit(f'{identity}: unsafe or repeated member path {name}')
+            members[name] = member
         for required in ('README.md', 'LICENSE-MIT', 'LICENSE-APACHE', 'LICENSE-MULAN', 'Cargo.toml', 'Cargo.toml.orig'):
             if required not in members:
                 raise SystemExit(f'{identity}: missing {required}')
         generated = {'Cargo.toml', 'Cargo.lock', '.cargo_vcs_info.json'}
         for name, member in members.items():
-            if Path(name).is_absolute() or '..' in Path(name).parts:
-                raise SystemExit(f'{identity}: nonportable member path {name}')
             local = crate_root / ('Cargo.toml' if name == 'Cargo.toml.orig' else name)
             if name not in generated:
                 if not local.is_file():
@@ -43,7 +50,7 @@ for package in metadata['packages']:
         if package['name'] == 'purrassist-core':
             if manifest.get('dependencies') or any(target.get('dependencies') for target in manifest.get('target', {}).values()):
                 raise SystemExit('packaged core gained runtime dependencies')
-            for notice in ('src/text/LICENSE-UNICODE', 'src/markdown/inline/LICENSE-WHATWG', 'src/schema/metaschemas/LICENSE', 'tests/data/json-schema/LICENSE', 'tests/data/unicode/LICENSE'):
+            for notice in ('src/text/LICENSE-UNICODE', 'src/markdown/inline/LICENSE-WHATWG', 'src/schema/metaschemas/LICENSE', 'tests/data/json-schema/LICENSE', 'tests/data/unicode/LICENSE', 'tests/data/markdown/LICENSE-commonmark', 'tests/data/markdown/LICENSE-gfm'):
                 if notice not in members:
                     raise SystemExit(f'{identity}: missing upstream notice {notice}')
     report.append({'package': identity, 'bytes': archive.stat().st_size,
