@@ -379,8 +379,16 @@ protocol behavior, not a maximum response latency or global allocator bound.
   selection, result limits, and per-signal scores. Candidate identity/alias
   admission and retained ranking storage are charged before cloning. Focused
   regressions cover alias evidence, exact-effort exclusion, malformed and duplicate
-  identities, and explicit preparation exhaustion; broader matching-quality and
-  allocation qualification remain open. The executed native/WASI string-ranking
+  identities, and explicit preparation exhaustion. Normalization equivalence is
+  an explicit refinement lattice (identity, NFC, case-fold, width/compatibility-
+  fold, diacritic-strip, UTS-39 confusable skeleton, depunctuation, phonetics),
+  and decimal digit runs, negation markers, semver components, ISO dates, hex
+  digests, and units are protected token classes no normalizer may collapse,
+  excluding a candidate with explicit evidence unless a caller alias matches
+  exactly; see `docs/MATCHING-QUALITY.md` for the lattice, the protected
+  classes, and the curated 30-case evidence corpus that asserts zero incorrect
+  automatic resolutions. Broader allocation qualification remains open (Task 3).
+  The executed native/WASI string-ranking
   transcript now compares alias evidence and its receipt. Damerau matrix cells
   reserve at least eight bytes on 32-bit and 64-bit targets, keeping the
   governor decision and reported scratch usage portable for those targets;

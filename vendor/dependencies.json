@@ -36,6 +36,13 @@
       "manifest": "vendor/unicode/manifest.json"
     },
     {
+      "name": "Unicode Security Mechanisms confusables data (UTS #39)",
+      "version": "17.0.0",
+      "license": "Unicode-3.0",
+      "manifest": "vendor/unicode/manifest.json",
+      "justification": "First-party UTS-39 skeleton generation for confusable-glyph matching; generated lookup table only, no third-party executable code."
+    },
+    {
       "name": "JSON Schema meta-schemas",
       "version": "2020-12",
       "license": "BSD-3-Clause",
@@ -57,6 +64,12 @@
     },
     {
       "name": "Unicode normalization tests",
+      "version": "17.0.0",
+      "license": "Unicode-3.0",
+      "manifest": "vendor/unicode/manifest.json"
+    },
+    {
+      "name": "UTS #39 confusables fixture",
       "version": "17.0.0",
       "license": "Unicode-3.0",
       "manifest": "vendor/unicode/manifest.json"

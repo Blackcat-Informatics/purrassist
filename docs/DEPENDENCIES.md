@@ -7,7 +7,12 @@ exact decimals, schema evaluation, regex matching, normalization algorithms,
 edit distances, phonetics, recovery search, and receipts are first-party Rust.
 
 Standards data remains third-party material. Unicode tables and conformance
-fixtures retain the Unicode-3.0 license. Official JSON Schema meta-schemas use
+fixtures retain the Unicode-3.0 license. UTS #39 confusables data (Unicode
+17.0.0, published alongside the UCD release starting with that version) is
+generated into a first-party skeleton lookup table by
+`scripts/generate-unicode.py`, with its source URL and SHA-256 pinned in
+`vendor/unicode/manifest.json` alongside the other Unicode Character Database
+inputs; no confusables detection library is linked. Official JSON Schema meta-schemas use
 the upstream BSD license; the full upstream license is retained beside them.
 The JSON Schema Test Suite retains its MIT license. The WHATWG named-character
 table is incorporated as BSD-3-Clause source data; its original JSON fixture is

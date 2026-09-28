@@ -14,5 +14,9 @@
   "NormalizationTest.txt": {
     "url": "https://www.unicode.org/Public/17.0.0/ucd/NormalizationTest.txt",
     "sha256": "5019ffd530751a741900c849c0e010332f142a3612234639bd200b82138a87db"
+  },
+  "confusables.txt": {
+    "url": "https://www.unicode.org/Public/17.0.0/security/confusables.txt",
+    "sha256": "091c7f82fc39ef208faf8f94d29c244de99254675e09de163160c810d13ef22a"
   }
 }

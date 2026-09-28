@@ -91,8 +91,17 @@ thresholds to all candidates, even when ranking would normally return only its
 first ten. A unique byte-exact spelling is `resolved`; a unique accepted
 approximation is `best_guess`; close alternatives remain `ambiguous` with
 separate digest-bound inference ledgers; weak matches and exhaustion are
-`unresolved`. Aliases are caller-declared and count as guesses when selected.
+`unresolved`. Normalization equivalence is an explicit lattice — NFC,
+case-fold, width/compatibility-fold, diacritic-strip, UTS-39 confusable
+skeleton, and depunctuation, each a named ranking signal — resolving a query
+at the finest level where it has a unique acceptable candidate. Protected
+token classes (decimal digit runs, negation markers, semver components, ISO
+dates, hex digests, and units) must match for automatic selection unless a
+caller-declared alias matches the query exactly; a discarded protected-class
+mismatch appears in the receipt. Aliases count as guesses when selected.
 Thresholds are policy on ranking units, not calibrated confidence.
+The [curated quality set](docs/MATCHING-QUALITY.md) records correction and
+abstention outcomes across the full lattice and every protected class.
 `match_paths` takes a `query`, caller-supplied `paths`,
 optional directory `context`, effort, and score/margin thresholds. It returns
 `resolved`, `best_guess`, `ambiguous`, or `unresolved` with methods and a receipt.

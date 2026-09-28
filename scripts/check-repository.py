@@ -40,6 +40,9 @@ unicode_manifest = json.loads((ROOT / 'vendor/unicode/manifest.json').read_text(
 fixture = ROOT / 'crates/core/tests/data/unicode/NormalizationTest.txt'
 if hashlib.sha256(fixture.read_bytes()).hexdigest() != unicode_manifest['NormalizationTest.txt']['sha256']:
     errors.append('Unicode normalization fixture differs from its pinned upstream source')
+confusables_fixture = ROOT / 'crates/core/tests/data/unicode/confusables.txt'
+if hashlib.sha256(confusables_fixture.read_bytes()).hexdigest() != unicode_manifest['confusables.txt']['sha256']:
+    errors.append('UTS #39 confusables fixture differs from its pinned upstream source')
 generated = ROOT / 'vendor/unicode/generated.json'
 for name, expected in json.loads(generated.read_text()).items():
     if hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != expected:

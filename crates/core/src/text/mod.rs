@@ -178,6 +178,48 @@ fn compose(input: &[u32]) -> Vec<u32> {
     output
 }
 
+fn confusable_prototype(character: char, output: &mut Vec<u32>) {
+    let code = u32::from(character);
+    if let Ok(index) = unicode_data::CONFUSABLES.binary_search_by_key(&code, |entry| entry.0) {
+        output.extend_from_slice(unicode_data::CONFUSABLES[index].1);
+    } else {
+        output.push(code);
+    }
+}
+
+/// UTS #39 confusable skeleton: `NFD(map(NFD(input)))`.
+///
+/// Each scalar value is substituted for its confusable prototype from the
+/// pinned Unicode 17.0.0 security data (`vendor/unicode/manifest.json`). The
+/// published table is already the transitive closure of confusable
+/// substitutions, so one pass suffices (UTS #39 section 4). Equal skeletons
+/// are evidence of visual confusability, not identity or even similarity in
+/// meaning; this is a named matching signal, weighed alongside others, never
+/// an automatic acceptance rule on its own.
+///
+/// ```
+/// use purrassist_core::text::skeleton;
+/// // Cyrillic а (U+0430) is confusable with Latin a (U+0061).
+/// assert_eq!(skeleton("\u{430}dmin"), skeleton("admin"));
+/// assert_ne!(skeleton("admin"), skeleton("guest"));
+/// ```
+///
+/// # Panics
+/// Panics only if generated, conformance-tested tables contain a non-scalar value.
+#[must_use]
+pub fn skeleton(input: &str) -> String {
+    let decomposed = normalize(input, Normalization::Nfd);
+    let mut mapped = Vec::with_capacity(decomposed.len());
+    for character in decomposed.chars() {
+        confusable_prototype(character, &mut mapped);
+    }
+    let intermediate: String = mapped
+        .into_iter()
+        .map(|point| char::from_u32(point).expect("Unicode tables contain scalar values"))
+        .collect();
+    normalize(&intermediate, Normalization::Nfd)
+}
+
 /// Unicode 17 general category, including `Cn` for unassigned scalar values.
 #[must_use]
 pub fn general_category(character: char) -> &'static str {
@@ -192,7 +234,7 @@ pub fn general_category(character: char) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{Normalization, case_fold, comparison_key, depunctuate, normalize};
+    use super::{Normalization, case_fold, comparison_key, depunctuate, normalize, skeleton};
     #[test]
     fn canonical_compatibility_and_hangul() {
         assert_eq!(normalize("e\u{301}", Normalization::Nfc), "é");
@@ -225,5 +267,12 @@ mod tests {
         assert_eq!(comparison_key("ＣＡＦÉ"), comparison_key("cafe\u{301}"));
         assert_eq!(depunctuate("User_Name.json"), "usernamejson");
         assert_eq!(depunctuate("C++"), "c++");
+    }
+    #[test]
+    fn confusable_skeletons_collapse_lookalikes_without_hiding_real_differences() {
+        assert_eq!(skeleton("\u{430}dmin"), skeleton("admin"));
+        assert_eq!(skeleton("p\u{430}yp\u{430}l"), skeleton("paypal"));
+        assert_ne!(skeleton("admin"), skeleton("guest"));
+        assert_eq!(skeleton(""), "");
     }
 }
