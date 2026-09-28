@@ -210,20 +210,9 @@ fn section(value: &Section) -> Node {
     ])
 }
 fn plan(value: purrassist::edits::EditPlan) -> Node {
-    object([
-        ("source", string(value.source.to_string())),
-        (
-            "edits",
-            array(value.edits.into_iter().map(|edit| {
-                object([
-                    ("start", integer(size(edit.range.start))),
-                    ("end", integer(size(edit.range.end))),
-                    ("replacement", string(edit.replacement)),
-                ])
-            })),
-        ),
-    ])
+    super::edits::encode_plan(value)
 }
+
 fn block(value: &Block, path: &[usize]) -> Node {
     object([
         ("span", span(&value.span)),

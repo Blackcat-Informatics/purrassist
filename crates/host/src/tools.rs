@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Shared Rust, CLI, and MCP operations with schema-validated arguments.
+mod edits;
 mod embeddings;
 mod intent;
 mod markdown;
@@ -144,9 +145,15 @@ const DEFINITIONS: &[Definition] = &[
         writes: false,
     },
     Definition {
+        name: "apply_edit",
+        description: "Apply one caller-selected source-bound edit plan to a buffer, optionally validate code syntax, and return text, exact inverse, and a receipt; no file writes",
+        schema: r#"{"type":"object","required":["source","plan"],"properties":{"source":{"type":"string"},"plan":{"type":"object","required":["source","edits"],"properties":{"source":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"edits":{"type":"array","items":{"type":"object","required":["start","end","replacement"],"properties":{"start":{"type":"integer","minimum":0},"end":{"type":"integer","minimum":0},"replacement":{"type":"string"}},"additionalProperties":false}}},"additionalProperties":false},"language":{"enum":["text","python","rust","javascript","typescript","tsx"]},"effort":{"enum":["exact","quick","standard","deep","maximum"]}},"additionalProperties":false}"#,
+        writes: false,
+    },
+    Definition {
         name: "apply_file",
-        description: "Conditionally replace a file, validate supported code grammar, journal it, and return undo identity",
-        schema: r#"{"type":"object","required":["path","expected_digest","replacement"],"properties":{"path":{"type":"string"},"expected_digest":{"type":"string"},"replacement":{"type":"string"}},"additionalProperties":false}"#,
+        description: "Conditionally apply one selected edit plan or a replacement buffer, validate supported code grammar, journal it, and return undo identity",
+        schema: r#"{"type":"object","required":["path","expected_digest"],"oneOf":[{"required":["replacement"]},{"required":["plan"]}],"properties":{"path":{"type":"string"},"expected_digest":{"type":"string"},"replacement":{"type":"string"},"plan":{"type":"object","required":["source","edits"],"properties":{"source":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"edits":{"type":"array","items":{"type":"object","required":["start","end","replacement"],"properties":{"start":{"type":"integer","minimum":0},"end":{"type":"integer","minimum":0},"replacement":{"type":"string"}},"additionalProperties":false}}},"additionalProperties":false},"effort":{"enum":["exact","quick","standard","deep","maximum"]}},"additionalProperties":false}"#,
         writes: true,
     },
     Definition {
@@ -309,6 +316,7 @@ impl Tools {
                     ("digest", string(snapshot.digest.to_string())),
                 ]))
             }
+            "apply_edit" => edits::apply(args, cancellation),
             "apply_file" => self.apply(args, cancellation),
             "undo_file" => {
                 validation_governor.check().map_err(|e| e.to_string())?;
@@ -322,20 +330,26 @@ impl Tools {
         }
     }
     fn apply(&self, args: &Node, cancellation: Option<&CancellationToken>) -> Result<Node, String> {
-        let mut governor = governor(Budget::default(), cancellation);
+        let requested_effort = effort(args)?;
+        let mut governor = governor(requested_effort.budget(), cancellation);
         governor.check().map_err(|e| e.to_string())?;
         let path = field(args, "path")?;
         let snapshot = self.store.read(path).map_err(|e| e.to_string())?;
         if field(args, "expected_digest")? != snapshot.digest.to_string() {
             return Err("stale expected digest".into());
         }
-        let replacement = field(args, "replacement")?;
-        let plan = EditPlan {
-            source: snapshot.digest,
-            edits: vec![TextEdit {
-                range: 0..snapshot.text.len(),
-                replacement: replacement.into(),
-            }],
+        let plan = if let Some(plan) = args.get("plan") {
+            edits::decode_plan(&snapshot.text, plan, &mut governor)
+                .map_err(|error| error.to_string())?
+        } else {
+            let replacement = field(args, "replacement")?;
+            EditPlan {
+                source: snapshot.digest,
+                edits: vec![TextEdit {
+                    range: 0..snapshot.text.len(),
+                    replacement: replacement.into(),
+                }],
+            }
         };
         let language = Path::new(path)
             .extension()
@@ -348,11 +362,12 @@ impl Tools {
                 "tsx" => Some(Language::Tsx),
                 _ => None,
             });
-        let result = if let Some(language) = language {
+        let mut result = if let Some(language) = language {
             syntax::apply_checked_governed(&snapshot.text, &plan, language, &mut governor)
         } else {
             plan.apply_governed(&snapshot.text, &mut governor)
         };
+        result.receipt.effort = requested_effort;
         let Outcome::Resolved(applied) = result.outcome else {
             return Err(format!(
                 "edit was not unambiguously validated: {}",
@@ -554,30 +569,7 @@ fn planned(result: purrassist::AssistResult<EditPlan>) -> Node {
     };
     object([
         ("status", string(status)),
-        (
-            "plans",
-            array(plans.iter().map(|plan| {
-                object([
-                    ("source", string(plan.source.to_string())),
-                    (
-                        "edits",
-                        array(plan.edits.iter().map(|edit| {
-                            object([
-                                (
-                                    "start",
-                                    integer(u64::try_from(edit.range.start).unwrap_or(u64::MAX)),
-                                ),
-                                (
-                                    "end",
-                                    integer(u64::try_from(edit.range.end).unwrap_or(u64::MAX)),
-                                ),
-                                ("replacement", string(&edit.replacement)),
-                            ])
-                        })),
-                    ),
-                ])
-            })),
-        ),
+        ("plans", array(plans.into_iter().map(edits::encode_plan))),
         ("receipt", result.receipt.to_node()),
     ])
 }

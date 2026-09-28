@@ -242,6 +242,11 @@ fn shared_operations_are_identical_through_cli_and_mcp() {
     ] {
         assert_shared_operation(operation, arguments, pointer, expected);
     }
+    let digest = purrassist::digest::Digest::of(b"tea");
+    let arguments = format!(
+        r#"{{"source":"tea","plan":{{"source":"{digest}","edits":[{{"start":0,"end":3,"replacement":"coffee"}}]}}}}"#
+    );
+    assert_shared_operation("apply_edit", &arguments, "/value/text", "coffee");
 }
 fn assert_shared_operation(operation: &str, arguments: &str, pointer: &str, expected: &str) {
     let directory = std::env::temp_dir().join(format!(

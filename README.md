@@ -154,6 +154,11 @@ These operations take exact `source` and optional `effort`, retain admitted sour
 return receipts. Edit plans in `value` bind to the source digest and do not write
 files. Block indices come from inspection of the same source version.
 Markdown editing operations retain the original source and support exact undo.
+
+Pass one selected plan to `apply_edit` with the original `source` to obtain the
+edited text and a source-bound inverse. `apply_file` also accepts a `plan` instead
+of a full replacement buffer, with its expected digest and journaled undo checks.
+See [plan application](docs/EDIT-APPLICATION.md) and `examples/apply-edit.json`.
 `plan_markdown_table_row` inserts or removes body rows. Supply a table `path`,
 `action` (`insert` or `remove`), and zero-based body `index`; insertion also requires
 `cells` with exactly the header width. Inserting at the row count appends.

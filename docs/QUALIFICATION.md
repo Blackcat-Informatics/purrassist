@@ -315,6 +315,14 @@ hard memory limits.
 
 ## Remaining release work
 
+Source-bound plan application is available through `apply_edit` and the `plan`
+form of `apply_file`, closing the buffer-reconstruction gap between planning and
+application tools. Tests cover nested Markdown plan/inverse round trips, CRLF and
+UTF-8 preservation, code validation, stale/overlapping/out-of-range plans,
+explicit exhaustion, competing input rejection, conditional commit, and journal
+undo. Planning and application receipts remain separate; selecting a concrete
+plan does not erase a previous guess or ambiguity. See `EDIT-APPLICATION.md`.
+
 Caller-owned cancellation reaches the governor, governed matching/edit/syntax
 entry points, `Tools::call_with_cancellation`, and active stdio MCP calls. The
 source, transaction, admission, and shutdown boundaries are documented in
@@ -342,7 +350,8 @@ protocol behavior, not a maximum response latency or global allocator bound.
   intent resolution and path resolution now use the shared tool dispatcher,
   including epistemic status and one governor across domain/index admission
   and resolution. Markdown inspection, context extraction, section-body plans,
-  and root task-checkbox plans also share the tool dispatcher.
+  nested task-checkbox plans, and buffer/conditional-file plan application also
+  share the tool dispatcher.
 - Expand independent oracle and adversarial corpora, coverage-guided fuzzing beyond
   the bounded JSON campaign,
   memory/allocation measurements, build/artifact metrics, and representative

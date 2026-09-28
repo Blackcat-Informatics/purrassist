@@ -1,0 +1,13 @@
+{
+  "source": "hello world\r\n",
+  "plan": {
+    "source": "sha256:572a95fee9c0f320030789e4883707affe12482fbb1ea04b3ea8267c87a890fb",
+    "edits": [
+      {
+        "start": 6,
+        "end": 11,
+        "replacement": "earth"
+      }
+    ]
+  }
+}
