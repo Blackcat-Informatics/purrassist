@@ -5,8 +5,12 @@
 //! This is an editing index, not yet a conforming CommonMark/GFM renderer.
 mod containers;
 mod context;
+mod extensions;
 mod html;
+pub use extensions::{Extension, Extensions};
 mod inline;
+mod projection;
+mod render;
 pub use context::Context;
 pub use inline::{
     Dialect, Inline, InlineFragment, InlineKind, ReferenceDefinition, ReferenceOrigin, References,
@@ -25,6 +29,11 @@ use std::ops::Range;
 pub struct Block {
     /// Full original range, including original line endings.
     pub span: Range<usize>,
+    /// Original line ranges after enclosing container prefixes are removed.
+    /// Joining these slices reconstructs this block at its own container level.
+    pub lines: Vec<Range<usize>>,
+    /// Residual spaces from a partly consumed tab before each line range.
+    pub line_padding: Vec<usize>,
     /// Structural classification.
     pub kind: BlockKind,
     /// Nested quote or list-item blocks. Ranges refer to the original document;
@@ -123,8 +132,16 @@ impl Document {
             Resource::ScratchBytes,
             size(source.len()).saturating_mul(128).saturating_add(128),
         )?;
-        let lines = lines(source);
-        let blocks = containers::index(source, &lines, governor, 0)?;
+        let blocks = if source.contains('\t') {
+            let projection = projection::Projection::new(source);
+            let lines = lines(&projection.text);
+            let mut blocks = containers::index(&projection.text, &lines, governor, 0)?;
+            projection.restore(source, &mut blocks);
+            blocks
+        } else {
+            let lines = lines(source);
+            containers::index(source, &lines, governor, 0)?
+        };
         Ok(Self {
             source: source.into(),
             digest: Digest::of(source.as_bytes()),
@@ -348,9 +365,6 @@ fn classify(source: &str, lines: &[Range<usize>], cursor: usize) -> (BlockKind, 
     if let Some(kind) = list_item(text) {
         return (kind, cursor + 1);
     }
-    if text.trim_start().starts_with('[') && text.contains("]:") {
-        return (BlockKind::ReferenceDefinition, cursor + 1);
-    }
     paragraph(source, lines, cursor)
 }
 fn paragraph(source: &str, lines: &[Range<usize>], cursor: usize) -> (BlockKind, usize) {
@@ -373,10 +387,7 @@ fn paragraph(source: &str, lines: &[Range<usize>], cursor: usize) -> (BlockKind,
         {
             let mut end = cursor + 2;
             let mut rows = Vec::new();
-            while end < lines.len()
-                && line(source, &lines[end]).contains('|')
-                && !line(source, &lines[end]).trim().is_empty()
-            {
+            while end < lines.len() && !interrupts_paragraph(line(source, &lines[end])) {
                 rows.push(cells(line(source, &lines[end])));
                 end += 1;
             }

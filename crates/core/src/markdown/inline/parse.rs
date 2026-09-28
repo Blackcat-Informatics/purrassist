@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 pub(super) fn run(
     source: &str,
     references: &super::References,
+    strike: bool,
     governor: &mut Governor,
 ) -> Result<Vec<Inline>, StopReason> {
     let ticks = backticks(source, governor)?;
@@ -24,6 +25,7 @@ pub(super) fn run(
                 &mut tokens,
                 &mut brackets,
                 references,
+                strike,
                 governor,
             )?
         {
@@ -33,11 +35,15 @@ pub(super) fn run(
         }
         let start = cursor;
         let rest = &source[cursor..];
-        let marker = matches!(source.as_bytes()[cursor], b'*' | b'_' | b'[' | b']' | b'!');
+        let marker = matches!(
+            source.as_bytes()[cursor],
+            b'*' | b'_' | b'~' | b'[' | b']' | b'!'
+        );
         let (end, kind) = match source.as_bytes()[cursor] {
             b'*' | b'_' => delimiter(source, cursor),
+            b'~' if strike => delimiter(source, cursor),
             b'!' if rest.starts_with("![") => (cursor + 2, InlineKind::Text("![".into())),
-            b'[' | b']' | b'!' => literal(source, cursor),
+            b'~' | b'[' | b']' | b'!' => literal(source, cursor),
             b'`' => code(source, cursor, &ticks),
             b'\\' => escaped(source, cursor),
             b'&' => entities::one(rest).map_or_else(
@@ -89,7 +95,7 @@ pub(super) fn run(
         }
         previous_marker = marker;
     }
-    let tokens = emphasis::resolve(source, tokens, governor)?;
+    let tokens = emphasis::resolve(source, tokens, strike, governor)?;
     super::render::check(&tokens, governor)?;
     Ok(tokens)
 }
@@ -237,7 +243,7 @@ fn delimiter(source: &str, start: usize) -> (usize, InlineKind) {
 fn text_run(source: &str, start: usize) -> (usize, InlineKind) {
     let width = source[start..]
         .find([
-            '*', '_', '[', ']', '!', '`', '\\', '<', '&', ' ', '\t', '\r', '\n',
+            '*', '_', '~', '[', ']', '!', '`', '\\', '<', '&', ' ', '\t', '\r', '\n',
         ])
         .unwrap_or(source.len() - start);
     (

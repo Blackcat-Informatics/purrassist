@@ -10,7 +10,8 @@ pub(super) fn check(tokens: &[Inline], governor: &mut Governor) -> Result<(), St
         for token in tokens {
             governor.charge(Resource::Work, 1)?;
             match &token.kind {
-                InlineKind::Emphasis { children, .. }
+                InlineKind::Strikethrough { children }
+                | InlineKind::Emphasis { children, .. }
                 | InlineKind::Link { children, .. }
                 | InlineKind::Image { children, .. } => stack.push((children, depth + 1)),
                 _ => {}
@@ -55,6 +56,11 @@ fn render(
             output.push_str("\">");
             escape(label, output);
             output.push_str("</a>");
+        }
+        InlineKind::Strikethrough { children } => {
+            output.push_str("<del>");
+            tokens(children, output, governor, depth + 1, dialect, false)?;
+            output.push_str("</del>");
         }
         InlineKind::Emphasis { strong, children } => {
             let (open, close) = if *strong {
@@ -125,7 +131,8 @@ fn alternative(
                 escape(text, output);
             }
             InlineKind::Autolink { label, .. } => escape(label, output),
-            InlineKind::Emphasis { children, .. }
+            InlineKind::Strikethrough { children }
+            | InlineKind::Emphasis { children, .. }
             | InlineKind::Link { children, .. }
             | InlineKind::Image { children, .. } => {
                 alternative(children, output, governor, depth + 1)?;

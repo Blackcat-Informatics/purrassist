@@ -31,6 +31,7 @@ pub(super) fn close(
     tokens: &mut Vec<Inline>,
     brackets: &mut Vec<Bracket>,
     references: &super::References,
+    strike: bool,
     governor: &mut Governor,
 ) -> Result<Option<usize>, StopReason> {
     let Some(bracket) = brackets.pop() else {
@@ -74,7 +75,7 @@ pub(super) fn close(
     };
     let children = tokens.split_off(bracket.index + 1);
     let opening = tokens.pop().expect("indexed opening bracket");
-    let children = emphasis::resolve(source, children, governor)?;
+    let children = emphasis::resolve(source, children, strike, governor)?;
     let kind = if bracket.image {
         InlineKind::Image {
             destination,

@@ -22,6 +22,12 @@
       "url": "https://raw.githubusercontent.com/github/cmark-gfm/587a12bb54d95ac37241377e6ddc93ea0e45439b/COPYING",
       "upstream_sha256": "c22e885f33b821bddb24cf007145e5540655b6c0f403e49e6c76a93c28e6d9a9",
       "sha256": "c22e885f33b821bddb24cf007145e5540655b6c0f403e49e6c76a93c28e6d9a9"
+    },
+    "gfm-profiles.json": {
+      "url": "https://raw.githubusercontent.com/github/cmark-gfm/587a12bb54d95ac37241377e6ddc93ea0e45439b/test/spec.txt",
+      "upstream_sha256": "7d8e5814befec287ac116786d81ff14e0adc9b13295b4494649e995408fd871c",
+      "sha256": "486f2f5223c4ec9150b370ddb643a8676fcd7ef5f784de32d50db2a2e874cd2c",
+      "extraction": "Ordered text following each 32-backtick example marker; disabled task-list examples remain tested."
     }
   }
 }

@@ -101,7 +101,7 @@ pub(super) fn start(text: &str, interrupts: bool) -> Option<End> {
             && text
                 .as_bytes()
                 .get(tag.len() + 1)
-                .is_some_and(|b| matches!(b, b' ' | b'\t' | b'>'))
+                .is_none_or(|b| matches!(b, b' ' | b'\t' | b'>'))
         {
             return Some(End::Folded(close));
         }

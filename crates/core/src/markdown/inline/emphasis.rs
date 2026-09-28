@@ -16,18 +16,26 @@ struct Delimiter {
 }
 #[derive(Clone, Copy)]
 enum Event {
-    Open { end: usize, strong: bool },
-    Close { end: usize },
+    Open {
+        end: usize,
+        strong: bool,
+        strike: bool,
+    },
+    Close {
+        end: usize,
+    },
 }
 struct Frame {
     start: usize,
     strong: bool,
+    strike: bool,
     children: Vec<Inline>,
 }
 
 pub(super) fn resolve(
     source: &str,
     tokens: Vec<Inline>,
+    strike: bool,
     governor: &mut Governor,
 ) -> Result<Vec<Inline>, StopReason> {
     let mut delimiters = vec![Delimiter::default()];
@@ -37,10 +45,13 @@ pub(super) fn resolve(
             continue;
         }
         let raw = &source[token.span.clone()];
-        let Some(marker @ (b'*' | b'_')) = raw.as_bytes().first().copied() else {
+        let Some(marker @ (b'*' | b'_' | b'~')) = raw.as_bytes().first().copied() else {
             continue;
         };
         if !raw.bytes().all(|byte| byte == marker) {
+            continue;
+        }
+        if marker == b'~' && (!strike || raw.len() != 2) {
             continue;
         }
         let (open, close) = flanking(source, &token.span, marker);
@@ -101,7 +112,7 @@ fn matches(
     delimiters: &mut [Delimiter],
     governor: &mut Governor,
 ) -> Result<BTreeMap<usize, Event>, StopReason> {
-    let mut floors = [[[0usize; 3]; 2]; 2];
+    let mut floors = [[[0usize; 3]; 2]; 3];
     let mut events = BTreeMap::new();
     let mut closer = delimiters[0].next;
     while closer != 0 {
@@ -111,7 +122,11 @@ fn matches(
             continue;
         }
         let close = &delimiters[closer];
-        let kind = usize::from(close.marker == b'_');
+        let kind = if close.marker == b'~' {
+            2
+        } else {
+            usize::from(close.marker == b'_')
+        };
         let can_open = usize::from(close.open);
         let modulo = close.original % 3;
         let floor = floors[kind][can_open][modulo];
@@ -119,7 +134,8 @@ fn matches(
         while opener > floor {
             governor.charge(Resource::Work, 1)?;
             let open = &delimiters[opener];
-            let odd = (close.open || open.close)
+            let odd = close.marker != b'~'
+                && (close.open || open.close)
                 && (open.original + close.original).is_multiple_of(3)
                 && (!open.original.is_multiple_of(3) || !close.original.is_multiple_of(3));
             if open.open && open.marker == close.marker && !odd {
@@ -142,6 +158,7 @@ fn matches(
                 Event::Open {
                     end: open_end,
                     strong: width == 2,
+                    strike: delimiters[opener].marker == b'~',
                 },
             );
             events.insert(
@@ -198,7 +215,11 @@ fn assemble(
         while position < token.span.end {
             governor.charge(Resource::Work, 1)?;
             match events.get(&position) {
-                Some(Event::Open { end, strong }) => {
+                Some(Event::Open {
+                    end,
+                    strong,
+                    strike,
+                }) => {
                     governor.charge(
                         Resource::Depth,
                         super::super::size(frames.len().saturating_add(1)),
@@ -206,6 +227,7 @@ fn assemble(
                     frames.push(Frame {
                         start: position,
                         strong: *strong,
+                        strike: *strike,
                         children: Vec::new(),
                     });
                     position = *end;
@@ -215,9 +237,15 @@ fn assemble(
                     append(
                         Inline {
                             span: frame.start..*end,
-                            kind: InlineKind::Emphasis {
-                                strong: frame.strong,
-                                children: frame.children,
+                            kind: if frame.strike {
+                                InlineKind::Strikethrough {
+                                    children: frame.children,
+                                }
+                            } else {
+                                InlineKind::Emphasis {
+                                    strong: frame.strong,
+                                    children: frame.children,
+                                }
                             },
                         },
                         &mut output,

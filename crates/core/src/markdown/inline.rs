@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Source-preserving inline parsing foundation; full inline conformance is in progress.
 mod angle;
+mod autolinks;
 mod emphasis;
-mod entities;
+pub(super) mod entities;
 mod entity_data;
 mod links;
 mod parse;
@@ -55,6 +56,11 @@ pub enum InlineKind {
         /// Nested content with ranges in the original fragment.
         children: Vec<Inline>,
     },
+    /// GFM strikethrough content, excluding its double-tilde delimiters.
+    Strikethrough {
+        /// Nested source-addressed inline content.
+        children: Vec<Inline>,
+    },
     /// An inline or reference link.
     Link {
         /// Decoded destination before URI serialization.
@@ -95,6 +101,7 @@ pub struct InlineFragment {
     digest: Digest,
     tokens: Vec<Inline>,
     dialect: Dialect,
+    tag_filter: bool,
 }
 impl InlineFragment {
     /// Parse the contents of one paragraph or heading, preserving original bytes.
@@ -157,6 +164,33 @@ impl InlineFragment {
         references: &References,
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
+        Self::parse_with_extensions(
+            source,
+            dialect,
+            references,
+            super::Extensions::default(),
+            governor,
+        )
+    }
+    /// Parse with explicit GFM extensions and source-retaining references.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, markdown::{Dialect, Extensions, InlineFragment, References}};
+    /// let mut g = Governor::new(Budget::default());
+    /// let text = InlineFragment::parse_with_extensions("~~tea~~", Dialect::Gfm, &References::default(), Extensions::gfm(), &mut g)?;
+    /// assert_eq!(text.render_html(&mut g)?, "<del>tea</del>");
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns explicit resource exhaustion or cancellation, without partial tokens.
+    pub fn parse_with_extensions(
+        source: &str,
+        dialect: Dialect,
+        references: &References,
+        extensions: super::Extensions,
+        governor: &mut Governor,
+    ) -> Result<Self, StopReason> {
         governor.charge(Resource::InputBytes, super::size(source.len()))?;
         governor.charge(Resource::Work, super::size(source.len()).saturating_mul(4))?;
         governor.charge(
@@ -165,11 +199,21 @@ impl InlineFragment {
                 .saturating_mul(256)
                 .saturating_add(256),
         )?;
+        let mut tokens = parse::run(
+            source,
+            references,
+            extensions.contains(crate::markdown::Extension::Strikethrough),
+            governor,
+        )?;
+        if extensions.contains(crate::markdown::Extension::Autolinks) {
+            tokens = autolinks::apply(source, tokens, governor)?;
+        }
         Ok(Self {
             source: source.into(),
             digest: Digest::of(source.as_bytes()),
-            tokens: parse::run(source, references, governor)?,
+            tokens,
             dialect,
+            tag_filter: extensions.contains(crate::markdown::Extension::TagFilter),
         })
     }
     /// Exact source before inline interpretation.
@@ -209,10 +253,14 @@ impl InlineFragment {
         )?;
         let mut output = String::new();
         render::tokens(&self.tokens, &mut output, governor, 0, self.dialect, false)?;
-        Ok(output)
+        Ok(if self.tag_filter {
+            super::extensions::filter(&output)
+        } else {
+            output
+        })
     }
 }
-fn escape(text: &str, output: &mut String) {
+pub(super) fn escape(text: &str, output: &mut String) {
     for character in text.chars() {
         match character {
             '&' => output.push_str("&amp;"),
@@ -224,7 +272,7 @@ fn escape(text: &str, output: &mut String) {
         }
     }
 }
-fn normalize_lines(source: &str) -> String {
+pub(super) fn normalize_lines(source: &str) -> String {
     source
         .replace("\r\n", "\n")
         .replace('\r', "\n")

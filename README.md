@@ -97,15 +97,19 @@ takes UTF-8 byte offsets `start`/`end` and optional neighboring-block count.
 All four take exact `source` and optional `effort`, retain admitted source, and
 return receipts. Edit plans in `value` bind to the source digest and do not write
 files. Block indices come from inspection of the same source version. This
-Markdown editing index is not yet a conforming CommonMark/GFM renderer.
+Markdown editing operations retain the original source and exact undo.
 The Rust `markdown::InlineFragment` layer retains exact byte spans and renders
 code spans, emphasis, strong emphasis, inline links/images, escapes, line breaks,
 autolinks, and raw inline HTML. Explicit dialect selection preserves the pinned
 CommonMark/GFM rendering differences. Named/numeric entities are decoded.
 `markdown::References` collects definitions from supplied paragraph blocks;
 `InlineFragment::parse_with_references` resolves full, collapsed, and shortcut
-links/images while retaining definition provenance. Full document rendering
-and automatic container-aware definition collection are still in progress.
+links/images while retaining definition provenance. `Document::render_html`
+collects definitions across containers and renders blocks. GFM rendering enables
+tables, task lists, strikethrough, extended autolinks, and tag filtering; explicit
+extension profiles are also available. All 1,324 pinned official document examples
+match exact HTML under their upstream profiles. Broader adversarial and release
+qualification remains in progress.
 
 File tools reject stale versions and record transaction identities for undo. The portable filesystem layer coordinates
 cooperating writers; it is not a sandbox against malicious directory replacement

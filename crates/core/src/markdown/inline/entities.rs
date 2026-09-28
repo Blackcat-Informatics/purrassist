@@ -47,7 +47,7 @@ pub(super) fn one(source: &str) -> Option<(usize, Cow<'static, str>)> {
 }
 
 /// Decode title/destination text after syntax recognition, protecting escaped ampersands.
-pub(super) fn text(source: &str) -> String {
+pub(in crate::markdown) fn text(source: &str) -> String {
     let normalized = super::normalize_lines(source);
     let source = normalized.as_str();
     let mut output = String::new();

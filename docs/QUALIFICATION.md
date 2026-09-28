@@ -38,8 +38,8 @@ guess reporting, and exhaustion before a complete ledger can be returned.
 Local package verification has built all five packages. A local release CLI was
 installed into a disposable checkout cache and exercised on the published example
 inputs, including exact-source retention. This does not verify downloadable registry
-packages. Hosted CI passed for checkpoint `fa30c00eefdbc97a96ae15af54635c2e0a717c8f`:
-[run 36402629184](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36402629184)
+packages. Hosted CI passed for checkpoint `dbf69e0963a442f89daa78f7c01e6bafb51eafb2`:
+[run 36403769680](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36403769680)
 completed the Linux/macOS local gates, MSRV workspace tests, Windows core/syntax
 tests, and native/WASI comparisons. This is evidence for that checkpoint only;
 subsequent changes need their own qualification.
@@ -96,17 +96,16 @@ Additional regressions check CRLF/Unicode source spans, selected nested edits an
 exact undo, backslash hard breaks, NUL replacement in autolinks, cancellation,
 storage/depth exhaustion, and bounded lookahead. This increment passed the full
 local Rust 1.98.0 gate, including optimized workspace tests and Rustdoc.
-The entity checkpoint passed hosted CI, including nightly analysis, as
-recorded above. This is not full inline or document conformance: GFM extensions
-and complete document rendering remain open.
+The reference checkpoint passed hosted CI, including nightly analysis, as
+recorded above. Those focused inline tests are supplemented by the full-document
+comparison described below.
 
 Named/numeric entity decoding passes all 2,125 semicolon-terminated WHATWG names,
 24 official inline-only entity examples, and numeric digit-limit/scalar tests.
 The tests use the retained upstream JSON independently of the generated lookup.
 Additional cases cover escaped ampersands, single-pass decoding, syntax
 non-reinterpretation, titles/destinations, and preservation in code/HTML/autolinks.
-Document-level entity cases in fences and lists await the
-complete block renderer. Data, generated output, and upstream notices are pinned
+Document-level entity cases are now covered by the full-document comparison. Data, generated output, and upstream notices are pinned
 and checked; generation uses no network. The full local Rust 1.98.0 gate passed
 for this increment, including optimized workspace tests and Rustdoc.
 
@@ -119,14 +118,27 @@ labels, escape/entity distinction, exact source retention and winning-definition
 provenance, cancellation, and work exhaustion. Definitions retain every occurrence,
 including shadowed duplicates, and links/images retain the selected source digest
 and definition range. The full local Rust 1.98.0 gate passed, including optimized
-workspace tests and Rustdoc. Automatic container-aware collection remains open.
+workspace tests and Rustdoc. Container-aware collection is now exercised below.
+
+Document rendering collects references across containers and retains original-source
+line maps, including partial-tab padding. All 652 CommonMark and 672 pinned GFM
+examples pass exact full-document HTML comparison. The GFM harness uses the
+upstream per-example extension annotations retained in a hash-pinned sidecar;
+expected HTML was not changed. Both upstream-disabled task-list examples are
+still executed. Normal GFM rendering enables all five extensions together.
+Regressions cover combined extensions, protected code and existing links, source
+ranges, inline tag filtering, definitions in quotes/lists versus code, Unicode/CRLF,
+partial tabs, cancellation, and exhaustion. Passing these finite corpora is not
+proof for arbitrary input; broader generated/adversarial testing remains required.
+The full local Rust 1.98.0 gate passed for this document-rendering increment,
+including optimized workspace tests, Rustdoc examples, and documentation builds.
 
 ## Remaining release work
 
-- Complete CommonMark/GFM container and inline parsing and structural editing;
-  execute full HTML-output conformance against the pinned official corpora. The
-  Markdown module remains an editing index; block-aligned context extraction and
-  checkbox-state edits are implemented, with full-source identity and exact undo.
+- Extend Markdown structural editing beyond root sections/tasks, expose rendering
+  through shared CLI/MCP tools, and broaden adversarial/preservation qualification.
+  Full HTML-output comparison against the pinned official corpora now passes;
+  this does not finish structural editing or resource/performance qualification.
 - Extend composed recovery/witness generation and regex coverage; audit recursive
   schemas and resource-sensitive compilation. Qualify unsupported vocabulary and
   format behavior without silently weakening assertions.
