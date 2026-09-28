@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Source-bound context and task editing without implicit source normalization.
-use super::{BlockKind, Document, Section, size};
+use super::{Block, BlockKind, Document, Section, size};
 use crate::{
     Governor, StopReason,
     contract::Resource,
@@ -111,10 +111,62 @@ impl Document {
     /// # Errors
     /// Rejects missing block indices and blocks that are not recognized task items.
     pub fn set_task(&self, block: usize, checked: bool) -> Result<EditPlan, StopReason> {
-        let block = self
-            .blocks
-            .get(block)
-            .ok_or_else(|| StopReason::InvalidInput("task block does not exist".into()))?;
+        self.task_plan(self.block_at(&[block])?, checked)
+    }
+
+    /// Select a block by root index followed by successive child indices.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, markdown::{Document, BlockKind}};
+    /// let doc = Document::parse("> - [ ] tea\n", &mut Governor::new(Budget::default()))?;
+    /// assert!(matches!(doc.block_at(&[0, 0])?.kind, BlockKind::ListItem { .. }));
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Rejects empty paths or any index outside its selected parent's children.
+    pub fn block_at(&self, path: &[usize]) -> Result<&Block, StopReason> {
+        let (first, rest) = path
+            .split_first()
+            .ok_or_else(|| StopReason::InvalidInput("block path is empty".into()))?;
+        let missing = || StopReason::InvalidInput("block path does not exist".into());
+        let mut block = self.blocks.get(*first).ok_or_else(missing)?;
+        for index in rest {
+            block = block.children.get(*index).ok_or_else(missing)?;
+        }
+        Ok(block)
+    }
+
+    /// Plan a checkbox edit anywhere in a nested quote/list block tree.
+    ///
+    /// The path is relative to this document's immutable block index. Only the
+    /// checkbox byte changes; container prefixes, line endings, and siblings stay exact.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, markdown::Document};
+    /// let mut g = Governor::new(Budget::default());
+    /// let doc = Document::parse("> - [ ] tea\r\n", &mut g)?;
+    /// let plan = doc.set_task_at(&[0, 0], true, &mut g)?;
+    /// assert_eq!(plan.edits[0].range, 5..6);
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Rejects missing/non-task selections; returns resource exhaustion or cancellation.
+    /// Already-matching states produce an empty plan bound to the same source digest.
+    pub fn set_task_at(
+        &self,
+        path: &[usize],
+        checked: bool,
+        governor: &mut Governor,
+    ) -> Result<EditPlan, StopReason> {
+        governor.charge(Resource::Work, size(path.len()).saturating_add(1))?;
+        governor.charge(Resource::Depth, size(path.len().saturating_sub(1)))?;
+        governor.charge(Resource::ScratchBytes, 256)?;
+        self.task_plan(self.block_at(path)?, checked)
+    }
+
+    fn task_plan(&self, block: &Block, checked: bool) -> Result<EditPlan, StopReason> {
         let BlockKind::ListItem {
             checked: Some(current),
             ..

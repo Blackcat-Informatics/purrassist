@@ -254,3 +254,49 @@ fn rendering_profiles_receipts_and_schema_rejection() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn nested_task_tool_uses_paths_from_inspection() {
+    let root = std::env::temp_dir().join(format!(
+        "purrassist-nested-task-tool-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let tools = Tools::new(&root).unwrap();
+    let source = "> - [ ] café\r\n>   - [X] inner\r\n> - [ ] sibling\r\n";
+    let index = call(&tools, "inspect_markdown", source, "{}");
+    let path = index
+        .pointer("/value/blocks/0/children/0/children/1/path")
+        .unwrap();
+    assert_eq!(path.to_json(), "[0,0,1]");
+    let plan = call(
+        &tools,
+        "plan_markdown_task",
+        source,
+        &format!("{{\"path\":{},\"checked\":false}}", path.to_json()),
+    );
+    assert_eq!(apply(&plan, source), source.replace("[X]", "[ ]"));
+    for invalid in [
+        r#"{"source":"x","checked":true}"#,
+        r#"{"source":"x","block":0,"path":[0],"checked":true}"#,
+        r#"{"source":"x","path":[],"checked":true}"#,
+        r#"{"source":"x","path":[-1],"checked":true}"#,
+    ] {
+        assert!(
+            tools
+                .call("plan_markdown_task", &json::parse(invalid).unwrap())
+                .is_err()
+        );
+    }
+    let absent = call(
+        &tools,
+        "plan_markdown_task",
+        source,
+        r#"{"path":[0,99],"checked":true}"#,
+    );
+    assert_eq!(
+        absent.pointer("/status").unwrap().as_str(),
+        Some("unresolved")
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

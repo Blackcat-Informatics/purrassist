@@ -269,3 +269,51 @@ fn checkbox_spelling_inside_list_code_is_not_a_task() {
     );
     assert!(document.set_task(0, false).is_err());
 }
+
+#[test]
+fn nested_task_paths_preserve_prefixes_siblings_and_exact_undo() {
+    use purrassist_core::{Budget, Governor, Outcome, markdown::Document};
+    let source = "> - [ ] café\r\n>   - [X] inner\r\n> - [ ] sibling\r\n";
+    let mut governor = Governor::new(Budget::default());
+    let document = Document::parse(source, &mut governor).unwrap();
+    let path = [0, 0, 1];
+    let plan = document.set_task_at(&path, false, &mut governor).unwrap();
+    assert_eq!(plan.edits.len(), 1);
+    assert_eq!(&source[plan.edits[0].range.clone()], "X");
+    assert_eq!(plan.edits[0].replacement, " ");
+    let Outcome::Resolved(applied) = plan.apply(source, Budget::default()).outcome else {
+        panic!("apply")
+    };
+    assert_eq!(applied.text, source.replace("[X]", "[ ]"));
+    let Outcome::Resolved(undone) = applied
+        .inverse
+        .apply(&applied.text, Budget::default())
+        .outcome
+    else {
+        panic!("undo")
+    };
+    assert_eq!(undone.text, source);
+    assert_eq!(
+        plan.apply(&format!("{source}stale"), Budget::default())
+            .outcome,
+        Outcome::Unresolved
+    );
+    assert_eq!(
+        document
+            .set_task_at(&path, true, &mut governor)
+            .unwrap()
+            .edits,
+        Vec::new()
+    );
+    for path in [&[][..], &[9][..], &[0, 0, 0][..]] {
+        assert!(document.set_task_at(path, true, &mut governor).is_err());
+    }
+    let mut cancelled = Governor::new(Budget::default());
+    cancelled.cancel();
+    assert_eq!(
+        document
+            .set_task_at(&path, false, &mut cancelled)
+            .unwrap_err(),
+        purrassist_core::StopReason::Cancelled
+    );
+}

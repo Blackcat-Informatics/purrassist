@@ -146,6 +146,12 @@ fn assert_tool_responses(messages: &[Node]) {
 fn markdown_operations_are_identical_through_cli_and_mcp() {
     for (operation, arguments, pointer, expected) in [
         (
+            "plan_markdown_task",
+            r#"{"source":"> - [x] tea\r\n","path":[0,0],"checked":false}"#,
+            "/value/edits/0/replacement",
+            " ",
+        ),
+        (
             "markdown_context",
             r##"{"source":"# Tea\r\n- [ ] café\r\n","start":13,"end":18}"##,
             "/value/text",

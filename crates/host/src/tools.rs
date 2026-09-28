@@ -54,8 +54,8 @@ const DEFINITIONS: &[Definition] = &[
     },
     Definition {
         name: "plan_markdown_task",
-        description: "Plan a single checkbox-state edit selected by root task block index",
-        schema: r#"{"type":"object","required":["source","block","checked"],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"block":{"type":"integer","minimum":0},"checked":{"type":"boolean"}},"additionalProperties":false}"#,
+        description: "Plan a single checkbox-state edit selected by root block index or nested block path",
+        schema: r#"{"type":"object","required":["source","checked"],"oneOf":[{"required":["block"]},{"required":["path"]}],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"block":{"type":"integer","minimum":0},"path":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"integer","minimum":0}},"checked":{"type":"boolean"}},"additionalProperties":false}"#,
         writes: false,
     },
     Definition {

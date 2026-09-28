@@ -38,8 +38,8 @@ guess reporting, and exhaustion before a complete ledger can be returned.
 Local package verification has built all five packages. A local release CLI was
 installed into a disposable checkout cache and exercised on the published example
 inputs, including exact-source retention. This does not verify downloadable registry
-packages. Hosted CI passed for checkpoint `f4f1871fac255b161d3917a99f36a43816481b34`:
-[run 36406037564](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36406037564)
+packages. Hosted CI passed for checkpoint `c81d9ac6bd89644a9c7a23e115dfbd26e596bf66`:
+[run 36406749181](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36406749181)
 completed the Linux/macOS local gates, MSRV workspace tests, Windows core/syntax
 tests, and native/WASI comparisons. This is evidence for that checkpoint only;
 subsequent changes need their own qualification.
@@ -96,7 +96,7 @@ Additional regressions check CRLF/Unicode source spans, selected nested edits an
 exact undo, backslash hard breaks, NUL replacement in autolinks, cancellation,
 storage/depth exhaustion, and bounded lookahead. This increment passed the full
 local Rust 1.98.0 gate, including optimized workspace tests and Rustdoc.
-The document-rendering checkpoint passed hosted CI, including nightly analysis, as
+The shared-rendering checkpoint passed hosted CI, including nightly analysis, as
 recorded above. Those focused inline tests are supplemented by the full-document
 comparison described below.
 
@@ -142,9 +142,17 @@ exhaustion without partial output, source line maps, and CLI/MCP wire equivalenc
 The full local Rust 1.98.0 gate passed for the shared operation; the documented
 rendering example also executed successfully with the verification-profile CLI.
 
+Nested task editing uses source-bound block paths emitted by inspection, supports
+quotes and nested lists, and changes only the original checkbox-state byte.
+Regression coverage includes uppercase checked markers, Unicode/CRLF, sibling and
+container-prefix preservation, exact inverse replay, stale-source rejection,
+no-op states, invalid selectors, cancellation, and shared tool path selection.
+The full local Rust 1.98.0 gate passed, including CLI/MCP equivalence for nested
+paths, optimized workspace tests, Rustdoc examples, and documentation builds.
+
 ## Remaining release work
 
-- Extend Markdown structural editing beyond root sections/tasks and broaden
+- Extend Markdown section, list, table, and reference structural editing and broaden
   adversarial/preservation qualification.
   Full HTML-output comparison against the pinned official corpora now passes;
   this does not finish structural editing or resource/performance qualification.

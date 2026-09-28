@@ -60,7 +60,16 @@ fn operation(
         "render_markdown" => render::render(args, document, governor),
         "inspect_markdown" => Ok(object([
             ("source", string(document.digest().to_string())),
-            ("blocks", array(document.blocks().iter().map(block))),
+            (
+                "blocks",
+                array(
+                    document
+                        .blocks()
+                        .iter()
+                        .enumerate()
+                        .map(|(index, value)| block(value, &[index])),
+                ),
+            ),
             ("sections", array(document.sections().iter().map(section))),
         ])),
         "markdown_context" => {
@@ -94,7 +103,28 @@ fn operation(
             let Some(Value::Bool(checked)) = args.get("checked").map(|node| &node.value) else {
                 return Err(StopReason::InvalidInput("checked must be boolean".into()));
             };
-            Ok(plan(document.set_task(index(args, "block")?, *checked)?))
+            let path = if let Some(Node {
+                value: Value::Array(values),
+                ..
+            }) = args.get("path")
+            {
+                values
+                    .iter()
+                    .map(|node| match &node.value {
+                        Value::Number(value) => value.to_usize().ok_or_else(|| {
+                            StopReason::InvalidInput(
+                                "block path index exceeds address space".into(),
+                            )
+                        }),
+                        _ => Err(StopReason::InvalidInput(
+                            "block path must contain indices".into(),
+                        )),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+            } else {
+                vec![index(args, "block")?]
+            };
+            Ok(plan(document.set_task_at(&path, *checked, governor)?))
         }
         _ => Err(StopReason::InvalidInput(
             "unknown Markdown operation".into(),
@@ -140,7 +170,7 @@ fn plan(value: purrassist::edits::EditPlan) -> Node {
         ),
     ])
 }
-fn block(value: &Block) -> Node {
+fn block(value: &Block, path: &[usize]) -> Node {
     object([
         ("span", span(&value.span)),
         (
@@ -155,8 +185,19 @@ fn block(value: &Block) -> Node {
                     }),
             ),
         ),
+        (
+            "path",
+            array(path.iter().map(|index| integer(size(*index)))),
+        ),
         ("kind", kind(&value.kind)),
-        ("children", array(value.children.iter().map(block))),
+        (
+            "children",
+            array(value.children.iter().enumerate().map(|(index, child)| {
+                let mut path = path.to_vec();
+                path.push(index);
+                block(child, &path)
+            })),
+        ),
     ])
 }
 fn kind(value: &BlockKind) -> Node {
