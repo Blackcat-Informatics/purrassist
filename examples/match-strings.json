@@ -1,0 +1,10 @@
+{
+  "query": "iced tea",
+  "candidates": [
+    {"id": "tea", "text": "cold tea", "aliases": ["iced tea"]},
+    {"id": "coffee", "text": "coffee"}
+  ],
+  "effort": "standard",
+  "english_phonetics": false,
+  "limit": 2
+}

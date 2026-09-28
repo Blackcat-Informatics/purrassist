@@ -9,7 +9,9 @@ mod paths;
 
 use crate::files::Store;
 use purrassist::{
-    Budget, CancellationToken, Effort, Governor, Outcome, RecoveryRequest, Schema,
+    AssistResult, Budget, CancellationToken, Effort, Governor, Outcome, Receipt, RecoveryRequest,
+    Schema, StopReason,
+    contract::Resource,
     edits::{EditPlan, TextEdit},
     json::{self, Node, Value},
     matching::{self, Candidate, MatchRequest},
@@ -104,8 +106,8 @@ const DEFINITIONS: &[Definition] = &[
     },
     Definition {
         name: "match_strings",
-        description: "Rank candidate strings using exact, Unicode, lexical, distance, and phonetic evidence",
-        schema: r#"{"type":"object","required":["query","candidates"],"properties":{"query":{"type":"string"},"candidates":{"type":"array","items":{"type":"string"}}},"additionalProperties":false}"#,
+        description: "Rank caller-identified strings and aliases using exact, Unicode, lexical, distance, and optional English phonetic evidence",
+        schema: r#"{"type":"object","required":["query","candidates"],"properties":{"query":{"type":"string"},"candidates":{"type":"array","maxItems":8192,"items":{"oneOf":[{"type":"string"},{"type":"object","required":["id","text"],"properties":{"id":{"type":"string","minLength":1},"text":{"type":"string"},"aliases":{"type":"array","maxItems":256,"items":{"type":"string"}}},"additionalProperties":false}]}},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"english_phonetics":{"type":"boolean"},"limit":{"type":"integer","minimum":1,"maximum":8192}},"additionalProperties":false}"#,
         writes: false,
     },
     Definition {
@@ -456,6 +458,25 @@ fn decode(args: &Node, cancellation: Option<&CancellationToken>) -> Result<Node,
 }
 
 fn rank(args: &Node, cancellation: Option<&CancellationToken>) -> Result<Node, String> {
+    let query = field(args, "query")?;
+    let effort = effort(args)?;
+    let limit = match args.get("limit").map(|value| &value.value) {
+        Some(Value::Number(value)) => value.to_usize().ok_or("invalid match limit")?,
+        None => MatchRequest::default().limit,
+        _ => return Err("invalid match limit".into()),
+    };
+    let english_phonetics = match args.get("english_phonetics").map(|value| &value.value) {
+        Some(Value::Bool(value)) => *value,
+        None => true,
+        _ => return Err("invalid english_phonetics".into()),
+    };
+    let request = MatchRequest {
+        effort,
+        budget: effort.budget(),
+        english_phonetics,
+        limit,
+    };
+    let mut governor = governor(request.budget, cancellation);
     let Some(Node {
         value: Value::Array(values),
         ..
@@ -463,22 +484,20 @@ fn rank(args: &Node, cancellation: Option<&CancellationToken>) -> Result<Node, S
     else {
         return Err("missing candidates".into());
     };
-    let candidates: Vec<_> = values
-        .iter()
-        .enumerate()
-        .map(|(index, value)| {
-            value
-                .as_str()
-                .map(|text| Candidate::new(index.to_string(), text))
-                .ok_or("candidate must be a string")
-        })
-        .collect::<Result<_, _>>()?;
-    let result = matching::rank_governed(
-        field(args, "query")?,
-        &candidates,
-        &MatchRequest::default(),
-        &mut governor(Budget::default(), cancellation),
-    );
+    let prepared = prepare_match_candidates(values, &mut governor);
+    let result = match prepared {
+        Ok(candidates) => matching::rank_governed(query, &candidates, &request, &mut governor),
+        Err(reason) => {
+            let mut receipt =
+                Receipt::new(query.as_bytes(), "matching/rank-v1", effort, request.budget);
+            receipt.stopped = reason;
+            receipt.usage = governor.usage();
+            AssistResult {
+                outcome: Outcome::Unresolved,
+                receipt,
+            }
+        }
+    };
     let values = match result.outcome {
         Outcome::Resolved(values) | Outcome::BestGuess(values) => values,
         _ => Vec::new(),
@@ -491,11 +510,88 @@ fn rank(args: &Node, cancellation: Option<&CancellationToken>) -> Result<Node, S
                     ("id", string(&value.candidate.id)),
                     ("text", string(&value.candidate.text)),
                     ("score", integer(u64::from(value.score))),
+                    ("aliases", array(value.candidate.aliases.iter().map(string))),
+                    (
+                        "signals",
+                        array(value.signals.iter().map(|signal| {
+                            object([
+                                ("method", string(signal.method)),
+                                ("score", integer(u64::from(signal.score))),
+                                ("detail", string(&signal.detail)),
+                            ])
+                        })),
+                    ),
                 ])
             })),
         ),
         ("receipt", result.receipt.to_node()),
     ]))
+}
+fn prepare_match_candidates(
+    values: &[Node],
+    governor: &mut Governor,
+) -> Result<Vec<Candidate>, StopReason> {
+    let mut candidates = Vec::new();
+    for (index, value) in values.iter().enumerate() {
+        let (id, text, aliases): (&str, &str, Vec<&str>) = match &value.value {
+            Value::String(text) => {
+                let id = index.to_string();
+                let storage = u64::try_from(id.len().saturating_add(text.len()))
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(2)
+                    .saturating_add(256);
+                governor.charge(Resource::Work, storage)?;
+                governor.charge(Resource::ScratchBytes, storage)?;
+                candidates.push(Candidate::new(id, text));
+                continue;
+            }
+            Value::Object(_) => {
+                let id = field(value, "id").map_err(StopReason::InvalidInput)?;
+                let text = field(value, "text").map_err(StopReason::InvalidInput)?;
+                let aliases = match value.get("aliases") {
+                    Some(Node {
+                        value: Value::Array(aliases),
+                        ..
+                    }) => aliases
+                        .iter()
+                        .map(|alias| {
+                            alias.as_str().ok_or_else(|| {
+                                StopReason::InvalidInput("candidate alias must be a string".into())
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                    None => Vec::new(),
+                    _ => {
+                        return Err(StopReason::InvalidInput("invalid candidate aliases".into()));
+                    }
+                };
+                (id, text, aliases)
+            }
+            _ => return Err(StopReason::InvalidInput("invalid candidate".into())),
+        };
+        let bytes = aliases
+            .iter()
+            .fold(id.len().saturating_add(text.len()), |sum, alias| {
+                sum.saturating_add(alias.len())
+            });
+        let storage = u64::try_from(bytes)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(2)
+            .saturating_add(
+                u64::try_from(aliases.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(64),
+            )
+            .saturating_add(256);
+        governor.charge(Resource::Work, storage)?;
+        governor.charge(Resource::ScratchBytes, storage)?;
+        candidates.push(Candidate {
+            id: id.into(),
+            text: text.into(),
+            aliases: aliases.into_iter().map(str::to_owned).collect(),
+        });
+    }
+    Ok(candidates)
 }
 fn inspect(args: &Node, cancellation: Option<&CancellationToken>) -> Result<Node, String> {
     let language = match field(args, "language")? {

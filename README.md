@@ -64,6 +64,7 @@ Current surfaces include:
 ```sh
 cargo run -p purrassist-cli -- --help
 cargo run -p purrassist-cli -- match raeder reader writer
+cargo run -p purrassist-cli -- call match_strings --root . < examples/match-strings.json
 cargo run -p purrassist-cli -- decode --schema examples/temperature.schema.json \
   --input examples/temperature.input.txt
 cargo run -p purrassist-cli -- mcp --root /path/to/workspace
@@ -79,7 +80,12 @@ recovery budget. The `decode_json` tool does this automatically. The convenience
 compilation methods use the default finite budget.
 
 `call TOOL --root DIRECTORY` reads a JSON argument object from stdin and invokes
-the same operation used by MCP. `match_paths` takes a `query`, caller-supplied `paths`,
+the same operation used by MCP. `match_strings` accepts plain candidate strings
+or objects with stable `id`, `text`, and caller-declared `aliases`. Optional
+`effort`, `english_phonetics`, and `limit` control ranking. Its results retain
+each identity, score, aliases, and comparison signals; scores are ranking units,
+not proof of semantic equivalence. See [the example](examples/match-strings.json).
+`match_paths` takes a `query`, caller-supplied `paths`,
 optional directory `context`, effort, and score/margin thresholds. It returns
 `resolved`, `best_guess`, `ambiguous`, or `unresolved` with methods and a receipt.
 Ambiguous paths carry separate evidence and inference ledgers bound to each
@@ -211,7 +217,7 @@ rustfmt. No commit-verification bypass is permitted.
 
 ```sh
 make check       # formatting, attribution/dependencies, lint, optimized tests, docs
-make wasm-test   # compare native/WASI recovery, embeddings, Markdown, and grammars
+make wasm-test   # compare native/WASI recovery, matching, embeddings, Markdown, and grammars
 make syntax-oracles  # compare fixed syntax probes to independent compilers
 make benchmark  # recovery quality assertions and latency baseline
 make fuzz-json  # source-region coverage-guided JSON campaign; matching LLVM tools required

@@ -11,7 +11,7 @@ use purrassist_core::{
     markdown::{
         Alignment, Dialect, Document, ListItemEdit, References, TableColumnEdit, TableRowEdit,
     },
-    matching::{self, MatchRequest},
+    matching::{self, Candidate, MatchRequest},
     paths::{PathIndex, PathMatch},
     schema::{Schema, recovery::RecoveryRequest},
     text::{self, Normalization},
@@ -59,6 +59,7 @@ fn main() {
     assert_eq!(distance, 2);
     assert_eq!(text::comparison_key("Straße"), "strasse");
     transcript.push(string(text::normalize("\u{212b}각ﬃ", Normalization::Nfkc)));
+    transcript.push(matching_transcript());
     transcript.push(embedding_transcript());
     transcript.push(path_transcript());
     transcript.push(markdown_transcript());
@@ -67,6 +68,30 @@ fn main() {
     let output = array(transcript).to_json();
     println!("{}", Digest::of(output.as_bytes()));
     println!("{output}");
+}
+
+fn matching_transcript() -> Node {
+    let candidate = Candidate {
+        id: "tea".into(),
+        text: "cold tea".into(),
+        aliases: vec!["iced tea".into()],
+    };
+    let result = matching::rank("iced tea", &[candidate], &MatchRequest::default());
+    let Outcome::Resolved(values) = result.outcome else {
+        panic!("expected alias ranking")
+    };
+    assert_eq!(values[0].candidate.id, "tea");
+    assert!(
+        values[0]
+            .signals
+            .iter()
+            .any(|signal| signal.method == "caller-alias-v1")
+    );
+    object([
+        ("operation", string("matching")),
+        ("score", integer(u64::from(values[0].score))),
+        ("receipt", result.receipt.to_node()),
+    ])
 }
 
 fn path_transcript() -> Node {

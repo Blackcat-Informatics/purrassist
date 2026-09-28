@@ -73,6 +73,10 @@ the publication and registry gates described in `RELEASE.md`.
 The hosted [release-qualification run 36433883963](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36433883963)
 also passed on `de8db9d7b0d7a15259bb783529372f29cfdc9f78`, including the
 stable full gate and Cargo verification of all five archives.
+The subsequent [Verify run 36437227125](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36437227125)
+and [release-qualification run 36437268473](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36437268473)
+passed on `a68beebbc2bdfde6ae38ed51a269e81b64a4c8f5`. The latter used a
+commit-scoped Cargo home to avoid resolving an older cached same-version crate.
 
 The initial six-case baseline observed approximately 2 microseconds median for
 exact integer recovery and 42 microseconds for composed syntax/key/wrapper/type
@@ -370,6 +374,17 @@ protocol behavior, not a maximum response latency or global allocator bound.
   the bounded JSON campaign,
   memory/allocation measurements, build/artifact metrics, and representative
   incorrect-correction evaluation beyond the small baseline.
+  The shared string-ranking tool accepts identified candidates and caller aliases
+  while retaining legacy string arrays. It exposes effort, English phonetic
+  selection, result limits, and per-signal scores. Candidate identity/alias
+  admission and retained ranking storage are charged before cloning. Focused
+  regressions cover alias evidence, exact-effort exclusion, malformed and duplicate
+  identities, and explicit preparation exhaustion; broader matching-quality and
+  allocation qualification remain open. The executed native/WASI string-ranking
+  transcript now compares alias evidence and its receipt. Damerau matrix cells
+  reserve at least eight bytes on 32-bit and 64-bit targets, keeping the
+  governor decision and reported scratch usage portable for those targets;
+  this remains an accounting reservation, not an allocator measurement.
 - Qualify Windows filesystem durability and crash boundaries. Unix tests and a
   configured Windows engine job do not establish Windows host support.
 - Execute hosted CI, audit final package contents and notices, configure trusted

@@ -127,8 +127,7 @@ pub fn rank_governed(
             ));
         }
         for candidate in candidates {
-            governor.charge(Resource::Candidates, 1)?;
-            governor.charge(Resource::InputBytes, size(candidate.text.len()))?;
+            let alias_bytes = admit_candidate(candidate, governor)?;
             if !identities.insert(&candidate.id) {
                 return Err(StopReason::InvalidInput(format!(
                     "duplicate candidate identity: {}",
@@ -136,21 +135,11 @@ pub fn rank_governed(
                 )));
             }
             let mut signals = signals(query, &candidate.text, request, governor)?;
-            if request.effort != Effort::Exact {
-                for alias in &candidate.aliases {
-                    let alias_signals = signals_for_alias(query, alias, request, governor)?;
-                    if let Some(score) = alias_signals.iter().map(|signal| signal.score).max() {
-                        signals.push(Signal {
-                            method: "caller-alias-v1",
-                            score: score.min(9900),
-                            detail: format!("caller supplied alias {alias:?}"),
-                        });
-                    }
-                }
-            }
+            let alias_storage =
+                append_alias_signals(query, candidate, request, governor, &mut signals)?;
             let score = signals.iter().map(|signal| signal.score).max().unwrap_or(0);
             if score > 0 {
-                governor.charge(Resource::EvidenceEntries, size(signals.len()))?;
+                reserve_ranked(candidate, &signals, alias_bytes, governor)?;
                 for signal in &signals {
                     receipt.evidence.push(Evidence {
                         rule: signal.method.into(),
@@ -164,6 +153,8 @@ pub fn rank_governed(
                     score,
                     signals,
                 });
+            } else {
+                governor.release_scratch(alias_storage)?;
             }
         }
         Ok(())
@@ -187,6 +178,67 @@ pub fn rank_governed(
         Outcome::Resolved(ranked)
     };
     AssistResult { outcome, receipt }
+}
+
+fn admit_candidate(candidate: &Candidate, governor: &mut Governor) -> Result<u64, StopReason> {
+    governor.charge(Resource::Candidates, 1)?;
+    governor.charge(Resource::InputBytes, size(candidate.id.len()))?;
+    governor.charge(Resource::InputBytes, size(candidate.text.len()))?;
+    let mut alias_bytes = 0_u64;
+    for alias in &candidate.aliases {
+        governor.charge(Resource::InputBytes, size(alias.len()))?;
+        alias_bytes = alias_bytes.saturating_add(size(alias.len()));
+    }
+    governor.charge(Resource::ScratchBytes, 128)?;
+    Ok(alias_bytes)
+}
+
+fn append_alias_signals(
+    query: &str,
+    candidate: &Candidate,
+    request: &MatchRequest,
+    governor: &mut Governor,
+    signals: &mut Vec<Signal>,
+) -> Result<u64, StopReason> {
+    if request.effort == Effort::Exact {
+        return Ok(0);
+    }
+    let mut alias_storage = 0_u64;
+    for alias in &candidate.aliases {
+        let reservation = size(alias.len()).saturating_mul(6).saturating_add(128);
+        governor.charge(Resource::ScratchBytes, reservation)?;
+        alias_storage = alias_storage.saturating_add(reservation);
+        let alias_signals = signals_for_alias(query, alias, request, governor)?;
+        if let Some(score) = alias_signals.iter().map(|signal| signal.score).max() {
+            signals.push(Signal {
+                method: "caller-alias-v1",
+                score: score.min(9900),
+                detail: format!("caller supplied alias {alias:?}"),
+            });
+        }
+    }
+    Ok(alias_storage)
+}
+
+fn reserve_ranked(
+    candidate: &Candidate,
+    signals: &[Signal],
+    alias_bytes: u64,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    let signal_bytes = signals.iter().fold(0_u64, |sum, signal| {
+        sum.saturating_add(size(signal.detail.len()))
+    });
+    let retained = size(candidate.id.len())
+        .saturating_mul(size(signals.len()).saturating_add(1))
+        .saturating_add(size(candidate.text.len()))
+        .saturating_add(alias_bytes)
+        .saturating_add(signal_bytes)
+        .saturating_add(size(signals.len()).saturating_mul(256))
+        .saturating_add(256);
+    governor.charge(Resource::Work, retained)?;
+    governor.charge(Resource::ScratchBytes, retained)?;
+    governor.charge(Resource::EvidenceEntries, size(signals.len()))
 }
 
 fn signals_for_alias(
@@ -343,8 +395,11 @@ pub fn damerau_levenshtein(
         .checked_mul(columns + 2)
         .ok_or(StopReason::BudgetExceeded(Resource::ScratchBytes))?;
     governor.charge(Resource::Work, size(cells))?;
+    // Charge at least 64-bit cells so the same request has the same governor
+    // decision on native 64-bit and WASM 32-bit targets.
+    let cell_bytes = core::mem::size_of::<usize>().max(8);
     let scratch = size(cells)
-        .saturating_mul(size(core::mem::size_of::<usize>()))
+        .saturating_mul(size(cell_bytes))
         .saturating_add(size(rows + columns).saturating_mul(128));
     governor.charge(Resource::ScratchBytes, scratch)?;
     let left: Vec<_> = left.chars().collect();
@@ -465,5 +520,63 @@ mod tests {
         assert_eq!(soundex("Tymczak"), Some(*b"T522"));
         assert_eq!(soundex("Pfister"), Some(*b"P236"));
         assert_eq!(soundex("猫"), None);
+    }
+    #[test]
+    fn candidate_id_and_alias_admission_precedes_ranking() {
+        for candidate in [
+            Candidate::new("identity", "tea"),
+            Candidate {
+                id: "id".into(),
+                text: "tea".into(),
+                aliases: vec!["alternate".into()],
+            },
+        ] {
+            let request = MatchRequest {
+                budget: Budget {
+                    input_bytes: 4,
+                    ..Budget::default()
+                },
+                ..MatchRequest::default()
+            };
+            let answer = rank("tea", &[candidate], &request);
+            assert_eq!(answer.outcome, Outcome::Unresolved);
+            assert_eq!(
+                answer.receipt.stopped,
+                StopReason::BudgetExceeded(Resource::InputBytes)
+            );
+        }
+        let request = MatchRequest {
+            budget: Budget {
+                scratch_bytes: 127,
+                ..Budget::default()
+            },
+            ..MatchRequest::default()
+        };
+        let answer = rank("tea", &[Candidate::new("id", "tea")], &request);
+        assert_eq!(answer.outcome, Outcome::Unresolved);
+        assert_eq!(
+            answer.receipt.stopped,
+            StopReason::BudgetExceeded(Resource::ScratchBytes)
+        );
+        assert_eq!(answer.receipt.evidence, Vec::new());
+        let request = MatchRequest {
+            effort: Effort::Exact,
+            budget: Budget {
+                scratch_bytes: 512,
+                ..Budget::default()
+            },
+            ..MatchRequest::default()
+        };
+        let candidate = Candidate {
+            id: "tea".into(),
+            text: "tea".into(),
+            aliases: vec!["a".repeat(1024)],
+        };
+        let answer = rank("tea", &[candidate], &request);
+        assert_eq!(answer.outcome, Outcome::Unresolved);
+        assert_eq!(
+            answer.receipt.stopped,
+            StopReason::BudgetExceeded(Resource::ScratchBytes)
+        );
     }
 }
