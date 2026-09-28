@@ -1,0 +1,48 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/syntax", "crates/purrassist", "crates/host", "crates/cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0 OR MulanPSL-2.0"
+authors = ["Blackcat Informatics Inc."]
+repository = "https://github.com/Blackcat-Informatics/purrassist"
+
+[workspace.dependencies]
+purrassist-core = { path = "crates/core", version = "0.1.0" }
+purrassist-syntax = { path = "crates/syntax", version = "0.1.0" }
+purrassist = { path = "crates/purrassist", version = "0.1.0" }
+purrassist-host = { path = "crates/host", version = "0.1.0" }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+
+[profile.dev]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true
+
+[profile.dev.build-override]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+overflow-checks = true
+
+[profile.verification]
+inherits = "release"
+debug-assertions = true
+overflow-checks = true

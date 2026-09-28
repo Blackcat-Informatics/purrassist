@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrassist-cli"
+description = "PurRAssist command-line and MCP tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+keywords = ["ai", "json", "recovery", "matching", "agents"]
+categories = ["parsing", "text-processing"]
+authors.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/purrassist-cli"
+
+[lints]
+workspace = true
+
+[dependencies]
+purrassist-host.workspace = true
+purrassist.workspace = true
+
+[[bin]]
+name = "purrassist"
+path = "src/main.rs"
+doc = false

@@ -1,0 +1,399 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Compiled JSON Schema constraints and source-addressed validation.
+mod builtin;
+mod compile;
+mod evaluate;
+pub mod recovery;
+mod uri;
+mod vocabulary;
+use crate::digest::Digest;
+use crate::json::{Node, Value};
+use crate::{Budget, Governor, StopReason};
+use core::fmt;
+use std::collections::BTreeMap;
+use vocabulary::{Keywords, Vocabularies};
+
+/// Supported schema dialect URI.
+pub const DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
+
+/// A compiled schema plus caller-supplied external resources. Compilation does no I/O.
+#[derive(Clone, Debug)]
+pub struct Schema {
+    documents: Vec<Node>,
+    index: Index,
+    root: usize,
+    digest: Digest,
+}
+#[derive(Clone, Debug, Default)]
+struct Index {
+    locations: Vec<Location>,
+    by_route: BTreeMap<(usize, Vec<usize>), usize>,
+    resources: BTreeMap<String, usize>,
+    anchors: BTreeMap<String, usize>,
+}
+#[derive(Clone, Debug)]
+struct Location {
+    vocabularies: Vocabularies,
+    document: usize,
+    route: Vec<usize>,
+    pointer: String,
+    base: String,
+    children: BTreeMap<String, usize>,
+    patterns: BTreeMap<String, crate::pattern::Pattern>,
+    dynamic_anchor: Option<String>,
+}
+struct ReferenceTarget {
+    document: usize,
+    route: Vec<usize>,
+    pointer: String,
+    base: String,
+}
+
+/// Invalid schema syntax, keyword use, or resource linkage.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SchemaError {
+    /// Location within the schema resource.
+    pub location: String,
+    /// Why compilation failed.
+    pub message: String,
+}
+impl fmt::Display for SchemaError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} at schema {}", self.message, self.location)
+    }
+}
+impl std::error::Error for SchemaError {}
+
+/// One failed constraint at a precise instance and schema location.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Violation {
+    /// RFC 6901 pointer into the instance.
+    pub instance_path: String,
+    /// Absolute schema location and keyword.
+    pub schema_path: String,
+    /// Keyword that failed.
+    pub keyword: String,
+    /// Observable reason for the failure.
+    pub message: String,
+}
+
+/// Whole-instance validation evidence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValidationReport {
+    /// Identity of the root, supplied resources, and validator dialect profile.
+    pub schema: Digest,
+    /// Whether all evaluated assertions passed.
+    pub valid: bool,
+    /// Every collected failed constraint.
+    pub violations: Vec<Violation>,
+}
+
+impl Schema {
+    /// Compile Draft 2020-12 with no external resources.
+    ///
+    /// # Errors
+    /// Rejects invalid schemas, unsupported required vocabularies, and unresolved references.
+    pub fn compile(source: &str) -> Result<Self, SchemaError> {
+        Self::with_resources(source, &BTreeMap::new())
+    }
+
+    /// Compile with an explicit URI-to-schema resource map. Nothing is fetched implicitly.
+    ///
+    /// # Errors
+    /// Rejects malformed resource content, conflicting identities, or invalid schemas.
+    pub fn with_resources(
+        source: &str,
+        resources: &BTreeMap<String, String>,
+    ) -> Result<Self, SchemaError> {
+        let root = crate::json::parse(source).map_err(|error| SchemaError {
+            location: String::new(),
+            message: error.to_string(),
+        })?;
+        let mut index = Index::default();
+        compile::walk(
+            &root,
+            0,
+            &[],
+            "",
+            "urn:purrassist:root",
+            &mut index,
+            resources,
+        )?;
+        let mut schema = Self {
+            documents: vec![root],
+            index,
+            root: 0,
+            digest: bundle_digest(source, resources),
+        };
+        let mut cursor = 0;
+        while cursor < schema.index.locations.len() {
+            for keyword in ["$ref", "$dynamicRef"] {
+                let Some(reference) = schema
+                    .body(cursor)
+                    .get(keyword)
+                    .and_then(Node::as_str)
+                    .map(str::to_owned)
+                else {
+                    continue;
+                };
+                let base = schema.index.locations[cursor].base.clone();
+                let uri = compile::resolve_uri(&base, &reference);
+                let resource = uri.split('#').next().unwrap_or(&uri);
+                if !schema.index.resources.contains_key(resource) {
+                    let text = builtin::resource(resource)
+                        .or_else(|| resources.get(resource).map(String::as_str))
+                        .ok_or_else(|| SchemaError {
+                            location: uri.clone(),
+                            message: "unresolved resource; supply it explicitly".into(),
+                        })?;
+                    let node = crate::json::parse(text).map_err(|error| SchemaError {
+                        location: resource.into(),
+                        message: error.to_string(),
+                    })?;
+                    let document = schema.documents.len();
+                    let id = compile::walk(
+                        &node,
+                        document,
+                        &[],
+                        "",
+                        resource,
+                        &mut schema.index,
+                        resources,
+                    )?;
+                    schema.index.resources.insert(resource.into(), id);
+                    schema.documents.push(node);
+                }
+                let target = schema.reference_target(&base, &reference)?;
+                if !schema
+                    .index
+                    .by_route
+                    .contains_key(&(target.document, target.route.clone()))
+                {
+                    let node = at_route(&schema.documents[target.document], &target.route).clone();
+                    compile::walk(
+                        &node,
+                        target.document,
+                        &target.route,
+                        &target.pointer,
+                        &target.base,
+                        &mut schema.index,
+                        resources,
+                    )?;
+                }
+                schema.resolve(&base, &reference)?;
+            }
+            cursor += 1;
+        }
+        Ok(schema)
+    }
+
+    /// Root schema document, preserving source spans and annotations.
+    #[must_use]
+    pub fn document(&self) -> &Node {
+        self.body(self.root)
+    }
+
+    /// Identity of this complete schema configuration.
+    ///
+    /// Binds exact root bytes and every supplied resource URI and byte buffer,
+    /// including custom meta-schemas. Unused resources also affect identity;
+    /// resource insertion order does not. Built-in dialect data is versioned.
+    #[must_use]
+    pub const fn digest(&self) -> Digest {
+        self.digest
+    }
+
+    /// Validate using ordinary bounds.
+    ///
+    /// # Errors
+    /// Returns resource exhaustion or an unproductive recursive reference.
+    pub fn validate(&self, instance: &Node) -> Result<ValidationReport, StopReason> {
+        self.validate_with(instance, &mut Governor::new(Budget::default()))
+    }
+
+    /// Validate with caller-controlled limits shared with a recovery operation.
+    ///
+    /// # Errors
+    /// Governor failure is distinct from an instance failing its schema.
+    pub fn validate_with(
+        &self,
+        instance: &Node,
+        governor: &mut Governor,
+    ) -> Result<ValidationReport, StopReason> {
+        let result = evaluate::run(self, self.root, instance, governor)?;
+        Ok(ValidationReport {
+            schema: self.digest,
+            valid: result.is_empty(),
+            violations: result,
+        })
+    }
+
+    fn keywords(&self, id: usize) -> Keywords<'_> {
+        Keywords {
+            node: self.body(id),
+            vocabularies: self.index.locations[id].vocabularies,
+        }
+    }
+    fn body(&self, id: usize) -> &Node {
+        at_route(
+            &self.documents[self.index.locations[id].document],
+            &self.index.locations[id].route,
+        )
+    }
+    fn child(&self, id: usize, key: &str) -> usize {
+        self.index.locations[id].children[key]
+    }
+    fn resolve(&self, base: &str, reference: &str) -> Result<usize, SchemaError> {
+        let target = self.reference_target(base, reference)?;
+        self.index
+            .by_route
+            .get(&(target.document, target.route))
+            .copied()
+            .ok_or_else(|| SchemaError {
+                location: compile::resolve_uri(base, reference),
+                message: "reference does not identify a compiled schema".into(),
+            })
+    }
+    fn reference_target(
+        &self,
+        base: &str,
+        reference: &str,
+    ) -> Result<ReferenceTarget, SchemaError> {
+        let uri = compile::resolve_uri(base, reference);
+        if let Some(id) = self.index.anchors.get(&uri) {
+            let location = &self.index.locations[*id];
+            return Ok(ReferenceTarget {
+                document: location.document,
+                route: location.route.clone(),
+                pointer: location.pointer.clone(),
+                base: location.base.clone(),
+            });
+        }
+        let (resource, fragment) = uri.split_once('#').unwrap_or((&uri, ""));
+        let Some(&root) = self.index.resources.get(resource) else {
+            return Err(SchemaError {
+                location: uri,
+                message: "unresolved resource; supply it explicitly".into(),
+            });
+        };
+        if fragment.is_empty() {
+            let location = &self.index.locations[root];
+            return Ok(ReferenceTarget {
+                document: location.document,
+                route: location.route.clone(),
+                pointer: location.pointer.clone(),
+                base: location.base.clone(),
+            });
+        }
+        let pointer = decode_fragment(fragment).ok_or_else(|| SchemaError {
+            location: uri.clone(),
+            message: "invalid URI fragment".into(),
+        })?;
+        if !pointer.starts_with('/') {
+            return Err(SchemaError {
+                location: uri,
+                message: "unresolved anchor".into(),
+            });
+        }
+        let location = &self.index.locations[root];
+        let mut route = location.route.clone();
+        let mut node = self.body(root);
+        let mut effective_base = location.base.clone();
+        for token in pointer[1..].split('/') {
+            let token = pointer_token(token).ok_or_else(|| SchemaError {
+                location: uri.clone(),
+                message: "invalid JSON Pointer escape".into(),
+            })?;
+            let (position, next) = match &node.value {
+                Value::Object(members) => members
+                    .iter()
+                    .enumerate()
+                    .find(|(_, member)| member.key == token)
+                    .map(|(position, member)| (position, &member.value)),
+                Value::Array(items)
+                    if token == "0"
+                        || (!token.starts_with('0')
+                            && token.bytes().all(|byte| byte.is_ascii_digit())) =>
+                {
+                    token
+                        .parse::<usize>()
+                        .ok()
+                        .and_then(|position| items.get(position).map(|node| (position, node)))
+                }
+                _ => None,
+            }
+            .ok_or_else(|| SchemaError {
+                location: uri.clone(),
+                message: "reference pointer does not exist".into(),
+            })?;
+            route.push(position);
+            node = next;
+            if let Some(id) = self.index.by_route.get(&(location.document, route.clone())) {
+                effective_base.clone_from(&self.index.locations[*id].base);
+            }
+        }
+        Ok(ReferenceTarget {
+            document: location.document,
+            route,
+            pointer: format!("{}{pointer}", location.pointer),
+            base: effective_base,
+        })
+    }
+}
+fn pointer_token(token: &str) -> Option<String> {
+    let mut output = String::new();
+    let mut characters = token.chars();
+    while let Some(character) = characters.next() {
+        if character == '~' {
+            output.push(match characters.next()? {
+                '0' => '~',
+                '1' => '/',
+                _ => return None,
+            });
+        } else {
+            output.push(character);
+        }
+    }
+    Some(output)
+}
+fn bundle_digest(source: &str, resources: &BTreeMap<String, String>) -> Digest {
+    let mut identity =
+        b"purrassist.schema.bundle.v1\0draft2020-12.601a66c8b0f25246bf0e1fb488c5b5f030a79b72\0"
+            .to_vec();
+    identity.extend_from_slice(Digest::of(source.as_bytes()).as_bytes());
+    for (uri, document) in resources {
+        // Fixed-width hashes make the framing unambiguous, even for arbitrary URIs.
+        identity.extend_from_slice(Digest::of(uri.as_bytes()).as_bytes());
+        identity.extend_from_slice(Digest::of(document.as_bytes()).as_bytes());
+    }
+    Digest::of(&identity)
+}
+fn at_route<'a>(mut node: &'a Node, route: &[usize]) -> &'a Node {
+    for &index in route {
+        node = match &node.value {
+            Value::Object(members) => &members[index].value,
+            Value::Array(items) => &items[index],
+            _ => unreachable!("compiled route"),
+        };
+    }
+    node
+}
+fn decode_fragment(fragment: &str) -> Option<String> {
+    let bytes = fragment.as_bytes();
+    let mut output = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let a = char::from(*bytes.get(index + 1)?).to_digit(16)?;
+            let b = char::from(*bytes.get(index + 2)?).to_digit(16)?;
+            output.push(u8::try_from(a * 16 + b).ok()?);
+            index += 3;
+        } else {
+            output.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(output).ok()
+}

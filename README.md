@@ -1,0 +1,104 @@
+<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. -->
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
+<p align="center"><img src="docs/purrassist-logo.svg" width="220" alt="PurRAssist black cat holding a repaired structure"></p>
+
+# PurRAssist
+
+**Assistance for AIs that get the details almost right.**
+
+PurRAssist recovers intent from imperfect JSON, names, paths, and text. Give a
+decoder a schema and an effort level: it searches composed corrections, validates
+the complete result, and returns evidence of what changed. A schema-valid guess
+is still a guess. Ambiguous alternatives remain visible.
+
+**Pre-release implementation in progress.** The accepted scope and remaining
+qualification requirements are in [the implementation contract](docs/IMPLEMENTATION.md).
+This repository has not been published or release-qualified.
+
+```rust
+use purrassist::{Outcome, RecoveryRequest, Schema};
+
+let schema = Schema::compile(r#"{
+  "type": "object",
+  "required": ["temperature"],
+  "properties": {"temperature": {"type": "number"}},
+  "additionalProperties": false
+}"#)?;
+
+let answer = schema.recover("[[{temperatur: '42',}]]", RecoveryRequest::default());
+match answer.outcome {
+    Outcome::Resolved(value) => assert_eq!(value.to_json(), r#"{"temperature":42}"#),
+    Outcome::BestGuess(value) => println!("inferred: {}", value.to_json()),
+    Outcome::Ambiguous(values) => println!("{} interpretations", values.len()),
+    Outcome::Unresolved => println!("{}", answer.receipt.stopped),
+}
+# Ok::<(), purrassist::schema::SchemaError>(())
+```
+
+The pure core owns its JSON parser, exact decimal arithmetic, schema validator,
+Unicode normalization, edit distances, phonetic matching, semantic rules, recovery
+search, and receipts. It has **zero third-party runtime dependencies**. The
+isolated syntax crate uses the pinned Tree-sitter grammar family; see the
+[dependency inventory](docs/DEPENDENCIES.md).
+
+Current surfaces include:
+
+- JSON recovery with nested unwrapping, syntax repair, approximate keys/enums,
+  stringified values, inferred required fields, and whole-schema validation.
+- Unicode, lexical, Levenshtein, unrestricted Damerau-Levenshtein, English
+  Soundex, aliases, and contextual path matching.
+- Explicit semantic domain rules and caller-supplied embedding similarity.
+- Source-bound text edits, bounded fuzzy replacement, relocatable unified diffs,
+  overlap checks, exact-byte undo, and a Markdown
+  editing index. Full CommonMark/GFM conformance remains unfinished.
+- Python, Rust, JavaScript/JSX, TypeScript/TSX grammar inspection and validated
+  punctuation repairs. Grammar acceptance does not prove program correctness.
+- Journaled single-file replacement and conditional undo for coordinated writers.
+- CLI, stdio MCP, and resumable helper request/response adapters. No model is
+  required, loaded, or contacted by default.
+
+## Use the checkout
+
+```sh
+cargo run -p purrassist-cli -- --help
+cargo run -p purrassist-cli -- match raeder reader writer
+cargo run -p purrassist-cli -- decode --schema examples/temperature.schema.json \
+  --input examples/temperature.input.txt
+cargo run -p purrassist-cli -- mcp --root /path/to/workspace
+```
+
+`decode` returns the answer and receipt as JSON. `Exact` performs no recovery;
+`Quick`, `Standard`, `Deep`, and `Maximum` increase finite search budgets.
+Exhaustion is explicit and never proves that a schema is unsatisfiable.
+
+`call TOOL --root DIRECTORY` reads a JSON argument object from stdin and invokes
+the same operation used by MCP. File tools reject stale versions and record
+transaction identities for undo. The portable filesystem layer coordinates
+cooperating writers; it is not a sandbox against malicious directory replacement
+or an atomic multi-file transaction.
+
+## Develop and verify
+
+Rust edition 2024, MSRV 1.98. Development uses nightly Rust with Clippy and
+rustfmt. No commit-verification bypass is permitted.
+
+```sh
+make check       # formatting, attribution/dependencies, lint, optimized tests, docs
+make wasm-test   # execute and compare native/WASI core and grammar transcripts
+make syntax-oracles  # compare fixed syntax probes to independent compilers
+make benchmark  # recovery quality assertions and latency baseline
+```
+
+The checked-in main Draft 2020-12 corpus contains 1,301 tests, with another 121
+selected optional cases exercised; Unicode 17
+normalization contains 20,034 cases. These suites, regression tests, fixed helper
+transcripts, and bounded mutation probes run locally. Full release qualification
+also requires the remaining conformance, performance, packaging, CI, and platform
+work described in the [qualification record](docs/QUALIFICATION.md).
+
+## License and family
+
+First-party code is available under **MIT OR Apache-2.0 OR MulanPSL-2.0**, at your
+choice. Third-party data and grammar dependencies retain their own notices.
+PurRAssist shares Blackcat Informatics' cat silhouette and palette with PurRDF;
+the braces and validation mark are this crate's service emblem.

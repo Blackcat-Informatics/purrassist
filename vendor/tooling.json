@@ -1,0 +1,39 @@
+[
+  {
+    "name": "actions-checkout",
+    "version": "11d5960a326750d5838078e36cf38b85af677262",
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/actions/checkout/11d5960a326750d5838078e36cf38b85af677262/LICENSE",
+    "notices": {
+      "vendor/licenses/actions-checkout-11d5960a326750d5838078e36cf38b85af677262/LICENSE": "3e855ffa704114a51628ef8f0bf3aeb41728adf9d9070e263bf58aa5640b0eb5"
+    }
+  },
+  {
+    "name": "wasi-sdk",
+    "version": "34",
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "source": "https://raw.githubusercontent.com/WebAssembly/wasi-sdk/wasi-sdk-34/LICENSE",
+    "notices": {
+      "vendor/licenses/wasi-sdk-34/LICENSE": "a6c48161a09acc75a0e25503bab66a731eb5fba5392ed4bb4743e4ba5085327a"
+    },
+    "upstream_notice_sha256": {
+      "vendor/licenses/wasi-sdk-34/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+    },
+    "notice_normalization": "LF line endings; trailing horizontal whitespace and final blank lines removed. License text unchanged."
+  },
+  {
+    "name": "typescript",
+    "version": "5.9.3",
+    "license": "Apache-2.0",
+    "source": "https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz",
+    "notices": {
+      "vendor/licenses/typescript-5.9.3/LICENSE.txt": "527adf9d4c760f7367c2aeffed6a89afba8ba40ea1b0efbc8f56496ad30ea9cf",
+      "vendor/licenses/typescript-5.9.3/ThirdPartyNoticeText.txt": "f7d7409c091d9d5c09a8bafbc4a27dc30ce2da6e19b7c0f91c59754a7c4b195b"
+    },
+    "upstream_notice_sha256": {
+      "vendor/licenses/typescript-5.9.3/LICENSE.txt": "a7d00bfd54525bc694b6e32f64c7ebcf5e6b7ae3657be5cc12767bce74654a47",
+      "vendor/licenses/typescript-5.9.3/ThirdPartyNoticeText.txt": "1af3c68039c57e539422da82a4faada506ce6d0ea6f90e0b699d02dbcdb7a90c"
+    },
+    "notice_normalization": "LF line endings; trailing horizontal whitespace and final blank lines removed. License text unchanged."
+  }
+]

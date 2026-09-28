@@ -1,0 +1,95 @@
+<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. -->
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
+# Accepted implementation contract
+
+Status: implementation in progress; release qualification has not passed.
+
+PurRAssist recovers intent from imperfect AI output and requests. Every result
+combines its answer with evidence, provenance, losses, and explicit inferences.
+The governing requirements are in `.goals`. Maximal utility, performance, and
+portability apply together. Native execution uses native capabilities while
+computational engines remain wasmable.
+
+## Agreed release scope
+
+- First-party JSON parsing, Draft 2020-12 schema validation, and composed healing.
+  Preserve duplicate occurrences and exact numeric spelling. Repair prose,
+  fences, malformed syntax, truncated structures, wrappers, stringified JSON,
+  approximate keys/enums, misplaced fields, and incompatible shapes/types.
+- Permit schema-valid speculative values; identify each invention or inference.
+  Validate the complete candidate and never silently weaken constraints.
+- Exact, Unicode, case-folded, depunctuated, lexical, edit-distance, phonetic,
+  alias, and semantic matching, including path context and candidate indexes.
+- Model-free concepts/domain rules, caller embeddings and scorers, and helper
+  adapters. Helpers propose candidates; the engine validates their proposals.
+- Source-preserving CommonMark/GFM structure, selection, section editing,
+  lists/tasks, tables, references, and context extraction.
+- Syntax-aware Python, Rust, JavaScript/JSX, TypeScript/TSX editing. The initial
+  parser exception is one isolated Tree-sitter grammar family. Edit selection,
+  repair, and validation policy remain first-party Rust.
+- Robust fuzzy replacement/diff application and automatic application of
+  unambiguous validated edits, with receipts and conditional undo.
+- Root-scoped file tools, coordinated writer locks, version checks, atomic
+  single-file replacement, recovery journals, and explicit multi-file outcomes.
+- Rust facade, CLI, and stdio MCP server using the same operations.
+- Standard helper-provider adapters and caller-managed endpoints. No model is
+  required. Bundled small models remain an evaluation track, not a prerequisite.
+
+## Shared contracts
+
+Intent + input + context -> candidates -> validation/ranking -> result + receipt.
+
+Effort presets: Exact, Quick, Standard (default), Deep, Maximum. Explicit
+budgets bound work, memory, candidates, depth, cancellation, and helper usage.
+Results distinguish resolved answers, best guesses, ambiguity, and unsuccessful
+recovery. Search exhaustion does not prove unsatisfiability.
+
+Receipts identify sources, spans, transforms, alternatives, scores, validations,
+rules, schemas, parsers, policies, helpers, consumed resources, and termination.
+Losses and inferences are separate ledgers. Receipt serialization is versioned.
+Core operations are synchronous and resumable around supplied helper responses.
+
+## Workspace boundaries
+
+- `purrassist-core`: first-party pure engines and common contracts; zero external
+  runtime dependencies.
+- `purrassist-syntax`: isolated syntax grammar integration.
+- `purrassist`: standard public facade.
+- `purrassist-host`: filesystem and model transport facilities.
+- `purrassist-cli`: executable and stdio MCP server.
+
+## Required delivery sequence
+
+1. Foundation: contracts, evidence, budgets, repository/dependency gates, fixtures.
+2. Recovery: JSON/schema, matching, semantics, candidate search and effort.
+3. Documents/files: Markdown, syntax, edit planning/application, recovery, undo.
+4. Unified surfaces: helpers, CLI, MCP, executable end-to-end examples.
+5. Qualification: conformance, fuzzing, portability, performance, packaging,
+   documentation, registry setup, and verified publication.
+
+Every stage remains required. A passing subset does not qualify the release.
+
+## Acceptance
+
+Run official JSON Schema and CommonMark/GFM suites, independent syntax oracles,
+composed-recovery goldens, Unicode/path/phonetic ambiguity tests, crash/stale/
+retry/undo tests, preservation/replay/ledger properties, bounded fuzzing, and
+executed native/WASM comparisons with fixed helper transcripts. Measure quality,
+incorrect correction, latency, allocation, memory, build cost and artifact size.
+
+`make check` runs formatting, lint, optimized build/test, Rustdoc, and repository
+hygiene with warnings as errors. Verification preserves debug/overflow checks.
+Publication additionally requires conformance, packaging, installation, hosted
+CI, documentation, and registry verification. Never bypass commit verification.
+
+## Publication and identity
+
+Use PurRAssist in prose; identifiers are lowercase `purrassist`. Preserve the
+family logo's `cat-head-core` and palette, replacing its service object with a
+repaired-structure emblem. First-party licensing is MIT OR Apache-2.0 OR
+MulanPSL-2.0. Preserve third-party source attribution and license boundaries.
+
+Rust edition 2024, stable MSRV 1.98, nightly development analysis, stable release
+builds. Workspace version 0.1.0; release tags `rust-v*`. Publish in dependency
+order with trusted publishing after registry setup. Verify actual downloadable
+packages and CLI/MCP behavior before declaring completion.

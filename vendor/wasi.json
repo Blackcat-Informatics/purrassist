@@ -1,0 +1,9 @@
+{
+  "name": "WASI SDK sysroot",
+  "version": "34.0",
+  "purpose": "Build-only C grammar cross-compilation; excluded from core and runtime dependencies",
+  "url": "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sysroot-34.0.tar.gz",
+  "sha256": "9d813544eeebe38b7b8f2244ed591de46b6db812c6dd1a257ff9f0d2a905a2be",
+  "license_source": "https://github.com/WebAssembly/wasi-sdk/tree/wasi-sdk-34",
+  "directory": "wasi-sysroot-34.0"
+}

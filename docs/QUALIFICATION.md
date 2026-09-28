@@ -1,0 +1,65 @@
+<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. -->
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
+# Qualification record
+
+This is an implementation checkpoint, not release approval. The complete accepted
+scope in `IMPLEMENTATION.md` remains required. No registry publication is claimed.
+
+## Executable checks
+
+| Check | Command | Coverage |
+| --- | --- | --- |
+| Local gate | `make check` | Formatting, provenance, Clippy, optimized tests, Rustdoc |
+| Schema | `cargo test -p purrassist-core --test schema_conformance` | 1,301 main Draft 2020-12 tests; 121 selected optional tests |
+| Unicode | `cargo test -p purrassist-core --test unicode_conformance` | 20,034 Unicode 17 normalization cases |
+| Portability | `make wasm-test` | Executed native/WASI recovery and all five grammar transcripts; browser-WASM core build |
+| Independent syntax | `make syntax-oracles` | 15 fixed positive/negative probes against Python, rustc, Node, and TypeScript 5.9.3 |
+| Baseline | `make benchmark` | Six deterministic recovery cases, 200 samples each, quality assertions and latency |
+| MSRV | `rustup run 1.98.0 cargo test --workspace --locked` | Workspace tests on Rust 1.98 |
+| Packages | `make package` | Cargo package construction and verification in dependency order |
+
+Selected optional schema suites cover large numbers, overflow, ECMA regex cases,
+non-BMP characters, references into unknown keywords, anchors, dynamic references,
+identifiers, missing dialect declarations, and unknown keywords. They do not imply
+format-assertion support or unrestricted ECMAScript regex support.
+
+Regression tests cover composed healing, duplicate ambiguity, retained sources,
+inferences, exhaustion, Unicode/path matching, fuzzy replacement minima, unified
+diff relocation, CRLF preservation, no-final-newline markers, exact undo, stale
+writes, interrupted journal/temp writes, independent batch outcomes, provider
+transcripts, and the actual CLI/MCP subprocess. Mutation probes exercise 2,000
+reproducible malformed JSON inputs; this is not coverage-guided fuzz qualification.
+
+Local package verification has built all five packages. A local release CLI was
+installed into a disposable checkout cache and exercised on the published example
+inputs, including exact-source retention. This does not verify downloadable registry
+packages. Hosted CI is configured but has not run against this implementation.
+
+The initial six-case baseline observed approximately 2 microseconds median for
+exact integer recovery and 42 microseconds for composed syntax/key/wrapper/type
+repair. These are single-machine observations, not portable performance guarantees.
+Reported scratch usage is governor accounting, not measured allocator consumption.
+Run the benchmark on the target platform; do not generalize its zero incorrect
+corrections to arbitrary AI output.
+
+## Remaining release work
+
+- Complete CommonMark/GFM container and inline parsing, structural editing and
+  context extraction; execute the full official conformance corpora. The current
+  Markdown module is explicitly an editing index.
+- Extend composed recovery/witness generation and regex coverage; audit recursive
+  schemas and resource-sensitive compilation. Qualify unsupported vocabulary and
+  format behavior without silently weakening assertions.
+- Complete allocation/work accounting throughout candidate generation, receipts,
+  schema compilation, and helper preparation. Bound external parser allocations;
+  progress cancellation alone is not a hard memory limit.
+- Bind ambiguous alternatives to their own transformation/validation ledgers and
+  finish uniform Rust/CLI/MCP access to path, semantic, and document operations.
+- Expand independent oracle and adversarial corpora, coverage-guided fuzzing,
+  memory/allocation measurements, build/artifact metrics, and representative
+  incorrect-correction evaluation beyond the small baseline.
+- Qualify Windows filesystem durability and crash boundaries. Unix tests and a
+  configured Windows engine job do not establish Windows host support.
+- Execute hosted CI, audit final package contents and notices, configure trusted
+  publishing, verify downloadable packages and installed behavior, and only then
+  make a release. No remote publication settings have been changed.
