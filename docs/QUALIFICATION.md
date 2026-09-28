@@ -36,6 +36,17 @@ new inputs and select subsequent mutation parents. It checks four fixed schemas
 with bounded recovery and retains failures for replay. This does not qualify
 arbitrary schemas, every effort policy, or the document/matching engines.
 
+A clean-source campaign at `ea50c8965a005744ca680c69d89a61e93bea324f`
+passed 1,014 executions (14 seeds and 1,000 mutations), with 39 invalid-UTF-8
+inputs explicitly rejected at the probe boundary. The seeds covered 4,051 core
+code regions; mutation feedback added 248 regions and retained 49 discoveries,
+for 4,299 regions and 63 corpus entries. No probe assertion or timeout failed.
+The tool/build/source identities, deterministic seed, parent corpus indexes,
+and discovery counts are recorded in
+`qualification/fuzz-json-linux-x86_64.json`. These are covered-region counts,
+not a whole-crate coverage percentage. A saved discovery also passed replay;
+a separate forced-timeout check produced a failed report with its input retained.
+
 Ambiguous JSON recovery results carry separate ordered alternative ledgers with
 output digests, search costs, transformations, losses, inferences, and indices into
 the actual validation log. Regressions check candidate association, wire encoding,
