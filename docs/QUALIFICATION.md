@@ -38,8 +38,8 @@ guess reporting, and exhaustion before a complete ledger can be returned.
 Local package verification has built all five packages. A local release CLI was
 installed into a disposable checkout cache and exercised on the published example
 inputs, including exact-source retention. This does not verify downloadable registry
-packages. Hosted CI passed for checkpoint `440761176fe9de7846e99f25858bd97b5f3dc91e`:
-[run 36396443293](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36396443293)
+packages. Hosted CI passed for checkpoint `c67c67feb4bfdb2d731b508f6c61850e32b7b7c2`:
+[run 36397449872](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36397449872)
 completed the Linux/macOS local gates, MSRV workspace tests, Windows core/syntax
 tests, and native/WASI comparisons. This is evidence for that checkpoint only;
 subsequent changes need their own qualification.
@@ -75,6 +75,13 @@ work/storage/input/depth exhaustion and cancellation. Tests cover cumulative
 external-resource/dialect preparation, unused-resource hashing admission, shared
 compilation/recovery limits, and tool-level exhaustion reporting.
 
+Semantic alternatives now carry independent, output-bound rule and inference
+ledgers with validation references. The full Rust 1.98.0 local gate passed,
+including contradictory rules, rejected and duplicate derivations, final derived
+attributes, host wire/digest association, and atomic failure on ledger exhaustion.
+Semantic alternative costs are zero because the surviving interpretations are
+not ranked against each other.
+
 ## Remaining release work
 
 - Complete CommonMark/GFM container and inline parsing and structural editing;
@@ -91,7 +98,8 @@ compilation/recovery limits, and tool-level exhaustion reporting.
   avoids subtree cloning for reference-only targets. These accounting additions
   do not establish measured allocator bounds or complete the allocation audit. Bound external parser allocations;
   progress cancellation alone is not a hard memory limit.
-- Extend alternative-specific ledgers beyond JSON recovery and finish uniform
+- Extend alternative-specific ledgers beyond JSON recovery and semantic resolution,
+  and finish uniform
   Rust/CLI/MCP access to embedding similarity and remaining document operations. Domain-rule
   intent resolution and path resolution now use the shared tool dispatcher,
   including epistemic status and one governor across domain/index admission

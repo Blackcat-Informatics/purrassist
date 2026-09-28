@@ -85,6 +85,10 @@ takes `input`, an explicit `domain` (identity, phrase rules, ignored words), and
 `concepts` (identities, labels, attribute maps). It applies the declared rules,
 retains the request, and returns concept interpretations with evidence. Unknown
 words are errors; effort bounds work without changing domain meanings.
+Ambiguous semantic answers carry separate ordered receipt ledgers with output
+digests, supporting rules, derived values, and validation references. Duplicate
+outputs retain the first supporting rule derivation; rejected branches do not
+contribute evidence to accepted answers.
 
 `inspect_markdown` returns nested blocks and root sections. `markdown_context`
 takes UTF-8 byte offsets `start`/`end` and optional neighboring-block count.

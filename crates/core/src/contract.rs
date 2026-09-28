@@ -314,7 +314,7 @@ pub struct SourceDocument {
     pub text: String,
 }
 
-/// Evidence belonging to one competing JSON recovery interpretation.
+/// Evidence belonging to one competing recovery or semantic interpretation.
 ///
 /// Records follow the order of `Outcome::Ambiguous`. Their output identities hash
 /// `Node::to_json()` bytes, not the original input or an equivalence-normalized JSON
@@ -361,8 +361,8 @@ pub struct Receipt {
     pub inferences: Vec<Inference>,
     /// Actual validation results.
     pub validations: Vec<Validation>,
-    /// Per-alternative JSON recovery ledgers in outcome order. Empty for other
-    /// operations or a single answer. Mutually exclusive transformations stay here
+    /// Per-alternative ledgers in outcome order for JSON recovery and semantic
+    /// resolution. Empty for operations without alternative ledgers or a single answer. Mutually exclusive transformations stay here
     /// rather than being combined into the top-level selected-result ledgers.
     pub alternatives: Vec<AlternativeReceipt>,
     /// Why processing stopped.

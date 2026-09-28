@@ -6,6 +6,9 @@ use crate::{
     contract::{Evidence, Resource},
 };
 use std::collections::{BTreeMap, BTreeSet};
+mod selection;
+mod wire;
+use selection::Selection;
 
 /// A candidate's domain meaning, supplied explicitly by the caller.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,6 +61,9 @@ impl Domain {
     /// negations or quantities. Equal-length conflicting phrase rules branch;
     /// multiple matching concepts remain ambiguous. Later modifiers replace earlier
     /// assignments, and receipts identify both rules. Scores are not probabilities.
+    /// Ambiguous outputs have ordered alternative ledgers; incompatible decisions
+    /// are never combined in the top-level ledger. Identical outputs reached by
+    /// multiple derivations retain the first supporting derivation in rule order.
     #[must_use]
     pub fn resolve(
         &self,
@@ -96,17 +102,13 @@ impl Domain {
             .retain_source(query, governor)
             .and_then(|()| self.resolve_with(query, concepts, governor));
         let outcome = match result {
-            Ok((answers, evidence)) => {
-                receipt.evidence = evidence;
-                match answers.as_slice() {
-                    [] => {
-                        receipt.stopped = StopReason::NoCandidate;
-                        Outcome::Unresolved
-                    }
-                    [answer] => Outcome::Resolved(answer.clone()),
-                    _ => Outcome::Ambiguous(answers),
+            Ok(answers) => match selection::finish(answers, &mut receipt, governor) {
+                Ok(outcome) => outcome,
+                Err(reason) => {
+                    receipt.stopped = reason;
+                    Outcome::Unresolved
                 }
-            }
+            },
             Err(reason) => {
                 receipt.stopped = reason;
                 Outcome::Unresolved
@@ -120,7 +122,7 @@ impl Domain {
         query: &str,
         concepts: &[Concept],
         governor: &mut Governor,
-    ) -> Result<(Vec<Interpretation>, Vec<Evidence>), StopReason> {
+    ) -> Result<Vec<Selection>, StopReason> {
         governor.charge(Resource::InputBytes, size(query.len()))?;
         governor.charge(
             Resource::ScratchBytes,
@@ -194,7 +196,7 @@ impl Domain {
             states = self.apply_rules(&states, &matches, governor)?;
             position += longest;
         }
-        select(concepts, states, governor)
+        selection::select(concepts, states, governor)
     }
     fn apply_rules(
         &self,
@@ -206,18 +208,17 @@ impl Domain {
         for state in states {
             for rule in rules {
                 governor.charge(Resource::Candidates, 1)?;
-                governor.charge(
-                    Resource::ScratchBytes,
-                    size(state.desired.len().saturating_add(rule.assignments.len()))
-                        .saturating_mul(256),
-                )?;
+                selection::admit_branch(state, rule, &self.id, governor)?;
                 let mut state = state.clone();
                 for (attribute, value) in &rule.assignments {
                     governor.charge(Resource::EvidenceEntries, 1)?;
                     let previous = state.desired.insert(attribute.clone(), value.clone());
                     state.evidence.push(Evidence {
                         rule: format!("{}::{}", self.id, rule.id),
-                        destination: attribute.clone(),
+                        destination: format!(
+                            "/desired/{}",
+                            crate::json::pointer_segment(attribute)
+                        ),
                         span: None,
                         explanation: format!(
                             "phrase {:?} assigns {value:?}; prior assignment {previous:?}",
@@ -230,46 +231,6 @@ impl Domain {
         }
         Ok(next)
     }
-}
-fn select(
-    concepts: &[Concept],
-    states: Vec<State>,
-    governor: &mut Governor,
-) -> Result<(Vec<Interpretation>, Vec<Evidence>), StopReason> {
-    let mut identities = BTreeSet::new();
-    for concept in concepts {
-        if !identities.insert(&concept.id) {
-            return Err(StopReason::InvalidInput(
-                "duplicate concept identity".into(),
-            ));
-        }
-    }
-    let mut answers = Vec::new();
-    let mut evidence = Vec::new();
-    for state in states {
-        if state.desired.is_empty() {
-            continue;
-        }
-        for concept in concepts {
-            governor.charge(Resource::Work, size(state.desired.len()))?;
-            if state
-                .desired
-                .iter()
-                .all(|(key, value)| concept.attributes.get(key) == Some(value))
-            {
-                let answer = Interpretation {
-                    concept: concept.clone(),
-                    desired: state.desired.clone(),
-                };
-                if !answers.contains(&answer) {
-                    answers.push(answer);
-                }
-            }
-        }
-        evidence.extend(state.evidence);
-    }
-    answers.sort_by(|a, b| a.concept.id.cmp(&b.concept.id));
-    Ok((answers, evidence))
 }
 fn size(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)

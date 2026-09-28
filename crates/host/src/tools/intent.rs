@@ -4,9 +4,8 @@
 use purrassist::{
     AssistResult, Governor, Outcome, Receipt, StopReason,
     contract::Resource,
-    intent::{Concept, Domain, Interpretation, Rule},
+    intent::{Concept, Domain, Rule},
     json::{Node, Value},
-    wire::{object, string},
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -65,11 +64,14 @@ pub(super) fn resolve(args: &Node) -> Result<Node, String> {
     result.receipt.effort = effort;
     Ok(AssistResult {
         outcome: match result.outcome {
-            Outcome::Resolved(value) => Outcome::Resolved(encode(value)),
-            Outcome::BestGuess(value) => Outcome::BestGuess(encode(value)),
-            Outcome::Ambiguous(values) => {
-                Outcome::Ambiguous(values.into_iter().map(encode).collect())
-            }
+            Outcome::Resolved(value) => Outcome::Resolved(value.to_node()),
+            Outcome::BestGuess(value) => Outcome::BestGuess(value.to_node()),
+            Outcome::Ambiguous(values) => Outcome::Ambiguous(
+                values
+                    .iter()
+                    .map(purrassist::intent::Interpretation::to_node)
+                    .collect(),
+            ),
             Outcome::Unresolved => Outcome::Unresolved,
         },
         receipt: result.receipt,
@@ -99,36 +101,6 @@ fn attributes(node: &Node, name: &str) -> Result<BTreeMap<String, String>, Strin
             ))
         })
         .collect()
-}
-fn encode(value: Interpretation) -> Node {
-    object([
-        (
-            "concept",
-            object([
-                ("id", string(value.concept.id)),
-                ("label", string(value.concept.label)),
-                (
-                    "attributes",
-                    object(
-                        value
-                            .concept
-                            .attributes
-                            .into_iter()
-                            .map(|(key, value)| (key, string(value))),
-                    ),
-                ),
-            ]),
-        ),
-        (
-            "desired",
-            object(
-                value
-                    .desired
-                    .into_iter()
-                    .map(|(key, value)| (key, string(value))),
-            ),
-        ),
-    ])
 }
 fn admit(node: &Node, governor: &mut Governor, depth: u32) -> Result<(), StopReason> {
     governor.charge(Resource::Depth, u64::from(depth))?;

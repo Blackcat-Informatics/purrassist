@@ -118,3 +118,124 @@ fn shared_governor_retains_source_and_preserves_cancellation() {
     );
     assert_eq!(result.receipt.sources, Vec::new());
 }
+
+#[test]
+fn conflicting_rules_have_separate_output_bound_ledgers() {
+    use purrassist_core::{contract::InferenceKind, digest::Digest};
+    let (mut domain, concepts) = drinks();
+    domain.rules.push(Rule {
+        id: "other-tea".into(),
+        phrase: "tea".into(),
+        assignments: attributes(&[("drink", "coffee")]),
+    });
+    domain.rules.push(Rule {
+        id: "warm".into(),
+        phrase: "temperature".into(),
+        assignments: attributes(&[("temperature", "hot")]),
+    });
+    domain.rules.push(Rule {
+        id: "cold".into(),
+        phrase: "temperature".into(),
+        assignments: attributes(&[("temperature", "cold")]),
+    });
+    let result = domain.resolve("tea temperature", &concepts, Budget::default());
+    let Outcome::Ambiguous(answers) = &result.outcome else {
+        panic!("{result:?}")
+    };
+    assert_eq!(answers.len(), 2);
+    assert_eq!(result.receipt.alternatives.len(), answers.len());
+    assert!(result.receipt.evidence.is_empty());
+    assert!(result.receipt.inferences.is_empty());
+    for (answer, ledger) in answers.iter().zip(&result.receipt.alternatives) {
+        assert_eq!(
+            ledger.output,
+            Digest::of(answer.to_node().to_json().as_bytes())
+        );
+        assert!(result.receipt.validations[ledger.validations[0]].passed);
+        assert!(
+            !ledger
+                .evidence
+                .iter()
+                .any(|entry| entry.rule.ends_with("::other-tea"))
+        );
+        let expected = if answer.concept.id == "cold-tea" {
+            "::cold"
+        } else {
+            "::warm"
+        };
+        assert!(
+            ledger
+                .evidence
+                .iter()
+                .any(|entry| entry.rule.ends_with(expected))
+        );
+        assert_eq!(ledger.evidence.len(), 2);
+        assert_eq!(ledger.inferences.len(), 2);
+        assert!(
+            ledger
+                .inferences
+                .iter()
+                .all(|inference| inference.kind == InferenceKind::Derived)
+        );
+        assert!(
+            ledger
+                .inferences
+                .iter()
+                .any(
+                    |inference| inference.evidence.destination == "/desired/temperature"
+                        && inference.value == format!("{:?}", answer.desired["temperature"])
+                )
+        );
+    }
+    assert!(!result.receipt.contains_guesses());
+}
+#[test]
+fn rejected_and_duplicate_derivations_do_not_pollute_selected_evidence() {
+    let (mut domain, concepts) = drinks();
+    domain.rules.push(Rule {
+        id: "wrong".into(),
+        phrase: "tea".into(),
+        assignments: attributes(&[("drink", "coffee")]),
+    });
+    domain.rules.push(Rule {
+        id: "duplicate".into(),
+        phrase: "tea".into(),
+        assignments: attributes(&[("drink", "tea")]),
+    });
+    let result = domain.resolve("hot tea", &concepts, Budget::default());
+    assert!(matches!(result.outcome, Outcome::Resolved(_)));
+    assert_eq!(result.receipt.evidence.len(), 2);
+    assert!(
+        result
+            .receipt
+            .evidence
+            .iter()
+            .all(|entry| !entry.rule.ends_with("::wrong") && !entry.rule.ends_with("::duplicate"))
+    );
+    assert_eq!(result.receipt.validations.len(), 1);
+    assert!(result.receipt.alternatives.is_empty());
+}
+#[test]
+fn semantic_ledger_exhaustion_never_publishes_partial_alternatives() {
+    use purrassist_core::{StopReason, contract::Resource};
+    let (domain, concepts) = drinks();
+    let complete = domain.resolve("tea", &concepts, Budget::default());
+    let limit = complete.receipt.usage.evidence_entries - 1;
+    assert!(matches!(complete.outcome, Outcome::Ambiguous(_)));
+    let limited = domain.resolve(
+        "tea",
+        &concepts,
+        Budget {
+            evidence_entries: limit,
+            ..Budget::default()
+        },
+    );
+    assert_eq!(limited.outcome, Outcome::Unresolved);
+    assert_eq!(
+        limited.receipt.stopped,
+        StopReason::BudgetExceeded(Resource::EvidenceEntries)
+    );
+    assert!(limited.receipt.alternatives.is_empty());
+    assert!(limited.receipt.validations.is_empty());
+    assert!(limited.receipt.evidence.is_empty());
+}

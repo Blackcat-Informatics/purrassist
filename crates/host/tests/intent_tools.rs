@@ -60,6 +60,20 @@ fn semantic_tools_preserve_refinement_ambiguity_and_unknown_words() {
         panic!("missing alternatives")
     };
     assert_eq!(alternatives.len(), 2);
+    let Value::Array(ledgers) = &ambiguous.pointer("/receipt/alternatives").unwrap().value else {
+        panic!("missing alternative ledgers")
+    };
+    for (value, ledger) in alternatives.iter().zip(ledgers) {
+        assert_eq!(
+            ledger.get("output").unwrap().as_str(),
+            Some(
+                purrassist::digest::Digest::of(value.to_json().as_bytes())
+                    .to_string()
+                    .as_str()
+            )
+        );
+    }
+    assert_eq!(ledgers.len(), alternatives.len());
     let unknown = tools
         .call("resolve_intent", &request("not hot tea", "standard"))
         .unwrap();
