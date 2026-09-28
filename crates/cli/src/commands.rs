@@ -176,8 +176,6 @@ fn mcp(args: &[String]) -> Result<u8, String> {
         return Err("usage: purrassist mcp --root DIRECTORY".into());
     }
     let tools = purrassist_host::tools::Tools::new(&args[1]).map_err(|e| e.to_string())?;
-    purrassist_host::mcp::Session::new(tools)
-        .serve(io::stdin().lock(), io::stdout().lock())
-        .map_err(|e| e.to_string())?;
+    crate::mcp_stdio::run(tools)?;
     Ok(0)
 }

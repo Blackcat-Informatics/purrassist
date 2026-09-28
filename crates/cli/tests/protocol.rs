@@ -47,11 +47,16 @@ fn stdio_lifecycle_and_recovery_use_real_tool_operations() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let messages: Vec<Node> = String::from_utf8(output.stdout)
+    let mut messages: Vec<Node> = String::from_utf8(output.stdout)
         .unwrap()
         .lines()
         .map(|line| json::parse(line).unwrap())
         .collect();
+    // JSON-RPC permits tool responses to complete out of request order.
+    messages.sort_by_key(|message| match message.get("id").map(|id| &id.value) {
+        Some(Value::Number(number)) => number.to_usize().unwrap(),
+        _ => 7,
+    });
     assert_eq!(
         messages.len(),
         11,
@@ -140,6 +145,41 @@ fn assert_tool_responses(messages: &[Node]) {
             .and_then(Node::as_str),
         Some("iced-tea")
     );
+}
+
+#[test]
+fn broken_stdout_terminates_even_when_stdin_remains_open() {
+    let root = std::env::temp_dir().join(format!(
+        "purrassist-mcp-output-failure-{}",
+        std::process::id()
+    ));
+    fs::create_dir(&root).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_purrassist"))
+        .args(["mcp", "--root"])
+        .arg(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    drop(child.stdout.take());
+    writeln!(input, r#"{{"jsonrpc":"2.0","id":1,"method":"ping"}}"#).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("MCP output failure left the process waiting on open stdin");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    assert!(!status.success());
+    drop(input);
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

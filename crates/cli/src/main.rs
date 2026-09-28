@@ -3,6 +3,7 @@
 
 //! `PurRAssist` command-line entry point.
 mod commands;
+mod mcp_stdio;
 fn main() -> std::process::ExitCode {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match commands::run(&args) {

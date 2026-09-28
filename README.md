@@ -228,4 +228,5 @@ Coverage-guided JSON campaigns are available with `make fuzz-json`; see
 [properties, replay, and qualification limits](docs/FUZZING.md).
 
 Governed engines and host tools accept [caller-owned cancellation](docs/CANCELLATION.md),
-with explicit transaction boundaries. Live MCP cancellation remains in progress.
+with explicit transaction boundaries. The stdio MCP server handles cancellation
+while tools run and admits at most four active tool calls.
