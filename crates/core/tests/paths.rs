@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Candidate path spelling, context, ambiguity, and traversal tests.
 use purrassist_core::{
-    Budget, Governor, Outcome, StopReason, matching::MatchRequest, paths::PathIndex,
+    Budget, Governor, Outcome, StopReason, digest::Digest, matching::MatchRequest, paths::PathIndex,
 };
 
 fn index() -> PathIndex {
@@ -38,6 +38,21 @@ fn parent_context_disambiguates_preserving_original_paths() {
             .iter()
             .all(|answer| answer.path.ends_with("README.md"))
     );
+    assert_eq!(result.receipt.evidence, Vec::new());
+    assert_eq!(result.receipt.inferences, Vec::new());
+    assert_eq!(result.receipt.alternatives.len(), answers.len());
+    for (answer, ledger) in answers.iter().zip(&result.receipt.alternatives) {
+        assert_eq!(
+            ledger.output,
+            Digest::of(answer.to_node().to_json().as_bytes())
+        );
+        assert_eq!(ledger.evidence.len(), 1);
+        assert_eq!(ledger.evidence[0].destination, answer.path);
+        assert_eq!(ledger.inferences.len(), 1);
+        assert_eq!(ledger.inferences[0].value, answer.path);
+        assert_eq!(ledger.losses, Vec::new());
+        assert_eq!(ledger.validations, Vec::new());
+    }
 }
 #[test]
 fn weak_similarity_does_not_silently_choose_a_file() {
@@ -109,4 +124,27 @@ fn shared_governor_reports_construction_and_sticky_exhaustion() {
     );
     assert_eq!(cancelled.outcome, Outcome::Unresolved);
     assert_eq!(cancelled.receipt.stopped, StopReason::Cancelled);
+}
+
+#[test]
+fn path_ledger_exhaustion_does_not_return_partial_alternatives() {
+    let paths = index();
+    let baseline = paths.resolve("README.md", "", &MatchRequest::default());
+    assert!(matches!(baseline.outcome, Outcome::Ambiguous(_)));
+    let request = MatchRequest {
+        budget: Budget {
+            evidence_entries: baseline.receipt.usage.evidence_entries - 1,
+            ..Budget::default()
+        },
+        ..MatchRequest::default()
+    };
+    let result = paths.resolve("README.md", "", &request);
+    assert_eq!(result.outcome, Outcome::Unresolved);
+    assert_eq!(
+        result.receipt.stopped,
+        StopReason::BudgetExceeded(purrassist_core::contract::Resource::EvidenceEntries)
+    );
+    assert_eq!(result.receipt.alternatives, Vec::new());
+    assert_eq!(result.receipt.evidence, Vec::new());
+    assert_eq!(result.receipt.inferences, Vec::new());
 }

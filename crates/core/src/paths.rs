@@ -3,9 +3,12 @@
 //! Pure candidate-path resolution. Matching never opens or authorizes a file.
 use crate::{
     AssistResult, Effort, Governor, Outcome, Receipt, StopReason,
-    contract::{Evidence, Inference, InferenceKind, Resource},
+    contract::{AlternativeReceipt, Evidence, Inference, InferenceKind, Resource},
+    digest::Digest,
+    json::Node,
     matching::{self, Candidate, MatchRequest},
     text::comparison_key,
+    wire::{array, integer, object, string},
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -25,6 +28,25 @@ pub struct PathMatch {
     pub score: u32,
     /// Matching algorithms and contextual rules supporting this result.
     pub methods: Vec<String>,
+}
+impl PathMatch {
+    /// Serialize the path interpretation used by the shared CLI/MCP tools.
+    /// The returned JSON bytes are the identity hashed by alternative receipts.
+    ///
+    /// ```
+    /// use purrassist_core::paths::PathMatch;
+    /// let value = PathMatch { path: "src/lib.rs".into(), score: 20_000,
+    ///     methods: vec!["exact-path".into()] };
+    /// assert_eq!(value.to_node().pointer("/path").unwrap().as_str(), Some("src/lib.rs"));
+    /// ```
+    #[must_use]
+    pub fn to_node(&self) -> Node {
+        object([
+            ("path", string(&self.path)),
+            ("score", integer(u64::from(self.score))),
+            ("methods", array(self.methods.iter().map(string))),
+        ])
+    }
 }
 /// Explicit acceptance thresholds for selecting among fuzzy path spellings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,7 +115,8 @@ impl PathIndex {
     /// `context` is a relative directory, or an empty string for the root. Exact
     /// paths take precedence. For fuzzy resolution, every candidate is ranked;
     /// normalized basename indexes identify equivalent spellings without dropping
-    /// fuzzy alternatives. Equal top scores remain ambiguous. No disk access occurs.
+    /// fuzzy alternatives. Equal top scores remain ambiguous with separate
+    /// output-bound evidence and inference ledgers. No disk access occurs.
     #[must_use]
     pub fn resolve(
         &self,
@@ -157,40 +180,27 @@ impl PathIndex {
             request.effort,
             *governor.limits(),
         );
-        let result = self.resolve_with(query, context, request, policy, governor);
+        let result = self
+            .resolve_with(query, context, request, policy, governor)
+            .and_then(|matches| {
+                record_matches(&matches, context, policy, governor, &mut receipt)
+                    .map(|outcome| (matches, outcome))
+            });
         let outcome = match result {
-            Ok(matches) => {
-                for entry in &matches {
-                    let evidence = Evidence {
-                        rule: "paths.rank.v1".into(),
-                        explanation: format!(
-                            "score {}; signals {:?}; context {context:?}; selection policy {policy:?}",
-                            entry.score, entry.methods
-                        ),
-                        span: None,
-                        destination: entry.path.clone(),
-                    };
-                    receipt.evidence.push(evidence.clone());
-                    if entry.score != 20_000 {
-                        receipt.inferences.push(Inference {
-                            evidence,
-                            kind: InferenceKind::Guess,
-                            value: entry.path.clone(),
-                        });
-                    }
+            Ok((matches, ())) => match matches.as_slice() {
+                [] => {
+                    receipt.stopped = StopReason::NoCandidate;
+                    Outcome::Unresolved
                 }
-                match matches.as_slice() {
-                    [] => {
-                        receipt.stopped = StopReason::NoCandidate;
-                        Outcome::Unresolved
-                    }
-                    [answer] if answer.score == 20_000 => Outcome::Resolved(answer.clone()),
-                    [answer] => Outcome::BestGuess(answer.clone()),
-                    _ => Outcome::Ambiguous(matches),
-                }
-            }
+                [answer] if answer.score == 20_000 => Outcome::Resolved(answer.clone()),
+                [answer] => Outcome::BestGuess(answer.clone()),
+                _ => Outcome::Ambiguous(matches),
+            },
             Err(reason) => {
                 receipt.stopped = reason;
+                receipt.alternatives.clear();
+                receipt.evidence.clear();
+                receipt.inferences.clear();
                 Outcome::Unresolved
             }
         };
@@ -303,6 +313,68 @@ impl PathIndex {
         governor.charge(Resource::EvidenceEntries, size(results.len()))?;
         Ok(results)
     }
+}
+fn record_matches(
+    matches: &[PathMatch],
+    context: &str,
+    policy: SelectionPolicy,
+    governor: &mut Governor,
+    receipt: &mut Receipt,
+) -> Result<(), StopReason> {
+    let ambiguous = matches.len() > 1;
+    for entry in matches {
+        let signal_bytes = entry
+            .methods
+            .iter()
+            .fold(0_usize, |sum, method| sum.saturating_add(method.len()));
+        let storage = size(
+            entry
+                .path
+                .len()
+                .saturating_add(context.len())
+                .saturating_add(signal_bytes),
+        )
+        .saturating_mul(8)
+        .saturating_add(1024);
+        governor.charge(Resource::Work, storage)?;
+        governor.charge(Resource::ScratchBytes, storage)?;
+        governor.charge(
+            Resource::EvidenceEntries,
+            1 + u64::from(entry.score != 20_000),
+        )?;
+        let evidence = Evidence {
+            rule: "paths.rank.v1".into(),
+            explanation: format!(
+                "score {}; signals {:?}; context {context:?}; selection policy {policy:?}",
+                entry.score, entry.methods
+            ),
+            span: None,
+            destination: entry.path.clone(),
+        };
+        let inferences = if entry.score == 20_000 {
+            Vec::new()
+        } else {
+            vec![Inference {
+                evidence: evidence.clone(),
+                kind: InferenceKind::Guess,
+                value: entry.path.clone(),
+            }]
+        };
+        if ambiguous {
+            receipt.alternatives.push(AlternativeReceipt {
+                output: Digest::of(entry.to_node().to_json().as_bytes()),
+                cost: 0,
+                evidence: vec![evidence],
+                losses: Vec::new(),
+                inferences,
+                validations: Vec::new(),
+            });
+        } else {
+            receipt.evidence.push(evidence);
+            receipt.inferences.extend(inferences);
+        }
+    }
+    Ok(())
 }
 fn portable(path: &str) -> Result<(), StopReason> {
     if path.is_empty()

@@ -425,8 +425,9 @@ pub struct Receipt {
     pub inferences: Vec<Inference>,
     /// Actual validation results.
     pub validations: Vec<Validation>,
-    /// Per-alternative ledgers in outcome order for JSON recovery and semantic
-    /// resolution. Empty for operations without alternative ledgers or a single answer. Mutually exclusive transformations stay here
+    /// Per-alternative ledgers in outcome order for recovery, semantic, path,
+    /// and embedding resolution. Empty for operations without alternative ledgers
+    /// or a single answer. Mutually exclusive transformations stay here
     /// rather than being combined into the top-level selected-result ledgers.
     pub alternatives: Vec<AlternativeReceipt>,
     /// Why processing stopped.

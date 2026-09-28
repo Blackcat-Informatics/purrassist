@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Shared path-tool outcomes and schema boundaries; candidates need not exist.
-use purrassist::{json, json::Value};
+use purrassist::{digest::Digest, json, json::Value};
 use purrassist_host::tools::Tools;
 
 #[test]
@@ -42,6 +42,27 @@ fn paths_preserve_status_evidence_and_never_read_candidate_files() {
                 panic!("missing inferences")
             };
             assert_eq!(inferences.len(), 1);
+        }
+        if status == "ambiguous" {
+            let Value::Array(answers) = &result.get("alternatives").unwrap().value else {
+                panic!("missing alternatives")
+            };
+            let Value::Array(ledgers) = &result.pointer("/receipt/alternatives").unwrap().value
+            else {
+                panic!("missing alternative ledgers")
+            };
+            assert_eq!(answers.len(), 2);
+            assert_eq!(ledgers.len(), answers.len());
+            for (answer, ledger) in answers.iter().zip(ledgers) {
+                assert_eq!(
+                    ledger.get("output").unwrap().as_str(),
+                    Some(Digest::of(answer.to_json().as_bytes()).to_string().as_str())
+                );
+                assert_eq!(
+                    ledger.pointer("/inferences/0/value").unwrap().as_str(),
+                    answer.get("path").unwrap().as_str()
+                );
+            }
         }
     }
     let exact = tools.call("match_paths", &json::parse(r#"{"query":"src/reader.rs","paths":["src/reader.rs","tests/reader.rs"],"effort":"exact"}"#).unwrap()).unwrap();

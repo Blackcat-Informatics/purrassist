@@ -6,7 +6,6 @@ use purrassist::{
     json::{Node, Value},
     matching::MatchRequest,
     paths::{PathIndex, PathMatch, SelectionPolicy},
-    wire::{array, integer, object, string},
 };
 
 pub(super) fn resolve(
@@ -53,10 +52,10 @@ pub(super) fn resolve(
     };
     Ok(AssistResult {
         outcome: match result.outcome {
-            Outcome::Resolved(value) => Outcome::Resolved(encode(value)),
-            Outcome::BestGuess(value) => Outcome::BestGuess(encode(value)),
+            Outcome::Resolved(value) => Outcome::Resolved(value.to_node()),
+            Outcome::BestGuess(value) => Outcome::BestGuess(value.to_node()),
             Outcome::Ambiguous(values) => {
-                Outcome::Ambiguous(values.into_iter().map(encode).collect())
+                Outcome::Ambiguous(values.iter().map(PathMatch::to_node).collect())
             }
             Outcome::Unresolved => Outcome::Unresolved,
         },
@@ -76,11 +75,4 @@ fn threshold(args: &Node, name: &str, default: u32) -> Result<u32, String> {
         None => Ok(default),
         _ => Err(format!("invalid {name}")),
     }
-}
-fn encode(value: PathMatch) -> Node {
-    object([
-        ("path", string(value.path)),
-        ("score", integer(u64::from(value.score))),
-        ("methods", array(value.methods.into_iter().map(string))),
-    ])
 }

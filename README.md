@@ -82,6 +82,8 @@ compilation methods use the default finite budget.
 the same operation used by MCP. `match_paths` takes a `query`, caller-supplied `paths`,
 optional directory `context`, effort, and score/margin thresholds. It returns
 `resolved`, `best_guess`, `ambiguous`, or `unresolved` with methods and a receipt.
+Ambiguous paths carry separate evidence and inference ledgers bound to each
+serialized alternative.
 It matches names only; choosing a path does not grant file access. `resolve_intent`
 takes `input`, an explicit `domain` (identity, phrase rules, ignored words), and
 `concepts` (identities, labels, attribute maps). It applies the declared rules,

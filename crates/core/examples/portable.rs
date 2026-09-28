@@ -11,7 +11,8 @@ use purrassist_core::{
     markdown::{
         Alignment, Dialect, Document, ListItemEdit, References, TableColumnEdit, TableRowEdit,
     },
-    matching,
+    matching::{self, MatchRequest},
+    paths::{PathIndex, PathMatch},
     schema::{Schema, recovery::RecoveryRequest},
     text::{self, Normalization},
     wire::{array, integer, object, string},
@@ -59,12 +60,46 @@ fn main() {
     assert_eq!(text::comparison_key("Straße"), "strasse");
     transcript.push(string(text::normalize("\u{212b}각ﬃ", Normalization::Nfkc)));
     transcript.push(embedding_transcript());
+    transcript.push(path_transcript());
     transcript.push(markdown_transcript());
     transcript.push(list_transcript());
     transcript.push(reference_transcript());
     let output = array(transcript).to_json();
     println!("{}", Digest::of(output.as_bytes()));
     println!("{output}");
+}
+
+fn path_transcript() -> Node {
+    let request = MatchRequest::default();
+    let mut governor = Governor::new(request.budget);
+    let index = PathIndex::new(
+        ["docs/README.md".into(), "other/README.md".into()],
+        &mut governor,
+    )
+    .expect("paths");
+    let answer = index.resolve_governed(
+        "README.md",
+        "",
+        &request,
+        purrassist_core::paths::SelectionPolicy::default(),
+        &mut governor,
+    );
+    let Outcome::Ambiguous(values) = answer.outcome else {
+        panic!("expected ambiguous path alternatives")
+    };
+    assert_eq!(answer.receipt.alternatives.len(), 2);
+    for (value, ledger) in values.iter().zip(&answer.receipt.alternatives) {
+        assert_eq!(
+            ledger.output,
+            Digest::of(value.to_node().to_json().as_bytes())
+        );
+        assert_eq!(ledger.inferences[0].value, value.path);
+    }
+    object([
+        ("operation", string("paths")),
+        ("values", array(values.iter().map(PathMatch::to_node))),
+        ("receipt", answer.receipt.to_node()),
+    ])
 }
 
 fn embedding_transcript() -> Node {

@@ -70,6 +70,9 @@ stdio MCP initialize/decode smoke. Hosted [CI run 36432747721](https://github.co
 passed for that same commit. These are checkout artifacts, not downloaded
 registry packages. The release-qualification workflow is package-only pending
 the publication and registry gates described in `RELEASE.md`.
+The hosted [release-qualification run 36433883963](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36433883963)
+also passed on `de8db9d7b0d7a15259bb783529372f29cfdc9f78`, including the
+stable full gate and Cargo verification of all five archives.
 
 The initial six-case baseline observed approximately 2 microseconds median for
 exact integer recovery and 42 microseconds for composed syntax/key/wrapper/type
@@ -354,14 +357,15 @@ protocol behavior, not a maximum response latency or global allocator bound.
   avoids subtree cloning for reference-only targets. These accounting additions
   do not establish measured allocator bounds or complete the allocation audit. Bound external parser allocations;
   progress cancellation alone is not a hard memory limit.
-- Extend alternative-specific ledgers beyond JSON recovery and semantic resolution,
-  and finish uniform
+- Extend alternative-specific ledgers beyond JSON recovery, semantic resolution,
+  embeddings, and path matching, and finish uniform
   Rust/CLI/MCP access to remaining document operations. Domain-rule
   intent resolution and path resolution now use the shared tool dispatcher,
   including epistemic status and one governor across domain/index admission
   and resolution. Markdown inspection, context extraction, section-body plans,
   nested task-checkbox plans, and buffer/conditional-file plan application also
-  share the tool dispatcher.
+  share the tool dispatcher. Ambiguous path matches now carry one output-digest-bound
+  evidence and guess ledger per path; an exhausted ledger returns no partial set.
 - Expand independent oracle and adversarial corpora, coverage-guided fuzzing beyond
   the bounded JSON campaign,
   memory/allocation measurements, build/artifact metrics, and representative
