@@ -64,6 +64,26 @@ Cargo dependency or crate runtime dependency. Profiling requires appropriate
 loader debug symbols; installed debuginfod configuration is inherited, without
 embedding any endpoint in repository configuration or reports.
 
+`crates/syntax/src/alloc.rs` is a registered `unsafe_code` exception to the
+workspace-wide `unsafe_code = "deny"` lint (`#![allow(unsafe_code)]` scoped to
+that one file; the workspace deny stays in force everywhere else, including
+the rest of `purrassist-syntax`). The rationale: `tree_sitter::set_allocator`
+is a safe function's *only* way to route tree-sitter's own C allocations
+through a governed accounting layer instead of leaving them external to the
+core's resource governor (R3); its four `unsafe extern "C" fn` pointers and
+the raw per-block header they share cannot be expressed without `unsafe`. The
+module implements `malloc`/`calloc`/`realloc`/`free` wrappers over
+`std::alloc::System`, installs itself exactly once via `std::sync::Once`
+before this crate constructs any `Parser`/`Language`, and documents (in its
+own module docs, and in `SECURITY.md`) the process-global effect on any other
+tree-sitter allocator installation in the same process, the "abort rather
+than return null" contract tree-sitter's C call sites require, and why
+per-parse accounting is attributed through each allocation's own header
+rather than a thread-local counter (frees can happen on any thread; see
+`docs/RESOURCES.md`'s "Tree-sitter allocation bound" section). No allocator
+wrapper, client request, or profiler library is linked for this; it is
+first-party code exercising a public, documented tree-sitter API.
+
 Coverage-guided JSON qualification uses installed LLVM 22.1.8 `llvm-cov` and
 `llvm-profdata` tools with the Rust compiler's matching coverage runtime. Only
 the qualification example is instrumented. LLVM's Apache-2.0 WITH LLVM-exception

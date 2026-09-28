@@ -182,6 +182,56 @@ generators, or scaled far beyond 16x, could still expose a gap this two-point
 check does not sample), and they do not replace `make resources`' broader,
 allocator-agnostic measurements above.
 
+## Tree-sitter allocation bound
+
+`crates/syntax/src/alloc.rs` installs itself as tree-sitter's C allocator
+(`tree_sitter::set_allocator`, called exactly once via `std::sync::Once`,
+before this crate ever constructs a `Parser`/`Language`) so tree-sitter's own
+allocations are no longer external to the governor. Every `malloc`/`calloc`/
+`realloc` tree-sitter's C library performs is attributed, via a header stored
+immediately before the returned pointer, to the specific parse ("account")
+active on the allocating thread; freeing that block — even from a different
+thread, since `tree_sitter::Tree` is `Send` — decrements the same account
+directly from the header, never a thread-local counter. The progress callback
+`inspect`/`parse_governed` install on every parse (and, when this crate uses a
+`QueryCursor`, the equivalent `QueryCursorOptions::progress_callback`) reads
+that account's live-byte delta since its last check, charges it to
+`Resource::ScratchBytes`, and breaks the parse with `Cancelled` or
+`BudgetExceeded(ScratchBytes)` on failure; a break never returns a partial
+tree, and every byte charged during a failed attempt is released before the
+call returns. A successfully retained tree's bytes are charged once more and
+tied to a `ScratchLease` released when the tree (`ParsedTree`, or `inspect`'s
+own local tree) is dropped.
+
+Because the real allocator can only be checked *between* progress-callback
+invocations, real usage can momentarily exceed the last charge by however much
+tree-sitter allocates in one callback interval — the *overshoot*. This is not
+a null-return failure mode (tree-sitter aborts if `malloc` ever returns null;
+`crates/syntax/src/alloc.rs`'s module docs cover why budget enforcement never
+relies on that path) but a bound on how far real memory can run ahead of the
+governor's own ledger before the next check catches up and either charges the
+difference or stops the parse. `crates/syntax/tests/allocation.rs` measures
+the largest such interval observed per grammar, over a small oracle corpus
+covering each pinned grammar (mirroring `scripts/check-syntax-oracles.py`'s
+probes, extended with one ~1 MiB generated input per grammar so the bound
+reflects sustained parsing, not just a single token):
+
+| Grammar | Measured maximum overshoot | Documented bound |
+| --- | ---: | ---: |
+| Python | 22,152 bytes | 40,960 bytes |
+| Rust | 67,256 bytes | 102,400 bytes |
+| JavaScript (incl. JSX) | 21,016 bytes | 40,960 bytes |
+| TypeScript | 17,992 bytes | 40,960 bytes |
+| TSX | 20,944 bytes | 40,960 bytes |
+
+A caller sizing a `scratch_bytes` budget around this crate's parsing should
+add the appropriate row's documented bound as headroom above the size it
+actually intends to admit, on top of the input/output bytes themselves. These
+bounds describe the oracle corpus above, not every possible input; a
+pathologically different input shape could still exceed them, in which case
+`crates/syntax/tests/allocation.rs` (which asserts exactly these numbers) is
+the place to re-measure and update this table.
+
 ## Loader compatibility
 
 A loader compiled with instructions unsupported by Valgrind can fail before the
