@@ -9,7 +9,12 @@ edit distances, phonetics, recovery search, and receipts are first-party Rust.
 Standards data remains third-party material. Unicode tables and conformance
 fixtures retain the Unicode-3.0 license. Official JSON Schema meta-schemas use
 the upstream BSD license; the full upstream license is retained beside them.
-The JSON Schema Test Suite retains its MIT license. Source URLs, versions, and
+The JSON Schema Test Suite retains its MIT license. The WHATWG named-character
+table is incorporated as BSD-3-Clause source data; its original JSON fixture is
+CC-BY-4.0. The full upstream notice is packaged beside the generated table.
+An offline generator checks pinned source hashes and generates only semicolon-
+terminated names; the gate checks the generated digest. No HTML parser library
+is linked. Source URLs, versions, and
 SHA-256 digests are recorded in the manifests listed in
 `vendor/dependencies.json`. These assets are not relicensed as first-party code.
 

@@ -45,6 +45,14 @@ for name, expected in json.loads(generated.read_text()).items():
     if hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != expected:
         errors.append(f'{name}: generated Unicode artifact digest mismatch; regenerate and review')
 
+entity_manifest = json.loads((ROOT / 'vendor/entities/manifest.json').read_text())
+for name, entry in entity_manifest['files'].items():
+    if hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != entry['sha256']:
+        errors.append(f'{name}: entity source or notice digest mismatch')
+for name, expected in json.loads((ROOT / 'vendor/entities/generated.json').read_text()).items():
+    if hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != expected:
+        errors.append(f'{name}: generated entity table digest mismatch')
+
 metadata = json.loads(subprocess.check_output(
     ['cargo', 'metadata', '--format-version', '1', '--locked'], cwd=ROOT, text=True))
 inventory = json.loads((ROOT / 'vendor/dependencies.json').read_text())

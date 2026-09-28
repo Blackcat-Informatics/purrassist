@@ -22,5 +22,5 @@ Pre-release implementation: the Markdown editing index is not yet a conforming
 CommonMark/GFM parser. Full release qualification remains unfinished. See the
 [implementation contract](https://github.com/Blackcat-Informatics/purrassist/blob/main/docs/IMPLEMENTATION.md).
 
-First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0. Unicode tables, schema
-meta-schemas, and test corpora retain the upstream notices included with them.
+First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0. Unicode and HTML entity tables,
+schema meta-schemas, and test corpora retain the upstream notices included with them.

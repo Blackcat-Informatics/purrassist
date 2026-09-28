@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Inline link grouping precedes delimiter matching; references remain document-owned.
-use super::{Inline, InlineKind, emphasis, normalize_lines};
+use super::{Inline, InlineKind, emphasis, entities};
 use crate::{Governor, StopReason, contract::Resource};
 
 pub(super) struct Bracket {
@@ -106,7 +106,7 @@ fn target(
         if cursor == source.len() {
             return Ok(None);
         }
-        let result = decode(&source[begin..cursor]);
+        let result = entities::text(&source[begin..cursor]);
         cursor += 1;
         result
     } else {
@@ -136,7 +136,7 @@ fn target(
         if depth != 0 {
             return Ok(None);
         }
-        decode(&source[destination_start..cursor])
+        entities::text(&source[destination_start..cursor])
     };
     let after = spaces(source, cursor);
     let (end, title) = if after > cursor
@@ -166,7 +166,7 @@ fn title(source: &str, start: usize) -> Option<(usize, String)> {
     while cursor < source.len() {
         let byte = source.as_bytes()[cursor];
         if byte == closing {
-            return Some((cursor + 1, decode(&source[start + 1..cursor])));
+            return Some((cursor + 1, entities::text(&source[start + 1..cursor])));
         }
         if opening == b'(' && byte == b'(' {
             return None;
@@ -182,16 +182,4 @@ fn title(source: &str, start: usize) -> Option<(usize, String)> {
         cursor += 1;
     }
     None
-}
-fn decode(source: &str) -> String {
-    let mut output = String::new();
-    let mut chars = source.chars().peekable();
-    while let Some(character) = chars.next() {
-        if character == '\\' && chars.peek().is_some_and(char::is_ascii_punctuation) {
-            output.push(chars.next().expect("peeked punctuation"));
-        } else {
-            output.push(character);
-        }
-    }
-    normalize_lines(&output)
 }

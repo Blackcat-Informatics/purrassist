@@ -40,6 +40,13 @@
       "version": "2020-12",
       "license": "BSD-3-Clause",
       "manifest": "crates/core/src/schema/metaschemas/manifest.json"
+    },
+    {
+      "name": "WHATWG HTML named character references",
+      "version": "2026-09-28 hash-pinned snapshot",
+      "license": "BSD-3-Clause (incorporated source); CC-BY-4.0 (original data)",
+      "manifest": "vendor/entities/manifest.json",
+      "justification": "Complete standardized entity names without a runtime library dependency; generated sorted lookup table, no third-party executable code."
     }
   ],
   "test_data": [

@@ -3,6 +3,8 @@
 //! Source-preserving inline parsing foundation; full inline conformance is in progress.
 mod angle;
 mod emphasis;
+mod entities;
+mod entity_data;
 mod links;
 mod parse;
 mod render;
@@ -79,8 +81,8 @@ pub enum InlineKind {
 /// Exact inline source and a contiguous token index.
 ///
 /// Recognizes code spans, escapes, breaks, autolinks, raw HTML, emphasis, and
-/// inline links/images. Reference links and entity decoding remain to be
-/// implemented; their syntax remains literal. This is not a complete renderer.
+/// inline links/images. Reference links remain to be implemented; their syntax remains literal.
+/// Named and numeric character references are decoded after syntax recognition. This is not a complete renderer.
 #[derive(Clone, Debug)]
 pub struct InlineFragment {
     source: String,

@@ -39,7 +39,7 @@ for package in metadata['packages']:
         if package['name'] == 'purrassist-core':
             if manifest.get('dependencies') or any(target.get('dependencies') for target in manifest.get('target', {}).values()):
                 raise SystemExit('packaged core gained runtime dependencies')
-            for notice in ('src/text/LICENSE-UNICODE', 'src/schema/metaschemas/LICENSE', 'tests/data/json-schema/LICENSE', 'tests/data/unicode/LICENSE'):
+            for notice in ('src/text/LICENSE-UNICODE', 'src/markdown/inline/LICENSE-WHATWG', 'src/schema/metaschemas/LICENSE', 'tests/data/json-schema/LICENSE', 'tests/data/unicode/LICENSE'):
                 if notice not in members:
                     raise SystemExit(f'{identity}: missing upstream notice {notice}')
     report.append({'package': identity, 'bytes': archive.stat().st_size,

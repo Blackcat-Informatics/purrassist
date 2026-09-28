@@ -101,7 +101,8 @@ Markdown editing index is not yet a conforming CommonMark/GFM renderer.
 The Rust `markdown::InlineFragment` layer retains exact byte spans and renders
 code spans, emphasis, strong emphasis, inline links/images, escapes, line breaks,
 autolinks, and raw inline HTML. Explicit dialect selection preserves the pinned
-CommonMark/GFM rendering differences. Entities and reference links remain literal;
+CommonMark/GFM rendering differences. Named/numeric entities are decoded while
+reference links remain literal;
 full document rendering is still in progress.
 
 File tools reject stale versions and record transaction identities for undo. The portable filesystem layer coordinates

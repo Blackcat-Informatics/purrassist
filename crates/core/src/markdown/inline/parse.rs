@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Inline tokenization with indexed backtick runs and bounded angle lookahead.
-use super::{Inline, InlineKind, angle, emphasis, links, normalize_lines};
+use super::{Inline, InlineKind, angle, emphasis, entities, links, normalize_lines};
 use crate::{Governor, StopReason, contract::Resource};
 use std::collections::BTreeMap;
 
@@ -29,6 +29,10 @@ pub(super) fn run(source: &str, governor: &mut Governor) -> Result<Vec<Inline>, 
             b'[' | b']' | b'!' => literal(source, cursor),
             b'`' => code(source, cursor, &ticks),
             b'\\' => escaped(source, cursor),
+            b'&' => entities::one(rest).map_or_else(
+                || literal(source, cursor),
+                |(width, value)| (cursor + width, InlineKind::Text(value.into_owned())),
+            ),
             b' ' | b'\t' | b'\r' | b'\n' => whitespace(source, cursor),
             b'<' => {
                 governor.charge(
@@ -222,7 +226,7 @@ fn delimiter(source: &str, start: usize) -> (usize, InlineKind) {
 fn text_run(source: &str, start: usize) -> (usize, InlineKind) {
     let width = source[start..]
         .find([
-            '*', '_', '[', ']', '!', '`', '\\', '<', ' ', '\t', '\r', '\n',
+            '*', '_', '[', ']', '!', '`', '\\', '<', '&', ' ', '\t', '\r', '\n',
         ])
         .unwrap_or(source.len() - start);
     (
