@@ -1,0 +1,13 @@
+{
+  "name": "Arch Linux glibc",
+  "version": "2.44+r50+g1848099f063e-1",
+  "architecture": "x86_64",
+  "url": "https://geo.mirror.pkgbuild.com/core/os/x86_64/glibc-2.44+r50+g1848099f063e-1-x86_64.pkg.tar.zst",
+  "sha256": "e8e4d50d45cb2bd21c9f7eabacc6a01bd5eb93dbd476f3f44d44038fc1eba417",
+  "license": "LGPL-2.1-or-later AND GPL-2.0-or-later",
+  "members": [
+    "usr/lib/ld-linux-x86-64.so.2",
+    "usr/lib/libc.so.6"
+  ],
+  "scope": "Isolated optional profiling runtime for hosts whose loader uses instructions unsupported by Valgrind. Never packaged or linked into PurRAssist."
+}

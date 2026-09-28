@@ -27,3 +27,7 @@ path = "examples/portable.rs"
 [[bench]]
 name = "recovery"
 harness = false
+
+[[bench]]
+name = "resources"
+harness = false

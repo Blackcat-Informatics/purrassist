@@ -35,5 +35,41 @@
       "vendor/licenses/typescript-5.9.3/ThirdPartyNoticeText.txt": "1af3c68039c57e539422da82a4faada506ce6d0ea6f90e0b699d02dbcdb7a90c"
     },
     "notice_normalization": "LF line endings; trailing horizontal whitespace and final blank lines removed. License text unchanged."
+  },
+  {
+    "name": "valgrind",
+    "version": "3.25.1",
+    "license": "GPL-2.0-or-later",
+    "source": "https://sourceware.org/pub/valgrind/valgrind-3.25.1.tar.bz2",
+    "scope": "Installed external qualification tool only; no source or client requests linked into crates. Installed package reports GPL-2.0-or-later.",
+    "license_text_source": "https://spdx.org/licenses/GPL-2.0-or-later.html",
+    "notices": {
+      "vendor/licenses/valgrind-3.25.1/GPL-2.0-or-later.txt": "aaf135472f81c5b4a0dca9367e5bb5e9750032b5bebe5442b36e4c0a47430df3"
+    },
+    "notice_normalization": "LF; trailing whitespace and final blank lines removed from standard SPDX license text."
+  },
+  {
+    "name": "profiling-glibc",
+    "version": "2.44+r50+g1848099f063e-1",
+    "license": "LGPL-2.1-or-later AND GPL-2.0-or-later",
+    "source": "https://geo.mirror.pkgbuild.com/core/os/x86_64/glibc-2.44+r50+g1848099f063e-1-x86_64.pkg.tar.zst",
+    "scope": "External isolated profiling support only; not linked or packaged into PurRAssist crates.",
+    "notices": {
+      "vendor/licenses/profiling-glibc/GPL-2.0-or-later.txt": "aaf135472f81c5b4a0dca9367e5bb5e9750032b5bebe5442b36e4c0a47430df3",
+      "vendor/licenses/profiling-glibc/LGPL-2.1-or-later.txt": "5749785c8bdefafcb5d798270ed0a967036fe2ca63dcedade1627565dfef81d2"
+    },
+    "notice_normalization": "LF; trailing whitespace and final blank lines removed."
+  },
+  {
+    "name": "libarchive-bsdtar",
+    "version": "3.8.9",
+    "license": "BSD-2-Clause AND BSD-4-Clause-UC",
+    "source": "https://libarchive.org/",
+    "scope": "External isolated profiling support only; not linked or packaged into PurRAssist crates.",
+    "notices": {
+      "vendor/licenses/libarchive-3.8.9/BSD-2-Clause.txt": "0f9c97a2f7a75d3303d6b3cbf61d782a5f242ca7f510deaf220b4ba3e89952eb",
+      "vendor/licenses/libarchive-3.8.9/BSD-4-Clause-UC.txt": "e2d8e88f20fc73195792b45502399fa7c012a91bf07ec6c9ee015b5f78a8b709"
+    },
+    "notice_normalization": "LF; trailing whitespace and final blank lines removed."
   }
 ]

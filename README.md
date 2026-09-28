@@ -220,3 +220,5 @@ First-party code is available under **MIT OR Apache-2.0 OR MulanPSL-2.0**, at yo
 choice. Third-party data and grammar dependencies retain their own notices.
 PurRAssist shares Blackcat Informatics' cat silhouette and palette with PurRDF;
 the braces and validation mark are this crate's service emblem.
+
+Resource profiling is available with `make resources`; see [measurement scope and prerequisites](docs/RESOURCES.md). It uses external profilers and adds no crate runtime dependencies.

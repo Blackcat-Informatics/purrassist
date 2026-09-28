@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 MAKEFLAGS += --no-print-directory
-.PHONY: check fmt lint test doc hygiene wasm-test benchmark package syntax-oracles
+.PHONY: check fmt lint test doc hygiene wasm-test benchmark package syntax-oracles resources
 
 check: fmt hygiene lint test doc
 
@@ -32,3 +32,7 @@ syntax-oracles:
 package:
 	cargo package --workspace --locked
 	python3 scripts/check-packages.py
+
+resources:
+	python3 scripts/test-resource-report.py
+	python3 scripts/measure-resources.py $(RESOURCE_ARGS)

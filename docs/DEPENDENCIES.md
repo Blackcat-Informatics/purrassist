@@ -47,3 +47,14 @@ fixtures under CC-BY-SA-4.0, separately attributed to John MacFarlane and the GF
 specification contributors. The manifest retains upstream and normalized digests,
 source URLs, and extraction details; accompanying upstream license notices remain
 beside the examples. These test strings are not linked into the runtime engine.
+
+Allocation qualification uses the installed Valgrind 3.25.1 executable as an
+external process; no allocator wrapper, client request, or profiler library is
+linked into a crate. The Linux runner can use an isolated stock glibc loader and
+libc when a host loader uses instructions unsupported by the profiler. That
+opt-in runtime is pinned by archive digest in `vendor/profiling-runtime.json`,
+extracted with system `bsdtar`, and kept only in the ignored cache. Tool and
+runtime license notices are registered in `vendor/tooling.json`. This adds no
+Cargo dependency or crate runtime dependency. Profiling requires appropriate
+loader debug symbols; installed debuginfod configuration is inherited, without
+embedding any endpoint in repository configuration or reports.

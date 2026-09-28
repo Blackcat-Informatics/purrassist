@@ -154,19 +154,23 @@ fn pair(first: u32, second: u32) -> Option<u32> {
 }
 fn compose(input: &[u32]) -> Vec<u32> {
     let mut output = Vec::with_capacity(input.len());
-    let mut starter = None;
+    // Keep the index defined before a starter exists: optimized bounds-check
+    // motion can inspect an Option payload before its discriminant guard.
+    let mut starter = 0;
+    let mut has_starter = false;
     let mut last_class = 0;
     for &code in input {
         let class = combining(code);
-        if let Some(index) = starter
+        if has_starter
             && (last_class == 0 || last_class < class)
-            && let Some(composed) = pair(output[index], code)
+            && let Some(composed) = pair(output[starter], code)
         {
-            output[index] = composed;
+            output[starter] = composed;
             continue;
         }
         if class == 0 {
-            starter = Some(output.len());
+            starter = output.len();
+            has_starter = true;
         }
         output.push(code);
         last_class = class;
@@ -202,6 +206,18 @@ mod tests {
             normalize("각", Normalization::Nfd),
             "\u{1100}\u{1161}\u{11a8}"
         );
+    }
+    #[test]
+    fn composition_before_and_after_the_first_starter() {
+        for (source, expected) in [
+            ("", ""),
+            ("\u{301}\u{300}", "\u{301}\u{300}"),
+            ("\u{301}e\u{301}", "\u{301}é"),
+            ("a\u{315}\u{300}", "à\u{315}"),
+        ] {
+            assert_eq!(normalize(source, Normalization::Nfc), expected);
+            assert_eq!(normalize(source, Normalization::Nfkc), expected);
+        }
     }
     #[test]
     fn casing_does_not_depend_on_host_locale() {

@@ -15,6 +15,7 @@ scope in `IMPLEMENTATION.md` remains required. No registry publication is claime
 | Portability | `make wasm-test` | Executed native/WASI recovery and all five grammar transcripts; browser-WASM core build |
 | Independent syntax | `make syntax-oracles` | 15 fixed positive/negative probes against Python, rustc, Node, and TypeScript 5.9.3 |
 | Baseline | `make benchmark` | Six deterministic recovery cases, 200 samples each, quality assertions and latency |
+| Resources | `make resources` | Nine assertion-backed processes, Memcheck allocations, Massif heap observations, native RSS, and native executable/build measurements; Linux prerequisites in `RESOURCES.md` |
 | MSRV | `rustup run 1.98.0 cargo test --workspace --locked` | Workspace tests on Rust 1.98 |
 | Packages | `make package` | Cargo package construction and verification in dependency order |
 
@@ -38,8 +39,8 @@ guess reporting, and exhaustion before a complete ledger can be returned.
 Local package verification has built all five packages. A local release CLI was
 installed into a disposable checkout cache and exercised on the published example
 inputs, including exact-source retention. This does not verify downloadable registry
-packages. Hosted CI passed for checkpoint `4bd9055739ec929c83b7d670b4ffbe24290b9512`:
-[run 36420979796](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36420979796)
+packages. Hosted CI passed for checkpoint `922b36fa966cb00f0d8fdaafcf66a5944632a1dd`:
+[run 36422654690](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36422654690)
 completed the Linux/macOS local gates, MSRV workspace tests, Windows core/syntax
 tests, and native/WASI comparisons. This is evidence for that checkpoint only;
 subsequent changes need their own qualification.
@@ -280,6 +281,20 @@ The full Rust 1.98.0 gate, nightly Clippy, native/WASI list edit/undo transcript
 and browser-WASM build passed. The optimized CLI executed
 `examples/markdown-list-item.json` and returned the expected nested task insertion
 and `markdown.list-item-structure.v1` validation.
+
+Resource qualification now has a dependency-free Rust workload executable and
+an external Linux measurement runner. All nine cases passed native assertions,
+Memcheck, and Massif using the pinned isolated glibc runtime. The runner checks
+profiler summaries and fails on errors; native RSS comes from the workload’s own
+post-exec VmHWM, avoiding inherited Python-launcher memory. Profiling exposed an
+optimized bounds comparison against the unused payload of an empty Unicode
+composition starter `Option`; explicitly initializing the separately guarded
+index removed the diagnostic. All 20,034 Unicode normalization cases, the full
+Rust 1.98.0 gate, nightly Clippy, native/WASI comparisons, and browser-WASM build
+passed. The six-case latency baseline still passed 200/200 assertions per case.
+Measurement definitions, runtime identity, cache caveats, and limitations are in
+`RESOURCES.md`; these observations do not complete the allocation audit or prove
+hard memory limits.
 
 ## Remaining release work
 
