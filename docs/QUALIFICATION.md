@@ -385,6 +385,10 @@ protocol behavior, not a maximum response latency or global allocator bound.
   reserve at least eight bytes on 32-bit and 64-bit targets, keeping the
   governor decision and reported scratch usage portable for those targets;
   this remains an accounting reservation, not an allocator measurement.
+  An independent breadth-first edit search checks both Levenshtein and
+  unrestricted Damerau-Levenshtein on all 225 ordered pairs of binary strings
+  up to three characters, with a separate Unicode transposition case. This
+  finite oracle does not qualify arbitrary strings or ranking thresholds.
 - Qualify Windows filesystem durability and crash boundaries. Unix tests and a
   configured Windows engine job do not establish Windows host support.
 - Execute hosted CI, audit final package contents and notices, configure trusted
