@@ -179,3 +179,15 @@ fn symlinks_are_rejected_and_permissions_survive_replacement() {
         0o700
     );
 }
+
+#[test]
+fn writer_lock_is_released_before_the_next_writer_arrives() {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.0, 4096).unwrap();
+    for attempt in 0..500 {
+        assert!(
+            store.recover().is_ok(),
+            "lock still held on back-to-back acquisition {attempt}"
+        );
+    }
+}

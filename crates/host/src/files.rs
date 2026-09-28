@@ -513,7 +513,7 @@ impl Store {
         }
         Ok(current)
     }
-    fn lock(&self) -> Result<File, Error> {
+    fn lock(&self) -> Result<WriterLock, Error> {
         let path = self.journal.join("writer.lock");
         if let Ok(metadata) = fs::symlink_metadata(&path)
             && metadata.file_type().is_symlink()
@@ -530,7 +530,7 @@ impl Store {
             std::fs::TryLockError::WouldBlock => Error::Busy,
             std::fs::TryLockError::Error(error) => Error::Io(error),
         })?;
-        Ok(file)
+        Ok(WriterLock(file))
     }
     /// Write the replacement bytes into a sibling temporary file and make it
     /// visible at `target`, returning which rename mechanism completed and
@@ -798,4 +798,20 @@ fn create_private_directory(path: &Path) -> Result<(), Error> {
     }
     builder.create(path)?;
     Ok(())
+}
+
+/// Holds the cooperating-writer lock and releases it explicitly when dropped.
+///
+/// Closing a handle releases its lock on every platform, but Windows documents
+/// that release-on-close happens asynchronously, so an immediate retry by the
+/// same or another writer could still observe the lock as held. Unlocking
+/// before the handle closes makes release synchronous everywhere.
+struct WriterLock(File);
+impl Drop for WriterLock {
+    fn drop(&mut self) {
+        // A drop cannot report failure. If the explicit unlock fails, closing
+        // the handle immediately afterwards still releases the lock (the
+        // pre-existing behavior), so no lock can outlive this guard's handle.
+        let _ = self.0.unlock();
+    }
 }
