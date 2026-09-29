@@ -394,7 +394,19 @@ impl Document {
         let target_position = match target_section {
             None => 0,
             Some(target_section) => {
-                if target_section.span.start >= section.span.end {
+                // `target_section.span.end` is an offset into the
+                // *original* source; removing `section` shifts every
+                // position at or after `section.span.end` left by
+                // `section.span.len()`. That holds whenever the removed
+                // section ends at or before the point we are measuring,
+                // regardless of whether `section` sits entirely before
+                // `target_section` (disjoint siblings) or is nested inside
+                // it (a subsection of the section named as the move
+                // target): both leave `target_section.span.end` past the
+                // removed span. Only a `section` that starts at or after
+                // `target_section.span.end` (entirely after the target's
+                // own complete section) leaves that offset unaffected.
+                if section.span.end <= target_section.span.end {
                     target_section.span.end - section.span.len()
                 } else {
                     target_section.span.end

@@ -439,6 +439,19 @@ fn item(
 /// edit (each surviving sibling's own raw source bytes, reordered) and
 /// reparse-checking the result via the same [`Proposal`]/[`validate`] path
 /// every other list-item edit uses.
+///
+/// A nested sibling's own leading container-prefix bytes (the enclosing
+/// quote's `"> "`, a further-nested list's continuation indent, ...) sit
+/// *outside* its `span` (see [`Block::span`]'s documentation), in the gap
+/// between the previous sibling's end and this one's start; a root-level
+/// sibling has no such gap. Reordering must carry that separator along by
+/// *position*, not by moved identity: the exact bytes that originally
+/// separated position `p - 1` from position `p` still separate them after
+/// reordering, regardless of which sibling now occupies each slot. This
+/// keeps every sibling that does not change position byte-for-byte
+/// unchanged (rather than resynthesizing a canonical separator that could
+/// subtly differ, e.g. a blank quote line's bare `">"` versus `"> "`) and
+/// keeps the whole window's total length exactly unchanged.
 fn move_item(
     doc: &Document,
     path: &[usize],
@@ -462,12 +475,18 @@ fn move_item(
         Resource::ScratchBytes,
         size(region.len()).saturating_mul(4).saturating_add(512),
     )?;
+    let gaps: Vec<&str> = (1..siblings.len())
+        .map(|position| &doc.source[siblings[position - 1].span.end..siblings[position].span.start])
+        .collect();
     let mut order: Vec<usize> = (0..siblings.len()).collect();
     let moved = order.remove(index);
     order.insert(to, moved);
     let mut replacement = String::with_capacity(region.len());
-    for &position in &order {
-        replacement.push_str(&doc.source[siblings[position].span.clone()]);
+    for (position, &original) in order.iter().enumerate() {
+        if position > 0 {
+            replacement.push_str(gaps[position - 1]);
+        }
+        replacement.push_str(&doc.source[siblings[original].span.clone()]);
     }
     let change = TextEdit {
         range: region,
@@ -482,17 +501,40 @@ fn move_item(
         return Err(applied.receipt.stopped);
     };
     let updated = Document::parse(&applied.text, governor)?;
-    let intended = Document::parse(&change.replacement, governor)?;
+    // A move never changes the sibling count, so `old_count`/`new_count`
+    // are always equal here (unlike insert/replace, which legitimately can
+    // change how many blocks occupy the window). `intended` is deliberately
+    // omitted: parsing `change.replacement` *standalone* is not a reliable
+    // oracle for a moved window, because whether a line such as a nested
+    // `>` continues an already-open container or starts a new one depends
+    // on what precedes the window in the real document, not on the
+    // replacement text alone. The reordering itself is instead checked
+    // directly below, by kind, position by position.
     let proposal = Proposal {
-        new_count: intended.blocks.len(),
+        new_count: siblings.len(),
         old_count: siblings.len(),
         index: 0,
-        intended: Some(intended),
+        intended: None,
         eof_separator: 0,
         placeholder: false,
         change,
     };
     validate(doc, &updated, path, &proposal)?;
+    let updated_siblings: &[Block] = if path.len() == 1 {
+        updated.blocks()
+    } else {
+        &updated.block_at(&path[..path.len() - 1])?.children
+    };
+    if updated_siblings.len() != siblings.len()
+        || order
+            .iter()
+            .enumerate()
+            .any(|(position, &original)| updated_siblings[position].kind != siblings[original].kind)
+    {
+        return Err(invalid(
+            "move produced a different sibling arrangement than expected",
+        ));
+    }
     Ok(plan)
 }
 fn validate(
