@@ -161,7 +161,9 @@ fn run_crash_point(point: CrashPoint) {
     );
 
     let store = Store::open(&scratch.0, 4096).unwrap();
-    let recovered = store.recover().unwrap();
+    let recovered = store
+        .recover()
+        .unwrap_or_else(|error| panic!("checkpoint {point:?}: recovery failed: {error}"));
     assert!(
         !recovered
             .iter()
@@ -202,13 +204,17 @@ fn run_crash_point(point: CrashPoint) {
     // Retrying the original transaction (regardless of which partial state
     // the crash left) must complete idempotently and land on exactly AFTER.
     let original_before = Scratch::original_before();
-    let commit = store.commit(&original_before, AFTER_TEXT).unwrap();
+    let commit = store
+        .commit(&original_before, AFTER_TEXT)
+        .unwrap_or_else(|error| panic!("checkpoint {point:?}: retry commit failed: {error}"));
     assert_eq!(
         std::fs::read(scratch.0.join(FILE_NAME)).unwrap(),
         AFTER_TEXT.as_bytes(),
         "checkpoint {point:?}: retry did not converge on the exact after version"
     );
-    let commit_again = store.commit(&original_before, AFTER_TEXT).unwrap();
+    let commit_again = store
+        .commit(&original_before, AFTER_TEXT)
+        .unwrap_or_else(|error| panic!("checkpoint {point:?}: repeated commit failed: {error}"));
     assert_eq!(
         commit, commit_again,
         "checkpoint {point:?}: retry was not idempotent"

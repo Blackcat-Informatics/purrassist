@@ -753,8 +753,11 @@ fn prepare_piece(path: &Path, expected: &[u8]) -> Result<(), Error> {
                 )
                 .read_to_end(&mut actual)?;
             if actual == expected {
-                // A previous write may have completed in memory but failed before fsync.
-                File::open(path)?.sync_all()?;
+                // A previous write may have completed in memory but failed before
+                // fsync. Flushing needs a writable handle: Windows
+                // `FlushFileBuffers` rejects read-only handles with
+                // `ERROR_ACCESS_DENIED`, unlike POSIX `fsync`.
+                OpenOptions::new().write(true).open(path)?.sync_all()?;
                 return Ok(());
             }
             if !expected.starts_with(&actual) {
