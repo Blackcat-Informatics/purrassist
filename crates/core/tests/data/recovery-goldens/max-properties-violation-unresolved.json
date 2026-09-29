@@ -1,0 +1,14 @@
+{
+  "description": "too many properties has no automatic repair",
+  "schema": {
+    "type": "object",
+    "maxProperties": 1,
+    "properties": {
+      "a": true,
+      "b": true
+    }
+  },
+  "input": "{\"a\":1,\"b\":2}",
+  "outcome": "unresolved",
+  "ledger_rules": []
+}

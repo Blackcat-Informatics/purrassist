@@ -1,0 +1,28 @@
+{
+  "description": "multiple $ref uses of the same $defs entry are each repaired",
+  "schema": {
+    "$defs": {
+      "flag": {
+        "type": "boolean"
+      }
+    },
+    "type": "object",
+    "properties": {
+      "a": {
+        "$ref": "#/$defs/flag"
+      },
+      "b": {
+        "$ref": "#/$defs/flag"
+      }
+    }
+  },
+  "input": "{\"a\":\"true\",\"b\":\"false\"}",
+  "outcome": "resolved",
+  "output": {
+    "a": true,
+    "b": false
+  },
+  "ledger_rules": [
+    "json.type.decode-string"
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "description": "a key typo and a nested stringified value are both repaired",
+  "schema": {
+    "type": "object",
+    "required": [
+      "items"
+    ],
+    "properties": {
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  "input": "{\"itms\":\"[1,2,3]\"}",
+  "outcome": "resolved",
+  "output": {
+    "items": [
+      1,
+      2,
+      3
+    ]
+  },
+  "ledger_rules": [
+    "json.key.match",
+    "json.type.decode-string"
+  ]
+}

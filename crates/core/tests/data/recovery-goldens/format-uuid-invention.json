@@ -1,0 +1,20 @@
+{
+  "description": "a required uuid-formatted property is invented",
+  "schema": {
+    "type": "object",
+    "required": [
+      "id"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "format": "uuid"
+      }
+    },
+    "$schema": "http://localhost:1234/draft2020-12/format-assertion-true.json"
+  },
+  "input": "{}",
+  "outcome": "resolved",
+  "output": {},
+  "ledger_rules": []
+}

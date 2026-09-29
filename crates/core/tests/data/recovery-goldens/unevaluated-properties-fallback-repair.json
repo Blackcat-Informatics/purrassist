@@ -1,0 +1,23 @@
+{
+  "description": "a member left unevaluated by properties is type-coerced",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "a": {
+        "type": "integer"
+      }
+    },
+    "unevaluatedProperties": {
+      "type": "boolean"
+    }
+  },
+  "input": "{\"a\":1,\"b\":\"false\"}",
+  "outcome": "resolved",
+  "output": {
+    "a": 1,
+    "b": false
+  },
+  "ledger_rules": [
+    "json.type.decode-string"
+  ]
+}

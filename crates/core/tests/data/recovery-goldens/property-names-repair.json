@@ -1,0 +1,18 @@
+{
+  "description": "a property key failing propertyNames is renamed to match its pattern",
+  "schema": {
+    "type": "object",
+    "propertyNames": {
+      "pattern": "^[a-z]+$"
+    },
+    "additionalProperties": true
+  },
+  "input": "{\"Bad Key\":1}",
+  "outcome": "best_guess",
+  "output": {
+    "a": 1
+  },
+  "ledger_rules": [
+    "json.schema.property-name-repair"
+  ]
+}

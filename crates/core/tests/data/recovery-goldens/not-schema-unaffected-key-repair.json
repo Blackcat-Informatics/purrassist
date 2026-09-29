@@ -1,0 +1,27 @@
+{
+  "description": "a key-typo repair proceeds independently of a satisfied not clause",
+  "schema": {
+    "type": "object",
+    "required": [
+      "mode"
+    ],
+    "properties": {
+      "mode": {
+        "type": "string"
+      }
+    },
+    "not": {
+      "required": [
+        "forbidden"
+      ]
+    }
+  },
+  "input": "{\"mod\":\"on\"}",
+  "outcome": "resolved",
+  "output": {
+    "mode": "on"
+  },
+  "ledger_rules": [
+    "json.key.match"
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "description": "a single missing required property is invented",
+  "schema": {
+    "type": "object",
+    "required": [
+      "name"
+    ],
+    "properties": {
+      "name": {
+        "type": "string"
+      }
+    }
+  },
+  "input": "{}",
+  "outcome": "best_guess",
+  "output": {
+    "name": ""
+  },
+  "ledger_rules": [
+    "json.required.invent"
+  ]
+}

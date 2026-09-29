@@ -1,0 +1,18 @@
+{
+  "description": "recovery has no top-level minProperties padding invention (only per-property values from required); explicit non-success",
+  "schema": {
+    "type": "object",
+    "required": [
+      "name"
+    ],
+    "properties": {
+      "name": {
+        "type": "string"
+      }
+    },
+    "minProperties": 2
+  },
+  "input": "{}",
+  "outcome": "unresolved",
+  "ledger_rules": []
+}

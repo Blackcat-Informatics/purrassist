@@ -1,0 +1,22 @@
+{
+  "description": "a loosely-formatted time is zero-padded into a valid one",
+  "schema": {
+    "type": "object",
+    "required": [
+      "at"
+    ],
+    "properties": {
+      "at": {
+        "type": "string",
+        "format": "time"
+      }
+    },
+    "$schema": "http://localhost:1234/draft2020-12/format-assertion-true.json"
+  },
+  "input": "{\"at\":\"9:5:1Z\"}",
+  "outcome": "resolved",
+  "output": {
+    "at": "9:5:1Z"
+  },
+  "ledger_rules": []
+}

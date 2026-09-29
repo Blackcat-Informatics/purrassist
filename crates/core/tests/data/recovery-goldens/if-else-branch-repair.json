@@ -1,0 +1,28 @@
+{
+  "description": "the else branch is followed and repaired when the condition fails",
+  "schema": {
+    "if": {
+      "properties": {
+        "kind": {
+          "const": "a"
+        }
+      }
+    },
+    "else": {
+      "properties": {
+        "value": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "input": "{\"kind\":\"b\",\"value\":\"true\"}",
+  "outcome": "resolved",
+  "output": {
+    "kind": "b",
+    "value": true
+  },
+  "ledger_rules": [
+    "json.type.decode-string"
+  ]
+}

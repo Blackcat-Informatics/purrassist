@@ -1,0 +1,23 @@
+{
+  "description": "an extra property validated by an additionalProperties schema is repaired",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "a": {
+        "type": "integer"
+      }
+    },
+    "additionalProperties": {
+      "type": "boolean"
+    }
+  },
+  "input": "{\"a\":1,\"b\":\"true\"}",
+  "outcome": "resolved",
+  "output": {
+    "a": 1,
+    "b": true
+  },
+  "ledger_rules": [
+    "json.type.decode-string"
+  ]
+}

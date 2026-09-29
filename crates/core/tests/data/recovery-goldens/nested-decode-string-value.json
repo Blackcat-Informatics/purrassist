@@ -1,0 +1,29 @@
+{
+  "description": "a nested value encoded as a JSON string is decoded in place",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "list": {
+        "type": "array",
+        "items": {
+          "type": "integer"
+        }
+      }
+    },
+    "required": [
+      "list"
+    ]
+  },
+  "input": "{\"list\":\"[1,2,3]\"}",
+  "outcome": "resolved",
+  "output": {
+    "list": [
+      1,
+      2,
+      3
+    ]
+  },
+  "ledger_rules": [
+    "json.type.decode-string"
+  ]
+}

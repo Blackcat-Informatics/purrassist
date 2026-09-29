@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Compiled JSON Schema constraints and source-addressed validation.
+pub mod algebra;
 mod build;
 mod builtin;
 pub use build::CompilationError;

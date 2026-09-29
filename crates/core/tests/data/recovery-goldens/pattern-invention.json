@@ -1,0 +1,23 @@
+{
+  "description": "a required string property matching a regex pattern is invented",
+  "schema": {
+    "type": "object",
+    "required": [
+      "code"
+    ],
+    "properties": {
+      "code": {
+        "type": "string",
+        "pattern": "^[A-Z]{3}-[0-9]{4}$"
+      }
+    }
+  },
+  "input": "{}",
+  "outcome": "best_guess",
+  "output": {
+    "code": "AAA-0000"
+  },
+  "ledger_rules": [
+    "json.required.invent"
+  ]
+}

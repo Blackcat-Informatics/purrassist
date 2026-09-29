@@ -1,0 +1,22 @@
+{
+  "description": "a loosely-formatted date is zero-padded into a valid one",
+  "schema": {
+    "type": "object",
+    "required": [
+      "day"
+    ],
+    "properties": {
+      "day": {
+        "type": "string",
+        "format": "date"
+      }
+    },
+    "$schema": "http://localhost:1234/draft2020-12/format-assertion-true.json"
+  },
+  "input": "{\"day\":\"2026-9-5\"}",
+  "outcome": "resolved",
+  "output": {
+    "day": "2026-9-5"
+  },
+  "ledger_rules": []
+}

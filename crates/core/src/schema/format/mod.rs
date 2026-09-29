@@ -66,10 +66,10 @@ pub(super) fn evaluate(
     governor: &mut Governor,
 ) -> Result<Outcome, StopReason> {
     let pass = match name {
-        "date-time" => datetime::is_date_time(value),
-        "date" => datetime::is_date(value),
-        "time" => datetime::is_time(value),
-        "duration" => datetime::is_duration(value),
+        "date-time" => datetime::is_date_time(value, governor)?,
+        "date" => datetime::is_date(value, governor)?,
+        "time" => datetime::is_time(value, governor)?,
+        "duration" => datetime::is_duration(value, governor)?,
         "email" => email::is_email(value, false, governor)?,
         "idn-email" => email::is_email(value, true, governor)?,
         "hostname" => host::is_hostname(value, false, governor)?,
@@ -100,6 +100,35 @@ pub(super) fn repairable(name: &str) -> bool {
 /// Normalize a `date`/`date-time`/`time` value that failed its format
 /// assertion into a labeled guess, or `None` if no repair applies (the
 /// value is not repairable syntax, e.g. not even date-shaped).
-pub(super) fn repair(name: &str, value: &str) -> Option<String> {
-    datetime::repair(name, value)
+pub(super) fn repair(
+    name: &str,
+    value: &str,
+    governor: &mut Governor,
+) -> Result<Option<String>, StopReason> {
+    datetime::repair(name, value, governor)
+}
+
+/// The witness-generation algebra's (Task 8) canonical example value for
+/// one known `format` name: always re-checked with [`evaluate`] before use,
+/// so an imprecise guess here can only cost a fallback attempt, never an
+/// incorrect witness.
+pub(super) fn witness(name: &str) -> &'static str {
+    match name {
+        "date-time" => "1970-01-01T00:00:00Z",
+        "date" => "1970-01-01",
+        "time" => "00:00:00Z",
+        "duration" => "PT0S",
+        "email" | "idn-email" => "a@example.com",
+        "hostname" | "idn-hostname" => "example.com",
+        "ipv4" => "0.0.0.0",
+        "ipv6" => "::",
+        "uri" | "iri" => "https://example.com/",
+        "uuid" => "00000000-0000-0000-0000-000000000000",
+        "uri-template" => "https://example.com/{id}",
+        "relative-json-pointer" => "0",
+        "regex" => "a",
+        // "uri-reference"/"iri-reference"/"json-pointer" all accept the
+        // empty string, matching every other unknown name's fallback.
+        _ => "",
+    }
 }

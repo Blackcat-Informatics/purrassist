@@ -4,6 +4,16 @@
 //! Byte-level, allocation-free parsing: every format here rejects any
 //! non-ASCII-digit input (including other decimal digit scripts) and any
 //! trailing content, matching the official test suite exactly.
+use crate::contract::{Governor, Resource, StopReason};
+
+/// Charge one `Work` unit per scanned byte, like every other format
+/// validator in this module, before any parsing.
+fn charge(text: &str, governor: &mut Governor) -> Result<(), StopReason> {
+    governor.charge(
+        Resource::Work,
+        u64::try_from(text.len()).unwrap_or(u64::MAX),
+    )
+}
 
 /// One parsed RFC 3339 full-date, kept so callers (recovery's normalization
 /// repair) can re-render it with corrected separators/padding.
@@ -132,20 +142,27 @@ pub(super) fn parse_time(text: &str) -> Option<Time> {
     })
 }
 
-pub(super) fn is_date(text: &str) -> bool {
-    parse_date(text).is_some()
+pub(super) fn is_date(text: &str, governor: &mut Governor) -> Result<bool, StopReason> {
+    charge(text, governor)?;
+    Ok(parse_date(text).is_some())
 }
 
-pub(super) fn is_time(text: &str) -> bool {
-    parse_time(text).is_some()
+pub(super) fn is_time(text: &str, governor: &mut Governor) -> Result<bool, StopReason> {
+    charge(text, governor)?;
+    Ok(parse_time(text).is_some())
 }
 
-pub(super) fn is_date_time(text: &str) -> bool {
+fn date_time_ok(text: &str) -> bool {
     let bytes = text.as_bytes();
     bytes.len() > 11
         && matches!(bytes[10], b'T' | b't')
         && parse_date(&text[..10]).is_some()
         && parse_time(&text[11..]).is_some()
+}
+
+pub(super) fn is_date_time(text: &str, governor: &mut Governor) -> Result<bool, StopReason> {
+    charge(text, governor)?;
+    Ok(date_time_ok(text))
 }
 
 fn ascii_digit_run(bytes: &[u8], start: usize) -> Option<usize> {
@@ -205,7 +222,12 @@ fn dur_time(bytes: &[u8], start: usize) -> bool {
 /// RFC 3339 Appendix A `duration = "P" (dur-date / dur-time / dur-week)`.
 /// Every digit run must be plain ASCII digits; no sign, no fraction, no
 /// trailing content survives.
-pub(super) fn is_duration(text: &str) -> bool {
+pub(super) fn is_duration(text: &str, governor: &mut Governor) -> Result<bool, StopReason> {
+    charge(text, governor)?;
+    Ok(duration_ok(text))
+}
+
+fn duration_ok(text: &str) -> bool {
     let bytes = text.as_bytes();
     if bytes.first() != Some(&b'P') {
         return false;
@@ -267,12 +289,16 @@ pub(super) fn is_duration(text: &str) -> bool {
 /// assertion (zero-pad numeric fields, and for `date-time`, accept a plain
 /// space in place of `T`), or `None` if no such normalization makes it
 /// valid. Recovery labels the result an explicit `Guess` inference.
-pub(super) fn repair(name: &str, value: &str) -> Option<String> {
+pub(super) fn repair(
+    name: &str,
+    value: &str,
+    governor: &mut Governor,
+) -> Result<Option<String>, StopReason> {
     match name {
-        "date" => repair_date(value),
-        "time" => repair_time(value),
-        "date-time" => repair_date_time(value),
-        _ => None,
+        "date" => repair_date(value, governor),
+        "time" => repair_time(value, governor),
+        "date-time" => repair_date_time(value, governor),
+        _ => Ok(None),
     }
 }
 
@@ -283,98 +309,150 @@ fn zero_padded_digits(field: &str, max_width: usize) -> Option<String> {
     .then(|| format!("{field:0>max_width$}"))
 }
 
-fn repair_date(value: &str) -> Option<String> {
+fn repair_date(value: &str, governor: &mut Governor) -> Result<Option<String>, StopReason> {
     let mut parts = value.split('-');
-    let (year, month, day) = (parts.next()?, parts.next()?, parts.next()?);
+    let (Some(year), Some(month), Some(day)) = (parts.next(), parts.next(), parts.next()) else {
+        return Ok(None);
+    };
     if parts.next().is_some() {
-        return None;
+        return Ok(None);
     }
-    let candidate = format!(
-        "{}-{}-{}",
-        zero_padded_digits(year, 4)?,
-        zero_padded_digits(month, 2)?,
-        zero_padded_digits(day, 2)?
-    );
-    (candidate != value && is_date(&candidate)).then_some(candidate)
+    let (Some(year), Some(month), Some(day)) = (
+        zero_padded_digits(year, 4),
+        zero_padded_digits(month, 2),
+        zero_padded_digits(day, 2),
+    ) else {
+        return Ok(None);
+    };
+    let candidate = format!("{year}-{month}-{day}");
+    Ok((candidate != value && is_date(&candidate, governor)?).then_some(candidate))
 }
 
-fn repair_time(value: &str) -> Option<String> {
+fn repair_time(value: &str, governor: &mut Governor) -> Result<Option<String>, StopReason> {
     let mut parts = value.splitn(3, ':');
-    let (hour, minute, rest) = (parts.next()?, parts.next()?, parts.next()?);
+    let (Some(hour), Some(minute), Some(rest)) = (parts.next(), parts.next(), parts.next()) else {
+        return Ok(None);
+    };
     let split = rest
         .find(|c: char| !c.is_ascii_digit())
         .unwrap_or(rest.len());
     let (second, suffix) = rest.split_at(split);
-    let candidate = format!(
-        "{}:{}:{}{suffix}",
-        zero_padded_digits(hour, 2)?,
-        zero_padded_digits(minute, 2)?,
-        zero_padded_digits(second, 2)?
-    );
-    (candidate != value && is_time(&candidate)).then_some(candidate)
+    let (Some(hour), Some(minute), Some(second)) = (
+        zero_padded_digits(hour, 2),
+        zero_padded_digits(minute, 2),
+        zero_padded_digits(second, 2),
+    ) else {
+        return Ok(None);
+    };
+    let candidate = format!("{hour}:{minute}:{second}{suffix}");
+    Ok((candidate != value && is_time(&candidate, governor)?).then_some(candidate))
 }
 
-fn repair_date_time(value: &str) -> Option<String> {
-    let separator = value.find(['T', 't', ' '])?;
+fn repair_date_time(value: &str, governor: &mut Governor) -> Result<Option<String>, StopReason> {
+    let Some(separator) = value.find(['T', 't', ' ']) else {
+        return Ok(None);
+    };
     let (date_part, time_part) = (&value[..separator], &value[separator + 1..]);
-    let date_fixed = if is_date(date_part) {
+    let date_fixed = if is_date(date_part, governor)? {
         date_part.to_string()
     } else {
-        repair_date(date_part)?
+        let Some(fixed) = repair_date(date_part, governor)? else {
+            return Ok(None);
+        };
+        fixed
     };
-    let time_fixed = if is_time(time_part) {
+    let time_fixed = if is_time(time_part, governor)? {
         time_part.to_string()
     } else {
-        repair_time(time_part)?
+        let Some(fixed) = repair_time(time_part, governor)? else {
+            return Ok(None);
+        };
+        fixed
     };
     let candidate = format!("{date_fixed}T{time_fixed}");
-    (candidate != value && is_date_time(&candidate)).then_some(candidate)
+    Ok((candidate != value && is_date_time(&candidate, governor)?).then_some(candidate))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{is_date, is_date_time, is_duration, is_time, repair};
+    use crate::{Budget, Governor};
+    fn governor() -> Governor {
+        Governor::new(Budget::default())
+    }
     #[test]
     fn dates_reject_calendar_and_syntax_violations() {
-        assert!(is_date("2020-02-29"));
-        assert!(!is_date("2021-02-29"));
-        assert!(!is_date("1998-1-20"));
-        assert!(!is_date("2020-01-01\u{0}"));
+        assert_eq!(is_date("2020-02-29", &mut governor()), Ok(true));
+        assert_eq!(is_date("2021-02-29", &mut governor()), Ok(false));
+        assert_eq!(is_date("1998-1-20", &mut governor()), Ok(false));
+        assert_eq!(is_date("2020-01-01\u{0}", &mut governor()), Ok(false));
     }
     #[test]
     fn times_apply_the_leap_second_bidi_condition() {
-        assert!(is_time("23:59:60Z"));
-        assert!(is_time("01:29:60+01:30"));
-        assert!(!is_time("22:59:60Z"));
-        assert!(!is_time("23:59:60+01:00"));
-        assert!(!is_time("23:60:00+00:01"));
+        assert_eq!(is_time("23:59:60Z", &mut governor()), Ok(true));
+        assert_eq!(is_time("01:29:60+01:30", &mut governor()), Ok(true));
+        assert_eq!(is_time("22:59:60Z", &mut governor()), Ok(false));
+        assert_eq!(is_time("23:59:60+01:00", &mut governor()), Ok(false));
+        assert_eq!(is_time("23:60:00+00:01", &mut governor()), Ok(false));
     }
     #[test]
     fn date_times_require_a_separator_and_valid_halves() {
-        assert!(is_date_time("1963-06-19T08:30:06.283185Z"));
-        assert!(is_date_time("1963-06-19t08:30:06.283185z"));
-        assert!(!is_date_time("1963-06-19T08:30:06.28123+01:00Z"));
-        assert!(!is_date_time("1985-04-12T23:20:50Ztail"));
+        assert_eq!(
+            is_date_time("1963-06-19T08:30:06.283185Z", &mut governor()),
+            Ok(true)
+        );
+        assert_eq!(
+            is_date_time("1963-06-19t08:30:06.283185z", &mut governor()),
+            Ok(true)
+        );
+        assert_eq!(
+            is_date_time("1963-06-19T08:30:06.28123+01:00Z", &mut governor()),
+            Ok(false)
+        );
+        assert_eq!(
+            is_date_time("1985-04-12T23:20:50Ztail", &mut governor()),
+            Ok(false)
+        );
     }
     #[test]
     fn durations_follow_the_appendix_a_grammar_order() {
-        assert!(is_duration("P4DT12H30M5S"));
-        assert!(is_duration("P1M2D"));
-        assert!(!is_duration("P2D1Y"));
-        assert!(!is_duration("PT1D"));
-        assert!(!is_duration("P1WT1H"));
-        assert!(is_duration(
-            "P999999999999999999999999999999999999999999999999999999999999999999999999999999D"
-        ));
+        assert_eq!(is_duration("P4DT12H30M5S", &mut governor()), Ok(true));
+        assert_eq!(is_duration("P1M2D", &mut governor()), Ok(true));
+        assert_eq!(is_duration("P2D1Y", &mut governor()), Ok(false));
+        assert_eq!(is_duration("PT1D", &mut governor()), Ok(false));
+        assert_eq!(is_duration("P1WT1H", &mut governor()), Ok(false));
+        assert_eq!(
+            is_duration(
+                "P999999999999999999999999999999999999999999999999999999999999999999999999999999D",
+                &mut governor()
+            ),
+            Ok(true)
+        );
+    }
+    #[test]
+    fn work_is_charged_per_scanned_byte() {
+        let mut tight = Governor::new(Budget {
+            work: 3,
+            ..Budget::default()
+        });
+        assert_eq!(
+            is_date_time("1963-06-19T08:30:06.283185Z", &mut tight),
+            Err(crate::StopReason::BudgetExceeded(
+                crate::contract::Resource::Work
+            ))
+        );
     }
     #[test]
     fn repairs_normalize_common_slips() {
-        assert_eq!(repair("date", "2026-9-28"), Some("2026-09-28".into()));
         assert_eq!(
-            repair("date-time", "2026-09-28 10:00:00Z"),
-            Some("2026-09-28T10:00:00Z".into())
+            repair("date", "2026-9-28", &mut governor()),
+            Ok(Some("2026-09-28".into()))
         );
-        assert_eq!(repair("date", "2026-09-28"), None);
-        assert_eq!(repair("date", "not-a-date"), None);
+        assert_eq!(
+            repair("date-time", "2026-09-28 10:00:00Z", &mut governor()),
+            Ok(Some("2026-09-28T10:00:00Z".into()))
+        );
+        assert_eq!(repair("date", "2026-09-28", &mut governor()), Ok(None));
+        assert_eq!(repair("date", "not-a-date", &mut governor()), Ok(None));
     }
 }

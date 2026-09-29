@@ -1,0 +1,17 @@
+{
+  "description": "a bare scalar where the schema demands an array is wrapped",
+  "schema": {
+    "type": "array",
+    "items": {
+      "type": "integer"
+    }
+  },
+  "input": "7",
+  "outcome": "resolved",
+  "output": [
+    7
+  ],
+  "ledger_rules": [
+    "json.shape.wrap-array"
+  ]
+}

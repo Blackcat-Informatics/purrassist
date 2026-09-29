@@ -1,11 +1,34 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 use super::{Candidate, Search, size};
-use crate::contract::{Effort, Resource, ScratchCharge, ScratchMap, ScratchVec, StopReason};
+use crate::contract::{Effort, Resource, StopReason};
 use crate::json::{Member, Node, ParseFailure, Value, pointer_segment};
 use std::collections::BTreeSet;
 
 impl Search<'_> {
+    /// Walk the schema alongside `node`, proposing local repairs and
+    /// recursing into every applicator this engine gives generation
+    /// semantics to (Task 8 requirement 2): `$ref`/`$dynamicRef` (the
+    /// latter resolved against the live `scope` dynamic-scope stack, the
+    /// same as the evaluator and the witness algebra), `allOf`/`anyOf`/
+    /// `oneOf`, `properties`/`patternProperties`/`additionalProperties`/
+    /// `unevaluatedProperties`, `prefixItems`/`items`/`contains`/
+    /// `unevaluatedItems`, `dependentSchemas`, and `if`/`then`/`else`
+    /// (recursed into whichever branch currently applies). `not` and a
+    /// `propertyNames` member key have no *local* repair (there is no
+    /// single "opposite" edit for an arbitrary negated schema, and
+    /// fabricating an unrelated whole-candidate replacement just to dodge
+    /// one broken applicator would weaken recovery's connection to the
+    /// actual input): a `not` violation is an explicit no-candidate for
+    /// this rule, and a failing `propertyNames` key is repaired narrowly,
+    /// by generating a replacement key from its own `pattern` (via the
+    /// witness algebra's regex generation) rather than inventing a new
+    /// object from scratch.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each parameter is an independent fact this governed recursive walk needs; \
+                  grouping them into a struct would only move the same facts, not reduce them"
+    )]
     pub(super) fn propose(
         &mut self,
         parent: &Candidate,
@@ -14,6 +37,7 @@ impl Search<'_> {
         site: (&[usize], &str),
         depth: u32,
         visited: &mut BTreeSet<(usize, Vec<usize>)>,
+        scope: &mut Vec<String>,
     ) -> Result<(), StopReason> {
         let (route, path) = site;
         self.governor.charge(Resource::Depth, u64::from(depth))?;
@@ -22,14 +46,56 @@ impl Search<'_> {
             return Ok(());
         }
         self.shapes(parent, node, route, path)?;
+        let base = self.schema.index.locations[schema_id].base.clone();
+        let entered = scope.last() != Some(&base);
+        if entered {
+            scope.push(base);
+        }
+        let result = self.propose_body(
+            parent,
+            node,
+            schema_id,
+            (route, path),
+            depth,
+            visited,
+            scope,
+        );
+        if entered {
+            scope.pop();
+        }
+        result
+    }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each parameter is an independent fact this governed recursive walk needs; \
+                  grouping them into a struct would only move the same facts, not reduce them"
+    )]
+    fn propose_body(
+        &mut self,
+        parent: &Candidate,
+        node: &Node,
+        schema_id: usize,
+        site: (&[usize], &str),
+        depth: u32,
+        visited: &mut BTreeSet<(usize, Vec<usize>)>,
+        scope: &mut Vec<String>,
+    ) -> Result<(), StopReason> {
+        let (route, path) = site;
         let schema = self.schema;
         let body = schema.keywords(schema_id);
         for keyword in ["$ref", "$dynamicRef"] {
             if let Some(reference) = body.get(keyword).and_then(Node::as_str) {
-                let target = schema
-                    .resolve(&schema.index.locations[schema_id].base, reference)
-                    .map_err(|e| StopReason::InvalidInput(e.to_string()))?;
-                self.propose(parent, node, target, (route, path), depth + 1, visited)?;
+                let target =
+                    self.resolve_reference(schema_id, keyword == "$dynamicRef", reference, scope)?;
+                self.propose(
+                    parent,
+                    node,
+                    target,
+                    (route, path),
+                    depth + 1,
+                    visited,
+                    scope,
+                )?;
             }
         }
         for keyword in ["allOf", "anyOf", "oneOf"] {
@@ -46,52 +112,179 @@ impl Search<'_> {
                         (route, path),
                         depth + 1,
                         visited,
+                        scope,
                     )?;
                 }
             }
         }
+        self.if_then_else_proposal(
+            parent,
+            node,
+            schema_id,
+            (route, path),
+            depth,
+            visited,
+            scope,
+        )?;
         match &node.value {
             Value::Object(members) => {
-                self.object_proposals(parent, schema_id, members, (route, path), depth, visited)?;
+                self.object_proposals(
+                    parent,
+                    schema_id,
+                    members,
+                    (route, path),
+                    depth,
+                    visited,
+                    scope,
+                )?;
             }
             Value::Array(items) => {
-                let prefix = body
-                    .get("prefixItems")
-                    .and_then(|n| {
-                        if let Value::Array(v) = &n.value {
-                            Some(v.len())
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(0);
-                for (position, item) in items.iter().enumerate() {
-                    let key = if position < prefix {
-                        format!("prefixItems/{position}")
-                    } else {
-                        "items".into()
-                    };
-                    if schema.index.locations[schema_id]
-                        .children
-                        .contains_key(&key)
-                    {
-                        let mut next = route.to_vec();
-                        next.push(position);
-                        self.propose(
-                            parent,
-                            item,
-                            schema.child(schema_id, &key),
-                            (&next, &format!("{path}/{position}")),
-                            depth + 1,
-                            visited,
-                        )?;
-                    }
-                }
+                self.array_proposals(
+                    parent,
+                    schema_id,
+                    items,
+                    (route, path),
+                    depth,
+                    visited,
+                    scope,
+                )?;
             }
             _ => {}
         }
         self.local_constraints(parent, node, schema_id, (route, path))?;
         self.format_repair(parent, node, schema_id, (route, path))?;
+        Ok(())
+    }
+    /// Resolve `$ref`/`$dynamicRef` the same way `super::super::evaluate`
+    /// and the witness algebra do: `$dynamicRef` to a fragment-only anchor
+    /// is overridden by the outermost matching `$dynamicAnchor` on the live
+    /// `scope` stack, never resolved purely statically.
+    fn resolve_reference(
+        &self,
+        schema_id: usize,
+        dynamic: bool,
+        reference: &str,
+        scope: &[String],
+    ) -> Result<usize, StopReason> {
+        let schema = self.schema;
+        let base = schema.index.locations[schema_id].base.clone();
+        let mut target = schema
+            .resolve(&base, reference)
+            .map_err(|error| StopReason::InvalidInput(error.to_string()))?;
+        if dynamic
+            && reference
+                .split_once('#')
+                .is_some_and(|(_, fragment)| !fragment.is_empty() && !fragment.starts_with('/'))
+            && let Some(name) = &schema.index.locations[target].dynamic_anchor
+        {
+            for scope_base in scope {
+                if let Some(&candidate) = schema.index.anchors.get(&format!("{scope_base}#{name}"))
+                    && schema.index.locations[candidate].dynamic_anchor.as_ref() == Some(name)
+                {
+                    target = candidate;
+                    break;
+                }
+            }
+        }
+        Ok(target)
+    }
+    /// `if`/`then`/`else` (Task 8 requirement 2): recurse into whichever of
+    /// `then`/`else` currently applies to `node`, so nested local repairs
+    /// inside that branch are still explored.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each parameter is an independent fact this governed recursive walk needs; \
+                  grouping them into a struct would only move the same facts, not reduce them"
+    )]
+    fn if_then_else_proposal(
+        &mut self,
+        parent: &Candidate,
+        node: &Node,
+        schema_id: usize,
+        site: (&[usize], &str),
+        depth: u32,
+        visited: &mut BTreeSet<(usize, Vec<usize>)>,
+        scope: &mut Vec<String>,
+    ) -> Result<(), StopReason> {
+        let (route, path) = site;
+        let schema = self.schema;
+        let body = schema.keywords(schema_id);
+        if body.get("if").is_some() {
+            let if_id = schema.child(schema_id, "if");
+            let condition_holds = super::super::evaluate::run(schema, if_id, node, self.governor)?
+                .violations
+                .is_empty();
+            let branch = if condition_holds { "then" } else { "else" };
+            if body.get(branch).is_some() {
+                self.propose(
+                    parent,
+                    node,
+                    schema.child(schema_id, branch),
+                    (route, path),
+                    depth + 1,
+                    visited,
+                    scope,
+                )?;
+            }
+        }
+        Ok(())
+    }
+    /// A member whose key fails `propertyNames`: propose renaming just that
+    /// key to a witness of the `propertyNames` schema's own `pattern`
+    /// (Task 6's regex generation), keeping the member's value untouched.
+    /// Every other shape of `propertyNames` (no `pattern`, or a failing key
+    /// this pattern's generator cannot reach) is left an explicit
+    /// no-candidate for this rule rather than fabricating an unrelated key.
+    fn property_names_proposals(
+        &mut self,
+        parent: &Candidate,
+        schema_id: usize,
+        members: &[Member],
+        site: (&[usize], &str),
+    ) -> Result<(), StopReason> {
+        let (route, path) = site;
+        let schema = self.schema;
+        let body = schema.keywords(schema_id);
+        if body.get("propertyNames").is_none() {
+            return Ok(());
+        }
+        let names_id = schema.child(schema_id, "propertyNames");
+        let Some(pattern) = schema.index.locations[names_id].patterns.get("pattern") else {
+            return Ok(());
+        };
+        for (position, member) in members.iter().enumerate() {
+            let key_node = Node::new(Value::String(member.key.clone()));
+            if super::super::evaluate::run(schema, names_id, &key_node, self.governor)?
+                .violations
+                .is_empty()
+            {
+                continue;
+            }
+            if let crate::pattern::GenerateOutcome::Witness(new_key) = pattern.generate(
+                self.governor,
+                crate::pattern::GenerateOptions {
+                    min_len: 0,
+                    max_len: Some(64),
+                    avoid: &[],
+                },
+            )? {
+                let _lease = self.governor.lease_scratch(members_weight(members))?;
+                let mut replacement = members.to_vec();
+                replacement[position].key = new_key;
+                replacement[position].key_span = None;
+                self.change(
+                    parent,
+                    route,
+                    path,
+                    (
+                        Node::new(Value::Object(replacement)),
+                        "json.schema.property-name-repair",
+                        30,
+                        true,
+                    ),
+                )?;
+            }
+        }
         Ok(())
     }
     /// Requirement 4: a `date`/`date-time`/`time` violation under an active
@@ -123,7 +316,7 @@ impl Search<'_> {
         if matches!(
             super::super::format::evaluate(name, text, self.governor)?,
             super::super::format::Outcome::Fail
-        ) && let Some(fixed) = super::super::format::repair(name, text)
+        ) && let Some(fixed) = super::super::format::repair(name, text, self.governor)?
         {
             self.change(
                 parent,
@@ -279,6 +472,11 @@ impl Search<'_> {
                 .then_some(5 + size(distance)),
         )
     }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each parameter is an independent fact this governed recursive walk needs; \
+                  grouping them into a struct would only move the same facts, not reduce them"
+    )]
     fn object_proposals(
         &mut self,
         parent: &Candidate,
@@ -287,6 +485,7 @@ impl Search<'_> {
         site: (&[usize], &str),
         depth: u32,
         visited: &mut BTreeSet<(usize, Vec<usize>)>,
+        scope: &mut Vec<String>,
     ) -> Result<(), StopReason> {
         let (route, path) = site;
         let schema = self.schema;
@@ -301,7 +500,28 @@ impl Search<'_> {
                 }
             })
             .unwrap_or(&[]);
+        // Key-typo rename candidates: every `properties` name (each with a
+        // sub-schema to recurse into once matched) plus every `required`
+        // name `properties` does not already declare (a `required` name
+        // with no `properties` entry still names an expected key, so a
+        // typo'd occurrence of it should still be recognized and renamed).
+        let mut candidate_names: Vec<String> = properties
+            .iter()
+            .map(|property| property.key.clone())
+            .collect();
+        if let Some(Node {
+            value: Value::Array(required),
+            ..
+        }) = body.get("required")
+        {
+            for name in required.iter().filter_map(Node::as_str) {
+                if !candidate_names.iter().any(|candidate| candidate == name) {
+                    candidate_names.push(name.to_string());
+                }
+            }
+        }
         for (position, member) in members.iter().enumerate() {
+            let matched = properties.iter().any(|property| property.key == member.key);
             if let Some(property) = properties
                 .iter()
                 .find(|property| property.key == member.key)
@@ -318,75 +538,261 @@ impl Search<'_> {
                     (&next, &format!("{path}/{}", pointer_segment(&member.key))),
                     depth + 1,
                     visited,
+                    scope,
                 )?;
             } else {
-                for property in properties {
-                    if members.iter().any(|member| member.key == property.key) {
-                        continue;
-                    }
-                    if let Some(cost) = self.name_cost(&member.key, &property.key)? {
-                        let _lease = self.governor.lease_scratch(members_weight(members))?;
-                        let mut replacement = members.to_vec();
-                        replacement[position].key.clone_from(&property.key);
-                        replacement[position].key_span = None;
-                        self.change(
-                            parent,
-                            route,
-                            path,
-                            (
-                                Node::new(Value::Object(replacement)),
-                                "json.key.match",
-                                cost,
-                                false,
-                            ),
-                        )?;
-                    }
-                }
-                if body
-                    .get("additionalProperties")
-                    .is_some_and(|n| n.value == Value::Bool(false))
+                self.key_repair_proposals(
+                    parent,
+                    schema_id,
+                    members,
+                    position,
+                    &candidate_names,
+                    (route, path),
+                )?;
+            }
+            self.pattern_and_additional_proposals(
+                parent,
+                schema_id,
+                members,
+                position,
+                matched,
+                (route, path),
+                depth,
+                visited,
+                scope,
+            )?;
+            self.duplicate_key_proposals(parent, members, position, (route, path))?;
+        }
+        self.dependent_schema_proposals(
+            parent,
+            schema_id,
+            members,
+            (route, path),
+            depth,
+            visited,
+            scope,
+        )?;
+        self.required_proposals(parent, schema_id, members, (route, path))?;
+        self.property_names_proposals(parent, schema_id, members, (route, path))?;
+        Ok(())
+    }
+    /// A member unmatched by `properties`: propose renaming its key to a
+    /// close `properties` name, or dropping it when `additionalProperties`
+    /// is `false`.
+    fn key_repair_proposals(
+        &mut self,
+        parent: &Candidate,
+        schema_id: usize,
+        members: &[Member],
+        position: usize,
+        candidate_names: &[String],
+        site: (&[usize], &str),
+    ) -> Result<(), StopReason> {
+        let (route, path) = site;
+        let body = self.schema.keywords(schema_id);
+        for candidate_name in candidate_names {
+            if members.iter().any(|member| member.key == *candidate_name) {
+                continue;
+            }
+            if let Some(cost) = self.name_cost(&members[position].key, candidate_name)? {
+                let _lease = self.governor.lease_scratch(members_weight(members))?;
+                let mut replacement = members.to_vec();
+                replacement[position].key.clone_from(candidate_name);
+                replacement[position].key_span = None;
+                self.change(
+                    parent,
+                    route,
+                    path,
+                    (
+                        Node::new(Value::Object(replacement)),
+                        "json.key.match",
+                        cost,
+                        false,
+                    ),
+                )?;
+            }
+        }
+        if body
+            .get("additionalProperties")
+            .is_some_and(|n| n.value == Value::Bool(false))
+        {
+            let _lease = self.governor.lease_scratch(members_weight(members))?;
+            let mut replacement = members.to_vec();
+            replacement.remove(position);
+            self.change(
+                parent,
+                route,
+                path,
+                (
+                    Node::new(Value::Object(replacement)),
+                    "json.key.remove-additional",
+                    50,
+                    false,
+                ),
+            )?;
+        }
+        Ok(())
+    }
+    /// A member whose key already occurred earlier: propose removing
+    /// either occurrence, resolving the ambiguity. Costed below the
+    /// cheapest possible key rename (`json.key.match`'s minimum is 6):
+    /// an outright duplicate key is unambiguous JSON malformation with an
+    /// obvious fix, not a guess about intent, so it must win the search
+    /// before a same-shaped but speculative rename is even considered
+    /// (otherwise a short, coincidentally close-by property name from an
+    /// unrelated `allOf`/`oneOf` branch can look cheaper than simply
+    /// dropping the duplicate).
+    fn duplicate_key_proposals(
+        &mut self,
+        parent: &Candidate,
+        members: &[Member],
+        position: usize,
+        site: (&[usize], &str),
+    ) -> Result<(), StopReason> {
+        let (route, path) = site;
+        if !members[..position]
+            .iter()
+            .any(|prior| prior.key == members[position].key)
+        {
+            return Ok(());
+        }
+        for remove in 0..=position {
+            if members[remove].key == members[position].key {
+                let _lease = self.governor.lease_scratch(members_weight(members))?;
+                let mut replacement = members.to_vec();
+                replacement.remove(remove);
+                self.change(
+                    parent,
+                    route,
+                    path,
+                    (
+                        Node::new(Value::Object(replacement)),
+                        "json.key.resolve-duplicate",
+                        2,
+                        false,
+                    ),
+                )?;
+            }
+        }
+        Ok(())
+    }
+    /// `patternProperties`/`additionalProperties`/`unevaluatedProperties`
+    /// (Task 8 requirement 2): recurse into every matching sub-schema for
+    /// this member's *value*, independently of the key-typo repairs above.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each parameter is an independent fact this governed recursive walk needs; \
+                  grouping them into a struct would only move the same facts, not reduce them"
+    )]
+    fn pattern_and_additional_proposals(
+        &mut self,
+        parent: &Candidate,
+        schema_id: usize,
+        members: &[Member],
+        position: usize,
+        matched_by_properties: bool,
+        site: (&[usize], &str),
+        depth: u32,
+        visited: &mut BTreeSet<(usize, Vec<usize>)>,
+        scope: &mut Vec<String>,
+    ) -> Result<(), StopReason> {
+        let (route, path) = site;
+        let schema = self.schema;
+        let body = schema.keywords(schema_id);
+        let member = &members[position];
+        let mut next = route.to_vec();
+        next.push(position);
+        let child_path = format!("{path}/{}", pointer_segment(&member.key));
+        let mut matched_pattern = false;
+        if let Some(Node {
+            value: Value::Object(patterns),
+            ..
+        }) = body.get("patternProperties")
+        {
+            for pattern in patterns {
+                let keyword = format!("patternProperties/{}", pointer_segment(&pattern.key));
+                if schema.index.locations[schema_id].patterns[&keyword]
+                    .is_match(&member.key, self.governor)?
                 {
-                    let _lease = self.governor.lease_scratch(members_weight(members))?;
-                    let mut replacement = members.to_vec();
-                    replacement.remove(position);
-                    self.change(
+                    matched_pattern = true;
+                    self.propose(
                         parent,
-                        route,
-                        path,
-                        (
-                            Node::new(Value::Object(replacement)),
-                            "json.key.remove-additional",
-                            50,
-                            false,
-                        ),
+                        &member.value,
+                        schema.child(schema_id, &keyword),
+                        (&next, &child_path),
+                        depth + 1,
+                        visited,
+                        scope,
                     )?;
                 }
             }
-            if members[..position]
-                .iter()
-                .any(|prior| prior.key == member.key)
-            {
-                for remove in 0..=position {
-                    if members[remove].key == member.key {
-                        let _lease = self.governor.lease_scratch(members_weight(members))?;
-                        let mut replacement = members.to_vec();
-                        replacement.remove(remove);
-                        self.change(
-                            parent,
-                            route,
-                            path,
-                            (
-                                Node::new(Value::Object(replacement)),
-                                "json.key.resolve-duplicate",
-                                10,
-                                false,
-                            ),
-                        )?;
-                    }
+        }
+        if !matched_by_properties && !matched_pattern {
+            let fallback = if body.get("additionalProperties").is_some() {
+                Some(schema.child(schema_id, "additionalProperties"))
+            } else if body.get("unevaluatedProperties").is_some() {
+                Some(schema.child(schema_id, "unevaluatedProperties"))
+            } else {
+                None
+            };
+            if let Some(target) = fallback {
+                self.propose(
+                    parent,
+                    &member.value,
+                    target,
+                    (&next, &child_path),
+                    depth + 1,
+                    visited,
+                    scope,
+                )?;
+            }
+        }
+        Ok(())
+    }
+    /// `dependentSchemas` (Task 8 requirement 2): when a trigger key is
+    /// present, the dependent schema's own constraints apply to the whole
+    /// object, so it is followed at the object's own route/path rather than
+    /// one member's.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each parameter is an independent fact this governed recursive walk needs; \
+                  grouping them into a struct would only move the same facts, not reduce them"
+    )]
+    fn dependent_schema_proposals(
+        &mut self,
+        parent: &Candidate,
+        schema_id: usize,
+        members: &[Member],
+        site: (&[usize], &str),
+        depth: u32,
+        visited: &mut BTreeSet<(usize, Vec<usize>)>,
+        scope: &mut Vec<String>,
+    ) -> Result<(), StopReason> {
+        let (route, path) = site;
+        let schema = self.schema;
+        let body = schema.keywords(schema_id);
+        if let Some(Node {
+            value: Value::Object(dependencies),
+            ..
+        }) = body.get("dependentSchemas")
+        {
+            for dependency in dependencies {
+                if members.iter().any(|member| member.key == dependency.key) {
+                    self.propose(
+                        parent,
+                        &Node::new(Value::Object(members.to_vec())),
+                        schema.child(
+                            schema_id,
+                            &format!("dependentSchemas/{}", pointer_segment(&dependency.key)),
+                        ),
+                        (route, path),
+                        depth + 1,
+                        visited,
+                        scope,
+                    )?;
                 }
             }
         }
-        self.required_proposals(parent, schema_id, members, (route, path), depth)?;
         Ok(())
     }
     fn required_proposals(
@@ -395,7 +801,6 @@ impl Search<'_> {
         schema_id: usize,
         members: &[Member],
         site: (&[usize], &str),
-        depth: u32,
     ) -> Result<(), StopReason> {
         let (route, path) = site;
         let schema = self.schema;
@@ -444,14 +849,18 @@ impl Search<'_> {
                 }
                 if self.request.allow_guesses && self.request.effort >= Effort::Standard {
                     let key = format!("properties/{}", pointer_segment(name));
-                    let values = if let Some(&child) =
+                    let value = if let Some(&child) =
                         schema.index.locations[schema_id].children.get(&key)
                     {
-                        self.witnesses(child, depth + 1, &mut BTreeSet::new())?
+                        match super::super::algebra::generate(schema, child, self.governor)? {
+                            super::super::algebra::WitnessOutcome::Witness(node) => Some(node),
+                            super::super::algebra::WitnessOutcome::Unsatisfiable(_)
+                            | super::super::algebra::WitnessOutcome::Exhausted => None,
+                        }
                     } else {
-                        vec![Node::new(Value::Null)]
+                        Some(Node::new(Value::Null))
                     };
-                    for value in values {
+                    if let Some(value) = value {
                         let _lease = self.governor.lease_scratch(
                             members_weight(members).saturating_add(value.estimated_bytes()),
                         )?;
@@ -478,192 +887,91 @@ impl Search<'_> {
         }
         Ok(())
     }
-    fn witnesses(
+    /// `prefixItems`/`items`/`contains`/`unevaluatedItems` (Task 8
+    /// requirement 2), each followed for every element it applies to.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each parameter is an independent fact this governed recursive walk needs; \
+                  grouping them into a struct would only move the same facts, not reduce them"
+    )]
+    fn array_proposals(
         &mut self,
+        parent: &Candidate,
         schema_id: usize,
+        items: &[Node],
+        site: (&[usize], &str),
         depth: u32,
-        visited: &mut BTreeSet<usize>,
-    ) -> Result<Vec<Node>, StopReason> {
-        self.governor.charge(Resource::Depth, u64::from(depth))?;
-        self.governor.charge(Resource::Work, 1)?;
-        if !visited.insert(schema_id) {
-            return Ok(Vec::new());
-        }
+        visited: &mut BTreeSet<(usize, Vec<usize>)>,
+        scope: &mut Vec<String>,
+    ) -> Result<(), StopReason> {
+        let (route, path) = site;
         let schema = self.schema;
         let body = schema.keywords(schema_id);
-        // `values` is discarded once the finest-refinement selection above
-        // picks at most one entry, or drained by an `into_iter()` caller: its
-        // backing buffer is transient, unlike the `Node`s it moves out.
-        let mut values: ScratchVec<Node> = ScratchVec::new(self.governor);
-        for keyword in ["const", "default"] {
-            if let Some(value) = body.get(keyword) {
-                self.governor
-                    .charge(Resource::ScratchBytes, value.estimated_bytes())?;
-                values.push(value.clone())?;
-            }
-        }
-        if let Some(Node {
-            value: Value::Array(choices),
-            ..
-        }) = body.get("enum")
-        {
-            for choice in choices {
-                self.governor
-                    .charge(Resource::ScratchBytes, choice.estimated_bytes())?;
-                values.push(choice.clone())?;
-            }
-        }
-        if let Some(reference) = body.get("$ref").and_then(Node::as_str) {
-            let target = schema
-                .resolve(&schema.index.locations[schema_id].base, reference)
-                .map_err(|e| StopReason::InvalidInput(e.to_string()))?;
-            values.extend(self.witnesses(target, depth + 1, visited)?)?;
-        }
-        for keyword in ["anyOf", "oneOf", "allOf"] {
-            if let Some(Node {
-                value: Value::Array(branches),
-                ..
-            }) = body.get(keyword)
+        let prefix = body
+            .get("prefixItems")
+            .and_then(|n| {
+                if let Value::Array(v) = &n.value {
+                    Some(v.len())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+        for (position, item) in items.iter().enumerate() {
+            let mut next = route.to_vec();
+            next.push(position);
+            let child_path = format!("{path}/{position}");
+            let key = if position < prefix {
+                Some(format!("prefixItems/{position}"))
+            } else if body.get("items").is_some() {
+                Some("items".into())
+            } else if body.get("unevaluatedItems").is_some() {
+                Some("unevaluatedItems".into())
+            } else {
+                None
+            };
+            if let Some(key) = key
+                && schema.index.locations[schema_id]
+                    .children
+                    .contains_key(&key)
             {
-                for position in 0..branches.len() {
-                    let branch = self.witnesses(
-                        schema.child(schema_id, &format!("{keyword}/{position}")),
-                        depth + 1,
-                        visited,
-                    )?;
-                    values.extend(branch)?;
-                }
-            }
-        }
-        let typed = self.typed_witnesses(schema_id, depth, visited)?;
-        values.extend(typed)?;
-        visited.remove(&schema_id);
-        // Dedupe by serialized form; charge the retained keys before
-        // allocating them (`distinct` is dropped, and its charge released,
-        // when this function returns).
-        let mut distinct: ScratchMap<String, ()> = ScratchMap::new(self.governor);
-        let mut unique = Vec::with_capacity(values.len());
-        for node in values.into_vec() {
-            self.governor.charge(
-                Resource::ScratchBytes,
-                node.estimated_bytes().saturating_add(48),
-            )?;
-            let key = node.to_json();
-            if distinct.insert(key, ())?.is_none() {
-                unique.push(node);
-            }
-        }
-        Ok(unique)
-    }
-    fn typed_witnesses(
-        &mut self,
-        schema_id: usize,
-        depth: u32,
-        visited: &mut BTreeSet<usize>,
-    ) -> Result<Vec<Node>, StopReason> {
-        let schema = self.schema;
-        let body = schema.keywords(schema_id);
-        let mut values: ScratchVec<Node> = ScratchVec::new(self.governor);
-        match body.get("type").and_then(Node::as_str) {
-            Some("boolean") => {
-                values.push(Node::new(Value::Bool(false)))?;
-                values.push(Node::new(Value::Bool(true)))?;
-            }
-            Some("number" | "integer") => {
-                for keyword in ["minimum", "maximum", "multipleOf"] {
-                    if let Some(value) = body.get(keyword) {
-                        self.governor
-                            .charge(Resource::ScratchBytes, value.estimated_bytes())?;
-                        values.push(value.clone())?;
-                    }
-                }
-                values.push(Node::new(Value::Number("0".parse().expect("zero"))))?;
-            }
-            Some("string") => {
-                let count = count(body.get("minLength"))?;
-                self.governor.charge(Resource::ScratchBytes, size(count))?;
-                self.governor.charge(Resource::Work, size(count))?;
-                values.push(Node::new(Value::String(" ".repeat(count))))?;
-            }
-            Some("object") => {
-                let mut members: ScratchVec<Member> = ScratchVec::new(self.governor);
-                if let Some(Node {
-                    value: Value::Array(required),
-                    ..
-                }) = body.get("required")
-                {
-                    for name in required.iter().filter_map(Node::as_str) {
-                        let key = format!("properties/{}", pointer_segment(name));
-                        let choices = if let Some(&child) =
-                            schema.index.locations[schema_id].children.get(&key)
-                        {
-                            self.witnesses(child, depth + 1, visited)?
-                        } else {
-                            vec![Node::new(Value::Null)]
-                        };
-                        if let Some(value) = choices.into_iter().next() {
-                            self.governor.charge(
-                                Resource::ScratchBytes,
-                                size(name.len()).saturating_add(value.estimated_bytes()),
-                            )?;
-                            members.push(Member {
-                                key: name.into(),
-                                key_span: None,
-                                value,
-                            })?;
-                        }
-                    }
-                }
-                values.push(Node::new(Value::Object(members.into_vec())))?;
-            }
-            Some("array") => {
-                let count = count(body.get("minItems"))?;
-                self.governor.charge(Resource::Work, size(count))?;
-                let item =
-                    if let Some(&child) = schema.index.locations[schema_id].children.get("items") {
-                        self.witnesses(child, depth + 1, visited)?
-                            .into_iter()
-                            .next()
-                            .unwrap_or_else(|| Node::new(Value::Null))
-                    } else {
-                        Node::new(Value::Null)
-                    };
-                // Charge by the actual item's estimated size, not a flat
-                // per-element guess: a large `items` witness repeated
-                // `minItems` times must not be under-charged.
-                self.governor.charge(
-                    Resource::ScratchBytes,
-                    size(count).saturating_mul(item.estimated_bytes().max(24)),
+                self.propose(
+                    parent,
+                    item,
+                    schema.child(schema_id, &key),
+                    (&next, &child_path),
+                    depth + 1,
+                    visited,
+                    scope,
                 )?;
-                values.push(Node::new(Value::Array(vec![item; count])))?;
             }
-            _ => values.push(Node::new(Value::Null))?,
+            if body.get("contains").is_some() {
+                self.propose(
+                    parent,
+                    item,
+                    schema.child(schema_id, "contains"),
+                    (&next, &child_path),
+                    depth + 1,
+                    visited,
+                    scope,
+                )?;
+            }
         }
-        Ok(values.into_vec())
+        Ok(())
     }
 }
 /// A conservative byte-size estimate for a member slice, used to charge
 /// scratch before `.to_vec()`-ing it to build a proposal.
 fn members_weight(members: &[Member]) -> u64 {
     // Portable, target-independent charge: `Member::CHARGE`, not `size_of`.
-    let mut total = size(members.len()).saturating_mul(size(Member::CHARGE));
+    let mut total = size(members.len())
+        .saturating_mul(size(<Member as crate::contract::ScratchCharge>::CHARGE));
     for member in members {
         total = total
             .saturating_add(size(member.key.len()))
             .saturating_add(member.value.estimated_bytes());
     }
     total
-}
-fn count(node: Option<&Node>) -> Result<usize, StopReason> {
-    match node.map(|node| &node.value) {
-        None => Ok(0),
-        Some(Value::Number(number)) => number
-            .to_usize()
-            .ok_or(StopReason::BudgetExceeded(Resource::ScratchBytes)),
-        _ => Err(StopReason::InvalidInput(
-            "compiled length constraint is not numeric".into(),
-        )),
-    }
 }
 fn clear_spans(node: &mut Node) {
     node.span = None;

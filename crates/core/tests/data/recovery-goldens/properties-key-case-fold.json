@@ -1,0 +1,23 @@
+{
+  "description": "a case-mismatched property key is matched",
+  "schema": {
+    "type": "object",
+    "required": [
+      "userName"
+    ],
+    "properties": {
+      "userName": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
+  "input": "{\"USERNAME\":\"alice\"}",
+  "outcome": "resolved",
+  "output": {
+    "userName": "alice"
+  },
+  "ledger_rules": [
+    "json.key.match"
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "description": "a punctuation-mismatched property key is matched",
+  "schema": {
+    "type": "object",
+    "required": [
+      "firstName"
+    ],
+    "properties": {
+      "firstName": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
+  "input": "{\"first_name\":\"alice\"}",
+  "outcome": "resolved",
+  "output": {
+    "firstName": "alice"
+  },
+  "ledger_rules": [
+    "json.key.match"
+  ]
+}

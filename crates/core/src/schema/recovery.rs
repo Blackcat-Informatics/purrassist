@@ -292,6 +292,7 @@ impl Search<'_> {
                     (&[], ""),
                     0,
                     &mut visited,
+                    &mut Vec::new(),
                 )?;
             }
         }

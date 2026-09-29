@@ -1,0 +1,22 @@
+{
+  "description": "a const value survives alongside a key-typo repair",
+  "schema": {
+    "type": "object",
+    "required": [
+      "status"
+    ],
+    "properties": {
+      "status": {
+        "const": "ok"
+      }
+    }
+  },
+  "input": "{\"staatus\":\"ok\"}",
+  "outcome": "resolved",
+  "output": {
+    "status": "ok"
+  },
+  "ledger_rules": [
+    "json.key.match"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "description": "a property governed by the boolean schema false has no possible value",
+  "schema": {
+    "type": "object",
+    "required": [
+      "forbidden"
+    ],
+    "properties": {
+      "forbidden": false
+    }
+  },
+  "input": "{}",
+  "outcome": "unresolved",
+  "ledger_rules": []
+}

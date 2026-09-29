@@ -1,0 +1,20 @@
+{
+  "description": "a required email-formatted property is invented",
+  "schema": {
+    "type": "object",
+    "required": [
+      "contact"
+    ],
+    "properties": {
+      "contact": {
+        "type": "string",
+        "format": "email"
+      }
+    },
+    "$schema": "http://localhost:1234/draft2020-12/format-assertion-true.json"
+  },
+  "input": "{}",
+  "outcome": "resolved",
+  "output": {},
+  "ledger_rules": []
+}

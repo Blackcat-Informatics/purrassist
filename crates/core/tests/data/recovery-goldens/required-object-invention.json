@@ -1,0 +1,32 @@
+{
+  "description": "a required nested object property is invented recursively",
+  "schema": {
+    "type": "object",
+    "required": [
+      "address"
+    ],
+    "properties": {
+      "address": {
+        "type": "object",
+        "required": [
+          "city"
+        ],
+        "properties": {
+          "city": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "input": "{}",
+  "outcome": "best_guess",
+  "output": {
+    "address": {
+      "city": ""
+    }
+  },
+  "ledger_rules": [
+    "json.required.invent"
+  ]
+}

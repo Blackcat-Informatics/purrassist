@@ -1,0 +1,23 @@
+{
+  "description": "a near-miss property key is matched by edit distance",
+  "schema": {
+    "type": "object",
+    "required": [
+      "quantity"
+    ],
+    "properties": {
+      "quantity": {
+        "type": "integer"
+      }
+    },
+    "additionalProperties": false
+  },
+  "input": "{\"quantitty\":5}",
+  "outcome": "resolved",
+  "output": {
+    "quantity": 5
+  },
+  "ledger_rules": [
+    "json.key.match"
+  ]
+}

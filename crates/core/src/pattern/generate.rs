@@ -146,19 +146,31 @@ fn generate_derivative(
     }
 
     // Breadth-first over string length; `frontier` holds, for each reachable
-    // combination of (target state, every avoid pattern's search state),
-    // the witness string that reaches it. Deduplicated by that combination
-    // so the search is bounded by the (finite, interned) product state
-    // space, never by string length alone.
+    // combination of (target state, every avoid pattern's search state), the
+    // witness string that reaches it. Deduplicated *within one step* (so a
+    // step's own work is bounded by the finite, interned product state
+    // space, never by the alphabet), but never across steps: a state whose
+    // nullability was not yet checked (because its length was still below
+    // `options.min_len`) must stay reachable at every later length too, or a
+    // self-looping accepting state (any `+`/`*`/`{n,}` repetition) would
+    // wrongly read as an empty language the moment `min_len` forces the
+    // search past the point where states start repeating.
     let mut frontier: Vec<(Vec<u32>, String)> = vec![(
         std::iter::once(target.state)
             .chain(avoids.iter().map(|lane| lane.state))
             .collect(),
         String::new(),
     )];
-    let mut visited: std::collections::BTreeSet<Vec<u32>> =
-        frontier.iter().map(|(key, _)| key.clone()).collect();
     let mut length = 0usize;
+    // Once every current-length nullability check has failed, remember the
+    // *set* of live states so far seen at length >= `options.min_len`
+    // (stepping is a deterministic function of that set, so a repeated set
+    // reproduces the exact same set forever). Recognizing that cycle is what
+    // still lets this search prove emptiness *within these bounds* even
+    // though states below `options.min_len` are deliberately never pruned
+    // (see the `frontier` doc comment above).
+    let mut seen_state_sets: std::collections::BTreeSet<Vec<Vec<u32>>> =
+        std::collections::BTreeSet::new();
     loop {
         governor.charge(
             Resource::Work,
@@ -174,6 +186,15 @@ fn generate_derivative(
                     return Ok(GenerateOutcome::Witness(witness.clone()));
                 }
             }
+            let mut current_set: Vec<Vec<u32>> =
+                frontier.iter().map(|(states, _)| states.clone()).collect();
+            current_set.sort_unstable();
+            current_set.dedup();
+            if !seen_state_sets.insert(current_set) {
+                return Ok(no_candidate(
+                    "the language is empty within these bounds: the reachable state set has cycled back to one already checked for acceptance without ever satisfying it, so no longer witness can ever satisfy it either",
+                ));
+            }
         }
         if options.max_len.is_some_and(|max| length >= max) {
             return Ok(no_candidate(format!(
@@ -182,38 +203,14 @@ fn generate_derivative(
                 avoids.len()
             )));
         }
-        let mut next_frontier = Vec::new();
-        for (states, witness) in &frontier {
-            for &code in &representatives {
-                let Some(character) = char::from_u32(code) else {
-                    continue;
-                };
-                let prev_word = witness.chars().last().is_some_and(derive::is_word);
-                let ctx = NullCtx {
-                    at_start: length == 0,
-                    at_end: false,
-                    prev_word,
-                    next_word: derive::is_word(character),
-                };
-                let Some(next_states) = step_lanes(
-                    &mut target,
-                    &mut avoids,
-                    states,
-                    code,
-                    ctx,
-                    length,
-                    governor,
-                )?
-                else {
-                    continue;
-                };
-                if visited.insert(next_states.clone()) {
-                    let mut extended = witness.clone();
-                    extended.push(character);
-                    next_frontier.push((next_states, extended));
-                }
-            }
-        }
+        let next_frontier = step_frontier(
+            &frontier,
+            &representatives,
+            &mut target,
+            &mut avoids,
+            length,
+            governor,
+        )?;
         if next_frontier.is_empty() {
             return Ok(no_candidate(
                 "the language is empty: the product automaton (this pattern and every `avoid` pattern) has no reachable accepting state",
@@ -222,6 +219,47 @@ fn generate_derivative(
         frontier = next_frontier;
         length += 1;
     }
+}
+
+/// Step every frontier entry by one character over every representative
+/// code point, deduplicating *within this one step* (never across steps:
+/// see the `frontier` doc comment in [`generate_derivative`]).
+fn step_frontier(
+    frontier: &[(Vec<u32>, String)],
+    representatives: &[u32],
+    target: &mut Lane<'_>,
+    avoids: &mut [Lane<'_>],
+    length: usize,
+    governor: &mut Governor,
+) -> Result<Vec<(Vec<u32>, String)>, StopReason> {
+    let mut next_frontier = Vec::new();
+    let mut seen_this_step: std::collections::BTreeSet<Vec<u32>> =
+        std::collections::BTreeSet::new();
+    for (states, witness) in frontier {
+        for &code in representatives {
+            let Some(character) = char::from_u32(code) else {
+                continue;
+            };
+            let prev_word = witness.chars().last().is_some_and(derive::is_word);
+            let ctx = NullCtx {
+                at_start: length == 0,
+                at_end: false,
+                prev_word,
+                next_word: derive::is_word(character),
+            };
+            let Some(next_states) =
+                step_lanes(target, avoids, states, code, ctx, length, governor)?
+            else {
+                continue;
+            };
+            if seen_this_step.insert(next_states.clone()) {
+                let mut extended = witness.clone();
+                extended.push(character);
+                next_frontier.push((next_states, extended));
+            }
+        }
+    }
+    Ok(next_frontier)
 }
 
 const fn end_ctx(length: usize, prev_word: bool) -> NullCtx {

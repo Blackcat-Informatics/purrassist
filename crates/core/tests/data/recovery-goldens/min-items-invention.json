@@ -1,0 +1,29 @@
+{
+  "description": "a required array property with minItems is invented",
+  "schema": {
+    "type": "object",
+    "required": [
+      "tags"
+    ],
+    "properties": {
+      "tags": {
+        "type": "array",
+        "minItems": 2,
+        "items": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "input": "{}",
+  "outcome": "best_guess",
+  "output": {
+    "tags": [
+      "",
+      ""
+    ]
+  },
+  "ledger_rules": [
+    "json.required.invent"
+  ]
+}

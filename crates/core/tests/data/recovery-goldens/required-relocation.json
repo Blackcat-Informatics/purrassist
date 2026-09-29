@@ -1,0 +1,25 @@
+{
+  "description": "a required value nested under the wrong key is relocated",
+  "schema": {
+    "type": "object",
+    "required": [
+      "id"
+    ],
+    "properties": {
+      "id": {
+        "type": "integer"
+      },
+      "meta": {
+        "type": "object"
+      }
+    }
+  },
+  "input": "{\"meta\":{\"id\":7}}",
+  "outcome": "resolved",
+  "output": {
+    "id": 7
+  },
+  "ledger_rules": [
+    "json.shape.unwrap-object"
+  ]
+}

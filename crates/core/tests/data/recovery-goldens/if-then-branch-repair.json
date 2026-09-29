@@ -1,0 +1,28 @@
+{
+  "description": "the then branch is followed and repaired when the condition holds",
+  "schema": {
+    "if": {
+      "properties": {
+        "kind": {
+          "const": "a"
+        }
+      }
+    },
+    "then": {
+      "properties": {
+        "value": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  "input": "{\"kind\":\"a\",\"value\":\"3\"}",
+  "outcome": "resolved",
+  "output": {
+    "kind": "a",
+    "value": 3
+  },
+  "ledger_rules": [
+    "json.type.decode-string"
+  ]
+}

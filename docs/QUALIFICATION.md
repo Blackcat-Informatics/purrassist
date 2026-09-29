@@ -12,6 +12,7 @@ scope in `IMPLEMENTATION.md` remains required. No registry publication is claime
 | Local gate | `make check` | Formatting, provenance, Clippy, optimized tests, Rustdoc |
 | Schema | `cargo test -p purrassist-core --test schema_conformance --test formats --test vocabularies` | 1,301 main Draft 2020-12 tests; 121 selected optional tests; 878 vendored `optional/format/*` + `format-assertion.json` cases run under a dialect declaring format-assertion (every 2020-12 format, including RFC 5892/5893 IDNA2008 contextual/Bidi rules); explicit unknown-format-under-assertion and unsupported-vocabulary behavior |
 | Pattern engine | `cargo test -p purrassist-core --test pattern` | 441-fixture test262 property-escapes census (Unicode 17); pathological `(a+)+b` linear-time check; 10,000-pair derivative/backtracking differential; `generate` witness/emptiness properties |
+| Witness algebra | `cargo test -p purrassist-core --test witness_algebra --test recursive_schemas --test recovery_goldens --test corruption_oracle` | 430/430 official-suite schema groups witnessed (0 exhaustions, 0 false unsatisfiability claims); 4 known-unsatisfiable schemas proven; 7 recursive-schema audit cases; 66 curated composed-recovery goldens; corruption oracle over 446 witnessed schemas × 6 deterministic corruptions (791 informative trials, 0 wrong answers) |
 | Unicode | `cargo test -p purrassist-core --test unicode_conformance` | 20,034 Unicode 17 normalization cases |
 | Portability | `make wasm-test` | Executed native/WASI recovery, all five grammar, and fixed-provider-transcript host transcripts (`purrassist-core`, `purrassist-syntax`, `purrassist-host` each on wasm32-wasip1); `purrassist-core`'s transcript additionally executed on wasm32-unknown-unknown (no WASI, via the unpublished `wasm-harness` crate and Node's plain `WebAssembly` API) and compared byte-for-byte against its native output |
 | Independent syntax | `make syntax-oracles` | 15 fixed positive/negative probes against Python, rustc, Node, and TypeScript 5.9.3 |
@@ -479,6 +480,158 @@ protocol behavior, not a maximum response latency or global allocator bound.
   declaring format-assertion — 878 cases, zero skipped, on top of the existing
   1,301/121-case censuses — and exercises the compile-time/annotation/repair/
   vocabulary behaviors above directly.
+- `crates/core/src/schema/algebra/` implements the Attouche, Baazizi, Colazzo,
+  Ghelli, Sartiani witness-generation pipeline (VLDB 2022) as five traceable
+  stages: canonicalize (`canon::build`) and `not`-elimination (`canon::build_negated`,
+  De Morgan duality down to a closed-form dual for every keyword that has one —
+  `type`, `const`/`enum`, numeric bounds, string length, `pattern`, `format`,
+  array length, `uniqueItems` — falling back to `Canon::OpaqueNot`, "some
+  candidate that fails this exact sub-schema", checked with the real evaluator
+  rather than decided symbolically, for the structural keywords that do not);
+  `and`-merge and preparation (`merge::Requirements`, detecting an empty merged
+  `TypeSet`, a crossed numeric/length/count bound, or an incompatible literal
+  before generation ever runs); and generation (`generate::Gen`, type-directed
+  construction using Task 6's `Pattern::generate` for `pattern`/`patternProperties`
+  and Task 7's format validators for format witnesses, recursing over `$ref`/
+  `$dynamicRef` under the same non-progressing-cycle guard and dynamic-scope
+  stack as the evaluator). Every returned witness is re-validated with the real
+  evaluator before this module returns it, so an unsound simplification anywhere
+  upstream can only ever cost a downgrade to exhaustion, never an invalid
+  witness. The outcome is exactly one of three shapes
+  (`schema::algebra::WitnessOutcome`, `Schema::generate_witness`/
+  `_governed`): `Witness`; `Unsatisfiable` (a closed-form refutation, never
+  inferred from search exhaustion); or `Exhausted` (this stage's bounded,
+  deliberately incomplete search found neither). Unsatisfiability is
+  deliberately never expressed as a `StopReason`: that type's own contract is
+  that exhaustion never asserts unsatisfiability, and `WitnessOutcome` is a new,
+  separate type rather than a new `StopReason` variant, so nothing changes in
+  `crate::wire`'s existing `StopReason` encoding. `crates/core/src/schema/recovery/proposals.rs`
+  now invents every guessed value through this algebra (`WitnessOutcome::Witness`
+  only; `Unsatisfiable`/`Exhausted` propose nothing) instead of the old
+  `witnesses`/`typed_witnesses` heuristic, which is fully removed — one path,
+  not two. Proposal traversal now also follows `patternProperties`,
+  `additionalProperties`/`unevaluatedProperties` schemas, `dependentSchemas`
+  (at the object's own route, since it constrains the whole object), `contains`,
+  `unevaluatedItems`, `if`/`then`/`else` (recursing into whichever branch
+  currently applies), and dynamic `$dynamicRef` (resolved against a live
+  `scope` stack threaded through `propose`, the same dynamic-anchor-override
+  rule as the evaluator and the algebra, not a purely static resolution as
+  before). `not` and a failing `propertyNames` key have no local repair — a
+  `not` violation is left an explicit no-candidate for that rule rather than
+  fabricating an unrelated whole-candidate replacement, and a `propertyNames`
+  violation is repaired narrowly (renaming just that key to a witness of the
+  `propertyNames` schema's own `pattern`) rather than inventing a new object
+  from scratch; `key_repair_proposals`'s rename candidates now also include
+  `required` names with no `properties` entry, so a typo'd required-only key
+  is still recognized. `crates/core/tests/recursive_schemas.rs` (7 cases) checks
+  self-recursion, mutual recursion, the `$dynamicRef`/`$dynamicAnchor`
+  extensible-schema pattern resolving against the live scope, a non-progressing
+  cycle (`{"$ref":"#"}`, an explicit `InvalidInput` from the evaluator and
+  `Exhausted` from the algebra, never a hang or a false pass), compile-time
+  `Depth` exhaustion on deeply nested (not merely wide) schemas, `Depth`
+  exhaustion on a 300-hop `$ref` chain during evaluation, and that deep-but-finite
+  nesting is not mistaken for a cycle. `crates/core/tests/witness_algebra.rs`
+  runs every schema group in the vendored official Draft 2020-12 suite with at
+  least one valid test instance (430 groups) through the algebra: all 430
+  witnessed and re-validated, zero exhausted, zero falsely reported
+  unsatisfiable. That was a closed acceptance gap, not the starting point: 5
+  groups (two `oneOf.json` cases, `dynamicRef.json`, `items.json`,
+  `not.json`) initially exhausted, each defeated by a distinct construct with
+  no closed-form treatment. `oneOf`'s exactly-one semantics needed
+  `Canon::OneOf`/`Gen::attempt_one_of`: try branch `i`'s own canon while
+  adding every *other* branch as a `Canon::OpaqueNot` exclusion, checked
+  against the real evaluator, so the search can never falsely prove `oneOf`
+  unsatisfiable merely because branch exclusion was inconclusive.
+  `dynamicRef.json` ("after leaving a dynamic scope, it is not used by a
+  `$dynamicRef`") exposed a scope-stack bug in `if`/`then`/`else`: folding
+  `cond` and `then` into one flat `Canon` list under `Canon::Scoped`'s
+  push/pop deferred the pop until the *entire* remaining search returned, so
+  `then` was searched with `cond`'s dynamic scope still active — able to
+  resolve a `$dynamicRef` against an anchor that should already have been
+  left. `Gen::try_simple_merge`/`Gen::if_branch` now merge `cond`'s facets to
+  completion — pushing and popping its scope within one Rust call stack,
+  hence unconditionally on every return path — strictly *before* `then`/
+  `else` is even built, mirroring `evaluate.rs`'s two separate, sequential
+  scope entries; the previous flat-list combination remains as a sound
+  fallback whenever `cond`/`then` need real backtracking search (`Or`/`Ref`/
+  nested `if`) that a merge-only pass cannot resolve. `items.json` ("items
+  does not look in applicators, valid case") exposed that `items` and
+  `prefixItems` declared on *different* schema objects (`items` at the root,
+  `prefixItems` inside an `allOf` branch) were merged as if they shared one
+  prefix length, so the root's own `items` was wrongly skipped over the
+  indices the `allOf` branch's `prefixItems` covered: `Facet::Items` now
+  carries its own node's `prefixItems` length (0 if it declares none)
+  alongside its target, so an `items` occurrence with no `prefixItems` of
+  its own applies from index 0 regardless of what a sibling branch's
+  `prefixItems` covers. `not.json` ("collect annotations inside a `not`,
+  even if collection is disabled") exposed that `unevaluatedProperties:
+  false` has no closed-form `not`-dual (falling back to `Canon::OpaqueNot`,
+  whose dual is "some property is not evaluated") and the minimal,
+  required-only object `build_object` builds can never witness that on its
+  own; `Gen::retry_object_with_extra_member` retries once with one synthetic
+  property whenever the minimal candidate fails a pending `OpaqueNot`
+  obligation — bounded and sound, since the retry is re-`finalize`d, so a
+  genuinely hopeless case still exhausts rather than fabricating a wrong
+  witness. `false`, `allOf:[{type:string},{type:number}]`,
+  `{"type":"integer","minimum":2,"maximum":1}`, and a `pattern` contradicted by
+  its own `not` are each proven unsatisfiable by dedicated cases. Finding this
+  gap required fixing a real pre-existing bug in Task 6's `Pattern::generate`
+  (`crates/core/src/pattern/generate.rs`): its breadth-first search deduplicated
+  reachable automaton states *globally* across every string length, which is
+  the correct shortest-witness search when `min_len` is `0` but silently
+  misreported "the language is empty" for any pattern containing a `+`/`*`/
+  `{n,}` repetition once `min_len` forced the search past the point where
+  states start repeating (a self-looping accepting state, once visited at an
+  earlier length below `min_len`, was never revisited at a later length where
+  its nullability would actually be checked). The fix dedupes only *within*
+  one length step and instead recognizes a cycle in the sequence of live
+  *state sets* once `min_len` is reached to keep proving genuine emptiness;
+  `crates/core/tests/pattern.rs`'s existing emptiness-proof cases still pass
+  unchanged. `crates/core/tests/data/recovery-goldens/*.json` (66 curated
+  cases, exceeding the required 60, spanning every applicator: `type`/`const`/
+  `enum`/numeric bounds/string length+`pattern`/array `minItems`+`prefixItems`+
+  `contains`+`minContains`/`maxContains`/`uniqueItems`/object `minProperties`+
+  `required`+`properties`+`patternProperties`+`additionalProperties`+
+  `propertyNames`+`dependentRequired`+`dependentSchemas`/`allOf`/`anyOf`/
+  `oneOf`/`not`/`if`-`then`-`else`/`$ref`/`$dynamicRef`/`unevaluatedProperties`+
+  `unevaluatedItems`/all Task 7 formats/duplicate keys/truncated+prose-wrapped+
+  stringified input) pin `description`+`schema`+`input` (hand-curated) against
+  a captured `outcome`/`output`(s)/`ledger_rules` (captured from an actual
+  governed run rather than hand-transcribed, via `crates/core/tests/recovery_goldens.rs`;
+  `PURRASSIST_BLESS=1` re-captures them and panics if `CI` is set, so blessing
+  can never run unattended). 61 goldens capture a successful repair or
+  invention; 5 pin an intentional, explicit `unresolved` (an unmet
+  `dependentRequired` trigger, a `uniqueItems` violation, exceeding
+  `maxProperties`, a required property whose schema is `false`, and
+  top-level `minProperties` padding — recovery invents a value per missing
+  `required` property, never extra properties merely to satisfy a count, which
+  this last golden documents as an explicit, deliberate boundary rather than a
+  gap). `crates/core/tests/corruption_oracle.rs` takes an algebra witness for
+  every official-suite schema group with one (446 schemas, up from 441 once
+  the witness-algebra acceptance gap above was closed), applies each of
+  six deterministic corruptions (truncation of a container's closing
+  punctuation; prose/fence wrapping; an adjacent-character key transposition;
+  full-value stringification; an information-preserving type swap; a
+  duplicate key), and asserts recovery returns the exact original, an
+  `Ambiguous` set containing it, or an explicit `Unresolved` — never a
+  *different* answer. Of 1,134 corruption attempts, 343 turned out to already
+  be a different but directly schema-valid instance on their own (many
+  official-suite schema groups impose no `type` restriction at all, so
+  swapping/stringifying a witness can produce an equally valid, merely
+  different, instance; recovering the specific original in that case is not
+  well-posed, so these are counted separately rather than either way) leaving
+  791 informative trials: 773 recovered the exact original, 12 `Ambiguous`
+  sets contained it, 6 were an explicit `Unresolved`, zero wrong answers. That
+  oracle run surfaced one genuine, now-fixed cost-model gap:
+  `json.key.resolve-duplicate` (an outright duplicate key, unambiguous JSON
+  malformation with one obvious fix) was costed *above* the cheapest possible
+  speculative key rename, so a short property name from an unrelated `allOf`/
+  `oneOf` branch could look cheaper than simply dropping the duplicate;
+  resolving a duplicate key is now costed at `2` (`crates/core/tests/recovery.rs`
+  updated to match). Run all of this with `cargo test -p purrassist-core
+  --test witness_algebra --test recursive_schemas --test recovery_goldens
+  --test corruption_oracle --test recovery --test schema_conformance --test
+  formats --test vocabularies --test pattern`.
 - Complete allocation/work accounting throughout candidate generation, receipts,
   schema compilation, and helper preparation. Schema compilation now shares a
   governor across root/external/dialect parsing, indexing, pattern preparation,

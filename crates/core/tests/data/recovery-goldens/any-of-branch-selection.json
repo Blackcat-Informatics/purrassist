@@ -1,0 +1,19 @@
+{
+  "description": "an anyOf branch is selected after a type coercion",
+  "schema": {
+    "anyOf": [
+      {
+        "type": "integer"
+      },
+      {
+        "type": "boolean"
+      }
+    ]
+  },
+  "input": "\"7\"",
+  "outcome": "resolved",
+  "output": 7,
+  "ledger_rules": [
+    "json.type.decode-string"
+  ]
+}

@@ -46,7 +46,10 @@ isolated syntax crate uses the pinned Tree-sitter grammar family; see the
 Current surfaces include:
 
 - JSON recovery with nested unwrapping, syntax repair, approximate keys/enums,
-  stringified values, inferred required fields, and whole-schema validation.
+  stringified values, whole-schema validation, and invented values (required
+  properties, `patternProperties`/`additionalProperties`/`dependentSchemas`
+  fills, `propertyNames`-conformant key repairs) produced by a first-party
+  witness-generation algebra rather than a schema-blind heuristic.
 - Unicode, lexical, Levenshtein, unrestricted Damerau-Levenshtein, English
   Soundex, aliases, and contextual path matching.
 - Explicit semantic domain rules and caller-supplied embedding similarity.
@@ -74,7 +77,13 @@ cargo run -p purrassist-cli -- mcp --root /path/to/workspace
 `decode` returns the answer and receipt as JSON. `Exact` performs no recovery;
 `Quick`, `Standard`, `Deep`, and `Maximum` increase finite search budgets.
 Exhaustion is explicit and never proves that a schema is unsatisfiable.
-`Schema::compile_governed` and `with_resources_governed` return typed
+`Schema::generate_witness`/`generate_witness_governed` separately implement a
+witness-generation algebra (canonicalize, eliminate `not` by De Morgan duality,
+merge `allOf` constraints, and generate a type-directed value, recursing over
+`$ref`/`$dynamicRef`): its result is a validated `Witness`, a closed-form
+`Unsatisfiable` proof (never inferred from search exhaustion), or an honest
+`Exhausted`, and recovery invents every guessed value through this same
+algebra. `Schema::compile_governed` and `with_resources_governed` return typed
 `CompilationError` values separating invalid schemas from resource failures.
 Pass the same governor to `recover_governed` to share the total preparation and
 recovery budget. The `decode_json` tool does this automatically. The convenience

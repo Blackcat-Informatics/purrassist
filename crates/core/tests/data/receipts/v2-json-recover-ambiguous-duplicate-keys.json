@@ -10,7 +10,7 @@
   "alternatives": [
     {
       "output": "sha256:5e2b030a4a0f1582d78c0fd9924511cd6b1f2df9879e574f5ea1406c94052418",
-      "cost": 10,
+      "cost": 2,
       "evidence": [
         {
           "rule": "json.key.resolve-duplicate",
@@ -45,7 +45,7 @@
     },
     {
       "output": "sha256:5041bf1f713df204784353e82f6a4a535931cb64f1f4b4a5aeaffcb720918b22",
-      "cost": 10,
+      "cost": 2,
       "evidence": [
         {
           "rule": "json.key.resolve-duplicate",

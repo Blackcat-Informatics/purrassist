@@ -1,0 +1,20 @@
+{
+  "description": "an unexpected extra property is removed when additionalProperties is false",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "a": {
+        "type": "integer"
+      }
+    },
+    "additionalProperties": false
+  },
+  "input": "{\"a\":1,\"b\":2}",
+  "outcome": "resolved",
+  "output": {
+    "a": 1
+  },
+  "ledger_rules": [
+    "json.key.remove-additional"
+  ]
+}

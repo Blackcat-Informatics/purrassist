@@ -1,0 +1,23 @@
+{
+  "description": "a required numeric property with a minimum bound is invented",
+  "schema": {
+    "type": "object",
+    "required": [
+      "age"
+    ],
+    "properties": {
+      "age": {
+        "type": "integer",
+        "minimum": 18
+      }
+    }
+  },
+  "input": "{}",
+  "outcome": "best_guess",
+  "output": {
+    "age": 18
+  },
+  "ledger_rules": [
+    "json.required.invent"
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "description": "an item left unevaluated by prefixItems is type-coerced",
+  "schema": {
+    "type": "array",
+    "prefixItems": [
+      {
+        "type": "integer"
+      }
+    ],
+    "unevaluatedItems": {
+      "type": "boolean"
+    }
+  },
+  "input": "[1,\"true\"]",
+  "outcome": "resolved",
+  "output": [
+    1,
+    true
+  ],
+  "ledger_rules": [
+    "json.type.decode-string"
+  ]
+}
