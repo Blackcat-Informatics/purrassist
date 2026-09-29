@@ -358,8 +358,9 @@ impl Forest {
     /// each derivation's accumulated [`Derivation::cost`]), the standard
     /// k-best selection order. Ties break on ascending [`Derivation::output`]
     /// (a total order, since [`Digest`] is [`Ord`]), so the result is
-    /// deterministic independent of input order; see
-    /// [`AlternativeReceipt::rank`] for where this ordering reaches the wire.
+    /// deterministic independent of input order; [`Forest::publish`] applies
+    /// this order and reports it as [`Published::order`], so every ambiguous
+    /// outcome, receipt, and wire form lists alternatives in it.
     #[must_use]
     pub fn rank(derivations: &[Derivation]) -> Vec<usize> {
         let mut order: Vec<usize> = (0..derivations.len()).collect();

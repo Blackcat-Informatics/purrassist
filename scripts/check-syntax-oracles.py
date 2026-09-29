@@ -57,7 +57,7 @@ with tempfile.TemporaryDirectory(prefix='purrassist-oracles-') as directory:
         path = directory / f'probe{index}{extension}'
         path.write_text(source)
         inspected = subprocess.check_output([binaries[0], 'call', 'inspect_code', '--root', str(directory)], input=json.dumps({'source': source, 'language': language}), text=True)
-        actual = json.loads(inspected)['valid']
+        actual = json.loads(inspected)['value']['valid']
         if extension == '.py':
             command = [sys.executable, '-c', 'import ast,sys; ast.parse(sys.stdin.read())']
         elif extension == '.rs':

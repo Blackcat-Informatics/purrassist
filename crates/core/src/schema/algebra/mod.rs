@@ -17,13 +17,13 @@
 //!   unsound simplification anywhere upstream can only ever cost a
 //!   downgrade to [`WitnessOutcome::Exhausted`], never an invalid witness.
 //! - [`WitnessOutcome::Unsatisfiable`]: a closed-form refutation — an
-//!   empty merged [`canon::TypeSet`], a crossed numeric/length/count bound,
+//!   empty merged `TypeSet`, a crossed numeric/length/count bound,
 //!   an incompatible literal, or a pattern proven empty by the derivative
 //!   automaton (Task 6's `Pattern::generate`) exhausting every reachable
 //!   state — never a claim inferred from search exhaustion.
 //! - [`WitnessOutcome::Exhausted`]: this stage's bounded, deliberately
 //!   incomplete search (a fixed-size numeric/string candidate scan, or a
-//!   structural keyword this module leaves to [`canon::Canon::OpaqueNot`]'s
+//!   structural keyword this module leaves to the `OpaqueNot` canon's
 //!   generate-and-check fallback) found neither of the above.
 //!
 //! `StopReason` is reserved for governor hard-stops (`BudgetExceeded`,
@@ -47,7 +47,7 @@ pub struct Refutation {
     pub evidence: Vec<Evidence>,
 }
 
-/// The three possible shapes [`generate_witness`] returns; see the module
+/// The three possible shapes [`Schema::generate_witness`](crate::schema::Schema::generate_witness) returns; see the module
 /// documentation for exactly what each one guarantees.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WitnessOutcome {
