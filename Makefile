@@ -12,6 +12,7 @@ hygiene:
 	python3 scripts/check-repository.py
 	python3 scripts/check-release.py
 	python3 scripts/test-fuzz-json.py
+	python3 scripts/test-verify-published.py
 
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings

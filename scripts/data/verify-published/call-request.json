@@ -1,0 +1,4 @@
+{
+  "tool": "decode_json",
+  "arguments": {"input": "[[42]]", "schema": {"type": "integer"}}
+}

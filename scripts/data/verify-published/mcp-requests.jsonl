@@ -1,0 +1,13 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"verify-published","version":"1"}}}
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+{"jsonrpc":"2.0","id":2,"method":"tools/list"}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"decode_json","arguments":{"input":"[[42]]","schema":{"type":"integer"}}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"validate_json","arguments":{"schema":{"type":"object","required":["name"],"properties":{"name":{"type":"string"}}},"instance":{"name":"tea"}}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"match_strings","arguments":{"query":"invioce","candidates":["invoice","receipt"]}}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"match_paths","arguments":{"query":"raeder.rs","context":"src","paths":["src/reader.rs","tests/reader.rs"]}}}
+{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"resolve_intent","arguments":{"input":"hot tea","domain":{"id":"drinks.v1","rules":[{"id":"hot","phrase":"hot","assignments":{"temperature":"hot"}},{"id":"tea","phrase":"tea","assignments":{"drink":"tea"}}]},"concepts":[{"id":"hot-tea","label":"cup of hot tea","attributes":{"drink":"tea","temperature":"hot"}}]}}}
+{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"render_markdown","arguments":{"source":"# Title\n\nHello *world*.\n"}}}
+{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"plan_replacement","arguments":{"source":"hello world","needle":"wurld","replacement":"earth","max_edits":1}}}
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"inspect_code","arguments":{"source":"def answer():\n    return 42\n","language":"python"}}}
+{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"match_embeddings","arguments":{"space":"demo","query":[1.0,0.0],"candidates":[{"id":"a","vector":[1.0,0.0]},{"id":"b","vector":[0.0,1.0]}]}}}
+{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"prepare_helper","arguments":{"provider":"openai_responses","model":"test-model","input":"hi","schema":{"type":"string"},"max_output_tokens":16}}}

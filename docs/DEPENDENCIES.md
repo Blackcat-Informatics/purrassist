@@ -60,6 +60,12 @@ no Cargo dependency and runs no package-installation scripts. It is used only as
 an independent TS/TSX/JSX test oracle; its package has no runtime dependencies.
 Tool and CI action identities/notices are recorded in `vendor/tooling.json`;
 the GitHub checkout action is pinned to a full commit with credentials disabled.
+`rust-lang/crates-io-auth-action` (MIT OR Apache-2.0), pinned by full commit SHA
+`c6f97d42243bad5fab37ca0427f495c86d5b1a18` (tag `v1.0.5`), exchanges the
+`crates-io` environment's OIDC trusted-publishing token for a short-lived
+registry token inside `.github/workflows/publish.yml` only; it is never
+invoked from `verify.yml` or `release-qualification.yml`, and it never sees a
+long-lived credential.
 
 `make hygiene` checks the resolved Cargo graph against the checked-in inventory
 and verifies retained license notices, Unicode artifact/fixture hashes, and each

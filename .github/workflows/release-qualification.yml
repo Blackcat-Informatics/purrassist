@@ -1,5 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# Qualification only: never publishes, never attests, never creates a GitHub
+# release, and holds no crates.io credential or OIDC permission. It proves
+# the tag matches the workspace version and dependency order, runs the full
+# local gate on stable Rust, and audits the packaged archives and license
+# notices. publish.yml is the only workflow that publishes, and it requires a
+# successful run of this workflow for the same commit before it does.
 name: Release qualification
 on:
   push:

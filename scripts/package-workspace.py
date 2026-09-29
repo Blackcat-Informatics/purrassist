@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 """Package in a commit-scoped Cargo home so old same-version crates cannot mask changes."""
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -20,7 +21,23 @@ for name in tuple(environment):
     ):
         del environment[name]
 
-subprocess.run(['cargo', 'package', '--workspace', '--locked'],
+# Package exactly the publishable release set, not every workspace member.
+# `cargo package --workspace` would also try to package and *verify-build*
+# `publish = false` tooling crates (e.g. `crates/wasm-harness`), which exist
+# to exercise a different target (wasm32-unknown-unknown) and are not part
+# of the release this script audits; a build failure in one of those would
+# otherwise block packaging the crates that actually ship. `check-release.py`
+# already proves the publishable set is exactly the five release crates in
+# dependency order, so this mirrors that filter directly from `cargo metadata`
+# instead of hardcoding the crate list a second time.
+metadata = json.loads(subprocess.check_output(
+    ['cargo', 'metadata', '--no-deps', '--format-version', '1', '--locked'],
+    cwd=ROOT, env=environment, text=True))
+publishable = sorted(
+    package['name'] for package in metadata['packages'] if package.get('publish') != [])
+package_args = [flag for name in publishable for flag in ('-p', name)]
+
+subprocess.run(['cargo', 'package', *package_args, '--locked'],
                cwd=ROOT, env=environment, check=True)
 subprocess.run([sys.executable, 'scripts/check-packages.py'],
                cwd=ROOT, env=environment, check=True)
