@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://purrassist.dev/schema/receipt.schema.json",
   "title": "PurRAssist receipt",
-  "description": "Wire shape of `purrassist_core::contract::Receipt::to_node()`. Versioned by `receipt.version` (see `purrassist_core::contract::RECEIPT_VERSION` for the history of each version). This schema describes version 2.",
+  "description": "Wire shape of `purrassist_core::contract::Receipt::to_node()`. Versioned by `receipt.version` (see `purrassist_core::contract::RECEIPT_VERSION` for the history of each version). This schema describes version 2, including its unreleased `ambiguity` annotation addition.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -10,6 +10,7 @@
     "source",
     "sources",
     "alternatives",
+    "ambiguity",
     "operation",
     "effort",
     "budget",
@@ -33,6 +34,9 @@
     "alternatives": {
       "type": "array",
       "items": { "$ref": "#/$defs/alternativeReceipt" }
+    },
+    "ambiguity": {
+      "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/ambiguity" }]
     },
     "operation": { "type": "string" },
     "effort": {
@@ -152,6 +156,34 @@
           "type": "array",
           "items": { "type": "integer", "minimum": 0 }
         }
+      }
+    },
+    "ambiguity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["derivations", "valid", "distinguishing"],
+      "properties": {
+        "derivations": { "type": "integer", "minimum": 2 },
+        "valid": { "type": "integer", "minimum": 0 },
+        "distinguishing": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/distinguishingNode" }
+          }
+        }
+      }
+    },
+    "distinguishingNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "rule"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["evidence", "loss", "inference", "validation"]
+        },
+        "rule": { "type": "string" }
       }
     },
     "budget": {

@@ -137,7 +137,7 @@ fn populate_unified_alternatives(
     let published = forest.publish(&derivations, governor)?;
     receipt.evidence = published.evidence;
     receipt.alternatives = published.alternatives;
-    Ok(outputs)
+    Ok(crate::provenance::permute(&outputs, &published.order))
 }
 
 fn invalid(message: &str) -> StopReason {

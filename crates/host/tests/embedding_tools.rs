@@ -6,6 +6,20 @@ use purrassist::{
     json::{self, Value},
 };
 use purrassist_host::tools::Tools;
+
+fn cost(ledger: &json::Node) -> u64 {
+    let Value::Number(number) = &ledger.pointer("/cost").unwrap().value else {
+        panic!("cost must be numeric")
+    };
+    u64::try_from(number.to_usize().unwrap()).unwrap()
+}
+fn output(ledger: &json::Node) -> &str {
+    ledger
+        .pointer("/output")
+        .and_then(json::Node::as_str)
+        .unwrap()
+}
+
 #[test]
 fn embedding_tools_preserve_vectors_and_independent_alternative_ledgers() {
     let root =
@@ -50,6 +64,19 @@ fn embedding_tools_preserve_vectors_and_independent_alternative_ledgers() {
         receipt_inferences[0].pointer("/kind").unwrap().as_str(),
         Some("derived")
     );
+    // `values` (`Outcome::Ambiguous`'s own wire array) and `ledgers`
+    // (`receipt.alternatives`) must share exactly one order — the same
+    // permutation `Forest::publish` ordered `ledgers` by ascending rank
+    // (cost, ties by output digest) — never reordered only at a wire
+    // boundary; both ties cost identically here, so this pins the digest
+    // tie-break for adjacent ledgers.
+    for pair in ledgers.windows(2) {
+        assert!(
+            cost(&pair[0]) < cost(&pair[1])
+                || (cost(&pair[0]) == cost(&pair[1]) && output(&pair[0]) <= output(&pair[1])),
+            "{ledgers:?}"
+        );
+    }
     for (value, ledger) in values.iter().zip(ledgers) {
         assert_eq!(
             ledger.get("output").unwrap().as_str(),

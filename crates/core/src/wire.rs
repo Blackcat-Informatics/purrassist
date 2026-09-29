@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Versioned JSON representations shared by command-line and protocol surfaces.
 use crate::contract::{
-    AssistResult, Budget, Evidence, Inference, InferenceKind, Loss, Outcome, Receipt, StopReason,
+    AlternativeReceipt, AssistResult, Budget, Evidence, Inference, InferenceKind, Loss, Outcome,
+    Receipt, StopReason, Validation,
 };
 use crate::edits::{AppliedEdit, EditPlan};
 use crate::json::{Member, Node, Number, Value};
@@ -85,6 +86,92 @@ fn inferences(entries: &[Inference]) -> Node {
         ])
     }))
 }
+/// Kinds/rules of the provenance nodes distinguishing two ranked-adjacent
+/// alternatives (see [`ambiguity`]), over the already-published per-alternative
+/// ledgers: since [`crate::provenance::Forest::publish`] promotes exactly the
+/// nodes reachable from *every* derivation to the receipt's top-level ledgers,
+/// the symmetric difference of two alternatives' own (non-promoted) ledgers is
+/// exactly [`crate::provenance::Forest::distinguishing`] restricted to the
+/// non-validation nodes; validation membership is compared by index directly.
+fn distinguishing(
+    a: &AlternativeReceipt,
+    b: &AlternativeReceipt,
+    validations: &[Validation],
+) -> Node {
+    let mut nodes: Vec<(&'static str, String)> = Vec::new();
+    for (mine, other) in [(&a.evidence, &b.evidence), (&b.evidence, &a.evidence)] {
+        for entry in mine {
+            if !other.contains(entry) {
+                nodes.push(("evidence", entry.rule.clone()));
+            }
+        }
+    }
+    for (mine, other) in [(&a.losses, &b.losses), (&b.losses, &a.losses)] {
+        for entry in mine {
+            if !other.contains(entry) {
+                nodes.push(("loss", entry.evidence.rule.clone()));
+            }
+        }
+    }
+    for (mine, other) in [
+        (&a.inferences, &b.inferences),
+        (&b.inferences, &a.inferences),
+    ] {
+        for entry in mine {
+            if !other.contains(entry) {
+                nodes.push(("inference", entry.evidence.rule.clone()));
+            }
+        }
+    }
+    for (mine, other) in [
+        (&a.validations, &b.validations),
+        (&b.validations, &a.validations),
+    ] {
+        for &index in mine {
+            if !other.contains(&index) {
+                let rule = validations
+                    .get(index)
+                    .map_or_else(|| format!("validation:{index}"), |v| v.validator.clone());
+                nodes.push(("validation", rule));
+            }
+        }
+    }
+    array(
+        nodes
+            .into_iter()
+            .map(|(kind, rule)| object([("kind", string(kind)), ("rule", string(rule))])),
+    )
+}
+/// The wire `ambiguity` annotation for a receipt with two or more published
+/// alternatives: `derivations` is the competing-answer count, `valid` counts
+/// alternatives whose [`AlternativeReceipt::valid`] annotation held, and
+/// `distinguishing` gives, for each ranked-adjacent pair (`alternatives` is
+/// already in ascending [`crate::provenance::Forest::rank`] order; see
+/// [`crate::provenance::Published::order`]), the evidence/loss/inference/
+/// validation nodes reachable from exactly one of the pair — "why is this
+/// ambiguous", following [`crate::provenance::Forest::distinguishing`].
+/// `null` when fewer than two alternatives were published.
+fn ambiguity(alternatives: &[AlternativeReceipt], validations: &[Validation]) -> Node {
+    if alternatives.len() < 2 {
+        return Node::new(Value::Null);
+    }
+    let valid = alternatives.iter().filter(|entry| entry.valid).count();
+    object([
+        ("derivations", integer(size(alternatives.len()))),
+        ("valid", integer(size(valid))),
+        (
+            "distinguishing",
+            array(
+                alternatives
+                    .windows(2)
+                    .map(|pair| distinguishing(&pair[0], &pair[1], validations)),
+            ),
+        ),
+    ])
+}
+fn size(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
 fn budget(value: Budget) -> Node {
     object([
         ("work", integer(value.work)),
@@ -100,6 +187,14 @@ impl Receipt {
     /// Serialize the versioned public receipt, including failures and inferred values.
     #[must_use]
     pub fn to_node(&self) -> Node {
+        // `self.alternatives` is already ordered ascending by
+        // `crate::provenance::Forest::rank`: every publishing call site
+        // permutes its own `Outcome::Ambiguous` candidate vector by the same
+        // `crate::provenance::Published::order` `Forest::publish` used to
+        // build this Vec (see that type's documentation), so this wire array
+        // and `Outcome::Ambiguous`'s own wire array (see
+        // `AssistResult::to_node` below) already agree — nothing is
+        // reordered here.
         object([
             ("version", integer(u64::from(self.version))),
             ("source", string(self.source.to_string())),
@@ -131,6 +226,10 @@ impl Receipt {
                         ),
                     ])
                 })),
+            ),
+            (
+                "ambiguity",
+                ambiguity(&self.alternatives, &self.validations),
             ),
             ("operation", string(&self.operation)),
             (
@@ -243,6 +342,13 @@ impl AssistResult<Node> {
             Outcome::Resolved(value) => ("resolved", value.clone(), array([])),
             Outcome::BestGuess(value) => ("best_guess", value.clone(), array([])),
             Outcome::Ambiguous(values) => {
+                // `values` is already in the same order as
+                // `self.receipt.alternatives` (see that field's
+                // documentation): the operation that built this
+                // `Outcome::Ambiguous` permuted its own candidate vector by
+                // `crate::provenance::Published::order` when it published
+                // more than one alternative, exactly as `Receipt::alternatives`
+                // itself was ordered. Nothing is reordered again here.
                 ("ambiguous", Node::new(Value::Null), array(values.clone()))
             }
             Outcome::Unresolved => ("unresolved", Node::new(Value::Null), array([])),

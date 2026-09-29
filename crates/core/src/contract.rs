@@ -67,7 +67,14 @@ impl CancellationToken {
 ///   `evidence`/`losses`/`inferences` ledgers instead of being duplicated
 ///   into each alternative (see `crate::provenance`). Callers that assumed
 ///   an alternative's ledgers were self-contained must also read the
-///   top-level ledgers to see shared transformations.
+///   top-level ledgers to see shared transformations. Unreleased addition
+///   within version `2` (no new version number, since nothing has shipped
+///   yet): `alternatives` (in every Rust and wire form; see
+///   `crate::provenance::Published::order`) is ordered by ascending
+///   `crate::provenance::Forest::rank`, and a receipt with two or more
+///   alternatives carries a top-level `ambiguity` object (`derivations`,
+///   `valid`, `distinguishing`); see `crate::wire` and
+///   `docs/schema/receipt.schema.json`.
 pub const RECEIPT_VERSION: u32 = 2;
 
 /// Increasing recovery effort; all presets remain finite.
@@ -1184,7 +1191,15 @@ pub struct SourceDocument {
 
 /// Evidence belonging to one competing recovery or semantic interpretation.
 ///
-/// Records follow the order of `Outcome::Ambiguous`. Their output identities hash
+/// Records follow the order of `Outcome::Ambiguous`: every operation that
+/// publishes more than one alternative through
+/// [`crate::provenance::Forest::publish`] permutes its own `Outcome::Ambiguous`
+/// candidate vector by [`crate::provenance::Published::order`], the same
+/// permutation `publish` used to order this `Vec<AlternativeReceipt>` by
+/// ascending [`crate::provenance::Forest::rank`] (ties broken by
+/// [`Self::output`]) — so this Vec's position `i` always names the same
+/// answer as `Outcome::Ambiguous`'s position `i`, in every Rust and wire
+/// form, never only at a serialization boundary. Output identities hash
 /// `Node::to_json()` bytes, not the original input or an equivalence-normalized JSON
 /// value. Validation indices refer to the enclosing receipt's validation log.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1201,6 +1216,10 @@ pub struct AlternativeReceipt {
     pub inferences: Vec<Inference>,
     /// Indices of validations actually performed on this output.
     pub validations: Vec<usize>,
+    /// Whether every validation this alternative depends on passed, from
+    /// [`crate::provenance::Forest::valid`] at publish time; vacuously
+    /// `true` when it depends on none or was the only derivation.
+    pub valid: bool,
 }
 
 /// An ordered, versioned audit receipt. Ledgers contain no hidden model reasoning.

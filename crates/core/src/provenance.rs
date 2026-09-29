@@ -235,11 +235,33 @@ pub struct Published {
     pub losses: Vec<Loss>,
     /// Inferences common to every supplied derivation.
     pub inferences: Vec<Inference>,
-    /// One ledger per supplied derivation, in the same order, holding only
-    /// what that derivation alone depends on. Empty when fewer than two
-    /// derivations were published, matching `Receipt::alternatives`'
+    /// One ledger per supplied derivation, already reordered to ascending
+    /// [`Forest::rank`] (ties broken by output digest). Empty when fewer
+    /// than two derivations were published, matching `Receipt::alternatives`'
     /// "empty for operations without alternative ledgers" contract.
     pub alternatives: Vec<AlternativeReceipt>,
+    /// The original `derivations` index now published at each position of
+    /// [`Published::alternatives`]: `order[k]` is the index into the
+    /// `derivations` slice (and, by construction, into the caller's own
+    /// parallel candidate-output slice) that now sits at position `k`.
+    /// Every caller that builds an `Outcome::Ambiguous` value from the same
+    /// `derivations` **must** reorder its own candidate vector by this same
+    /// permutation (see [`permute`]) before constructing it, so
+    /// `Outcome::Ambiguous`, `Receipt::alternatives`, and every wire
+    /// encoding of both share exactly one order — never reorder only at a
+    /// wire boundary. Identity (`0..derivations.len()`) when fewer than two
+    /// derivations were published (nothing to reorder).
+    pub order: Vec<usize>,
+}
+
+/// Reorder `values` (indexed by original derivation index) to [`Published::order`].
+///
+/// `permute(values, &published.order)[k] == values[published.order[k]]`.
+/// See [`Published::order`] for why every `Outcome::Ambiguous` call site
+/// must apply this to its own candidate vector.
+#[must_use]
+pub fn permute<T: Clone>(values: &[T], order: &[usize]) -> Vec<T> {
+    order.iter().map(|&index| values[index].clone()).collect()
 }
 
 /// A deduplicated forest of provenance nodes shared by every derivation of
@@ -334,11 +356,19 @@ impl Forest {
     /// Tropical (min-plus) semiring rank: derivation indices in ascending
     /// cost order (`⊕ = min` over derivations, `⊗ = +` already folded into
     /// each derivation's accumulated [`Derivation::cost`]), the standard
-    /// k-best selection order. Ties preserve input order (a stable sort).
+    /// k-best selection order. Ties break on ascending [`Derivation::output`]
+    /// (a total order, since [`Digest`] is [`Ord`]), so the result is
+    /// deterministic independent of input order; see
+    /// [`AlternativeReceipt::rank`] for where this ordering reaches the wire.
     #[must_use]
     pub fn rank(derivations: &[Derivation]) -> Vec<usize> {
         let mut order: Vec<usize> = (0..derivations.len()).collect();
-        order.sort_by_key(|&index| derivations[index].cost);
+        order.sort_by(|&a, &b| {
+            derivations[a]
+                .cost
+                .cmp(&derivations[b].cost)
+                .then_with(|| derivations[a].output.cmp(&derivations[b].output))
+        });
         order
     }
     /// Counting semiring: how many of `derivations` depend on `node`.
@@ -396,7 +426,10 @@ impl Forest {
         governor: &mut Governor,
     ) -> Result<Published, StopReason> {
         if derivations.len() < 2 {
-            let mut published = Published::default();
+            let mut published = Published {
+                order: (0..derivations.len()).collect(),
+                ..Published::default()
+            };
             if let Some(derivation) = derivations.first() {
                 for &id in &derivation.order {
                     self.charge_clone(governor, id)?;
@@ -414,15 +447,24 @@ impl Forest {
             }
             return Ok(published);
         }
-        let mut shared: BTreeSet<NodeId> = derivations[0]
-            .order
-            .iter()
-            .copied()
-            .filter(|&id| !matches!(self.node(id), ProvenanceNode::Validation(..)))
-            .collect();
-        for derivation in &derivations[1..] {
-            let present: BTreeSet<NodeId> = derivation.order.iter().copied().collect();
-            shared.retain(|id| present.contains(id));
+        // A node is shared exactly when every derivation reaches it: the
+        // counting-semiring annotation `multiplicity(derivations, id) ==
+        // derivations.len()`, computed here through the public
+        // `Self::multiplicity` rather than a private set intersection, so
+        // this promotion decision and that annotation can never disagree.
+        let mut candidates: BTreeSet<NodeId> = BTreeSet::new();
+        for derivation in derivations {
+            for &id in &derivation.order {
+                if !matches!(self.node(id), ProvenanceNode::Validation(..)) {
+                    candidates.insert(id);
+                }
+            }
+        }
+        let mut shared: BTreeSet<NodeId> = BTreeSet::new();
+        for id in candidates {
+            if Self::multiplicity(derivations, id) == derivations.len() {
+                shared.insert(id);
+            }
         }
         let mut evidence = Vec::new();
         let mut losses = Vec::new();
@@ -436,8 +478,16 @@ impl Forest {
                 ProvenanceNode::Validation(..) => unreachable!("filtered above"),
             }
         }
+        // `ranked` is `Self::rank`'s ascending-cost, digest-tie-broken
+        // derivation order; `alternatives` (and the `order` this function
+        // returns) are built in exactly this order, giving `Self::rank` a
+        // production consumer beyond this crate's own tests and ensuring
+        // every caller's own candidate vector, once permuted the same way
+        // (see [`Published::order`]), agrees with it.
+        let ranked = Self::rank(derivations);
         let mut alternatives = Vec::with_capacity(derivations.len());
-        for derivation in derivations {
+        for &derivation_index in &ranked {
+            let derivation = &derivations[derivation_index];
             let mut own_evidence = Vec::new();
             let mut own_losses = Vec::new();
             let mut own_inferences = Vec::new();
@@ -471,6 +521,7 @@ impl Forest {
                 losses: own_losses,
                 inferences: own_inferences,
                 validations,
+                valid: self.valid(derivation),
             });
         }
         Ok(Published {
@@ -478,6 +529,7 @@ impl Forest {
             losses,
             inferences,
             alternatives,
+            order: ranked,
         })
     }
 }
@@ -608,8 +660,22 @@ mod tests {
         b.push(forest.validation(&mut governor, 1, true).unwrap());
         b.push(forest.evidence(&mut governor, evidence("b")).unwrap());
         let published = forest.publish(&[a, b], &mut governor).unwrap();
-        assert_eq!(published.alternatives[0].validations, vec![0]);
-        assert_eq!(published.alternatives[1].validations, vec![1]);
+        // Both derivations cost 0 (a tie), so `publish` orders them by
+        // ascending output digest, not input order; assert the split by
+        // content rather than a hard-coded position.
+        assert_eq!(published.alternatives.len(), 2);
+        assert!(
+            published
+                .alternatives
+                .iter()
+                .any(|entry| entry.validations == vec![0])
+        );
+        assert!(
+            published
+                .alternatives
+                .iter()
+                .any(|entry| entry.validations == vec![1])
+        );
     }
 
     #[test]

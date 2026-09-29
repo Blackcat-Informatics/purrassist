@@ -122,7 +122,10 @@ fn select(
             receipt.evidence.extend(published.evidence);
             receipt.inferences.extend(published.inferences);
             receipt.alternatives = published.alternatives;
-            Ok(Outcome::Ambiguous(outputs))
+            Ok(Outcome::Ambiguous(purrassist::provenance::permute(
+                &outputs,
+                &published.order,
+            )))
         }
         Outcome::Unresolved => Ok(Outcome::Unresolved),
     }

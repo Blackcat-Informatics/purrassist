@@ -408,9 +408,47 @@ protocol behavior, not a maximum response latency or global allocator bound.
   standalone) instead of refused. `crates/core/tests/markdown_structure.rs`
   checks every new operation for success, byte-identical inverse round-trip,
   CRLF preservation, stale-digest refusal, and exhaustion.
-  Adversarial/preservation qualification (Task 11) and the CLI/MCP operation
-  registry for these new operations (Task 10) remain open; this bullet is
-  otherwise complete.
+  The CLI/MCP operation registry exposes every one of these new operations
+  through `plan_markdown_structure` (Task 10; `crates/host/src/tools/registry.rs`,
+  `crates/host/src/tools/markdown/structure.rs`), with a CLI≡MCP equivalence
+  fixture in `crates/cli/tests/protocol.rs`. Adversarial/preservation
+  qualification (Task 11) remains open; this bullet is otherwise complete.
+- Operation registry and complete Rust/CLI/MCP surface (Task 10):
+  `crates/host/src/tools/registry.rs` is the single declarative registry
+  (name, description, input/output JSON Schema, write annotation, handler)
+  backing `Tools::definitions()`, the CLI `call`/`mcp` commands, and MCP
+  `tools/list`/`tools/call`; there is no second, hand-maintained dispatch
+  path. New tools: `plan_markdown_structure` (above); `recover_files`/
+  `commit_files` over `Store::recover`/`Store::commit_batch`; `validate_json`
+  (schema + instance → `valid`/`violations`/always-evaluated
+  `format_evidence`/`pattern_evidence`/`unsupported_vocabularies`/receipt),
+  which the CLI `purrassist validate` command now emits verbatim instead of a
+  hand-built object; `prepare_helper`/`complete_helper` giving
+  `purrassist_host::helpers::Pending` a production tool surface (see
+  `docs/HELPERS.md`) with a tamper-evident, versioned `pending` envelope.
+  `effort` is now accepted by `plan_replacement`, `plan_diff`, and
+  `inspect_code`. `inspect_code` is implemented via
+  `purrassist_syntax::parse_governed`/`inspect_with_allocation`, reporting
+  each issue's JSX/TSX rename repair options and the parse's
+  `AllocationReport`; `crates/host/tests/inspect_tool.rs` drives it and
+  `apply_edit` through the tool boundary to measured `ScratchBytes` budget
+  exhaustion, cancellation, and a two-alternative JSX rename ambiguity.
+  Forest annotations reach the wire: `crates/core/src/provenance.rs`'s
+  `Forest::rank`/`multiplicity`/`valid` gain production callers inside
+  `Forest::publish` (an `AlternativeReceipt` now carries its own `rank` and
+  `valid`), and `crates/core/src/wire.rs` orders every receipt's
+  `alternatives` array by that rank and adds a top-level `ambiguity` object
+  (`derivations`, `valid`, and, per `Forest::distinguishing`, a
+  `distinguishing` node list for each ranked-adjacent pair) whenever two or
+  more alternatives publish, still under receipt wire version 2 (unreleased);
+  `docs/schema/receipt.schema.json` and the version-2 golden fixture are
+  updated to match, and `crates/core/tests/receipt_wire.rs` asserts the
+  annotation directly. `crates/cli/tests/protocol.rs` iterates every registry
+  entry with a required fixture per tool (a missing fixture fails the test),
+  asserts MCP `tools/list` names equal the registry, validates every tool's
+  output against its own registered output schema, and includes fixtures for
+  the `ambiguity` object (a `resolve_string` tie), `validate_json`, and both
+  helper tools.
 - Regex coverage is complete: `crates/core/src/pattern/` implements the full
   ECMA-262 `u`-mode grammar (named groups with the ECMA duplicate-name
   mutual-exclusive-alternative early-error rule, `\k<name>` resolved at

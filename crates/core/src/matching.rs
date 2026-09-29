@@ -258,8 +258,10 @@ pub fn resolve_governed(
                 receipt.inferences.clear();
                 Outcome::Unresolved
             }
-            Ok(()) if matches.len() > 1 => Outcome::Ambiguous(matches),
-            Ok(()) => matches
+            Ok(order) if matches.len() > 1 => {
+                Outcome::Ambiguous(crate::provenance::permute(&matches, &order))
+            }
+            Ok(_) => matches
                 .into_iter()
                 .next()
                 .map_or(Outcome::Unresolved, |answer| {
@@ -571,12 +573,17 @@ fn protected_class_violations(
     Ok(violations)
 }
 
+/// Records ambiguous-selection evidence and returns the permutation the
+/// caller must apply to its own `matches`-indexed candidate vector before
+/// building `Outcome::Ambiguous` (identity when not ambiguous), so that
+/// vector and `receipt.alternatives` (already ordered by
+/// `crate::provenance::Published::order`) share one order.
 fn record_selection(
     matches: &[RankedMatch],
     policy: SelectionPolicy,
     governor: &mut Governor,
     receipt: &mut Receipt,
-) -> Result<(), StopReason> {
+) -> Result<Vec<usize>, StopReason> {
     let ambiguous = matches.len() > 1;
     let mut forest = ambiguous.then(|| crate::provenance::Forest::new(governor));
     let mut derivations = Vec::with_capacity(matches.len());
@@ -632,8 +639,10 @@ fn record_selection(
         receipt.evidence.extend(published.evidence);
         receipt.inferences.extend(published.inferences);
         receipt.alternatives = published.alternatives;
+        Ok(published.order)
+    } else {
+        Ok((0..matches.len()).collect())
     }
-    Ok(())
 }
 
 /// Caller-selected matching behavior.

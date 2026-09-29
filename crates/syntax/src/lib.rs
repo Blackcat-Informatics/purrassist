@@ -308,7 +308,57 @@ pub fn inspect(
 ) -> Result<Report, StopReason> {
     let accounted = parse_accounted(source, language, governor)?;
     let lease = governor.scratch_lease_for(accounted.retained_bytes);
-    let tree = accounted.tree;
+    let report = traverse(&accounted.tree, source, language, governor)?;
+    // `accounted.tree` and `lease` drop here (in this order): dropping the
+    // tree frees its real memory (decrementing the account tracked inside
+    // `lease`'s charge), and dropping the lease releases exactly the bytes
+    // charged for it from the governor's ledger. `inspect` never retains the
+    // tree past its own return, so its net scratch charge is always zero by
+    // the time it returns, on every path (including an early `?` return
+    // inside `traverse`).
+    drop(accounted.tree);
+    drop(lease);
+    Ok(report)
+}
+
+/// [`inspect`], but also returning the parse's [`AllocationReport`].
+///
+/// Reports peak, retained, and overshoot byte counts instead of discarding
+/// them, for hosts that must surface allocator accounting alongside grammar
+/// issues and declarations from the same governed parse — see
+/// `purrassist_host`'s `inspect_code` tool.
+///
+/// # Errors
+/// Same as [`inspect`].
+///
+/// ```
+/// use purrassist_core::{Budget, Governor};
+/// use purrassist_syntax::{Language, inspect_with_allocation};
+/// let mut governor = Governor::new(Budget::default());
+/// let (report, allocation) = inspect_with_allocation("fn f() {}", Language::Rust, &mut governor)?;
+/// assert!(report.valid);
+/// assert!(allocation.retained_bytes > 0);
+/// # Ok::<(), purrassist_core::StopReason>(())
+/// ```
+pub fn inspect_with_allocation(
+    source: &str,
+    language: Language,
+    governor: &mut Governor,
+) -> Result<(Report, AllocationReport), StopReason> {
+    let parsed = parse_governed(source, language, governor)?;
+    let report = traverse(&parsed.tree, source, language, governor)?;
+    Ok((report, parsed.allocation()))
+}
+
+/// Shared traversal for [`inspect`]/[`inspect_with_allocation`]: walk every
+/// node of an already-parsed tree, collecting parser errors/missing tokens,
+/// mismatched JSX/TSX tag pairs, and named declarations.
+fn traverse(
+    tree: &tree_sitter::Tree,
+    source: &str,
+    language: Language,
+    governor: &mut Governor,
+) -> Result<Report, StopReason> {
     let root = tree.root_node();
     let mut report = Report {
         source: Digest::of(source.as_bytes()),
@@ -360,14 +410,6 @@ pub fn inspect(
             }
         }
     }
-    // `tree` and `lease` drop here (in this order): dropping the tree frees
-    // its real memory (decrementing the account tracked inside `lease`'s
-    // charge), and dropping the lease releases exactly the bytes charged for
-    // it from the governor's ledger. `inspect` never retains the tree past
-    // its own return, so its net scratch charge is always zero by the time
-    // it returns, on every path (including an early `?` return above).
-    drop(tree);
-    drop(lease);
     Ok(report)
 }
 /// A mismatched JSX/TSX tag pair's opening/closing name spans, used to offer
@@ -734,7 +776,10 @@ fn populate_repair_alternatives(
     // search); extend rather than replace it.
     receipt.evidence.extend(published.evidence);
     receipt.alternatives = published.alternatives;
-    Ok(Outcome::Ambiguous(outputs))
+    Ok(Outcome::Ambiguous(purrassist_core::provenance::permute(
+        &outputs,
+        &published.order,
+    )))
 }
 fn validation(receipt: &mut Receipt, report: &Report) {
     receipt.validations.push(Validation {

@@ -9,41 +9,6 @@
   ],
   "alternatives": [
     {
-      "output": "sha256:5e2b030a4a0f1582d78c0fd9924511cd6b1f2df9879e574f5ea1406c94052418",
-      "cost": 2,
-      "evidence": [
-        {
-          "rule": "json.key.resolve-duplicate",
-          "explanation": "replace with {\"x\":2}",
-          "destination": "",
-          "span": {
-            "source": "sha256:d38245cfdb5d2239d67fe2a719312768b668a6928d8d97d04fbce83215e50b44",
-            "start": 0,
-            "end": 13
-          }
-        }
-      ],
-      "losses": [
-        {
-          "evidence": {
-            "rule": "json.key.resolve-duplicate",
-            "explanation": "replace with {\"x\":2}",
-            "destination": "",
-            "span": {
-              "source": "sha256:d38245cfdb5d2239d67fe2a719312768b668a6928d8d97d04fbce83215e50b44",
-              "start": 0,
-              "end": 13
-            }
-          },
-          "original": "{\"x\":1,\"x\":2}"
-        }
-      ],
-      "inferences": [],
-      "validations": [
-        1
-      ]
-    },
-    {
       "output": "sha256:5041bf1f713df204784353e82f6a4a535931cb64f1f4b4a5aeaffcb720918b22",
       "cost": 2,
       "evidence": [
@@ -77,8 +42,75 @@
       "validations": [
         2
       ]
+    },
+    {
+      "output": "sha256:5e2b030a4a0f1582d78c0fd9924511cd6b1f2df9879e574f5ea1406c94052418",
+      "cost": 2,
+      "evidence": [
+        {
+          "rule": "json.key.resolve-duplicate",
+          "explanation": "replace with {\"x\":2}",
+          "destination": "",
+          "span": {
+            "source": "sha256:d38245cfdb5d2239d67fe2a719312768b668a6928d8d97d04fbce83215e50b44",
+            "start": 0,
+            "end": 13
+          }
+        }
+      ],
+      "losses": [
+        {
+          "evidence": {
+            "rule": "json.key.resolve-duplicate",
+            "explanation": "replace with {\"x\":2}",
+            "destination": "",
+            "span": {
+              "source": "sha256:d38245cfdb5d2239d67fe2a719312768b668a6928d8d97d04fbce83215e50b44",
+              "start": 0,
+              "end": 13
+            }
+          },
+          "original": "{\"x\":1,\"x\":2}"
+        }
+      ],
+      "inferences": [],
+      "validations": [
+        1
+      ]
     }
   ],
+  "ambiguity": {
+    "derivations": 2,
+    "valid": 2,
+    "distinguishing": [
+      [
+        {
+          "kind": "evidence",
+          "rule": "json.key.resolve-duplicate"
+        },
+        {
+          "kind": "evidence",
+          "rule": "json.key.resolve-duplicate"
+        },
+        {
+          "kind": "loss",
+          "rule": "json.key.resolve-duplicate"
+        },
+        {
+          "kind": "loss",
+          "rule": "json.key.resolve-duplicate"
+        },
+        {
+          "kind": "validation",
+          "rule": "purrassist.schema.draft2020-12.v1"
+        },
+        {
+          "kind": "validation",
+          "rule": "purrassist.schema.draft2020-12.v1"
+        }
+      ]
+    ]
+  },
   "operation": "json.recover.v1",
   "effort": "standard",
   "budget": {

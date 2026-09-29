@@ -184,10 +184,10 @@ impl PathIndex {
             .resolve_with(query, context, request, policy, governor)
             .and_then(|matches| {
                 record_matches(&matches, context, policy, governor, &mut receipt)
-                    .map(|outcome| (matches, outcome))
+                    .map(|order| crate::provenance::permute(&matches, &order))
             });
         let outcome = match result {
-            Ok((matches, ())) => match matches.as_slice() {
+            Ok(matches) => match matches.as_slice() {
                 [] => {
                     receipt.stopped = StopReason::NoCandidate;
                     Outcome::Unresolved
@@ -314,13 +314,18 @@ impl PathIndex {
         Ok(results)
     }
 }
+/// Records ambiguous-selection evidence and returns the permutation the
+/// caller must apply to its own `matches`-indexed candidate vector before
+/// building `Outcome::Ambiguous` (identity when not ambiguous), so that
+/// vector and `receipt.alternatives` (already ordered by
+/// `crate::provenance::Published::order`) share one order.
 fn record_matches(
     matches: &[PathMatch],
     context: &str,
     policy: SelectionPolicy,
     governor: &mut Governor,
     receipt: &mut Receipt,
-) -> Result<(), StopReason> {
+) -> Result<Vec<usize>, StopReason> {
     let ambiguous = matches.len() > 1;
     let mut forest = ambiguous.then(|| crate::provenance::Forest::new(governor));
     let mut derivations = Vec::with_capacity(matches.len());
@@ -382,8 +387,10 @@ fn record_matches(
         receipt.evidence.extend(published.evidence);
         receipt.inferences.extend(published.inferences);
         receipt.alternatives = published.alternatives;
+        Ok(published.order)
+    } else {
+        Ok((0..matches.len()).collect())
     }
-    Ok(())
 }
 fn portable(path: &str) -> Result<(), StopReason> {
     if path.is_empty()

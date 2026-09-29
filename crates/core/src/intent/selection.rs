@@ -211,7 +211,10 @@ pub(super) fn finish(
         receipt.evidence = published.evidence;
         receipt.inferences = published.inferences;
         receipt.alternatives = published.alternatives;
-        Ok(Outcome::Ambiguous(values))
+        Ok(Outcome::Ambiguous(crate::provenance::permute(
+            &values,
+            &published.order,
+        )))
     } else {
         let (_, evidence, inferences, _) = candidates.pop().expect("one accepted interpretation");
         receipt.validations = validations;

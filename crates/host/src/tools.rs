@@ -3,9 +3,14 @@
 //! Shared Rust, CLI, and MCP operations with schema-validated arguments.
 mod edits;
 mod embeddings;
+mod files;
+mod helper;
+mod inspect;
 mod intent;
 mod markdown;
 mod paths;
+mod registry;
+mod validate;
 
 use crate::files::Store;
 use purrassist::{
@@ -14,10 +19,10 @@ use purrassist::{
     contract::Resource,
     digest::Digest,
     edits::{EditPlan, TextEdit},
-    json::{self, Node, Value},
+    json::{Node, Value},
     matching::{self, Candidate, MatchRequest, SelectionPolicy as StringSelectionPolicy},
     syntax::{self, Language},
-    wire::{array, integer, object, string},
+    wire::{array, object, string},
 };
 use std::path::Path;
 
@@ -26,155 +31,9 @@ use std::path::Path;
 pub struct Tools {
     store: Store,
 }
-struct Definition {
-    name: &'static str,
-    description: &'static str,
-    schema: &'static str,
-    writes: bool,
-}
-const DEFINITIONS: &[Definition] = &[
-    Definition {
-        name: "match_embeddings",
-        description: "Match caller-supplied vectors in a named embedding space; unique cosine winners are best guesses, ties remain ambiguous, and no model is loaded",
-        schema: r#"{"type":"object","required":["space","query","candidates"],"properties":{"space":{"type":"string","minLength":1},"query":{"type":"array","minItems":1,"items":{"type":"number"}},"candidates":{"type":"array","items":{"type":"object","required":["id","vector"],"properties":{"id":{"type":"string","minLength":1},"vector":{"type":"array","minItems":1,"items":{"type":"number"}}},"additionalProperties":false}},"minimum_score":{"type":"number","minimum":-1,"maximum":1},"minimum_margin":{"type":"number","minimum":0,"maximum":2},"effort":{"enum":["exact","quick","standard","deep","maximum"]}},"additionalProperties":false}"#,
-        writes: false,
-    },
-    Definition {
-        name: "render_markdown",
-        description: "Render exact Markdown source to HTML with a source-retaining receipt, dialect, and explicit extension profile; preserves raw HTML/URI schemes except selected GFM tag filtering and is not a sanitizer",
-        schema: r#"{"type":"object","required":["source"],"properties":{"source":{"type":"string"},"dialect":{"enum":["commonmark","gfm"]},"extensions":{"type":"array","maxItems":5,"uniqueItems":true,"items":{"enum":["autolinks","strikethrough","tables","task_lists","tag_filter"]}},"effort":{"enum":["exact","quick","standard","deep","maximum"]}},"additionalProperties":false}"#,
-        writes: false,
-    },
-    Definition {
-        name: "inspect_markdown",
-        description: "Index exact Markdown block ranges, source line maps, nested containers, and sections",
-        schema: r#"{"type":"object","required":["source"],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]}},"additionalProperties":false}"#,
-        writes: false,
-    },
-    Definition {
-        name: "markdown_context",
-        description: "Extract exact block-aligned Markdown context and enclosing sections",
-        schema: r#"{"type":"object","required":["source","start","end"],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"start":{"type":"integer","minimum":0},"end":{"type":"integer","minimum":0},"neighbors":{"type":"integer","minimum":0}},"additionalProperties":false}"#,
-        writes: false,
-    },
-    Definition {
-        name: "plan_markdown_list_item",
-        description: "Insert, replace, or remove a root or nested Markdown list item with structural validation and exact source identity",
-        schema: r#"{"type":"object","required":["source","path","action"],"oneOf":[{"properties":{"action":{"enum":["before","after"]}},"required":["marker","body"]},{"properties":{"action":{"const":"replace"},"marker":false},"required":["body"]},{"properties":{"action":{"const":"remove"},"marker":false,"body":false}}],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"path":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"integer","minimum":0}},"action":{"enum":["before","after","replace","remove"]},"marker":{"type":"string"},"body":{"type":"string"}},"additionalProperties":false}"#,
-        writes: false,
-    },
-    Definition {
-        name: "plan_markdown_section",
-        description: "Plan a structurally validated Markdown section body replacement selected by root heading index or nested path",
-        schema: r#"{"type":"object","required":["source","body"],"oneOf":[{"required":["heading"],"properties":{"path":false}},{"required":["path"],"properties":{"heading":false}}],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"heading":{"type":"integer","minimum":0},"path":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"integer","minimum":0}},"body":{"type":"string"}},"additionalProperties":false}"#,
-        writes: false,
-    },
-    Definition {
-        name: "plan_markdown_reference",
-        description: "Plan replacement of a selected Markdown reference definition's decoded destination and title",
-        schema: r#"{"type":"object","required":["source","path","occurrence","destination","title"],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"path":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"integer","minimum":0}},"occurrence":{"type":"integer","minimum":0},"destination":{"type":"string"},"title":{"type":["string","null"]}},"additionalProperties":false}"#,
-        writes: false,
-    },
-    Definition {
-        name: "plan_markdown_table_column",
-        description: "Plan a nested GFM column insertion, removal, or alignment change with structural validation",
-        schema: r#"{"type":"object","required":["source","path","action","index"],"oneOf":[{"properties":{"action":{"const":"insert"}},"required":["header","alignment","cells"]},{"properties":{"action":{"const":"remove"},"header":false,"alignment":false,"cells":false}},{"properties":{"action":{"const":"align"},"header":false,"cells":false},"required":["alignment"]}],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"path":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"integer","minimum":0}},"action":{"enum":["insert","remove","align"]},"index":{"type":"integer","minimum":0},"header":{"type":"string"},"alignment":{"enum":["default","left","right","center"]},"cells":{"type":"array","items":{"type":"string"}}},"additionalProperties":false}"#,
-        writes: false,
-    },
-    Definition {
-        name: "plan_markdown_table_row",
-        description: "Plan insertion or removal of a GFM body row by nested table path and zero-based body index",
-        schema: r#"{"type":"object","required":["source","path","action","index"],"oneOf":[{"properties":{"action":{"const":"insert"}},"required":["cells"]},{"properties":{"action":{"const":"remove"}},"not":{"required":["cells"]}}],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"path":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"integer","minimum":0}},"action":{"enum":["insert","remove"]},"index":{"type":"integer","minimum":0},"cells":{"type":"array","minItems":1,"items":{"type":"string"}}},"additionalProperties":false}"#,
-        writes: false,
-    },
-    Definition {
-        name: "plan_markdown_table_cell",
-        description: "Plan a source-preserving GFM cell edit by nested block path; row zero is the header",
-        schema: r#"{"type":"object","required":["source","path","row","column","markdown"],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"path":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"integer","minimum":0}},"row":{"type":"integer","minimum":0},"column":{"type":"integer","minimum":0},"markdown":{"type":"string"}},"additionalProperties":false}"#,
-        writes: false,
-    },
-    Definition {
-        name: "plan_markdown_task",
-        description: "Plan a single checkbox-state edit selected by root block index or nested block path",
-        schema: r#"{"type":"object","required":["source","checked"],"oneOf":[{"required":["block"]},{"required":["path"]}],"properties":{"source":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"block":{"type":"integer","minimum":0},"path":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"integer","minimum":0}},"checked":{"type":"boolean"}},"additionalProperties":false}"#,
-        writes: false,
-    },
-    Definition {
-        name: "decode_json",
-        description: "Recover schema-valid JSON with effort bounds, ambiguity, and inference receipts",
-        schema: r#"{"type":"object","required":["input","schema"],"properties":{"input":{"type":"string"},"schema":{"type":["object","boolean"]},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"allow_guesses":{"type":"boolean"}},"additionalProperties":false}"#,
-        writes: false,
-    },
-    Definition {
-        name: "match_strings",
-        description: "Rank caller-identified strings and aliases using exact, Unicode, lexical, distance, and optional English phonetic evidence",
-        schema: r#"{"type":"object","required":["query","candidates"],"properties":{"query":{"type":"string"},"candidates":{"type":"array","maxItems":8192,"items":{"oneOf":[{"type":"string"},{"type":"object","required":["id","text"],"properties":{"id":{"type":"string","minLength":1},"text":{"type":"string"},"aliases":{"type":"array","maxItems":256,"items":{"type":"string"}}},"additionalProperties":false}]}},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"english_phonetics":{"type":"boolean"},"limit":{"type":"integer","minimum":1,"maximum":8192}},"additionalProperties":false}"#,
-        writes: false,
-    },
-    Definition {
-        name: "resolve_string",
-        description: "Select a caller-identified string with explicit exact, guess, ambiguity, and weak-match outcomes",
-        schema: r#"{"type":"object","required":["query","candidates"],"properties":{"query":{"type":"string"},"candidates":{"type":"array","maxItems":8192,"items":{"oneOf":[{"type":"string"},{"type":"object","required":["id","text"],"properties":{"id":{"type":"string","minLength":1},"text":{"type":"string"},"aliases":{"type":"array","maxItems":256,"items":{"type":"string"}}},"additionalProperties":false}]}},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"english_phonetics":{"type":"boolean"},"minimum_score":{"type":"integer","minimum":0,"maximum":10000},"minimum_margin":{"type":"integer","minimum":0,"maximum":10000}},"additionalProperties":false}"#,
-        writes: false,
-    },
-    Definition {
-        name: "match_paths",
-        description: "Resolve caller-supplied relative paths with context, explicit ambiguity, and guess receipts; never opens or authorizes a matched path",
-        schema: r#"{"type":"object","required":["query","paths"],"properties":{"query":{"type":"string"},"paths":{"type":"array","items":{"type":"string"}},"context":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"minimum_score":{"type":"integer","minimum":0,"maximum":10000},"minimum_margin":{"type":"integer","minimum":0,"maximum":20000}},"additionalProperties":false}"#,
-        writes: false,
-    },
-    Definition {
-        name: "resolve_intent",
-        description: "Resolve explicit semantic domain rules against caller concepts; unknown words fail, conflicting interpretations remain ambiguous, and no model is contacted",
-        schema: r#"{"type":"object","required":["input","domain","concepts"],"properties":{"input":{"type":"string"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"domain":{"type":"object","required":["id","rules"],"properties":{"id":{"type":"string"},"rules":{"type":"array","items":{"type":"object","required":["id","phrase","assignments"],"properties":{"id":{"type":"string"},"phrase":{"type":"string"},"assignments":{"type":"object","additionalProperties":{"type":"string"}}},"additionalProperties":false}},"ignored_words":{"type":"array","items":{"type":"string"}}},"additionalProperties":false},"concepts":{"type":"array","items":{"type":"object","required":["id","label","attributes"],"properties":{"id":{"type":"string"},"label":{"type":"string"},"attributes":{"type":"object","additionalProperties":{"type":"string"}}},"additionalProperties":false}}},"additionalProperties":false}"#,
-        writes: false,
-    },
-    Definition {
-        name: "plan_replacement",
-        description: "Plan exact or bounded fuzzy text replacement; approximate selections remain guesses and ties remain ambiguous",
-        schema: r#"{"type":"object","required":["source","needle","replacement"],"properties":{"source":{"type":"string"},"needle":{"type":"string","minLength":1},"replacement":{"type":"string"},"max_edits":{"type":"integer","minimum":0,"maximum":64}},"additionalProperties":false}"#,
-        writes: false,
-    },
-    Definition {
-        name: "plan_diff",
-        description: "Plan a single-file unified diff with relocatable exact context and source-bound edit ranges",
-        schema: r#"{"type":"object","required":["source","patch"],"properties":{"source":{"type":"string"},"patch":{"type":"string"}},"additionalProperties":false}"#,
-        writes: false,
-    },
-    Definition {
-        name: "inspect_code",
-        description: "Inspect grammar acceptance and source-bound declaration ranges without executing code",
-        schema: r#"{"type":"object","required":["source","language"],"properties":{"source":{"type":"string"},"language":{"enum":["python","rust","javascript","typescript","tsx"]}},"additionalProperties":false}"#,
-        writes: false,
-    },
-    Definition {
-        name: "read_file",
-        description: "Read a bounded root-relative UTF-8 file and its exact digest",
-        schema: r#"{"type":"object","required":["path"],"properties":{"path":{"type":"string"}},"additionalProperties":false}"#,
-        writes: false,
-    },
-    Definition {
-        name: "apply_edit",
-        description: "Apply one caller-selected source-bound edit plan to a buffer, optionally validate code syntax, optionally rebase a stale plan onto an intervening change, and return text, exact inverse, and a receipt; no file writes",
-        schema: r#"{"type":"object","required":["source","plan"],"properties":{"source":{"type":"string"},"plan":{"type":"object","required":["source","edits"],"properties":{"source":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"edits":{"type":"array","items":{"type":"object","required":["start","end","replacement"],"properties":{"start":{"type":"integer","minimum":0},"end":{"type":"integer","minimum":0},"replacement":{"type":"string"}},"additionalProperties":false}}},"additionalProperties":false},"rebase_from":{"type":"object","required":["source"],"properties":{"source":{"type":"string"}},"additionalProperties":false},"language":{"enum":["text","python","rust","javascript","typescript","tsx"]},"effort":{"enum":["exact","quick","standard","deep","maximum"]}},"additionalProperties":false}"#,
-        writes: false,
-    },
-    Definition {
-        name: "apply_file",
-        description: "Conditionally apply one selected edit plan or a replacement buffer, optionally rebase a stale plan onto an intervening change, validate supported code grammar, journal it, and return undo identity",
-        schema: r#"{"type":"object","required":["path","expected_digest"],"oneOf":[{"required":["replacement"]},{"required":["plan"]}],"properties":{"path":{"type":"string"},"expected_digest":{"type":"string"},"replacement":{"type":"string"},"plan":{"type":"object","required":["source","edits"],"properties":{"source":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"edits":{"type":"array","items":{"type":"object","required":["start","end","replacement"],"properties":{"start":{"type":"integer","minimum":0},"end":{"type":"integer","minimum":0},"replacement":{"type":"string"}},"additionalProperties":false}}},"additionalProperties":false},"rebase_from":{"type":"object","required":["source"],"properties":{"source":{"type":"string"}},"additionalProperties":false},"effort":{"enum":["exact","quick","standard","deep","maximum"]}},"additionalProperties":false}"#,
-        writes: true,
-    },
-    Definition {
-        name: "undo_file",
-        description: "Undo a journaled file replacement only if its exact output is still present",
-        schema: r#"{"type":"object","required":["transaction"],"properties":{"transaction":{"type":"string"}},"additionalProperties":false}"#,
-        writes: true,
-    },
-];
 impl Tools {
     pub(crate) fn contains(name: &str) -> bool {
-        DEFINITIONS.iter().any(|definition| definition.name == name)
+        registry::contains(name)
     }
     /// Initialize the file store for an explicit root; creates `.purrassist`.
     ///
@@ -190,33 +49,14 @@ impl Tools {
     /// # Errors
     /// Returns an error if a built-in tool schema is malformed.
     pub fn definitions() -> Result<Node, String> {
-        let mut definitions = Vec::new();
-        for definition in DEFINITIONS {
-            definitions.push(object([
-                ("name", string(definition.name)),
-                ("description", string(definition.description)),
-                (
-                    "inputSchema",
-                    json::parse(definition.schema).map_err(|e| e.to_string())?,
-                ),
-                (
-                    "annotations",
-                    object([
-                        ("readOnlyHint", Node::new(Value::Bool(!definition.writes))),
-                        ("destructiveHint", Node::new(Value::Bool(definition.writes))),
-                        ("openWorldHint", Node::new(Value::Bool(false))),
-                    ]),
-                ),
-            ]));
-        }
-        Ok(array(definitions))
+        registry::definitions()
     }
     /// Invoke the same operation exposed through CLI `call` and MCP `tools/call`.
     ///
     /// # Errors
     /// Rejects unknown operations, schema-invalid arguments, stale writes, and execution errors.
     pub fn call(&self, name: &str, args: &Node) -> Result<Node, String> {
-        self.call_controlled(name, args, None)
+        registry::call(self, name, args, None)
     }
 
     /// Invoke with a caller-owned cooperative cancellation signal.
@@ -249,95 +89,60 @@ impl Tools {
         args: &Node,
         cancellation: &CancellationToken,
     ) -> Result<Node, String> {
-        self.call_controlled(name, args, Some(cancellation))
+        registry::call(self, name, args, Some(cancellation))
     }
 
-    fn call_controlled(
+    fn read_file(
         &self,
-        name: &str,
         args: &Node,
         cancellation: Option<&CancellationToken>,
     ) -> Result<Node, String> {
-        let mut validation_governor = governor(Budget::default(), cancellation);
-        validation_governor.check().map_err(|e| e.to_string())?;
-        let definition = DEFINITIONS
-            .iter()
-            .find(|definition| definition.name == name)
-            .ok_or_else(|| format!("unknown tool {name:?}"))?;
-        let schema = Schema::compile_governed(definition.schema, &mut validation_governor)
+        governor(Budget::default(), cancellation)
+            .check()
             .map_err(|e| e.to_string())?;
-        let validation = schema
-            .validate_with(args, &mut validation_governor)
+        let snapshot = self
+            .store
+            .read(field(args, "path")?)
             .map_err(|e| e.to_string())?;
-        if !validation.valid {
-            return Err(format!(
-                "tool arguments violate schema: {:?}",
-                validation.violations
-            ));
-        }
-        match name {
-            "decode_json" => decode(args, cancellation),
-            "match_strings" => rank(args, cancellation),
-            "resolve_string" => resolve_string(args, cancellation),
-            "match_paths" => paths::resolve(args, cancellation),
-            "resolve_intent" => intent::resolve(args, cancellation),
-            "match_embeddings" => embeddings::call(args, cancellation),
-            "render_markdown"
-            | "inspect_markdown"
-            | "markdown_context"
-            | "plan_markdown_list_item"
-            | "plan_markdown_section"
-            | "plan_markdown_table_cell"
-            | "plan_markdown_table_row"
-            | "plan_markdown_table_column"
-            | "plan_markdown_reference"
-            | "plan_markdown_task" => markdown::call(name, args, cancellation),
-            "plan_replacement" => {
-                let max_edits = match args.get("max_edits").map(|node| &node.value) {
-                    Some(Value::Number(number)) => {
-                        number.to_usize().ok_or("max_edits is out of range")?
-                    }
-                    None => 0,
-                    _ => return Err("max_edits must be an integer".into()),
-                };
-                Ok(planned(purrassist::edits::locate_fuzzy_governed(
-                    field(args, "source")?,
-                    field(args, "needle")?,
-                    field(args, "replacement")?,
-                    max_edits,
-                    &mut governor(Budget::default(), cancellation),
-                )))
-            }
-            "plan_diff" => Ok(planned(purrassist::edits::plan_unified_governed(
-                field(args, "source")?,
-                field(args, "patch")?,
-                &mut governor(Budget::default(), cancellation),
-            ))),
-            "inspect_code" => inspect(args, cancellation),
-            "read_file" => {
-                validation_governor.check().map_err(|e| e.to_string())?;
-                let snapshot = self
-                    .store
-                    .read(field(args, "path")?)
-                    .map_err(|e| e.to_string())?;
-                Ok(object([
-                    ("path", string(snapshot.path)),
-                    ("source", string(snapshot.text)),
-                    ("digest", string(snapshot.digest.to_string())),
-                ]))
-            }
-            "apply_edit" => edits::apply(args, cancellation),
-            "apply_file" => self.apply(args, cancellation),
-            "undo_file" => {
-                validation_governor.check().map_err(|e| e.to_string())?;
-                let commit = self
-                    .store
-                    .undo(field(args, "transaction")?)
-                    .map_err(|e| e.to_string())?;
-                Ok(commit_node(commit))
-            }
-            _ => Err("tool dispatch invariant failed".into()),
-        }
+        Ok(object([
+            ("path", string(snapshot.path)),
+            ("source", string(snapshot.text)),
+            ("digest", string(snapshot.digest.to_string())),
+        ]))
+    }
+    fn undo_file(
+        &self,
+        args: &Node,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<Node, String> {
+        governor(Budget::default(), cancellation)
+            .check()
+            .map_err(|e| e.to_string())?;
+        let commit = self
+            .store
+            .undo(field(args, "transaction")?)
+            .map_err(|e| e.to_string())?;
+        Ok(commit_node(commit))
+    }
+    fn recover_files(
+        &self,
+        _args: &Node,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<Node, String> {
+        governor(Budget::default(), cancellation)
+            .check()
+            .map_err(|e| e.to_string())?;
+        files::recover(&self.store)
+    }
+    fn commit_files(
+        &self,
+        args: &Node,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<Node, String> {
+        governor(Budget::default(), cancellation)
+            .check()
+            .map_err(|e| e.to_string())?;
+        files::commit(&self.store, args)
     }
     fn apply(&self, args: &Node, cancellation: Option<&CancellationToken>) -> Result<Node, String> {
         let requested_effort = effort(args)?;
@@ -418,6 +223,17 @@ impl Tools {
         ]))
     }
 }
+
+/// Validate a JSON instance against a schema: the exact operation the
+/// `validate_json` tool exposes, shared by the CLI `purrassist validate`
+/// command so both surfaces emit identical output.
+///
+/// # Errors
+/// Returns the same errors `Tools::call("validate_json", args)` would.
+pub fn validate_json(args: &Node) -> Result<Node, String> {
+    validate::call(args, None)
+}
+
 fn governor(budget: Budget, cancellation: Option<&CancellationToken>) -> Governor {
     cancellation.map_or_else(
         || Governor::new(budget),
@@ -429,6 +245,15 @@ fn field<'a>(node: &'a Node, name: &str) -> Result<&'a str, String> {
     node.get(name)
         .and_then(Node::as_str)
         .ok_or_else(|| format!("missing string argument {name}"))
+}
+fn unsigned(node: &Node, name: &str) -> Result<u64, String> {
+    match node.get(name).map(|value| &value.value) {
+        Some(Value::Number(value)) => value
+            .to_usize()
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or_else(|| format!("integer argument {name} is out of range")),
+        _ => Err(format!("missing integer argument {name}")),
+    }
 }
 fn effort(args: &Node) -> Result<Effort, String> {
     Ok(
@@ -672,61 +497,6 @@ fn prepare_match_candidates(
         });
     }
     Ok(candidates)
-}
-fn inspect(args: &Node, cancellation: Option<&CancellationToken>) -> Result<Node, String> {
-    let language = match field(args, "language")? {
-        "python" => Language::Python,
-        "rust" => Language::Rust,
-        "javascript" => Language::JavaScript,
-        "typescript" => Language::TypeScript,
-        "tsx" => Language::Tsx,
-        _ => return Err("unsupported language".into()),
-    };
-    let report = syntax::inspect(
-        field(args, "source")?,
-        language,
-        &mut governor(Budget::default(), cancellation),
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(object([
-        ("valid", Node::new(Value::Bool(report.valid))),
-        ("source", string(report.source.to_string())),
-        ("parser", string(report.parser)),
-        (
-            "issues",
-            array(report.issues.iter().map(|issue| {
-                object([
-                    ("kind", string(&issue.kind)),
-                    (
-                        "start",
-                        integer(u64::try_from(issue.span.start).unwrap_or(u64::MAX)),
-                    ),
-                    (
-                        "end",
-                        integer(u64::try_from(issue.span.end).unwrap_or(u64::MAX)),
-                    ),
-                    ("missing", Node::new(Value::Bool(issue.missing))),
-                ])
-            })),
-        ),
-        (
-            "symbols",
-            array(report.symbols.iter().map(|symbol| {
-                object([
-                    ("name", string(&symbol.name)),
-                    ("kind", string(&symbol.kind)),
-                    (
-                        "start",
-                        integer(u64::try_from(symbol.span.start).unwrap_or(u64::MAX)),
-                    ),
-                    (
-                        "end",
-                        integer(u64::try_from(symbol.span.end).unwrap_or(u64::MAX)),
-                    ),
-                ])
-            })),
-        ),
-    ]))
 }
 fn commit_node(commit: crate::files::Commit) -> Node {
     object([

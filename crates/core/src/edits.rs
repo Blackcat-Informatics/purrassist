@@ -159,7 +159,7 @@ fn populate_locate_alternatives(
     let published = forest.publish(&derivations, governor)?;
     receipt.evidence = published.evidence;
     receipt.alternatives = published.alternatives;
-    Ok(outputs)
+    Ok(crate::provenance::permute(&outputs, &published.order))
 }
 fn size(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)

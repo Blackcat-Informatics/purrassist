@@ -123,10 +123,45 @@ fn mismatched_jsx_tag_yields_two_ambiguous_rename_repairs() {
         assert!(texts.contains(&"const x = <div></div>;\n"), "{texts:?}");
         assert!(texts.contains(&"const x = <span></span>;\n"), "{texts:?}");
         assert_eq!(result.receipt.alternatives.len(), 2);
-        for (answer, ledger) in answers.iter().zip(&result.receipt.alternatives) {
+        // Non-decreasing by rank (ascending cost, ties by output digest):
+        // both repairs cost 0, so this pins the digest tie-break, which the
+        // wire check below then confirms the outer `Outcome::Ambiguous`
+        // candidate order (`answers`) shares — never reordered only at a
+        // wire boundary.
+        assert!(
+            result.receipt.alternatives[0].cost <= result.receipt.alternatives[1].cost
+                && (result.receipt.alternatives[0].cost != result.receipt.alternatives[1].cost
+                    || result.receipt.alternatives[0].output
+                        <= result.receipt.alternatives[1].output),
+            "{:?}",
+            result.receipt.alternatives
+        );
+        let wire = result.receipt.to_node();
+        let purrassist_core::json::Value::Array(wire_alternatives) =
+            &wire.get("alternatives").unwrap().value
+        else {
+            panic!("wire alternatives must be an array")
+        };
+        assert_eq!(wire_alternatives.len(), answers.len());
+        for (index, (answer, ledger)) in
+            answers.iter().zip(&result.receipt.alternatives).enumerate()
+        {
             assert_eq!(
                 ledger.output,
                 Digest::of(answer.to_node().to_json().as_bytes())
+            );
+            // The wire array must name the same answer at the same
+            // position: this is exactly the invariant that broke when
+            // alternatives were reordered only at a serialization boundary.
+            assert_eq!(
+                wire_alternatives[index]
+                    .get("output")
+                    .and_then(purrassist_core::json::Node::as_str),
+                Some(
+                    Digest::of(answer.to_node().to_json().as_bytes())
+                        .to_string()
+                        .as_str()
+                )
             );
             // Undoing either alternative restores the original broken text
             // it was derived from applying the original plan to, not the

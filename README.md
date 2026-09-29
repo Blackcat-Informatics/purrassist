@@ -87,7 +87,17 @@ algebra. `Schema::compile_governed` and `with_resources_governed` return typed
 `CompilationError` values separating invalid schemas from resource failures.
 Pass the same governor to `recover_governed` to share the total preparation and
 recovery budget. The `decode_json` tool does this automatically. The convenience
-compilation methods use the default finite budget.
+compilation methods use the default finite budget. `validate_json` exposes
+whole-instance validation itself: given `schema` and `instance`, it returns
+`valid`, every `violations` entry, always-evaluated format/pattern evidence,
+and any unsupported-vocabulary evidence, alongside a receipt. The shipped CLI's
+`purrassist validate` command emits exactly this tool's output.
+
+`prepare_helper`/`complete_helper` expose optional external-model helper
+proposals (see [helpers](docs/HELPERS.md)) as a two-call tool pair: the first
+returns the exact request to send and an opaque, tamper-evident `pending`
+string with no network I/O performed here; the second resumes with the
+caller-observed HTTP status/body once the caller's own transport has sent it.
 
 `call TOOL --root DIRECTORY` reads a JSON argument object from stdin and invokes
 the same operation used by MCP. `match_strings` accepts plain candidate strings
@@ -197,6 +207,15 @@ Pass one selected plan to `apply_edit` with the original `source` to obtain the
 edited text and a source-bound inverse. `apply_file` also accepts a `plan` instead
 of a full replacement buffer, with its expected digest and journaled undo checks.
 See [plan application](docs/EDIT-APPLICATION.md) and `examples/apply-edit.json`.
+`recover_files` reconciles prepared journals against actual file versions
+without overwriting anything, reporting each transaction's exact outcome and
+removing evidence-bearing orphan temporaries. `commit_files` independently
+journals and commits several file replacements in one call — never as one
+atomic multi-file transaction; each entry reports its own commit or error.
+`plan_replacement`, `plan_diff`, and `inspect_code` each also accept an
+`effort` argument selecting their search/traversal budget preset.
+`inspect_code` reports each JSX/TSX rename issue's repair options and the
+governed parse's allocator accounting (retained/peak/overshoot bytes).
 `plan_markdown_table_row` inserts or removes body rows. Supply a table `path`,
 `action` (`insert` or `remove`), and zero-based body `index`; insertion also requires
 `cells` with exactly the header width. Inserting at the row count appends.
@@ -229,15 +248,18 @@ representation; `edits::EditPlan`/`TextEdit` are aliases for it. Beyond
 `diff` algebra; `apply_edit`/`apply_file` use `rebase`/`diff` to reconcile a
 stale plan against an intervening change through an explicit `rebase_from`
 input. See [plan application](docs/EDIT-APPLICATION.md). The Rust
-`markdown::Document` API also has structural operations not yet exposed
-through a host tool: `insert_section`, `remove_section`, `move_section`
-(with optional re-leveling of the moved section's own heading),
-`rename_heading`, `ListItemEdit::Move`, `renumber_list`,
-`TableRowEdit::Move`, `TableColumnEdit::Move`, and `add_reference`/
-`relabel_reference`/`remove_reference`/`unlink_reference` (which rewrite
-every shortcut/collapsed/full-reference use resolving to the affected
-definition). Each is governed, digest-bound, reparse-checked, and provides
-an exact inverse.
+`markdown::Document` API's remaining structural operations — `insert_section`,
+`remove_section`, `move_section` (with optional re-leveling of the moved
+section's own heading), `rename_heading`, `ListItemEdit::Move`,
+`renumber_list`, `TableRowEdit::Move`, `TableColumnEdit::Move`, and
+`add_reference`/`relabel_reference`/`remove_reference`/`unlink_reference`
+(which rewrite every shortcut/collapsed/full-reference use resolving to the
+affected definition) — are exposed through the host tool
+`plan_markdown_structure`, selected by a typed `op` (`section_insert`,
+`section_remove`, `section_move`, `section_rename`, `list_move`,
+`list_renumber`, `table_row_move`, `table_column_move`, `reference_add`,
+`reference_relabel`, `reference_remove`, `reference_unlink`). Each is governed,
+digest-bound, reparse-checked, and provides an exact inverse.
 
 The Rust `markdown::InlineFragment` layer retains exact byte spans and renders
 code spans, emphasis, strong emphasis, inline links/images, escapes, line breaks,

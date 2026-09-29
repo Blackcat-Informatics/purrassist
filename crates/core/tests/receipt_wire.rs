@@ -57,6 +57,55 @@ fn golden_ambiguous_json_recovery_receipt_matches_the_committed_fixture() {
 }
 
 #[test]
+fn ambiguous_receipts_carry_a_ranked_ambiguity_annotation() {
+    // A tie between two candidates: the wire receipt must carry a top-level
+    // `ambiguity` object naming the derivation count, how many of them
+    // validated, and one distinguishing-node list per adjacent ranked pair.
+    let ambiguous = matching::resolve(
+        "reader",
+        &[Candidate::new("a", "reader"), Candidate::new("b", "reader")],
+        &MatchRequest::default(),
+        SelectionPolicy {
+            minimum_score: 10_000,
+            minimum_margin: 0,
+        },
+    );
+    assert!(matches!(ambiguous.outcome, Outcome::Ambiguous(_)));
+    let node = ambiguous.receipt.to_node();
+    assert_eq!(
+        node.pointer("/ambiguity/derivations").unwrap().to_json(),
+        "2"
+    );
+    assert_eq!(node.pointer("/ambiguity/valid").unwrap().to_json(), "2");
+    let distinguishing = node.pointer("/ambiguity/distinguishing").unwrap();
+    let purrassist_core::json::Value::Array(pairs) = &distinguishing.value else {
+        panic!("distinguishing is an array")
+    };
+    assert_eq!(
+        pairs.len(),
+        1,
+        "two alternatives have exactly one adjacent ranked pair"
+    );
+    // A single-answer receipt never carries an ambiguity annotation.
+    let resolved = locate_governed(
+        "hello",
+        "hello",
+        "world",
+        &mut Governor::new(Budget::default()),
+    );
+    assert_eq!(
+        resolved
+            .receipt
+            .to_node()
+            .pointer("/ambiguity")
+            .unwrap()
+            .to_json(),
+        "null"
+    );
+    assert_valid(&receipt_schema(), &ambiguous.receipt.to_node());
+}
+
+#[test]
 fn every_outcome_shape_validates_against_the_receipt_schema() {
     let schema = receipt_schema();
 

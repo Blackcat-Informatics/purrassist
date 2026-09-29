@@ -345,6 +345,12 @@ impl Search<'_> {
             self.receipt.losses = published.losses;
             self.receipt.inferences = published.inferences;
             self.receipt.alternatives = published.alternatives;
+            // `receipt.alternatives` is now ordered by `Forest::publish`'s
+            // ranking; permute `nodes` (the `Outcome::Ambiguous` candidates)
+            // by the same `published.order` so both share one order (see
+            // `AlternativeReceipt`'s documentation) instead of only agreeing
+            // at a wire-serialization boundary.
+            nodes = crate::provenance::permute(&nodes, &published.order);
         } else {
             let (candidate, _validation) = accepted
                 .into_iter()

@@ -173,7 +173,7 @@ fn populate_fuzzy_alternatives(
     receipt.evidence = published.evidence;
     receipt.inferences = published.inferences;
     receipt.alternatives = published.alternatives;
-    Ok(outputs)
+    Ok(crate::provenance::permute(&outputs, &published.order))
 }
 
 pub(super) fn regions(
