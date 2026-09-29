@@ -9,6 +9,16 @@
     }
   },
   {
+    "name": "node",
+    "version": "26.10.0",
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/nodejs/node/v26.10.0/LICENSE",
+    "scope": "Installed Node.js runtime used only to execute scripts/run-wasi.mjs (wasm32-wasip1 acceptance transcripts) and scripts/run-wasm.mjs (wasm32-unknown-unknown acceptance transcript, no WASI). No Cargo dependency; not linked into any crate. The upstream LICENSE aggregates the licenses of bundled third-party components (V8, ICU, and others); none of that bundled source is vendored or shipped by this project.",
+    "notices": {
+      "vendor/licenses/node-26.10.0/LICENSE": "6b85ee1983d01fa2cdcdd5d1a3053c6221fae41d6a54e43b416bf35969fc4128"
+    }
+  },
+  {
     "name": "wasi-sdk",
     "version": "34",
     "license": "Apache-2.0 WITH LLVM-exception",

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/syntax", "crates/purrassist", "crates/host", "crates/cli"]
+members = ["crates/core", "crates/syntax", "crates/purrassist", "crates/host", "crates/cli", "crates/wasm-harness"]
 
 [workspace.package]
 version = "0.1.0"

@@ -13,7 +13,7 @@ scope in `IMPLEMENTATION.md` remains required. No registry publication is claime
 | Schema | `cargo test -p purrassist-core --test schema_conformance --test formats --test vocabularies` | 1,301 main Draft 2020-12 tests; 121 selected optional tests; 878 vendored `optional/format/*` + `format-assertion.json` cases run under a dialect declaring format-assertion (every 2020-12 format, including RFC 5892/5893 IDNA2008 contextual/Bidi rules); explicit unknown-format-under-assertion and unsupported-vocabulary behavior |
 | Pattern engine | `cargo test -p purrassist-core --test pattern` | 441-fixture test262 property-escapes census (Unicode 17); pathological `(a+)+b` linear-time check; 10,000-pair derivative/backtracking differential; `generate` witness/emptiness properties |
 | Unicode | `cargo test -p purrassist-core --test unicode_conformance` | 20,034 Unicode 17 normalization cases |
-| Portability | `make wasm-test` | Executed native/WASI recovery and all five grammar transcripts; browser-WASM core build |
+| Portability | `make wasm-test` | Executed native/WASI recovery, all five grammar, and fixed-provider-transcript host transcripts (`purrassist-core`, `purrassist-syntax`, `purrassist-host` each on wasm32-wasip1); `purrassist-core`'s transcript additionally executed on wasm32-unknown-unknown (no WASI, via the unpublished `wasm-harness` crate and Node's plain `WebAssembly` API) and compared byte-for-byte against its native output |
 | Independent syntax | `make syntax-oracles` | 15 fixed positive/negative probes against Python, rustc, Node, and TypeScript 5.9.3 |
 | Baseline | `make benchmark` | Six deterministic recovery cases, 200 samples each, quality assertions and latency |
 | Resources | `make resources` | Nine assertion-backed processes, Memcheck allocations, Massif heap observations, native RSS, and native executable/build measurements; Linux prerequisites in `RESOURCES.md` |
@@ -659,6 +659,35 @@ protocol behavior, not a maximum response latency or global allocator bound.
   for this change on this branch; a green `windows-engines` run for the
   commit that lands this is the acceptance evidence, not the local
   cross-compile check alone.
+- Native/WASM comparison now also covers the fixed helper transcripts and a
+  browser-target execution, not only recovery and grammar acceptance.
+  `purrassist-host` builds and runs unmodified for `wasm32-wasip1` (no module
+  needed a `cfg`-disable: `files.rs`'s `std::fs` calls, including the
+  Rust-1.89 `File::try_lock`/`unlock`, compile there as-is, and the crate's
+  only conditional dependency, `windows-sys`, is `cfg(windows)`-gated and
+  never resolved for a wasm target). `crates/host/examples/portable.rs`
+  (`portable-host`) replays the three fixed provider transcripts (OpenAI
+  Responses, Anthropic Messages, llama.cpp/chat-completions, copied verbatim
+  from `crates/host/tests/helpers.rs`) through `Pending`, one governor per
+  transcript, with no network, socket, or credential access; its digest,
+  outputs, and full receipts execute identically natively and under WASI.
+  A new unpublished, `publish = false` crate, `crates/wasm-harness`
+  (`cdylib`), exports a `portable_main` entry point for
+  `wasm32-unknown-unknown` that writes the exact same transcript
+  `crates/core/examples/portable.rs` (`portable-core`) produces — the JSON
+  body is shared via `crates/core/examples/portable_transcript.rs`, a
+  `#[path]`-included module rather than a duplicate, so `purrassist-core`'s
+  public API gains nothing new — into the module's own linear memory and
+  returns a packed `(pointer, length)` pair. `scripts/run-wasm.mjs`
+  instantiates that module with Node's plain `WebAssembly` API (no WASI
+  import object) and decodes the result. `scripts/check-wasm.py` now runs
+  five comparisons: native vs. `wasm32-wasip1` for `purrassist-core`,
+  `purrassist-syntax`, and `purrassist-host`, plus native vs. executed
+  `wasm32-unknown-unknown` for `purrassist-core`; all five match
+  byte-for-byte. `scripts/check-release.py` already excluded any
+  `publish = false` workspace member from the required publishable set, so
+  `crates/wasm-harness` needed no change there. Node is now pinned
+  (26.10.0) and its license notice registered in `vendor/tooling.json`.
 - Execute hosted CI, audit final package contents and notices, configure trusted
   publishing, verify downloadable packages and installed behavior, and only then
   make a release. No remote publication settings have been changed.

@@ -3,6 +3,7 @@
 
 [package]
 name = "purrassist-host"
+autoexamples = false
 description = "Native filesystem and helper integration for PurRAssist"
 version.workspace = true
 edition.workspace = true
@@ -16,6 +17,10 @@ documentation = "https://docs.rs/purrassist-host"
 
 [lints]
 workspace = true
+
+[[example]]
+name = "portable-host"
+path = "examples/portable.rs"
 
 [dependencies]
 purrassist.workspace = true

@@ -19,7 +19,7 @@ for target in core.get('target', {}).values():
 
 for source in ['crates', 'scripts']:
     for path in (ROOT / source).rglob('*'):
-        if not path.is_file() or path.suffix not in {'.rs', '.py', '.js', '.toml', '.sh'}:
+        if not path.is_file() or path.suffix not in {'.rs', '.py', '.js', '.mjs', '.toml', '.sh'}:
             continue
         if '/tests/data/' in str(path) or '/schema/metaschemas/' in str(path):
             continue

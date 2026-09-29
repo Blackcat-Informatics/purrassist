@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-"""Build and execute the same acceptance transcript natively and under WASI."""
+"""Build and execute the same acceptance transcript natively, under WASI, and
+under wasm32-unknown-unknown (no WASI, executed by Node's plain WebAssembly
+API)."""
 import json
 import hashlib
 import os
@@ -23,6 +25,19 @@ def artifact(package, target=None, environment=None):
              and event.get('executable') and event['target']['name'] == example]
     if len(paths) != 1:
         raise SystemExit(f'expected one portable artifact, got {paths}')
+    return paths[0]
+
+def harness_artifact():
+    """The single wasm32-unknown-unknown `.wasm` file `wasm-harness` produces."""
+    command = ['cargo', 'build', '-p', 'wasm-harness', '--target', 'wasm32-unknown-unknown',
+               '--locked', '--message-format=json']
+    result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE, check=True)
+    paths = [filename for line in result.stdout.splitlines()
+             if (event := json.loads(line)).get('reason') == 'compiler-artifact'
+             for filename in (event.get('filenames') or [])
+             if filename.endswith('.wasm')]
+    if len(paths) != 1:
+        raise SystemExit(f'expected one wasm-harness artifact, got {paths}')
     return paths[0]
 
 def wasi_environment():
@@ -47,12 +62,26 @@ def wasi_environment():
         environment[name] = f'--sysroot={sysroot}'
     return environment
 
-for package in ('purrassist-core', 'purrassist-syntax'):
-    native = subprocess.check_output([artifact(package)], cwd=ROOT)
-    environment = wasi_environment() if package == 'purrassist-syntax' else None
+# `purrassist-host` depends (through `purrassist` -> `purrassist-syntax`) on
+# tree-sitter's C grammars, so it needs the same WASI C sysroot as syntax.
+WASI_PACKAGES = {'purrassist-syntax', 'purrassist-host'}
+core_native_output = None
+for package in ('purrassist-core', 'purrassist-syntax', 'purrassist-host'):
+    native_path = artifact(package)
+    native = subprocess.check_output([native_path], cwd=ROOT)
+    if package == 'purrassist-core':
+        core_native_output = native
+    environment = wasi_environment() if package in WASI_PACKAGES else None
     wasm = subprocess.check_output(['node', str(ROOT/'scripts/run-wasi.mjs'), artifact(package, 'wasm32-wasip1', environment)], cwd=ROOT)
     if native != wasm:
         raise SystemExit(f'{package} native/WASI mismatch\nnative={native!r}\nWASI={wasm!r}')
     print(f'{package}: executed native and WASI transcripts match.')
-subprocess.run(['cargo', 'build', '-p', 'purrassist-core', '--target', 'wasm32-unknown-unknown', '--locked'], cwd=ROOT, check=True)
-print('Browser-WASM core builds; native/WASI recovery and syntax acceptance passed.')
+
+harness = harness_artifact()
+unknown_unknown = subprocess.check_output(['node', str(ROOT/'scripts/run-wasm.mjs'), harness], cwd=ROOT)
+if core_native_output != unknown_unknown:
+    raise SystemExit(
+        f'purrassist-core native/wasm32-unknown-unknown mismatch\n'
+        f'native={core_native_output!r}\nunknown-unknown={unknown_unknown!r}')
+print('purrassist-core: executed native and wasm32-unknown-unknown transcripts match.')
+print('Native, WASI (core/syntax/host), and browser-WASM (core, executed) acceptance transcripts all match.')
