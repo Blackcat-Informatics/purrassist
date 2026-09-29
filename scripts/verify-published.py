@@ -378,10 +378,12 @@ def package_fresh(workspace: Path, cargo_home: Path, target_dir: Path) -> Path:
     cargo_home.mkdir(parents=True, exist_ok=True)
     target_dir.mkdir(parents=True, exist_ok=True)
     environment = dict(os.environ, CARGO_HOME=str(cargo_home))
-    # `cargo metadata --no-deps` does not write Cargo.lock; generate it
-    # explicitly so the following `--locked` package run has one to check.
-    subprocess.run(['cargo', 'generate-lockfile'], cwd=workspace,
-                    env=environment, check=True, capture_output=True, text=True)
+    # `--locked` needs a lockfile. Generate one only when the workspace has
+    # none (a synthetic fixture); regenerating an existing one would rewrite
+    # the committed dependency pins this verification is meant to hold fixed.
+    if not (workspace / 'Cargo.lock').is_file():
+        subprocess.run(['cargo', 'generate-lockfile'], cwd=workspace,
+                        env=environment, check=True, capture_output=True, text=True)
     metadata = json.loads(subprocess.check_output(
         ['cargo', 'metadata', '--no-deps', '--format-version', '1'],
         cwd=workspace, env=environment, text=True))
@@ -393,7 +395,24 @@ def package_fresh(workspace: Path, cargo_home: Path, target_dir: Path) -> Path:
         cwd=workspace, env=environment, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         raise SystemExit(f'cargo package failed:\n{result.stdout}\n{result.stderr}')
-    return Path(metadata['target_directory']) / 'package'
+    versions = {package['name']: package['version'] for package in metadata['packages']}
+    return locate_package_directory(
+        target_dir, metadata, [f'{name}-{versions[name]}.crate' for name in publishable])
+
+
+def locate_package_directory(target_dir: Path, metadata: dict, names) -> Path:
+    """Return the `package` directory that actually holds the expected
+    `.crate` archives. Plain cargo honours `--target-dir`; a wrapper may strip
+    it and write under the target directory `cargo metadata` reports. Checking
+    both, in that order, is correct under either, and anything else is an
+    explicit error naming both candidates."""
+    candidates = [target_dir / 'package', Path(metadata['target_directory']) / 'package']
+    for candidate in candidates:
+        if all((candidate / name).is_file() for name in names):
+            return candidate
+    raise SystemExit('cargo package produced no archives in either candidate directory: '
+                     + ', '.join(str(candidate) for candidate in candidates)
+                     + f' (expected {", ".join(names)})')
 
 
 def archive_members(data: bytes, identity: str):

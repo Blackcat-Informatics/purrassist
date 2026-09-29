@@ -235,7 +235,8 @@ def package_workspace(workspace: Path, cargo_home: Path, target_dir: Path) -> Pa
         cwd=workspace, env=cargo_environment(cargo_home), text=True))
     subprocess.run(['cargo', 'package', '--workspace', '--locked', '--target-dir', str(target_dir)],
                     cwd=workspace, env=cargo_environment(cargo_home), check=True, capture_output=True, text=True)
-    return Path(metadata['target_directory']) / 'package'
+    names = [f"{package['name']}-{package['version']}.crate" for package in metadata['packages']]
+    return VP.locate_package_directory(target_dir, metadata, names)
 
 
 REQUESTS = [
