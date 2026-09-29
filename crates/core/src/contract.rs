@@ -446,8 +446,11 @@ impl ScratchLease {
     /// Keep the charge permanently instead of releasing it on drop, because
     /// the reservation turned out to back retained output rather than
     /// transient scratch (mirrors [`ScratchVec::into_vec`]).
-    pub const fn retain(self) {
-        mem::forget(self);
+    pub fn retain(mut self) {
+        // Zero the recorded charge and let `Drop` run: it then releases
+        // nothing but still drops the shared meter handle. Forgetting `self`
+        // would leak that handle and the meter allocation it keeps alive.
+        self.bytes = 0;
     }
 }
 
@@ -678,7 +681,9 @@ impl<T: ScratchCharge> ScratchVec<T> {
     #[must_use]
     pub fn into_vec(mut self) -> Vec<T> {
         let inner = mem::take(&mut self.inner);
-        mem::forget(self);
+        // Keep the charge: zero what `Drop` releases, but let `Drop` run so
+        // the shared meter handle is dropped rather than leaked.
+        self.reserved = 0;
         inner
     }
 }
@@ -788,7 +793,9 @@ impl ScratchString {
     #[must_use]
     pub fn into_string(mut self) -> String {
         let inner = mem::take(&mut self.inner);
-        mem::forget(self);
+        // Keep the charge: zero what `Drop` releases, but let `Drop` run so
+        // the shared meter handle is dropped rather than leaked.
+        self.reserved = 0;
         inner
     }
 }
@@ -918,7 +925,9 @@ impl<K: Ord + ScratchCharge, V: ScratchCharge> ScratchMap<K, V> {
     #[must_use]
     pub fn into_pairs(mut self) -> Vec<(K, V)> {
         let inner = mem::take(&mut self.inner);
-        mem::forget(self);
+        // Keep the charge: zero what `Drop` releases, but let `Drop` run so
+        // the shared meter handle is dropped rather than leaked.
+        self.reserved = 0;
         inner
     }
 }
@@ -1338,7 +1347,42 @@ pub struct AssistResult<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Budget, Governor, Resource, StopReason, Usage};
+    use super::{
+        Budget, Governor, Resource, ScratchMap, ScratchString, ScratchVec, StopReason, Usage,
+    };
+    use std::sync::Arc;
+
+    #[test]
+    fn retaining_scratch_keeps_the_charge_without_leaking_the_meter() {
+        let mut governor = Governor::new(Budget::default());
+        let meter = Arc::clone(&governor.scratch.0);
+        let baseline = Arc::strong_count(&meter);
+
+        let mut vector = ScratchVec::<u64>::new(&governor);
+        vector.push(7).unwrap();
+        let owned = vector.into_vec();
+        assert_eq!(owned, vec![7]);
+
+        let mut text = ScratchString::new(&governor);
+        text.push_str("tea").unwrap();
+        assert_eq!(text.into_string(), "tea");
+
+        let mut map = ScratchMap::<u32, u64>::new(&governor);
+        map.insert(1, 2).unwrap();
+        assert_eq!(map.into_pairs(), vec![(1, 2)]);
+
+        governor.lease_scratch(32).unwrap().retain();
+
+        assert_eq!(
+            Arc::strong_count(&meter),
+            baseline,
+            "a retained container leaked its meter handle"
+        );
+        assert!(
+            governor.usage().peak_scratch_bytes >= 32,
+            "retained charges must stay counted"
+        );
+    }
 
     #[test]
     fn usage_merge_sums_counters_and_maxes_the_high_water_mark() {
