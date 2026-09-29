@@ -682,9 +682,11 @@ impl<T> Drop for ScratchVec<T> {
     }
 }
 
-/// A `String` whose growth is charged against a [`ScratchMeter`] before it is
-/// requested from the allocator, and whose charge is released exactly once,
-/// on drop. See [`ScratchVec`] for the growth/charging contract.
+/// A `String` whose growth is charged before it is allocated.
+///
+/// Growth is charged against a [`ScratchMeter`] before it is requested from
+/// the allocator, and the charge is released exactly once, on drop. See
+/// [`ScratchVec`] for the growth/charging contract.
 ///
 /// ```
 /// use purrassist_core::{Budget, Governor, ScratchString};
