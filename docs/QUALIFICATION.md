@@ -10,7 +10,7 @@ scope in `IMPLEMENTATION.md` remains required. No registry publication is claime
 | Check | Command | Coverage |
 | --- | --- | --- |
 | Local gate | `make check` | Formatting, provenance, Clippy, optimized tests, Rustdoc |
-| Schema | `cargo test -p purrassist-core --test schema_conformance` | 1,301 main Draft 2020-12 tests; 121 selected optional tests |
+| Schema | `cargo test -p purrassist-core --test schema_conformance --test formats --test vocabularies` | 1,301 main Draft 2020-12 tests; 121 selected optional tests; 878 vendored `optional/format/*` + `format-assertion.json` cases run under a dialect declaring format-assertion (every 2020-12 format, including RFC 5892/5893 IDNA2008 contextual/Bidi rules); explicit unknown-format-under-assertion and unsupported-vocabulary behavior |
 | Pattern engine | `cargo test -p purrassist-core --test pattern` | 441-fixture test262 property-escapes census (Unicode 17); pathological `(a+)+b` linear-time check; 10,000-pair derivative/backtracking differential; `generate` witness/emptiness properties |
 | Unicode | `cargo test -p purrassist-core --test unicode_conformance` | 20,034 Unicode 17 normalization cases |
 | Portability | `make wasm-test` | Executed native/WASI recovery and all five grammar transcripts; browser-WASM core build |
@@ -23,8 +23,25 @@ scope in `IMPLEMENTATION.md` remains required. No registry publication is claime
 
 Selected optional schema suites cover large numbers, overflow, ECMA regex cases,
 non-BMP characters, references into unknown keywords, anchors, dynamic references,
-identifiers, missing dialect declarations, and unknown keywords. They do not imply
-format-assertion support or unrestricted ECMAScript regex support.
+identifiers, missing dialect declarations, and unknown keywords.
+
+Every Draft 2020-12 format (`date-time`, `date`, `time`, `duration`, `email`,
+`idn-email`, `hostname`, `idn-hostname`, `ipv4`, `ipv6`, `uri`, `uri-reference`,
+`iri`, `iri-reference`, `uuid`, `uri-template`, `json-pointer`,
+`relative-json-pointer`, `regex`) is a first-party validator, always evaluated as
+annotation evidence; assertion is driven solely by the dialect's `$vocabulary`
+declaring the format-assertion vocabulary, never a caller switch. `idn-hostname`
+implements IDNA2008 (RFC 5890-5893): UTS-46 nontransitional mapping, Punycode
+A-label decode/encode with the RFC 5891 section 5.4 round-trip check, the RFC 5892
+Appendix A CONTEXTJ/CONTEXTO rules, and the RFC 5893 Bidi rule, using generated
+Bidi_Class/Joining_Type tables alongside the existing Script/UTS-46 tables. An
+unrecognized format under an active format-assertion vocabulary is a compile-time
+error; recovery repairs `date`/`date-time`/`time` violations as labeled `Guess`
+inferences and leaves every other failing format an explicit non-invention. An
+unsupported optional (`$vocabulary` ... `false`) vocabulary compiles and every
+recovery receipt (and `Schema::unsupported_vocabularies`) names the URI and the
+keywords left unevaluated; a required unknown vocabulary fails to compile. This
+does not imply unrestricted ECMAScript regex support beyond Task 6's engine.
 
 Regression tests cover composed healing, duplicate ambiguity, retained sources,
 inferences, exhaustion, Unicode/path matching, fuzzy replacement minima, unified
@@ -388,9 +405,39 @@ protocol behavior, not a maximum response latency or global allocator bound.
   `Script_Extensions`, and ECMA-262 binary-property tables plus the IDNA/
   UTS-46 mapping table for the format work below, all pinned by URL and
   SHA-256 in `vendor/unicode/manifest.json`.
-- Extend composed recovery/witness generation; audit recursive schemas and
-  resource-sensitive compilation. Qualify unsupported vocabulary and
-  format behavior without silently weakening assertions.
+- `format` is a first-party validator in `crates/core/src/schema/format/` for
+  every Draft 2020-12 format (`date-time`, `date`, `time`, `duration`, `email`,
+  `idn-email`, `hostname`, `idn-hostname`, `ipv4`, `ipv6`, `uri`,
+  `uri-reference`, `iri`, `iri-reference`, `uuid`, `uri-template`,
+  `json-pointer`, `relative-json-pointer`, `regex`, the last via Task 6's
+  parser), always evaluated and reported as `schema.format.<name>-v1`
+  annotation evidence (`ValidationReport::format_evidence`) regardless of
+  assertion; assertion (a `Violation`) applies solely when the dialect's
+  `$vocabulary` declares the format-assertion vocabulary URI (either boolean
+  value counts), never a caller switch. `idn-hostname` implements IDNA2008
+  (RFC 5890-5893) over the existing UTS-46 mapping table plus a new
+  first-party Punycode codec (`crates/core/src/text/punycode.rs`, RFC 3492,
+  including the RFC 5891 section 5.4 A-label round-trip check): nontransitional
+  mapping and NFC normalization, the RFC 5892 Appendix A CONTEXTJ/CONTEXTO
+  rules, the RFC 5892 section 2.6 derived-property exceptions, and the RFC 5893
+  Bidi rule, using two new generated tables (`Bidi_Class`, `Joining_Type` from
+  `DerivedBidiClass.txt`/`DerivedJoiningType.txt`, extending the single Task 6
+  generator) alongside the existing `Script`/UTS-46 tables. An unrecognized
+  format under an active format-assertion vocabulary is a compile-time
+  `SchemaError`; recovery repairs `date`/`date-time`/`time` violations as
+  labeled `Guess` inferences (`json.schema.format-repair`) and never invents a
+  value for any other failing format. An unsupported optional
+  (`$vocabulary` ... `false`) vocabulary compiles; `Schema::unsupported_vocabularies`
+  and every recovery receipt (`schema.vocabulary.unsupported-v1` evidence) name
+  the URI and the declaring resource's own keywords left unevaluated, while
+  every other vocabulary keeps validating fully. A required unknown vocabulary
+  still fails to compile. `cargo test -p purrassist-core --test
+  schema_conformance --test formats --test vocabularies` runs the complete
+  vendored `optional/format/` corpus (enumerated from its manifest; 21 files,
+  874 cases) plus `optional/format-assertion.json` (4 cases) under a dialect
+  declaring format-assertion — 878 cases, zero skipped, on top of the existing
+  1,301/121-case censuses — and exercises the compile-time/annotation/repair/
+  vocabulary behaviors above directly.
 - Complete allocation/work accounting throughout candidate generation, receipts,
   schema compilation, and helper preparation. Schema compilation now shares a
   governor across root/external/dialect parsing, indexing, pattern preparation,

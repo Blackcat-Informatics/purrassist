@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 use super::{Schema, Violation};
-use crate::contract::{Governor, Resource, StopReason};
+use crate::contract::{Evidence, Governor, Resource, StopReason, Validation};
 use crate::json::{Member, Node, Value, pointer_segment};
 use std::collections::BTreeSet;
 
@@ -9,11 +9,27 @@ fn size(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
 }
 
+/// Everything [`super::evaluate::run`] collects while walking one instance
+/// against one schema: hard assertion failures, plus the always-on
+/// evidence requirement 1 (`format`) and the Task 6 pattern-engine wiring
+/// check both require, regardless of which branch's assertions passed.
+pub(super) struct EvalResult {
+    pub violations: Vec<Violation>,
+    pub format_evidence: Vec<Validation>,
+    pub pattern_evidence: Vec<Evidence>,
+}
+
 #[derive(Default)]
 struct Evaluation {
     errors: Vec<Violation>,
     properties: BTreeSet<String>,
     items: BTreeSet<usize>,
+    /// Requirement 1: format annotation results, always recorded regardless
+    /// of whether the enclosing branch's assertions passed.
+    format_evidence: Vec<Validation>,
+    /// Task 6 wiring: `(location id, "pattern" | "patternProperties/<name>")`
+    /// for every compiled pattern this evaluation actually exercised.
+    pattern_ids: BTreeSet<(usize, String)>,
 }
 impl Evaluation {
     fn merge(&mut self, other: Self) {
@@ -22,6 +38,8 @@ impl Evaluation {
             self.items.extend(other.items);
         }
         self.errors.extend(other.errors);
+        self.format_evidence.extend(other.format_evidence);
+        self.pattern_ids.extend(other.pattern_ids);
     }
     const fn valid(&self) -> bool {
         self.errors.is_empty()
@@ -39,14 +57,36 @@ pub(super) fn run(
     id: usize,
     instance: &Node,
     governor: &mut Governor,
-) -> Result<Vec<Violation>, StopReason> {
+) -> Result<EvalResult, StopReason> {
     let mut evaluator = Evaluator {
         schema,
         governor,
         active: BTreeSet::new(),
         scope: Vec::new(),
     };
-    Ok(evaluator.eval(id, instance, "", 0)?.errors)
+    let evaluation = evaluator.eval(id, instance, "", 0)?;
+    let mut pattern_evidence = Vec::with_capacity(evaluation.pattern_ids.len());
+    for (location_id, keyword) in &evaluation.pattern_ids {
+        governor.charge(Resource::EvidenceEntries, 1)?;
+        let location = &schema.index.locations[*location_id];
+        let pattern = &location.patterns[keyword];
+        let evidence = pattern.engine_evidence();
+        governor.charge(
+            Resource::ScratchBytes,
+            size(location.pointer.len())
+                .saturating_add(size(keyword.len()))
+                .saturating_add(64),
+        )?;
+        pattern_evidence.push(Evidence {
+            destination: format!("{}#{}/{keyword}", location.base, location.pointer),
+            ..evidence
+        });
+    }
+    Ok(EvalResult {
+        violations: evaluation.errors,
+        format_evidence: evaluation.format_evidence,
+        pattern_evidence,
+    })
 }
 impl Evaluator<'_, '_> {
     fn violation(
@@ -299,19 +339,80 @@ impl Evaluator<'_, '_> {
                     "maxLength",
                     result,
                 )?;
-                if let Some(pattern) = schema.index.locations[id].patterns.get("pattern")
-                    && !pattern.is_match(text, self.governor)?
-                {
-                    self.violation(
-                        result,
-                        id,
-                        path,
-                        "pattern",
-                        "string does not match the pattern",
-                    )?;
+                if let Some(pattern) = schema.index.locations[id].patterns.get("pattern") {
+                    result.pattern_ids.insert((id, "pattern".into()));
+                    if !pattern.is_match(text, self.governor)? {
+                        self.violation(
+                            result,
+                            id,
+                            path,
+                            "pattern",
+                            "string does not match the pattern",
+                        )?;
+                    }
+                }
+                if let Some(name) = body.get("format").and_then(Node::as_str) {
+                    self.format(id, path, name, text, result)?;
                 }
             }
             _ => {}
+        }
+        Ok(())
+    }
+    /// Requirement 1: `format` is always evaluated and always reported as
+    /// annotation evidence (`schema.format.<name>-v1`, pass/fail, per
+    /// instance location); it becomes an assertion `Violation` only when
+    /// this location's dialect declared the format-assertion vocabulary
+    /// (`Vocabularies::format_assert`), never from a caller switch.
+    fn format(
+        &mut self,
+        id: usize,
+        path: &str,
+        name: &str,
+        text: &str,
+        result: &mut Evaluation,
+    ) -> Result<(), StopReason> {
+        let outcome = super::format::evaluate(name, text, self.governor)?;
+        self.governor.charge(Resource::EvidenceEntries, 1)?;
+        let (validator, passed, diagnostics) = match outcome {
+            super::format::Outcome::Pass => (super::format::rule(name), true, Vec::new()),
+            super::format::Outcome::Fail => (
+                super::format::rule(name),
+                false,
+                vec![format!("{text:?} does not satisfy format {name:?}")],
+            ),
+            super::format::Outcome::Unknown => (
+                "schema.format.unknown-v1".into(),
+                true,
+                vec![format!("format {name:?} is not evaluated")],
+            ),
+        };
+        self.governor.charge(
+            Resource::ScratchBytes,
+            size(validator.len())
+                .saturating_add(size(path.len()))
+                .saturating_add(
+                    diagnostics
+                        .iter()
+                        .fold(0, |sum, line| sum.saturating_add(size(line.len()))),
+                )
+                .saturating_add(64),
+        )?;
+        let assert = !passed && self.schema.keywords(id).vocabularies.format_assert;
+        result.format_evidence.push(Validation {
+            validator,
+            constraint: path.into(),
+            passed,
+            diagnostics,
+        });
+        if assert {
+            self.violation(
+                result,
+                id,
+                path,
+                "format",
+                format!("does not satisfy format {name:?}"),
+            )?;
         }
         Ok(())
     }
@@ -557,6 +658,7 @@ impl Evaluator<'_, '_> {
         {
             for pattern in patterns {
                 let name = format!("patternProperties/{}", pointer_segment(&pattern.key));
+                result.pattern_ids.insert((id, name.clone()));
                 if schema.index.locations[id].patterns[&name]
                     .is_match(&member.key, self.governor)?
                 {

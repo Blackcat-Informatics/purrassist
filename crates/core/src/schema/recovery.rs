@@ -45,6 +45,9 @@ struct Search<'a> {
     queue: BTreeMap<(u64, u64), Candidate>,
     seen: BTreeMap<String, u64>,
     serial: u64,
+    /// Task 6 wiring: deduplicated by destination (one distinct compiled
+    /// pattern), across every candidate this search actually validated.
+    pattern_evidence: BTreeMap<String, Evidence>,
 }
 impl Schema {
     /// Recover a schema-valid interpretation of imperfect UTF-8 JSON input.
@@ -103,14 +106,24 @@ impl Schema {
             queue: BTreeMap::new(),
             seen: BTreeMap::new(),
             serial: 0,
+            pattern_evidence: BTreeMap::new(),
         };
-        let outcome = match search.run(input) {
+        let outcome = match search
+            .unsupported_vocabulary_evidence()
+            .and_then(|()| search.run(input))
+        {
             Ok(outcome) => outcome,
             Err(reason) => {
                 search.receipt.stopped = reason;
                 Outcome::Unresolved
             }
         };
+        // Task 6 wiring: every distinct pattern actually validated during
+        // this search, regardless of which candidate (if any) was accepted.
+        search
+            .receipt
+            .evidence
+            .extend(search.pattern_evidence.into_values());
         search.receipt.usage = search.governor.usage();
         AssistResult {
             outcome,
@@ -119,6 +132,33 @@ impl Schema {
     }
 }
 impl Search<'_> {
+    /// Requirement 5: every recovery receipt carries an
+    /// `unsupported-vocabulary` evidence entry for each optional (`false`)
+    /// `$vocabulary` URI this schema's dialects did not recognize, naming
+    /// the declaring resource's own keywords left unevaluated.
+    fn unsupported_vocabulary_evidence(&mut self) -> Result<(), StopReason> {
+        for unsupported in self.schema.unsupported_vocabularies() {
+            self.governor.charge(Resource::EvidenceEntries, 1)?;
+            let explanation = format!(
+                "vocabulary {} is not supported; keywords left unevaluated: {}",
+                unsupported.uri,
+                unsupported.keywords.join(", ")
+            );
+            self.governor.charge(
+                Resource::ScratchBytes,
+                size(unsupported.uri.len())
+                    .saturating_add(size(explanation.len()))
+                    .saturating_add(64),
+            )?;
+            self.receipt.evidence.push(Evidence {
+                rule: "schema.vocabulary.unsupported-v1".into(),
+                explanation,
+                span: None,
+                destination: unsupported.uri,
+            });
+        }
+        Ok(())
+    }
     fn evidence(&self, node: &Node, path: &str, rule: &str, explanation: String) -> Evidence {
         Evidence {
             rule: rule.into(),
@@ -202,6 +242,44 @@ impl Search<'_> {
                     })
                     .collect(),
             });
+            // Requirement 1 / Task 6 wiring: format annotation evidence and
+            // pattern-engine evidence are search-time signals, not tied to
+            // any one alternative, so they are retained unconditionally
+            // (after the index captured above) rather than routed through
+            // the derivation forest's per-alternative ledgers.
+            self.governor.charge(
+                Resource::EvidenceEntries,
+                size(report.format_evidence.len()),
+            )?;
+            let format_bytes = report.format_evidence.iter().fold(0_u64, |sum, entry| {
+                sum.saturating_add(size(entry.validator.len()))
+                    .saturating_add(size(entry.constraint.len()))
+                    .saturating_add(
+                        entry
+                            .diagnostics
+                            .iter()
+                            .fold(0, |inner, line| inner.saturating_add(size(line.len()))),
+                    )
+                    .saturating_add(32)
+            });
+            self.governor.charge(Resource::ScratchBytes, format_bytes)?;
+            self.receipt
+                .validations
+                .extend(report.format_evidence.iter().cloned());
+            for evidence in &report.pattern_evidence {
+                if !self.pattern_evidence.contains_key(&evidence.destination) {
+                    self.governor.charge(Resource::EvidenceEntries, 1)?;
+                    self.governor.charge(
+                        Resource::ScratchBytes,
+                        size(evidence.rule.len())
+                            .saturating_add(size(evidence.explanation.len()))
+                            .saturating_add(size(evidence.destination.len()))
+                            .saturating_add(32),
+                    )?;
+                    self.pattern_evidence
+                        .insert(evidence.destination.clone(), evidence.clone());
+                }
+            }
             if report.valid {
                 winning_cost = Some(cost);
                 accepted.push((candidate, self.receipt.validations.len() - 1));

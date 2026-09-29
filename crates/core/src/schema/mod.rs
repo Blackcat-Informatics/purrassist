@@ -7,6 +7,7 @@ mod builtin;
 pub use build::CompilationError;
 mod compile;
 mod evaluate;
+mod format;
 pub mod recovery;
 mod uri;
 mod vocabulary;
@@ -14,7 +15,7 @@ use crate::digest::Digest;
 use crate::json::{Node, Value};
 use crate::{Budget, Governor, StopReason};
 use core::fmt;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use vocabulary::{Keywords, Vocabularies};
 
 /// Supported schema dialect URI.
@@ -34,6 +35,11 @@ struct Index {
     by_route: BTreeMap<(usize, Vec<usize>), usize>,
     resources: BTreeMap<String, usize>,
     anchors: BTreeMap<String, usize>,
+    /// Requirement 5: unsupported optional (`$vocabulary` ... `false`)
+    /// vocabulary URIs discovered during compilation, mapped to the
+    /// declaring schema resource's own keywords this engine does not
+    /// otherwise recognize.
+    unsupported: BTreeMap<String, BTreeSet<String>>,
 }
 #[derive(Clone, Debug)]
 struct Location {
@@ -68,6 +74,18 @@ impl fmt::Display for SchemaError {
 }
 impl std::error::Error for SchemaError {}
 
+/// Requirement 5: one unsupported, optional (`$vocabulary` ... `false`)
+/// vocabulary URI, naming the keywords its declaring schema resource used
+/// that this engine leaves otherwise unevaluated.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnsupportedVocabulary {
+    /// The unrecognized vocabulary URI.
+    pub uri: String,
+    /// Keywords on the schema resource that declared this dialect, not
+    /// otherwise recognized by any supported vocabulary.
+    pub keywords: Vec<String>,
+}
+
 /// One failed constraint at a precise instance and schema location.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Violation {
@@ -90,6 +108,17 @@ pub struct ValidationReport {
     pub valid: bool,
     /// Every collected failed constraint.
     pub violations: Vec<Violation>,
+    /// Requirement 1: `format` annotation evidence, always populated
+    /// regardless of whether format-assertion made a failure a
+    /// [`Violation`] above, one entry per string instance location that
+    /// carries a `format` keyword (`validator` = `schema.format.<name>-v1`,
+    /// `constraint` = the instance's JSON Pointer path).
+    pub format_evidence: Vec<crate::contract::Validation>,
+    /// Task 6 wiring: which pattern-matching engine
+    /// (`pattern.engine.derivative-v1`/`pattern.engine.backtrack-v1`)
+    /// evaluated each distinct `pattern`/`patternProperties` keyword this
+    /// validation actually exercised.
+    pub pattern_evidence: Vec<crate::contract::Evidence>,
 }
 
 impl Schema {
@@ -183,6 +212,22 @@ impl Schema {
         self.digest
     }
 
+    /// Requirement 5: every unsupported optional vocabulary this schema's
+    /// dialects declared, with the keywords left unevaluated because of it.
+    /// Empty when every declared vocabulary is either required-and-known
+    /// (compilation would otherwise have failed) or fully supported.
+    #[must_use]
+    pub fn unsupported_vocabularies(&self) -> Vec<UnsupportedVocabulary> {
+        self.index
+            .unsupported
+            .iter()
+            .map(|(uri, keywords)| UnsupportedVocabulary {
+                uri: uri.clone(),
+                keywords: keywords.iter().cloned().collect(),
+            })
+            .collect()
+    }
+
     /// Validate using ordinary bounds.
     ///
     /// # Errors
@@ -203,8 +248,10 @@ impl Schema {
         let result = evaluate::run(self, self.root, instance, governor)?;
         Ok(ValidationReport {
             schema: self.digest,
-            valid: result.is_empty(),
-            violations: result,
+            valid: result.violations.is_empty(),
+            violations: result.violations,
+            format_evidence: result.format_evidence,
+            pattern_evidence: result.pattern_evidence,
         })
     }
 

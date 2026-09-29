@@ -241,7 +241,10 @@ make fuzz-json  # source-region coverage-guided JSON campaign; matching LLVM too
 ```
 
 The checked-in main Draft 2020-12 corpus contains 1,301 tests, with another 121
-selected optional cases exercised; Unicode 17
+selected optional cases exercised, plus the complete vendored `optional/format/`
+corpus (878 cases across every 2020-12 format, including RFC 5892/5893 IDNA2008
+contextual and Bidi rules) run under a dialect declaring the format-assertion
+vocabulary; Unicode 17
 normalization contains 20,034 cases. These suites, regression tests, fixed helper
 transcripts, and bounded mutation probes run locally. Full release qualification
 also requires the remaining conformance, performance, packaging, CI, and platform

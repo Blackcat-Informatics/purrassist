@@ -45,12 +45,11 @@ pub(super) fn walk(
                 .map(|id| index.locations[*id].vocabularies)
         })
         .unwrap_or_default();
-    let vocabularies = node
-        .get("$schema")
-        .and_then(Node::as_str)
-        .map_or(Ok(inherited), |dialect| {
-            Vocabularies::load(dialect, context)
-        })?;
+    let (vocabularies, unsupported) = match node.get("$schema").and_then(Node::as_str) {
+        Some(dialect) => Vocabularies::load(dialect, context)?,
+        None => (inherited, Vec::new()),
+    };
+    record_unsupported_vocabularies(node, &unsupported, index, context)?;
     check_keywords(node, vocabularies, &fail)?;
     let id = index.locations.len();
     index.by_route.insert((document, route.to_vec()), id);
@@ -224,8 +223,23 @@ fn check_keywords(
         let value = &member.value.value;
         let valid = match member.key.as_str() {
             "$schema" | "$id" | "$ref" | "$dynamicRef" | "$anchor" | "$dynamicAnchor"
-            | "pattern" | "format" | "title" | "description" | "contentEncoding"
-            | "contentMediaType" => matches!(value, Value::String(_)),
+            | "pattern" | "title" | "description" | "contentEncoding" | "contentMediaType" => {
+                matches!(value, Value::String(_))
+            }
+            "format" => match value {
+                Value::String(name) => {
+                    // Requirement 3: an unrecognized format under an active
+                    // format-assertion vocabulary is a compile-time error;
+                    // annotation-only use never rejects an unknown name.
+                    if vocabularies.format_assert && !super::format::known(name) {
+                        return Err(fail(format!(
+                            "unknown format under format-assertion: {name}"
+                        )));
+                    }
+                    true
+                }
+                _ => false,
+            },
             "minimum" | "maximum" | "exclusiveMinimum" | "exclusiveMaximum" => {
                 matches!(value, Value::Number(_))
             }
@@ -293,6 +307,103 @@ fn check_keywords(
     }
     Ok(())
 }
+/// Every keyword this engine gives defined behavior to (core linkage,
+/// applicators, validation, unevaluated, content, format, and the
+/// meta-data annotations); anything else is a keyword an unsupported
+/// optional vocabulary might own, and requirement 5's evidence names it.
+fn is_known_keyword(key: &str) -> bool {
+    matches!(
+        key,
+        "$schema"
+            | "$id"
+            | "$ref"
+            | "$dynamicRef"
+            | "$anchor"
+            | "$dynamicAnchor"
+            | "$vocabulary"
+            | "$defs"
+            | "definitions"
+            | "type"
+            | "enum"
+            | "const"
+            | "multipleOf"
+            | "maximum"
+            | "exclusiveMaximum"
+            | "minimum"
+            | "exclusiveMinimum"
+            | "maxLength"
+            | "minLength"
+            | "pattern"
+            | "maxItems"
+            | "minItems"
+            | "uniqueItems"
+            | "maxContains"
+            | "minContains"
+            | "maxProperties"
+            | "minProperties"
+            | "required"
+            | "dependentRequired"
+            | "prefixItems"
+            | "items"
+            | "contains"
+            | "additionalProperties"
+            | "properties"
+            | "patternProperties"
+            | "dependentSchemas"
+            | "propertyNames"
+            | "if"
+            | "then"
+            | "else"
+            | "allOf"
+            | "anyOf"
+            | "oneOf"
+            | "not"
+            | "unevaluatedItems"
+            | "unevaluatedProperties"
+            | "contentSchema"
+            | "contentEncoding"
+            | "contentMediaType"
+            | "format"
+            | "title"
+            | "description"
+            | "default"
+            | "deprecated"
+            | "readOnly"
+            | "writeOnly"
+            | "examples"
+    )
+}
+
+/// Requirement 5: an unknown, optional (`false`) `$vocabulary` entry still
+/// compiles, but every compile/recovery receipt must name the URI and the
+/// keywords left unevaluated because of it. Scoped to the exact schema
+/// resource that declared the dialect (the only schema object whose member
+/// keys we can attribute to that specific, otherwise-unknown vocabulary).
+fn record_unsupported_vocabularies(
+    node: &Node,
+    unsupported: &[String],
+    index: &mut Index,
+    context: &mut Context<'_>,
+) -> Result<(), CompilationError> {
+    if unsupported.is_empty() {
+        return Ok(());
+    }
+    let Value::Object(members) = &node.value else {
+        return Ok(());
+    };
+    for uri in unsupported {
+        context.charge(Resource::Work, uri.len())?;
+        let keywords = index.unsupported.entry(uri.clone()).or_default();
+        for member in members {
+            if !is_known_keyword(&member.key) {
+                context.charge(Resource::ScratchBytes, member.key.len().saturating_add(32))?;
+                keywords.insert(member.key.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
 fn valid_type(name: &str) -> bool {
     matches!(
         name,

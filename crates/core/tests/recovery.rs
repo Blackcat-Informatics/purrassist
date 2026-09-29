@@ -243,3 +243,30 @@ fn truncated_containers_and_nested_stringification() {
         "42"
     );
 }
+/// Task 6 wiring: recovery receipts name which engine evaluated each
+/// distinct `pattern` this search actually validated.
+#[test]
+fn recovery_receipts_name_the_pattern_engine_used() {
+    let derivative = Schema::compile(r#"{"type":"string","pattern":"^[a-z]+$"}"#).unwrap();
+    let result = derivative.recover(r#""abc""#, RecoveryRequest::default());
+    assert!(
+        result
+            .receipt
+            .evidence
+            .iter()
+            .any(|evidence| evidence.rule == "pattern.engine.derivative-v1"),
+        "receipt evidence: {:?}",
+        result.receipt.evidence
+    );
+    let backtracking = Schema::compile(r#"{"type":"string","pattern":"^(a)\\1$"}"#).unwrap();
+    let result = backtracking.recover(r#""aa""#, RecoveryRequest::default());
+    assert!(
+        result
+            .receipt
+            .evidence
+            .iter()
+            .any(|evidence| evidence.rule == "pattern.engine.backtrack-v1"),
+        "receipt evidence: {:?}",
+        result.receipt.evidence
+    );
+}

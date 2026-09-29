@@ -3,6 +3,7 @@
 
 //! First-party Unicode normalization and text comparison foundations.
 mod idna_data;
+pub(crate) mod punycode;
 mod unicode_data;
 
 /// Unicode data version, independent of the compiler's built-in character tables.
@@ -249,12 +250,6 @@ pub(crate) const fn general_categories() -> &'static [(u32, u32, &'static str)] 
 /// accessor only exposes the generated table; hostname/idn-hostname format
 /// validation that consumes it is implemented in the Task 7 format
 /// validators, not here.
-#[allow(
-    dead_code,
-    reason = "generated table and accessor land in Task 6 for the Task 7 hostname/idn-hostname \
-              format validators to consume; exercised here by \
-              idna_mapping_matches_published_examples pending that caller"
-)]
 pub(crate) fn idna_status(code: u32) -> (&'static str, &'static [u32]) {
     let entries = idna_data::IDNA_MAPPING;
     let position = entries.partition_point(|(_, end, _, _)| *end < code);
@@ -264,6 +259,39 @@ pub(crate) fn idna_status(code: u32) -> (&'static str, &'static [u32]) {
         .map_or(("disallowed", &[]), |(_, _, status, mapping)| {
             (status, mapping)
         })
+}
+
+/// `Canonical_Combining_Class` (UAX #44): non-zero exactly for combining marks;
+/// `9` identifies Virama, which the Task 7 idn-hostname validator's RFC 5892
+/// Appendix A.1/A.2 CONTEXTJ rule for ZWNJ/ZWJ requires (the same generated
+/// table `normalize` uses for canonical reordering).
+pub(crate) fn canonical_combining_class(code: u32) -> u8 {
+    combining(code)
+}
+
+/// `Bidi_Class` (UAX #44) as an explicit, gap-free partition of the whole
+/// scalar range (`@missing` defaults already expanded by the generator), for
+/// the Task 7 idn-hostname validator's RFC 5893 Bidi rule.
+pub(crate) fn bidi_class(code: u32) -> &'static str {
+    let entries = idna_data::BIDI_CLASS;
+    let position = entries.partition_point(|(_, end, _)| *end < code);
+    entries
+        .get(position)
+        .filter(|(start, _, _)| *start <= code)
+        .map_or("L", |(_, _, class)| *class)
+}
+
+/// `Joining_Type` (UAX #44) as an explicit, gap-free partition of the whole
+/// scalar range (`U` = `Non_Joining` where the source `@missing` default
+/// applies), for the Task 7 idn-hostname validator's RFC 5892 Appendix A.1
+/// CONTEXTJ rule for ZWNJ.
+pub(crate) fn joining_type(code: u32) -> &'static str {
+    let entries = idna_data::JOINING_TYPE;
+    let position = entries.partition_point(|(_, end, _)| *end < code);
+    entries
+        .get(position)
+        .filter(|(start, _, _)| *start <= code)
+        .map_or("U", |(_, _, kind)| *kind)
 }
 
 #[cfg(test)]

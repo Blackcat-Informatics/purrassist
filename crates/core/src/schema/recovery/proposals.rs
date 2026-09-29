@@ -91,6 +91,52 @@ impl Search<'_> {
             _ => {}
         }
         self.local_constraints(parent, node, schema_id, (route, path))?;
+        self.format_repair(parent, node, schema_id, (route, path))?;
+        Ok(())
+    }
+    /// Requirement 4: a `date`/`date-time`/`time` violation under an active
+    /// format-assertion vocabulary is repaired as a labeled `Guess`
+    /// inference (normalization only); every other failing format yields no
+    /// proposal here, leaving it an explicit no-candidate for this rule
+    /// (assertions are never weakened, only the search's guess is added).
+    fn format_repair(
+        &mut self,
+        parent: &Candidate,
+        node: &Node,
+        schema_id: usize,
+        site: (&[usize], &str),
+    ) -> Result<(), StopReason> {
+        let (route, path) = site;
+        let body = self.schema.keywords(schema_id);
+        if !body.vocabularies.format_assert {
+            return Ok(());
+        }
+        let Some(name) = body.get("format").and_then(Node::as_str) else {
+            return Ok(());
+        };
+        if !super::super::format::repairable(name) {
+            return Ok(());
+        }
+        let Value::String(text) = &node.value else {
+            return Ok(());
+        };
+        if matches!(
+            super::super::format::evaluate(name, text, self.governor)?,
+            super::super::format::Outcome::Fail
+        ) && let Some(fixed) = super::super::format::repair(name, text)
+        {
+            self.change(
+                parent,
+                route,
+                path,
+                (
+                    Node::new(Value::String(fixed)),
+                    "json.schema.format-repair",
+                    20,
+                    true,
+                ),
+            )?;
+        }
         Ok(())
     }
     fn local_constraints(
