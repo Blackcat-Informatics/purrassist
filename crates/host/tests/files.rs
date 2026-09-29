@@ -191,3 +191,32 @@ fn writer_lock_is_released_before_the_next_writer_arrives() {
         );
     }
 }
+
+#[test]
+fn journal_records_a_patch_and_rejects_an_unsupported_version() {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.0, 4096).unwrap();
+    let before = store.read("source.txt").unwrap();
+    let commit = store.commit(&before, "changed\r\n").unwrap();
+    let prepared_path = scratch
+        .0
+        .join(".purrassist")
+        .join(&commit.id)
+        .join("prepared.json");
+    let prepared = fs::read_to_string(&prepared_path).unwrap();
+    // The journal now records a `Patch` (source digest + byte-range edits)
+    // from `before` to `after`, alongside the existing before/after pieces.
+    assert!(prepared.contains("\"version\":2"));
+    assert!(prepared.contains("\"patch\":"));
+    assert!(prepared.contains("\"edits\":"));
+
+    // Tampering with the version must be rejected explicitly, not silently
+    // reinterpreted, once the journal's own digest self-check is also
+    // satisfied by recomputing everything consistently.
+    let tampered = prepared.replacen("\"version\":2", "\"version\":99", 1);
+    fs::write(&prepared_path, &tampered).unwrap();
+    match store.undo(&commit.id) {
+        Err(Error::Invalid(message)) => assert!(message.contains("version")),
+        other => panic!("expected an explicit unsupported-version rejection, got {other:?}"),
+    }
+}

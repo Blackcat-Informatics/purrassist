@@ -123,32 +123,57 @@ impl Document {
                 logical.push_str(&self.source[line.clone()]);
             }
         }
-        if logical == body {
+        // Layout recovery: a leading tab is column-dependent (the same byte
+        // means a different number of columns depending on where the parent
+        // container's prefix leaves off), so a caller-supplied leading tab is
+        // re-indented to the number of spaces it would occupy starting at
+        // column zero -- exactly how `Self::parse(body, ..)` alone interprets
+        // it -- rather than embedded literally and left to whatever column
+        // the container prefix happens to end on.
+        let recovered_body = expand_leading_tabs_in_body(body);
+        if logical == recovered_body {
             return Ok(EditPlan {
                 source: self.digest,
                 edits: Vec::new(),
             });
         }
-        let prefix = prefix(self, path, governor)?;
-        let lines = crate::markdown::lines(body);
+        let own_prefix = prefix(self, path, governor)?;
         governor.charge(
             Resource::Work,
-            size(prefix.len()).saturating_mul(size(lines.len())),
+            size(own_prefix.len()).saturating_mul(size(recovered_body.len())),
         )?;
         governor.charge(
             Resource::ScratchBytes,
-            size(prefix.len())
-                .saturating_mul(size(lines.len()))
+            size(own_prefix.len())
+                .saturating_mul(size(recovered_body.len()))
                 .saturating_mul(4),
         )?;
-        let mut replacement = String::new();
-        for line in lines {
-            replacement.push_str(&prefix);
-            replacement.push_str(&body[line]);
-        }
+        let intended = Self::parse(&recovered_body, governor)?;
+        // Layout recovery: a body's trailing blank line(s) never stay nested
+        // inside a container that ends immediately afterward -- a blank line
+        // followed by a dedent always separates from its container, by this
+        // parser's own rule (see `containers::item` trailing-blank handling)
+        // -- so a trailing blank body is re-indented to the *container's*
+        // level (the same level the container's own trailing blank line
+        // would already occupy) instead of being folded into the container's
+        // body and rejected as a structural mismatch. Only attempted when the
+        // heading's body already extends to the end of its container ( `stop
+        // == parent.children.len()`); a body followed by further siblings
+        // inside the same container has no adjacent dedent to eject into.
+        let (core_replacement, replacement, ejected) = build_recovered_replacement(
+            self,
+            path,
+            parent,
+            stop,
+            &own_prefix,
+            &recovered_body,
+            &intended,
+            governor,
+        )?;
         let mut proposed = self.source.clone();
         proposed.replace_range(range.clone(), &replacement);
         let updated = Self::parse(&proposed, governor)?;
+        let new_core_end = range.start + core_replacement.len();
         let new_end = range.start + replacement.len();
         let new_parent = updated.block_at(&path[..path.len() - 1])?;
         let (new_range, new_stop) = bounds(
@@ -157,13 +182,12 @@ impl Document {
             heading,
             new_parent.span.end,
         )?;
-        if new_range != (range.start..new_end) {
+        if new_range != (range.start..new_core_end) {
             return Err(invalid("replacement changes nested section boundaries"));
         }
-        let intended = Self::parse(body, governor)?;
         if !same_shape(
             &intended.source,
-            &intended.blocks,
+            &intended.blocks[..intended.blocks.len() - ejected],
             &updated.source,
             &new_parent.children[heading + 1..new_stop],
         ) {
@@ -171,7 +195,17 @@ impl Document {
                 "replacement changes body structure inside its container",
             ));
         }
-        validate_context(self, &updated, path, stop, new_stop, &range, new_end)?;
+        validate_context(
+            self,
+            &updated,
+            path,
+            stop,
+            new_stop,
+            &range,
+            new_core_end,
+            new_end,
+            ejected,
+        )?;
         Ok(EditPlan {
             source: self.digest,
             edits: vec![TextEdit { range, replacement }],
@@ -179,6 +213,113 @@ impl Document {
     }
 }
 
+/// Render every physical line of `body` with `prefix` prepended, exactly as
+/// this document's own container prefixes are always spelled.
+/// Split `recovered_body` at its trailing-blank boundary (if [`Self`]'s
+/// [`replace_section_at`] should eject those lines to the container's own
+/// level) and render both halves with their respective container prefixes.
+/// Returns `(core_replacement, full_replacement, ejected_blank_count)`.
+///
+/// [`Self`]: Document
+/// [`replace_section_at`]: Document::replace_section_at
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each parameter is an independent fact this one governed reparse-and-split step \
+              needs; grouping them into a struct would only move the same eight facts, not \
+              reduce them"
+)]
+fn build_recovered_replacement(
+    doc: &Document,
+    path: &[usize],
+    parent: &Block,
+    stop: usize,
+    own_prefix: &str,
+    recovered_body: &str,
+    intended: &Document,
+    governor: &mut Governor,
+) -> Result<(String, String, usize), StopReason> {
+    let trailing_blanks = trailing_blank_run(&intended.blocks);
+    let eject = trailing_blanks > 0 && stop == parent.children.len();
+    let (core_body, trailing_body) = if eject {
+        let split = intended.blocks[intended.blocks.len() - trailing_blanks]
+            .span
+            .start;
+        (&recovered_body[..split], &recovered_body[split..])
+    } else {
+        (recovered_body, "")
+    };
+    let outer_prefix = if eject {
+        prefix(doc, &path[..path.len() - 1], governor)?
+    } else {
+        String::new()
+    };
+    let core_replacement = prefixed_lines(core_body, own_prefix);
+    let mut replacement = core_replacement.clone();
+    replacement.push_str(&prefixed_lines(trailing_body, &outer_prefix));
+    let ejected = if eject { trailing_blanks } else { 0 };
+    Ok((core_replacement, replacement, ejected))
+}
+fn prefixed_lines(body: &str, prefix: &str) -> String {
+    let mut result = String::with_capacity(body.len() + prefix.len().saturating_mul(4));
+    for line in crate::markdown::lines(body) {
+        result.push_str(prefix);
+        result.push_str(&body[line]);
+    }
+    result
+}
+
+/// Count the trailing run of top-level `Blank` blocks.
+fn trailing_blank_run(blocks: &[Block]) -> usize {
+    blocks
+        .iter()
+        .rev()
+        .take_while(|block| matches!(block.kind, BlockKind::Blank))
+        .count()
+}
+
+/// Expand a physical line's leading tab/space run into spaces, using 4-column
+/// tab stops counted from column zero (not from wherever a container prefix
+/// would leave the real cursor): matches how [`Document::parse`] alone
+/// interprets the same bytes, so a recovered body reparses into the same
+/// shape `Document::parse(body, ..)` reports as intended.
+fn expand_leading_tabs(line: &str) -> String {
+    let mut column = 0_usize;
+    let mut end = 0_usize;
+    for byte in line.bytes() {
+        match byte {
+            b' ' => column += 1,
+            b'\t' => column += 4 - column % 4,
+            _ => break,
+        }
+        end += 1;
+    }
+    if !line[..end].contains('\t') {
+        return line.into();
+    }
+    let mut result = " ".repeat(column);
+    result.push_str(&line[end..]);
+    result
+}
+fn expand_leading_tabs_in_body(body: &str) -> String {
+    let mut result = String::with_capacity(body.len());
+    for line in crate::markdown::lines(body) {
+        result.push_str(&expand_leading_tabs(&body[line]));
+    }
+    result
+}
+
+/// `new_core_end` is where the heading's own container (`path[..path.len() -
+/// 1]`) now ends: equal to `new_end` unless `ejected` trailing `Blank`
+/// blocks were pushed out to become that container's own trailing siblings
+/// (see the "Layout recovery" comment in [`Document::replace_section_at`]),
+/// in which case `new_core_end < new_end` and `ejected` of those siblings
+/// are expected immediately after that container in *its* parent.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "distinguishes the container's own shrunk span from the full replaced range \
+              exactly where trailing blanks are ejected one level up; splitting this into a \
+              struct would only move the same six related facts, not reduce them"
+)]
 fn validate_context(
     original: &Document,
     updated: &Document,
@@ -186,7 +327,9 @@ fn validate_context(
     stop: usize,
     new_stop: usize,
     range: &Range<usize>,
+    new_core_end: usize,
     new_end: usize,
+    ejected: usize,
 ) -> Result<(), StopReason> {
     let mut before = original.blocks.as_slice();
     let mut after = updated.blocks.as_slice();
@@ -204,6 +347,24 @@ fn validate_context(
             if old != new || !same_tail(&before[stop..], &after[new_stop..], range.end, new_end) {
                 return Err(invalid("replacement changes heading or following blocks"));
             }
+        } else if depth + 2 == path.len() {
+            // This is the heading's direct container's own entry in *its*
+            // parent: the one place ejected trailing blanks can appear.
+            if old.kind != new.kind
+                || old.span.start != new.span.start
+                || old.span.end - range.end + new_core_end != new.span.end
+                || !same_tail_with_ejected_blanks(
+                    &before[index + 1..],
+                    &after[index + 1..],
+                    range.end,
+                    new_end,
+                    ejected,
+                )
+            {
+                return Err(invalid("replacement changes ancestor or outside siblings"));
+            }
+            before = &old.children;
+            after = &new.children;
         } else {
             if old.kind != new.kind
                 || old.span.start != new.span.start
@@ -223,8 +384,26 @@ fn validate_context(
     }
     Ok(())
 }
+/// Like [`same_tail`], but the new tail may begin with `ejected` extra
+/// `Blank` blocks that have no counterpart in `old` (see [`validate_context`]).
+fn same_tail_with_ejected_blanks(
+    old: &[Block],
+    new: &[Block],
+    old_end: usize,
+    new_end: usize,
+    ejected: usize,
+) -> bool {
+    if new.len() < ejected {
+        return false;
+    }
+    let (inserted, rest) = new.split_at(ejected);
+    inserted
+        .iter()
+        .all(|block| matches!(block.kind, BlockKind::Blank))
+        && same_tail(old, rest, old_end, new_end)
+}
 
-fn bounds(
+pub(in crate::markdown) fn bounds(
     source: &str,
     siblings: &[Block],
     heading: usize,
@@ -274,7 +453,12 @@ fn collect(
     }
     Ok(())
 }
-fn same_tail(old: &[Block], new: &[Block], old_end: usize, new_end: usize) -> bool {
+pub(in crate::markdown) fn same_tail(
+    old: &[Block],
+    new: &[Block],
+    old_end: usize,
+    new_end: usize,
+) -> bool {
     let mut expected = old.to_vec();
     for block in &mut expected {
         shift(block, old_end, new_end);
@@ -322,7 +506,7 @@ fn logical_text(source: &str, block: &Block) -> String {
     text
 }
 
-fn line_start(source: &str, offset: usize) -> usize {
+pub(super) fn line_start(source: &str, offset: usize) -> usize {
     source[..offset]
         .rfind(['\r', '\n'])
         .map_or(0, |position| position + 1)

@@ -28,10 +28,10 @@ impl Document {
     /// ```
     ///
     /// # Errors
-    /// Rejects missing/non-table paths, absent cells (including implicit padded
-    /// cells), cells beyond the header width, line breaks, and proposals that
-    /// alter table structure or another cell. Escape literal pipes as `\|`.
-    /// Work, storage, depth exhaustion and cancellation propagate explicitly.
+    /// Rejects a missing/non-table path, a row/column beyond the header
+    /// width, line breaks, and proposals that alter table structure or
+    /// another cell. Escape literal pipes as `\|`. Work, storage, depth
+    /// exhaustion and cancellation propagate explicitly.
     pub fn replace_table_cell(
         &self,
         path: &[usize],
@@ -53,17 +53,21 @@ impl Document {
         let BlockKind::Table { header, rows, .. } = &block.kind else {
             return Err(invalid("selected block is not a table"));
         };
+        if column >= header.len() {
+            return Err(invalid("table cell exceeds the header width"));
+        }
         let cells = if row == 0 {
             header
         } else {
             rows.get(row - 1)
                 .ok_or_else(|| invalid("table row does not exist"))?
         };
-        if column >= header.len() || column >= cells.len() {
-            return Err(invalid(
-                "table cell is not explicitly present within header width",
-            ));
-        }
+        // A body row shorter than the header has only implicit empty cells
+        // beyond its own width; direct-editing one of those materializes
+        // every implicit cell up to (and including) `column`, a reported
+        // transformation rather than a refusal. The header itself is always
+        // exactly as wide as `header.len()`, so it is never ragged.
+        let materialize = row > 0 && column >= cells.len();
         let line_index = if row == 0 {
             0
         } else {
@@ -80,38 +84,51 @@ impl Document {
             Resource::ScratchBytes,
             size(text.len()).saturating_mul(32).saturating_add(256),
         )?;
-        let ranges = cell_ranges(text);
-        let raw = ranges
-            .get(column)
-            .ok_or_else(|| invalid("table source cell missing"))?;
-        let value = &text[raw.clone()];
-        let start = raw.start + value.len() - value.trim_start().len();
-        let end = start + value.trim().len();
         let replacement = markdown.trim();
-        let mut plan = EditPlan {
-            source: self.digest,
-            edits: Vec::new(),
+        let ranges = cell_ranges(text);
+        let (range, line_replacement) = if materialize {
+            (
+                source_line.start..source_line.start + text.len(),
+                materialize_cell(text, &ranges, column, replacement),
+            )
+        } else {
+            let raw = ranges
+                .get(column)
+                .ok_or_else(|| invalid("table source cell missing"))?;
+            let value = &text[raw.clone()];
+            let start = raw.start + value.len() - value.trim_start().len();
+            let end = start + value.trim().len();
+            if &text[start..end] == replacement {
+                return Ok(EditPlan {
+                    source: self.digest,
+                    edits: Vec::new(),
+                });
+            }
+            (
+                source_line.start + start..source_line.start + end,
+                replacement.into(),
+            )
         };
-        if &text[start..end] == replacement {
-            return Ok(plan);
-        }
         // Admission precedes cloning or constructing the complete proposed document.
-        let bytes = size(self.source.len()).saturating_add(size(replacement.len()));
+        let bytes = size(self.source.len()).saturating_add(size(line_replacement.len()));
         governor.charge(
             Resource::ScratchBytes,
             bytes.saturating_mul(4).saturating_add(256),
         )?;
         governor.charge(Resource::Work, bytes.saturating_mul(4))?;
-        let range = source_line.start + start..source_line.start + end;
         let mut proposed = self.source.clone();
-        proposed.replace_range(range.clone(), replacement);
+        proposed.replace_range(range.clone(), &line_replacement);
         let updated = Self::parse(&proposed, governor)?;
         let mut expected = block.kind.clone();
         if let BlockKind::Table { header, rows, .. } = &mut expected {
             if row == 0 {
                 header[column] = replacement.into();
             } else {
-                rows[row - 1][column] = replacement.into();
+                let target = &mut rows[row - 1];
+                if target.len() <= column {
+                    target.resize(column + 1, String::new());
+                }
+                target[column] = replacement.into();
             }
         }
         if updated.block_at(path)?.kind != expected {
@@ -119,12 +136,54 @@ impl Document {
                 "replacement changes table structure or another cell",
             ));
         }
-        plan.edits.push(TextEdit {
-            range,
-            replacement: replacement.into(),
-        });
-        Ok(plan)
+        Ok(EditPlan {
+            source: self.digest,
+            edits: vec![TextEdit {
+                range,
+                replacement: line_replacement,
+            }],
+        })
     }
+}
+/// Rebuild a table source line with every implicit cell up to `column`
+/// materialized as an explicit empty cell, then `column` itself set to
+/// `replacement`. Cells before the first present range and after the last
+/// keep their exact original margins and delimiters.
+fn materialize_cell(
+    text: &str,
+    ranges: &[std::ops::Range<usize>],
+    column: usize,
+    replacement: &str,
+) -> String {
+    // Existing explicit cells keep their exact original spelling and
+    // margins; only the newly materialized cells (and `column` itself, if
+    // it is one of them) use the ` cell ` margin convention.
+    let mut cells: Vec<String> = ranges
+        .iter()
+        .map(|range| text[range.clone()].to_owned())
+        .collect();
+    while cells.len() <= column {
+        cells.push("  ".into());
+    }
+    cells[column] = format!(" {replacement} ");
+    let leading = text.len() - text.trim_start().len();
+    let prefix = ranges
+        .first()
+        .map_or(&text[..leading], |range| &text[..range.start]);
+    let suffix = ranges.last().map_or_else(
+        || &text[text.trim_end().len()..],
+        |range| &text[range.end..],
+    );
+    let mut result = prefix.to_owned();
+    if !prefix.trim_end().ends_with('|') {
+        result.push('|');
+    }
+    result.push_str(&cells.join("|"));
+    if !suffix.trim_start().starts_with('|') {
+        result.push('|');
+    }
+    result.push_str(suffix);
+    result
 }
 fn invalid(message: &str) -> StopReason {
     StopReason::InvalidInput(message.into())

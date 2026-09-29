@@ -12,6 +12,7 @@ use purrassist::{
     AssistResult, Budget, CancellationToken, Effort, Governor, Outcome, Receipt, RecoveryRequest,
     Schema, StopReason,
     contract::Resource,
+    digest::Digest,
     edits::{EditPlan, TextEdit},
     json::{self, Node, Value},
     matching::{self, Candidate, MatchRequest, SelectionPolicy as StringSelectionPolicy},
@@ -154,14 +155,14 @@ const DEFINITIONS: &[Definition] = &[
     },
     Definition {
         name: "apply_edit",
-        description: "Apply one caller-selected source-bound edit plan to a buffer, optionally validate code syntax, and return text, exact inverse, and a receipt; no file writes",
-        schema: r#"{"type":"object","required":["source","plan"],"properties":{"source":{"type":"string"},"plan":{"type":"object","required":["source","edits"],"properties":{"source":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"edits":{"type":"array","items":{"type":"object","required":["start","end","replacement"],"properties":{"start":{"type":"integer","minimum":0},"end":{"type":"integer","minimum":0},"replacement":{"type":"string"}},"additionalProperties":false}}},"additionalProperties":false},"language":{"enum":["text","python","rust","javascript","typescript","tsx"]},"effort":{"enum":["exact","quick","standard","deep","maximum"]}},"additionalProperties":false}"#,
+        description: "Apply one caller-selected source-bound edit plan to a buffer, optionally validate code syntax, optionally rebase a stale plan onto an intervening change, and return text, exact inverse, and a receipt; no file writes",
+        schema: r#"{"type":"object","required":["source","plan"],"properties":{"source":{"type":"string"},"plan":{"type":"object","required":["source","edits"],"properties":{"source":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"edits":{"type":"array","items":{"type":"object","required":["start","end","replacement"],"properties":{"start":{"type":"integer","minimum":0},"end":{"type":"integer","minimum":0},"replacement":{"type":"string"}},"additionalProperties":false}}},"additionalProperties":false},"rebase_from":{"type":"object","required":["source"],"properties":{"source":{"type":"string"}},"additionalProperties":false},"language":{"enum":["text","python","rust","javascript","typescript","tsx"]},"effort":{"enum":["exact","quick","standard","deep","maximum"]}},"additionalProperties":false}"#,
         writes: false,
     },
     Definition {
         name: "apply_file",
-        description: "Conditionally apply one selected edit plan or a replacement buffer, validate supported code grammar, journal it, and return undo identity",
-        schema: r#"{"type":"object","required":["path","expected_digest"],"oneOf":[{"required":["replacement"]},{"required":["plan"]}],"properties":{"path":{"type":"string"},"expected_digest":{"type":"string"},"replacement":{"type":"string"},"plan":{"type":"object","required":["source","edits"],"properties":{"source":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"edits":{"type":"array","items":{"type":"object","required":["start","end","replacement"],"properties":{"start":{"type":"integer","minimum":0},"end":{"type":"integer","minimum":0},"replacement":{"type":"string"}},"additionalProperties":false}}},"additionalProperties":false},"effort":{"enum":["exact","quick","standard","deep","maximum"]}},"additionalProperties":false}"#,
+        description: "Conditionally apply one selected edit plan or a replacement buffer, optionally rebase a stale plan onto an intervening change, validate supported code grammar, journal it, and return undo identity",
+        schema: r#"{"type":"object","required":["path","expected_digest"],"oneOf":[{"required":["replacement"]},{"required":["plan"]}],"properties":{"path":{"type":"string"},"expected_digest":{"type":"string"},"replacement":{"type":"string"},"plan":{"type":"object","required":["source","edits"],"properties":{"source":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"edits":{"type":"array","items":{"type":"object","required":["start","end","replacement"],"properties":{"start":{"type":"integer","minimum":0},"end":{"type":"integer","minimum":0},"replacement":{"type":"string"}},"additionalProperties":false}}},"additionalProperties":false},"rebase_from":{"type":"object","required":["source"],"properties":{"source":{"type":"string"}},"additionalProperties":false},"effort":{"enum":["exact","quick","standard","deep","maximum"]}},"additionalProperties":false}"#,
         writes: true,
     },
     Definition {
@@ -344,12 +345,32 @@ impl Tools {
         governor.check().map_err(|e| e.to_string())?;
         let path = field(args, "path")?;
         let snapshot = self.store.read(path).map_err(|e| e.to_string())?;
-        if field(args, "expected_digest")? != snapshot.digest.to_string() {
+        let rebase_from = args.get("rebase_from");
+        if rebase_from.is_some() && args.get("plan").is_none() {
+            return Err("rebase_from requires plan".into());
+        }
+        // `expected_digest` names the version the caller's plan (or, for
+        // `rebase_from`, its prior text) actually targets; the live file
+        // may have moved on since, exactly the case `rebase_from` exists to
+        // reconcile, so the live digest is checked by the rebase itself
+        // rather than gating admission here.
+        let baseline_digest = match rebase_from {
+            Some(rebase_from) => Digest::of(field(rebase_from, "source")?.as_bytes()).to_string(),
+            None => snapshot.digest.to_string(),
+        };
+        if field(args, "expected_digest")? != baseline_digest {
             return Err("stale expected digest".into());
         }
+        let mut transformation = None;
         let plan = if let Some(plan) = args.get("plan") {
-            edits::decode_plan(&snapshot.text, plan, &mut governor)
-                .map_err(|error| error.to_string())?
+            edits::decode_plan_rebased(
+                &snapshot.text,
+                plan,
+                rebase_from,
+                &mut governor,
+                &mut transformation,
+            )
+            .map_err(|error| error.to_string())?
         } else {
             let replacement = field(args, "replacement")?;
             EditPlan {
@@ -377,6 +398,9 @@ impl Tools {
             plan.apply_governed(&snapshot.text, &mut governor)
         };
         result.receipt.effort = requested_effort;
+        if let Some(transformation) = transformation {
+            result.receipt.evidence.insert(0, transformation);
+        }
         let Outcome::Resolved(applied) = result.outcome else {
             return Err(format!(
                 "edit was not unambiguously validated: {}",

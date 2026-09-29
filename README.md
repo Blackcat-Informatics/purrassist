@@ -150,9 +150,10 @@ container markers; new lines receive quote prefixes and list-continuation spaces
 Reparsing preserves the heading, section boundary, ancestors, and outside blocks.
 Supply line endings and separators explicitly. Bodies that capture following
 sections, introduce peer headings, or change structure under container prefixes
-are rejected; this includes trailing blanks that leave a list item and some
-column-sensitive tab indentation. Identical logical bodies preserve original
-prefix spelling and yield empty plans. See `examples/markdown-section.json`.
+are rejected. A trailing blank body line and a leading tab are layout-recovered
+(reindented to the container level, or to the number of spaces the tab would
+occupy from column zero) rather than rejected. Identical logical bodies preserve
+original prefix spelling and yield empty plans. See `examples/markdown-section.json`.
 `plan_markdown_task` sets the supplied `checked` state using either a root
 `block` index or a nested `path` from inspection (for example `[0,0,1]`).
 Exactly one selector is required; paths follow successive child indices.
@@ -169,8 +170,9 @@ item and checks outside siblings and ancestors. See `examples/markdown-list-item
 cell; surrounding whitespace, pipes, container prefixes, and line endings remain
 exact. Leading/trailing replacement whitespace is trimmed. Escape literal pipes
 as `\|`; line breaks and proposals that change table structure are rejected after
-reparsing. Implicit padding cells and columns beyond the header width are not
-editable through this operation.
+reparsing. Columns beyond the header width are not editable through this
+operation, but editing an implicit padded cell of a body row shorter than the
+header materializes every implicit cell up to it instead of refusing.
 For an executable nested-table example:
 
 ```sh
@@ -210,6 +212,24 @@ Multiline destination/title regions can collapse to one physical line; newline
 and tab values use entities. NUL values are rejected because Markdown cannot
 retain them. Equal decoded fields produce an empty plan. See
 `examples/markdown-reference.json`.
+
+`purrassist_core::patch::Patch` (an ordered, non-overlapping, source-digest-
+bound set of byte-range replacements) is the crate's single edit
+representation; `edits::EditPlan`/`TextEdit` are aliases for it. Beyond
+`apply`, it exposes a governed `invert`, `compose`, `commute`, `rebase`, and
+`diff` algebra; `apply_edit`/`apply_file` use `rebase`/`diff` to reconcile a
+stale plan against an intervening change through an explicit `rebase_from`
+input. See [plan application](docs/EDIT-APPLICATION.md). The Rust
+`markdown::Document` API also has structural operations not yet exposed
+through a host tool: `insert_section`, `remove_section`, `move_section`
+(with optional re-leveling of the moved section's own heading),
+`rename_heading`, `ListItemEdit::Move`, `renumber_list`,
+`TableRowEdit::Move`, `TableColumnEdit::Move`, and `add_reference`/
+`relabel_reference`/`remove_reference`/`unlink_reference` (which rewrite
+every shortcut/collapsed/full-reference use resolving to the affected
+definition). Each is governed, digest-bound, reparse-checked, and provides
+an exact inverse.
+
 The Rust `markdown::InlineFragment` layer retains exact byte spans and renders
 code spans, emphasis, strong emphasis, inline links/images, escapes, line breaks,
 autolinks, and raw inline HTML. Explicit dialect selection preserves the pinned

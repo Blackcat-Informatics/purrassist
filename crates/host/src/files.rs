@@ -16,9 +16,11 @@
 //! records the mechanism actually used in [`Commit::durability`]. See
 //! `docs/EDIT-APPLICATION.md` for the full design.
 use purrassist::{
+    Budget, Governor, Outcome,
     digest::Digest,
-    json::{self, Node},
-    wire::{object, string},
+    json::{self, Node, Value},
+    patch::{Patch, TextEdit},
+    wire::{integer, object, string},
 };
 use std::{
     fmt,
@@ -248,6 +250,20 @@ pub enum Recovery {
     OrphanUnknown(String),
 }
 
+/// `prepared.json`'s current format version. Bumped whenever a field is
+/// added, removed, or reinterpreted; [`Store::entry`] rejects any other
+/// value explicitly rather than guessing at an older or newer shape.
+///
+/// # History
+/// - `1`: `path`, `before` (digest), `after` (digest).
+/// - `2`: adds `patch`, the wire [`Patch`] (see `crates/core/src/wire.rs`)
+///   from `before`'s exact bytes to `after`'s, computed with
+///   [`Patch::diff`] at commit time. [`Store::undo`] inverts this recorded
+///   patch (validated against the current file's digest through the same
+///   governed [`Patch::apply`] every other consumer uses) instead of an
+///   independent restore path.
+const JOURNAL_VERSION: u64 = 2;
+
 impl Store {
     /// Attempt each replacement in input order and retain every outcome.
     ///
@@ -336,10 +352,18 @@ impl Store {
         let _lock = self.lock()?;
         let current = self.read(&before.path)?;
         let after = Digest::of(replacement.as_bytes());
+        let patch = Patch::diff(
+            &before.text,
+            replacement,
+            &mut Governor::new(self.patch_budget()),
+        )
+        .map_err(|reason| Error::Invalid(format!("patch computation failed: {reason}")))?;
         let key = object([
+            ("version", integer(JOURNAL_VERSION)),
             ("path", string(&before.path)),
             ("before", string(before.digest.to_string())),
             ("after", string(after.to_string())),
+            ("patch", patch.to_node()),
         ])
         .to_json();
         let id = Digest::of(key.as_bytes())
@@ -409,15 +433,45 @@ impl Store {
     /// Undo only if the current file still contains the exact committed output.
     /// The undo itself is journaled as a new conditional transaction.
     ///
+    /// Constructs its replacement by governed-[`Patch::invert`]ing the exact
+    /// patch [`Store::commit`] recorded (from the journaled `before` bytes),
+    /// then governed-[`Patch::apply`]ing that inverse to the current file
+    /// text; that apply's own stale-source check is what validates the
+    /// current file against the inverse's expected source digest, not an
+    /// independent comparison.
+    ///
     /// # Errors
-    /// Rejects modified output, tampered/incomplete journals, and ordinary commit failures.
+    /// Rejects modified output, tampered/incomplete journals, a recorded
+    /// patch that does not invert against its own `before` bytes, and
+    /// ordinary commit failures.
     pub fn undo(&self, transaction: &str) -> Result<Commit, Error> {
         let entry = self.entry(transaction)?;
         let current = self.read(&entry.path)?;
-        if current.digest != Digest::of(entry.after.as_bytes()) {
+        let inverse = entry
+            .patch
+            .invert(&entry.before, &mut Governor::new(self.patch_budget()))
+            .map_err(|reason| {
+                Error::Invalid(format!("journaled patch does not invert: {reason}"))
+            })?;
+        let Outcome::Resolved(applied) = inverse.apply(&current.text, self.patch_budget()).outcome
+        else {
             return Err(Error::Stale);
+        };
+        self.commit(&current, &applied.text)
+    }
+    /// A resource budget generous enough to diff, invert, or apply a patch
+    /// over any file this store admits (bounded by `max_bytes`), scaled to
+    /// that same limit rather than a fixed effort preset.
+    const fn patch_budget(&self) -> Budget {
+        Budget {
+            work: self.max_bytes.saturating_mul(4).saturating_add(1_000_000),
+            candidates: 1,
+            input_bytes: self.max_bytes.saturating_add(1024),
+            scratch_bytes: self.max_bytes.saturating_mul(8).saturating_add(1_000_000),
+            depth: 8,
+            evidence_entries: 1024,
+            helper_calls: 0,
         }
-        self.commit(&current, &entry.before)
     }
     /// Reconcile prepared journals with actual file versions without overwriting files.
     ///
@@ -648,7 +702,14 @@ impl Store {
         if fs::symlink_metadata(&directory)?.file_type().is_symlink() {
             return Err(Error::Invalid("journal cannot be a symlink".into()));
         }
-        let source = read_bounded(&directory.join("prepared.json"), 65_536)?;
+        // `prepared.json` now embeds the recorded `patch`'s replacement text
+        // (see `JOURNAL_VERSION`), so it can be as large as the file itself;
+        // bound it the same way the `before`/`after` pieces already are,
+        // plus a fixed allowance for the surrounding metadata.
+        let source = read_bounded(
+            &directory.join("prepared.json"),
+            self.max_bytes.saturating_add(65_536),
+        )?;
         let metadata = json::parse(&source).map_err(|e| Error::Invalid(e.to_string()))?;
         let field = |key| {
             metadata
@@ -656,6 +717,16 @@ impl Store {
                 .and_then(Node::as_str)
                 .ok_or_else(|| Error::Invalid(format!("journal missing {key}")))
         };
+        match metadata.get("version").map(|node| &node.value) {
+            Some(Value::Number(number))
+                if number.to_usize() == usize::try_from(JOURNAL_VERSION).ok() => {}
+            Some(Value::Number(number)) => {
+                return Err(Error::Invalid(format!(
+                    "unsupported journal version {number:?}"
+                )));
+            }
+            _ => return Err(Error::Invalid("journal missing a supported version".into())),
+        }
         let before = read_bounded(&directory.join("before"), self.max_bytes)?;
         let after = read_bounded(&directory.join("after"), self.max_bytes)?;
         if field("before")? != Digest::of(before.as_bytes()).to_string()
@@ -667,10 +738,15 @@ impl Store {
         {
             return Err(Error::Invalid("journal digest mismatch".into()));
         }
+        let patch_node = metadata
+            .get("patch")
+            .ok_or_else(|| Error::Invalid("journal missing patch".into()))?;
+        let patch = decode_patch(patch_node, Digest::of(before.as_bytes()))?;
         Ok(Entry {
             path: field("path")?.into(),
             before,
             after,
+            patch,
         })
     }
 }
@@ -678,6 +754,58 @@ struct Entry {
     path: String,
     before: String,
     after: String,
+    /// The recorded `before`-to-`after` patch (see `JOURNAL_VERSION`);
+    /// [`Store::undo`] inverts this rather than taking an independent path.
+    patch: Patch,
+}
+/// Decode a `prepared.json` `"patch"` member into a [`Patch`], validated to
+/// be bound to `expected_source` (the journal's own `before` piece digest).
+fn decode_patch(node: &Node, expected_source: Digest) -> Result<Patch, Error> {
+    let source = node
+        .get("source")
+        .and_then(Node::as_str)
+        .ok_or_else(|| Error::Invalid("journal patch missing source".into()))?;
+    if source != expected_source.to_string() {
+        return Err(Error::Invalid(
+            "journal patch source does not match its before piece".into(),
+        ));
+    }
+    let Some(Node {
+        value: Value::Array(edit_nodes),
+        ..
+    }) = node.get("edits")
+    else {
+        return Err(Error::Invalid("journal patch missing edits".into()));
+    };
+    let mut edits = Vec::with_capacity(edit_nodes.len());
+    for edit in edit_nodes {
+        let start = patch_offset(edit, "start")?;
+        let end = patch_offset(edit, "end")?;
+        let replacement = edit
+            .get("replacement")
+            .and_then(Node::as_str)
+            .ok_or_else(|| Error::Invalid("journal patch edit missing replacement".into()))?;
+        if start > end {
+            return Err(Error::Invalid(
+                "journal patch edit has a reversed range".into(),
+            ));
+        }
+        edits.push(TextEdit {
+            range: start..end,
+            replacement: replacement.into(),
+        });
+    }
+    Ok(Patch {
+        source: expected_source,
+        edits,
+    })
+}
+fn patch_offset(node: &Node, key: &str) -> Result<usize, Error> {
+    match node.get(key).map(|field| &field.value) {
+        Some(Value::Number(number)) => number.to_usize(),
+        _ => None,
+    }
+    .ok_or_else(|| Error::Invalid(format!("journal patch edit {key} is invalid")))
 }
 /// One `.purrassist-<id>.tmp` replacement temporary file found while
 /// recovering, classified by whether its id matches a known journal.

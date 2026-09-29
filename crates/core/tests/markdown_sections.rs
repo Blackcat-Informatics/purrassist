@@ -243,16 +243,44 @@ fn nested_final_sections_empty_bodies_and_container_escape_checks() {
             format!("{prefix}```\n{prefix}code")
         );
     }
+    // Layout recovery: a trailing blank body line is re-indented to the
+    // container's own level (it is ejected there regardless, by this
+    // parser's blank-line-before-dedent rule) instead of being rejected.
     let mut g = Governor::new(Budget::default());
-    let doc = Document::parse("- # Tea\n  Old\n- Keep\n", &mut g).unwrap();
-    assert!(matches!(
-        doc.replace_section_at(&[0, 0], "Cold\n\n", &mut g),
-        Err(StopReason::InvalidInput(_))
-    ));
-    // A tab's indentation depends on physical columns. Reject changed structure.
-    let quote = Document::parse("> # Tea\n> Old\n", &mut g).unwrap();
-    assert!(matches!(
-        quote.replace_section_at(&[0, 0], "\tcode\n", &mut g),
-        Err(StopReason::InvalidInput(_))
-    ));
+    let source = "- # Tea\n  Old\n- Keep\n";
+    let doc = Document::parse(source, &mut g).unwrap();
+    let plan = doc.replace_section_at(&[0, 0], "Cold\n\n", &mut g).unwrap();
+    let Outcome::Resolved(applied) = plan.apply(source, Budget::default()).outcome else {
+        panic!("apply");
+    };
+    assert_eq!(applied.text, "- # Tea\n  Cold\n\n- Keep\n");
+    let Outcome::Resolved(undo) = applied
+        .inverse
+        .apply(&applied.text, Budget::default())
+        .outcome
+    else {
+        panic!("undo");
+    };
+    assert_eq!(undo.text, source);
+
+    // Layout recovery: a leading tab is re-indented to the number of spaces
+    // it would occupy starting at column zero -- matching how the body
+    // parses standalone -- instead of being rejected as column-ambiguous.
+    let quote_source = "> # Tea\n> Old\n";
+    let quote = Document::parse(quote_source, &mut g).unwrap();
+    let plan = quote
+        .replace_section_at(&[0, 0], "\tcode\n", &mut g)
+        .unwrap();
+    let Outcome::Resolved(applied) = plan.apply(quote_source, Budget::default()).outcome else {
+        panic!("apply");
+    };
+    assert_eq!(applied.text, "> # Tea\n>     code\n");
+    let Outcome::Resolved(undo) = applied
+        .inverse
+        .apply(&applied.text, Budget::default())
+        .outcome
+    else {
+        panic!("undo");
+    };
+    assert_eq!(undo.text, quote_source);
 }

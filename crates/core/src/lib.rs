@@ -26,6 +26,8 @@ pub mod paths;
 
 pub mod edits;
 
+pub mod patch;
+
 pub mod provenance;
 
 pub mod markdown;

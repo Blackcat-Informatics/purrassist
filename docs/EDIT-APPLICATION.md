@@ -35,19 +35,55 @@ or `plan`; `effort` selects its finite execution budget. Supplying neither or bo
 is an argument error. The existing replacement-buffer form remains supported.
 The plan form avoids making callers reconstruct the complete file themselves.
 
-Both the expected digest and the plan's source must match the file snapshot.
-Supported code-file extensions still trigger grammar validation automatically.
-Only a resolved, unambiguous application reaches the journaled store commit;
-stale, invalid, ambiguous, exhausted, or cancelled applications do not enter it.
-Cancellation is checked again before commit. Once a transaction begins, it
-finishes under the existing durability/recovery contract and reports its actual
-outcome. The returned `commit.transaction` is accepted by `undo_file`, which
-restores the journaled original only while the exact committed output remains.
+Both the expected digest and the plan's source must match the file snapshot,
+unless `rebase_from` reconciles a stale one (below). Supported code-file
+extensions still trigger grammar validation automatically. Only a resolved,
+unambiguous application reaches the journaled store commit; stale, invalid,
+ambiguous, exhausted, or cancelled applications do not enter it. Cancellation
+is checked again before commit. Once a transaction begins, it finishes under
+the existing durability/recovery contract and reports its actual outcome. The
+returned `commit.transaction` is accepted by `undo_file`, which restores the
+journaled original only while the exact committed output remains.
 
 These operations use the shared `Tools` dispatcher from Rust, CLI `call`, and
 MCP `tools/call`. `apply_edit` is advertised as read-only; `apply_file` remains
 a destructive file operation. File scope, cooperating-writer locks, stale checks,
 and crash-recovery limitations are unchanged.
+
+## The `Patch` algebra and governed rebase
+
+`purrassist_core::patch::Patch` (an ordered, non-overlapping, source-digest-
+bound set of byte-range replacements) is the crate's single edit
+representation; `edits::EditPlan` and `edits::TextEdit` are aliases for
+`Patch` and its element type, not a second implementation. Every plan this
+document describes — from Markdown planning tools, `plan_replacement`,
+`plan_diff`, and the wire `plan` object `apply_edit`/`apply_file` accept — is
+a `Patch`. Beyond `apply`, `Patch` exposes a governed algebra: `invert`
+(the exact inverse, matching a plan's `inverse` field), `compose` (sequential
+chaining through an intermediate text), `commute` (whether two patches made
+against the same source have disjoint edited ranges, and if so, each rebased
+onto the other), and `diff` (a single covering replacement from one text
+directly to another).
+
+A plan's `source` names the exact bytes it was made against. If that source
+has since changed — another writer's edit landed first — applying the plan
+directly is refused as stale. `apply_edit` and `apply_file` accept an
+explicit `rebase_from` object, `{"source": "<prior text>"}`, naming the exact
+text the plan's own declared `source` digest matches. When the plan's
+declared source no longer matches the live buffer/file but does match
+`rebase_from.source`, the tool diffs `rebase_from.source` against the current
+text into an intervening `Patch` (`Patch::diff`) and rebases the plan onto it
+(`Patch::rebase`): if the plan's edits and the intervening change commute
+(their byte ranges are disjoint), the rebased plan is applied and the
+resulting receipt's `evidence` gains a leading `patch.rebase.v1` entry
+recording the rebase; if they overlap, the application is refused as stale,
+exactly as an unrebased stale plan already is — a plan whose own edits
+conflict with what changed underneath it cannot be unambiguously
+reinterpreted. For `apply_file`, `expected_digest` is checked against
+`rebase_from.source` (the plan's actual baseline) rather than the live file
+when `rebase_from` is supplied; the live file's digest is reconciled by the
+rebase itself. `rebase_from` requires `plan` (it has no meaning for
+`apply_file`'s `replacement` form).
 
 ## Filesystem durability
 
@@ -60,6 +96,35 @@ wire under `apply_file`/`undo_file`'s `commit.durability` object as
 `rename` (`posix_semantics`, `move_file_ex_fallback`, or `already_current`
 for an idempotent retry that needed no rename) and `directory_sync`
 (`flushed` or `access_denied_fallback`).
+
+### The journal's recorded `patch`
+
+`prepared.json` is a versioned, self-checked object (`Digest::of` its own
+bytes must equal the transaction directory's name); `Store::entry` rejects
+any `version` it does not explicitly recognize, rather than guessing at an
+unfamiliar or missing one. Version 1 held only `path`, `before` (the
+original text's digest), and `after` (the replacement's digest). Version 2
+(current) adds `patch`: the wire `Patch` (`crates/core/src/wire.rs`'s
+`EditPlan::to_node`, since `edits::EditPlan` is an alias for
+[`purrassist_core::patch::Patch`](../crates/core/src/patch.rs)) from the
+journaled `before` piece's exact bytes to the `after` piece's, computed with
+`Patch::diff` at commit time. Because a patch's replacement text can be as
+large as the file itself, `prepared.json`'s admitted size now scales with
+the store's own `max_bytes`, not a small fixed constant.
+
+`Store::undo` no longer treats `entry.before` as an independent restore
+target. It governed-`Patch::invert`s the recorded patch (bound to the
+journaled `before` bytes) to get the patch that maps `after` back to
+`before`, then governed-`Patch::apply`s that inverse to the *current* file
+text: that apply's own stale-source check — the same one every other
+`Patch` consumer relies on — is what validates the current file against the
+inverse's expected source digest, and its own edit-range/UTF-8-boundary
+validation is what rejects a journal whose recorded patch does not actually
+invert against its own `before` bytes. Both failure modes surface as
+`Error::Invalid` (a tampered or otherwise non-inverting patch) or
+`Error::Stale` (the file no longer holds the exact committed output),
+exactly as before, but reached through `Patch`'s own governed algebra
+instead of a second, independently maintained comparison.
 
 On Unix, replacement is `rename(2)` and directory durability is `fsync` on
 an open directory handle; both are unconditional and always succeed or the

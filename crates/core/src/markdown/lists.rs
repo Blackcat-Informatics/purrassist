@@ -3,7 +3,7 @@
 //! List-item splices with exact outside-source preservation.
 use super::{Block, BlockKind, Document, line, lines, sections, size};
 use crate::{
-    Governor, StopReason,
+    Governor, Outcome, StopReason,
     contract::Resource,
     edits::{EditPlan, TextEdit},
 };
@@ -32,6 +32,13 @@ pub enum ListItemEdit {
     },
     /// Remove the item, retaining enclosing containers and outside bytes.
     Remove,
+    /// Relocate the item to a new position among the same siblings,
+    /// [`Vec::remove`]-then-[`Vec::insert`] semantics: `to` is the item's
+    /// zero-based index in the *final* (still same-length) sibling order.
+    Move {
+        /// Final zero-based sibling index, `0..siblings.len()`.
+        to: usize,
+    },
 }
 
 impl Document {
@@ -72,6 +79,15 @@ impl Document {
         if !matches!(anchor.kind, BlockKind::ListItem { .. }) {
             return Err(invalid("selected block is not a list item"));
         }
+        let index = path[path.len() - 1];
+        let siblings = if path.len() == 1 {
+            &self.blocks
+        } else {
+            &self.block_at(&path[..path.len() - 1])?.children
+        };
+        if let ListItemEdit::Move { to } = edit {
+            return move_item(self, path, siblings, index, *to, governor);
+        }
         governor.charge(Resource::Work, size(self.source.len()).saturating_mul(32))?;
         governor.charge(
             Resource::ScratchBytes,
@@ -79,12 +95,6 @@ impl Document {
                 .saturating_mul(192)
                 .saturating_add(512),
         )?;
-        let index = path[path.len() - 1];
-        let siblings = if path.len() == 1 {
-            &self.blocks
-        } else {
-            &self.block_at(&path[..path.len() - 1])?.children
-        };
         let proposal = prepare(self, path, anchor, siblings, index, edit, governor)?;
         if self.source[proposal.change.range.clone()] == proposal.change.replacement {
             return Ok(EditPlan {
@@ -101,6 +111,153 @@ impl Document {
             edits: vec![proposal.change],
         })
     }
+
+    /// Renumber a contiguous run of ordered-list siblings (every immediately
+    /// adjacent sibling, in both directions from `path`, that is also an
+    /// ordered item) sequentially from `start`, keeping each item's `.`/`)`
+    /// delimiter, checkbox state, and body exact.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, markdown::Document};
+    /// let mut g = Governor::new(Budget::default());
+    /// let doc = Document::parse("1. a\n5. b\n9. c\n", &mut g)?;
+    /// let plan = doc.renumber_list(&[0], 1, &mut g)?;
+    /// assert_eq!(plan.edits.len(), 2); // "1." is already correct; "5." and "9." change
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Rejects a missing/non-ordered-list selection, an item missing its
+    /// numeric marker, and numbering overflow. Any proposal that changes an
+    /// item's body, checkbox state, or a block outside the run is rejected.
+    /// Resource exhaustion and cancellation propagate without a partial plan.
+    pub fn renumber_list(
+        &self,
+        path: &[usize],
+        start: u64,
+        governor: &mut Governor,
+    ) -> Result<EditPlan, StopReason> {
+        governor.charge(Resource::Work, size(path.len()).saturating_add(1))?;
+        governor.charge(Resource::Depth, size(path.len().saturating_sub(1)))?;
+        let anchor = self.block_at(path)?;
+        if !matches!(
+            anchor.kind,
+            BlockKind::ListItem {
+                ordinal: Some(_),
+                ..
+            }
+        ) {
+            return Err(invalid("selected block is not an ordered list item"));
+        }
+        let index = path[path.len() - 1];
+        let siblings = if path.len() == 1 {
+            &self.blocks
+        } else {
+            &self.block_at(&path[..path.len() - 1])?.children
+        };
+        governor.charge(Resource::Work, size(siblings.len()).saturating_mul(8))?;
+        governor.charge(
+            Resource::ScratchBytes,
+            size(siblings.len()).saturating_mul(64).saturating_add(256),
+        )?;
+        let ordered = |block: &Block| {
+            matches!(
+                block.kind,
+                BlockKind::ListItem {
+                    ordinal: Some(_),
+                    ..
+                }
+            )
+        };
+        let mut lo = index;
+        while lo > 0 && ordered(&siblings[lo - 1]) {
+            lo -= 1;
+        }
+        let mut hi = index + 1;
+        while hi < siblings.len() && ordered(&siblings[hi]) {
+            hi += 1;
+        }
+        let mut edits = Vec::with_capacity(hi - lo);
+        for (offset, item) in siblings[lo..hi].iter().enumerate() {
+            let number = start
+                .checked_add(offset as u64)
+                .ok_or_else(|| invalid("renumbering overflows"))?;
+            let first_line_range = item.lines[0].clone();
+            let first_line = line(&self.source, &first_line_range);
+            let leading = first_line.len() - first_line.trim_start_matches([' ', '\t']).len();
+            let digits = first_line[leading..]
+                .bytes()
+                .take_while(u8::is_ascii_digit)
+                .count();
+            if digits == 0 {
+                return Err(invalid("ordered list item is missing its numeric marker"));
+            }
+            let digit_start = first_line_range.start + leading;
+            let old = &self.source[digit_start..digit_start + digits];
+            let new = number.to_string();
+            if old != new {
+                edits.push(TextEdit {
+                    range: digit_start..digit_start + digits,
+                    replacement: new,
+                });
+            }
+        }
+        let plan = EditPlan {
+            source: self.digest,
+            edits,
+        };
+        if plan.edits.is_empty() {
+            return Ok(plan);
+        }
+        let applied = plan.apply_governed(&self.source, governor);
+        let Outcome::Resolved(applied) = applied.outcome else {
+            return Err(applied.receipt.stopped);
+        };
+        let updated = Self::parse(&applied.text, governor)?;
+        validate_renumbering(path, siblings, &updated, lo, hi, start)?;
+        Ok(plan)
+    }
+}
+/// Check that renumbering [`Document::renumber_list`]'s selected run touched
+/// nothing else: every preceding/following sibling stays exact (only
+/// shifted, for the following ones, by the digit-width change), and every
+/// renumbered item keeps its exact body and checkbox state.
+fn validate_renumbering(
+    path: &[usize],
+    siblings: &[Block],
+    updated: &Document,
+    lo: usize,
+    hi: usize,
+    start: u64,
+) -> Result<(), StopReason> {
+    let updated_siblings = if path.len() == 1 {
+        &updated.blocks
+    } else {
+        &updated.block_at(&path[..path.len() - 1])?.children
+    };
+    if updated_siblings.len() < siblings.len() || updated_siblings[..lo] != siblings[..lo] {
+        return Err(invalid("renumbering changed preceding blocks"));
+    }
+    for (offset, item) in siblings[lo..hi].iter().enumerate() {
+        let BlockKind::ListItem { checked, .. } = item.kind else {
+            unreachable!("already matched ListItem above")
+        };
+        let expected = BlockKind::ListItem {
+            ordinal: Some(start + offset as u64),
+            checked,
+        };
+        if updated_siblings[lo + offset].kind != expected {
+            return Err(invalid(
+                "renumbering changed an item's body or checkbox state",
+            ));
+        }
+    }
+    let old_end = siblings[hi - 1].span.end;
+    let new_end = updated_siblings[hi - 1].span.end;
+    if !sections::same_tail(&siblings[hi..], &updated_siblings[hi..], old_end, new_end) {
+        return Err(invalid("renumbering changed following blocks"));
+    }
+    Ok(())
 }
 struct Proposal {
     change: TextEdit,
@@ -126,6 +283,10 @@ fn prepare(
     if matches!(edit, ListItemEdit::Remove) {
         return removal(doc, path, anchor, siblings, index, newline);
     }
+    debug_assert!(
+        !matches!(edit, ListItemEdit::Move { .. }),
+        "Move is handled before prepare() is called"
+    );
     let outer = sections::prefix(doc, path, g)?;
     let inherited = if matches!(edit, ListItemEdit::Replace { .. }) {
         marker(doc, anchor)
@@ -137,7 +298,7 @@ fn prepare(
             (marker.as_str(), body.as_str())
         }
         ListItemEdit::Replace { body } => (inherited.as_str(), body.as_str()),
-        ListItemEdit::Remove => unreachable!("handled removal"),
+        ListItemEdit::Remove | ListItemEdit::Move { .. } => unreachable!("handled earlier"),
     };
     validate_marker(marker)?;
     g.charge(
@@ -181,7 +342,7 @@ fn prepare(
             (anchor.span.end..anchor.span.end, 0, index + 1, extra)
         }
         ListItemEdit::Replace { .. } => (anchor.span.clone(), 1, index, 0),
-        ListItemEdit::Remove => unreachable!("handled removal"),
+        ListItemEdit::Remove | ListItemEdit::Move { .. } => unreachable!("handled earlier"),
     };
     Ok(Proposal {
         change: TextEdit { range, replacement },
@@ -272,6 +433,67 @@ fn item(
         }
     }
     Ok(text)
+}
+/// Relocate the sibling at `index` to final position `to`, [`Vec::remove`]/
+/// [`Vec::insert`] semantics, by rewriting the whole sibling window as one
+/// edit (each surviving sibling's own raw source bytes, reordered) and
+/// reparse-checking the result via the same [`Proposal`]/[`validate`] path
+/// every other list-item edit uses.
+fn move_item(
+    doc: &Document,
+    path: &[usize],
+    siblings: &[Block],
+    index: usize,
+    to: usize,
+    governor: &mut Governor,
+) -> Result<EditPlan, StopReason> {
+    if to >= siblings.len() {
+        return Err(invalid("move target index is out of range"));
+    }
+    if to == index {
+        return Ok(EditPlan {
+            source: doc.digest,
+            edits: Vec::new(),
+        });
+    }
+    let region = siblings[0].span.start..siblings[siblings.len() - 1].span.end;
+    governor.charge(Resource::Work, size(region.len()).saturating_mul(4))?;
+    governor.charge(
+        Resource::ScratchBytes,
+        size(region.len()).saturating_mul(4).saturating_add(512),
+    )?;
+    let mut order: Vec<usize> = (0..siblings.len()).collect();
+    let moved = order.remove(index);
+    order.insert(to, moved);
+    let mut replacement = String::with_capacity(region.len());
+    for &position in &order {
+        replacement.push_str(&doc.source[siblings[position].span.clone()]);
+    }
+    let change = TextEdit {
+        range: region,
+        replacement,
+    };
+    let plan = EditPlan {
+        source: doc.digest,
+        edits: vec![change.clone()],
+    };
+    let applied = plan.apply_governed(&doc.source, governor);
+    let Outcome::Resolved(applied) = applied.outcome else {
+        return Err(applied.receipt.stopped);
+    };
+    let updated = Document::parse(&applied.text, governor)?;
+    let intended = Document::parse(&change.replacement, governor)?;
+    let proposal = Proposal {
+        new_count: intended.blocks.len(),
+        old_count: siblings.len(),
+        index: 0,
+        intended: Some(intended),
+        eof_separator: 0,
+        placeholder: false,
+        change,
+    };
+    validate(doc, &updated, path, &proposal)?;
+    Ok(plan)
 }
 fn validate(
     old: &Document,

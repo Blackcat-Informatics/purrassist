@@ -34,6 +34,15 @@ pub enum TableColumnEdit {
         /// Requested alignment.
         alignment: Alignment,
     },
+    /// Reorder a column (header, alignment, and every body cell together),
+    /// [`Vec::remove`]-then-[`Vec::insert`] semantics. Every other column's
+    /// cells keep their exact original spelling and margins.
+    Move {
+        /// Current existing header column.
+        index: usize,
+        /// Final header column, `0..header.len()`.
+        to: usize,
+    },
 }
 
 impl Document {
@@ -85,6 +94,11 @@ impl Document {
         };
         if let TableColumnEdit::Align { index, alignment } = edit
             && alignments[*index] == *alignment
+        {
+            return Ok(plan);
+        }
+        if let TableColumnEdit::Move { index, to } = edit
+            && index == to
         {
             return Ok(plan);
         }
@@ -177,6 +191,11 @@ fn admit(
                 return Err(invalid("table column does not exist"));
             }
         }
+        TableColumnEdit::Move { index, to } => {
+            if *index >= width || *to >= width {
+                return Err(invalid("table column does not exist"));
+            }
+        }
     }
     Ok(())
 }
@@ -217,6 +236,16 @@ fn update_expected(kind: &mut BlockKind, edit: &TableColumnEdit) {
             TableColumnEdit::Align { index, alignment } => {
                 alignments[*index] = *alignment;
             }
+            TableColumnEdit::Move { index, to } => {
+                let value = header.remove(*index);
+                header.insert(*to, value);
+                let alignment = alignments.remove(*index);
+                alignments.insert(*to, alignment);
+                for row in rows.iter_mut() {
+                    let value = row.remove(*index);
+                    row.insert(*to, value);
+                }
+            }
         }
     }
 }
@@ -253,6 +282,10 @@ fn edit_line(text: &str, width: usize, number: usize, edit: &TableColumnEdit) ->
         }
         TableColumnEdit::Remove { index } => {
             cells.remove(*index);
+        }
+        TableColumnEdit::Move { index, to } => {
+            let value = cells.remove(*index);
+            cells.insert(*to, value);
         }
         TableColumnEdit::Align { .. } => unreachable!(),
     }

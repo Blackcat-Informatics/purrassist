@@ -23,6 +23,13 @@ pub enum TableRowEdit {
         /// Zero-based body index, excluding header and delimiter rows.
         index: usize,
     },
+    /// Reorder a body row, [`Vec::remove`]-then-[`Vec::insert`] semantics.
+    Move {
+        /// Current zero-based body index.
+        index: usize,
+        /// Final zero-based body index, `0..rows.len()`.
+        to: usize,
+    },
 }
 
 impl Document {
@@ -106,6 +113,21 @@ impl Document {
                     replacement: String::new(),
                 }
             }
+            TableRowEdit::Move { index, to } => {
+                if *index >= rows.len() || *to >= rows.len() {
+                    return Err(invalid("table row index out of range"));
+                }
+                if index == to {
+                    return Ok(EditPlan {
+                        source: self.digest,
+                        edits: Vec::new(),
+                    });
+                }
+                let change = move_row(&self.source, block, rows.len(), *index, *to, governor)?;
+                let moved_row = expected_rows.remove(*index);
+                expected_rows.insert(*to, moved_row);
+                change
+            }
         };
         let mut proposed = self.source.clone();
         proposed.replace_range(change.range.clone(), &change.replacement);
@@ -122,6 +144,44 @@ impl Document {
     }
 }
 
+/// Build the single reordering edit for [`TableRowEdit::Move`]: every body
+/// row's raw line, in its new order, each with the delimiter line's own
+/// container prefix (every row in one table shares that prefix).
+fn move_row(
+    source: &str,
+    block: &Block,
+    row_count: usize,
+    index: usize,
+    to: usize,
+    governor: &mut Governor,
+) -> Result<TextEdit, StopReason> {
+    let body_lines = &block.lines[2..];
+    if body_lines.len() != row_count {
+        return Err(invalid("table row source lines missing"));
+    }
+    let delimiter = &block.lines[1];
+    let delimiter_text = line(source, delimiter);
+    let indentation = delimiter_text.len() - delimiter_text.trim_start_matches([' ', '\t']).len();
+    let row_prefix = &source[line_start(source, delimiter.start)..delimiter.start + indentation];
+    let region = line_start(source, body_lines[0].start)..body_lines[row_count - 1].end;
+    governor.charge(Resource::Work, size(region.len()).saturating_mul(4))?;
+    governor.charge(
+        Resource::ScratchBytes,
+        size(region.len()).saturating_mul(4).saturating_add(256),
+    )?;
+    let mut order: Vec<usize> = (0..row_count).collect();
+    let moved = order.remove(index);
+    order.insert(to, moved);
+    let mut replacement = String::with_capacity(region.len());
+    for &position in &order {
+        replacement.push_str(row_prefix);
+        replacement.push_str(&source[body_lines[position].clone()]);
+    }
+    Ok(TextEdit {
+        range: region,
+        replacement,
+    })
+}
 fn insert(
     source: &str,
     block: &Block,

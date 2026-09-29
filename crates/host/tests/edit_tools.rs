@@ -298,3 +298,134 @@ fn application_reports_budget_exhaustion_and_rejects_oversized_offsets() {
         Some("invalid_input")
     );
 }
+
+fn rebase_from(prior: &str) -> Node {
+    object([("source", string(prior))])
+}
+
+#[test]
+fn apply_edit_rebases_a_commuting_stale_plan_via_rebase_from() {
+    let root = Root::new();
+    let tools = root.tools();
+    let prior = "hot tea, cold coffee";
+    // A plan made against `prior`, replacing "hot" -> "warm".
+    let stale_plan = plan(prior, &[(0, 3, "warm")]);
+    // The file changed underneath the plan: "coffee" -> "espresso".
+    let current = "hot tea, cold espresso";
+    let args = object([
+        ("source", string(current)),
+        ("plan", stale_plan),
+        ("rebase_from", rebase_from(prior)),
+    ]);
+    let result = tools.call("apply_edit", &args).unwrap();
+    assert_eq!(result.get("status").unwrap().as_str(), Some("resolved"));
+    assert_eq!(
+        result.pointer("/value/text").unwrap().as_str(),
+        Some("warm tea, cold espresso")
+    );
+    // The rebase is recorded as evidence.
+    assert!(
+        result
+            .pointer("/receipt/evidence")
+            .unwrap()
+            .to_json()
+            .contains("patch.rebase.v1")
+    );
+}
+
+#[test]
+fn apply_edit_refuses_a_non_commuting_stale_plan_even_with_rebase_from() {
+    let root = Root::new();
+    let tools = root.tools();
+    let prior = "hot tea, cold coffee";
+    // A plan made against `prior`, replacing "hot tea" -> "warm chai".
+    let stale_plan = plan(prior, &[(0, 7, "warm chai")]);
+    // The intervening change overlaps that exact range: "hot" -> "iced".
+    let current = "iced tea, cold coffee";
+    let args = object([
+        ("source", string(current)),
+        ("plan", stale_plan),
+        ("rebase_from", rebase_from(prior)),
+    ]);
+    let result = tools.call("apply_edit", &args).unwrap();
+    assert_eq!(result.get("status").unwrap().as_str(), Some("unresolved"));
+    assert_eq!(
+        result
+            .pointer("/receipt/termination/kind")
+            .unwrap()
+            .as_str(),
+        Some("invalid_input")
+    );
+}
+
+#[test]
+fn apply_edit_rejects_a_rebase_from_that_does_not_match_the_plans_declared_source() {
+    let root = Root::new();
+    let tools = root.tools();
+    let stale_plan = plan("hot tea", &[(0, 3, "warm")]);
+    let args = object([
+        ("source", string("cold tea")),
+        ("plan", stale_plan),
+        ("rebase_from", rebase_from("some other prior text")),
+    ]);
+    let result = tools.call("apply_edit", &args).unwrap();
+    assert_eq!(result.get("status").unwrap().as_str(), Some("unresolved"));
+}
+
+#[test]
+fn apply_file_rebases_a_commuting_stale_plan_and_refuses_a_non_commuting_one() {
+    let root = Root::new();
+    let tools = root.tools();
+    let prior = "hot tea, cold coffee";
+    std::fs::write(root.0.join("drinks.txt"), prior).unwrap();
+
+    // Someone else's intervening write changes the file first.
+    let current = "hot tea, cold espresso";
+    std::fs::write(root.0.join("drinks.txt"), current).unwrap();
+
+    // A plan made against the original `prior` text, disjoint from the
+    // intervening change: replace "hot" -> "warm".
+    let stale_plan = plan(prior, &[(0, 3, "warm")]);
+    let args = object([
+        ("path", string("drinks.txt")),
+        (
+            "expected_digest",
+            string(Digest::of(prior.as_bytes()).to_string()),
+        ),
+        ("plan", stale_plan),
+        ("rebase_from", rebase_from(prior)),
+    ]);
+    let result = tools.call("apply_file", &args).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(root.0.join("drinks.txt")).unwrap(),
+        "warm tea, cold espresso"
+    );
+    assert!(
+        result
+            .pointer("/receipt/evidence")
+            .unwrap()
+            .to_json()
+            .contains("patch.rebase.v1")
+    );
+
+    // Now a non-commuting case: the intervening change overlaps the plan's
+    // own edited range, so the rebase must refuse rather than guess.
+    let prior2 = "warm tea, cold espresso";
+    let current2 = "iced tea, cold espresso";
+    std::fs::write(root.0.join("drinks.txt"), current2).unwrap();
+    let overlapping_plan = plan(prior2, &[(0, 4, "hot ")]);
+    let args2 = object([
+        ("path", string("drinks.txt")),
+        (
+            "expected_digest",
+            string(Digest::of(prior2.as_bytes()).to_string()),
+        ),
+        ("plan", overlapping_plan),
+        ("rebase_from", rebase_from(prior2)),
+    ]);
+    assert!(tools.call("apply_file", &args2).is_err());
+    assert_eq!(
+        std::fs::read_to_string(root.0.join("drinks.txt")).unwrap(),
+        current2
+    );
+}

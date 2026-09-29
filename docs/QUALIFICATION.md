@@ -367,8 +367,49 @@ protocol behavior, not a maximum response latency or global allocator bound.
 
 - Extend Markdown section, list, table, and reference structural editing and broaden
   adversarial/preservation qualification.
-  Full HTML-output comparison against the pinned official corpora now passes;
-  this does not finish structural editing or resource/performance qualification.
+  Full HTML-output comparison against the pinned official corpora now passes.
+  `crates/core/src/patch.rs` adds `Patch` (an ordered, non-overlapping,
+  source-digest-bound set of byte-range replacements) as the crate's single
+  edit representation, with a governed `apply`/`invert`/`compose`/`commute`/
+  `rebase`/`diff` algebra; `edits::EditPlan`/`TextEdit` are aliases for it,
+  not a parallel implementation. `Patch::rebase` reconciles a stale plan
+  against an intervening change when their edited ranges commute (disjoint),
+  recording a `patch.rebase.v1` transformation, and refuses as stale
+  otherwise; `apply_edit`/`apply_file` expose this as an explicit
+  `rebase_from` input (the prior text the plan was made against), diffing
+  prior-to-current into the intervening patch via `Patch::diff`.
+  `crates/core/tests/patch_laws.rs` checks invert-apply identity, compose
+  associativity, and commute consistency (`p;q' ≡ q;p'`) over a deterministic
+  in-test LCG generating well over 1,000 patches, plus rebase success and
+  non-commuting refusal; `crates/host/tests/edit_tools.rs` covers
+  `apply_edit`/`apply_file` rebasing a commuting stale plan and refusing a
+  non-commuting one. New governed, digest-bound, reparse-checked, inverse-
+  providing Markdown operations: `insert_section`, `remove_section`,
+  `move_section` (with optional re-leveling of the moved section's own top
+  heading, reported as a transformation), `rename_heading`;
+  `ListItemEdit::Move` and `renumber_list`; `TableRowEdit::Move`,
+  `TableColumnEdit::Move`, and direct cell edits on a body row's implicit
+  padded cells, which now materialize the missing cells instead of refusing;
+  `add_reference`, `relabel_reference` (rewrites every shortcut/collapsed/
+  full-reference use resolving to the renamed definition, wherever
+  CommonMark/GFM itself resolves one — paragraph/heading text and GFM table
+  cells, at any container nesting depth — while leaving a code span,
+  autolink, raw HTML, or code block spelling the label untouched, since
+  those are literal there), `remove_reference`
+  (inlines the destination/title into every use, lossless), and
+  `unlink_reference` (removes the definition and turns every use into plain
+  text, each rewritten byte range recorded as an ordinary `Loss`). Layout
+  recovery: a body whose trailing line is blank, or whose leading indentation
+  uses a tab, previously refused; both are now recognized and reindented (the
+  trailing blank line to the container's own level, matching this parser's
+  existing blank-line-before-dedent ejection rule; the tab to the number of
+  spaces it would occupy from column zero, matching how the body parses
+  standalone) instead of refused. `crates/core/tests/markdown_structure.rs`
+  checks every new operation for success, byte-identical inverse round-trip,
+  CRLF preservation, stale-digest refusal, and exhaustion.
+  Adversarial/preservation qualification (Task 11) and the CLI/MCP operation
+  registry for these new operations (Task 10) remain open; this bullet is
+  otherwise complete.
 - Regex coverage is complete: `crates/core/src/pattern/` implements the full
   ECMA-262 `u`-mode grammar (named groups with the ECMA duplicate-name
   mutual-exclusive-alternative early-error rule, `\k<name>` resolved at

@@ -3,10 +3,11 @@
 //! Decode selected plans and expose governed buffer application without file effects.
 use purrassist::{
     AssistResult, CancellationToken, Governor, Outcome, Receipt, StopReason,
-    contract::Resource,
+    contract::{Evidence, Resource},
     digest::Digest,
     edits::{AppliedEdit, EditPlan, TextEdit},
     json::{Node, Value},
+    patch::Patch,
     syntax::{self, Language},
 };
 
@@ -14,10 +15,13 @@ pub(super) fn apply(args: &Node, cancellation: Option<&CancellationToken>) -> Re
     let source = super::field(args, "source")?;
     let effort = super::effort(args)?;
     let mut governor = super::governor(effort.budget(), cancellation);
-    let plan = match decode_plan(
+    let mut transformation = None;
+    let plan = match decode_plan_rebased(
         source,
         args.get("plan").ok_or("missing plan")?,
+        args.get("rebase_from"),
         &mut governor,
+        &mut transformation,
     ) {
         Ok(plan) => plan,
         Err(reason) => {
@@ -56,6 +60,9 @@ pub(super) fn apply(args: &Node, cancellation: Option<&CancellationToken>) -> Re
     if let Err(reason) = admit_output(&result.outcome, source, &mut governor) {
         result.outcome = Outcome::Unresolved;
         result.receipt.stopped = reason;
+    }
+    if let Some(transformation) = transformation {
+        result.receipt.evidence.insert(0, transformation);
     }
     result.receipt.usage = governor.usage();
     result.receipt.effort = effort;
@@ -110,6 +117,50 @@ pub(super) fn decode_plan(
         source: digest,
         edits,
     })
+}
+
+/// Decode a plan exactly as [`decode_plan`] does when its declared source
+/// digest still matches `source`. Otherwise, if `rebase_from` supplies the
+/// exact prior text the plan was made against, diff that prior text against
+/// `source` into an intervening [`Patch`], and governed-[`Patch::rebase`]
+/// the plan onto it: a plan whose edits commute with the intervening change
+/// is rebased (recording `*transformation`), and one that does not is
+/// refused as stale, exactly as an unrebased stale plan already is.
+///
+/// # Errors
+/// Returns the same stale/malformed-plan refusals as [`decode_plan`], plus
+/// a stale refusal when `rebase_from` is absent, does not match the plan's
+/// declared digest, or when the rebase itself refuses a non-commuting
+/// intervening change. Resource exhaustion and cancellation propagate.
+pub(super) fn decode_plan_rebased(
+    source: &str,
+    plan: &Node,
+    rebase_from: Option<&Node>,
+    governor: &mut Governor,
+    transformation: &mut Option<Evidence>,
+) -> Result<EditPlan, StopReason> {
+    let digest = Digest::of(source.as_bytes());
+    let declared = super::field(plan, "source").map_err(StopReason::InvalidInput)?;
+    if declared == digest.to_string() {
+        return decode_plan(source, plan, governor);
+    }
+    let Some(rebase_from) = rebase_from else {
+        return Err(StopReason::InvalidInput(
+            "stale edit plan: source digest changed".into(),
+        ));
+    };
+    let prior = super::field(rebase_from, "source").map_err(StopReason::InvalidInput)?;
+    let prior_digest = Digest::of(prior.as_bytes());
+    if declared != prior_digest.to_string() {
+        return Err(StopReason::InvalidInput(
+            "stale edit plan: plan source does not match rebase_from source".into(),
+        ));
+    }
+    let stale_plan = decode_plan(prior, plan, governor)?;
+    let intervening = Patch::diff(prior, source, governor)?;
+    let rebased = stale_plan.rebase(&intervening, prior, governor)?;
+    *transformation = Some(rebased.transformation);
+    Ok(rebased.patch)
 }
 
 fn offset(value: &Node, name: &str) -> Result<usize, StopReason> {
