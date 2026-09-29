@@ -26,10 +26,10 @@
 //! is caught at the 16x scale even if it slips under a generously chosen `K`
 //! at the base scale.
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use purrassist_core::{
     Budget, Governor, Outcome, edits,
@@ -46,7 +46,26 @@ use purrassist_core::{
 /// The "at least 16x larger" scale pair every workload is measured at.
 const SCALES: [usize; 2] = [2, 32];
 
-static ALLOCATED: AtomicU64 = AtomicU64::new(0);
+thread_local! {
+    /// Bytes granted to *this thread*. Counting per thread keeps the test
+    /// harness's own allocations on other threads (spawning the next test,
+    /// capturing output) out of a measured window; a single process-global
+    /// counter picked those up and made the bound depend on test ordering.
+    static ALLOCATED: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Add `bytes` to the calling thread's counter. Uses `try_with` because the
+/// allocator can run while this thread's locals are being torn down, when the
+/// counter is gone and the allocation belongs to no measured window.
+fn count(bytes: usize) {
+    let _ = ALLOCATED.try_with(|allocated| {
+        allocated.set(allocated.get().saturating_add(bytes as u64));
+    });
+}
+
+fn allocated() -> u64 {
+    ALLOCATED.with(Cell::get)
+}
 
 struct CountingAllocator;
 
@@ -56,7 +75,7 @@ struct CountingAllocator;
 // memory and never changes the contract `GlobalAlloc` requires of `System`.
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATED.fetch_add(layout.size() as u64, Ordering::Relaxed);
+        count(layout.size());
         // SAFETY: `layout` is passed through unchanged to the system allocator.
         unsafe { System.alloc(layout) }
     }
@@ -66,13 +85,13 @@ unsafe impl GlobalAlloc for CountingAllocator {
         unsafe { System.dealloc(ptr, layout) }
     }
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        ALLOCATED.fetch_add(layout.size() as u64, Ordering::Relaxed);
+        count(layout.size());
         // SAFETY: `layout` is passed through unchanged to the system allocator.
         unsafe { System.alloc_zeroed(layout) }
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         if new_size > layout.size() {
-            ALLOCATED.fetch_add((new_size - layout.size()) as u64, Ordering::Relaxed);
+            count(new_size - layout.size());
         }
         // SAFETY: `ptr`, `layout`, and `new_size` are passed through unchanged
         // to the system allocator, which is the same contract this method must
@@ -84,16 +103,14 @@ unsafe impl GlobalAlloc for CountingAllocator {
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-/// Serializes every measured test's *entire body* in this process, not just
-/// its `measure` call: the counting allocator has no thread affinity, so a
-/// concurrently running test's ordinary (unmeasured) setup on another thread
-/// would otherwise still add to the same global counter mid-measurement.
-/// This is the "mutex around measurement" strategy for single-threaded-safe
-/// measurement; every `#[test]` in this file takes this guard first.
+/// Serializes every measured test's *entire body* in this process. Counting is
+/// per thread, so other threads cannot perturb a measurement; the lock also
+/// keeps measured work from competing with concurrent tests for shared
+/// process-wide state (lazy statics initialised by whichever test runs first).
 static MEASURE_LOCK: Mutex<()> = Mutex::new(());
 
-/// Acquire exclusive access to the process-global allocation counter for the
-/// rest of the calling test. Hold the returned guard for the whole test body.
+/// Acquire exclusive measurement for the rest of the calling test. Hold the
+/// returned guard for the whole test body.
 fn exclusive() -> std::sync::MutexGuard<'static, ()> {
     MEASURE_LOCK
         .lock()
@@ -103,7 +120,8 @@ fn exclusive() -> std::sync::MutexGuard<'static, ()> {
 /// Run `op`, returning its result and the bytes the allocator granted while
 /// it ran (allocation only; frees are not subtracted, since the bound is on
 /// bytes *allocated during* the operation, not net/live bytes). Callers must
-/// hold an [`exclusive`] guard for their whole test body, not just this call.
+/// hold an [`exclusive`] guard for their whole test body. Only this thread's
+/// allocations are counted.
 ///
 /// `op` runs once, unmeasured, before the timed call. Every workload here
 /// constructs a fresh [`Governor`] inside `op` itself, so a repeat call is
@@ -115,9 +133,9 @@ fn exclusive() -> std::sync::MutexGuard<'static, ()> {
 /// scheduling.
 fn measure<T>(mut op: impl FnMut() -> T) -> (T, u64) {
     let _ = op();
-    let before = ALLOCATED.load(Ordering::Relaxed);
+    let before = allocated();
     let result = op();
-    let after = ALLOCATED.load(Ordering::Relaxed);
+    let after = allocated();
     (result, after.saturating_sub(before))
 }
 
