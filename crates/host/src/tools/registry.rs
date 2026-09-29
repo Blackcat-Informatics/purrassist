@@ -174,6 +174,14 @@ pub(super) static ENTRIES: &[Entry] = &[
         |_, _, args, cancellation| super::validate::call(args, cancellation)
     ),
     entry!(
+        "generate_json_witness",
+        "Generate a witness instance for a JSON Schema location, prove unsatisfiability with refutation evidence, or report explicit search exhaustion; never claims unsatisfiability from a governor hard stop",
+        r#"{"type":"object","required":["schema"],"properties":{"schema":{"type":["object","boolean"]},"resources":{"type":"object","additionalProperties":{"type":["object","boolean"]}},"effort":{"enum":["exact","quick","standard","deep","maximum"]}},"additionalProperties":false}"#,
+        r#"{"type":"object","additionalProperties":false,"required":["outcome","witness","refutation","receipt"],"properties":{"outcome":{"enum":["witness","unsatisfiable","exhausted"]},"witness":true,"refutation":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["rule","explanation","destination","span"],"properties":{"rule":{"type":"string"},"explanation":{"type":"string"},"destination":{"type":"string"},"span":true}}},"receipt":{"type":"object","required":["version","source","sources","alternatives","ambiguity","operation","effort","budget","usage","evidence","losses","inferences","validations","termination"],"properties":{"version":{"type":"integer"},"termination":{"type":"object"}}}}}"#,
+        false,
+        |_, _, args, cancellation| super::witness::call(args, cancellation)
+    ),
+    entry!(
         "match_strings",
         "Rank caller-identified strings and aliases using exact, Unicode, lexical, distance, and optional English phonetic evidence",
         r#"{"type":"object","required":["query","candidates"],"properties":{"query":{"type":"string"},"candidates":{"type":"array","maxItems":8192,"items":{"oneOf":[{"type":"string"},{"type":"object","required":["id","text"],"properties":{"id":{"type":"string","minLength":1},"text":{"type":"string"},"aliases":{"type":"array","maxItems":256,"items":{"type":"string"}}},"additionalProperties":false}]}},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"english_phonetics":{"type":"boolean"},"limit":{"type":"integer","minimum":1,"maximum":8192}},"additionalProperties":false}"#,

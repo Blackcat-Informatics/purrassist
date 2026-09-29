@@ -11,3 +11,4 @@
 {"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"inspect_code","arguments":{"source":"def answer():\n    return 42\n","language":"python"}}}
 {"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"match_embeddings","arguments":{"space":"demo","query":[1.0,0.0],"candidates":[{"id":"a","vector":[1.0,0.0]},{"id":"b","vector":[0.0,1.0]}]}}}
 {"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"prepare_helper","arguments":{"provider":"openai_responses","model":"test-model","input":"hi","schema":{"type":"string"},"max_output_tokens":16}}}
+{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"generate_json_witness","arguments":{"schema":{"type":"object","required":["a"],"properties":{"a":{"type":"integer","minimum":3}}}}}}

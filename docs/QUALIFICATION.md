@@ -423,7 +423,14 @@ protocol behavior, not a maximum response latency or global allocator bound.
   (schema + instance → `valid`/`violations`/always-evaluated
   `format_evidence`/`pattern_evidence`/`unsupported_vocabularies`/receipt),
   which the CLI `purrassist validate` command now emits verbatim instead of a
-  hand-built object; `prepare_helper`/`complete_helper` giving
+  hand-built object; `generate_json_witness` (schema + optional `resources` →
+  `outcome` `witness`/`unsatisfiable`/`exhausted`, the generated `witness` or
+  non-empty `refutation` evidence, and a receipt), giving
+  `Schema::generate_witness_governed` (Task 8) a production consumer beyond
+  `crate::schema::recovery` — one governor call covers compilation and
+  generation, and a governor hard stop reached while generating is reported
+  as `exhausted`/`budget_exceeded`, never `unsatisfiable`;
+  `prepare_helper`/`complete_helper` giving
   `purrassist_host::helpers::Pending` a production tool surface (see
   `docs/HELPERS.md`) with a tamper-evident, versioned `pending` envelope.
   `effort` is now accepted by `plan_replacement`, `plan_diff`, and
@@ -448,7 +455,8 @@ protocol behavior, not a maximum response latency or global allocator bound.
   asserts MCP `tools/list` names equal the registry, validates every tool's
   output against its own registered output schema, and includes fixtures for
   the `ambiguity` object (a `resolve_string` tie), `validate_json`, and both
-  helper tools.
+  helper tools; a dedicated equivalence test exercises `generate_json_witness`
+  through both transports for all three outcome shapes.
 - Regex coverage is complete: `crates/core/src/pattern/` implements the full
   ECMA-262 `u`-mode grammar (named groups with the ECMA duplicate-name
   mutual-exclusive-alternative early-error rule, `\k<name>` resolved at

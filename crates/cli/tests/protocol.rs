@@ -374,6 +374,18 @@ fn fixtures() -> Vec<Fixture> {
             |node| assert_eq!(node.get("valid").unwrap().to_json(), "true"),
         ),
         fx(
+            "generate_json_witness",
+            |_| {
+                r#"{"schema":{"type":"object","required":["a"],"properties":{"a":{"type":"integer","minimum":3}}}}"#
+                    .into()
+            },
+            |node| {
+                assert_eq!(node.get("outcome").and_then(Node::as_str), Some("witness"));
+                assert_eq!(node.get("witness").unwrap().to_json(), r#"{"a":3}"#);
+                assert_eq!(node.pointer("/refutation").unwrap().to_json(), "[]");
+            },
+        ),
+        fx(
             "match_strings",
             |_| {
                 r#"{"query":"iced tea","candidates":[{"id":"tea","text":"cold tea","aliases":["iced tea"]}],"english_phonetics":false}"#.into()
@@ -788,4 +800,60 @@ fn mcp_tools_list_names_equal_the_registry() {
     registered_names.sort_unstable();
     assert_eq!(listed_names, registered_names);
     fs::remove_dir_all(root).unwrap();
+}
+
+/// `generate_json_witness` (Task 10's witness-generation surface) through
+/// both transports for each of the three [`WitnessOutcome`][algebra outcome]
+/// shapes — a witness, a proven-unsatisfiable refutation, and an explicit
+/// exhaustion (here a non-progressing `$ref` cycle) — beyond the single
+/// fixture `every_registry_entry_has_a_fixture_validated_through_cli_and_mcp`
+/// requires per tool: CLI and MCP must agree byte-for-byte and every result
+/// must validate against the tool's own registered output schema.
+#[test]
+fn generate_json_witness_agrees_across_cli_and_mcp_for_every_outcome() {
+    let definitions = Tools::definitions().unwrap();
+    let Value::Array(tools) = &definitions.value else {
+        panic!("definitions must be an array")
+    };
+    let tool = tools
+        .iter()
+        .find(|tool| tool.get("name").and_then(Node::as_str) == Some("generate_json_witness"))
+        .expect("generate_json_witness must be registered");
+    let output_schema = Schema::compile(&tool.get("outputSchema").unwrap().to_json()).unwrap();
+    for (label, arguments, outcome) in [
+        (
+            "witness",
+            r#"{"schema":{"type":"object","required":["a"],"properties":{"a":{"type":"integer","minimum":3}}}}"#,
+            "witness",
+        ),
+        (
+            "unsatisfiable",
+            r#"{"schema":{"allOf":[{"type":"string"},{"type":"number"}]}}"#,
+            "unsatisfiable",
+        ),
+        ("exhausted", r##"{"schema":{"$ref":"#"}}"##, "exhausted"),
+    ] {
+        let dir_a = fresh_dir(&format!("witness-cli-{label}"));
+        let dir_b = fresh_dir(&format!("witness-mcp-{label}"));
+        let direct = run_cli("generate_json_witness", arguments, &dir_a);
+        let via_mcp = run_mcp("generate_json_witness", arguments, &dir_b);
+        assert_eq!(
+            direct.to_json(),
+            via_mcp.to_json(),
+            "generate_json_witness[{label}]: CLI and MCP results diverged"
+        );
+        assert_eq!(
+            direct.get("outcome").and_then(Node::as_str),
+            Some(outcome),
+            "generate_json_witness[{label}]: unexpected outcome {direct:?}"
+        );
+        let report = output_schema.validate(&direct).unwrap();
+        assert!(
+            report.valid,
+            "generate_json_witness[{label}]: output violates its registered output schema: {:?}",
+            report.violations
+        );
+        fs::remove_dir_all(&dir_a).unwrap();
+        fs::remove_dir_all(&dir_b).unwrap();
+    }
 }

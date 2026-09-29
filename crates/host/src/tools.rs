@@ -11,6 +11,7 @@ mod markdown;
 mod paths;
 mod registry;
 mod validate;
+mod witness;
 
 use crate::files::Store;
 use purrassist::{

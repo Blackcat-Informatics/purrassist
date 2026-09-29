@@ -91,7 +91,12 @@ compilation methods use the default finite budget. `validate_json` exposes
 whole-instance validation itself: given `schema` and `instance`, it returns
 `valid`, every `violations` entry, always-evaluated format/pattern evidence,
 and any unsupported-vocabulary evidence, alongside a receipt. The shipped CLI's
-`purrassist validate` command emits exactly this tool's output.
+`purrassist validate` command emits exactly this tool's output. `generate_json_witness`
+exposes the same witness-generation algebra: given `schema` and optional
+`resources`, it returns `outcome` (`witness`, `unsatisfiable`, or `exhausted`),
+the generated `witness` value or non-empty `refutation` evidence, and a
+receipt; a governor hard stop while generating is reported as `exhausted`
+with `budget_exceeded` in the receipt's termination, never as `unsatisfiable`.
 
 `prepare_helper`/`complete_helper` expose optional external-model helper
 proposals (see [helpers](docs/HELPERS.md)) as a two-call tool pair: the first
