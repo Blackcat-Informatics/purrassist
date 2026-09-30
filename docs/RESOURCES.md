@@ -262,7 +262,30 @@ then use that loader/libc; other libraries still come from the host. The report
 records the runtime archive and extracted-file hashes. These measurements qualify
 that runtime, not the host's alternate allocator implementation. Appropriate
 loader debug symbols must be available; installed debuginfod configuration is
-inherited. No endpoint is embedded in this repository or the report.
+inherited for ordinary system-runtime profiling. Portable profiling instead
+downloads the exact loader's debug file from the public Arch source registered
+in `vendor/profiling-runtime.json`, verifies its SHA-256, and keeps it beside
+the loader under its GNU debuglink name. The report includes this file's digest.
+This mode requires no ambient debuginfod configuration or system debug package.
+
+Every measurement first runs the real empty workload natively and under both
+Memcheck and Massif, with the same strict flags and output/log validation as the
+campaign. `python3 scripts/measure-resources.py --portable-runtime --check-tools`
+runs only that prerequisite check and writes no measurement report. Verify runs
+it before its independent qualification campaigns; its toolchain installs both
+WASM targets and its hosted runner provisions `libarchive-tools` for `bsdtar`.
+
+Profiler stdout, stderr and raw tool logs are retained in the announced ignored
+resource-log directory. Any nonzero profiler exit, including startup exit 1 or
+Memcheck's memory-error exit 97, fails with all three diagnostics visible.
+Successful process exit also requires exact workload output and valid tool logs.
+
+The original hosted failure did not expose the raw startup diagnostic. A
+controlled reproduction with the pinned profiler and portable loader, empty
+debug cache and no `DEBUGINFOD_URLS`, exited 1 on a missing mandatory loader
+redirection. Supplying the verified matching debug file made the same strict
+run pass with zero Memcheck errors. This establishes the debug prerequisite;
+the original hidden failure is not mislabeled as a workload memory error.
 
 The measurement definitions follow the upstream
 [Massif manual](https://valgrind.org/docs/manual/ms-manual.html) and
@@ -345,19 +368,19 @@ any flag the wrapper would otherwise add.
 
 ## Recorded baseline
 
-[Linux x86_64 resource baseline](qualification/resources-linux-x86_64.json) was measured from commit `22d33135ed43a438b093a4bf996956109408a30f`. The report records the dirty working tree and a stable engine source digest checked before and after the campaign. It records the isolated runtime and executable identities. Ordinary build durations describe their observed Cargo cache states; the separate `cold_build` records compilation with empty target and intermediate directories and disabled compiler wrappers.
+[Linux x86_64 resource baseline](qualification/resources-linux-x86_64.json) was measured from commit `dc23bc81bebacef95f2b84d29dfd20031fdcd44c` with a dirty working tree. The engine source digest `4293b5c9807fe32e55cbe8f24bffff9a2c2046fa1a56bca16656e10cff6c0509` was checked before and after the campaign. The run used the isolated runtime with verified matching loader debug symbols and an empty `DEBUGINFOD_URLS`; it records all three runtime file hashes and executable identities. Raw logs are retained locally in `.cache/resource-logs-q4vz5bs0`. Ordinary build durations describe their observed Cargo cache states; the separate `cold_build` records compilation with empty target and intermediate directories and disabled compiler wrappers.
 
 | Workload | Allocation calls | Total allocated bytes | Observed requested-heap peak | Native reported RSS |
 | --- | ---: | ---: | ---: | ---: |
-| empty | 13 | 3,817 | 1,736 | 4,657,152 |
-| schema_compile | 106 | 9,168 | 4,538 | 5,345,280 |
-| json_parse | 1,574 | 236,097 | 173,150 | 5,332,992 |
+| empty | 13 | 3,817 | 1,736 | 4,677,632 |
+| schema_compile | 106 | 9,168 | 4,538 | 5,337,088 |
+| json_parse | 1,574 | 236,097 | 173,150 | 5,337,088 |
 | json_composed | 2,541 | 192,835 | 62,611 | 5,636,096 |
 | json_ambiguous | 389 | 33,349 | 15,689 | 5,480,448 |
-| markdown_render | 4,096 | 777,195 | 225,787 | 5,660,672 |
-| markdown_list | 2,811 | 242,688 | 152,036 | 5,705,728 |
-| unicode | 23 | 125,931 | 68,955 | 5,136,384 |
-| matching | 7,222 | 313,232 | 23,944 | 5,226,496 |
+| markdown_render | 4,096 | 777,195 | 225,787 | 5,664,768 |
+| markdown_list | 2,811 | 242,688 | 152,036 | 5,689,344 |
+| unicode | 23 | 125,931 | 68,955 | 5,140,480 |
+| matching | 7,222 | 313,232 | 23,944 | 5,234,688 |
 
 Values include the full benchmark process as described above. They are not per-function allocation counts, portable guarantees, or a production sizing rule.
 
@@ -375,7 +398,7 @@ The release CLI in this snapshot is 9,762,176 bytes. The instrumentable benchmar
 
 ### Cold build
 
-The recorded release CLI cold build took 26.512 seconds and produced 35 compiler artifacts, with 0 reused artifacts. Both compiler wrapper layers were disabled; the target and intermediate directories were new and empty. Registry sources and OS page caches remained available. The report also records the resulting executable's size and digest.
+The recorded release CLI cold build took 20.968 seconds and produced 35 compiler artifacts, with 0 reused artifacts. Both compiler wrapper layers were disabled; the target and intermediate directories were new and empty. Registry sources and OS page caches remained available. The resulting executable is 9,673,768 bytes with SHA-256 `4961cbea4bac723d2f05a302465597597c3334bbd95d07e285c8fb9d97f06bc1`.
 
 ### Latency workload samples (selected)
 
@@ -383,19 +406,19 @@ Full detail is in the committed report. Each row measures 200 samples in its own
 
 | Core workload | Median ns | p95 ns | Allocation calls | Peak live bytes | Peak RSS bytes |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| schema_compile | 5,920 | 6,410 | 93 | 3,928 | 5,795,840 |
-| schema_recover | 72,998 | 80,618 | 2,528 | 62,005 | 6,201,344 |
-| matching_resolve | 448,616 | 821,324 | 3,684 | 19,838 | 5,713,920 |
-| edits_fuzzy | 316,050 | 499,464 | 12,980 | 12,676 | 5,795,840 |
-| markdown_render | 16,979 | 19,709 | 450 | 24,840 | 5,898,240 |
+| schema_compile | 3,690 | 4,070 | 93 | 3,928 | 5,771,264 |
+| schema_recover | 74,198 | 79,478 | 2,528 | 62,005 | 6,303,744 |
+| matching_resolve | 464,916 | 472,305 | 3,684 | 19,838 | 5,677,056 |
+| edits_fuzzy | 342,059 | 348,679 | 12,980 | 12,676 | 5,713,920 |
+| markdown_render | 16,159 | 18,899 | 450 | 24,840 | 6,021,120 |
 
 | Syntax workload | Median ns | p95 ns | C allocation calls | Rust allocation calls | C peak bytes | Rust peak growth bytes | Peak RSS bytes |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| python | 182,784 | 349,049 | 573 | 59 | 56,720 | 4,760 | 3,457,024 |
-| rust | 150,505 | 199,433 | 480 | 42 | 48,896 | 3,048 | 4,005,888 |
-| javascript | 163,585 | 169,484 | 476 | 25 | 48,360 | 2,264 | 3,407,872 |
-| typescript | 226,793 | 238,283 | 652 | 42 | 64,040 | 3,184 | 4,300,800 |
-| tsx | 212,153 | 256,492 | 545 | 25 | 53,032 | 2,288 | 4,337,664 |
+| python | 197,644 | 209,634 | 573 | 59 | 56,720 | 4,760 | 3,416,064 |
+| rust | 167,575 | 175,964 | 480 | 42 | 48,896 | 3,048 | 3,862,528 |
+| javascript | 182,685 | 191,974 | 476 | 25 | 48,360 | 2,264 | 3,420,160 |
+| typescript | 230,033 | 234,802 | 652 | 42 | 64,040 | 3,184 | 4,268,032 |
+| tsx | 211,274 | 218,404 | 545 | 25 | 53,032 | 2,288 | 4,423,680 |
 
 C and Rust peak values are measured separately and must not be added as a simultaneous peak.
 

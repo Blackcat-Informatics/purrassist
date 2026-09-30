@@ -4,6 +4,7 @@
 """Check measurement parsing and fail-closed behavior without invoking profilers."""
 import copy
 import hashlib
+import io
 import json
 import importlib.util
 from pathlib import Path
@@ -23,6 +24,46 @@ RESOURCES_PATH = Path(RESOURCES.__file__)
 
 
 class Reports(unittest.TestCase):
+    def test_failed_profiler_retains_output_and_surfaces_startup_or_memory_error(self):
+        for code in (1, 97):
+            with self.subTest(exit_code=code), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                detail = 'Fatal startup redirection failure' if code == 1 else 'Invalid read of size 8'
+
+                def failed(command, **kwargs):
+                    self.assertFalse(kwargs['check'])
+                    self.assertIn('--leak-check=full', command)
+                    self.assertIn('--error-exitcode=97', command)
+                    self.assertIn('--errors-for-leak-kinds=definite,indirect,possible', command)
+                    (directory / 'empty.memcheck.log').write_text(detail)
+                    return SimpleNamespace(returncode=code, stdout=b'partial workload output\n',
+                                           stderr=b'profiler stderr diagnostic\n')
+
+                with patch.object(RESOURCES, 'native', return_value={}), \
+                     patch.object(RESOURCES.subprocess, 'run', side_effect=failed):
+                    with self.assertRaises(RuntimeError) as error:
+                        RESOURCES.profile(['/benchmark'], 'empty', directory, {})
+                message = str(error.exception)
+                for expected in (f'exited {code}', detail, 'partial workload output',
+                                 'profiler stderr diagnostic', 'empty.memcheck.log'):
+                    self.assertIn(expected, message)
+                self.assertEqual((directory / 'empty.memcheck.stdout').read_bytes(), b'partial workload output\n')
+                self.assertEqual((directory / 'empty.memcheck.stderr').read_bytes(), b'profiler stderr diagnostic\n')
+
+    def test_failed_profiler_reports_missing_tool_log_and_success_still_checks_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            failed = SimpleNamespace(returncode=1, stdout=b'', stderr=b'cannot start tool')
+            with patch.object(RESOURCES.subprocess, 'run', return_value=failed):
+                with self.assertRaisesRegex(RuntimeError, 'cannot start tool') as error:
+                    RESOURCES.run_profiler(['valgrind'], ['/benchmark'], 'empty', 'memcheck', directory, {})
+            self.assertIn('(not created)', str(error.exception))
+            wrong = SimpleNamespace(returncode=0, stdout=b'ok other\n', stderr=b'')
+            with patch.object(RESOURCES.subprocess, 'run', return_value=wrong):
+                with self.assertRaisesRegex(ValueError, 'unexpected workload output'):
+                    RESOURCES.run_profiler(['valgrind'], ['/benchmark'], 'empty', 'memcheck', directory, {})
+            self.assertEqual((directory / 'empty.memcheck.stdout').read_bytes(), b'ok other\n')
+
     def test_allocation_summary(self):
         text = '==1== total heap usage: 1,234 allocs, 1,233 frees, 56,789 bytes allocated\n==1== ERROR SUMMARY: 0 errors from 0 contexts\n'
         self.assertEqual(RESOURCES.memcheck(text), {'allocation_calls': 1234, 'free_calls': 1233, 'total_allocated_bytes': 56789})
@@ -66,6 +107,52 @@ class ExtendedSchema(unittest.TestCase):
             'bytes': 10,
             'sha256': hashlib.sha256(b'purrassist').hexdigest(),
         })
+
+    def test_portable_loader_debug_symbols_are_verified_and_recorded(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(RESOURCES, 'ROOT', Path(directory)), \
+             patch.object(RESOURCES.platform, 'machine', return_value='x86_64'), \
+             patch.object(RESOURCES.subprocess, 'run'), \
+             patch.object(RESOURCES.subprocess, 'check_output', return_value='bsdtar test version'), \
+             patch.object(RESOURCES.urllib.request, 'urlopen', side_effect=AssertionError('cached inputs need no network')):
+            root = Path(directory)
+            cache = root / '.cache/profile-runtime'
+            manifest = {
+                'architecture': 'x86_64', 'name': 'test runtime', 'version': '1',
+                'sha256': hashlib.sha256(b'archive').hexdigest(),
+                'members': ['usr/lib/ld-linux-x86-64.so.2', 'usr/lib/libc.so.6'],
+                'loader_debuginfo': {
+                    'url': 'https://example.invalid/loader.debug',
+                    'sha256': hashlib.sha256(b'verified debug symbols').hexdigest(),
+                    'member': 'usr/lib/.debug/ld-linux-x86-64.so.2.debug',
+                },
+            }
+            (root / 'vendor').mkdir()
+            (root / 'vendor/profiling-runtime.json').write_text(json.dumps(manifest))
+            for name in manifest['members']:
+                path = cache / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'runtime file')
+            (cache / 'runtime.pkg.tar.zst').write_bytes(b'archive')
+            name = manifest['loader_debuginfo']['member']
+            debug = cache / name
+            debug.parent.mkdir()
+            debug.write_bytes(b'verified debug symbols')
+            _, report = RESOURCES.runtime(Path('/benchmark'), True)
+            self.assertEqual(report['files_sha256'][name], manifest['loader_debuginfo']['sha256'])
+            debug.write_bytes(b'corrupted symbols')
+            with self.assertRaisesRegex(ValueError, 'loader debuginfo digest mismatch'):
+                RESOURCES.runtime(Path('/benchmark'), True)
+            debug.unlink()
+            with patch.object(RESOURCES.urllib.request, 'urlopen', return_value=io.BytesIO(b'verified debug symbols')) as fetch:
+                _, report = RESOURCES.runtime(Path('/benchmark'), True)
+            fetch.assert_called_once_with(manifest['loader_debuginfo']['url'])
+            self.assertEqual(debug.read_bytes(), b'verified debug symbols')
+            self.assertEqual(report['files_sha256'][name], manifest['loader_debuginfo']['sha256'])
+            debug.unlink()
+            debug.mkdir()
+            with self.assertRaisesRegex(ValueError, 'loader debuginfo must be a regular file'):
+                RESOURCES.runtime(Path('/benchmark'), True)
 
     def test_cold_build_isolates_intermediates_and_both_wrapper_layers(self):
         def fake_build(command, **kwargs):

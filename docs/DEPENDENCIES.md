@@ -89,8 +89,19 @@ opt-in runtime is pinned by archive digest in `vendor/profiling-runtime.json`,
 extracted with system `bsdtar`, and kept only in the ignored cache. Tool and
 runtime license notices are registered in `vendor/tooling.json`. This adds no
 Cargo dependency or crate runtime dependency. Profiling requires appropriate
-loader debug symbols; installed debuginfod configuration is inherited, without
-embedding any endpoint in repository configuration or reports.
+loader debug symbols. System-runtime profiling inherits installed debuginfod
+configuration. The isolated runtime explicitly caches the corresponding public
+Arch loader debug file, pinned by build-id and SHA-256 in
+`vendor/profiling-runtime.json` and registered under `profiling-glibc` in the
+tooling inventory. Its license is the existing glibc license set. Its verified
+file identity is recorded with the runtime; no ambient service is required.
+Verify provisions the existing external `bsdtar` extractor through Ubuntu's
+`libarchive-tools` package (libarchive 3.7.2 on Ubuntu 24.04). Its distribution
+revision is logged by CI, and the actual extractor version is recorded per run.
+This distro dependency is registered separately from the local bsdtar 3.8.9
+entry. The complete upstream per-file copyright and license terms from Ubuntu
+source revision `3.7.2-2ubuntu0.8` are preserved with their source archive digest;
+apt selects the supported distro revision rather than a pinned executable.
 
 `crates/syntax/src/alloc.rs` is a registered `unsafe_code` exception to the
 workspace-wide `unsafe_code = "deny"` lint (`#![allow(unsafe_code)]` scoped to

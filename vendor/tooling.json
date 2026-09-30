@@ -77,6 +77,8 @@
     "version": "2.44+r50+g1848099f063e-1",
     "license": "LGPL-2.1-or-later AND GPL-2.0-or-later",
     "source": "https://archive.archlinux.org/packages/g/glibc/glibc-2.44+r50+g1848099f063e-1-x86_64.pkg.tar.zst",
+    "loader_debuginfo_source": "https://debuginfod.archlinux.org/buildid/c609e8ec75de304410d3c69f79d96c7bd4d4fdf8/debuginfo",
+    "loader_debuginfo_sha256": "9222e10233e727c483cbc86e45fad67a1c8bc72049c0ec99715ee191f6fc7e53",
     "scope": "External isolated profiling support only; not linked or packaged into PurRAssist crates.",
     "notices": {
       "vendor/licenses/profiling-glibc/GPL-2.0-or-later.txt": "aaf135472f81c5b4a0dca9367e5bb5e9750032b5bebe5442b36e4c0a47430df3",
@@ -95,6 +97,18 @@
       "vendor/licenses/libarchive-3.8.9/BSD-4-Clause-UC.txt": "e2d8e88f20fc73195792b45502399fa7c012a91bf07ec6c9ee015b5f78a8b709"
     },
     "notice_normalization": "LF; trailing whitespace and final blank lines removed."
+  },
+  {
+    "name": "libarchive-tools-ubuntu",
+    "version": "3.7.2 (Ubuntu 24.04; distribution revision recorded by CI)",
+    "license": "Mixed licenses; exact per-file terms preserved in the registered upstream COPYRIGHT",
+    "source": "https://archive.ubuntu.com/ubuntu/pool/main/liba/libarchive/libarchive_3.7.2-2ubuntu0.8.debian.tar.xz",
+    "source_sha256": "e814fc50367b8dd96aeaf1ed111dc0a00bf95e07b1ff3444f89007a42a29c53f",
+    "scope": "External Ubuntu qualification archive extractor only; not linked or packaged into PurRAssist crates. Ubuntu apt selects the supported distribution revision; CI logs its exact installed package version and the resource report records bsdtar --version. The preserved source copyright comes from distribution revision 2ubuntu0.8; this is not a claim of a pinned executable.",
+    "notices": {
+      "vendor/licenses/libarchive-tools-3.7.2-2ubuntu0.8/COPYRIGHT": "21e7f99bb2808ddf4ac9cb7126a9af6e130d4342f2bcafdbe84fe9e4344cf4c0"
+    },
+    "notice_normalization": "None; original debian/copyright bytes preserved."
   },
   {
     "name": "cmark-gfm",

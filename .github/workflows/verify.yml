@@ -79,9 +79,19 @@ jobs:
       # llvm-tools provides the llvm-cov/llvm-profdata build of this exact
       # nightly's own LLVM revision, which scripts/fuzz.py resolves via
       # `rustc --print sysroot` (see vendor/tooling.json's llvm-coverage entry).
-      - run: rustup toolchain install nightly-2026-09-14 --profile minimal --component llvm-tools
+      - run: rustup toolchain install nightly-2026-09-14 --profile minimal --component llvm-tools --target wasm32-wasip1,wasm32-unknown-unknown
       - name: Install pinned Node for independent oracles
         run: python3 scripts/install-qualification-tool.py node >> "$GITHUB_PATH"
+      - name: Install pinned Valgrind for resource measurement
+        run: python3 scripts/install-qualification-tool.py valgrind >> "$GITHUB_PATH"
+      - name: Install archive extractor for the pinned profiling runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libarchive-tools
+          dpkg-query --show --showformat='${Package} ${Version}\n' libarchive-tools
+          bsdtar --version
+      - name: Check profiler startup and diagnostics before qualification campaigns
+        run: python3 scripts/measure-resources.py --portable-runtime --check-tools
       - name: Independent syntax oracles
         run: make syntax-oracles
       - name: Coverage-guided and differential fuzzing (smoke counts)
@@ -89,9 +99,7 @@ jobs:
         run: make fuzz
       - name: Package crate archives and notices
         run: make package
-      - name: Install pinned Valgrind for resource measurement
-        run: python3 scripts/install-qualification-tool.py valgrind >> "$GITHUB_PATH"
       - name: Measure resources
-        run: make resources
+        run: make resources RESOURCE_ARGS=--portable-runtime
       - name: Check resource limits
         run: python3 scripts/check-resource-limits.py .cache/resource-report.json

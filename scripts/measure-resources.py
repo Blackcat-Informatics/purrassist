@@ -95,6 +95,24 @@ def verify_output(output, case):
         raise ValueError(f'unexpected workload output for {case}')
 
 
+def run_profiler(command, executable, case, tool, directory, environment):
+    """Retain every diagnostic before rejecting a profiler's failed execution."""
+    result = subprocess.run(command + executable + [case], cwd=ROOT, env=environment,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    (directory / f'{case}.{tool}.stdout').write_bytes(result.stdout)
+    (directory / f'{case}.{tool}.stderr').write_bytes(result.stderr)
+    tool_log = directory / f'{case}.{tool}.log'
+    if result.returncode != 0:
+        log = tool_log.read_text(errors='replace') if tool_log.exists() else '(not created)'
+        raise RuntimeError(
+            f'{tool} workload {case} exited {result.returncode}; raw logs retained in {directory}\n'
+            f'stdout:\n{result.stdout.decode(errors="replace")}\n'
+            f'stderr:\n{result.stderr.decode(errors="replace")}\n'
+            f'tool log ({tool_log.name}):\n{log}'
+        )
+    verify_output(result.stdout, case)
+
+
 def profile(executable, case, directory, environment):
     row = {'case': case, **native(executable, case, environment)}
     memory = directory / f'{case}.memcheck.log'
@@ -107,10 +125,8 @@ def profile(executable, case, directory, environment):
          '--max-snapshots=1000', '--detailed-freq=1', f'--massif-out-file={heap}',
          f'--log-file={directory / (case + ".massif.log")}'],
     ]
-    for command in commands:
-        result = subprocess.run(command + executable + [case], cwd=ROOT, env=environment,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-        verify_output(result.stdout, case)
+    for tool, command in zip(('memcheck', 'massif'), commands):
+        run_profiler(command, executable, case, tool, directory, environment)
     row.update(memcheck(memory.read_text()))
     row.update(massif(heap.read_text()))
     return row
@@ -181,6 +197,23 @@ def runtime(binary, portable):
         if path.is_symlink() or not path.is_file() or cache.resolve() not in path.resolve().parents:
             raise ValueError('invalid profiling runtime member')
         files[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    # The stripped loader needs these exact symbols for mandatory Memcheck
+    # redirections. A verified adjacent GNU debuglink file avoids depending
+    # on the caller's debuginfod configuration or system debug packages.
+    debug = manifest['loader_debuginfo']
+    debug_file = cache / debug['member']
+    if debug_file.is_symlink() or cache.resolve() not in debug_file.resolve().parents:
+        raise ValueError('invalid profiling loader debuginfo path')
+    if debug_file.exists() and not debug_file.is_file():
+        raise ValueError('profiling loader debuginfo must be a regular file')
+    debug_file.parent.mkdir(parents=True, exist_ok=True)
+    if not debug_file.exists():
+        with urllib.request.urlopen(debug['url']) as response:
+            debug_file.write_bytes(response.read())
+    debug_digest = hashlib.sha256(debug_file.read_bytes()).hexdigest()
+    if debug_digest != debug['sha256']:
+        raise ValueError('profiling loader debuginfo digest mismatch')
+    files[debug['member']] = debug_digest
     loader = cache / 'usr/lib/ld-linux-x86-64.so.2'
     return [str(loader), '--library-path', str(cache / 'usr/lib'), str(binary)], {
         'kind': 'isolated pinned loader and libc; other libraries supplied by host',
@@ -387,6 +420,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, default=ROOT / '.cache/resource-report.json')
     parser.add_argument('--portable-runtime', action='store_true', help='use the pinned isolated x86_64 glibc runtime for profiler compatibility')
+    parser.add_argument('--check-tools', action='store_true', help='run strict native/Memcheck/Massif startup and parser checks, without writing a measurement report')
     args = parser.parse_args()
     if sys.platform != 'linux':
         raise SystemExit('this measurement runner qualifies Linux only (procfs RSS probe)')
@@ -398,6 +432,7 @@ def main():
     cache = ROOT / '.cache'
     cache.mkdir(exist_ok=True)
     directory = Path(tempfile.mkdtemp(prefix='resource-logs-', dir=cache))
+    print(f'Raw resource logs: {directory}', flush=True)
     environment = dict(os.environ, LC_ALL='C')
     engine_digest = engine_source_identity()
     # An explicit target-cpu opts this one build out of a host-tuning cargo
@@ -408,8 +443,17 @@ def main():
     # "Loader compatibility" below for the matching loader/libc fix this
     # same SIGILL failure mode needs.
     binary, benchmark_build = build(['cargo', 'bench', '-p', 'purrassist-core', '--bench', 'resources', '--no-run', '--locked', '--config', 'profile.bench.debug=1', '--config', 'profile.bench.strip=false', '--config', 'build.rustflags=["-C", "target-cpu=x86-64-v2"]'], 'resources', directory)
-    cli_binary, cli_build = build(['cargo', 'build', '-p', 'purrassist-cli', '--release', '--locked'], 'purrassist', directory)
     executable, runtime_identity = runtime(binary, args.portable_runtime)
+    print('Checking native, Memcheck and Massif startup on the empty workload', flush=True)
+    preflight = directory / 'preflight'
+    preflight.mkdir()
+    profile(executable, 'empty', preflight, environment)
+    if args.check_tools:
+        if engine_source_identity() != engine_digest:
+            raise ValueError('engine source inputs changed during profiler preflight')
+        print('Native, Memcheck and Massif startup/output/log checks passed; no measurement report written', flush=True)
+        return
+    cli_binary, cli_build = build(['cargo', 'build', '-p', 'purrassist-cli', '--release', '--locked'], 'purrassist', directory)
     cases = subprocess.check_output([str(binary), '--list'], text=True).splitlines()
     if not cases or len(set(cases)) != len(cases) or any(not re.fullmatch(r'[a-z_]+', case) for case in cases):
         raise ValueError('invalid workload inventory')
