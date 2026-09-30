@@ -49,6 +49,38 @@ fn exhausted() -> Governor {
 }
 
 #[test]
+fn task_edits_preserve_original_ancestor_lazy_indent_spans() {
+    use purrassist_core::markdown::BlockKind;
+    for newline in ["\n", "\r\n", "\r"] {
+        for indent in ["  ", "    ", "\t"] {
+            let source = format!("> - [ ] tea{newline}{indent}--{newline}{indent}|\"{newline}");
+            let mut governor = Governor::new(Budget::default());
+            let document = Document::parse(&source, &mut governor).unwrap();
+            let item = document.block_at(&[0, 0]).unwrap();
+            assert_eq!(item.children.len(), 1);
+            let paragraph = &item.children[0];
+            assert!(matches!(paragraph.kind, BlockKind::Paragraph));
+            assert_eq!(paragraph.lines.len(), 3);
+            let second_line = source.find(newline).unwrap() + newline.len();
+            assert_eq!(paragraph.lines[1].start, second_line);
+            assert!(source[paragraph.lines[1].clone()].starts_with(indent));
+            let plan = document.set_task_at(&[0, 0], true, &mut governor).unwrap();
+            assert_eq!(plan.edits.len(), 1);
+            assert_eq!(plan.edits[0].range, 5..6);
+            let expected = format!("> - [x] tea{newline}{indent}--{newline}{indent}|\"{newline}");
+            assert_eq!(round_trip(&source, &plan), expected);
+            assert_stale(&source, &plan);
+            assert_eq!(
+                document
+                    .set_task_at(&[0, 0], true, &mut exhausted())
+                    .unwrap_err(),
+                StopReason::BudgetExceeded(Resource::Work)
+            );
+        }
+    }
+}
+
+#[test]
 fn task_edits_preserve_lazy_setext_text_and_all_later_paragraph_lines() {
     use purrassist_core::markdown::BlockKind;
     for newline in ["\n", "\r\n", "\r"] {

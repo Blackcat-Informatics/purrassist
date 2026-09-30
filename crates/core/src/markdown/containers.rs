@@ -58,8 +58,15 @@ fn index_with_lazy(
                     // indentation, type-7 HTML and noninterrupting list markers stay
                     // paragraph text. An otherwise empty setext heading also leaves
                     // its underline as paragraph text after definitions are removed.
+                    // A table delimiter can split an existing paragraph before
+                    // its final header line. That line keeps its paragraph
+                    // admission even when indented too far to begin a new one;
+                    // standalone indented input still follows code precedence.
                     if blocks.last().is_some_and(|block: &Block| {
                         matches!(block.kind, BlockKind::ReferenceDefinition)
+                            || (tables
+                                && code_indent(text)
+                                && matches!(block.kind, BlockKind::Paragraph))
                     }) && (!interrupts_paragraph(text) || setext(text).is_some())
                     {
                         super::paragraph(source, lines, cursor, tables, remaining_lazy)
@@ -80,10 +87,7 @@ fn index_with_lazy(
                     &lazy[lazy_position..],
                     governor,
                 )?;
-                let mut children =
-                    index_with_lazy(source, &inner, governor, depth + 1, tables, &lazy)?;
-                demote_lazy(source, &mut children, &lazy);
-                children
+                index_with_lazy(source, &inner, governor, depth + 1, tables, &lazy)?
             }
             BlockKind::ListItem { .. } => {
                 let (inner, stop) =
@@ -174,13 +178,14 @@ fn quote_lines(
     while end < lines.len() {
         let text = line(source, &lines[end]);
         let inherited = lazy.get(lazy_position) == Some(&lines[end].start);
-        if let Some(prefix) = quote_prefix(text) {
+        if inherited && !text.trim_matches([' ', '\t']).is_empty() {
+            // An ancestor's missing prefix admits this line as literal paragraph
+            // continuation. Its indentation cannot supply a local block prefix.
+            continuation.lazy(text);
+            inner.push(lines[end].clone());
+        } else if let Some(prefix) = quote_prefix(text) {
             let range = lines[end].start + prefix..lines[end].end;
-            if inherited {
-                continuation.lazy(line(source, &range));
-            } else {
-                continuation.feed(line(source, &range));
-            }
+            continuation.feed(line(source, &range));
             inner.push(range);
         } else if continuation.paragraph && list_item(text).is_none() && !interrupts_paragraph(text)
         {
@@ -224,13 +229,14 @@ fn item_lines(
             }
             inner.push(lines[end].clone());
             continuation.feed("");
+        } else if inherited {
+            // Preserve the complete ancestor-lazy source line, including spaces
+            // meaningful inside code spans and multiline inline HTML.
+            continuation.lazy(text);
+            inner.push(lines[end].clone());
         } else if let Some(prefix) = strip_indent(text, indent) {
             let range = lines[end].start + prefix..lines[end].end;
-            if inherited {
-                continuation.lazy(line(source, &range));
-            } else {
-                continuation.feed(line(source, &range));
-            }
+            continuation.feed(line(source, &range));
             inner.push(range);
         } else if continuation.paragraph && list_item(text).is_none() && !interrupts_paragraph(text)
         {
@@ -313,7 +319,7 @@ impl Continuation {
         // a header, so retain its width without treating a lazy delimiter as
         // an attempted table opening.
         let count = super::cells(text).len();
-        self.table.header = (!code_indent(text) && count > 0).then_some(count);
+        self.table.header = (count > 0).then_some(count);
     }
     fn feed(&mut self, mut text: &str) {
         for index in 0..self.prefixes.len() {
@@ -439,7 +445,7 @@ impl TableContinuation {
         false
     }
     fn record(&mut self, text: &str, paragraph: bool) {
-        if paragraph && !self.rejected && !code_indent(text) {
+        if paragraph && !self.rejected {
             let count = super::cells(text).len();
             self.header = (count > 0).then_some(count);
         } else {
@@ -493,20 +499,4 @@ fn definition_end(
         }
     }
     Ok(None)
-}
-
-fn demote_lazy(source: &str, blocks: &mut [Block], lazy: &[usize]) {
-    for block in blocks {
-        if matches!(block.kind, BlockKind::Heading { .. })
-            && block.lines.len() > 1
-            && block
-                .lines
-                .last()
-                .is_some_and(|range| lazy.contains(&range.start))
-            && heading(line(source, &block.lines[0])).is_none()
-        {
-            block.kind = BlockKind::Paragraph;
-        }
-        demote_lazy(source, &mut block.children, lazy);
-    }
 }

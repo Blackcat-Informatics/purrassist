@@ -8,6 +8,68 @@ use purrassist_core::{
 };
 
 #[test]
+fn ancestor_lazy_prefixes_preserve_code_and_inline_html_source() {
+    use purrassist_core::markdown::BlockKind;
+    // These indent bytes are paragraph content: missing outer quote markers
+    // cannot supply an inner list prefix. Properly marked lines remain a control.
+    for (input, expected, inherited) in [
+        (
+            "> - `a\n  b`\nend\n",
+            "<blockquote>\n<ul>\n<li><code>a   b</code>\nend</li>\n</ul>\n</blockquote>\n",
+            true,
+        ),
+        (
+            "> - `a\n    b`\nend\n",
+            "<blockquote>\n<ul>\n<li><code>a     b</code>\nend</li>\n</ul>\n</blockquote>\n",
+            true,
+        ),
+        (
+            "> - `a\n\tb`\nend\n",
+            "<blockquote>\n<ul>\n<li><code>a \tb</code>\nend</li>\n</ul>\n</blockquote>\n",
+            true,
+        ),
+        (
+            "> - `a\n>     b`\n>   end\n",
+            "<blockquote>\n<ul>\n<li><code>a b</code>\nend</li>\n</ul>\n</blockquote>\n",
+            false,
+        ),
+        (
+            "> - n>es>es) coon<t-\n    n>es>es) coon<t-\n    >",
+            "<blockquote>\n<ul>\n<li>n&gt;es&gt;es) coon<t-\n    n>es&gt;es) coon<t-\n    ></li>\n</ul>\n</blockquote>\n",
+            true,
+        ),
+        (
+            "> - n>es>es) coon<.t-\n    n>es>es)_ coon<t-\n    >",
+            "<blockquote>\n<ul>\n<li>n&gt;es&gt;es) coon&lt;.t-\nn&gt;es&gt;es)_ coon<t-\n    ></li>\n</ul>\n</blockquote>\n",
+            true,
+        ),
+    ] {
+        for newline in ["\n", "\r\n", "\r"] {
+            let source = input.replace('\n', newline);
+            for dialect in [Dialect::CommonMark, Dialect::Gfm] {
+                let mut governor = Governor::new(Budget::default());
+                let document = Document::parse(&source, &mut governor).unwrap();
+                assert_eq!(document.source(), source);
+                assert_eq!(document.blocks()[0].span, 0..source.len());
+                let paragraph = document.block_at(&[0, 0, 0]).unwrap();
+                assert!(matches!(paragraph.kind, BlockKind::Paragraph));
+                assert_eq!(paragraph.lines.len(), 3);
+                if inherited {
+                    let second_line = source.find(newline).unwrap() + newline.len();
+                    assert_eq!(paragraph.lines[1].start, second_line);
+                    assert_eq!(paragraph.line_padding[1], 0);
+                }
+                assert_eq!(
+                    document.render_html(dialect, &mut governor).unwrap(),
+                    expected,
+                    "{dialect:?}: {source:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn lazy_setext_candidates_keep_the_whole_container_paragraph_open() {
     use purrassist_core::{StopReason, contract::Resource, markdown::BlockKind};
 

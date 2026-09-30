@@ -54,7 +54,9 @@ pub enum BlockKind {
     Heading {
         /// Heading level from one to six.
         level: u8,
-        /// Source title, without heading delimiters.
+        /// Inline source without heading delimiters or block indentation.
+        /// Setext titles normalize physical line endings to LF and remove only
+        /// their initial/final spaces and tabs; interior whitespace is preserved.
         title: String,
     },
     /// Fenced code; body headings are never indexed as document headings.
@@ -416,6 +418,7 @@ fn paragraph(
     lazy: &[usize],
 ) -> (BlockKind, usize) {
     let text = line(source, &lines[cursor]);
+    let heading_lazy = lazy;
     let mut lazy = lazy;
     let mut table_rejected = false;
     if cursor + 1 < lines.len() {
@@ -435,7 +438,7 @@ fn paragraph(
             return (
                 BlockKind::Heading {
                     level,
-                    title: text.trim().into(),
+                    title: setext_title(source, &lines[cursor..=cursor], heading_lazy, &[]),
                 },
                 cursor + 2,
             );
@@ -482,11 +485,7 @@ fn paragraph(
         if let Some(level) = setext(next)
             && lazy.first() != Some(&lines[end].start)
         {
-            let title = lines[cursor..end]
-                .iter()
-                .map(|range| line(source, range).trim())
-                .collect::<Vec<_>>()
-                .join("\n");
+            let title = setext_title(source, &lines[cursor..end], heading_lazy, &[]);
             return (BlockKind::Heading { level, title }, end + 1);
         }
         // A delimiter candidate whose width disagrees with its header keeps
@@ -499,7 +498,6 @@ fn paragraph(
             || (tables
                 && !table_rejected
                 && end + 1 < lines.len()
-                && !code_indent(next)
                 && lazy.binary_search(&lines[end + 1].start).is_err()
                 && !interrupts_paragraph(line(source, &lines[end + 1]))
                 && setext(line(source, &lines[end + 1])).is_none()
@@ -513,6 +511,36 @@ fn paragraph(
         end += 1;
     }
     (BlockKind::Paragraph, end)
+}
+// Concatenate inline source, consuming block indentation but preserving lazy
+// physical prefixes and interior hardbreak spaces. The ordered lazy cursor visits
+// each entry at most once; heading construction stays linear in admitted input.
+fn setext_title(
+    source: &str,
+    lines: &[Range<usize>],
+    mut lazy: &[usize],
+    padding: &[usize],
+) -> String {
+    let mut title = String::new();
+    for (index, range) in lines.iter().enumerate() {
+        while lazy.first().is_some_and(|start| *start < range.start) {
+            lazy = &lazy[1..];
+        }
+        let text = line(source, range);
+        if !title.is_empty() {
+            title.push('\n');
+        }
+        if lazy.first() == Some(&range.start) {
+            title.extend(std::iter::repeat_n(
+                ' ',
+                padding.get(index).copied().unwrap_or(0),
+            ));
+            title.push_str(text);
+        } else {
+            title.push_str(text.trim_start_matches([' ', '\t']));
+        }
+    }
+    title.trim_matches([' ', '\t']).into()
 }
 fn interrupts_paragraph(text: &str) -> bool {
     text.trim_matches([' ', '\t']).is_empty()
