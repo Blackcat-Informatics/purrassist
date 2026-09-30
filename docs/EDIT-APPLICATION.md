@@ -191,11 +191,16 @@ directory's ACL, which is ordinary Windows file-creation behavior requiring
 no code here; nothing analogous to the Unix `0700`/`0600` journal modes is
 set explicitly on Windows, and none is needed for the same reason.
 
-`Store::recover` retains individual bad-journal outcomes: a torn, truncated, or
+`Store::recover` reports an absent `prepared.json` as `Recovery::NotApplied`:
+preparation is incomplete, and recovery does not claim a replacement occurred.
+It retains individual bad-journal outcomes: a torn, truncated, or
 otherwise unreadable `prepared.json` or piece file is reported as
 `Recovery::Corrupt { id, reason }` for that transaction only, and every
 other journal is still recovered. Governed parser or patch exhaustion instead
 returns typed `Error::Resource`; an unexamined journal is not labeled corrupt.
+Store-lock, directory enumeration, orphan scanning, removal, and directory-sync
+failures abort the recovery call. CLI/MCP handlers expose these error explanations
+through tool errors rather than the Rust store's enum variants.
 It also scans the store root without following symlinks for
 `.purrassist-<id>.tmp` replacement temporary files left behind by an
 interrupted commit. Deletion requires a fully validated journal whose recorded
@@ -221,4 +226,7 @@ and after the rename, and before the `committed` marker). The parent then
 runs `recover` and a retry against the exact bytes left on disk and asserts
 the file is exactly the before or exactly the after version — never
 mixed — that the classification matches, and that the retry completes
-idempotently.
+idempotently. At every checkpoint, intervening bytes then cause undo to refuse
+without changing them; restoring the exact committed output permits undo with
+inverse digests and byte-exact original restoration. Repeating the original
+undo refuses its changed version and preserves those restored bytes.

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Crash-recovery proofs: re-executing this test binary as a child process
 //! that aborts at a named checkpoint inside `Store::commit`, then asserting
-//! that `Store::recover` and a retry produce exact-version outcomes.
+//! that recovery, retry, and conditional undo produce exact-version outcomes.
 //!
 //! This file runs unchanged on Unix and Windows: crash injection uses only
 //! `std::process::abort`, environment variables, and `std::process::Command`,
@@ -17,7 +17,9 @@
 //! that race without touching `Store`'s locking, which is correct — a real
 //! concurrent writer legitimately gets `Busy`.
 use purrassist::digest::Digest;
-use purrassist_host::files::{CrashPoint, Recovery, Snapshot, Store, install_crash_hook};
+use purrassist_host::files::{
+    Commit, CrashPoint, Error, Recovery, Snapshot, Store, install_crash_hook,
+};
 use std::{
     path::PathBuf,
     process::{Command, Stdio},
@@ -219,6 +221,35 @@ fn run_crash_point(point: CrashPoint) {
         commit, commit_again,
         "checkpoint {point:?}: retry was not idempotent"
     );
+    assert_conditional_undo(&store, &scratch, &commit, point);
+}
+
+fn assert_conditional_undo(store: &Store, scratch: &Scratch, commit: &Commit, point: CrashPoint) {
+    let target = scratch.0.join(FILE_NAME);
+    let intervening = b"intervening caller bytes\r\n";
+    std::fs::write(&target, intervening).unwrap();
+    assert!(
+        matches!(store.undo(&commit.id), Err(Error::Stale)),
+        "checkpoint {point:?}: undo must refuse an intervening version"
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), intervening);
+
+    std::fs::write(&target, AFTER_TEXT).unwrap();
+    let undo = store
+        .undo(&commit.id)
+        .unwrap_or_else(|error| panic!("checkpoint {point:?}: undo failed: {error}"));
+    assert_eq!(undo.before, commit.after);
+    assert_eq!(undo.after, commit.before);
+    assert_eq!(
+        std::fs::read(&target).unwrap(),
+        BEFORE_TEXT.as_bytes(),
+        "checkpoint {point:?}: undo did not restore the exact original bytes"
+    );
+    assert!(
+        matches!(store.undo(&commit.id), Err(Error::Stale)),
+        "checkpoint {point:?}: repeated original undo must refuse its changed version"
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), BEFORE_TEXT.as_bytes());
 }
 
 #[test]
