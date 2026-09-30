@@ -133,10 +133,10 @@ the committed test asserts:
   per candidate at `Standard` effort and above) were tokenized and
   deduplicated without any charge; the reservations in `signals` and
   `protected_class_violations` now include that cost.
-- `pattern.rs`'s bounded backtracking search (`repeat`) clones its capture
-  state on every iteration of a repetition, in addition to the clone
-  `evaluate`'s own per-call lease already covers; `repeat` now leases a bound
-  covering its whole stack/results growth, released when it returns.
+- The bounded backtracking search clones capture state while evaluating
+  repetitions and alternatives. Its capture vectors, exploration stack and
+  results now each own their admitted storage through shared scratch
+  containers; their leases remain live until the actual allocations drop.
 - `json/repair.rs`'s syntax recovery re-encodes every repaired bare/malformed
   token's replacement through `Node::to_json`, one allocation per repaired
   token, against a flat, too-small per-input-byte precharge; the precharge
@@ -195,6 +195,39 @@ within the same bound (an input shaped very differently from the oracle's
 generators, or scaled far beyond 16x, could still expose a gap this two-point
 check does not sample), and they do not replace `make resources`' broader,
 allocator-agnostic measurements above.
+
+Pattern generation has six additional controls with no `input_len` allowance
+and no `K`. They compile patterns and construct governors before the measurement
+window, then compare both cumulative allocator requests and peak live requested
+bytes during generation against the corresponding governor charges. Derivative
+`^a+$` witnesses are measured at lengths 64, 1,024, 8,192 and 32,768;
+backreference witnesses are measured at lengths 64, 1,024 and 4,096. Generation
+uses admitted state/frontier/cycle storage and a flat parent-index prefix arena,
+with iterative reconstruction rather than cloning each growing prefix. The
+backtracking engine owns its captures, states, and traversal frames individually.
+Canonical alternation merges and derivative nullable/step traversal also use
+admitted iterative continuations with per-term Work and cancellation checks.
+Compilation propagates traversal stops rather than replacing failed work with a
+dead language. Direct controls exercise 32,768 flat literals at logical depth
+zero, the previously uncharged nullable traversal, and overlapping root/residual
+alternation chains with compilation and generation Work boundaries.
+
+Compilation has two additional zero-slack allocator controls for wide alternations
+with 8, 64 and 128 branches. Compile terms, their sorted lookup index, classes,
+and predicate cuts own admitted capacities; the syntax estimate is leased and
+released on a failed compilation. Controls cover the formerly undercharged
+128-branch arena under a 140,000-byte budget, exact scratch and Work boundaries,
+and cancellation at initial, intermediate and final allocation checkpoints.
+The complete allocator oracle contains 30 controls.
+
+The controls also require exact charged-peak budgets to succeed and one byte
+less to return typed scratch exhaustion, low Work to return typed exhaustion,
+and cancellation before generation, during traversal, and before output
+transfer to release all temporary charges. A retained witness keeps its charge
+under the existing output contract. The original request for an 8,192-byte
+witness under 4,096 scratch bytes now exhausts explicitly. These finite workloads
+establish the measured logical allocation contract; they do not measure allocator
+metadata, resident memory, or every possible pattern/input combination.
 
 ## Tree-sitter allocation bound
 

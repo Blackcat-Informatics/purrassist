@@ -12,17 +12,17 @@ and merge sequence in [RELEASE.md](RELEASE.md).
 | Contract | Executable evidence | Scope |
 | --- | --- | --- |
 | Pure, portable first-party core | `make hygiene`, `make wasm-test` | Zero runtime dependencies; registered data/tooling/source notices; executed transcripts |
-| JSON/schema validation | `schema_conformance`, `formats`, `vocabularies` | 1,301 main Draft 2020-12 cases, 121 selected optional cases, all 878 vendored format/assertion cases |
-| Pattern engine | `pattern` | 441 test262 Unicode-property fixtures; derivative/backtracking agreement, anchors, named groups, bounded generation |
-| Witness generation | `witness_algebra`, `recursive_schemas` | 430 official-suite groups with valid instances witnessed; explicit closed-form refutations and exhaustion; recursive/dynamic references |
+| JSON/schema validation | `schema_conformance`, `formats`, `vocabularies`, `schema_evidence` | 1,301 main Draft 2020-12 cases, 121 selected optional cases, all 878 vendored format/assertion cases; nested observations and instance-scoped annotations |
+| Pattern engine | `pattern`, `pattern_generation`, `witness_pattern_generation` | 441 test262 Unicode-property fixtures; derivative/backtracking agreement; assertion-sensitive witnesses and exclusions; 3,024 exhaustive finite generation cases |
+| Witness generation | `witness_algebra`, `witness_applicability`, `witness_formats`, `recursive_schemas` | 430 official-suite groups with valid instances witnessed; type-applicable bounds, occurrence-scoped contains counts, dialect-specific formats; explicit refutations and exhaustion; recursive/dynamic references |
 | Composed recovery | `recovery_goldens`, `corruption_oracle`, `recovery` | 66 curated goldens; deterministic known-origin corruptions; schema revalidation and guess labels |
 | Unicode | `unicode_conformance`, `matching_quality` | 20,034 normalization fixtures; refinement lattice and protected token contrasts |
 | Markdown parsing/rendering | `markdown_corpus`, `markdown_render` | All 652 CommonMark and 672 GFM examples; source partitions and focused regressions |
-| Structural document edits | `markdown_structure` and section/list/table/reference tests | Section insert/remove/move/rename; list move/renumber; table edits/moves/padding; reference add/relabel/remove/unlink |
+| Structural document edits | `markdown_structure`, `markdown_relabel_preservation`, `markdown_renumber_preservation` and section/list/table/reference tests | Section insert/remove/move/rename; list move/renumber with body preservation; table edits/moves/padding; reference add/relabel/remove/unlink with display/alt preservation |
 | Patch algebra and preservation | `patch_laws`, `preservation_properties`, `fuzzy_patch` | Invert/apply, composition, commute/rebase, independent splice oracle, unchanged bytes and loss spans |
-| Alternative-specific ledgers | `provenance`, `edit_ambiguity`, `receipt_wire`, syntax tests | Digest-bound candidates, shared-node deduplication, ranked ambiguity, atomic ledger exhaustion; receipt wire v2 |
-| Resource boundaries | `resource_accounting`, `schema_budgets`, `allocation_oracle`, syntax `allocation`, host `helpers` | Charge-before-allocation, cancellation, helper admission, measured allocator comparisons, external parser accounts |
-| Filesystem transaction boundaries | host `files`, `crash_recovery`, `edit_tools` | Eight crash checkpoints; retry/recovery, stale plans, locks, conditional undo and explicit batch outcomes |
+| Alternative-specific ledgers | `provenance`, `edit_ambiguity`, `recovery_validation_binding`, `receipt_wire`, syntax tests | Digest-bound candidates and whole-schema validations, shared-node deduplication, ranked ambiguity, atomic ledger exhaustion; receipt wire v2 |
+| Resource boundaries | `resource_accounting`, `schema_budgets`, `allocation_oracle`, syntax `allocation`, host `helpers` | Charge-before-allocation, cancellation, helper admission, measured allocator comparisons including zero-slack pattern compilation and generation, external parser accounts |
+| Filesystem transaction boundaries | host `files`, `crash_recovery`, `journal_limits`, `orphan_preservation`, `edit_tools` | Eight crash checkpoints; bounded escaped journals, retry/recovery, temporary ownership checks, stale plans, locks, conditional undo and explicit batch outcomes |
 | Shared Rust/CLI/MCP surface | host tests and CLI `protocol` | Single registry; every tool has CLI/MCP equivalence fixtures and schema-checked output |
 | Independent syntax | `make syntax-oracles` | 15 positive/negative Python, Rust, JavaScript/JSX, TypeScript/TSX compiler probes |
 | Correction quality | `correction_evaluation`, `matching_oracle` | Four provenance-bound corpora, risk/coverage sweeps, exact distance and path oracles |
@@ -46,6 +46,10 @@ inferred values are labeled guesses. Required unknown vocabularies fail schema
 compilation; optional unknown vocabularies identify their URI and unevaluated
 keywords in evidence. Formats are evaluated as annotations and asserted when
 the dialect declares format-assertion. Unknown asserted formats fail compilation.
+Nested format observations and pattern-engine identities remain visible even
+when evaluated alternatives fail. Their evaluated-property/item annotations
+remain scoped to the instance that owns them. Competing recovery alternatives
+reference the passing whole-schema validation separately from format observations.
 
 Witness generation reports `witness`, `unsatisfiable`, or `exhausted`. Only a
 supported contradiction proof can establish unsatisfiability. Exhaustion,
@@ -53,6 +57,15 @@ cancellation, or an unsuccessful search cannot establish impossibility. Pattern
 matching uses derivatives for regular patterns and bounded backtracking for
 backreferences/lookaround; the chosen engine is evidence. Finite conformance
 corpora establish tested behavior, rather than unrestricted proof of correctness.
+Crossed bounds exclude only the types to which their keywords apply. Each
+`contains` occurrence owns its counts; counts without `contains` have no effect.
+Annotation-only formats do not constrain positive or negated witnesses.
+Pattern generation retains start and word-boundary context; end-dependent
+exclusions reject complete candidates without prematurely rejecting extensions.
+Canonical alternation merges and nullable/derivative traversals use admitted
+iterative storage, Work checks and cancellation polling. Flat derivative chains
+do not require proportional native recursion; long-flat-pattern controls and
+explicit compilation/matching/generation budget failures exercise this boundary.
 
 Every document edit is a digest-bound patch. Applying its inverse restores the
 original bytes. Disjoint intervening changes can be rebased with a transformation
@@ -61,6 +74,10 @@ links, while unlinking records the dropped link semantics as a loss. Container
 layout normalization, heading releveling, and materializing padded table cells
 are reported transformations. Planning, application, and commit receipts remain
 separate so selecting a plan preserves its earlier guess/ambiguity context.
+Reference relabeling preserves visible link text and image alt text, including
+shortcut and collapsed references, and rejects changes to rendering in either
+dialect. List renumbering rejects marker-width changes that alter an item's body
+structure or logical content.
 
 The operation registry exposes structural editing, validation, witnesses,
 helper request preparation/completion, file recovery/batch commits, and existing
@@ -72,7 +89,12 @@ transcripts perform no model-backed execution.
 
 The core scratch governor uses shared meters, leases, and budgeted containers.
 Its measured-allocation oracle compares representative operations at multiple
-input scales with explicit per-operation slack. This is evidence for those
+input scales with explicit per-operation slack. Pattern compilation and generation
+also compare live and cumulative allocator requests against charges with no input
+allowance or slack. Controls cover wide compile arenas, derivative and backreference
+workloads, exact budget boundaries, exhaustion, and cancellation. Returned patterns
+and witnesses retain their charges; temporary storage releases its charges. These
+are evidence for those
 workloads, rather than a whole-program allocator bound. External Tree-sitter
 allocations have per-owner live/peak accounts, survive cross-thread tree drops,
 and are reconciled at progress callbacks. The grammar-specific overshoot limits
@@ -84,6 +106,12 @@ violation retries, and evidence for directory-flush access denial. Crash tests
 abort a subprocess at each journal/replacement checkpoint and verify exact
 version recovery, retry, and undo. Real Windows execution is proved by the
 `windows-engines` hosted lane; a cross-compile alone does not prove durability.
+File transactions admit JSON escaping when bounding journal metadata and derive
+parsing budgets from the admitted serialized size. Resource errors remain typed
+errors in the Rust store; CLI/MCP handlers retain their explanations as tool
+errors. Recovery deletes a temporary file only after validating its journal,
+recorded target-parent path, and bounded replacement-byte prefix. Unknown or
+unvalidated artifacts remain in place with an observable explanation.
 
 `make wasm-test` executes and compares native/WASI core, syntax, and fixed helper
 transcripts; it also executes the core transcript on wasm32-unknown-unknown

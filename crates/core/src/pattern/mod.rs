@@ -27,9 +27,35 @@ mod backtrack;
 pub(crate) mod derive;
 mod generate;
 mod parse;
+mod storage;
 mod unicode;
 
-use crate::contract::{Budget, Evidence, Governor, Resource, StopReason};
+use crate::contract::{
+    Budget, Evidence, Governor, Resource, ScratchCharge, ScratchVec, StopReason,
+};
+
+impl ScratchCharge for char {
+    const CHARGE: usize = {
+        assert!(core::mem::size_of::<Self>() <= 4);
+        4
+    };
+}
+
+/// Admit the matcher's scalar buffer before collecting any input. Its owner
+/// stays alive through either engine and releases the buffer on every exit.
+fn match_chars(text: &str, governor: &mut Governor) -> Result<ScratchVec<char>, StopReason> {
+    governor.charge(
+        Resource::InputBytes,
+        u64::try_from(text.len()).unwrap_or(u64::MAX),
+    )?;
+    governor.charge(
+        Resource::Work,
+        u64::try_from(text.len()).unwrap_or(u64::MAX),
+    )?;
+    let mut chars = ScratchVec::new(governor);
+    chars.extend(text.chars())?;
+    Ok(chars)
+}
 use core::fmt;
 
 /// ECMA-262 `u`-mode word-boundary class: ASCII letters, digits, and underscore.
@@ -149,11 +175,15 @@ impl Pattern {
 
     /// Compile the pattern against a caller-owned governor.
     ///
-    /// Charges `InputBytes` for the pattern's own length and `ScratchBytes`
-    /// for the retained character buffer and syntax tree before building
-    /// them, then charges `Depth`/`Work` for each nesting level and
-    /// alternation parsed. The compiled pattern is retained by the caller, so
-    /// its charge is never released, matching other permanently retained
+    /// Charges `InputBytes` for the pattern's length and leases a conservative,
+    /// source-dependent syntax-storage estimate before parsing. Derivative
+    /// arena terms, index entries, unique class copies, and cut storage admit
+    /// their actual capacities before allocation. Parsing charges `Depth` for
+    /// nesting and `Work` for its operations; translation and canonical union
+    /// also charge `Work` for visited terms, copied intervals, and chain heads.
+    /// Compilation failures release temporary owners and the syntax lease.
+    /// A successful pattern is retained by the caller, so its storage charges
+    /// are never released, matching other permanently retained
     /// compiled artifacts (schemas, receipts). Full ECMA-262 `u`-mode syntax
     /// is supported: named groups, `\k<name>`, `\u{...}`, surrogate-pair
     /// combination, and `\p{...}`/`\P{...}` for `General_Category`,
@@ -183,21 +213,21 @@ impl Pattern {
         let length = u64::try_from(source.len()).unwrap_or(u64::MAX);
         governor.charge(Resource::InputBytes, length)?;
         let scalars = u64::try_from(source.chars().count()).unwrap_or(u64::MAX);
-        governor.charge(
-            Resource::ScratchBytes,
+        let syntax_lease = governor.lease_scratch(
             scalars
                 .saturating_mul(4) // the retained `chars: Vec<char>` buffer.
                 .saturating_add(length.saturating_mul(48)) // an estimated AST.
                 .saturating_add(256),
         )?;
         let (ast, captures) = parse::parse(source, governor)?;
+        governor.check()?;
         let backtracking = ast.requires_backtracking();
         let (engine, compiled) = if backtracking {
             (Engine::Backtrack, None)
         } else {
-            governor.charge(Resource::ScratchBytes, length.saturating_mul(64))?;
-            (Engine::Derivative, Some(derive::compile(&ast)))
+            (Engine::Derivative, Some(derive::compile(&ast, governor)?))
         };
+        syntax_lease.retain();
         Ok(Self {
             ast,
             captures,
@@ -219,14 +249,10 @@ impl Pattern {
     /// assert_eq!(pattern.is_match("Hello", &mut governor), Ok(false));
     /// ```
     pub fn is_match(&self, text: &str, governor: &mut Governor) -> Result<bool, StopReason> {
-        governor.charge(
-            Resource::InputBytes,
-            u64::try_from(text.len()).unwrap_or(u64::MAX),
-        )?;
-        let chars: Vec<char> = text.chars().collect();
+        let chars = match_chars(text, governor)?;
         match &self.compiled {
-            Some(compiled) => derive::is_match(compiled, &chars, governor),
-            None => backtrack::is_match(&self.ast, self.captures, &chars, governor),
+            Some(compiled) => derive::is_match(compiled, chars.as_slice(), governor),
+            None => backtrack::is_match(&self.ast, self.captures, chars.as_slice(), governor),
         }
     }
 
@@ -298,12 +324,8 @@ impl Pattern {
         text: &str,
         governor: &mut Governor,
     ) -> Result<bool, StopReason> {
-        governor.charge(
-            Resource::InputBytes,
-            u64::try_from(text.len()).unwrap_or(u64::MAX),
-        )?;
-        let chars: Vec<char> = text.chars().collect();
-        backtrack::is_match(&self.ast, self.captures, &chars, governor)
+        let chars = match_chars(text, governor)?;
+        backtrack::is_match(&self.ast, self.captures, chars.as_slice(), governor)
     }
 
     /// Generate a shortest witness string that matches this pattern and none
@@ -321,6 +343,12 @@ impl Pattern {
     /// from its syntax tree and verifies each with [`Pattern::is_match`],
     /// since its language need not be regular; exhaustion of that bounded
     /// enumeration is reported explicitly, not as proof of emptiness.
+    /// Frontier text, product states, cycle keys, captures, verification
+    /// buffers, and the returned witness or evidence are admitted against
+    /// `ScratchBytes` before allocation. Temporary ownership releases its
+    /// charge on every exit; returned plain strings retain their charges.
+    /// Copying candidate text and scanning it for verification also consumes
+    /// `Work`, so forcing a long minimum length can exhaust either resource.
     ///
     /// # Errors
     /// Returns a governor failure (`BudgetExceeded`/`Cancelled`) if the

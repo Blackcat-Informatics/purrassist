@@ -237,3 +237,145 @@ fn generation_exhaustion_stays_an_explicit_resource_error() {
         Err(StopReason::BudgetExceeded(Resource::ScratchBytes))
     );
 }
+
+#[test]
+fn flat_literal_chains_use_admitted_iterative_traversal() {
+    // The AST is a flat sequence; neither its width nor the derivative
+    // arena's left-deep Concat representation is structural nesting.
+    let source = "a".repeat(32_768);
+    let mut compiler = Governor::new(Budget {
+        depth: 0,
+        ..Budget::default()
+    });
+    let pattern = Pattern::compile_governed(&source, &mut compiler).unwrap();
+    for text in ["", "a"] {
+        let mut governor = Governor::new(Budget {
+            depth: 0,
+            ..Budget::default()
+        });
+        assert_eq!(pattern.is_match(text, &mut governor), Ok(false));
+        assert!(governor.usage().work > 32_768);
+        assert_eq!(governor.scratch_meter().live(), 0);
+        assert_eq!(
+            pattern.is_match_backtracking(text, &mut Governor::new(Budget::default())),
+            Ok(false)
+        );
+    }
+}
+
+#[test]
+fn nullable_exhaustion_is_an_error_before_a_boolean_result() {
+    // Six arena items and four index entries consume ten units when seeding,
+    // then the outer position consumes the last unit. The first nullable
+    // visit must fail; it cannot silently traverse the remaining terms.
+    let pattern = Pattern::compile("aaaa").unwrap();
+    let mut governor = Governor::new(Budget {
+        work: 11,
+        ..Budget::default()
+    });
+    assert_eq!(
+        pattern.is_match("", &mut governor),
+        Err(StopReason::BudgetExceeded(Resource::Work))
+    );
+    assert_eq!(governor.usage().work, 11);
+    assert_eq!(governor.scratch_meter().live(), 0);
+    assert_eq!(
+        governor.check(),
+        Err(StopReason::BudgetExceeded(Resource::Work))
+    );
+}
+
+#[test]
+fn flat_wide_alternations_share_bounded_compile_and_runtime_union() {
+    // Deriving the initial 'a' produces second-character Class terms;
+    // restarting search unions them with disjoint Concat root terms.
+    let source = (0..64)
+        .map(|index| format!("a\\u{{{:x}}}", 0x100 + index))
+        .collect::<Vec<_>>()
+        .join("|");
+    let mut compiler = Governor::new(Budget {
+        depth: 0,
+        ..Budget::default()
+    });
+    let pattern = Pattern::compile_governed(&source, &mut compiler).unwrap();
+    let options = GenerateOptions {
+        min_len: 2,
+        max_len: Some(2),
+        avoid: &[],
+    };
+    let mut governor = Governor::new(Budget {
+        depth: 0,
+        ..Budget::default()
+    });
+    let outcome = pattern.generate(&mut governor, options).unwrap();
+    let GenerateOutcome::Witness(text) = outcome else {
+        panic!("wide flat pattern must have a witness")
+    };
+    assert_eq!(text.chars().count(), 2);
+    verify_witness(&pattern, &[], &text);
+    assert_eq!(
+        governor.scratch_meter().live(),
+        u64::try_from(text.capacity()).unwrap()
+    );
+    let work = governor.usage().work;
+    let mut stopped = Governor::new(Budget {
+        work: work - 1,
+        depth: 0,
+        ..Budget::default()
+    });
+    assert_eq!(
+        pattern.generate(&mut stopped, options),
+        Err(StopReason::BudgetExceeded(Resource::Work))
+    );
+    assert_eq!(stopped.scratch_meter().live(), 0);
+    // The exact work required for compilation succeeds; one less must
+    // propagate compile exhaustion instead of translating it to DEAD_ID.
+    let work = compiler.usage().work;
+    let mut stopped = Governor::new(Budget {
+        work: work - 1,
+        depth: 0,
+        ..Budget::default()
+    });
+    assert!(matches!(
+        Pattern::compile_governed(&source, &mut stopped),
+        Err(purrassist_core::pattern::PatternCompileError::Resource(
+            StopReason::BudgetExceeded(Resource::Work)
+        ))
+    ));
+}
+
+#[test]
+fn wide_pattern_compile_stops_keep_their_schema_resource_type() {
+    use purrassist_core::schema::{CompilationError, Schema};
+
+    let pattern = (0..128)
+        .map(|index| format!("a\\u{{{:x}}}", 0x100 + index))
+        .collect::<Vec<_>>()
+        .join("|");
+    let source = format!(r#"{{"pattern":"{}"}}"#, pattern.replace('\\', "\\\\"));
+    let mut completed = Governor::new(Budget::default());
+    Schema::compile_governed(&source, &mut completed).unwrap();
+    for (budget, resource) in [
+        (
+            Budget {
+                work: completed.usage().work - 1,
+                ..Budget::default()
+            },
+            Resource::Work,
+        ),
+        (
+            Budget {
+                scratch_bytes: completed.usage().peak_scratch_bytes - 1,
+                ..Budget::default()
+            },
+            Resource::ScratchBytes,
+        ),
+    ] {
+        let mut governor = Governor::new(budget);
+        assert_eq!(
+            Schema::compile_governed(&source, &mut governor).unwrap_err(),
+            CompilationError::Resource(StopReason::BudgetExceeded(resource))
+        );
+        assert_eq!(governor.check(), Err(StopReason::BudgetExceeded(resource)));
+    }
+}
