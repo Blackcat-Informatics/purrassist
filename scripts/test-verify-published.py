@@ -28,7 +28,10 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
+import time
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 VERIFY_PUBLISHED = ROOT / 'scripts/verify-published.py'
@@ -162,6 +165,23 @@ def build_fixture_workspace(root: Path, version: str):
                     );
                 }
                 Some("mcp") => {
+                    let root = args.iter().position(|arg| arg == "--root")
+                        .and_then(|index| args.get(index + 1)).unwrap();
+                    let hang = std::path::Path::new(root).join("hang-mcp");
+                    if hang.exists() {
+                        match std::fs::read_to_string(hang).unwrap().as_str() {
+                            "partial" => {
+                                print!("{{\"jsonrpc\":\"2.0\"");
+                                io::stdout().flush().unwrap();
+                            }
+                            "stderr" => {
+                                io::stderr().write_all(&vec![b'x'; 256 * 1024]).unwrap();
+                                io::stderr().flush().unwrap();
+                            }
+                            _ => {}
+                        }
+                        loop { std::thread::park(); }
+                    }
                     let stdin = io::stdin();
                     let mut out = io::stdout();
                     for line in stdin.lock().lines() {
@@ -331,6 +351,37 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('Verified purrassist-cli', result.stdout)
 
+    def test_missing_partial_and_stderr_flooded_responses_timeout_and_clean_up(self):
+        """A real child stays alive without completing a response. The
+        verifier must bound the pipe exchange, reap it, and join its readers,
+        including when the child fills stderr or writes a partial stdout line.
+        """
+        for mode in ('missing', 'partial', 'stderr'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / 'hang-mcp').write_text(mode)
+                spawned = []
+                popen = subprocess.Popen
+
+                def record_process(*args, **kwargs):
+                    process = popen(*args, **kwargs)
+                    spawned.append(process)
+                    return process
+
+                before = {thread.ident for thread in threading.enumerate()}
+                start = time.monotonic()
+                with mock.patch.object(VP, 'MCP_TIMEOUT_SECONDS', 0.25), \
+                        mock.patch.object(VP.subprocess, 'Popen', side_effect=record_process):
+                    with self.assertRaisesRegex(SystemExit, 'timed out'):
+                        VP.replay_mcp(self.fixture.binary, root, [json.dumps(REQUESTS[0])])
+                self.assertLess(time.monotonic() - start, 5)
+                self.assertEqual(len(spawned), 1)
+                self.assertIsNotNone(spawned[0].poll(), 'timed-out child was not reaped')
+                self.assertEqual([
+                    thread.name for thread in threading.enumerate()
+                    if thread.ident not in before and thread.name.startswith('purrassist-mcp-')
+                ], [], 'pipe workers survived replay cleanup')
+
     def test_tampered_registry_archive_is_detected(self):
         target = self.fixture.registry / f'purrassist-core-{FIXTURE_VERSION}.crate'
         original = target.read_bytes()
@@ -412,6 +463,23 @@ class CommittedFixtureFreshnessTests(unittest.TestCase):
             'committed scripts/data/verify-published fixtures are stale relative to the current '
             'workspace CLI; regenerate with `python3 scripts/verify-published.py --capture` and '
             'review the diff before committing:\n' + '\n'.join(errors))
+
+    def test_download_acceptance_transcript_exercises_file_apply_and_undo(self):
+        requests = [json.loads(line) for line in VP.read_lines(
+            VP.DEFAULT_FIXTURES / 'mcp-requests.jsonl')]
+        names = [request.get('params', {}).get('name') for request in requests]
+        self.assertTrue({'read_file', 'apply_file', 'undo_file'}.issubset(names))
+        seeds = VP.seed_transcript_root(self.root, VP.DEFAULT_FIXTURES)
+        self.assertEqual(seeds, {'verify.txt': 'hello world\n'})
+        VP.verify_restored_files(self.root, seeds)
+
+    def test_seed_restoration_refuses_different_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            seeds = VP.seed_transcript_root(root, VP.DEFAULT_FIXTURES)
+            (root / 'verify.txt').write_bytes(b'hello earth\n')
+            with self.assertRaisesRegex(SystemExit, 'did not restore exact seed bytes'):
+                VP.verify_restored_files(root, seeds)
 
 
 if __name__ == '__main__':

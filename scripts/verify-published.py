@@ -29,14 +29,17 @@ a stale fixture can never be committed silently: regenerate with
 and review the diff before committing.
 """
 import argparse
+from collections import deque
 import importlib.util
 import io
 import json
 import os
+import queue
 from pathlib import Path
 import subprocess
 import tarfile
 import tempfile
+import threading
 import urllib.error
 import urllib.request
 
@@ -234,18 +237,18 @@ def read_lines(path: Path):
 
 
 def replay_mcp(binary: Path, root: Path, requests):
-    """Send `requests` (JSON-RPC lines) to a fresh `purrassist mcp` session
-    one at a time and return the response line for every id'd request, in
-    request order. Strictly sequential, well within the session's bounded
-    concurrent-call admission (never floods past it, unlike sending every
-    request before reading any response).
+    """Sequentially exchange requests with bounded pipe writes and response reads.
+
+    One worker owns stdin/stdout, allowing Queue's timeout to cover both a
+    blocked write and a missing or incomplete response on Windows as well as
+    POSIX. A second worker continuously drains stderr into a bounded tail.
+    Every exit path kills a still-running child, waits for it, and joins both
+    workers before releasing their pipes.
 
     # Errors
-    Raises `SystemExit` if the subprocess does not expose its stdio pipes,
-    produces no response for an id'd request, or exits non-zero.
+    Raises SystemExit on timeout, pipe failure, unexpected response identity,
+    tool errors, missing responses, or a nonzero process exit.
     """
-    # `with process:` closes stdin/stdout/stderr on every exit path (normal,
-    # exception, or timeout), instead of leaking the pipe file objects.
     with subprocess.Popen(
         [str(binary), 'mcp', '--root', str(root)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -254,28 +257,115 @@ def replay_mcp(binary: Path, root: Path, requests):
         if process.stdin is None or process.stdout is None or process.stderr is None:
             raise SystemExit('purrassist mcp subprocess did not provide stdio pipes')
         stdin, stdout, stderr = process.stdin, process.stdout, process.stderr
+        commands = queue.Queue()
+        replies = queue.Queue()
+        stderr_chunks = deque(maxlen=16)
+
+        def exchange():
+            try:
+                while True:
+                    command = commands.get()
+                    if command is None:
+                        stdin.close()
+                        return
+                    line, expects_response = command
+                    stdin.write(line + '\n')
+                    stdin.flush()
+                    replies.put((stdout.readline() if expects_response else '', None))
+            except (OSError, ValueError) as error:
+                replies.put(('', error))
+
+        def drain_stderr():
+            try:
+                while chunk := stderr.read(4096):
+                    stderr_chunks.append(chunk)
+            except (OSError, ValueError) as error:
+                stderr_chunks.append(str(error))
+
+        # Daemon status is a last resort against inherited descendant pipes;
+        # successful cleanup still explicitly requires both workers to stop.
+        worker = threading.Thread(target=exchange, name='purrassist-mcp-exchange', daemon=True)
+        diagnostics = threading.Thread(target=drain_stderr, name='purrassist-mcp-stderr', daemon=True)
+        worker.start()
+        diagnostics.start()
         actual = []
-        returncode = None
         try:
             for line in requests:
                 request = json.loads(line)
-                stdin.write(line + '\n')
-                stdin.flush()
-                if request.get('id') is None:
-                    continue  # A notification never gets a response.
-                response = stdout.readline()
+                expects_response = request.get('id') is not None
+                commands.put((line, expects_response))
+                try:
+                    response, error = replies.get(timeout=MCP_TIMEOUT_SECONDS)
+                except queue.Empty as error:
+                    raise SystemExit(
+                        f'purrassist mcp timed out after {MCP_TIMEOUT_SECONDS}s '
+                        f'waiting for request {request.get("id")!r}') from error
+                if error is not None:
+                    raise SystemExit(f'purrassist mcp pipe failure: {error}')
+                if not expects_response:
+                    continue
                 if not response:
-                    raise SystemExit(f'purrassist mcp produced no response for {line!r}: {stderr.read()}')
+                    raise SystemExit(f'purrassist mcp produced no response for {line!r}')
+                decoded = json.loads(response)
+                if decoded.get('id') != request['id']:
+                    raise SystemExit(f'purrassist mcp returned unexpected response id: {response!r}')
+                if decoded.get('error') is not None or decoded.get('result', {}).get('isError'):
+                    raise SystemExit(f'purrassist mcp request failed: {response!r}')
                 actual.append(response.rstrip('\n'))
-            stdin.close()
-            returncode = process.wait(timeout=MCP_TIMEOUT_SECONDS)
+            commands.put(None)
+            try:
+                returncode = process.wait(timeout=MCP_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired as error:
+                raise SystemExit('purrassist mcp timed out waiting for process exit') from error
+            if returncode != 0:
+                raise SystemExit(f'purrassist mcp exited {returncode}: {"".join(stderr_chunks)}')
         finally:
-            stderr_tail = stderr.read() if process.poll() is not None else ''
+            commands.put(None)
             if process.poll() is None:
                 process.kill()
-        if returncode != 0:
-            raise SystemExit(f'purrassist mcp exited {returncode}: {stderr_tail}')
+            process.wait(timeout=MCP_TIMEOUT_SECONDS)
+            for thread in (worker, diagnostics):
+                thread.join(timeout=MCP_TIMEOUT_SECONDS)
+                if thread.is_alive():
+                    raise SystemExit(f'purrassist mcp cleanup could not join {thread.name}')
         return actual
+
+
+def seed_transcript_root(root: Path, fixtures: Path):
+    """Populate only declared relative files in the disposable verification root.
+
+    Custom registry-test fixtures may omit root-files.json. Existing files
+    must already equal their seed; replay never silently overwrites a changed
+    result left by an earlier verification attempt.
+    """
+    path = fixtures / 'root-files.json'
+    if not path.is_file():
+        return {}
+    seeds = json.loads(path.read_text())
+    if not isinstance(seeds, dict):
+        raise SystemExit('root-files.json must be a relative-path to text object')
+    for name, text in seeds.items():
+        relative = Path(name)
+        if (not isinstance(text, str) or not relative.parts or relative.is_absolute()
+                or '..' in relative.parts or '.purrassist' in relative.parts
+                or '\\' in name or ':' in name or relative.as_posix() != name):
+            raise SystemExit(f'unsafe transcript seed path or value: {name!r}')
+        destination = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists():
+            if destination.read_bytes() != text.encode():
+                raise SystemExit(f'transcript seed already differs: {name}')
+        else:
+            destination.write_bytes(text.encode())
+    return seeds
+
+
+def verify_restored_files(root: Path, seeds):
+    """Require the real apply/undo transcript to restore every seed byte."""
+    for name, text in seeds.items():
+        path = root / name
+        if not path.is_file() or path.read_bytes() != text.encode():
+            raise SystemExit(f'MCP file transaction/undo did not restore exact seed bytes: {name}')
 
 
 def run_mcp_transcript(binary: Path, root: Path, fixtures: Path):
@@ -283,7 +373,9 @@ def run_mcp_transcript(binary: Path, root: Path, fixtures: Path):
     a list of precise mismatch descriptions (empty on an exact match)."""
     requests = read_lines(fixtures / 'mcp-requests.jsonl')
     expected = read_lines(fixtures / 'mcp-responses.jsonl')
+    seeds = seed_transcript_root(root, fixtures)
     actual = replay_mcp(binary, root, requests)
+    verify_restored_files(root, seeds)
     return diff_transcript('mcp', expected, actual)
 
 
@@ -327,7 +419,9 @@ def capture_fixtures(binary: Path, root: Path, fixtures: Path):
     Raises `SystemExit` if the `call` replay exits non-zero.
     """
     requests = read_lines(fixtures / 'mcp-requests.jsonl')
+    seeds = seed_transcript_root(root, fixtures)
     responses = replay_mcp(binary, root, requests)
+    verify_restored_files(root, seeds)
     (fixtures / 'mcp-responses.jsonl').write_text('\n'.join(responses) + '\n')
 
     call_request = json.loads((fixtures / 'call-request.json').read_text())
