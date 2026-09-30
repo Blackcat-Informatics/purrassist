@@ -16,7 +16,7 @@
 //! records the mechanism actually used in [`Commit::durability`]. See
 //! `docs/EDIT-APPLICATION.md` for the full design.
 use purrassist::{
-    Budget, Governor, Outcome,
+    Budget, Governor, Outcome, StopReason,
     digest::Digest,
     json::{self, Node, Value},
     patch::{Patch, TextEdit},
@@ -41,6 +41,9 @@ pub enum Error {
     Busy,
     /// Current file differs from the expected version.
     Stale,
+    /// A governed journal or patch operation exhausted its resource allowance.
+    /// This does not establish a stale source or a corrupt journal.
+    Resource(StopReason),
 }
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -51,6 +54,7 @@ impl fmt::Display for Error {
                 f.write_str("file transaction is busy (writer lock or rename contention)")
             }
             Self::Stale => f.write_str("file changed since the expected snapshot"),
+            Self::Resource(reason) => reason.fmt(f),
         }
     }
 }
@@ -58,6 +62,14 @@ impl std::error::Error for Error {}
 impl From<std::io::Error> for Error {
     fn from(error: std::io::Error) -> Self {
         Self::Io(error)
+    }
+}
+impl From<StopReason> for Error {
+    fn from(reason: StopReason) -> Self {
+        match reason {
+            StopReason::BudgetExceeded(_) | StopReason::Cancelled => Self::Resource(reason),
+            other => Self::Invalid(other.to_string()),
+        }
     }
 }
 
@@ -266,6 +278,11 @@ pub enum Recovery {
 ///   governed [`Patch::apply`] every other consumer uses) instead of an
 ///   independent restore path.
 const JOURNAL_VERSION: u64 = 2;
+// A diff has at most one replacement, whose JSON spelling takes at most six
+// bytes per admitted UTF-8 byte. The remaining allowance covers the path,
+// digests, version, offsets, and fixed JSON structure; commit checks the exact
+// generated record against this bound before creating transaction artifacts.
+const JOURNAL_METADATA_ALLOWANCE: u64 = 65_536;
 
 impl Store {
     /// Attempt each replacement in input order and retain every outcome.
@@ -341,9 +358,16 @@ impl Store {
     /// rename mechanism and directory-flush outcome this call actually used.
     ///
     /// # Errors
-    /// Returns busy, stale, path, size, or I/O errors. Noncooperating writers can
+    /// Returns busy, stale, path, size, resource, or I/O errors. Both snapshot
+    /// and replacement text must fit the store's file limit. The serialized
+    /// journal must fit six times that limit plus 65,536 metadata bytes, accounting
+    /// for JSON escaping and the root-relative path before any journal is written.
+    /// Noncooperating writers can
     /// still race the final comparison and rename; callers must coordinate them.
     pub fn commit(&self, before: &Snapshot, replacement: &str) -> Result<Commit, Error> {
+        if u64::try_from(before.text.len()).unwrap_or(u64::MAX) > self.max_bytes {
+            return Err(Error::Invalid("snapshot exceeds file limit".into()));
+        }
         if u64::try_from(replacement.len()).unwrap_or(u64::MAX) > self.max_bytes {
             return Err(Error::Invalid("replacement exceeds file limit".into()));
         }
@@ -360,7 +384,7 @@ impl Store {
             replacement,
             &mut Governor::new(self.patch_budget()),
         )
-        .map_err(|reason| Error::Invalid(format!("patch computation failed: {reason}")))?;
+        .map_err(Error::from)?;
         let key = object([
             ("version", integer(JOURNAL_VERSION)),
             ("path", string(&before.path)),
@@ -369,6 +393,11 @@ impl Store {
             ("patch", patch.to_node()),
         ])
         .to_json();
+        if u64::try_from(key.len()).unwrap_or(u64::MAX) > self.journal_limit() {
+            return Err(Error::Invalid(
+                "serialized journal exceeds metadata limit".into(),
+            ));
+        }
         let id = Digest::of(key.as_bytes())
             .to_string()
             .replace("sha256:", "");
@@ -446,19 +475,25 @@ impl Store {
     /// # Errors
     /// Rejects modified output, tampered/incomplete journals, a recorded
     /// patch that does not invert against its own `before` bytes, and
-    /// ordinary commit failures.
+    /// ordinary commit failures. Journal parsing uses allowances derived from
+    /// its admitted serialized size; resource exhaustion remains [`Error::Resource`]
+    /// and never becomes evidence that the current file is stale.
     pub fn undo(&self, transaction: &str) -> Result<Commit, Error> {
         let entry = self.entry(transaction)?;
         let current = self.read(&entry.path)?;
         let inverse = entry
             .patch
             .invert(&entry.before, &mut Governor::new(self.patch_budget()))
-            .map_err(|reason| {
-                Error::Invalid(format!("journaled patch does not invert: {reason}"))
-            })?;
-        let Outcome::Resolved(applied) = inverse.apply(&current.text, self.patch_budget()).outcome
-        else {
-            return Err(Error::Stale);
+            .map_err(Error::from)?;
+        let result = inverse.apply(&current.text, self.patch_budget());
+        let Outcome::Resolved(applied) = result.outcome else {
+            // Successful inversion constructed valid ranges against the exact
+            // recorded output. Its only invalid-input refusal here is a changed
+            // source digest; resource failures retain their own typed outcome.
+            return Err(match result.receipt.stopped {
+                StopReason::InvalidInput(_) => Error::Stale,
+                reason => Error::from(reason),
+            });
         };
         self.commit(&current, &applied.text)
     }
@@ -476,11 +511,32 @@ impl Store {
             helper_calls: 0,
         }
     }
+    const fn journal_limit(&self) -> u64 {
+        self.max_bytes
+            .saturating_mul(6)
+            .saturating_add(JOURNAL_METADATA_ALLOWANCE)
+    }
+    const fn journal_budget(serialized_bytes: u64) -> Budget {
+        Budget {
+            // Parsing charges every consumed byte exactly once. The fixed
+            // journal structure and geometric decoded-string capacity fit the
+            // actual serialized length plus this fixed structural allowance.
+            work: serialized_bytes,
+            candidates: 1,
+            input_bytes: serialized_bytes,
+            scratch_bytes: serialized_bytes.saturating_mul(4).saturating_add(16_384),
+            depth: 8,
+            evidence_entries: 0,
+            helper_calls: 0,
+        }
+    }
     /// Reconcile prepared journals with actual file versions without overwriting files.
     ///
     /// # Errors
     /// Fails on store-lock contention, journal-directory enumeration, orphan
-    /// scanning, or orphan removal errors. Corrupt/unreadable individual
+    /// scanning, orphan removal, or governed journal resource errors. Resource
+    /// exhaustion returns [`Error::Resource`] rather than classifying an otherwise
+    /// unexamined transaction as corrupt. Corrupt/unreadable individual
     /// transactions and failed marker writes are retained as [`Recovery::Corrupt`]
     /// outcomes while other transactions continue.
     pub fn recover(&self) -> Result<Vec<Recovery>, Error> {
@@ -529,10 +585,14 @@ impl Store {
                     Ok(Recovery::Conflict(id.clone()))
                 }
             })();
-            results.push(outcome.unwrap_or_else(|error| Recovery::Corrupt {
-                id: id.clone(),
-                reason: error.to_string(),
-            }));
+            results.push(match outcome {
+                Ok(recovery) => recovery,
+                Err(error @ Error::Resource(_)) => return Err(error),
+                Err(error) => Recovery::Corrupt {
+                    id,
+                    reason: error.to_string(),
+                },
+            });
         }
         for orphan in self.scan_orphans(&known_ids)? {
             match orphan {
@@ -708,15 +768,14 @@ impl Store {
         if fs::symlink_metadata(&directory)?.file_type().is_symlink() {
             return Err(Error::Invalid("journal cannot be a symlink".into()));
         }
-        // `prepared.json` now embeds the recorded `patch`'s replacement text
-        // (see `JOURNAL_VERSION`), so it can be as large as the file itself;
-        // bound it the same way the `before`/`after` pieces already are,
-        // plus a fixed allowance for the surrounding metadata.
-        let source = read_bounded(
-            &directory.join("prepared.json"),
-            self.max_bytes.saturating_add(65_536),
-        )?;
-        let metadata = json::parse(&source).map_err(|e| Error::Invalid(e.to_string()))?;
+        let source = read_bounded(&directory.join("prepared.json"), self.journal_limit())?;
+        let mut governor = Governor::new(Self::journal_budget(
+            u64::try_from(source.len()).unwrap_or(u64::MAX),
+        ));
+        let metadata = json::parse_with(&source, &mut governor).map_err(|error| match error {
+            json::ParseFailure::Syntax(error) => Error::Invalid(error.to_string()),
+            json::ParseFailure::Resource(reason) => Error::Resource(reason),
+        })?;
         let field = |key| {
             metadata
                 .get(key)
