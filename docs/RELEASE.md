@@ -41,9 +41,14 @@ repository or its CI configuration at any point.
 On `rust-vVERSION` tags, `release-qualification.yml` checks the tag against the
 workspace, runs the full local gate on stable Rust 1.98.0, packages all five
 crates with Cargo verification enabled, and audits the archives and license
-notices. Packaging uses a commit-scoped Cargo home so a previously packaged
-crate at the same version cannot satisfy a later crate's verification. This
-workflow **never publishes, attests, or creates a GitHub release**, and it
+notices. Every package attempt also runs the packaging isolation and failure
+regressions before creating archives. Packaging resolves the real toolchain Cargo through rustup and uses
+fresh Cargo home, target and intermediate directories for each invocation.
+Both compiler wrapper layers are disabled for these verification builds;
+previously packaged same-version crates and build artifacts cannot satisfy them.
+The verified archives are retained in a unique ignored `package-archives`
+run directory printed by the command, after the complete source/license audit.
+This workflow **never publishes, attests, or creates a GitHub release**, and it
 holds no `id-token` permission and no registry credential. `verify.yml`'s
 `qualification` job gathers the same class of evidence (independent syntax
 oracles, coverage-guided/differential fuzzing, packaging, resource
