@@ -196,6 +196,46 @@ class DifferentialNormalization(unittest.TestCase):
                          FUZZ.normalize_html('<!--<script>-->' + second))
         self.assertNotEqual(FUZZ.normalize_html('<textarea>x\n'), FUZZ.normalize_html('<textarea>x\n\n'))
 
+    def test_normalizer_never_searches_inside_unrecognized_outer_markup(self):
+        from html.parser import HTMLParser
+        class Attributes(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.attributes = []
+            def handle_starttag(self, tag, attributes):
+                self.attributes.append((tag, attributes))
+        left = '<div data-x=foo<br/>\n'
+        right = '<div data-x=foo<br>\n'
+        parsed_left, parsed_right = Attributes(), Attributes()
+        parsed_left.feed(left)
+        parsed_right.feed(right)
+        self.assertEqual(parsed_left.attributes, [('div', [('data-x', 'foo<br/')])])
+        self.assertEqual(parsed_right.attributes, [('div', [('data-x', 'foo<br')])])
+        self.assertNotEqual(FUZZ.normalize_html(left), FUZZ.normalize_html(right))
+        for left, right in (
+            ('<custom-tag data-x=foo<br/>', '<custom-tag data-x=foo<br>'),
+            ('<!bogus <input b="2" a="1" />>', '<!bogus <input a="1" b="2">>'),
+            ('<?xml "<br/>"?>', '<?xml "<br>"?>'),
+            ('<svg><div data-x=foo<br/>', '<svg><div data-x=foo<br>'),
+            ('<svg><div data-x=foo</svg>\n', '<svg><div data-x=foo</svg>\n\n')):
+            self.assertEqual(FUZZ.normalize_html(left), left if left.startswith('<svg>') else left + '\n')
+            self.assertEqual(FUZZ.normalize_html(right), right if right.startswith('<svg>') else right + '\n')
+            self.assertNotEqual(FUZZ.normalize_html(left), FUZZ.normalize_html(right))
+        for prefix in ('<?pi?>', '<!DOCTYPE html>', '<!DOCTYPE html PUBLIC \"literal > text\">', '<!bogus <tag>>', '<div data-x=foo<br/>'):
+            after = '<input z=\"2\" a=\"1\" />'
+            equivalent = '<input a=\"1\" z=\"2\">'
+            self.assertEqual(FUZZ.normalize_html(prefix + after), FUZZ.normalize_html(prefix + equivalent))
+        for whitespace in ('\u00a0', '\v'):
+            source = '<p a=\"1\"' + whitespace + 'b=\"2\">x</p>'
+            self.assertEqual(FUZZ.normalize_html(source), source + '\n')
+            self.assertNotEqual(FUZZ.normalize_html(source), FUZZ.normalize_html(source.replace(whitespace, ' ')))
+        for source in ('<?pi <br/', '<!DOCTYPE html PUBLIC \"<br/>', '<!bogus <br'):
+            self.assertEqual(FUZZ.normalize_html(source), source)
+        ordinary = '<my-widget z="2" a="1"><input disabled="" type="checkbox" /></my-widget>'
+        equivalent = '<my-widget a="1" z="2"><input type="checkbox" disabled=""></my-widget>'
+        self.assertEqual(FUZZ.normalize_html(ordinary), FUZZ.normalize_html(equivalent))
+        self.assertNotEqual(FUZZ.normalize_html('<my-widget/>'), FUZZ.normalize_html('<my-widget>'))
+
     def test_normalize_html_ignores_attribute_order_and_void_self_closing(self):
         # cmark-gfm's CLI self-closes void elements and orders attributes
         # differently from the official GFM specification fixture (see
@@ -684,66 +724,74 @@ class DifferentialNormalization(unittest.TestCase):
                        '[x]: ' + FUZZ._REFERENCE_GUARD + '(\n'):
             self.assertFalse(FUZZ.unbalanced_reference_paragraph(source), repr(source))
 
-    def test_email_retry_brackets_and_escapes_need_independent_target_exclusion(self):
-        source = '[~~strike~~ www.ex_er@exampwww.ex_er@exampl~om\n\\]'
-        self.assertTrue(FUZZ.generated_email_retry_reference_profile(source))
-        for allowed in ('[r@ee.or@exampl]', r'\[r@ee.or@exampl\]', r'r@ee.or@exampl\_'):
-            self.assertTrue(FUZZ.generated_email_retry_reference_profile(allowed), allowed)
-        for denied in ('[r@ee.or@exampl](mailto:r@host)', '[label]: mailto:r@host\nr@ee.or@exampl',
-                       '[r@ee.or@exampl] : target', r'r@ee.or@exampl\_ (target)',
-                       '`[r@ee.or@exampl]`', '&lbrack;r@ee.or@exampl', '<r@ee.or@exampl>'):
-            self.assertFalse(FUZZ.generated_email_retry_reference_profile(denied), denied)
-        raw = '<p>[<del>strike</del> www.ex_er@<a href="mailto:exampwww.ex_er@exampl">exampwww.ex_er@exampl</a>~om\n]</p>\n'
-        expected = '<p>[<del>strike</del> www.ex_er@exampwww.ex_er@exampl~om\n]</p>\n'
-        record = {'kind': 'markdown', 'source': source, 'html': expected, 'full_html': expected}
+    def test_email_counter_patch_requires_registration_unique_preimage_and_raw_selection(self):
+        self.assertEqual(FUZZ.patch_reference_email_counter(FUZZ.CMARK_EMAIL_BEFORE), FUZZ.CMARK_EMAIL_AFTER)
+        self.assertIn('np = 0;', FUZZ.CMARK_EMAIL_AFTER)
+        for source in ('', FUZZ.CMARK_EMAIL_BEFORE * 2, FUZZ.CMARK_EMAIL_BEFORE.replace('rewind = 0', 'rewind = 1')):
+            with self.assertRaises(ValueError):
+                FUZZ.patch_reference_email_counter(source)
+        inventory = json.loads((FUZZ.ROOT / 'vendor/tooling.json').read_text())
+        entry = next(item for item in inventory if item['name'] == 'cmark-gfm')
+        self.assertEqual(entry['email_counter_patch_sha256'], FUZZ.CMARK_EMAIL_PATCH_SHA256)
+        bad = [dict(item, email_counter_patch_sha256='bad') if item['name'] == 'cmark-gfm' else item for item in inventory]
+        with patch.object(FUZZ.Path, 'read_text', return_value=json.dumps(bad)):
+            with self.assertRaises(ValueError):
+                FUZZ.ensure_cmark_gfm(corrected_emails=True)
+        for source in ('a@b.c@d', 'a&#64;b.c&#64;d', 'a&#x40;b.c&#x40;d', 'a&commat;b.c&commat;d',
+                       'a&commat;b.c&commat;d&period;e', '`a@b.c@d`', '[label](mailto:a@b)', '<a@b>'):
+            self.assertTrue(FUZZ.email_reference_profile(source), source)
+        for source in ('ordinary', '[label](target)', '<script>"text"</script>'):
+            self.assertFalse(FUZZ.email_reference_profile(source), source)
+        for supplied in ({}, {'corrected_emails_binary': Path('email')}):
+            with patch.object(FUZZ, 'cmark_gfm_render') as oracle:
+                with self.assertRaises(ValueError):
+                    FUZZ.check_markdown_differential({'kind': 'markdown', 'source': 'a@b.c@d', 'html': ''}, Path('raw'), 5, **supplied)
+                oracle.assert_not_called()
+
+    def test_email_corrected_oracle_preserves_complete_answers_and_rejects_content_loss(self):
+        source = '[~~strik:e~~ www.example.org\\ user@exampleww.example.orgser@exam\n]'
+        raw = '<p>[<del>strik:e</del> www.example.org\\ user@<a href="mailto:exampleww.example.orgser@exam">exampleww.example.orgser@exam</a>\n]</p>\n'
+        fixed = '<p>[<del>strik:e</del> www.example.org\\ user@exampleww.example.orgser@exam\n]</p>\n'
+        record = {'kind': 'markdown', 'source': source, 'html': fixed, 'full_html': fixed}
         counts = {}
-        with patch.object(FUZZ, 'cmark_gfm_render', return_value=raw):
+        with patch.object(FUZZ, 'cmark_gfm_render', side_effect=[raw, raw, fixed]):
             self.assertTrue(FUZZ.check_markdown_differential(record, Path('raw'), 5, counts,
-                corrected_emphasis_binary=Path('combined')))
-        self.assertEqual(counts['email_retry_reference_disagreements'], 1)
-        self.assertEqual(counts['email_retry_reference_cases'][0]['raw_reference_html'], raw)
-        for wrong in (raw, expected.replace('www.ex_er@', ''), expected.replace('~om', 'lost')):
+                corrected_emphasis_binary=Path('emphasis'), corrected_destinations_binary=Path('destination'),
+                corrected_emails_binary=Path('email')))
+        self.assertEqual(counts['email_reference_disagreements'], 1)
+        case = counts['email_reference_cases'][0]
+        self.assertEqual(case['raw_reference_html'], raw)
+        self.assertEqual(case['reference_html_before_correction'], raw)
+        self.assertEqual(case['corrected_reference_html'], fixed)
+        for wrong in (raw, fixed.replace('user@', ''), fixed.replace('strik:e', 'lost')):
             record['html'] = wrong
-            with patch.object(FUZZ, 'cmark_gfm_render', return_value=raw):
+            with patch.object(FUZZ, 'cmark_gfm_render', side_effect=[raw, raw, fixed]):
                 with self.assertRaises(FUZZ.DifferentialMismatch):
                     FUZZ.check_markdown_differential(record, Path('raw'), 5,
-                        corrected_emphasis_binary=Path('combined'))
-
-    def test_email_retry_certificate_and_whole_content_projection(self):
-        source = '~~strike~~ user@ee.or@exampl~om and valid@host.com'
-        raw = '<p><del>strike</del> user@<a href="mailto:ee.or@exampl">ee.or@exampl</a>~om and <a href="mailto:valid@host.com">valid@host.com</a></p>\n'
-        expected = '<p><del>strike</del> user@ee.or@exampl~om and <a href="mailto:valid@host.com">valid@host.com</a></p>\n'
-        self.assertTrue(FUZZ.generated_email_retry_reference_profile(source))
-        self.assertEqual(FUZZ.project_reference_email_retries(source, raw), expected)
-        for excluded in ('plain@host.com', 'a@host', 'a@b@c', '<a@host> a@b.c@d',
-                         '[a@host](mailto:a@host) a@b.c@d', '`a@b.c@d`',
-                         'a@b.c@d &amp;', 'a@b.c@d\\_ (target)'):
-            self.assertFalse(FUZZ.generated_email_retry_reference_profile(excluded), excluded)
-            with self.assertRaises(ValueError):
-                FUZZ.project_reference_email_retries(excluded, raw)
-        for preserved in ('<code>a@b.c@d</code>', '<a href="http://a@b.c@d">a@b.c@d</a>',
-                          '<a href="mailto:ee.or@exampl">different</a>',
-                          '<a href="mailto:a@b.c">a@b.c</a>', '<p>  interior  spaces</p>'):
-            self.assertEqual(FUZZ.project_reference_email_retries(source, preserved), FUZZ.normalize_html(preserved))
-        record = {'kind': 'markdown', 'source': source, 'html': expected}
-        counts = {}
-        with patch.object(FUZZ, 'cmark_gfm_render', return_value=raw):
-            self.assertTrue(FUZZ.check_markdown_differential(record, Path('cmark'), 5, counts))
-        self.assertEqual(counts['email_retry_reference_disagreements'], 1)
-        self.assertEqual(counts['email_retry_reference_cases'][0]['raw_reference_html'], raw)
-        self.assertEqual(counts['email_retry_reference_cases'][0]['projected_reference_html'], expected)
-        for wrong in (expected.replace('user@', 'lost@'), raw,
-                      expected.replace('<del>strike</del>', 'strike'),
-                      expected.replace('valid@host.com</a>', 'invalid</a>')):
-            record['html'] = wrong
-            with patch.object(FUZZ, 'cmark_gfm_render', return_value=raw):
-                with self.assertRaises(FUZZ.DifferentialMismatch):
-                    FUZZ.check_markdown_differential(record, Path('cmark'), 5)
-        record['reference_email_retry_profile'] = 'gfm'
+                        corrected_emphasis_binary=Path('emphasis'), corrected_destinations_binary=Path('destination'),
+                        corrected_emails_binary=Path('email'))
+        record['reference_email_profile'] = 'gfm'
         with patch.object(FUZZ, 'cmark_gfm_render') as oracle:
             with self.assertRaises(ValueError):
-                FUZZ.check_markdown_differential(record, Path('cmark'), 5)
+                FUZZ.check_markdown_differential(record, Path('raw'), 5,
+                    corrected_destinations_binary=Path('destination'), corrected_emails_binary=Path('email'))
             oracle.assert_not_called()
+
+    def test_email_attribution_uses_immediately_preceding_destination_binary(self):
+        source = '[x]: a(b user@a.b'
+        fixed = '<p>[x]: a(b <a href="mailto:user@a.b">user@a.b</a></p>\n'
+        guarded = '<p>' + FUZZ._REFERENCE_GUARD + fixed[len('<p>'):]
+        counts = {}
+        with patch.object(FUZZ, 'cmark_gfm_render', side_effect=['', fixed, fixed, guarded]) as oracle:
+            self.assertTrue(FUZZ.check_markdown_differential(
+                {'kind': 'markdown', 'source': source, 'html': fixed}, Path('raw'), 5, counts,
+                corrected_destinations_binary=Path('destination'), corrected_emails_binary=Path('email')))
+        self.assertEqual(oracle.call_args_list[1].args[0], Path('destination'))
+        self.assertEqual(oracle.call_args_list[2].args[0], Path('email'))
+        self.assertEqual(counts['email_reference_checks'], 1)
+        self.assertEqual(counts['email_reference_disagreements'], 0)
+        self.assertEqual(counts['email_reference_cases'], [])
+        self.assertEqual(counts['reference_admission_disagreements'], 1)
 
     def test_paragraph_prefix_certificate_preserves_semantic_whitespace(self):
         source = '- [d]: /x\n a\n'

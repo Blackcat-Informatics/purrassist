@@ -248,3 +248,12 @@ digest registered in `vendor/tooling.json`; reports retain original/previous/
 corrected source and executable identities, full output disagreements and
 executed compatibility controls. Existing upstream source licenses/notices
 apply. This reference tooling is never linked or packaged into production crates.
+
+The final independent reference also resets each retried extended email's domain
+period counter at the unique `found_at:` scanner label in
+`extensions/autolink.c`. The registered patch and both corrected source-file
+hashes are required. Raw at-signs or entity syntax select that oracle before
+execution; original/earlier/final binaries and full answers remain distinct.
+Actual controls and the full official corpus execute for each campaign. This
+supersedes the earlier narrow email HTML projection for new reports, preserving
+all historical observations unchanged and retaining the same upstream licenses.

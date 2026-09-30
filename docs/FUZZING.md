@@ -411,30 +411,45 @@ between backtick-only and combined references. The same ten unchanged
 reference/specification differences are recorded separately. Corrected
 comparisons do not claim unmodified reference agreement.
 
-A second pinned extended-email defect retains its domain-period counter
-when retrying at another `@`. The
+The pinned extended-email parser retains its domain-period counter when
+retrying at another `@`. The
 [GFM extended-email grammar](https://github.github.io/gfm/#autolinks-extension-)
 requires a period after the particular address's own `@`. For example,
-`user@ee.or@exampl~om` is literal, whereas the pinned renderer incorrectly
-links `ee.or@exampl`. Before executing the probe, a raw-source certificate
-requires multiple `@` symbols with an intervening domain period. Both
-certificate branches exclude `<`, `&`, and backticks. The original branch
-also excludes brackets and backslashes. A second branch permits undefined
-brackets and punctuation escapes only when raw `(` and `:` are absent, so
-no inline or reference-definition target can exist; an escaped character
-cannot supply a missing raw target delimiter. Explicit/angle links, raw
-HTML, entities, and code spans cannot produce a legitimate dotless mailto
-anchor under either certificate. The repeated-at/period trigger is unchanged.
-The oracle projection unwraps only
-an exact generated `mailto:` anchor whose ASCII label equals its destination
-and whose domain has no period, preserving its entire visible label and all
-other HTML. A missing label, differing destination, valid dotted-domain
-anchor, code, other link scheme, or unrelated whitespace is unchanged.
-Strict comparison of the complete projected HTML remains mandatory;
-invented links or lost content in the core still fail. Reports retain all
-raw/core/projected answers and source/digests in
-`email_retry_reference_cases`, with separate projection and disagreement
-counts. This projection is selected before execution, never after a mismatch.
+`user@ee.or@exampl~om` is literal, whereas the original renderer links
+`ee.or@exampl`. The runner builds a further separate reference executable
+combining the three earlier registered patches with a correction at the exact
+unique `found_at:` scanner-label preimage in `extensions/autolink.c`: reset
+`np` before scanning each retried candidate. The original and earlier corrected
+executables remain unchanged; upstream licenses and notices apply, and no
+production crate links this implementation.
+
+Before execution, raw `@` **or** `&` selects this corrected reference, including
+potential entity-produced at-signs. Both core and reference receive the complete
+original source; no HTML link is unwrapped or removed. The text-node scanner
+retains protected code/HTML/explicit links and independently admits valid final
+email domains. Each campaign executes 69 controls across LF/CRLF/CR (39
+disagreements with the immediately preceding reference), including entirely
+encoded `&#64;`, `&#x40;` and `&commat;` delimiters, encoded valid-domain dots,
+escaped delimiters, multiple retries, literal HTML attributes, raw script data,
+angle/explicit/reference links, URL paths and code. All 672 official GFM
+outputs must remain byte-identical before/after this correction; the ten
+unchanged original reference/gold differences are recorded separately.
+
+Reports retain archive and all patch digests/preimages/postimages, both corrected
+source-file digests, and every reference executable identity.
+`email_reference_checks`, `email_reference_disagreements` and
+`email_reference_cases` distinguish this correction from the immediately
+preceding destination-corrected binary executing the same source. Cases retain
+full original, preceding, final and core answers. The preceding binary runs for
+every email-selected input even if no standalone destination profile applies,
+so another patch's effect cannot be attributed to this email correction. Strict
+whole-HTML comparison rejects invented links and any lost or changed content.
+
+Earlier failed phase reports retain their original narrow email projection
+metadata and answers unchanged. That source-certified projection was superseded
+by the registered scanner correction for new campaigns; new results do not claim
+agreement with the unmodified reference, and historical metadata is never
+reconstructed or rewritten.
 
 Comparison normalization (`normalize_html`, unit-tested in
 `scripts/test-fuzz.py`) canonicalizes only formatting with no HTML meaning:
@@ -458,7 +473,15 @@ normalized away.
 Raw-text and RCDATA bodies (`script`, `style`, `xmp`, `iframe`, `noembed`,
 `noframes`, `plaintext`, `title`, `textarea`) and complete SVG/MathML fragments
 remain opaque, including nested foreign elements and tag-looking literal text.
-Quoted attributes, comments and CDATA cannot introduce false raw-text starts.
+Tokenization starts at the earliest `<` and is anchored there. Valid custom
+tag names remain eligible for ordinary attribute normalization; unrecognized
+or malformed markup remains opaque. Recognized declarations, processing
+instructions and closed lexical tags retain their complete spelling and then
+resume normalizing real following tags; genuinely unterminated tokens retain
+their whole remaining fragment opaque. Attribute separators use only HTML
+ASCII whitespace, preserving nonbreaking spaces and vertical tabs as data. Searching past an unrecognized outer token
+cannot turn tag-looking attribute data into a void element. Quoted attributes,
+comments and CDATA cannot introduce false raw-text starts.
 Unterminated opaque content extending to EOF retains its trailing newlines;
 terminal formatting-newline adjustment applies only outside such content.
 These controls prevent changed script strings, visible textarea data or foreign

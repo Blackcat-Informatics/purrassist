@@ -388,6 +388,24 @@ def destination_reference_profile(source):
     return '(' in source and ']:' in source and reference_admission_profile(source) == 'gfm'
 
 
+CMARK_EMAIL_BEFORE = 'found_at:\n    for (rewind = 0; rewind < max_rewind; ++rewind) {'
+CMARK_EMAIL_AFTER = 'found_at:\n    np = 0;\n    for (rewind = 0; rewind < max_rewind; ++rewind) {'
+CMARK_EMAIL_PATCH_SHA256 = hashlib.sha256(
+    json.dumps([CMARK_EMAIL_BEFORE, CMARK_EMAIL_AFTER], separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
+
+
+def patch_reference_email_counter(source):
+    """Reset domain periods for each retried candidate at the unique scanner label."""
+    if source.count(CMARK_EMAIL_BEFORE) != 1:
+        raise ValueError('cmark-gfm email patch requires its exact unique source preimage')
+    return source.replace(CMARK_EMAIL_BEFORE, CMARK_EMAIL_AFTER)
+
+
+def email_reference_profile(source):
+    """Select literal or potentially entity-decoded at-signs before execution."""
+    return '@' in source or '&' in source
+
+
 def patch_reference_emphasis_floors(source):
     """Keep close-only and dual-purpose opener floors separate; fail closed."""
     for before, after in CMARK_EMPHASIS_PATCHES:
@@ -405,21 +423,23 @@ def patch_reference_backtick_cache(source):
     return '\n'.join(CMARK_BACKTICK_AFTER if line == CMARK_BACKTICK_BEFORE else line for line in lines)
 
 
-def ensure_cmark_gfm(*, corrected_backticks=False, corrected_emphasis=False, corrected_destinations=False):
+def ensure_cmark_gfm(*, corrected_backticks=False, corrected_emphasis=False, corrected_destinations=False, corrected_emails=False):
     """Build the pinned `cmark-gfm` CLI from a digest-verified source tarball
     into a persistent `.cache/tools/` location, reused across runs."""
-    corrected = corrected_backticks or corrected_emphasis or corrected_destinations
+    corrected = corrected_backticks or corrected_emphasis or corrected_destinations or corrected_emails
     if corrected:
         inventory = json.loads((ROOT / 'vendor/tooling.json').read_text())
         entry = next(item for item in inventory if item['name'] == 'cmark-gfm')
         if (entry.get('source_sha256') != CMARK_GFM_SOURCE_SHA256
                 or (corrected_backticks and entry.get('backtick_cache_patch_sha256') != CMARK_BACKTICK_PATCH_SHA256)
                 or (corrected_emphasis and entry.get('emphasis_floors_patch_sha256') != CMARK_EMPHASIS_PATCH_SHA256)
-                or (corrected_destinations and entry.get('destination_balance_patch_sha256') != CMARK_DESTINATION_PATCH_SHA256)):
+                or (corrected_destinations and entry.get('destination_balance_patch_sha256') != CMARK_DESTINATION_PATCH_SHA256)
+                or (corrected_emails and entry.get('email_counter_patch_sha256') != CMARK_EMAIL_PATCH_SHA256)):
             raise ValueError('cmark-gfm correction differs from its registered digest')
     suffix = ('-backtick-' + CMARK_BACKTICK_PATCH_SHA256[:16] if corrected_backticks else '')
     suffix += '-emphasis-' + CMARK_EMPHASIS_PATCH_SHA256[:16] if corrected_emphasis else ''
     suffix += '-destination-' + CMARK_DESTINATION_PATCH_SHA256[:16] if corrected_destinations else ''
+    suffix += '-email-' + CMARK_EMAIL_PATCH_SHA256[:16] if corrected_emails else ''
     tools_root = ROOT / '.cache' / 'tools' / f'cmark-gfm-{CMARK_GFM_VERSION}{suffix}'
     binary = tools_root / 'bin' / 'cmark-gfm'
     identity_path = tools_root / 'backtick-build.json'
@@ -428,15 +448,20 @@ def ensure_cmark_gfm(*, corrected_backticks=False, corrected_emphasis=False, cor
         patch_identity['emphasis_patch_sha256'] = CMARK_EMPHASIS_PATCH_SHA256
     if corrected_destinations:
         patch_identity['destination_patch_sha256'] = CMARK_DESTINATION_PATCH_SHA256
+    if corrected_emails:
+        patch_identity['email_patch_sha256'] = CMARK_EMAIL_PATCH_SHA256
     if binary.is_file():
         version = subprocess.run([str(binary), '--version'], capture_output=True, text=True, timeout=10).stdout
         if CMARK_GFM_VERSION in version:
             if not corrected:
                 return binary
             inlines = tools_root / 'src' / 'src' / 'inlines.c'
-            if identity_path.is_file() and inlines.is_file() and json.loads(identity_path.read_text()) == {
+            autolink = tools_root / 'src' / 'extensions' / 'autolink.c'
+            autolink_identity = {'corrected_autolink_sha256': hashlib.sha256(autolink.read_bytes()).hexdigest()} if corrected_emails and autolink.is_file() else {}
+            if identity_path.is_file() and inlines.is_file() and (not corrected_emails or autolink.is_file()) and json.loads(identity_path.read_text()) == {
                     'source_sha256': CMARK_GFM_SOURCE_SHA256,
                     **patch_identity,
+                    **autolink_identity,
                     'corrected_inlines_sha256': hashlib.sha256(inlines.read_bytes()).hexdigest(),
                     'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest()}:
                 return binary
@@ -471,6 +496,9 @@ def ensure_cmark_gfm(*, corrected_backticks=False, corrected_emphasis=False, cor
         if corrected_destinations:
             patched = patch_reference_destination_balance(patched)
         inlines.write_text(patched)
+        if corrected_emails:
+            autolink = source / 'extensions' / 'autolink.c'
+            autolink.write_text(patch_reference_email_counter(autolink.read_text()))
     build_dir = tools_root / 'build'
     configure = subprocess.run(
         ['cmake', '-S', str(source), '-B', str(build_dir), '-DCMAKE_BUILD_TYPE=Release',
@@ -495,6 +523,7 @@ def ensure_cmark_gfm(*, corrected_backticks=False, corrected_emphasis=False, cor
     if corrected:
         identity_path.write_text(json.dumps({'source_sha256': CMARK_GFM_SOURCE_SHA256,
             **patch_identity,
+            **({'corrected_autolink_sha256': hashlib.sha256(autolink.read_bytes()).hexdigest()} if corrected_emails else {}),
             'corrected_inlines_sha256': hashlib.sha256(inlines.read_bytes()).hexdigest(),
             'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest()}, sort_keys=True) + '\n')
     return binary
@@ -593,32 +622,6 @@ def project_reference_paragraph_prefix(source, html):
     if not generated_paragraph_prefix_reference_profile(source):
         raise ValueError('paragraph-prefix projection requires its raw-input certificate')
     return re.sub(r'(<(?:p|li)>)[ \t]+', r'\1', normalize_html(html))
-
-
-_EMAIL_RETRY = re.compile(r'@[A-Za-z0-9._-]*\.[A-Za-z0-9._-]*@')
-_DOTLESS_EMAIL_ANCHOR = re.compile(r'<a href="mailto:([A-Za-z0-9.+_-]+@[A-Za-z0-9_-]+)">\1</a>')
-
-
-def generated_email_retry_reference_profile(source):
-    """Certify generated email links with independently excluded protected targets.
-
-    A repeated @ after a domain period selects the known reference counter bug
-    before execution. The original scope forbids bracket/escape syntax. A
-    second scope admits them only when no '(' or ':' can introduce an inline
-    or reference target. Both forbid HTML, angle links, entities and code spans.
-    """
-    protected = not any(character in source for character in '[]\\')
-    no_targets = '(' not in source and ':' not in source
-    return not any(character in source for character in '<&`') and (protected or no_targets) and bool(_EMAIL_RETRY.search(source))
-
-
-def project_reference_email_retries(source, html):
-    if not generated_email_retry_reference_profile(source):
-        raise ValueError('email-retry projection requires its raw-input certificate')
-    # GFM extended emails require a period AFTER their own @. The pinned
-    # postprocess_text goto found_at keeps np from a previous attempted domain.
-    # Keep the entire visible literal label and every other HTML byte unchanged.
-    return _DOTLESS_EMAIL_ANCHOR.sub(r'\1', normalize_html(html))
 
 
 _REFERENCE_LABEL = re.compile(r'\[((?:[^\[\]\\\x00-\x08\x0e-\x1f\x7f]|\\[!"#$%&\'()*+,./:;<=>?@\[\]\\^_`{|}~\-]|\\(?![!"#$%&\'()*+,./:;<=>?@\[\]\\^_`{|}~\-])){1,999})\]:[ \t]*([^ \t\v\f\r\n]+)([^\r\n]*)')
@@ -844,13 +847,45 @@ def verify_reference_destination_correction(previous, corrected):
             'unchanged_reference_gold_disagreements': gold_disagreements}
 
 
+CMARK_EMAIL_CONTROLS = [{'source': '[~~strik:e~~ www.example.org\\ user@exampleww.example.orgser@exam\n]', 'previous_html': '<p>[<del>strik:e</del> www.example.org\\ user@<a href="mailto:exampleww.example.orgser@exam">exampleww.example.orgser@exam</a>\n]</p>\n', 'corrected_html': '<p>[<del>strik:e</del> www.example.org\\ user@exampleww.example.orgser@exam\n]</p>\n'}, {'source': '[~~strike~~ www.ex_er@exampwww.ex_er@exampl~om\n\\]', 'previous_html': '<p>[<del>strike</del> www.ex_er@<a href="mailto:exampwww.ex_er@exampl">exampwww.ex_er@exampl</a>~om\n]</p>\n', 'corrected_html': '<p>[<del>strike</del> www.ex_er@exampwww.ex_er@exampl~om\n]</p>\n'}, {'source': 'a@b.c@d', 'previous_html': '<p>a@<a href="mailto:b.c@d">b.c@d</a></p>\n', 'corrected_html': '<p>a@b.c@d</p>\n'}, {'source': 'a@b.c@d.e', 'previous_html': '<p>a@<a href="mailto:b.c@d.e">b.c@d.e</a></p>\n', 'corrected_html': '<p>a@<a href="mailto:b.c@d.e">b.c@d.e</a></p>\n'}, {'source': 'a@b.c@d.e@f', 'previous_html': '<p>a@b.c@<a href="mailto:d.e@f">d.e@f</a></p>\n', 'corrected_html': '<p>a@b.c@d.e@f</p>\n'}, {'source': 'a@b.c@d.e@f.g', 'previous_html': '<p>a@b.c@<a href="mailto:d.e@f.g">d.e@f.g</a></p>\n', 'corrected_html': '<p>a@b.c@<a href="mailto:d.e@f.g">d.e@f.g</a></p>\n'}, {'source': '[a@b.c@d](mailto:a@b)', 'previous_html': '<p><a href="mailto:a@b">a@b.c@d</a></p>\n', 'corrected_html': '<p><a href="mailto:a@b">a@b.c@d</a></p>\n'}, {'source': '[label]: mailto:a@b\n\n[label] a@b.c@d', 'previous_html': '<p><a href="mailto:a@b">label</a> a@<a href="mailto:b.c@d">b.c@d</a></p>\n', 'corrected_html': '<p><a href="mailto:a@b">label</a> a@b.c@d</p>\n'}, {'source': '`a@b.c@d`', 'previous_html': '<p><code>a@b.c@d</code></p>\n', 'corrected_html': '<p><code>a@b.c@d</code></p>\n'}, {'source': '<a href="mailto:a@b">a@b</a> a@b.c@d', 'previous_html': '<p><a href="mailto:a@b">a@b</a> a@<a href="mailto:b.c@d">b.c@d</a></p>\n', 'corrected_html': '<p><a href="mailto:a@b">a@b</a> a@b.c@d</p>\n'}, {'source': 'a@b.c&#64;d', 'previous_html': '<p>a@<a href="mailto:b.c@d">b.c@d</a></p>\n', 'corrected_html': '<p>a@b.c@d</p>\n'}, {'source': 'a@b.c\\@d', 'previous_html': '<p>a@<a href="mailto:b.c@d">b.c@d</a></p>\n', 'corrected_html': '<p>a@b.c@d</p>\n'}, {'source': 'mailto:a@b.c@d', 'previous_html': '<p>mailto:a@<a href="b.c@d">b.c@d</a></p>\n', 'corrected_html': '<p>mailto:a@b.c@d</p>\n'}, {'source': 'xmpp:a@b.c@d', 'previous_html': '<p>xmpp:a@<a href="b.c@d">b.c@d</a></p>\n', 'corrected_html': '<p>xmpp:a@b.c@d</p>\n'}, {'source': 'a&#64;b.c&#64;d', 'previous_html': '<p>a@<a href="mailto:b.c@d">b.c@d</a></p>\n', 'corrected_html': '<p>a@b.c@d</p>\n'}, {'source': 'a&#x40;b.c&#x40;d', 'previous_html': '<p>a@<a href="mailto:b.c@d">b.c@d</a></p>\n', 'corrected_html': '<p>a@b.c@d</p>\n'}, {'source': 'a&commat;b.c&commat;d', 'previous_html': '<p>a@<a href="mailto:b.c@d">b.c@d</a></p>\n', 'corrected_html': '<p>a@b.c@d</p>\n'}, {'source': 'a&#64;b.c&#64;d&#46;e', 'previous_html': '<p>a@<a href="mailto:b.c@d.e">b.c@d.e</a></p>\n', 'corrected_html': '<p>a@<a href="mailto:b.c@d.e">b.c@d.e</a></p>\n'}, {'source': 'a&commat;b.c&commat;d&period;e', 'previous_html': '<p>a@<a href="mailto:b.c@d.e">b.c@d.e</a></p>\n', 'corrected_html': '<p>a@<a href="mailto:b.c@d.e">b.c@d.e</a></p>\n'}, {'source': '<a@b>', 'previous_html': '<p><a href="mailto:a@b">a@b</a></p>\n', 'corrected_html': '<p><a href="mailto:a@b">a@b</a></p>\n'}, {'source': '<span data="a@b.c@d">x</span>', 'previous_html': '<p><span data="a@b.c@d">x</span></p>\n', 'corrected_html': '<p><span data="a@b.c@d">x</span></p>\n'}, {'source': '<script>let x = "a@b.c@d";</script>', 'previous_html': '&lt;script>let x = "a@b.c@d";&lt;/script>\n', 'corrected_html': '&lt;script>let x = "a@b.c@d";&lt;/script>\n'}, {'source': 'http://example.org/a@b.c@d', 'previous_html': '<p><a href="http://example.org/a@b.c@d">http://example.org/a@b.c@d</a></p>\n', 'corrected_html': '<p><a href="http://example.org/a@b.c@d">http://example.org/a@b.c@d</a></p>\n'}]
+
+
+def verify_reference_email_correction(previous, corrected):
+    """Execute per-candidate period, decoded text and protected-node controls."""
+    disagreements = 0
+    for case in CMARK_EMAIL_CONTROLS:
+        for ending in ('\n', '\r\n', '\r'):
+            source = case['source'].replace('\n', ending)
+            raw = cmark_gfm_render(previous, source, 10)
+            fixed = cmark_gfm_render(corrected, source, 10)
+            if raw != case['previous_html'] or fixed != case['corrected_html']:
+                raise ValueError(f'cmark-gfm email correction control failed: {source!r} raw={raw!r} corrected={fixed!r}')
+            disagreements += int(raw != fixed)
+    corpus = json.loads((ROOT / 'crates/core/tests/data/markdown/gfm-0.29.0.gfm.13.json').read_text())
+    gold_disagreements = []
+    for case in corpus:
+        raw = cmark_gfm_render(previous, case['markdown'], 10)
+        fixed = cmark_gfm_render(corrected, case['markdown'], 10)
+        if raw != fixed:
+            raise ValueError(f'cmark-gfm email correction changed official example {case["example"]}')
+        if normalize_html(fixed) != normalize_html(case['html']):
+            gold_disagreements.append(case['example'])
+    return {'authoritative_controls': len(CMARK_EMAIL_CONTROLS) * 3,
+            'control_previous_disagreements': disagreements,
+            'official_examples': len(corpus), 'previous_corrected_exact_agreements': len(corpus),
+            'unchanged_reference_gold_disagreements': gold_disagreements}
+
+
 _HTML_TAG = re.compile(
-    r'<(/?)([a-zA-Z][a-zA-Z0-9]*)((?:\s+[a-zA-Z_:][-a-zA-Z0-9_:.]*(?:="[^"]*")?)*)\s*/?>'
+    r'<(/?)([a-zA-Z][a-zA-Z0-9:-]*)((?:[ \t\n\r\f]+[a-zA-Z_:][-a-zA-Z0-9_:.]*(?:="[^"]*")?)*)[ \t\n\r\f]*/?>'
 )
 _HTML_ATTRIBUTE = re.compile(r'[a-zA-Z_:][-a-zA-Z0-9_:.]*(?:="[^"]*")?')
 _HTML_TOKEN = re.compile(
     r'<!--.*?(?:-->|--!>|\Z)|<!\[CDATA\[.*?(?:\]\]>|\Z)|'
-    r'<(/?)([a-zA-Z][a-zA-Z0-9]*)(?=[ \t\n\r\f/>])(?:[^\"\'<>]|\"[^\"]*\"|\'[^\']*\')*>',
+    r'<\?[^>]*(?:>|\Z)|'
+    r'<!(?i:doctype)(?=[ \t\n\r\f>])(?:[^\"\'>]|\"[^\"]*\"|\'[^\']*\')*(?:>|\Z)|'
+    r'<!(?!(?i:doctype)(?=[ \t\n\r\f>]))[^>]*(?:>|\Z)|'
+    r'<(/?)([a-zA-Z][a-zA-Z0-9:-]*)(?=[ \t\n\r\f/>])(?:[^\"\'>]|\"[^\"]*\"|\'[^\']*\')*>',
     re.DOTALL)
 _HTML_RAW_TEXT = frozenset(('script', 'style', 'xmp', 'iframe', 'noembed',
                             'noframes', 'plaintext', 'title', 'textarea'))
@@ -892,8 +927,17 @@ def normalize_html(text):
     pieces = []
     cursor = 0
     opaque_eof = False
-    while (token := _HTML_TOKEN.search(text, cursor)) is not None:
-        pieces.append(text[cursor:token.start()])
+    while (opening := text.find('<', cursor)) != -1:
+        pieces.append(text[cursor:opening])
+        token = _HTML_TOKEN.match(text, opening)
+        if token is None:
+            # An unrecognized outer token can contain apparent inner tags in
+            # an unquoted attribute or declaration. Preserve its whole suffix
+            # instead of searching past it and inventing a normalization site.
+            pieces.append(text[opening:])
+            cursor = len(text)
+            opaque_eof = True
+            break
         spelling = token[0]
         name = (token[2] or '').lower()
         tag = _HTML_TAG.fullmatch(spelling)
@@ -920,7 +964,12 @@ def normalize_html(text):
                         opaque_eof = True
                         break
                     if name in _HTML_FOREIGN:
-                        nested = _HTML_TOKEN.search(text, end)
+                        opening = text.find('<', end)
+                        nested = _HTML_TOKEN.match(text, opening) if opening != -1 else None
+                        if opening != -1 and opening < close.start() and nested is None:
+                            end = len(text)
+                            opaque_eof = True
+                            break
                         if nested is not None and nested.start() < close.start():
                             if not nested[1] and (nested[2] or '').lower() == name and not nested[0].endswith('/>'):
                                 depth += 1
@@ -932,7 +981,8 @@ def normalize_html(text):
             cursor = end
         else:
             if (spelling.startswith('<!--') and not spelling.endswith(('-->', '--!>'))
-                    or spelling.startswith('<![CDATA[') and not spelling.endswith(']]>')):
+                    or spelling.startswith('<![CDATA[') and not spelling.endswith(']]>')
+                    or spelling.startswith(('<?', '<!')) and not spelling.endswith('>')):
                 opaque_eof = True
             pieces.append(_normalize_tag(tag) if tag else spelling)
             cursor = token.end()
@@ -987,17 +1037,19 @@ def check_tasklist_projection(plain_html, full_html, source=None):
     return True
 
 
-def check_markdown_differential(record, binary, timeout, counts=None, *, corrected_backticks_binary=None, corrected_emphasis_binary=None, corrected_destinations_binary=None):
+def check_markdown_differential(record, binary, timeout, counts=None, *, corrected_backticks_binary=None, corrected_emphasis_binary=None, corrected_destinations_binary=None, corrected_emails_binary=None):
     if record.get('kind') != 'markdown':
         raise ValueError(f'unexpected differential record for target markdown: {record!r}')
     admission_profile = reference_admission_profile(record['source'])
     admission_selected = admission_profile != 'gfm'
     if record.get('reference_admission_profile', admission_profile) != admission_profile:
         raise ValueError('reference admission profile does not match its raw-input certificate')
-    email_selected = generated_email_retry_reference_profile(record['source'])
-    email_profile = 'generated-email-retries' if email_selected else 'gfm'
-    if record.get('reference_email_retry_profile', email_profile) != email_profile:
-        raise ValueError('email-retry profile does not match its raw-input certificate')
+    email_selected = email_reference_profile(record['source'])
+    email_profile = 'reset-email-candidate-periods' if email_selected else 'gfm'
+    if record.get('reference_email_profile', email_profile) != email_profile:
+        raise ValueError('email profile does not match its raw-input certificate')
+    if email_selected and (corrected_emails_binary is None or corrected_destinations_binary is None):
+        raise ValueError('email profile requires the corrected executable and its preceding destination baseline')
     paragraph_selected = generated_paragraph_prefix_reference_profile(record['source'])
     paragraph_profile = 'generated-paragraph-prefix' if paragraph_selected else 'gfm'
     if record.get('reference_paragraph_prefix_profile', paragraph_profile) != paragraph_profile:
@@ -1051,8 +1103,24 @@ def check_markdown_differential(record, binary, timeout, counts=None, *, correct
     selected_reference = cmark_gfm_render(selected_binary, record['source'], timeout,
                                          tasklists=not limited) if emphasis_selected else backtick_reference
     destination_reference = cmark_gfm_render(corrected_destinations_binary, record['source'], timeout,
-                                            tasklists=not limited) if destination_selected else selected_reference
-    theirs = normalize_html(destination_reference)
+                                            tasklists=not limited) if destination_selected or email_selected else selected_reference
+    email_reference = cmark_gfm_render(corrected_emails_binary, record['source'], timeout,
+                                      tasklists=not limited) if email_selected else destination_reference
+    theirs = normalize_html(email_reference)
+    guard_binary = corrected_emails_binary if email_selected else (corrected_destinations_binary if destination_selected else selected_binary)
+    if email_selected and counts is not None:
+        counts['email_reference_checks'] = counts.get('email_reference_checks', 0) + 1
+        disagreed = normalize_html(destination_reference) != normalize_html(email_reference)
+        counts['email_reference_disagreements'] = counts.get('email_reference_disagreements', 0) + int(disagreed)
+        cases = counts.setdefault('email_reference_cases', [])
+        digest = hashlib.sha256(record['source'].encode()).hexdigest()
+        if disagreed and not any(case['sha256'] == digest for case in cases):
+            cases.append({'sha256': digest, 'source': record['source'],
+                          'reason': 'each retried email domain requires its own period after its at-sign',
+                          'patch_sha256': CMARK_EMAIL_PATCH_SHA256,
+                          'core_html': record['html'], 'full_core_html': record.get('full_html', record['html']),
+                          'raw_reference_html': raw_reference, 'reference_html_before_correction': destination_reference,
+                          'corrected_reference_html': email_reference})
     if destination_selected and counts is not None:
         counts['destination_reference_checks'] = counts.get('destination_reference_checks', 0) + 1
         disagreed = normalize_html(selected_reference) != normalize_html(destination_reference)
@@ -1107,7 +1175,7 @@ def check_markdown_differential(record, binary, timeout, counts=None, *, correct
         # nonzero depth at whitespace. A plain prefix prevents that invalid
         # definition from being consumed. All inline/extension behavior and
         # all subsequent blocks still come from the independent renderer.
-        guarded = cmark_gfm_render(selected_binary, _REFERENCE_GUARD + record['source'], timeout,
+        guarded = cmark_gfm_render(guard_binary, _REFERENCE_GUARD + record['source'], timeout,
                                    tasklists=not limited)
         prefix = _GUARDED_BLOCK.match(guarded)
         if prefix is None:
@@ -1160,22 +1228,6 @@ def check_markdown_differential(record, binary, timeout, counts=None, *, correct
                               'raw_reference_html': raw_reference,
                               'reference_html_before_projection': before_projection,
                               'projected_reference_html': theirs})
-    if email_selected:
-        before_projection = theirs
-        theirs = project_reference_email_retries(record['source'], theirs)
-        if counts is not None:
-            counts['email_retry_reference_projections'] = counts.get('email_retry_reference_projections', 0) + 1
-            counts['email_retry_reference_disagreements'] = counts.get('email_retry_reference_disagreements', 0) + int(before_projection != theirs)
-            cases = counts.setdefault('email_retry_reference_cases', [])
-            identity = hashlib.sha256(record['source'].encode()).hexdigest()
-            if before_projection != theirs and not any(case['sha256'] == identity for case in cases):
-                cases.append({'sha256': identity, 'source': record['source'],
-                              'reason': 'each extended email domain requires its own period after its @',
-                              'profile': record.get('profile', 'gfm'),
-                              'core_html': record['html'], 'full_core_html': record.get('full_html', record['html']),
-                              'raw_reference_html': raw_reference,
-                              'reference_html_before_projection': before_projection,
-                              'projected_reference_html': theirs})
     if ours != theirs:
         raise DifferentialMismatch(
             'markdown differential mismatch: source='
@@ -1194,7 +1246,8 @@ def check_differential(target, record, oracle, timeout, counts=None):
         return check_markdown_differential(record, oracle['cmark_gfm_binary'], timeout, counts,
             corrected_backticks_binary=oracle.get('cmark_gfm_backticks_binary'),
             corrected_emphasis_binary=oracle.get('cmark_gfm_emphasis_binary'),
-            corrected_destinations_binary=oracle.get('cmark_gfm_destinations_binary'))
+            corrected_destinations_binary=oracle.get('cmark_gfm_destinations_binary'),
+            corrected_emails_binary=oracle.get('cmark_gfm_emails_binary'))
     raise ValueError(f'unknown differential kind: {kind}')
 
 
@@ -1294,6 +1347,25 @@ def tool_identity(target):
             'original_binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
             'compatibility': destination_compatibility}
         oracle['cmark_gfm_destinations_binary'] = destinations
+        emails = ensure_cmark_gfm(corrected_backticks=True, corrected_emphasis=True, corrected_destinations=True, corrected_emails=True)
+        email_compatibility = verify_reference_email_correction(destinations, emails)
+        versions['cmark-gfm-email-correction'] = {
+            'version': subprocess.check_output([str(emails), '--version'], text=True).strip(),
+            'source_sha256': CMARK_GFM_SOURCE_SHA256,
+            'backtick_patch_sha256': CMARK_BACKTICK_PATCH_SHA256,
+            'emphasis_patch_sha256': CMARK_EMPHASIS_PATCH_SHA256,
+            'destination_patch_sha256': CMARK_DESTINATION_PATCH_SHA256,
+            'email_patch_sha256': CMARK_EMAIL_PATCH_SHA256,
+            'email_preimage': CMARK_EMAIL_BEFORE, 'email_postimage': CMARK_EMAIL_AFTER,
+            'corrected_inlines_sha256': hashlib.sha256(
+                (emails.parent.parent / 'src' / 'src' / 'inlines.c').read_bytes()).hexdigest(),
+            'corrected_autolink_sha256': hashlib.sha256(
+                (emails.parent.parent / 'src' / 'extensions' / 'autolink.c').read_bytes()).hexdigest(),
+            'binary_sha256': hashlib.sha256(emails.read_bytes()).hexdigest(),
+            'previous_binary_sha256': hashlib.sha256(destinations.read_bytes()).hexdigest(),
+            'original_binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+            'compatibility': email_compatibility}
+        oracle['cmark_gfm_emails_binary'] = emails
     return versions, oracle, tool_paths
 
 
@@ -1398,7 +1470,7 @@ def probe(binary, data, directory, timeout, target, oracle, tool_paths, counts=N
             admission_profile = reference_admission_profile(original_markdown)
             admission_selected = admission_profile != 'gfm'
             paragraph_selected = generated_paragraph_prefix_reference_profile(original_markdown)
-            email_selected = generated_email_retry_reference_profile(original_markdown)
+            email_selected = email_reference_profile(original_markdown)
             hardbreak_selected = generated_hardbreak_reference_profile(original_markdown)
             backticks_selected = '`' in original_markdown
             emphasis_selected = '*' in original_markdown or '_' in original_markdown
@@ -1441,7 +1513,7 @@ def probe(binary, data, directory, timeout, target, oracle, tool_paths, counts=N
                 check_markdown_stop(record, original_markdown, counts)
                 continue
             record['reference_admission_profile'] = admission_profile
-            record['reference_email_retry_profile'] = 'generated-email-retries' if email_selected else 'gfm'
+            record['reference_email_profile'] = 'reset-email-candidate-periods' if email_selected else 'gfm'
             record['reference_paragraph_prefix_profile'] = 'generated-paragraph-prefix' if paragraph_selected else 'gfm'
             record['reference_hardbreak_profile'] = 'generated-hardbreaks' if hardbreak_selected else 'gfm'
             record['reference_emphasis_profile'] = 'separate-emphasis-opener-floors' if emphasis_selected else 'gfm'
@@ -1509,8 +1581,8 @@ def main():
               'hardbreak_reference_cases': [],
               'paragraph_prefix_reference_projections': 0, 'paragraph_prefix_reference_disagreements': 0,
               'paragraph_prefix_reference_cases': [],
-              'email_retry_reference_projections': 0, 'email_retry_reference_disagreements': 0,
-              'email_retry_reference_cases': [],
+              'email_reference_checks': 0, 'email_reference_disagreements': 0,
+              'email_reference_cases': [],
               'emphasis_reference_checks': 0, 'emphasis_reference_disagreements': 0,
               'emphasis_reference_cases': [],
               'backtick_reference_checks': 0, 'backtick_reference_disagreements': 0,
