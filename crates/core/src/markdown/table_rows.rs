@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Source-preserving GFM body-row insertion and removal.
-use super::{Block, BlockKind, Document, line, size};
+use super::{Block, BlockKind, Document, ending, line, line_start, size};
+use crate::contract::invalid_input as invalid;
 use crate::{
     Governor, StopReason,
     contract::Resource,
@@ -225,23 +226,4 @@ fn insert(
         range: position..position,
         replacement,
     })
-}
-fn line_start(source: &str, offset: usize) -> usize {
-    source[..offset]
-        .rfind(['\r', '\n'])
-        .map_or(0, |position| position + 1)
-}
-fn ending(text: &str) -> Option<&'static str> {
-    if text.ends_with("\r\n") {
-        Some("\r\n")
-    } else if text.ends_with('\r') {
-        Some("\r")
-    } else if text.ends_with('\n') {
-        Some("\n")
-    } else {
-        None
-    }
-}
-fn invalid(message: &str) -> StopReason {
-    StopReason::InvalidInput(message.into())
 }

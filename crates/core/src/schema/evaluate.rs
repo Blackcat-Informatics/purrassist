@@ -1,13 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 use super::{Schema, Violation};
+use crate::contract::saturating_size as size;
 use crate::contract::{Evidence, Governor, Resource, StopReason, Validation};
 use crate::json::{Member, Node, Value, pointer_segment};
 use std::collections::BTreeSet;
-
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
-}
 
 /// Everything [`super::evaluate::run`] collects while walking one instance
 /// against one schema: hard assertion failures, plus the always-on

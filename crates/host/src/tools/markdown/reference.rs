@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Shared reference occurrence inspection and verified field-edit receipts.
 use purrassist::{
-    Governor, Receipt, StopReason,
-    contract::{Evidence, Resource, SourceSpan, Validation},
+    Governor, StopReason,
     json::{Node, Value},
     markdown::{Document, ReferenceSite},
     wire::{array, integer, object, string},
@@ -62,23 +61,9 @@ pub(super) fn call(
         governor,
     )?))
 }
-pub(super) fn record(
-    document: &Document,
-    receipt: &mut Receipt,
-    governor: &mut Governor,
-) -> Result<(), StopReason> {
-    governor.charge(Resource::EvidenceEntries, 2)?;
-    governor.charge(Resource::Work, 512)?;
-    governor.charge(Resource::ScratchBytes, 1024)?;
-    receipt.validations.push(Validation {
-        validator: "markdown.reference-definition.v1".into(),
-        constraint: "selected decoded fields match the request; ordered unselected definition labels and values remain unchanged".into(),
-        passed: true, diagnostics: Vec::new(),
-    });
-    receipt.evidence.push(Evidence {
-        rule: "markdown.reference-fields.v1".into(),
-        explanation: "The source-bound field region is encoded with escapes/entities and checked by reparsing all definitions. Multiline field spelling may collapse; labels and surrounding bytes remain retained.".into(),
-        span: Some(SourceSpan { source: document.digest(), bytes: 0..document.source().len() }), destination: "/edits".into(),
-    });
-    Ok(())
-}
+pub(super) const RECORD: super::Record<'static> = super::Record {
+    validator: "markdown.reference-definition.v1",
+    constraint: "selected decoded fields match the request; ordered unselected definition labels and values remain unchanged",
+    rule: "markdown.reference-fields.v1",
+    explanation: "The source-bound field region is encoded with escapes/entities and checked by reparsing all definitions. Multiline field spelling may collapse; labels and surrounding bytes remain retained.",
+};

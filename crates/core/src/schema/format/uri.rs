@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! RFC 3986 `uri`/`uri-reference` and RFC 3987 `iri`/`iri-reference`.
-use super::net::ipv6_literal;
+use super::{net::ipv6_literal, pct_encoded};
 use crate::contract::{Governor, Resource, StopReason};
 use std::iter::Peekable;
 use std::str::Chars;
@@ -32,10 +32,6 @@ pub(super) fn is_iprivate(c: char) -> bool {
 
 type Cursor<'a> = Peekable<Chars<'a>>;
 
-fn pct_encoded(chars: &mut Cursor<'_>) -> bool {
-    matches!(chars.next(), Some(h) if h.is_ascii_hexdigit())
-        && matches!(chars.next(), Some(h) if h.is_ascii_hexdigit())
-}
 /// Consume characters while they are `%XX` or satisfy `extra`; stop (without
 /// consuming) at the first character satisfying `stop`. `false` on the first
 /// disallowed character.

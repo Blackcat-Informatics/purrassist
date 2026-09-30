@@ -709,35 +709,43 @@ separate from claims of agreement with an unmodified reference. All original
 answers, reasons and transformation counters remain in the report.
 
 The Markdown report is archived byte for byte from the completed campaign.
-Its actual launch commit and dirty-state metadata remain unchanged, even though
-subsequent commits recorded the same frozen source bytes. The final smoke gate
-provides separate integration evidence; it does not rewrite these baselines.
+Its actual launch commit and dirty-state metadata remain unchanged. The later
+helper consolidation changed the core's guarded source identity; the smoke gate
+below records that distinct build without rewriting these baselines.
 
 ### Final all-target smoke
 
-The final `env -u TARGET make fuzz` gate exited zero after its real coverage
-feedback test and all eight default 1,000-mutation campaigns. The
+After helper consolidation, the `env -u TARGET make fuzz` gate exited zero
+after its real coverage feedback test and all eight default 1,000-mutation
+campaigns, with no `FUZZ_ARGS` overrides. The
 [smoke evidence index](qualification/fuzz-smoke-linux-x86_64.json) records the
 actual invocation, observed launch/build identities and SHA-256 of each unedited
 report; the reports retain every tool identity and transformation record.
 All engine/harness/runner hashes still matched the current frozen source after
-completion. These are integration observations, separate from the 10,000-case
-phase baselines above and from hosted CI or packaging evidence.
+completion. All eight reports retain the observed launch commit
+`300f7cffe188ffbd7b569e6b76476cc27f6ded4a` and dirty state, with guarded engine
+SHA-256 `eb806ebd7eb2b991ca08a34177a49c1900d1be7b3a52122a740e102578fd3cc6`.
+These are integration observations, separate from the 10,000-case phase
+baselines above and from hosted CI or packaging evidence.
 
 | Target | Executions | Differential checks | Regions | Mismatches | Crashes |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| [json](qualification/fuzz-smoke-json-linux-x86_64.json) | 1,021 | 0 | 3,775 | 0 | 0 |
-| [markdown](qualification/fuzz-smoke-markdown-linux-x86_64.json) | 1,015 | 981 | 5,256 | 0 | 0 |
-| [schema](qualification/fuzz-smoke-schema-linux-x86_64.json) | 1,016 | 0 | 4,610 | 0 | 0 |
-| [pattern](qualification/fuzz-smoke-pattern-linux-x86_64.json) | 1,011 | 286 | 1,674 | 0 | 0 |
-| [unified](qualification/fuzz-smoke-unified-linux-x86_64.json) | 1,003 | 0 | 607 | 0 | 0 |
-| [fuzzy](qualification/fuzz-smoke-fuzzy-linux-x86_64.json) | 1,003 | 0 | 848 | 0 | 0 |
-| [matching](qualification/fuzz-smoke-matching-linux-x86_64.json) | 1,004 | 0 | 1,388 | 0 | 0 |
+| [json](qualification/fuzz-smoke-json-linux-x86_64.json) | 1,021 | 0 | 3,731 | 0 | 0 |
+| [markdown](qualification/fuzz-smoke-markdown-linux-x86_64.json) | 1,015 | 981 | 5,208 | 0 | 0 |
+| [schema](qualification/fuzz-smoke-schema-linux-x86_64.json) | 1,016 | 0 | 4,560 | 0 | 0 |
+| [pattern](qualification/fuzz-smoke-pattern-linux-x86_64.json) | 1,011 | 286 | 1,651 | 0 | 0 |
+| [unified](qualification/fuzz-smoke-unified-linux-x86_64.json) | 1,003 | 0 | 604 | 0 | 0 |
+| [fuzzy](qualification/fuzz-smoke-fuzzy-linux-x86_64.json) | 1,003 | 0 | 816 | 0 | 0 |
+| [matching](qualification/fuzz-smoke-matching-linux-x86_64.json) | 1,004 | 0 | 1,362 | 0 | 0 |
 | [patch](qualification/fuzz-smoke-patch-linux-x86_64.json) | 1,003 | 0 | 435 | 0 | 0 |
 
 The eight smoke campaigns executed 8,076 inputs in total, including their fixed
 seeds. None reported a crash or mismatch. Zero declared Markdown resource
 non-results were observed; other targets retain their documented refusal rules.
+Markdown completed 981 differential comparisons with no reference-profile
+exclusions. Pattern completed 286 independent comparisons; its 118 reference
+rejections and one reference timeout are separate non-comparisons, not successful
+independent checks.
 
 The lightweight runner tests (`scripts/test-fuzz.py`) run in `make check`
 via `make hygiene`, including coverage-region admission and differential normalization tests;

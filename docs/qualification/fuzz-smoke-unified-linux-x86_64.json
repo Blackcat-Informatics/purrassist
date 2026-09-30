@@ -7,9 +7,9 @@
     "llvm-cov": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1-rust-1.100.0-nightly\n  Optimized build.",
     "llvm-profdata": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1-rust-1.100.0-nightly\n  Optimized build."
   },
-  "source_commit": "79e5d3705818a436dc1113f6619c8e1ba1efa071",
+  "source_commit": "300f7cffe188ffbd7b569e6b76476cc27f6ded4a",
   "source_dirty": true,
-  "nonignored_file_tree_sha256": "c1de24c670bc0ee4831e22ac1128c2092471f0b113b8666fe7bb744899022606",
+  "nonignored_file_tree_sha256": "c05e353654e3a352744f8c581b14c2c540deb54cf741d3661837954695ae1d69",
   "build": {
     "command": [
       "cargo",
@@ -31,13 +31,13 @@
       "profile.dev.overflow-checks=true",
       "--message-format=json"
     ],
-    "sha256": "119df87c07ae074046ddb97123d5fe0aff6efeca30897346e114fa9e26774156",
+    "sha256": "e2083b1292a6ea975e3817b80163fa702855376cb93e0d3311ddb8927bda25bc",
     "inherited_rustflags_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "appended_rustflags": [
       "-C",
       "instrument-coverage"
     ],
-    "engine_source_sha256": "70e41ff78819f3e983f2db66c6f0d4380cfd831a9c13fb361fd7999a30e4a3b3",
+    "engine_source_sha256": "eb806ebd7eb2b991ca08a34177a49c1900d1be7b3a52122a740e102578fd3cc6",
     "harness_source_sha256": "49d6fd39ff40d51de8bf22ad72572d69c5341a4bc8c454c4757dd1bc932f4502",
     "runner_source_sha256": "79d1a3e268bf90dfe76ed023c7b1fb92daf59be68977d2dcaf478c392c57888d"
   },
@@ -84,7 +84,7 @@
     {
       "execution": 0,
       "sha256": "d42073eb330923a22abc1057a9531b55fc38c737a6af41d0f379a54691c8c4f4",
-      "new_regions": 562,
+      "new_regions": 559,
       "parent_corpus_index": null,
       "bytes": 58
     },
@@ -208,6 +208,6 @@
       "bytes": 38
     }
   ],
-  "regions": 607,
+  "regions": 604,
   "current_execution": 1002
 }

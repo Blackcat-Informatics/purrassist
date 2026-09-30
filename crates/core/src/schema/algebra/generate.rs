@@ -12,18 +12,16 @@
 //! path)` and dynamic-scope stack `super::super::evaluate` uses, so a
 //! self- or mutually-recursive schema either makes progress (the path
 //! deepens) or is reported as [`Attempt::Exhausted`] rather than looping.
-use super::super::{Schema, SchemaError};
+use super::super::Schema;
 use super::Refutation;
 use super::canon::{self, Canon, NumKind, PatternRef};
+use super::invalid;
 use super::merge::Requirements;
+use crate::contract::saturating_size as size;
 use crate::contract::{Evidence, Governor, Resource, StopReason};
 use crate::json::{Member, Node, Value, pointer_segment};
 use crate::pattern::{Engine, GenerateOptions, GenerateOutcome, Pattern};
 use std::collections::BTreeSet;
-
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
-}
 
 /// Every `items` occurrence in `req` that applies at array index `index` —
 /// i.e. every `(id, own_prefix_len)` pair whose own `prefixItems` (if any)
@@ -63,10 +61,6 @@ fn refute(reason: &str) -> Refutation {
             destination: String::new(),
         }],
     }
-}
-
-fn invalid(error: &SchemaError) -> StopReason {
-    StopReason::InvalidInput(error.to_string())
 }
 
 pub(super) fn run(

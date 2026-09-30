@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! List-item splices with exact outside-source preservation.
-use super::{Block, BlockKind, Document, line, lines, sections, size};
+use super::{Block, BlockKind, Document, ending, line, line_start, lines, sections, size};
+use crate::contract::invalid_input as invalid;
 use crate::{
     Governor, Outcome, StopReason,
     contract::Resource,
@@ -655,23 +656,4 @@ fn validate_marker(marker: &str) -> Result<(), StopReason> {
     } else {
         Err(invalid("invalid list marker"))
     }
-}
-fn line_start(source: &str, offset: usize) -> usize {
-    source[..offset]
-        .rfind(['\r', '\n'])
-        .map_or(0, |position| position + 1)
-}
-fn ending(text: &str) -> Option<&'static str> {
-    if text.ends_with("\r\n") {
-        Some("\r\n")
-    } else if text.ends_with('\r') {
-        Some("\r")
-    } else if text.ends_with('\n') {
-        Some("\n")
-    } else {
-        None
-    }
-}
-fn invalid(message: &str) -> StopReason {
-    StopReason::InvalidInput(message.into())
 }

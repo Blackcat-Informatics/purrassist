@@ -5,6 +5,7 @@
 //! reporting each issue's JSX rename repair options and the parse's
 //! [`purrassist_syntax::AllocationReport`] alongside the existing
 //! issues/symbols content, wrapped like every other governed tool.
+use purrassist::contract::saturating_size as size;
 use purrassist::{
     AssistResult, CancellationToken, Outcome, Receipt,
     json::{Node, Value},
@@ -108,7 +109,4 @@ fn issue_node(issue: &SyntaxIssue) -> Node {
             ),
         ),
     ])
-}
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
 }

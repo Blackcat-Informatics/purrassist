@@ -6,9 +6,10 @@ mod reference;
 mod render;
 mod structure;
 mod table;
+use purrassist::contract::saturating_size as size;
 use purrassist::{
     AssistResult, Governor, Outcome, Receipt, StopReason,
-    contract::Resource,
+    contract::{Evidence, Resource, SourceSpan, Validation},
     json::{Node, Value},
     markdown::{Alignment, Block, BlockKind, Document, Section},
     wire::{array, integer, object, string},
@@ -39,22 +40,24 @@ pub(super) fn call(
         if name == "plan_markdown_section" {
             governor.charge(Resource::EvidenceEntries, 2)?;
             governor.charge(Resource::ScratchBytes, 1024)?;
-            receipt.validations.push(purrassist::contract::Validation {
-                validator: "markdown.section-structure.v1".into(),
-                constraint: "selected heading, section boundary, ancestors, and surrounding block structure remain unchanged after reparsing".into(),
-                passed: true, diagnostics: Vec::new(),
-            });
-            receipt.evidence.push(purrassist::contract::Evidence {
-                rule: "markdown.section-body.v1".into(),
-                explanation: "Replaced the selected body; nested lines receive canonical outer container prefixes. Identical logical bodies keep original spelling. Outside bytes remain exact and original source is retained.".into(),
-                span: Some(purrassist::contract::SourceSpan { source: document.digest(), bytes: 0..source.len() }),
-                destination: "/edits".into(),
+            publish_record(&document, &mut receipt, Record {
+                validator: "markdown.section-structure.v1",
+                constraint: "selected heading, section boundary, ancestors, and surrounding block structure remain unchanged after reparsing",
+                rule: "markdown.section-body.v1",
+                explanation: "Replaced the selected body; nested lines receive canonical outer container prefixes. Identical logical bodies keep original spelling. Outside bytes remain exact and original source is retained.",
             });
         }
         if name == "plan_markdown_list_item" { list::record(&document, &mut receipt, &mut governor)?; }
-        if name == "plan_markdown_reference" { reference::record(&document, &mut receipt, &mut governor)?; }
-        if matches!(name, "plan_markdown_table_cell" | "plan_markdown_table_row" | "plan_markdown_table_column") {
-            table::record(&document, &mut receipt, &mut governor)?;
+        let record = match name {
+            "plan_markdown_reference" => Some(reference::RECORD),
+            "plan_markdown_table_cell" | "plan_markdown_table_row" | "plan_markdown_table_column" => Some(table::RECORD),
+            _ => None,
+        };
+        if let Some(record) = record {
+            governor.charge(Resource::EvidenceEntries, 2)?;
+            governor.charge(Resource::Work, 512)?;
+            governor.charge(Resource::ScratchBytes, 1024)?;
+            publish_record(&document, &mut receipt, record);
         }
         if name == "plan_markdown_structure" {
             structure::record(args, &document, &mut receipt, &mut governor)?;
@@ -215,9 +218,6 @@ fn index(args: &Node, name: &str) -> Result<usize, StopReason> {
         .to_usize()
         .ok_or_else(|| StopReason::InvalidInput(format!("index {name} exceeds address space")))
 }
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
-}
 fn span(range: &Range<usize>) -> Node {
     object([
         ("start", integer(size(range.start))),
@@ -338,4 +338,36 @@ fn kind(value: &BlockKind) -> Node {
     };
     fields.push(("type", string(name)));
     object(fields)
+}
+
+/// Metadata for one successful Markdown edit's validation and source evidence.
+#[derive(Clone, Copy)]
+struct Record<'a, Explanation = &'a str> {
+    validator: &'a str,
+    constraint: &'a str,
+    rule: &'a str,
+    explanation: Explanation,
+}
+
+/// Publish the base pair after the caller admits its operation-specific charges.
+fn publish_record(
+    document: &Document,
+    receipt: &mut Receipt,
+    record: Record<'_, impl Into<String>>,
+) {
+    receipt.validations.push(Validation {
+        validator: record.validator.into(),
+        constraint: record.constraint.into(),
+        passed: true,
+        diagnostics: Vec::new(),
+    });
+    receipt.evidence.push(Evidence {
+        rule: record.rule.into(),
+        explanation: record.explanation.into(),
+        span: Some(SourceSpan {
+            source: document.digest(),
+            bytes: 0..document.source().len(),
+        }),
+        destination: "/edits".into(),
+    });
 }

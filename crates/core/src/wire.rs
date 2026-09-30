@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Versioned JSON representations shared by command-line and protocol surfaces.
+use crate::contract::saturating_size as size;
 use crate::contract::{
     AlternativeReceipt, AssistResult, Budget, Evidence, Inference, InferenceKind, Loss, Outcome,
     Receipt, StopReason, Validation,
@@ -37,7 +38,28 @@ pub fn integer(value: u64) -> Node {
 pub fn array(values: impl IntoIterator<Item = Node>) -> Node {
     Node::new(Value::Array(values.into_iter().collect()))
 }
-fn evidence(entry: &Evidence) -> Node {
+/// Serialize one evidence entry using the receipt's public wire representation.
+///
+/// A present span retains its source digest and half-open byte offsets; an absent
+/// span becomes JSON `null`. Offsets exceeding `u64` saturate to `u64::MAX`, as
+/// in receipt serialization. This function returns no validation errors: it
+/// encodes the supplied evidence without checking the referenced source or
+/// changing its rule, explanation, destination, or span.
+///
+/// ```
+/// use purrassist_core::{contract::Evidence, wire};
+/// let entry = Evidence {
+///     rule: "caller.literal.v1".into(),
+///     explanation: "The caller supplied the value verbatim.".into(),
+///     destination: "/answer".into(),
+///     span: None,
+/// };
+/// let encoded = wire::evidence(&entry);
+/// assert_eq!(encoded.get("rule").and_then(|node| node.as_str()), Some("caller.literal.v1"));
+/// assert_eq!(encoded.get("span").unwrap().to_json(), "null");
+/// ```
+#[must_use]
+pub fn evidence(entry: &Evidence) -> Node {
     object([
         ("rule", string(&entry.rule)),
         ("explanation", string(&entry.explanation)),
@@ -168,9 +190,6 @@ fn ambiguity(alternatives: &[AlternativeReceipt], validations: &[Validation]) ->
             ),
         ),
     ])
-}
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
 }
 fn budget(value: Budget) -> Node {
     object([

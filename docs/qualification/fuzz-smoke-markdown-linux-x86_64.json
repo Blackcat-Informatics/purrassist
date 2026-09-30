@@ -148,9 +148,9 @@
       }
     }
   },
-  "source_commit": "22d33135ed43a438b093a4bf996956109408a30f",
+  "source_commit": "300f7cffe188ffbd7b569e6b76476cc27f6ded4a",
   "source_dirty": true,
-  "nonignored_file_tree_sha256": "a028fb8924127ef9c2e54c3b9141c41de6463ea71cf35a14dcadc4b2761c0936",
+  "nonignored_file_tree_sha256": "400b9b04822a948e48ae788fd0abcb38171532bc946a84d21e7bd8636806e48d",
   "build": {
     "command": [
       "cargo",
@@ -172,13 +172,13 @@
       "profile.dev.overflow-checks=true",
       "--message-format=json"
     ],
-    "sha256": "738289fac58f2246cffe37533e82b8ffb64ef4e127247cec9c01168cf4e5357f",
+    "sha256": "fbdc16a4acfdd74023f5ed1e574a1ffeb805e97e792bf29d5ea4597e367232a7",
     "inherited_rustflags_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "appended_rustflags": [
       "-C",
       "instrument-coverage"
     ],
-    "engine_source_sha256": "70e41ff78819f3e983f2db66c6f0d4380cfd831a9c13fb361fd7999a30e4a3b3",
+    "engine_source_sha256": "eb806ebd7eb2b991ca08a34177a49c1900d1be7b3a52122a740e102578fd3cc6",
     "harness_source_sha256": "13144aecb656d618e00cfa35933112b67ab86ebe6aaf7c3642f3f84bf7c7cf33",
     "runner_source_sha256": "79d1a3e268bf90dfe76ed023c7b1fb92daf59be68977d2dcaf478c392c57888d"
   },
@@ -225,7 +225,7 @@
     {
       "execution": 0,
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "new_regions": 1274,
+      "new_regions": 1268,
       "parent_corpus_index": null,
       "bytes": 0
     },
@@ -274,14 +274,14 @@
     {
       "execution": 7,
       "sha256": "fa83320d8507c1c768af6c87a36be27806aacdc5146f0749a6a2f6c51550dba2",
-      "new_regions": 410,
+      "new_regions": 399,
       "parent_corpus_index": null,
       "bytes": 30
     },
     {
       "execution": 8,
       "sha256": "3df9aa3227fe5fd7307ae26d288810cecc17630c017c32374a29b39578ba6c71",
-      "new_regions": 622,
+      "new_regions": 609,
       "parent_corpus_index": null,
       "bytes": 25
     },
@@ -365,7 +365,7 @@
     {
       "execution": 25,
       "sha256": "2efc14bb62ec038479bcad36b47ca760f3866a8ca0db8e21de45d350cd586cec",
-      "new_regions": 37,
+      "new_regions": 30,
       "parent_corpus_index": 2,
       "bytes": 46
     },
@@ -505,7 +505,7 @@
     {
       "execution": 74,
       "sha256": "341ebb26f6218fbab6e0e0e3e2092e4ccb4adedfb29ed91b57cb42b4dac1cc0e",
-      "new_regions": 7,
+      "new_regions": 4,
       "parent_corpus_index": 6,
       "bytes": 15
     },
@@ -582,7 +582,7 @@
     {
       "execution": 140,
       "sha256": "354bdda2e262db9e322ff2dd9da82baffe0d1fde0e05b1a25febf4b9ce009f57",
-      "new_regions": 51,
+      "new_regions": 49,
       "parent_corpus_index": 7,
       "bytes": 30
     },
@@ -771,7 +771,7 @@
     {
       "execution": 470,
       "sha256": "afa393f048535e8865dbc7e25b19b0d036e629f3ebcfc3afce62a18659afca1f",
-      "new_regions": 58,
+      "new_regions": 55,
       "parent_corpus_index": 29,
       "bytes": 38
     },
@@ -876,7 +876,7 @@
     {
       "execution": 831,
       "sha256": "179e02d1503320ba81cbb1fb9e7c29f5795e2e7285bb7c9411031f84f2b68b8b",
-      "new_regions": 6,
+      "new_regions": 3,
       "parent_corpus_index": 27,
       "bytes": 8
     },
@@ -895,6 +895,6 @@
       "bytes": 26
     }
   ],
-  "regions": 5256,
+  "regions": 5208,
   "current_execution": 1014
 }

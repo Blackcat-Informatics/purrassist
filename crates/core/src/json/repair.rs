@@ -3,6 +3,7 @@
 //! Syntax recovery retains every edit and never runs in the strict parser.
 use super::SyntaxEdit;
 use super::{Member, Node, Number, Value};
+use crate::contract::saturating_size as size;
 use crate::contract::{Governor, Resource, StopReason};
 use std::ops::Range;
 
@@ -31,9 +32,6 @@ pub(super) fn recover(
     let node = parser.value(0)?;
     parser.space()?;
     Ok((node, parser.position, parser.edits))
-}
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
 }
 struct Parser<'a, 'g> {
     input: &'a str,

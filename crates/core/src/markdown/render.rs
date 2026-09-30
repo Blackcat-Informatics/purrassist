@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Document rendering over source-addressed container blocks.
-use super::{Alignment, Block, BlockKind, Dialect, Document, InlineFragment, References, inline};
+use super::{
+    Alignment, Block, BlockKind, Dialect, Document, InlineFragment, References, inline,
+    logical_text,
+};
 use crate::{Governor, ScratchString, StopReason, contract::Resource};
 use std::fmt::Write;
 
@@ -129,15 +132,6 @@ fn contains_tables(blocks: &[Block]) -> bool {
     })
 }
 
-fn text(source: &str, block: &Block) -> String {
-    let mut result = String::new();
-    for (range, padding) in block.lines.iter().zip(&block.line_padding) {
-        result.extend(std::iter::repeat_n(' ', *padding));
-        result.push_str(&source[range.clone()]);
-    }
-    result
-}
-
 // Block indentation is consumed before inline parsing, except for lazy
 // continuation lines whose container prefix was omitted. Those retain their
 // literal indentation inside raw HTML and code spans.
@@ -176,7 +170,7 @@ fn collect(
             lazy_lines.push(super::references::lazy_line_starts(
                 block, parent, governor,
             )?);
-            definitions.push(text(source, block));
+            definitions.push(logical_text(source, block));
         }
         collect(
             source,
@@ -247,7 +241,7 @@ impl Renderer<'_> {
             BlockKind::ThematicBreak => self.output.push_str("<hr />\n"),
             BlockKind::Html => {
                 self.output
-                    .push_str(&inline::normalize_lines(&text(self.source, block)));
+                    .push_str(&inline::normalize_lines(&logical_text(self.source, block)));
                 if !self.output.ends_with('\n') {
                     self.output.push('\n');
                 }

@@ -3,7 +3,7 @@
 MAKEFLAGS += --no-print-directory
 .PHONY: check fmt lint test doc hygiene wasm-test benchmark package syntax-oracles resources fuzz helper-test helper-census helper-check
 
-check: fmt hygiene helper-test lint test doc
+check: fmt hygiene helper-test helper-check lint test doc
 
 fmt:
 	cargo fmt --all --check
@@ -60,8 +60,8 @@ fuzz:
 		python3 scripts/fuzz.py --target $(TARGET) $(FUZZ_ARGS); \
 	fi
 
-# The self-tests and ledger validity are mandatory. Inspection reports keep
-# existing unsanctioned groups visible; helper-check rejects those groups.
+# Detector self-tests, ledger validity and strict clone enforcement are mandatory.
+# Only documented exact typed API distinctions may remain in the ledger.
 helper-test:
 	cargo run --quiet --locked -p purrassist-helper-census -- --self-test
 	python3 scripts/check-shared-helpers.py --self-test

@@ -15,6 +15,7 @@
 //! bound is the *overshoot* discussed in [`ParsedTree::allocation`] and
 //! `docs/RESOURCES.md`. Input admission, progress callbacks, tree traversal, and
 //! candidate counts are all bounded here.
+use purrassist_core::contract::saturating_size as size;
 use purrassist_core::{
     AssistResult, Budget, Governor, Outcome, Receipt, StopReason,
     contract::{Evidence, Resource, ScratchLease, Validation},
@@ -821,9 +822,6 @@ fn changed_ranges(plan: &EditPlan) -> Vec<Range<usize>> {
         original = edit.range.end;
     }
     ranges
-}
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]

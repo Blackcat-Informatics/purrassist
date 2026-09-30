@@ -126,14 +126,17 @@ semantic equivalence. `make helper-census` writes the actual inspection report.
 implementations against the exact helper ledger. Existing findings remain
 visible without blanket sanctions.
 
-`make check` requires detector positive/negative self-tests and independently
-validated ledger structure, resolved symbols and documentation anchors, plus
-reported cross-package includes. Strict enforcement rejects those include
-findings; the local gate does not impose that new architectural policy. This
-validates the installed detector and ledger; it does not claim
-the workspace has no structural duplicates. The WASM qualification harness
-deliberately shares the core portable transcript example through one cross-package
-include; that finding remains visible. See [HELPER-CENSUS.md](HELPER-CENSUS.md).
+`make check` requires detector positive/negative self-tests and strict ledger
+checking: resolved symbols, documentation anchors, exact group membership, and
+absence of cross-package source includes. The consolidation removed all six
+body groups and six forwarding groups from the initial inspection. Only two
+exact documented groups remain: distinct integer constructor input domains and
+conversions into three distinct public error types. Shared resource conversion,
+error construction, evidence serialization, Markdown source/publication logic,
+percent decoding, word classification, and scratch storage now have one
+implementation each. The portable core fixture belongs to the unpublished
+harness Cargo library. See [HELPER-CENSUS.md](HELPER-CENSUS.md) and its actual
+consolidation report for the source-bound census and review decisions.
 
 ## Qualification commands
 

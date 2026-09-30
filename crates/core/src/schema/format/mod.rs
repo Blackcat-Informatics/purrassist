@@ -16,6 +16,14 @@ mod uuid;
 
 use crate::contract::{Governor, StopReason};
 
+/// Consume the two ASCII hex digits after an already consumed percent sign.
+/// An invalid first digit leaves the second untouched; a valid first digit
+/// always consumes the second, including a non-hex digit.
+fn pct_encoded(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> bool {
+    matches!(chars.next(), Some(h) if h.is_ascii_hexdigit())
+        && matches!(chars.next(), Some(h) if h.is_ascii_hexdigit())
+}
+
 /// The complete Draft 2020-12 format census (every name this module knows
 /// how to evaluate).
 pub(super) const NAMES: &[&str] = &[
@@ -130,5 +138,28 @@ pub(super) fn witness(name: &str) -> &'static str {
         // "uri-reference"/"iri-reference"/"json-pointer" all accept the
         // empty string, matching every other unknown name's fallback.
         _ => "",
+    }
+}
+
+#[cfg(test)]
+mod percent_tests {
+    use super::pct_encoded;
+
+    #[test]
+    fn percent_digits_preserve_short_circuit_cursor_consumption() {
+        for (source, expected, remaining) in [
+            ("aF!", true, "!"),
+            ("00終", true, "終"),
+            ("Gf!", false, "f!"),
+            ("aG!", false, "!"),
+            ("é0!", false, "0!"),
+            ("０0!", false, "0!"),
+            ("a", false, ""),
+            ("", false, ""),
+        ] {
+            let mut chars = source.chars().peekable();
+            assert_eq!(pct_encoded(&mut chars), expected, "{source:?}");
+            assert_eq!(chars.collect::<String>(), remaining, "{source:?}");
+        }
     }
 }

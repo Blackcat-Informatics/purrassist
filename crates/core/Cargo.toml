@@ -21,10 +21,6 @@ workspace = true
 [dependencies]
 
 [[example]]
-name = "portable-core"
-path = "examples/portable.rs"
-
-[[example]]
 name = "fuzz-json"
 path = "examples/fuzz_json.rs"
 

@@ -3,6 +3,7 @@
 //! Reparsed section-body edits with surrounding block preservation.
 mod nested;
 use super::{Block, BlockKind, Document, line, size};
+use crate::contract::invalid_input as invalid;
 use crate::{
     Budget, Governor, Outcome, StopReason,
     contract::Resource,
@@ -621,7 +622,4 @@ pub(super) fn shift(block: &mut Block, old: usize, new: usize) {
     for child in &mut block.children {
         shift(child, old, new);
     }
-}
-fn invalid(message: &str) -> StopReason {
-    StopReason::InvalidInput(message.into())
 }

@@ -15,7 +15,7 @@ use purrassist::{
     contract::Evidence,
     json::{Node, Value},
     schema::{CompilationError, Schema, algebra::WitnessOutcome},
-    wire::{array, integer, object, string},
+    wire::{array, evidence, object, string},
 };
 use std::collections::BTreeMap;
 
@@ -86,32 +86,5 @@ fn finish(outcome: &str, witness: Node, refutation: &[Evidence], receipt: &Recei
         ("witness", witness),
         ("refutation", array(refutation.iter().map(evidence))),
         ("receipt", receipt.to_node()),
-    ])
-}
-
-fn evidence(entry: &Evidence) -> Node {
-    object([
-        ("rule", string(&entry.rule)),
-        ("explanation", string(&entry.explanation)),
-        ("destination", string(&entry.destination)),
-        (
-            "span",
-            entry.span.as_ref().map_or_else(
-                || Node::new(Value::Null),
-                |span| {
-                    object([
-                        ("source", string(span.source.to_string())),
-                        (
-                            "start",
-                            integer(u64::try_from(span.bytes.start).unwrap_or(u64::MAX)),
-                        ),
-                        (
-                            "end",
-                            integer(u64::try_from(span.bytes.end).unwrap_or(u64::MAX)),
-                        ),
-                    ])
-                },
-            ),
-        ),
     ])
 }

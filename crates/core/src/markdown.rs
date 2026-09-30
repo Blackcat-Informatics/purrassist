@@ -27,6 +27,7 @@ pub use inline::{
 };
 pub use sections::{SectionInsertion, SectionSite};
 
+use crate::contract::saturating_size as size;
 use crate::{Governor, StopReason, contract::Resource, digest::Digest};
 use std::ops::Range;
 
@@ -189,9 +190,6 @@ impl Document {
         sections
     }
 }
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
-}
 fn lines(source: &str) -> Vec<Range<usize>> {
     let mut result = Vec::new();
     let mut start = 0;
@@ -215,6 +213,36 @@ fn lines(source: &str) -> Vec<Range<usize>> {
 fn line<'a>(source: &'a str, range: &Range<usize>) -> &'a str {
     source[range.clone()].trim_end_matches(['\r', '\n'])
 }
+/// Reconstruct a block's logical source, retaining line endings and residual tab padding.
+fn logical_text(source: &str, block: &Block) -> String {
+    let mut text = String::new();
+    for (line, padding) in block.lines.iter().zip(&block.line_padding) {
+        text.extend(std::iter::repeat_n(' ', *padding));
+        text.push_str(&source[line.clone()]);
+    }
+    text
+}
+
+/// Byte offset immediately after the last physical CR or LF before `offset`.
+fn line_start(source: &str, offset: usize) -> usize {
+    source[..offset]
+        .rfind(['\r', '\n'])
+        .map_or(0, |position| position + 1)
+}
+
+/// Preserve the exact terminal CRLF, CR, or LF spelling; unterminated text has none.
+fn ending(text: &str) -> Option<&'static str> {
+    if text.ends_with("\r\n") {
+        Some("\r\n")
+    } else if text.ends_with('\r') {
+        Some("\r")
+    } else if text.ends_with('\n') {
+        Some("\n")
+    } else {
+        None
+    }
+}
+
 fn unindent(text: &str) -> Option<&str> {
     let count = text.bytes().take_while(|byte| *byte == b' ').count();
     (count <= 3).then(|| &text[count..])
@@ -655,4 +683,49 @@ fn alignments(text: &str) -> Option<Vec<Alignment>> {
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod source_tests {
+    use super::{Block, BlockKind, ending, line_start, logical_text};
+
+    #[test]
+    fn logical_source_preserves_unicode_endings_and_partial_tab_padding() {
+        let source = "\tα\r\n> β\r終\n";
+        let block = Block {
+            span: 0..source.len(),
+            lines: vec![1..5, 7..10, 10..14],
+            line_padding: vec![3, 0, 0],
+            kind: BlockKind::Paragraph,
+            children: Vec::new(),
+        };
+        assert_eq!(logical_text(source, &block), "   α\r\nβ\r終\n");
+    }
+
+    #[test]
+    fn physical_line_boundaries_preserve_all_original_newline_spellings() {
+        let source = "α\r\nβ\rγ\nδ";
+        for (offset, expected) in [
+            (0, 0),
+            (2, 0),
+            (3, 3),
+            (4, 4),
+            (6, 4),
+            (7, 7),
+            (10, 10),
+            (12, 10),
+        ] {
+            assert_eq!(line_start(source, offset), expected, "offset {offset}");
+        }
+        for (text, expected) in [
+            ("α\r\n", Some("\r\n")),
+            ("α\r", Some("\r")),
+            ("α\n", Some("\n")),
+            ("α", None),
+            ("", None),
+            ("α\n\t", None),
+        ] {
+            assert_eq!(ending(text), expected, "{text:?}");
+        }
+    }
 }

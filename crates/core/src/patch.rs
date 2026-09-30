@@ -20,6 +20,8 @@
 //! already has the text available, and grounding every derived patch's
 //! `source` digest against real applied bytes is simpler and strictly safer
 //! than reconstructing it from range arithmetic alone.
+use crate::contract::invalid_input as invalid;
+use crate::contract::saturating_size as size;
 use crate::contract::{Evidence, Loss, Resource, SourceSpan, Validation};
 use crate::digest::Digest;
 use crate::{AssistResult, Budget, Effort, Governor, Outcome, Receipt, StopReason};
@@ -517,13 +519,6 @@ fn merge_disjoint(a: &[TextEdit], b: &[TextEdit]) -> Option<Vec<TextEdit>> {
     } else {
         None
     }
-}
-
-fn invalid(message: &str) -> StopReason {
-    StopReason::InvalidInput(message.into())
-}
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]

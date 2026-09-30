@@ -13,7 +13,7 @@
 //! a claim of emptiness.
 use super::ast::Node;
 use super::derive::{self, NullCtx};
-use super::{Engine, GenerateOptions, GenerateOutcome, Pattern};
+use super::{Engine, GenerateOptions, GenerateOutcome, Pattern, is_word};
 use crate::contract::{Evidence, Governor, Resource, StopReason};
 
 fn no_candidate(explanation: impl Into<String>) -> GenerateOutcome {
@@ -240,12 +240,12 @@ fn step_frontier(
             let Some(character) = char::from_u32(code) else {
                 continue;
             };
-            let prev_word = witness.chars().last().is_some_and(derive::is_word);
+            let prev_word = witness.chars().last().is_some_and(is_word);
             let ctx = NullCtx {
                 at_start: length == 0,
                 at_end: false,
                 prev_word,
-                next_word: derive::is_word(character),
+                next_word: is_word(character),
             };
             let Some(next_states) =
                 step_lanes(target, avoids, states, code, ctx, length, governor)?

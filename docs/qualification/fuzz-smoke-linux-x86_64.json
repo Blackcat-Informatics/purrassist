@@ -15,9 +15,10 @@
     {
       "target": "json",
       "report": "fuzz-smoke-json-linux-x86_64.json",
-      "report_sha256": "8633cd8af6c2552ab8e737deba0b4a2bf1fc3d8e975228962e1eab84ec1905c7",
+      "report_sha256": "52a45b8ef46652f9a86038dc07e82b9ff44ed0bd174ff6559f1c8577a6dd9515",
+      "raw_campaign_report": ".cache/fuzz-json-x8iwk8by/report.json",
       "status": "passed",
-      "source_commit": "22d33135ed43a438b093a4bf996956109408a30f",
+      "source_commit": "300f7cffe188ffbd7b569e6b76476cc27f6ded4a",
       "source_dirty": true,
       "seed": 6491701292666032971,
       "requested_mutations": 1000,
@@ -27,7 +28,10 @@
       "differential_mismatches": 0,
       "crashes": 0,
       "resource_non_results": 0,
-      "regions": 3775,
+      "reference_rejections": 0,
+      "reference_timeouts": 0,
+      "reference_profile_exclusions": 0,
+      "regions": 3731,
       "build": {
         "command": [
           "cargo",
@@ -49,13 +53,13 @@
           "profile.dev.overflow-checks=true",
           "--message-format=json"
         ],
-        "sha256": "9387cf64baeec442978703f530b16f1db0d9979110fa06b04b9a0f4e611762bf",
+        "sha256": "341d7361e2af1aab88cc2d4f3bc628a7ab98a31aa5e36542fd98d2c16bba849b",
         "inherited_rustflags_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "appended_rustflags": [
           "-C",
           "instrument-coverage"
         ],
-        "engine_source_sha256": "70e41ff78819f3e983f2db66c6f0d4380cfd831a9c13fb361fd7999a30e4a3b3",
+        "engine_source_sha256": "eb806ebd7eb2b991ca08a34177a49c1900d1be7b3a52122a740e102578fd3cc6",
         "harness_source_sha256": "8d26a3545f0629a6bdcc855d685a1fc9a1f1c2fd149c6407f3b96e83b6dd5507",
         "runner_source_sha256": "79d1a3e268bf90dfe76ed023c7b1fb92daf59be68977d2dcaf478c392c57888d"
       },
@@ -64,9 +68,10 @@
     {
       "target": "markdown",
       "report": "fuzz-smoke-markdown-linux-x86_64.json",
-      "report_sha256": "80dce344d871a761305b390cabe528f221d2e9a013f2970cdf1f38e76f157b55",
+      "report_sha256": "1871c0e581fb47be32a49e1f5c14dc228caa0f083e9a3505e1a8d54000ed9aa7",
+      "raw_campaign_report": ".cache/fuzz-markdown-_xzsx47e/report.json",
       "status": "passed",
-      "source_commit": "22d33135ed43a438b093a4bf996956109408a30f",
+      "source_commit": "300f7cffe188ffbd7b569e6b76476cc27f6ded4a",
       "source_dirty": true,
       "seed": 6491701292666032971,
       "requested_mutations": 1000,
@@ -76,7 +81,10 @@
       "differential_mismatches": 0,
       "crashes": 0,
       "resource_non_results": 0,
-      "regions": 5256,
+      "reference_rejections": 0,
+      "reference_timeouts": 0,
+      "reference_profile_exclusions": 0,
+      "regions": 5208,
       "build": {
         "command": [
           "cargo",
@@ -98,13 +106,13 @@
           "profile.dev.overflow-checks=true",
           "--message-format=json"
         ],
-        "sha256": "738289fac58f2246cffe37533e82b8ffb64ef4e127247cec9c01168cf4e5357f",
+        "sha256": "fbdc16a4acfdd74023f5ed1e574a1ffeb805e97e792bf29d5ea4597e367232a7",
         "inherited_rustflags_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "appended_rustflags": [
           "-C",
           "instrument-coverage"
         ],
-        "engine_source_sha256": "70e41ff78819f3e983f2db66c6f0d4380cfd831a9c13fb361fd7999a30e4a3b3",
+        "engine_source_sha256": "eb806ebd7eb2b991ca08a34177a49c1900d1be7b3a52122a740e102578fd3cc6",
         "harness_source_sha256": "13144aecb656d618e00cfa35933112b67ab86ebe6aaf7c3642f3f84bf7c7cf33",
         "runner_source_sha256": "79d1a3e268bf90dfe76ed023c7b1fb92daf59be68977d2dcaf478c392c57888d"
       },
@@ -113,9 +121,10 @@
     {
       "target": "schema",
       "report": "fuzz-smoke-schema-linux-x86_64.json",
-      "report_sha256": "138da2c33dd1423b8202bb544465b1f07ccd4fe3d366743574d5a8cd52257095",
+      "report_sha256": "7be5a096533dfed28e72b0e751ed4179a09d11c98b272609a08eb231341b0600",
+      "raw_campaign_report": ".cache/fuzz-schema-lobn18h9/report.json",
       "status": "passed",
-      "source_commit": "22d33135ed43a438b093a4bf996956109408a30f",
+      "source_commit": "300f7cffe188ffbd7b569e6b76476cc27f6ded4a",
       "source_dirty": true,
       "seed": 6491701292666032971,
       "requested_mutations": 1000,
@@ -125,7 +134,10 @@
       "differential_mismatches": 0,
       "crashes": 0,
       "resource_non_results": 0,
-      "regions": 4610,
+      "reference_rejections": 0,
+      "reference_timeouts": 0,
+      "reference_profile_exclusions": 0,
+      "regions": 4560,
       "build": {
         "command": [
           "cargo",
@@ -147,13 +159,13 @@
           "profile.dev.overflow-checks=true",
           "--message-format=json"
         ],
-        "sha256": "bfd55cc8cd60174efff27c4065e29d9b32ffffe2a606fb4e49735f228364eb90",
+        "sha256": "f2fd68b5d28054f0939a45c6b76a6801ea06e5fccc38cf9310afd4690bf9d50c",
         "inherited_rustflags_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "appended_rustflags": [
           "-C",
           "instrument-coverage"
         ],
-        "engine_source_sha256": "70e41ff78819f3e983f2db66c6f0d4380cfd831a9c13fb361fd7999a30e4a3b3",
+        "engine_source_sha256": "eb806ebd7eb2b991ca08a34177a49c1900d1be7b3a52122a740e102578fd3cc6",
         "harness_source_sha256": "816f8c0835e330b32d206af2165c9bf8e84784057f15e4596cf148ec27ddaa95",
         "runner_source_sha256": "79d1a3e268bf90dfe76ed023c7b1fb92daf59be68977d2dcaf478c392c57888d"
       },
@@ -162,9 +174,10 @@
     {
       "target": "pattern",
       "report": "fuzz-smoke-pattern-linux-x86_64.json",
-      "report_sha256": "0d54dd852522f2888bc16e7ff1ecc097e63a22a30ca028b30955654a1a7d0731",
+      "report_sha256": "e57b0a77a42d0c623fe054ffb2b4c2ac67bd47dd107d5cd86ca2c13397335e56",
+      "raw_campaign_report": ".cache/fuzz-pattern-2utypzro/report.json",
       "status": "passed",
-      "source_commit": "79e5d3705818a436dc1113f6619c8e1ba1efa071",
+      "source_commit": "300f7cffe188ffbd7b569e6b76476cc27f6ded4a",
       "source_dirty": true,
       "seed": 6491701292666032971,
       "requested_mutations": 1000,
@@ -174,7 +187,10 @@
       "differential_mismatches": 0,
       "crashes": 0,
       "resource_non_results": 0,
-      "regions": 1674,
+      "reference_rejections": 118,
+      "reference_timeouts": 1,
+      "reference_profile_exclusions": 0,
+      "regions": 1651,
       "build": {
         "command": [
           "cargo",
@@ -196,13 +212,13 @@
           "profile.dev.overflow-checks=true",
           "--message-format=json"
         ],
-        "sha256": "6a9919d5aa9c697e59ae71c5a638ca06795487957a93790b97f6d5347a1184c1",
+        "sha256": "64575f17c284b7ef0029b08ca171c4f7f0cffb4f33d4b3a294f4f711babca98d",
         "inherited_rustflags_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "appended_rustflags": [
           "-C",
           "instrument-coverage"
         ],
-        "engine_source_sha256": "70e41ff78819f3e983f2db66c6f0d4380cfd831a9c13fb361fd7999a30e4a3b3",
+        "engine_source_sha256": "eb806ebd7eb2b991ca08a34177a49c1900d1be7b3a52122a740e102578fd3cc6",
         "harness_source_sha256": "3ec13bb330b3b3913f7a7eeaa39b0bf987a78e37347fb8c4e33c07d0086baa83",
         "runner_source_sha256": "79d1a3e268bf90dfe76ed023c7b1fb92daf59be68977d2dcaf478c392c57888d"
       },
@@ -211,9 +227,10 @@
     {
       "target": "unified",
       "report": "fuzz-smoke-unified-linux-x86_64.json",
-      "report_sha256": "f99a8b99cac76065d55260eee0b47f826f76fd6c3dec450b7ad9ff929db4ae88",
+      "report_sha256": "debd6b92b370e9f5e40e531f149c3ff58f0fc08f95cf5bd784330658f9613f60",
+      "raw_campaign_report": ".cache/fuzz-unified-gptx1l72/report.json",
       "status": "passed",
-      "source_commit": "79e5d3705818a436dc1113f6619c8e1ba1efa071",
+      "source_commit": "300f7cffe188ffbd7b569e6b76476cc27f6ded4a",
       "source_dirty": true,
       "seed": 6491701292666032971,
       "requested_mutations": 1000,
@@ -223,7 +240,10 @@
       "differential_mismatches": 0,
       "crashes": 0,
       "resource_non_results": 0,
-      "regions": 607,
+      "reference_rejections": 0,
+      "reference_timeouts": 0,
+      "reference_profile_exclusions": 0,
+      "regions": 604,
       "build": {
         "command": [
           "cargo",
@@ -245,13 +265,13 @@
           "profile.dev.overflow-checks=true",
           "--message-format=json"
         ],
-        "sha256": "119df87c07ae074046ddb97123d5fe0aff6efeca30897346e114fa9e26774156",
+        "sha256": "e2083b1292a6ea975e3817b80163fa702855376cb93e0d3311ddb8927bda25bc",
         "inherited_rustflags_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "appended_rustflags": [
           "-C",
           "instrument-coverage"
         ],
-        "engine_source_sha256": "70e41ff78819f3e983f2db66c6f0d4380cfd831a9c13fb361fd7999a30e4a3b3",
+        "engine_source_sha256": "eb806ebd7eb2b991ca08a34177a49c1900d1be7b3a52122a740e102578fd3cc6",
         "harness_source_sha256": "49d6fd39ff40d51de8bf22ad72572d69c5341a4bc8c454c4757dd1bc932f4502",
         "runner_source_sha256": "79d1a3e268bf90dfe76ed023c7b1fb92daf59be68977d2dcaf478c392c57888d"
       },
@@ -260,9 +280,10 @@
     {
       "target": "fuzzy",
       "report": "fuzz-smoke-fuzzy-linux-x86_64.json",
-      "report_sha256": "f1c2c52ebfd54ee45a8ba27e51885298b0e5fd6037e460eca96d85853cfa255b",
+      "report_sha256": "e26b457d3942bb5d5fdc777c9cd02f2bb5424c426f750e1f3502d5e71471dabe",
+      "raw_campaign_report": ".cache/fuzz-fuzzy-jysio3dd/report.json",
       "status": "passed",
-      "source_commit": "79e5d3705818a436dc1113f6619c8e1ba1efa071",
+      "source_commit": "300f7cffe188ffbd7b569e6b76476cc27f6ded4a",
       "source_dirty": true,
       "seed": 6491701292666032971,
       "requested_mutations": 1000,
@@ -272,7 +293,10 @@
       "differential_mismatches": 0,
       "crashes": 0,
       "resource_non_results": 0,
-      "regions": 848,
+      "reference_rejections": 0,
+      "reference_timeouts": 0,
+      "reference_profile_exclusions": 0,
+      "regions": 816,
       "build": {
         "command": [
           "cargo",
@@ -294,13 +318,13 @@
           "profile.dev.overflow-checks=true",
           "--message-format=json"
         ],
-        "sha256": "02ed904ea20b5e5844e5a04dba7ff1060fe743da5fd92221114a2327cc252bde",
+        "sha256": "3d1a5acb5bd29afd85292bde4ea3be2ce6b130df13811c1469d293cc421b9cc0",
         "inherited_rustflags_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "appended_rustflags": [
           "-C",
           "instrument-coverage"
         ],
-        "engine_source_sha256": "70e41ff78819f3e983f2db66c6f0d4380cfd831a9c13fb361fd7999a30e4a3b3",
+        "engine_source_sha256": "eb806ebd7eb2b991ca08a34177a49c1900d1be7b3a52122a740e102578fd3cc6",
         "harness_source_sha256": "71ae89602fb2712f030c8bff86cd93fb56f5d4892817ba49004091b698771c7a",
         "runner_source_sha256": "79d1a3e268bf90dfe76ed023c7b1fb92daf59be68977d2dcaf478c392c57888d"
       },
@@ -309,9 +333,10 @@
     {
       "target": "matching",
       "report": "fuzz-smoke-matching-linux-x86_64.json",
-      "report_sha256": "875cf9e2d53b9f5bcc903786fea14a76c019a79da0e707ce3379c07cfa4ccd1a",
+      "report_sha256": "76b0692bd469d27b3b564887d1a3f008d4aa696281bd6440f6a9e982ed0e34f7",
+      "raw_campaign_report": ".cache/fuzz-matching-h6e5j_0n/report.json",
       "status": "passed",
-      "source_commit": "79e5d3705818a436dc1113f6619c8e1ba1efa071",
+      "source_commit": "300f7cffe188ffbd7b569e6b76476cc27f6ded4a",
       "source_dirty": true,
       "seed": 6491701292666032971,
       "requested_mutations": 1000,
@@ -321,7 +346,10 @@
       "differential_mismatches": 0,
       "crashes": 0,
       "resource_non_results": 0,
-      "regions": 1388,
+      "reference_rejections": 0,
+      "reference_timeouts": 0,
+      "reference_profile_exclusions": 0,
+      "regions": 1362,
       "build": {
         "command": [
           "cargo",
@@ -343,13 +371,13 @@
           "profile.dev.overflow-checks=true",
           "--message-format=json"
         ],
-        "sha256": "c05e81b44d264c517f99412af4d2b8d7a0284125484a831f30b8affdc5287940",
+        "sha256": "f78e0db753501c7ea3e3d74ad177efbbcec8ed5713a9c19fe6633016e5ae48fb",
         "inherited_rustflags_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "appended_rustflags": [
           "-C",
           "instrument-coverage"
         ],
-        "engine_source_sha256": "70e41ff78819f3e983f2db66c6f0d4380cfd831a9c13fb361fd7999a30e4a3b3",
+        "engine_source_sha256": "eb806ebd7eb2b991ca08a34177a49c1900d1be7b3a52122a740e102578fd3cc6",
         "harness_source_sha256": "c3e70377eb56bb96af6e13cbccf1df17a105f4c7c830b2dc1f6397ca4d36e636",
         "runner_source_sha256": "79d1a3e268bf90dfe76ed023c7b1fb92daf59be68977d2dcaf478c392c57888d"
       },
@@ -358,9 +386,10 @@
     {
       "target": "patch",
       "report": "fuzz-smoke-patch-linux-x86_64.json",
-      "report_sha256": "ebf549a029425818f6ea022b73b29c85d7b1796663e801370dae6ab42ac4dd93",
+      "report_sha256": "9b46d6e6182ecdea099c54565e744225ab61fea6c7d6bc62d1d20eef5f6306ee",
+      "raw_campaign_report": ".cache/fuzz-patch-dotqrt_t/report.json",
       "status": "passed",
-      "source_commit": "79e5d3705818a436dc1113f6619c8e1ba1efa071",
+      "source_commit": "300f7cffe188ffbd7b569e6b76476cc27f6ded4a",
       "source_dirty": true,
       "seed": 6491701292666032971,
       "requested_mutations": 1000,
@@ -370,6 +399,9 @@
       "differential_mismatches": 0,
       "crashes": 0,
       "resource_non_results": 0,
+      "reference_rejections": 0,
+      "reference_timeouts": 0,
+      "reference_profile_exclusions": 0,
       "regions": 435,
       "build": {
         "command": [
@@ -392,13 +424,13 @@
           "profile.dev.overflow-checks=true",
           "--message-format=json"
         ],
-        "sha256": "250a73e61ea79fc5d8a2edc43faad9752a133092ac0220a922d9542e107a6a1f",
+        "sha256": "244ddb524e4cc19a8f134c31004ea4098857dc9f75027396d1c0162ad23d7370",
         "inherited_rustflags_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "appended_rustflags": [
           "-C",
           "instrument-coverage"
         ],
-        "engine_source_sha256": "70e41ff78819f3e983f2db66c6f0d4380cfd831a9c13fb361fd7999a30e4a3b3",
+        "engine_source_sha256": "eb806ebd7eb2b991ca08a34177a49c1900d1be7b3a52122a740e102578fd3cc6",
         "harness_source_sha256": "7322b68a2b73ff7d8b88492dc21d06bfb5bcf471e11387df8e7722b75f25f223",
         "runner_source_sha256": "79d1a3e268bf90dfe76ed023c7b1fb92daf59be68977d2dcaf478c392c57888d"
       },
@@ -406,5 +438,5 @@
     }
   ],
   "total_executions": 8076,
-  "note": "Each report is an unedited byte copy of its actual campaign result. Launch commit, dirty state, source/tool identities and declared Markdown resource non-results are observed fields, not reconstructed historical metadata."
+  "note": "Post-consolidation integration phase. Each report is an unedited byte copy of its actual campaign result. Launch commit, dirty state, source/tool identities and declared Markdown resource non-results are observed fields, not reconstructed historical metadata. Earlier 10,000-mutation phase baselines retain their original provenance."
 }

@@ -5,6 +5,7 @@
 mod number;
 mod parser;
 mod repair;
+use crate::contract::saturating_size as size;
 use core::fmt::Write;
 use core::ops::Range;
 pub use number::{Number, NumberError};
@@ -21,10 +22,6 @@ pub(crate) fn recover_syntax(
     governor: &mut crate::Governor,
 ) -> Result<(Node, usize, Vec<SyntaxEdit>), crate::StopReason> {
     repair::recover(input, governor)
-}
-
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 /// A JSON value occurrence with an optional original byte span.

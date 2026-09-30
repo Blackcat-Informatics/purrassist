@@ -32,6 +32,11 @@ mod unicode;
 use crate::contract::{Budget, Evidence, Governor, Resource, StopReason};
 use core::fmt;
 
+/// ECMA-262 `u`-mode word-boundary class: ASCII letters, digits, and underscore.
+const fn is_word(character: char) -> bool {
+    character.is_ascii_alphanumeric() || character == '_'
+}
+
 /// A compiled pattern; no ambient regex engine or platform-dependent dialect.
 #[derive(Clone, Debug)]
 pub struct Pattern {
@@ -380,6 +385,35 @@ mod tests {
                 compiled.is_match(text, &mut Governor::new(Budget::default())),
                 Ok(expected),
                 "{pattern:?} {text:?}"
+            );
+        }
+    }
+    #[test]
+    fn word_boundaries_agree_for_ascii_and_non_ascii_neighbours() {
+        for character in ['a', 'Z', '0', '9', '_'] {
+            assert!(is_word(character));
+        }
+        for character in ['é', '猫', '０', '\u{212a}', ' ', '-', '\n', '\u{0301}'] {
+            assert!(!is_word(character));
+        }
+        for (source, text, expected) in [
+            (r"\ba\b", "a", true),
+            (r"\ba\b", "_a", false),
+            (r"\ba\b", "a9", false),
+            (r"\ba\b", "éa猫", true),
+            (r"\B_\B", "a_9", true),
+            (r"\B_\B", "é_猫", false),
+        ] {
+            let pattern = Pattern::compile(source).expect("boundary pattern");
+            assert_eq!(
+                pattern.is_match(text, &mut Governor::new(Budget::default())),
+                Ok(expected),
+                "derivative {source:?} {text:?}"
+            );
+            assert_eq!(
+                pattern.is_match_backtracking(text, &mut Governor::new(Budget::default())),
+                Ok(expected),
+                "backtracking {source:?} {text:?}"
             );
         }
     }

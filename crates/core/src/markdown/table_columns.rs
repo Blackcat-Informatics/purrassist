@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Governed table-column changes retaining untouched cell spelling and source lines.
 use super::{Alignment, BlockKind, Document, cell_ranges, line, size};
+use crate::contract::invalid_input as invalid;
 use crate::{
     Governor, Outcome, StopReason,
     contract::Resource,
@@ -315,7 +316,4 @@ const fn delimiter(alignment: Alignment) -> &'static str {
         Alignment::Right => "---:",
         Alignment::Center => ":---:",
     }
-}
-fn invalid(message: &str) -> StopReason {
-    StopReason::InvalidInput(message.into())
 }

@@ -7,9 +7,10 @@
 //! shape. Each `Document` method this dispatches to already validates its own
 //! proposal by reparsing; this module only decodes arguments and reports
 //! evidence of which structural operation ran.
+use super::index;
 use purrassist::{
     Governor, Receipt, StopReason,
-    contract::{Evidence, Resource, SourceSpan, Validation},
+    contract::{Evidence, Resource, SourceSpan},
     json::{Node, Value},
     markdown::{
         BlockKind, Document, ListItemEdit, SectionInsertion, TableColumnEdit, TableRowEdit,
@@ -153,18 +154,19 @@ pub(super) fn record(
         Resource::EvidenceEntries,
         if transformation.is_some() { 3 } else { 2 },
     )?;
-    receipt.validations.push(Validation {
-        validator: "markdown.structure.v1".into(),
-        constraint: "the selected section, list, table, or reference structure and every unselected block reparse to the intended shape".into(),
-        passed: true,
-        diagnostics: Vec::new(),
-    });
-    receipt.evidence.push(Evidence {
-        rule: "markdown.structure-edit.v1".into(),
-        explanation: format!("Structural operation {op} was reparsed and checked against its documented shape; outside bytes remain exact and the original source is retained."),
-        span: Some(SourceSpan { source: document.digest(), bytes: 0..document.source().len() }),
-        destination: "/edits".into(),
-    });
+    let explanation = format!(
+        "Structural operation {op} was reparsed and checked against its documented shape; outside bytes remain exact and the original source is retained."
+    );
+    super::publish_record(
+        document,
+        receipt,
+        super::Record {
+            validator: "markdown.structure.v1",
+            constraint: "the selected section, list, table, or reference structure and every unselected block reparse to the intended shape",
+            rule: "markdown.structure-edit.v1",
+            explanation,
+        },
+    );
     if let Some((rule, explanation, bytes)) = transformation {
         receipt.evidence.push(Evidence {
             rule: rule.into(),
@@ -211,14 +213,6 @@ fn optional_title(args: &Node) -> Result<Option<&str>, StopReason> {
             "title must be a string or null".into(),
         )),
     }
-}
-fn index(args: &Node, name: &str) -> Result<usize, StopReason> {
-    let Some(Value::Number(value)) = args.get(name).map(|node| &node.value) else {
-        return Err(StopReason::InvalidInput(format!("missing index {name}")));
-    };
-    value
-        .to_usize()
-        .ok_or_else(|| StopReason::InvalidInput(format!("index {name} exceeds address space")))
 }
 fn unsigned(args: &Node, name: &str) -> Result<u64, StopReason> {
     let Some(Value::Number(value)) = args.get(name).map(|node| &node.value) else {

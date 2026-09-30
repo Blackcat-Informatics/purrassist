@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Single-buffer unified diffs: strict grammar, relocatable context, exact undo.
 use super::{EditPlan, TextEdit, size};
+use crate::contract::invalid_input as invalid;
 use crate::contract::{Evidence, Resource, SourceSpan};
 use crate::{AssistResult, Budget, Effort, Governor, Outcome, Receipt, StopReason};
 
@@ -138,10 +139,6 @@ fn populate_unified_alternatives(
     receipt.evidence = published.evidence;
     receipt.alternatives = published.alternatives;
     Ok(crate::provenance::permute(&outputs, &published.order))
-}
-
-fn invalid(message: &str) -> StopReason {
-    StopReason::InvalidInput(message.into())
 }
 
 fn plan(

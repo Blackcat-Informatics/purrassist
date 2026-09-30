@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Governed embedding admission, selection, and independent alternative ledgers.
+use purrassist::contract::invalid_input as invalid;
+use purrassist::contract::saturating_size as size;
 use purrassist::{
     AssistResult, Governor, Outcome, Receipt, StopReason,
     contract::{Evidence, Inference, InferenceKind, Resource, Validation},
@@ -251,10 +253,4 @@ fn admission(node: &Node, governor: &mut Governor) -> Result<u64, StopReason> {
     };
     governor.charge(Resource::Work, size.saturating_add(1))?;
     Ok(size)
-}
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
-}
-fn invalid(message: &str) -> StopReason {
-    StopReason::InvalidInput(message.into())
 }

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Explicit, resumable provider adapters. No model, socket, credential, or HTTP client
 //! is created here. A caller-owned transport supplies authentication and responses.
+use purrassist::contract::saturating_size as size;
 use purrassist::{
     AssistResult, Effort, Governor, Outcome, Receipt, RecoveryRequest, Schema, StopReason,
     contract::{Evidence, Inference, InferenceKind, Resource},
@@ -393,7 +394,4 @@ fn text_blocks(node: &Node, expected: &str) -> Result<String, StopReason> {
     } else {
         Ok(output)
     }
-}
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
 }

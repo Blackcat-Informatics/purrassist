@@ -5,6 +5,7 @@ use super::{
     Block, BlockKind, Dialect, Document, Inline, InlineFragment, InlineKind, References,
     cell_ranges, line, size,
 };
+use crate::contract::invalid_input as invalid;
 use crate::{
     Governor, Outcome, StopReason,
     contract::Resource,
@@ -953,7 +954,4 @@ fn encode(value: &str, result: &mut String) {
             c => result.push(c),
         }
     }
-}
-fn invalid(message: &str) -> StopReason {
-    StopReason::InvalidInput(message.into())
 }

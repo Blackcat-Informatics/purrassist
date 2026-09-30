@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! RFC 6570 URI Template, level 4 (every operator, prefix, and explode
 //! modifier).
-use super::uri::{is_iprivate, is_ucschar};
+use super::{
+    pct_encoded,
+    uri::{is_iprivate, is_ucschar},
+};
 use crate::contract::{Governor, Resource, StopReason};
 use std::iter::Peekable;
 use std::str::Chars;
@@ -17,11 +20,6 @@ fn is_literal(c: char) -> bool {
         | 0x27..=0x3B | 0x3D | 0x3F..=0x5B | 0x5D | 0x5F | 0x61..=0x7A | 0x7E)
         || is_ucschar(c)
         || is_iprivate(c)
-}
-
-fn pct_encoded(chars: &mut Cursor<'_>) -> bool {
-    matches!(chars.next(), Some(h) if h.is_ascii_hexdigit())
-        && matches!(chars.next(), Some(h) if h.is_ascii_hexdigit())
 }
 
 fn varchar(chars: &mut Cursor<'_>) -> bool {

@@ -13,7 +13,22 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-fn size(value: usize) -> u64 {
+/// Convert a target-sized count to the portable resource-counter width.
+///
+/// Counts wider than `u64` saturate rather than wrap or undercount. This is
+/// suitable for resource accounting; exact JSON numbers use
+/// [`crate::json::Number::from_count`] instead.
+///
+/// ```
+/// use purrassist_core::contract::saturating_size;
+/// assert_eq!(saturating_size(0), 0);
+/// assert_eq!(saturating_size(42), 42);
+/// assert_eq!(saturating_size(usize::MAX), u64::try_from(usize::MAX).unwrap_or(u64::MAX));
+/// ```
+///
+/// This conversion is infallible and performs no allocation.
+#[must_use]
+pub fn saturating_size(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
 }
 
@@ -173,6 +188,22 @@ pub enum StopReason {
     Cancelled,
     /// Input or configuration cannot be interpreted under its contract.
     InvalidInput(String),
+}
+
+/// Preserve an input diagnostic as an explicit unsuccessful outcome.
+///
+/// ```
+/// use purrassist_core::{StopReason, contract::invalid_input};
+/// assert_eq!(invalid_input("missing index"),
+///            StopReason::InvalidInput("missing index".into()));
+/// ```
+///
+/// This constructor does not validate or recover input. It retains the
+/// supplied message exactly and does not change resource exhaustion into
+/// an input failure.
+#[must_use]
+pub fn invalid_input(message: impl Into<String>) -> StopReason {
+    StopReason::InvalidInput(message.into())
 }
 
 impl fmt::Display for StopReason {
@@ -622,7 +653,8 @@ impl<T: ScratchCharge> ScratchVec<T> {
         if target == capacity {
             return Ok(());
         }
-        let delta = size(target - capacity).saturating_mul(size(T::CHARGE.max(1)));
+        let delta =
+            saturating_size(target - capacity).saturating_mul(saturating_size(T::CHARGE.max(1)));
         self.meter.charge(delta)?;
         self.reserved = self.reserved.saturating_add(delta);
         if let Err(error) = self.inner.try_reserve_exact(target - self.inner.len()) {
@@ -739,7 +771,7 @@ impl ScratchString {
         if target == capacity {
             return Ok(());
         }
-        let delta = size(target - capacity);
+        let delta = saturating_size(target - capacity);
         self.meter.charge(delta)?;
         self.reserved = self.reserved.saturating_add(delta);
         if let Err(error) = self.inner.try_reserve_exact(target - self.inner.len()) {
@@ -828,9 +860,7 @@ impl Drop for ScratchString {
 /// ```
 #[derive(Debug)]
 pub struct ScratchMap<K, V> {
-    inner: Vec<(K, V)>,
-    meter: ScratchMeter,
-    reserved: u64,
+    inner: ScratchVec<(K, V)>,
 }
 
 impl<K: Ord + ScratchCharge, V: ScratchCharge> ScratchMap<K, V> {
@@ -838,14 +868,14 @@ impl<K: Ord + ScratchCharge, V: ScratchCharge> ScratchMap<K, V> {
     #[must_use]
     pub fn new(governor: &Governor) -> Self {
         Self {
-            inner: Vec::new(),
-            meter: governor.scratch_meter(),
-            reserved: 0,
+            inner: ScratchVec::new(governor),
         }
     }
 
     fn position(&self, key: &K) -> Result<usize, usize> {
-        self.inner.binary_search_by(|(entry, _)| entry.cmp(key))
+        self.inner
+            .inner
+            .binary_search_by(|(entry, _)| entry.cmp(key))
     }
 
     /// Insert or replace the value for `key`, growing (and charging) the
@@ -855,12 +885,12 @@ impl<K: Ord + ScratchCharge, V: ScratchCharge> ScratchMap<K, V> {
     /// Returns `BudgetExceeded(ScratchBytes)` before any allocation.
     pub fn insert(&mut self, key: K, value: V) -> Result<Option<V>, StopReason> {
         match self.position(&key) {
-            Ok(index) => Ok(Some(mem::replace(&mut self.inner[index].1, value))),
+            Ok(index) => Ok(Some(mem::replace(&mut self.inner.inner[index].1, value))),
             Err(index) => {
-                if self.inner.len() == self.inner.capacity() {
+                if self.inner.len() == self.inner.inner.capacity() {
                     self.reserve(1)?;
                 }
-                self.inner.insert(index, (key, value));
+                self.inner.inner.insert(index, (key, value));
                 Ok(None)
             }
         }
@@ -872,34 +902,21 @@ impl<K: Ord + ScratchCharge, V: ScratchCharge> ScratchMap<K, V> {
     /// # Errors
     /// Returns `BudgetExceeded(ScratchBytes)` before any allocation.
     pub fn reserve(&mut self, additional: usize) -> Result<(), StopReason> {
-        let capacity = self.inner.capacity();
-        let Some(target) = grown_capacity(self.inner.len(), capacity, additional) else {
-            return Err(StopReason::BudgetExceeded(Resource::ScratchBytes));
-        };
-        if target == capacity {
-            return Ok(());
-        }
-        let delta = size(target - capacity).saturating_mul(size(<(K, V)>::CHARGE.max(1)));
-        self.meter.charge(delta)?;
-        self.reserved = self.reserved.saturating_add(delta);
-        if let Err(error) = self.inner.try_reserve_exact(target - self.inner.len()) {
-            let _ = self.meter.release(delta);
-            self.reserved = self.reserved.saturating_sub(delta);
-            return Err(reserve_failure(&error));
-        }
-        Ok(())
+        self.inner.reserve(additional)
     }
 
     /// Borrow the value for `key`.
     #[must_use]
     pub fn get(&self, key: &K) -> Option<&V> {
-        self.position(key).ok().map(|index| &self.inner[index].1)
+        self.position(key)
+            .ok()
+            .map(|index| &self.inner.inner[index].1)
     }
 
     /// Remove and return the value for `key`.
     pub fn remove(&mut self, key: &K) -> Option<V> {
         let index = self.position(key).ok()?;
-        Some(self.inner.remove(index).1)
+        Some(self.inner.inner.remove(index).1)
     }
 
     /// Number of entries.
@@ -916,25 +933,15 @@ impl<K: Ord + ScratchCharge, V: ScratchCharge> ScratchMap<K, V> {
 
     /// Iterate entries in key order.
     pub fn iter(&self) -> impl Iterator<Item = &(K, V)> {
-        self.inner.iter()
+        self.inner.as_slice().iter()
     }
 
     /// Take ownership of the plain, key-ordered pairs, permanently retaining
     /// the charge (it no longer describes transient scratch, so it is never
     /// released).
     #[must_use]
-    pub fn into_pairs(mut self) -> Vec<(K, V)> {
-        let inner = mem::take(&mut self.inner);
-        // Keep the charge: zero what `Drop` releases, but let `Drop` run so
-        // the shared meter handle is dropped rather than leaked.
-        self.reserved = 0;
-        inner
-    }
-}
-
-impl<K, V> Drop for ScratchMap<K, V> {
-    fn drop(&mut self) {
-        let _ = self.meter.release(self.reserved);
+    pub fn into_pairs(self) -> Vec<(K, V)> {
+        self.inner.into_vec()
     }
 }
 

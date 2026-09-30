@@ -5,8 +5,9 @@
 The unpublished `purrassist-helper-census` workspace tool finds repeated Rust
 implementations and reports the source locations that need review. Structural
 similarity is a candidate for consolidation, not a proof that two functions have
-identical contracts. Existing findings remain visible: `helpers-ledger.toml`
-contains no sanctioned variants or distinct-group exceptions.
+identical contracts. Real implementation copies are consolidated;
+`helpers-ledger.toml` retains only two documented exact groups of distinct
+public typed APIs.
 
 ## Commands and enforcement
 
@@ -25,13 +26,12 @@ validator fixtures, and independent ledger validation. `helper-census` writes a
 real workspace inspection to `.cache/helper-census/clone-baseline.json`. This
 report does not create an acceptance baseline or suppress any finding.
 `helper-check` enforces the complete ledger and rejects unreviewed groups.
-Ledger validation reports current body/shim groups and cross-package includes
-without accepting or suppressing them. The existing include at
-`crates/wasm-harness/src/lib.rs:34` compiles
-`crates/core/examples/portable_transcript.rs` into the unpublished WASM
-qualification harness. It deliberately shares the same transcript fixture for
-native/WASM equivalence; it remains visible and strict `helper-check` rejects
-it. Porting the detector does not impose a new global include ban in `make check`.
+Ledger validation reports current body/shim groups without silently accepting
+new findings. Strict `helper-check` is mandatory in `make check`. The shared
+core acceptance transcript belongs to the unpublished `wasm-harness` Cargo
+library. Its native/WASI example and browser export use the same function
+through Cargo, with no cross-package source include and no dependency from
+the pure core to qualification tooling.
 
 The Rust `--check` directly enforces body/shim groups and forbidden matches;
 the Python gate additionally checks files, vectors, bench targets, documented
@@ -150,8 +150,8 @@ results are archived in
 [the local qualification report](qualification/helper-census-linux-x86_64.json).
 Its source hashes are explicitly observations after the run, not a reconstructed
 atomic build/start identity. The archived checks record 38 unit tests, 18 Rust
-CLI fixture cases and 86 Python fixture cases, all passing; strict checking
-returns failure for 14 unreviewed groups and the existing transcript include.
+CLI fixture cases and 86 Python fixture cases, all passing; that historical strict check
+returned failure for 14 unreviewed groups and the then-existing transcript include.
 Useful consolidation candidates include:
 
 | Candidate | Locations | Why it merits review |
@@ -168,7 +168,42 @@ validation and literal policies; `ScratchVec::new` and `ScratchMap::new` build
 different collections; error `From` implementations construct different error
 types; `Number::from_unsigned` and `from_count` expose distinct typed inputs.
 Constants such as `0x10000` occur in unrelated Unicode, resource and storage
-contracts. None of these have been automatically merged or sanctioned.
+contracts. These initial findings were reviewed explicitly; see the implemented
+consolidation below.
+
+## Implemented consolidation
+
+Every real implementation duplicate in the initial census now has one home:
+
+- `contract::saturating_size` serves all 23 former conversion helpers in core,
+  host and syntax; `contract::invalid_input` serves the ten string diagnostic
+  constructors. Schema algebra keeps one shared schema-error conversion.
+- `wire::evidence` is public and used directly by receipt and witness surfaces.
+- Markdown owns one logical-line reconstruction, line-start and line-ending
+  implementation. URI formats share percent-escape consumption; pattern
+  evaluators share ASCII word classification.
+- Host Markdown shares index decoding and record publication while preserving
+  operation-specific metadata and resource charge ordering.
+- `ScratchMap` delegates storage growth, release and retained ownership to
+  `ScratchVec<(K, V)>`, preserving sorted map behavior and portable charges.
+- The core acceptance transcript has one unpublished Cargo home, used by all
+  three execution environments.
+
+Strict checking accepts only two exact, documented typed API groups: the
+`u64`/`usize` exact JSON number constructors, and the three distinct public
+error-type conversions from `StopReason`. Neither is shared resource or
+classification logic. Their Rustdoc anchors state their differing contracts;
+adding a member or losing an anchor invalidates the exception. No blanket
+baseline or unenforced clone job is used.
+
+Boundary controls cover mixed newline conventions and virtual-tab padding,
+percent-cursor short-circuit consumption, ASCII/non-ASCII word boundaries,
+evidence spans, differing record diagnostics/charges, and scratch map growth,
+ordering, exhaustion, drop and retained ownership. The actual fresh census and
+strict check are recorded in
+[the consolidation report](qualification/helper-consolidation-linux-x86_64.json).
+Earlier qualification reports retain their original source identities and are
+not relabeled as observations of this refactor.
 
 ## Provenance and dependency boundary
 

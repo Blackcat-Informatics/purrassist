@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Pure candidate-path resolution. Matching never opens or authorizes a file.
+use crate::contract::saturating_size as size;
 use crate::{
     AssistResult, Effort, Governor, Outcome, Receipt, StopReason,
     contract::{Evidence, Inference, InferenceKind, Resource},
@@ -413,7 +414,4 @@ fn extension(path: &str) -> Option<&str> {
     basename(path)
         .rsplit_once('.')
         .map(|(_, extension)| extension)
-}
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
 }

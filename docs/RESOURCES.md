@@ -368,37 +368,37 @@ any flag the wrapper would otherwise add.
 
 ## Recorded baseline
 
-[Linux x86_64 resource baseline](qualification/resources-linux-x86_64.json) was measured from commit `dc23bc81bebacef95f2b84d29dfd20031fdcd44c` with a dirty working tree. The engine source digest `4293b5c9807fe32e55cbe8f24bffff9a2c2046fa1a56bca16656e10cff6c0509` was checked before and after the campaign. The run used the isolated runtime with verified matching loader debug symbols and an empty `DEBUGINFOD_URLS`; it records all three runtime file hashes and executable identities. Raw logs are retained locally in `.cache/resource-logs-q4vz5bs0`. Ordinary build durations describe their observed Cargo cache states; the separate `cold_build` records compilation with empty target and intermediate directories and disabled compiler wrappers.
+[Linux x86_64 resource baseline](qualification/resources-linux-x86_64.json) was measured from commit `300f7cffe188ffbd7b569e6b76476cc27f6ded4a` with a dirty working tree. The engine source digest `659c7a62fa86d072676a2730af8978c7dd4bce0e59d87ecf724858334d13a211` was checked before and after the campaign. The run used the isolated runtime with verified matching loader debug symbols and an empty `DEBUGINFOD_URLS`; it records all three runtime file hashes and executable identities. Raw logs are retained locally in `.cache/resource-logs-awk6qz7k`. Ordinary build durations describe their observed Cargo cache states; the separate `cold_build` records compilation with empty target and intermediate directories and disabled compiler wrappers.
 
 | Workload | Allocation calls | Total allocated bytes | Observed requested-heap peak | Native reported RSS |
 | --- | ---: | ---: | ---: | ---: |
-| empty | 13 | 3,817 | 1,736 | 4,677,632 |
-| schema_compile | 106 | 9,168 | 4,538 | 5,337,088 |
+| empty | 13 | 3,817 | 1,736 | 4,689,920 |
+| schema_compile | 106 | 9,168 | 4,538 | 5,353,472 |
 | json_parse | 1,574 | 236,097 | 173,150 | 5,337,088 |
 | json_composed | 2,541 | 192,835 | 62,611 | 5,636,096 |
-| json_ambiguous | 389 | 33,349 | 15,689 | 5,480,448 |
-| markdown_render | 4,096 | 777,195 | 225,787 | 5,664,768 |
-| markdown_list | 2,811 | 242,688 | 152,036 | 5,689,344 |
-| unicode | 23 | 125,931 | 68,955 | 5,140,480 |
+| json_ambiguous | 389 | 33,349 | 15,689 | 5,455,872 |
+| markdown_render | 4,096 | 777,195 | 225,787 | 5,644,288 |
+| markdown_list | 2,811 | 242,688 | 152,036 | 5,652,480 |
+| unicode | 23 | 125,931 | 68,955 | 5,103,616 |
 | matching | 7,222 | 313,232 | 23,944 | 5,234,688 |
 
 Values include the full benchmark process as described above. They are not per-function allocation counts, portable guarantees, or a production sizing rule.
 
-The release CLI in this snapshot is 9,762,176 bytes. The instrumentable benchmark (12,969,312 bytes) includes retained debug information and is not a release CLI size comparison.
+The release CLI in this snapshot is 9,757,120 bytes. The instrumentable benchmark (12,967,216 bytes) includes retained debug information and is not a release CLI size comparison.
 
 ### Artifact sizes
 
 | Artifact | Bytes |
 | --- | ---: |
-| Native release CLI (`purrassist-cli`) | 9,762,176 |
-| `purrassist-core` `wasm32-wasip1` (`portable-core`) | 1,998,896 |
+| Native release CLI (`purrassist-cli`) | 9,757,120 |
+| `purrassist-core` `wasm32-wasip1` (`portable-core`) | 1,998,277 |
 | `purrassist-syntax` `wasm32-wasip1` (`portable-syntax`) | 5,223,153 |
 | `purrassist-host` `wasm32-wasip1` (`portable-host`) | 1,467,114 |
-| `wasm-harness` `wasm32-unknown-unknown` | 2,120,547 |
+| `wasm-harness` `wasm32-unknown-unknown` | 1,937,506 |
 
 ### Cold build
 
-The recorded release CLI cold build took 20.968 seconds and produced 35 compiler artifacts, with 0 reused artifacts. Both compiler wrapper layers were disabled; the target and intermediate directories were new and empty. Registry sources and OS page caches remained available. The resulting executable is 9,673,768 bytes with SHA-256 `4961cbea4bac723d2f05a302465597597c3334bbd95d07e285c8fb9d97f06bc1`.
+The recorded release CLI cold build took 27.364 seconds and produced 35 compiler artifacts, with 0 reused artifacts. Both compiler wrapper layers were disabled; the target and intermediate directories were new and empty. Registry sources and OS page caches remained available. The resulting executable is 9,668,520 bytes with SHA-256 `24ea7dd813a878666c1d304740ec49a43a5ef0c045b071d135055b8d6f3aa053`.
 
 ### Latency workload samples (selected)
 
@@ -406,19 +406,19 @@ Full detail is in the committed report. Each row measures 200 samples in its own
 
 | Core workload | Median ns | p95 ns | Allocation calls | Peak live bytes | Peak RSS bytes |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| schema_compile | 3,690 | 4,070 | 93 | 3,928 | 5,771,264 |
-| schema_recover | 74,198 | 79,478 | 2,528 | 62,005 | 6,303,744 |
-| matching_resolve | 464,916 | 472,305 | 3,684 | 19,838 | 5,677,056 |
-| edits_fuzzy | 342,059 | 348,679 | 12,980 | 12,676 | 5,713,920 |
-| markdown_render | 16,159 | 18,899 | 450 | 24,840 | 6,021,120 |
+| schema_compile | 3,200 | 3,450 | 93 | 3,928 | 5,754,880 |
+| schema_recover | 68,988 | 74,337 | 2,528 | 62,005 | 6,197,248 |
+| matching_resolve | 430,966 | 448,736 | 3,684 | 19,838 | 5,722,112 |
+| edits_fuzzy | 297,341 | 308,080 | 12,980 | 12,676 | 5,664,768 |
+| markdown_render | 16,700 | 18,799 | 450 | 24,840 | 5,947,392 |
 
 | Syntax workload | Median ns | p95 ns | C allocation calls | Rust allocation calls | C peak bytes | Rust peak growth bytes | Peak RSS bytes |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| python | 197,644 | 209,634 | 573 | 59 | 56,720 | 4,760 | 3,416,064 |
-| rust | 167,575 | 175,964 | 480 | 42 | 48,896 | 3,048 | 3,862,528 |
-| javascript | 182,685 | 191,974 | 476 | 25 | 48,360 | 2,264 | 3,420,160 |
-| typescript | 230,033 | 234,802 | 652 | 42 | 64,040 | 3,184 | 4,268,032 |
-| tsx | 211,274 | 218,404 | 545 | 25 | 53,032 | 2,288 | 4,423,680 |
+| python | 177,255 | 184,354 | 573 | 59 | 56,720 | 4,760 | 3,457,024 |
+| rust | 152,015 | 160,875 | 480 | 42 | 48,896 | 3,048 | 3,936,256 |
+| javascript | 162,175 | 171,545 | 476 | 25 | 48,360 | 2,264 | 3,436,544 |
+| typescript | 202,783 | 212,293 | 652 | 42 | 64,040 | 3,184 | 4,263,936 |
+| tsx | 185,994 | 196,384 | 545 | 25 | 53,032 | 2,288 | 4,378,624 |
 
 C and Rust peak values are measured separately and must not be added as a simultaneous peak.
 

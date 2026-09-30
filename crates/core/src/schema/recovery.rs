@@ -3,6 +3,7 @@
 //! Composed, best-first recovery with whole-schema validation and explicit guesses.
 mod proposals;
 use super::Schema;
+use crate::contract::saturating_size as size;
 use crate::contract::{
     AssistResult, Budget, Effort, Evidence, Governor, Inference, InferenceKind, Loss, Outcome,
     Receipt, Resource, SourceSpan, StopReason, Validation,
@@ -513,9 +514,6 @@ impl Search<'_> {
         *at_mut(&mut candidate.node, route) = replacement;
         self.enqueue(candidate)
     }
-}
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
 }
 /// A conservative byte-size estimate for a whole candidate, used to charge
 /// scratch before `.clone()`-ing it while exploring a proposal.

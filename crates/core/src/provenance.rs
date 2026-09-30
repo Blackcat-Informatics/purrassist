@@ -115,16 +115,13 @@
 //! # Ok::<(), purrassist_core::StopReason>(())
 //! ```
 
+use crate::contract::saturating_size as size;
 use crate::contract::{
     AlternativeReceipt, Evidence, Governor, Inference, Loss, Resource, ScratchMap, ScratchVec,
     StopReason,
 };
 use crate::digest::Digest;
 use std::collections::BTreeSet;
-
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
-}
 
 /// Stable identity of one deduplicated node within one [`Forest`].
 ///

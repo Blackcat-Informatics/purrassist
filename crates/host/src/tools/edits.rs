@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Decode selected plans and expose governed buffer application without file effects.
+use purrassist::contract::saturating_size as size;
 use purrassist::{
     AssistResult, CancellationToken, Governor, Outcome, Receipt, StopReason,
     contract::{Evidence, Resource},
@@ -205,7 +206,4 @@ fn admit_output(
 
 fn applied(value: &AppliedEdit) -> Node {
     value.to_node()
-}
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
 }

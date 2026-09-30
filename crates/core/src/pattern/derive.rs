@@ -22,7 +22,7 @@
 //! `\b`/`\B` are resolved against a per-position [`Ctx`] (shared by every
 //! live derivation at that position, since they depend only on absolute
 //! text position) rather than folded permanently into the term.
-use super::ast::Node;
+use super::{ast::Node, is_word};
 use crate::contract::{Governor, Resource, ScratchMap, ScratchVec, StopReason};
 use std::collections::BTreeMap;
 
@@ -71,9 +71,6 @@ struct Ctx {
     at_end: bool,
     prev_word: bool,
     next_word: bool,
-}
-const fn word(character: char) -> bool {
-    character.is_ascii_alphanumeric() || character == '_'
 }
 
 /// A resizable, governed [`Term`] store shared by the initial (compile-time)
@@ -442,7 +439,7 @@ pub(super) fn is_match(
             at_start: i == 0,
             at_end: next_char.is_none(),
             prev_word,
-            next_word: next_char.is_some_and(word),
+            next_word: next_char.is_some_and(is_word),
         };
         if nullable(&arena, &compiled.classes, live, ctx) {
             return Ok(true);
@@ -463,7 +460,7 @@ pub(super) fn is_match(
             governor,
         )?;
         live = mk_or(stepped, compiled.root, &mut arena)?;
-        prev_word = word(character);
+        prev_word = is_word(character);
     }
     Ok(false)
 }
@@ -551,7 +548,4 @@ impl From<NullCtx> for Ctx {
 }
 pub(super) fn minterm_of(cuts: &[u32], code: u32) -> (usize, u32) {
     minterm_representative(cuts, code)
-}
-pub(super) const fn is_word(character: char) -> bool {
-    word(character)
 }

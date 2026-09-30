@@ -7,9 +7,9 @@
     "llvm-cov": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1-rust-1.100.0-nightly\n  Optimized build.",
     "llvm-profdata": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1-rust-1.100.0-nightly\n  Optimized build."
   },
-  "source_commit": "22d33135ed43a438b093a4bf996956109408a30f",
+  "source_commit": "300f7cffe188ffbd7b569e6b76476cc27f6ded4a",
   "source_dirty": true,
-  "nonignored_file_tree_sha256": "c1de24c670bc0ee4831e22ac1128c2092471f0b113b8666fe7bb744899022606",
+  "nonignored_file_tree_sha256": "0f10155939987582ab4cf4e422f2d4e13f167d18311d5bf177d85c132b2adb0b",
   "build": {
     "command": [
       "cargo",
@@ -31,13 +31,13 @@
       "profile.dev.overflow-checks=true",
       "--message-format=json"
     ],
-    "sha256": "bfd55cc8cd60174efff27c4065e29d9b32ffffe2a606fb4e49735f228364eb90",
+    "sha256": "f2fd68b5d28054f0939a45c6b76a6801ea06e5fccc38cf9310afd4690bf9d50c",
     "inherited_rustflags_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "appended_rustflags": [
       "-C",
       "instrument-coverage"
     ],
-    "engine_source_sha256": "70e41ff78819f3e983f2db66c6f0d4380cfd831a9c13fb361fd7999a30e4a3b3",
+    "engine_source_sha256": "eb806ebd7eb2b991ca08a34177a49c1900d1be7b3a52122a740e102578fd3cc6",
     "harness_source_sha256": "816f8c0835e330b32d206af2165c9bf8e84784057f15e4596cf148ec27ddaa95",
     "runner_source_sha256": "79d1a3e268bf90dfe76ed023c7b1fb92daf59be68977d2dcaf478c392c57888d"
   },
@@ -84,28 +84,28 @@
     {
       "execution": 0,
       "sha256": "a7f45ec94b54c5a394771c1eb9442732811153701adffe025b4d14bbe3a6e5ad",
-      "new_regions": 1446,
+      "new_regions": 1437,
       "parent_corpus_index": null,
       "bytes": 25
     },
     {
       "execution": 1,
       "sha256": "e35e3b161a1cd52de52dd992aeada98cabe7ad8366cd07b26c19941e4943dd94",
-      "new_regions": 286,
+      "new_regions": 283,
       "parent_corpus_index": null,
       "bytes": 20
     },
     {
       "execution": 2,
       "sha256": "bdd54c4a39fad1a27af0d117429ab6de9bdfe11fa981d23986a6d5ecb9363a0b",
-      "new_regions": 278,
+      "new_regions": 275,
       "parent_corpus_index": null,
       "bytes": 33
     },
     {
       "execution": 3,
       "sha256": "715aa604c9510d4f6c1535b1fb5ee91ddeeb8f55b99e259aa58d308f39a688b6",
-      "new_regions": 405,
+      "new_regions": 402,
       "parent_corpus_index": null,
       "bytes": 81
     },
@@ -140,14 +140,14 @@
     {
       "execution": 8,
       "sha256": "cc1457146006df1faef7d52ac3fe003f888a42dd7844b4f747c3c8e8d1deb136",
-      "new_regions": 839,
+      "new_regions": 813,
       "parent_corpus_index": null,
       "bytes": 29
     },
     {
       "execution": 9,
       "sha256": "907613c818be523ff6b569d9a60502f6ae7f711d0388e9858c7714439fac0dc1",
-      "new_regions": 252,
+      "new_regions": 249,
       "parent_corpus_index": null,
       "bytes": 46
     },
@@ -448,7 +448,7 @@
     {
       "execution": 916,
       "sha256": "196263967f7f50c936329f0f6d1ca53b810ebc716696397c9f66e4774b32fd1a",
-      "new_regions": 205,
+      "new_regions": 202,
       "parent_corpus_index": 9,
       "bytes": 50
     },
@@ -467,6 +467,6 @@
       "bytes": 84
     }
   ],
-  "regions": 4610,
+  "regions": 4560,
   "current_execution": 1015
 }

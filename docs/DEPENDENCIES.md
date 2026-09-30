@@ -268,3 +268,10 @@ execution; original/earlier/final binaries and full answers remain distinct.
 Actual controls and the full official corpus execute for each campaign. This
 supersedes the earlier narrow email HTML projection for new reports, preserving
 all historical observations unchanged and retaining the same upstream licenses.
+
+The unpublished `wasm-harness` owns the shared core acceptance transcript.
+Its native/WASI `portable-core` example and browser export use that Cargo
+library directly. The harness depends on core; core has no dependency on the
+harness. Adding its `rlib` output beside the browser `cdylib` adds no third-party
+or published-package dependency. Artifact reports retain the tested engine's
+logical `purrassist-core` label while recording the measured module identity.

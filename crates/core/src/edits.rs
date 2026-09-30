@@ -7,6 +7,7 @@
 //! `apply`/`invert`/`compose`/`commute`/`rebase` algebra lives in
 //! [`crate::patch`]. This module keeps the exact/fuzzy/unified planning
 //! operations that produce one.
+use crate::contract::saturating_size as size;
 use crate::{
     AssistResult, Budget, Effort, Governor, Outcome, Receipt, StopReason,
     contract::{Evidence, Resource, SourceSpan},
@@ -160,7 +161,4 @@ fn populate_locate_alternatives(
     receipt.evidence = published.evidence;
     receipt.alternatives = published.alternatives;
     Ok(crate::provenance::permute(&outputs, &published.order))
-}
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
 }

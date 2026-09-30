@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Section paths and container-aware body insertion.
-use super::{Block, BlockKind, Document, invalid, shift, size};
+use super::{Block, BlockKind, Document, shift, size};
+use crate::contract::invalid_input as invalid;
+use crate::markdown::{line_start, logical_text};
 use crate::{
     Governor, StopReason,
     contract::Resource,
@@ -497,20 +499,7 @@ pub(in crate::markdown) fn same_shape(
             }
         })
 }
-fn logical_text(source: &str, block: &Block) -> String {
-    let mut text = String::new();
-    for (line, padding) in block.lines.iter().zip(&block.line_padding) {
-        text.extend(std::iter::repeat_n(' ', *padding));
-        text.push_str(&source[line.clone()]);
-    }
-    text
-}
 
-pub(super) fn line_start(source: &str, offset: usize) -> usize {
-    source[..offset]
-        .rfind(['\r', '\n'])
-        .map_or(0, |position| position + 1)
-}
 pub(in crate::markdown) fn prefix(
     doc: &Document,
     path: &[usize],
@@ -556,7 +545,9 @@ pub(in crate::markdown) fn prefix(
                     crate::markdown::containers::item_prefix(text.trim_end_matches(['\r', '\n']));
                 result.push_str(&" ".repeat(indent));
             }
-            _ => return Err(invalid("section ancestor is not a container")),
+            _ => {
+                return Err(invalid("section ancestor is not a container"));
+            }
         }
     }
     Ok(result)

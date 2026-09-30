@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! GFM cell edits preserve source delimiters and validate the resulting table.
 use super::{BlockKind, Document, cell_ranges, line, size};
+use crate::contract::invalid_input as invalid;
 use crate::{
     Governor, StopReason,
     contract::Resource,
@@ -184,7 +185,4 @@ fn materialize_cell(
     }
     result.push_str(suffix);
     result
-}
-fn invalid(message: &str) -> StopReason {
-    StopReason::InvalidInput(message.into())
 }

@@ -21,7 +21,8 @@ if actual_node_version != 'v' + node_version:
 
 def artifact(package, target=None, environment=None):
     example = 'portable-' + package.removeprefix('purrassist-')
-    command = ['cargo', 'build', '-p', package, '--example', example, '--locked', '--message-format=json']
+    cargo_package = 'wasm-harness' if package == 'purrassist-core' else package
+    command = ['cargo', 'build', '-p', cargo_package, '--example', example, '--locked', '--message-format=json']
     if target:
         command += ['--target', target]
     result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE, check=True, env=environment)

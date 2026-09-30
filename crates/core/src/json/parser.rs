@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 use super::{Member, Node, Value};
+use crate::contract::saturating_size as size;
 use crate::contract::{Budget, Governor, Resource, ScratchCharge, StopReason};
 use core::fmt;
 
@@ -21,6 +22,19 @@ impl fmt::Display for ParseError {
 impl std::error::Error for ParseError {}
 
 /// Parsing distinguishes malformed input from exhausted resources.
+///
+/// The `From<StopReason>` conversion preserves the exact reason in this JSON
+/// error type. Pattern compilation and schema compilation use their own
+/// nominal error enums, whose syntax diagnostics have different contracts:
+/// JSON reports original byte offsets, patterns report character offsets,
+/// and schemas report schema locations. These typed conversions do not
+/// classify, relabel or swallow a resource outcome.
+///
+/// ```
+/// use purrassist_core::{StopReason, json::ParseFailure};
+/// let failure = ParseFailure::from(StopReason::Cancelled);
+/// assert_eq!(failure, ParseFailure::Resource(StopReason::Cancelled));
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ParseFailure {
     /// Input does not satisfy JSON syntax.
@@ -76,9 +90,6 @@ struct Parser<'a, 'g> {
     input: &'a str,
     position: usize,
     governor: &'g mut Governor,
-}
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
 }
 impl Parser<'_, '_> {
     fn fail<T>(&self, message: &str) -> Result<T, ParseFailure> {

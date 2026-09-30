@@ -7,9 +7,9 @@
     "llvm-cov": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1-rust-1.100.0-nightly\n  Optimized build.",
     "llvm-profdata": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1-rust-1.100.0-nightly\n  Optimized build."
   },
-  "source_commit": "79e5d3705818a436dc1113f6619c8e1ba1efa071",
+  "source_commit": "300f7cffe188ffbd7b569e6b76476cc27f6ded4a",
   "source_dirty": true,
-  "nonignored_file_tree_sha256": "c1de24c670bc0ee4831e22ac1128c2092471f0b113b8666fe7bb744899022606",
+  "nonignored_file_tree_sha256": "c05e353654e3a352744f8c581b14c2c540deb54cf741d3661837954695ae1d69",
   "build": {
     "command": [
       "cargo",
@@ -31,13 +31,13 @@
       "profile.dev.overflow-checks=true",
       "--message-format=json"
     ],
-    "sha256": "02ed904ea20b5e5844e5a04dba7ff1060fe743da5fd92221114a2327cc252bde",
+    "sha256": "3d1a5acb5bd29afd85292bde4ea3be2ce6b130df13811c1469d293cc421b9cc0",
     "inherited_rustflags_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "appended_rustflags": [
       "-C",
       "instrument-coverage"
     ],
-    "engine_source_sha256": "70e41ff78819f3e983f2db66c6f0d4380cfd831a9c13fb361fd7999a30e4a3b3",
+    "engine_source_sha256": "eb806ebd7eb2b991ca08a34177a49c1900d1be7b3a52122a740e102578fd3cc6",
     "harness_source_sha256": "71ae89602fb2712f030c8bff86cd93fb56f5d4892817ba49004091b698771c7a",
     "runner_source_sha256": "79d1a3e268bf90dfe76ed023c7b1fb92daf59be68977d2dcaf478c392c57888d"
   },
@@ -84,7 +84,7 @@
     {
       "execution": 0,
       "sha256": "26a78cdae4555568630c51cd3dc32cd4a9d8457c4b0272b3ddff1e7d0143ae30",
-      "new_regions": 484,
+      "new_regions": 478,
       "parent_corpus_index": null,
       "bytes": 25
     },
@@ -98,7 +98,7 @@
     {
       "execution": 2,
       "sha256": "a479a9064375afaf2cc3cd8b888bcdb201ff37b748cbb4d65bee4f81ebfbf207",
-      "new_regions": 353,
+      "new_regions": 327,
       "parent_corpus_index": null,
       "bytes": 29
     },
@@ -117,6 +117,6 @@
       "bytes": 21
     }
   ],
-  "regions": 848,
+  "regions": 816,
   "current_execution": 1002
 }

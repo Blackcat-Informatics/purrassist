@@ -34,9 +34,14 @@ mod canon;
 mod generate;
 mod merge;
 
-use super::Schema;
+use super::{Schema, SchemaError};
 use crate::contract::{Evidence, Governor, StopReason};
 use crate::json::Node;
+
+/// Preserve a compilation diagnostic when witness search rejects malformed input.
+fn invalid(error: &SchemaError) -> StopReason {
+    crate::contract::invalid_input(error.to_string())
+}
 
 /// Closed-form refutation evidence for [`WitnessOutcome::Unsatisfiable`].
 #[derive(Clone, Debug, PartialEq, Eq)]

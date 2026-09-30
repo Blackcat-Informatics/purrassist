@@ -19,6 +19,7 @@
 //! candidate with explicit evidence, no matter how similar the surrounding
 //! text is, unless one of the candidate's caller-declared aliases matches the
 //! query exactly. See `docs/MATCHING-QUALITY.md` for the curated evidence set.
+use crate::contract::saturating_size as size;
 use crate::contract::{
     AssistResult, Budget, Effort, Evidence, Governor, Outcome, Receipt, Resource, ScratchCharge,
     StopReason,
@@ -1010,9 +1011,6 @@ fn diacritic_key(key: &str) -> String {
         .chars()
         .filter(|character| !general_category(*character).starts_with('M'))
         .collect()
-}
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
 }
 fn fraction(numerator: usize, denominator: usize, scale: u32) -> u32 {
     if denominator == 0 {

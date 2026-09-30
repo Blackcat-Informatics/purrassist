@@ -266,11 +266,13 @@ def cargo_json_artifacts(command, environment=None):
 
 
 def example_artifact(package, target=None, environment=None):
-    """Build `portable-<suffix>`, the fixed-transcript example every
-    portable crate (core/syntax/host) exposes, exactly like
-    scripts/check-wasm.py's `artifact()`."""
+    """Build the fixed transcript for the logical core/syntax/host engine.
+    Core's fixture belongs to the unpublished wasm-harness Cargo library;
+    syntax and host own their examples. Keep the tested-engine report keys.
+    """
     example = 'portable-' + package.removeprefix('purrassist-')
-    command = ['cargo', 'build', '-p', package, '--example', example, '--release', '--locked']
+    cargo_package = 'wasm-harness' if package == 'purrassist-core' else package
+    command = ['cargo', 'build', '-p', cargo_package, '--example', example, '--release', '--locked']
     if target:
         command += ['--target', target]
     artifacts = cargo_json_artifacts(command, environment)

@@ -1,13 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-//! Deterministic native/WASI/wasm32-unknown-unknown acceptance transcript body.
-//!
-//! Extracted from `portable.rs` (`portable-core`) so `crates/wasm-harness` can
-//! produce byte-identical transcript JSON for wasm32-unknown-unknown without
-//! adding public API to `purrassist-core`: it is included by `#[path]` into
-//! both `crates/core/examples/portable.rs` and `crates/wasm-harness/src/lib.rs`,
-//! each of which depends on `purrassist_core` and can therefore use the same
-//! `purrassist_core::` imports below unmodified.
+//! Single-source acceptance transcript shared through the harness Cargo library.
+//! Native, WASI and browser-WASM callers exercise the actual core engines.
 use purrassist_core::{
     Budget, CancellationToken, Effort, Governor, Outcome, StopReason,
     contract::Resource,
@@ -25,19 +19,18 @@ use purrassist_core::{
     wire::{array, integer, object, string},
 };
 
-/// Build the exact JSON transcript body every portable acceptance target
-/// (native, wasm32-wasip1, wasm32-unknown-unknown) exercises and compares
-/// byte-for-byte. Callers prepend their own deterministic digest line.
+/// Build the exact JSON transcript exercised by every portable target.
 ///
-/// `pub(crate)` is necessary (the crate root that includes this module via
-/// `#[path]` needs to call it) but looks redundant to Clippy examining only
-/// this one compilation of the file, since the enclosing module is private
-/// either way: this exact source is compiled twice, once as a private
-/// submodule of the `portable-core` example crate and once as a private
-/// submodule of the `wasm-harness` crate, and `pub` alone would instead trip
-/// `unreachable_pub` in both (nothing outside either crate reaches it).
-#[allow(clippy::redundant_pub_crate)]
-pub(crate) fn transcript_json() -> String {
+/// ```
+/// let json = wasm_harness::transcript_json();
+/// assert!(purrassist_core::json::parse(&json).is_ok());
+/// ```
+///
+/// # Panics
+/// Panics if a fixture's internal invariant fails. This is a qualification
+/// fixture, not a production recovery operation.
+#[must_use]
+pub fn transcript_json() -> String {
     let cancellation = CancellationToken::new();
     let cancelled = Governor::with_cancellation(Budget::default(), cancellation.clone());
     cancellation.cancel();

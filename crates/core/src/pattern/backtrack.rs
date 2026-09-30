@@ -10,13 +10,9 @@
 //! partially cooperate on one search. Charges `Resource::Work` per
 //! exploration step, matching the pre-split engine's semantics exactly (see
 //! `docs/QUALIFICATION.md`).
-use super::ast::Node;
 use super::unicode::interval_contains;
+use super::{ast::Node, is_word};
 use crate::contract::{Governor, Resource, StopReason};
-
-const fn word(character: char) -> bool {
-    character.is_ascii_alphanumeric() || character == '_'
-}
 
 /// Which of `indices` (a numeric backreference's single index, or every
 /// index sharing a duplicated name) has actually captured something on
@@ -112,8 +108,10 @@ fn evaluate(
             let before = position
                 .checked_sub(1)
                 .and_then(|index| text.get(index))
-                .is_some_and(|character| word(*character));
-            let after = text.get(position).is_some_and(|character| word(*character));
+                .is_some_and(|character| is_word(*character));
+            let after = text
+                .get(position)
+                .is_some_and(|character| is_word(*character));
             Ok(single((before != after) == *positive, state, 0))
         }
         Node::Concat(items) => {

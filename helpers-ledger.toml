@@ -1,5 +1,19 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-# Structural helper ledger. No findings have been sanctioned or baselined.
-# --validate-ledger checks declarations; --check rejects every unreviewed group.
+# Exact, documented typed API distinctions. All real implementation copies
+# are consolidated; adding a member invalidates these reviewed exact groups.
 # Schema and review criteria: docs/HELPER-CENSUS.md.
+
+[[distinct]]
+kind = "shim"
+members = ["purrassist_core::json::number::Number::from_unsigned", "purrassist_core::json::number::Number::from_count"]
+criterion = "a"
+anchor = "purrassist_core::json::number::Number::from_count"
+reason = "Distinct exact integer input domains: u64 and target-sized usize. Each preserves its full decimal value without narrowing or saturating. The public constructor signatures are part of the documented contract."
+
+[[distinct]]
+kind = "shim"
+members = ["purrassist_core::json::parser::ParseFailure::from", "purrassist_core::pattern::PatternCompileError::from", "purrassist_core::schema::build::CompilationError::from"]
+criterion = "a"
+anchor = "purrassist_core::json::parser::ParseFailure"
+reason = "Distinct public nominal error types for JSON parsing, pattern compilation and schema compilation. Each From<StopReason> preserves the exact reason in its own Resource variant; merging the variants would change the public result contract."

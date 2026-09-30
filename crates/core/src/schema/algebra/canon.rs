@@ -22,13 +22,11 @@
 //! opaque fallback branch never lets an opaque, unprovable branch launder a
 //! false unsatisfiability claim: see `super::generate::attempt` on
 //! [`Canon::Or`].
-use super::super::{Schema, SchemaError};
+use super::super::Schema;
+use super::invalid;
+use crate::contract::saturating_size as size;
 use crate::contract::{Governor, Resource, StopReason};
 use crate::json::{Node, Value};
-
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
-}
 
 /// Which numbers a merged `type` constraint admits, distinguishing a bare
 /// `"number"` (any) from `"integer"` (mathematically integral) from the
@@ -274,10 +272,6 @@ pub(super) enum Canon {
     /// entered/left discipline `super::super::evaluate` applies to every
     /// location it evaluates, not only explicit `$ref` targets.
     Scoped(usize, Box<Self>),
-}
-
-fn invalid(error: &SchemaError) -> StopReason {
-    StopReason::InvalidInput(error.to_string())
 }
 
 /// Wrap `canon` (built for schema location `id`) so generation enters
