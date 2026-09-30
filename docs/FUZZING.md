@@ -713,7 +713,7 @@ Its actual launch commit and dirty-state metadata remain unchanged. The later
 helper consolidation changed the core's guarded source identity; the smoke gate
 below records that distinct build without rewriting these baselines.
 
-### Final all-target smoke
+### Helper-consolidation all-target smoke
 
 After helper consolidation, the `env -u TARGET make fuzz` gate exited zero
 after its real coverage feedback test and all eight default 1,000-mutation
@@ -721,7 +721,7 @@ campaigns, with no `FUZZ_ARGS` overrides. The
 [smoke evidence index](qualification/fuzz-smoke-linux-x86_64.json) records the
 actual invocation, observed launch/build identities and SHA-256 of each unedited
 report; the reports retain every tool identity and transformation record.
-All engine/harness/runner hashes still matched the current frozen source after
+All engine/harness/runner hashes still matched that phase's frozen source after
 completion. All eight reports retain the observed launch commit
 `300f7cffe188ffbd7b569e6b76476cc27f6ded4a` and dirty state, with guarded engine
 SHA-256 `eb806ebd7eb2b991ca08a34177a49c1900d1be7b3a52122a740e102578fd3cc6`.
@@ -758,3 +758,33 @@ registered LLVM coverage tooling, with no skips or alternate coverage path; the 
 command. Bounded campaigns cannot establish absence of bugs, complete
 recovery quality, or whole-crate coverage. Observations apply only to the
 exercised budget/effort profiles, input sizes, oracles, and campaign lengths.
+
+
+### Stage 2 repair qualification
+
+The normal `make fuzz` target passed its coverage-feedback test and all eight
+default 1,000-mutation campaigns after the Stage 2 repairs. The
+[Stage 2 evidence index](qualification/fuzz-stage2-linux-x86_64.json) binds each
+byte-exact report and its observed source, executable, harness and runner identities.
+No caller environment overrides or alternate Cargo launchers were used.
+
+All reports record launch commit `66b3756776a072af1889596ae98a5faa5a50cea6` and guarded engine
+SHA-256 `c22f2b14572fb2f684349840e65684d7b6550767dee7fe5f0d9c596074278872`. Their actual clean/dirty flags are retained: documentation changed between campaign launches, while guarded engine inputs remained fixed.
+These observations are distinct from the earlier baselines.
+
+| Target | Executions | Differential checks | Regions | Mismatches | Crashes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| [json](qualification/fuzz-stage2-json-linux-x86_64.json) | 1,021 | 0 | 3,744 | 0 | 0 |
+| [markdown](qualification/fuzz-stage2-markdown-linux-x86_64.json) | 1,015 | 981 | 5,262 | 0 | 0 |
+| [schema](qualification/fuzz-stage2-schema-linux-x86_64.json) | 1,016 | 0 | 4,956 | 0 | 0 |
+| [pattern](qualification/fuzz-stage2-pattern-linux-x86_64.json) | 1,011 | 330 | 2,132 | 0 | 0 |
+| [unified](qualification/fuzz-stage2-unified-linux-x86_64.json) | 1,003 | 0 | 604 | 0 | 0 |
+| [fuzzy](qualification/fuzz-stage2-fuzzy-linux-x86_64.json) | 1,003 | 0 | 816 | 0 | 0 |
+| [matching](qualification/fuzz-stage2-matching-linux-x86_64.json) | 1,004 | 0 | 1,362 | 0 | 0 |
+| [patch](qualification/fuzz-stage2-patch-linux-x86_64.json) | 1,003 | 0 | 435 | 0 | 0 |
+
+The campaigns executed 8,076 inputs with zero crashes, mismatches or declared
+resource non-results. Markdown completed 981 differential comparisons; patterns
+completed 330, with 77 reference rejections counted separately and no reference
+timeouts. Finite campaigns establish their recorded cases and do not establish
+absence of arbitrary defects.

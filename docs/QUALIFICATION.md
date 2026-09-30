@@ -198,3 +198,17 @@ byte-exact restoration. Pipe writes and response reads have bounded timeouts,
 with child cleanup tested for missing responses, partial output, and stderr
 flooding. Until the real acceptance steps execute, 0.1.0 is not
 claimed as published and issue #1 remains open.
+
+
+## Stage 2 local integration record
+
+The repaired engines passed the normal `make check`, `make syntax-oracles`,
+`make wasm-test` and all-target `make fuzz` commands. Fresh source-bound
+[smoke reports](qualification/fuzz-stage2-linux-x86_64.json),
+[resource measurements](qualification/resources-stage2-linux-x86_64.json) and
+[recovery measurements](qualification/recovery-bench-stage2-linux-x86_64.json)
+record their actual observed identities; existing phase reports are unchanged.
+The resource measurements passed the unchanged published limits. These commands
+used the normal project framework without caller environment overrides or
+alternate Cargo launchers. This local record is separate from registry publication
+and downloaded-package acceptance in the approved release sequence.

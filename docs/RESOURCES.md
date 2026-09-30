@@ -523,3 +523,27 @@ Rationale per category:
   }
 }
 ```
+
+
+## Stage 2 repair measurements
+
+The normal project `make resources RESOURCE_ARGS=--portable-runtime` target
+completed after the Stage 2 repairs. The
+[Stage 2 resource report](qualification/resources-stage2-linux-x86_64.json)
+and [recovery benchmark](qualification/recovery-bench-stage2-linux-x86_64.json)
+retain the observed source, tool, runtime and executable identities. Earlier
+baselines remain byte-identical. No caller environment overrides or alternate
+Cargo launchers were used; profiling and cold-build isolation follow the existing
+measurement framework.
+
+The report records commit `66b3756776a072af1889596ae98a5faa5a50cea6` with a dirty documentation
+tree and guarded engine SHA-256
+`132196375955100e6f289a314d3f51cb1f41bf9e8d2d530fb5f1926f95d96a83`. Its nine profiles,
+25 core latency cases, five syntax cases, six recovery cases and five artifact
+sizes passed the unchanged documented limits. Strict native, Memcheck and Massif
+startup/output checks completed, including every workload's correctness checks.
+
+The framework's cold CLI build took 21.671 seconds, built
+35 artifacts and reused 0. Its executable is 9,694,344 bytes
+with SHA-256 `f6621c50e03cc55e0cbf24fe715052eb4b9ebdfc19cfd24a0a230ffbd9be3190`. This is an
+observation of the recorded machine and build conditions, not a speedup claim.
