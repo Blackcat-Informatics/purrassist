@@ -215,7 +215,9 @@ impl Document {
             return Err(applied.receipt.stopped);
         };
         let updated = Self::parse(&applied.text, governor)?;
-        validate_renumbering(path, siblings, &updated, lo, hi, start)?;
+        governor.charge(Resource::Work, size(self.source.len()).saturating_mul(4))?;
+        let _lease = governor.lease_scratch(size(self.source.len()).saturating_mul(8))?;
+        validate_renumbering(&self.source, path, siblings, &updated, lo, hi, start)?;
         Ok(plan)
     }
 }
@@ -224,6 +226,7 @@ impl Document {
 /// shifted, for the following ones, by the digit-width change), and every
 /// renumbered item keeps its exact body and checkbox state.
 fn validate_renumbering(
+    source: &str,
     path: &[usize],
     siblings: &[Block],
     updated: &Document,
@@ -236,7 +239,7 @@ fn validate_renumbering(
     } else {
         &updated.block_at(&path[..path.len() - 1])?.children
     };
-    if updated_siblings.len() < siblings.len() || updated_siblings[..lo] != siblings[..lo] {
+    if updated_siblings.len() != siblings.len() || updated_siblings[..lo] != siblings[..lo] {
         return Err(invalid("renumbering changed preceding blocks"));
     }
     for (offset, item) in siblings[lo..hi].iter().enumerate() {
@@ -247,7 +250,15 @@ fn validate_renumbering(
             ordinal: Some(start + offset as u64),
             checked,
         };
-        if updated_siblings[lo + offset].kind != expected {
+        let updated_item = &updated_siblings[lo + offset];
+        if updated_item.kind != expected
+            || !sections::same_shape(
+                source,
+                &item.children,
+                &updated.source,
+                &updated_item.children,
+            )
+        {
             return Err(invalid(
                 "renumbering changed an item's body or checkbox state",
             ));
