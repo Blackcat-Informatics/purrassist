@@ -45,7 +45,7 @@ literals directly (no JavaScript engine is linked or invoked). None of this
 data is relicensed as first-party code.
 
 The accepted grammar-parser exception is Tree-sitter and its Python, Rust,
-JavaScript, and TypeScript grammar family. The pinned integration currently resolves 10 external runtime packages and 27
+JavaScript, and TypeScript grammar family. The pinned integration currently resolves 12 external runtime packages and 29
 packages in the full Cargo graph. Tree-sitter also brings regex/query support,
 a small language ABI crate, and a streaming iterator; its C build brings `cc`,
 platform compiler discovery, and a JSON-driven generation toolchain. Exact
@@ -156,9 +156,45 @@ field). Every `unsafe` block carries a `SAFETY` comment. No allocator
 wrapper, client request, or profiler library is linked for this; it is
 first-party code calling public, documented Win32 APIs.
 
-Coverage-guided JSON qualification uses installed LLVM 22.1.8 `llvm-cov` and
-`llvm-profdata` tools with the Rust compiler's matching coverage runtime. Only
-the qualification example is instrumented. LLVM's Apache-2.0 WITH LLVM-exception
-notice and exact tool version are recorded in `vendor/tooling.json`. The
-first-party mutation runner uses Python's standard library; it adds no Cargo
-dependency, vendored fuzzing engine, or instrumentation to production crates.
+Coverage-guided and differential qualification (`scripts/fuzz.py --target
+<json|markdown|schema|pattern|unified|fuzzy|matching|patch>`, see
+`docs/FUZZING.md`) uses the `llvm-tools` rustup component's `llvm-cov` and
+`llvm-profdata` (LLVM 23.1.1, resolved via `rustc --print sysroot` so they
+are always built from the exact LLVM revision the active `rustc` itself
+uses) with the Rust compiler's matching coverage runtime. Only the
+qualification example for the target under test is instrumented. LLVM's
+Apache-2.0 WITH LLVM-exception notice and exact tool version are recorded in
+`vendor/tooling.json`. The first-party mutation runner uses Python's
+standard library; it adds no Cargo dependency, vendored fuzzing engine, or
+instrumentation to production crates. The `pattern` target's differential
+probe invokes the already-pinned Node runtime (`new RegExp(p,
+'u').test(s)`) as an independent oracle, restricted to the ECMA-262 subset
+both engines implement. The `markdown` target's differential probe builds
+`cmark-gfm` `0.29.0.gfm.13` (BSD-2-Clause AND MIT; matching the GFM example
+corpus already vendored above) from a digest-verified source tarball into
+`.cache/tools/`, registered in `vendor/tooling.json` with its license notice
+under `vendor/licenses/`; it is never linked into any crate and is used only
+as an independent HTML-rendering oracle, out of process.
+
+
+Repository scripting requires Python 3.12 or newer (including the standard
+library archive extraction filter); cmark-gfm qualification requires CMake
+3.16 or newer and the native C build toolchain. Python and CMake notices are
+registered in `vendor/tooling.json`. The pinned Valgrind source and Linux Node
+binary are installed by `scripts/install-qualification-tool.py` into an ignored
+cache in CI, with archive hashes checked before extraction. Tool versions are
+recorded in each report. These build and verification processes add no core
+runtime dependencies.
+
+The first-party correction evaluation corpora are reproducibly generated from
+curated templates and the pinned confusables fixture. Their generator, case
+counts, and output hashes are registered in the evaluation manifest and checked
+by repository hygiene. `vendor/dependencies.json` also records the exact set and
+hashes of notices that belong in each crate archive; package auditing compares
+both checkout and archive against that reviewed registry.
+
+The core and syntax latency benchmark binaries use scoped first-party counting
+allocators under `#![allow(unsafe_code)]`, confined to their bench files. They
+measure requested allocation rather than add a production allocator or dependency.
+The existing allocation-oracle test has the same isolated exception. Their unsafe
+blocks document the standard allocator delegation and counter invariants.

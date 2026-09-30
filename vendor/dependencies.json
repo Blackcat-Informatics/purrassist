@@ -108,6 +108,11 @@
       "version": "commit 834912b0a6b1d973244a5e8a1baad25d6b9ef238 (\"Add tests for Unicode 17 property escapes\"; Unicode-17-aligned generated fixtures)",
       "license": "BSD-3-Clause",
       "manifest": "crates/core/tests/data/test262/manifest.json"
+    },
+    {
+      "name": "Correction-evaluation corpora (string selection, path matching, phonetic ambiguity, JSON recovery)",
+      "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "manifest": "crates/core/tests/data/evaluation/manifest.json"
     }
   ],
   "cargo_details": [
@@ -541,5 +546,22 @@
         "vendor/licenses/zmij-1.0.23/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
       }
     }
-  ]
+  ],
+  "packaged_notices": {
+    "cli": {},
+    "core": {
+      "src/markdown/inline/LICENSE-WHATWG": "85dc6f5ccb57a6fe8c33d158f9fc8fc7ee5655a5d3db2cdd131c6a3d0f48a864",
+      "src/schema/metaschemas/LICENSE": "909b25a80d4945b21d3adb2fb17f90bf592e0274bdf117c069c088a8e44dc7b6",
+      "src/text/LICENSE-UNICODE": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96",
+      "tests/data/json-schema/LICENSE": "837402bd25fad9b704265801ca3f92566a98157c1f9a7acd6f446299ba1c305a",
+      "tests/data/markdown/LICENSE-commonmark": "3e4806ba6f20073e8ce40da5a0c4b59f7f44287965f538e195a4d734d833557b",
+      "tests/data/markdown/LICENSE-gfm": "c22e885f33b821bddb24cf007145e5540655b6c0f403e49e6c76a93c28e6d9a9",
+      "tests/data/test262/LICENSE": "4dd9244dfe8197c75348c4b24ab53d29d3b1cfad143ac76b5a3d8942aa354ce0",
+      "tests/data/unicode/LICENSE": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96"
+    },
+    "host": {},
+    "purrassist": {},
+    "syntax": {},
+    "wasm-harness": {}
+  }
 }

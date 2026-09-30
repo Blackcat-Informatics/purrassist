@@ -24,10 +24,12 @@
     "version": "26.10.0",
     "license": "MIT",
     "source": "https://raw.githubusercontent.com/nodejs/node/v26.10.0/LICENSE",
-    "scope": "Installed Node.js runtime used only to execute scripts/run-wasi.mjs (wasm32-wasip1 acceptance transcripts) and scripts/run-wasm.mjs (wasm32-unknown-unknown acceptance transcript, no WASI). No Cargo dependency; not linked into any crate. The upstream LICENSE aggregates the licenses of bundled third-party components (V8, ICU, and others); none of that bundled source is vendored or shipped by this project.",
+    "scope": "Installed Node.js runtime used to execute scripts/run-wasi.mjs (wasm32-wasip1 acceptance transcripts), scripts/run-wasm.mjs (wasm32-unknown-unknown acceptance transcript, no WASI), and scripts/fuzz.py's `pattern`-target differential oracle (`node -e`, comparing `Pattern::is_match` against `new RegExp(p, 'u').test(s)` restricted to the ECMA subset both implement). No Cargo dependency; not linked into any crate. The upstream LICENSE aggregates the licenses of bundled third-party components (V8, ICU, and others); none of that bundled source is vendored or shipped by this project.",
     "notices": {
       "vendor/licenses/node-26.10.0/LICENSE": "6b85ee1983d01fa2cdcdd5d1a3053c6221fae41d6a54e43b416bf35969fc4128"
-    }
+    },
+    "binary_source": "https://nodejs.org/dist/v26.10.0/node-v26.10.0-linux-x64.tar.xz",
+    "binary_sha256": "ca70e9e349de048b9522abb3adc05b3bd6f43c5ffd3ec57916c7da292f59f022"
   },
   {
     "name": "wasi-sdk",
@@ -62,12 +64,13 @@
     "version": "3.25.1",
     "license": "GPL-2.0-or-later",
     "source": "https://sourceware.org/pub/valgrind/valgrind-3.25.1.tar.bz2",
-    "scope": "Installed external qualification tool only; no source or client requests linked into crates. Installed package reports GPL-2.0-or-later.",
+    "scope": "External qualification process only. CI builds the digest-pinned source into the ignored cache; no Valgrind source or client requests are linked into crates.",
     "license_text_source": "https://spdx.org/licenses/GPL-2.0-or-later.html",
     "notices": {
       "vendor/licenses/valgrind-3.25.1/GPL-2.0-or-later.txt": "aaf135472f81c5b4a0dca9367e5bb5e9750032b5bebe5442b36e4c0a47430df3"
     },
-    "notice_normalization": "LF; trailing whitespace and final blank lines removed from standard SPDX license text."
+    "notice_normalization": "LF; trailing whitespace and final blank lines removed from standard SPDX license text.",
+    "source_sha256": "61deb8d0727b45c268efdc1b3b6c9e679cd97cbf5ee4b28d1dead7c8b7a271af"
   },
   {
     "name": "profiling-glibc",
@@ -94,11 +97,22 @@
     "notice_normalization": "LF; trailing whitespace and final blank lines removed."
   },
   {
+    "name": "cmark-gfm",
+    "version": "0.29.0.gfm.13",
+    "license": "BSD-2-Clause AND MIT",
+    "source": "https://codeload.github.com/github/cmark-gfm/tar.gz/refs/tags/0.29.0.gfm.13",
+    "scope": "Reference GFM/CommonMark implementation built from source by scripts/fuzz.py into .cache/tools/cmark-gfm-0.29.0.gfm.13/ (source tarball digest verified before build) and cached across runs. Used only as the `markdown`-target differential oracle (`cmark-gfm -e table -e strikethrough -e autolink -e tasklist -e tagfilter --unsafe`, comparing normalized HTML against Document::render_html(Dialect::Gfm, ...)). Never linked, vendored as source, or packaged into any crate; the pinned version matches the GFM example corpus already vendored at crates/core/tests/data/markdown/gfm-0.29.0.gfm.13.json.",
+    "source_sha256": "5abc61798ebd9de5660bc076443c07abad2b8d15dbc11094a3a79644b8ad243a",
+    "notices": {
+      "vendor/licenses/cmark-gfm-0.29.0.gfm.13/COPYING": "c22e885f33b821bddb24cf007145e5540655b6c0f403e49e6c76a93c28e6d9a9"
+    }
+  },
+  {
     "name": "llvm-coverage",
-    "version": "22.1.8",
+    "version": "23.1.1",
     "license": "Apache-2.0 WITH LLVM-exception",
-    "source": "https://github.com/llvm/llvm-project/tree/llvmorg-22.1.8",
-    "scope": "Installed llvm-cov and llvm-profdata tools and rustc-provided coverage runtime for instrumented qualification binaries only. No Cargo dependency or production instrumentation. Tool LLVM versions must match rustc.",
+    "source": "https://github.com/llvm/llvm-project/tree/llvmorg-23.1.1",
+    "scope": "The `llvm-tools` rustup component's llvm-cov and llvm-profdata (installed alongside the pinned nightly toolchain: `rustup component add llvm-tools`) and rustc's own coverage runtime, used only for `scripts/fuzz.py`'s instrumented qualification binaries. No Cargo dependency or production instrumentation. Resolved via `rustc --print sysroot` so the tool's LLVM revision is always exactly the one `rustc` itself was built from, rather than a separately installed system package that could drift out of sync; `scripts/fuzz.py` still verifies both against this pin. The upstream license text is unchanged from llvmorg-22.1.8 (same digest, verified directly against the llvmorg-23.1.1 tag).",
     "notices": {
       "vendor/licenses/llvm-22.1.8/LICENSE": "3340babe8ac7bc6ae294d93aa01c310a250d43d5b760e5c12954882d4e5c83c7"
     },
@@ -106,5 +120,25 @@
       "vendor/licenses/llvm-22.1.8/LICENSE": "8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee"
     },
     "notice_normalization": "LF; trailing whitespace and final blank lines removed from installed LLVM project license."
+  },
+  {
+    "name": "python",
+    "version": "3.12 or newer",
+    "license": "PSF-2.0",
+    "source": "https://raw.githubusercontent.com/python/cpython/v3.13.5/LICENSE",
+    "scope": "External standard tooling used by repository verification and the independent cmark-gfm build. Not linked into or bundled with production crates; actual versions are recorded by qualification reports.",
+    "notices": {
+      "vendor/licenses/python/LICENSE": "78b12c3a81360b357002334f0e70ea0e92eebf7a9b358805c03c48484945f3bb"
+    }
+  },
+  {
+    "name": "cmake",
+    "version": "3.16 or newer",
+    "license": "BSD-3-Clause",
+    "source": "https://raw.githubusercontent.com/Kitware/CMake/v4.1.2/LICENSE.rst",
+    "scope": "External standard tooling used by repository verification and the independent cmark-gfm build. Not linked into or bundled with production crates; actual versions are recorded by qualification reports.",
+    "notices": {
+      "vendor/licenses/cmake/LICENSE": "1e0d48f16c60f400838a96989684ae12cec35cb96688db11e8cb0204058cf4b8"
+    }
   }
 ]

@@ -67,23 +67,15 @@ for package in metadata['packages']:
         if package['name'] == 'purrassist-core':
             if manifest.get('dependencies') or any(target.get('dependencies') for target in manifest.get('target', {}).values()):
                 raise SystemExit('packaged core gained runtime dependencies')
-        # The registered notice set for this crate is exactly the upstream
-        # LICENSE* files checked into its own tree (excluding the top-level
-        # first-party LICENSE-MIT/APACHE/MULAN triple, already required
-        # above): these are the vendored data notices (Unicode, JSON Schema
-        # meta-schemas/test suite, CommonMark/GFM, WHATWG, test262) recorded
-        # in `vendor/dependencies.json` and `docs/DEPENDENCIES.md`, physically
-        # bundled inside the crate directory that ships the data they cover.
-        # Deriving this set from the checkout instead of a hand-maintained
-        # literal list means an upstream notice added anywhere in the tree
-        # (e.g. the test262 fixture's LICENSE, previously unchecked here)
-        # is caught automatically, in every crate, not only in the one this
-        # check happened to be written against.
-        registered = {
-            str(path.relative_to(crate_root))
-            for path in crate_root.rglob('LICENSE*')
+        inventory = json.loads((ROOT / 'vendor/dependencies.json').read_text())
+        notices = inventory['packaged_notices'][crate_root.name]
+        registered = set(notices)
+        checkout_notices = {
+            str(path.relative_to(crate_root)) for path in crate_root.rglob('LICENSE*')
             if path.is_file() and path.parent != crate_root and 'target' not in path.parts
         }
+        if checkout_notices != registered:
+            raise SystemExit(f'{identity}: checkout notices differ from the reviewed registry')
         packaged = {
             name for name in members
             if PurePosixPath(name).name.startswith('LICENSE')
@@ -95,6 +87,8 @@ for package in metadata['packages']:
                 f'missing={sorted(registered - packaged)}, extra={sorted(packaged - registered)}')
         for notice in registered:
             local = crate_root / notice
+            if hashlib.sha256(local.read_bytes()).hexdigest() != notices[notice]:
+                raise SystemExit(f'{identity}: registered notice digest differs: {notice}')
             if extract(source, members[notice], identity) != local.read_bytes():
                 raise SystemExit(f'{identity}: packaged notice {notice} differs from its checkout source')
     report.append({'package': identity, 'bytes': archive.stat().st_size,

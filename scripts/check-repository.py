@@ -72,6 +72,26 @@ for identity, entry in details.items():
         path = ROOT / name
         if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != entry.get('notice_sha256', {}).get(name):
             errors.append(f'{identity}: license notice missing or changed: {name}')
+evaluation_root = ROOT / 'crates/core/tests/data/evaluation'
+evaluation_manifest = json.loads((evaluation_root / 'manifest.json').read_text())
+for name, entry in evaluation_manifest['outputs'].items():
+    path = evaluation_root / name
+    if (hashlib.sha256(path.read_bytes()).hexdigest() != entry['sha256']
+            or len(json.loads(path.read_text())) != entry['cases']):
+        errors.append(f'evaluation/{name}: corpus digest or census mismatch')
+for name, value in evaluation_manifest['inputs'].items():
+    if name.endswith('_sha256'):
+        input_path = ROOT / evaluation_manifest['inputs'][name.removesuffix('_sha256')]
+        if hashlib.sha256(input_path.read_bytes()).hexdigest() != value:
+            errors.append(f'evaluation: registered input digest mismatch: {input_path.relative_to(ROOT)}')
+generator = ROOT / evaluation_manifest['generator']
+if hashlib.sha256(generator.read_bytes()).hexdigest() != evaluation_manifest['generator_sha256']:
+    errors.append('evaluation: generator digest mismatch')
+for crate_name, notices in inventory['packaged_notices'].items():
+    for name, expected in notices.items():
+        path = ROOT / 'crates' / crate_name / name
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            errors.append(f'{crate_name}: registered package notice missing or changed: {name}')
 for entry in json.loads((ROOT / 'vendor/tooling.json').read_text()):
     for name, expected in entry['notices'].items():
         if hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != expected:

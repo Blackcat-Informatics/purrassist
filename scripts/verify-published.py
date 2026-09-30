@@ -105,9 +105,8 @@ def registry_config_args(registry_index):
     Cargo's own precedence rules put CLI `--config` above every config file
     (including one this script writes into its own scratch `CARGO_HOME`),
     so this keeps working even under a wrapper that replaces `CARGO_HOME`
-    outright before running the real `cargo` (measured on this workstation:
-    `/home/paudley/stage/scripts/cargo` does exactly that, but explicitly
-    forwards `--config`)."""
+    outright before running the real `cargo`. Command-line overrides keep
+    the registry choice explicit across such host wrappers."""
     if registry_index is None:
         return []
     return [
