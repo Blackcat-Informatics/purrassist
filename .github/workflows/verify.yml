@@ -21,8 +21,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - run: rustup toolchain install nightly-2026-09-14 --profile minimal --component clippy,rustfmt
+      - run: rustup toolchain install nightly-2026-09-14 --profile minimal --component clippy,rustfmt,llvm-tools
       - run: make check
+      - if: runner.os == 'Linux'
+        name: Install pinned Node for independent syntax oracles
+        run: python3 scripts/install-qualification-tool.py node >> "$GITHUB_PATH"
       - if: runner.os == 'Linux'
         run: make syntax-oracles
   msrv:
@@ -59,47 +62,36 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install nightly-2026-09-14 --profile minimal --target wasm32-wasip1,wasm32-unknown-unknown
+      - name: Install pinned Node for WASM execution
+        run: python3 scripts/install-qualification-tool.py node >> "$GITHUB_PATH"
       - run: make wasm-test
   qualification:
-    # Release-qualification evidence gathered on every push/PR, distinct from
-    # the tag-triggered release-qualification.yml (which stays package/audit
-    # only) and from publish.yml (which never runs here). Two steps below are
-    # written against targets Tasks 12/13 still need to land in this same PR
-    # (`make fuzz`, `scripts/check-resource-limits.py`); until they do, this
-    # job fails at exactly those steps and the earlier steps still run and
-    # report. See the inline comments on those two steps.
+    # Independent oracles, bounded campaigns, archive audits, and fresh
+    # resource measurements for this exact branch head.
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     env:
       RUSTUP_TOOLCHAIN: nightly-2026-09-14
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - run: rustup toolchain install nightly-2026-09-14 --profile minimal
+      # llvm-tools provides the llvm-cov/llvm-profdata build of this exact
+      # nightly's own LLVM revision, which scripts/fuzz.py resolves via
+      # `rustc --print sysroot` (see vendor/tooling.json's llvm-coverage entry).
+      - run: rustup toolchain install nightly-2026-09-14 --profile minimal --component llvm-tools
+      - name: Install pinned Node for independent oracles
+        run: python3 scripts/install-qualification-tool.py node >> "$GITHUB_PATH"
       - name: Independent syntax oracles
         run: make syntax-oracles
       - name: Coverage-guided and differential fuzzing (smoke counts)
-        # Task 12 replaces scripts/fuzz-json.py with scripts/fuzz.py and adds
-        # `make fuzz TARGET=<name>`, covering json, markdown, schema, pattern,
-        # unified, fuzzy, matching, patch. Fails with "No rule to make
-        # target" until Task 12 lands in this PR.
-        run: |
-          set -euo pipefail
-          for target in json markdown schema pattern unified fuzzy matching patch; do
-            make fuzz TARGET="$target" FUZZ_ARGS="--iterations 200"
-          done
+        # Deterministic default: all eight targets, 1,000 mutations each.
+        run: make fuzz
       - name: Package crate archives and notices
         run: make package
       - name: Install pinned Valgrind for resource measurement
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y valgrind
-          valgrind --version
+        run: python3 scripts/install-qualification-tool.py valgrind >> "$GITHUB_PATH"
       - name: Measure resources
         run: make resources
       - name: Check resource limits
-        # Task 13 adds scripts/check-resource-limits.py, which compares the
-        # freshly measured report to the limits table in docs/RESOURCES.md.
-        # Fails with "No such file or directory" until Task 13 lands in this PR.
         run: python3 scripts/check-resource-limits.py .cache/resource-report.json

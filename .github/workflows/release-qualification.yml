@@ -26,6 +26,10 @@ jobs:
           persist-credentials: false
       - name: Install release toolchain
         run: rustup toolchain install 1.98.0 --profile minimal --component clippy,rustfmt
+      - name: Install pinned coverage-feedback toolchain
+        # The workspace gate remains stable; the isolated coverage probe
+        # uses its registered nightly compiler and matching LLVM tools.
+        run: rustup toolchain install nightly-2026-09-14 --profile minimal --component llvm-tools
       - name: Verify release set and version
         shell: bash
         run: |

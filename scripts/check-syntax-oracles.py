@@ -13,6 +13,11 @@ import tempfile
 import urllib.request
 
 ROOT = Path(__file__).resolve().parent.parent
+node_version = next(entry['version'] for entry in json.loads(
+    (ROOT / 'vendor/tooling.json').read_text()) if entry['name'] == 'node')
+actual_node_version = subprocess.check_output(['node', '--version'], text=True).strip()
+if actual_node_version != 'v' + node_version:
+    raise SystemExit(f'Node identity mismatch: expected v{node_version}, got {actual_node_version}')
 manifest = json.loads((ROOT / 'vendor/typescript.json').read_text())
 cache = ROOT / '.cache/typescript'
 cache.mkdir(parents=True, exist_ok=True)

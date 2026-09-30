@@ -27,7 +27,7 @@ jobs:
     # bounded API poll against the exact commit SHA using the token this job
     # already has. This job never publishes; it only reads Actions run state.
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 105
     permissions:
       contents: read
       actions: read
@@ -38,7 +38,7 @@ jobs:
         run: |
           set -euo pipefail
           attempt=0
-          max_attempts=40
+          max_attempts=200
           while :; do
             attempt=$((attempt + 1))
             runs=$(gh api "repos/${{ github.repository }}/actions/workflows/release-qualification.yml/runs?head_sha=${{ github.sha }}&per_page=20")
@@ -46,8 +46,11 @@ jobs:
               echo "release-qualification.yml succeeded for ${{ github.sha }}"
               exit 0
             fi
-            if ! echo "$runs" | jq -e '.workflow_runs[] | select(.status!="completed")' >/dev/null; then
-              echo "release-qualification.yml has no successful run for ${{ github.sha }}, and none are in progress" >&2
+            # An empty result can precede creation of the sibling tag run.
+            # Wait within the same bound until that run becomes visible.
+            if echo "$runs" | jq -e '.workflow_runs | length > 0' >/dev/null &&
+               ! echo "$runs" | jq -e '.workflow_runs[] | select(.status!="completed")' >/dev/null; then
+              echo "release-qualification.yml has completed runs for ${{ github.sha }}, all failed" >&2
               exit 1
             fi
             if (( attempt >= max_attempts )); then
