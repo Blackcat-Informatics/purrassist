@@ -8,7 +8,7 @@
 //! a numeric/length/property-count bound crossing itself, or two
 //! irreconcilable `const` values — before generation (stage 5, `finish.rs`)
 //! ever tries to build a value.
-use super::canon::{Facet, PatternRef, TypeSet};
+use super::canon::{Facet, NumKind, PatternRef, TypeSet};
 use crate::json::Node;
 
 /// Everything a search path has merged so far. `And`-merging is simply
@@ -41,8 +41,6 @@ pub(super) struct Requirements {
     /// not one shared prefix length, is load-bearing.
     pub items: Vec<(usize, usize)>,
     pub contains: Vec<(usize, u64, Option<u64>)>,
-    pub min_contains: Option<u64>,
-    pub max_contains: Option<u64>,
     pub min_properties: u64,
     pub max_properties: Option<u64>,
     pub properties: Vec<(String, usize)>,
@@ -88,8 +86,6 @@ impl Default for Requirements {
             prefix_items: Vec::new(),
             items: Vec::new(),
             contains: Vec::new(),
-            min_contains: None,
-            max_contains: None,
             min_properties: 0,
             max_properties: None,
             properties: Vec::new(),
@@ -155,16 +151,22 @@ impl Requirements {
             }
             Facet::Minimum(bound, exclusive) => {
                 self.minimum = Some(match &self.minimum {
-                    Some((existing, existing_exclusive)) if existing.compare(bound).is_ge() => {
+                    Some((existing, existing_exclusive)) if existing.compare(bound).is_gt() => {
                         (existing.clone(), *existing_exclusive)
+                    }
+                    Some((existing, existing_exclusive)) if existing.compare(bound).is_eq() => {
+                        (existing.clone(), *existing_exclusive || *exclusive)
                     }
                     _ => (bound.clone(), *exclusive),
                 });
             }
             Facet::Maximum(bound, exclusive) => {
                 self.maximum = Some(match &self.maximum {
-                    Some((existing, existing_exclusive)) if existing.compare(bound).is_le() => {
+                    Some((existing, existing_exclusive)) if existing.compare(bound).is_lt() => {
                         (existing.clone(), *existing_exclusive)
+                    }
+                    Some((existing, existing_exclusive)) if existing.compare(bound).is_eq() => {
+                        (existing.clone(), *existing_exclusive || *exclusive)
                     }
                     _ => (bound.clone(), *exclusive),
                 });
@@ -187,12 +189,8 @@ impl Requirements {
             Facet::RequireDuplicate => self.require_duplicate = true,
             Facet::PrefixItems(ids) => self.prefix_items.push(ids.clone()),
             Facet::Items(id, own_prefix_len) => self.items.push((*id, *own_prefix_len)),
-            Facet::Contains(id) => self.contains.push((*id, 0, None)),
-            Facet::MinContains(bound) => {
-                self.min_contains = Some(self.min_contains.map_or(*bound, |m| m.max(*bound)));
-            }
-            Facet::MaxContains(bound) => {
-                self.max_contains = Some(self.max_contains.map_or(*bound, |m| m.min(*bound)));
+            Facet::Contains(id, minimum, maximum) => {
+                self.contains.push((*id, *minimum, *maximum));
             }
             Facet::MinProperties(bound) => self.min_properties = self.min_properties.max(*bound),
             Facet::MaxProperties(bound) => {
@@ -213,37 +211,46 @@ impl Requirements {
             Facet::UnevaluatedItems(id) => self.unevaluated_items.push(*id),
         }
     }
-    /// Cross-field contradictions a single [`Facet`] cannot reveal on its
-    /// own (a crossed bound, or a literal that conflicts with another
-    /// merged obligation), re-checked after every [`Requirements::merge_one`].
+    /// Crossed shape-specific bounds exclude only that shape. They prove
+    /// a branch contradictory when no admitted shape remains; literals and
+    /// enum members are still checked against the resulting type set.
     fn check_contradictions(&mut self) {
         if let (Some((min, min_exclusive)), Some((max, max_exclusive))) =
             (&self.minimum, &self.maximum)
         {
             let comparison = min.compare(max);
             if comparison.is_gt() || (comparison.is_eq() && (*min_exclusive || *max_exclusive)) {
-                self.fail("minimum exceeds maximum");
+                self.types.num = NumKind::None;
             }
         }
         if let Some(max) = self.max_length
             && self.min_length > max
         {
-            self.fail("minLength exceeds maxLength");
+            self.types.string = false;
         }
         if let Some(max) = self.max_items
-            && self.min_items > max
+            && self
+                .min_items
+                .max(if self.require_duplicate { 2 } else { 0 })
+                > max
         {
-            self.fail("minItems exceeds maxItems");
+            self.types.array = false;
         }
         if let Some(max) = self.max_properties
             && self.min_properties > max
         {
-            self.fail("minProperties exceeds maxProperties");
+            self.types.object = false;
         }
-        if let Some(max) = self.max_contains
-            && self.min_contains.unwrap_or(0) > max
+        if self
+            .contains
+            .iter()
+            .any(|(_, minimum, maximum)| maximum.is_some_and(|maximum| *minimum > maximum))
+            || (self.unique_items && self.require_duplicate)
         {
-            self.fail("minContains exceeds maxContains");
+            self.types.array = false;
+        }
+        if self.types.is_empty() {
+            self.fail("no admitted type satisfies its shape-specific bounds");
         }
         if let Some(const_value) = self.const_value.clone() {
             if self

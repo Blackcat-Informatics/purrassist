@@ -743,94 +743,99 @@ impl Gen<'_, '_> {
         depth: u32,
     ) -> Result<Attempt, StopReason> {
         let mut items: Vec<Node> = Vec::new();
-        let prefix_len = req.prefix_items.iter().map(Vec::len).max().unwrap_or(0);
-        for index in 0..prefix_len {
-            // An `items` occurrence applies here too whenever this index is
-            // beyond *that occurrence's own* prefix length — which may be 0
-            // (e.g. `items` declared at the root while `prefixItems` is
-            // declared inside an `allOf` branch), even though `index` is
-            // still within some *other* occurrence's prefix count.
-            let mut ids: Vec<usize> = req
+        let minimum = req.min_items.max(if req.require_duplicate { 2 } else { 0 });
+        // Preserve the established preference for materializing a usable
+        // prefix, while retaining a shorter valid array when an optional
+        // position cannot be constructed. Contains construction already
+        // selects its needed positions and must not add gratuitous matches.
+        let preferred = if req.contains.is_empty() {
+            size(req.prefix_items.iter().map(Vec::len).max().unwrap_or(0))
+                .min(req.max_items.unwrap_or(u64::MAX))
+        } else {
+            0
+        };
+        // Each contains occurrence has its own minimum; one value can
+        // satisfy several occurrences. This sum is a construction bound,
+        // not a claim that an array needs disjoint matching elements.
+        let construction_bound = req
+            .contains
+            .iter()
+            .fold(minimum.max(preferred), |count, (_, min, _)| {
+                count.saturating_add(*min)
+            });
+        self.governor.charge(
+            Resource::ScratchBytes,
+            construction_bound.saturating_mul(24).saturating_add(1),
+        )?;
+        loop {
+            let deficient = self.deficient_contains(req, &items)?;
+            let optional = size(items.len()) >= minimum && deficient.is_empty();
+            if optional && size(items.len()) >= preferred {
+                break;
+            }
+            if size(items.len()) >= construction_bound {
+                return Ok(Attempt::Exhausted);
+            }
+            if req.max_items.is_some_and(|max| size(items.len()) >= max) {
+                return Ok(Attempt::Exhausted);
+            }
+            let index = items.len();
+            let child_path = format!("{path}/{index}");
+            let mut applicable: Vec<usize> = req
                 .prefix_items
                 .iter()
                 .filter_map(|occurrence| occurrence.get(index).copied())
                 .collect();
-            ids.extend(applicable_items(req, index));
+            applicable.extend(applicable_items(req, index));
             let exclusions: Vec<Node> = if req.unique_items {
                 items.clone()
             } else {
                 Vec::new()
             };
-            match self.attempt_many_excluding(
-                &ids,
-                &exclusions,
-                &format!("{path}/{index}"),
-                depth + 1,
-            )? {
-                Attempt::Witness(node) => items.push(node),
-                other => return Ok(other),
+            let mut selected = None;
+            for id in deficient {
+                let mut ids = applicable.clone();
+                ids.push(id);
+                if let Attempt::Witness(node) =
+                    self.attempt_many_excluding(&ids, &exclusions, &child_path, depth + 1)?
+                {
+                    selected = Some(node);
+                    break;
+                }
             }
-        }
-        let contains_needed = if req.contains.is_empty() {
-            0
-        } else {
-            req.min_contains
-                .unwrap_or(1)
-                .saturating_mul(size(req.contains.len()))
-        };
-        let mut target_len = req.min_items.max(size(prefix_len));
-        target_len = target_len.max(size(prefix_len).saturating_add(contains_needed));
-        if let Some(max) = req.max_items
-            && target_len > max
-        {
-            return Ok(Attempt::Exhausted);
-        }
-        // Charge before building `target_len` elements, so an
-        // unrepresentably large `minItems` (clamped to `u64::MAX` by
-        // `canon::as_u64`) fails with an explicit `BudgetExceeded` instead
-        // of this loop attempting to build that many elements.
-        self.governor.charge(
-            Resource::ScratchBytes,
-            target_len.saturating_mul(24).saturating_add(1),
-        )?;
-        while size(items.len()) < target_len {
-            let index = items.len();
-            let child_path = format!("{path}/{index}");
-            let beyond_prefix = index.saturating_sub(prefix_len);
-            let exclusions: Vec<Node> = if req.unique_items {
-                items.clone()
-            } else {
-                Vec::new()
-            };
-            let applicable = applicable_items(req, index);
-            let value = if !applicable.is_empty() {
-                match self.attempt_many_excluding(
-                    &applicable,
-                    &exclusions,
-                    &child_path,
-                    depth + 1,
-                )? {
-                    Attempt::Witness(node) => node,
-                    other => return Ok(other),
+            let value = if let Some(node) = selected {
+                node
+            } else if size(items.len()) < minimum || optional {
+                if applicable.is_empty() {
+                    applicable.extend_from_slice(&req.unevaluated_items);
                 }
-            } else if !req.contains.is_empty() && size(beyond_prefix) < contains_needed {
-                let clause = req.contains[beyond_prefix % req.contains.len()].0;
-                match self.attempt_many_excluding(&[clause], &exclusions, &child_path, depth + 1)? {
-                    Attempt::Witness(node) => node,
-                    other => return Ok(other),
-                }
-            } else if !req.unevaluated_items.is_empty() {
-                match self.attempt_many_excluding(
-                    &req.unevaluated_items,
-                    &exclusions,
-                    &child_path,
-                    depth + 1,
-                )? {
-                    Attempt::Witness(node) => node,
-                    other => return Ok(other),
+                if applicable.is_empty() {
+                    if req.require_duplicate && !items.is_empty() {
+                        items[0].clone()
+                    } else {
+                        fresh_scalar(index)
+                    }
+                } else {
+                    match self.attempt_many_excluding(
+                        &applicable,
+                        &exclusions,
+                        &child_path,
+                        depth + 1,
+                    )? {
+                        Attempt::Witness(node) => node,
+                        // A failed construction at this chosen position
+                        // does not refute other array lengths or placements
+                        // of contains matches, nor earlier greedy choices.
+                        Attempt::Unsatisfiable(_) | Attempt::Exhausted => {
+                            if optional {
+                                break;
+                            }
+                            return Ok(Attempt::Exhausted);
+                        }
+                    }
                 }
             } else {
-                fresh_scalar(index)
+                return Ok(Attempt::Exhausted);
             };
             items.push(value);
         }
@@ -847,6 +852,27 @@ impl Gen<'_, '_> {
             }
         }
         self.finalize(Node::new(Value::Array(items)), req)
+    }
+    /// Which contains occurrences still need matches in the construction
+    /// so far. These evaluations guide candidate generation; final
+    /// whole-schema validation establishes the returned witness.
+    fn deficient_contains(
+        &mut self,
+        req: &Requirements,
+        items: &[Node],
+    ) -> Result<Vec<usize>, StopReason> {
+        let mut deficient = Vec::new();
+        for &(id, minimum, _) in &req.contains {
+            let mut count = 0_u64;
+            for item in items {
+                let report = super::super::evaluate::run(self.schema, id, item, self.governor)?;
+                count += u64::from(report.violations.is_empty());
+            }
+            if count < minimum {
+                deficient.push(id);
+            }
+        }
+        Ok(deficient)
     }
     fn build_object(
         &mut self,
@@ -1159,6 +1185,9 @@ impl Gen<'_, '_> {
                 }
             }
         }
+        if req.require_duplicate && !has_duplicate(items) {
+            return Ok(Some("array must contain a duplicate item"));
+        }
         Ok(None)
     }
 }
@@ -1204,8 +1233,6 @@ fn type_preference(req: &Requirements) -> Vec<Kind> {
     let array_hint = !req.items.is_empty()
         || !req.prefix_items.is_empty()
         || !req.contains.is_empty()
-        || req.min_contains.is_some()
-        || req.max_contains.is_some()
         || !req.unevaluated_items.is_empty()
         || req.min_items > 0
         || req.max_items.is_some()

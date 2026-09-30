@@ -215,9 +215,9 @@ pub(super) enum Facet {
     /// `items` in that case still applies from index 0, since its own node
     /// declares no `prefixItems` of its own.
     Items(usize, usize),
-    Contains(usize),
-    MinContains(u64),
-    MaxContains(u64),
+    /// A `contains` occurrence and only that occurrence's cardinality bounds.
+    /// Bounds on another schema object (or without `contains`) do not apply.
+    Contains(usize, u64, Option<u64>),
     MinProperties(u64),
     MaxProperties(u64),
     Properties(Vec<(String, usize)>),
@@ -462,39 +462,47 @@ pub(super) fn build_negated(
 /// stage leaves that keyword's negation to [`Canon::OpaqueNot`]: see the
 /// module documentation for exactly which keywords have one.
 fn negate_facet(facet: &Facet) -> Option<Canon> {
+    // A shape-specific keyword accepts every instance of another shape.
+    // Its complement therefore requires the affected shape as well as the
+    // complemented assertion; dualizing only the bound is not equivalent.
+    let typed = |name, facet| {
+        Canon::And(vec![
+            Canon::Local(Facet::Type(TypeSet::from_name(name))),
+            Canon::Local(facet),
+        ])
+    };
     match facet {
         Facet::Type(set) => Some(Canon::Local(Facet::Type(set.complement()))),
         Facet::Const(value) => Some(Canon::Local(Facet::Excluded(vec![value.clone()]))),
         Facet::Enum(values) => Some(Canon::Local(Facet::Excluded(values.clone()))),
         Facet::Minimum(bound, exclusive) => {
-            Some(Canon::Local(Facet::Maximum(bound.clone(), !exclusive)))
+            Some(typed("number", Facet::Maximum(bound.clone(), !exclusive)))
         }
         Facet::Maximum(bound, exclusive) => {
-            Some(Canon::Local(Facet::Minimum(bound.clone(), !exclusive)))
+            Some(typed("number", Facet::Minimum(bound.clone(), !exclusive)))
         }
-        Facet::MultipleOf(divisor) => Some(Canon::Local(Facet::NotMultipleOf(divisor.clone()))),
-        Facet::NotMultipleOf(divisor) => Some(Canon::Local(Facet::MultipleOf(divisor.clone()))),
+        Facet::MultipleOf(divisor) => Some(typed("number", Facet::NotMultipleOf(divisor.clone()))),
+        Facet::NotMultipleOf(divisor) => Some(typed("number", Facet::MultipleOf(divisor.clone()))),
         Facet::MinLength(0) | Facet::MinItems(0) | Facet::MinProperties(0) => Some(Canon::False),
-        Facet::MinLength(bound) => Some(Canon::Local(Facet::MaxLength(bound - 1))),
-        Facet::MaxLength(bound) => Some(Canon::Local(Facet::MinLength(bound.saturating_add(1)))),
-        Facet::Pattern(reference) => Some(Canon::Local(Facet::AvoidPattern(reference.clone()))),
-        Facet::AvoidPattern(reference) => Some(Canon::Local(Facet::Pattern(reference.clone()))),
-        Facet::Format(name) => Some(Canon::Local(Facet::AvoidFormat(name.clone()))),
-        Facet::AvoidFormat(name) => Some(Canon::Local(Facet::Format(name.clone()))),
-        Facet::MinItems(bound) => Some(Canon::Local(Facet::MaxItems(bound - 1))),
-        Facet::MaxItems(bound) => Some(Canon::Local(Facet::MinItems(bound.saturating_add(1)))),
-        Facet::UniqueItems => Some(Canon::Local(Facet::RequireDuplicate)),
-        Facet::RequireDuplicate => Some(Canon::Local(Facet::UniqueItems)),
-        Facet::MinProperties(bound) => Some(Canon::Local(Facet::MaxProperties(bound - 1))),
-        Facet::MaxProperties(bound) => {
-            Some(Canon::Local(Facet::MinProperties(bound.saturating_add(1))))
-        }
+        Facet::MinLength(bound) => Some(typed("string", Facet::MaxLength(bound - 1))),
+        Facet::MaxLength(bound) => Some(typed("string", Facet::MinLength(bound.saturating_add(1)))),
+        Facet::Pattern(reference) => Some(typed("string", Facet::AvoidPattern(reference.clone()))),
+        Facet::AvoidPattern(reference) => Some(typed("string", Facet::Pattern(reference.clone()))),
+        Facet::Format(name) => Some(typed("string", Facet::AvoidFormat(name.clone()))),
+        Facet::AvoidFormat(name) => Some(typed("string", Facet::Format(name.clone()))),
+        Facet::MinItems(bound) => Some(typed("array", Facet::MaxItems(bound - 1))),
+        Facet::MaxItems(bound) => Some(typed("array", Facet::MinItems(bound.saturating_add(1)))),
+        Facet::UniqueItems => Some(typed("array", Facet::RequireDuplicate)),
+        Facet::RequireDuplicate => Some(typed("array", Facet::UniqueItems)),
+        Facet::MinProperties(bound) => Some(typed("object", Facet::MaxProperties(bound - 1))),
+        Facet::MaxProperties(bound) => Some(typed(
+            "object",
+            Facet::MinProperties(bound.saturating_add(1)),
+        )),
         Facet::Excluded(_)
         | Facet::PrefixItems(_)
         | Facet::Items(_, _)
-        | Facet::Contains(_)
-        | Facet::MinContains(_)
-        | Facet::MaxContains(_)
+        | Facet::Contains(_, _, _)
         | Facet::Properties(_)
         | Facet::PatternProperties(_)
         | Facet::AdditionalProperties(_)
@@ -614,13 +622,11 @@ fn array_facets(schema: &Schema, id: usize, out: &mut Vec<Canon>) {
         )));
     }
     if body.get("contains").is_some() {
-        out.push(Canon::Local(Facet::Contains(schema.child(id, "contains"))));
-    }
-    if let Some(count) = as_u64(body.get("minContains")) {
-        out.push(Canon::Local(Facet::MinContains(count)));
-    }
-    if let Some(count) = as_u64(body.get("maxContains")) {
-        out.push(Canon::Local(Facet::MaxContains(count)));
+        out.push(Canon::Local(Facet::Contains(
+            schema.child(id, "contains"),
+            as_u64(body.get("minContains")).unwrap_or(1),
+            as_u64(body.get("maxContains")),
+        )));
     }
 }
 
