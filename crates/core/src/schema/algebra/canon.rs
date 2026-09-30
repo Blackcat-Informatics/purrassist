@@ -582,7 +582,12 @@ fn scalar_facets(schema: &Schema, id: usize, out: &mut Vec<Canon>) {
             keyword: "pattern".into(),
         })));
     }
-    if let Some(name) = body.get("format").and_then(Node::as_str) {
+    // Annotation-only formats remain observations in the real evaluator.
+    // Adding them here would constrain generation and their `not` dual,
+    // incorrectly turning a failed annotation into a refutation.
+    if body.vocabularies.format_assert
+        && let Some(name) = body.get("format").and_then(Node::as_str)
+    {
         out.push(Canon::Local(Facet::Format(name.to_string())));
     }
 }
