@@ -36,7 +36,8 @@ pub enum Error {
     Io(std::io::Error),
     /// Invalid path, journal, or input.
     Invalid(String),
-    /// Another cooperating writer holds the store lock.
+    /// A cooperating writer holds the store lock, or Windows rename sharing/lock
+    /// contention exhausted its bounded retries.
     Busy,
     /// Current file differs from the expected version.
     Stale,
@@ -46,7 +47,9 @@ impl fmt::Display for Error {
         match self {
             Self::Io(e) => e.fmt(f),
             Self::Invalid(message) => f.write_str(message),
-            Self::Busy => f.write_str("store is locked by another writer"),
+            Self::Busy => {
+                f.write_str("file transaction is busy (writer lock or rename contention)")
+            }
             Self::Stale => f.write_str("file changed since the expected snapshot"),
         }
     }
@@ -476,7 +479,10 @@ impl Store {
     /// Reconcile prepared journals with actual file versions without overwriting files.
     ///
     /// # Errors
-    /// Fails on lock contention, tampered journals, unreadable entries, or marker writes.
+    /// Fails on store-lock contention, journal-directory enumeration, orphan
+    /// scanning, or orphan removal errors. Corrupt/unreadable individual
+    /// transactions and failed marker writes are retained as [`Recovery::Corrupt`]
+    /// outcomes while other transactions continue.
     pub fn recover(&self) -> Result<Vec<Recovery>, Error> {
         let _lock = self.lock()?;
         let mut results = Vec::new();

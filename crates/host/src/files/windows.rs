@@ -28,7 +28,7 @@
 //! (antivirus scanners and search indexers commonly hold a brief handle open)
 //! is retried [`RENAME_ATTEMPTS`] times, yielding the calling thread between
 //! attempts via [`std::thread::yield_now`] — never sleeping — before giving up
-//! with an [`Error::Io`] carrying the last operating-system error. Any other
+//! with an explicit [`Error::Busy`]. Any other
 //! failure, including `ERROR_ACCESS_DENIED`, is reported immediately.
 //!
 //! Renaming through a handle requires `DELETE` access on that handle, so the
@@ -91,7 +91,7 @@ pub(super) fn replace(file: File, temporary: &Path, target: &Path) -> Result<Ren
     let buffer = RenameBuffer::new(&target_name, flags)?;
     match retry(|| set_rename_info(&file, &buffer), is_posix_unsupported) {
         Outcome::Success => return Ok(RenameMethod::PosixSemantics),
-        Outcome::Contended(code) | Outcome::Io(code) => return Err(win_io_error(code)),
+        outcome @ (Outcome::Contended | Outcome::Io(_)) => return Err(rename_error(outcome)),
         Outcome::Unsupported => {}
     }
     // The filesystem rejected POSIX rename semantics. Close our own handle
@@ -103,7 +103,7 @@ pub(super) fn replace(file: File, temporary: &Path, target: &Path) -> Result<Ren
     let destination: Vec<u16> = wide_null(target);
     match retry(|| move_file_ex(&existing, &destination), |_| false) {
         Outcome::Success => Ok(RenameMethod::MoveFileExFallback),
-        Outcome::Contended(code) | Outcome::Io(code) => Err(win_io_error(code)),
+        outcome @ (Outcome::Contended | Outcome::Io(_)) => Err(rename_error(outcome)),
         Outcome::Unsupported => unreachable!("MoveFileExW fallback never reports Unsupported"),
     }
 }
@@ -140,11 +140,11 @@ fn is_access_denied(error: &std::io::Error) -> bool {
     error.raw_os_error() == i32::try_from(ERROR_ACCESS_DENIED).ok()
 }
 
+#[derive(Clone, Copy)]
 enum Outcome {
     Success,
-    /// Still sharing- or lock-violated after every bounded attempt; carries
-    /// the last operating-system error code.
-    Contended(u32),
+    /// Still sharing- or lock-violated after every bounded attempt.
+    Contended,
     Io(u32),
     Unsupported,
 }
@@ -164,14 +164,14 @@ fn retry(
             Err(code) if is_unsupported(code) => return Outcome::Unsupported,
             Err(code) if is_sharing_violation(code) => {
                 if remaining == 0 {
-                    return Outcome::Contended(code);
+                    return Outcome::Contended;
                 }
                 std::thread::yield_now();
             }
             Err(code) => return Outcome::Io(code),
         }
     }
-    Outcome::Contended(ERROR_SHARING_VIOLATION)
+    Outcome::Contended
 }
 
 const fn is_posix_unsupported(code: u32) -> bool {
@@ -180,6 +180,17 @@ const fn is_posix_unsupported(code: u32) -> bool {
 
 const fn is_sharing_violation(code: u32) -> bool {
     matches!(code, ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)
+}
+
+/// Both rename mechanisms classify bounded contention identically.
+fn rename_error(outcome: Outcome) -> Error {
+    match outcome {
+        Outcome::Contended => Error::Busy,
+        Outcome::Io(code) => win_io_error(code),
+        Outcome::Success | Outcome::Unsupported => {
+            unreachable!("only failed rename outcomes reach error mapping")
+        }
+    }
 }
 
 fn win_io_error(code: u32) -> Error {
@@ -288,5 +299,74 @@ impl Drop for RenameBuffer {
         // SAFETY: `ptr`/`layout` are exactly as returned from `alloc_zeroed`
         // in `RenameBuffer::new`, and a `RenameBuffer` is dropped at most once.
         unsafe { dealloc(self.ptr, self.layout) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sharing_and_lock_retry_exhaustion_are_busy_for_both_rename_mechanisms() {
+        for code in [ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION] {
+            for posix in [true, false] {
+                let mut attempts = 0;
+                let outcome = retry(
+                    || {
+                        attempts += 1;
+                        Err(code)
+                    },
+                    |code| posix && is_posix_unsupported(code),
+                );
+                assert_eq!(attempts, RENAME_ATTEMPTS);
+                assert!(matches!(rename_error(outcome), Error::Busy));
+            }
+        }
+    }
+
+    #[test]
+    fn transient_contention_can_succeed_and_other_errors_are_immediate() {
+        let mut attempts = 0;
+        let outcome = retry(
+            || {
+                attempts += 1;
+                if attempts < RENAME_ATTEMPTS {
+                    Err(ERROR_SHARING_VIOLATION)
+                } else {
+                    Ok(())
+                }
+            },
+            is_posix_unsupported,
+        );
+        assert!(matches!(outcome, Outcome::Success));
+        assert_eq!(attempts, RENAME_ATTEMPTS);
+        attempts = 0;
+        let outcome = retry(
+            || {
+                attempts += 1;
+                Err(ERROR_ACCESS_DENIED)
+            },
+            is_posix_unsupported,
+        );
+        assert_eq!(attempts, 1);
+        let Error::Io(error) = rename_error(outcome) else {
+            panic!("non-contention must preserve I/O classification")
+        };
+        assert_eq!(
+            error.raw_os_error(),
+            i32::try_from(ERROR_ACCESS_DENIED).ok()
+        );
+        for code in [ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED] {
+            attempts = 0;
+            let outcome = retry(
+                || {
+                    attempts += 1;
+                    Err(code)
+                },
+                is_posix_unsupported,
+            );
+            assert_eq!(attempts, 1);
+            assert!(matches!(outcome, Outcome::Unsupported));
+        }
     }
 }
