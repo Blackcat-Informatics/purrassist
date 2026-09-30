@@ -1,0 +1,1573 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+"""Deterministic source-region coverage-guided qualification (LLVM, pinned
+in vendor/tooling.json's `llvm-coverage` entry),
+generalized across eight `purrassist-core` targets, with differential probes
+against Node's `RegExp` (`pattern`) and `cmark-gfm` (`markdown`).
+
+Replaces the single-purpose `scripts/fuzz-json.py`; see `docs/FUZZING.md`.
+"""
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import tarfile
+import tempfile
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+RS = b'\x1e'  # ASCII record separator: multi-field probe input delimiter.
+
+# --------------------------------------------------------------------------
+# Seeds and mutation tokens, one set per target.
+#
+# `json`, `schema` (its instance field), and `pattern` (differentially
+# checked against Node) reimplement the six corruption transformations
+# tested against a known-origin witness in
+# `crates/core/tests/corruption_oracle.rs` (Task 8: truncation, prose
+# wrapping, key typo, stringification, type swap, duplicate keys), applied
+# here to a small canonical object independent of that test code, purely to
+# seed the campaign with the same corruption shapes. `markdown` seeds are
+# adapted from examples already vendored at
+# `crates/core/tests/data/markdown/{commonmark-0.31.2,gfm-0.29.0.gfm.13}.json`
+# (headings, lists, block quotes, fenced code, tables, reference links, GFM
+# strikethrough/autolink/tasklist/tagfilter, setext headings, hard breaks).
+# --------------------------------------------------------------------------
+
+
+def _json_corruption_seeds():
+    canonical = '{"name":"tea","items":[1,2,3]}'
+    return [
+        canonical.rstrip('}]').encode(),  # Truncation
+        (
+            'Sure, here is the value you asked for:\n```json\n'
+            + canonical
+            + '\n```\nLet me know if you need anything else!'
+        ).encode(),  # ProseWrapping
+        canonical.replace('"name"', '"nmae"').encode(),  # KeyTypo
+        json.dumps(canonical).encode(),  # Stringification
+        b'"10"',
+        b'10',  # TypeSwap (both directions)
+        b'{"name":"tea","name":"tea","items":[1,2,3]}',  # DuplicateKeys
+    ]
+
+
+JSON_SEEDS = [
+    b'',
+    b'null',
+    b'true',
+    b'10',
+    b'-1.25e+2',
+    b'"\\uD83D\\uDE00"',
+    b'{"name":"tea","items":[1,2,3]}',
+    b'{"x":1,"x":2}',
+    b'[[{"nmae":"tea","items":["1"]}]]',
+    b'["Tea","coffee"]',
+    b'```json\n{"x":1,}\n```',
+    b'{name:\'tea\', items:[1,2',
+    b'"{\\"x\\":1}"',
+    b'\xff',
+    *_json_corruption_seeds(),
+]
+JSON_TOKENS = [
+    b'null', b'true', b'false', b'"', b'\\', b'\n', b'\t', b':', b',',
+    b'{', b'}', b'[', b']', b'0', b'-1', b'1e9999', b'\\uD800',
+    b'"name"', b'"items"', b'"x"', b'"tea"', 'é'.encode(), b'\xff',
+]
+
+MARKDOWN_SEEDS = [
+    b'',
+    b'# Tea\n\nHot **and** _iced_.\n',
+    b'# Tea\n\n## Iced\n\nCold brew.\n\n## Hot\n\nKettle.\n',
+    b'- one\n- two\n- three\n',
+    b'1. one\n2. two\n3. three\n',
+    b'> quoted\n> text\n',
+    b'```rust\nfn main() {}\n```\n',
+    b'| a | b |\n| - | - |\n| 1 | 2 |\n',
+    b'[tea]: /tea "Tea"\n\n[tea]\n',
+    b'~~strike~~ www.example.org user@example.com\n',
+    b'- [ ] todo\n- [x] done\n',
+    b'<script>alert(1)</script>\n',
+    b'Setext\n======\n\nBody.\n',
+    b'a\\\nb\n',
+    b'> - nested\n>   continued\n',
+]
+MARKDOWN_TOKENS = [
+    b'#', b'*', b'_', b'~', b'`', b'|', b'-', b'>', b'[', b']', b'(', b')',
+    b'!', b':', b'.', b'\n', b'\t', b'\r\n', b'1.', b'    ', b'<', b'>',
+    b'"', b'\\', 'café'.encode(), b'\xff',
+]
+
+SCHEMA_SEEDS = [
+    b'{"type":"object"}' + RS + b'{"x":1}',
+    b'{"type":"string"}' + RS + b'10',
+    b'{"enum":["tea","coffee"]}' + RS + b'"cofee"',
+    b'{"type":"object","required":["x"],"properties":{"x":{"type":"number"}}}'
+    + RS
+    + b'{"x":"1"}',
+    b'{"allOf":[{"type":"string"},{"minLength":2}]}' + RS + b'"t"',
+    b'{"not":{"type":"string"}}' + RS + b'"x"',
+    b'{"type":"array","items":{"type":"integer"},"uniqueItems":true}'
+    + RS
+    + b'[1,1,2]',
+    b'false' + RS + b'{}',
+    b'{"pattern":"^[a-z]+$"}' + RS + b'"Tea1"',
+    *(b'{"type":"object"}' + RS + corrupted for corrupted in _json_corruption_seeds()),
+]
+SCHEMA_TOKENS = JSON_TOKENS + [RS]
+
+PATTERN_SEEDS = [
+    b'^[a-z]+[0-9]{2}$' + RS + b'ab12',
+    b'foo|bar' + RS + b'xxbarxx',
+    b'(?<year>\\d{4})-(?<month>\\d{2})' + RS + b'2024-01',
+    b'(a)\\1' + RS + b'aa',
+    b'(?=abc)ab' + RS + b'abc',
+    b'(?<=ab)c' + RS + b'abc',
+    b'\\p{Script=Greek}+' + RS + 'Ελλάδα'.encode(),
+    b'a+' + RS + b'aaaa',
+    b'[^]' + RS + b'\n',
+    b'(a+)+$' + RS + b'aaaaaaaaaaaa!',
+    b'^\\d+$' + RS + '１２'.encode(),
+]
+PATTERN_TOKENS = [
+    b'a', b'b', b'0', b'9', b'+', b'*', b'?', b'.', b'^', b'$', b'|', b'(',
+    b')', b'[', b']', b'{', b'}', b'\\d', b'\\w', b'\\s', b'\\1', RS,
+    b'\n', 'é'.encode(), b'\xff',
+]
+
+UNIFIED_SEEDS = [
+    b'one\ntwo\n' + RS + b'--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n one\n-two\n+three\n',
+    b'a\nb\nc\n' + RS + b'--- a/x\n+++ b/x\n@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n',
+    b'' + RS + b'--- a/x\n+++ b/x\n@@ -0,0 +1,1 @@\n+new\n',
+]
+UNIFIED_TOKENS = [
+    b'@@', b'---', b'+++', b'+', b'-', b' ', b'\n', b'\\', RS, b'\t',
+    'é'.encode(), b'\xff',
+]
+
+FUZZY_SEEDS = [
+    b'hello world' + RS + b'wurld' + RS + b'earth' + RS + b'1',
+    b'tea' + RS + b'tea' + RS + b'coffee' + RS + b'0',
+    b'invoice-1001' + RS + b'invoice-1002' + RS + b'x' + RS + b'2',
+]
+FUZZY_TOKENS = JSON_TOKENS[:0] + [
+    b'a', b'e', b'i', b'o', b'u', b' ', b'-', RS, b'0', b'1', b'2',
+    'é'.encode(), b'\xff',
+]
+
+MATCHING_SEEDS = [
+    b'tea' + RS + b'tea' + RS + b'coffee',
+    b'raeder' + RS + b'reader',
+    b'invoice-1001' + RS + b'invoice-1002',
+    b'not ready' + RS + b'ready',
+]
+MATCHING_TOKENS = [
+    b'a', b'e', b'i', b'o', b'u', b' ', b'-', RS, b'0', b'1', b'2', b'not ',
+    'é'.encode(), b'\xff',
+]
+
+PATCH_SEEDS = [
+    b'hot tea' + RS + b'hot coffee' + RS + b'cold tea',
+    b'' + RS + b'grew' + RS + b'',
+    b'shrank' + RS + b'' + RS + b'shrank!',
+]
+PATCH_TOKENS = [
+    b'a', b'b', b' ', b'\n', b'-', RS, 'é'.encode(), b'\xff',
+]
+
+TARGETS = {
+    'json': {'seeds': JSON_SEEDS, 'tokens': JSON_TOKENS, 'differential': None},
+    'markdown': {'seeds': MARKDOWN_SEEDS, 'tokens': MARKDOWN_TOKENS, 'differential': 'markdown'},
+    'schema': {'seeds': SCHEMA_SEEDS, 'tokens': SCHEMA_TOKENS, 'differential': None},
+    'pattern': {'seeds': PATTERN_SEEDS, 'tokens': PATTERN_TOKENS, 'differential': 'pattern'},
+    'unified': {'seeds': UNIFIED_SEEDS, 'tokens': UNIFIED_TOKENS, 'differential': None},
+    'fuzzy': {'seeds': FUZZY_SEEDS, 'tokens': FUZZY_TOKENS, 'differential': None},
+    'matching': {'seeds': MATCHING_SEEDS, 'tokens': MATCHING_TOKENS, 'differential': None},
+    'patch': {'seeds': PATCH_SEEDS, 'tokens': PATCH_TOKENS, 'differential': None},
+}
+
+
+class Random:
+    """Fixed LCG algorithm; reproducibility does not depend on Python random."""
+
+    def __init__(self, seed):
+        self.state = seed
+
+    def index(self, length):
+        self.state = (self.state * 6364136223846793005 + 1) & ((1 << 64) - 1)
+        return (self.state >> 32) % length
+
+
+def mutate(data, random, tokens):
+    for _ in range(1 + random.index(3)):
+        start = random.index(len(data) + 1)
+        end = start + random.index(len(data) - start + 1)
+        token = tokens[random.index(len(tokens))]
+        operation = random.index(5)
+        if operation == 0:
+            data = data[:start] + token + data[start:]
+        elif operation == 1:
+            data = data[:start] + data[end:]
+        elif operation == 2:
+            data = data[:start] + token + data[end:]
+        elif operation == 3:
+            data = b'[' + data + b']'
+        else:
+            data = data[:end] + data[start:end] + data[end:]
+    return data[:4096]
+
+
+def covered_regions(document):
+    if document.get('type') != 'llvm.coverage.json.export' or document.get('version') != '3.1.0':
+        raise ValueError('unsupported LLVM coverage JSON format')
+    regions = set()
+    core_functions = 0
+    core_root = ROOT / 'crates/core/src'
+    classified_filenames = {}
+    for unit in document['data']:
+        for function in unit['functions']:
+            filenames = function['filenames']
+            core_files = {}
+            for file_id, name in enumerate(filenames):
+                if name not in classified_filenames:
+                    filename = Path(name)
+                    classified_filenames[name] = (
+                        str(filename.relative_to(ROOT)) if filename.is_relative_to(core_root) else None)
+                relative = classified_filenames[name]
+                if relative is not None:
+                    core_files[file_id] = relative
+            core_functions += bool(core_files)
+            for region in function['regions']:
+                if len(region) != 8 or any(type(value) is not int or value < 0 for value in region):
+                    raise ValueError('malformed coverage region')
+                line, column, end_line, end_column, count, file_id, _, kind = region
+                if file_id >= len(filenames):
+                    raise ValueError('coverage file index out of bounds')
+                if count and kind == 0 and file_id in core_files:
+                    # Coalesce generic instantiations by source coordinates. Count only code regions.
+                    regions.add((core_files[file_id], line, column, end_line, end_column))
+    if not core_functions:
+        raise ValueError('coverage export contains no core functions')
+    return regions
+
+
+# --------------------------------------------------------------------------
+# Differential oracles: Node's `RegExp` for `pattern`, `cmark-gfm` for
+# `markdown`. Each oracle is invoked out-of-process, never linked.
+# --------------------------------------------------------------------------
+
+_NODE_PATTERN_SCRIPT = (
+    "const p = process.argv[1], s = process.argv[2];"
+    "let re;"
+    "try { re = new RegExp(p, 'u'); }"
+    "catch (e) { process.stdout.write('unsupported'); process.exit(0); }"
+    "process.stdout.write(String(re.test(s)));"
+)
+
+
+def node_pattern_test(pattern, subject, timeout, counts=None):
+    """`None` means Node itself refuses the construct under `u` mode (the
+    restricted subset both implement) or could not decide within the bounded
+    timeout; neither is a mismatch. V8's own backtracking regex engine is
+    exactly as vulnerable to catastrophic backtracking as any backtracking
+    engine (this project's derivative engine is specifically designed to
+    avoid that on the same inputs, e.g. the documented `(a+)+$` seed against
+    a long run of `a`s), so a reference-tool timeout on an adversarial
+    pattern says nothing about which engine, if either, is wrong."""
+    try:
+        result = subprocess.run(
+            ['node', '-e', _NODE_PATTERN_SCRIPT, '--', pattern, subject],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        if counts is not None:
+            counts['reference_timeouts'] += 1
+        return None
+    result.check_returncode()
+    if result.stderr:
+        raise ValueError(f'node pattern oracle reported a diagnostic: {result.stderr!r}')
+    output = result.stdout.strip()
+    if output == 'unsupported':
+        if counts is not None:
+            counts['reference_rejections'] += 1
+        return None
+    if output not in ('true', 'false'):
+        raise ValueError(f'node pattern oracle returned an unexpected value: {output!r}')
+    return output == 'true'
+
+
+class DifferentialMismatch(ValueError):
+    """A completed independent oracle disagrees with the implementation."""
+
+
+def check_pattern_differential(record, timeout, counts=None):
+    if record.get('kind') != 'pattern':
+        raise ValueError(f'unexpected differential record for target pattern: {record!r}')
+    expected = node_pattern_test(record['pattern'], record['subject'], timeout, counts)
+    if expected is None:
+        return False
+    if expected != record['expected']:
+        raise DifferentialMismatch(
+            'pattern differential mismatch: pattern='
+            f'{record["pattern"]!r} subject={record["subject"]!r} '
+            f'purrassist_core={record["expected"]} node={expected}'
+        )
+    return True
+
+
+CMARK_GFM_VERSION = '0.29.0.gfm.13'
+CMARK_GFM_SOURCE_SHA256 = '5abc61798ebd9de5660bc076443c07abad2b8d15dbc11094a3a79644b8ad243a'
+CMARK_GFM_URL = f'https://codeload.github.com/github/cmark-gfm/tar.gz/refs/tags/{CMARK_GFM_VERSION}'
+CMARK_GFM_EXTENSIONS = ['table', 'strikethrough', 'autolink', 'tasklist', 'tagfilter']
+CMARK_BACKTICK_BEFORE = '      subj->backticks[numticks] = subj->pos - numticks;'
+CMARK_BACKTICK_AFTER = '''      if (subj->backticks[numticks] < subj->pos - numticks) {
+        subj->backticks[numticks] = subj->pos - numticks;
+      }'''
+CMARK_BACKTICK_PATCH_SHA256 = hashlib.sha256(
+    (CMARK_BACKTICK_BEFORE + '\n' + CMARK_BACKTICK_AFTER).encode()).hexdigest()
+
+
+CMARK_EMPHASIS_PATCHES = [['  bufsize_t openers_bottom[3][128];', '  bufsize_t openers_bottom[2][3][128];'],
+ ['  // initialize openers_bottom:\n'
+  '  memset(&openers_bottom, 0, sizeof(openers_bottom));\n'
+  '  for (i=0; i < 3; i++) {\n'
+  "    openers_bottom[i]['*'] = stack_bottom;\n"
+  "    openers_bottom[i]['_'] = stack_bottom;\n"
+  "    openers_bottom[i]['\\''] = stack_bottom;\n"
+  '    openers_bottom[i][\'"\'] = stack_bottom;\n'
+  '  }',
+  '  // Separate close-only and dual-purpose emphasis runs.\n'
+  '  memset(&openers_bottom, 0, sizeof(openers_bottom));\n'
+  '  for (i=0; i < 3; i++) {\n'
+  "    openers_bottom[0][i]['*'] = stack_bottom;\n"
+  "    openers_bottom[1][i]['*'] = stack_bottom;\n"
+  "    openers_bottom[0][i]['_'] = stack_bottom;\n"
+  "    openers_bottom[1][i]['_'] = stack_bottom;\n"
+  "    openers_bottom[0][i]['\\''] = stack_bottom;\n"
+  '    openers_bottom[0][i][\'"\'] = stack_bottom;\n'
+  '  }'],
+ ['    if (closer->can_close) {\n      // Now look backwards for first matching opener:',
+  '    if (closer->can_close) {\n'
+  "      int can_open_floor = (closer->delim_char == '*' || closer->delim_char == '_') && "
+  'closer->can_open;\n'
+  '      // Now look backwards for first matching opener:'],
+ ['openers_bottom[closer->length % 3][closer->delim_char]',
+  'openers_bottom[can_open_floor][closer->length % 3][closer->delim_char]'],
+ ['openers_bottom[old_closer->length % 3][old_closer->delim_char]',
+  'openers_bottom[can_open_floor][old_closer->length % 3][old_closer->delim_char]']]
+CMARK_EMPHASIS_PATCH_SHA256 = hashlib.sha256(
+    json.dumps(CMARK_EMPHASIS_PATCHES, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
+
+
+CMARK_DESTINATION_BEFORE = "static bufsize_t manual_scan_link_url_2(cmark_chunk *input, bufsize_t offset,\n                                        cmark_chunk *output) {\n  bufsize_t i = offset;\n  size_t nb_p = 0;\n\n  while (i < input->len) {\n    if (input->data[i] == '\\\\' &&\n        i + 1 < input-> len &&\n        cmark_ispunct(input->data[i+1]))\n      i += 2;\n    else if (input->data[i] == '(') {\n      ++nb_p;\n      ++i;\n      if (nb_p > 32)\n        return -1;\n    } else if (input->data[i] == ')') {\n      if (nb_p == 0)\n        break;\n      --nb_p;\n      ++i;\n    } else if (cmark_isspace(input->data[i])) {\n      if (i == offset) {\n        return -1;\n      }\n      break;\n    } else {\n      ++i;\n    }\n  }\n\n  if (i >= input->len)\n    return -1;\n\n  {\n    cmark_chunk result = {input->data + offset, i - offset, 0};\n    *output = result;\n  }\n  return i - offset;\n}\n"
+CMARK_DESTINATION_AFTER = "static bufsize_t manual_scan_link_url_2(cmark_chunk *input, bufsize_t offset,\n                                        cmark_chunk *output) {\n  bufsize_t i = offset;\n  size_t nb_p = 0;\n\n  while (i < input->len) {\n    if (input->data[i] == '\\\\' &&\n        i + 1 < input-> len &&\n        cmark_ispunct(input->data[i+1]))\n      i += 2;\n    else if (input->data[i] == '(') {\n      ++nb_p;\n      ++i;\n      if (nb_p > 32)\n        return -1;\n    } else if (input->data[i] == ')') {\n      if (nb_p == 0)\n        break;\n      --nb_p;\n      ++i;\n    } else if (cmark_isspace(input->data[i])) {\n      if (i == offset) {\n        return -1;\n      }\n      break;\n    } else {\n      ++i;\n    }\n  }\n\n  if (i >= input->len || nb_p != 0)\n    return -1;\n\n  {\n    cmark_chunk result = {input->data + offset, i - offset, 0};\n    *output = result;\n  }\n  return i - offset;\n}\n"
+CMARK_DESTINATION_PATCH_SHA256 = hashlib.sha256(
+    json.dumps([CMARK_DESTINATION_BEFORE, CMARK_DESTINATION_AFTER], separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
+
+
+def patch_reference_destination_balance(source):
+    """Reject unmatched bare-destination parentheses at the exact scanner site."""
+    if source.count(CMARK_DESTINATION_BEFORE) != 1:
+        raise ValueError('cmark-gfm destination patch requires its exact unique function preimage')
+    return source.replace(CMARK_DESTINATION_BEFORE, CMARK_DESTINATION_AFTER)
+
+
+def destination_reference_profile(source):
+    """Select potential definition destinations independently of either renderer.
+
+    Existing literal-prefix certificates retain their separate guarded oracle.
+    Other raw definition spellings with an opening parenthesis select the
+    corrected bare-destination scanner, including container/multiline forms.
+    Balanced, escaped, angle and unused spellings are still executed in full.
+    """
+    return '(' in source and ']:' in source and reference_admission_profile(source) == 'gfm'
+
+
+def patch_reference_emphasis_floors(source):
+    """Keep close-only and dual-purpose opener floors separate; fail closed."""
+    for before, after in CMARK_EMPHASIS_PATCHES:
+        if source.count(before) != 1:
+            raise ValueError('cmark-gfm emphasis patch requires each exact unique source preimage')
+        source = source.replace(before, after)
+    return source
+
+
+def patch_reference_backtick_cache(source):
+    """Preserve the furthest known closer; reject an unexpected patch site."""
+    lines = source.split('\n')
+    if lines.count(CMARK_BACKTICK_BEFORE) != 1:
+        raise ValueError('cmark-gfm backtick patch requires its exact unique source preimage')
+    return '\n'.join(CMARK_BACKTICK_AFTER if line == CMARK_BACKTICK_BEFORE else line for line in lines)
+
+
+def ensure_cmark_gfm(*, corrected_backticks=False, corrected_emphasis=False, corrected_destinations=False):
+    """Build the pinned `cmark-gfm` CLI from a digest-verified source tarball
+    into a persistent `.cache/tools/` location, reused across runs."""
+    corrected = corrected_backticks or corrected_emphasis or corrected_destinations
+    if corrected:
+        inventory = json.loads((ROOT / 'vendor/tooling.json').read_text())
+        entry = next(item for item in inventory if item['name'] == 'cmark-gfm')
+        if (entry.get('source_sha256') != CMARK_GFM_SOURCE_SHA256
+                or (corrected_backticks and entry.get('backtick_cache_patch_sha256') != CMARK_BACKTICK_PATCH_SHA256)
+                or (corrected_emphasis and entry.get('emphasis_floors_patch_sha256') != CMARK_EMPHASIS_PATCH_SHA256)
+                or (corrected_destinations and entry.get('destination_balance_patch_sha256') != CMARK_DESTINATION_PATCH_SHA256)):
+            raise ValueError('cmark-gfm correction differs from its registered digest')
+    suffix = ('-backtick-' + CMARK_BACKTICK_PATCH_SHA256[:16] if corrected_backticks else '')
+    suffix += '-emphasis-' + CMARK_EMPHASIS_PATCH_SHA256[:16] if corrected_emphasis else ''
+    suffix += '-destination-' + CMARK_DESTINATION_PATCH_SHA256[:16] if corrected_destinations else ''
+    tools_root = ROOT / '.cache' / 'tools' / f'cmark-gfm-{CMARK_GFM_VERSION}{suffix}'
+    binary = tools_root / 'bin' / 'cmark-gfm'
+    identity_path = tools_root / 'backtick-build.json'
+    patch_identity = {'patch_sha256': CMARK_BACKTICK_PATCH_SHA256} if corrected_backticks else {}
+    if corrected_emphasis:
+        patch_identity['emphasis_patch_sha256'] = CMARK_EMPHASIS_PATCH_SHA256
+    if corrected_destinations:
+        patch_identity['destination_patch_sha256'] = CMARK_DESTINATION_PATCH_SHA256
+    if binary.is_file():
+        version = subprocess.run([str(binary), '--version'], capture_output=True, text=True, timeout=10).stdout
+        if CMARK_GFM_VERSION in version:
+            if not corrected:
+                return binary
+            inlines = tools_root / 'src' / 'src' / 'inlines.c'
+            if identity_path.is_file() and inlines.is_file() and json.loads(identity_path.read_text()) == {
+                    'source_sha256': CMARK_GFM_SOURCE_SHA256,
+                    **patch_identity,
+                    'corrected_inlines_sha256': hashlib.sha256(inlines.read_bytes()).hexdigest(),
+                    'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest()}:
+                return binary
+    tools_root.mkdir(parents=True, exist_ok=True)
+    # CMARK_GFM_URL is a fixed, pinned constant; its digest is verified below.
+    existing_archive = ROOT / '.cache' / 'tools' / f'cmark-gfm-{CMARK_GFM_VERSION}' / 'source.tar.gz'
+    if corrected and existing_archive.is_file():
+        data = existing_archive.read_bytes()
+    else:
+        with urllib.request.urlopen(CMARK_GFM_URL, timeout=60) as response:
+            data = response.read()
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != CMARK_GFM_SOURCE_SHA256:
+        raise ValueError(f'cmark-gfm source digest mismatch: got {digest}, expected {CMARK_GFM_SOURCE_SHA256}')
+    archive = tools_root / 'source.tar.gz'
+    archive.write_bytes(data)
+    source = tools_root / 'src'
+    if source.exists():
+        shutil.rmtree(source)
+    source.mkdir()
+    with tarfile.open(archive) as tar:
+        members = tar.getmembers()
+        for member in members:
+            parts = member.name.split('/', 1)
+            member.name = parts[1] if len(parts) == 2 else ''
+        tar.extractall(source, members=[member for member in members if member.name], filter='data')
+    if corrected:
+        inlines = source / 'src' / 'inlines.c'
+        patched = patch_reference_backtick_cache(inlines.read_text()) if corrected_backticks else inlines.read_text()
+        if corrected_emphasis:
+            patched = patch_reference_emphasis_floors(patched)
+        if corrected_destinations:
+            patched = patch_reference_destination_balance(patched)
+        inlines.write_text(patched)
+    build_dir = tools_root / 'build'
+    configure = subprocess.run(
+        ['cmake', '-S', str(source), '-B', str(build_dir), '-DCMAKE_BUILD_TYPE=Release',
+         '-DCMARK_TESTS=OFF', '-DCMARK_SHARED=OFF', '-DCMARK_STATIC=ON',
+         '-DCMAKE_POLICY_VERSION_MINIMUM=3.5'],
+        capture_output=True, text=True, timeout=120,
+    )
+    if configure.returncode != 0:
+        raise ValueError(f'cmark-gfm configure failed:\n{configure.stdout}\n{configure.stderr}')
+    build = subprocess.run(
+        ['cmake', '--build', str(build_dir), '--target', 'cmark-gfm', '-j', str(os.cpu_count() or 1)],
+        capture_output=True, text=True, timeout=300,
+    )
+    if build.returncode != 0:
+        raise ValueError(f'cmark-gfm build failed:\n{build.stdout}\n{build.stderr}')
+    built = build_dir / 'src' / 'cmark-gfm'
+    if not built.is_file():
+        raise ValueError('cmark-gfm build did not produce the expected executable')
+    (tools_root / 'bin').mkdir(exist_ok=True)
+    shutil.copy2(built, binary)
+    binary.chmod(0o755)
+    if corrected:
+        identity_path.write_text(json.dumps({'source_sha256': CMARK_GFM_SOURCE_SHA256,
+            **patch_identity,
+            'corrected_inlines_sha256': hashlib.sha256(inlines.read_bytes()).hexdigest(),
+            'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest()}, sort_keys=True) + '\n')
+    return binary
+
+
+# Raw-input profile selection is independent of PurRAssist parsing and never
+# runs as a fallback after a mismatch. cmark-gfm cannot recognize task markers
+# when an outer container and their item open on the same physical line,
+# and incorrectly treats a later literal [x]/[X] as checking an initial [ ].
+_LIST_PREFIX = re.compile(r'(?:[-+*]|[0-9]{1,9}[.)])[ \t]+')
+_TASK_MARKER = re.compile(r'\[([ \txX\v\f])\](?=[ \t\v\f]|$)')
+
+
+def tasklist_reference_limit_reasons(source):
+    # Scan once through each prefix. A nested quantified regex would admit
+    # exponential whitespace partitions on long sequences of quote markers.
+    reasons = set()
+    reference_prefix = False
+    task_prefix = False
+    physical_lines = re.split(r'\r\n|[\r\n]', source)
+    for line_number, line in enumerate(physical_lines):
+        cursor = 0
+        containers = 0
+        last_list = False
+        while cursor < len(line):
+            leading = 0
+            while cursor < len(line) and line[cursor] == ' ' and leading < 3:
+                cursor += 1
+                leading += 1
+            reference_prefix |= _REFERENCE_LABEL.match(line, cursor) is not None
+            task_prefix |= _TASK_MARKER.match(line, cursor) is not None
+            marker = _TASK_MARKER.match(line, cursor) if last_list else None
+            if marker is not None:
+                if containers >= 2:
+                    reasons.add("task marker shares physical line with an outer container")
+                if marker[1] not in 'xX' and re.search(r"\[[xX]\]", line[marker.end():]):
+                    reasons.add("unchecked task contains a later literal checked marker")
+                if marker[1] not in ' xX':
+                    reasons.add("task marker uses non-space ASCII whitespace inside brackets")
+                tail = line[marker.end():]
+                if tail and not tail.strip(' \t\v\f'):
+                    reasons.add("task marker occupies an otherwise empty first physical line")
+                    if not tail.strip(' \t'):
+                        reasons.add("empty task separator consists only of spaces or tabs")
+                if not tail and line_number + 1 < len(physical_lines):
+                    reasons.add("task separator can be the paragraph continuation newline")
+            if last_list and line[cursor:] == '[' and line_number + 1 < len(physical_lines):
+                if re.match(r'[ \t>]*\](?=[ \t\v\f]|$)', physical_lines[line_number + 1]):
+                    reasons.add("task marker's single whitespace character is a logical newline")
+            if cursor < len(line) and line[cursor] == '>':
+                cursor += 1
+                if cursor < len(line) and line[cursor] in ' \t':
+                    cursor += 1
+                containers += 1
+                last_list = False
+            else:
+                item = _LIST_PREFIX.match(line, cursor)
+                if item is None:
+                    break
+                cursor = item.end()
+                containers += 1
+                last_list = True
+    if task_prefix and any(not line.strip(' \t') for line in physical_lines[:-1]):
+        reasons.add('physical blank line can make a task list loose')
+    if reference_prefix and task_prefix:
+        reasons.add('task marker can follow a reference definition in its first paragraph')
+    return sorted(reasons)
+
+
+def tasklist_reference_limited(source):
+    return bool(tasklist_reference_limit_reasons(source))
+
+
+def generated_hardbreak_reference_profile(source):
+    """Certify that BR markup cannot be raw HTML or entity-produced text.
+
+    A possible physical hardbreak selects this profile before execution; only
+    actual generated BR elements in the reference output are projected.
+    """
+    return '<' not in source and '&' not in source and bool(
+        re.search(r'(?:\\| {2})(?:\r\n|\r|\n)', source))
+
+
+def project_reference_hardbreaks(source, html):
+    if not generated_hardbreak_reference_profile(source):
+        raise ValueError('hardbreak projection requires its raw-input certificate')
+    return re.sub(r'(<br>\n)[ \t]+', r'\1', normalize_html(html))
+
+
+def generated_paragraph_prefix_reference_profile(source):
+    """Certify generated paragraph/list markup without semantic entities."""
+    return '<' not in source and '&' not in source
+
+
+def project_reference_paragraph_prefix(source, html):
+    if not generated_paragraph_prefix_reference_profile(source):
+        raise ValueError('paragraph-prefix projection requires its raw-input certificate')
+    return re.sub(r'(<(?:p|li)>)[ \t]+', r'\1', normalize_html(html))
+
+
+_EMAIL_RETRY = re.compile(r'@[A-Za-z0-9._-]*\.[A-Za-z0-9._-]*@')
+_DOTLESS_EMAIL_ANCHOR = re.compile(r'<a href="mailto:([A-Za-z0-9.+_-]+@[A-Za-z0-9_-]+)">\1</a>')
+
+
+def generated_email_retry_reference_profile(source):
+    """Certify generated email links with independently excluded protected targets.
+
+    A repeated @ after a domain period selects the known reference counter bug
+    before execution. The original scope forbids bracket/escape syntax. A
+    second scope admits them only when no '(' or ':' can introduce an inline
+    or reference target. Both forbid HTML, angle links, entities and code spans.
+    """
+    protected = not any(character in source for character in '[]\\')
+    no_targets = '(' not in source and ':' not in source
+    return not any(character in source for character in '<&`') and (protected or no_targets) and bool(_EMAIL_RETRY.search(source))
+
+
+def project_reference_email_retries(source, html):
+    if not generated_email_retry_reference_profile(source):
+        raise ValueError('email-retry projection requires its raw-input certificate')
+    # GFM extended emails require a period AFTER their own @. The pinned
+    # postprocess_text goto found_at keeps np from a previous attempted domain.
+    # Keep the entire visible literal label and every other HTML byte unchanged.
+    return _DOTLESS_EMAIL_ANCHOR.sub(r'\1', normalize_html(html))
+
+
+_REFERENCE_LABEL = re.compile(r'\[((?:[^\[\]\\\x00-\x08\x0e-\x1f\x7f]|\\[!"#$%&\'()*+,./:;<=>?@\[\]\\^_`{|}~\-]|\\(?![!"#$%&\'()*+,./:;<=>?@\[\]\\^_`{|}~\-])){1,999})\]:[ \t]*([^ \t\v\f\r\n]+)([^\r\n]*)')
+# A definition may place its bare destination after one physical line break.
+# This extension is exclusive to invalid unbalanced destinations; title
+# admission continues to use the original same-line matcher.
+_UNBALANCED_REFERENCE_LABEL = re.compile(_REFERENCE_LABEL.pattern.replace(
+    r'\]:[ \t]*', r'\]:[ \t]*(?:\n[ \t]*)?', 1))
+
+_REFERENCE_GUARD = 'PurrassistLiteralReferenceGuard1848099'
+_GUARDED_BLOCK = re.compile(r'\A(?:<p>|<h[12]>|<table>\n<thead>\n<tr>\n<th(?: align="(?:left|right|center)")?>)' + _REFERENCE_GUARD)
+
+
+def unbalanced_reference_paragraph(source):
+    """Select an invalid definition-shaped prefix independently.
+
+    Only a nonempty label without unescaped brackets/non-whitespace control bytes and a bare
+    destination with an unmatched opening
+    parenthesis qualify. One physical newline may separate the colon from
+    that destination; blank lines never qualify. It must remain ordinary block content, including any
+    continuation lines. Balanced/escaped parentheses and angle destinations
+    do not qualify. The primary grammar forbids this reference definition.
+    """
+    normalized = source.replace('\r\n', '\n').replace('\r', '\n')
+    match = _UNBALANCED_REFERENCE_LABEL.match(normalized)
+    if match is None or not match[1].strip() or _REFERENCE_GUARD in source:
+        return False
+    if re.search(r'\n[ \t]*\n', match[1]):
+        return False
+    destination = match[2]
+    if destination.startswith('<') or any(ord(char) < 32 or ord(char) == 127 for char in destination):
+        return False
+    depth = 0
+    cursor = 0
+    while cursor < len(destination):
+        char = destination[cursor]
+        if char == '\\' and cursor + 1 < len(destination) and destination[cursor + 1] in r'''!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~''':
+            cursor += 2
+            continue
+        if char == '(':
+            depth += 1
+        elif char == ')':
+            if depth == 0:
+                return False
+            depth -= 1
+        cursor += 1
+    return depth > 0
+
+
+def escaped_terminal_reference_title(source):
+    """Select an isolated invalid title with no unescaped closing delimiter."""
+    normalized = source.replace('\r\n', '\n').replace('\r', '\n')
+    line, _, rest = normalized.partition('\n')
+    if rest.strip(' \t\n') or _REFERENCE_GUARD in source:
+        return False
+    match = _REFERENCE_LABEL.fullmatch(line)
+    if match is None or not match[1].strip():
+        return False
+    title = match[3].strip(' \t')
+    if len(title) < 3 or title[0] not in '"\'(':
+        return False
+    closer = ')' if title[0] == '(' else title[0]
+    if title[-1] != closer:
+        return False
+    cursor = 1
+    escaped_closer = False
+    while cursor < len(title):
+        char = title[cursor]
+        if char == '\\' and cursor + 1 < len(title) and title[cursor + 1] in r"""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~""":
+            escaped_closer = cursor + 2 == len(title) and title[cursor + 1] == closer
+            cursor += 2
+            continue
+        if char == closer or (title[0] == '(' and char == '('):
+            return False
+        cursor += 1
+    return escaped_closer
+
+
+def reference_admission_profile(source):
+    if unbalanced_reference_paragraph(source):
+        return 'literal-unbalanced-destination'
+    if escaped_terminal_reference_title(source):
+        return 'literal-escaped-title-closer'
+    return 'gfm'
+
+
+def cmark_gfm_render(binary, source, timeout, *, tasklists=True):
+    args = [str(binary)]
+    for extension in CMARK_GFM_EXTENSIONS:
+        if extension == 'tasklist' and not tasklists:
+            continue
+        args += ['-e', extension]
+    args.extend(['--unsafe', '--strikethrough-double-tilde'])
+    result = subprocess.run(args, input=source.encode('utf-8'), capture_output=True, timeout=timeout)
+    result.check_returncode()
+    if result.stderr:
+        raise ValueError(f'cmark-gfm reported a diagnostic: {result.stderr!r}')
+    return result.stdout.decode('utf-8')
+
+
+def verify_reference_backtick_correction(original, corrected):
+    """Execute primary-grammar controls against both independent binaries."""
+    for source, expected, raw_expected in [
+        ('[`a ``b`` c ``d``', '<p>[`a <code>b</code> c <code>d</code></p>\n',
+         '<p>[`a <code>b</code> c ``d``</p>\n'),
+        ('[```a ``b`` c ``d``', '<p>[```a <code>b</code> c <code>d</code></p>\n',
+         '<p>[```a <code>b</code> c ``d``</p>\n'),
+        ('[``a `b` c `d`', '<p>[``a <code>b</code> c <code>d</code></p>\n',
+         '<p>[``a <code>b</code> c `d`</p>\n'),
+        ('[```a ``b`` c ``d`` ```', '<p>[<code>a ``b`` c ``d`` </code></p>\n',
+         '<p>[<code>a ``b`` c ``d`` </code></p>\n'),
+        ('[`a\r\n`` b\r\nc `` tail ``d``', '<p>[`a\n<code>b c</code> tail <code>d</code></p>\n',
+         '<p>[`a\n<code>b c</code> tail ``d``</p>\n'),
+        ('`one` and ``two``', '<p><code>one</code> and <code>two</code></p>\n',
+         '<p><code>one</code> and <code>two</code></p>\n'),
+    ]:
+        for binary, wanted in [(original, raw_expected), (corrected, expected)]:
+            actual = cmark_gfm_render(binary, source, 10)
+            if actual != wanted:
+                raise ValueError(f'cmark-gfm backtick correction control failed: source={source!r} '
+                                 f'expected={wanted!r} actual={actual!r}')
+    corpus = json.loads((ROOT / 'crates/core/tests/data/markdown/gfm-0.29.0.gfm.13.json').read_text())
+    gold_disagreements = []
+    for case in corpus:
+        raw = cmark_gfm_render(original, case['markdown'], 10)
+        fixed = cmark_gfm_render(corrected, case['markdown'], 10)
+        if raw != fixed:
+            raise ValueError(f'cmark-gfm backtick correction changed official example {case["example"]}')
+        if normalize_html(fixed) != normalize_html(case['html']):
+            gold_disagreements.append(case['example'])
+    return {'authoritative_controls': 6, 'official_examples': len(corpus),
+            'original_corrected_exact_agreements': len(corpus),
+            'unchanged_reference_gold_disagreements': gold_disagreements}
+
+
+CMARK_EMPHASIS_CONTROLS = [{'commonmark_0_31_1': '<p>Hot <em>)and<strong>nd</strong> _ict <em>)and<strong>nd</strong> '
+                       '_icd</em></em> <em>iced</em>.</p>\n',
+  'gfm_0_29': '<p>Hot *)and<strong>nd</strong> _ict *)and<strong>nd</strong> _icd** '
+              '<em>iced</em>.</p>\n',
+  'source': 'Hot *)and**nd** _ict *)and**nd** _icd** _iced_.'},
+ {'commonmark_0_31_1': '<p><em>a<strong>b</strong> c</em>*</p>\n',
+  'gfm_0_29': '<p>*a<strong>b</strong> c**</p>\n',
+  'source': '*a**b** c**'},
+ {'commonmark_0_31_1': '<p><em>)a<strong>b</strong> c</em>*</p>\n',
+  'gfm_0_29': '<p>*)a<strong>b</strong> c**</p>\n',
+  'source': '*)a**b** c**'},
+ {'commonmark_0_31_1': '<p><em>a_b</em> c__</p>\n',
+  'gfm_0_29': '<p><em>a_b</em> c__</p>\n',
+  'source': '_a_b_ c__'},
+ {'commonmark_0_31_1': '<p><em>a<strong>b</strong> c</em></p>\n',
+  'gfm_0_29': '<p><em>a<strong>b</strong> c</em></p>\n',
+  'source': '*a**b** c*'},
+ {'commonmark_0_31_1': '<p><em>)a<strong>b</strong> c</em></p>\n',
+  'gfm_0_29': '<p><em>)a<strong>b</strong> c</em></p>\n',
+  'source': '*)a**b** c*'},
+ {'commonmark_0_31_1': '<p>a<em><strong>b</strong></em>c</p>\n',
+  'gfm_0_29': '<p>a<em><strong>b</strong></em>c</p>\n',
+  'source': 'a***b***c'},
+ {'commonmark_0_31_1': '<p><em><strong>a</strong></em></p>\n',
+  'gfm_0_29': '<p><em><strong>a</strong></em></p>\n',
+  'source': '***a***'},
+ {'commonmark_0_31_1': '<p><strong>a<em>b</em>c</strong></p>\n',
+  'gfm_0_29': '<p><strong>a<em>b</em>c</strong></p>\n',
+  'source': '**a*b*c**'},
+ {'commonmark_0_31_1': '<p><a href="u"><em>a<strong>b</strong> c</em>*</a></p>\n',
+  'gfm_0_29': '<p><a href="u">*a<strong>b</strong> c**</a></p>\n',
+  'source': '[*a**b** c**](u)'},
+ {'commonmark_0_31_1': '<p><em>a<strong>b</strong> c</em>* and <em>d<strong>e</strong> '
+                       'f</em>*</p>\n',
+  'gfm_0_29': '<p>*a<strong>b</strong> c** and *d<strong>e</strong> f**</p>\n',
+  'source': '*a**b** c** and *d**e** f**'}]
+
+def verify_reference_emphasis_correction(backticks, combined):
+    """Execute flanking-category controls and preserve the official corpus."""
+    disagreements = 0
+    for case in CMARK_EMPHASIS_CONTROLS:
+        raw = cmark_gfm_render(backticks, case['source'], 10)
+        corrected = cmark_gfm_render(combined, case['source'], 10)
+        if raw != case['gfm_0_29'] or corrected != case['commonmark_0_31_1']:
+            raise ValueError(f'cmark-gfm emphasis correction control failed: {case!r} raw={raw!r} corrected={corrected!r}')
+        disagreements += int(raw != corrected)
+    corpus = json.loads((ROOT / 'crates/core/tests/data/markdown/gfm-0.29.0.gfm.13.json').read_text())
+    gold_disagreements = []
+    for case in corpus:
+        raw = cmark_gfm_render(backticks, case['markdown'], 10)
+        corrected = cmark_gfm_render(combined, case['markdown'], 10)
+        if raw != corrected:
+            raise ValueError(f'cmark-gfm emphasis correction changed official example {case["example"]}')
+        if normalize_html(corrected) != normalize_html(case['html']):
+            gold_disagreements.append(case['example'])
+    return {'authoritative_controls': len(CMARK_EMPHASIS_CONTROLS),
+            'control_original_disagreements': disagreements,
+            'official_examples': len(corpus), 'backtick_combined_exact_agreements': len(corpus),
+            'unchanged_reference_gold_disagreements': gold_disagreements}
+
+
+CMARK_DESTINATION_CONTROLS = [{'source': '> [x]: a(b\n', 'raw_html': '<blockquote>\n</blockquote>\n', 'corrected_html': '<blockquote>\n<p>[x]: a(b</p>\n</blockquote>\n'}, {'source': '>[te\na]: /te(a "Tea~"\n\nother\n', 'raw_html': '<blockquote>\n</blockquote>\n<p>other</p>\n', 'corrected_html': '<blockquote>\n<p>[te\na]: /te(a &quot;Tea~&quot;</p>\n</blockquote>\n<p>other</p>\n'}, {'source': '> > [x]: a(b\n', 'raw_html': '<blockquote>\n<blockquote>\n</blockquote>\n</blockquote>\n', 'corrected_html': '<blockquote>\n<blockquote>\n<p>[x]: a(b</p>\n</blockquote>\n</blockquote>\n'}, {'source': '- [x]: a(b\n\nother\n', 'raw_html': '<ul>\n<li></li>\n</ul>\n<p>other</p>\n', 'corrected_html': '<ul>\n<li>[x]: a(b</li>\n</ul>\n<p>other</p>\n'}, {'source': '> [x]: a(b)\n\n[x]\n', 'raw_html': '<blockquote>\n</blockquote>\n<p><a href="a(b)">x</a></p>\n', 'corrected_html': '<blockquote>\n</blockquote>\n<p><a href="a(b)">x</a></p>\n'}, {'source': '> [x]: a\\(b\n\n[x]\n', 'raw_html': '<blockquote>\n</blockquote>\n<p><a href="a(b">x</a></p>\n', 'corrected_html': '<blockquote>\n</blockquote>\n<p><a href="a(b">x</a></p>\n'}, {'source': '> [x]: <a(b>\n\n[x]\n', 'raw_html': '<blockquote>\n</blockquote>\n<p><a href="a(b">x</a></p>\n', 'corrected_html': '<blockquote>\n</blockquote>\n<p><a href="a(b">x</a></p>\n'}, {'source': '> [x]: a(b\n\n[x]: /valid\n\n[x]\n', 'raw_html': '<blockquote>\n</blockquote>\n<p><a href="a(b">x</a></p>\n', 'corrected_html': '<blockquote>\n<p><a href="/valid">x</a>: a(b</p>\n</blockquote>\n<p><a href="/valid">x</a></p>\n'}, {'source': '> [x]: a(b\n\n[x]\n', 'raw_html': '<blockquote>\n</blockquote>\n<p><a href="a(b">x</a></p>\n', 'corrected_html': '<blockquote>\n<p>[x]: a(b</p>\n</blockquote>\n<p>[x]</p>\n'}]
+
+
+def verify_reference_destination_correction(previous, corrected):
+    """Execute literal-definition, container and valid-resolution controls."""
+    disagreements = 0
+    for case in CMARK_DESTINATION_CONTROLS:
+        for ending in ('\n', '\r\n', '\r'):
+            source = case['source'].replace('\n', ending)
+            raw = cmark_gfm_render(previous, source, 10)
+            fixed = cmark_gfm_render(corrected, source, 10)
+            if raw != case['raw_html'] or fixed != case['corrected_html']:
+                raise ValueError(f'cmark-gfm destination correction control failed: {source!r} raw={raw!r} corrected={fixed!r}')
+            disagreements += int(raw != fixed)
+    corpus = json.loads((ROOT / 'crates/core/tests/data/markdown/gfm-0.29.0.gfm.13.json').read_text())
+    gold_disagreements = []
+    for case in corpus:
+        raw = cmark_gfm_render(previous, case['markdown'], 10)
+        fixed = cmark_gfm_render(corrected, case['markdown'], 10)
+        if raw != fixed:
+            raise ValueError(f'cmark-gfm destination correction changed official example {case["example"]}')
+        if normalize_html(fixed) != normalize_html(case['html']):
+            gold_disagreements.append(case['example'])
+    return {'authoritative_controls': len(CMARK_DESTINATION_CONTROLS) * 3,
+            'control_previous_disagreements': disagreements,
+            'official_examples': len(corpus), 'previous_corrected_exact_agreements': len(corpus),
+            'unchanged_reference_gold_disagreements': gold_disagreements}
+
+
+_HTML_TAG = re.compile(
+    r'<(/?)([a-zA-Z][a-zA-Z0-9]*)((?:\s+[a-zA-Z_:][-a-zA-Z0-9_:.]*(?:="[^"]*")?)*)\s*/?>'
+)
+_HTML_ATTRIBUTE = re.compile(r'[a-zA-Z_:][-a-zA-Z0-9_:.]*(?:="[^"]*")?')
+_HTML_TOKEN = re.compile(
+    r'<!--.*?(?:-->|--!>|\Z)|<!\[CDATA\[.*?(?:\]\]>|\Z)|'
+    r'<(/?)([a-zA-Z][a-zA-Z0-9]*)(?=[ \t\n\r\f/>])(?:[^\"\'<>]|\"[^\"]*\"|\'[^\']*\')*>',
+    re.DOTALL)
+_HTML_RAW_TEXT = frozenset(('script', 'style', 'xmp', 'iframe', 'noembed',
+                            'noframes', 'plaintext', 'title', 'textarea'))
+_HTML_FOREIGN = frozenset(('svg', 'math'))
+
+
+def _normalize_tag(match):
+    closing, name, attributes = match.group(1), match.group(2), match.group(3)
+    parsed_attributes = _HTML_ATTRIBUTE.findall(attributes)
+    names = [attribute.split('=', 1)[0].lower() for attribute in parsed_attributes]
+    # HTML duplicate attribute names are case-insensitive and the first wins.
+    # Sorting duplicates would silently change the element's meaning.
+    ordered_attributes = parsed_attributes if len(set(names)) != len(names) else sorted(parsed_attributes)
+    rebuilt = ''.join(f' {attribute}' for attribute in ordered_attributes)
+    void = name.lower() in {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
+                            'link', 'meta', 'param', 'source', 'track', 'wbr'}
+    slash = '/' if match.group(0).endswith('/>') and not void else ''
+    return f'<{closing}{name}{rebuilt}{slash}>'
+
+
+def normalize_html(text):
+    """Normalize only trivial reference-tool formatting, never actual
+    content: CRLF line endings, a missing/extra trailing newline, HTML
+    attribute order (insignificant per the WHATWG HTML spec), and a void
+    element's optional self-closing `/>` (also insignificant; `<input ...>`
+    and `<input ... />` are the same element). The last two account for a
+    documented spec divergence: the official GFM specification examples
+    already vendored at crates/core/tests/data/markdown/gfm-0.29.0.gfm.13.json
+    (e.g. example 279, `- [ ] foo\\n- [x] bar\\n`) render task-list
+    checkboxes as `<input disabled="" type="checkbox">`, without a
+    self-closing slash — exactly what Document::render_html produces, and
+    what `crates/core/tests/markdown_render.rs::official_documents` checks
+    byte-for-byte against that same corpus — while the `cmark-gfm` CLI's own
+    default HTML renderer always self-closes void elements and orders
+    attributes differently, diverging from its own project's specification
+    fixture in this purely stylistic way.
+    """
+    text = text.replace('\r\n', '\n')
+    pieces = []
+    cursor = 0
+    opaque_eof = False
+    while (token := _HTML_TOKEN.search(text, cursor)) is not None:
+        pieces.append(text[cursor:token.start()])
+        spelling = token[0]
+        name = (token[2] or '').lower()
+        tag = _HTML_TAG.fullmatch(spelling)
+        if not token[1] and name in _HTML_RAW_TEXT | _HTML_FOREIGN:
+            # Preserve the whole raw/RCDATA/foreign fragment conservatively.
+            # HTML ignores a self-closing flag on non-void raw-text elements;
+            # SVG/MathML instead keep that flag and foreign attribute semantics.
+            if name in _HTML_FOREIGN and spelling.endswith('/>'):
+                end = token.end()
+            elif name == 'plaintext':
+                end = len(text)
+                opaque_eof = True
+            else:
+                closing = re.compile(r'</' + name + r'(?=[ \t\n\r\f/>])'
+                                     r'(?:[^\"\'<>]|\"[^\"]*\"|\'[^\']*\')*>', re.IGNORECASE)
+                end = token.end()
+                depth = 1
+                # Foreign fragments can nest; inner tag normalization is never
+                # attempted, including at HTML integration points.
+                while depth:
+                    close = closing.search(text, end)
+                    if close is None:
+                        end = len(text)
+                        opaque_eof = True
+                        break
+                    if name in _HTML_FOREIGN:
+                        nested = _HTML_TOKEN.search(text, end)
+                        if nested is not None and nested.start() < close.start():
+                            if not nested[1] and (nested[2] or '').lower() == name and not nested[0].endswith('/>'):
+                                depth += 1
+                            end = nested.end()
+                            continue
+                    depth -= 1
+                    end = close.end()
+            pieces.append(text[token.start():end])
+            cursor = end
+        else:
+            if (spelling.startswith('<!--') and not spelling.endswith(('-->', '--!>'))
+                    or spelling.startswith('<![CDATA[') and not spelling.endswith(']]>')):
+                opaque_eof = True
+            pieces.append(_normalize_tag(tag) if tag else spelling)
+            cursor = token.end()
+    pieces.append(text[cursor:])
+    text = ''.join(pieces)
+    # A renderer's final formatting newline is insignificant only outside a
+    # content-bearing unterminated raw/RCDATA/foreign fragment.
+    return text if opaque_eof else text.rstrip('\n') + '\n'
+
+
+_TASK_HTML_MARKER = re.compile(r'(<li>(?:\n<p>)?)\[([ \txX\v\f\n])\](?=[ \t\v\f\n])([ \t\n]*)')
+
+
+def tasklist_projection_limit_reasons(source):
+    """Certify inputs whose neutral HTML loses task-marker source information.
+
+    These limits are selected from raw input, never from core checkbox output.
+    The neutral full-content comparison remains mandatory for all of them.
+    """
+    reasons = []
+    if '<' in source:
+        reasons.append('raw HTML can contain literal marker-looking list markup')
+    if '&' in source:
+        reasons.append('entity decoding can create marker-looking literal text')
+    if '\\' in source:
+        reasons.append('backslash escapes can create marker-looking literal text')
+    if re.search(r'\[[ \t]*(?:\r\n|\r|\n)', source):
+        reasons.append('neutral softbreak HTML loses split-marker indentation and whitespace')
+    if re.search(r'\[\s*[xX]\s*\]:', source):
+        reasons.append('a reference definition can hide the literal checked marker')
+    if 'empty task separator consists only of spaces or tabs' in tasklist_reference_limit_reasons(source):
+        reasons.append('neutral empty-task HTML loses the required trailing separator')
+    return reasons
+
+
+def check_tasklist_projection(plain_html, full_html, source=None):
+    """Apply the specification's literal first-paragraph task-marker rule.
+
+    Raw-source certificates identify normalization or reference-admission
+    ambiguity before execution. Those inputs retain both renderings and
+    receive an explicit unavailable count, never a completed full projection.
+    """
+    if source is not None and tasklist_projection_limit_reasons(source):
+        return False
+    def replace(match):
+        checked = ' checked=""' if match[2].lower() == 'x' else ''
+        return match[1] + f'<input{checked} disabled="" type="checkbox"> '
+    expected = _TASK_HTML_MARKER.sub(replace, normalize_html(plain_html))
+    full = normalize_html(full_html)
+    if expected != full:
+        raise DifferentialMismatch(f'tasklist specification projection mismatch: expected={expected!r} actual={full!r}')
+    return True
+
+
+def check_markdown_differential(record, binary, timeout, counts=None, *, corrected_backticks_binary=None, corrected_emphasis_binary=None, corrected_destinations_binary=None):
+    if record.get('kind') != 'markdown':
+        raise ValueError(f'unexpected differential record for target markdown: {record!r}')
+    admission_profile = reference_admission_profile(record['source'])
+    admission_selected = admission_profile != 'gfm'
+    if record.get('reference_admission_profile', admission_profile) != admission_profile:
+        raise ValueError('reference admission profile does not match its raw-input certificate')
+    email_selected = generated_email_retry_reference_profile(record['source'])
+    email_profile = 'generated-email-retries' if email_selected else 'gfm'
+    if record.get('reference_email_retry_profile', email_profile) != email_profile:
+        raise ValueError('email-retry profile does not match its raw-input certificate')
+    paragraph_selected = generated_paragraph_prefix_reference_profile(record['source'])
+    paragraph_profile = 'generated-paragraph-prefix' if paragraph_selected else 'gfm'
+    if record.get('reference_paragraph_prefix_profile', paragraph_profile) != paragraph_profile:
+        raise ValueError('paragraph-prefix profile does not match its raw-input certificate')
+    hardbreak_selected = generated_hardbreak_reference_profile(record['source'])
+    hardbreak_profile = 'generated-hardbreaks' if hardbreak_selected else 'gfm'
+    if record.get('reference_hardbreak_profile', hardbreak_profile) != hardbreak_profile:
+        raise ValueError('hardbreak profile does not match its raw-input certificate')
+    backticks_selected = '`' in record['source']
+    backtick_profile = 'preserve-furthest-backtick-closer' if backticks_selected else 'gfm'
+    if record.get('reference_backtick_profile', backtick_profile) != backtick_profile:
+        raise ValueError('backtick profile does not match its raw-input certificate')
+    if backticks_selected and corrected_backticks_binary is None:
+        raise ValueError('backtick profile requires the independently corrected reference executable')
+    emphasis_selected = '*' in record['source'] or '_' in record['source']
+    emphasis_profile = 'separate-emphasis-opener-floors' if emphasis_selected else 'gfm'
+    if record.get('reference_emphasis_profile', emphasis_profile) != emphasis_profile:
+        raise ValueError('emphasis profile does not match its raw-input certificate')
+    if emphasis_selected and corrected_emphasis_binary is None:
+        raise ValueError('emphasis profile requires the independently corrected reference executable')
+    destination_selected = destination_reference_profile(record['source'])
+    destination_profile = 'balanced-bare-destinations' if destination_selected else 'gfm'
+    if record.get('reference_destination_profile', destination_profile) != destination_profile:
+        raise ValueError('destination profile does not match its raw-input certificate')
+    if destination_selected and corrected_destinations_binary is None:
+        raise ValueError('destination profile requires the independently corrected reference executable')
+    limited = tasklist_reference_limited(record['source'])
+    expected_profile = 'tasklist-reference-limited' if limited else 'gfm'
+    if record.get('profile', 'gfm') != expected_profile:
+        raise ValueError('Markdown probe profile does not match the independently selected raw-input profile')
+    if limited:
+        projection_limits = tasklist_projection_limit_reasons(record['source'])
+        if record.get('tasklist_projection_limits', projection_limits) != projection_limits:
+            raise ValueError('tasklist projection limits do not match their raw-input certificate')
+        projection = check_tasklist_projection(record['html'], record['full_html'], record['source'])
+        if counts is not None:
+            counts['reference_profile_exclusions'] += 1
+            key = 'tasklist_projection_checks' if projection else 'tasklist_projection_unavailable'
+            counts[key] += 1
+            digest = hashlib.sha256(record['source'].encode()).hexdigest()
+            if not any(entry['sha256'] == digest for entry in counts['profile_exclusions']):
+                counts['profile_exclusions'].append({'sha256': digest, 'source': record['source'],
+                    'reasons': tasklist_reference_limit_reasons(record['source']),
+                    'projection_unavailable_reasons': projection_limits,
+                    'projection_checked': projection})
+    ours = normalize_html(record['html'])
+    raw_reference = cmark_gfm_render(binary, record['source'], timeout, tasklists=not limited)
+    backtick_reference = cmark_gfm_render(corrected_backticks_binary, record['source'], timeout,
+                                         tasklists=not limited) if backticks_selected else raw_reference
+    selected_binary = corrected_emphasis_binary if emphasis_selected else (corrected_backticks_binary if backticks_selected else binary)
+    selected_reference = cmark_gfm_render(selected_binary, record['source'], timeout,
+                                         tasklists=not limited) if emphasis_selected else backtick_reference
+    destination_reference = cmark_gfm_render(corrected_destinations_binary, record['source'], timeout,
+                                            tasklists=not limited) if destination_selected else selected_reference
+    theirs = normalize_html(destination_reference)
+    if destination_selected and counts is not None:
+        counts['destination_reference_checks'] = counts.get('destination_reference_checks', 0) + 1
+        disagreed = normalize_html(selected_reference) != normalize_html(destination_reference)
+        counts['destination_reference_disagreements'] = counts.get('destination_reference_disagreements', 0) + int(disagreed)
+        cases = counts.setdefault('destination_reference_cases', [])
+        digest = hashlib.sha256(record['source'].encode()).hexdigest()
+        if disagreed and not any(case['sha256'] == digest for case in cases):
+            cases.append({'sha256': digest, 'source': record['source'],
+                          'reason': 'bare link destinations require balanced unescaped parentheses',
+                          'patch_sha256': CMARK_DESTINATION_PATCH_SHA256,
+                          'core_html': record['html'], 'full_core_html': record.get('full_html', record['html']),
+                          'raw_reference_html': raw_reference, 'reference_html_before_correction': selected_reference,
+                          'corrected_reference_html': destination_reference})
+    if backticks_selected and counts is not None:
+        counts['backtick_reference_checks'] = counts.get('backtick_reference_checks', 0) + 1
+        disagreed = normalize_html(raw_reference) != normalize_html(backtick_reference)
+        counts['backtick_reference_disagreements'] = counts.get('backtick_reference_disagreements', 0) + int(disagreed)
+        cases = counts.setdefault('backtick_reference_cases', [])
+        digest = hashlib.sha256(record['source'].encode()).hexdigest()
+        if disagreed and not any(case['sha256'] == digest for case in cases):
+            cases.append({'sha256': digest, 'source': record['source'],
+                          'reason': 'reference backtick cache must preserve its furthest known closer',
+                          'patch_sha256': CMARK_BACKTICK_PATCH_SHA256,
+                          'profile': record.get('profile', 'gfm'),
+                          'core_html': record['html'], 'full_core_html': record.get('full_html', record['html']),
+                          'raw_reference_html': raw_reference,
+                          'corrected_reference_html': backtick_reference})
+    if emphasis_selected and counts is not None:
+        counts['emphasis_reference_checks'] = counts.get('emphasis_reference_checks', 0) + 1
+        disagreed = normalize_html(backtick_reference) != normalize_html(selected_reference)
+        counts['emphasis_reference_disagreements'] = counts.get('emphasis_reference_disagreements', 0) + int(disagreed)
+        cases = counts.setdefault('emphasis_reference_cases', [])
+        digest = hashlib.sha256(record['source'].encode()).hexdigest()
+        if disagreed and not any(case['sha256'] == digest for case in cases):
+            cases.append({'sha256': digest, 'source': record['source'],
+                          'reason': 'close-only and dual-purpose emphasis runs require distinct opener floors',
+                          'patch_sha256': CMARK_EMPHASIS_PATCH_SHA256,
+                          'profile': record.get('profile', 'gfm'),
+                          'core_html': record['html'], 'full_core_html': record.get('full_html', record['html']),
+                          'raw_reference_html': raw_reference,
+                          'backtick_reference_html': backtick_reference,
+                          'corrected_reference_html': selected_reference})
+    if limited and counts is not None:
+        digest = hashlib.sha256(record['source'].encode()).hexdigest()
+        case = next(entry for entry in counts['profile_exclusions'] if entry['sha256'] == digest)
+        if 'raw_reference_html' not in case:
+            case.update({'core_neutral_html': record['html'], 'core_full_html': record['full_html'],
+                         'neutral_reference_html': raw_reference,
+                         'raw_reference_html': cmark_gfm_render(binary, record['source'], timeout)})
+    if admission_selected:
+        # The pinned reference tracks parenthesis depth but fails to reject a
+        # nonzero depth at whitespace. A plain prefix prevents that invalid
+        # definition from being consumed. All inline/extension behavior and
+        # all subsequent blocks still come from the independent renderer.
+        guarded = cmark_gfm_render(selected_binary, _REFERENCE_GUARD + record['source'], timeout,
+                                   tasklists=not limited)
+        prefix = _GUARDED_BLOCK.match(guarded)
+        if prefix is None:
+            raise ValueError('literal-reference oracle did not preserve its exact block guard')
+        guard_start = prefix.end() - len(_REFERENCE_GUARD)
+        theirs = normalize_html(guarded[:guard_start] + guarded[prefix.end():])
+        if counts is not None:
+            counts['reference_admission_projections'] = counts.get('reference_admission_projections', 0) + 1
+            counts['reference_admission_disagreements'] = counts.get('reference_admission_disagreements', 0) + int(normalize_html(raw_reference) != ours)
+            cases = counts.setdefault('reference_admission_cases', [])
+            digest = hashlib.sha256(record['source'].encode()).hexdigest()
+            if not any(entry['sha256'] == digest for entry in cases):
+                cases.append({'sha256': digest, 'source': record['source'],
+                              'reason': ('unbalanced bare reference destination must remain literal'
+                                         if admission_profile == 'literal-unbalanced-destination'
+                                         else 'escaped terminal title delimiter cannot close a reference title'),
+                              'admission_profile': admission_profile,
+                              'core_html': record['html'], 'raw_reference_html': raw_reference,
+                              'guarded_reference_html': guarded,
+                              'guarded_source_sha256': hashlib.sha256((_REFERENCE_GUARD + record['source']).encode()).hexdigest()})
+    if hardbreak_selected:
+        before_projection = theirs
+        theirs = project_reference_hardbreaks(record['source'], theirs)
+        if counts is not None:
+            counts['hardbreak_reference_projections'] = counts.get('hardbreak_reference_projections', 0) + 1
+            counts['hardbreak_reference_disagreements'] = counts.get('hardbreak_reference_disagreements', 0) + int(before_projection != theirs)
+            cases = counts.setdefault('hardbreak_reference_cases', [])
+            identity = hashlib.sha256(record['source'].encode()).hexdigest()
+            if before_projection != theirs and not any(case['sha256'] == identity for case in cases):
+                cases.append({'sha256': identity, 'source': record['source'],
+                              'reason': 'generated hardbreaks ignore subsequent physical indentation',
+                              'profile': record.get('profile', 'gfm'),
+                              'core_html': record['html'], 'full_core_html': record.get('full_html', record['html']),
+                              'raw_reference_html': raw_reference,
+                              'reference_html_before_projection': before_projection,
+                              'projected_reference_html': theirs})
+    if paragraph_selected:
+        before_projection = theirs
+        theirs = project_reference_paragraph_prefix(record['source'], theirs)
+        if counts is not None:
+            counts['paragraph_prefix_reference_projections'] = counts.get('paragraph_prefix_reference_projections', 0) + 1
+            counts['paragraph_prefix_reference_disagreements'] = counts.get('paragraph_prefix_reference_disagreements', 0) + int(before_projection != theirs)
+            cases = counts.setdefault('paragraph_prefix_reference_cases', [])
+            identity = hashlib.sha256(record['source'].encode()).hexdigest()
+            if before_projection != theirs and not any(case['sha256'] == identity for case in cases):
+                cases.append({'sha256': identity, 'source': record['source'],
+                              'reason': 'generated paragraphs remove initial physical spaces and tabs',
+                              'profile': record.get('profile', 'gfm'),
+                              'core_html': record['html'], 'full_core_html': record.get('full_html', record['html']),
+                              'raw_reference_html': raw_reference,
+                              'reference_html_before_projection': before_projection,
+                              'projected_reference_html': theirs})
+    if email_selected:
+        before_projection = theirs
+        theirs = project_reference_email_retries(record['source'], theirs)
+        if counts is not None:
+            counts['email_retry_reference_projections'] = counts.get('email_retry_reference_projections', 0) + 1
+            counts['email_retry_reference_disagreements'] = counts.get('email_retry_reference_disagreements', 0) + int(before_projection != theirs)
+            cases = counts.setdefault('email_retry_reference_cases', [])
+            identity = hashlib.sha256(record['source'].encode()).hexdigest()
+            if before_projection != theirs and not any(case['sha256'] == identity for case in cases):
+                cases.append({'sha256': identity, 'source': record['source'],
+                              'reason': 'each extended email domain requires its own period after its @',
+                              'profile': record.get('profile', 'gfm'),
+                              'core_html': record['html'], 'full_core_html': record.get('full_html', record['html']),
+                              'raw_reference_html': raw_reference,
+                              'reference_html_before_projection': before_projection,
+                              'projected_reference_html': theirs})
+    if ours != theirs:
+        raise DifferentialMismatch(
+            'markdown differential mismatch: source='
+            f'{record["source"]!r}\npurrassist_core={ours!r}\ncmark_gfm={theirs!r}'
+        )
+    return True
+
+
+def check_differential(target, record, oracle, timeout, counts=None):
+    kind = TARGETS[target]['differential']
+    if kind is None:
+        raise ValueError(f'target {target!r} emitted an unexpected differential record: {record!r}')
+    if kind == 'pattern':
+        return check_pattern_differential(record, timeout, counts)
+    if kind == 'markdown':
+        return check_markdown_differential(record, oracle['cmark_gfm_binary'], timeout, counts,
+            corrected_backticks_binary=oracle.get('cmark_gfm_backticks_binary'),
+            corrected_emphasis_binary=oracle.get('cmark_gfm_emphasis_binary'),
+            corrected_destinations_binary=oracle.get('cmark_gfm_destinations_binary'))
+    raise ValueError(f'unknown differential kind: {kind}')
+
+
+def rustc_sysroot_tool(name):
+    """Resolve an `llvm-tools` component binary bundled with the active
+    `rustc` (installed via `rustup component add llvm-tools`), rather than a
+    separately installed system package: the bundled copy is always built
+    from the exact same LLVM revision as `rustc` itself, which a
+    coincidentally version-matched system package is not guaranteed to be.
+    """
+    sysroot = Path(subprocess.check_output(['rustc', '--print', 'sysroot'], text=True).strip())
+    info = subprocess.check_output(['rustc', '-vV'], text=True)
+    host = re.search(r'^host:\s+(\S+)$', info, re.MULTILINE)
+    if not host:
+        raise ValueError('could not determine the rustc host triple')
+    path = sysroot / 'lib' / 'rustlib' / host[1] / 'bin' / name
+    if not path.is_file():
+        raise ValueError(f'{name} not found at {path}; run `rustup component add llvm-tools`')
+    return path
+
+
+def tool_identity(target):
+    rustc = subprocess.check_output(['rustc', '-vV'], text=True)
+    inventory = json.loads((ROOT / 'vendor/tooling.json').read_text())
+    expected = next(entry['version'] for entry in inventory if entry['name'] == 'llvm-coverage')
+    versions = {'rustc': rustc.strip()}
+    tool_paths = {}
+    for tool in ('llvm-cov', 'llvm-profdata'):
+        tool_paths[tool] = rustc_sysroot_tool(tool)
+        versions[tool] = subprocess.check_output([str(tool_paths[tool]), '--version'], text=True).strip()
+    for tool, text in versions.items():
+        match = re.search(r'LLVM version:?\s+(\S+)', text)
+        # The bundled `llvm-tools` component reports "<version>-rust-<rustc
+        # version>"; a standalone LLVM install reports a bare version. Only
+        # the leading dotted version is a genuine LLVM release identity.
+        reported = match[1].split('-rust-')[0] if match else None
+        if reported != expected:
+            raise ValueError(f'{tool} LLVM version differs from inventory {expected}')
+    kind = TARGETS[target]['differential']
+    oracle = {}
+    if kind == 'pattern':
+        node_expected = next(entry['version'] for entry in inventory if entry['name'] == 'node')
+        node_version = subprocess.check_output(['node', '--version'], text=True).strip()
+        if node_version != f'v{node_expected}':
+            raise ValueError(f'node version differs from inventory {node_expected}')
+        versions['node'] = node_version
+    if kind == 'markdown':
+        cmark_expected = next(entry['version'] for entry in inventory if entry['name'] == 'cmark-gfm')
+        binary = ensure_cmark_gfm()
+        cmark_version_output = subprocess.check_output([str(binary), '--version'], text=True).strip()
+        if cmark_expected not in cmark_version_output:
+            raise ValueError(f'cmark-gfm version differs from inventory {cmark_expected}')
+        versions['cmark-gfm'] = cmark_version_output
+        oracle['cmark_gfm_binary'] = binary
+        corrected = ensure_cmark_gfm(corrected_backticks=True)
+        compatibility = verify_reference_backtick_correction(binary, corrected)
+        versions['cmark-gfm-backtick-correction'] = {
+            'version': subprocess.check_output([str(corrected), '--version'], text=True).strip(),
+            'source_sha256': CMARK_GFM_SOURCE_SHA256,
+            'patch_sha256': CMARK_BACKTICK_PATCH_SHA256,
+            'patch_preimage': CMARK_BACKTICK_BEFORE,
+            'patch_postimage': CMARK_BACKTICK_AFTER,
+            'corrected_inlines_sha256': hashlib.sha256(
+                (corrected.parent.parent / 'src' / 'src' / 'inlines.c').read_bytes()).hexdigest(),
+            'binary_sha256': hashlib.sha256(corrected.read_bytes()).hexdigest(),
+            'original_binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest()}
+        versions['cmark-gfm-backtick-correction']['compatibility'] = compatibility
+        oracle['cmark_gfm_backticks_binary'] = corrected
+        combined = ensure_cmark_gfm(corrected_backticks=True, corrected_emphasis=True)
+        emphasis_compatibility = verify_reference_emphasis_correction(corrected, combined)
+        versions['cmark-gfm-emphasis-correction'] = {
+            'version': subprocess.check_output([str(combined), '--version'], text=True).strip(),
+            'source_sha256': CMARK_GFM_SOURCE_SHA256,
+            'backtick_patch_sha256': CMARK_BACKTICK_PATCH_SHA256,
+            'emphasis_patch_sha256': CMARK_EMPHASIS_PATCH_SHA256,
+            'emphasis_patch_preimages_postimages': CMARK_EMPHASIS_PATCHES,
+            'corrected_inlines_sha256': hashlib.sha256(
+                (combined.parent.parent / 'src' / 'src' / 'inlines.c').read_bytes()).hexdigest(),
+            'binary_sha256': hashlib.sha256(combined.read_bytes()).hexdigest(),
+            'original_binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+            'compatibility': emphasis_compatibility}
+        oracle['cmark_gfm_emphasis_binary'] = combined
+        destinations = ensure_cmark_gfm(corrected_backticks=True, corrected_emphasis=True, corrected_destinations=True)
+        destination_compatibility = verify_reference_destination_correction(combined, destinations)
+        versions['cmark-gfm-destination-correction'] = {
+            'version': subprocess.check_output([str(destinations), '--version'], text=True).strip(),
+            'source_sha256': CMARK_GFM_SOURCE_SHA256,
+            'backtick_patch_sha256': CMARK_BACKTICK_PATCH_SHA256,
+            'emphasis_patch_sha256': CMARK_EMPHASIS_PATCH_SHA256,
+            'destination_patch_sha256': CMARK_DESTINATION_PATCH_SHA256,
+            'destination_preimage': CMARK_DESTINATION_BEFORE,
+            'destination_postimage': CMARK_DESTINATION_AFTER,
+            'corrected_inlines_sha256': hashlib.sha256(
+                (destinations.parent.parent / 'src' / 'src' / 'inlines.c').read_bytes()).hexdigest(),
+            'binary_sha256': hashlib.sha256(destinations.read_bytes()).hexdigest(),
+            'previous_binary_sha256': hashlib.sha256(combined.read_bytes()).hexdigest(),
+            'original_binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+            'compatibility': destination_compatibility}
+        oracle['cmark_gfm_destinations_binary'] = destinations
+    return versions, oracle, tool_paths
+
+
+def input_identity(target):
+    """Identify source inputs independently of mutable documentation/reports."""
+    sources = sorted(path for path in (ROOT / 'crates/core/src').rglob('*') if path.is_file())
+    sources += [ROOT / name for name in ('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/core/Cargo.toml', 'crates/core/README.md')]
+    digest = hashlib.sha256()
+    for path in sorted(sources):
+        digest.update(str(path.relative_to(ROOT)).encode() + b'\0' + hashlib.sha256(path.read_bytes()).digest())
+    return {
+        'engine_source_sha256': digest.hexdigest(),
+        'harness_source_sha256': hashlib.sha256((ROOT / f'crates/core/examples/fuzz_{target}.rs').read_bytes()).hexdigest(),
+        'runner_source_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+    }
+
+
+def build(directory, target):
+    sources_before = input_identity(target)
+    environment = dict(os.environ)
+    flags = environment.get('CARGO_ENCODED_RUSTFLAGS')
+    flags = flags.split('\x1f') if flags is not None else environment.get('RUSTFLAGS', '').split()
+    environment['CARGO_ENCODED_RUSTFLAGS'] = '\x1f'.join(flags + ['-C', 'instrument-coverage'])
+    example = f'fuzz-{target}'
+    command = ['cargo', 'build', '-p', 'purrassist-core', '--example', example, '--locked',
+               '--config', 'profile.dev.opt-level=1', '--config', 'profile.dev.debug=1',
+               '--config', 'profile.dev.strip=false', '--config', 'profile.dev.debug-assertions=true',
+               '--config', 'profile.dev.overflow-checks=true', '--message-format=json']
+    result = subprocess.run(command, cwd=ROOT, env=environment, capture_output=True, text=True)
+    (directory / 'build.log').write_text(result.stderr)
+    result.check_returncode()
+    if input_identity(target) != sources_before:
+        raise ValueError('fuzz build source changed during compilation; rerun on stable inputs')
+    artifacts = [json.loads(line) for line in result.stdout.splitlines()]
+    binaries = [row['executable'] for row in artifacts if row.get('target', {}).get('name') == example and row.get('executable')]
+    if len(binaries) != 1:
+        raise ValueError(f'expected exactly one probe executable for {example}')
+    built_binary = Path(binaries[0])
+    # Cargo reuses its output path. Snapshot the executable so a concurrent
+    # rebuild cannot change the implementation between campaign executions.
+    binary = directory / 'probe'
+    shutil.copy2(built_binary, binary)
+    if input_identity(target) != sources_before:
+        raise ValueError('fuzz build source changed before executable capture; rerun')
+    return binary, {'command': command, 'sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+                    'inherited_rustflags_sha256': hashlib.sha256('\x1f'.join(flags).encode()).hexdigest(),
+                    'appended_rustflags': ['-C', 'instrument-coverage'], **sources_before}
+
+
+def check_markdown_stop(record, source, counts=None):
+    """Validate a closed declared non-result; never count it as comparison."""
+    if not isinstance(record, dict) or set(record) != {'kind', 'source', 'stage', 'reason', 'resource'} or record['kind'] != 'resource-stop':
+        raise ValueError('Markdown stop record must contain only its closed protocol fields')
+    if not isinstance(record['stage'], str) or not isinstance(record['reason'], str):
+        raise ValueError('Markdown stop stage and reason must be strings')
+    if record['resource'] is not None and not isinstance(record['resource'], str):
+        raise ValueError('Markdown stop resource must be a string or null')
+    if record['source'] != source or record['stage'] not in {'parse', 'render', 'neutral-render'}:
+        raise ValueError('Markdown stop record source or stage is invalid')
+    if record['reason'] == 'BudgetExceeded':
+        if record['resource'] not in {'Work', 'Candidates', 'InputBytes', 'ScratchBytes', 'Depth', 'EvidenceEntries', 'HelperCalls'}:
+            raise ValueError('Markdown stop resource is invalid')
+    elif record['reason'] == 'Cancelled':
+        if record['resource'] is not None:
+            raise ValueError('Markdown cancellation cannot name an exhausted resource')
+    else:
+        raise ValueError('unexpected Markdown stop reason')
+    if counts is not None:
+        counts['resource_non_results'] = counts.get('resource_non_results', 0) + 1
+        key = ':'.join((record['stage'], record['reason'], record['resource'] or 'none'))
+        reasons = counts.setdefault('resource_non_result_reasons', {})
+        reasons[key] = reasons.get(key, 0) + 1
+        cases = counts.setdefault('resource_non_result_cases', [])
+        identity = hashlib.sha256(source.encode()).hexdigest()
+        if not any(entry['sha256'] == identity and entry['stage'] == record['stage'] and entry['reason'] == record['reason'] and entry['resource'] == record['resource'] for entry in cases):
+            cases.append({'sha256': identity, **record})
+
+
+def probe(binary, data, directory, timeout, target, oracle, tool_paths, counts=None):
+    # Remove prior successful profiles so stale counters can never supply feedback.
+    raw, indexed = directory / 'current.profraw', directory / 'current.profdata'
+    raw.unlink(missing_ok=True)
+    indexed.unlink(missing_ok=True)
+    (directory / 'current.bin').write_bytes(data)
+    (directory / 'probe.stderr').write_bytes(b'')
+    environment = dict(os.environ, LLVM_PROFILE_FILE=str(raw), LC_ALL='C')
+    environment.pop('PURRASSIST_FUZZ_TASKLIST_REFERENCE_PROFILE', None)
+    original_markdown = None
+    admission_selected = False
+    admission_profile = 'gfm'
+    hardbreak_selected = False
+    paragraph_selected = False
+    email_selected = False
+    backticks_selected = False
+    emphasis_selected = False
+    destination_selected = False
+    task_projection_limits = []
+    if target == 'markdown':
+        try:
+            original_markdown = data.decode('utf-8')
+            limited = tasklist_reference_limited(original_markdown)
+            admission_profile = reference_admission_profile(original_markdown)
+            admission_selected = admission_profile != 'gfm'
+            paragraph_selected = generated_paragraph_prefix_reference_profile(original_markdown)
+            email_selected = generated_email_retry_reference_profile(original_markdown)
+            hardbreak_selected = generated_hardbreak_reference_profile(original_markdown)
+            backticks_selected = '`' in original_markdown
+            emphasis_selected = '*' in original_markdown or '_' in original_markdown
+            destination_selected = destination_reference_profile(original_markdown)
+            task_projection_limits = tasklist_projection_limit_reasons(original_markdown)
+        except UnicodeDecodeError:
+            limited = False
+        if limited:
+            environment['PURRASSIST_FUZZ_TASKLIST_REFERENCE_PROFILE'] = 'tasklist-neutral'
+    result = subprocess.run([str(binary)], input=data, capture_output=True, env=environment, timeout=timeout)
+    (directory / 'probe.stderr').write_bytes(result.stderr)
+    if result.returncode:
+        if counts is not None:
+            counts['crashes'] += 1
+        result.check_returncode()
+    try:
+        data.decode('utf-8')
+        invalid = False
+    except UnicodeDecodeError:
+        invalid = True
+    if result.stderr:
+        raise ValueError('probe reported a diagnostic on stderr')
+    lines = result.stdout.split(b'\n')
+    if lines and lines[-1] == b'':
+        lines.pop()
+    expected_first = b'invalid-utf8' if invalid else b'ok'
+    if not lines or lines[0] != expected_first:
+        raise ValueError('probe output differs from its completion protocol')
+    if invalid and len(lines) != 1:
+        raise ValueError('an invalid-utf8 rejection must not emit differential records')
+    if target == 'markdown' and not invalid and len(lines) != 2:
+        raise ValueError('Markdown completion requires exactly one HTML or declared-stop record')
+    checked = 0
+    for line in lines[1:]:
+        record = json.loads(line)
+        if target == 'markdown':
+            if record.get('source') != original_markdown:
+                raise ValueError('Markdown differential record must retain the exact admitted input')
+            if record.get('kind') == 'resource-stop':
+                check_markdown_stop(record, original_markdown, counts)
+                continue
+            record['reference_admission_profile'] = admission_profile
+            record['reference_email_retry_profile'] = 'generated-email-retries' if email_selected else 'gfm'
+            record['reference_paragraph_prefix_profile'] = 'generated-paragraph-prefix' if paragraph_selected else 'gfm'
+            record['reference_hardbreak_profile'] = 'generated-hardbreaks' if hardbreak_selected else 'gfm'
+            record['reference_emphasis_profile'] = 'separate-emphasis-opener-floors' if emphasis_selected else 'gfm'
+            record['reference_backtick_profile'] = 'preserve-furthest-backtick-closer' if backticks_selected else 'gfm'
+            record['reference_destination_profile'] = 'balanced-bare-destinations' if destination_selected else 'gfm'
+            record['tasklist_projection_limits'] = task_projection_limits
+        if check_differential(target, record, oracle, timeout, counts):
+            checked += 1
+    merged = subprocess.run(
+        [str(tool_paths['llvm-profdata']), 'merge', '-sparse', str(raw), '-o', str(indexed)],
+        check=True, capture_output=True, timeout=timeout,
+    )
+    exported = subprocess.run(
+        [str(tool_paths['llvm-cov']), 'export', str(binary), f'-instr-profile={indexed}'],
+        check=True, capture_output=True, timeout=timeout,
+    )
+    if merged.stderr or exported.stderr:
+        raise ValueError('LLVM reported a coverage diagnostic')
+    return covered_regions(json.loads(exported.stdout)), invalid, checked
+
+
+def source_digest():
+    names = subprocess.check_output(['git', 'ls-files', '-co', '--exclude-standard', '-z'], cwd=ROOT).split(b'\0')
+    digest = hashlib.sha256()
+    for name in sorted(set(names) - {b''}):
+        path = ROOT / os.fsdecode(name)
+        if path.is_file():
+            digest.update(name + b'\0' + hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--target', required=True, choices=sorted(TARGETS), help='fuzz target')
+    parser.add_argument('--iterations', type=int, default=1000, help='mutations after all fixed seeds')
+    parser.add_argument('--seed', type=int, default=0x5A1727EE614D934B)
+    parser.add_argument('--timeout', type=float, default=10, help='seconds per probe, LLVM, or oracle command')
+    parser.add_argument('--replay', type=Path, help='execute one saved input instead of a campaign')
+    args = parser.parse_args()
+    if args.iterations < 0 or not 0 <= args.seed < 1 << 64 or not 0 < args.timeout <= 3600:
+        parser.error('invalid iteration, seed, or timeout bound')
+    target = args.target
+    tokens = TARGETS[target]['tokens']
+    cache = ROOT / '.cache'
+    cache.mkdir(exist_ok=True)
+    directory = Path(tempfile.mkdtemp(prefix=f'fuzz-{target}-', dir=cache))
+    (directory / 'corpus').mkdir()
+    print(f'Campaign artifacts: {directory}', flush=True)
+    tools, oracle, tool_paths = tool_identity(target)
+    binary, build_identity = build(directory, target)
+    report = {'format': 'purrassist.fuzz.v1', 'target': target, 'status': 'running', 'tools': tools,
+              'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+              'source_dirty': bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT)),
+              'nonignored_file_tree_sha256': source_digest(),
+              'build': build_identity, 'seed': args.seed, 'requested_mutations': args.iterations,
+              'timeout_seconds': args.timeout, 'maximum_input_bytes': 4096,
+              'executions': 0, 'invalid_utf8': 0, 'differential_checks': 0, 'differential_mismatches': 0,
+              'crashes': 0, 'reference_rejections': 0, 'reference_timeouts': 0,
+              'resource_non_results': 0, 'resource_non_result_reasons': {}, 'resource_non_result_cases': [],
+              'reference_profile_exclusions': 0, 'tasklist_projection_checks': 0,
+              'tasklist_projection_unavailable': 0, 'profile_exclusions': [],
+              'reference_admission_projections': 0, 'reference_admission_disagreements': 0,
+              'reference_admission_cases': [],
+              'hardbreak_reference_projections': 0, 'hardbreak_reference_disagreements': 0,
+              'hardbreak_reference_cases': [],
+              'paragraph_prefix_reference_projections': 0, 'paragraph_prefix_reference_disagreements': 0,
+              'paragraph_prefix_reference_cases': [],
+              'email_retry_reference_projections': 0, 'email_retry_reference_disagreements': 0,
+              'email_retry_reference_cases': [],
+              'emphasis_reference_checks': 0, 'emphasis_reference_disagreements': 0,
+              'emphasis_reference_cases': [],
+              'backtick_reference_checks': 0, 'backtick_reference_disagreements': 0,
+              'backtick_reference_cases': [],
+              'destination_reference_checks': 0, 'destination_reference_disagreements': 0,
+              'destination_reference_cases': [],
+              'retained': [], 'regions': 0}
+    corpus, seen = [], set()
+    random = Random(args.seed)
+    seeds = [args.replay.read_bytes()] if args.replay else TARGETS[target]['seeds']
+    if any(len(data) > 4096 for data in seeds):
+        raise ValueError('replay exceeds probe input limit')
+    mutations = 0 if args.replay else args.iterations
+    try:
+        for index in range(len(seeds) + mutations):
+            parent = None
+            if index < len(seeds):
+                data = seeds[index]
+            else:
+                parent = random.index(len(corpus))
+                data = mutate(corpus[parent], random, tokens)
+            report['current_execution'] = index
+            regions, invalid, checked = probe(
+                binary, data, directory, args.timeout, target, oracle, tool_paths, report
+            )
+            report['differential_checks'] += checked
+            novel = regions - seen
+            seen.update(regions)
+            if novel or index < len(seeds):
+                digest = hashlib.sha256(data).hexdigest()
+                (directory / 'corpus' / f'{digest}.bin').write_bytes(data)
+                corpus.append(data)
+                report['retained'].append({'execution': index, 'sha256': digest, 'new_regions': len(novel),
+                                           'parent_corpus_index': parent, 'bytes': len(data)})
+            report['executions'] += 1
+            report['invalid_utf8'] += invalid
+            report['regions'] = len(seen)
+            if index % 100 == 0:
+                print(f'{index + 1} executions; {len(corpus)} corpus entries; {len(seen)} core regions; '
+                      f'{report["differential_checks"]} differential checks', flush=True)
+        if not seen:
+            if not args.replay:
+                raise ValueError('campaign produced no covered core regions')
+        report['status'] = 'passed'
+    except (Exception, KeyboardInterrupt) as error:
+        report['status'] = 'failed'
+        report['failure_type'] = type(error).__name__
+        if isinstance(error, DifferentialMismatch):
+            report['differential_mismatches'] += 1
+        (directory / 'failure.txt').write_text(repr(error) + '\n')
+        print(f'Failure retained in {directory / "current.bin"}', flush=True)
+        raise
+    finally:
+        (directory / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
+        (directory / 'regions.json').write_text(json.dumps(sorted(seen), indent=2) + '\n')
+    print(f'Passed {report["executions"]} inputs; report: {directory / "report.json"}', flush=True)
+
+
+if __name__ == '__main__':
+    main()

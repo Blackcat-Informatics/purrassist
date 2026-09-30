@@ -1,0 +1,912 @@
+{
+  "format": "purrassist.markdown-html-boundaries.v1",
+  "interpretation": "bounded diagnostic observations; reference limits are not successful comparisons",
+  "case_set": "tables",
+  "build": {
+    "command": [
+      "cargo",
+      "build",
+      "-p",
+      "purrassist-core",
+      "--example",
+      "fuzz-markdown",
+      "--locked",
+      "--config",
+      "profile.dev.opt-level=1",
+      "--config",
+      "profile.dev.debug=1",
+      "--config",
+      "profile.dev.strip=false",
+      "--config",
+      "profile.dev.debug-assertions=true",
+      "--config",
+      "profile.dev.overflow-checks=true",
+      "--message-format=json"
+    ],
+    "sha256": "fe306545fec4a922643e4707495bfe2d153e69fda9dae720fe5f548b05661e3f",
+    "inherited_rustflags_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "appended_rustflags": [
+      "-C",
+      "instrument-coverage"
+    ],
+    "engine_source_sha256": "eb4cae64f020a3e5e62da047e9b0711d7a9cea94ded2f874658d53b200bfe39f",
+    "harness_source_sha256": "881f86897461b3a00583ddcac32e292d1ccd706c546cdd14461a246f6d961532",
+    "runner_source_sha256": "b4316016d5f9778a4ed9caa234d403f99573e8cecf3c4d128e9b785bdc5bf2d8"
+  },
+  "tools": {
+    "rustc": "rustc 1.100.0-nightly (4b6d04e70 2026-09-13)\nbinary: rustc\ncommit-hash: 4b6d04e706108ccfeafe2547fbe857dfe8972bad\ncommit-date: 2026-09-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0-nightly\nLLVM version: 23.1.1",
+    "llvm-cov": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1-rust-1.100.0-nightly\n  Optimized build.",
+    "llvm-profdata": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1-rust-1.100.0-nightly\n  Optimized build.",
+    "cmark-gfm": "cmark-gfm 0.29.0.gfm.13 - CommonMark with GitHub Flavored Markdown converter\n(C) 2014-2016 John MacFarlane"
+  },
+  "diagnostic_sha256": "bb82af935f556b1305bcb397f59770a6da7807eee298b0f01878bb0f126b2b63",
+  "executions": 1728,
+  "differential_checks": 1584,
+  "reference_limits": [
+    {
+      "source": "- before\n  a|b\n  |-|-|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "479e2e5c8808e786da95d3500b4ba3b305be86b3602b414ad404840c7773472d",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  a|b\\n  |-|-|\\n  |\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  a|b\n  |-|-|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "a02923cc3f05423f6a23a721695783372ee7efc70e05e8111f302ea691277850",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  a|b\\n  |-|-|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  a|b\n  ---|---\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "8f560377e9dd9b4778c5aa77194cc898ee151dae9369d97b2842a09a8bd46acb",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  a|b\\n  ---|---\\n  |\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  a|b\n  ---|---\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "e8833a3a2754db75a96364ee76b52ff566411bf70e526d663eae22c990c4d6cd",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  a|b\\n  ---|---\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  a|b\n  |:---|---:|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "e292b11928e1071fd0aeec87dbcef12c27f116b17328e27c33a23f80c850574c",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  a|b\\n  |:---|---:|\\n  |\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  a|b\n  |:---|---:|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "ce7da78841fb5c038208740cefeb4941bd816a645e8793420cffaf4aa114ff0f",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  a|b\\n  |:---|---:|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  |a|b|\n  |-|-|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "e6649a3ad7f123c56c907a335fc9d879b338d71fd6223ed5d10e008b64934b9b",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  |a|b|\\n  |-|-|\\n  |\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  |a|b|\n  |-|-|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "7bc36fd40f26bc6ace208149fad326e463bbba019a21685abcecc070484e38f8",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  |a|b|\\n  |-|-|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  |a|b|\n  ---|---\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "7b07f0bc0bd89c7c75fb9653cff28a82c8c7d7b51842ba2a21d5606142a8246f",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  |a|b|\\n  ---|---\\n  |\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  |a|b|\n  ---|---\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "98562fe1448a8c7fe1c0d179e6fd4247f8f31330bc305a23af83186db137ed93",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  |a|b|\\n  ---|---\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  |a|b|\n  |:---|---:|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "907f411d23884f7ebbe1a394ad2c50fe030ccbf41467669425841fad473bd2a6",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  |a|b|\\n  |:---|---:|\\n  |\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  |a|b|\n  |:---|---:|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "89ae6c7d49f1f4ac9536064b4ee4808ba6daedec85099923f865fe4a6c8bd42b",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  |a|b|\\n  |:---|---:|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  |a\\|c|b|\n  |-|-|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "1d47e13bf08d957bc6ada3d73ee960163c800d76031ea6faada96e7712595ea9",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  |a\\\\|c|b|\\n  |-|-|\\n  |\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  |a\\|c|b|\n  |-|-|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "fd8ba30d61c68f4afed7fb000de0747f8f508d3715b19abcb8a2a0df049830f8",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  |a\\\\|c|b|\\n  |-|-|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  |a\\|c|b|\n  ---|---\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "362a53552854e58cdd1e5736d8e96fb103aa1529dc074ce5d767e8aea560b667",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  |a\\\\|c|b|\\n  ---|---\\n  |\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  |a\\|c|b|\n  ---|---\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "87f87ac78e80580907781fa4315a0dbb41e9fc8bcfa548715e760e067453eceb",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  |a\\\\|c|b|\\n  ---|---\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  |a\\|c|b|\n  |:---|---:|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "849ac1d80476bb7be61166df8d20dead44084844c50394ec784d888b6df377ac",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  |a\\\\|c|b|\\n  |:---|---:|\\n  |\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  |a\\|c|b|\n  |:---|---:|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "a358eec1a430ea87707715d2c976d0a11765c2e1dac273ea3ba68cdd6f50f209",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  |a\\\\|c|b|\\n  |:---|---:|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  a | b\n  |-|-|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "677e60385702f40c01ae838ecb91834f32e0c60eefbe1d8fb7dc46f59bcb3c51",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  a | b\\n  |-|-|\\n  |\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  a | b\n  |-|-|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "cf9bebddc762de1ad572463fb29e9fed3e86b691c60b22f573369ac31764027f",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  a | b\\n  |-|-|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  a | b\n  ---|---\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "350f332bab33e226dd784401c58f35c364c0dfa2cd98e956dd4416054cab8666",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  a | b\\n  ---|---\\n  |\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  a | b\n  ---|---\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "a3e374d2255b09a228afa71fbb9f9ab849bc381c0ddcba242248d1280d681bbd",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  a | b\\n  ---|---\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  a | b\n  |:---|---:|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "c1ef151f5a66070ce30c89acacec2b6158b7439b0c0bc118a9ea8cc16bd1432b",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  a | b\\n  |:---|---:|\\n  |\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\n  a | b\n  |:---|---:|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "d6727cb9433dad51101c178691b772c648c983ba8cbd3ab282b85c3c3cf69d7a",
+      "diagnostic": "markdown differential mismatch: source='- before\\n  a | b\\n  |:---|---:|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  a|b\n  |-|-|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "3a802ed5fe35f85d6db17136516b8515d7477e357ffa44d4ec855e5541ce262e",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  a|b\\n  |-|-|\\n  |\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  a|b\n  |-|-|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "899eb144b660a404d8c756584e4c0b103b991c4eb91f2365af54a6f1eae22e09",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  a|b\\n  |-|-|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  a|b\n  ---|---\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "e95a47373a672911e56a480af48a2c730fc94a399cc7cbcb7abe3eb437c0cddd",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  a|b\\n  ---|---\\n  |\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  a|b\n  ---|---\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "92c96b6486eca03a15738542ab85f66513209f2b73e19a7f8c32b3c13a5eec05",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  a|b\\n  ---|---\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  a|b\n  |:---|---:|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "585ea838ab86601e09884d1a31659e0777b72259e2d9e748301e6ff53f48a6e6",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  a|b\\n  |:---|---:|\\n  |\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  a|b\n  |:---|---:|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "47376cb689ed726c65fdbfce5eb59a234574743ab454dc3802a2698c83f7d29c",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  a|b\\n  |:---|---:|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  |a|b|\n  |-|-|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "2e4523e5d6491c89370fb83cdb4a55a9ceec597e9c2141fd04ba0f2d02884261",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  |a|b|\\n  |-|-|\\n  |\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  |a|b|\n  |-|-|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "2b392e1698bbd0a7520b6626d370dc5f43963716e7c9ff3cbd91d08fa8ad6d9b",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  |a|b|\\n  |-|-|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  |a|b|\n  ---|---\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "e3bc9bbfdaefede54b62e3de973e003e091f809f6d1f4ae79dfe9d8412574f3a",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  |a|b|\\n  ---|---\\n  |\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  |a|b|\n  ---|---\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "607182836ecabff5fe070d9a9a401a62f602470b0613152b4f85d3b4ae299891",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  |a|b|\\n  ---|---\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  |a|b|\n  |:---|---:|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "0eb23c16a165dfe5bc466ecac27d85d4a5e92a305a5340a64699309c17369770",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  |a|b|\\n  |:---|---:|\\n  |\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  |a|b|\n  |:---|---:|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "9fadba098e8c364c925dfbfb7f4a82597823135daf8805f992700cad9f88ecef",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  |a|b|\\n  |:---|---:|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  |a\\|c|b|\n  |-|-|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "5b507c01581ce3a61e5e3192b3d03093ff31bee3fd028d08fad2a48411e8ce47",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  |a\\\\|c|b|\\n  |-|-|\\n  |\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  |a\\|c|b|\n  |-|-|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "a52a92566354d8d920a13896b0934547b22bc1c3ba4c95e3527fd16acd771da0",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  |a\\\\|c|b|\\n  |-|-|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  |a\\|c|b|\n  ---|---\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "57b6ce233b9061dc16f8d6a8bcb10284a41e8c6c0d73a5c95760eef53ebb5664",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  |a\\\\|c|b|\\n  ---|---\\n  |\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  |a\\|c|b|\n  ---|---\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "dee55354f40c8353bb8cf5cac77123536838ab102dcb2d0e72b59fd239957f48",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  |a\\\\|c|b|\\n  ---|---\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  |a\\|c|b|\n  |:---|---:|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "6ccb222395d1aa82787d4c94110e485d7b69ac9dbd0605fef8825b6511a11606",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  |a\\\\|c|b|\\n  |:---|---:|\\n  |\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  |a\\|c|b|\n  |:---|---:|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "a6ef8ef6158894579bb3d1facc35f79f4f677ddb4f83f57abe49c692d099e7a6",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  |a\\\\|c|b|\\n  |:---|---:|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  a | b\n  |-|-|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "a7ae1d0e86269cad8e31abeee9ca58de78b2fd0e32ceca9fe7cde33350cb0aff",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  a | b\\n  |-|-|\\n  |\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  a | b\n  |-|-|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "60269a9111d17105dd6c6653838df18f247f7556561755cb40bc7317c949542b",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  a | b\\n  |-|-|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  a | b\n  ---|---\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "ac2979d41a7ee40a30967ef4c5d8f44fcd96a8de05135ed29e45e6672d9e845c",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  a | b\\n  ---|---\\n  |\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  a | b\n  ---|---\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "7edf7e7d004be1e62d31fb8af815810a63590c68d63a6bacb410409ab12e305a",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  a | b\\n  ---|---\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  a | b\n  |:---|---:|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "384d0d848f279fec0e3ef50f7460183c079c9180bf503b8bbb99f75638cdc96e",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  a | b\\n  |:---|---:|\\n  |\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\n  a | b\n  |:---|---:|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "54f61cfddedfacd813bf4107653de0ed8991e874fca8a0594bdb1e7dd0d9b1ea",
+      "diagnostic": "markdown differential mismatch: source='- [\\n  a | b\\n  |:---|---:|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  a|b\n  |-|-|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "eea218e85ec9692847cf2556c6c964794e456e6cb81acc66c223d1a19722ae17",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  a|b\\n  |-|-|\\n  |\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  a|b\n  |-|-|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "131d3212448b3cc456f0823c449e6ba8dd916157894e4f7345656a23ad7c2702",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  a|b\\n  |-|-|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  a|b\n  ---|---\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "49e190d0b56a00b57d211f187a8207ad095af8023a49345de3c35651312c18cb",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  a|b\\n  ---|---\\n  |\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  a|b\n  ---|---\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "63133baf978b56734cc6eac5a03610c4f5f9fc35f762e0c76d2e948f2146db17",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  a|b\\n  ---|---\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  a|b\n  |:---|---:|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "1a7ad7f4110682040d5df2a0b805016f72c083224034a3ebd1e69e6f4f91f154",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  a|b\\n  |:---|---:|\\n  |\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  a|b\n  |:---|---:|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "4ed7965fe5927422d8ae4ba045192748c1b9964443ddff07a77777018bac1bde",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  a|b\\n  |:---|---:|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  |a|b|\n  |-|-|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "1b8e85ba3f229522d0df096690a1eecafac7d06d84d46f837473c3989f22212c",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  |a|b|\\n  |-|-|\\n  |\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  |a|b|\n  |-|-|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "bd8a1a7024b29743f353bf93f0383de83698522631f79ba102650282bc2e702c",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  |a|b|\\n  |-|-|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  |a|b|\n  ---|---\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "5b26e32946cd83798175887e35cb7dabcdb7d805df692585e41140a8d696cbc0",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  |a|b|\\n  ---|---\\n  |\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  |a|b|\n  ---|---\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "f0b285c9a8a70d2535bc67161efc47d211e39e27a008f51c025209685a6294cd",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  |a|b|\\n  ---|---\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  |a|b|\n  |:---|---:|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "857a2b685b274cf059e3923275f3230279ffe803f466b1b6af25e8349e9c358a",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  |a|b|\\n  |:---|---:|\\n  |\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  |a|b|\n  |:---|---:|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "7924186f9bfab7a6087b456ebfc8404e0403c0784984154bfdaeac84d233ffcf",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  |a|b|\\n  |:---|---:|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  |a\\|c|b|\n  |-|-|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "42a298a1fc5a49ade72665b44a05997a57ea7c09783c92eedc19141ce9c7da4c",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  |a\\\\|c|b|\\n  |-|-|\\n  |\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  |a\\|c|b|\n  |-|-|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "ef0afa27355dc2a5910a8f14007d45bcbf46955cf36ee786fdfb1a6750899327",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  |a\\\\|c|b|\\n  |-|-|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  |a\\|c|b|\n  ---|---\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "32a782c9654f81d5aef98e5e7f22f3379aef51056b33d2a3cf0c0894699fd1a1",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  |a\\\\|c|b|\\n  ---|---\\n  |\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  |a\\|c|b|\n  ---|---\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "402d5527ce83d747db4326eba01943f859790bdd991b58168eb1d4921ebdcf20",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  |a\\\\|c|b|\\n  ---|---\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  |a\\|c|b|\n  |:---|---:|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "1bb709f30e964aea5fa93e13ddee5090891887c69ce36d8e9295dedcc7fdf8ae",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  |a\\\\|c|b|\\n  |:---|---:|\\n  |\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  |a\\|c|b|\n  |:---|---:|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "7b5cece538d792e6ddf51c7810c7b92b4a89b6dfd4ef048219f6d852041a1f53",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  |a\\\\|c|b|\\n  |:---|---:|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  a | b\n  |-|-|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "6e2e8a1bfb3f783e76e06a0eb9ce9b3ce20dd663fe071ba31ec48c64f21b04d5",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  a | b\\n  |-|-|\\n  |\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  a | b\n  |-|-|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "9509799e2604a126ed111cb07207e27e6ced7586273886f1f1b5ee44ed1a2ee5",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  a | b\\n  |-|-|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  a | b\n  ---|---\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "c1a6a114cf83ea48341041b6c73c89cc1f890e6de97e4e27bcdb64355c521585",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  a | b\\n  ---|---\\n  |\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  a | b\n  ---|---\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "1c8dbb03ef301c44b824fbf3c451edfa4b0fdeb2525e33f4aabc510b11525166",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  a | b\\n  ---|---\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  a | b\n  |:---|---:|\n  |\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "a89ce406e33e60eb15d8d46de1ce4f990a9ccb8dd172e12b1496eaa5e9bb17b8",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  a | b\\n  |:---|---:|\\n  |\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\n  a | b\n  |:---|---:|\n  <x>\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "b8fd1de0c3755f8edd1e5574a863fb16b5e08f033552b0d086335812ae05eb70",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\n  a | b\\n  |:---|---:|\\n  <x>\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  a|b\r\n  |-|-|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "1c677e694cff83d058ab0c1e845c2678a3768cf69cf6668807b6e16d2e937e94",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  a|b\\r\\n  |-|-|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  a|b\r\n  |-|-|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "20351401f10fc422540e2dced6daeb45f63c1705e7b2bcb177a9b46454dbf42c",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  a|b\\r\\n  |-|-|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  a|b\r\n  ---|---\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "9ec309d4de581805a2b0e43732f0f1df6cc250f3113e8fe4ac19f364f7745fdf",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  a|b\\r\\n  ---|---\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  a|b\r\n  ---|---\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "162f24cc284954269f87dcb2a67c51aed3e9126134703de6b3f8ae7a8f37ebc3",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  a|b\\r\\n  ---|---\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  a|b\r\n  |:---|---:|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "89cf1fd2b9450c75bfc6dd34285fd894072a9b721ebacb52b2fa5cedad2ff3b3",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  a|b\\r\\n  |:---|---:|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  a|b\r\n  |:---|---:|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "0211c70591198933ea64baaaf3af8910bd537fcb1903e654be182fbbeef74d02",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  a|b\\r\\n  |:---|---:|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  |a|b|\r\n  |-|-|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "173740188144b51b443bf19375940174f7546b0f0eb5c1e88b65c3cac5212160",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  |a|b|\\r\\n  |-|-|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  |a|b|\r\n  |-|-|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "cb4625fe5b19ccf9f3406601a170534198be6a2d227accd5cfdc41f3c27bdb67",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  |a|b|\\r\\n  |-|-|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  |a|b|\r\n  ---|---\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "887cd24adde7e4cdf4b178fbb07ec325c8e3a7bb6effef98b4eb2585889c009e",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  |a|b|\\r\\n  ---|---\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  |a|b|\r\n  ---|---\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "d2d669d17aea968b73937f591ce06de2698aff11e2c8030337fe8b9c671896ac",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  |a|b|\\r\\n  ---|---\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  |a|b|\r\n  |:---|---:|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "1edf5734bccf4c990cf1f6ca35be82db61cd603918405c8b47596b18a6b86218",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  |a|b|\\r\\n  |:---|---:|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  |a|b|\r\n  |:---|---:|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "a1996ddf91de1ec41c17fcb737ded00513ab9155b05b891057897d2eeeed7b5a",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  |a|b|\\r\\n  |:---|---:|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  |a\\|c|b|\r\n  |-|-|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "56a111d86c279c07dda289786f7851981e5f65c23f1a3ff64818b112dd085648",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  |a\\\\|c|b|\\r\\n  |-|-|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  |a\\|c|b|\r\n  |-|-|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "99eedb587a7bc6e7f772ae6c8f21179440e63f8179e507e6794670ed78d2e5e2",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  |a\\\\|c|b|\\r\\n  |-|-|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  |a\\|c|b|\r\n  ---|---\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "a5b5b5e0d06cbeabb81a1ee959683aa91894ecae6386b5d742eb0c7cde925bf1",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  |a\\\\|c|b|\\r\\n  ---|---\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  |a\\|c|b|\r\n  ---|---\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "46ce370c84cc62cdaf04aa166151486d2e6f8590da3fcbfafb7edbc08c986b7d",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  |a\\\\|c|b|\\r\\n  ---|---\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  |a\\|c|b|\r\n  |:---|---:|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "58a9375c3047ce5c2cce4c1b8d72aaa028adc31282ad9ba9b48f04e69bb6fb3a",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  |a\\\\|c|b|\\r\\n  |:---|---:|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  |a\\|c|b|\r\n  |:---|---:|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "59298ce1c1925cf612cac985f97d6d8bef17125f80f5de8a571a893e50503863",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  |a\\\\|c|b|\\r\\n  |:---|---:|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  a | b\r\n  |-|-|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "a63cf06c1182d7556189ac252e35ee96eeb8724f6e9d1aff70e8946ec92bab28",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  a | b\\r\\n  |-|-|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  a | b\r\n  |-|-|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "e99ee962b7473f61eca1d5cec9ce5fa42f4926827e3c88db43c17dada9debc80",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  a | b\\r\\n  |-|-|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  a | b\r\n  ---|---\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "db4d65f99fdae142b0d042262957a3c101059b4bbd8f50086a72909ebb5c9b46",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  a | b\\r\\n  ---|---\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  a | b\r\n  ---|---\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "c747d4918f15977e1b888eb2d8814c576cb120da0faaebaafbaf09e8ae51ccbc",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  a | b\\r\\n  ---|---\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  a | b\r\n  |:---|---:|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "4df228252db93378c11d163e103aaaa3c9143f9e29451927055d997bb5d02367",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  a | b\\r\\n  |:---|---:|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- before\r\n  a | b\r\n  |:---|---:|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "5d74dc5722bdded5e04e304f3ad69f59ec6592b39f6c639ee358f0239361bac4",
+      "diagnostic": "markdown differential mismatch: source='- before\\r\\n  a | b\\r\\n  |:---|---:|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>before\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>before</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  a|b\r\n  |-|-|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "061ff775b42b5cccc41db5ddb228a512a68601a8545aafb27b711b4cb287322a",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  a|b\\r\\n  |-|-|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  a|b\r\n  |-|-|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "526f7f2041e37921781f65c832a41452153d60a5c5f6578ad728d6d51682f2c7",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  a|b\\r\\n  |-|-|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  a|b\r\n  ---|---\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "464a0ad37e4e27489afc28424c29a2099d19691a806b3fcd0632e3fb061d4f4f",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  a|b\\r\\n  ---|---\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  a|b\r\n  ---|---\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "d97aef280fa86bf1e71eb2725321a92da0e80c04307a40a4bfaa027456aa4dd9",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  a|b\\r\\n  ---|---\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  a|b\r\n  |:---|---:|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "84c3125951bdf5022251b12ec4fae2d3719094234754a681c3603fac0dfb56ff",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  a|b\\r\\n  |:---|---:|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  a|b\r\n  |:---|---:|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "4e3918e11263cf0aefdf49fc0d2fbdafbcb61f47d061d4ad555800799316815f",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  a|b\\r\\n  |:---|---:|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  |a|b|\r\n  |-|-|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "d72b1292e39be8cde8f2b945395a273716379181fce867d3d8601bfc3d08fb6d",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  |a|b|\\r\\n  |-|-|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  |a|b|\r\n  |-|-|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "99dd56384053f9fcf50aa1ef38bb4c5f9b198e1028136497f5bd7e6d0145f1d0",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  |a|b|\\r\\n  |-|-|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  |a|b|\r\n  ---|---\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "cead5cbcde056a498811f7441e8bf49b081657c993d1e623b9f6caee1b2dd9ba",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  |a|b|\\r\\n  ---|---\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  |a|b|\r\n  ---|---\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "28382999996e01dfffde0b807df0c838226ec6bb126e6b0656bf218d282661e1",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  |a|b|\\r\\n  ---|---\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  |a|b|\r\n  |:---|---:|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "d8e9226072112a67d0d8427a5f51a2395f820d9d24bbd0339879d05486fa3e2e",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  |a|b|\\r\\n  |:---|---:|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  |a|b|\r\n  |:---|---:|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "ba04ab1390d51dad9f77bce08d8b4d36e6418eac3768b18e03f6e9032cd3ecac",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  |a|b|\\r\\n  |:---|---:|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  |a\\|c|b|\r\n  |-|-|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "696d317036abc5c0920d09d4a52914856d6d03647203fa97596327b4cdd99cc5",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  |a\\\\|c|b|\\r\\n  |-|-|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  |a\\|c|b|\r\n  |-|-|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "b37a3388a9a02f575b38b5cd621cd9c873cb1f52085ed7a1e40c1a75d8512eb4",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  |a\\\\|c|b|\\r\\n  |-|-|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  |a\\|c|b|\r\n  ---|---\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "8da874fc94f8c6bcac9aeb443f107090ccf4be1df909e0820f822ffffa9be893",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  |a\\\\|c|b|\\r\\n  ---|---\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  |a\\|c|b|\r\n  ---|---\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "352ad954cd69d767a422766cece97750258b3cf6493ed1c04ce7b454c611e4b7",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  |a\\\\|c|b|\\r\\n  ---|---\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  |a\\|c|b|\r\n  |:---|---:|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "6cf141a27cbedc0a660febd83fd85e56f6a49a28e24b57948664eac9a7e1be94",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  |a\\\\|c|b|\\r\\n  |:---|---:|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  |a\\|c|b|\r\n  |:---|---:|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "1bf8ff8914d508e5a42e3169cf46a63afd8e4172685309a48d060085a75497b5",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  |a\\\\|c|b|\\r\\n  |:---|---:|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  a | b\r\n  |-|-|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "9720d6a6a87b090c744816a906288816e0a0adb5d2e7e9a746fadd38081a2fc6",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  a | b\\r\\n  |-|-|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  a | b\r\n  |-|-|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "eaf2ffd33a12aecdc73c7e14352994635763e12ab1ac764b59b8198e6434396b",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  a | b\\r\\n  |-|-|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  a | b\r\n  ---|---\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "61dcbf0387f19c4b3261b72e62de651b358d510ce775402441671a40766e033a",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  a | b\\r\\n  ---|---\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  a | b\r\n  ---|---\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "cc2758fa4f82d4f830adbcda886ad58ef446c70a94bc899750c7657f6626593e",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  a | b\\r\\n  ---|---\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  a | b\r\n  |:---|---:|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "d6fdcc017b5b9438ff2391f9c793d5412ef6ca8fe56785811b729f60b5da6213",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  a | b\\r\\n  |:---|---:|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- [\r\n  a | b\r\n  |:---|---:|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "5d9ca8b0581c5c0945762bab63ada8e4bac04032d12cf6201f464a28701129e5",
+      "diagnostic": "markdown differential mismatch: source='- [\\r\\n  a | b\\r\\n  |:---|---:|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>[\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>[</p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  a|b\r\n  |-|-|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "19f0cba67544ac96abd113cffbc4351b794712bdf897826498d2e02aab43642f",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  a|b\\r\\n  |-|-|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  a|b\r\n  |-|-|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "56a8f4791977f6da2206cc12c236502822fe32930ffb9ecead9ea6cbb46d3776",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  a|b\\r\\n  |-|-|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  a|b\r\n  ---|---\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "48c93de2cfaa336aaa557e54f4db1c740c9491269824907fca598ec6a7deb1e3",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  a|b\\r\\n  ---|---\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  a|b\r\n  ---|---\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "1fb68867e7a5377a32db7affc926d65207066037ba57f8cb4abf5d1e9fa00638",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  a|b\\r\\n  ---|---\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  a|b\r\n  |:---|---:|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "10b38ea7fae4405e47c4eeca5bbc69e53b53e8f1df1bc83069b4719c2c7ff593",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  a|b\\r\\n  |:---|---:|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  a|b\r\n  |:---|---:|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "56449f3a1b75a9f9ad74e7afa94606faa2123d12c5c41f16b5b94ddfdbd28c79",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  a|b\\r\\n  |:---|---:|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  |a|b|\r\n  |-|-|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "2f6d9df1b8982c84da9851d4a5c37ec7b145dcdebc8395cd7e4b202154fdde54",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  |a|b|\\r\\n  |-|-|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  |a|b|\r\n  |-|-|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "878279ae8a30a3ce734fdcf5538d1fd2be005740c6205bc5b52004df9bf5d442",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  |a|b|\\r\\n  |-|-|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  |a|b|\r\n  ---|---\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "67d2793165bbbf95855efff643967a995eaa0fb4a45f37821b02a0ee9e75afb8",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  |a|b|\\r\\n  ---|---\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  |a|b|\r\n  ---|---\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "9b505d37586e3873d0f23988701458980e592b3a4906f127cfe06442a1d92933",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  |a|b|\\r\\n  ---|---\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  |a|b|\r\n  |:---|---:|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "5caa5fcd353d7e80ff5d29e2496fe0297ad2a675c60ca64617c95ae37c1ef4d3",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  |a|b|\\r\\n  |:---|---:|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  |a|b|\r\n  |:---|---:|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "207c2359622bbb527e7102280d580d5a864b7df7f7b74ab98c5f37d9df383730",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  |a|b|\\r\\n  |:---|---:|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  |a\\|c|b|\r\n  |-|-|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "ebd9856979c32ac626d057ba076710af402b48790f8f13e66d73f9413d95aa6d",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  |a\\\\|c|b|\\r\\n  |-|-|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  |a\\|c|b|\r\n  |-|-|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "e1ecb5240c7387f646566ab424913f4f38ca52a8e253568927fa79819b9f8e69",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  |a\\\\|c|b|\\r\\n  |-|-|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  |a\\|c|b|\r\n  ---|---\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "dcefd7e9800149ef6e55bb31626e35881aee7f564311ff5f409e326adb8cc490",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  |a\\\\|c|b|\\r\\n  ---|---\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  |a\\|c|b|\r\n  ---|---\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "703ced736fbaa9d5ddffcbc7fc518cc87fc784794cdf289b64f0d5ec24c6ad6a",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  |a\\\\|c|b|\\r\\n  ---|---\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a|c</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  |a\\|c|b|\r\n  |:---|---:|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "2b564d90a3d71fe09114b98d16ba982b82baece17da6010e1cee537a187d913f",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  |a\\\\|c|b|\\r\\n  |:---|---:|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  |a\\|c|b|\r\n  |:---|---:|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "da1cd974b5936249a336c62c3c9c0c5dc79f51f425bb956c9fb101ac0a37e18a",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  |a\\\\|c|b|\\r\\n  |:---|---:|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a|c</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  a | b\r\n  |-|-|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "85317bbb58df823c367135b6a5738ee7b53fd237126c698d58f13fb1c9b2079f",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  a | b\\r\\n  |-|-|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  a | b\r\n  |-|-|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "7631470265fefcb3c3ccad5d687498e945393b4613f6054d70251ab3226bd87e",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  a | b\\r\\n  |-|-|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  a | b\r\n  ---|---\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "cdcac7c9bc806454ace3b41f5bbbe1ec931679fda871d27e23e13db2a9d10828",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  a | b\\r\\n  ---|---\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  a | b\r\n  ---|---\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "e2ac7aca8481d09fc531f6e2acd3d30abf4a9d7e5dc58f543a4be2b33d8b9793",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  a | b\\r\\n  ---|---\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th>a</th>\\n<th>b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  a | b\r\n  |:---|---:|\r\n  |\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "ad15ae05bf3cf02dce12b12b9dff6a1a07415b3ad81b683c1193f9769a2b1737",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  a | b\\r\\n  |:---|---:|\\r\\n  |\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n|</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<p>|</p>\\n</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "- text *em*\r\n  a | b\r\n  |:---|---:|\r\n  <x>\r\n",
+      "reason": "header-only table incorrectly loosens containing list",
+      "source_sha256": "85c4960f828083c2d3b2881d0a62c3c7b81131b97fcd871da3986c7a369d76a8",
+      "diagnostic": "markdown differential mismatch: source='- text *em*\\r\\n  a | b\\r\\n  |:---|---:|\\r\\n  <x>\\r\\n'\npurrassist_core='<ul>\\n<li>text <em>em</em>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>\\n<p>text <em>em</em></p>\\n<table>\\n<thead>\\n<tr>\\n<th align=\"left\">a</th>\\n<th align=\"right\">b</th>\\n</tr>\\n</thead>\\n</table>\\n<x>\\n</li>\\n</ul>\\n'"
+    }
+  ],
+  "unexpected_mismatches": []
+}

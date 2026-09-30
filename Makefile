@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 MAKEFLAGS += --no-print-directory
-.PHONY: check fmt lint test doc hygiene wasm-test benchmark package syntax-oracles resources fuzz-json helper-test helper-census helper-check
+.PHONY: check fmt lint test doc hygiene wasm-test benchmark package syntax-oracles resources fuzz helper-test helper-census helper-check
 
 check: fmt hygiene helper-test lint test doc
 
@@ -11,7 +11,8 @@ fmt:
 hygiene:
 	python3 scripts/check-repository.py
 	python3 scripts/check-release.py
-	python3 scripts/test-fuzz-json.py
+	python3 scripts/test-fuzz.py
+	python3 scripts/test-fuzz-feedback.py
 	python3 scripts/test-verify-published.py
 	python3 scripts/test-resource-report.py
 	python3 scripts/check-resource-limits.py --schema-only docs/qualification/resources-linux-x86_64.json
@@ -42,9 +43,22 @@ resources:
 	python3 scripts/test-resource-report.py
 	python3 scripts/measure-resources.py $(RESOURCE_ARGS)
 
-fuzz-json:
-	python3 scripts/test-fuzz-json.py
-	python3 scripts/fuzz-json.py $(FUZZ_ARGS)
+# TARGET selects one of json/markdown/schema/pattern/unified/fuzzy/matching/patch
+# (see docs/FUZZING.md); FUZZ_ARGS forwards to scripts/fuzz.py (--iterations,
+# --seed, --timeout, --replay). With no TARGET, every target runs once at the
+# documented smoke count (scripts/fuzz.py's default of 1,000 mutations),
+# ignoring FUZZ_ARGS, so the gate stays deterministic across all eight targets.
+fuzz:
+	python3 scripts/test-fuzz.py
+	python3 scripts/test-fuzz-feedback.py
+	@if [ -z "$(TARGET)" ]; then \
+		for target in json markdown schema pattern unified fuzzy matching patch; do \
+			echo "== fuzz target: $$target =="; \
+			python3 scripts/fuzz.py --target $$target || exit 1; \
+		done; \
+	else \
+		python3 scripts/fuzz.py --target $(TARGET) $(FUZZ_ARGS); \
+	fi
 
 # The self-tests and ledger validity are mandatory. Inspection reports keep
 # existing unsanctioned groups visible; helper-check rejects those groups.

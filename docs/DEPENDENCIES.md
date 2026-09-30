@@ -177,6 +177,29 @@ corpus already vendored above) from a digest-verified source tarball into
 under `vendor/licenses/`; it is never linked into any crate and is used only
 as an independent HTML-rendering oracle, out of process.
 
+The same verified archive also produces a separate executable with one
+registered cache correction in `src/inlines.c`: preserve the furthest known
+backtick closer instead of overwriting it with an earlier closer. The exact
+unique patch preimage and `backtick_cache_patch_sha256` in
+`vendor/tooling.json` are checked before building. The original executable
+remains unchanged. Reports identify the original archive, correction,
+corrected source file, and both executable digests, and retain actual
+original/corrected disagreements. GFM §6.3 and executed regression controls
+justify the correction; see `docs/FUZZING.md`. Its source retains the upstream
+licenses above. Neither executable is linked into or shipped with a crate.
+
+
+An additional isolated oracle executable combines that backtick correction
+with distinct close-only and dual-purpose emphasis opener floors. The exact
+unique preimages and `emphasis_floors_patch_sha256` registration are checked
+before building. Raw `*` or `_` selects it before probe execution. GFM's
+emphasis algorithm and actual upstream cmark 0.31.1 outputs justify the
+change; each campaign requires 11 authoritative controls and unchanged
+output on all 672 official examples. Raw, backtick-only, and combined answers,
+patch/source/archive/executable identities, and unchanged specification
+mismatches remain explicit. Upstream licenses continue to apply, and no
+corrected source or executable is included in a production crate.
+
 
 Repository scripting requires Python 3.12 or newer (including the standard
 library archive extraction filter); cmark-gfm qualification requires CMake
@@ -217,3 +240,11 @@ is bundled into a published crate. Upstream commit and original file digests are
 recorded in `crates/helper-census/UPSTREAM.json`; the source license headers and
 three first-party license copies are retained. Its documented repository commands
 distinguish an inspection report from strict helper-ledger enforcement.
+
+The independently corrected qualification-only `cmark-gfm` executables also
+retain bare-destination parenthesis balance in `manual_scan_link_url_2`.
+`scripts/fuzz.py` requires an exact unique full-function preimage and the patch
+digest registered in `vendor/tooling.json`; reports retain original/previous/
+corrected source and executable identities, full output disagreements and
+executed compatibility controls. Existing upstream source licenses/notices
+apply. This reference tooling is never linked or packaged into production crates.

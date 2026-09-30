@@ -1,0 +1,156 @@
+{
+  "format": "purrassist.markdown-html-boundaries.v1",
+  "interpretation": "bounded diagnostic observations; reference limits are not successful comparisons",
+  "case_set": "html",
+  "build": {
+    "command": [
+      "cargo",
+      "build",
+      "-p",
+      "purrassist-core",
+      "--example",
+      "fuzz-markdown",
+      "--locked",
+      "--config",
+      "profile.dev.opt-level=1",
+      "--config",
+      "profile.dev.debug=1",
+      "--config",
+      "profile.dev.strip=false",
+      "--config",
+      "profile.dev.debug-assertions=true",
+      "--config",
+      "profile.dev.overflow-checks=true",
+      "--message-format=json"
+    ],
+    "sha256": "fe306545fec4a922643e4707495bfe2d153e69fda9dae720fe5f548b05661e3f",
+    "inherited_rustflags_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "appended_rustflags": [
+      "-C",
+      "instrument-coverage"
+    ],
+    "engine_source_sha256": "eb4cae64f020a3e5e62da047e9b0711d7a9cea94ded2f874658d53b200bfe39f",
+    "harness_source_sha256": "881f86897461b3a00583ddcac32e292d1ccd706c546cdd14461a246f6d961532",
+    "runner_source_sha256": "b4316016d5f9778a4ed9caa234d403f99573e8cecf3c4d128e9b785bdc5bf2d8"
+  },
+  "tools": {
+    "rustc": "rustc 1.100.0-nightly (4b6d04e70 2026-09-13)\nbinary: rustc\ncommit-hash: 4b6d04e706108ccfeafe2547fbe857dfe8972bad\ncommit-date: 2026-09-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0-nightly\nLLVM version: 23.1.1",
+    "llvm-cov": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1-rust-1.100.0-nightly\n  Optimized build.",
+    "llvm-profdata": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1-rust-1.100.0-nightly\n  Optimized build.",
+    "cmark-gfm": "cmark-gfm 0.29.0.gfm.13 - CommonMark with GitHub Flavored Markdown converter\n(C) 2014-2016 John MacFarlane"
+  },
+  "diagnostic_sha256": "bb82af935f556b1305bcb397f59770a6da7807eee298b0f01878bb0f126b2b63",
+  "executions": 2592,
+  "differential_checks": 2574,
+  "reference_limits": [
+    {
+      "source": "a <!--\u0000---> b\n",
+      "reason": "inline HTML comment trailing-hyphen scanner restriction",
+      "source_sha256": "82d436c18d0e5422c3478a16335375999ea9084c3fe89a251f72b05e4487227a",
+      "diagnostic": "markdown differential mismatch: source='a <!--\\x00---> b\\n'\npurrassist_core='<p>a <!--\ufffd---> b</p>\\n'\ncmark_gfm='<p>a &lt;!--\ufffd---&gt; b</p>\\n'"
+    },
+    {
+      "source": "> a <!--\u0000---> b\n",
+      "reason": "inline HTML comment trailing-hyphen scanner restriction",
+      "source_sha256": "e5efa3bb1285599994a6c8ba9d042b0894055b4231f3adcf36a21719cec28a90",
+      "diagnostic": "markdown differential mismatch: source='> a <!--\\x00---> b\\n'\npurrassist_core='<blockquote>\\n<p>a <!--\ufffd---> b</p>\\n</blockquote>\\n'\ncmark_gfm='<blockquote>\\n<p>a &lt;!--\ufffd---&gt; b</p>\\n</blockquote>\\n'"
+    },
+    {
+      "source": "- a <!--\u0000---> b\n",
+      "reason": "inline HTML comment trailing-hyphen scanner restriction",
+      "source_sha256": "9b3ef7879b289a2f70b304e70ad81e630805ddcd8abf8261192bf8e35228e136",
+      "diagnostic": "markdown differential mismatch: source='- a <!--\\x00---> b\\n'\npurrassist_core='<ul>\\n<li>a <!--\ufffd---> b</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>a &lt;!--\ufffd---&gt; b</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "a <!--\n---> b\n",
+      "reason": "inline HTML comment trailing-hyphen scanner restriction",
+      "source_sha256": "c29ddef80a8c9073c4db0a339970c5ba4cd2a7ad95688b86df66453efc342892",
+      "diagnostic": "markdown differential mismatch: source='a <!--\\n---> b\\n'\npurrassist_core='<p>a <!--\\n---> b</p>\\n'\ncmark_gfm='<p>a &lt;!--\\n---&gt; b</p>\\n'"
+    },
+    {
+      "source": "> a <!--\n---> b\n",
+      "reason": "inline HTML comment trailing-hyphen scanner restriction",
+      "source_sha256": "f107ef911d78037134303d270eea391c851eedcf3aa6dfa92ee8da79759e9d09",
+      "diagnostic": "markdown differential mismatch: source='> a <!--\\n---> b\\n'\npurrassist_core='<blockquote>\\n<p>a <!--\\n---> b</p>\\n</blockquote>\\n'\ncmark_gfm='<blockquote>\\n<p>a &lt;!--\\n---&gt; b</p>\\n</blockquote>\\n'"
+    },
+    {
+      "source": "- a <!--\n---> b\n",
+      "reason": "inline HTML comment trailing-hyphen scanner restriction",
+      "source_sha256": "554d441f56b681ceb4706eff847703377d26dca346b0d80bc5d138ed8ce283a9",
+      "diagnostic": "markdown differential mismatch: source='- a <!--\\n---> b\\n'\npurrassist_core='<ul>\\n<li>a <!--\\n---> b</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>a &lt;!--\\n---&gt; b</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "a <!------> b\n",
+      "reason": "inline HTML comment trailing-hyphen scanner restriction",
+      "source_sha256": "200ce9b858c1cc1e6f752cfd4967ff384da40b304c3cf1ead33fc1f9de037f90",
+      "diagnostic": "markdown differential mismatch: source='a <!------> b\\n'\npurrassist_core='<p>a <!------> b</p>\\n'\ncmark_gfm='<p>a &lt;!------&gt; b</p>\\n'"
+    },
+    {
+      "source": "> a <!------> b\n",
+      "reason": "inline HTML comment trailing-hyphen scanner restriction",
+      "source_sha256": "d5f0b63a237c92cb9cc15446ef6958e13d89a2826e0c945bab6bdcbb638db3fe",
+      "diagnostic": "markdown differential mismatch: source='> a <!------> b\\n'\npurrassist_core='<blockquote>\\n<p>a <!------> b</p>\\n</blockquote>\\n'\ncmark_gfm='<blockquote>\\n<p>a &lt;!------&gt; b</p>\\n</blockquote>\\n'"
+    },
+    {
+      "source": "- a <!------> b\n",
+      "reason": "inline HTML comment trailing-hyphen scanner restriction",
+      "source_sha256": "f2ca60453d769b0eb900e60ac74617e405c3f205d67419571a496b3f8bec3ecc",
+      "diagnostic": "markdown differential mismatch: source='- a <!------> b\\n'\npurrassist_core='<ul>\\n<li>a <!------> b</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>a &lt;!------&gt; b</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "a <!-----> b\n",
+      "reason": "inline HTML comment trailing-hyphen scanner restriction",
+      "source_sha256": "470c8aa89f5d715e5fdd9fa56910ecd909bf705ce852b69f4288f1a0c73bcbca",
+      "diagnostic": "markdown differential mismatch: source='a <!-----> b\\n'\npurrassist_core='<p>a <!-----> b</p>\\n'\ncmark_gfm='<p>a &lt;!-----&gt; b</p>\\n'"
+    },
+    {
+      "source": "> a <!-----> b\n",
+      "reason": "inline HTML comment trailing-hyphen scanner restriction",
+      "source_sha256": "7a01bdd548012e84d400a5dff0b99e939e77240f81a950f283e7135ef3021ec8",
+      "diagnostic": "markdown differential mismatch: source='> a <!-----> b\\n'\npurrassist_core='<blockquote>\\n<p>a <!-----> b</p>\\n</blockquote>\\n'\ncmark_gfm='<blockquote>\\n<p>a &lt;!-----&gt; b</p>\\n</blockquote>\\n'"
+    },
+    {
+      "source": "- a <!-----> b\n",
+      "reason": "inline HTML comment trailing-hyphen scanner restriction",
+      "source_sha256": "709b15b14d00db64e48105239043bc6c199205549b5199bc00d2bb84396289a9",
+      "diagnostic": "markdown differential mismatch: source='- a <!-----> b\\n'\npurrassist_core='<ul>\\n<li>a <!-----> b</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>a &lt;!-----&gt; b</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "a <!--a--b---> b\n",
+      "reason": "inline HTML comment trailing-hyphen scanner restriction",
+      "source_sha256": "897c64de7eddd7593fcdb048f7f6d4359d37bf1db3a250fa0b59fd939b2eb9e2",
+      "diagnostic": "markdown differential mismatch: source='a <!--a--b---> b\\n'\npurrassist_core='<p>a <!--a--b---> b</p>\\n'\ncmark_gfm='<p>a &lt;!--a--b---&gt; b</p>\\n'"
+    },
+    {
+      "source": "> a <!--a--b---> b\n",
+      "reason": "inline HTML comment trailing-hyphen scanner restriction",
+      "source_sha256": "0de7630e86e87cfe7d7e9cc7c4f7a3d89c95468dfaa92641adcb68e85b8c51b5",
+      "diagnostic": "markdown differential mismatch: source='> a <!--a--b---> b\\n'\npurrassist_core='<blockquote>\\n<p>a <!--a--b---> b</p>\\n</blockquote>\\n'\ncmark_gfm='<blockquote>\\n<p>a &lt;!--a--b---&gt; b</p>\\n</blockquote>\\n'"
+    },
+    {
+      "source": "- a <!--a--b---> b\n",
+      "reason": "inline HTML comment trailing-hyphen scanner restriction",
+      "source_sha256": "4c7bb2e5bd7c832649b42acab8d50f845ac31cdac0e33266bbb65e287969bed2",
+      "diagnostic": "markdown differential mismatch: source='- a <!--a--b---> b\\n'\npurrassist_core='<ul>\\n<li>a <!--a--b---> b</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>a &lt;!--a--b---&gt; b</li>\\n</ul>\\n'"
+    },
+    {
+      "source": "a <!--x---> b\n",
+      "reason": "inline HTML comment trailing-hyphen scanner restriction",
+      "source_sha256": "d0ca68c09b68421fbcb0d9f1da12604f2527ca98b580eb97c778351d5c862b63",
+      "diagnostic": "markdown differential mismatch: source='a <!--x---> b\\n'\npurrassist_core='<p>a <!--x---> b</p>\\n'\ncmark_gfm='<p>a &lt;!--x---&gt; b</p>\\n'"
+    },
+    {
+      "source": "> a <!--x---> b\n",
+      "reason": "inline HTML comment trailing-hyphen scanner restriction",
+      "source_sha256": "77bbb8893fea9d0e22b823658ee057c2fa0785132056b2f900975ebe87914a7d",
+      "diagnostic": "markdown differential mismatch: source='> a <!--x---> b\\n'\npurrassist_core='<blockquote>\\n<p>a <!--x---> b</p>\\n</blockquote>\\n'\ncmark_gfm='<blockquote>\\n<p>a &lt;!--x---&gt; b</p>\\n</blockquote>\\n'"
+    },
+    {
+      "source": "- a <!--x---> b\n",
+      "reason": "inline HTML comment trailing-hyphen scanner restriction",
+      "source_sha256": "ba7b67657d423c3cb4970cef1d7e16e93c3bdbae22f68602ef1048a40f2c7473",
+      "diagnostic": "markdown differential mismatch: source='- a <!--x---> b\\n'\npurrassist_core='<ul>\\n<li>a <!--x---> b</li>\\n</ul>\\n'\ncmark_gfm='<ul>\\n<li>a &lt;!--x---&gt; b</li>\\n</ul>\\n'"
+    }
+  ],
+  "unexpected_mismatches": []
+}
