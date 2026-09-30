@@ -109,11 +109,11 @@ pub struct ValidationReport {
     pub valid: bool,
     /// Every collected failed constraint.
     pub violations: Vec<Violation>,
-    /// Requirement 1: `format` annotation evidence, always populated
-    /// regardless of whether format-assertion made a failure a
-    /// [`Violation`] above, one entry per string instance location that
-    /// carries a `format` keyword (`validator` = `schema.format.<name>-v1`,
-    /// `constraint` = the instance's JSON Pointer path).
+    /// Results of every evaluated `format` keyword, including nested instances
+    /// and unsuccessful, negated, or conditional branches. A failed annotation
+    /// becomes a [`Violation`] only under the format-assertion vocabulary.
+    /// Each entry identifies its format validator and instance JSON Pointer;
+    /// evaluating several schemas at one instance can produce several entries.
     pub format_evidence: Vec<crate::contract::Validation>,
     /// Task 6 wiring: which pattern-matching engine
     /// (`pattern.engine.derivative-v1`/`pattern.engine.backtrack-v1`)

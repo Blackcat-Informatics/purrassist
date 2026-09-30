@@ -13,6 +13,7 @@
     "a": 1
   },
   "ledger_rules": [
-    "json.schema.property-name-repair"
+    "json.schema.property-name-repair",
+    "pattern.engine.derivative-v1"
   ]
 }

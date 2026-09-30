@@ -20,6 +20,7 @@
     "id": "aaa"
   },
   "ledger_rules": [
-    "json.required.invent"
+    "json.required.invent",
+    "pattern.engine.derivative-v1"
   ]
 }

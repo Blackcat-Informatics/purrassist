@@ -29,14 +29,23 @@ struct Evaluation {
     pattern_ids: BTreeSet<(usize, String)>,
 }
 impl Evaluation {
-    fn merge(&mut self, other: Self) {
+    /// Merge a schema evaluated against this same instance scope.
+    fn merge(&mut self, mut other: Self) {
         if other.errors.is_empty() {
-            self.properties.extend(other.properties);
-            self.items.extend(other.items);
+            self.properties.append(&mut other.properties);
+            self.items.append(&mut other.items);
         }
-        self.errors.extend(other.errors);
-        self.format_evidence.extend(other.format_evidence);
-        self.pattern_ids.extend(other.pattern_ids);
+        self.merge_child(other);
+    }
+    /// Child-instance annotations cannot mark members of the parent evaluated.
+    fn merge_child(&mut self, mut other: Self) {
+        self.merge_evidence(&mut other);
+        self.errors.append(&mut other.errors);
+    }
+    /// Keep observations even when the branch's assertions are discarded.
+    fn merge_evidence(&mut self, other: &mut Self) {
+        self.format_evidence.append(&mut other.format_evidence);
+        self.pattern_ids.append(&mut other.pattern_ids);
     }
     const fn valid(&self) -> bool {
         self.errors.is_empty()
@@ -483,6 +492,9 @@ impl Evaluator<'_, '_> {
                     for branch in passed {
                         result.merge(branch);
                     }
+                    for mut branch in failed {
+                        result.merge_evidence(&mut branch);
+                    }
                 } else {
                     self.violation(
                         result,
@@ -492,24 +504,28 @@ impl Evaluator<'_, '_> {
                         format!("{} of {} branches passed", passed.len(), children.len()),
                     )?;
                     for branch in failed {
-                        result.errors.extend(branch.errors);
+                        result.merge_child(branch);
+                    }
+                    for mut branch in passed {
+                        result.merge_evidence(&mut branch);
                     }
                 }
             }
         }
-        if body.get("not").is_some()
-            && self
-                .eval(schema.child(id, "not"), instance, path, depth + 1)?
-                .valid()
-        {
-            self.violation(result, id, path, "not", "negated schema matched")?;
+        if body.get("not").is_some() {
+            let mut branch = self.eval(schema.child(id, "not"), instance, path, depth + 1)?;
+            if branch.valid() {
+                self.violation(result, id, path, "not", "negated schema matched")?;
+            }
+            result.merge_evidence(&mut branch);
         }
         if body.get("if").is_some() {
-            let condition = self.eval(schema.child(id, "if"), instance, path, depth + 1)?;
+            let mut condition = self.eval(schema.child(id, "if"), instance, path, depth + 1)?;
             let branch = if condition.valid() {
                 result.merge(condition);
                 "then"
             } else {
+                result.merge_evidence(&mut condition);
                 "else"
             };
             if body.get(branch).is_some() {
@@ -625,15 +641,12 @@ impl Evaluator<'_, '_> {
         let child_path = format!("{path}/{}", pointer_segment(&member.key));
         if body.get("propertyNames").is_some() {
             let name = Node::new(Value::String(member.key.clone()));
-            result.errors.extend(
-                self.eval(
-                    schema.child(id, "propertyNames"),
-                    &name,
-                    &format!("{child_path}/@name"),
-                    depth + 1,
-                )?
-                .errors,
-            );
+            result.merge_child(self.eval(
+                schema.child(id, "propertyNames"),
+                &name,
+                &format!("{child_path}/@name"),
+                depth + 1,
+            )?);
         }
         if let Some(properties) = body.get("properties")
             && properties.get(&member.key).is_some()
@@ -645,7 +658,7 @@ impl Evaluator<'_, '_> {
                 &child_path,
                 depth + 1,
             )?;
-            result.errors.extend(branch.errors);
+            result.merge_child(branch);
             result.properties.insert(member.key.clone());
         }
         if let Some(Node {
@@ -666,7 +679,7 @@ impl Evaluator<'_, '_> {
                         &child_path,
                         depth + 1,
                     )?;
-                    result.errors.extend(branch.errors);
+                    result.merge_child(branch);
                     result.properties.insert(member.key.clone());
                 }
             }
@@ -678,7 +691,7 @@ impl Evaluator<'_, '_> {
                 &child_path,
                 depth + 1,
             )?;
-            result.errors.extend(branch.errors);
+            result.merge_child(branch);
             result.properties.insert(member.key.clone());
         }
         Ok(())
@@ -738,24 +751,23 @@ impl Evaluator<'_, '_> {
                     &format!("{path}/{position}"),
                     depth + 1,
                 )?;
-                result.errors.extend(branch.errors);
+                result.merge_child(branch);
                 result.items.insert(position);
             }
         }
         if body.get("contains").is_some() {
             let mut matched = BTreeSet::new();
             for (position, item) in items.iter().enumerate() {
-                if self
-                    .eval(
-                        schema.child(id, "contains"),
-                        item,
-                        &format!("{path}/{position}"),
-                        depth + 1,
-                    )?
-                    .valid()
-                {
+                let mut branch = self.eval(
+                    schema.child(id, "contains"),
+                    item,
+                    &format!("{path}/{position}"),
+                    depth + 1,
+                )?;
+                if branch.valid() {
                     matched.insert(position);
                 }
+                result.merge_evidence(&mut branch);
             }
             if body.get("minContains").is_none() && matched.is_empty() {
                 self.violation(
@@ -798,7 +810,7 @@ impl Evaluator<'_, '_> {
                             &format!("{path}/{}", pointer_segment(&member.key)),
                             depth + 1,
                         )?;
-                        result.errors.extend(branch.errors);
+                        result.merge_child(branch);
                         result.properties.insert(member.key.clone());
                     }
                 }
@@ -812,7 +824,7 @@ impl Evaluator<'_, '_> {
                             &format!("{path}/{position}"),
                             depth + 1,
                         )?;
-                        result.errors.extend(branch.errors);
+                        result.merge_child(branch);
                     }
                 }
             }
