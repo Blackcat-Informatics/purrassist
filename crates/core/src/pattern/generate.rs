@@ -4,9 +4,10 @@
 //! [`Pattern::generate`]: a shortest witness for the derivative automaton
 //! intersected with the complement of every `avoid` pattern's own
 //! unanchored-search language, found by a governed breadth-first search of
-//! the product automaton (pruning a path the instant any `avoid` pattern's
-//! search state becomes nullable, since every extension of a string
-//! containing a forbidden substring still contains it); or, for a pattern
+//! the product automaton. A match established before an actual next character
+//! persists through every extension; an end-dependent match is checked only
+//! when accepting a complete candidate. Start position and the preceding
+//! word class are part of every frontier and cycle key. For a pattern
 //! (or `avoid` pattern) that needs the backtracking engine, bounded
 //! candidate enumeration from the syntax tree verified with
 //! [`Pattern::is_match`], with exhaustion reported explicitly rather than as
@@ -62,62 +63,100 @@ fn lane_of<'c>(pattern: &'c Pattern, governor: &Governor) -> Result<Lane<'c>, St
     })
 }
 
-/// `true` if `lane` (an `avoid` pattern's own search state) is already
-/// nullable: an unanchored search finds that empty match at every position,
-/// so no extension of any witness could ever avoid it.
-fn already_matches(lane: &Lane<'_>, length: usize) -> bool {
-    state_matches(lane, lane.state, length)
-}
-/// Like `already_matches`, but for a state other than `lane`'s own current
-/// one (the state reached by stepping `lane`, before it is committed).
-fn state_matches(lane: &Lane<'_>, state: u32, length: usize) -> bool {
-    lane.session.nullable(
-        derive::classes(lane.compiled),
-        state,
-        end_ctx(length, false),
-    )
+/// A lane's live search state and whether it already matched at a position
+/// whose actual next character was available. Such a match remains true for
+/// every extension, unlike a match depending on the current string ending.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct LaneState {
+    live: u32,
+    matched: bool,
 }
 
-/// Step every lane (the target pattern and every `avoid` pattern) by one
-/// character, pruning (returning `None`) the instant an `avoid` pattern's
-/// restarted search state becomes nullable.
-fn step_lanes(
-    target: &mut Lane<'_>,
-    avoids: &mut [Lane<'_>],
-    states: &[u32],
+/// Assertion context belongs to the product state: two equal derivative
+/// terms reached after a word and a non-word character can accept differently
+/// and have different successors. The initial position is distinct as well.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ProductState {
+    lanes: Vec<LaneState>,
+    at_start: bool,
+    prev_word: bool,
+}
+
+impl ProductState {
+    const fn context(&self, at_end: bool, next_word: bool) -> NullCtx {
+        NullCtx {
+            at_start: self.at_start,
+            at_end,
+            prev_word: self.prev_word,
+            next_word,
+        }
+    }
+}
+
+fn state_matches(lane: &Lane<'_>, state: LaneState, ctx: NullCtx) -> bool {
+    state.matched
+        || lane
+            .session
+            .nullable(derive::classes(lane.compiled), state.live, ctx)
+}
+
+/// Resolve assertions at the position before consuming `code`, then advance
+/// the unanchored search. Only this nonterminal context can establish a
+/// permanent match: `$` is false and a boundary uses the actual next scalar.
+fn step_lane(
+    lane: &mut Lane<'_>,
+    current: LaneState,
     code: u32,
     ctx: NullCtx,
-    length: usize,
     governor: &mut Governor,
-) -> Result<Option<Vec<u32>>, StopReason> {
-    let target_next = target.session.step(
-        derive::classes(target.compiled),
-        states[0],
+) -> Result<LaneState, StopReason> {
+    let root = derive::root(lane.compiled);
+    if state_matches(lane, current, ctx) {
+        return Ok(LaneState {
+            live: root,
+            matched: true,
+        });
+    }
+    let stepped = lane.session.step(
+        derive::classes(lane.compiled),
+        current.live,
         code,
-        derive::minterm_of(derive::cuts(target.compiled), code).0,
+        derive::minterm_of(derive::cuts(lane.compiled), code).0,
         ctx,
         governor,
     )?;
-    let mut next_states = Vec::with_capacity(states.len());
-    next_states.push(target_next);
-    for (lane, &current) in avoids.iter_mut().zip(&states[1..]) {
-        let stepped = lane.session.step(
-            derive::classes(lane.compiled),
-            current,
-            code,
-            derive::minterm_of(derive::cuts(lane.compiled), code).0,
-            ctx,
-            governor,
-        )?;
-        // An `avoid` pattern's search is unanchored: a fresh attempt
-        // restarts at every position.
-        let restarted = lane.session.union(stepped, derive::root(lane.compiled))?;
-        if state_matches(lane, restarted, length + 1) {
+    Ok(LaneState {
+        live: lane.session.union(stepped, root)?,
+        matched: false,
+    })
+}
+
+/// Step every lane (the target pattern and every `avoid` pattern) by one
+/// character. A permanently established exclusion enters a rejecting sink;
+/// terminal-only exclusions remain live until complete-candidate acceptance.
+fn step_lanes(
+    target: &mut Lane<'_>,
+    avoids: &mut [Lane<'_>],
+    state: &ProductState,
+    code: u32,
+    governor: &mut Governor,
+) -> Result<Option<ProductState>, StopReason> {
+    let next_word = char::from_u32(code).is_some_and(is_word);
+    let ctx = state.context(false, next_word);
+    let mut lanes = Vec::with_capacity(state.lanes.len());
+    lanes.push(step_lane(target, state.lanes[0], code, ctx, governor)?);
+    for (lane, &current) in avoids.iter_mut().zip(&state.lanes[1..]) {
+        let next = step_lane(lane, current, code, ctx, governor)?;
+        if next.matched {
             return Ok(None);
         }
-        next_states.push(restarted);
+        lanes.push(next);
     }
-    Ok(Some(next_states))
+    Ok(Some(ProductState {
+        lanes,
+        at_start: false,
+        prev_word: next_word,
+    }))
 }
 
 fn generate_derivative(
@@ -139,15 +178,9 @@ fn generate_derivative(
     cuts.dedup();
     let representatives = representatives(&cuts);
 
-    if avoids.iter().any(|lane| already_matches(lane, 0)) {
-        return Ok(no_candidate(
-            "at least one `avoid` pattern matches the empty string, which an unanchored search finds at every position, so no witness for this pattern can ever avoid it",
-        ));
-    }
-
     // Breadth-first over string length; `frontier` holds, for each reachable
-    // combination of (target state, every avoid pattern's search state), the
-    // witness string that reaches it. Deduplicated *within one step* (so a
+    // combination of lane states and assertion context, the witness string
+    // that reaches it. Deduplicated *within one step* (so a
     // step's own work is bounded by the finite, interned product state
     // space, never by the alphabet), but never across steps: a state whose
     // nullability was not yet checked (because its length was still below
@@ -155,10 +188,18 @@ fn generate_derivative(
     // self-looping accepting state (any `+`/`*`/`{n,}` repetition) would
     // wrongly read as an empty language the moment `min_len` forces the
     // search past the point where states start repeating.
-    let mut frontier: Vec<(Vec<u32>, String)> = vec![(
-        std::iter::once(target.state)
-            .chain(avoids.iter().map(|lane| lane.state))
-            .collect(),
+    let mut frontier = vec![(
+        ProductState {
+            lanes: std::iter::once(target.state)
+                .chain(avoids.iter().map(|lane| lane.state))
+                .map(|live| LaneState {
+                    live,
+                    matched: false,
+                })
+                .collect(),
+            at_start: true,
+            prev_word: false,
+        },
         String::new(),
     )];
     let mut length = 0usize;
@@ -169,7 +210,7 @@ fn generate_derivative(
     // still lets this search prove emptiness *within these bounds* even
     // though states below `options.min_len` are deliberately never pruned
     // (see the `frontier` doc comment above).
-    let mut seen_state_sets: std::collections::BTreeSet<Vec<Vec<u32>>> =
+    let mut seen_state_sets: std::collections::BTreeSet<Vec<ProductState>> =
         std::collections::BTreeSet::new();
     loop {
         governor.charge(
@@ -177,17 +218,19 @@ fn generate_derivative(
             u64::try_from(frontier.len()).unwrap_or(u64::MAX),
         )?;
         if length >= options.min_len {
-            for (states, witness) in &frontier {
-                let target_ctx = end_ctx(length, false);
-                if target
-                    .session
-                    .nullable(derive::classes(target.compiled), states[0], target_ctx)
+            for (state, witness) in &frontier {
+                let ctx = state.context(true, false);
+                if state_matches(&target, state.lanes[0], ctx)
+                    && avoids
+                        .iter()
+                        .zip(&state.lanes[1..])
+                        .all(|(lane, &current)| !state_matches(lane, current, ctx))
                 {
                     return Ok(GenerateOutcome::Witness(witness.clone()));
                 }
             }
-            let mut current_set: Vec<Vec<u32>> =
-                frontier.iter().map(|(states, _)| states.clone()).collect();
+            let mut current_set: Vec<ProductState> =
+                frontier.iter().map(|(state, _)| state.clone()).collect();
             current_set.sort_unstable();
             current_set.dedup();
             if !seen_state_sets.insert(current_set) {
@@ -208,7 +251,6 @@ fn generate_derivative(
             &representatives,
             &mut target,
             &mut avoids,
-            length,
             governor,
         )?;
         if next_frontier.is_empty() {
@@ -225,50 +267,31 @@ fn generate_derivative(
 /// code point, deduplicating *within this one step* (never across steps:
 /// see the `frontier` doc comment in [`generate_derivative`]).
 fn step_frontier(
-    frontier: &[(Vec<u32>, String)],
+    frontier: &[(ProductState, String)],
     representatives: &[u32],
     target: &mut Lane<'_>,
     avoids: &mut [Lane<'_>],
-    length: usize,
     governor: &mut Governor,
-) -> Result<Vec<(Vec<u32>, String)>, StopReason> {
+) -> Result<Vec<(ProductState, String)>, StopReason> {
     let mut next_frontier = Vec::new();
-    let mut seen_this_step: std::collections::BTreeSet<Vec<u32>> =
+    let mut seen_this_step: std::collections::BTreeSet<ProductState> =
         std::collections::BTreeSet::new();
-    for (states, witness) in frontier {
+    for (state, witness) in frontier {
         for &code in representatives {
             let Some(character) = char::from_u32(code) else {
                 continue;
             };
-            let prev_word = witness.chars().last().is_some_and(is_word);
-            let ctx = NullCtx {
-                at_start: length == 0,
-                at_end: false,
-                prev_word,
-                next_word: is_word(character),
-            };
-            let Some(next_states) =
-                step_lanes(target, avoids, states, code, ctx, length, governor)?
-            else {
+            let Some(next_state) = step_lanes(target, avoids, state, code, governor)? else {
                 continue;
             };
-            if seen_this_step.insert(next_states.clone()) {
+            if seen_this_step.insert(next_state.clone()) {
                 let mut extended = witness.clone();
                 extended.push(character);
-                next_frontier.push((next_states, extended));
+                next_frontier.push((next_state, extended));
             }
         }
     }
     Ok(next_frontier)
-}
-
-const fn end_ctx(length: usize, prev_word: bool) -> NullCtx {
-    NullCtx {
-        at_start: length == 0,
-        at_end: true,
-        prev_word,
-        next_word: false,
-    }
 }
 
 /// One representative scalar value per unified minterm bucket across every
