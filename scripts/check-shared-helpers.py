@@ -20,6 +20,7 @@ commands, exact scope and the current workspace's unsanctioned findings.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -1376,6 +1377,78 @@ def distinct_fixture_cases() -> list[tuple[str, bool]]:
     ]
 
 
+def invalid_name_fixture_case(
+    path: bytes,
+    scan: Callable[[], str],
+    create: Callable[[bytes, int], int] = os.open,
+) -> tuple[str, bool]:
+    """Check either filesystem refusal or the scanner's invalid-name diagnostic.
+
+    Only EILSEQ from file creation is an admitted filesystem refusal. Errors
+    writing, scanning or cleaning up remain failures, and every created entry
+    is removed even when the scanner unexpectedly accepts it.
+    """
+    try:
+        descriptor = create(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+    except OSError as exc:
+        if exc.errno != errno.EILSEQ:
+            raise
+        return ("filesystem explicitly rejects non-UTF-8 directory entry with EILSEQ", True)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(b"pub fn hidden() {}")
+        try:
+            scan()
+            rejected = False
+        except CensusError as exc:
+            rejected = "non-UTF-8 directory entry" in str(exc)
+        return ("admitted non-UTF-8 directory entry fails explicitly in scanner", rejected)
+    finally:
+        os.unlink(path)
+
+
+def invalid_name_fixture_controls() -> list[tuple[str, bool]]:
+    """Exercise the filesystem boundary on every platform, including APFS refusal."""
+    cases = []
+    attempted = b"invalid-\xff.rs"
+    scanned = []
+
+    def scan() -> str:
+        scanned.append(True)
+        return "accepted"
+
+    def refuse(path: bytes, flags: int) -> int:
+        if path != attempted or flags != os.O_WRONLY | os.O_CREAT | os.O_EXCL:
+            raise AssertionError("fixture must attempt the exact invalid filename")
+        raise OSError(errno.EILSEQ, "illegal byte sequence", path)
+
+    name, passed = invalid_name_fixture_case(attempted, scan, refuse)
+    cases.append(("EILSEQ creation refusal is checked without invoking scanner", passed and "EILSEQ" in name and not scanned))
+    for code in (errno.EACCES, errno.ENOSPC):
+        expected = OSError(code, "unexpected filesystem failure", attempted)
+
+        def unexpected(_path: bytes, _flags: int) -> int:
+            raise expected
+
+        try:
+            invalid_name_fixture_case(attempted, scan, unexpected)
+            propagated = False
+        except OSError as exc:
+            propagated = exc is expected
+        cases.append((f"unexpected creation errno {code} propagates without invoking scanner", propagated and not scanned))
+    with tempfile.TemporaryDirectory(prefix="helper-census-name-controls-") as directory:
+        path = os.fsencode(Path(directory) / "admitted.rs")
+        _, passed = invalid_name_fixture_case(path, scan)
+        cases.append(("created fixture cannot pass when scanner accepts it and is cleaned up", not passed and scanned == [True] and not os.path.exists(path)))
+
+        def unrelated_failure() -> str:
+            raise CensusError("unrelated manifest failure")
+
+        _, passed = invalid_name_fixture_case(path, unrelated_failure)
+        cases.append(("unrelated scanner failure cannot substitute for invalid-name rejection", not passed and not os.path.exists(path)))
+    return cases
+
+
 def disk_fixture_cases() -> list[tuple[str, bool]]:
     """Run actual disk/CLI positive and negative controls, retaining hard failures."""
     cases = []
@@ -1427,15 +1500,7 @@ def disk_fixture_cases() -> list[tuple[str, bool]]:
             cases.append((f"{name} fails explicitly", failed))
         if os.name == "posix":
             invalid = os.fsencode(crate) + b"/invalid-\xff.rs"
-            with open(invalid, "wb") as handle:
-                handle.write(b"pub fn hidden() {}")
-            try:
-                run_census("--index", root=root)
-                failed = False
-            except CensusError:
-                failed = True
-            cases.append(("non-UTF-8 directory entry fails explicitly", failed))
-            os.unlink(invalid)
+            cases.append(invalid_name_fixture_case(invalid, lambda: run_census("--index", root=root)))
         (root / "Cargo.toml").write_text("[workspace]\ninvalid = { broken }", encoding="utf-8")
         try:
             run_census("--index", root=root)
@@ -1552,6 +1617,7 @@ mod local;
 """
     cases.append(("comments, raw-string contents and character literals are not path attributes", path_include_findings({"crates/a/src/lib.rs": controls}, manifests) == []))
     cases.extend(disk_fixture_cases())
+    cases.extend(invalid_name_fixture_controls())
 
     cases.extend(distinct_fixture_cases())
     cases.extend(rule_fixture_cases())

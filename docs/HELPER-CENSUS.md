@@ -91,6 +91,17 @@ a plausibly clean partial census. Absent optional `bindings/` and automatically
 discovered binary directories are legitimate. Symlink entries are explicitly
 rejected rather than silently skipped or recursively followed.
 
+The invalid-filename disk fixture has two explicit outcomes. On filesystems
+that admit the byte spelling `invalid-\xff.rs`, the real scanner must report
+`non-UTF-8 directory entry`; accepting it or failing for an unrelated reason
+fails the control. The macOS 14 arm64 qualification lane on APFS rejected
+creation with `EILSEQ` before the scanner ran. That specific creation refusal
+is now a checked filesystem outcome. Unexpected creation errors propagate;
+write and cleanup errors are not classified as filesystem refusal. Five
+portable controls exercise the refusal, unexpected permission/storage errors,
+scanner acceptance and unrelated scanner failure. The admitted file is always
+removed after the scanner check.
+
 ## Ledger schema
 
 The ledger accepts basic/literal strings, booleans, decimal integers, arrays,
@@ -169,6 +180,12 @@ SHA-256, including the generic Python validator, is recorded and verified
 against the immutable actual copy commit in
 `crates/helper-census/UPSTREAM.json`. Original SPDX attribution and three
 license texts are retained.
+
+The local Python fixture's explicit filesystem-refusal handling is a destination
+portability adaptation. The `UPSTREAM.json` file digests identify the immutable
+original snapshot, not current adapted copies, and remain unchanged by this
+repair. The archived initial qualification counts above also remain historical;
+current self-tests include the five additional filesystem-boundary controls.
 
 All generic body/shim/constant/table detection, source traversal, ledger modes,
 strict validation and positive/negative self-tests are retained. PurRDF-specific
