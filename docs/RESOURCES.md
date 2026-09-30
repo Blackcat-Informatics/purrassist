@@ -119,11 +119,12 @@ reduced by a release — unlike `peak_scratch_bytes`, a high-water mark of only
 and releases scratch many times in a loop (the fuzzy edit-distance region
 scan, regex backtracking, per-candidate ranking) even though the allocator
 performs one real call per iteration and those bytes sum over the whole
-operation. Because both sides of the inequality now scale with input size,
-holding `K` constant across a 16x input-size change is a real falsifiability
-property, not a numerically convenient one: an uncharged allocation that
-grows with input size, at any multiplier, is caught at the larger scale even
-if a generously chosen `K` hid it at the smaller one. This oracle caught and
+operation. Holding `K` constant across a 16x input-size change increases
+sensitivity to allocations that grow with the workload. A test fails when
+the measured excess exceeds that same `K` at either tested scale. Smaller
+uncharged allocations can remain within the slack or be absorbed by other
+conservative charges; two tested scales cannot establish a universal bound.
+This oracle caught and
 led to fixing three such regressions during this task, each confirmed fixed
 by measuring the per-unit gap across four to five scales, not just the two
 the committed test asserts:
@@ -141,14 +142,13 @@ the committed test asserts:
   token, against a flat, too-small per-input-byte precharge; the precharge
   is now sized against a per-token cost, not a per-byte guess.
 
-`K` still covers a smaller, now genuinely scale-invariant residual: fixed,
-per-call overhead (`Parser`/`Renderer` construction, digest computation) that
-does not grow with input size, plus any remaining retained-output structure
-this task did not individually convert to a charged type (index/children maps
-built during schema compilation, small result vectors). A regression that
-reintroduces an uncounted allocation *proportional to input size* — however
-small at the base scale — fails at the 16x scale even with a generous `K`,
-because `K` cannot absorb a term that itself grows with input.
+`K` is fixed test slack for observed residual allocation at the two tested
+scales, including per-call overhead (`Parser`/`Renderer` construction, digest
+computation) and retained-output structures without individual charged
+containers (schema index/children maps and small result vectors). Its fixed
+value does not prove that every covered residual is scale-invariant. The
+oracle rejects a proportional-allocation regression when its measured excess
+crosses the inequality at a tested scale.
 
 The oracle measures the current thread's process-wide allocator traffic; since
 `cargo test` runs this file's tests as separate threads that can be reused

@@ -15,9 +15,10 @@
 //!   [`Pattern::is_match`] and [`Pattern::generate`].
 //! - **`pattern.engine.backtrack-v1`**: exploration-based matching
 //!   (`backtrack.rs`), Work-charged per step, for backreferences and
-//!   lookaround (neither is a regular language: a backreference's language
-//!   depends on what an earlier group actually captured; lookaround needs to
-//!   explore ahead of the current position before committing).
+//!   lookaround. Backreferences can describe nonregular languages because
+//!   they depend on earlier captured text. Lookaround over regular components
+//!   remains regular; this implementation evaluates it through bounded
+//!   exploration rather than the derivative engine.
 //!
 //! `pattern` is unanchored search (JSON Schema semantics: found anywhere in
 //! the subject), on both engines.
@@ -112,9 +113,9 @@ pub struct GenerateOptions<'a> {
 pub enum GenerateOutcome {
     /// A string that matches this pattern and none of the `avoid` patterns.
     Witness(String),
-    /// No such string exists within the given bounds; `evidence.explanation`
-    /// names why (language emptiness, an exhausted length bound, or a
-    /// backtracking generator's bounded search exhausting its candidates).
+    /// No witness was produced. `evidence.explanation` distinguishes proven
+    /// regular-language emptiness, an exhausted length bound, and a bounded
+    /// backtracking search that does not prove a witness impossible.
     NoCandidate(Evidence),
 }
 

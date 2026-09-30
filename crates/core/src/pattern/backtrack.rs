@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! The backtracking evaluator: the only engine that understands
-//! backreferences and lookaround, since neither is regular (a
-//! backreference's language depends on what an earlier group actually
-//! captured, and unbounded lookaround needs to explore the tail of the
-//! match before committing to it). Every other supported construct is also
+//! backreferences and lookaround. Backreferences can describe nonregular
+//! languages; lookaround over regular components remains regular, but this
+//! implementation evaluates it through bounded exploration. Every other
+//! supported construct is also
 //! matched here when a pattern contains either, so the two engines never
 //! partially cooperate on one search. Charges `Resource::Work` per
 //! exploration step, matching the pre-split engine's semantics exactly (see
