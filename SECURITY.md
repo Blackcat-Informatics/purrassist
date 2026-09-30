@@ -14,11 +14,13 @@ budgets, misleading correction receipts, file transactions, MCP framing, and
 dependency provenance. A validated guess remains a guess. File tools coordinate
 cooperating writers; their portable path checks are not a hostile-process sandbox.
 
-The workspace denies `unsafe_code` everywhere except two registered
-exceptions in `docs/DEPENDENCIES.md`: `crates/syntax/src/alloc.rs` and
-`crates/host/src/files/windows.rs` (`unsafe_code = "deny"` stays in force
-everywhere else, including the rest of `purrassist-syntax` and
-`purrassist-host`). `crates/host/src/files/windows.rs` calls `kernel32`
+The workspace denies `unsafe_code` by default. Its two production exceptions
+are `crates/syntax/src/alloc.rs` and `crates/host/src/files/windows.rs`;
+the rest of those library crates retains the denial. Four qualification-only
+exceptions are confined to `crates/wasm-harness/src/lib.rs`,
+`crates/core/tests/allocation_oracle.rs`, `crates/core/benches/latency.rs`, and
+`crates/syntax/benches/latency.rs`. Their source and justification are registered
+in `docs/DEPENDENCIES.md`. `crates/host/src/files/windows.rs` calls `kernel32`
 through `windows-sys` (`SetFileInformationByHandle`, `MoveFileExW`,
 `FlushFileBuffers`) to implement Windows filesystem durability — these are
 raw FFI calls with no safe std equivalent, each with a `SAFETY` comment.

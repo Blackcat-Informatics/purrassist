@@ -102,7 +102,8 @@ stack controls, not memory a caller may go on holding indefinitely.
 
 `crates/core/tests/allocation_oracle.rs` installs a test-only counting
 `#[global_allocator]` (that file only; no dependencies; `#![allow(unsafe_code)]`
-scoped to the file) and asserts, for every governed public operation, **at
+scoped to the file) and asserts, for the representative governed operations
+listed below, **at
 two deterministically generated input scales — a base size and a size at
 least 16x larger** — that real allocator bytes never exceed
 

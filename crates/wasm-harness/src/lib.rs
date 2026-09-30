@@ -8,7 +8,7 @@
 //! target that has no WASI host to run a plain example binary against).
 //!
 //! # Scope of the `unsafe_code = "deny"` exception
-//! The workspace denies `unsafe_code` everywhere else; this crate is a
+//! The workspace denies `unsafe_code` by default; this crate is a
 //! registered exception (`#![allow(unsafe_code)]` above), scoped to this one
 //! crate. [`portable_main`] must be callable from JavaScript by a stable,
 //! unmangled export name; the only standard way to guarantee that without a
