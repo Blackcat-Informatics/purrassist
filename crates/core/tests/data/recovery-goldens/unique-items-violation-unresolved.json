@@ -1,0 +1,13 @@
+{
+  "description": "a duplicate pair in a uniqueItems array has no automatic repair",
+  "schema": {
+    "type": "array",
+    "uniqueItems": true,
+    "items": {
+      "type": "integer"
+    }
+  },
+  "input": "[1,2,2,3]",
+  "outcome": "unresolved",
+  "ledger_rules": []
+}

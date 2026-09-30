@@ -36,12 +36,13 @@ pub(super) fn parse(source: &str) -> Option<(usize, InlineKind)> {
         rest.find("?>").map(|end| end + 4)
     } else if let Some(rest) = source.strip_prefix("<![CDATA[") {
         rest.find("]]>").map(|end| end + 12)
-    } else if source.starts_with("<!")
-        && source
-            .as_bytes()
-            .get(2)
-            .is_some_and(u8::is_ascii_alphabetic)
-    {
+    } else if source.strip_prefix("<!").is_some_and(|rest| {
+        let name = rest.bytes().take_while(u8::is_ascii_uppercase).count();
+        name > 0
+            && rest.as_bytes().get(name).is_some_and(|byte| {
+                matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | b'\x0b' | b'\x0c')
+            })
+    }) {
         source.find('>').map(|end| end + 1)
     } else {
         super::super::html::tag_end(source)

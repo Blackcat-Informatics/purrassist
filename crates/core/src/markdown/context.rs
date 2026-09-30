@@ -107,6 +107,35 @@ impl Document {
     ///
     /// The returned plan is bound to the complete source digest and supports the
     /// normal edit engine's exact undo. Already-matching states yield an empty plan.
+    /// Recognition follows the first parsed paragraph; content may begin on its
+    /// next line. A split marker's whitespace is replaced by joining its marker
+    /// lines, with exact original spelling retained by the inverse edit.
+    /// Optional leading ASCII spaces are part of marker admission; the edit
+    /// changes only its state and retains those original spaces.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, Outcome, markdown::Document};
+    /// let source = "- [x]\n  tea\n";
+    /// let doc = Document::parse(source, &mut Governor::new(Budget::default()))?;
+    /// let plan = doc.set_task(0, false)?;
+    /// let Outcome::Resolved(changed) = plan.apply(source, Budget::default()).outcome else {
+    ///     panic!("the source-bound task edit must apply");
+    /// };
+    /// assert_eq!(changed.text, "- [ ]\n  tea\n");
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, Outcome, markdown::Document};
+    /// let source = "- [ref]: /tea\n [ ] tea\n";
+    /// let doc = Document::parse(source, &mut Governor::new(Budget::default()))?;
+    /// let plan = doc.set_task(0, true)?;
+    /// let Outcome::Resolved(changed) = plan.apply(source, Budget::default()).outcome else {
+    ///     panic!("the original task marker must remain editable");
+    /// };
+    /// assert_eq!(changed.text, "- [ref]: /tea\n [x] tea\n");
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
     ///
     /// # Errors
     /// Rejects missing block indices and blocks that are not recognized task items.
@@ -140,7 +169,10 @@ impl Document {
     /// Plan a checkbox edit anywhere in a nested quote/list block tree.
     ///
     /// The path is relative to this document's immutable block index. Only the
-    /// checkbox byte changes; container prefixes, line endings, and siblings stay exact.
+    /// marker state changes. A marker whose whitespace is a logical newline
+    /// joins its split marker lines; that explicit splice includes intervening
+    /// container indentation. All bytes outside the splice stay exact, and undo
+    /// restores the original line endings and prefixes.
     ///
     /// ```
     /// use purrassist_core::{Budget, Governor, markdown::Document};
@@ -176,15 +208,37 @@ impl Document {
         };
         let mut edits = Vec::new();
         if current != checked {
-            // List markers cannot contain '['; recognition already established
-            // that this first bracket is the checkbox immediately after the marker.
-            let position = self.source[block.span.clone()]
+            let paragraph = block
+                .children
+                .iter()
+                .find(|child| {
+                    !matches!(
+                        child.kind,
+                        BlockKind::ReferenceDefinition | BlockKind::Blank
+                    )
+                })
+                .ok_or_else(|| StopReason::InvalidInput("task paragraph is missing".into()))?;
+            let first = paragraph.lines.first().ok_or_else(|| {
+                StopReason::InvalidInput("task paragraph has no source line".into())
+            })?;
+            let position = self.source[first.clone()]
                 .find('[')
                 .ok_or_else(|| StopReason::InvalidInput("task marker is missing".into()))?
-                + block.span.start
+                + first.start
                 + 1;
+            let end = if self.source[position..].starts_with(['\r', '\n']) {
+                let closing = paragraph.lines.get(1).ok_or_else(|| {
+                    StopReason::InvalidInput("split task marker has no closing line".into())
+                })?;
+                closing.start + self.source[closing.clone()].len()
+                    - self.source[closing.clone()]
+                        .trim_start_matches([' ', '\t'])
+                        .len()
+            } else {
+                position + 1
+            };
             edits.push(TextEdit {
-                range: position..position + 1,
+                range: position..end,
                 replacement: if checked { "x" } else { " " }.into(),
             });
         }

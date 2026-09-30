@@ -24,13 +24,16 @@ fn fuzzy_minima_preserve_ties_and_exact_precedence() {
     else {
         panic!("tie lost")
     };
-    // Deleting the needle's initial h also makes each "at" an equally good region.
+    // Deleting the needle's initial h also makes each "at" an equally good
+    // region: all four candidates cost the same, so `Outcome::Ambiguous`
+    // orders them (like `receipt.alternatives`) by ascending output digest,
+    // not by scan position.
     assert_eq!(
         plans
             .iter()
             .map(|plan| plan.edits[0].range.clone())
             .collect::<Vec<_>>(),
-        vec![0..3, 1..3, 4..7, 5..7]
+        vec![0..3, 4..7, 1..3, 5..7]
     );
     let result = locate_fuzzy("猫咪", "猫猫", "犬", 1, Budget::default());
     assert!(matches!(result.outcome, Outcome::Ambiguous(_)));

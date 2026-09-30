@@ -3,6 +3,7 @@
 //! Bounded approximate substring selection with explicit uncertainty.
 use super::{EditPlan, TextEdit, size};
 use crate::contract::{Evidence, Inference, InferenceKind, Resource, SourceSpan};
+use crate::digest::Digest;
 use crate::{AssistResult, Budget, Effort, Governor, Outcome, Receipt, StopReason};
 use std::ops::Range;
 
@@ -89,21 +90,22 @@ pub fn locate_fuzzy_governed(
                     }),
                     destination: format!("bytes:{}..{}", range.start, range.end),
                 };
-                receipt.evidence.push(evidence.clone());
-                if distance > 0 {
-                    receipt.inferences.push(Inference {
-                        evidence,
-                        kind: InferenceKind::Guess,
-                        value: source[range.clone()].into(),
-                    });
-                }
-                plans.push(EditPlan {
-                    source: receipt.source,
-                    edits: vec![TextEdit {
-                        range,
-                        replacement: replacement.into(),
-                    }],
+                let inference = (distance > 0).then(|| Inference {
+                    evidence: evidence.clone(),
+                    kind: InferenceKind::Guess,
+                    value: source[range.clone()].into(),
                 });
+                plans.push((
+                    EditPlan {
+                        source: receipt.source,
+                        edits: vec![TextEdit {
+                            range,
+                            replacement: replacement.into(),
+                        }],
+                    },
+                    evidence,
+                    inference,
+                ));
             }
             Ok((distance, plans))
         });
@@ -113,14 +115,28 @@ pub fn locate_fuzzy_governed(
             Outcome::Unresolved
         }
         Ok((distance, mut plans)) if plans.len() == 1 => {
-            let plan = plans.remove(0);
+            let (plan, evidence, inference) = plans.remove(0);
+            receipt.evidence.push(evidence);
+            receipt.inferences.extend(inference);
             if distance == 0 {
                 Outcome::Resolved(plan)
             } else {
                 Outcome::BestGuess(plan)
             }
         }
-        Ok((_, plans)) => Outcome::Ambiguous(plans),
+        // Every candidate here is an equally-minimal-distance region: leave
+        // its span-specific evidence and (for a nonzero distance) its Guess
+        // inference out of the top-level ledgers, and publish them through
+        // the derivation forest instead, so evidence shared identically by
+        // every tied region (none, ordinarily, since each has its own span)
+        // is promoted once rather than duplicated into every alternative.
+        Ok((_, plans)) => match populate_fuzzy_alternatives(plans, governor, &mut receipt) {
+            Ok(plans) => Outcome::Ambiguous(plans),
+            Err(reason) => {
+                receipt.stopped = reason;
+                Outcome::Unresolved
+            }
+        },
         Err(reason) => {
             receipt.stopped = reason;
             Outcome::Unresolved
@@ -128,6 +144,36 @@ pub fn locate_fuzzy_governed(
     };
     receipt.usage = governor.usage();
     AssistResult { outcome, receipt }
+}
+/// Build one derivation per equally-minimal-distance candidate region and
+/// publish shared vs. per-region evidence and inferences through the
+/// derivation forest.
+///
+/// # Errors
+/// Returns `BudgetExceeded` before any ledger is committed to `receipt`.
+fn populate_fuzzy_alternatives(
+    plans: Vec<(EditPlan, Evidence, Option<Inference>)>,
+    governor: &mut Governor,
+    receipt: &mut Receipt,
+) -> Result<Vec<EditPlan>, StopReason> {
+    let mut forest = crate::provenance::Forest::new(governor);
+    let mut derivations = Vec::with_capacity(plans.len());
+    let mut outputs = Vec::with_capacity(plans.len());
+    for (plan, evidence, inference) in plans {
+        let output = Digest::of(plan.to_node().to_json().as_bytes());
+        let mut derivation = crate::provenance::Derivation::new(output, 0);
+        derivation.push(forest.evidence(governor, evidence)?);
+        if let Some(inference) = inference {
+            derivation.push(forest.inference(governor, inference)?);
+        }
+        derivations.push(derivation);
+        outputs.push(plan);
+    }
+    let published = forest.publish(&derivations, governor)?;
+    receipt.evidence = published.evidence;
+    receipt.inferences = published.inferences;
+    receipt.alternatives = published.alternatives;
+    Ok(crate::provenance::permute(&outputs, &published.order))
 }
 
 pub(super) fn regions(
@@ -163,7 +209,7 @@ pub(super) fn regions(
     let storage = size(source.len())
         .saturating_add(size(needle.len()))
         .saturating_mul(32);
-    governor.charge(Resource::ScratchBytes, storage)?;
+    let _lease = governor.lease_scratch(storage)?;
     let mut boundaries: Vec<_> = source.char_indices().map(|(offset, _)| offset).collect();
     boundaries.push(source.len());
     let mut best = max_edits;
@@ -185,7 +231,6 @@ pub(super) fn regions(
             }
         }
     }
-    governor.release_scratch(storage)?;
     Ok((best, ranges))
 }
 

@@ -1,5 +1,6 @@
 {
   "cargo_packages": [
+    "aho-corasick@1.1.5",
     "cc@1.5.1",
     "equivalent@1.0.2",
     "find-msvc-tools@0.1.14",
@@ -26,6 +27,8 @@
     "tree-sitter-typescript@0.23.2",
     "tree-sitter@0.27.0",
     "unicode-ident@1.0.26",
+    "windows-link@0.2.1",
+    "windows-sys@0.61.2",
     "zmij@1.0.23"
   ],
   "generated_data": [
@@ -34,6 +37,13 @@
       "version": "17.0.0",
       "license": "Unicode-3.0",
       "manifest": "vendor/unicode/manifest.json"
+    },
+    {
+      "name": "Unicode Security Mechanisms confusables data (UTS #39)",
+      "version": "17.0.0",
+      "license": "Unicode-3.0",
+      "manifest": "vendor/unicode/manifest.json",
+      "justification": "First-party UTS-39 skeleton generation for confusable-glyph matching; generated lookup table only, no third-party executable code."
     },
     {
       "name": "JSON Schema meta-schemas",
@@ -47,6 +57,27 @@
       "license": "BSD-3-Clause (incorporated source); CC-BY-4.0 (original data)",
       "manifest": "vendor/entities/manifest.json",
       "justification": "Complete standardized entity names without a runtime library dependency; generated sorted lookup table, no third-party executable code."
+    },
+    {
+      "name": "Unicode Script, Script_Extensions, and ECMA-262 binary Unicode properties",
+      "version": "17.0.0",
+      "license": "Unicode-3.0",
+      "manifest": "vendor/unicode/manifest.json",
+      "justification": "First-party \\p{...}/\\P{...} property tables for the pattern derivative and backtracking engines (Task 6); generated interval-set lookup tables only, no third-party executable code."
+    },
+    {
+      "name": "Unicode IDNA Compatibility Processing mapping table (UTS #46)",
+      "version": "17.0.0",
+      "license": "Unicode-3.0",
+      "manifest": "vendor/unicode/manifest.json",
+      "justification": "First-party IDNA/UTS-46 mapping table for the Task 7 hostname/idn-hostname format validators; generated lookup table only, no third-party executable code."
+    },
+    {
+      "name": "Unicode Bidi_Class and Joining_Type extracted properties",
+      "version": "17.0.0",
+      "license": "Unicode-3.0",
+      "manifest": "vendor/unicode/manifest.json",
+      "justification": "First-party data for the Task 7 idn-hostname format validator's RFC 5893 Bidi rule and RFC 5892 Appendix A CONTEXTJ rule; generated lookup tables only, no third-party executable code."
     }
   ],
   "test_data": [
@@ -62,13 +93,46 @@
       "manifest": "vendor/unicode/manifest.json"
     },
     {
+      "name": "UTS #39 confusables fixture",
+      "version": "17.0.0",
+      "license": "Unicode-3.0",
+      "manifest": "vendor/unicode/manifest.json"
+    },
+    {
       "name": "CommonMark and GFM specification examples",
       "version": "CommonMark 0.31.2; cmark-gfm 0.29.0.gfm.13",
       "license": "CC-BY-SA-4.0",
       "manifest": "crates/core/tests/data/markdown/manifest.json"
+    },
+    {
+      "name": "test262 RegExp property-escapes generated conformance tests",
+      "version": "commit 834912b0a6b1d973244a5e8a1baad25d6b9ef238 (\"Add tests for Unicode 17 property escapes\"; Unicode-17-aligned generated fixtures)",
+      "license": "BSD-3-Clause",
+      "manifest": "crates/core/tests/data/test262/manifest.json"
+    },
+    {
+      "name": "Correction-evaluation corpora (string selection, path matching, phonetic ambiguity, JSON recovery)",
+      "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "manifest": "crates/core/tests/data/evaluation/manifest.json"
     }
   ],
   "cargo_details": [
+    {
+      "name": "aho-corasick",
+      "version": "1.1.5",
+      "license": "Unlicense OR MIT",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "repository": "https://github.com/BurntSushi/aho-corasick",
+      "notices": [
+        "vendor/licenses/aho-corasick-1.1.5/LICENSE-MIT",
+        "vendor/licenses/aho-corasick-1.1.5/UNLICENSE"
+      ],
+      "notice_sha256": {
+        "vendor/licenses/aho-corasick-1.1.5/LICENSE-MIT": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+        "vendor/licenses/aho-corasick-1.1.5/UNLICENSE": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c"
+      },
+      "justification": "Tool-only transitive dependency of purrassist-helper-census forbidden-name regex detection, enabled by the pinned regex perf-dfa/perf-inline feature set. No dependency of purrassist-core; the unpublished census is not packaged or published."
+    },
     {
       "name": "cc",
       "version": "1.5.1",
@@ -187,7 +251,8 @@
       "notice_sha256": {
         "vendor/licenses/proc-macro2-1.0.107/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
         "vendor/licenses/proc-macro2-1.0.107/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
-      }
+      },
+      "additional_tooling_use": "Pinned direct dependency of unpublished purrassist-helper-census: syn full+visit parses Rust/module/cfg/AST structure; proc-macro2 span-locations provides token bodies and locations; regex admits ledger forbidden-name patterns. Existing resolved version retained. No dependency of purrassist-core."
     },
     {
       "name": "quote",
@@ -217,7 +282,8 @@
       "notice_sha256": {
         "vendor/licenses/regex-1.13.1/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/regex-1.13.1/LICENSE-MIT": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
-      }
+      },
+      "additional_tooling_use": "Pinned direct dependency of unpublished purrassist-helper-census: syn full+visit parses Rust/module/cfg/AST structure; proc-macro2 span-locations provides token bodies and locations; regex admits ledger forbidden-name patterns. Existing resolved version retained. No dependency of purrassist-core."
     },
     {
       "name": "regex-automata",
@@ -356,7 +422,8 @@
       "notice_sha256": {
         "vendor/licenses/syn-3.0.6/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
         "vendor/licenses/syn-3.0.6/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
-      }
+      },
+      "additional_tooling_use": "Pinned direct dependency of unpublished purrassist-helper-census: syn full+visit parses Rust/module/cfg/AST structure; proc-macro2 span-locations provides token bodies and locations; regex admits ledger forbidden-name patterns. Existing resolved version retained. No dependency of purrassist-core."
     },
     {
       "name": "tree-sitter",
@@ -455,6 +522,38 @@
       }
     },
     {
+      "name": "windows-link",
+      "version": "0.2.1",
+      "license": "MIT OR Apache-2.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "repository": "https://github.com/microsoft/windows-rs",
+      "notices": [
+        "vendor/licenses/windows-link-0.2.1/LICENSE-APACHE",
+        "vendor/licenses/windows-link-0.2.1/LICENSE-MIT"
+      ],
+      "notice_sha256": {
+        "vendor/licenses/windows-link-0.2.1/LICENSE-APACHE": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b",
+        "vendor/licenses/windows-link-0.2.1/LICENSE-MIT": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+      },
+      "justification": "Transitive dependency of purrassist-host's Windows-only windows-sys dependency (extern-fn linking shim); pulled on every platform in the resolved Cargo graph, compiled only under cfg(windows)."
+    },
+    {
+      "name": "windows-sys",
+      "version": "0.61.2",
+      "license": "MIT OR Apache-2.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "repository": "https://github.com/microsoft/windows-rs",
+      "notices": [
+        "vendor/licenses/windows-sys-0.61.2/LICENSE-APACHE",
+        "vendor/licenses/windows-sys-0.61.2/LICENSE-MIT"
+      ],
+      "notice_sha256": {
+        "vendor/licenses/windows-sys-0.61.2/LICENSE-APACHE": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b",
+        "vendor/licenses/windows-sys-0.61.2/LICENSE-MIT": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+      },
+      "justification": "purrassist-host's only Windows-only dependency ([target.'cfg(windows)'.dependencies], default-features = false, Win32_Foundation + Win32_Storage_FileSystem only), providing raw kernel32 bindings (SetFileInformationByHandle, MoveFileExW, FlushFileBuffers) for R6 Windows filesystem durability (crates/host/src/files/windows.rs). Header-generated FFI signatures and constants only; no runtime logic beyond linking. Resolved on every platform because Cargo includes target-specific dependencies in the lock file regardless of the host running cargo metadata; compiled only under cfg(windows)."
+    },
+    {
       "name": "zmij",
       "version": "1.0.23",
       "license": "MIT",
@@ -466,6 +565,31 @@
       "notice_sha256": {
         "vendor/licenses/zmij-1.0.23/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
       }
+    }
+  ],
+  "packaged_notices": {
+    "cli": {},
+    "core": {
+      "src/markdown/inline/LICENSE-WHATWG": "85dc6f5ccb57a6fe8c33d158f9fc8fc7ee5655a5d3db2cdd131c6a3d0f48a864",
+      "src/schema/metaschemas/LICENSE": "909b25a80d4945b21d3adb2fb17f90bf592e0274bdf117c069c088a8e44dc7b6",
+      "src/text/LICENSE-UNICODE": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96",
+      "tests/data/json-schema/LICENSE": "837402bd25fad9b704265801ca3f92566a98157c1f9a7acd6f446299ba1c305a",
+      "tests/data/markdown/LICENSE-commonmark": "3e4806ba6f20073e8ce40da5a0c4b59f7f44287965f538e195a4d734d833557b",
+      "tests/data/markdown/LICENSE-gfm": "c22e885f33b821bddb24cf007145e5540655b6c0f403e49e6c76a93c28e6d9a9",
+      "tests/data/test262/LICENSE": "4dd9244dfe8197c75348c4b24ab53d29d3b1cfad143ac76b5a3d8942aa354ce0",
+      "tests/data/unicode/LICENSE": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96"
+    },
+    "host": {},
+    "purrassist": {},
+    "syntax": {},
+    "wasm-harness": {},
+    "helper-census": {}
+  },
+  "first_party_ports": [
+    {
+      "name": "PurRDF structural helper census",
+      "manifest": "crates/helper-census/UPSTREAM.json",
+      "scope": "Unpublished developer tooling; full generic normalized-body/shim/constant/table detector, module traversal and strict ledger reporting. First-party port with original attribution retained."
     }
   ]
 }

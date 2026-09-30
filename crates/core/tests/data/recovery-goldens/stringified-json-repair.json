@@ -1,0 +1,22 @@
+{
+  "description": "a fully stringified JSON payload is decoded",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "a": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "a"
+    ]
+  },
+  "input": "\"{\\\"a\\\":1}\"",
+  "outcome": "resolved",
+  "output": {
+    "a": 1
+  },
+  "ledger_rules": [
+    "json.type.decode-string"
+  ]
+}

@@ -1,0 +1,110 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# The one and only publish lane. Distinct from release-qualification.yml
+# (package/audit evidence only, never publishes) and from verify.yml's
+# `qualification` job (PR-time evidence gathering, never publishes). Triggers
+# on `rust-v*` tags. Publishes core -> syntax -> purrassist -> host -> cli via
+# crates.io trusted publishing (OIDC; no long-lived registry token is stored
+# anywhere in this repository or its secrets), gated on release-qualification.yml
+# having already succeeded for this exact commit.
+name: Publish
+on:
+  push:
+    tags: ['rust-v*']
+permissions:
+  contents: read
+jobs:
+  gate:
+    # Both this workflow and release-qualification.yml trigger on the same tag
+    # push, so they start concurrently; this job blocks `publish` until
+    # release-qualification.yml has a successful run recorded for the exact
+    # commit the tag points at. A `workflow_run` trigger was considered and
+    # rejected: it would tie this workflow's trigger semantics to the
+    # completion event of another workflow (complicating the required "on
+    # push of tags" trigger), and `workflow_run`'s head_sha/permissions
+    # handling for tag pushes is less direct to reason about than a plain,
+    # bounded API poll against the exact commit SHA using the token this job
+    # already has. This job never publishes; it only reads Actions run state.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 105
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Wait for release-qualification.yml success on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          attempt=0
+          max_attempts=200
+          while :; do
+            attempt=$((attempt + 1))
+            runs=$(gh api "repos/${{ github.repository }}/actions/workflows/release-qualification.yml/runs?head_sha=${{ github.sha }}&per_page=20")
+            if echo "$runs" | jq -e '.workflow_runs[] | select(.conclusion=="success")' >/dev/null; then
+              echo "release-qualification.yml succeeded for ${{ github.sha }}"
+              exit 0
+            fi
+            # An empty result can precede creation of the sibling tag run.
+            # Wait within the same bound until that run becomes visible.
+            if echo "$runs" | jq -e '.workflow_runs | length > 0' >/dev/null &&
+               ! echo "$runs" | jq -e '.workflow_runs[] | select(.status!="completed")' >/dev/null; then
+              echo "release-qualification.yml has completed runs for ${{ github.sha }}, all failed" >&2
+              exit 1
+            fi
+            if (( attempt >= max_attempts )); then
+              echo "timed out after $attempt attempts waiting for release-qualification.yml on ${{ github.sha }}" >&2
+              exit 1
+            fi
+            sleep 30
+          done
+  publish:
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: crates-io
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      RUSTUP_TOOLCHAIN: 1.98.0
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install release toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal
+      - name: Determine version from tag
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#rust-v}"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Verify release set, order, and tag
+        run: python3 scripts/check-release.py --tag "$GITHUB_REF_NAME"
+      - name: Authenticate with crates.io trusted publishing
+        id: auth
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+      - name: Publish core, syntax, purrassist, host, cli in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          set -euo pipefail
+          user_agent='purrassist-release (https://github.com/${{ github.repository }})'
+          for crate in purrassist-core purrassist-syntax purrassist purrassist-host purrassist-cli; do
+            echo "Publishing $crate $VERSION"
+            cargo publish -p "$crate" --locked
+            attempt=0
+            max_attempts=10
+            until [[ "$(curl -sS -A "$user_agent" -o /dev/null -w '%{http_code}' "https://crates.io/api/v1/crates/$crate/$VERSION")" == "200" ]]; do
+              attempt=$((attempt + 1))
+              if (( attempt >= max_attempts )); then
+                echo "timed out waiting for $crate $VERSION to be served by crates.io" >&2
+                exit 1
+              fi
+              sleep 30
+            done
+            echo "$crate $VERSION is served by crates.io"
+          done
+      - name: Verify published packages and installed CLI/MCP
+        run: python3 scripts/verify-published.py --version "$VERSION"

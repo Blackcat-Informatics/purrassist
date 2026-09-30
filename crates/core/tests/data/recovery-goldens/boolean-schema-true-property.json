@@ -1,0 +1,20 @@
+{
+  "description": "a property governed by the boolean schema true accepts any repaired value",
+  "schema": {
+    "type": "object",
+    "required": [
+      "extra"
+    ],
+    "properties": {
+      "extra": true
+    }
+  },
+  "input": "{}",
+  "outcome": "best_guess",
+  "output": {
+    "extra": {}
+  },
+  "ledger_rules": [
+    "json.required.invent"
+  ]
+}

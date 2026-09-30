@@ -1,0 +1,28 @@
+{
+  "description": "allOf-combined constraints are jointly repaired",
+  "schema": {
+    "allOf": [
+      {
+        "type": "object",
+        "required": [
+          "n"
+        ]
+      },
+      {
+        "properties": {
+          "n": {
+            "type": "integer"
+          }
+        }
+      }
+    ]
+  },
+  "input": "{\"n\":\"5\"}",
+  "outcome": "resolved",
+  "output": {
+    "n": 5
+  },
+  "ledger_rules": [
+    "json.type.decode-string"
+  ]
+}

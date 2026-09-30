@@ -13,6 +13,11 @@ pub(super) struct Vocabularies {
     applicator: bool,
     unevaluated: bool,
     content: bool,
+    /// Whether the dialect's `$vocabulary` declared the format-assertion
+    /// vocabulary URI at all (`true` or `false` both count: requirement 1
+    /// treats either boolean as "known vocabulary", since we recognize it
+    /// either way; only its *absence* leaves `format` annotation-only).
+    pub format_assert: bool,
 }
 impl Default for Vocabularies {
     fn default() -> Self {
@@ -21,14 +26,21 @@ impl Default for Vocabularies {
             applicator: true,
             unevaluated: true,
             content: true,
+            format_assert: false,
         }
     }
 }
 impl Vocabularies {
-    pub(super) fn load(dialect: &str, context: &mut Context<'_>) -> Result<Self, CompilationError> {
+    /// Loads the dialect's vocabulary flags, plus every unrecognized
+    /// `$vocabulary` URI declared with `false` (required-but-unknown fails
+    /// compilation immediately below instead).
+    pub(super) fn load(
+        dialect: &str,
+        context: &mut Context<'_>,
+    ) -> Result<(Self, Vec<String>), CompilationError> {
         let uri = dialect.trim_end_matches('#');
         if uri == DIALECT {
-            return Ok(Self::default());
+            return Ok((Self::default(), Vec::new()));
         }
         let error = |message: String| {
             CompilationError::InvalidSchema(SchemaError {
@@ -42,7 +54,7 @@ impl Vocabularies {
             .ok_or_else(|| error("unresolved dialect; supply its meta-schema explicitly".into()))?;
         let meta = context.parse(source, uri)?;
         let Some(declaration) = meta.get("$vocabulary") else {
-            return Ok(Self::default());
+            return Ok((Self::default(), Vec::new()));
         };
         let Value::Object(entries) = &declaration.value else {
             return Err(error("$vocabulary must be an object".into()));
@@ -52,7 +64,9 @@ impl Vocabularies {
             applicator: false,
             unevaluated: false,
             content: false,
+            format_assert: false,
         };
+        let mut unsupported = Vec::new();
         for entry in entries {
             let Value::Bool(required) = entry.value.value else {
                 return Err(error("vocabulary requirement must be boolean".into()));
@@ -71,13 +85,16 @@ impl Vocabularies {
                     result.unevaluated = true;
                 }
                 "https://json-schema.org/draft/2020-12/vocab/content" => result.content = true,
+                "https://json-schema.org/draft/2020-12/vocab/format-assertion" => {
+                    result.format_assert = true;
+                }
                 unknown if required => {
                     return Err(error(format!("unsupported required vocabulary: {unknown}")));
                 }
-                _ => {}
+                unknown => unsupported.push(unknown.to_string()),
             }
         }
-        Ok(result)
+        Ok((result, unsupported))
     }
     pub(super) fn enabled(self, keyword: &str) -> bool {
         match keyword {

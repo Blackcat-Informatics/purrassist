@@ -1,0 +1,25 @@
+{
+  "description": "a case-mismatched enum value is corrected",
+  "schema": {
+    "type": "object",
+    "required": [
+      "day"
+    ],
+    "properties": {
+      "day": {
+        "enum": [
+          "Monday",
+          "Tuesday"
+        ]
+      }
+    }
+  },
+  "input": "{\"day\":\"MONDAY\"}",
+  "outcome": "resolved",
+  "output": {
+    "day": "Monday"
+  },
+  "ledger_rules": [
+    "json.enum.match"
+  ]
+}

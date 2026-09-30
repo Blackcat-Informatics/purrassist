@@ -1,0 +1,30 @@
+{
+  "description": "a dependentSchemas-triggered constraint repairs a sibling value",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "kind": {
+        "type": "string"
+      },
+      "count": {}
+    },
+    "dependentSchemas": {
+      "kind": {
+        "properties": {
+          "count": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  },
+  "input": "{\"kind\":\"x\",\"count\":\"3\"}",
+  "outcome": "resolved",
+  "output": {
+    "kind": "x",
+    "count": 3
+  },
+  "ledger_rules": [
+    "json.type.decode-string"
+  ]
+}

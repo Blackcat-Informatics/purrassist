@@ -1,0 +1,833 @@
+{
+  "format_version": 1,
+  "phase": "local issue-worktree inspection; observations are not acceptance allowances",
+  "observed_utc": "2026-09-30T08:17:56.260254+00:00",
+  "command": "make helper-census",
+  "exit_code": 0,
+  "git_head_observed_after_run": "6bcc257e1e80dfaaa4eb1c9e6d53d3fdbaf76f1e",
+  "source_files_observed_after_run_sha256": {
+    "Cargo.lock": "dd17292f997c622f4b84e499d7860966b7877fd760883bf8a6b49dea3f4808a7",
+    "Cargo.toml": "7b2e63b59c0b7cbc9c582bafeed7a03dd07040bdaeae25cac16b1f49e0cc5abf",
+    "crates/cli/Cargo.toml": "289bdbef5e11aa58202b0293336f7da9c93d66403e7f993037cb82d15f7b5b00",
+    "crates/cli/src/commands.rs": "b5103611be1e6401bdfbc9f01bae2ee25bad6f3d04d0beb6db477900464c93ce",
+    "crates/cli/src/main.rs": "2014f5e7f979f2de8052b5972482e01a42a16da49f2d8739f9dd391286f736e8",
+    "crates/cli/src/mcp_stdio.rs": "752aa1494b7914bdd94572656b2c0ceafc3c3d2e2e7cab6c20c9f9e64917c94f",
+    "crates/cli/tests/protocol.rs": "ebc365481013dba3f91601a1f134491596d2adadc6ed2bdb1224f7ce8c13e2ad",
+    "crates/core/Cargo.toml": "1905231f8a36e7eb47ec1ff1a5cf2cdb24ab14132fd1fd99243807ba44d41c92",
+    "crates/core/benches/latency.rs": "0a1baef9b57c145f8dc46affddcbdee438232288757158ee4905deabb6ffdb5e",
+    "crates/core/benches/recovery.rs": "9c518fc1aa3c34fc82633df80ec92313d236978771bb5cce20db1517cae01ee5",
+    "crates/core/benches/resources.rs": "08ad8e021233de4a8cdf2e9ae661476abeaef1fdf824ce45adfec9936386f061",
+    "crates/core/examples/fuzz_fuzzy.rs": "71ae89602fb2712f030c8bff86cd93fb56f5d4892817ba49004091b698771c7a",
+    "crates/core/examples/fuzz_json.rs": "8d26a3545f0629a6bdcc855d685a1fc9a1f1c2fd149c6407f3b96e83b6dd5507",
+    "crates/core/examples/fuzz_markdown.rs": "13144aecb656d618e00cfa35933112b67ab86ebe6aaf7c3642f3f84bf7c7cf33",
+    "crates/core/examples/fuzz_matching.rs": "c3e70377eb56bb96af6e13cbccf1df17a105f4c7c830b2dc1f6397ca4d36e636",
+    "crates/core/examples/fuzz_patch.rs": "7322b68a2b73ff7d8b88492dc21d06bfb5bcf471e11387df8e7722b75f25f223",
+    "crates/core/examples/fuzz_pattern.rs": "3ec13bb330b3b3913f7a7eeaa39b0bf987a78e37347fb8c4e33c07d0086baa83",
+    "crates/core/examples/fuzz_schema.rs": "816f8c0835e330b32d206af2165c9bf8e84784057f15e4596cf148ec27ddaa95",
+    "crates/core/examples/fuzz_unified.rs": "49d6fd39ff40d51de8bf22ad72572d69c5341a4bc8c454c4757dd1bc932f4502",
+    "crates/core/examples/portable.rs": "a1d939da46b74d77bc6059249d9fc31c77a498a4d7974cb2c5644372959aaaa1",
+    "crates/core/examples/portable_transcript.rs": "5cfc12199f8df80b7f8719a01d487cd731c305697de54acb449cef511079e661",
+    "crates/core/src/contract.rs": "22af8aa164706e30bfe124c5903ebb1e997b8ce271bdd73d0c00defabb7d63bd",
+    "crates/core/src/digest.rs": "9e36570231a5bd603474497e7eaf8516ded53ba06d5344b1952c8c6659f00df8",
+    "crates/core/src/edits/fuzzy.rs": "e0b2e369a67e5294eb8b7a59fd9ffc5a9abfd610b229e964b317bca34eeebce8",
+    "crates/core/src/edits/unified.rs": "b3e9f94bffd74126a51dc706f8d234a546d143c012cc8d5e56940f8de68da2f2",
+    "crates/core/src/edits.rs": "c866a2f5c8a780db4275f2a0c543ef85803ace137c90cf7ce6079c36884173d8",
+    "crates/core/src/embeddings.rs": "6c82d46271970f3263b4942342c77ba5f529a6f81b444c464c34df474dc2adaf",
+    "crates/core/src/intent/selection.rs": "9dc0a8b2a1bdb67c1efaa72495ca7f0b4f0eff25ceb6a2284dc726a309008056",
+    "crates/core/src/intent/wire.rs": "b5f82e29347d8f9814d6ab98745729f4be7206e9cdfa0fcd7b332a07c88cd1c9",
+    "crates/core/src/intent.rs": "5d40bcd95d16e04d40da378e7f89cb10b95b1fa93f3d1ed3b90cbdc0874b5d42",
+    "crates/core/src/json/mod.rs": "2f0566b31c79344cf47f8a94c98311a01713bead11c616a8f5f04a4599fb45a7",
+    "crates/core/src/json/number.rs": "eaf36c4ba8f6af175e9c7cfede8392f1df9517570cf0611e5ada4950a62bbf8c",
+    "crates/core/src/json/parser.rs": "5e05aafbef4678485b7bc3c658caf031610fb41f0165c88ca5f71fcb11415d9c",
+    "crates/core/src/json/repair.rs": "81fb702b88b66c4e226db2fb55a21582949270fdd2a5691bd2c41d19faf18625",
+    "crates/core/src/lib.rs": "e963347e1229bad6dcad07260a4ed64947a6f24728e0b1a043a863b43e3d2f2b",
+    "crates/core/src/markdown/containers.rs": "7f1f630c750a4dfacac13d04c51e400ccd782e2f88f7aa35532f1ce573b836be",
+    "crates/core/src/markdown/context.rs": "6badf9a1864e5f5eae0386068a5b63c38977ec6911834de9d528da0f329b17c3",
+    "crates/core/src/markdown/extensions.rs": "1567b1f0c62800370c698cfa3ec93fdb4985c48262b365f3185c6b4e873ac998",
+    "crates/core/src/markdown/html.rs": "4d9af4a590a958048a1b14fac7d26951754ee1ff939c25cc736bc9fb131a747d",
+    "crates/core/src/markdown/inline/angle.rs": "c83d07bd0a4f8dc95f360d48e7f83b63285fefef0305122249079896796e23e1",
+    "crates/core/src/markdown/inline/autolinks.rs": "bba70a242e42224da10df472fbae1866377ee0d68460281da6d2b790716a9057",
+    "crates/core/src/markdown/inline/emphasis.rs": "586712b07197dae910f0b2c68321c2538943e7c8dc3c1b56f08c3193a0ab3fee",
+    "crates/core/src/markdown/inline/entities.rs": "899656db1f92adba5273f876fc4c202385ec01387e0ecc589932ff21302a0e9c",
+    "crates/core/src/markdown/inline/entity_data.rs": "2decaf535b3f8e377aa7aeb91886ec04bf7a5a423b227577a82581a1423ba5db",
+    "crates/core/src/markdown/inline/links.rs": "1b1a15fef7516a8222a2d11227092c9fb2cdc14ac6530cd806a2e026336673e8",
+    "crates/core/src/markdown/inline/parse.rs": "9d3d7b5d7a1d9629067c8cc31d7b3bf6cf8479260b118e058eff242c68054cea",
+    "crates/core/src/markdown/inline/references.rs": "9f40372951237c347b1be85fd0e3f64732f701e271f6484948da2eb4effde13f",
+    "crates/core/src/markdown/inline/render.rs": "ed3a7872127c25b03ad2277eb58f8f88dfca70f86d197bec8be6a90f0e122304",
+    "crates/core/src/markdown/inline.rs": "cccfe0ef93bf71b25fd27b9cd90ed79e88a09312a2df279600dcddd517087330",
+    "crates/core/src/markdown/lists.rs": "33d1d531e265ca6d473710b134c8e78b1025d3df4f57bf8a241906f0a9600c04",
+    "crates/core/src/markdown/projection.rs": "2c2331f679c56edd1cc3c67e8fef7e79fe3527f1488f9aea1f396a8a72cd85fe",
+    "crates/core/src/markdown/references.rs": "d6583ab821c5c34445ea21d358b6545ff8a5341a36c84fe66f65fd6dbde9ba37",
+    "crates/core/src/markdown/render.rs": "682e00a5f4ec4a948cd021e28bed2a2e1e28815ac525e073080b4fec13220fd9",
+    "crates/core/src/markdown/sections/nested.rs": "992982b9d4a3aa61d57058798ecbc72ec4fe1241e406a16bf36359128f5b9b6f",
+    "crates/core/src/markdown/sections.rs": "7ae734658487308d24b3167ea29b16d3e77b664ae786b5c12388122fec41c9ac",
+    "crates/core/src/markdown/table.rs": "bab75465e66a1cea0e28a85cc23a1463b7fff9c433cc435041df8ba5390a11e9",
+    "crates/core/src/markdown/table_columns.rs": "e51c07b17a972840960320c7af4b48d0a244f03844c2642568cbc92e05eff30c",
+    "crates/core/src/markdown/table_rows.rs": "6ad6e896b28916d66c71e3c2da506f6fe013b9cbffa81baedb0fe9ff5ee48066",
+    "crates/core/src/markdown.rs": "40cc202ccd3964221bba32388bd55f75353ddc45544bcb9f46d23a56c7b17768",
+    "crates/core/src/matching.rs": "9854d51c45f63287e235fc61c5649fd3d3d796c0f9dcdee177bf931df64a95be",
+    "crates/core/src/patch.rs": "41209f17dda2e97c6870ad546ef9ef467b3d5bcef4e851a3df589824ac449881",
+    "crates/core/src/paths.rs": "c9e4b2ccd82936d0418e76ab3df16a5f7e3eea21f947f5b7937fccc818f4f7b6",
+    "crates/core/src/pattern/ast.rs": "3561b1a3c89a9333e5c2e7ee49f2643937b2e09ef6f2d0acb4b1ec1f83bb760c",
+    "crates/core/src/pattern/backtrack.rs": "174f30140db1aeab9fe0eecf892521cb9534c0ba31ed5a1530fe67b7ed202e6a",
+    "crates/core/src/pattern/derive.rs": "ce6cfcbc10231ea431f62164f0a2c68ab3631b313f0d9f648b55ca3f3a8b6ad3",
+    "crates/core/src/pattern/generate.rs": "d3c801364d806de2edf67f7414e787f47ff613be4ba18dcca3a5678c7fcaa735",
+    "crates/core/src/pattern/mod.rs": "e399229648d71da906b562eec3010d22b6c0e29a07edd54dabc0ac9dcb157c32",
+    "crates/core/src/pattern/parse.rs": "68e83e5deab038c274e5e16f9e3a98dd6ba94d24df94a734115cb7391d1abe42",
+    "crates/core/src/pattern/unicode/unicode_data.rs": "dd5940c89d6fd52f278665a4d249f5229b7e6128ef08f4e3ade3dc3a4d8b81cd",
+    "crates/core/src/pattern/unicode.rs": "a08de2432f9b4b5b8d5349ed90a6a7f9487152a5478da5da27543351603a9678",
+    "crates/core/src/provenance.rs": "acf103201f4b39b07e3617f2fd2b7cc18ce3d8f0d9a76ed3707e068930a121d8",
+    "crates/core/src/schema/algebra/canon.rs": "dbb1dcfc1e78238f5a589e0925ed9102920ace9da976cd73aac113070ca6ad39",
+    "crates/core/src/schema/algebra/generate.rs": "ef375d28985198830e56db88754b1a6ded4d6d84a9c5b5594130c385ea1fd104",
+    "crates/core/src/schema/algebra/merge.rs": "2989c5b5245384fd8be5436408f5a5142d77f920ce65e1d655fc175e71f904d3",
+    "crates/core/src/schema/algebra/mod.rs": "5eb7f11303d9bd616c3922a2edf726ed65efb64998385eb9c23014cdf006303c",
+    "crates/core/src/schema/build.rs": "19a2e2441065274e613b3481ca0f71c4f0f8defb65609b780f9b6b476610c0b6",
+    "crates/core/src/schema/builtin.rs": "053a18f64feba6860c89f1b63997b0b65565c799759af44142dbbe408d3808d1",
+    "crates/core/src/schema/compile.rs": "ab1bc7ca08a2c423b1835f6ffcb318de9b7e6787834e57bcd6aa2a7bf5bdc760",
+    "crates/core/src/schema/evaluate.rs": "8375708c5ff95fe758e530d3da2cd4fd528dba4ffa86bee87ccf48b42f74a0e5",
+    "crates/core/src/schema/format/datetime.rs": "6465624478bc165f3a68a56fe2b5b14b15ca675cfefc442c1035dce6f1ac270e",
+    "crates/core/src/schema/format/email.rs": "d5660e50f395e5fa364b614e088a307d08b60a1def026c3ea690f350dcabcb8c",
+    "crates/core/src/schema/format/host.rs": "9861f69116ff258f08ef738cfca041e185ee09d95cf85c845abd5f10c2ec20a3",
+    "crates/core/src/schema/format/mod.rs": "d92b99529e062ed49380f1f241fa49f32d2db70d2ea3c05a6aa16053a1a30200",
+    "crates/core/src/schema/format/net.rs": "98584116086eb08b0951a80a42da4185c87237cb9d555d78cb8458ebcfd397e9",
+    "crates/core/src/schema/format/pointer.rs": "9ce3a0a8a8d9f21c1224d5c2a149a1587a6de912bd69c173b28f31544cd22440",
+    "crates/core/src/schema/format/regexp.rs": "46c894d4033dbb6627550182ccd39376f7a46a253be25d11b8d88c32e14d4a23",
+    "crates/core/src/schema/format/template.rs": "3689ff1a213fa0a3dc1d02d1d9d4b0c179303bbbc45b13fb6737d60f7c3a001f",
+    "crates/core/src/schema/format/uri.rs": "500b5216b05069c3e9cb6a00541e862a71cd551a5572d77b60a1b023a25c1550",
+    "crates/core/src/schema/format/uuid.rs": "ad22d386c44e156ab9b6287221b48a0710fc543469e25f0442739bdceb5da843",
+    "crates/core/src/schema/mod.rs": "2f65eb7cc79b827616ea41939e10c123d3fa6937a7a618f24ef4980567f7c132",
+    "crates/core/src/schema/recovery/proposals.rs": "d7136b66122e0a1f393342d6eb608a8b9fb5bbdd503fdf776182e79f62f6d6f0",
+    "crates/core/src/schema/recovery.rs": "ffeaa9c3c3660ea8048eee040f24dd90a0d840dcbfbe850b5a0f1a874f7d99c9",
+    "crates/core/src/schema/uri.rs": "f077bac18b3cd436fd9db1426a2c3289dd60808b9f9b14e764d5d7bd6d156591",
+    "crates/core/src/schema/vocabulary.rs": "cbe96d26b7c01339f1a481f808727839f94cc206907379578411709aa69322e4",
+    "crates/core/src/text/idna_data.rs": "ae3f0615030573e5e17955ac197ecbeeb69b9b7ac64bc59660e915cd2f403fd0",
+    "crates/core/src/text/mod.rs": "92d2367f28ed20ebf0bb7d0353dc1aede9355f89277201cb169d5c5c077412ab",
+    "crates/core/src/text/punycode.rs": "8549bca4c4953d03fe5147d1c0084e8fbe078f6f0ff7a8706a3c0657b54f013c",
+    "crates/core/src/text/unicode_data.rs": "364e7d8c89e5598cbb6715f7553ee81eab1388064bcb3b9d86975873fe583240",
+    "crates/core/src/wire.rs": "c564c79f77e95c9cc4fb08ec303ce76029476976ef8e438c5fe1d34a1ec67670",
+    "crates/core/tests/allocation_oracle.rs": "5bf93c289e696c2e389244e518797b734cfa21357eb3d96d5bb59dd4c7ec7fc8",
+    "crates/core/tests/cancellation.rs": "628ddbd92d051e43a4d79b0619dd1f032a01bdc79c7f521f9ed18ea09664d263",
+    "crates/core/tests/correction_evaluation.rs": "b96449e754b19ce2e0b68d6219c049b65f6c5c21814818b961ad9844e48f1f30",
+    "crates/core/tests/corruption_oracle.rs": "8f57e9c2f0b40da263738696b9d54e84fe553fdab118c9c55243a16b4e727706",
+    "crates/core/tests/edit_ambiguity.rs": "cf0f243d0de789f34dbd0ca42b16db5cc41676908219d2a90d8c44521bb61032",
+    "crates/core/tests/edits.rs": "0c42f97918825bef371f8cbe65d2a6f73fe78914047e6f44b8bb2ff8041a32cf",
+    "crates/core/tests/embeddings.rs": "001abf4e29d94cd25c6c2f771b7f577d2f485357626a6aa1308d8cb3fdfa3b2f",
+    "crates/core/tests/formats.rs": "b57b383b6ff35f201bf79d5e0ca1547c6e788028b18908fcf2c160ec492a690d",
+    "crates/core/tests/fuzzy_patch.rs": "e92c41b1f36696bb62df4c437110b73c46ba98c8019b52e5816d8ab48a571ebf",
+    "crates/core/tests/intent.rs": "86de807517f6530cc4af8cdad0609fc47f7d0d11d0424c57cd42a07aad5b12e2",
+    "crates/core/tests/markdown.rs": "10eb548b23144d0b5732c8a5fcafc3e19f15fe09635c429f1dd3b152a32d8bdb",
+    "crates/core/tests/markdown_autolink_text.rs": "b3ce29002f3e414a4fc0dd7f7bd73d707725a0170198c9b3d821cf860b78fc38",
+    "crates/core/tests/markdown_corpus.rs": "a39cd9f336ea111c28907dd602435dbee753031eb7f707e94b709d19ecc8d16e",
+    "crates/core/tests/markdown_emphasis_floors.rs": "daa67595a56e13a1ab52bd1d451c6d90995ea8d6a95b0d0d86801749310c35a1",
+    "crates/core/tests/markdown_entities.rs": "cc7d241edd38897aa83bd70086f8342824484fb5c74ade404a8db6e3ae2e56a3",
+    "crates/core/tests/markdown_inline.rs": "d1ac665e01e63ae37f98a524ad9204ddb7a8560a879afe5c77b8204f3d371b74",
+    "crates/core/tests/markdown_lists.rs": "9025bfdcbeae769134d9659675792c422817ee946d6442617c5272c1f80abb5f",
+    "crates/core/tests/markdown_reference_budgets.rs": "f32d197b81ec60fdb35324e9eafe4540ec43f249b83ede86326e90cb34873782",
+    "crates/core/tests/markdown_reference_edits.rs": "8bdf3d870cf6db7e5c1fa4929b4ce707fab24546fa0773487895c2d018bff807",
+    "crates/core/tests/markdown_references.rs": "cbc0cb583f21dad353968ec5abeeae76feecde1e6f3d121f46dc9ff6105504a9",
+    "crates/core/tests/markdown_render.rs": "cc41c9e1be6ec09492082440315837b38f90bc5813514f68cb42f0583dd0bc2d",
+    "crates/core/tests/markdown_sections.rs": "4b7fbc915db5a6710a51349bfce21a5ce67ab4792133d7b5ae37bc9ae001ded4",
+    "crates/core/tests/markdown_setext_content.rs": "e2da07ae2188de263f15f13c8d612bd56b74365f381aac5dfd7adea7e01e6042",
+    "crates/core/tests/markdown_structure.rs": "d4826aaaddb0164178c386486a94c68f85b1f0fbf10ed0621ff9620a3e4f12c2",
+    "crates/core/tests/markdown_table_columns.rs": "c9671c6914e16a7d69b1f81c5aa23c4bbb48e86beaed480df0c14f2f435ae359",
+    "crates/core/tests/markdown_table_edits.rs": "6b049198bd4362465937b61a164e9a50889f0811f7cd73e2a44b1dcf751836f7",
+    "crates/core/tests/markdown_table_headers.rs": "29449194ce8ce2b196be680a4c9a11d27c0b177281feb74220526914cd60f11d",
+    "crates/core/tests/markdown_table_rows.rs": "1c21f2cb49091630c59d414f7a520f8be86cc1cee4acff00a8ebe2c442fc93be",
+    "crates/core/tests/matching_oracle.rs": "788487cce84bc657ad5a691d74b1fc77cfe793a7c3e0ad41cf1c46245d268f87",
+    "crates/core/tests/matching_quality.rs": "6a6dafa21967e02a4d6500604e0b5ab35c219e816c31e067f5ff4558d0c2b002",
+    "crates/core/tests/mutation.rs": "5acaf3c8887b4799d14d6154623ee87e7cc18ba77c35ca294923283280e9a514",
+    "crates/core/tests/patch_laws.rs": "98458347555a17342119f12b5ddbb9db6d13994845b4ed4b08af6c9346da9d00",
+    "crates/core/tests/paths.rs": "e4fc0b52b4075017ed6e3e391f1b1ac950019d4e8d2ee44aff89fd2ed2c6561b",
+    "crates/core/tests/pattern.rs": "a620e1e5590e4ac3784d20611dc44f7ecfb40918f51f8cc085514d6045808a28",
+    "crates/core/tests/preservation_properties.rs": "31b5bb1d5b7096a213c0ace28a2ba4c81e0cbec8f59a25636471cd9bc26d28e4",
+    "crates/core/tests/provenance.rs": "72301d3f02dfd9adfe0ae5d7d0a40f196673454bb67079a000716d89476ce8f2",
+    "crates/core/tests/receipt_wire.rs": "c2f012041592f5dc3df813a5039895be1fda9fc7605dab56cfe5f203f34a5952",
+    "crates/core/tests/recovery.rs": "197fd0457a1a2db7f091c75847a2919023162aeb6bcbad5344d6e3230c2910db",
+    "crates/core/tests/recovery_goldens.rs": "6271665a2c1d547244ebd31647705a4cc49f41f81b8b55d281e80c7ecebe8911",
+    "crates/core/tests/recursive_schemas.rs": "68eadd892a6c9c23b8ce85dd1879d337f7c20f035e6867ed5d4bb1421fcdb9fb",
+    "crates/core/tests/resource_accounting.rs": "d46d300c8232d98bd9144404401c58fa5c735231427e0f2add059ae96c258353",
+    "crates/core/tests/schema_budgets.rs": "b0bef121e3df67d28b6600011a775813160b10b3e670386d23c436e8fae7905b",
+    "crates/core/tests/schema_conformance.rs": "c84fc6d217963ba9c5610ac464b795bb20375bf410e107d2a61522bb36a8c64b",
+    "crates/core/tests/schema_identity.rs": "2ce4ad106ae3c9c75afe0d24e362e4bef05deda50fd9d5b7e3eef21c47d7aadd",
+    "crates/core/tests/scratch_portability.rs": "3ea95488ece7b0903230468a5daf3f127e7d274e2f9cbc0e02ea0d62aa3166da",
+    "crates/core/tests/string_selection.rs": "3fa29ffea5eeb08bf8ec6384bc56e53e03b717b170babfe0ef6d57fbcd1f34d8",
+    "crates/core/tests/unicode_conformance.rs": "22b5f71e51b76d30d01fb98e5340bb18b7489406b8c75053f6de5713c1eea6ad",
+    "crates/core/tests/vocabularies.rs": "5e5755ea1355ba134f567a2b8924d51dba034a5c38e358cabbf6c65bf13baaef",
+    "crates/core/tests/witness_algebra.rs": "9b9f20dba7afef8892991332a3eee88bfceeff7c3f4cddad313825c0e5176b42",
+    "crates/helper-census/Cargo.toml": "d31c1ec413ba555b8b2f0b5a692e58a5b026d1a95ac5331e9a0b1e5e518948af",
+    "crates/helper-census/src/census.rs": "be728c0ad1ec848cf6a441701efbbc98030a5b53e2c90c93491be1b0e49c7b85",
+    "crates/helper-census/src/hex.rs": "e19ebf0f6d4a7a7174b2275bc01b81d49a78c43d6ec02603ba5d35ae4fb7aae1",
+    "crates/helper-census/src/json.rs": "fb3c64b7e644caf3abd5a7f18d3a1730bd9189fe6c58f6e515e037e72b6a6b98",
+    "crates/helper-census/src/layout.rs": "81175b106c793fb843d50896c5baa47b6f3897540a4810fe32afefc82856204f",
+    "crates/helper-census/src/ledger.rs": "558baa8b5673a9d86b45080ff65d7885adde262836496f788fcf5c4981df36b0",
+    "crates/helper-census/src/main.rs": "548a06a133058bbeb7ad9abd2e0999abbbe03b1bef9874ab004a65ced07adfb6",
+    "crates/helper-census/src/normalize.rs": "6ba238504377d1bf1398d17051f9ad3dfd77b33c18adc406e53327141f9a3b0a",
+    "crates/helper-census/src/rules.rs": "5af6a9370e187a1445b1b25715c9520abf77e91d0034b94750c9bfba851f8822",
+    "crates/helper-census/src/source.rs": "ce8728bac656803a524e111a22af60fe0c0a205d7ff32999f96e58d8a0765e6f",
+    "crates/helper-census/src/toml.rs": "82d60798bc0a632ab49f85c0b5ffa75b0d6050a9545b76343e225fbdd4583c51",
+    "crates/host/Cargo.toml": "e79b6b87c809794228aee05757387c6fee945ad7166116a92f332f3c37aa9b45",
+    "crates/host/examples/portable.rs": "74a75b9e154647d43e3e90446b7543c88b86274d1afaa0e6787aef3e143f4071",
+    "crates/host/src/files/windows.rs": "7ae8d726cfaef8ef77952934791de6c5b6ead3d997e55f0a35acd56477c2c7d5",
+    "crates/host/src/files.rs": "ff596289c812d03afa86e82e7214fd7f7ea20c646ee657518ebe4a207ce88189",
+    "crates/host/src/helpers.rs": "3694138b6eebaeffda20f01d28c30de1ace4efbc2e34dbadcbe8a2fc128f0a8b",
+    "crates/host/src/lib.rs": "5232416b656591d64176c690bba8244e31eeb54d39a5f31c13d4b12f475328df",
+    "crates/host/src/mcp.rs": "2e7767d6a939a38107fdbf43c883bf550f1074ef895073a8811703fe8297829d",
+    "crates/host/src/tools/edits.rs": "051b31d57eeb1f45b65a6c0aed2a5bfaf5206db5ac5d363ac35ee170aa96fdb9",
+    "crates/host/src/tools/embeddings.rs": "3b33ea4d32025d1b1f73f77a2517d9ed00ac8fb5bdd7c63d0cb1c31ca12b6068",
+    "crates/host/src/tools/files.rs": "abdbf8e9d893b46ce4757d9dcda939e1b0fb9d21391710e963480ec15d01c891",
+    "crates/host/src/tools/helper.rs": "a4a4fd32d4bbc1cb4e697437e0a161e7e06ed7ebb169e6f62ff6fe3d46dcad43",
+    "crates/host/src/tools/inspect.rs": "b55a6dd53e5db762f164ef255840cb6ce98e2d5cc8e53aa2db94983fd3eb3273",
+    "crates/host/src/tools/intent.rs": "361c8480bffe5aac33d4284c374c5ded43889998dc618a5edcd2cdcf2c2d22fa",
+    "crates/host/src/tools/markdown/list.rs": "a94162c39cd0c2fb952b2425593b9faac16439b759b6b4ed4c559bab8fdb96b2",
+    "crates/host/src/tools/markdown/reference.rs": "74461d5466ffa7b988b7b09978483279205530c192da6ea8b1a46fbc58e4dbf8",
+    "crates/host/src/tools/markdown/render.rs": "80ffb45852cf73f089190c39a93e32a4674d040f8ce4b37b5819a71d84307c0d",
+    "crates/host/src/tools/markdown/structure.rs": "2fc7c527b176b0254d4c54c0a5943f3599f49b3d933b91a3e14a149efaa26715",
+    "crates/host/src/tools/markdown/table.rs": "dca2789e3f62323effb3eb79682852ed18a4ac7a8a975f862dd548fbdd1c9472",
+    "crates/host/src/tools/markdown.rs": "8868c216d8528b0ebd31cc3c32f1088fbfa88c2813f5722ad1fa1e793fe01f14",
+    "crates/host/src/tools/paths.rs": "ea3958bac3b29b4390f09e0d8f50b92e091384dafe1c51f9ca31b0f9a2f22570",
+    "crates/host/src/tools/registry.rs": "da5cf525519a0a4711e4d49b5dbe9fc79bf7331ea507c581bb19217af17fe72e",
+    "crates/host/src/tools/validate.rs": "06d8c196be14f69210c420175ec44b9fe94092d834996c078883ebe771cd45f7",
+    "crates/host/src/tools/witness.rs": "149f9ac566b33f1b1893156221b101fd17388cd3afcea1d5d7beb7deaa45924c",
+    "crates/host/src/tools.rs": "b10b32ada4fdb24201ed306e8dc08dbf5d216a4fdd17274310ab36ad6d1f2092",
+    "crates/host/tests/cancellation.rs": "ee1cce30ee466c62e9ee6168c7fcea46a958c1116fd3d53566593630535a64ea",
+    "crates/host/tests/crash_recovery.rs": "5d8aed3c87ce2271f75fa529202e17cd52ffcadf2f2ec15d2ca1437837eb4a74",
+    "crates/host/tests/edit_tools.rs": "56b731f59d2cac683037118e645eecf443ca9d45793f66b9613717283a395347",
+    "crates/host/tests/embedding_tools.rs": "b193f478a4ba10222eb30abf075a0cc4129c61d7085ad627b13b397b9fd5b95d",
+    "crates/host/tests/files.rs": "293133a879e96ea5aa5c1e5cdbd7ce63418f1e11fee6d2318a53507e6e4ba8f4",
+    "crates/host/tests/helpers.rs": "9e24bdd3e816363debd148c8bb6a9c545848e0a4e54105fae03e15d22a3df1bf",
+    "crates/host/tests/inspect_tool.rs": "a16409569db101a35e445900e7d59dec171a5d2ed320324444c14c4724cdcc43",
+    "crates/host/tests/intent_tools.rs": "1b7493a2baee02c87b3e903113055daa10c9ea218a2055dda516996e73cf8412",
+    "crates/host/tests/markdown_tools.rs": "66cfa8fcc3a3510d3caee1eedb80d1ab4c430cb80e25c648b1a0cab5d7682617",
+    "crates/host/tests/matching_tools.rs": "f847e19a0210c1bb510eae6cc525825eaf37c652e74e375938d9ddc8cd717529",
+    "crates/host/tests/mcp_cancellation.rs": "4e10401884d8bdd6f93f179d6e3f2ad6514c5b34886950c5437cde461bb9c5a1",
+    "crates/host/tests/path_tools.rs": "423b469c917381fa0094c6126e90661248ea9fcc3e98b42b908c8ad33d938519",
+    "crates/host/tests/schema_tools.rs": "67d3de88bc1313db7fdaa535166d885fcee066b799e152f484dd8d4fd2b67116",
+    "crates/host/tests/witness_tool.rs": "da1bf55288eb0196ee65f5954b85dc00947344bd6e22a78bb02950eec3c4a7e2",
+    "crates/purrassist/Cargo.toml": "31283aa69ef7751bd3b7e1afdf6167aa4965f8714f9fb8df97ede7fe50f99053",
+    "crates/purrassist/src/lib.rs": "5fe8d2bfe5ca1c9326de4366df5bc3fccd9b018bcde837504abd1076517ce655",
+    "crates/syntax/Cargo.toml": "3c92c842be7eafdf4ecd429fb9eb6128fadf6d97d4f09ff5da8e6023790eeff2",
+    "crates/syntax/benches/latency.rs": "ad2fef7b7ca063f421ca7a05c70c7b08d418152248c639c796f478427dc1c54e",
+    "crates/syntax/examples/portable.rs": "c06a5cf7d6b031aff074302a53ae3b0cf492f076c0f40152ca0b5af140806c44",
+    "crates/syntax/src/alloc.rs": "55d734c9e79ae4ce1ad4f09ad96d1961f445710ef10bb9a7f65636a1ddda0bba",
+    "crates/syntax/src/lib.rs": "06f8f086ee057ee84c085c88a4f56a449450ef2ed30e93214ff45c201f8e1871",
+    "crates/syntax/tests/allocation.rs": "09bd587fcbd3bd6b9a89cbe0e7ab30abb865707e8971409c2589a4c6fcefb69f",
+    "crates/syntax/tests/syntax.rs": "137334eac4cbe761aac59fdce14e4518f453cf738fbcc4db9d91cbe5c9f626ba",
+    "crates/wasm-harness/Cargo.toml": "e59c3695f6367b4c4d06f8739bcc332cf15b65d9d821413ebd38a1cd8ad619a4",
+    "crates/wasm-harness/src/lib.rs": "bc9e7f8bd3ba857f94c2a732a061b76e478fc6d0debe4fd6baaa26ad7f00ace6",
+    "helpers-ledger.toml": "aed055cda3cabcf750d77b68e1bc24570b8cc34fc11b7c5af0e3b93107edd1d8",
+    "scripts/check-shared-helpers.py": "3d664bd0ca70dbf24afab94f479185f38f1af27e91e0f0610be8d07b5c687e7a"
+  },
+  "source_identity_limit": "Source hashes were observed after the completed command, not reconstructed as an atomic build/start guard. The baseline remains an inspection, not proof of semantic equivalence.",
+  "upstream_commit": "0387e83e01842edb4bb5f4141ed788a0b71638dd",
+  "fingerprint_algorithm": "first 8 bytes of first-party SHA-256(normalized tokens), lowercase hex",
+  "raw_report_sha256": "1dc265e0f36c93f8ee8b3ea09ac4554769640ae0c5c4219323b3e3eebc621e57",
+  "checks": [
+    {
+      "command": "cargo test --locked -p purrassist-helper-census",
+      "exit_code": 0,
+      "passed": 38
+    },
+    {
+      "command": "cargo clippy --locked -p purrassist-helper-census --all-targets -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "make helper-test",
+      "exit_code": 0,
+      "rust_cli_fixture_passes": 18,
+      "python_fixture_passes": 86
+    },
+    {
+      "command": "cargo run --quiet --locked -p purrassist-helper-census -- --check",
+      "exit_code": 1,
+      "existing_unsanctioned_groups": 14
+    },
+    {
+      "command": "python3 scripts/check-shared-helpers.py",
+      "exit_code": 1,
+      "existing_unsanctioned_groups": 14,
+      "cross_package_includes": 1
+    },
+    {
+      "command": "python3 scripts/check-repository.py",
+      "exit_code": 0
+    }
+  ],
+  "existing_cross_package_includes": [
+    {
+      "file": "crates/wasm-harness/src/lib.rs",
+      "line": 34,
+      "target": "crates/core/examples/portable_transcript.rs",
+      "intent": "Same portable transcript fixture used for native/WASM equivalence in an unpublished qualification harness; reported and rejected by strict helper-check, no allowance added."
+    }
+  ],
+  "baseline": {
+    "hex_tables": [
+      {
+        "file": "crates/core/src/markdown/inline/angle.rs",
+        "line": 81,
+        "package": "purrassist-core",
+        "symbol": "purrassist_core::markdown::inline::angle::uri",
+        "tables": [
+          "table:hex-upper"
+        ]
+      }
+    ],
+    "isomorphic_groups": [
+      {
+        "fingerprint": "body:14238babab5df159",
+        "members": [
+          {
+            "file": "crates/core/src/wire.rs",
+            "line": 40,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::wire::evidence"
+          },
+          {
+            "file": "crates/host/src/tools/witness.rs",
+            "line": 92,
+            "package": "purrassist-host",
+            "symbol": "purrassist_host::tools::witness::evidence"
+          }
+        ],
+        "sanctioned": false,
+        "tokens": 153
+      },
+      {
+        "fingerprint": "body:813af60ff232c23b",
+        "members": [
+          {
+            "file": "crates/host/src/tools/markdown/reference.rs",
+            "line": 65,
+            "package": "purrassist-host",
+            "symbol": "purrassist_host::tools::markdown::reference::record"
+          },
+          {
+            "file": "crates/host/src/tools/markdown/table.rs",
+            "line": 32,
+            "package": "purrassist-host",
+            "symbol": "purrassist_host::tools::markdown::table::record"
+          }
+        ],
+        "sanctioned": false,
+        "tokens": 150
+      },
+      {
+        "fingerprint": "body:64d22b8508bc9f38",
+        "members": [
+          {
+            "file": "crates/host/src/tools/markdown/structure.rs",
+            "line": 215,
+            "package": "purrassist-host",
+            "symbol": "purrassist_host::tools::markdown::structure::index"
+          },
+          {
+            "file": "crates/host/src/tools/markdown.rs",
+            "line": 210,
+            "package": "purrassist-host",
+            "symbol": "purrassist_host::tools::markdown::index"
+          }
+        ],
+        "sanctioned": false,
+        "tokens": 71
+      },
+      {
+        "fingerprint": "body:88f7c607c8cf526f",
+        "members": [
+          {
+            "file": "crates/core/src/markdown/render.rs",
+            "line": 132,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::markdown::render::text"
+          },
+          {
+            "file": "crates/core/src/markdown/sections/nested.rs",
+            "line": 500,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::markdown::sections::nested::logical_text"
+          }
+        ],
+        "sanctioned": false,
+        "tokens": 70
+      },
+      {
+        "fingerprint": "body:bb4f827364b6d31f",
+        "members": [
+          {
+            "file": "crates/core/src/markdown/lists.rs",
+            "line": 664,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::markdown::lists::ending"
+          },
+          {
+            "file": "crates/core/src/markdown/table_rows.rs",
+            "line": 234,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::markdown::table_rows::ending"
+          }
+        ],
+        "sanctioned": false,
+        "tokens": 45
+      },
+      {
+        "fingerprint": "body:79146e71867ac96d",
+        "members": [
+          {
+            "file": "crates/core/src/schema/format/template.rs",
+            "line": 22,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::schema::format::template::pct_encoded"
+          },
+          {
+            "file": "crates/core/src/schema/format/uri.rs",
+            "line": 35,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::schema::format::uri::pct_encoded"
+          }
+        ],
+        "sanctioned": false,
+        "tokens": 42
+      }
+    ],
+    "min_tokens": 30,
+    "shared_constants": [
+      {
+        "packages": 2,
+        "units": [
+          {
+            "file": "crates/core/src/contract.rs",
+            "line": 99,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::contract::Effort::budget"
+          },
+          {
+            "file": "crates/core/src/json/parser.rs",
+            "line": 167,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::json::parser::Parser::string"
+          },
+          {
+            "file": "crates/core/src/pattern/parse.rs",
+            "line": 558,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::pattern::parse::Parser::unicode_escape"
+          },
+          {
+            "file": "crates/core/src/pattern/unicode/unicode_data.rs",
+            "line": 8,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::pattern::unicode::unicode_data::SCRIPTS"
+          },
+          {
+            "file": "crates/core/src/pattern/unicode/unicode_data.rs",
+            "line": 2075,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::pattern::unicode::unicode_data::SCRIPT_EXTENSIONS"
+          },
+          {
+            "file": "crates/core/src/pattern/unicode/unicode_data.rs",
+            "line": 4618,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::pattern::unicode::unicode_data::BINARY_PROPERTIES"
+          },
+          {
+            "file": "crates/core/src/schema/format/uri.rs",
+            "line": 19,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::schema::format::uri::is_ucschar"
+          },
+          {
+            "file": "crates/core/src/text/idna_data.rs",
+            "line": 13,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::text::idna_data::IDNA_MAPPING"
+          },
+          {
+            "file": "crates/core/src/text/idna_data.rs",
+            "line": 9370,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::text::idna_data::BIDI_CLASS"
+          },
+          {
+            "file": "crates/core/src/text/unicode_data.rs",
+            "line": 9463,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::text::unicode_data::CATEGORIES"
+          },
+          {
+            "file": "crates/core/src/text/unicode_data.rs",
+            "line": 10771,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::text::unicode_data::GENERAL_CATEGORIES"
+          },
+          {
+            "file": "crates/host/src/files.rs",
+            "line": 703,
+            "package": "purrassist-host",
+            "symbol": "purrassist_host::files::Store::entry"
+          }
+        ],
+        "value": "0x10000"
+      },
+      {
+        "packages": 2,
+        "units": [
+          {
+            "file": "crates/core/src/contract.rs",
+            "line": 99,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::contract::Effort::budget"
+          },
+          {
+            "file": "crates/host/src/files.rs",
+            "line": 468,
+            "package": "purrassist-host",
+            "symbol": "purrassist_host::files::Store::patch_budget"
+          }
+        ],
+        "value": "0xf4240"
+      }
+    ],
+    "shim_groups": [
+      {
+        "fingerprint": "shim:a23762c7ad297424",
+        "members": [
+          {
+            "file": "crates/core/src/contract.rs",
+            "line": 16,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::contract::size"
+          },
+          {
+            "file": "crates/core/src/json/parser.rs",
+            "line": 80,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::json::parser::size"
+          },
+          {
+            "file": "crates/core/src/json/repair.rs",
+            "line": 35,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::json::repair::size"
+          },
+          {
+            "file": "crates/core/src/json/mod.rs",
+            "line": 26,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::json::size"
+          },
+          {
+            "file": "crates/core/src/matching.rs",
+            "line": 1014,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::matching::size"
+          },
+          {
+            "file": "crates/core/src/schema/algebra/canon.rs",
+            "line": 29,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::schema::algebra::canon::size"
+          },
+          {
+            "file": "crates/core/src/schema/algebra/generate.rs",
+            "line": 24,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::schema::algebra::generate::size"
+          },
+          {
+            "file": "crates/core/src/schema/evaluate.rs",
+            "line": 8,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::schema::evaluate::size"
+          },
+          {
+            "file": "crates/core/src/schema/recovery.rs",
+            "line": 517,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::schema::recovery::size"
+          },
+          {
+            "file": "crates/core/src/wire.rs",
+            "line": 172,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::wire::size"
+          },
+          {
+            "file": "crates/core/src/embeddings.rs",
+            "line": 209,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::embeddings::size"
+          },
+          {
+            "file": "crates/core/src/intent.rs",
+            "line": 235,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::intent::size"
+          },
+          {
+            "file": "crates/core/src/paths.rs",
+            "line": 417,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::paths::size"
+          },
+          {
+            "file": "crates/core/src/edits.rs",
+            "line": 164,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::edits::size"
+          },
+          {
+            "file": "crates/core/src/patch.rs",
+            "line": 525,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::patch::size"
+          },
+          {
+            "file": "crates/core/src/provenance.rs",
+            "line": 125,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::provenance::size"
+          },
+          {
+            "file": "crates/core/src/markdown.rs",
+            "line": 192,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::markdown::size"
+          },
+          {
+            "file": "crates/host/src/helpers.rs",
+            "line": 397,
+            "package": "purrassist-host",
+            "symbol": "purrassist_host::helpers::size"
+          },
+          {
+            "file": "crates/host/src/tools/edits.rs",
+            "line": 209,
+            "package": "purrassist-host",
+            "symbol": "purrassist_host::tools::edits::size"
+          },
+          {
+            "file": "crates/host/src/tools/embeddings.rs",
+            "line": 255,
+            "package": "purrassist-host",
+            "symbol": "purrassist_host::tools::embeddings::size"
+          },
+          {
+            "file": "crates/host/src/tools/inspect.rs",
+            "line": 112,
+            "package": "purrassist-host",
+            "symbol": "purrassist_host::tools::inspect::size"
+          },
+          {
+            "file": "crates/host/src/tools/markdown.rs",
+            "line": 218,
+            "package": "purrassist-host",
+            "symbol": "purrassist_host::tools::markdown::size"
+          },
+          {
+            "file": "crates/syntax/src/lib.rs",
+            "line": 825,
+            "package": "purrassist-syntax",
+            "symbol": "purrassist_syntax::size"
+          }
+        ],
+        "sanctioned": false,
+        "tokens": 0
+      },
+      {
+        "fingerprint": "shim:fdf192934819ae61",
+        "members": [
+          {
+            "file": "crates/core/src/embeddings.rs",
+            "line": 212,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::embeddings::invalid"
+          },
+          {
+            "file": "crates/core/src/edits/unified.rs",
+            "line": 143,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::edits::unified::invalid"
+          },
+          {
+            "file": "crates/core/src/patch.rs",
+            "line": 522,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::patch::invalid"
+          },
+          {
+            "file": "crates/core/src/markdown/lists.rs",
+            "line": 675,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::markdown::lists::invalid"
+          },
+          {
+            "file": "crates/core/src/markdown/table.rs",
+            "line": 188,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::markdown::table::invalid"
+          },
+          {
+            "file": "crates/core/src/markdown/table_columns.rs",
+            "line": 319,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::markdown::table_columns::invalid"
+          },
+          {
+            "file": "crates/core/src/markdown/table_rows.rs",
+            "line": 245,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::markdown::table_rows::invalid"
+          },
+          {
+            "file": "crates/core/src/markdown/references.rs",
+            "line": 957,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::markdown::references::invalid"
+          },
+          {
+            "file": "crates/core/src/markdown/sections.rs",
+            "line": 625,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::markdown::sections::invalid"
+          },
+          {
+            "file": "crates/host/src/tools/embeddings.rs",
+            "line": 258,
+            "package": "purrassist-host",
+            "symbol": "purrassist_host::tools::embeddings::invalid"
+          }
+        ],
+        "sanctioned": false,
+        "tokens": 0
+      },
+      {
+        "fingerprint": "shim:5cf562489b652402",
+        "members": [
+          {
+            "file": "crates/core/src/json/parser.rs",
+            "line": 41,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::json::parser::ParseFailure::from"
+          },
+          {
+            "file": "crates/core/src/pattern/mod.rs",
+            "line": 92,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::pattern::PatternCompileError::from"
+          },
+          {
+            "file": "crates/core/src/schema/build.rs",
+            "line": 35,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::schema::build::CompilationError::from"
+          }
+        ],
+        "sanctioned": false,
+        "tokens": 0
+      },
+      {
+        "fingerprint": "shim:72a5aa4ed4208a14",
+        "members": [
+          {
+            "file": "crates/core/src/markdown/lists.rs",
+            "line": 659,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::markdown::lists::line_start"
+          },
+          {
+            "file": "crates/core/src/markdown/table_rows.rs",
+            "line": 229,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::markdown::table_rows::line_start"
+          },
+          {
+            "file": "crates/core/src/markdown/sections/nested.rs",
+            "line": 509,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::markdown::sections::nested::line_start"
+          }
+        ],
+        "sanctioned": false,
+        "tokens": 0
+      },
+      {
+        "fingerprint": "shim:6455eb085e5f6019",
+        "members": [
+          {
+            "file": "crates/core/src/json/number.rs",
+            "line": 14,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::json::number::Number::from_unsigned"
+          },
+          {
+            "file": "crates/core/src/json/number.rs",
+            "line": 19,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::json::number::Number::from_count"
+          }
+        ],
+        "sanctioned": false,
+        "tokens": 0
+      },
+      {
+        "fingerprint": "shim:a268e33e6e6599ea",
+        "members": [
+          {
+            "file": "crates/core/src/schema/algebra/canon.rs",
+            "line": 279,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::schema::algebra::canon::invalid"
+          },
+          {
+            "file": "crates/core/src/schema/algebra/generate.rs",
+            "line": 68,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::schema::algebra::generate::invalid"
+          }
+        ],
+        "sanctioned": false,
+        "tokens": 0
+      },
+      {
+        "fingerprint": "shim:b4d957ee00b5c26c",
+        "members": [
+          {
+            "file": "crates/core/src/contract.rs",
+            "line": 604,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::contract::ScratchVec::new"
+          },
+          {
+            "file": "crates/core/src/contract.rs",
+            "line": 839,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::contract::ScratchMap::new"
+          }
+        ],
+        "sanctioned": false,
+        "tokens": 0
+      },
+      {
+        "fingerprint": "shim:c1b72c341f281369",
+        "members": [
+          {
+            "file": "crates/core/src/pattern/backtrack.rs",
+            "line": 17,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::pattern::backtrack::word"
+          },
+          {
+            "file": "crates/core/src/pattern/derive.rs",
+            "line": 75,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::pattern::derive::word"
+          }
+        ],
+        "sanctioned": false,
+        "tokens": 0
+      }
+    ],
+    "units": 1438
+  }
+}

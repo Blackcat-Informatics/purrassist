@@ -25,6 +25,41 @@ complete local schema. It never relies on a provider's restricted JSON Schema
 subset as the final validator. Any accepted helper proposal is a `BestGuess` or
 an explicit ambiguity, with provider/model and request/response digests recorded.
 
+Preparation snapshots its cumulative governor. Completion resumes that snapshot
+and preserves cancellation, consumed budget, and the request storage reservation.
+Extraction, schema recovery, and the proposal evidence/inference use that same
+account; ledger exhaustion returns an explicit unsuccessful result.
+
 Fixed transcripts exercise all three wire formats, status errors, refusal,
-truncation, helper admission, validation, and guess labeling. No live provider
+truncation, helper admission, validation, cancellation, and guess labeling. No live provider
 qualification or model-backed evaluation has been performed.
+
+## `prepare_helper`/`complete_helper` tools
+
+`Pending` is also reachable as a two-call CLI/MCP tool pair, so a caller never
+needs its own Rust process to use it. `prepare_helper` takes `provider`,
+`model`, `input`, `schema`, and `max_output_tokens`, and returns the exact
+`path`/`headers`/`body` the caller's own transport must send, plus an opaque
+`pending` string and a receipt; it performs no network I/O itself. The caller
+sends that request, then calls `complete_helper` with the same `pending`
+string alongside the transport's observed `status` and response `body`; it
+returns the same `AssistResult` shape every other governed tool does (a
+`status`/`value`/`alternatives`/`receipt`), with any successful proposal
+reported as `best_guess`.
+
+The `pending` string is a versioned, tamper-evident envelope: it carries
+`provider`/`model`/`original` (the input)/`schema`/`max_output_tokens` under a
+`payload` key, and a `digest` binding that payload's exact serialized bytes.
+`complete_helper` recomputes that digest before trusting anything inside and
+refuses a `pending` string whose digest does not match or whose `version` it
+does not recognize. This detects corruption or substitution of the opaque
+string in transit or storage; it is a content hash, not an authenticated MAC,
+so it does not defend against a caller who controls the string outright — that
+threat has no defense here, consistent with `purrassist-core`'s prohibition on
+ambient credentials or secrets. `complete_helper` reconstructs the identical
+`Pending` value `prepare_helper` minted (preparation is a deterministic
+function of those five fields) rather than persisting anything server-side
+between the two calls. Each tool invocation explicitly admits one `HelperCalls`
+unit; completion reconstructs the pending preparation within its own call, then
+resumes its governor snapshot. The receipt declares that admitted budget and
+reports cumulative usage; other tools retain zero helper calls.

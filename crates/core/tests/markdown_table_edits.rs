@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Source preservation, exact undo, and structural rejection for GFM cell edits.
 use purrassist_core::{
-    Budget, Governor, Outcome, StopReason, contract::Resource, markdown::Document,
+    Budget, Governor, Outcome, StopReason,
+    contract::Resource,
+    markdown::{BlockKind, Document},
 };
 
 #[test]
@@ -93,7 +95,6 @@ fn invalid_cells_and_structural_changes_fail_without_a_plan() {
         (vec![], 0, 0, "x"),
         (vec![99], 0, 0, "x"),
         (vec![0], 99, 0, "x"),
-        (vec![0], 1, 1, "x"),
         (vec![0], 2, 2, "x"),
         (vec![0], 0, 0, "a|b"),
         (vec![0], 0, 0, "a\nb"),
@@ -121,4 +122,39 @@ fn invalid_cells_and_structural_changes_fail_without_a_plan() {
     // Escaping a boundary pipe would merge adjacent cells and must be rejected.
     let doc = Document::parse("|A|B|\n|-|-|\n", &mut g).unwrap();
     assert!(doc.replace_table_cell(&[0], 0, 0, "x\\", &mut g).is_err());
+}
+
+/// A body row shorter than the header has only implicit empty cells beyond
+/// its own width; editing one of those materializes every implicit cell up
+/// to it, a reported transformation, rather than refusing the edit.
+#[test]
+fn implicit_padded_cells_are_materialized_not_refused() {
+    let mut g = Governor::new(Budget::default());
+    let source = "| A | B | C |\n| --- | --- | --- |\n| tea |\n";
+    let doc = Document::parse(source, &mut g).unwrap();
+    let plan = doc.replace_table_cell(&[0], 1, 2, "iced", &mut g).unwrap();
+    assert_eq!(plan.edits.len(), 1);
+    let Outcome::Resolved(applied) = plan.apply(source, Budget::default()).outcome else {
+        panic!("apply")
+    };
+    assert_eq!(
+        applied.text,
+        "| A | B | C |\n| --- | --- | --- |\n| tea |  | iced |\n"
+    );
+    let Outcome::Resolved(undone) = applied
+        .inverse
+        .apply(&applied.text, Budget::default())
+        .outcome
+    else {
+        panic!("undo")
+    };
+    assert_eq!(undone.text, source);
+    let updated = Document::parse(&applied.text, &mut g).unwrap();
+    let BlockKind::Table { rows, .. } = &updated.blocks()[0].kind else {
+        panic!("table")
+    };
+    assert_eq!(
+        rows[0],
+        vec!["tea".to_string(), String::new(), "iced".into()]
+    );
 }

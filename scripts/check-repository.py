@@ -19,7 +19,7 @@ for target in core.get('target', {}).values():
 
 for source in ['crates', 'scripts']:
     for path in (ROOT / source).rglob('*'):
-        if not path.is_file() or path.suffix not in {'.rs', '.py', '.js', '.toml', '.sh'}:
+        if not path.is_file() or path.suffix not in {'.rs', '.py', '.js', '.mjs', '.toml', '.sh'}:
             continue
         if '/tests/data/' in str(path) or '/schema/metaschemas/' in str(path):
             continue
@@ -27,7 +27,7 @@ for source in ['crates', 'scripts']:
         if 'SPDX-License-Identifier:' not in header or 'SPDX-FileCopyrightText:' not in header:
             errors.append(f'{path.relative_to(ROOT)}: missing attribution')
 
-for directory in ['crates/core/src/schema/metaschemas', 'crates/core/tests/data/json-schema', 'crates/core/tests/data/markdown']:
+for directory in ['crates/core/src/schema/metaschemas', 'crates/core/tests/data/json-schema', 'crates/core/tests/data/markdown', 'crates/core/tests/data/test262']:
     root = ROOT / directory
     manifest = json.loads((root / 'manifest.json').read_text())
     entries = manifest.get('files', manifest)
@@ -40,6 +40,9 @@ unicode_manifest = json.loads((ROOT / 'vendor/unicode/manifest.json').read_text(
 fixture = ROOT / 'crates/core/tests/data/unicode/NormalizationTest.txt'
 if hashlib.sha256(fixture.read_bytes()).hexdigest() != unicode_manifest['NormalizationTest.txt']['sha256']:
     errors.append('Unicode normalization fixture differs from its pinned upstream source')
+confusables_fixture = ROOT / 'crates/core/tests/data/unicode/confusables.txt'
+if hashlib.sha256(confusables_fixture.read_bytes()).hexdigest() != unicode_manifest['confusables.txt']['sha256']:
+    errors.append('UTS #39 confusables fixture differs from its pinned upstream source')
 generated = ROOT / 'vendor/unicode/generated.json'
 for name, expected in json.loads(generated.read_text()).items():
     if hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != expected:
@@ -69,6 +72,26 @@ for identity, entry in details.items():
         path = ROOT / name
         if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != entry.get('notice_sha256', {}).get(name):
             errors.append(f'{identity}: license notice missing or changed: {name}')
+evaluation_root = ROOT / 'crates/core/tests/data/evaluation'
+evaluation_manifest = json.loads((evaluation_root / 'manifest.json').read_text())
+for name, entry in evaluation_manifest['outputs'].items():
+    path = evaluation_root / name
+    if (hashlib.sha256(path.read_bytes()).hexdigest() != entry['sha256']
+            or len(json.loads(path.read_text())) != entry['cases']):
+        errors.append(f'evaluation/{name}: corpus digest or census mismatch')
+for name, value in evaluation_manifest['inputs'].items():
+    if name.endswith('_sha256'):
+        input_path = ROOT / evaluation_manifest['inputs'][name.removesuffix('_sha256')]
+        if hashlib.sha256(input_path.read_bytes()).hexdigest() != value:
+            errors.append(f'evaluation: registered input digest mismatch: {input_path.relative_to(ROOT)}')
+generator = ROOT / evaluation_manifest['generator']
+if hashlib.sha256(generator.read_bytes()).hexdigest() != evaluation_manifest['generator_sha256']:
+    errors.append('evaluation: generator digest mismatch')
+for crate_name, notices in inventory['packaged_notices'].items():
+    for name, expected in notices.items():
+        path = ROOT / 'crates' / crate_name / name
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            errors.append(f'{crate_name}: registered package notice missing or changed: {name}')
 for entry in json.loads((ROOT / 'vendor/tooling.json').read_text()):
     for name, expected in entry['notices'].items():
         if hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != expected:

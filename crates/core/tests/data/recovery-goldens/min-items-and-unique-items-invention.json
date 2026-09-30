@@ -1,0 +1,31 @@
+{
+  "description": "a required array combining minItems and uniqueItems is invented",
+  "schema": {
+    "type": "object",
+    "required": [
+      "ids"
+    ],
+    "properties": {
+      "ids": {
+        "type": "array",
+        "minItems": 3,
+        "uniqueItems": true,
+        "items": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  "input": "{}",
+  "outcome": "best_guess",
+  "output": {
+    "ids": [
+      0,
+      1,
+      -1
+    ]
+  },
+  "ledger_rules": [
+    "json.required.invent"
+  ]
+}

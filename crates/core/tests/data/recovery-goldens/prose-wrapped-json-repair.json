@@ -1,0 +1,22 @@
+{
+  "description": "JSON wrapped in a fenced code block and prose is extracted",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "a": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "a"
+    ]
+  },
+  "input": "Sure, here you go:\n```json\n{\"a\":1}\n```\nLet me know if that helps!",
+  "outcome": "resolved",
+  "output": {
+    "a": 1
+  },
+  "ledger_rules": [
+    "json.extract"
+  ]
+}

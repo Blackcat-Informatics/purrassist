@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Inline tokenization with indexed backtick runs and bounded angle lookahead.
-use super::{Inline, InlineKind, angle, emphasis, entities, links, normalize_lines};
+use super::{Inline, InlineKind, angle, autolinks, emphasis, entities, links, normalize_lines};
 use crate::{Governor, StopReason, contract::Resource};
 use std::collections::BTreeMap;
 
@@ -9,6 +9,7 @@ pub(super) fn run(
     source: &str,
     references: &super::References,
     strike: bool,
+    bare_urls: bool,
     governor: &mut Governor,
 ) -> Result<Vec<Inline>, StopReason> {
     let ticks = backticks(source, governor)?;
@@ -39,29 +40,38 @@ pub(super) fn run(
             source.as_bytes()[cursor],
             b'*' | b'_' | b'~' | b'[' | b']' | b'!'
         );
-        let (end, kind) = match source.as_bytes()[cursor] {
-            b'*' | b'_' => delimiter(source, cursor),
-            b'~' if strike => delimiter(source, cursor),
-            b'!' if rest.starts_with("![") => (cursor + 2, InlineKind::Text("![".into())),
-            b'~' | b'[' | b']' | b'!' => literal(source, cursor),
-            b'`' => code(source, cursor, &ticks),
-            b'\\' => escaped(source, cursor),
-            b'&' => entities::one(rest).map_or_else(
-                || literal(source, cursor),
-                |(width, value)| (cursor + width, InlineKind::Text(value.into_owned())),
-            ),
-            b' ' | b'\t' | b'\r' | b'\n' => whitespace(source, cursor),
-            b'<' => {
-                governor.charge(
-                    Resource::Work,
-                    super::super::size(rest.len()).saturating_mul(3),
-                )?;
-                angle::parse(rest).map_or_else(
+        let bare = if bare_urls && brackets.is_empty() {
+            autolinks::url_at(source, cursor, governor)?
+        } else {
+            None
+        };
+        let (end, kind) = if let Some(bare) = bare {
+            bare
+        } else {
+            match source.as_bytes()[cursor] {
+                b'*' | b'_' => delimiter(source, cursor),
+                b'~' if strike => delimiter(source, cursor),
+                b'!' if rest.starts_with("![") => (cursor + 2, InlineKind::Text("![".into())),
+                b'~' | b'[' | b']' | b'!' => literal(source, cursor),
+                b'`' => code(source, cursor, &ticks),
+                b'\\' => escaped(source, cursor),
+                b'&' => entities::one(rest).map_or_else(
                     || literal(source, cursor),
-                    |(width, kind)| (cursor + width, kind),
-                )
+                    |(width, value)| (cursor + width, InlineKind::Text(value.into_owned())),
+                ),
+                b' ' | b'\t' | b'\r' | b'\n' => whitespace(source, cursor),
+                b'<' => {
+                    governor.charge(
+                        Resource::Work,
+                        super::super::size(rest.len()).saturating_mul(3),
+                    )?;
+                    angle::parse(rest).map_or_else(
+                        || literal(source, cursor),
+                        |(width, kind)| (cursor + width, kind),
+                    )
+                }
+                _ => text_run(source, cursor, bare_urls),
             }
-            _ => text_run(source, cursor),
         };
         cursor = end;
         if matches!(kind, InlineKind::Autolink { .. }) {
@@ -240,12 +250,21 @@ fn delimiter(source: &str, start: usize) -> (usize, InlineKind) {
             .count();
     (end, InlineKind::Text(source[start..end].into()))
 }
-fn text_run(source: &str, start: usize) -> (usize, InlineKind) {
+fn text_run(source: &str, start: usize, bare_urls: bool) -> (usize, InlineKind) {
     let width = source[start..]
         .find([
             '*', '_', '~', '[', ']', '!', '`', '\\', '<', '&', ' ', '\t', '\r', '\n',
         ])
         .unwrap_or(source.len() - start);
+    let width = if bare_urls {
+        source[start..]
+            .char_indices()
+            .skip(1)
+            .find(|(_, c)| matches!(c, 'w' | 'h' | 'H' | 'f' | 'F'))
+            .map_or(width, |(offset, _)| offset.min(width))
+    } else {
+        width
+    };
     (
         start + width,
         InlineKind::Text(source[start..start + width].replace('\0', "\u{fffd}")),

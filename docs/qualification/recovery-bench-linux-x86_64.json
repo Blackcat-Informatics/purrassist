@@ -1,0 +1,62 @@
+[
+  {
+    "case": "exact",
+    "samples": 200,
+    "correct": 200,
+    "wrong_corrections": 0,
+    "median_ns": 1410,
+    "p95_ns": 1530,
+    "governor_peak_scratch_bytes": 556,
+    "governor_peak_work": 7
+  },
+  {
+    "case": "nested",
+    "samples": 200,
+    "correct": 200,
+    "wrong_corrections": 0,
+    "median_ns": 9010,
+    "p95_ns": 11429,
+    "governor_peak_scratch_bytes": 6766,
+    "governor_peak_work": 63
+  },
+  {
+    "case": "composed",
+    "samples": 200,
+    "correct": 200,
+    "wrong_corrections": 0,
+    "median_ns": 61618,
+    "p95_ns": 68447,
+    "governor_peak_scratch_bytes": 48232,
+    "governor_peak_work": 782
+  },
+  {
+    "case": "duplicate",
+    "samples": 200,
+    "correct": 200,
+    "wrong_corrections": 0,
+    "median_ns": 10769,
+    "p95_ns": 11420,
+    "governor_peak_scratch_bytes": 10654,
+    "governor_peak_work": 79
+  },
+  {
+    "case": "inferred",
+    "samples": 200,
+    "correct": 200,
+    "wrong_corrections": 0,
+    "median_ns": 14330,
+    "p95_ns": 15039,
+    "governor_peak_scratch_bytes": 2513,
+    "governor_peak_work": 27
+  },
+  {
+    "case": "no_candidate",
+    "samples": 200,
+    "correct": 200,
+    "wrong_corrections": 0,
+    "median_ns": 1539,
+    "p95_ns": 1580,
+    "governor_peak_scratch_bytes": 711,
+    "governor_peak_work": 8
+  }
+]

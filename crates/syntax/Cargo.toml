@@ -22,6 +22,10 @@ workspace = true
 name = "portable-syntax"
 path = "examples/portable.rs"
 
+[[bench]]
+name = "latency"
+harness = false
+
 [dependencies]
 purrassist-core.workspace = true
 tree-sitter = { version = "=0.27.0", default-features = false }

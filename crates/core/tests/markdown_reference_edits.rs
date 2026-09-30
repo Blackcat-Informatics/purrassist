@@ -26,6 +26,161 @@ fn apply(plan: &EditPlan, source: &str) -> String {
 }
 
 #[test]
+fn multiline_titles_remove_raw_indentation_and_retain_encoded_whitespace_and_spans() {
+    for newline in ["\n", "\r\n", "\r"] {
+        for indent in ["", " ", "    ", "\t", "\t  "] {
+            let source = format!(
+                "[a]: /url \" first{newline}{indent}&#32;&#9;text{newline}{indent}b  \"{newline}{newline}[a]{newline}"
+            );
+            let mut governor = Governor::new(Budget::default());
+            let refs = References::parse_blocks(&[&source], &mut governor).unwrap();
+            let definition = &refs.definitions()[0];
+            assert_eq!(definition.title.as_deref(), Some(" first\n \ttext\nb  "));
+            assert_eq!(
+                &source[definition.title_span.clone().unwrap()],
+                format!("\" first{newline}{indent}&#32;&#9;text{newline}{indent}b  \"")
+            );
+            assert_eq!(refs.sources(), std::slice::from_ref(&source));
+            let document = Document::parse(&source, &mut governor).unwrap();
+            let sites = document.reference_sites(&mut governor).unwrap();
+            assert_eq!(sites[0].title, definition.title);
+            assert_eq!(
+                &source[sites[0].title_span.clone().unwrap()],
+                &source[definition.title_span.clone().unwrap()]
+            );
+            assert_eq!(
+                document
+                    .replace_reference(
+                        &sites[0].path,
+                        0,
+                        "/url",
+                        definition.title.as_deref(),
+                        &mut governor
+                    )
+                    .unwrap()
+                    .edits,
+                []
+            );
+            for dialect in [Dialect::CommonMark, Dialect::Gfm] {
+                assert_eq!(
+                    document.render_html(dialect, &mut governor).unwrap(),
+                    "<p><a href=\"/url\" title=\" first\n \ttext\nb  \">a</a></p>\n"
+                );
+            }
+            let changed = document
+                .replace_reference(&sites[0].path, 0, "/cold", Some("new title"), &mut governor)
+                .unwrap();
+            assert!(apply(&changed, &source).contains("/cold"));
+        }
+    }
+}
+
+#[test]
+fn lazy_reference_titles_keep_indentation_and_replacements_preserve_reference_semantics() {
+    for newline in ["\n", "\r\n", "\r"] {
+        for (middle, closing, expected_title) in [
+            ("    next", "end", "first\n    next\nend"),
+            (">     next", "> end", "first\nnext\nend"),
+            ("> &#10;    next", "> end", "first\n\n    next\nend"),
+        ] {
+            let source = format!(
+                "> [a]: /url \"first{newline}{middle}{newline}{closing}\"{newline}{newline}[a]{newline}"
+            );
+            let mut governor = Governor::new(Budget::default());
+            let document = Document::parse(&source, &mut governor).unwrap();
+            let sites = document.reference_sites(&mut governor).unwrap();
+            assert_eq!(sites[0].title.as_deref(), Some(expected_title));
+            for dialect in [Dialect::CommonMark, Dialect::Gfm] {
+                assert_eq!(
+                    document.render_html(dialect, &mut governor).unwrap(),
+                    format!(
+                        "<blockquote>\n</blockquote>\n<p><a href=\"/url\" title=\"{expected_title}\">a</a></p>\n"
+                    )
+                );
+            }
+            assert_eq!(
+                document
+                    .replace_reference(
+                        &sites[0].path,
+                        0,
+                        "/url",
+                        Some(expected_title),
+                        &mut governor
+                    )
+                    .unwrap()
+                    .edits,
+                []
+            );
+            let plan = document
+                .remove_reference(&sites[0].path, 0, &mut governor)
+                .unwrap();
+            let changed = apply(&plan, &source);
+            assert!(changed.starts_with("> "));
+            let updated = Document::parse(&changed, &mut governor).unwrap();
+            assert_eq!(
+                updated
+                    .render_html(Dialect::CommonMark, &mut governor)
+                    .unwrap(),
+                format!(
+                    "<blockquote>\n</blockquote>\n<p><a href=\"/url\" title=\"{expected_title}\">a</a></p>\n"
+                )
+            );
+        }
+    }
+}
+
+#[test]
+fn partially_consumed_tabs_are_explicit_reference_continuation_indentation() {
+    for newline in ["\n", "\r\n", "\r"] {
+        for (opening, middle, closing, path) in [
+            ("> - ", ">\t    ", ">   ", vec![0, 0, 0]),
+            ("- - ", "\t  ", "\t  ", vec![0, 0, 0]),
+        ] {
+            let source = format!(
+                "{opening}[a]: /url \"first{newline}{middle}&#32;next{newline}{closing}end\"{newline}{newline}[a]{newline}"
+            );
+            let mut governor = Governor::new(Budget::default());
+            let document = Document::parse(&source, &mut governor).unwrap();
+            let sites = document.reference_sites(&mut governor).unwrap();
+            assert_eq!(sites.len(), 1);
+            let site = &sites[0];
+            assert_eq!(site.path, path);
+            assert_eq!(site.title.as_deref(), Some("first\n next\nend"));
+            assert_eq!(&source[site.destination_span.clone()], "/url");
+            assert_eq!(
+                &source[site.title_span.clone().unwrap()],
+                format!("\"first{newline}{middle}&#32;next{newline}{closing}end\"")
+            );
+            assert_eq!(
+                &source[site.span.clone()],
+                format!(
+                    "[a]: /url \"first{newline}{middle}&#32;next{newline}{closing}end\"{newline}"
+                )
+            );
+            assert_eq!(
+                document
+                    .replace_reference(&site.path, 0, "/url", site.title.as_deref(), &mut governor)
+                    .unwrap()
+                    .edits,
+                []
+            );
+            let before = document
+                .render_html(Dialect::CommonMark, &mut governor)
+                .unwrap();
+            assert!(before.contains("title=\"first\n next\nend\""));
+            let plan = document
+                .remove_reference(&site.path, 0, &mut governor)
+                .unwrap();
+            let changed = apply(&plan, &source);
+            let updated = Document::parse(&changed, &mut governor).unwrap();
+            for dialect in [Dialect::CommonMark, Dialect::Gfm] {
+                assert_eq!(updated.render_html(dialect, &mut governor).unwrap(), before);
+            }
+        }
+    }
+}
+
+#[test]
 fn token_spans_include_delimiters_but_not_surrounding_whitespace() {
     let source = "  [A]: </café>  'cold tea'  \r\n[A]: /shadow\r\n";
     let refs = References::parse_blocks(&[source], &mut Governor::new(Budget::default())).unwrap();

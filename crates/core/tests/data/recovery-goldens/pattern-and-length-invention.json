@@ -1,0 +1,26 @@
+{
+  "description": "a required pattern property additionally bounded by length is invented",
+  "schema": {
+    "type": "object",
+    "required": [
+      "id"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "pattern": "^[a-z]+$",
+        "minLength": 3,
+        "maxLength": 6
+      }
+    }
+  },
+  "input": "{}",
+  "outcome": "best_guess",
+  "output": {
+    "id": "aaa"
+  },
+  "ledger_rules": [
+    "json.required.invent",
+    "pattern.engine.derivative-v1"
+  ]
+}

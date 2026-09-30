@@ -1,0 +1,23 @@
+{
+  "description": "a required string property with minLength is invented",
+  "schema": {
+    "type": "object",
+    "required": [
+      "token"
+    ],
+    "properties": {
+      "token": {
+        "type": "string",
+        "minLength": 8
+      }
+    }
+  },
+  "input": "{}",
+  "outcome": "best_guess",
+  "output": {
+    "token": "aaaaaaaa"
+  },
+  "ledger_rules": [
+    "json.required.invent"
+  ]
+}

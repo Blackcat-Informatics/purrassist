@@ -21,12 +21,37 @@ workspace = true
 [dependencies]
 
 [[example]]
-name = "portable-core"
-path = "examples/portable.rs"
-
-[[example]]
 name = "fuzz-json"
 path = "examples/fuzz_json.rs"
+
+[[example]]
+name = "fuzz-markdown"
+path = "examples/fuzz_markdown.rs"
+test = true
+
+[[example]]
+name = "fuzz-schema"
+path = "examples/fuzz_schema.rs"
+
+[[example]]
+name = "fuzz-pattern"
+path = "examples/fuzz_pattern.rs"
+
+[[example]]
+name = "fuzz-unified"
+path = "examples/fuzz_unified.rs"
+
+[[example]]
+name = "fuzz-fuzzy"
+path = "examples/fuzz_fuzzy.rs"
+
+[[example]]
+name = "fuzz-matching"
+path = "examples/fuzz_matching.rs"
+
+[[example]]
+name = "fuzz-patch"
+path = "examples/fuzz_patch.rs"
 
 [[bench]]
 name = "recovery"
@@ -34,4 +59,8 @@ harness = false
 
 [[bench]]
 name = "resources"
+harness = false
+
+[[bench]]
+name = "latency"
 harness = false

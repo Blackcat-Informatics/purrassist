@@ -30,7 +30,7 @@ pub(super) fn call(args: &Node, doc: &Document, g: &mut Governor) -> Result<Node
         "remove" => ListItemEdit::Remove,
         _ => return Err(StopReason::InvalidInput("unknown list action".into())),
     };
-    Ok(super::plan(doc.edit_list_item(
+    Ok(super::plan(&doc.edit_list_item(
         &super::block_path(args)?,
         &edit,
         g,

@@ -1,0 +1,22 @@
+{
+  "description": "an extra wrapping array around the intended object is removed",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "a": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "a"
+    ]
+  },
+  "input": "[{\"a\":1}]",
+  "outcome": "resolved",
+  "output": {
+    "a": 1
+  },
+  "ledger_rules": [
+    "json.shape.unwrap-array"
+  ]
+}

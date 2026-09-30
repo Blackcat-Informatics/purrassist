@@ -1,0 +1,38 @@
+{
+  "description": "prose wrapping, a key typo, and a type coercion are all repaired together",
+  "schema": {
+    "type": "object",
+    "required": [
+      "temperature",
+      "drink"
+    ],
+    "properties": {
+      "temperature": {
+        "type": "number"
+      },
+      "drink": {
+        "enum": [
+          "tea",
+          "coffee"
+        ]
+      }
+    },
+    "additionalProperties": false
+  },
+  "input": "```json\n[[{temperatur: '42', drink: 'Tea',}]]\n```",
+  "outcome": "resolved",
+  "output": {
+    "temperature": 42,
+    "drink": "tea"
+  },
+  "ledger_rules": [
+    "json.enum.match",
+    "json.extract",
+    "json.key.match",
+    "json.shape.unwrap-array",
+    "json.syntax.bare-key",
+    "json.syntax.string",
+    "json.syntax.trailing-comma",
+    "json.type.decode-string"
+  ]
+}

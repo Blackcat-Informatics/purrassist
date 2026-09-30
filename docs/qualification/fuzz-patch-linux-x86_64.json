@@ -1,0 +1,88 @@
+{
+  "format": "purrassist.fuzz.v1",
+  "target": "patch",
+  "status": "passed",
+  "tools": {
+    "rustc": "rustc 1.100.0-nightly (4b6d04e70 2026-09-13)\nbinary: rustc\ncommit-hash: 4b6d04e706108ccfeafe2547fbe857dfe8972bad\ncommit-date: 2026-09-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0-nightly\nLLVM version: 23.1.1",
+    "llvm-cov": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1-rust-1.100.0-nightly\n  Optimized build.",
+    "llvm-profdata": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1-rust-1.100.0-nightly\n  Optimized build."
+  },
+  "source_commit": "ba2a35cc3ab655cf377fade556d3e0c066cd633c",
+  "source_dirty": true,
+  "nonignored_file_tree_sha256": "75718bcccc438bede3524bf54ab361c90f859db5c5ce5e64ad8191e36f4d0197",
+  "build": {
+    "command": [
+      "cargo",
+      "build",
+      "-p",
+      "purrassist-core",
+      "--example",
+      "fuzz-patch",
+      "--locked",
+      "--config",
+      "profile.dev.opt-level=1",
+      "--config",
+      "profile.dev.debug=1",
+      "--config",
+      "profile.dev.strip=false",
+      "--config",
+      "profile.dev.debug-assertions=true",
+      "--config",
+      "profile.dev.overflow-checks=true",
+      "--message-format=json"
+    ],
+    "sha256": "7c71fa47856df56349469b164b11ba8e15f22eb8220c1d397135e22c227c3b92",
+    "inherited_rustflags_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "appended_rustflags": [
+      "-C",
+      "instrument-coverage"
+    ]
+  },
+  "seed": 1006,
+  "requested_mutations": 10000,
+  "timeout_seconds": 10,
+  "maximum_input_bytes": 4096,
+  "executions": 10003,
+  "invalid_utf8": 980,
+  "differential_checks": 0,
+  "differential_mismatches": 0,
+  "retained": [
+    {
+      "execution": 0,
+      "sha256": "a132216fd45f6c96ce79a2879d85fd4b69a23bc9d198b3b70dfc09b9898a38de",
+      "new_regions": 416,
+      "parent_corpus_index": null,
+      "bytes": 27
+    },
+    {
+      "execution": 1,
+      "sha256": "c24e82ab6f776ae48d72979c73cfb3a832b95102745cdb8dc0c26c3b44519ae1",
+      "new_regions": 1,
+      "parent_corpus_index": null,
+      "bytes": 6
+    },
+    {
+      "execution": 2,
+      "sha256": "542afc2b5bc105c168efe7c6841e812d7a242eff54a32d71d9d285c0e2a9067d",
+      "new_regions": 6,
+      "parent_corpus_index": null,
+      "bytes": 15
+    },
+    {
+      "execution": 3,
+      "sha256": "44e1cd4512c918c202dfed88268128239c85f3f417dae0a182a377dad55ff87f",
+      "new_regions": 11,
+      "parent_corpus_index": 0,
+      "bytes": 25
+    },
+    {
+      "execution": 6,
+      "sha256": "d7e115a7949556bff4d681f9f9896af25ff12f7ade5cdffd31d863b8b4761b78",
+      "new_regions": 1,
+      "parent_corpus_index": 2,
+      "bytes": 11
+    }
+  ],
+  "regions": 435,
+  "current_execution": 10002
+}

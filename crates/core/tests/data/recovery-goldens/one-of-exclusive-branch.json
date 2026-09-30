@@ -1,0 +1,19 @@
+{
+  "description": "a oneOf branch is selected exclusively after a type coercion",
+  "schema": {
+    "oneOf": [
+      {
+        "type": "string",
+        "maxLength": 2
+      },
+      {
+        "type": "string",
+        "minLength": 5
+      }
+    ]
+  },
+  "input": "\"hello world\"",
+  "outcome": "resolved",
+  "output": "hello world",
+  "ledger_rules": []
+}

@@ -3,6 +3,7 @@
 
 [package]
 name = "purrassist-host"
+autoexamples = false
 description = "Native filesystem and helper integration for PurRAssist"
 version.workspace = true
 edition.workspace = true
@@ -17,5 +18,18 @@ documentation = "https://docs.rs/purrassist-host"
 [lints]
 workspace = true
 
+[[example]]
+name = "portable-host"
+path = "examples/portable.rs"
+
 [dependencies]
 purrassist.workspace = true
+
+# Windows-only durable-replace/rename primitives (`crates/host/src/files/windows.rs`);
+# see docs/DEPENDENCIES.md for the registration and unsafe_code exception rationale.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", default-features = false, features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_WindowsProgramming",
+] }

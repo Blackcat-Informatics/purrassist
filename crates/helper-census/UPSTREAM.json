@@ -1,0 +1,28 @@
+{
+  "repository": "https://github.com/Blackcat-Informatics/purrdf",
+  "commit": "0387e83e01842edb4bb5f4141ed788a0b71638dd",
+  "branch": "paudley/366-centralize-overlapping-helpers-one-home",
+  "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+  "files_sha256": {
+    "crates/helper-census/Cargo.toml": "47c0fe4ed7072db1e149c36ea70f3509e680c1bbe2ff53e78e39763ebabea6a6",
+    "crates/helper-census/src/census.rs": "2bdd527a3ac217645bfc41f8c1f920e56cf2c560063d52079edc407a1105e92f",
+    "crates/helper-census/src/layout.rs": "81175b106c793fb843d50896c5baa47b6f3897540a4810fe32afefc82856204f",
+    "crates/helper-census/src/ledger.rs": "26b428198dc15d098ca42eb5919bc9c4da9c4c5391618321e1e0010faa7b344d",
+    "crates/helper-census/src/main.rs": "1c7d65fbfb95a0449205121bafa3d49762eb9513377f8477837418979ec5d21f",
+    "crates/helper-census/src/normalize.rs": "75f382984b93ab4102799416818739a1f699cb9ec2444ebab8501c083e0565dc",
+    "crates/helper-census/src/rules.rs": "c836bee202a73a186beaf8e59005ccfb630e1da686c72bec7dd9777bf391de27",
+    "crates/helper-census/src/source.rs": "967243c8187f2f0cc8e3818c1f49936418efc2b7c8a84e38140c0d6955ae2419",
+    "crates/helper-census/src/toml.rs": "440d058db23e24bacc329cc4278a21b9c89dde5f22ea596f3be1b31382799813",
+    "scripts/check-shared-helpers.py": "8e86e77040533c548115302667c203f705c08bc0faa3b235ea97153b27091330"
+  },
+  "adaptations": [
+    "Use PurRAssist first-party SHA-256 for fingerprints; normalized token equivalence is unchanged, ids differ from upstream BLAKE3.",
+    "Serialize JSON reports with purrassist-core, retaining deterministic sorted object keys.",
+    "Compute default workspace root from this unpublished crate manifest.",
+    "PurRDF architecture rules are retained as opt-in ledger detectors, with no imported PurRDF jobs or sanctions. Delegated hash-domain rule ids are removed because their Python enforcement is PurRDF-specific.",
+    "Keep generic independent tomllib/ledger/vector/bench/anchor/staleness/exact-group/cross-package-path validation; remove imports/delegation to PurRDF-specific banned-dependency, IRI-singleton and hash-domain gates. SIMD sites and replacement-ban claims have no local registry and fail if nonempty.",
+    "Cargo validates full disk manifests and provides authoritative shipping targets; IO, invalid names and missing declared roots are explicit failures. Cross-package path validation tokenizes Rust comments and raw/escaped strings, including multiline attributes."
+  ],
+  "initial_requested_commit": "e58250b3e65ae8bfeb85147ccc07975d6aba183b",
+  "snapshot_note": "The branch advanced from the initial requested commit before the copy. Every original file digest below matches this immutable actual copied commit; no dirty source snapshot is used."
+}

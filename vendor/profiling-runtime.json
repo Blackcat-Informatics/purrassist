@@ -4,6 +4,12 @@
   "architecture": "x86_64",
   "url": "https://archive.archlinux.org/packages/g/glibc/glibc-2.44+r50+g1848099f063e-1-x86_64.pkg.tar.zst",
   "sha256": "e8e4d50d45cb2bd21c9f7eabacc6a01bd5eb93dbd476f3f44d44038fc1eba417",
+  "loader_debuginfo": {
+    "url": "https://debuginfod.archlinux.org/buildid/c609e8ec75de304410d3c69f79d96c7bd4d4fdf8/debuginfo",
+    "build_id": "c609e8ec75de304410d3c69f79d96c7bd4d4fdf8",
+    "sha256": "9222e10233e727c483cbc86e45fad67a1c8bc72049c0ec99715ee191f6fc7e53",
+    "member": "usr/lib/.debug/ld-linux-x86-64.so.2.debug"
+  },
   "license": "LGPL-2.1-or-later AND GPL-2.0-or-later",
   "members": [
     "usr/lib/ld-linux-x86-64.so.2",

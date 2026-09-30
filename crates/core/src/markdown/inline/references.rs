@@ -26,7 +26,8 @@ pub struct ReferenceDefinition {
     pub destination: String,
     /// Destination syntax, including angle delimiters when present, within the supplied block.
     pub destination_span: Range<usize>,
-    /// Optional decoded title.
+    /// Optional decoded title, with paragraph continuation indentation removed
+    /// before escapes and entities are decoded. Exact spelling remains in the source.
     pub title: Option<String>,
     /// Title syntax including its delimiters, within the supplied block.
     pub title_span: Option<Range<usize>>,
@@ -61,6 +62,13 @@ impl References {
     /// # Errors
     /// Returns explicit resource exhaustion or cancellation.
     pub fn parse_blocks(blocks: &[&str], governor: &mut Governor) -> Result<Self, StopReason> {
+        Self::parse_blocks_with_lazy(blocks, &[], governor)
+    }
+    pub(in crate::markdown) fn parse_blocks_with_lazy(
+        blocks: &[&str],
+        lazy_lines: &[Vec<usize>],
+        governor: &mut Governor,
+    ) -> Result<Self, StopReason> {
         governor.check()?;
         let mut result = Self::default();
         for (block, source) in blocks.iter().enumerate() {
@@ -73,7 +81,8 @@ impl References {
             governor.charge(Resource::Work, size.saturating_mul(4).saturating_add(1))?;
             let digest = Digest::of(source.as_bytes());
             let mut cursor = 0;
-            while let Some(parsed) = definition(source, cursor, governor)? {
+            let lazy = lazy_lines.get(block).map_or(&[][..], Vec::as_slice);
+            while let Some(parsed) = definition(source, cursor, lazy, governor)? {
                 // Reserve definition-vector capacity and label-index metadata
                 // separately from retained/decoded text, including new field spans.
                 governor.charge(Resource::ScratchBytes, 512)?;
@@ -201,6 +210,7 @@ struct Definition {
 fn definition(
     source: &str,
     start: usize,
+    lazy_lines: &[usize],
     governor: &mut Governor,
 ) -> Result<Option<Definition>, StopReason> {
     governor.charge(Resource::Work, 1)?;
@@ -232,9 +242,15 @@ fn definition(
     let after = links::spaces(source, end, governor)?;
     let (finish, title_value, title_span) = if after > end
         && !blank_line(&source[end..after], governor)?
-        && let Some((title_end, title)) = links::title(source, after, governor)?
+        && let Some((title_end, _)) = links::title(source, after, governor)?
         && let Some(end) = line_end(source, title_end, governor)?
     {
+        let title = reference_title(
+            &source[after + 1..title_end - 1],
+            after + 1,
+            lazy_lines,
+            governor,
+        )?;
         (Some(end), Some(title), Some(after..title_end))
     } else {
         (line_end(source, end, governor)?, None, None)
@@ -250,6 +266,52 @@ fn definition(
         title: title_value,
         title_span,
     }))
+}
+fn reference_title(
+    source: &str,
+    start: usize,
+    lazy_lines: &[usize],
+    governor: &mut Governor,
+) -> Result<String, StopReason> {
+    let size = super::super::size(source.len());
+    governor.charge(Resource::Work, size.saturating_mul(8).saturating_add(1))?;
+    governor.charge(
+        Resource::ScratchBytes,
+        size.saturating_mul(16).saturating_add(64),
+    )?;
+    // Definitions belong to paragraphs: raw continuation indentation is block
+    // syntax, while entity-encoded whitespace and spaces after the opening
+    // title delimiter remain semantic content. Keep original spans untouched.
+    let mut content = String::new();
+    let mut offset = 0;
+    while offset < source.len() {
+        let rest = &source[offset..];
+        let width = rest.find(['\r', '\n']).map_or(rest.len(), |position| {
+            position
+                + 1
+                + usize::from(
+                    rest.as_bytes()[position] == b'\r'
+                        && rest.as_bytes().get(position + 1) == Some(&b'\n'),
+                )
+        });
+        governor.charge(
+            Resource::Work,
+            1 + u64::from(
+                super::super::size(lazy_lines.len())
+                    .saturating_add(1)
+                    .ilog2(),
+            ),
+        )?;
+        let line = &rest[..width];
+        let preserve = offset == 0 || lazy_lines.binary_search(&(start + offset)).is_ok();
+        content.push_str(if preserve {
+            line
+        } else {
+            line.trim_start_matches([' ', '\t'])
+        });
+        offset += width;
+    }
+    Ok(super::entities::text(&content))
 }
 fn line_end(
     source: &str,

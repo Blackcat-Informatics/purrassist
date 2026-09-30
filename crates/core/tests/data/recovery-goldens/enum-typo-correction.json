@@ -1,0 +1,26 @@
+{
+  "description": "a near-miss enum value is corrected by edit distance",
+  "schema": {
+    "type": "object",
+    "required": [
+      "color"
+    ],
+    "properties": {
+      "color": {
+        "enum": [
+          "red",
+          "green",
+          "blue"
+        ]
+      }
+    }
+  },
+  "input": "{\"color\":\"gren\"}",
+  "outcome": "resolved",
+  "output": {
+    "color": "green"
+  },
+  "ledger_rules": [
+    "json.enum.match"
+  ]
+}

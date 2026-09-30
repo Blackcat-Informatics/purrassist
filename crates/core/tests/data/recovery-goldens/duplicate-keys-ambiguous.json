@@ -1,0 +1,24 @@
+{
+  "description": "duplicate object keys resolve as an explicit ambiguity",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "x": {
+        "type": "integer"
+      }
+    }
+  },
+  "input": "{\"x\":1,\"x\":2}",
+  "outcome": "ambiguous",
+  "outputs": [
+    {
+      "x": 1
+    },
+    {
+      "x": 2
+    }
+  ],
+  "ledger_rules": [
+    "json.key.resolve-duplicate"
+  ]
+}

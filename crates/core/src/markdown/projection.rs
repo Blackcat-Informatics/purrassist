@@ -49,6 +49,15 @@ impl Projection {
         self.offsets[range.start]..self.offsets[range.end]
     }
     pub(super) fn restore(&self, source: &str, blocks: &mut [Block]) {
+        self.restore_with_parent(source, blocks, None);
+    }
+    fn restore_with_parent(
+        &self,
+        source: &str,
+        blocks: &mut [Block],
+        parent: Option<(&[Range<usize>], &[usize])>,
+    ) {
+        let mut parent_position = 0;
         for block in blocks {
             block.span = self.range(&block.span);
             for (range, padding) in block.lines.iter_mut().zip(&mut block.line_padding) {
@@ -61,11 +70,32 @@ impl Projection {
                     *title = if let Some((_, title)) = super::heading(&first) {
                         title
                     } else {
-                        block.lines[..block.lines.len() - 1]
-                            .iter()
-                            .map(|range| super::line(source, range).trim())
-                            .collect::<Vec<_>>()
-                            .join("\n")
+                        let mut lazy = Vec::new();
+                        if let Some((outer, padding)) = parent {
+                            for (range, inner_padding) in
+                                block.lines.iter().zip(&block.line_padding)
+                            {
+                                while outer
+                                    .get(parent_position)
+                                    .is_some_and(|line| line.start < range.start)
+                                {
+                                    parent_position += 1;
+                                }
+                                if outer
+                                    .get(parent_position)
+                                    .is_some_and(|line| line.start == range.start)
+                                    && padding[parent_position] == *inner_padding
+                                {
+                                    lazy.push(range.start);
+                                }
+                            }
+                        }
+                        super::setext_title(
+                            source,
+                            &block.lines[..block.lines.len() - 1],
+                            &lazy,
+                            &block.line_padding,
+                        )
                     };
                 }
                 BlockKind::CodeFence { info, content, .. } => {
@@ -84,7 +114,11 @@ impl Projection {
                 }
                 _ => {}
             }
-            self.restore(source, &mut block.children);
+            self.restore_with_parent(
+                source,
+                &mut block.children,
+                Some((&block.lines, &block.line_padding)),
+            );
         }
     }
 }

@@ -1,0 +1,203 @@
+{
+  "format_version": 1,
+  "phase": "actual consolidation inspection; strict ledger review is separate from raw structural observations",
+  "observed_utc": "2026-09-30T14:40:09.332437+00:00",
+  "commands": [
+    [
+      "make",
+      "helper-census",
+      "helper-check"
+    ]
+  ],
+  "exit_code": 0,
+  "source_commit_observed": "300f7cffe188ffbd7b569e6b76476cc27f6ded4a",
+  "source_dirty_observed": true,
+  "source_inputs_sha256_before": "f497455867bc92ccc1699b2dbf622025329d85283d39ebb6866e3347e0827cc1",
+  "source_inputs_sha256_after": "f497455867bc92ccc1699b2dbf622025329d85283d39ebb6866e3347e0827cc1",
+  "census_sha256": "7fe6abd2fc97219079e6ae128be636fad80b98f1a16b34e19515b416f5e17f71",
+  "strict_output": "cargo run --quiet --locked -p purrassist-helper-census -- --baseline\n1409 units; 0 isomorphic groups, 2 shim groups, 1 hex tables, 2 shared constants -> .cache/helper-census/clone-baseline.json\npython3 scripts/check-shared-helpers.py\nOK: 0 ledger jobs hold (0 enforced, 0 reasoned variants, 0 copies still open in unenforced jobs); 2 [[distinct]] rows each equal one group; 0 cross-package includes reported (202 files)\n",
+  "reviewed_distinct": [
+    {
+      "kind": "shim",
+      "members": [
+        "purrassist_core::json::number::Number::from_unsigned",
+        "purrassist_core::json::number::Number::from_count"
+      ],
+      "criterion": "a",
+      "anchor": "purrassist_core::json::number::Number::from_count",
+      "reason": "Distinct exact integer input domains: u64 and target-sized usize. Each preserves its full decimal value without narrowing or saturating. The public constructor signatures are part of the documented contract."
+    },
+    {
+      "kind": "shim",
+      "members": [
+        "purrassist_core::json::parser::ParseFailure::from",
+        "purrassist_core::pattern::PatternCompileError::from",
+        "purrassist_core::schema::build::CompilationError::from"
+      ],
+      "criterion": "a",
+      "anchor": "purrassist_core::json::parser::ParseFailure",
+      "reason": "Distinct public nominal error types for JSON parsing, pattern compilation and schema compilation. Each From<StopReason> preserves the exact reason in its own Resource variant; merging the variants would change the public result contract."
+    }
+  ],
+  "report": {
+    "hex_tables": [
+      {
+        "file": "crates/core/src/markdown/inline/angle.rs",
+        "line": 81,
+        "package": "purrassist-core",
+        "symbol": "purrassist_core::markdown::inline::angle::uri",
+        "tables": [
+          "table:hex-upper"
+        ]
+      }
+    ],
+    "isomorphic_groups": [],
+    "min_tokens": 30,
+    "shared_constants": [
+      {
+        "packages": 2,
+        "units": [
+          {
+            "file": "crates/core/src/contract.rs",
+            "line": 114,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::contract::Effort::budget"
+          },
+          {
+            "file": "crates/core/src/json/parser.rs",
+            "line": 178,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::json::parser::Parser::string"
+          },
+          {
+            "file": "crates/core/src/pattern/parse.rs",
+            "line": 558,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::pattern::parse::Parser::unicode_escape"
+          },
+          {
+            "file": "crates/core/src/pattern/unicode/unicode_data.rs",
+            "line": 8,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::pattern::unicode::unicode_data::SCRIPTS"
+          },
+          {
+            "file": "crates/core/src/pattern/unicode/unicode_data.rs",
+            "line": 2075,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::pattern::unicode::unicode_data::SCRIPT_EXTENSIONS"
+          },
+          {
+            "file": "crates/core/src/pattern/unicode/unicode_data.rs",
+            "line": 4618,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::pattern::unicode::unicode_data::BINARY_PROPERTIES"
+          },
+          {
+            "file": "crates/core/src/schema/format/uri.rs",
+            "line": 19,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::schema::format::uri::is_ucschar"
+          },
+          {
+            "file": "crates/core/src/text/idna_data.rs",
+            "line": 13,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::text::idna_data::IDNA_MAPPING"
+          },
+          {
+            "file": "crates/core/src/text/idna_data.rs",
+            "line": 9370,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::text::idna_data::BIDI_CLASS"
+          },
+          {
+            "file": "crates/core/src/text/unicode_data.rs",
+            "line": 9463,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::text::unicode_data::CATEGORIES"
+          },
+          {
+            "file": "crates/core/src/text/unicode_data.rs",
+            "line": 10771,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::text::unicode_data::GENERAL_CATEGORIES"
+          },
+          {
+            "file": "crates/host/src/files.rs",
+            "line": 703,
+            "package": "purrassist-host",
+            "symbol": "purrassist_host::files::Store::entry"
+          }
+        ],
+        "value": "0x10000"
+      },
+      {
+        "packages": 2,
+        "units": [
+          {
+            "file": "crates/core/src/contract.rs",
+            "line": 114,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::contract::Effort::budget"
+          },
+          {
+            "file": "crates/host/src/files.rs",
+            "line": 468,
+            "package": "purrassist-host",
+            "symbol": "purrassist_host::files::Store::patch_budget"
+          }
+        ],
+        "value": "0xf4240"
+      }
+    ],
+    "shim_groups": [
+      {
+        "fingerprint": "shim:5cf562489b652402",
+        "members": [
+          {
+            "file": "crates/core/src/json/parser.rs",
+            "line": 55,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::json::parser::ParseFailure::from"
+          },
+          {
+            "file": "crates/core/src/pattern/mod.rs",
+            "line": 98,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::pattern::PatternCompileError::from"
+          },
+          {
+            "file": "crates/core/src/schema/build.rs",
+            "line": 35,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::schema::build::CompilationError::from"
+          }
+        ],
+        "sanctioned": false,
+        "tokens": 0
+      },
+      {
+        "fingerprint": "shim:6455eb085e5f6019",
+        "members": [
+          {
+            "file": "crates/core/src/json/number.rs",
+            "line": 14,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::json::number::Number::from_unsigned"
+          },
+          {
+            "file": "crates/core/src/json/number.rs",
+            "line": 28,
+            "package": "purrassist-core",
+            "symbol": "purrassist_core::json::number::Number::from_count"
+          }
+        ],
+        "sanctioned": false,
+        "tokens": 0
+      }
+    ],
+    "units": 1409
+  },
+  "strict_output_presentation": "Absolute checkout prefix removed from the artifact path for public presentation; the original complete command output is retained in the local qualification log. Census bytes, hash, exit status and source identities are unchanged."
+}

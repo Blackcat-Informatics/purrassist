@@ -172,3 +172,154 @@ fn shared_governor_and_invalid_policy_fail_closed() {
         StopReason::InvalidInput(_)
     ));
 }
+
+#[test]
+fn numeric_identity_guard_is_explicit_and_budgeted() {
+    // `rank` and `resolve` both apply the protected-class guard: a candidate
+    // whose decimal digit run differs from the query is excluded from
+    // ranking entirely, not merely demoted, so neither ever reports it as a
+    // `Resolved`/ranked answer (see also `protected_class_digits_excludes_candidate`
+    // below, which asserts this same non-resolution more directly).
+    let values = candidates(&[("wrong", "invoice-1002")]);
+    let rejected = matching::resolve(
+        "invoice-1001",
+        &values,
+        &MatchRequest::default(),
+        SelectionPolicy::default(),
+    );
+    assert_eq!(rejected.outcome, Outcome::Unresolved);
+    assert_eq!(rejected.receipt.stopped, StopReason::NoCandidate);
+    assert_eq!(
+        rejected.receipt.evidence[0].rule,
+        "matching.numeric-identity-v1"
+    );
+    let ranked = matching::rank("invoice-1001", &values, &MatchRequest::default());
+    assert!(
+        !matches!(ranked.outcome, Outcome::Resolved(_)),
+        "a digit-run mismatch must exclude the candidate from rank, not just from resolve: {ranked:?}"
+    );
+    assert_eq!(ranked.receipt.stopped, StopReason::NoCandidate);
+    assert_eq!(
+        ranked.receipt.evidence[0].rule,
+        "matching.numeric-identity-v1"
+    );
+    // The protected-class check itself charges Work before comparing tokens;
+    // a budget too small to afford that charge fails closed with no evidence,
+    // rather than silently skipping the guard.
+    let request = MatchRequest {
+        budget: Budget {
+            work: 1,
+            ..Budget::default()
+        },
+        ..MatchRequest::default()
+    };
+    let exhausted = matching::resolve(
+        "invoice-1001",
+        &values,
+        &request,
+        SelectionPolicy::default(),
+    );
+    assert_eq!(exhausted.outcome, Outcome::Unresolved);
+    assert_eq!(
+        exhausted.receipt.stopped,
+        StopReason::BudgetExceeded(Resource::Work)
+    );
+    assert_eq!(exhausted.receipt.evidence, Vec::new());
+}
+
+#[test]
+fn protected_class_digits_excludes_candidate() {
+    let values = candidates(&[("wrong", "invoice-1002")]);
+    let ranked = matching::rank("invoice-1001", &values, &MatchRequest::default());
+    assert_eq!(ranked.outcome, Outcome::Unresolved);
+    let resolved = matching::resolve(
+        "invoice-1001",
+        &values,
+        &MatchRequest::default(),
+        SelectionPolicy::default(),
+    );
+    assert_eq!(resolved.outcome, Outcome::Unresolved);
+}
+
+#[test]
+fn protected_class_negation_excludes_candidate() {
+    let values = candidates(&[("wrong", "task available")]);
+    let ranked = matching::rank("task unavailable", &values, &MatchRequest::default());
+    assert_eq!(ranked.outcome, Outcome::Unresolved);
+    assert!(
+        ranked
+            .receipt
+            .evidence
+            .iter()
+            .any(|evidence| evidence.rule == "matching.protected-negation-v1")
+    );
+}
+
+#[test]
+fn protected_class_semver_excludes_candidate() {
+    let values = candidates(&[("wrong", "release-v1.2.4")]);
+    let ranked = matching::rank("release-v1.2.3", &values, &MatchRequest::default());
+    assert_eq!(ranked.outcome, Outcome::Unresolved);
+    assert!(
+        ranked
+            .receipt
+            .evidence
+            .iter()
+            .any(|evidence| evidence.rule == "matching.protected-semver-v1")
+    );
+}
+
+#[test]
+fn protected_class_iso_date_excludes_candidate() {
+    let values = candidates(&[("wrong", "log-2024-01-16")]);
+    let ranked = matching::rank("log-2024-01-15", &values, &MatchRequest::default());
+    assert_eq!(ranked.outcome, Outcome::Unresolved);
+    assert!(
+        ranked
+            .receipt
+            .evidence
+            .iter()
+            .any(|evidence| evidence.rule == "matching.protected-iso-date-v1")
+    );
+}
+
+#[test]
+fn protected_class_hex_digest_excludes_candidate() {
+    let values = candidates(&[("wrong", "build-deadbeee")]);
+    let ranked = matching::rank("build-deadbeef", &values, &MatchRequest::default());
+    assert_eq!(ranked.outcome, Outcome::Unresolved);
+    assert!(
+        ranked
+            .receipt
+            .evidence
+            .iter()
+            .any(|evidence| evidence.rule == "matching.protected-hex-digest-v1")
+    );
+}
+
+#[test]
+fn protected_class_unit_excludes_candidate() {
+    let values = candidates(&[("wrong", "response time: 5s")]);
+    let ranked = matching::rank("response time: 5ms", &values, &MatchRequest::default());
+    assert_eq!(ranked.outcome, Outcome::Unresolved);
+    assert!(
+        ranked
+            .receipt
+            .evidence
+            .iter()
+            .any(|evidence| evidence.rule == "matching.protected-unit-v1")
+    );
+}
+
+#[test]
+fn protected_class_exact_alias_bypasses_the_guard() {
+    let mut values = candidates(&[("right", "invoice-1002")]);
+    values[0].aliases.push("invoice-1001".into());
+    let resolved = matching::resolve(
+        "invoice-1001",
+        &values,
+        &MatchRequest::default(),
+        SelectionPolicy::default(),
+    );
+    assert!(matches!(resolved.outcome, Outcome::BestGuess(_)));
+}

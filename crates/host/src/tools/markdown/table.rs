@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Shared table-row plans and structural validation receipts.
 use purrassist::{
-    Governor, Receipt, StopReason,
-    contract::{Evidence, Resource, SourceSpan, Validation},
+    Governor, StopReason,
+    contract::Resource,
     json::{Node, Value},
     markdown::{Alignment, Document, TableColumnEdit, TableRowEdit},
 };
@@ -22,37 +22,19 @@ pub(super) fn row(
         "remove" => TableRowEdit::Remove { index },
         _ => return Err(StopReason::InvalidInput("unknown table row action".into())),
     };
-    Ok(super::plan(document.edit_table_row(
+    Ok(super::plan(&document.edit_table_row(
         &super::block_path(args)?,
         &edit,
         governor,
     )?))
 }
 
-pub(super) fn record(
-    document: &Document,
-    receipt: &mut Receipt,
-    governor: &mut Governor,
-) -> Result<(), StopReason> {
-    governor.charge(Resource::EvidenceEntries, 2)?;
-    governor.charge(Resource::Work, 512)?;
-    governor.charge(Resource::ScratchBytes, 1024)?;
-    receipt.validations.push(Validation {
-        validator: "markdown.table-structure.v1".into(),
-        constraint:
-            "indexed source selection and table cell/row/column content match the requested edit"
-                .into(),
-        passed: true,
-        diagnostics: Vec::new(),
-    });
-    receipt.evidence.push(Evidence {
-        rule: "markdown.table-edit.v1".into(),
-        explanation: "The source-bound proposal identifies exact changed ranges. Changed proposals were reparsed and checked against the complete expected table; unchanged cells require no mutation.".into(),
-        span: Some(SourceSpan { source: document.digest(), bytes: 0..document.source().len() }),
-        destination: "/edits".into(),
-    });
-    Ok(())
-}
+pub(super) const RECORD: super::Record<'static> = super::Record {
+    validator: "markdown.table-structure.v1",
+    constraint: "indexed source selection and table cell/row/column content match the requested edit",
+    rule: "markdown.table-edit.v1",
+    explanation: "The source-bound proposal identifies exact changed ranges. Changed proposals were reparsed and checked against the complete expected table; unchanged cells require no mutation.",
+};
 
 fn cells(args: &Node, governor: &mut Governor) -> Result<Vec<String>, StopReason> {
     let Some(Node {
@@ -108,7 +90,7 @@ pub(super) fn column(
             ));
         }
     };
-    Ok(super::plan(document.edit_table_column(
+    Ok(super::plan(&document.edit_table_column(
         &super::block_path(args)?,
         &edit,
         governor,

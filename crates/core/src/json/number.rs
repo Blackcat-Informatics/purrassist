@@ -14,7 +14,16 @@ impl Number {
     pub fn from_unsigned(value: u64) -> Self {
         Self(value.to_string())
     }
-    /// Construct the exact decimal spelling of a count.
+    /// Construct the exact decimal spelling of a target-sized count.
+    ///
+    /// This accepts `usize`, whereas [`Self::from_unsigned`] accepts the full
+    /// `u64` domain. Neither constructor narrows or saturates its input.
+    ///
+    /// ```
+    /// use purrassist_core::json::Number;
+    /// assert_eq!(Number::from_count(usize::MAX).as_str(), usize::MAX.to_string());
+    /// assert_eq!(Number::from_unsigned(u64::MAX).as_str(), u64::MAX.to_string());
+    /// ```
     #[must_use]
     pub fn from_count(value: usize) -> Self {
         Self(value.to_string())

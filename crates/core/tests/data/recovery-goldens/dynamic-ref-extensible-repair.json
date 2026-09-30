@@ -1,0 +1,27 @@
+{
+  "description": "a repair is found through a $dynamicRef extensible base schema",
+  "schema": {
+    "$id": "urn:golden:base",
+    "$dynamicAnchor": "node",
+    "type": "object",
+    "properties": {
+      "value": {
+        "type": "integer"
+      },
+      "next": {
+        "$dynamicRef": "#node"
+      }
+    }
+  },
+  "input": "{\"value\":\"1\",\"next\":{\"value\":2}}",
+  "outcome": "resolved",
+  "output": {
+    "value": 1,
+    "next": {
+      "value": 2
+    }
+  },
+  "ledger_rules": [
+    "json.type.decode-string"
+  ]
+}

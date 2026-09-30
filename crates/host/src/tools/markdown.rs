@@ -4,10 +4,12 @@
 mod list;
 mod reference;
 mod render;
+mod structure;
 mod table;
+use purrassist::contract::saturating_size as size;
 use purrassist::{
     AssistResult, Governor, Outcome, Receipt, StopReason,
-    contract::Resource,
+    contract::{Evidence, Resource, SourceSpan, Validation},
     json::{Node, Value},
     markdown::{Alignment, Block, BlockKind, Document, Section},
     wire::{array, integer, object, string},
@@ -34,26 +36,31 @@ pub(super) fn call(
             Resource::Work,
             size(source.len()).saturating_mul(4).saturating_add(1),
         )?;
-        let value = operation(name, args, &document, &mut governor)?;
+        let value = operation(name, args, &document, &mut receipt, &mut governor)?;
         if name == "plan_markdown_section" {
             governor.charge(Resource::EvidenceEntries, 2)?;
             governor.charge(Resource::ScratchBytes, 1024)?;
-            receipt.validations.push(purrassist::contract::Validation {
-                validator: "markdown.section-structure.v1".into(),
-                constraint: "selected heading, section boundary, ancestors, and surrounding block structure remain unchanged after reparsing".into(),
-                passed: true, diagnostics: Vec::new(),
-            });
-            receipt.evidence.push(purrassist::contract::Evidence {
-                rule: "markdown.section-body.v1".into(),
-                explanation: "Replaced the selected body; nested lines receive canonical outer container prefixes. Identical logical bodies keep original spelling. Outside bytes remain exact and original source is retained.".into(),
-                span: Some(purrassist::contract::SourceSpan { source: document.digest(), bytes: 0..source.len() }),
-                destination: "/edits".into(),
+            publish_record(&document, &mut receipt, Record {
+                validator: "markdown.section-structure.v1",
+                constraint: "selected heading, section boundary, ancestors, and surrounding block structure remain unchanged after reparsing",
+                rule: "markdown.section-body.v1",
+                explanation: "Replaced the selected body; nested lines receive canonical outer container prefixes. Identical logical bodies keep original spelling. Outside bytes remain exact and original source is retained.",
             });
         }
         if name == "plan_markdown_list_item" { list::record(&document, &mut receipt, &mut governor)?; }
-        if name == "plan_markdown_reference" { reference::record(&document, &mut receipt, &mut governor)?; }
-        if matches!(name, "plan_markdown_table_cell" | "plan_markdown_table_row" | "plan_markdown_table_column") {
-            table::record(&document, &mut receipt, &mut governor)?;
+        let record = match name {
+            "plan_markdown_reference" => Some(reference::RECORD),
+            "plan_markdown_table_cell" | "plan_markdown_table_row" | "plan_markdown_table_column" => Some(table::RECORD),
+            _ => None,
+        };
+        if let Some(record) = record {
+            governor.charge(Resource::EvidenceEntries, 2)?;
+            governor.charge(Resource::Work, 512)?;
+            governor.charge(Resource::ScratchBytes, 1024)?;
+            publish_record(&document, &mut receipt, record);
+        }
+        if name == "plan_markdown_structure" {
+            structure::record(args, &document, &mut receipt, &mut governor)?;
         }
         if name == "render_markdown" {
             governor.charge(Resource::EvidenceEntries, 1)?;
@@ -81,6 +88,7 @@ fn operation(
     name: &str,
     args: &Node,
     document: &Document,
+    receipt: &mut Receipt,
     governor: &mut Governor,
 ) -> Result<Node, StopReason> {
     match name {
@@ -140,9 +148,9 @@ fn operation(
             } else {
                 vec![index(args, "heading")?]
             };
-            Ok(plan(document.replace_section_at(&path, body, governor)?))
+            Ok(plan(&document.replace_section_at(&path, body, governor)?))
         }
-        "plan_markdown_table_cell" => Ok(plan(document.replace_table_cell(
+        "plan_markdown_table_cell" => Ok(plan(&document.replace_table_cell(
             &block_path(args)?,
             index(args, "row")?,
             index(args, "column")?,
@@ -152,12 +160,29 @@ fn operation(
         "plan_markdown_table_row" => table::row(args, document, governor),
         "plan_markdown_table_column" => table::column(args, document, governor),
         "plan_markdown_reference" => reference::call(args, document, governor),
+        "plan_markdown_structure" => structure::call(args, document, governor),
         "plan_markdown_task" => {
             let Some(Value::Bool(checked)) = args.get("checked").map(|node| &node.value) else {
                 return Err(StopReason::InvalidInput("checked must be boolean".into()));
             };
             let path = block_path(args)?;
-            Ok(plan(document.set_task_at(&path, *checked, governor)?))
+            let edit_plan = document.set_task_at(&path, *checked, governor)?;
+            for edit in &edit_plan.edits {
+                if document.source()[edit.range.clone()].contains(['\r', '\n']) {
+                    governor.charge(Resource::Work, size(edit.range.len()))?;
+                    governor.charge(Resource::ScratchBytes, 512)?;
+                    governor.charge(Resource::EvidenceEntries, 1)?;
+                    receipt.evidence.push(purrassist::contract::Evidence {
+                        rule: "markdown.task-marker-join.v1".into(),
+                        explanation: "Joined the split task marker by replacing its middle newline and continuation prefixes with the requested state character; every outside byte remains exact. Original bytes remain retained for exact inverse restoration.".into(),
+                        span: Some(purrassist::contract::SourceSpan {
+                            source: document.digest(), bytes: edit.range.clone(),
+                        }),
+                        destination: "/edits".into(),
+                    });
+                }
+            }
+            Ok(plan(&edit_plan))
         }
         _ => Err(StopReason::InvalidInput(
             "unknown Markdown operation".into(),
@@ -193,9 +218,6 @@ fn index(args: &Node, name: &str) -> Result<usize, StopReason> {
         .to_usize()
         .ok_or_else(|| StopReason::InvalidInput(format!("index {name} exceeds address space")))
 }
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
-}
 fn span(range: &Range<usize>) -> Node {
     object([
         ("start", integer(size(range.start))),
@@ -209,8 +231,8 @@ fn section(value: &Section) -> Node {
         ("body", span(&value.body)),
     ])
 }
-fn plan(value: purrassist::edits::EditPlan) -> Node {
-    super::edits::encode_plan(value)
+fn plan(value: &purrassist::edits::EditPlan) -> Node {
+    value.to_node()
 }
 
 fn block(value: &Block, path: &[usize]) -> Node {
@@ -316,4 +338,36 @@ fn kind(value: &BlockKind) -> Node {
     };
     fields.push(("type", string(name)));
     object(fields)
+}
+
+/// Metadata for one successful Markdown edit's validation and source evidence.
+#[derive(Clone, Copy)]
+struct Record<'a, Explanation = &'a str> {
+    validator: &'a str,
+    constraint: &'a str,
+    rule: &'a str,
+    explanation: Explanation,
+}
+
+/// Publish the base pair after the caller admits its operation-specific charges.
+fn publish_record(
+    document: &Document,
+    receipt: &mut Receipt,
+    record: Record<'_, impl Into<String>>,
+) {
+    receipt.validations.push(Validation {
+        validator: record.validator.into(),
+        constraint: record.constraint.into(),
+        passed: true,
+        diagnostics: Vec::new(),
+    });
+    receipt.evidence.push(Evidence {
+        rule: record.rule.into(),
+        explanation: record.explanation.into(),
+        span: Some(SourceSpan {
+            source: document.digest(),
+            bytes: 0..document.source().len(),
+        }),
+        destination: "/edits".into(),
+    });
 }

@@ -1,0 +1,24 @@
+{
+  "description": "a required numeric property with exclusive bounds is invented",
+  "schema": {
+    "type": "object",
+    "required": [
+      "ratio"
+    ],
+    "properties": {
+      "ratio": {
+        "type": "number",
+        "exclusiveMinimum": 0,
+        "exclusiveMaximum": 1
+      }
+    }
+  },
+  "input": "{}",
+  "outcome": "best_guess",
+  "output": {
+    "ratio": 0.5
+  },
+  "ledger_rules": [
+    "json.required.invent"
+  ]
+}

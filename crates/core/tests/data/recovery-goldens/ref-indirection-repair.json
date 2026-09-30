@@ -1,0 +1,24 @@
+{
+  "description": "a repair is found through a simple $ref indirection",
+  "schema": {
+    "$defs": {
+      "count": {
+        "type": "integer"
+      }
+    },
+    "type": "object",
+    "properties": {
+      "n": {
+        "$ref": "#/$defs/count"
+      }
+    }
+  },
+  "input": "{\"n\":\"9\"}",
+  "outcome": "resolved",
+  "output": {
+    "n": 9
+  },
+  "ledger_rules": [
+    "json.type.decode-string"
+  ]
+}

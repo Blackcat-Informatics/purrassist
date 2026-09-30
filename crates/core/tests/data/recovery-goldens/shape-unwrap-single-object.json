@@ -1,0 +1,19 @@
+{
+  "description": "a spurious single-key wrapper object is removed",
+  "schema": {
+    "type": "array",
+    "items": {
+      "type": "integer"
+    }
+  },
+  "input": "{\"result\":[1,2,3]}",
+  "outcome": "resolved",
+  "output": [
+    1,
+    2,
+    3
+  ],
+  "ledger_rules": [
+    "json.shape.unwrap-object"
+  ]
+}

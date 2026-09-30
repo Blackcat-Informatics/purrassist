@@ -1,9 +1,10 @@
 {
-  "format": "purrassist.resources.v1",
+  "format": "purrassist.resources.v2",
   "source": {
-    "commit": "c2f5d18f218033bae408ba28a543f0926cdfa7cb",
-    "dirty": false,
-    "nonignored_file_tree_sha256": "8d8d187a3ccd391b87cfc77d1c474dae0c559dcdcc259c13e2ba84f6117b309f"
+    "commit": "300f7cffe188ffbd7b569e6b76476cc27f6ded4a",
+    "dirty": true,
+    "nonignored_file_tree_sha256": "aff53a5eba26f6c6f6dc594c5008960a28d31654e7151d9cfb2a26283f7aace9",
+    "engine_source_tree_sha256": "659c7a62fa86d072676a2730af8978c7dd4bce0e59d87ecf724858334d13a211"
   },
   "platform": {
     "system": "Linux",
@@ -15,9 +16,9 @@
   },
   "tools": {
     "valgrind": "valgrind-3.25.1",
-    "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)"
+    "rustc": "rustc 1.100.0-nightly (4b6d04e70 2026-09-13)"
   },
-  "scope": "One process per workload and profiler; includes startup, construction, assertions, output, and teardown. Native elapsed time is not per-operation latency. Heap excludes stacks and mappings; Massif overhead is estimated. RSS is the native workload VmHWM, including a small procfs read used to obtain it. These observations are not hard memory bounds or representative quality evaluation.",
+  "scope": "One process per workload and profiler; includes startup, construction, assertions, output, and teardown. Native elapsed time is not per-operation latency. Heap excludes stacks and mappings; Massif overhead is estimated. RSS is the native workload VmHWM, including a small procfs read used to obtain it. Latency and counting-allocator measurements cover fixture construction, correctness checks (including JSON serialization for the composed-recovery expected value), and output destruction. Each latency case is a separate process. These observations are not hard memory bounds or representative quality evaluation.",
   "rss_observation": "VmHWM after workload and before final teardown; includes native-only procfs read",
   "runtime": {
     "kind": "isolated pinned loader and libc; other libraries supplied by host",
@@ -26,7 +27,8 @@
     "archive_sha256": "e8e4d50d45cb2bd21c9f7eabacc6a01bd5eb93dbd476f3f44d44038fc1eba417",
     "files_sha256": {
       "usr/lib/ld-linux-x86-64.so.2": "f5e11cc62f8f2c24dff532982559f4303dba3b17e7450551372a88c8e7ea8757",
-      "usr/lib/libc.so.6": "02c8c3d06180beee9c7d0392aa85736c7d19f274a81e7f8f0b3d9e28e0641524"
+      "usr/lib/libc.so.6": "02c8c3d06180beee9c7d0392aa85736c7d19f274a81e7f8f0b3d9e28e0641524",
+      "usr/lib/.debug/ld-linux-x86-64.so.2.debug": "9222e10233e727c483cbc86e45fad67a1c8bc72049c0ec99715ee191f6fc7e53"
     },
     "extractor": "bsdtar 3.8.9 - libarchive 3.8.9 zlib/1.3.1.zlib-ng liblzma/5.8.3 bz2lib/1.0.8 liblz4/1.10.0 libzstd/1.5.7 openssl/3.6.3 libb2/bundled libacl/2.4.0"
   },
@@ -45,9 +47,11 @@
         "--config",
         "profile.bench.debug=1",
         "--config",
-        "profile.bench.strip=false"
+        "profile.bench.strip=false",
+        "--config",
+        "build.rustflags=[\"-C\", \"target-cpu=x86-64-v2\"]"
       ],
-      "elapsed_ns": 259854509,
+      "elapsed_ns": 1537425547,
       "cache_state": "not cleaned; fresh artifact counts are observed Cargo events",
       "fresh_artifacts": 2,
       "built_artifacts": 0,
@@ -58,8 +62,8 @@
         "overflow_checks": true,
         "test": true
       },
-      "executable_bytes": 7958080,
-      "executable_sha256": "946eaf1f43cf6541a49c25e4a8bf43ef8a892a9695667bffa62fff1b5ee9d733"
+      "executable_bytes": 12967216,
+      "executable_sha256": "8e4ac85a0144034db1bfe27d86eaf747cd2a0ead75ee175879055353dbe246e9"
     },
     {
       "target": "purrassist",
@@ -71,10 +75,10 @@
         "--release",
         "--locked"
       ],
-      "elapsed_ns": 39442513,
+      "elapsed_ns": 22639053878,
       "cache_state": "not cleaned; fresh artifact counts are observed Cargo events",
-      "fresh_artifacts": 35,
-      "built_artifacts": 0,
+      "fresh_artifacts": 32,
+      "built_artifacts": 3,
       "profile": {
         "opt_level": "3",
         "debuginfo": 0,
@@ -82,109 +86,500 @@
         "overflow_checks": true,
         "test": false
       },
-      "executable_bytes": 7316832,
-      "executable_sha256": "fa3910bb1aec965d90b9d14363d4fbf680de676c8aec4ff51fcb82447216cd60"
+      "executable_bytes": 9757120,
+      "executable_sha256": "2c67400a40ed3ee41bfb93ea0f14d8a2791d8e7ba1aded6783c8c151d5c9669f"
     }
   ],
   "workloads": [
     {
       "case": "empty",
-      "process_elapsed_ns": 851204,
-      "process_peak_rss_bytes": 3293184,
+      "process_elapsed_ns": 5164009,
+      "process_peak_rss_bytes": 4689920,
       "allocation_calls": 13,
-      "free_calls": 12,
-      "total_allocated_bytes": 3766,
+      "free_calls": 11,
+      "total_allocated_bytes": 3817,
       "observed_peak_requested_heap_bytes": 1736,
       "observed_peak_heap_plus_estimated_overhead_bytes": 1768,
-      "snapshots": 26
+      "snapshots": 25
     },
     {
       "case": "schema_compile",
-      "process_elapsed_ns": 1249272,
-      "process_peak_rss_bytes": 3670016,
-      "allocation_calls": 105,
+      "process_elapsed_ns": 3156541,
+      "process_peak_rss_bytes": 5353472,
+      "allocation_calls": 106,
       "free_calls": 104,
-      "total_allocated_bytes": 9061,
-      "observed_peak_requested_heap_bytes": 4482,
-      "observed_peak_heap_plus_estimated_overhead_bytes": 5056,
-      "snapshots": 207
+      "total_allocated_bytes": 9168,
+      "observed_peak_requested_heap_bytes": 4538,
+      "observed_peak_heap_plus_estimated_overhead_bytes": 5128,
+      "snapshots": 208
     },
     {
       "case": "json_parse",
-      "process_elapsed_ns": 1733178,
-      "process_peak_rss_bytes": 3825664,
-      "allocation_calls": 1573,
+      "process_elapsed_ns": 7966990,
+      "process_peak_rss_bytes": 5337088,
+      "allocation_calls": 1574,
       "free_calls": 1572,
-      "total_allocated_bytes": 235990,
+      "total_allocated_bytes": 236097,
       "observed_peak_requested_heap_bytes": 173150,
       "observed_peak_heap_plus_estimated_overhead_bytes": 195784,
-      "snapshots": 629
+      "snapshots": 631
     },
     {
       "case": "json_composed",
-      "process_elapsed_ns": 1689649,
-      "process_peak_rss_bytes": 3883008,
-      "allocation_calls": 844,
-      "free_calls": 843,
-      "total_allocated_bytes": 90691,
-      "observed_peak_requested_heap_bytes": 40156,
-      "observed_peak_heap_plus_estimated_overhead_bytes": 45384,
-      "snapshots": 594
+      "process_elapsed_ns": 2373316,
+      "process_peak_rss_bytes": 5636096,
+      "allocation_calls": 2541,
+      "free_calls": 2539,
+      "total_allocated_bytes": 192835,
+      "observed_peak_requested_heap_bytes": 62611,
+      "observed_peak_heap_plus_estimated_overhead_bytes": 74008,
+      "snapshots": 502
     },
     {
       "case": "json_ambiguous",
-      "process_elapsed_ns": 2256712,
-      "process_peak_rss_bytes": 3784704,
-      "allocation_calls": 309,
-      "free_calls": 308,
-      "total_allocated_bytes": 23628,
-      "observed_peak_requested_heap_bytes": 12132,
-      "observed_peak_heap_plus_estimated_overhead_bytes": 13208,
-      "snapshots": 582
+      "process_elapsed_ns": 33706303,
+      "process_peak_rss_bytes": 5455872,
+      "allocation_calls": 389,
+      "free_calls": 387,
+      "total_allocated_bytes": 33349,
+      "observed_peak_requested_heap_bytes": 15689,
+      "observed_peak_heap_plus_estimated_overhead_bytes": 17080,
+      "snapshots": 716
     },
     {
       "case": "markdown_render",
-      "process_elapsed_ns": 2080577,
-      "process_peak_rss_bytes": 3977216,
-      "allocation_calls": 3785,
-      "free_calls": 3784,
-      "total_allocated_bytes": 665496,
-      "observed_peak_requested_heap_bytes": 114883,
-      "observed_peak_heap_plus_estimated_overhead_bytes": 125864,
-      "snapshots": 766
+      "process_elapsed_ns": 2215201,
+      "process_peak_rss_bytes": 5644288,
+      "allocation_calls": 4096,
+      "free_calls": 4094,
+      "total_allocated_bytes": 777195,
+      "observed_peak_requested_heap_bytes": 225787,
+      "observed_peak_heap_plus_estimated_overhead_bytes": 236816,
+      "snapshots": 559
     },
     {
       "case": "markdown_list",
-      "process_elapsed_ns": 2576182,
-      "process_peak_rss_bytes": 3993600,
-      "allocation_calls": 1903,
-      "free_calls": 1902,
-      "total_allocated_bytes": 217925,
-      "observed_peak_requested_heap_bytes": 151980,
-      "observed_peak_heap_plus_estimated_overhead_bytes": 163288,
-      "snapshots": 654
+      "process_elapsed_ns": 2558100,
+      "process_peak_rss_bytes": 5652480,
+      "allocation_calls": 2811,
+      "free_calls": 2809,
+      "total_allocated_bytes": 242688,
+      "observed_peak_requested_heap_bytes": 152036,
+      "observed_peak_heap_plus_estimated_overhead_bytes": 163360,
+      "snapshots": 795
     },
     {
       "case": "unicode",
-      "process_elapsed_ns": 2993309,
-      "process_peak_rss_bytes": 3657728,
+      "process_elapsed_ns": 2476052,
+      "process_peak_rss_bytes": 5103616,
       "allocation_calls": 23,
-      "free_calls": 22,
-      "total_allocated_bytes": 125880,
+      "free_calls": 21,
+      "total_allocated_bytes": 125931,
       "observed_peak_requested_heap_bytes": 68955,
       "observed_peak_heap_plus_estimated_overhead_bytes": 69048,
-      "snapshots": 46
+      "snapshots": 45
     },
     {
       "case": "matching",
-      "process_elapsed_ns": 2285201,
-      "process_peak_rss_bytes": 3862528,
-      "allocation_calls": 5464,
-      "free_calls": 5463,
-      "total_allocated_bytes": 524546,
-      "observed_peak_requested_heap_bytes": 101905,
-      "observed_peak_heap_plus_estimated_overhead_bytes": 125136,
-      "snapshots": 830
+      "process_elapsed_ns": 3406884,
+      "process_peak_rss_bytes": 5234688,
+      "allocation_calls": 7222,
+      "free_calls": 7220,
+      "total_allocated_bytes": 313232,
+      "observed_peak_requested_heap_bytes": 23944,
+      "observed_peak_heap_plus_estimated_overhead_bytes": 29392,
+      "snapshots": 875
     }
-  ]
+  ],
+  "artifact_sizes": {
+    "native_cli": {
+      "bytes": 9757120,
+      "sha256": "2c67400a40ed3ee41bfb93ea0f14d8a2791d8e7ba1aded6783c8c151d5c9669f"
+    },
+    "purrassist_core_wasm32_wasip1": {
+      "bytes": 1998277,
+      "sha256": "a4a33bdf5527d48e6c77fb3194b8b755a7ca764e82406d1247bc493df367f7a4"
+    },
+    "purrassist_syntax_wasm32_wasip1": {
+      "bytes": 5223153,
+      "sha256": "32e239c80b152e1b9fbc72ee3cdd232b42e11a165c89e540b08753be40cbca3d"
+    },
+    "purrassist_host_wasm32_wasip1": {
+      "bytes": 1467114,
+      "sha256": "b0ac6c5cba017337ef5e6fa2bf75b495fe9819848ea3a503be61a845f007fd9a"
+    },
+    "wasm_harness_wasm32_unknown_unknown": {
+      "bytes": 1937506,
+      "sha256": "227e5e34f3e57a49b75f40b169975ea6b70dd177e1be7bda51edb19985721613"
+    }
+  },
+  "latency_workloads": [
+    {
+      "case": "schema_compile",
+      "samples": 200,
+      "median_ns": 3200,
+      "p95_ns": 3450,
+      "allocation_calls": 93,
+      "peak_live_bytes": 3928,
+      "process_peak_rss_bytes": 5754880
+    },
+    {
+      "case": "schema_validate",
+      "samples": 200,
+      "median_ns": 4310,
+      "p95_ns": 4660,
+      "allocation_calls": 116,
+      "peak_live_bytes": 5182,
+      "process_peak_rss_bytes": 5832704
+    },
+    {
+      "case": "schema_recover",
+      "samples": 200,
+      "median_ns": 68988,
+      "p95_ns": 74337,
+      "allocation_calls": 2528,
+      "peak_live_bytes": 62005,
+      "process_peak_rss_bytes": 6197248
+    },
+    {
+      "case": "matching_rank",
+      "samples": 200,
+      "median_ns": 429357,
+      "p95_ns": 443056,
+      "allocation_calls": 3556,
+      "peak_live_bytes": 12172,
+      "process_peak_rss_bytes": 5640192
+    },
+    {
+      "case": "matching_resolve",
+      "samples": 200,
+      "median_ns": 430966,
+      "p95_ns": 448736,
+      "allocation_calls": 3684,
+      "peak_live_bytes": 19838,
+      "process_peak_rss_bytes": 5722112
+    },
+    {
+      "case": "paths_resolve",
+      "samples": 200,
+      "median_ns": 415117,
+      "p95_ns": 425886,
+      "allocation_calls": 3902,
+      "peak_live_bytes": 21212,
+      "process_peak_rss_bytes": 5722112
+    },
+    {
+      "case": "pattern_compile",
+      "samples": 200,
+      "median_ns": 1040,
+      "p95_ns": 1140,
+      "allocation_calls": 51,
+      "peak_live_bytes": 2824,
+      "process_peak_rss_bytes": 5582848
+    },
+    {
+      "case": "pattern_match_derivative",
+      "samples": 200,
+      "median_ns": 6590,
+      "p95_ns": 7179,
+      "allocation_calls": 145,
+      "peak_live_bytes": 9976,
+      "process_peak_rss_bytes": 5632000
+    },
+    {
+      "case": "pattern_match_backtracking",
+      "samples": 200,
+      "median_ns": 3819,
+      "p95_ns": 4450,
+      "allocation_calls": 140,
+      "peak_live_bytes": 4080,
+      "process_peak_rss_bytes": 5865472
+    },
+    {
+      "case": "edits_exact",
+      "samples": 200,
+      "median_ns": 5230,
+      "p95_ns": 5430,
+      "allocation_calls": 16,
+      "peak_live_bytes": 3365,
+      "process_peak_rss_bytes": 5210112
+    },
+    {
+      "case": "edits_fuzzy",
+      "samples": 200,
+      "median_ns": 297341,
+      "p95_ns": 308080,
+      "allocation_calls": 12980,
+      "peak_live_bytes": 12676,
+      "process_peak_rss_bytes": 5664768
+    },
+    {
+      "case": "edits_unified",
+      "samples": 200,
+      "median_ns": 3700,
+      "p95_ns": 4380,
+      "allocation_calls": 27,
+      "peak_live_bytes": 5205,
+      "process_peak_rss_bytes": 5619712
+    },
+    {
+      "case": "markdown_render",
+      "samples": 200,
+      "median_ns": 16700,
+      "p95_ns": 18799,
+      "allocation_calls": 450,
+      "peak_live_bytes": 24840,
+      "process_peak_rss_bytes": 5947392
+    },
+    {
+      "case": "markdown_insert_section",
+      "samples": 200,
+      "median_ns": 19620,
+      "p95_ns": 23039,
+      "allocation_calls": 536,
+      "peak_live_bytes": 27195,
+      "process_peak_rss_bytes": 6004736
+    },
+    {
+      "case": "markdown_remove_section",
+      "samples": 200,
+      "median_ns": 9539,
+      "p95_ns": 11470,
+      "allocation_calls": 251,
+      "peak_live_bytes": 13065,
+      "process_peak_rss_bytes": 5980160
+    },
+    {
+      "case": "markdown_move_section",
+      "samples": 200,
+      "median_ns": 34669,
+      "p95_ns": 39009,
+      "allocation_calls": 807,
+      "peak_live_bytes": 32638,
+      "process_peak_rss_bytes": 5947392
+    },
+    {
+      "case": "markdown_rename_heading",
+      "samples": 200,
+      "median_ns": 19049,
+      "p95_ns": 22429,
+      "allocation_calls": 510,
+      "peak_live_bytes": 26264,
+      "process_peak_rss_bytes": 6148096
+    },
+    {
+      "case": "markdown_list_edit",
+      "samples": 200,
+      "median_ns": 18269,
+      "p95_ns": 21200,
+      "allocation_calls": 532,
+      "peak_live_bytes": 26254,
+      "process_peak_rss_bytes": 6017024
+    },
+    {
+      "case": "markdown_list_renumber",
+      "samples": 200,
+      "median_ns": 17879,
+      "p95_ns": 19700,
+      "allocation_calls": 473,
+      "peak_live_bytes": 23252,
+      "process_peak_rss_bytes": 5984256
+    },
+    {
+      "case": "markdown_table_row_move",
+      "samples": 200,
+      "median_ns": 14659,
+      "p95_ns": 16410,
+      "allocation_calls": 430,
+      "peak_live_bytes": 20940,
+      "process_peak_rss_bytes": 5996544
+    },
+    {
+      "case": "markdown_table_column_move",
+      "samples": 200,
+      "median_ns": 18290,
+      "p95_ns": 22059,
+      "allocation_calls": 498,
+      "peak_live_bytes": 23846,
+      "process_peak_rss_bytes": 6000640
+    },
+    {
+      "case": "markdown_reference_add",
+      "samples": 200,
+      "median_ns": 20679,
+      "p95_ns": 23079,
+      "allocation_calls": 558,
+      "peak_live_bytes": 25010,
+      "process_peak_rss_bytes": 6025216
+    },
+    {
+      "case": "markdown_reference_relabel",
+      "samples": 200,
+      "median_ns": 35349,
+      "p95_ns": 39839,
+      "allocation_calls": 928,
+      "peak_live_bytes": 28358,
+      "process_peak_rss_bytes": 6090752
+    },
+    {
+      "case": "markdown_reference_remove",
+      "samples": 200,
+      "median_ns": 26519,
+      "p95_ns": 29479,
+      "allocation_calls": 684,
+      "peak_live_bytes": 24631,
+      "process_peak_rss_bytes": 6107136
+    },
+    {
+      "case": "markdown_reference_unlink",
+      "samples": 200,
+      "median_ns": 26149,
+      "p95_ns": 30729,
+      "allocation_calls": 670,
+      "peak_live_bytes": 24475,
+      "process_peak_rss_bytes": 6246400
+    }
+  ],
+  "syntax_latency_workloads": [
+    {
+      "case": "python",
+      "samples": 200,
+      "median_ns": 177255,
+      "p95_ns": 184354,
+      "tree_allocation_calls": 573,
+      "rust_allocation_calls": 59,
+      "rust_peak_live_bytes": 4760,
+      "process_peak_rss_bytes": 3457024,
+      "retained_bytes": 50424,
+      "peak_bytes": 56720,
+      "max_overshoot_bytes": 11784
+    },
+    {
+      "case": "rust",
+      "samples": 200,
+      "median_ns": 152015,
+      "p95_ns": 160875,
+      "tree_allocation_calls": 480,
+      "rust_allocation_calls": 42,
+      "rust_peak_live_bytes": 3048,
+      "process_peak_rss_bytes": 3936256,
+      "retained_bytes": 42104,
+      "peak_bytes": 48896,
+      "max_overshoot_bytes": 11592
+    },
+    {
+      "case": "javascript",
+      "samples": 200,
+      "median_ns": 162175,
+      "p95_ns": 171545,
+      "tree_allocation_calls": 476,
+      "rust_allocation_calls": 25,
+      "rust_peak_live_bytes": 2264,
+      "process_peak_rss_bytes": 3436544,
+      "retained_bytes": 42296,
+      "peak_bytes": 48360,
+      "max_overshoot_bytes": 10920
+    },
+    {
+      "case": "typescript",
+      "samples": 200,
+      "median_ns": 202783,
+      "p95_ns": 212293,
+      "tree_allocation_calls": 652,
+      "rust_allocation_calls": 42,
+      "rust_peak_live_bytes": 3184,
+      "process_peak_rss_bytes": 4263936,
+      "retained_bytes": 57976,
+      "peak_bytes": 64040,
+      "max_overshoot_bytes": 11360
+    },
+    {
+      "case": "tsx",
+      "samples": 200,
+      "median_ns": 185994,
+      "p95_ns": 196384,
+      "tree_allocation_calls": 545,
+      "rust_allocation_calls": 25,
+      "rust_peak_live_bytes": 2288,
+      "process_peak_rss_bytes": 4378624,
+      "retained_bytes": 46008,
+      "peak_bytes": 53032,
+      "max_overshoot_bytes": 11600
+    }
+  ],
+  "recovery_benchmark": [
+    {
+      "case": "exact",
+      "samples": 200,
+      "correct": 200,
+      "wrong_corrections": 0,
+      "median_ns": 1410,
+      "p95_ns": 1530,
+      "governor_peak_scratch_bytes": 556,
+      "governor_peak_work": 7
+    },
+    {
+      "case": "nested",
+      "samples": 200,
+      "correct": 200,
+      "wrong_corrections": 0,
+      "median_ns": 9010,
+      "p95_ns": 11429,
+      "governor_peak_scratch_bytes": 6766,
+      "governor_peak_work": 63
+    },
+    {
+      "case": "composed",
+      "samples": 200,
+      "correct": 200,
+      "wrong_corrections": 0,
+      "median_ns": 61618,
+      "p95_ns": 68447,
+      "governor_peak_scratch_bytes": 48232,
+      "governor_peak_work": 782
+    },
+    {
+      "case": "duplicate",
+      "samples": 200,
+      "correct": 200,
+      "wrong_corrections": 0,
+      "median_ns": 10769,
+      "p95_ns": 11420,
+      "governor_peak_scratch_bytes": 10654,
+      "governor_peak_work": 79
+    },
+    {
+      "case": "inferred",
+      "samples": 200,
+      "correct": 200,
+      "wrong_corrections": 0,
+      "median_ns": 14330,
+      "p95_ns": 15039,
+      "governor_peak_scratch_bytes": 2513,
+      "governor_peak_work": 27
+    },
+    {
+      "case": "no_candidate",
+      "samples": 200,
+      "correct": 200,
+      "wrong_corrections": 0,
+      "median_ns": 1539,
+      "p95_ns": 1580,
+      "governor_peak_scratch_bytes": 711,
+      "governor_peak_work": 8
+    }
+  ],
+  "cold_build": {
+    "method": "Real toolchain Cargo resolved through rustup; brand-new empty target and intermediate build directories under /tmp outside the checkout; both compiler wrapper layers disabled. Downloaded package sources and OS page cache are retained.",
+    "fresh_target_directory": true,
+    "fresh_build_directory": true,
+    "compiler_cache_disabled": true,
+    "fresh_artifacts": 0,
+    "built_artifacts": 35,
+    "artifact": {
+      "bytes": 9668520,
+      "sha256": "24ea7dd813a878666c1d304740ec49a43a5ef0c045b071d135055b8d6f3aa053"
+    },
+    "elapsed_ns": 27363807814
+  }
 }

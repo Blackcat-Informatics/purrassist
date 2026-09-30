@@ -1,0 +1,23 @@
+{
+  "description": "a required numeric property with multipleOf is invented",
+  "schema": {
+    "type": "object",
+    "required": [
+      "step"
+    ],
+    "properties": {
+      "step": {
+        "type": "integer",
+        "multipleOf": 5
+      }
+    }
+  },
+  "input": "{}",
+  "outcome": "best_guess",
+  "output": {
+    "step": 0
+  },
+  "ledger_rules": [
+    "json.required.invent"
+  ]
+}

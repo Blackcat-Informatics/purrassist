@@ -4,7 +4,7 @@
 use super::{Concept, Interpretation, Rule, State, size};
 use crate::{
     Governor, Outcome, Receipt, StopReason,
-    contract::{AlternativeReceipt, Evidence, Inference, InferenceKind, Resource, Validation},
+    contract::{Evidence, Inference, InferenceKind, Resource, Validation},
     digest::Digest,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -142,7 +142,8 @@ pub(super) fn finish(
     }
     let ambiguous = answers.len() > 1;
     let mut values = Vec::new();
-    let mut ledgers = Vec::new();
+    let mut candidates: Vec<(crate::digest::Digest, Vec<Evidence>, Vec<Inference>, usize)> =
+        Vec::new();
     let mut validations = Vec::new();
     for answer in answers {
         governor.charge(
@@ -179,25 +180,46 @@ pub(super) fn finish(
             passed: true,
             diagnostics: Vec::new(),
         });
-        ledgers.push(AlternativeReceipt {
-            output,
-            cost: 0,
-            evidence: answer.evidence,
-            losses: Vec::new(),
-            inferences,
-            validations: vec![validation],
-        });
+        candidates.push((output, answer.evidence, inferences, validation));
         values.push(answer.value);
     }
-    // Publish only after all candidates and their independent ledgers fit.
-    receipt.validations = validations;
+    // Publish only after every candidate, its independent ledger, and (when
+    // ambiguous) the derivation forest built from them all fit the budget;
+    // nothing below is assigned to `receipt` until it is known to succeed,
+    // so exhaustion at any point here leaves `receipt` exactly as it was.
     if ambiguous {
-        receipt.alternatives = ledgers;
-        Ok(Outcome::Ambiguous(values))
+        // Route through the derivation forest so evidence and inferences
+        // shared by every competing interpretation (for example, a phrase
+        // rule matched identically regardless of which conflicting modifier
+        // rule also matched) are promoted once to the shared, top-level
+        // ledgers instead of being duplicated into every alternative.
+        let mut forest = crate::provenance::Forest::new(governor);
+        let mut derivations = Vec::with_capacity(candidates.len());
+        for (output, evidence, inferences, validation) in candidates {
+            let mut derivation = crate::provenance::Derivation::new(output, 0);
+            for entry in evidence {
+                derivation.push(forest.evidence(governor, entry)?);
+            }
+            for inference in inferences {
+                derivation.push(forest.inference(governor, inference)?);
+            }
+            derivation.push(forest.validation(governor, validation, true)?);
+            derivations.push(derivation);
+        }
+        let published = forest.publish(&derivations, governor)?;
+        receipt.validations = validations;
+        receipt.evidence = published.evidence;
+        receipt.inferences = published.inferences;
+        receipt.alternatives = published.alternatives;
+        Ok(Outcome::Ambiguous(crate::provenance::permute(
+            &values,
+            &published.order,
+        )))
     } else {
-        let ledger = ledgers.pop().expect("one accepted interpretation");
-        receipt.evidence = ledger.evidence;
-        receipt.inferences = ledger.inferences;
+        let (_, evidence, inferences, _) = candidates.pop().expect("one accepted interpretation");
+        receipt.validations = validations;
+        receipt.evidence = evidence;
+        receipt.inferences = inferences;
         Ok(Outcome::Resolved(
             values.pop().expect("one accepted interpretation"),
         ))

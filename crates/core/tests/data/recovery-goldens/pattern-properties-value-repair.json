@@ -1,0 +1,20 @@
+{
+  "description": "a patternProperties-matched value is type-coerced",
+  "schema": {
+    "type": "object",
+    "patternProperties": {
+      "^opt_": {
+        "type": "boolean"
+      }
+    }
+  },
+  "input": "{\"opt_enabled\":\"true\"}",
+  "outcome": "resolved",
+  "output": {
+    "opt_enabled": true
+  },
+  "ledger_rules": [
+    "json.type.decode-string",
+    "pattern.engine.derivative-v1"
+  ]
+}

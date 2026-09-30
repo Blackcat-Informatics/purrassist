@@ -1,0 +1,122 @@
+{
+  "format": "purrassist.fuzz.v1",
+  "target": "patch",
+  "status": "passed",
+  "tools": {
+    "rustc": "rustc 1.100.0-nightly (4b6d04e70 2026-09-13)\nbinary: rustc\ncommit-hash: 4b6d04e706108ccfeafe2547fbe857dfe8972bad\ncommit-date: 2026-09-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0-nightly\nLLVM version: 23.1.1",
+    "llvm-cov": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1-rust-1.100.0-nightly\n  Optimized build.",
+    "llvm-profdata": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1-rust-1.100.0-nightly\n  Optimized build."
+  },
+  "source_commit": "66b3756776a072af1889596ae98a5faa5a50cea6",
+  "source_dirty": true,
+  "nonignored_file_tree_sha256": "17db88f42e973a4dfbc97ba0a163080ceabde7dff170765daad2e37c27a0b41d",
+  "build": {
+    "command": [
+      "cargo",
+      "build",
+      "-p",
+      "purrassist-core",
+      "--example",
+      "fuzz-patch",
+      "--locked",
+      "--config",
+      "profile.dev.opt-level=1",
+      "--config",
+      "profile.dev.debug=1",
+      "--config",
+      "profile.dev.strip=false",
+      "--config",
+      "profile.dev.debug-assertions=true",
+      "--config",
+      "profile.dev.overflow-checks=true",
+      "--message-format=json"
+    ],
+    "sha256": "7dab46b43482ec7e150f73cca565053cdf196224895949a02b89e2f8d4beb243",
+    "inherited_rustflags_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "appended_rustflags": [
+      "-C",
+      "instrument-coverage"
+    ],
+    "engine_source_sha256": "c22f2b14572fb2f684349840e65684d7b6550767dee7fe5f0d9c596074278872",
+    "harness_source_sha256": "7322b68a2b73ff7d8b88492dc21d06bfb5bcf471e11387df8e7722b75f25f223",
+    "runner_source_sha256": "79d1a3e268bf90dfe76ed023c7b1fb92daf59be68977d2dcaf478c392c57888d"
+  },
+  "seed": 6491701292666032971,
+  "requested_mutations": 1000,
+  "timeout_seconds": 10,
+  "maximum_input_bytes": 4096,
+  "executions": 1003,
+  "invalid_utf8": 85,
+  "differential_checks": 0,
+  "differential_mismatches": 0,
+  "crashes": 0,
+  "reference_rejections": 0,
+  "reference_timeouts": 0,
+  "resource_non_results": 0,
+  "resource_non_result_reasons": {},
+  "resource_non_result_cases": [],
+  "reference_profile_exclusions": 0,
+  "tasklist_projection_checks": 0,
+  "tasklist_projection_unavailable": 0,
+  "profile_exclusions": [],
+  "reference_admission_projections": 0,
+  "reference_admission_disagreements": 0,
+  "reference_admission_cases": [],
+  "hardbreak_reference_projections": 0,
+  "hardbreak_reference_disagreements": 0,
+  "hardbreak_reference_cases": [],
+  "paragraph_prefix_reference_projections": 0,
+  "paragraph_prefix_reference_disagreements": 0,
+  "paragraph_prefix_reference_cases": [],
+  "email_reference_checks": 0,
+  "email_reference_disagreements": 0,
+  "email_reference_cases": [],
+  "emphasis_reference_checks": 0,
+  "emphasis_reference_disagreements": 0,
+  "emphasis_reference_cases": [],
+  "backtick_reference_checks": 0,
+  "backtick_reference_disagreements": 0,
+  "backtick_reference_cases": [],
+  "destination_reference_checks": 0,
+  "destination_reference_disagreements": 0,
+  "destination_reference_cases": [],
+  "retained": [
+    {
+      "execution": 0,
+      "sha256": "a132216fd45f6c96ce79a2879d85fd4b69a23bc9d198b3b70dfc09b9898a38de",
+      "new_regions": 416,
+      "parent_corpus_index": null,
+      "bytes": 27
+    },
+    {
+      "execution": 1,
+      "sha256": "c24e82ab6f776ae48d72979c73cfb3a832b95102745cdb8dc0c26c3b44519ae1",
+      "new_regions": 1,
+      "parent_corpus_index": null,
+      "bytes": 6
+    },
+    {
+      "execution": 2,
+      "sha256": "542afc2b5bc105c168efe7c6841e812d7a242eff54a32d71d9d285c0e2a9067d",
+      "new_regions": 6,
+      "parent_corpus_index": null,
+      "bytes": 15
+    },
+    {
+      "execution": 3,
+      "sha256": "5ff350f9f796fb4b67a51e380682c5fd4237afa815a780c06dfaff1f8895a2e8",
+      "new_regions": 11,
+      "parent_corpus_index": 2,
+      "bytes": 11
+    },
+    {
+      "execution": 5,
+      "sha256": "bcc1aa994c0012995e99e18122f3615300d07336e93ba1ebb52a38d30d958b5d",
+      "new_regions": 1,
+      "parent_corpus_index": 0,
+      "bytes": 10
+    }
+  ],
+  "regions": 435,
+  "current_execution": 1002
+}

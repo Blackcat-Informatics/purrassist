@@ -107,7 +107,7 @@ fn duplicate_values_remain_ambiguous() {
             ledger.output,
             purrassist_core::digest::Digest::of(choice.to_json().as_bytes())
         );
-        assert_eq!(ledger.cost, 10);
+        assert_eq!(ledger.cost, 2);
         assert_eq!(ledger.evidence.len(), 1);
         assert_eq!(
             ledger.evidence[0].explanation,
@@ -142,20 +142,22 @@ fn duplicate_values_remain_ambiguous() {
     );
 }
 #[test]
-fn ambiguous_guesses_keep_their_own_inferences() {
+fn guessed_invention_keeps_its_own_inference() {
+    // Task 8: the witness algebra picks one canonical value out of `enum`
+    // (validated before being returned) rather than the old heuristic's
+    // every enum member as a separate ambiguous alternative.
     let schema =
         Schema::compile(r#"{"type":"object","required":["x"],"properties":{"x":{"enum":[1,2]}}}"#)
             .unwrap();
     let result = schema.recover("{}", RecoveryRequest::default());
-    let Outcome::Ambiguous(choices) = &result.outcome else {
+    let Outcome::BestGuess(node) = &result.outcome else {
         panic!("{result:?}")
     };
+    assert!(schema.validate(node).unwrap().valid);
     assert!(result.receipt.contains_guesses());
-    assert_eq!(result.receipt.inferences, Vec::new());
-    for (choice, ledger) in choices.iter().zip(&result.receipt.alternatives) {
-        assert_eq!(ledger.inferences.len(), 1);
-        assert_eq!(ledger.inferences[0].value, choice.to_json());
-    }
+    assert_eq!(result.receipt.inferences.len(), 1);
+    assert_eq!(result.receipt.inferences[0].value, node.to_json());
+    assert_eq!(result.receipt.alternatives, Vec::new());
     for budget in [
         Budget {
             work: result.receipt.usage.work - 1,
@@ -241,5 +243,32 @@ fn truncated_containers_and_nested_stringification() {
         )
         .to_json(),
         "42"
+    );
+}
+/// Task 6 wiring: recovery receipts name which engine evaluated each
+/// distinct `pattern` this search actually validated.
+#[test]
+fn recovery_receipts_name_the_pattern_engine_used() {
+    let derivative = Schema::compile(r#"{"type":"string","pattern":"^[a-z]+$"}"#).unwrap();
+    let result = derivative.recover(r#""abc""#, RecoveryRequest::default());
+    assert!(
+        result
+            .receipt
+            .evidence
+            .iter()
+            .any(|evidence| evidence.rule == "pattern.engine.derivative-v1"),
+        "receipt evidence: {:?}",
+        result.receipt.evidence
+    );
+    let backtracking = Schema::compile(r#"{"type":"string","pattern":"^(a)\\1$"}"#).unwrap();
+    let result = backtracking.recover(r#""aa""#, RecoveryRequest::default());
+    assert!(
+        result
+            .receipt
+            .evidence
+            .iter()
+            .any(|evidence| evidence.rule == "pattern.engine.backtrack-v1"),
+        "receipt evidence: {:?}",
+        result.receipt.evidence
     );
 }

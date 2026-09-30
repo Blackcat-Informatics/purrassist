@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "wasm-harness"
+description = "Unpublished native, WASI and browser-WASM core acceptance transcript harness"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+purrassist-core.workspace = true
+
+[[example]]
+name = "portable-core"
+path = "examples/portable.rs"

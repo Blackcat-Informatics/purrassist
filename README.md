@@ -11,9 +11,10 @@ decoder a schema and an effort level: it searches composed corrections, validate
 the complete result, and returns evidence of what changed. A schema-valid guess
 is still a guess. Ambiguous alternatives remain visible.
 
-**Pre-release implementation in progress.** The accepted scope and remaining
-qualification requirements are in [the implementation contract](docs/IMPLEMENTATION.md).
-This repository has not been published or release-qualified.
+**Pre-release 0.1.0 implementation.** The accepted scope is in
+[the implementation contract](docs/IMPLEMENTATION.md), with executable evidence
+and limits in [the qualification record](docs/QUALIFICATION.md). Publication
+acceptance follows review and merge; 0.1.0 is not claimed as published.
 
 The [release procedure](docs/RELEASE.md) records the package and registry gates.
 
@@ -46,13 +47,18 @@ isolated syntax crate uses the pinned Tree-sitter grammar family; see the
 Current surfaces include:
 
 - JSON recovery with nested unwrapping, syntax repair, approximate keys/enums,
-  stringified values, inferred required fields, and whole-schema validation.
+  stringified values, whole-schema validation, and invented values (required
+  properties, `patternProperties`/`additionalProperties`/`dependentSchemas`
+  fills, `propertyNames`-conformant key repairs) produced by a first-party
+  witness-generation algebra rather than a schema-blind heuristic.
 - Unicode, lexical, Levenshtein, unrestricted Damerau-Levenshtein, English
   Soundex, aliases, and contextual path matching.
 - Explicit semantic domain rules and caller-supplied embedding similarity.
 - Source-bound text edits, bounded fuzzy replacement, relocatable unified diffs,
   overlap checks, exact-byte undo, and a Markdown
-  editing index. Full CommonMark/GFM conformance remains unfinished.
+  editing index and structural section/list/table/reference operations. All
+  1,324 pinned CommonMark/GFM examples have exact rendering checks, alongside
+  generated preservation properties and independent differential campaigns.
 - Python, Rust, JavaScript/JSX, TypeScript/TSX grammar inspection and validated
   punctuation repairs. Grammar acceptance does not prove program correctness.
 - Journaled single-file replacement and conditional undo for coordinated writers.
@@ -74,11 +80,32 @@ cargo run -p purrassist-cli -- mcp --root /path/to/workspace
 `decode` returns the answer and receipt as JSON. `Exact` performs no recovery;
 `Quick`, `Standard`, `Deep`, and `Maximum` increase finite search budgets.
 Exhaustion is explicit and never proves that a schema is unsatisfiable.
-`Schema::compile_governed` and `with_resources_governed` return typed
+`Schema::generate_witness`/`generate_witness_governed` separately implement a
+witness-generation algebra (canonicalize, eliminate `not` by De Morgan duality,
+merge `allOf` constraints, and generate a type-directed value, recursing over
+`$ref`/`$dynamicRef`): its result is a validated `Witness`, a closed-form
+`Unsatisfiable` proof (never inferred from search exhaustion), or an honest
+`Exhausted`, and recovery invents every guessed value through this same
+algebra. `Schema::compile_governed` and `with_resources_governed` return typed
 `CompilationError` values separating invalid schemas from resource failures.
 Pass the same governor to `recover_governed` to share the total preparation and
 recovery budget. The `decode_json` tool does this automatically. The convenience
-compilation methods use the default finite budget.
+compilation methods use the default finite budget. `validate_json` exposes
+whole-instance validation itself: given `schema` and `instance`, it returns
+`valid`, every `violations` entry, always-evaluated format/pattern evidence,
+and any unsupported-vocabulary evidence, alongside a receipt. The shipped CLI's
+`purrassist validate` command emits exactly this tool's output. `generate_json_witness`
+exposes the same witness-generation algebra: given `schema` and optional
+`resources`, it returns `outcome` (`witness`, `unsatisfiable`, or `exhausted`),
+the generated `witness` value or non-empty `refutation` evidence, and a
+receipt; a governor hard stop while generating is reported as `exhausted`
+with `budget_exceeded` in the receipt's termination, never as `unsatisfiable`.
+
+`prepare_helper`/`complete_helper` expose optional external-model helper
+proposals (see [helpers](docs/HELPERS.md)) as a two-call tool pair: the first
+returns the exact request to send and an opaque, tamper-evident `pending`
+string with no network I/O performed here; the second resumes with the
+caller-observed HTTP status/body once the caller's own transport has sent it.
 
 `call TOOL --root DIRECTORY` reads a JSON argument object from stdin and invokes
 the same operation used by MCP. `match_strings` accepts plain candidate strings
@@ -91,8 +118,17 @@ thresholds to all candidates, even when ranking would normally return only its
 first ten. A unique byte-exact spelling is `resolved`; a unique accepted
 approximation is `best_guess`; close alternatives remain `ambiguous` with
 separate digest-bound inference ledgers; weak matches and exhaustion are
-`unresolved`. Aliases are caller-declared and count as guesses when selected.
+`unresolved`. Normalization equivalence is an explicit lattice — NFC,
+case-fold, width/compatibility-fold, diacritic-strip, UTS-39 confusable
+skeleton, and depunctuation, each a named ranking signal — resolving a query
+at the finest level where it has a unique acceptable candidate. Protected
+token classes (decimal digit runs, negation markers, semver components, ISO
+dates, hex digests, and units) must match for automatic selection unless a
+caller-declared alias matches the query exactly; a discarded protected-class
+mismatch appears in the receipt. Aliases count as guesses when selected.
 Thresholds are policy on ranking units, not calibrated confidence.
+The [curated quality set](docs/MATCHING-QUALITY.md) records correction and
+abstention outcomes across the full lattice and every protected class.
 `match_paths` takes a `query`, caller-supplied `paths`,
 optional directory `context`, effort, and score/margin thresholds. It returns
 `resolved`, `best_guess`, `ambiguous`, or `unresolved` with methods and a receipt.
@@ -141,9 +177,10 @@ container markers; new lines receive quote prefixes and list-continuation spaces
 Reparsing preserves the heading, section boundary, ancestors, and outside blocks.
 Supply line endings and separators explicitly. Bodies that capture following
 sections, introduce peer headings, or change structure under container prefixes
-are rejected; this includes trailing blanks that leave a list item and some
-column-sensitive tab indentation. Identical logical bodies preserve original
-prefix spelling and yield empty plans. See `examples/markdown-section.json`.
+are rejected. A trailing blank body line and a leading tab are layout-recovered
+(reindented to the container level, or to the number of spaces the tab would
+occupy from column zero) rather than rejected. Identical logical bodies preserve
+original prefix spelling and yield empty plans. See `examples/markdown-section.json`.
 `plan_markdown_task` sets the supplied `checked` state using either a root
 `block` index or a nested `path` from inspection (for example `[0,0,1]`).
 Exactly one selector is required; paths follow successive child indices.
@@ -160,8 +197,9 @@ item and checks outside siblings and ancestors. See `examples/markdown-list-item
 cell; surrounding whitespace, pipes, container prefixes, and line endings remain
 exact. Leading/trailing replacement whitespace is trimmed. Escape literal pipes
 as `\|`; line breaks and proposals that change table structure are rejected after
-reparsing. Implicit padding cells and columns beyond the header width are not
-editable through this operation.
+reparsing. Columns beyond the header width are not editable through this
+operation, but editing an implicit padded cell of a body row shorter than the
+header materializes every implicit cell up to it instead of refusing.
 For an executable nested-table example:
 
 ```sh
@@ -177,6 +215,15 @@ Pass one selected plan to `apply_edit` with the original `source` to obtain the
 edited text and a source-bound inverse. `apply_file` also accepts a `plan` instead
 of a full replacement buffer, with its expected digest and journaled undo checks.
 See [plan application](docs/EDIT-APPLICATION.md) and `examples/apply-edit.json`.
+`recover_files` reconciles prepared journals against actual file versions
+without overwriting anything, reporting each transaction's exact outcome and
+removing evidence-bearing orphan temporaries. `commit_files` independently
+journals and commits several file replacements in one call — never as one
+atomic multi-file transaction; each entry reports its own commit or error.
+`plan_replacement`, `plan_diff`, and `inspect_code` each also accept an
+`effort` argument selecting their search/traversal budget preset.
+`inspect_code` reports each JSX/TSX rename issue's repair options and the
+governed parse's allocator accounting (retained/peak/overshoot bytes).
 `plan_markdown_table_row` inserts or removes body rows. Supply a table `path`,
 `action` (`insert` or `remove`), and zero-based body `index`; insertion also requires
 `cells` with exactly the header width. Inserting at the row count appends.
@@ -201,6 +248,27 @@ Multiline destination/title regions can collapse to one physical line; newline
 and tab values use entities. NUL values are rejected because Markdown cannot
 retain them. Equal decoded fields produce an empty plan. See
 `examples/markdown-reference.json`.
+
+`purrassist_core::patch::Patch` (an ordered, non-overlapping, source-digest-
+bound set of byte-range replacements) is the crate's single edit
+representation; `edits::EditPlan`/`TextEdit` are aliases for it. Beyond
+`apply`, it exposes a governed `invert`, `compose`, `commute`, `rebase`, and
+`diff` algebra; `apply_edit`/`apply_file` use `rebase`/`diff` to reconcile a
+stale plan against an intervening change through an explicit `rebase_from`
+input. See [plan application](docs/EDIT-APPLICATION.md). The Rust
+`markdown::Document` API's structural operations — `insert_section`,
+`remove_section`, `move_section` (with optional re-leveling of the moved
+section's own heading), `rename_heading`, `ListItemEdit::Move`,
+`renumber_list`, `TableRowEdit::Move`, `TableColumnEdit::Move`, and
+`add_reference`/`relabel_reference`/`remove_reference`/`unlink_reference`
+(which rewrite every shortcut/collapsed/full-reference use resolving to the
+affected definition) — are exposed through the host tool
+`plan_markdown_structure`, selected by a typed `op` (`section_insert`,
+`section_remove`, `section_move`, `section_rename`, `list_move`,
+`list_renumber`, `table_row_move`, `table_column_move`, `reference_add`,
+`reference_relabel`, `reference_remove`, `reference_unlink`). Each is governed,
+digest-bound, reparse-checked, and provides an exact inverse.
+
 The Rust `markdown::InlineFragment` layer retains exact byte spans and renders
 code spans, emphasis, strong emphasis, inline links/images, escapes, line breaks,
 autolinks, and raw inline HTML. Explicit dialect selection preserves the pinned
@@ -211,8 +279,9 @@ links/images while retaining definition provenance. `Document::render_html`
 collects definitions across containers and renders blocks. GFM rendering enables
 tables, task lists, strikethrough, extended autolinks, and tag filtering; explicit
 extension profiles are also available. All 1,324 pinned official document examples
-match exact HTML under their upstream profiles. Broader adversarial and release
-qualification remains in progress.
+match exact HTML under their upstream profiles. Generated adversarial
+preservation and independent differential checks extend this finite corpus;
+the qualification record states their coverage and limits.
 
 File tools reject stale versions and record transaction identities for undo. The portable filesystem layer coordinates
 cooperating writers; it is not a sandbox against malicious directory replacement
@@ -228,15 +297,20 @@ make check       # formatting, attribution/dependencies, lint, optimized tests, 
 make wasm-test   # compare native/WASI recovery, matching, embeddings, Markdown, and grammars
 make syntax-oracles  # compare fixed syntax probes to independent compilers
 make benchmark  # recovery quality assertions and latency baseline
-make fuzz-json  # source-region coverage-guided JSON campaign; matching LLVM tools required
+make fuzz       # eight coverage-guided targets and independent pattern/Markdown oracles
+make resources  # allocations, heap/RSS, latency, artifact size, and uncached build cost
+make package    # Cargo verification and registered source/license archive audit
 ```
 
 The checked-in main Draft 2020-12 corpus contains 1,301 tests, with another 121
-selected optional cases exercised; Unicode 17
+selected optional cases exercised, plus the complete vendored `optional/format/`
+corpus (878 cases across every 2020-12 format, including RFC 5892/5893 IDNA2008
+contextual and Bidi rules) run under a dialect declaring the format-assertion
+vocabulary; Unicode 17
 normalization contains 20,034 cases. These suites, regression tests, fixed helper
 transcripts, and bounded mutation probes run locally. Full release qualification
-also requires the remaining conformance, performance, packaging, CI, and platform
-work described in the [qualification record](docs/QUALIFICATION.md).
+requires the exact-commit gates and registry acceptance described in the
+[qualification record](docs/QUALIFICATION.md).
 
 ## License and family
 
@@ -247,7 +321,7 @@ the braces and validation mark are this crate's service emblem.
 
 Resource profiling is available with `make resources`; see [measurement scope and prerequisites](docs/RESOURCES.md). It uses external profilers and adds no crate runtime dependencies.
 
-Coverage-guided JSON campaigns are available with `make fuzz-json`; see
+Coverage-guided JSON campaigns are available with `make fuzz TARGET=json`; see
 [properties, replay, and qualification limits](docs/FUZZING.md).
 
 Governed engines and host tools accept [caller-owned cancellation](docs/CANCELLATION.md),

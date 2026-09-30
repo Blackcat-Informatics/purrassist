@@ -1,0 +1,24 @@
+{
+  "description": "a key typo repair is found even though the value already respects maxLength",
+  "schema": {
+    "type": "object",
+    "required": [
+      "code"
+    ],
+    "properties": {
+      "code": {
+        "type": "string",
+        "maxLength": 4
+      }
+    },
+    "additionalProperties": false
+  },
+  "input": "{\"cod\":\"AB12\"}",
+  "outcome": "resolved",
+  "output": {
+    "code": "AB12"
+  },
+  "ledger_rules": [
+    "json.key.match"
+  ]
+}

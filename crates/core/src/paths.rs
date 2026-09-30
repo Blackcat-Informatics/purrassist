@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Pure candidate-path resolution. Matching never opens or authorizes a file.
+use crate::contract::saturating_size as size;
 use crate::{
     AssistResult, Effort, Governor, Outcome, Receipt, StopReason,
-    contract::{AlternativeReceipt, Evidence, Inference, InferenceKind, Resource},
+    contract::{Evidence, Inference, InferenceKind, Resource},
     digest::Digest,
     json::Node,
     matching::{self, Candidate, MatchRequest},
@@ -184,10 +185,10 @@ impl PathIndex {
             .resolve_with(query, context, request, policy, governor)
             .and_then(|matches| {
                 record_matches(&matches, context, policy, governor, &mut receipt)
-                    .map(|outcome| (matches, outcome))
+                    .map(|order| crate::provenance::permute(&matches, &order))
             });
         let outcome = match result {
-            Ok((matches, ())) => match matches.as_slice() {
+            Ok(matches) => match matches.as_slice() {
                 [] => {
                     receipt.stopped = StopReason::NoCandidate;
                     Outcome::Unresolved
@@ -314,14 +315,21 @@ impl PathIndex {
         Ok(results)
     }
 }
+/// Records ambiguous-selection evidence and returns the permutation the
+/// caller must apply to its own `matches`-indexed candidate vector before
+/// building `Outcome::Ambiguous` (identity when not ambiguous), so that
+/// vector and `receipt.alternatives` (already ordered by
+/// `crate::provenance::Published::order`) share one order.
 fn record_matches(
     matches: &[PathMatch],
     context: &str,
     policy: SelectionPolicy,
     governor: &mut Governor,
     receipt: &mut Receipt,
-) -> Result<(), StopReason> {
+) -> Result<Vec<usize>, StopReason> {
     let ambiguous = matches.len() > 1;
+    let mut forest = ambiguous.then(|| crate::provenance::Forest::new(governor));
+    let mut derivations = Vec::with_capacity(matches.len());
     for entry in matches {
         let signal_bytes = entry
             .methods
@@ -360,21 +368,30 @@ fn record_matches(
                 value: entry.path.clone(),
             }]
         };
-        if ambiguous {
-            receipt.alternatives.push(AlternativeReceipt {
-                output: Digest::of(entry.to_node().to_json().as_bytes()),
-                cost: 0,
-                evidence: vec![evidence],
-                losses: Vec::new(),
-                inferences,
-                validations: Vec::new(),
-            });
+        if let Some(forest) = forest.as_mut() {
+            let mut derivation = crate::provenance::Derivation::new(
+                Digest::of(entry.to_node().to_json().as_bytes()),
+                0,
+            );
+            derivation.push(forest.evidence(governor, evidence)?);
+            for inference in inferences {
+                derivation.push(forest.inference(governor, inference)?);
+            }
+            derivations.push(derivation);
         } else {
             receipt.evidence.push(evidence);
             receipt.inferences.extend(inferences);
         }
     }
-    Ok(())
+    if let Some(forest) = forest {
+        let published = forest.publish(&derivations, governor)?;
+        receipt.evidence.extend(published.evidence);
+        receipt.inferences.extend(published.inferences);
+        receipt.alternatives = published.alternatives;
+        Ok(published.order)
+    } else {
+        Ok((0..matches.len()).collect())
+    }
 }
 fn portable(path: &str) -> Result<(), StopReason> {
     if path.is_empty()
@@ -397,7 +414,4 @@ fn extension(path: &str) -> Option<&str> {
     basename(path)
         .rsplit_once('.')
         .map(|(_, extension)| extension)
-}
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
 }

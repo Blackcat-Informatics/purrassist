@@ -25,8 +25,9 @@ pub use context::Context;
 pub use inline::{
     Dialect, Inline, InlineFragment, InlineKind, ReferenceDefinition, ReferenceOrigin, References,
 };
-pub use sections::SectionSite;
+pub use sections::{SectionInsertion, SectionSite};
 
+use crate::contract::saturating_size as size;
 use crate::{Governor, StopReason, contract::Resource, digest::Digest};
 use std::ops::Range;
 
@@ -54,7 +55,9 @@ pub enum BlockKind {
     Heading {
         /// Heading level from one to six.
         level: u8,
-        /// Source title, without heading delimiters.
+        /// Inline source without heading delimiters or block indentation.
+        /// Setext titles normalize physical line endings to LF and remove only
+        /// their initial/final spaces and tabs; interior whitespace is preserved.
         title: String,
     },
     /// Fenced code; body headings are never indexed as document headings.
@@ -138,16 +141,7 @@ impl Document {
             Resource::ScratchBytes,
             size(source.len()).saturating_mul(128).saturating_add(128),
         )?;
-        let blocks = if source.contains('\t') {
-            let projection = projection::Projection::new(source);
-            let lines = lines(&projection.text);
-            let mut blocks = containers::index(&projection.text, &lines, governor, 0)?;
-            projection.restore(source, &mut blocks);
-            blocks
-        } else {
-            let lines = lines(source);
-            containers::index(source, &lines, governor, 0)?
-        };
+        let blocks = index_blocks(source, governor, true)?;
         Ok(Self {
             source: source.into(),
             digest: Digest::of(source.as_bytes()),
@@ -196,9 +190,6 @@ impl Document {
         sections
     }
 }
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
-}
 fn lines(source: &str) -> Vec<Range<usize>> {
     let mut result = Vec::new();
     let mut start = 0;
@@ -222,6 +213,36 @@ fn lines(source: &str) -> Vec<Range<usize>> {
 fn line<'a>(source: &'a str, range: &Range<usize>) -> &'a str {
     source[range.clone()].trim_end_matches(['\r', '\n'])
 }
+/// Reconstruct a block's logical source, retaining line endings and residual tab padding.
+fn logical_text(source: &str, block: &Block) -> String {
+    let mut text = String::new();
+    for (line, padding) in block.lines.iter().zip(&block.line_padding) {
+        text.extend(std::iter::repeat_n(' ', *padding));
+        text.push_str(&source[line.clone()]);
+    }
+    text
+}
+
+/// Byte offset immediately after the last physical CR or LF before `offset`.
+fn line_start(source: &str, offset: usize) -> usize {
+    source[..offset]
+        .rfind(['\r', '\n'])
+        .map_or(0, |position| position + 1)
+}
+
+/// Preserve the exact terminal CRLF, CR, or LF spelling; unterminated text has none.
+fn ending(text: &str) -> Option<&'static str> {
+    if text.ends_with("\r\n") {
+        Some("\r\n")
+    } else if text.ends_with('\r') {
+        Some("\r")
+    } else if text.ends_with('\n') {
+        Some("\n")
+    } else {
+        None
+    }
+}
+
 fn unindent(text: &str) -> Option<&str> {
     let count = text.bytes().take_while(|byte| *byte == b' ').count();
     (count <= 3).then(|| &text[count..])
@@ -285,7 +306,69 @@ fn code_indent(text: &str) -> bool {
     }
     false
 }
-fn classify(source: &str, lines: &[Range<usize>], cursor: usize) -> (BlockKind, usize) {
+fn index_blocks(
+    source: &str,
+    governor: &mut Governor,
+    tables: bool,
+) -> Result<Vec<Block>, StopReason> {
+    let mut blocks = if source.contains('\t') {
+        let projection = projection::Projection::new(source);
+        let lines = lines(&projection.text);
+        let mut blocks = containers::index(&projection.text, &lines, governor, 0, tables)?;
+        projection.restore(source, &mut blocks);
+        blocks
+    } else {
+        let lines = lines(source);
+        containers::index(source, &lines, governor, 0, tables)?
+    };
+    classify_tasks(source, &mut blocks, governor)?;
+    Ok(blocks)
+}
+fn classify_tasks(
+    source: &str,
+    blocks: &mut [Block],
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    for block in blocks {
+        governor.charge(Resource::Work, 1)?;
+        classify_tasks(source, &mut block.children, governor)?;
+        if !matches!(block.kind, BlockKind::ListItem { .. }) {
+            continue;
+        }
+        let checked = if let Some(paragraph) = block
+            .children
+            .iter()
+            .find(|child| {
+                !matches!(
+                    child.kind,
+                    BlockKind::Blank | BlockKind::ReferenceDefinition
+                )
+            })
+            .filter(|child| matches!(child.kind, BlockKind::Paragraph))
+        {
+            governor.charge(Resource::Work, size(paragraph.span.len()))?;
+            governor.charge(
+                Resource::ScratchBytes,
+                size(paragraph.span.len()).saturating_mul(2),
+            )?;
+            let text = render::paragraph_text(source, paragraph, Some(block));
+            task_marker(text.trim_end_matches(['\r', '\n'])).map(|(state, _)| state)
+        } else {
+            None
+        };
+        if let BlockKind::ListItem { checked: state, .. } = &mut block.kind {
+            *state = checked;
+        }
+    }
+    Ok(())
+}
+fn classify(
+    source: &str,
+    lines: &[Range<usize>],
+    cursor: usize,
+    tables: bool,
+    lazy: &[usize],
+) -> (BlockKind, usize) {
     let text = line(source, &lines[cursor]);
     if text.trim_matches([' ', '\t']).is_empty() {
         return (BlockKind::Blank, cursor + 1);
@@ -353,30 +436,62 @@ fn classify(source: &str, lines: &[Range<usize>], cursor: usize) -> (BlockKind, 
     if let Some(kind) = list_item(text) {
         return (kind, cursor + 1);
     }
-    paragraph(source, lines, cursor)
+    paragraph(source, lines, cursor, tables, lazy)
 }
-fn paragraph(source: &str, lines: &[Range<usize>], cursor: usize) -> (BlockKind, usize) {
+fn paragraph(
+    source: &str,
+    lines: &[Range<usize>],
+    cursor: usize,
+    tables: bool,
+    lazy: &[usize],
+) -> (BlockKind, usize) {
     let text = line(source, &lines[cursor]);
+    let heading_lazy = lazy;
+    let mut lazy = lazy;
+    let mut table_rejected = false;
     if cursor + 1 < lines.len() {
         let next = line(source, &lines[cursor + 1]);
-        if let Some(level) = setext(next) {
+        while lazy
+            .first()
+            .is_some_and(|start| *start < lines[cursor + 1].start)
+        {
+            lazy = &lazy[1..];
+        }
+        // A missing container prefix admits paragraph text only. Promoting a
+        // lazy underline and demoting it later would already have ended this
+        // paragraph, splitting its subsequent continuation into another block.
+        if let Some(level) = setext(next)
+            && lazy.first() != Some(&lines[cursor + 1].start)
+        {
             return (
                 BlockKind::Heading {
                     level,
-                    title: text.trim().into(),
+                    title: setext_title(source, &lines[cursor..=cursor], heading_lazy, &[]),
                 },
                 cursor + 2,
             );
         }
         let header = cells(text);
-        if let Some(alignments) = alignments(next)
+        if tables
+            && lazy.binary_search(&lines[cursor + 1].start).is_err()
+            && !interrupts_paragraph(next)
+            && let Some(alignments) = alignments(next)
+            && !header.is_empty()
             && header.len() == alignments.len()
-            && text.contains('|')
         {
             let mut end = cursor + 2;
             let mut rows = Vec::new();
-            while end < lines.len() && !interrupts_paragraph(line(source, &lines[end])) {
-                rows.push(cells(line(source, &lines[end])));
+            while end < lines.len()
+                && !interrupts_paragraph(line(source, &lines[end]))
+                && list_item(line(source, &lines[end])).is_none()
+                && !code_indent(line(source, &lines[end]))
+                && html::start(line(source, &lines[end]), false).is_none()
+            {
+                let row = cells(line(source, &lines[end]));
+                if row.is_empty() {
+                    break;
+                }
+                rows.push(row);
                 end += 1;
             }
             return (
@@ -392,20 +507,68 @@ fn paragraph(source: &str, lines: &[Range<usize>], cursor: usize) -> (BlockKind,
     let mut end = cursor + 1;
     while end < lines.len() {
         let next = line(source, &lines[end]);
-        if let Some(level) = setext(next) {
-            let title = lines[cursor..end]
-                .iter()
-                .map(|range| line(source, range).trim())
-                .collect::<Vec<_>>()
-                .join("\n");
+        while lazy.first().is_some_and(|start| *start < lines[end].start) {
+            lazy = &lazy[1..];
+        }
+        if let Some(level) = setext(next)
+            && lazy.first() != Some(&lines[end].start)
+        {
+            let title = setext_title(source, &lines[cursor..end], heading_lazy, &[]);
             return (BlockKind::Heading { level, title }, end + 1);
         }
-        if interrupts_paragraph(next) {
+        // A delimiter candidate whose width disagrees with its header keeps
+        // this paragraph open. Later delimiter-looking lines cannot restart
+        // table recognition until a genuine block boundary closes it.
+        if tables && lazy.binary_search(&lines[end].start).is_err() && alignments(next).is_some() {
+            table_rejected = true;
+        }
+        if interrupts_paragraph(next)
+            || (tables
+                && !table_rejected
+                && end + 1 < lines.len()
+                && lazy.binary_search(&lines[end + 1].start).is_err()
+                && !interrupts_paragraph(line(source, &lines[end + 1]))
+                && setext(line(source, &lines[end + 1])).is_none()
+                && alignments(line(source, &lines[end + 1])).is_some_and(|alignments| {
+                    let header = cells(next);
+                    !header.is_empty() && header.len() == alignments.len()
+                }))
+        {
             break;
         }
         end += 1;
     }
     (BlockKind::Paragraph, end)
+}
+// Concatenate inline source, consuming block indentation but preserving lazy
+// physical prefixes and interior hardbreak spaces. The ordered lazy cursor visits
+// each entry at most once; heading construction stays linear in admitted input.
+fn setext_title(
+    source: &str,
+    lines: &[Range<usize>],
+    mut lazy: &[usize],
+    padding: &[usize],
+) -> String {
+    let mut title = String::new();
+    for (index, range) in lines.iter().enumerate() {
+        while lazy.first().is_some_and(|start| *start < range.start) {
+            lazy = &lazy[1..];
+        }
+        let text = line(source, range);
+        if !title.is_empty() {
+            title.push('\n');
+        }
+        if lazy.first() == Some(&range.start) {
+            title.extend(std::iter::repeat_n(
+                ' ',
+                padding.get(index).copied().unwrap_or(0),
+            ));
+            title.push_str(text);
+        } else {
+            title.push_str(text.trim_start_matches([' ', '\t']));
+        }
+    }
+    title.trim_matches([' ', '\t']).into()
 }
 fn interrupts_paragraph(text: &str) -> bool {
     text.trim_matches([' ', '\t']).is_empty()
@@ -439,18 +602,33 @@ fn list_item(text: &str) -> Option<BlockKind> {
         return None;
     }
     let rest = rest.trim_start_matches([' ', '\t']);
-    let separated = rest
-        .get(3..)
-        .is_some_and(|tail| tail.is_empty() || tail.starts_with([' ', '\t']));
-    let checked = if separated && rest.starts_with("[ ]") {
-        Some(false)
-    } else if separated && (rest.starts_with("[x]") || rest.starts_with("[X]")) {
-        Some(true)
-    } else {
-        None
-    };
+    let checked = task_marker(rest).map(|(checked, _)| checked);
     Some(BlockKind::ListItem { ordinal, checked })
 }
+// Task processing follows paragraph parsing. CRLF represents one logical
+// newline, and a marker needs whitespace separating it from later content.
+fn task_marker(text: &str) -> Option<(bool, usize)> {
+    let marker = text.trim_start_matches(' ');
+    let leading = text.len() - marker.len();
+    let rest = marker.strip_prefix('[')?;
+    let middle = rest.chars().next()?;
+    let checked = match middle {
+        'x' | 'X' => true,
+        ' ' | '\t' | '\r' | '\n' | '\u{b}' | '\u{c}' => false,
+        _ => return None,
+    };
+    let width = if rest.starts_with("\r\n") {
+        2
+    } else {
+        middle.len_utf8()
+    };
+    let tail = rest.get(width..)?.strip_prefix(']')?;
+    if !tail.starts_with([' ', '\t', '\r', '\n', '\u{b}', '\u{c}']) {
+        return None;
+    }
+    Some((checked, leading + width + 2))
+}
+
 fn cells(text: &str) -> Vec<String> {
     cell_ranges(text)
         .into_iter()
@@ -485,7 +663,12 @@ fn cell_ranges(text: &str) -> Vec<Range<usize>> {
     result
 }
 fn alignments(text: &str) -> Option<Vec<Alignment>> {
-    cells(text)
+    let text = unindent(text)?;
+    let cells = cells(text);
+    if cells.is_empty() {
+        return None;
+    }
+    cells
         .iter()
         .map(|cell| {
             let core = cell.trim_matches(':');
@@ -500,4 +683,49 @@ fn alignments(text: &str) -> Option<Vec<Alignment>> {
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod source_tests {
+    use super::{Block, BlockKind, ending, line_start, logical_text};
+
+    #[test]
+    fn logical_source_preserves_unicode_endings_and_partial_tab_padding() {
+        let source = "\tα\r\n> β\r終\n";
+        let block = Block {
+            span: 0..source.len(),
+            lines: vec![1..5, 7..10, 10..14],
+            line_padding: vec![3, 0, 0],
+            kind: BlockKind::Paragraph,
+            children: Vec::new(),
+        };
+        assert_eq!(logical_text(source, &block), "   α\r\nβ\r終\n");
+    }
+
+    #[test]
+    fn physical_line_boundaries_preserve_all_original_newline_spellings() {
+        let source = "α\r\nβ\rγ\nδ";
+        for (offset, expected) in [
+            (0, 0),
+            (2, 0),
+            (3, 3),
+            (4, 4),
+            (6, 4),
+            (7, 7),
+            (10, 10),
+            (12, 10),
+        ] {
+            assert_eq!(line_start(source, offset), expected, "offset {offset}");
+        }
+        for (text, expected) in [
+            ("α\r\n", Some("\r\n")),
+            ("α\r", Some("\r")),
+            ("α\n", Some("\n")),
+            ("α", None),
+            ("", None),
+            ("α\n\t", None),
+        ] {
+            assert_eq!(ending(text), expected, "{text:?}");
+        }
+    }
 }

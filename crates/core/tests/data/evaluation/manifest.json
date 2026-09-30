@@ -1,0 +1,30 @@
+{
+  "generator": "crates/core/tests/data/evaluation/generate.py",
+  "generator_sha256": "62f50cc56d019bc37d8089024049ce6454216ab7d84c5737d38172ac9be163ab",
+  "inputs": {
+    "confusables": "crates/core/tests/data/unicode/confusables.txt",
+    "confusables_sha256": "091c7f82fc39ef208faf8f94d29c244de99254675e09de163160c810d13ef22a"
+  },
+  "outputs": {
+    "strings.json": {
+      "cases": 907,
+      "distinct_queries": 907,
+      "sha256": "0f259b2089d66e4288dec75bf3c25e1749205e8dbafa965c6b03f52542108a8d"
+    },
+    "paths.json": {
+      "cases": 1594,
+      "distinct_queries": 1594,
+      "sha256": "31e5ca50b8fc598b09e0b63c2d24a5d4e3f64578d555323fe21254a846ffc044"
+    },
+    "phonetic.json": {
+      "cases": 1408,
+      "distinct_queries": 1408,
+      "sha256": "0b022e926ffe734044e0c8b140485380700537a01015eb4d197cb769ddbdaf41"
+    },
+    "json_recovery.json": {
+      "cases": 714,
+      "distinct_queries": 686,
+      "sha256": "7e55ae5b9141f9cb2524a1876946d0d7cd3d7327014e70042dc5392b4ea58148"
+    }
+  }
+}

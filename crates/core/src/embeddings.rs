@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Caller-owned embedding index; no model, transport, or ambient state.
+use crate::contract::invalid_input as invalid;
+use crate::contract::saturating_size as size;
 use crate::{Governor, Outcome, StopReason, contract::Resource};
 use std::collections::BTreeSet;
 
@@ -205,10 +207,4 @@ fn unit(values: &[f64], governor: &mut Governor) -> Result<Vec<f64>, StopReason>
         *value /= norm;
     }
     Ok(result)
-}
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
-}
-fn invalid(message: &str) -> StopReason {
-    StopReason::InvalidInput(message.into())
 }

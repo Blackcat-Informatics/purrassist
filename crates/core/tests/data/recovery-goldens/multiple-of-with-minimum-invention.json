@@ -1,0 +1,24 @@
+{
+  "description": "a required numeric property combining minimum and multipleOf is invented",
+  "schema": {
+    "type": "object",
+    "required": [
+      "n"
+    ],
+    "properties": {
+      "n": {
+        "type": "integer",
+        "minimum": 100,
+        "multipleOf": 25
+      }
+    }
+  },
+  "input": "{}",
+  "outcome": "best_guess",
+  "output": {
+    "n": 100
+  },
+  "ledger_rules": [
+    "json.required.invent"
+  ]
+}

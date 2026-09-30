@@ -1,0 +1,207 @@
+{
+  "format": "purrassist.fuzz.v1",
+  "target": "matching",
+  "status": "passed",
+  "tools": {
+    "rustc": "rustc 1.100.0-nightly (4b6d04e70 2026-09-13)\nbinary: rustc\ncommit-hash: 4b6d04e706108ccfeafe2547fbe857dfe8972bad\ncommit-date: 2026-09-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0-nightly\nLLVM version: 23.1.1",
+    "llvm-cov": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1-rust-1.100.0-nightly\n  Optimized build.",
+    "llvm-profdata": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1-rust-1.100.0-nightly\n  Optimized build."
+  },
+  "source_commit": "ba2a35cc3ab655cf377fade556d3e0c066cd633c",
+  "source_dirty": true,
+  "nonignored_file_tree_sha256": "75718bcccc438bede3524bf54ab361c90f859db5c5ce5e64ad8191e36f4d0197",
+  "build": {
+    "command": [
+      "cargo",
+      "build",
+      "-p",
+      "purrassist-core",
+      "--example",
+      "fuzz-matching",
+      "--locked",
+      "--config",
+      "profile.dev.opt-level=1",
+      "--config",
+      "profile.dev.debug=1",
+      "--config",
+      "profile.dev.strip=false",
+      "--config",
+      "profile.dev.debug-assertions=true",
+      "--config",
+      "profile.dev.overflow-checks=true",
+      "--message-format=json"
+    ],
+    "sha256": "eb99840b55713415f0458319bcc08737cd6516c51afea6a390dc260debb430fe",
+    "inherited_rustflags_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "appended_rustflags": [
+      "-C",
+      "instrument-coverage"
+    ]
+  },
+  "seed": 1005,
+  "requested_mutations": 10000,
+  "timeout_seconds": 10,
+  "maximum_input_bytes": 4096,
+  "executions": 10004,
+  "invalid_utf8": 758,
+  "differential_checks": 0,
+  "differential_mismatches": 0,
+  "retained": [
+    {
+      "execution": 0,
+      "sha256": "5bee0c61bbbd0553e694b8d591297f1c3320eec2d1eb5ba03d2b5bea941d37bc",
+      "new_regions": 1016,
+      "parent_corpus_index": null,
+      "bytes": 14
+    },
+    {
+      "execution": 1,
+      "sha256": "8100aa445f334964914a92ddd0e28b488e3ee6bd4438d10c24579e91ff5ac255",
+      "new_regions": 13,
+      "parent_corpus_index": null,
+      "bytes": 13
+    },
+    {
+      "execution": 2,
+      "sha256": "0010b0005668e7084a7c65021a172a9bc8829cc430e6e8b17266dac1e8f4d163",
+      "new_regions": 49,
+      "parent_corpus_index": null,
+      "bytes": 25
+    },
+    {
+      "execution": 3,
+      "sha256": "752efe15cb51d88a7b88d2ffb439ec0995230e3b271a7b6e25517e50cb2b7a20",
+      "new_regions": 1,
+      "parent_corpus_index": null,
+      "bytes": 15
+    },
+    {
+      "execution": 7,
+      "sha256": "c824bb80f707c774644db27f1011dee2e1afd8d24d3a6bf43793268b15e4c219",
+      "new_regions": 2,
+      "parent_corpus_index": 1,
+      "bytes": 15
+    },
+    {
+      "execution": 14,
+      "sha256": "75304e2a114d5ec7b9550c4f007b9ff481935df10476f2b8e44ff90da005c556",
+      "new_regions": 1,
+      "parent_corpus_index": 1,
+      "bytes": 17
+    },
+    {
+      "execution": 15,
+      "sha256": "fd9cfd8a7dff482ec4fdb32507af86a50a0c8e0a58e564a8655e9e777fda3941",
+      "new_regions": 4,
+      "parent_corpus_index": 5,
+      "bytes": 11
+    },
+    {
+      "execution": 18,
+      "sha256": "17bdcf3e9d94533895628db5a9822d9f72c434b226e79fe3ef5b935aaf0f34f3",
+      "new_regions": 14,
+      "parent_corpus_index": 2,
+      "bytes": 25
+    },
+    {
+      "execution": 22,
+      "sha256": "1764c84a787eb3d5f37e4cc2828d831e79dd5daa5d28060fe72aa2c5452baef5",
+      "new_regions": 264,
+      "parent_corpus_index": 0,
+      "bytes": 30
+    },
+    {
+      "execution": 24,
+      "sha256": "291f919da9e01ebe76e57c4e30a1db34019fd994cc55aedb9ca774287890e4b9",
+      "new_regions": 1,
+      "parent_corpus_index": 8,
+      "bytes": 45
+    },
+    {
+      "execution": 31,
+      "sha256": "430c3770aecd515c5beebc64428320204a6ed1337191a416f276374f71d75d3a",
+      "new_regions": 1,
+      "parent_corpus_index": 4,
+      "bytes": 21
+    },
+    {
+      "execution": 48,
+      "sha256": "d0067c9d07985c1807245e5d49f7368d70899f301d9fae96d7f90e847a4479db",
+      "new_regions": 2,
+      "parent_corpus_index": 10,
+      "bytes": 23
+    },
+    {
+      "execution": 65,
+      "sha256": "05c92a7152bd059e24b0d03b7d021d5b7b9c573e6d68591a72b44dbb071345b3",
+      "new_regions": 1,
+      "parent_corpus_index": 10,
+      "bytes": 25
+    },
+    {
+      "execution": 103,
+      "sha256": "536317f5b88b3bdcf4be3d64c22d4eae34a7b69963d1527347e1398645207861",
+      "new_regions": 1,
+      "parent_corpus_index": 6,
+      "bytes": 12
+    },
+    {
+      "execution": 106,
+      "sha256": "6a21ab75380968d0e17b68bac2bfd31f463de2fa251d0060e230888af844bc5f",
+      "new_regions": 6,
+      "parent_corpus_index": 8,
+      "bytes": 15
+    },
+    {
+      "execution": 241,
+      "sha256": "443ea3fa05ad2cd7e55570e10679da4254bee949d3942718de4e717a9a7b58ae",
+      "new_regions": 2,
+      "parent_corpus_index": 1,
+      "bytes": 15
+    },
+    {
+      "execution": 292,
+      "sha256": "60bc499003f0433bd01ed3d8cfd921cdda7c11de66b7f5ddd76ae5fec99c600f",
+      "new_regions": 2,
+      "parent_corpus_index": 7,
+      "bytes": 62
+    },
+    {
+      "execution": 432,
+      "sha256": "99b6185dca064aff719fe85541d5c722c638778e39ed026be96027db006085f3",
+      "new_regions": 2,
+      "parent_corpus_index": 7,
+      "bytes": 31
+    },
+    {
+      "execution": 493,
+      "sha256": "0767e43ff0736c7b66514753af18bb53d1c2f384f5b84ef00836ab9ced31e04e",
+      "new_regions": 5,
+      "parent_corpus_index": 16,
+      "bytes": 55
+    },
+    {
+      "execution": 600,
+      "sha256": "af591db6eaf0a0e04d036c3882e955d317240bc8e49fb86bf4890584bfc2d496",
+      "new_regions": 1,
+      "parent_corpus_index": 18,
+      "bytes": 54
+    },
+    {
+      "execution": 904,
+      "sha256": "402d7cb1e549388f1e8bdb405da62bd39d16fdc9d71556d0eb2c20988088a806",
+      "new_regions": 1,
+      "parent_corpus_index": 11,
+      "bytes": 15
+    },
+    {
+      "execution": 1201,
+      "sha256": "587973e91464c589ae7eb5f476f09ae9128dd2e25180533214a556fd0399c325",
+      "new_regions": 1,
+      "parent_corpus_index": 1,
+      "bytes": 19
+    }
+  ],
+  "regions": 1390,
+  "current_execution": 10003
+}

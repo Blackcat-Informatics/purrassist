@@ -112,7 +112,7 @@ fn render(
     Ok(())
 }
 fn attribute_title(title: Option<&str>, output: &mut String) {
-    if let Some(title) = title {
+    if let Some(title) = title.filter(|title| !title.is_empty()) {
         output.push_str(" title=\"");
         escape(title, output);
         output.push('"');

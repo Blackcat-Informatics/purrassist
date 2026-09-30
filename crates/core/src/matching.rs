@@ -2,10 +2,32 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Deterministic evidence-bearing matching. Scores are ranking units, not probabilities.
+//!
+//! Normalization-based equivalence is an explicit lattice of refinements,
+//! finest first: byte identity ⊑ NFC ⊑ case-fold ⊑ width/compatibility-fold
+//! ⊑ diacritic-strip ⊑ UTS-39 confusable skeleton ⊑ depunctuation ⊑
+//! phonetics. Each level a query and a candidate agree at emits one named,
+//! versioned [`Signal`] whose score decreases as the level coarsens, so the
+//! finest level at which a query has a unique acceptable candidate is what
+//! [`SelectionPolicy`] resolves to. Coarser levels never retract a finer
+//! level's evidence; they only fire when nothing finer already matched.
+//!
+//! Independent of that lattice, **protected token classes** — decimal digit
+//! runs, negation markers, semver components, ISO dates, hex digests, and
+//! units — bound every normalizer: a difference inside one of these classes
+//! between the query and a candidate's primary spelling excludes that
+//! candidate with explicit evidence, no matter how similar the surrounding
+//! text is, unless one of the candidate's caller-declared aliases matches the
+//! query exactly. See `docs/MATCHING-QUALITY.md` for the curated evidence set.
+use crate::contract::saturating_size as size;
 use crate::contract::{
-    AssistResult, Budget, Effort, Evidence, Governor, Outcome, Receipt, Resource, StopReason,
+    AssistResult, Budget, Effort, Evidence, Governor, Outcome, Receipt, Resource, ScratchCharge,
+    StopReason,
 };
-use crate::text::{comparison_key, depunctuate, lexical_tokens};
+use crate::text::{
+    Normalization, case_fold, comparison_key, depunctuate, general_category, lexical_tokens,
+    normalize, skeleton,
+};
 use crate::{
     digest::Digest,
     json::Node,
@@ -109,9 +131,12 @@ impl Default for SelectionPolicy {
 /// Select a string under the request's resource limits.
 ///
 /// A unique byte-exact spelling is resolved; all other accepted selections
-/// are labeled guesses. No score is treated as a probability. Invalid policy,
-/// exhaustion, cancellation, and no acceptable candidate return `Unresolved`
-/// with the cause in the receipt.
+/// are labeled guesses. A candidate whose protected tokens (decimal digit
+/// runs, negation markers, semver components, ISO dates, hex digests, or
+/// units) differ from the query's cannot be selected unless a caller-declared
+/// alias matches the query exactly. No score is treated as a probability.
+/// Invalid policy, exhaustion, cancellation, and no acceptable candidate
+/// return `Unresolved` with the cause in the receipt.
 #[must_use]
 pub fn resolve(
     query: &str,
@@ -136,6 +161,17 @@ pub fn resolve(
 /// let answer = matching::resolve("raeder", &[Candidate::new("reader", "reader")],
 ///     &MatchRequest::default(), SelectionPolicy::default());
 /// assert!(matches!(answer.outcome, Outcome::BestGuess(_)));
+/// ```
+///
+/// A protected-class difference excludes a candidate outright, even one that
+/// would otherwise be the closest textual match:
+///
+/// ```
+/// use purrassist_core::{Outcome, matching::{self, Candidate, MatchRequest, SelectionPolicy}};
+/// let answer = matching::resolve("invoice-1001", &[Candidate::new("wrong", "invoice-1002")],
+///     &MatchRequest::default(), SelectionPolicy::default());
+/// assert_eq!(answer.outcome, Outcome::Unresolved);
+/// assert_eq!(answer.receipt.evidence[0].rule, "matching.numeric-identity-v1");
 /// ```
 #[must_use]
 pub fn resolve_governed(
@@ -173,6 +209,17 @@ pub fn resolve_governed(
             receipt,
         };
     }
+    // `rank_governed` already excluded every protected-class violation before
+    // scoring; surface that exclusion evidence here even when it leaves no
+    // candidate at all (the `Unresolved` branch below).
+    receipt.evidence.extend(
+        ranked
+            .receipt
+            .evidence
+            .iter()
+            .filter(|evidence| is_protected_class_rule(&evidence.rule))
+            .cloned(),
+    );
     let Outcome::Resolved(mut matches) = ranked.outcome else {
         receipt.stopped = StopReason::NoCandidate;
         receipt.usage = governor.usage();
@@ -181,6 +228,14 @@ pub fn resolve_governed(
             receipt,
         };
     };
+    if matches.is_empty() {
+        receipt.stopped = StopReason::NoCandidate;
+        receipt.usage = governor.usage();
+        return AssistResult {
+            outcome: Outcome::Unresolved,
+            receipt,
+        };
+    }
     let exact = matches.iter().filter(|entry| entry.score == 10_000).count();
     let best = matches[0].score;
     matches.retain(|entry| {
@@ -204,8 +259,10 @@ pub fn resolve_governed(
                 receipt.inferences.clear();
                 Outcome::Unresolved
             }
-            Ok(()) if matches.len() > 1 => Outcome::Ambiguous(matches),
-            Ok(()) => matches
+            Ok(order) if matches.len() > 1 => {
+                Outcome::Ambiguous(crate::provenance::permute(&matches, &order))
+            }
+            Ok(_) => matches
                 .into_iter()
                 .next()
                 .map_or(Outcome::Unresolved, |answer| {
@@ -221,12 +278,316 @@ pub fn resolve_governed(
     AssistResult { outcome, receipt }
 }
 
+/// A class of token no lattice normalizer is permitted to collapse. A
+/// difference here excludes a candidate outright regardless of how similar
+/// the surrounding text is, unless a caller-declared alias matches the
+/// query exactly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProtectedClass {
+    /// Maximal runs of Unicode decimal digits (`Nd`).
+    Digits,
+    /// `not`/`no`, `non-`/`un-`-prefixed negation words, and `!`.
+    Negation,
+    /// `major.minor.patch[-pre][+build]` semantic-version components.
+    Semver,
+    /// `YYYY-MM-DD` calendar dates.
+    IsoDate,
+    /// Hexadecimal runs of at least seven characters, containing a letter.
+    HexDigest,
+    /// A decimal quantity immediately paired with a unit abbreviation.
+    Unit,
+}
+impl ProtectedClass {
+    const ALL: [Self; 6] = [
+        Self::Digits,
+        Self::Negation,
+        Self::Semver,
+        Self::IsoDate,
+        Self::HexDigest,
+        Self::Unit,
+    ];
+    /// Stable evidence rule identifier. `Digits` keeps its original name
+    /// (`matching.numeric-identity-v1`) so callers pinned to it are unaffected.
+    const fn rule(self) -> &'static str {
+        match self {
+            Self::Digits => "matching.numeric-identity-v1",
+            Self::Negation => "matching.protected-negation-v1",
+            Self::Semver => "matching.protected-semver-v1",
+            Self::IsoDate => "matching.protected-iso-date-v1",
+            Self::HexDigest => "matching.protected-hex-digest-v1",
+            Self::Unit => "matching.protected-unit-v1",
+        }
+    }
+    const fn explanation(self) -> &'static str {
+        match self {
+            Self::Digits => "decimal digit runs differ from the query and no caller alias matches",
+            Self::Negation => "negation markers differ from the query and no caller alias matches",
+            Self::Semver => {
+                "semantic-version components differ from the query and no caller alias matches"
+            }
+            Self::IsoDate => "ISO calendar dates differ from the query and no caller alias matches",
+            Self::HexDigest => {
+                "hexadecimal digests differ from the query and no caller alias matches"
+            }
+            Self::Unit => "quantities with units differ from the query and no caller alias matches",
+        }
+    }
+}
+
+const UNITS: &[&str] = &[
+    "ms", "s", "min", "hr", "h", "kb", "mb", "gb", "tb", "pb", "b", "px", "pt", "em", "rem", "kg",
+    "mg", "g", "km", "cm", "mm", "ft",
+];
+const NEGATION_WORDS: &[&str] = &["not", "no", "non", "un"];
+const UN_PREFIXED_NEGATIONS: &[&str] = &[
+    "unable",
+    "unavailable",
+    "undone",
+    "unknown",
+    "unresolved",
+    "unnecessary",
+    "unwanted",
+    "untrue",
+    "unsafe",
+    "unsure",
+    "unclear",
+    "unhappy",
+    "undefined",
+    "unsupported",
+    "unauthorized",
+    "unauthorised",
+    "uninstalled",
+    "unsuccessful",
+    "unconfirmed",
+    "unpaid",
+    "uninitialized",
+    "unlikely",
+    "unequal",
+];
+
+fn is_protected_class_rule(rule: &str) -> bool {
+    ProtectedClass::ALL.iter().any(|class| class.rule() == rule)
+}
+
+/// One protected class's ordered token sequence extracted from `text`.
+fn protected_tokens(text: &str, class: ProtectedClass) -> Vec<String> {
+    match class {
+        ProtectedClass::Digits => digit_runs(&comparison_key(text)),
+        ProtectedClass::Negation => negation_tokens(text),
+        ProtectedClass::Semver => semver_tokens(&comparison_key(text)),
+        ProtectedClass::IsoDate => iso_date_tokens(&comparison_key(text)),
+        ProtectedClass::HexDigest => hex_digest_tokens(&comparison_key(text)),
+        ProtectedClass::Unit => unit_tokens(&comparison_key(text)),
+    }
+}
+
+fn digit_runs(key: &str) -> Vec<String> {
+    let mut runs = Vec::new();
+    let mut current = String::new();
+    for character in key.chars() {
+        if general_category(character) == "Nd" {
+            current.push(character);
+        } else if !current.is_empty() {
+            runs.push(core::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        runs.push(current);
+    }
+    runs
+}
+
+fn negation_tokens(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = lexical_tokens(text)
+        .into_iter()
+        .filter(|token| {
+            NEGATION_WORDS.contains(&token.as_str())
+                || UN_PREFIXED_NEGATIONS.contains(&token.as_str())
+        })
+        .collect();
+    if text.contains('!') {
+        out.push("!".into());
+    }
+    out.sort();
+    out
+}
+
+fn take_ascii_digits(chars: &[char], index: &mut usize) -> bool {
+    let start = *index;
+    while chars.get(*index).is_some_and(char::is_ascii_digit) {
+        *index += 1;
+    }
+    *index > start
+}
+
+fn semver_tokens(key: &str) -> Vec<String> {
+    let chars: Vec<char> = key.chars().collect();
+    let mut out = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        let start = index;
+        let mut cursor = index;
+        let matched = take_ascii_digits(&chars, &mut cursor)
+            && chars.get(cursor) == Some(&'.')
+            && {
+                cursor += 1;
+                take_ascii_digits(&chars, &mut cursor)
+            }
+            && chars.get(cursor) == Some(&'.')
+            && {
+                cursor += 1;
+                take_ascii_digits(&chars, &mut cursor)
+            };
+        if matched {
+            if matches!(chars.get(cursor), Some('-' | '+')) {
+                let mut suffix = cursor + 1;
+                while chars
+                    .get(suffix)
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+                {
+                    suffix += 1;
+                }
+                if suffix > cursor + 1 {
+                    cursor = suffix;
+                }
+            }
+            out.push(chars[start..cursor].iter().collect());
+            index = cursor;
+        } else {
+            index += 1;
+        }
+    }
+    out
+}
+
+fn iso_date_tokens(key: &str) -> Vec<String> {
+    let chars: Vec<char> = key.chars().collect();
+    let mut out = Vec::new();
+    let mut index = 0;
+    while index + 10 <= chars.len() {
+        let digits = |range: std::ops::Range<usize>| chars[range].iter().all(char::is_ascii_digit);
+        let boundary_before = index == 0 || !chars[index - 1].is_ascii_digit();
+        let boundary_after = !chars.get(index + 10).is_some_and(char::is_ascii_digit);
+        if boundary_before
+            && boundary_after
+            && digits(index..index + 4)
+            && chars[index + 4] == '-'
+            && digits(index + 5..index + 7)
+            && chars[index + 7] == '-'
+            && digits(index + 8..index + 10)
+        {
+            out.push(chars[index..index + 10].iter().collect());
+            index += 10;
+        } else {
+            index += 1;
+        }
+    }
+    out
+}
+
+fn hex_digest_tokens(key: &str) -> Vec<String> {
+    let chars: Vec<char> = key.chars().collect();
+    let mut out = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        if chars[index].is_ascii_hexdigit() {
+            let start = index;
+            while chars.get(index).is_some_and(char::is_ascii_hexdigit) {
+                index += 1;
+            }
+            if index - start >= 7 && chars[start..index].iter().any(char::is_ascii_alphabetic) {
+                out.push(chars[start..index].iter().collect());
+            }
+        } else {
+            index += 1;
+        }
+    }
+    out
+}
+
+fn unit_tokens(key: &str) -> Vec<String> {
+    let chars: Vec<char> = key.chars().collect();
+    let mut out = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        if chars[index].is_ascii_digit() {
+            let start = index;
+            while chars.get(index).is_some_and(char::is_ascii_digit) {
+                index += 1;
+            }
+            let mut letters_start = index;
+            if chars.get(letters_start) == Some(&' ') {
+                letters_start += 1;
+            }
+            let mut letters_end = letters_start;
+            while chars
+                .get(letters_end)
+                .is_some_and(char::is_ascii_alphabetic)
+            {
+                letters_end += 1;
+            }
+            let unit: String = chars[letters_start..letters_end].iter().collect();
+            let boundary_after = !chars.get(letters_end).is_some_and(|c| c.is_alphanumeric());
+            if letters_end > letters_start && UNITS.contains(&unit.as_str()) && boundary_after {
+                let digits: String = chars[start..index].iter().collect();
+                out.push(format!("{digits}{unit}"));
+                index = letters_end;
+            }
+        } else {
+            index += 1;
+        }
+    }
+    out
+}
+
+/// Protected classes where `query` and `text` differ, unless `bypass` (an
+/// exact caller alias match) waives the check entirely.
+///
+/// # Errors
+/// Returns governor exhaustion before allocating the extraction scratch.
+fn protected_class_violations(
+    query: &str,
+    text: &str,
+    bypass: bool,
+    governor: &mut Governor,
+) -> Result<Vec<ProtectedClass>, StopReason> {
+    if bypass || query == text {
+        return Ok(Vec::new());
+    }
+    governor.charge(
+        Resource::Work,
+        size(query.len().saturating_add(text.len())).saturating_mul(8),
+    )?;
+    // Every class's extraction allocates a handful of Strings proportional to
+    // input length (the negation class additionally tokenizes both strings,
+    // each tokenization allocating a comparison key, a token vector, and a
+    // dedup set); charge a conservative bound before allocating any of them,
+    // released automatically once this function returns.
+    let reservation = size(query.len().saturating_add(text.len()))
+        .saturating_mul(160)
+        .saturating_add(512);
+    let _lease = governor.lease_scratch(reservation)?;
+    let violations = ProtectedClass::ALL
+        .into_iter()
+        .filter(|class| protected_tokens(query, *class) != protected_tokens(text, *class))
+        .collect();
+    Ok(violations)
+}
+
+/// Records ambiguous-selection evidence and returns the permutation the
+/// caller must apply to its own `matches`-indexed candidate vector before
+/// building `Outcome::Ambiguous` (identity when not ambiguous), so that
+/// vector and `receipt.alternatives` (already ordered by
+/// `crate::provenance::Published::order`) share one order.
 fn record_selection(
     matches: &[RankedMatch],
     policy: SelectionPolicy,
     governor: &mut Governor,
     receipt: &mut Receipt,
-) -> Result<(), StopReason> {
+) -> Result<Vec<usize>, StopReason> {
+    let ambiguous = matches.len() > 1;
+    let mut forest = ambiguous.then(|| crate::provenance::Forest::new(governor));
+    let mut derivations = Vec::with_capacity(matches.len());
     for entry in matches {
         let serialized = entry.to_node().to_json();
         let storage = size(serialized.len()).saturating_mul(4).saturating_add(512);
@@ -259,23 +620,30 @@ fn record_selection(
                 value: entry.candidate.id.clone(),
             }]
         };
-        if matches.len() > 1 {
-            receipt
-                .alternatives
-                .push(crate::contract::AlternativeReceipt {
-                    output: Digest::of(serialized.as_bytes()),
-                    cost: 0,
-                    evidence: vec![evidence],
-                    losses: Vec::new(),
-                    inferences,
-                    validations: Vec::new(),
-                });
+        if let Some(forest) = forest.as_mut() {
+            let mut derivation =
+                crate::provenance::Derivation::new(Digest::of(serialized.as_bytes()), 0);
+            derivation.push(forest.evidence(governor, evidence)?);
+            for inference in inferences {
+                derivation.push(forest.inference(governor, inference)?);
+            }
+            derivations.push(derivation);
         } else {
             receipt.evidence.push(evidence);
             receipt.inferences.extend(inferences);
         }
     }
-    Ok(())
+    if let Some(forest) = forest {
+        let published = forest.publish(&derivations, governor)?;
+        // `receipt.evidence` may already carry protected-class exclusion
+        // evidence recorded before selection; extend rather than replace it.
+        receipt.evidence.extend(published.evidence);
+        receipt.inferences.extend(published.inferences);
+        receipt.alternatives = published.alternatives;
+        Ok(published.order)
+    } else {
+        Ok((0..matches.len()).collect())
+    }
 }
 
 /// Caller-selected matching behavior.
@@ -360,11 +728,34 @@ pub fn rank_governed(
                     candidate.id
                 )));
             }
+            if request.effort != Effort::Exact {
+                let bypass = candidate
+                    .aliases
+                    .iter()
+                    .any(|alias| comparison_key(alias) == comparison_key(query));
+                let violations =
+                    protected_class_violations(query, &candidate.text, bypass, governor)?;
+                if !violations.is_empty() {
+                    governor.charge(Resource::EvidenceEntries, size(violations.len()))?;
+                    for class in violations {
+                        receipt.evidence.push(Evidence {
+                            rule: class.rule().into(),
+                            explanation: class.explanation().into(),
+                            span: None,
+                            destination: candidate.id.clone(),
+                        });
+                    }
+                    continue;
+                }
+            }
             let mut signals = signals(query, &candidate.text, request, governor)?;
-            let alias_storage =
+            let alias_lease =
                 append_alias_signals(query, candidate, request, governor, &mut signals)?;
             let score = signals.iter().map(|signal| signal.score).max().unwrap_or(0);
             if score > 0 {
+                // The alias reservation now backs a kept, ranked match:
+                // retain it permanently instead of releasing it.
+                alias_lease.retain();
                 reserve_ranked(candidate, &signals, alias_bytes, governor)?;
                 for signal in &signals {
                     receipt.evidence.push(Evidence {
@@ -379,9 +770,7 @@ pub fn rank_governed(
                     score,
                     signals,
                 });
-            } else {
-                governor.release_scratch(alias_storage)?;
-            }
+            } // else: `alias_lease` drops here, releasing its charge.
         }
         Ok(())
     })();
@@ -425,9 +814,9 @@ fn append_alias_signals(
     request: &MatchRequest,
     governor: &mut Governor,
     signals: &mut Vec<Signal>,
-) -> Result<u64, StopReason> {
+) -> Result<crate::contract::ScratchLease, StopReason> {
     if request.effort == Effort::Exact {
-        return Ok(0);
+        return Ok(governor.scratch_lease_for(0));
     }
     let mut alias_storage = 0_u64;
     for alias in &candidate.aliases {
@@ -443,7 +832,7 @@ fn append_alias_signals(
             });
         }
     }
-    Ok(alias_storage)
+    Ok(governor.scratch_lease_for(alias_storage))
 }
 
 fn reserve_ranked(
@@ -496,18 +885,23 @@ fn signals(
     if request.effort == Effort::Exact {
         return Ok(output);
     }
-    // Reserve a conservative bound for decomposition, folding, and comparison keys.
-    let reservation = size(query.len().saturating_add(text.len())).saturating_mul(128);
-    governor.charge(Resource::ScratchBytes, reservation)?;
+    // Reserve a conservative bound covering every normalized key this
+    // refinement lattice allocates for both strings, before allocating any
+    // of them: NFC, case-fold, the width/compatibility-fold comparison key,
+    // diacritic-stripped keys, UTS-39 skeletons, depunctuated keys, and (at
+    // `Standard` effort and above) the lexical-Jaccard token sets, each of
+    // which tokenizes both strings into a vector and a dedup set.
+    let reservation = size(query.len().saturating_add(text.len()))
+        .saturating_mul(320)
+        .saturating_add(512);
+    let _lease = governor.lease_scratch(reservation)?;
+    governor.charge(
+        Resource::Work,
+        size(query.len().saturating_add(text.len())).saturating_mul(8),
+    )?;
     let left = comparison_key(query);
     let right = comparison_key(text);
-    if left == right {
-        output.push(Signal {
-            method: "unicode-17-caseless-v1",
-            score: 9900,
-            detail: "equivalent after pinned Unicode normalization and full case folding".into(),
-        });
-    }
+    lattice_signal(query, text, &left, &right, &mut output);
     if depunctuate(query) == depunctuate(text) {
         output.push(Signal {
             method: "unicode-17-depunctuated-v1",
@@ -555,11 +949,68 @@ fn signals(
             ),
         });
     }
-    governor.release_scratch(reservation)?;
     Ok(output)
 }
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
+/// Test the query/text pair against the refinement lattice finer than the
+/// width/compatibility-fold comparison key (`left`/`right`), finest first,
+/// emitting exactly one named signal for the finest level that matches.
+/// Coarser levels are only tested once every finer level has failed, so a
+/// finer match's evidence is never shadowed by a coarser, less specific one.
+fn lattice_signal(query: &str, text: &str, left: &str, right: &str, output: &mut Vec<Signal>) {
+    let nfc_query = normalize(query, Normalization::Nfc);
+    let nfc_text = normalize(text, Normalization::Nfc);
+    if nfc_query == nfc_text {
+        output.push(Signal {
+            method: "unicode-17-nfc-v1",
+            score: 9950,
+            detail: "equivalent after canonical composition, before case or width folding".into(),
+        });
+        return;
+    }
+    if case_fold(&nfc_query) == case_fold(&nfc_text) {
+        output.push(Signal {
+            method: "unicode-17-case-fold-v1",
+            score: 9925,
+            detail: "equivalent after canonical composition and full case folding, before width or compatibility folding"
+                .into(),
+        });
+        return;
+    }
+    if left == right {
+        output.push(Signal {
+            method: "unicode-17-caseless-v1",
+            score: 9900,
+            detail: "equivalent after pinned Unicode normalization and full case folding".into(),
+        });
+        return;
+    }
+    let left_unmarked = diacritic_key(left);
+    let right_unmarked = diacritic_key(right);
+    if !left_unmarked.is_empty() && left_unmarked == right_unmarked {
+        output.push(Signal {
+            method: "unicode-17-diacritic-insensitive-v1",
+            score: 9700,
+            detail: "equivalent after Unicode decomposition and removal of combining marks".into(),
+        });
+        return;
+    }
+    let left_skeleton = skeleton(&left_unmarked);
+    let right_skeleton = skeleton(&right_unmarked);
+    if !left_skeleton.is_empty() && left_skeleton == right_skeleton {
+        output.push(Signal {
+            method: "unicode-17-skeleton-v1",
+            score: 9650,
+            detail:
+                "equivalent UTS-39 confusable skeletons after case, width, and diacritic folding"
+                    .into(),
+        });
+    }
+}
+fn diacritic_key(key: &str) -> String {
+    normalize(key, Normalization::Nfd)
+        .chars()
+        .filter(|character| !general_category(*character).starts_with('M'))
+        .collect()
 }
 fn fraction(numerator: usize, denominator: usize, scale: u32) -> u32 {
     if denominator == 0 {
@@ -621,9 +1072,10 @@ pub fn damerau_levenshtein(
         .checked_mul(columns + 2)
         .ok_or(StopReason::BudgetExceeded(Resource::ScratchBytes))?;
     governor.charge(Resource::Work, size(cells))?;
-    // Charge at least 64-bit cells so the same request has the same governor
+    // Charge the portable, 64-bit-layout cell size (`usize::CHARGE`, never
+    // `size_of::<usize>()`) so the same request has the same governor
     // decision on native 64-bit and WASM 32-bit targets.
-    let cell_bytes = core::mem::size_of::<usize>().max(8);
+    let cell_bytes = usize::CHARGE;
     let scratch = size(cells)
         .saturating_mul(size(cell_bytes))
         .saturating_add(size(rows + columns).saturating_mul(128));

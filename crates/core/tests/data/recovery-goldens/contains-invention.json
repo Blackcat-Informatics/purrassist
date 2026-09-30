@@ -1,0 +1,27 @@
+{
+  "description": "a required array must contain at least one matching element",
+  "schema": {
+    "type": "object",
+    "required": [
+      "values"
+    ],
+    "properties": {
+      "values": {
+        "type": "array",
+        "contains": {
+          "const": "flag"
+        }
+      }
+    }
+  },
+  "input": "{}",
+  "outcome": "best_guess",
+  "output": {
+    "values": [
+      "flag"
+    ]
+  },
+  "ledger_rules": [
+    "json.required.invent"
+  ]
+}

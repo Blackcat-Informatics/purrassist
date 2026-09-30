@@ -256,6 +256,62 @@ fn apply(result: &Node, source: &str) -> String {
     applied.text
 }
 #[test]
+fn task_receipts_report_split_marker_join_and_preserve_exact_undo() {
+    let root = std::env::temp_dir().join(format!("purrassist-task-join-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let tools = Tools::new(&root).unwrap();
+    for newline in ["\n", "\r\n", "\r"] {
+        for (prefix, continuation, path) in [("- ", "  ", "[0]"), ("> - ", ">   ", "[0,0]")] {
+            let source = format!("{prefix}[{newline}{continuation}] café{newline}");
+            let result = call(
+                &tools,
+                "plan_markdown_task",
+                &source,
+                &format!(r#"{{"path":{path},"checked":true}}"#),
+            );
+            assert_eq!(
+                apply(&result, &source),
+                format!("{prefix}[x] café{newline}")
+            );
+            let evidence = result.pointer("/receipt/evidence/0").unwrap();
+            assert_eq!(
+                evidence.get("rule").unwrap().as_str(),
+                Some("markdown.task-marker-join.v1")
+            );
+            assert_eq!(
+                offset(evidence.pointer("/span/start").unwrap()),
+                prefix.len() + 1
+            );
+            assert_eq!(
+                offset(evidence.pointer("/span/end").unwrap()),
+                prefix.len() + 1 + newline.len() + continuation.len()
+            );
+            let unchanged = call(
+                &tools,
+                "plan_markdown_task",
+                &source,
+                &format!(r#"{{"path":{path},"checked":false}}"#),
+            );
+            assert_eq!(apply(&unchanged, &source), source);
+            assert_eq!(
+                unchanged.pointer("/receipt/evidence").unwrap().to_json(),
+                "[]"
+            );
+        }
+    }
+    let source = "- [ ] café\n";
+    let result = call(
+        &tools,
+        "plan_markdown_task",
+        source,
+        r#"{"path":[0],"checked":true}"#,
+    );
+    assert_eq!(apply(&result, source), "- [x] café\n");
+    assert_eq!(result.pointer("/receipt/evidence").unwrap().to_json(), "[]");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn document_tools_preserve_crlf_unicode_context_and_edit_identity() {
     let root =
         std::env::temp_dir().join(format!("purrassist-markdown-tool-{}", std::process::id()));
@@ -610,5 +666,93 @@ fn list_item_tool_inserts_replaces_and_removes_nested_items() {
                 .is_err()
         );
     }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn structural_receipts_identify_setext_relevel_and_multiline_rename() {
+    let root = std::env::temp_dir().join(format!(
+        "purrassist-heading-transform-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let tools = Tools::new(&root).unwrap();
+    let source = "  Hot\r\nTea\r\n  --- \t\r\n\r\nKeep.\r\n";
+    for (level, expected, style, description) in [
+        (
+            1,
+            "  Hot\r\nTea\r\n  === \t\r\n\r\nKeep.\r\n",
+            "setext",
+            "Only underline marker characters change",
+        ),
+        (
+            3,
+            "  ### Hot Tea\r\n\r\nKeep.\r\n",
+            "ATX",
+            "Title lines are joined with spaces",
+        ),
+    ] {
+        let result = call(
+            &tools,
+            "plan_markdown_structure",
+            source,
+            &format!(
+                r#"{{"op":"section_move","heading":0,"position":"start","new_level":{level}}}"#
+            ),
+        );
+        assert_eq!(apply(&result, source), expected);
+        let evidence = result.pointer("/receipt/evidence/1").unwrap();
+        assert_eq!(
+            evidence.get("rule").unwrap().as_str(),
+            Some("markdown.section-relevel.v1")
+        );
+        let detail = evidence.get("explanation").unwrap().as_str().unwrap();
+        assert!(detail.contains(&format!(
+            "heading level 2 -> {level}; style setext -> {style}; original title lines: 2"
+        )));
+        assert!(detail.contains(description));
+        assert_eq!(offset(evidence.pointer("/span/start").unwrap()), 0);
+        assert_eq!(
+            offset(evidence.pointer("/span/end").unwrap()),
+            "  Hot\r\nTea\r\n  --- \t\r\n".len()
+        );
+    }
+    let renamed = call(
+        &tools,
+        "plan_markdown_structure",
+        source,
+        r#"{"op":"section_rename","heading":0,"title":"Chai"}"#,
+    );
+    assert_eq!(
+        apply(&renamed, source),
+        "  Chai\r\n  --- \t\r\n\r\nKeep.\r\n"
+    );
+    let evidence = renamed.pointer("/receipt/evidence/1").unwrap();
+    assert_eq!(
+        evidence.get("rule").unwrap().as_str(),
+        Some("markdown.heading-title-collapse.v1")
+    );
+    assert!(
+        evidence
+            .get("explanation")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("replaced 2 setext title lines")
+    );
+    assert_eq!(
+        offset(evidence.pointer("/span/end").unwrap()),
+        "  Hot\r\nTea\r\n".len()
+    );
+    let unchanged = call(
+        &tools,
+        "plan_markdown_structure",
+        source,
+        r#"{"op":"section_move","heading":0,"position":"start","new_level":2}"#,
+    );
+    let Value::Array(evidence) = &unchanged.pointer("/receipt/evidence").unwrap().value else {
+        panic!()
+    };
+    assert_eq!(evidence.len(), 1);
     std::fs::remove_dir_all(root).unwrap();
 }

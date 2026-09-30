@@ -15,9 +15,12 @@ assert!(report.valid);
 ```
 
 Grammar acceptance does not establish type correctness or execution behavior.
-Parser progress is bounded, but Tree-sitter's internal allocations are not yet
-covered by a hard scratch-memory bound. Native/WASI transcript checks exercise
-all five grammars. Full compiler-oracle qualification remains unfinished.
+Parser progress and external allocations are accounted per operation;
+Tree-sitter allocation overshoot between progress callbacks has explicit,
+measured limits. Native/WASI transcripts exercise all five grammars, and
+independent compiler probes check accepted and rejected buffers. See the
+[qualification record](https://github.com/Blackcat-Informatics/purrassist/blob/main/docs/QUALIFICATION.md)
+for measurement scope and limits.
 
 First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0. Pinned grammar dependencies
 retain their own licenses and are isolated from the dependency-free core.

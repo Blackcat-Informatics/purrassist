@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Caller-owned semantic rules: explicit concepts, modifiers, and auditable resolution.
+use crate::contract::saturating_size as size;
 use crate::{
     AssistResult, Budget, Effort, Governor, Outcome, Receipt, StopReason,
     contract::{Evidence, Resource},
@@ -231,9 +232,6 @@ impl Domain {
         }
         Ok(next)
     }
-}
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 /// Caller-supplied vector similarity. No embedding model is loaded by the core.

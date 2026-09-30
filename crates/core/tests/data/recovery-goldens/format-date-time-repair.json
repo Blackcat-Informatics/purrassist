@@ -1,0 +1,22 @@
+{
+  "description": "a date-time with a plain space separator is repaired",
+  "schema": {
+    "type": "object",
+    "required": [
+      "at"
+    ],
+    "properties": {
+      "at": {
+        "type": "string",
+        "format": "date-time"
+      }
+    },
+    "$schema": "http://localhost:1234/draft2020-12/format-assertion-true.json"
+  },
+  "input": "{\"at\":\"2026-01-02 03:04:05Z\"}",
+  "outcome": "resolved",
+  "output": {
+    "at": "2026-01-02 03:04:05Z"
+  },
+  "ledger_rules": []
+}

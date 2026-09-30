@@ -144,8 +144,23 @@ fn conflicting_rules_have_separate_output_bound_ledgers() {
     };
     assert_eq!(answers.len(), 2);
     assert_eq!(result.receipt.alternatives.len(), answers.len());
-    assert_eq!(result.receipt.evidence, Vec::new());
-    assert_eq!(result.receipt.inferences, Vec::new());
+    // Both surviving interpretations matched the *same* "tea" phrase rule
+    // identically (same rule id, same prior-assignment context, same
+    // assigned value): the derivation forest (crates/core/src/provenance.rs)
+    // recognizes that shared evidence and its derived "drink" inference as
+    // depended on by *every* alternative and promotes them once to the
+    // top-level, selected-result ledgers rather than duplicating them into
+    // both alternatives (crates/core/src/contract.rs `RECEIPT_VERSION` 2).
+    // Only the temperature rule, which differs between the two
+    // interpretations, remains alternative-specific below.
+    assert_eq!(result.receipt.evidence.len(), 1);
+    assert!(result.receipt.evidence[0].rule.ends_with("::tea"));
+    assert_eq!(result.receipt.inferences.len(), 1);
+    assert_eq!(
+        result.receipt.inferences[0].evidence.destination,
+        "/desired/drink"
+    );
+    assert_eq!(result.receipt.inferences[0].kind, InferenceKind::Derived);
     for (answer, ledger) in answers.iter().zip(&result.receipt.alternatives) {
         assert_eq!(
             ledger.output,
@@ -169,8 +184,8 @@ fn conflicting_rules_have_separate_output_bound_ledgers() {
                 .iter()
                 .any(|entry| entry.rule.ends_with(expected))
         );
-        assert_eq!(ledger.evidence.len(), 2);
-        assert_eq!(ledger.inferences.len(), 2);
+        assert_eq!(ledger.evidence.len(), 1);
+        assert_eq!(ledger.inferences.len(), 1);
         assert!(
             ledger
                 .inferences

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 use purrassist::{
     Effort, Outcome, RecoveryRequest, Schema,
-    json::{self, Node, Value},
+    json::{self, Value},
     matching::{self, Candidate, MatchRequest},
     wire::{array, integer, object, string},
 };
@@ -76,26 +76,22 @@ fn decode(args: &[String]) -> Result<u8, String> {
     let schema = Schema::compile(&source).map_err(|e| e.to_string())?;
     let input = read_input(input_path)?;
     if args[0] == "validate" {
-        let node = json::parse(&input).map_err(|e| e.to_string())?;
-        let report = schema.validate(&node).map_err(|e| e.to_string())?;
-        println!(
-            "{}",
-            object([
-                ("valid", Node::new(Value::Bool(report.valid))),
-                ("schema", string(report.schema.to_string())),
-                (
-                    "violations",
-                    array(report.violations.iter().map(|v| object([
-                        ("instance_path", string(&v.instance_path)),
-                        ("schema_path", string(&v.schema_path)),
-                        ("keyword", string(&v.keyword)),
-                        ("message", string(&v.message)),
-                    ])))
-                ),
-            ])
-            .to_json()
+        // Emit exactly the `validate_json` tool's output: the schema
+        // document and instance are decoded fresh here (rather than reusing
+        // the `schema` compiled above only to check for a parse error early)
+        // so this command's output is identical to calling that tool.
+        let schema_document = json::parse(&source).map_err(|e| e.to_string())?;
+        let instance = json::parse(&input).map_err(|e| e.to_string())?;
+        let result = purrassist_host::tools::validate_json(&object([
+            ("schema", schema_document),
+            ("instance", instance),
+        ]))?;
+        println!("{}", result.to_json());
+        let valid = matches!(
+            result.get("valid").map(|node| &node.value),
+            Some(Value::Bool(true))
         );
-        return Ok(if report.valid { 0 } else { 4 });
+        return Ok(if valid { 0 } else { 4 });
     }
     let result = schema.recover(&input, request);
     println!("{}", result.to_node().to_json());

@@ -34,6 +34,8 @@ already accept caller-owned governors. The same access is available for
 `matching::rank_governed`, `edits::locate_governed`,
 `edits::locate_fuzzy_governed`, `edits::plan_unified_governed`,
 `EditPlan::apply_governed`, and `syntax::apply_checked_governed`.
+`helpers::Pending` also retains the preparation governor's cancellation token
+and cumulative budget when `complete` resumes response extraction and recovery.
 Convenience methods delegate to these engines. Governed receipts describe the
 supplied limits and cumulative usage, including work performed before the call.
 
@@ -55,7 +57,7 @@ Tests cover cross-owner cancellation of a live governor after successful work,
 sticky exhaustion precedence, independent accounting, cancelled planning and
 matching, source-preserving file refusal before commit, and retry with a fresh
 token. The native/WASI transcript also executes token cancellation; browser-WASM
-compilation checks the shared-token implementation on that target.
+execution compares the shared-token transcript against native output.
 
 ## MCP transport
 

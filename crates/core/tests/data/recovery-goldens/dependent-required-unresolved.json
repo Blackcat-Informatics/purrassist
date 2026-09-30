@@ -1,0 +1,22 @@
+{
+  "description": "an unmet dependentRequired trigger has no automatic repair",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "credit_card": {
+        "type": "string"
+      },
+      "billing_address": {
+        "type": "string"
+      }
+    },
+    "dependentRequired": {
+      "credit_card": [
+        "billing_address"
+      ]
+    }
+  },
+  "input": "{\"credit_card\":\"4111\"}",
+  "outcome": "unresolved",
+  "ledger_rules": []
+}

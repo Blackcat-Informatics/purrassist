@@ -3,9 +3,10 @@
 //! Composed, best-first recovery with whole-schema validation and explicit guesses.
 mod proposals;
 use super::Schema;
+use crate::contract::saturating_size as size;
 use crate::contract::{
-    AlternativeReceipt, AssistResult, Budget, Effort, Evidence, Governor, Inference, InferenceKind,
-    Loss, Outcome, Receipt, Resource, SourceSpan, StopReason, Validation,
+    AssistResult, Budget, Effort, Evidence, Governor, Inference, InferenceKind, Loss, Outcome,
+    Receipt, Resource, SourceSpan, StopReason, Validation,
 };
 use crate::json::{Node, ParseFailure, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -45,6 +46,9 @@ struct Search<'a> {
     queue: BTreeMap<(u64, u64), Candidate>,
     seen: BTreeMap<String, u64>,
     serial: u64,
+    /// Task 6 wiring: deduplicated by destination (one distinct compiled
+    /// pattern), across every candidate this search actually validated.
+    pattern_evidence: BTreeMap<String, Evidence>,
 }
 impl Schema {
     /// Recover a schema-valid interpretation of imperfect UTF-8 JSON input.
@@ -103,14 +107,24 @@ impl Schema {
             queue: BTreeMap::new(),
             seen: BTreeMap::new(),
             serial: 0,
+            pattern_evidence: BTreeMap::new(),
         };
-        let outcome = match search.run(input) {
+        let outcome = match search
+            .unsupported_vocabulary_evidence()
+            .and_then(|()| search.run(input))
+        {
             Ok(outcome) => outcome,
             Err(reason) => {
                 search.receipt.stopped = reason;
                 Outcome::Unresolved
             }
         };
+        // Task 6 wiring: every distinct pattern actually validated during
+        // this search, regardless of which candidate (if any) was accepted.
+        search
+            .receipt
+            .evidence
+            .extend(search.pattern_evidence.into_values());
         search.receipt.usage = search.governor.usage();
         AssistResult {
             outcome,
@@ -119,6 +133,33 @@ impl Schema {
     }
 }
 impl Search<'_> {
+    /// Requirement 5: every recovery receipt carries an
+    /// `unsupported-vocabulary` evidence entry for each optional (`false`)
+    /// `$vocabulary` URI this schema's dialects did not recognize, naming
+    /// the declaring resource's own keywords left unevaluated.
+    fn unsupported_vocabulary_evidence(&mut self) -> Result<(), StopReason> {
+        for unsupported in self.schema.unsupported_vocabularies() {
+            self.governor.charge(Resource::EvidenceEntries, 1)?;
+            let explanation = format!(
+                "vocabulary {} is not supported; keywords left unevaluated: {}",
+                unsupported.uri,
+                unsupported.keywords.join(", ")
+            );
+            self.governor.charge(
+                Resource::ScratchBytes,
+                size(unsupported.uri.len())
+                    .saturating_add(size(explanation.len()))
+                    .saturating_add(64),
+            )?;
+            self.receipt.evidence.push(Evidence {
+                rule: "schema.vocabulary.unsupported-v1".into(),
+                explanation,
+                span: None,
+                destination: unsupported.uri,
+            });
+        }
+        Ok(())
+    }
     fn evidence(&self, node: &Node, path: &str, rule: &str, explanation: String) -> Evidence {
         Evidence {
             rule: rule.into(),
@@ -176,6 +217,18 @@ impl Search<'_> {
             }
             let report = self.schema.validate_with(&candidate.node, self.governor)?;
             self.governor.charge(Resource::EvidenceEntries, 1)?;
+            // Every violation's diagnostic line is permanently retained in the
+            // receipt (never released), so it is charged directly, before the
+            // `format!` calls that build it, like `retain_source`.
+            let diagnostic_bytes = report.violations.iter().fold(0_u64, |sum, violation| {
+                sum.saturating_add(size(violation.instance_path.len()))
+                    .saturating_add(size(violation.message.len()))
+                    .saturating_add(size(violation.schema_path.len()))
+                    .saturating_add(8)
+            });
+            self.governor
+                .charge(Resource::ScratchBytes, diagnostic_bytes)?;
+            let validation = self.receipt.validations.len();
             self.receipt.validations.push(Validation {
                 validator: "purrassist.schema.draft2020-12.v1".into(),
                 constraint: self.schema.digest.to_string(),
@@ -191,9 +244,47 @@ impl Search<'_> {
                     })
                     .collect(),
             });
+            // Requirement 1 / Task 6 wiring: format annotation evidence and
+            // pattern-engine evidence are search-time signals, not tied to
+            // any one alternative, so they are retained unconditionally
+            // (after the index captured above) rather than routed through
+            // the derivation forest's per-alternative ledgers.
+            self.governor.charge(
+                Resource::EvidenceEntries,
+                size(report.format_evidence.len()),
+            )?;
+            let format_bytes = report.format_evidence.iter().fold(0_u64, |sum, entry| {
+                sum.saturating_add(size(entry.validator.len()))
+                    .saturating_add(size(entry.constraint.len()))
+                    .saturating_add(
+                        entry
+                            .diagnostics
+                            .iter()
+                            .fold(0, |inner, line| inner.saturating_add(size(line.len()))),
+                    )
+                    .saturating_add(32)
+            });
+            self.governor.charge(Resource::ScratchBytes, format_bytes)?;
+            self.receipt
+                .validations
+                .extend(report.format_evidence.iter().cloned());
+            for evidence in &report.pattern_evidence {
+                if !self.pattern_evidence.contains_key(&evidence.destination) {
+                    self.governor.charge(Resource::EvidenceEntries, 1)?;
+                    self.governor.charge(
+                        Resource::ScratchBytes,
+                        size(evidence.rule.len())
+                            .saturating_add(size(evidence.explanation.len()))
+                            .saturating_add(size(evidence.destination.len()))
+                            .saturating_add(32),
+                    )?;
+                    self.pattern_evidence
+                        .insert(evidence.destination.clone(), evidence.clone());
+                }
+            }
             if report.valid {
                 winning_cost = Some(cost);
-                accepted.push((candidate, self.receipt.validations.len() - 1));
+                accepted.push((candidate, validation));
             } else if self.request.effort != Effort::Exact && winning_cost.is_none() {
                 let mut visited = BTreeSet::new();
                 self.propose(
@@ -203,6 +294,7 @@ impl Search<'_> {
                     (&[], ""),
                     0,
                     &mut visited,
+                    &mut Vec::new(),
                 )?;
             }
         }
@@ -217,38 +309,60 @@ impl Search<'_> {
             .iter()
             .any(|(candidate, _)| !candidate.inferences.is_empty());
         let ambiguous = accepted.len() > 1;
-        // Admit the new records before publishing any of them. Existing ledger
-        // entries are moved, preserving their original resource charges.
+        let mut nodes = Vec::with_capacity(accepted.len());
         if ambiguous {
-            self.governor
-                .charge(Resource::EvidenceEntries, size(accepted.len()))?;
-            self.governor.charge(
-                Resource::ScratchBytes,
-                size(accepted.len()).saturating_mul(256),
-            )?;
-        }
-        let mut nodes = Vec::new();
-        let mut alternatives = Vec::new();
-        for (candidate, validation) in accepted {
-            if ambiguous {
+            // Route through the derivation forest: evidence, losses, and
+            // inferences reachable from *every* accepted candidate (for
+            // example, an admission-level correction applied identically
+            // regardless of which later proposal was chosen) are promoted
+            // once to the shared, top-level ledgers instead of being
+            // duplicated into every alternative. Nothing is admitted to
+            // `self.receipt` until every candidate is interned and the whole
+            // forest is published, so exhaustion here never leaves a partial
+            // alternative list.
+            let mut forest = crate::provenance::Forest::new(self.governor);
+            let mut derivations = Vec::with_capacity(accepted.len());
+            for (candidate, validation) in accepted {
                 let output = candidate.node.to_json();
                 self.governor.charge(Resource::Work, size(output.len()))?;
-                alternatives.push(AlternativeReceipt {
-                    output: crate::digest::Digest::of(output.as_bytes()),
-                    cost: candidate.cost,
-                    evidence: candidate.evidence,
-                    losses: candidate.losses,
-                    inferences: candidate.inferences,
-                    validations: vec![validation],
-                });
-            } else {
-                self.receipt.evidence.extend(candidate.evidence);
-                self.receipt.losses.extend(candidate.losses);
-                self.receipt.inferences.extend(candidate.inferences);
+                let mut derivation = crate::provenance::Derivation::new(
+                    crate::digest::Digest::of(output.as_bytes()),
+                    candidate.cost,
+                );
+                for evidence in candidate.evidence {
+                    derivation.push(forest.evidence(self.governor, evidence)?);
+                }
+                for loss in candidate.losses {
+                    derivation.push(forest.loss(self.governor, loss)?);
+                }
+                for inference in candidate.inferences {
+                    derivation.push(forest.inference(self.governor, inference)?);
+                }
+                derivation.push(forest.validation(self.governor, validation, true)?);
+                derivations.push(derivation);
+                nodes.push(candidate.node);
             }
+            let published = forest.publish(&derivations, self.governor)?;
+            self.receipt.evidence = published.evidence;
+            self.receipt.losses = published.losses;
+            self.receipt.inferences = published.inferences;
+            self.receipt.alternatives = published.alternatives;
+            // `receipt.alternatives` is now ordered by `Forest::publish`'s
+            // ranking; permute `nodes` (the `Outcome::Ambiguous` candidates)
+            // by the same `published.order` so both share one order (see
+            // `AlternativeReceipt`'s documentation) instead of only agreeing
+            // at a wire-serialization boundary.
+            nodes = crate::provenance::permute(&nodes, &published.order);
+        } else {
+            let (candidate, _validation) = accepted
+                .into_iter()
+                .next()
+                .expect("exactly one accepted candidate");
+            self.receipt.evidence.extend(candidate.evidence);
+            self.receipt.losses.extend(candidate.losses);
+            self.receipt.inferences.extend(candidate.inferences);
             nodes.push(candidate.node);
         }
-        self.receipt.alternatives = alternatives;
         Ok(if nodes.len() > 1 {
             Outcome::Ambiguous(nodes)
         } else if guesses {
@@ -304,6 +418,12 @@ impl Search<'_> {
                     });
                 }
                 if !range.is_empty() {
+                    // Charge the retained loss copy (and its evidence clone)
+                    // before allocating either.
+                    self.governor.charge(
+                        Resource::ScratchBytes,
+                        size(range.len()).saturating_add(128),
+                    )?;
                     candidate.losses.push(Loss {
                         evidence: evidence.clone(),
                         original: input[range].into(),
@@ -323,6 +443,10 @@ impl Search<'_> {
                         }),
                         destination: String::new(),
                     };
+                    self.governor.charge(
+                        Resource::ScratchBytes,
+                        size(range.len()).saturating_add(128),
+                    )?;
                     candidate.losses.push(Loss {
                         evidence: evidence.clone(),
                         original: input[range.clone()].into(),
@@ -358,6 +482,16 @@ impl Search<'_> {
         if original.equivalent(&replacement) {
             return Ok(());
         }
+        // `parent.clone()` duplicates the whole candidate (node tree and
+        // every ledger so far); `original`/`replacement` are each serialized
+        // at least once below. Charge a bound on all of it before any of
+        // those allocations happen, and release exactly that bound once this
+        // change either lands in the queue or is discarded as a duplicate.
+        let clone_bytes = candidate_weight(parent)
+            .saturating_add(original.estimated_bytes())
+            .saturating_add(replacement.estimated_bytes().saturating_mul(3))
+            .saturating_add(512);
+        let _lease = self.governor.lease_scratch(clone_bytes)?;
         let evidence = self.evidence(
             original,
             path,
@@ -382,8 +516,15 @@ impl Search<'_> {
         self.enqueue(candidate)
     }
 }
-fn size(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
+/// A conservative byte-size estimate for a whole candidate, used to charge
+/// scratch before `.clone()`-ing it while exploring a proposal.
+fn candidate_weight(candidate: &Candidate) -> u64 {
+    candidate.node.estimated_bytes().saturating_add(
+        size(candidate.evidence.len())
+            .saturating_add(size(candidate.losses.len()))
+            .saturating_add(size(candidate.inferences.len()))
+            .saturating_mul(256),
+    )
 }
 fn at<'a>(mut node: &'a Node, route: &[usize]) -> &'a Node {
     for &index in route {

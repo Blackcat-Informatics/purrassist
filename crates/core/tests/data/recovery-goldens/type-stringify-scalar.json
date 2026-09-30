@@ -1,0 +1,12 @@
+{
+  "description": "a number where the schema demands a string is stringified",
+  "schema": {
+    "type": "string"
+  },
+  "input": "42",
+  "outcome": "resolved",
+  "output": "42",
+  "ledger_rules": [
+    "json.type.stringify-scalar"
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "description": "a missing required property with a fixed const is invented",
+  "schema": {
+    "type": "object",
+    "required": [
+      "answer"
+    ],
+    "properties": {
+      "answer": {
+        "const": 42
+      }
+    }
+  },
+  "input": "{}",
+  "outcome": "best_guess",
+  "output": {
+    "answer": 42
+  },
+  "ledger_rules": [
+    "json.required.invent"
+  ]
+}
