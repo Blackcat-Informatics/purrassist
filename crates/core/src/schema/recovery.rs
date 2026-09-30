@@ -228,6 +228,7 @@ impl Search<'_> {
             });
             self.governor
                 .charge(Resource::ScratchBytes, diagnostic_bytes)?;
+            let validation = self.receipt.validations.len();
             self.receipt.validations.push(Validation {
                 validator: "purrassist.schema.draft2020-12.v1".into(),
                 constraint: self.schema.digest.to_string(),
@@ -283,7 +284,7 @@ impl Search<'_> {
             }
             if report.valid {
                 winning_cost = Some(cost);
-                accepted.push((candidate, self.receipt.validations.len() - 1));
+                accepted.push((candidate, validation));
             } else if self.request.effort != Effort::Exact && winning_cost.is_none() {
                 let mut visited = BTreeSet::new();
                 self.propose(
