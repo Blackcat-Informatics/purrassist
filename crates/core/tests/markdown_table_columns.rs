@@ -51,12 +51,39 @@ fn nested_columns_preserve_crlf_escaped_cells_padding_and_ignored_extras() {
 }
 
 #[test]
+fn lone_pipe_ends_a_table_and_cannot_supply_an_inserted_column_cell() {
+    let source = "- | A | B |\n  | --- | --- |\n  |\n";
+    let mut governor = Governor::new(Budget::default());
+    let document = Document::parse(source, &mut governor).unwrap();
+    let table = document.block_at(&[0, 0]).unwrap();
+    let BlockKind::Table { rows, .. } = &table.kind else {
+        panic!("table")
+    };
+    assert_eq!(rows.as_slice(), &[] as &[Vec<String>]);
+    assert!(matches!(
+        document.block_at(&[0, 1]).unwrap().kind,
+        BlockKind::Paragraph
+    ));
+    let edit = TableColumnEdit::Insert {
+        index: 0,
+        header: "added".into(),
+        alignment: Alignment::Default,
+        cells: vec!["wrong body row".into()],
+    };
+    assert!(
+        document
+            .edit_table_column(&[0, 0], &edit, &mut governor)
+            .is_err()
+    );
+}
+
+#[test]
 fn insertion_at_each_boundary_and_alignment_changes_keep_table_structure() {
     for (source, aligned) in [
         ("A | B\n--- | ---\na | b", "A | B\n--- | ---:\na | b"),
         (
-            "- | A | B |\n  | --- | --- |\n  |\n",
-            "- | A | B |\n  | --- | ---: |\n  |\n",
+            "- | A | B |\n  | --- | --- |\n  ||\n",
+            "- | A | B |\n  | --- | ---: |\n  ||\n",
         ),
     ] {
         let path = if source.starts_with('-') {

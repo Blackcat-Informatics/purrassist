@@ -13,6 +13,17 @@ pub(super) fn index(
     lines: &[Range<usize>],
     governor: &mut Governor,
     depth: u32,
+    tables: bool,
+) -> Result<Vec<Block>, StopReason> {
+    index_with_lazy(source, lines, governor, depth, tables, &[])
+}
+fn index_with_lazy(
+    source: &str,
+    lines: &[Range<usize>],
+    governor: &mut Governor,
+    depth: u32,
+    tables: bool,
+    lazy: &[usize],
 ) -> Result<Vec<Block>, StopReason> {
     governor.charge(Resource::Depth, u64::from(depth))?;
     governor.charge(
@@ -26,27 +37,58 @@ pub(super) fn index(
     let mut blocks = Vec::new();
     let mut cursor = 0;
     while cursor < lines.len() {
-        let (mut kind, mut end) = definition_end(source, lines, cursor, governor)?.map_or_else(
-            || super::classify(source, lines, cursor),
-            |end| (BlockKind::ReferenceDefinition, end),
-        );
+        let (kind, mut end) = definition_end(source, lines, cursor, governor, tables, lazy)?
+            .map_or_else(
+                || {
+                    let text = line(source, &lines[cursor]);
+                    // Definitions are removed from the start of an open paragraph,
+                    // rather than ending it. Preserve that context for its remainder:
+                    // indentation, type-7 HTML and noninterrupting list markers stay
+                    // paragraph text. An otherwise empty setext heading also leaves
+                    // its underline as paragraph text after definitions are removed.
+                    if blocks.last().is_some_and(|block: &Block| {
+                        matches!(block.kind, BlockKind::ReferenceDefinition)
+                    }) && (!interrupts_paragraph(text) || setext(text).is_some())
+                    {
+                        super::paragraph(source, lines, cursor, tables, lazy)
+                    } else {
+                        super::classify(source, lines, cursor, tables, lazy)
+                    }
+                },
+                |end| (BlockKind::ReferenceDefinition, end),
+            );
         let children = match &kind {
             BlockKind::Quote => {
-                let (inner, stop) = quote_lines(source, lines, cursor);
+                let (inner, stop) = quote_lines(source, lines, cursor, tables);
                 end = stop;
-                let mut children = index(source, &inner, governor, depth + 1)?;
                 let lazy: Vec<_> = inner
                     .iter()
-                    .filter(|range| lines.iter().any(|outer| outer.start == range.start))
+                    .filter(|range| {
+                        lines
+                            .binary_search_by_key(&range.start, |outer| outer.start)
+                            .is_ok()
+                    })
                     .map(|range| range.start)
                     .collect();
+                let mut children =
+                    index_with_lazy(source, &inner, governor, depth + 1, tables, &lazy)?;
                 demote_lazy(source, &mut children, &lazy);
                 children
             }
             BlockKind::ListItem { .. } => {
-                let (inner, stop) = item_lines(source, lines, cursor);
+                let (inner, stop) = item_lines(source, lines, cursor, tables);
                 end = stop;
-                let mut children = index(source, &inner, governor, depth + 1)?;
+                let lazy: Vec<_> = inner
+                    .iter()
+                    .filter(|range| {
+                        lines
+                            .binary_search_by_key(&range.start, |outer| outer.start)
+                            .is_ok()
+                    })
+                    .map(|range| range.start)
+                    .collect();
+                let mut children =
+                    index_with_lazy(source, &inner, governor, depth + 1, tables, &lazy)?;
                 if children
                     .first()
                     .is_some_and(|block| matches!(block.kind, BlockKind::Blank))
@@ -57,14 +99,6 @@ pub(super) fn index(
             }
             _ => Vec::new(),
         };
-        if let BlockKind::ListItem { checked, .. } = &mut kind
-            && !children
-                .iter()
-                .find(|child| !matches!(child.kind, BlockKind::Blank))
-                .is_some_and(|child| matches!(child.kind, BlockKind::Paragraph))
-        {
-            *checked = None;
-        }
         blocks.push(Block {
             span: lines[cursor].start..lines[end - 1].end,
             lines: lines[cursor..end].to_vec(),
@@ -81,17 +115,30 @@ fn quote_prefix(text: &str) -> Option<usize> {
     let rest = stripped.strip_prefix('>')?;
     Some(text.len() - rest.len() + usize::from(rest.starts_with([' ', '\t'])))
 }
-fn quote_lines(source: &str, lines: &[Range<usize>], cursor: usize) -> (Vec<Range<usize>>, usize) {
+fn quote_lines(
+    source: &str,
+    lines: &[Range<usize>],
+    cursor: usize,
+    tables: bool,
+) -> (Vec<Range<usize>>, usize) {
     let mut inner = Vec::new();
     let mut end = cursor;
-    let mut continuation = Continuation::default();
+    let mut continuation = Continuation {
+        table: TableContinuation {
+            enabled: tables,
+            ..TableContinuation::default()
+        },
+        ..Continuation::default()
+    };
     while end < lines.len() {
         let text = line(source, &lines[end]);
         if let Some(prefix) = quote_prefix(text) {
             let range = lines[end].start + prefix..lines[end].end;
             continuation.feed(line(source, &range));
             inner.push(range);
-        } else if continuation.paragraph && !interrupts_paragraph(text) {
+        } else if continuation.paragraph && list_item(text).is_none() && !interrupts_paragraph(text)
+        {
+            continuation.lazy(text);
             inner.push(lines[end].clone());
         } else {
             break;
@@ -100,11 +147,22 @@ fn quote_lines(source: &str, lines: &[Range<usize>], cursor: usize) -> (Vec<Rang
     }
     (inner, end)
 }
-fn item_lines(source: &str, lines: &[Range<usize>], cursor: usize) -> (Vec<Range<usize>>, usize) {
+fn item_lines(
+    source: &str,
+    lines: &[Range<usize>],
+    cursor: usize,
+    tables: bool,
+) -> (Vec<Range<usize>>, usize) {
     let text = line(source, &lines[cursor]);
     let (prefix, indent) = item_prefix(text);
     let first = lines[cursor].start + prefix..lines[cursor].end;
-    let mut continuation = Continuation::default();
+    let mut continuation = Continuation {
+        table: TableContinuation {
+            enabled: tables,
+            ..TableContinuation::default()
+        },
+        ..Continuation::default()
+    };
     continuation.feed(line(source, &first));
     let mut inner = vec![first.clone()];
     let mut end = cursor + 1;
@@ -122,6 +180,7 @@ fn item_lines(source: &str, lines: &[Range<usize>], cursor: usize) -> (Vec<Range
             inner.push(range);
         } else if continuation.paragraph && list_item(text).is_none() && !interrupts_paragraph(text)
         {
+            continuation.lazy(text);
             inner.push(lines[end].clone());
         } else {
             break;
@@ -182,6 +241,7 @@ fn strip_indent(text: &str, required: usize) -> Option<usize> {
 #[derive(Default)]
 struct Continuation {
     paragraph: bool,
+    table: TableContinuation,
     fence: Option<(char, usize)>,
     html: Option<html::End>,
     prefixes: Vec<Prefix>,
@@ -192,6 +252,14 @@ enum Prefix {
     Item(usize),
 }
 impl Continuation {
+    fn lazy(&mut self, text: &str) {
+        // Missing markers carry paragraph text and cannot open a table. A
+        // later marked delimiter may convert this paragraph's last line into
+        // a header, so retain its width without treating a lazy delimiter as
+        // an attempted table opening.
+        let count = super::cells(text).len();
+        self.table.header = (!code_indent(text) && count > 0).then_some(count);
+    }
     fn feed(&mut self, mut text: &str) {
         for index in 0..self.prefixes.len() {
             let prefix = match self.prefixes[index] {
@@ -208,12 +276,14 @@ impl Continuation {
                 text = &text[prefix..];
             } else {
                 if self.paragraph && list_item(text).is_none() && !interrupts_paragraph(text) {
+                    self.lazy(text);
                     return;
                 }
                 self.prefixes.truncate(index);
                 self.fence = None;
                 self.html = None;
                 self.paragraph = false;
+                self.table.reset();
                 break;
             }
         }
@@ -237,6 +307,7 @@ impl Continuation {
                 self.prefixes.push(Prefix::Quote);
                 text = &text[prefix..];
                 self.paragraph = false;
+                self.table.reset();
             } else if list_item(text).is_some()
                 && !thematic(text)
                 && (!self.paragraph || interrupts_paragraph(text))
@@ -245,9 +316,14 @@ impl Continuation {
                 self.prefixes.push(Prefix::Item(indent));
                 text = &text[prefix..];
                 self.paragraph = false;
+                self.table.reset();
             } else {
                 break;
             }
+        }
+        if self.table.feed(text, self.paragraph) {
+            self.paragraph = false;
+            return;
         }
         if let Some((marker, count, _)) = fence(text) {
             self.fence = Some((marker, count));
@@ -264,6 +340,59 @@ impl Continuation {
         } else {
             self.paragraph = self.paragraph || !code_indent(text);
         }
+        self.table.record(text, self.paragraph);
+    }
+}
+
+#[derive(Default)]
+struct TableContinuation {
+    enabled: bool,
+    open: bool,
+    header: Option<usize>,
+    rejected: bool,
+}
+impl TableContinuation {
+    const fn reset(&mut self) {
+        self.open = false;
+        self.header = None;
+        self.rejected = false;
+    }
+    fn feed(&mut self, text: &str, paragraph: bool) -> bool {
+        if self.open
+            && !interrupts_paragraph(text)
+            && !code_indent(text)
+            && list_item(text).is_none()
+            && html::start(text, false).is_none()
+        {
+            return true;
+        }
+        self.open = false;
+        if self.enabled
+            && paragraph
+            && !self.rejected
+            && setext(text).is_none()
+            && !interrupts_paragraph(text)
+            && super::alignments(text).is_some_and(|alignment| self.header == Some(alignment.len()))
+        {
+            self.open = true;
+            self.header = None;
+            return true;
+        }
+        if paragraph && super::alignments(text).is_some() {
+            self.rejected = true;
+        }
+        false
+    }
+    fn record(&mut self, text: &str, paragraph: bool) {
+        if paragraph && !self.rejected && !code_indent(text) {
+            let count = super::cells(text).len();
+            self.header = (count > 0).then_some(count);
+        } else {
+            self.header = None;
+            if !paragraph {
+                self.rejected = false;
+            }
+        }
     }
 }
 
@@ -272,14 +401,23 @@ fn definition_end(
     lines: &[Range<usize>],
     cursor: usize,
     governor: &mut Governor,
+    tables: bool,
+    lazy: &[usize],
 ) -> Result<Option<usize>, StopReason> {
     if !unindent(line(source, &lines[cursor])).is_some_and(|text| text.starts_with('[')) {
         return Ok(None);
     }
-    let end = lines[cursor..]
-        .iter()
-        .position(|range| line(source, range).trim_matches([' ', '\t']).is_empty())
-        .map_or(lines.len(), |offset| cursor + offset);
+    // Reference definitions are prefixes of paragraph content. A destination
+    // or title on a later line cannot absorb an interrupting block. Table
+    // headers take precedence over definitions; setext underlines are syntax,
+    // not candidate destinations or parts of a multiline title.
+    let (kind, mut end) = super::paragraph(source, lines, cursor, tables, lazy);
+    if matches!(kind, BlockKind::Table { .. }) {
+        return Ok(None);
+    }
+    if matches!(kind, BlockKind::Heading { .. }) {
+        end -= 1;
+    }
     let size: usize = lines[cursor..end].iter().map(Range::len).sum();
     governor.charge(Resource::ScratchBytes, super::size(size))?;
     governor.charge(Resource::Work, super::size(size))?;

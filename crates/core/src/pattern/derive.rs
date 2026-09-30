@@ -378,11 +378,13 @@ fn step<A: Arena>(
     }
 }
 
-/// A cached transition: `(state, minterm, previous-character-is-a-word-char)
-/// -> next state`. `prev_word` is only ever meaningfully `true` for a
+/// A cached transition: `(state, minterm, previous-character-is-a-word-char,
+/// at-start) -> next state`. The start assertion must distinguish the first
+/// position from later positions even when state and character repeat.
+/// `prev_word` is only ever meaningfully `true` for a
 /// pattern containing `\b`/`\B`; harmless (just an unused extra key bit)
 /// otherwise.
-type TransitionCache = ScratchMap<((u32, u32), bool), u32>;
+type TransitionCache = ScratchMap<((u32, u32), (bool, bool)), u32>;
 
 /// One requested transition: the state to step from, the character actually
 /// consumed (`code`, the current minterm's representative), which minterm it
@@ -403,7 +405,10 @@ fn cached_step(
     governor: &mut Governor,
 ) -> Result<u32, StopReason> {
     let minterm = u32::try_from(transition.minterm).unwrap_or(u32::MAX);
-    let key = ((transition.state, minterm), transition.ctx.prev_word);
+    let key = (
+        (transition.state, minterm),
+        (transition.ctx.prev_word, transition.ctx.at_start),
+    );
     if let Some(next) = cache.get(&key) {
         return Ok(*next);
     }

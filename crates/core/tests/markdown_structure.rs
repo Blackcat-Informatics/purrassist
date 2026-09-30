@@ -11,7 +11,7 @@
 use purrassist_core::{
     Budget, Governor, Outcome, StopReason,
     contract::Resource,
-    edits::EditPlan,
+    edits::{EditPlan, TextEdit},
     markdown::{Dialect, Document, ListItemEdit, SectionInsertion, TableColumnEdit, TableRowEdit},
 };
 
@@ -645,6 +645,155 @@ fn setext_section_moves_relevel_every_valid_level_and_restore_exact_source() {
                 .replace("h2>", "h3>")
                 .replace("first\nliteral", "first literal"),
             new_html
+        );
+    }
+}
+
+#[test]
+fn tasks_use_the_first_paragraph_and_toggle_split_markers_with_exact_undo() {
+    use purrassist_core::markdown::BlockKind;
+    for newline in ["\n", "\r\n", "\r"] {
+        for (prefix, continuation, path) in [("- ", "  ", vec![0]), ("> - ", ">   ", vec![0, 0])] {
+            for middle in [" ", "\t", "\u{b}", "\u{c}", newline] {
+                let marker = if middle == newline {
+                    format!("[{newline}{continuation}] ")
+                } else {
+                    format!("[{middle}] ")
+                };
+                let source = format!("{prefix}{marker}todo{newline}");
+                let mut governor = Governor::new(Budget::default());
+                let document = Document::parse(&source, &mut governor).unwrap();
+                assert!(
+                    matches!(
+                        document.block_at(&path).unwrap().kind,
+                        BlockKind::ListItem {
+                            checked: Some(false),
+                            ..
+                        }
+                    ),
+                    "{source:?}"
+                );
+                let plan = document.set_task_at(&path, true, &mut governor).unwrap();
+                let expected = format!("{prefix}[x] todo{newline}");
+                let changed = round_trip(&source, &plan);
+                assert_eq!(changed, expected, "{source:?}");
+                assert_stale(&source, &plan);
+                let updated = Document::parse(&changed, &mut governor).unwrap();
+                assert!(matches!(
+                    updated.block_at(&path).unwrap().kind,
+                    BlockKind::ListItem {
+                        checked: Some(true),
+                        ..
+                    }
+                ));
+                assert_eq!(
+                    updated
+                        .set_task_at(&path, true, &mut governor)
+                        .unwrap()
+                        .edits,
+                    Vec::<purrassist_core::edits::TextEdit>::new()
+                );
+                assert!(updated.set_task_at(&path, false, &mut exhausted()).is_err());
+            }
+        }
+        for marker in ["[x]", "[X]", "[ ]"] {
+            let source = format!("- {marker}{newline}  todo{newline}");
+            let mut governor = Governor::new(Budget::default());
+            let document = Document::parse(&source, &mut governor).unwrap();
+            let checked = marker != "[ ]";
+            assert!(
+                matches!(document.blocks()[0].kind, BlockKind::ListItem { checked: Some(state), .. } if state == checked)
+            );
+            let expected = format!(
+                "<ul>\n<li><input{} disabled=\"\" type=\"checkbox\"> todo</li>\n</ul>\n",
+                if checked { " checked=\"\"" } else { "" }
+            );
+            assert_eq!(
+                document.render_html(Dialect::Gfm, &mut governor).unwrap(),
+                expected
+            );
+            round_trip(
+                &source,
+                &document.set_task_at(&[0], !checked, &mut governor).unwrap(),
+            );
+        }
+    }
+    let source = "- [def]: /target\n  [ ] todo\n";
+    let mut governor = Governor::new(Budget::default());
+    let document = Document::parse(source, &mut governor).unwrap();
+    let plan = document.set_task_at(&[0], true, &mut governor).unwrap();
+    assert_eq!(round_trip(source, &plan), "- [def]: /target\n  [x] todo\n");
+    assert_eq!(
+        document.render_html(Dialect::Gfm, &mut governor).unwrap(),
+        "<ul>\n<li><input disabled=\"\" type=\"checkbox\"> todo</li>\n</ul>\n"
+    );
+}
+
+#[test]
+fn tasks_after_definitions_allow_leading_spaces_and_preserve_marker_edit_spans() {
+    use purrassist_core::markdown::BlockKind;
+    for newline in ["\n", "\r\n", "\r"] {
+        for (prefix, continuation, path) in [
+            ("- ", " ", vec![0]),
+            ("- ", "", vec![0]),
+            ("- ", "  ", vec![0]),
+            ("> - ", ">  ", vec![0, 0]),
+            ("- - ", "   ", vec![0, 0]),
+        ] {
+            for marker in ["[ ]", "[x]", "[X]"] {
+                let source =
+                    format!("{prefix}[x]: /target{newline}{continuation}{marker} todo{newline}");
+                let current = marker != "[ ]";
+                let mut governor = Governor::new(Budget::default());
+                let document = Document::parse(&source, &mut governor).unwrap();
+                assert!(
+                    matches!(document.block_at(&path).unwrap().kind,
+                    BlockKind::ListItem { checked: Some(state), .. } if state == current),
+                    "{source:?}"
+                );
+                let plan = document
+                    .set_task_at(&path, !current, &mut governor)
+                    .unwrap();
+                assert_eq!(plan.edits.len(), 1);
+                let bracket = source.rfind(marker).unwrap();
+                assert_eq!(plan.edits[0].range, bracket + 1..bracket + 2);
+                let replacement = if current { " " } else { "x" };
+                let expected = format!(
+                    "{prefix}[x]: /target{newline}{continuation}[{replacement}] todo{newline}"
+                );
+                assert_eq!(round_trip(&source, &plan), expected);
+                assert_stale(&source, &plan);
+                let noop = document.set_task_at(&path, current, &mut governor).unwrap();
+                assert_eq!(noop.edits, Vec::<TextEdit>::new());
+                assert!(
+                    document
+                        .set_task_at(&path, !current, &mut exhausted())
+                        .is_err()
+                );
+                let html = document.render_html(Dialect::Gfm, &mut governor).unwrap();
+                assert!(
+                    html.contains(if current {
+                        "<input checked=\"\" disabled=\"\" type=\"checkbox\"> todo"
+                    } else {
+                        "<input disabled=\"\" type=\"checkbox\"> todo"
+                    }),
+                    "{source:?}: {html:?}"
+                );
+            }
+        }
+        let source = format!("-    [def]: /target{newline}\t[x] todo{newline}");
+        let mut governor = Governor::new(Budget::default());
+        let document = Document::parse(&source, &mut governor).unwrap();
+        assert!(matches!(
+            document.blocks()[0].kind,
+            BlockKind::ListItem { checked: None, .. }
+        ));
+        assert!(document.set_task_at(&[0], true, &mut governor).is_err());
+        assert!(
+            !document
+                .render_html(Dialect::Gfm, &mut governor)
+                .unwrap()
+                .contains("<input")
         );
     }
 }

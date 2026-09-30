@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-//! Source-preserving inline parsing foundation; full inline conformance is in progress.
+//! Source-preserving inline parsing for `CommonMark` and GFM dialects.
 mod angle;
 mod autolinks;
 mod emphasis;
@@ -21,7 +21,9 @@ pub enum Dialect {
     #[default]
     CommonMark,
     /// Pinned GFM 0.29.0.gfm.13, suppressing directly nested strong tags.
-    /// Extension parsing is still in progress; selecting this does not claim conformance.
+    /// Includes strikethrough and extended autolinks; rendering controls all
+    /// five GFM extensions. The specification corpus and differential probes
+    /// establish the documented qualification scope.
     Gfm,
 }
 
@@ -65,7 +67,8 @@ pub enum InlineKind {
     Link {
         /// Decoded destination before URI serialization.
         destination: String,
-        /// Optional decoded title.
+        /// Optional decoded title. An empty title is retained here but omitted
+        /// from rendered HTML attributes.
         title: Option<String>,
         /// Definition source for a reference link; absent for an inline link.
         reference: Option<ReferenceOrigin>,
@@ -76,7 +79,8 @@ pub enum InlineKind {
     Image {
         /// Decoded image destination before URI serialization.
         destination: String,
-        /// Optional decoded title.
+        /// Optional decoded title. An empty title is retained here but omitted
+        /// from rendered HTML attributes.
         title: Option<String>,
         /// Definition source for a reference image; absent for an inline image.
         reference: Option<ReferenceOrigin>,
@@ -94,7 +98,12 @@ pub enum InlineKind {
 ///
 /// Recognizes code spans, escapes, breaks, autolinks, raw HTML, emphasis, and
 /// inline links/images. Reference links use an explicit definition collection.
-/// Named and numeric character references are decoded after syntax recognition. This is not a complete renderer.
+/// Named and numeric character references are decoded after syntax recognition.
+/// This type renders inline content; [`Document`](super::Document) owns block
+/// structure and container indentation. Explicit extension profiles enable GFM
+/// bare URLs, email autolinks, double-tilde strikethrough, and tag filtering.
+/// Pinned CommonMark/GFM inline and full-document corpora qualify these paths;
+/// bounded corpus agreement does not prove equivalence for every possible input.
 #[derive(Clone, Debug)]
 pub struct InlineFragment {
     source: String,
@@ -203,6 +212,7 @@ impl InlineFragment {
             source,
             references,
             extensions.contains(crate::markdown::Extension::Strikethrough),
+            extensions.contains(crate::markdown::Extension::Autolinks),
             governor,
         )?;
         if extensions.contains(crate::markdown::Extension::Autolinks) {

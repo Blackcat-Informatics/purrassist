@@ -6,6 +6,28 @@
 //! differential fuzz, engine selection, and `generate`'s witness/emptiness
 //! contract.
 use purrassist_core::pattern::{Engine, GenerateOptions, GenerateOutcome, Pattern};
+
+#[test]
+fn anchored_derivative_transitions_distinguish_the_first_position() {
+    for source in ["^a$", "(^a|b)$", "^a?$", "(^a)+$"] {
+        let pattern = Pattern::compile(source).unwrap();
+        for subject in ["a", "", "a a", "a\na", "a!a", "a\u{1e}a", "aaa", "ba"] {
+            let mut derivative = Governor::new(Budget::default());
+            let mut backtracking = Governor::new(Budget::default());
+            assert_eq!(
+                pattern.is_match(subject, &mut derivative),
+                pattern.is_match_backtracking(subject, &mut backtracking),
+                "{source:?} / {subject:?}"
+            );
+        }
+    }
+    assert_eq!(
+        Pattern::compile("^a$")
+            .unwrap()
+            .is_match("a a", &mut Governor::new(Budget::default())),
+        Ok(false)
+    );
+}
 use purrassist_core::{Budget, Governor, StopReason};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

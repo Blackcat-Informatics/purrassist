@@ -68,6 +68,12 @@ title-line joining, and original source span. Application retains replaced
 source in its loss ledger and supplies an inverse that restores every original
 byte. Preserve both receipts to retain the full transformation history.
 
+`plan_markdown_task` selects the first visible paragraph of the chosen list
+item. When its marker contains a newline, changing the state joins the marker
+lines and removes the intervening continuation prefixes. Planning evidence
+records the exact replaced span as `markdown.task-marker-join.v1`; outside
+bytes remain exact, and applying the inverse restores the original split marker.
+
 `purrassist_core::patch::Patch` (an ordered, non-overlapping, source-digest-
 bound set of byte-range replacements) is the crate's single edit
 representation; `edits::EditPlan` and `edits::TextEdit` are aliases for

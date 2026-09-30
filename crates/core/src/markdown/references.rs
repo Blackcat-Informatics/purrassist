@@ -69,7 +69,14 @@ impl Document {
                 .saturating_add(256),
         )?;
         let mut result = Vec::new();
-        collect(self, &self.blocks, &mut Vec::new(), &mut result, governor)?;
+        collect(
+            self,
+            &self.blocks,
+            None,
+            &mut Vec::new(),
+            &mut result,
+            governor,
+        )?;
         Ok(result)
     }
 
@@ -619,17 +626,41 @@ struct UseSite {
 /// (digest, span) origins that can be compared directly.
 fn document_references(doc: &Document, governor: &mut Governor) -> Result<References, StopReason> {
     let mut texts = Vec::new();
-    collect_definition_texts(&doc.source, &doc.blocks, &mut texts);
+    let mut lazy_lines = Vec::new();
+    collect_definition_texts(
+        &doc.source,
+        &doc.blocks,
+        None,
+        &mut texts,
+        &mut lazy_lines,
+        governor,
+    )?;
     let sources: Vec<&str> = texts.iter().map(String::as_str).collect();
-    References::parse_blocks(&sources, governor)
+    References::parse_blocks_with_lazy(&sources, &lazy_lines, governor)
 }
-fn collect_definition_texts(source: &str, blocks: &[Block], out: &mut Vec<String>) {
+fn collect_definition_texts(
+    source: &str,
+    blocks: &[Block],
+    parent: Option<&Block>,
+    out: &mut Vec<String>,
+    lazy_lines: &mut Vec<Vec<usize>>,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
     for block in blocks {
         if matches!(block.kind, BlockKind::ReferenceDefinition) {
+            lazy_lines.push(lazy_line_starts(block, parent, governor)?);
             out.push(View::new(source, block).text);
         }
-        collect_definition_texts(source, &block.children, out);
+        collect_definition_texts(
+            source,
+            &block.children,
+            Some(block),
+            out,
+            lazy_lines,
+            governor,
+        )?;
     }
+    Ok(())
 }
 /// Find every reference-link/image use, in paragraph and heading text
 /// anywhere in the document, resolving to `target`'s exact (digest, span)
@@ -810,6 +841,7 @@ fn matching_bracket(source: &str, start: usize) -> Option<usize> {
 fn collect(
     doc: &Document,
     blocks: &[Block],
+    parent: Option<&Block>,
     path: &mut Vec<usize>,
     result: &mut Vec<ReferenceSite>,
     governor: &mut Governor,
@@ -820,7 +852,8 @@ fn collect(
         governor.charge(Resource::Depth, size(path.len().saturating_sub(1)))?;
         if matches!(block.kind, BlockKind::ReferenceDefinition) {
             let view = View::new(&doc.source, block);
-            let refs = References::parse_blocks(&[&view.text], governor)?;
+            let lazy_lines = vec![lazy_line_starts(block, parent, governor)?];
+            let refs = References::parse_blocks_with_lazy(&[&view.text], &lazy_lines, governor)?;
             for (occurrence, definition) in refs.definitions().iter().enumerate() {
                 governor.charge(
                     Resource::ScratchBytes,
@@ -839,10 +872,45 @@ fn collect(
                 });
             }
         }
-        collect(doc, &block.children, path, result, governor)?;
+        collect(doc, &block.children, Some(block), path, result, governor)?;
         path.pop();
     }
     Ok(())
+}
+
+pub(super) fn lazy_line_starts(
+    block: &Block,
+    parent: Option<&Block>,
+    governor: &mut Governor,
+) -> Result<Vec<usize>, StopReason> {
+    let Some(parent) = parent else {
+        return Ok(Vec::new());
+    };
+    governor.charge(
+        Resource::Work,
+        size(block.lines.len())
+            .saturating_mul(1 + u64::from(size(parent.lines.len()).saturating_add(1).ilog2())),
+    )?;
+    governor.charge(
+        Resource::ScratchBytes,
+        size(block.lines.len()).saturating_mul(8).saturating_add(24),
+    )?;
+    let mut starts = Vec::with_capacity(block.lines.len());
+    let mut offset = 0;
+    for (range, padding) in block.lines.iter().zip(&block.line_padding) {
+        // Consuming part of an expanded tab can retain the original offset
+        // while reducing residual padding. That is an explicit prefix, not
+        // a lazy line whose complete parent view was retained.
+        if parent
+            .lines
+            .binary_search_by_key(&range.start, |line| line.start)
+            .is_ok_and(|index| parent.line_padding[index] == *padding)
+        {
+            starts.push(offset);
+        }
+        offset += range.len() + padding;
+    }
+    Ok(starts)
 }
 
 struct View {

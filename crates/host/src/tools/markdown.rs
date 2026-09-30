@@ -35,7 +35,7 @@ pub(super) fn call(
             Resource::Work,
             size(source.len()).saturating_mul(4).saturating_add(1),
         )?;
-        let value = operation(name, args, &document, &mut governor)?;
+        let value = operation(name, args, &document, &mut receipt, &mut governor)?;
         if name == "plan_markdown_section" {
             governor.charge(Resource::EvidenceEntries, 2)?;
             governor.charge(Resource::ScratchBytes, 1024)?;
@@ -85,6 +85,7 @@ fn operation(
     name: &str,
     args: &Node,
     document: &Document,
+    receipt: &mut Receipt,
     governor: &mut Governor,
 ) -> Result<Node, StopReason> {
     match name {
@@ -162,7 +163,23 @@ fn operation(
                 return Err(StopReason::InvalidInput("checked must be boolean".into()));
             };
             let path = block_path(args)?;
-            Ok(plan(&document.set_task_at(&path, *checked, governor)?))
+            let edit_plan = document.set_task_at(&path, *checked, governor)?;
+            for edit in &edit_plan.edits {
+                if document.source()[edit.range.clone()].contains(['\r', '\n']) {
+                    governor.charge(Resource::Work, size(edit.range.len()))?;
+                    governor.charge(Resource::ScratchBytes, 512)?;
+                    governor.charge(Resource::EvidenceEntries, 1)?;
+                    receipt.evidence.push(purrassist::contract::Evidence {
+                        rule: "markdown.task-marker-join.v1".into(),
+                        explanation: "Joined the split task marker by replacing its middle newline and continuation prefixes with the requested state character; every outside byte remains exact. Original bytes remain retained for exact inverse restoration.".into(),
+                        span: Some(purrassist::contract::SourceSpan {
+                            source: document.digest(), bytes: edit.range.clone(),
+                        }),
+                        destination: "/edits".into(),
+                    });
+                }
+            }
+            Ok(plan(&edit_plan))
         }
         _ => Err(StopReason::InvalidInput(
             "unknown Markdown operation".into(),
