@@ -4,8 +4,8 @@
     "samples": 200,
     "correct": 200,
     "wrong_corrections": 0,
-    "median_ns": 1360,
-    "p95_ns": 1510,
+    "median_ns": 2520,
+    "p95_ns": 3360,
     "governor_peak_scratch_bytes": 556,
     "governor_peak_work": 7
   },
@@ -14,8 +14,8 @@
     "samples": 200,
     "correct": 200,
     "wrong_corrections": 0,
-    "median_ns": 8780,
-    "p95_ns": 10010,
+    "median_ns": 16580,
+    "p95_ns": 19860,
     "governor_peak_scratch_bytes": 6766,
     "governor_peak_work": 63
   },
@@ -24,8 +24,8 @@
     "samples": 200,
     "correct": 200,
     "wrong_corrections": 0,
-    "median_ns": 63418,
-    "p95_ns": 73258,
+    "median_ns": 124846,
+    "p95_ns": 134585,
     "governor_peak_scratch_bytes": 48232,
     "governor_peak_work": 782
   },
@@ -34,8 +34,8 @@
     "samples": 200,
     "correct": 200,
     "wrong_corrections": 0,
-    "median_ns": 11799,
-    "p95_ns": 12379,
+    "median_ns": 21620,
+    "p95_ns": 24960,
     "governor_peak_scratch_bytes": 10654,
     "governor_peak_work": 79
   },
@@ -44,8 +44,8 @@
     "samples": 200,
     "correct": 200,
     "wrong_corrections": 0,
-    "median_ns": 15830,
-    "p95_ns": 16629,
+    "median_ns": 29539,
+    "p95_ns": 32429,
     "governor_peak_scratch_bytes": 2513,
     "governor_peak_work": 27
   },
@@ -54,8 +54,8 @@
     "samples": 200,
     "correct": 200,
     "wrong_corrections": 0,
-    "median_ns": 1660,
-    "p95_ns": 1710,
+    "median_ns": 2850,
+    "p95_ns": 3020,
     "governor_peak_scratch_bytes": 711,
     "governor_peak_work": 8
   }
