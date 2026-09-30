@@ -13,6 +13,8 @@ hygiene:
 	python3 scripts/check-release.py
 	python3 scripts/test-fuzz-json.py
 	python3 scripts/test-verify-published.py
+	python3 scripts/test-resource-report.py
+	python3 scripts/check-resource-limits.py --schema-only docs/qualification/resources-linux-x86_64.json
 
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings

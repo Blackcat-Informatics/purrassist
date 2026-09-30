@@ -3,10 +3,13 @@
 # Resource measurements
 
 `make resources` builds an assertion-backed resource benchmark and the release
-CLI, then measures nine fixed workloads. It requires Linux, Python 3, Cargo,
-and the Valgrind version registered in `vendor/tooling.json`. No profiler or
-allocator wrapper is linked into the crates, and the core retains its unsafe-code
-prohibition and zero runtime dependencies.
+CLI, then profiles nine fixed workloads and measures core and syntax latency,
+allocation, RSS, artifact sizes and an uncached release build. It requires Linux,
+Python 3, Cargo, rustup and the Valgrind version registered in
+`vendor/tooling.json`. The benchmark counting allocators are confined to bench
+binaries. Syntax's production allocator accounting enforces its resource
+governor; the core library retains its unsafe-code prohibition and zero runtime
+dependencies.
 
 Each workload runs separately under the native runtime, Memcheck, and Massif.
 The report records:
@@ -25,6 +28,16 @@ The report records:
 - Executable byte sizes and SHA-256 identities, compiler/runtime identities,
   source commit/dirty state/tree digest, build elapsed time, and Cargo's fresh
   versus rebuilt artifact counts.
+
+`source.engine_source_tree_sha256` binds the measured engines and compiled-in
+JSON data, benchmarks, examples, manifests, lockfile, toolchain and vendor
+configuration, the Makefile and resource runner/checker/test scripts before
+any build starts. The runner compares this digest again
+after measurement and refuses to write reports if the inputs differ.
+Documentation and generated reports are excluded from this digest, so writing
+evidence does not invalidate its identity. `nonignored_file_tree_sha256` is an
+end-of-run snapshot before writing the final report, rather than a digest of the
+subsequent tree containing that report itself.
 
 The empty workload records process overhead. It is not subtracted from peaks:
 peaks from separate processes need not coincide. These fixed cases do not prove
@@ -257,27 +270,199 @@ recording depends on deallocations; observed peaks are not a universal memory
 bound. External profiling tool/runtime provenance is in `docs/DEPENDENCIES.md`
 and `vendor/tooling.json`.
 
+## Latency, artifact size, and cold-build measurements
+
+`make resources` also builds and runs `crates/core/benches/latency.rs` and
+`crates/syntax/benches/latency.rs` (each `harness = false`, matching the
+existing `resources`/`recovery` benches), and adds the following top-level report
+fields:
+
+- `latency_workloads`/`syntax_latency_workloads`: each named workload's
+  median/p95 latency in nanoseconds over 200 samples (one unmeasured warm-up
+  call first), plus real allocation call count and real peak live-heap
+  bytes from that bench binary's own counting instrument -- a
+  `#[global_allocator]` scoped to `crates/core/benches/latency.rs` (distinct
+  from `crates/core/tests/allocation_oracle.rs`'s, and measuring peak live
+  bytes rather than total bytes granted) for the core workloads, and this
+  crate's own `alloc::live_bytes`/`peak_bytes` tree-sitter accounting (see
+  above) for the per-grammar syntax workloads. Core workloads cover Markdown
+  rendering and structural operations (section insert/remove/
+  move/rename, list edit/renumber, table row/column move, reference add/
+  relabel/remove/unlink), exact/fuzzy/unified edits, matching rank/resolve,
+  paths, pattern compile/match (both the derivative and backtracking
+  engines), and schema compile/validate/recover.
+- `recovery_benchmark`: `crates/core/benches/recovery.rs`'s six deterministic
+  quality/latency cases, captured verbatim and also written to
+  [`qualification/recovery-bench-linux-x86_64.json`](qualification/recovery-bench-linux-x86_64.json)
+  as its own committed artifact.
+- `artifact_sizes`: byte size and SHA-256 identity of the native release
+  CLI, the `wasm32-wasip1` `portable-core`/`portable-syntax`/`portable-host`
+  example modules (the same fixed-transcript examples
+  `scripts/check-wasm.py` executes; the syntax/host builds use the same
+  pinned WASI C sysroot that script's `wasi_environment()` sets up, via a
+  small duplicated copy in `measure-resources.py` -- `check-wasm.py` runs its
+  own full build/execute/compare check as top-level code the instant it is
+  imported, so importing it here would trigger that check as a side effect
+  instead of reusing just the helper), and the `wasm32-unknown-unknown`
+  `wasm-harness` module.
+- `cold_build`: elapsed nanoseconds for a release CLI build using the real
+  toolchain Cargo resolved through `rustup which cargo`. Both the target
+  directory and Cargo's separate intermediate build directory are newly
+  created and empty, under `/tmp` outside the checkout. `RUSTC_WRAPPER`,
+  `RUSTC_WORKSPACE_WRAPPER`, and the
+  corresponding Cargo environment/config values are cleared. Every Cargo
+  compiler-artifact event must report `fresh: false`; the report records
+  those counts and the resulting CLI's byte size and SHA-256. Registry
+  downloads and OS page caches remain available. This measures an uncached
+  compilation and link, excluding dependency download time and page-cache
+  flushing.
+
+Each latency workload runs in its own process. Its `process_peak_rss_bytes`
+is Linux `VmHWM` after the warm-up and 200 samples, including process startup,
+fixtures, the sample vector, assertions and the small procfs read. Core
+`allocation_calls` includes successful allocate, zeroed-allocate and resize
+calls; `peak_live_bytes` is the high-water increase above allocations already
+live when the one measured operation starts. Neither includes profiler or
+procfs-reading allocations. Syntax records ordinary Rust allocator calls and
+peak growth separately as `rust_allocation_calls` and `rust_peak_live_bytes`.
+Its `tree_allocation_calls`, `retained_bytes`, and `peak_bytes` cover the
+parse's actual tree-sitter C allocations (payload bytes exclude its accounting
+headers), which use `System` directly. These independent peaks are not added
+or described as a simultaneous combined peak. Parse traversal's Rust
+allocations are included in the Rust instrument. Latency and allocation
+observations cover fixture construction, correctness checks (including JSON
+serialization of the composed-recovery expected value), and dropping outputs.
+These are measurements of the complete assertion-backed workload.
+
+On a host whose default compiler flags target an instruction set Valgrind
+cannot decode (for example, a wrapper that appends `-C target-cpu=native`),
+building the profiled `resources` bench with an explicit, portable
+`target-cpu` (this project builds it with `x86-64-v2`) opts that one build
+out, matching the escape hatch such a wrapper documents for itself: an
+explicit `target-cpu` anywhere already in the resolved `rustflags` wins over
+any flag the wrapper would otherwise add.
+
 ## Recorded baseline
 
-[Linux x86_64 resource baseline](qualification/resources-linux-x86_64.json) was
-measured from clean commit `c2f5d18f218033bae408ba28a543f0926cdfa7cb`. It records the
-isolated runtime and executable identities. Build artifacts were already cached;
-its build durations are not cold-build measurements.
+[Linux x86_64 resource baseline](qualification/resources-linux-x86_64.json) was measured from commit `42b44609c07dbd86b785775618f60e1b39046fb0`. The report records the dirty working tree and a stable engine source digest checked before and after the campaign. It records the isolated runtime and executable identities. Ordinary build durations describe their observed Cargo cache states; the separate `cold_build` records compilation with empty target and intermediate directories and disabled compiler wrappers.
 
 | Workload | Allocation calls | Total allocated bytes | Observed requested-heap peak | Native reported RSS |
 | --- | ---: | ---: | ---: | ---: |
-| empty | 13 | 3,766 | 1,736 | 3,293,184 |
-| schema_compile | 105 | 9,061 | 4,482 | 3,670,016 |
-| json_parse | 1,573 | 235,990 | 173,150 | 3,825,664 |
-| json_composed | 844 | 90,691 | 40,156 | 3,883,008 |
-| json_ambiguous | 309 | 23,628 | 12,132 | 3,784,704 |
-| markdown_render | 3,785 | 665,496 | 114,883 | 3,977,216 |
-| markdown_list | 1,903 | 217,925 | 151,980 | 3,993,600 |
-| unicode | 23 | 125,880 | 68,955 | 3,657,728 |
-| matching | 5,464 | 524,546 | 101,905 | 3,862,528 |
+| empty | 13 | 3,817 | 1,736 | 4,673,536 |
+| schema_compile | 106 | 9,168 | 4,538 | 5,337,088 |
+| json_parse | 1,574 | 236,097 | 173,150 | 5,332,992 |
+| json_composed | 2,541 | 192,835 | 62,611 | 5,636,096 |
+| json_ambiguous | 389 | 33,349 | 15,689 | 5,484,544 |
+| markdown_render | 4,096 | 777,195 | 225,787 | 5,681,152 |
+| markdown_list | 2,811 | 242,688 | 152,036 | 5,709,824 |
+| unicode | 23 | 125,931 | 68,955 | 5,136,384 |
+| matching | 7,222 | 313,232 | 23,944 | 5,210,112 |
 
-Values include the full benchmark process as described above. They are not
-per-function allocation counts, portable guarantees, or a production sizing rule.
-The release CLI executable in this snapshot is 7,316,832 bytes; the instrumentable
-benchmark executable includes retained debug information and is not a release
-CLI size comparison.
+Values include the full benchmark process as described above. They are not per-function allocation counts, portable guarantees, or a production sizing rule.
+
+The release CLI in this snapshot is 9,757,024 bytes. The instrumentable benchmark (12,967,776 bytes) includes retained debug information and is not a release CLI size comparison.
+
+### Artifact sizes
+
+| Artifact | Bytes |
+| --- | ---: |
+| Native release CLI (`purrassist-cli`) | 9,757,024 |
+| `purrassist-core` `wasm32-wasip1` (`portable-core`) | 1,996,445 |
+| `purrassist-syntax` `wasm32-wasip1` (`portable-syntax`) | 5,223,153 |
+| `purrassist-host` `wasm32-wasip1` (`portable-host`) | 1,467,114 |
+| `wasm-harness` `wasm32-unknown-unknown` | 2,117,110 |
+
+### Cold build
+
+The recorded release CLI cold build took 24.032 seconds and produced 35 compiler artifacts, with 0 reused artifacts. Both compiler wrapper layers were disabled; the target and intermediate directories were new and empty. Registry sources and OS page caches remained available. The report also records the resulting executable's size and digest.
+
+### Latency workload samples (selected)
+
+Full detail is in the committed report. Each row measures 200 samples in its own process; allocation and heap observations cover one operation after sampling.
+
+| Core workload | Median ns | p95 ns | Allocation calls | Peak live bytes | Peak RSS bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| schema_compile | 3,610 | 3,909 | 93 | 3,928 | 5,709,824 |
+| schema_recover | 70,688 | 74,788 | 2,528 | 62,005 | 6,328,320 |
+| matching_resolve | 420,837 | 427,927 | 3,684 | 19,838 | 5,611,520 |
+| edits_fuzzy | 318,911 | 334,080 | 12,980 | 12,676 | 5,636,096 |
+| markdown_render | 16,080 | 19,590 | 450 | 24,840 | 6,017,024 |
+
+| Syntax workload | Median ns | p95 ns | C allocation calls | Rust allocation calls | C peak bytes | Rust peak growth bytes | Peak RSS bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| python | 182,934 | 190,375 | 573 | 59 | 56,720 | 4,760 | 3,493,888 |
+| rust | 160,825 | 173,715 | 480 | 42 | 48,896 | 3,048 | 3,936,256 |
+| javascript | 175,305 | 259,282 | 476 | 25 | 48,360 | 2,264 | 3,444,736 |
+| typescript | 210,104 | 236,313 | 652 | 42 | 64,040 | 3,184 | 4,222,976 |
+| tsx | 204,243 | 216,294 | 545 | 25 | 53,032 | 2,288 | 4,362,240 |
+
+C and Rust peak values are measured separately and must not be added as a simultaneous peak.
+
+## Resource limits
+
+`scripts/check-resource-limits.py <report.json>` checks a resource report
+(freshly generated, or the committed baseline above) against the table
+below, extracted from the first ```` ```json ```` fence following this
+heading. Every limit is set with headroom over an actually measured value
+recorded above (never below one); a limit failing here means measured
+resource use grew past a deliberately generous ceiling, not that it
+regressed by any amount. `make hygiene` uses `--schema-only` against the *committed*
+`qualification/resources-linux-x86_64.json` (complete inventories, valid types,
+digests, uncached-build evidence and correctness observations); Task 17's CI `qualification` job runs `make resources` fresh and
+checks that output instead.
+
+Rationale per category:
+
+- `artifact_sizes`: roughly 2x the measured byte size in this document's
+  "Artifact sizes" table, generous enough to absorb ordinary dependency and
+  toolchain growth between releases without masking an accidental doubling.
+- `cold_build_elapsed_ns`: 180 seconds. This limits the uncached release
+  CLI compilation and link measured with empty build directories; 180s is a
+  generous ceiling for an actually cold compile of this workspace's five
+  publishable crates and their dependencies on ordinary CI hardware.
+- `latency_workloads`/`syntax_latency_workloads`: core median/p95 ceilings
+  are 10/15 milliseconds; syntax median/p95 ceilings are 3/4 milliseconds.
+  These provide headroom over the recorded workloads while detecting large
+  slowdowns. Tail latency includes scheduling interference on a loaded
+  machine; these ceilings are qualification thresholds, not a guarantee
+  that every host will pass them.
+- `workloads` (the existing Memcheck/Massif/RSS fields): roughly 8-10x the
+  largest measured workload in the recorded baseline table above, wide
+  enough to tolerate the allocator/libc/loader differences the "Loader
+  compatibility" section above describes across hosts.
+
+```json
+{
+  "artifact_sizes": {
+    "native_cli_bytes": 20000000,
+    "purrassist_core_wasm32_wasip1_bytes": 4000000,
+    "purrassist_syntax_wasm32_wasip1_bytes": 10000000,
+    "purrassist_host_wasm32_wasip1_bytes": 3000000,
+    "wasm_harness_wasm32_unknown_unknown_bytes": 4000000
+  },
+  "cold_build_elapsed_ns": 180000000000,
+  "latency_workloads": {
+    "median_ns": 10000000,
+    "p95_ns": 15000000,
+    "allocation_calls": 150000,
+    "peak_live_bytes": 1000000,
+    "process_peak_rss_bytes": 50000000
+  },
+  "syntax_latency_workloads": {
+    "median_ns": 3000000,
+    "p95_ns": 4000000,
+    "retained_bytes": 1000000,
+    "peak_bytes": 1000000,
+    "max_overshoot_bytes": 150000,
+    "tree_allocation_calls": 150000,
+    "rust_allocation_calls": 150000,
+    "rust_peak_live_bytes": 1000000,
+    "process_peak_rss_bytes": 50000000
+  },
+  "workloads": {
+    "process_peak_rss_bytes": 50000000,
+    "total_allocated_bytes": 8000000,
+    "observed_peak_heap_plus_estimated_overhead_bytes": 2000000
+  }
+}
+```

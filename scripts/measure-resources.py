@@ -9,8 +9,10 @@ import os
 from pathlib import Path
 import platform
 import re
+import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.request
@@ -18,15 +20,16 @@ import urllib.request
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def memcheck(text):
+def memcheck(text) -> dict[str, int]:
     match = re.search(r'total heap usage: ([\d,]+) allocs, ([\d,]+) frees, ([\d,]+) bytes allocated', text)
     if not match:
         raise ValueError('missing Memcheck allocation summary')
     errors = re.search(r'ERROR SUMMARY: ([\d,]+) errors', text)
     if not errors or int(errors[1].replace(',', '')):
         raise ValueError('missing or nonzero Memcheck error summary')
-    return dict(zip(('allocation_calls', 'free_calls', 'total_allocated_bytes'),
-                    (int(value.replace(',', '')) for value in match.groups())))
+    keys: tuple[str, str, str] = ('allocation_calls', 'free_calls', 'total_allocated_bytes')
+    values = (int(value.replace(',', '')) for value in match.groups())
+    return dict(zip(keys, values))
 
 
 def massif(text):
@@ -127,6 +130,36 @@ def source_identity():
     }
 
 
+def engine_source_identity():
+    """Digest executable source inputs, excluding reports and documentation.
+
+    Record before building and reject mutations before writing evidence. This
+    binds measurements to stable engines even when documentation is edited in
+    parallel. Cargo.lock binds fetched grammar/dependency versions.
+    """
+    names = {'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'Makefile',
+             'scripts/measure-resources.py', 'scripts/check-resource-limits.py',
+             'scripts/test-resource-report.py'}
+    for path in (ROOT / 'crates').rglob('*'):
+        relative = path.relative_to(ROOT)
+        if path.is_file() and ('tests' not in relative.parts) and (
+            path.suffix in ('.rs', '.c', '.h', '.json') or path.name == 'Cargo.toml'
+        ):
+            names.add(relative.as_posix())
+    for base in ('.cargo', 'vendor'):
+        directory = ROOT / base
+        if directory.exists():
+            names.update(path.relative_to(ROOT).as_posix() for path in directory.rglob('*')
+                         if path.is_file() and path.suffix in ('.toml', '.json'))
+    digest = hashlib.sha256()
+    for name in sorted(names):
+        path = ROOT / name
+        if not path.is_file():
+            raise ValueError(f'missing engine source input {name}')
+        digest.update(name.encode() + b'\0' + hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()
+
+
 def runtime(binary, portable):
     if not portable:
         return [str(binary)], {'kind': 'system loader and libraries'}
@@ -157,6 +190,199 @@ def runtime(binary, portable):
     }
 
 
+def identity(path):
+    return {'bytes': path.stat().st_size, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
+def wasi_environment():
+    """C sysroot environment for cross-compiling tree-sitter's C grammars to
+    wasm32-wasip1. A small, deliberately duplicated copy of
+    scripts/check-wasm.py's function of the same name: that script runs its
+    full build/execute/compare check as top-level code the moment it is
+    imported, so importing it here would trigger that whole check as a side
+    effect instead of reusing just this helper."""
+    manifest = json.loads((ROOT / 'vendor/wasi.json').read_text())
+    cache = ROOT / '.cache/wasi'
+    cache.mkdir(parents=True, exist_ok=True)
+    archive = cache / 'sysroot.tar.gz'
+    if not archive.exists():
+        with urllib.request.urlopen(manifest['url']) as response:
+            archive.write_bytes(response.read())
+    if hashlib.sha256(archive.read_bytes()).hexdigest() != manifest['sha256']:
+        raise SystemExit('WASI sysroot archive digest mismatch')
+    sysroot = cache / manifest['directory']
+    # Re-extract verified bytes; never trust an old, independently modified tree.
+    with tarfile.open(archive) as source:
+        source.extractall(cache, filter='data')
+    environment = os.environ.copy()
+    for name in ('CFLAGS', 'CXXFLAGS', 'TARGET_CFLAGS', 'TARGET_CXXFLAGS',
+                 'CFLAGS_wasm32-wasip1', 'CXXFLAGS_wasm32-wasip1'):
+        environment.pop(name, None)
+    for name in ('CFLAGS_wasm32_wasip1', 'CXXFLAGS_wasm32_wasip1'):
+        environment[name] = f'--sysroot={sysroot}'
+    return environment
+
+
+def cargo_json_artifacts(command, environment=None):
+    result = subprocess.run(command + ['--message-format=json'], cwd=ROOT, text=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment, check=False)
+    if result.returncode != 0:
+        raise SystemExit(f'{" ".join(command)} failed:\n{result.stderr}')
+    events = (json.loads(line) for line in result.stdout.splitlines())
+    return [event for event in events if event.get('reason') == 'compiler-artifact']
+
+
+def example_artifact(package, target=None, environment=None):
+    """Build `portable-<suffix>`, the fixed-transcript example every
+    portable crate (core/syntax/host) exposes, exactly like
+    scripts/check-wasm.py's `artifact()`."""
+    example = 'portable-' + package.removeprefix('purrassist-')
+    command = ['cargo', 'build', '-p', package, '--example', example, '--release', '--locked']
+    if target:
+        command += ['--target', target]
+    artifacts = cargo_json_artifacts(command, environment)
+    paths = [event['executable'] for event in artifacts
+             if event.get('executable') and event['target']['name'] == example]
+    if len(paths) != 1:
+        raise SystemExit(f'expected one portable artifact for {package}, got {paths}')
+    return Path(paths[0])
+
+
+def wasm_harness_artifact():
+    command = ['cargo', 'build', '-p', 'wasm-harness', '--target', 'wasm32-unknown-unknown',
+               '--release', '--locked']
+    artifacts = cargo_json_artifacts(command)
+    paths = [filename for event in artifacts for filename in (event.get('filenames') or [])
+             if filename.endswith('.wasm')]
+    if len(paths) != 1:
+        raise SystemExit(f'expected one wasm-harness artifact, got {paths}')
+    return Path(paths[0])
+
+
+def artifact_sizes(native_cli):
+    """Native CLI plus wasm32-wasip1 core/syntax/host example modules and
+    the wasm32-unknown-unknown wasm-harness module, byte sizes and SHA-256
+    identities."""
+    sizes = {'native_cli': identity(native_cli)}
+    wasi_packages = {'purrassist-syntax', 'purrassist-host'}
+    for package in ('purrassist-core', 'purrassist-syntax', 'purrassist-host'):
+        environment = wasi_environment() if package in wasi_packages else None
+        path = example_artifact(package, target='wasm32-wasip1', environment=environment)
+        sizes[f'{package.replace("-", "_")}_wasm32_wasip1'] = identity(path)
+    sizes['wasm_harness_wasm32_unknown_unknown'] = identity(wasm_harness_artifact())
+    return sizes
+
+
+def bench_executable(package, bench, directory):
+    """Build one `harness = false` bench binary and return its path; a
+    leaner sibling of `build()` above (no fresh/rebuilt artifact bookkeeping,
+    which only matters for the profiled `resources` bench)."""
+    log = directory / f'{package}-{bench}-build.log'
+    command = ['cargo', 'bench', '-p', package, '--bench', bench, '--no-run', '--locked',
+               '--message-format=json']
+    result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, check=False)
+    log.write_text(result.stderr)
+    if result.returncode != 0:
+        raise SystemExit(f'building {package}::{bench}: {result.stderr}')
+    events = [json.loads(line) for line in result.stdout.splitlines()]
+    selected = [event for event in events if event.get('reason') == 'compiler-artifact'
+                and event.get('executable') and event['target']['name'] == bench]
+    if len(selected) != 1:
+        raise ValueError(f'expected one executable for {package}::{bench}')
+    return Path(selected[0]['executable'])
+
+
+def run_latency_bench(package, directory):
+    """Run every workload `crates/{core,syntax}/benches/latency.rs` measures
+    (median/p95 latency, real allocation calls, real peak live bytes) and
+    return its JSON array verbatim."""
+    binary = bench_executable(package, 'latency', directory)
+    cases = subprocess.check_output([str(binary), '--list'], cwd=ROOT, text=True).splitlines()
+    if not cases or len(cases) != len(set(cases)):
+        raise ValueError('empty or duplicate latency workload inventory')
+    rows = []
+    for case in cases:
+        if not re.fullmatch(r'[a-z_]+', case):
+            raise ValueError('invalid latency workload name')
+        row = json.loads(subprocess.check_output([str(binary), case], cwd=ROOT, text=True))
+        if row.get('case') != case:
+            raise ValueError('latency workload output does not match inventory')
+        rows.append(row)
+    return rows
+
+
+def run_recovery_bench(directory):
+    """Run `crates/core/benches/recovery.rs`'s six deterministic recovery
+    cases (quality assertions plus latency) and return its JSON array."""
+    binary = bench_executable('purrassist-core', 'recovery', directory)
+    output = subprocess.check_output([str(binary)], cwd=ROOT, text=True)
+    return json.loads(output)
+
+
+def toolchain_cargo() -> str:
+    """Resolve Cargo through rustup, bypassing host Cargo launch wrappers."""
+    if not shutil.which('rustup'):
+        raise ValueError('rustup is required to resolve the real toolchain Cargo')
+    return subprocess.check_output(['rustup', 'which', 'cargo'], cwd=ROOT, text=True).strip()
+
+
+def cold_build():
+    """Build the release CLI in empty target AND intermediate directories.
+
+    Clear both compiler wrapper layers, including config overrides. Cargo's
+    package download cache remains available; OS page caches are not flushed.
+    """
+    cargo = toolchain_cargo()
+    environment = os.environ.copy()
+    for name in ('RUSTC_WRAPPER', 'RUSTC_WORKSPACE_WRAPPER',
+                 'CARGO_BUILD_RUSTC_WRAPPER', 'CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER'):
+        environment[name] = ''
+    cache = ROOT / '.cache'
+    cache.mkdir(exist_ok=True)
+    # Compile outside the source tree: hosts may enforce that no generated
+    # Cargo target/build tree exists inside a checkout, even in ignored caches.
+    with tempfile.TemporaryDirectory(prefix='purrassist-cold-build-', dir='/tmp') as directory:
+        target = Path(directory) / 'target'
+        intermediate = Path(directory) / 'build'
+        environment['CARGO_TARGET_DIR'] = str(target)
+        environment['CARGO_BUILD_BUILD_DIR'] = str(intermediate)
+        command = [cargo, 'build', '-p', 'purrassist-cli', '--release', '--locked',
+                   '--target-dir', str(target), '--config', f'build.build-dir="{intermediate}"',
+                   '--config', 'build.rustc-wrapper=""', '--config', 'build.rustc-workspace-wrapper=""',
+                   '--message-format=json']
+        start = time.perf_counter_ns()
+        result = subprocess.run(command, cwd=ROOT, env=environment, check=False,
+                                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        elapsed = time.perf_counter_ns() - start
+        (cache / 'cold-build.log').write_text(result.stderr)
+        (cache / 'cold-build.events.jsonl').write_text(result.stdout)
+        result.check_returncode()
+        artifacts = [event for event in map(json.loads, result.stdout.splitlines())
+                     if event.get('reason') == 'compiler-artifact']
+        fresh = sum(bool(event['fresh']) for event in artifacts)
+        if not artifacts or fresh:
+            raise ValueError('cold build reused compiler artifacts or produced none')
+        binaries = [event['executable'] for event in artifacts
+                    if event['target']['name'] == 'purrassist' and event.get('executable')]
+        if len(binaries) != 1:
+            raise ValueError('cold build did not produce exactly one CLI')
+        artifact = identity(Path(binaries[0]))
+    return {
+        'method': ('Real toolchain Cargo resolved through rustup; brand-new empty target and '
+                   'intermediate build directories under /tmp outside the checkout; '
+                   'both compiler wrapper layers disabled. '
+                   'Downloaded package sources and OS page cache are retained.'),
+        'fresh_target_directory': True,
+        'fresh_build_directory': True,
+        'compiler_cache_disabled': True,
+        'fresh_artifacts': fresh,
+        'built_artifacts': len(artifacts),
+        'artifact': artifact,
+        'elapsed_ns': elapsed,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, default=ROOT / '.cache/resource-report.json')
@@ -173,23 +399,49 @@ def main():
     cache.mkdir(exist_ok=True)
     directory = Path(tempfile.mkdtemp(prefix='resource-logs-', dir=cache))
     environment = dict(os.environ, LC_ALL='C')
-    binary, benchmark_build = build(['cargo', 'bench', '-p', 'purrassist-core', '--bench', 'resources', '--no-run', '--locked', '--config', 'profile.bench.debug=1', '--config', 'profile.bench.strip=false'], 'resources', directory)
-    _, cli_build = build(['cargo', 'build', '-p', 'purrassist-cli', '--release', '--locked'], 'purrassist', directory)
+    engine_digest = engine_source_identity()
+    # An explicit target-cpu opts this one build out of a host-tuning cargo
+    # wrapper that otherwise appends `-C target-cpu=native` for any build
+    # whose target is this host; Valgrind's JIT cannot decode every
+    # instruction that flag can select on a modern CPU. x86-64-v2 (SSE4.2)
+    # is a portable baseline every Valgrind-supported host can execute; see
+    # "Loader compatibility" below for the matching loader/libc fix this
+    # same SIGILL failure mode needs.
+    binary, benchmark_build = build(['cargo', 'bench', '-p', 'purrassist-core', '--bench', 'resources', '--no-run', '--locked', '--config', 'profile.bench.debug=1', '--config', 'profile.bench.strip=false', '--config', 'build.rustflags=["-C", "target-cpu=x86-64-v2"]'], 'resources', directory)
+    cli_binary, cli_build = build(['cargo', 'build', '-p', 'purrassist-cli', '--release', '--locked'], 'purrassist', directory)
     executable, runtime_identity = runtime(binary, args.portable_runtime)
     cases = subprocess.check_output([str(binary), '--list'], text=True).splitlines()
     if not cases or len(set(cases)) != len(cases) or any(not re.fullmatch(r'[a-z_]+', case) for case in cases):
         raise ValueError('invalid workload inventory')
     report = {
-        'format': 'purrassist.resources.v1', 'source': source_identity(),
+        'format': 'purrassist.resources.v2', 'source': source_identity(),
         'platform': {'system': 'Linux', 'architecture': platform.machine(), 'libc': platform.libc_ver()},
         'tools': {'valgrind': version, 'rustc': subprocess.check_output(['rustc', '--version'], text=True).strip()},
-        'scope': 'One process per workload and profiler; includes startup, construction, assertions, output, and teardown. Native elapsed time is not per-operation latency. Heap excludes stacks and mappings; Massif overhead is estimated. RSS is the native workload VmHWM, including a small procfs read used to obtain it. These observations are not hard memory bounds or representative quality evaluation.',
+        'scope': 'One process per workload and profiler; includes startup, construction, assertions, output, and teardown. Native elapsed time is not per-operation latency. Heap excludes stacks and mappings; Massif overhead is estimated. RSS is the native workload VmHWM, including a small procfs read used to obtain it. Latency and counting-allocator measurements cover fixture construction, correctness checks (including JSON serialization for the composed-recovery expected value), and output destruction. Each latency case is a separate process. These observations are not hard memory bounds or representative quality evaluation.',
         'rss_observation': 'VmHWM after workload and before final teardown; includes native-only procfs read',
         'runtime': runtime_identity, 'builds': [benchmark_build, cli_build], 'workloads': [],
     }
     for case in cases:
         print(f'Profiling {case}', flush=True)
         report['workloads'].append(profile(executable, case, directory, environment))
+    print('Measuring native CLI and wasm artifact sizes', flush=True)
+    report['artifact_sizes'] = artifact_sizes(cli_binary)
+    print('Running core latency workloads', flush=True)
+    report['latency_workloads'] = run_latency_bench('purrassist-core', directory)
+    print('Running syntax latency workloads', flush=True)
+    report['syntax_latency_workloads'] = run_latency_bench('purrassist-syntax', directory)
+    print('Running the recovery benchmark', flush=True)
+    recovery_output = run_recovery_bench(directory)
+    report['recovery_benchmark'] = recovery_output
+    recovery_path = ROOT / 'docs/qualification/recovery-bench-linux-x86_64.json'
+    print('Measuring cold build cost (empty target/build directories, compiler caches disabled)', flush=True)
+    report['cold_build'] = cold_build()
+    if engine_source_identity() != engine_digest:
+        raise ValueError('engine source inputs changed during measurement; rerun on stable sources')
+    report['source'] = source_identity()
+    report['source']['engine_source_tree_sha256'] = engine_digest
+    recovery_path.write_text(json.dumps(recovery_output, indent=2) + '\n')
+    print(f'Wrote {recovery_path}', flush=True)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + '\n')
     print(f'Wrote {args.output}; raw logs retained in {directory}', flush=True)

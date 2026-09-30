@@ -35,3 +35,7 @@ harness = false
 [[bench]]
 name = "resources"
 harness = false
+
+[[bench]]
+name = "latency"
+harness = false
