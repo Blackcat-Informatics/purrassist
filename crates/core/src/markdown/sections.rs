@@ -231,9 +231,30 @@ impl Document {
 
     /// Rename a root heading's title, keeping its level and ATX/setext style.
     ///
+    /// A setext title spanning several source lines is replaced by the supplied
+    /// single-line title. Its first-line indentation, final title-line ending,
+    /// exact underline, and every surrounding byte remain intact. The returned
+    /// patch identifies the entire replaced title span; its inverse restores
+    /// every original title line, including mixed line endings.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, Outcome, markdown::Document};
+    /// let source = "Hot\nTea\n---\n\nKeep.\n";
+    /// let mut governor = Governor::new(Budget::default());
+    /// let document = Document::parse(source, &mut governor)?;
+    /// let plan = document.rename_heading(0, "Chai", &mut governor)?;
+    /// let Outcome::Resolved(applied) = plan.apply(source, Budget::default()).outcome
+    ///     else { panic!("rename must apply") };
+    /// assert_eq!(applied.text, "Chai\n---\n\nKeep.\n");
+    /// let Outcome::Resolved(restored) = applied.inverse.apply(&applied.text, Budget::default()).outcome
+    ///     else { panic!("inverse must apply") };
+    /// assert_eq!(restored.text, source);
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    ///
     /// # Errors
     /// Rejects a missing/non-heading root index, a title containing a line
-    /// break, a multi-line setext title (not supported), and any proposal
+    /// break or not reparsing as the exact requested heading title, and any proposal
     /// that changes the heading's level, style, or another block. Resource
     /// exhaustion and cancellation propagate without a partial plan.
     pub fn rename_heading(
@@ -278,20 +299,18 @@ impl Document {
                 edits: Vec::new(),
             });
         }
-        if block.lines.len() > 2 {
-            return Err(invalid(
-                "multi-line setext heading titles cannot be renamed",
-            ));
-        }
-        let setext = block.lines.len() == 2;
+        let setext = block.lines.len() >= 2;
         let level = *level;
-        let line_range = block.lines[0].clone();
-        let text = line(&self.source, &line_range);
-        let ending = &self.source[line_range.clone()][text.len()..];
+        let first_line = &block.lines[0];
+        let final_title_line = &block.lines[if setext { block.lines.len() - 2 } else { 0 }];
+        let title_range = first_line.start..final_title_line.end;
+        let text = line(&self.source, first_line);
+        let final_text = line(&self.source, final_title_line);
+        let ending = &self.source[final_title_line.clone()][final_text.len()..];
+        let indent = text.len() - text.trim_start_matches(' ').len();
         let replacement = if setext {
-            format!("{title}{ending}")
+            format!("{}{title}{ending}", &text[..indent])
         } else {
-            let indent = text.len() - text.trim_start_matches(' ').len();
             format!(
                 "{}{} {title}{ending}",
                 &text[..indent],
@@ -301,7 +320,7 @@ impl Document {
         let plan = EditPlan {
             source: self.digest,
             edits: vec![TextEdit {
-                range: line_range.clone(),
+                range: title_range.clone(),
                 replacement: replacement.clone(),
             }],
         };
@@ -310,7 +329,7 @@ impl Document {
             return Err(applied.receipt.stopped);
         };
         let updated = Self::parse(&applied.text, governor)?;
-        let new_end = line_range.start + replacement.len();
+        let new_end = title_range.start + replacement.len();
         let expected = BlockKind::Heading {
             level,
             title: title.into(),
@@ -323,7 +342,7 @@ impl Document {
             || !same_tail(
                 &self.blocks[heading + 1..],
                 &updated.blocks[heading + 1..],
-                line_range.end,
+                title_range.end,
                 new_end,
             )
         {
@@ -335,14 +354,29 @@ impl Document {
     }
 
     /// Move a complete root-level section to a new position, optionally
-    /// re-leveling only its own top ATX heading; nested subsection headings
+    /// re-leveling only its own top heading; nested subsection headings
     /// keep their existing levels, so the moved section's internal nesting
     /// relative to its new top level is a reported transformation, not a
     /// refusal.
     ///
+    /// Setext headings retain their title lines and underline spacing/width at
+    /// levels 1 and 2. Levels 3 through 6 convert the heading to ATX, joining
+    /// its title lines with spaces and keeping the underline's line ending.
+    /// The inverse restores the original spelling, including every title line.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, Outcome, markdown::{Document, SectionInsertion}};
+    /// let source = "Hot\nTea\n---\n\nKeep.\n";
+    /// let mut g = Governor::new(Budget::default());
+    /// let doc = Document::parse(source, &mut g).unwrap();
+    /// let plan = doc.move_section(0, SectionInsertion::Start, Some(3), &mut g).unwrap();
+    /// let Outcome::Resolved(applied) = plan.apply(source, Budget::default()).outcome else { panic!() };
+    /// assert_eq!(applied.text, "### Hot Tea\n\nKeep.\n");
+    /// ```
+    ///
     /// # Errors
     /// Rejects a missing heading, moving a section after itself or into its
-    /// own body, re-leveling a setext or multi-line heading, and every error
+    /// own body, a requested level outside 1 through 6, and every error
     /// [`Self::remove_section`] and [`Self::insert_section`] can return.
     pub fn move_section(
         &self,
@@ -351,6 +385,14 @@ impl Document {
         new_level: Option<u8>,
         governor: &mut Governor,
     ) -> Result<EditPlan, StopReason> {
+        // Admit section-index storage and the moved source before either is copied.
+        governor.charge(Resource::Work, size(self.source.len()).saturating_add(1))?;
+        governor.charge(
+            Resource::ScratchBytes,
+            size(self.source.len())
+                .saturating_mul(128)
+                .saturating_add(512),
+        )?;
         let section = self
             .sections()
             .into_iter()
@@ -498,8 +540,7 @@ fn insert_section_at(
     Ok(plan)
 }
 
-/// Rewrite only a standalone section's own top ATX heading line to
-/// `new_level`, keeping its title exact. Used by [`Document::move_section`].
+/// Rewrite a standalone section's top heading, preserving its body exactly.
 fn relevel_first_heading(
     text: &str,
     new_level: u8,
@@ -508,6 +549,11 @@ fn relevel_first_heading(
     if !(1..=6).contains(&new_level) {
         return Err(invalid("heading level must be between 1 and 6"));
     }
+    governor.charge(Resource::Work, size(text.len()).saturating_add(8))?;
+    governor.charge(
+        Resource::ScratchBytes,
+        size(text.len()).saturating_mul(2).saturating_add(16),
+    )?;
     let doc = Document::parse(text, governor)?;
     let Some(first) = doc.blocks.first() else {
         return Err(invalid("moved text does not begin with a heading"));
@@ -515,22 +561,48 @@ fn relevel_first_heading(
     let BlockKind::Heading { title, .. } = &first.kind else {
         return Err(invalid("moved text does not begin with a heading"));
     };
-    if first.lines.len() != 1 {
-        return Err(invalid(
-            "only single-line ATX headings can be re-leveled while moving",
-        ));
-    }
     let line_range = first.lines[0].clone();
     let line_text = line(text, &line_range);
-    let ending = &text[line_range.clone()][line_text.len()..];
     let indent = line_text.len() - line_text.trim_start_matches(' ').len();
+    let setext = first.lines.len() >= 2;
+    let final_range = first.lines.last().expect("a heading has a source line");
+    let final_text = line(text, final_range);
+    let ending = &text[final_range.clone()][final_text.len()..];
+    if setext && new_level <= 2 {
+        let marker = if new_level == 1 { '=' } else { '-' };
+        let mut result = text[..final_range.start].to_string();
+        for character in final_text.chars() {
+            result.push(if matches!(character, '=' | '-') {
+                marker
+            } else {
+                character
+            });
+        }
+        result.push_str(ending);
+        result.push_str(&text[final_range.end..]);
+        return Ok(result);
+    }
     let mut result = text[..line_range.start].to_string();
     result.push_str(&line_text[..indent]);
     result.push_str(&"#".repeat(new_level as usize));
     result.push(' ');
-    result.push_str(title);
+    if setext {
+        let joined = title.replace('\n', " ");
+        // An unescaped trailing hash sequence would become ATX closing syntax.
+        // Escape its first hash so its rendered title remains literal.
+        let prefix = joined.trim_end_matches('#');
+        if prefix.len() != joined.len() && (prefix.is_empty() || prefix.ends_with([' ', '\t'])) {
+            result.push_str(prefix);
+            result.push('\\');
+            result.push_str(&joined[prefix.len()..]);
+        } else {
+            result.push_str(&joined);
+        }
+    } else {
+        result.push_str(title);
+    }
     result.push_str(ending);
-    result.push_str(&text[line_range.end..]);
+    result.push_str(&text[final_range.end..]);
     Ok(result)
 }
 

@@ -612,3 +612,91 @@ fn list_item_tool_inserts_replaces_and_removes_nested_items() {
     }
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn structural_receipts_identify_setext_relevel_and_multiline_rename() {
+    let root = std::env::temp_dir().join(format!(
+        "purrassist-heading-transform-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let tools = Tools::new(&root).unwrap();
+    let source = "  Hot\r\nTea\r\n  --- \t\r\n\r\nKeep.\r\n";
+    for (level, expected, style, description) in [
+        (
+            1,
+            "  Hot\r\nTea\r\n  === \t\r\n\r\nKeep.\r\n",
+            "setext",
+            "Only underline marker characters change",
+        ),
+        (
+            3,
+            "  ### Hot Tea\r\n\r\nKeep.\r\n",
+            "ATX",
+            "Title lines are joined with spaces",
+        ),
+    ] {
+        let result = call(
+            &tools,
+            "plan_markdown_structure",
+            source,
+            &format!(
+                r#"{{"op":"section_move","heading":0,"position":"start","new_level":{level}}}"#
+            ),
+        );
+        assert_eq!(apply(&result, source), expected);
+        let evidence = result.pointer("/receipt/evidence/1").unwrap();
+        assert_eq!(
+            evidence.get("rule").unwrap().as_str(),
+            Some("markdown.section-relevel.v1")
+        );
+        let detail = evidence.get("explanation").unwrap().as_str().unwrap();
+        assert!(detail.contains(&format!(
+            "heading level 2 -> {level}; style setext -> {style}; original title lines: 2"
+        )));
+        assert!(detail.contains(description));
+        assert_eq!(offset(evidence.pointer("/span/start").unwrap()), 0);
+        assert_eq!(
+            offset(evidence.pointer("/span/end").unwrap()),
+            "  Hot\r\nTea\r\n  --- \t\r\n".len()
+        );
+    }
+    let renamed = call(
+        &tools,
+        "plan_markdown_structure",
+        source,
+        r#"{"op":"section_rename","heading":0,"title":"Chai"}"#,
+    );
+    assert_eq!(
+        apply(&renamed, source),
+        "  Chai\r\n  --- \t\r\n\r\nKeep.\r\n"
+    );
+    let evidence = renamed.pointer("/receipt/evidence/1").unwrap();
+    assert_eq!(
+        evidence.get("rule").unwrap().as_str(),
+        Some("markdown.heading-title-collapse.v1")
+    );
+    assert!(
+        evidence
+            .get("explanation")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("replaced 2 setext title lines")
+    );
+    assert_eq!(
+        offset(evidence.pointer("/span/end").unwrap()),
+        "  Hot\r\nTea\r\n".len()
+    );
+    let unchanged = call(
+        &tools,
+        "plan_markdown_structure",
+        source,
+        r#"{"op":"section_move","heading":0,"position":"start","new_level":2}"#,
+    );
+    let Value::Array(evidence) = &unchanged.pointer("/receipt/evidence").unwrap().value else {
+        panic!()
+    };
+    assert_eq!(evidence.len(), 1);
+    std::fs::remove_dir_all(root).unwrap();
+}

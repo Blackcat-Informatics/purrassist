@@ -136,6 +136,78 @@ fn rename_heading_succeeds_preserves_crlf_and_refuses_stale_or_exhausted() {
 }
 
 #[test]
+fn multiline_setext_rename_preserves_underline_containers_spans_and_inverse() {
+    for newline in ["\n", "\r\n", "\r"] {
+        for underline in ["   ---  ", "  ===\t"] {
+            let before = "> before\n> - nested\n\n".replace('\n', newline);
+            let original_title = "  Café\nβeta\nthird\n".replace('\n', newline);
+            let after = "\n- after\n  > quote\n\n# Keep\n".replace('\n', newline);
+            let source = format!("{before}{original_title}{underline}{newline}{after}");
+            let mut governor = Governor::new(Budget::default());
+            let document = Document::parse(&source, &mut governor).unwrap();
+            let heading = document
+                .blocks()
+                .iter()
+                .position(|block| {
+                    matches!(
+                        &block.kind, purrassist_core::markdown::BlockKind::Heading { title, .. }
+                        if title == "Café\nβeta\nthird"
+                    )
+                })
+                .unwrap();
+            let plan = document
+                .rename_heading(heading, "Chāi", &mut governor)
+                .unwrap();
+            assert_eq!(plan.edits.len(), 1);
+            assert_eq!(
+                plan.edits[0].range,
+                before.len()..before.len() + original_title.len()
+            );
+            assert_eq!(plan.edits[0].replacement, format!("  Chāi{newline}"));
+            assert_eq!(
+                round_trip(&source, &plan),
+                format!("{before}  Chāi{newline}{underline}{newline}{after}")
+            );
+            let applied = plan.apply(&source, Budget::default());
+            assert_eq!(applied.receipt.losses.len(), 1);
+            assert_eq!(applied.receipt.losses[0].original, original_title);
+            assert_eq!(
+                applied.receipt.losses[0]
+                    .evidence
+                    .span
+                    .as_ref()
+                    .unwrap()
+                    .bytes,
+                plan.edits[0].range
+            );
+            assert_stale(&source, &plan);
+            assert_eq!(
+                document
+                    .rename_heading(heading, "Chāi", &mut exhausted())
+                    .unwrap_err(),
+                StopReason::BudgetExceeded(Resource::Work)
+            );
+            for invalid_title in ["", "\tcode", "# Different style", "two\nlines"] {
+                assert!(
+                    matches!(
+                        document.rename_heading(heading, invalid_title, &mut governor),
+                        Err(StopReason::InvalidInput(_))
+                    ),
+                    "title {invalid_title:?} must not change the selected heading's structure"
+                );
+            }
+        }
+    }
+    let source = "alpha\r\nbeta\n  ---\r\nbody\r\n";
+    let mut governor = Governor::new(Budget::default());
+    let document = Document::parse(source, &mut governor).unwrap();
+    let plan = document
+        .rename_heading(0, "renamed", &mut governor)
+        .unwrap();
+    assert_eq!(round_trip(source, &plan), "renamed\n  ---\r\nbody\r\n");
+}
+
+#[test]
 fn move_section_reorders_relevels_and_refuses_stale_or_exhausted() {
     for newline in ["\n", "\r\n"] {
         let source = "# Tea\nHot.\n# Coffee\nBlack.\n".replace('\n', newline);
@@ -484,4 +556,95 @@ fn unlink_reference_turns_every_resolving_context_into_plain_text() {
     );
     // The code span is not a use and is never unlinked.
     assert!(applied.contains("`[drink][tea]` code."));
+}
+
+#[test]
+fn setext_section_moves_relevel_every_valid_level_and_restore_exact_source() {
+    for newline in ["\n", "\r\n", "\r"] {
+        for (marker, old_level) in [('=', 1), ('-', 2)] {
+            for multiline in [false, true] {
+                for new_level in 1..=6 {
+                    let before = "# Keep\n> quote\n- list\n\nOutside\n\n".replace('\n', newline);
+                    let title = if multiline {
+                        "  Café\nβeta\n"
+                    } else {
+                        "  Café\n"
+                    }
+                    .replace('\n', newline);
+                    let underline = format!("  {marker}{marker}{marker}{marker} \t{newline}");
+                    let body = "body\n\n### Nested\nunchanged\n\n".replace('\n', newline);
+                    let source = format!("{before}{title}{underline}{body}");
+                    let mut g = Governor::new(Budget::default());
+                    let doc = Document::parse(&source, &mut g).unwrap();
+                    let heading = doc.blocks().iter().position(|block| matches!(&block.kind, purrassist_core::markdown::BlockKind::Heading { title, .. } if title.starts_with("Café"))).unwrap();
+                    let plan = doc
+                        .move_section(heading, SectionInsertion::Start, Some(new_level), &mut g)
+                        .unwrap();
+                    let moved_heading = if new_level <= 2 {
+                        let new_marker = if new_level == 1 { '=' } else { '-' };
+                        format!(
+                            "{title}{}",
+                            underline.replace(marker, &new_marker.to_string())
+                        )
+                    } else {
+                        format!(
+                            "  {} Café{}{newline}",
+                            "#".repeat(new_level as usize),
+                            if multiline { " βeta" } else { "" }
+                        )
+                    };
+                    let applied = round_trip(&source, &plan);
+                    assert_eq!(
+                        applied,
+                        format!("{moved_heading}{body}{before}"),
+                        "{old_level} -> {new_level}"
+                    );
+                    let updated = Document::parse(&applied, &mut g).unwrap();
+                    assert!(
+                        matches!(&updated.blocks()[0].kind, purrassist_core::markdown::BlockKind::Heading { level, .. } if *level == new_level)
+                    );
+                    assert_stale(&source, &plan);
+                    assert_eq!(
+                        doc.move_section(
+                            heading,
+                            SectionInsertion::Start,
+                            Some(new_level),
+                            &mut exhausted()
+                        )
+                        .unwrap_err(),
+                        StopReason::BudgetExceeded(Resource::Work)
+                    );
+                    for invalid in [0, 7] {
+                        assert!(matches!(
+                            doc.move_section(
+                                heading,
+                                SectionInsertion::Start,
+                                Some(invalid),
+                                &mut g
+                            ),
+                            Err(StopReason::InvalidInput(_))
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    for title in ["literal ###", "first\nliteral ###"] {
+        let source = format!("{title}\n---\n\nbody\n");
+        let mut g = Governor::new(Budget::default());
+        let doc = Document::parse(&source, &mut g).unwrap();
+        let plan = doc
+            .move_section(0, SectionInsertion::Start, Some(3), &mut g)
+            .unwrap();
+        let applied = round_trip(&source, &plan);
+        let old_html = doc.render_html(Dialect::CommonMark, &mut g).unwrap();
+        let updated = Document::parse(&applied, &mut g).unwrap();
+        let new_html = updated.render_html(Dialect::CommonMark, &mut g).unwrap();
+        assert_eq!(
+            old_html
+                .replace("h2>", "h3>")
+                .replace("first\nliteral", "first literal"),
+            new_html
+        );
+    }
 }

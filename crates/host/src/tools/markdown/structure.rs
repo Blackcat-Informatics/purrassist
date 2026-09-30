@@ -11,7 +11,9 @@ use purrassist::{
     Governor, Receipt, StopReason,
     contract::{Evidence, Resource, SourceSpan, Validation},
     json::{Node, Value},
-    markdown::{Document, ListItemEdit, SectionInsertion, TableColumnEdit, TableRowEdit},
+    markdown::{
+        BlockKind, Document, ListItemEdit, SectionInsertion, TableColumnEdit, TableRowEdit,
+    },
 };
 
 pub(super) fn call(
@@ -92,13 +94,65 @@ pub(super) fn call(
 }
 
 pub(super) fn record(
+    args: &Node,
     document: &Document,
     receipt: &mut Receipt,
     governor: &mut Governor,
 ) -> Result<(), StopReason> {
-    governor.charge(Resource::EvidenceEntries, 2)?;
-    governor.charge(Resource::Work, 512)?;
-    governor.charge(Resource::ScratchBytes, 1024)?;
+    let op = super::super::field(args, "op").map_err(StopReason::InvalidInput)?;
+    // Reserve every ledger entry and explanation before constructing or publishing any.
+    governor.charge(Resource::Work, 1024)?;
+    governor.charge(Resource::ScratchBytes, 4096)?;
+    let mut transformation = None;
+    if matches!(op, "section_move" | "section_rename") {
+        let block = &document.blocks()[index(args, "heading")?];
+        let BlockKind::Heading { level, title } = &block.kind else {
+            unreachable!("the successful structural operation selected a heading")
+        };
+        let setext = block.lines.len() >= 2;
+        let title_lines = if setext { block.lines.len() - 1 } else { 1 };
+        if op == "section_move" {
+            if let Some(new_level) = optional_level(args)?.filter(|new| new != level) {
+                let old_style = if setext { "setext" } else { "ATX" };
+                let new_style = if setext && new_level <= 2 {
+                    "setext"
+                } else {
+                    "ATX"
+                };
+                let detail = if setext && new_level <= 2 {
+                    "Only underline marker characters change; title lines, underline width/spacing, line endings, body bytes, and nested heading levels remain exact."
+                } else if setext {
+                    "Title lines are joined with spaces; the first title indentation and underline line ending become the ATX heading indentation and ending. The underline is removed; body bytes and nested heading levels remain exact."
+                } else {
+                    "The top heading receives the requested ATX prefix and canonical title spacing; body bytes and nested heading levels remain exact."
+                };
+                let joined_prefix = title.trim_end_matches('#');
+                let escaped = setext
+                    && new_level > 2
+                    && joined_prefix.len() != title.len()
+                    && (joined_prefix.is_empty() || joined_prefix.ends_with([' ', '\t', '\n']));
+                transformation = Some((
+                    "markdown.section-relevel.v1",
+                    format!(
+                        "section_move: heading level {level} -> {new_level}; style {old_style} -> {new_style}; original title lines: {title_lines}. {detail} Literal trailing hash sequence escaped: {escaped}. Original spelling is retained for exact inverse restoration."
+                    ),
+                    block.span.clone(),
+                ));
+            }
+        } else if title_lines > 1 {
+            transformation = Some((
+                "markdown.heading-title-collapse.v1",
+                format!(
+                    "section_rename: replaced {title_lines} setext title lines with the supplied single-line title; retained first-line indentation, final title-line ending, exact underline, and all outside bytes. Original title lines are retained for exact inverse restoration."
+                ),
+                block.lines[0].start..block.lines[title_lines - 1].end,
+            ));
+        }
+    }
+    governor.charge(
+        Resource::EvidenceEntries,
+        if transformation.is_some() { 3 } else { 2 },
+    )?;
     receipt.validations.push(Validation {
         validator: "markdown.structure.v1".into(),
         constraint: "the selected section, list, table, or reference structure and every unselected block reparse to the intended shape".into(),
@@ -107,10 +161,21 @@ pub(super) fn record(
     });
     receipt.evidence.push(Evidence {
         rule: "markdown.structure-edit.v1".into(),
-        explanation: "The requested structural operation (section insert/remove/move/rename, list move/renumber, table row/column move, or reference add/relabel/remove/unlink) was reparsed and checked against its documented shape; outside bytes remain exact and the original source is retained.".into(),
+        explanation: format!("Structural operation {op} was reparsed and checked against its documented shape; outside bytes remain exact and the original source is retained."),
         span: Some(SourceSpan { source: document.digest(), bytes: 0..document.source().len() }),
         destination: "/edits".into(),
     });
+    if let Some((rule, explanation, bytes)) = transformation {
+        receipt.evidence.push(Evidence {
+            rule: rule.into(),
+            explanation,
+            span: Some(SourceSpan {
+                source: document.digest(),
+                bytes,
+            }),
+            destination: "/edits".into(),
+        });
+    }
     Ok(())
 }
 

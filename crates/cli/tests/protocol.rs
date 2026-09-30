@@ -351,16 +351,38 @@ fn fixtures() -> Vec<Fixture> {
         fx(
             "plan_markdown_structure",
             |_| {
-                r##"{"source":"# Tea\nHot.\n","op":"section_rename","heading":0,"title":"Coffee"}"##
-                    .into()
+                r#"{"source":"Hot\r\nTea\r\n  --- \t\r\n\r\nKeep.\r\n","op":"section_move","heading":0,"position":"start","new_level":3}"#.into()
             },
             |node| {
                 assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
-                let replacement = node
-                    .pointer("/value/edits/0/replacement")
-                    .and_then(Node::as_str)
-                    .unwrap();
-                assert!(replacement.starts_with("# Coffee"), "{replacement:?}");
+                let evidence = node.pointer("/receipt/evidence/1").unwrap();
+                assert_eq!(
+                    evidence.get("rule").and_then(Node::as_str),
+                    Some("markdown.section-relevel.v1")
+                );
+                let detail = evidence.get("explanation").and_then(Node::as_str).unwrap();
+                assert!(detail.contains(
+                    "heading level 2 -> 3; style setext -> ATX; original title lines: 2"
+                ));
+                assert!(detail.contains("Title lines are joined with spaces"));
+                assert!(detail.contains("Literal trailing hash sequence escaped: false"));
+                let mut updated = "Hot\r\nTea\r\n  --- \t\r\n\r\nKeep.\r\n".to_string();
+                let Value::Array(edits) = &node.pointer("/value/edits").unwrap().value else {
+                    panic!()
+                };
+                for edit in edits.iter().rev() {
+                    let offset = |field| {
+                        let Value::Number(number) = &edit.get(field).unwrap().value else {
+                            panic!()
+                        };
+                        number.to_usize().unwrap()
+                    };
+                    updated.replace_range(
+                        offset("start")..offset("end"),
+                        edit.get("replacement").and_then(Node::as_str).unwrap(),
+                    );
+                }
+                assert_eq!(updated, "### Hot Tea\r\n\r\nKeep.\r\n");
             },
         ),
         fx(

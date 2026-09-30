@@ -57,7 +57,7 @@ pub(super) fn call(
             table::record(&document, &mut receipt, &mut governor)?;
         }
         if name == "plan_markdown_structure" {
-            structure::record(&document, &mut receipt, &mut governor)?;
+            structure::record(args, &document, &mut receipt, &mut governor)?;
         }
         if name == "render_markdown" {
             governor.charge(Resource::EvidenceEntries, 1)?;
