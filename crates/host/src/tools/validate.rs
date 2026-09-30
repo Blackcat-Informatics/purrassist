@@ -7,7 +7,7 @@
 use purrassist::{
     CancellationToken, Receipt,
     json::{Node, Value},
-    schema::Schema,
+    schema::{CompilationError, Schema},
     wire::{array, object, string},
 };
 
@@ -29,13 +29,18 @@ pub(super) fn call(args: &Node, cancellation: Option<&CancellationToken>) -> Res
         effort,
         effort.budget(),
     );
-    let outcome = (|| -> Result<Report, String> {
+    let outcome = (|| -> Result<Report, purrassist::StopReason> {
         let schema =
-            Schema::compile_governed(&schema_text, &mut governor).map_err(|e| e.to_string())?;
-        let instance = args.get("instance").ok_or("missing instance")?;
-        let report = schema
-            .validate_with(instance, &mut governor)
-            .map_err(|e| e.to_string())?;
+            Schema::compile_governed(&schema_text, &mut governor).map_err(|error| match error {
+                CompilationError::InvalidSchema(error) => {
+                    purrassist::StopReason::InvalidInput(error.to_string())
+                }
+                CompilationError::Resource(reason) => reason,
+            })?;
+        let instance = args
+            .get("instance")
+            .ok_or_else(|| purrassist::StopReason::InvalidInput("missing instance".into()))?;
+        let report = schema.validate_with(instance, &mut governor)?;
         Ok(Report {
             valid: report.valid,
             violations: report.violations,
@@ -47,7 +52,7 @@ pub(super) fn call(args: &Node, cancellation: Option<&CancellationToken>) -> Res
     let report = match outcome {
         Ok(report) => report,
         Err(error) => {
-            receipt.stopped = purrassist::StopReason::InvalidInput(error);
+            receipt.stopped = error;
             Report {
                 valid: false,
                 violations: Vec::new(),
@@ -127,4 +132,26 @@ fn evidence(entry: &purrassist::contract::Evidence) -> Node {
             ),
         ),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn cancellation_during_the_engine_phase_keeps_its_typed_termination() {
+        // Registry admission checks cancellation separately. Exercise the
+        // handler's own compilation failure path, which must also preserve it.
+        let token = purrassist::CancellationToken::new();
+        token.cancel();
+        let args = purrassist::json::parse(r#"{"instance":42,"schema":true}"#).unwrap();
+        let result = super::call(&args, Some(&token)).unwrap();
+        assert_eq!(
+            result
+                .pointer("/receipt/termination/kind")
+                .unwrap()
+                .as_str(),
+            Some("cancelled")
+        );
+        assert_eq!(result.get("valid").unwrap().to_json(), "false");
+        assert_eq!(result.get("violations").unwrap().to_json(), "[]");
+    }
 }

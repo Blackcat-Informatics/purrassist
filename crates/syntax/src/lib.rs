@@ -106,11 +106,14 @@ pub struct Report {
 }
 /// Allocator accounting for one governed parse, beyond [`Report`]'s content.
 ///
-/// Copy fields are byte counts, not the underlying memory itself; nothing
+/// Fields are observed call and byte counts, not underlying memory; nothing
 /// here is charged separately from the [`ScratchLease`] a [`ParsedTree`]
 /// already holds, or from the charge [`inspect`] releases before it returns.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AllocationReport {
+    /// Successful tree-sitter malloc, calloc, and realloc calls attributed
+    /// to this parse; excludes ordinary Rust allocations and allocator headers.
+    pub allocation_calls: u64,
     /// Bytes the produced tree retains: what [`ParsedTree`] charges to the
     /// governor and releases when dropped (or, for [`inspect`], what is
     /// charged and released again before [`inspect`] itself returns).
@@ -138,6 +141,7 @@ pub struct AllocationReport {
 pub struct ParsedTree {
     tree: tree_sitter::Tree,
     lease: ScratchLease,
+    allocation_calls: u64,
     peak_bytes: u64,
     max_overshoot_bytes: u64,
 }
@@ -149,6 +153,7 @@ impl ParsedTree {
     #[must_use]
     pub const fn allocation(&self) -> AllocationReport {
         AllocationReport {
+            allocation_calls: self.allocation_calls,
             retained_bytes: self.lease.bytes(),
             peak_bytes: self.peak_bytes,
             max_overshoot_bytes: self.max_overshoot_bytes,
@@ -193,6 +198,7 @@ pub fn parse_governed(
     let accounted = parse_accounted(source, language, governor)?;
     let lease = governor.scratch_lease_for(accounted.retained_bytes);
     Ok(ParsedTree {
+        allocation_calls: accounted.allocation_calls,
         tree: accounted.tree,
         lease,
         peak_bytes: accounted.peak_bytes,
@@ -205,6 +211,7 @@ pub fn parse_governed(
 struct Accounted {
     tree: tree_sitter::Tree,
     retained_bytes: u64,
+    allocation_calls: u64,
     peak_bytes: u64,
     max_overshoot_bytes: u64,
 }
@@ -290,6 +297,7 @@ fn parse_accounted(
         ));
     };
     Ok(Accounted {
+        allocation_calls: account.calls(),
         tree,
         retained_bytes: charged,
         peak_bytes: account.peak(),
@@ -338,6 +346,7 @@ pub fn inspect(
 /// let (report, allocation) = inspect_with_allocation("fn f() {}", Language::Rust, &mut governor)?;
 /// assert!(report.valid);
 /// assert!(allocation.retained_bytes > 0);
+/// assert!(allocation.allocation_calls > 0);
 /// # Ok::<(), purrassist_core::StopReason>(())
 /// ```
 pub fn inspect_with_allocation(

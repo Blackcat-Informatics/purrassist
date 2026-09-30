@@ -135,6 +135,11 @@ fn inspect_code_reports_jsx_mismatch_rename_options_and_allocation() {
         panic!("retained_bytes should be numeric")
     };
     assert!(retained.to_usize().unwrap() > 0);
+    let purrassist::json::Value::Number(calls) = &allocation.get("allocation_calls").unwrap().value
+    else {
+        panic!("allocation_calls should be numeric")
+    };
+    assert!(calls.to_usize().unwrap() > 0);
 }
 
 #[test]

@@ -109,6 +109,7 @@ static GLOBAL_PEAK: AtomicU64 = AtomicU64::new(0);
 /// Live/peak counters shared by every clone of one `Account`.
 #[derive(Debug)]
 struct AccountInner {
+    calls: AtomicU64,
     live: AtomicU64,
     peak: AtomicU64,
 }
@@ -129,9 +130,15 @@ impl Account {
     /// A fresh account with zeroed counters.
     pub(crate) fn new() -> Self {
         Self(Arc::new(AccountInner {
+            calls: AtomicU64::new(0),
             live: AtomicU64::new(0),
             peak: AtomicU64::new(0),
         }))
+    }
+
+    /// Successful malloc, calloc, and realloc calls attributed to this parse.
+    pub(crate) fn calls(&self) -> u64 {
+        self.0.calls.load(Ordering::Relaxed)
     }
 
     /// Bytes currently attributed to this account and not yet freed.
@@ -267,6 +274,7 @@ fn account_track(account: *const AccountInner, amount: u64) {
         // `attribute_new_block`), keeping the allocation valid regardless of
         // whether that original `Account` has since been dropped.
         let inner = unsafe { &*account };
+        inner.calls.fetch_add(1, Ordering::Relaxed);
         let live = inner.live.fetch_add(amount, Ordering::Relaxed) + amount;
         inner.peak.fetch_max(live, Ordering::Relaxed);
     }
@@ -544,9 +552,34 @@ mod tests {
             parser.parse("fn f() { 1 + 1 }", None)
         });
         assert!(account.live() > 0);
+        assert!(account.calls() > 0);
         assert!(account.peak() >= account.live());
         drop(tree);
         assert_eq!(account.live(), 0);
+    }
+
+    #[test]
+    fn call_counts_include_resizes_and_zeroed_allocations_but_not_frees() {
+        let _guard = LOCK.lock().unwrap();
+        let account = Account::new();
+        scoped(&account, || {
+            // SAFETY: these calls use valid sizes; realloc and free receive
+            // exactly the live pointers produced by this allocator, once each.
+            unsafe {
+                let first = super::ts_malloc(8);
+                assert_eq!((account.calls(), account.live()), (1, 8));
+                let first = super::ts_realloc(first, 16);
+                assert_eq!((account.calls(), account.live()), (2, 16));
+                let second = super::ts_calloc(4, 8);
+                assert_eq!((account.calls(), account.live()), (3, 48));
+                super::ts_free(first);
+                super::ts_free(second);
+            }
+        });
+        assert_eq!(
+            (account.calls(), account.live(), account.peak()),
+            (3, 0, 48)
+        );
     }
 
     #[test]

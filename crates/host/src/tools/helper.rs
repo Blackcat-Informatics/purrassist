@@ -13,6 +13,7 @@
 use crate::helpers::{Pending, Provider};
 use purrassist::{
     Budget, CancellationToken, Schema,
+    contract::Resource,
     digest::Digest,
     json::{self, Node, Value},
     wire::{array, integer, object, string},
@@ -40,9 +41,17 @@ pub(super) fn prepare(
     let provider = provider_of(super::field(args, "provider")?)?;
     let model = super::field(args, "model")?;
     let input = super::field(args, "input")?;
-    let schema_text = args.get("schema").ok_or("missing schema")?.to_json();
     let max_output_tokens = super::unsigned(args, "max_output_tokens")?;
     let mut governor = super::governor(helper_budget(), cancellation);
+    let schema_node = args.get("schema").ok_or("missing schema")?;
+    let schema_storage = schema_node.estimated_bytes().saturating_mul(6);
+    governor
+        .charge(Resource::Work, schema_storage)
+        .map_err(|e| e.to_string())?;
+    governor
+        .charge(Resource::ScratchBytes, schema_storage)
+        .map_err(|e| e.to_string())?;
+    let schema_text = schema_node.to_json();
     let schema =
         Schema::compile_governed(&schema_text, &mut governor).map_err(|e| e.to_string())?;
     let pending = Pending::prepare(
@@ -55,12 +64,30 @@ pub(super) fn prepare(
     )
     .map_err(|e| e.to_string())?;
     let request = pending.request();
+    // The envelope retains and serializes the original/schema/model; the
+    // returned Node also owns a request-body copy. Admit both before copying.
+    let output_storage = u64::try_from(
+        model
+            .len()
+            .saturating_add(input.len())
+            .saturating_add(schema_text.len())
+            .saturating_add(request.body.len()),
+    )
+    .unwrap_or(u64::MAX)
+    .saturating_mul(32)
+    .saturating_add(4096);
+    governor
+        .charge(Resource::Work, output_storage)
+        .map_err(|e| e.to_string())?;
+    governor
+        .charge(Resource::ScratchBytes, output_storage)
+        .map_err(|e| e.to_string())?;
     let envelope = encode_pending(provider, model, input, &schema_text, max_output_tokens);
     let mut receipt = purrassist::Receipt::new(
         input.as_bytes(),
         "helper.prepare.v1",
         purrassist::Effort::Standard,
-        Budget::default(),
+        helper_budget(),
     );
     receipt.usage = governor.usage();
     Ok(object([
@@ -89,8 +116,9 @@ pub(super) fn complete(
     let status =
         u16::try_from(status).map_err(|_| "status must fit an HTTP status code".to_string())?;
     let body = super::field(args, "body")?;
-    let (provider, model, original, schema_text, max_output_tokens) = decode_pending(pending_text)?;
     let mut governor = super::governor(helper_budget(), cancellation);
+    let (provider, model, original, schema_text, max_output_tokens) =
+        decode_pending(pending_text, &mut governor)?;
     let schema =
         Schema::compile_governed(&schema_text, &mut governor).map_err(|e| e.to_string())?;
     let pending = Pending::prepare(
@@ -138,8 +166,11 @@ fn encode_pending(
 /// Rejects malformed JSON, an unsupported `version`, a missing field, and a
 /// `digest` that does not match the recomputed digest of `payload`'s exact
 /// JSON bytes (a corrupted or substituted `pending` string).
-fn decode_pending(text: &str) -> Result<(Provider, String, String, String, u64), String> {
-    let envelope = json::parse(text).map_err(|e| e.to_string())?;
+fn decode_pending(
+    text: &str,
+    governor: &mut purrassist::Governor,
+) -> Result<(Provider, String, String, String, u64), String> {
+    let envelope = json::parse_with(text, governor).map_err(|e| e.to_string())?;
     let expected_version = usize::try_from(PENDING_VERSION).unwrap_or(usize::MAX);
     match envelope.get("version").map(|node| &node.value) {
         Some(Value::Number(number)) if number.to_usize() == Some(expected_version) => {}
@@ -148,6 +179,13 @@ fn decode_pending(text: &str) -> Result<(Provider, String, String, String, u64),
     let payload = envelope
         .get("payload")
         .ok_or("malformed pending state: missing payload")?;
+    let storage = payload.estimated_bytes().saturating_mul(8);
+    governor
+        .charge(Resource::Work, storage)
+        .map_err(|e| e.to_string())?;
+    governor
+        .charge(Resource::ScratchBytes, storage)
+        .map_err(|e| e.to_string())?;
     let expected = super::field(&envelope, "digest")?;
     if Digest::of(payload.to_json().as_bytes()).to_string() != expected {
         return Err("pending state failed tamper verification".into());

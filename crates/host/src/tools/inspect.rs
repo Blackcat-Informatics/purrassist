@@ -66,6 +66,7 @@ fn report_node(report: &Report, allocation: AllocationReport) -> Node {
         (
             "allocation",
             object([
+                ("allocation_calls", integer(allocation.allocation_calls)),
                 ("retained_bytes", integer(allocation.retained_bytes)),
                 ("peak_bytes", integer(allocation.peak_bytes)),
                 (

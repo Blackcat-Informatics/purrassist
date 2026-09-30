@@ -3,7 +3,7 @@
 //! Explicit, resumable provider adapters. No model, socket, credential, or HTTP client
 //! is created here. A caller-owned transport supplies authentication and responses.
 use purrassist::{
-    AssistResult, Budget, Effort, Governor, Outcome, Receipt, RecoveryRequest, Schema, StopReason,
+    AssistResult, Effort, Governor, Outcome, Receipt, RecoveryRequest, Schema, StopReason,
     contract::{Evidence, Inference, InferenceKind, Resource},
     digest::Digest,
     json::{self, Node, Value},
@@ -46,8 +46,7 @@ pub struct Pending {
     model: String,
     original: String,
     schema: Schema,
-    budget: Budget,
-    usage: purrassist::contract::Usage,
+    governor: Governor,
 }
 impl std::fmt::Debug for Pending {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -105,15 +104,16 @@ impl Pending {
         governor.charge(Resource::InputBytes, size(original.len()))?;
         // `schema.document().clone()`, this `Pending`'s own `schema.clone()`,
         // the serialized `prompt`, and the serialized request `body` are each
-        // roughly proportional to the schema's and the input's size; charge a
-        // bound on all four, using a non-serializing size estimate, before
+        // bounded by the schema, input, and model size including repeated JSON
+        // escaping; charge all of them using a non-serializing estimate before
         // allocating any of them.
         let schema_bytes = schema.document().estimated_bytes();
         governor.charge(
             Resource::ScratchBytes,
             schema_bytes
-                .saturating_mul(4)
-                .saturating_add(size(original.len()).saturating_mul(3))
+                .saturating_add(size(original.len()))
+                .saturating_add(size(model.len()))
+                .saturating_mul(32)
                 .saturating_add(1024),
         )?;
         let prompt = object([
@@ -136,8 +136,7 @@ impl Pending {
             model: model.into(),
             original: original.into(),
             schema: schema.clone(),
-            budget: *governor.limits(),
-            usage: governor.usage(),
+            governor: governor.clone(),
         })
     }
     /// Borrow the request; execute it only through a transport selected by the caller.
@@ -148,39 +147,73 @@ impl Pending {
     /// Resume with a completed HTTP response, extracting visible answer text only.
     /// Refusals, provider errors, and non-completed responses remain unsuccessful.
     /// Successful helper proposals are always marked as guesses, even when valid.
+    /// Preparation and completion use cumulative accounting and retain the
+    /// preparation governor's cancellation signal. Resource or ledger admission
+    /// failure returns an unresolved result with its typed termination reason.
+    ///
+    /// ```
+    /// use purrassist::{Budget, CancellationToken, Governor, Outcome, Schema, StopReason};
+    /// use purrassist_host::helpers::{Pending, Provider};
+    /// let token = CancellationToken::new();
+    /// let mut governor = Governor::with_cancellation(
+    ///     Budget { helper_calls: 1, ..Budget::default() }, token.clone());
+    /// let pending = Pending::prepare(Provider::AnthropicMessages, "example-model",
+    ///     "42", &Schema::compile("true")?, 32, &mut governor)?;
+    /// token.cancel();
+    /// let result = pending.complete(200, "{}");
+    /// assert_eq!(result.outcome, Outcome::Unresolved);
+    /// assert_eq!(result.receipt.stopped, StopReason::Cancelled);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     #[must_use]
     pub fn complete(self, status: u16, response: &str) -> AssistResult<Node> {
+        let mut governor = self.governor;
         let mut receipt = Receipt::new(
             self.original.as_bytes(),
             "helper.recover.v1",
             Effort::Deep,
-            self.budget,
+            *governor.limits(),
         );
-        receipt.usage = self.usage;
+        // The retained original is owned by Pending and was admitted during
+        // preparation; moving it into the receipt requires no second copy.
         receipt.sources.push(purrassist::contract::SourceDocument {
             digest: receipt.source,
             text: self.original,
         });
-        let remaining = Budget {
-            work: self.budget.work.saturating_sub(self.usage.work),
-            helper_calls: 0,
-            scratch_bytes: self
-                .budget
-                .scratch_bytes
-                .saturating_sub(self.usage.peak_scratch_bytes),
-            evidence_entries: self
-                .budget
-                .evidence_entries
-                .saturating_sub(self.usage.evidence_entries),
-            ..self.budget
-        };
-        let mut governor = Governor::new(remaining);
-        let extracted = response_text(self.provider, status, response, &mut governor);
-        let text = match extracted {
-            Ok(text) => text,
+        let prepared = (|| {
+            governor.check()?;
+            let text = response_text(self.provider, status, response, &mut governor)?;
+            // Reserve the proposal evidence and inference together before
+            // recovery can consume the remaining ledger allowance. No partial
+            // helper ledger or successful value can escape failed admission.
+            governor.charge(Resource::EvidenceEntries, 2)?;
+            let ledger_bytes = size(text.len())
+                .saturating_add(size(self.model.len()))
+                .saturating_add(size(self.request.body.len()))
+                .saturating_add(size(response.len()))
+                .saturating_add(1024);
+            governor.charge(Resource::Work, ledger_bytes)?;
+            governor.charge(Resource::ScratchBytes, ledger_bytes.saturating_mul(2))?;
+            let evidence = Evidence {
+                rule: "helper.proposal.v1".into(),
+                explanation: format!(
+                    "provider {:?}; model {:?}; request {}; response {}; schema {}",
+                    self.provider,
+                    self.model,
+                    Digest::of(self.request.body.as_bytes()),
+                    Digest::of(response.as_bytes()),
+                    self.schema.digest()
+                ),
+                span: None,
+                destination: String::new(),
+            };
+            Ok::<_, StopReason>((text, evidence))
+        })();
+        let (text, evidence) = match prepared {
+            Ok(value) => value,
             Err(reason) => {
                 receipt.stopped = reason;
-                receipt.usage = receipt.usage.merge(&governor.usage());
+                receipt.usage = governor.usage();
                 return AssistResult {
                     outcome: Outcome::Unresolved,
                     receipt,
@@ -189,29 +222,10 @@ impl Pending {
         };
         let request = RecoveryRequest {
             effort: Effort::Deep,
-            budget: Some(Budget {
-                work: remaining.work.saturating_sub(governor.usage().work),
-                scratch_bytes: remaining
-                    .scratch_bytes
-                    .saturating_sub(governor.usage().peak_scratch_bytes),
-                ..remaining
-            }),
+            budget: None,
             allow_guesses: true,
         };
-        let mut recovered = self.schema.recover(&text, request);
-        let evidence = Evidence {
-            rule: "helper.proposal.v1".into(),
-            explanation: format!(
-                "provider {:?}; model {:?}; request {}; response {}; schema {}",
-                self.provider,
-                self.model,
-                Digest::of(self.request.body.as_bytes()),
-                Digest::of(response.as_bytes()),
-                self.schema.digest()
-            ),
-            span: None,
-            destination: String::new(),
-        };
+        let mut recovered = self.schema.recover_governed(&text, request, &mut governor);
         if let Outcome::Resolved(value) = recovered.outcome {
             recovered.outcome = Outcome::BestGuess(value);
         }
@@ -226,17 +240,7 @@ impl Pending {
         recovered.receipt.source = receipt.source;
         recovered.receipt.sources.extend(receipt.sources);
         recovered.receipt.operation = receipt.operation;
-        recovered.receipt.budget = self.budget;
-        // Combine this helper round's three phases of independently measured
-        // usage (request preparation, response extraction, and local
-        // recovery of the proposed value) into one reported total: counters
-        // sum, and `peak_scratch_bytes` takes the largest of the three,
-        // since their live scratch was never simultaneously held.
-        recovered.receipt.usage = recovered
-            .receipt
-            .usage
-            .merge(&self.usage)
-            .merge(&governor.usage());
+        recovered.receipt.usage = governor.usage();
         recovered
     }
 }
@@ -255,6 +259,13 @@ fn response_text(
         json::ParseFailure::Resource(reason) => reason,
         json::ParseFailure::Syntax(error) => StopReason::InvalidInput(error.to_string()),
     })?;
+    // Every supported provider extracts substrings of this response. Reserve
+    // their joined owned storage before text_blocks or to_string allocates.
+    governor.charge(Resource::Work, size(response.len()))?;
+    governor.charge(
+        Resource::ScratchBytes,
+        size(response.len()).saturating_mul(2),
+    )?;
     extract(provider, &node)
 }
 fn body(provider: Provider, model: &str, prompt: &str, tokens: u64) -> (&'static str, Node) {

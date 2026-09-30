@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Fixed public-provider transcripts; no model, network, or credential is used.
-use purrassist::{Budget, Governor, Outcome, Schema, StopReason, contract::Resource, json};
+use purrassist::{
+    Budget, CancellationToken, Governor, Outcome, Schema, StopReason, contract::Resource, json,
+};
 use purrassist_host::helpers::{Pending, Provider};
 
 fn prepare(provider: Provider) -> Pending {
@@ -49,10 +51,9 @@ fn public_wire_formats_produce_locally_validated_explicit_guesses() {
     }
 }
 #[test]
-fn completed_usage_merges_every_phase_including_scratch_and_candidates() {
-    // `Pending::complete` combines three independently governed phases
-    // (request preparation, response extraction, and local schema recovery
-    // of the proposed value) via `Usage::merge`. Preparation alone charges
+fn completed_usage_includes_every_phase_scratch_and_candidates() {
+    // `Pending::complete` retains one cumulative governor through request
+    // preparation, response extraction, and schema recovery. Preparation alone charges
     // no `Resource::Candidates` (recovery is what proposes candidates), so a
     // nonzero count here proves the local-recovery phase's usage was folded
     // in, not dropped; likewise `total_scratch_charged` (a monotone sum,
@@ -66,6 +67,93 @@ fn completed_usage_merges_every_phase_including_scratch_and_candidates() {
     assert!(result.receipt.usage.candidates > 0);
     assert!(result.receipt.usage.total_scratch_charged > 0);
     assert!(result.receipt.usage.total_scratch_charged >= result.receipt.usage.peak_scratch_bytes);
+}
+
+#[test]
+fn pending_completion_retains_cancellation_and_prior_candidate_usage() {
+    let schema = Schema::compile("true").unwrap();
+    let token = CancellationToken::new();
+    let mut governor = Governor::with_cancellation(
+        Budget {
+            helper_calls: 1,
+            ..Budget::default()
+        },
+        token.clone(),
+    );
+    let pending = Pending::prepare(
+        Provider::AnthropicMessages,
+        "example-model",
+        "42",
+        &schema,
+        16,
+        &mut governor,
+    )
+    .unwrap();
+    token.cancel();
+    let stopped = pending.complete(
+        200,
+        r#"{"stop_reason":"end_turn","content":[{"type":"text","text":"42"}]}"#,
+    );
+    assert_eq!(stopped.outcome, Outcome::Unresolved);
+    assert_eq!(stopped.receipt.stopped, StopReason::Cancelled);
+    assert_eq!(stopped.receipt.usage, governor.usage());
+
+    let mut governor = Governor::new(Budget {
+        helper_calls: 1,
+        candidates: 1,
+        ..Budget::default()
+    });
+    governor.charge(Resource::Candidates, 1).unwrap();
+    let pending = Pending::prepare(
+        Provider::AnthropicMessages,
+        "example-model",
+        "42",
+        &schema,
+        16,
+        &mut governor,
+    )
+    .unwrap();
+    let exhausted = pending.complete(
+        200,
+        r#"{"stop_reason":"end_turn","content":[{"type":"text","text":"42"}]}"#,
+    );
+    assert_eq!(exhausted.outcome, Outcome::Unresolved);
+    assert_eq!(
+        exhausted.receipt.stopped,
+        StopReason::BudgetExceeded(Resource::Candidates)
+    );
+    assert_eq!(exhausted.receipt.usage.candidates, 1);
+}
+
+#[test]
+fn helper_ledger_admission_is_atomic_and_never_yields_partial_success() {
+    let mut governor = Governor::new(Budget {
+        helper_calls: 1,
+        evidence_entries: 2,
+        ..Budget::default()
+    });
+    let pending = Pending::prepare(
+        Provider::AnthropicMessages,
+        "example-model",
+        "42",
+        &Schema::compile("true").unwrap(),
+        16,
+        &mut governor,
+    )
+    .unwrap();
+    let result = pending.complete(
+        200,
+        r#"{"stop_reason":"end_turn","content":[{"type":"text","text":"42"}]}"#,
+    );
+    assert_eq!(result.outcome, Outcome::Unresolved);
+    assert_eq!(
+        result.receipt.stopped,
+        StopReason::BudgetExceeded(Resource::EvidenceEntries)
+    );
+    assert_eq!(result.receipt.evidence, Vec::new());
+    assert_eq!(result.receipt.inferences, Vec::new());
+    assert_eq!(result.receipt.usage.evidence_entries, 1);
+    assert_eq!(result.receipt.sources[0].text, "42");
 }
 #[test]
 fn helpers_are_disabled_by_default_and_refusals_are_not_reinterpreted() {

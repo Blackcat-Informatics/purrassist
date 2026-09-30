@@ -25,8 +25,13 @@ complete local schema. It never relies on a provider's restricted JSON Schema
 subset as the final validator. Any accepted helper proposal is a `BestGuess` or
 an explicit ambiguity, with provider/model and request/response digests recorded.
 
+Preparation snapshots its cumulative governor. Completion resumes that snapshot
+and preserves cancellation, consumed budget, and the request storage reservation.
+Extraction, schema recovery, and the proposal evidence/inference use that same
+account; ledger exhaustion returns an explicit unsuccessful result.
+
 Fixed transcripts exercise all three wire formats, status errors, refusal,
-truncation, helper admission, validation, and guess labeling. No live provider
+truncation, helper admission, validation, cancellation, and guess labeling. No live provider
 qualification or model-backed evaluation has been performed.
 
 ## `prepare_helper`/`complete_helper` tools
@@ -54,6 +59,7 @@ threat has no defense here, consistent with `purrassist-core`'s prohibition on
 ambient credentials or secrets. `complete_helper` reconstructs the identical
 `Pending` value `prepare_helper` minted (preparation is a deterministic
 function of those five fields) rather than persisting anything server-side
-between the two calls; each call charges exactly one caller-owned governor and
-is itself the explicit budgeting of one `HelperCalls` unit (every other tool
-leaves the default budget's `helper_calls: 0` in place).
+between the two calls. Each tool invocation explicitly admits one `HelperCalls`
+unit; completion reconstructs the pending preparation within its own call, then
+resumes its governor snapshot. The receipt declares that admitted budget and
+reports cumulative usage; other tools retain zero helper calls.

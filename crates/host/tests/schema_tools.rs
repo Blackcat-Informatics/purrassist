@@ -51,3 +51,98 @@ fn decoding_reports_schema_exhaustion_and_keeps_invalid_schema_distinct() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn validation_preserves_compilation_and_evaluation_exhaustion_reasons() {
+    let root =
+        std::env::temp_dir().join(format!("purrassist-validation-tool-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let tools = Tools::new(&root).unwrap();
+    let schema = object([("description", string("large annotation ".repeat(7000)))]);
+    let args = object([
+        ("instance", json::parse("42").unwrap()),
+        ("schema", schema),
+        ("effort", string("exact")),
+    ]);
+    let result = tools.call("validate_json", &args).unwrap();
+    assert_eq!(
+        result
+            .pointer("/receipt/termination/kind")
+            .unwrap()
+            .as_str(),
+        Some("budget_exceeded")
+    );
+    assert_eq!(result.get("valid").unwrap().to_json(), "false");
+    assert_eq!(result.get("violations").unwrap().to_json(), "[]");
+
+    let schema = json::parse(&format!(
+        r#"{{"type":"array","items":{{"enum":[{}]}}}}"#,
+        (0..200)
+            .map(|index| index.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    ))
+    .unwrap();
+    let instance =
+        purrassist::json::Node::new(purrassist::json::Value::Array(vec![
+            json::parse("199")
+                .unwrap();
+            1000
+        ]));
+    let result = tools
+        .call(
+            "validate_json",
+            &object([
+                ("instance", instance),
+                ("schema", schema),
+                ("effort", string("exact")),
+            ]),
+        )
+        .unwrap();
+    assert_eq!(
+        result
+            .pointer("/receipt/termination/kind")
+            .unwrap()
+            .as_str(),
+        Some("budget_exceeded")
+    );
+    assert_eq!(result.get("violations").unwrap().to_json(), "[]");
+    let invalid = tools
+        .call(
+            "validate_json",
+            &json::parse(r#"{"instance":42,"schema":{"type":false}}"#).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        invalid
+            .pointer("/receipt/termination/kind")
+            .unwrap()
+            .as_str(),
+        Some("invalid_input")
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn prepared_helper_receipt_declares_the_admitted_helper_budget() {
+    let root =
+        std::env::temp_dir().join(format!("purrassist-helper-budget-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let tools = Tools::new(&root).unwrap();
+    let result = tools.call("prepare_helper", &json::parse(r#"{"provider":"anthropic_messages","model":"example-model","input":"42","schema":true,"max_output_tokens":16}"#).unwrap()).unwrap();
+    assert_eq!(
+        result
+            .pointer("/receipt/budget/helper_calls")
+            .unwrap()
+            .to_json(),
+        "1"
+    );
+    assert_eq!(
+        result
+            .pointer("/receipt/usage/helper_calls")
+            .unwrap()
+            .to_json(),
+        "1"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
