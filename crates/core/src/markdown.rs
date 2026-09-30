@@ -416,10 +416,22 @@ fn paragraph(
     lazy: &[usize],
 ) -> (BlockKind, usize) {
     let text = line(source, &lines[cursor]);
+    let mut lazy = lazy;
     let mut table_rejected = false;
     if cursor + 1 < lines.len() {
         let next = line(source, &lines[cursor + 1]);
-        if let Some(level) = setext(next) {
+        while lazy
+            .first()
+            .is_some_and(|start| *start < lines[cursor + 1].start)
+        {
+            lazy = &lazy[1..];
+        }
+        // A missing container prefix admits paragraph text only. Promoting a
+        // lazy underline and demoting it later would already have ended this
+        // paragraph, splitting its subsequent continuation into another block.
+        if let Some(level) = setext(next)
+            && lazy.first() != Some(&lines[cursor + 1].start)
+        {
             return (
                 BlockKind::Heading {
                     level,
@@ -464,7 +476,12 @@ fn paragraph(
     let mut end = cursor + 1;
     while end < lines.len() {
         let next = line(source, &lines[end]);
-        if let Some(level) = setext(next) {
+        while lazy.first().is_some_and(|start| *start < lines[end].start) {
+            lazy = &lazy[1..];
+        }
+        if let Some(level) = setext(next)
+            && lazy.first() != Some(&lines[end].start)
+        {
             let title = lines[cursor..end]
                 .iter()
                 .map(|range| line(source, range).trim())

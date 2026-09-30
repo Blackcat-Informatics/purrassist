@@ -8,6 +8,137 @@ use purrassist_core::{
 };
 
 #[test]
+fn lazy_setext_candidates_keep_the_whole_container_paragraph_open() {
+    use purrassist_core::{StopReason, contract::Resource, markdown::BlockKind};
+
+    // CommonMark setext examples 92–94 forbid a lazy underline. Its text and
+    // every later continuation stay in one paragraph, even if a later line
+    // restores the container marker. A marked underline still creates a heading.
+    for newline in ["\n", "\r\n", "\r"] {
+        for underline in ["--", "=", "==", " --\t"] {
+            for (prefix, continuation, open, close, path) in [
+                (
+                    ">",
+                    "",
+                    "<blockquote>\n<p>",
+                    "</p>\n</blockquote>\n",
+                    vec![0, 0],
+                ),
+                (
+                    "> ",
+                    "> ",
+                    "<blockquote>\n<p>",
+                    "</p>\n</blockquote>\n",
+                    vec![0, 0],
+                ),
+                ("- ", "", "<ul>\n<li>", "</li>\n</ul>\n", vec![0, 0]),
+                (
+                    ">> ",
+                    "",
+                    "<blockquote>\n<blockquote>\n<p>",
+                    "</p>\n</blockquote>\n</blockquote>\n",
+                    vec![0, 0, 0],
+                ),
+                (
+                    "> - ",
+                    "> ",
+                    "<blockquote>\n<ul>\n<li>",
+                    "</li>\n</ul>\n</blockquote>\n",
+                    vec![0, 0, 0],
+                ),
+            ] {
+                let source = format!("{prefix}: {newline}{underline}{newline}{continuation}|\"");
+                let expected = format!("{open}:\n{}\n|&quot;{close}", underline.trim());
+                for dialect in [Dialect::CommonMark, Dialect::Gfm] {
+                    let mut governor = Governor::new(Budget::default());
+                    let document = Document::parse(&source, &mut governor).unwrap();
+                    assert_eq!(document.source(), source);
+                    assert_eq!(document.blocks()[0].span, 0..source.len());
+                    let paragraph = document.block_at(&path).unwrap();
+                    assert!(matches!(paragraph.kind, BlockKind::Paragraph));
+                    assert_eq!(paragraph.lines.len(), 3);
+                    assert_eq!(paragraph.span.end, source.len());
+                    assert_eq!(
+                        document.render_html(dialect, &mut governor).unwrap(),
+                        expected,
+                        "{dialect:?}: {source:?}"
+                    );
+                    assert_eq!(
+                        Document::parse(
+                            &source,
+                            &mut Governor::new(Budget {
+                                work: 0,
+                                ..Budget::default()
+                            })
+                        )
+                        .unwrap_err(),
+                        StopReason::BudgetExceeded(Resource::Work)
+                    );
+                    assert_eq!(
+                        Document::parse(
+                            &source,
+                            &mut Governor::new(Budget {
+                                scratch_bytes: 0,
+                                ..Budget::default()
+                            })
+                        )
+                        .unwrap_err(),
+                        StopReason::BudgetExceeded(Resource::ScratchBytes)
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn lazy_setext_respects_ancestor_prefixes_and_real_block_boundaries() {
+    for newline in ["\n", "\r\n", "\r"] {
+        for (input, expected) in [
+            (
+                "> - :\n  ==\nend\n",
+                "<blockquote>\n<ul>\n<li>:\n==\nend</li>\n</ul>\n</blockquote>\n",
+            ),
+            (
+                "> - :\n  --\n  ==\nend\n",
+                "<blockquote>\n<ul>\n<li>:\n--\n==\nend</li>\n</ul>\n</blockquote>\n",
+            ),
+            (
+                "> :\nbefore\n==\nend\n",
+                "<blockquote>\n<p>:\nbefore\n==\nend</p>\n</blockquote>\n",
+            ),
+            (
+                "> :\n> --\nend\n",
+                "<blockquote>\n<h2>:</h2>\n</blockquote>\n<p>end</p>\n",
+            ),
+            (
+                "> :\n--\n> ==\nend\n",
+                "<blockquote>\n<h1>:\n--</h1>\n</blockquote>\n<p>end</p>\n",
+            ),
+            (
+                "> :\n---\nend\n",
+                "<blockquote>\n<p>:</p>\n</blockquote>\n<hr />\n<p>end</p>\n",
+            ),
+            (
+                "> :\n\n--\nend\n",
+                "<blockquote>\n<p>:</p>\n</blockquote>\n<p>--\nend</p>\n",
+            ),
+        ] {
+            let source = input.replace('\n', newline);
+            for dialect in [Dialect::CommonMark, Dialect::Gfm] {
+                let mut governor = Governor::new(Budget::default());
+                let document = Document::parse(&source, &mut governor).unwrap();
+                assert_eq!(
+                    document.render_html(dialect, &mut governor).unwrap(),
+                    expected,
+                    "{dialect:?}: {source:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn unmatched_backtick_run_does_not_hide_later_same_width_code_spans() {
     // GFM §6.3 requires each code span to end at the next equal-width run.
     // An unmatched earlier run is literal and cannot consume later spans.

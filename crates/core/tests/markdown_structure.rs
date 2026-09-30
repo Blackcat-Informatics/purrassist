@@ -49,6 +49,41 @@ fn exhausted() -> Governor {
 }
 
 #[test]
+fn task_edits_preserve_lazy_setext_text_and_all_later_paragraph_lines() {
+    use purrassist_core::markdown::BlockKind;
+    for newline in ["\n", "\r\n", "\r"] {
+        for (prefix, path) in [("- ", vec![0]), ("> - ", vec![0, 0])] {
+            let source = format!("{prefix}[ ] tea{newline}--{newline}|\"{newline}");
+            let mut governor = Governor::new(Budget::default());
+            let document = Document::parse(&source, &mut governor).unwrap();
+            let item = document.block_at(&path).unwrap();
+            assert_eq!(item.children.len(), 1);
+            assert!(matches!(item.children[0].kind, BlockKind::Paragraph));
+            assert_eq!(item.children[0].lines.len(), 3);
+            assert_eq!(item.children[0].span.end, source.len());
+            let plan = document.set_task_at(&path, true, &mut governor).unwrap();
+            assert_eq!(plan.edits.len(), 1);
+            assert_eq!(plan.edits[0].range, prefix.len() + 1..prefix.len() + 2);
+            let expected = format!("{prefix}[x] tea{newline}--{newline}|\"{newline}");
+            assert_eq!(round_trip(&source, &plan), expected);
+            assert_stale(&source, &plan);
+            assert_eq!(
+                document
+                    .set_task_at(&path, true, &mut exhausted())
+                    .unwrap_err(),
+                StopReason::BudgetExceeded(Resource::Work)
+            );
+            let changed = Document::parse(&expected, &mut governor).unwrap();
+            let html = changed.render_html(Dialect::Gfm, &mut governor).unwrap();
+            assert!(
+                html.contains("type=\"checkbox\"> tea\n--\n|&quot;"),
+                "{html:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn insert_section_succeeds_preserves_crlf_and_refuses_stale_or_exhausted() {
     for newline in ["\n", "\r\n"] {
         let source = "# Tea\nHot.\n".replace('\n', newline);

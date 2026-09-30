@@ -3,6 +3,7 @@
 //! GFM text-node autolinks, preserving raw source spans and protecting existing links.
 use super::{Inline, InlineKind, entities};
 use crate::{Governor, StopReason, contract::Resource};
+use std::{borrow::Cow, ops::Range};
 
 pub(super) fn apply(
     source: &str,
@@ -55,32 +56,40 @@ fn split(
         Resource::ScratchBytes,
         super::super::size(raw.len()).saturating_mul(128),
     )?;
+    let InlineKind::Text(text) = &token.kind else {
+        unreachable!("only literal text nodes are split into email autolinks")
+    };
+    let mut source_spans = None;
     let mut cursor = 0;
     let mut start = 0;
     let mut retry = false;
-    while cursor < raw.len() {
-        let previous = source[..token.span.start + cursor].chars().next_back();
+    while cursor < text.len() {
+        let previous = text[..cursor].chars().next_back();
         let found = if retry
             || previous
                 .is_none_or(|c| !c.is_ascii_alphanumeric() && !matches!(c, '.' | '-' | '_' | '+'))
         {
-            email(&raw[cursor..])
+            email(&text[cursor..])
         } else {
             Err(0)
         };
         retry = false;
         if let Ok((width, destination)) = found {
-            if start < cursor {
-                output.push(literal(
-                    source,
-                    token.span.start + start..token.span.start + cursor,
+            let spans =
+                source_spans.get_or_insert_with(|| decoded_source_spans(raw, token.span.start));
+            if spans.len() != text.len() {
+                return Err(StopReason::InvalidInput(
+                    "interpreted text does not match its original source map".into(),
                 ));
             }
+            if start < cursor {
+                output.push(literal(text, spans, start..cursor));
+            }
             output.push(Inline {
-                span: token.span.start + cursor..token.span.start + cursor + width,
+                span: source_range(spans, cursor..cursor + width),
                 kind: InlineKind::Autolink {
                     destination,
-                    label: raw[cursor..cursor + width].into(),
+                    label: text[cursor..cursor + width].into(),
                 },
             });
             cursor += width;
@@ -92,7 +101,7 @@ fn split(
             cursor += skipped;
             retry = true;
         } else {
-            cursor += raw[cursor..]
+            cursor += text[cursor..]
                 .chars()
                 .next()
                 .expect("remaining character")
@@ -101,17 +110,61 @@ fn split(
     }
     if start == 0 {
         output.push(token);
-    } else if start < raw.len() {
-        output.push(literal(source, token.span.start + start..token.span.end));
+    } else if start < text.len() {
+        output.push(literal(
+            text,
+            source_spans
+                .as_ref()
+                .expect("a discovered link has source spans"),
+            start..text.len(),
+        ));
     }
     Ok(())
 }
-fn literal(source: &str, span: std::ops::Range<usize>) -> Inline {
+
+/// Map each interpreted byte to the complete original source unit producing it.
+/// An escape or entity remains indivisible in the original spelling; entities
+/// containing multiple characters can map several interpreted bytes to one unit.
+/// The existing per-node work/storage admission bounds this linear map.
+fn decoded_source_spans(source: &str, base: usize) -> Vec<Range<usize>> {
+    let mut spans = Vec::new();
+    let mut position = 0;
+    while position < source.len() {
+        let rest = &source[position..];
+        let (width, value) = if rest.starts_with('\\')
+            && rest.as_bytes().get(1).is_some_and(u8::is_ascii_punctuation)
+        {
+            (2, Cow::Borrowed(&rest[1..2]))
+        } else if let Some(entity) = entities::one(rest) {
+            entity
+        } else if rest.starts_with("\r\n") {
+            (2, Cow::Borrowed("\n"))
+        } else if rest.starts_with('\r') {
+            (1, Cow::Borrowed("\n"))
+        } else if rest.starts_with('\0') {
+            (1, Cow::Borrowed("\u{fffd}"))
+        } else {
+            let width = rest.chars().next().expect("remaining character").len_utf8();
+            (width, Cow::Borrowed(&rest[..width]))
+        };
+        spans.extend(std::iter::repeat_n(
+            base + position..base + position + width,
+            value.len(),
+        ));
+        position += width;
+    }
+    spans
+}
+const fn source_range(spans: &[Range<usize>], range: Range<usize>) -> Range<usize> {
+    spans[range.start].start..spans[range.end - 1].end
+}
+fn literal(text: &str, spans: &[Range<usize>], range: Range<usize>) -> Inline {
     Inline {
-        kind: InlineKind::Text(entities::text(&source[span.clone()])),
-        span,
+        kind: InlineKind::Text(text[range.clone()].into()),
+        span: source_range(spans, range),
     }
 }
+
 pub(super) fn url_at(
     source: &str,
     cursor: usize,

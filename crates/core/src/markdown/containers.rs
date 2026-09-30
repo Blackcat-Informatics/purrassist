@@ -28,7 +28,11 @@ fn index_with_lazy(
     governor.charge(Resource::Depth, u64::from(depth))?;
     governor.charge(
         Resource::Work,
-        lines.iter().map(|range| size(range.len())).sum(),
+        lines
+            .iter()
+            .map(|range| size(range.len()))
+            .sum::<u64>()
+            .saturating_add(size(lines.len()).saturating_mul(4)),
     )?;
     governor.charge(
         Resource::ScratchBytes,
@@ -36,9 +40,17 @@ fn index_with_lazy(
     )?;
     let mut blocks = Vec::new();
     let mut cursor = 0;
+    let mut lazy_position = 0;
     while cursor < lines.len() {
-        let (kind, mut end) = definition_end(source, lines, cursor, governor, tables, lazy)?
-            .map_or_else(
+        while lazy
+            .get(lazy_position)
+            .is_some_and(|start| *start < lines[cursor].start)
+        {
+            lazy_position += 1;
+        }
+        let remaining_lazy = &lazy[lazy_position..];
+        let (kind, mut end) =
+            definition_end(source, lines, cursor, governor, tables, remaining_lazy)?.map_or_else(
                 || {
                     let text = line(source, &lines[cursor]);
                     // Definitions are removed from the start of an open paragraph,
@@ -50,43 +62,39 @@ fn index_with_lazy(
                         matches!(block.kind, BlockKind::ReferenceDefinition)
                     }) && (!interrupts_paragraph(text) || setext(text).is_some())
                     {
-                        super::paragraph(source, lines, cursor, tables, lazy)
+                        super::paragraph(source, lines, cursor, tables, remaining_lazy)
                     } else {
-                        super::classify(source, lines, cursor, tables, lazy)
+                        super::classify(source, lines, cursor, tables, remaining_lazy)
                     }
                 },
                 |end| (BlockKind::ReferenceDefinition, end),
             );
         let children = match &kind {
             BlockKind::Quote => {
-                let (inner, stop) = quote_lines(source, lines, cursor, tables);
+                let (inner, stop) =
+                    quote_lines(source, lines, cursor, tables, &lazy[lazy_position..]);
                 end = stop;
-                let lazy: Vec<_> = inner
-                    .iter()
-                    .filter(|range| {
-                        lines
-                            .binary_search_by_key(&range.start, |outer| outer.start)
-                            .is_ok()
-                    })
-                    .map(|range| range.start)
-                    .collect();
+                let lazy = child_lazy_lines(
+                    &lines[cursor..end],
+                    &inner,
+                    &lazy[lazy_position..],
+                    governor,
+                )?;
                 let mut children =
                     index_with_lazy(source, &inner, governor, depth + 1, tables, &lazy)?;
                 demote_lazy(source, &mut children, &lazy);
                 children
             }
             BlockKind::ListItem { .. } => {
-                let (inner, stop) = item_lines(source, lines, cursor, tables);
+                let (inner, stop) =
+                    item_lines(source, lines, cursor, tables, &lazy[lazy_position..]);
                 end = stop;
-                let lazy: Vec<_> = inner
-                    .iter()
-                    .filter(|range| {
-                        lines
-                            .binary_search_by_key(&range.start, |outer| outer.start)
-                            .is_ok()
-                    })
-                    .map(|range| range.start)
-                    .collect();
+                let lazy = child_lazy_lines(
+                    &lines[cursor..end],
+                    &inner,
+                    &lazy[lazy_position..],
+                    governor,
+                )?;
                 let mut children =
                     index_with_lazy(source, &inner, governor, depth + 1, tables, &lazy)?;
                 if children
@@ -110,6 +118,37 @@ fn index_with_lazy(
     }
     Ok(blocks)
 }
+fn child_lazy_lines(
+    outer: &[Range<usize>],
+    inner: &[Range<usize>],
+    inherited: &[usize],
+    governor: &mut Governor,
+) -> Result<Vec<usize>, StopReason> {
+    // Both line views are ordered. Merge them once: a removed local prefix
+    // cannot make a line explicit if an enclosing container admitted it lazily.
+    // Storage is covered by index_with_lazy's per-line scratch reservation.
+    governor.charge(Resource::Work, size(outer.len()).saturating_mul(3))?;
+    let mut lazy = Vec::new();
+    let mut parent = 0;
+    let mut inherited_position = 0;
+    for range in inner {
+        while parent + 1 < outer.len() && outer[parent + 1].start <= range.start {
+            parent += 1;
+        }
+        while inherited
+            .get(inherited_position)
+            .is_some_and(|start| *start < outer[parent].start)
+        {
+            inherited_position += 1;
+        }
+        if range.start == outer[parent].start
+            || inherited.get(inherited_position) == Some(&outer[parent].start)
+        {
+            lazy.push(range.start);
+        }
+    }
+    Ok(lazy)
+}
 fn quote_prefix(text: &str) -> Option<usize> {
     let stripped = unindent(text)?;
     let rest = stripped.strip_prefix('>')?;
@@ -120,9 +159,11 @@ fn quote_lines(
     lines: &[Range<usize>],
     cursor: usize,
     tables: bool,
+    lazy: &[usize],
 ) -> (Vec<Range<usize>>, usize) {
     let mut inner = Vec::new();
     let mut end = cursor;
+    let mut lazy_position = 0;
     let mut continuation = Continuation {
         table: TableContinuation {
             enabled: tables,
@@ -132,9 +173,14 @@ fn quote_lines(
     };
     while end < lines.len() {
         let text = line(source, &lines[end]);
+        let inherited = lazy.get(lazy_position) == Some(&lines[end].start);
         if let Some(prefix) = quote_prefix(text) {
             let range = lines[end].start + prefix..lines[end].end;
-            continuation.feed(line(source, &range));
+            if inherited {
+                continuation.lazy(line(source, &range));
+            } else {
+                continuation.feed(line(source, &range));
+            }
             inner.push(range);
         } else if continuation.paragraph && list_item(text).is_none() && !interrupts_paragraph(text)
         {
@@ -143,6 +189,7 @@ fn quote_lines(
         } else {
             break;
         }
+        lazy_position += usize::from(inherited);
         end += 1;
     }
     (inner, end)
@@ -152,6 +199,7 @@ fn item_lines(
     lines: &[Range<usize>],
     cursor: usize,
     tables: bool,
+    lazy: &[usize],
 ) -> (Vec<Range<usize>>, usize) {
     let text = line(source, &lines[cursor]);
     let (prefix, indent) = item_prefix(text);
@@ -166,8 +214,10 @@ fn item_lines(
     continuation.feed(line(source, &first));
     let mut inner = vec![first.clone()];
     let mut end = cursor + 1;
+    let mut lazy_position = usize::from(lazy.first() == Some(&lines[cursor].start));
     while end < lines.len() {
         let text = line(source, &lines[end]);
+        let inherited = lazy.get(lazy_position) == Some(&lines[end].start);
         if text.trim_matches([' ', '\t']).is_empty() {
             if inner.len() == 1 && line(source, &first).trim_matches([' ', '\t']).is_empty() {
                 break;
@@ -176,7 +226,11 @@ fn item_lines(
             continuation.feed("");
         } else if let Some(prefix) = strip_indent(text, indent) {
             let range = lines[end].start + prefix..lines[end].end;
-            continuation.feed(line(source, &range));
+            if inherited {
+                continuation.lazy(line(source, &range));
+            } else {
+                continuation.feed(line(source, &range));
+            }
             inner.push(range);
         } else if continuation.paragraph && list_item(text).is_none() && !interrupts_paragraph(text)
         {
@@ -185,6 +239,7 @@ fn item_lines(
         } else {
             break;
         }
+        lazy_position += usize::from(inherited);
         end += 1;
     }
     // Trailing blanks separate outer blocks and must not migrate into the item.

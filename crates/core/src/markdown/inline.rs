@@ -46,7 +46,8 @@ pub enum InlineKind {
     Autolink {
         /// URI spelling, with `mailto:` supplied for email addresses.
         destination: String,
-        /// Visible label, unchanged except line-ending normalization.
+        /// Visible label. GFM extended emails use interpreted text-node content;
+        /// angle autolinks preserve their spelling except line-ending normalization.
         label: String,
     },
     /// Raw inline HTML, with line endings normalized.
@@ -191,8 +192,22 @@ impl InlineFragment {
     /// # Ok::<(), purrassist_core::StopReason>(())
     /// ```
     ///
+    /// Extended email recognition operates on interpreted text, while spans
+    /// retain the complete original escape/entity spelling:
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, markdown::{Dialect, Extensions, InlineFragment, References}};
+    /// let mut governor = Governor::new(Budget::default());
+    /// let fragment = InlineFragment::parse_with_extensions(r"a\@b.com", Dialect::Gfm, &References::default(), Extensions::gfm(), &mut governor)?;
+    /// assert_eq!(fragment.tokens()[0].span, 0..8);
+    /// assert_eq!(fragment.render_html(&mut governor)?, "<a href=\"mailto:a@b.com\">a@b.com</a>");
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    ///
     /// # Errors
     /// Returns explicit resource exhaustion or cancellation, without partial tokens.
+    /// An inconsistent interpreted-text/source map is rejected as `InvalidInput`
+    /// rather than publishing incorrect source spans.
     pub fn parse_with_extensions(
         source: &str,
         dialect: Dialect,
