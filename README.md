@@ -11,9 +11,10 @@ decoder a schema and an effort level: it searches composed corrections, validate
 the complete result, and returns evidence of what changed. A schema-valid guess
 is still a guess. Ambiguous alternatives remain visible.
 
-**Pre-release implementation in progress.** The accepted scope and remaining
-qualification requirements are in [the implementation contract](docs/IMPLEMENTATION.md).
-This repository has not been published or release-qualified.
+**Pre-release 0.1.0 implementation.** The accepted scope is in
+[the implementation contract](docs/IMPLEMENTATION.md), with executable evidence
+and limits in [the qualification record](docs/QUALIFICATION.md). Publication
+acceptance follows review and merge; 0.1.0 is not claimed as published.
 
 The [release procedure](docs/RELEASE.md) records the package and registry gates.
 
@@ -55,7 +56,9 @@ Current surfaces include:
 - Explicit semantic domain rules and caller-supplied embedding similarity.
 - Source-bound text edits, bounded fuzzy replacement, relocatable unified diffs,
   overlap checks, exact-byte undo, and a Markdown
-  editing index. Full CommonMark/GFM conformance remains unfinished.
+  editing index and structural section/list/table/reference operations. All
+  1,324 pinned CommonMark/GFM examples have exact rendering checks, alongside
+  generated preservation properties and independent differential campaigns.
 - Python, Rust, JavaScript/JSX, TypeScript/TSX grammar inspection and validated
   punctuation repairs. Grammar acceptance does not prove program correctness.
 - Journaled single-file replacement and conditional undo for coordinated writers.
@@ -253,7 +256,7 @@ representation; `edits::EditPlan`/`TextEdit` are aliases for it. Beyond
 `diff` algebra; `apply_edit`/`apply_file` use `rebase`/`diff` to reconcile a
 stale plan against an intervening change through an explicit `rebase_from`
 input. See [plan application](docs/EDIT-APPLICATION.md). The Rust
-`markdown::Document` API's remaining structural operations — `insert_section`,
+`markdown::Document` API's structural operations — `insert_section`,
 `remove_section`, `move_section` (with optional re-leveling of the moved
 section's own heading), `rename_heading`, `ListItemEdit::Move`,
 `renumber_list`, `TableRowEdit::Move`, `TableColumnEdit::Move`, and
@@ -276,8 +279,9 @@ links/images while retaining definition provenance. `Document::render_html`
 collects definitions across containers and renders blocks. GFM rendering enables
 tables, task lists, strikethrough, extended autolinks, and tag filtering; explicit
 extension profiles are also available. All 1,324 pinned official document examples
-match exact HTML under their upstream profiles. Broader adversarial and release
-qualification remains in progress.
+match exact HTML under their upstream profiles. Generated adversarial
+preservation and independent differential checks extend this finite corpus;
+the qualification record states their coverage and limits.
 
 File tools reject stale versions and record transaction identities for undo. The portable filesystem layer coordinates
 cooperating writers; it is not a sandbox against malicious directory replacement
@@ -293,7 +297,9 @@ make check       # formatting, attribution/dependencies, lint, optimized tests, 
 make wasm-test   # compare native/WASI recovery, matching, embeddings, Markdown, and grammars
 make syntax-oracles  # compare fixed syntax probes to independent compilers
 make benchmark  # recovery quality assertions and latency baseline
-make fuzz-json  # source-region coverage-guided JSON campaign; matching LLVM tools required
+make fuzz       # eight coverage-guided targets and independent pattern/Markdown oracles
+make resources  # allocations, heap/RSS, latency, artifact size, and uncached build cost
+make package    # Cargo verification and registered source/license archive audit
 ```
 
 The checked-in main Draft 2020-12 corpus contains 1,301 tests, with another 121
@@ -303,8 +309,8 @@ contextual and Bidi rules) run under a dialect declaring the format-assertion
 vocabulary; Unicode 17
 normalization contains 20,034 cases. These suites, regression tests, fixed helper
 transcripts, and bounded mutation probes run locally. Full release qualification
-also requires the remaining conformance, performance, packaging, CI, and platform
-work described in the [qualification record](docs/QUALIFICATION.md).
+requires the exact-commit gates and registry acceptance described in the
+[qualification record](docs/QUALIFICATION.md).
 
 ## License and family
 
@@ -315,7 +321,7 @@ the braces and validation mark are this crate's service emblem.
 
 Resource profiling is available with `make resources`; see [measurement scope and prerequisites](docs/RESOURCES.md). It uses external profilers and adds no crate runtime dependencies.
 
-Coverage-guided JSON campaigns are available with `make fuzz-json`; see
+Coverage-guided JSON campaigns are available with `make fuzz TARGET=json`; see
 [properties, replay, and qualification limits](docs/FUZZING.md).
 
 Governed engines and host tools accept [caller-owned cancellation](docs/CANCELLATION.md),

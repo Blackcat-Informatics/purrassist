@@ -18,8 +18,9 @@ Recovery may resolve, guess, preserve ambiguity, or exhaust its explicit budget.
 Guesses remain labeled after validation. The core never reads files, contacts
 models, or consults ambient clocks or randomness.
 
-Pre-release implementation: the Markdown editing index is not yet a conforming
-CommonMark/GFM parser. Full release qualification remains unfinished. See the
+Pre-release implementation. Markdown parsing and rendering are tested against
+all 652 `CommonMark` and 672 GFM specification examples, with source-preserving
+structural edits and explicit resource outcomes. See the
 [implementation contract](https://github.com/Blackcat-Informatics/purrassist/blob/main/docs/IMPLEMENTATION.md).
 
 First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0. Unicode and HTML entity tables,

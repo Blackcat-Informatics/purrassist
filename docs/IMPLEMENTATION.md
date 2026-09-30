@@ -2,7 +2,9 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
-Status: implementation in progress; release qualification has not passed.
+Status: accepted implementation delivered on the issue branch. Executable
+qualification and its limits are recorded in `QUALIFICATION.md`; registry
+publication acceptance follows review and merge as specified in `RELEASE.md`.
 
 PurRAssist recovers intent from imperfect AI output and requests. Every result
 combines its answer with evidence, provenance, losses, and explicit inferences.

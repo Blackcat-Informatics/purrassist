@@ -9,7 +9,9 @@ request/response adapters.
 File transactions coordinate cooperating writers. Each replacement is atomic
 for one file; batches report independent outcomes. The portable path checks are
 not a sandbox against malicious concurrent directory replacement. Durable host
-writes are currently implemented on Unix; Windows host qualification is pending.
+writes are implemented on Unix and Windows, with explicit filesystem-dependent
+flush evidence. Crash/retry/undo tests exercise the transaction checkpoints;
+the Windows CI lane executes the host operations on Windows.
 
 Helper transports, endpoints, authentication, and timeouts belong to the caller.
 No model is required. Returned helper proposals undergo local validation and

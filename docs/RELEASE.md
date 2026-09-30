@@ -2,9 +2,10 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Rust release procedure
 
-PurRAssist is not yet release-qualified or published at `0.1.0`. Follow the
-acceptance criteria in `IMPLEMENTATION.md` and close the open work in
-`QUALIFICATION.md` before creating a release tag.
+PurRAssist 0.1.0 has an implemented scope and executable qualification record
+in `QUALIFICATION.md`. Publication acceptance is performed on the reviewed
+merge commit using the steps below. A published 0.1.0 is not claimed before
+registry downloads and installed CLI/MCP behavior are verified.
 
 The release set is `purrassist-core`, `purrassist-syntax`, `purrassist`,
 `purrassist-host`, then `purrassist-cli`. `scripts/check-release.py` proves that
@@ -46,7 +47,8 @@ workflow **never publishes, attests, or creates a GitHub release**, and it
 holds no `id-token` permission and no registry credential. `verify.yml`'s
 `qualification` job gathers the same class of evidence (independent syntax
 oracles, coverage-guided/differential fuzzing, packaging, resource
-measurement against the documented limits) on every push and pull request, so
+measurement against the documented limits) on main pushes, pull requests, and
+manual runs, so
 regressions are visible long before a tag is cut.
 
 ## Publishing (publish.yml): the only workflow that publishes
@@ -59,10 +61,12 @@ It has two jobs:
    exact commit the tag points at. Both workflows trigger on the same tag
    push and start concurrently, so this job polls the Actions API
    (`GET /repos/{repo}/actions/workflows/release-qualification.yml/runs?head_sha=<sha>`)
-   with the ambient `GITHUB_TOKEN`, in a bounded loop (≤ 40 attempts, 30s
+   with the ambient `GITHUB_TOKEN`, in a bounded loop (≤ 200 attempts, 30s
    apart), until it observes a run with `conclusion: success` for that SHA. If
-   every completed run for that SHA failed and none are still in progress, it
-   fails immediately rather than waiting out the full bound. A `workflow_run`
+   every recorded run for that SHA is completed and failed, it fails
+   immediately. An empty API result waits within the same bound for the sibling
+   tag-triggered run to become visible. The bounded wait covers the qualification
+   job's 90-minute allowance with queue headroom. A `workflow_run`
    trigger was considered and rejected: it would tie `publish.yml`'s own
    trigger semantics to another workflow's completion event (in tension with
    the required "push of tags" trigger) and its head-SHA/permissions handling
@@ -93,10 +97,10 @@ on checkout.
 
 ## Verification tooling
 
-- `scripts/check-packages.py` asserts every packaged crate archive's set of
-  bundled third-party notice files is exactly the notice set
-  `vendor/dependencies.json`/`vendor/tooling.json` register for that crate's
-  resolved dependencies — no more, no fewer.
+- `scripts/check-packages.py` asserts every packaged crate archive's bundled
+  third-party notices match the explicit reviewed `packaged_notices` set and
+  hashes in `vendor/dependencies.json`. Both checkout and archive bytes are
+  compared with those registered identities.
 - `scripts/verify-published.py --version X` is the downloaded-package
   verifier described above. It accepts `--registry-index <path-or-file-url>`
   to redirect the fresh `CARGO_HOME`'s `crates-io` source to a local
@@ -128,6 +132,12 @@ on checkout.
   the real current workspace CLI and replays the committed fixtures against
   it, failing `make hygiene` if they differ, so a stale fixture can never be
   committed silently.
+
+  `root-files.json` seeds a disposable verification root. The default MCP
+  transcript reads the file, applies a journaled replacement, conditionally
+  undoes it, and reads it again. Verification requires byte-exact restoration.
+  Pipe writes, response reads, and child exit have bounded timeouts; regression
+  tests prove cleanup for missing responses, partial output, and stderr flooding.
 
 ## Release step (after merge)
 

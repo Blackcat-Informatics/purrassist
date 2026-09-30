@@ -52,6 +52,22 @@ and crash-recovery limitations are unchanged.
 
 ## The `Patch` algebra and governed rebase
 
+`plan_markdown_structure` provides section insertion/removal/movement/renaming,
+list movement/renumbering, table row/column movement, and reference
+addition/relabeling/removal/unlinking through the shared Rust, CLI, and MCP
+handler. Each operation reparses its proposal and checks the selected structure
+and surrounding blocks before returning a digest-bound plan.
+
+Heading renaming preserves ATX or setext style. A multiline setext title becomes
+the requested single-line title while retaining its first-line indentation,
+final title-line ending, and exact underline. Moving a setext section with a
+requested level of 1 or 2 changes only the underline markers; levels 3–6 convert
+the heading to ATX and join title lines with spaces. Literal closing hashes are
+escaped when needed. Planning evidence records the old/new level and style,
+title-line joining, and original source span. Application retains replaced
+source in its loss ledger and supplies an inverse that restores every original
+byte. Preserve both receipts to retain the full transformation history.
+
 `purrassist_core::patch::Patch` (an ordered, non-overlapping, source-digest-
 bound set of byte-range replacements) is the crate's single edit
 representation; `edits::EditPlan` and `edits::TextEdit` are aliases for
@@ -144,10 +160,10 @@ instead fails with a sharing/lock violation (`ERROR_SHARING_VIOLATION` or
 `ERROR_LOCK_VIOLATION` — commonly an antivirus scanner or search indexer
 holding a brief handle open) is retried a small fixed number of times,
 yielding the calling thread (`std::thread::yield_now`) between attempts and
-never sleeping, before returning the last operating-system error; any other
-failure is reported immediately. The temporary file is opened with
+never sleeping, before returning explicit `Error::Busy`; any other
+failure is reported immediately as an I/O error. The temporary file is opened with
 `GENERIC_WRITE | DELETE` access because renaming through a handle requires
-`DELETE`. `Busy` is reserved for the cooperating-writer lock. Directory
+`DELETE`. `Busy` also identifies the cooperating-writer lock. Directory
 durability opens the
 directory with `FILE_FLAG_BACKUP_SEMANTICS` and calls `FlushFileBuffers`;
 some filesystems deny this (`ERROR_ACCESS_DENIED`, at open or at flush),
