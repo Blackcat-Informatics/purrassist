@@ -345,19 +345,19 @@ any flag the wrapper would otherwise add.
 
 ## Recorded baseline
 
-[Linux x86_64 resource baseline](qualification/resources-linux-x86_64.json) was measured from commit `856d2ecdbc5835e561d70c7bb85ceb717c29f568`. The report records the dirty working tree and a stable engine source digest checked before and after the campaign. It records the isolated runtime and executable identities. Ordinary build durations describe their observed Cargo cache states; the separate `cold_build` records compilation with empty target and intermediate directories and disabled compiler wrappers.
+[Linux x86_64 resource baseline](qualification/resources-linux-x86_64.json) was measured from commit `22d33135ed43a438b093a4bf996956109408a30f`. The report records the dirty working tree and a stable engine source digest checked before and after the campaign. It records the isolated runtime and executable identities. Ordinary build durations describe their observed Cargo cache states; the separate `cold_build` records compilation with empty target and intermediate directories and disabled compiler wrappers.
 
 | Workload | Allocation calls | Total allocated bytes | Observed requested-heap peak | Native reported RSS |
 | --- | ---: | ---: | ---: | ---: |
-| empty | 13 | 3,817 | 1,736 | 4,689,920 |
-| schema_compile | 106 | 9,168 | 4,538 | 5,353,472 |
-| json_parse | 1,574 | 236,097 | 173,150 | 5,349,376 |
+| empty | 13 | 3,817 | 1,736 | 4,657,152 |
+| schema_compile | 106 | 9,168 | 4,538 | 5,345,280 |
+| json_parse | 1,574 | 236,097 | 173,150 | 5,332,992 |
 | json_composed | 2,541 | 192,835 | 62,611 | 5,636,096 |
-| json_ambiguous | 389 | 33,349 | 15,689 | 5,496,832 |
-| markdown_render | 4,096 | 777,195 | 225,787 | 5,677,056 |
+| json_ambiguous | 389 | 33,349 | 15,689 | 5,480,448 |
+| markdown_render | 4,096 | 777,195 | 225,787 | 5,660,672 |
 | markdown_list | 2,811 | 242,688 | 152,036 | 5,705,728 |
-| unicode | 23 | 125,931 | 68,955 | 5,152,768 |
-| matching | 7,222 | 313,232 | 23,944 | 5,222,400 |
+| unicode | 23 | 125,931 | 68,955 | 5,136,384 |
+| matching | 7,222 | 313,232 | 23,944 | 5,226,496 |
 
 Values include the full benchmark process as described above. They are not per-function allocation counts, portable guarantees, or a production sizing rule.
 
@@ -375,7 +375,7 @@ The release CLI in this snapshot is 9,762,176 bytes. The instrumentable benchmar
 
 ### Cold build
 
-The recorded release CLI cold build took 30.140 seconds and produced 35 compiler artifacts, with 0 reused artifacts. Both compiler wrapper layers were disabled; the target and intermediate directories were new and empty. Registry sources and OS page caches remained available. The report also records the resulting executable's size and digest.
+The recorded release CLI cold build took 26.512 seconds and produced 35 compiler artifacts, with 0 reused artifacts. Both compiler wrapper layers were disabled; the target and intermediate directories were new and empty. Registry sources and OS page caches remained available. The report also records the resulting executable's size and digest.
 
 ### Latency workload samples (selected)
 
@@ -383,19 +383,19 @@ Full detail is in the committed report. Each row measures 200 samples in its own
 
 | Core workload | Median ns | p95 ns | Allocation calls | Peak live bytes | Peak RSS bytes |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| schema_compile | 6,040 | 6,700 | 93 | 3,928 | 5,722,112 |
-| schema_recover | 123,436 | 127,856 | 2,528 | 62,005 | 6,266,880 |
-| matching_resolve | 852,574 | 892,522 | 3,684 | 19,838 | 5,632,000 |
-| edits_fuzzy | 610,301 | 640,940 | 12,980 | 12,676 | 5,738,496 |
-| markdown_render | 30,769 | 35,449 | 450 | 24,840 | 5,906,432 |
+| schema_compile | 5,920 | 6,410 | 93 | 3,928 | 5,795,840 |
+| schema_recover | 72,998 | 80,618 | 2,528 | 62,005 | 6,201,344 |
+| matching_resolve | 448,616 | 821,324 | 3,684 | 19,838 | 5,713,920 |
+| edits_fuzzy | 316,050 | 499,464 | 12,980 | 12,676 | 5,795,840 |
+| markdown_render | 16,979 | 19,709 | 450 | 24,840 | 5,898,240 |
 
 | Syntax workload | Median ns | p95 ns | C allocation calls | Rust allocation calls | C peak bytes | Rust peak growth bytes | Peak RSS bytes |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| python | 354,359 | 381,328 | 573 | 59 | 56,720 | 4,760 | 3,387,392 |
-| rust | 295,601 | 314,220 | 480 | 42 | 48,896 | 3,048 | 3,862,528 |
-| javascript | 326,069 | 339,570 | 476 | 25 | 48,360 | 2,264 | 3,485,696 |
-| typescript | 354,669 | 390,578 | 652 | 42 | 64,040 | 3,184 | 4,177,920 |
-| tsx | 374,948 | 403,847 | 545 | 25 | 53,032 | 2,288 | 4,329,472 |
+| python | 182,784 | 349,049 | 573 | 59 | 56,720 | 4,760 | 3,457,024 |
+| rust | 150,505 | 199,433 | 480 | 42 | 48,896 | 3,048 | 4,005,888 |
+| javascript | 163,585 | 169,484 | 476 | 25 | 48,360 | 2,264 | 3,407,872 |
+| typescript | 226,793 | 238,283 | 652 | 42 | 64,040 | 3,184 | 4,300,800 |
+| tsx | 212,153 | 256,492 | 545 | 25 | 53,032 | 2,288 | 4,337,664 |
 
 C and Rust peak values are measured separately and must not be added as a simultaneous peak.
 
