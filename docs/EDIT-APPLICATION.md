@@ -130,9 +130,15 @@ original text's digest), and `after` (the replacement's digest). Version 2
 `EditPlan::to_node`, since `edits::EditPlan` is an alias for
 [`purrassist_core::patch::Patch`](../crates/core/src/patch.rs)) from the
 journaled `before` piece's exact bytes to the `after` piece's, computed with
-`Patch::diff` at commit time. Because a patch's replacement text can be as
-large as the file itself, `prepared.json`'s admitted size now scales with
-the store's own `max_bytes`, not a small fixed constant.
+`Patch::diff` at commit time. Snapshot and replacement text must each fit the
+store's `max_bytes` admission limit. JSON escaping can expand each replacement
+byte to six serialized bytes, so `prepared.json` admits up to
+`6 * max_bytes + 65,536` bytes, including its checked metadata/path allowance.
+Commit checks the generated record before writing journal artifacts. Reading
+that record derives parser input, work, and scratch allowances from its actual
+admitted serialized size, rather than a fixed effort preset. Each decoded
+journal's recorded patch is applied to its retained original and must produce
+its exact recorded replacement before retry, recovery, undo, or cleanup trusts it.
 
 `Store::undo` no longer treats `entry.before` as an independent restore
 target. It governed-`Patch::invert`s the recorded patch (bound to the
@@ -144,9 +150,11 @@ inverse's expected source digest, and its own edit-range/UTF-8-boundary
 validation is what rejects a journal whose recorded patch does not actually
 invert against its own `before` bytes. Both failure modes surface as
 `Error::Invalid` (a tampered or otherwise non-inverting patch) or
-`Error::Stale` (the file no longer holds the exact committed output),
-exactly as before, but reached through `Patch`'s own governed algebra
-instead of a second, independently maintained comparison.
+`Error::Stale` (the file no longer holds the exact committed output), reached
+through `Patch`'s own governed algebra. Exhaustion retains `Error::Resource`
+and never establishes corruption or staleness. `journal_limits` covers escaped
+and large records, exact replay/undo, tampering, admission, and typed exhaustion;
+`orphan_preservation` covers cleanup authority and observable preservation.
 
 On Unix, replacement is `rename(2)` and directory durability is `fsync` on
 an open directory handle; both are unconditional and always succeed or the
@@ -183,14 +191,25 @@ directory's ACL, which is ordinary Windows file-creation behavior requiring
 no code here; nothing analogous to the Unix `0700`/`0600` journal modes is
 set explicitly on Windows, and none is needed for the same reason.
 
-`Store::recover` never aborts on one bad journal: a torn, truncated, or
+`Store::recover` retains individual bad-journal outcomes: a torn, truncated, or
 otherwise unreadable `prepared.json` or piece file is reported as
 `Recovery::Corrupt { id, reason }` for that transaction only, and every
-other journal is still recovered. It also scans the store root for
+other journal is still recovered. Governed parser or patch exhaustion instead
+returns typed `Error::Resource`; an unexamined journal is not labeled corrupt.
+It also scans the store root without following symlinks for
 `.purrassist-<id>.tmp` replacement temporary files left behind by an
-interrupted commit: ones whose id matches a known journal are removed and
-reported as `Recovery::OrphanRemoved`; ones matching no known journal are
-reported as `Recovery::OrphanUnknown` and left in place.
+interrupted commit. Deletion requires a fully validated journal whose recorded
+patch produces its exact `after` bytes, the exact temporary path beside that
+journal's recorded target, and bounded contents that are a byte prefix of those
+`after` bytes. Empty, partially written UTF-8, and complete temporaries satisfy
+the prefix check. Such cleanup is reported as `Recovery::OrphanRemoved` and its
+parent directory is synced. An absent journal identity produces
+`Recovery::OrphanUnknown`; invalid/incomplete journals, different locations,
+symlinks, oversized contents, and incompatible bytes produce
+`Recovery::OrphanPreserved { path, reason }`. Every uncertain artifact remains
+untouched. The shared `recover_files` tool exposes these as `orphan_unknown` and
+`orphan_preserved` records; their `id` field contains the root-relative artifact
+path, and preserved records include the refusal reason.
 
 `crates/host/tests/crash_recovery.rs` proves this by re-executing its own
 test binary as a child process that installs a crash hook

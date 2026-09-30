@@ -256,13 +256,22 @@ pub enum Recovery {
         /// Human-readable reason the journal could not be read.
         reason: String,
     },
-    /// A leftover `.purrassist-<id>.tmp` replacement temporary file whose id
-    /// matched a known journal was removed as evidence-bearing cleanup.
+    /// A bounded regular temporary file at its validated journal's recorded
+    /// target parent contained a byte prefix of the recorded replacement and
+    /// was removed as evidence-bearing cleanup.
     OrphanRemoved(String),
     /// A leftover `.purrassist-<id>.tmp` replacement temporary file matched
     /// no known journal and was left in place; the path is root-relative
     /// with forward-slash separators on every platform.
     OrphanUnknown(String),
+    /// A matching temporary name was retained because its ownership could not
+    /// be validated. A name alone never authorizes deletion.
+    OrphanPreserved {
+        /// Root-relative artifact path, with forward-slash separators.
+        path: String,
+        /// The journal, location, or content check that prevented deletion.
+        reason: String,
+    },
 }
 
 /// `prepared.json`'s current format version. Bumped whenever a field is
@@ -532,9 +541,16 @@ impl Store {
     }
     /// Reconcile prepared journals with actual file versions without overwriting files.
     ///
+    /// Temporary cleanup requires a validated journal, the exact temporary path
+    /// beside its recorded target, and a bounded byte prefix of its replacement.
+    /// Empty, partial UTF-8, and complete replacement bytes are compatible prefixes.
+    /// Unknown identities remain [`Recovery::OrphanUnknown`]; invalid journals,
+    /// symlinks, other locations, and incompatible bytes remain
+    /// [`Recovery::OrphanPreserved`] with an explanation.
+    ///
     /// # Errors
     /// Fails on store-lock contention, journal-directory enumeration, orphan
-    /// scanning, orphan removal, or governed journal resource errors. Resource
+    /// scanning, orphan removal/directory sync, or governed journal resource errors. Resource
     /// exhaustion returns [`Error::Resource`] rather than classifying an otherwise
     /// unexamined transaction as corrupt. Corrupt/unreadable individual
     /// transactions and failed marker writes are retained as [`Recovery::Corrupt`]
@@ -542,7 +558,6 @@ impl Store {
     pub fn recover(&self) -> Result<Vec<Recovery>, Error> {
         let _lock = self.lock()?;
         let mut results = Vec::new();
-        let mut known_ids = Vec::new();
         for directory in fs::read_dir(&self.journal)? {
             let directory = directory?;
             if !directory.file_type()?.is_dir() {
@@ -565,7 +580,6 @@ impl Store {
                 });
                 continue;
             }
-            known_ids.push(id.clone());
             if !directory.path().join("prepared.json").exists() {
                 results.push(Recovery::NotApplied(id));
                 continue;
@@ -594,17 +608,68 @@ impl Store {
                 },
             });
         }
-        for orphan in self.scan_orphans(&known_ids)? {
-            match orphan {
-                Orphan::Known { id, path } => {
-                    fs::remove_file(&path)?;
-                    results.push(Recovery::OrphanRemoved(id));
-                }
-                Orphan::Unknown { name } => results.push(Recovery::OrphanUnknown(name)),
-            }
+        for orphan in self.scan_orphans()? {
+            results.push(self.recover_orphan(&orphan)?);
         }
         results.sort_by(|a, b| recovery_id(a).cmp(recovery_id(b)));
         Ok(results)
+    }
+    fn recover_orphan(&self, orphan: &Orphan) -> Result<Recovery, Error> {
+        let relative = orphan
+            .path
+            .strip_prefix(&self.root)
+            .map_err(|_| Error::Invalid("temporary artifact is outside the store root".into()))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let directory = self.journal.join(&orphan.id);
+        let metadata = match fs::symlink_metadata(&directory) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Recovery::OrphanUnknown(relative));
+            }
+            Err(error) => {
+                return Ok(Recovery::OrphanPreserved {
+                    path: relative,
+                    reason: format!("journal metadata could not be read: {error}"),
+                });
+            }
+        };
+        let checked = (|| -> Result<PathBuf, Error> {
+            if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                return Err(Error::Invalid("journal must be a real directory".into()));
+            }
+            let entry = self.entry(&orphan.id)?;
+            let target = self.resolve(&entry.path)?;
+            let parent = target
+                .parent()
+                .ok_or_else(|| Error::Invalid("recorded target has no parent".into()))?;
+            let expected = parent.join(format!(".purrassist-{}.tmp", orphan.id));
+            if orphan.path != expected {
+                return Err(Error::Invalid(
+                    "temporary path does not match the recorded target parent".into(),
+                ));
+            }
+            let pending = read_bytes_bounded(&orphan.path, self.max_bytes)?;
+            if !entry.after.as_bytes().starts_with(&pending) {
+                return Err(Error::Invalid(
+                    "temporary contents are not a byte prefix of the journaled replacement".into(),
+                ));
+            }
+            Ok(parent.to_path_buf())
+        })();
+        let parent = match checked {
+            Ok(parent) => parent,
+            Err(error @ Error::Resource(_)) => return Err(error),
+            Err(error) => {
+                return Ok(Recovery::OrphanPreserved {
+                    path: relative,
+                    reason: error.to_string(),
+                });
+            }
+        };
+        fs::remove_file(&orphan.path)?;
+        sync_directory(&parent)?;
+        Ok(Recovery::OrphanRemoved(orphan.id.clone()))
     }
     fn resolve(&self, relative: &str) -> Result<PathBuf, Error> {
         let path = Path::new(relative);
@@ -711,19 +776,14 @@ impl Store {
         Ok((method, directory_sync))
     }
     /// Recursively find `.purrassist-<id>.tmp` replacement temporary files
-    /// under the store root, classifying each by whether its id matches a
-    /// known journal directory.
-    fn scan_orphans(&self, known: &[String]) -> Result<Vec<Orphan>, Error> {
+    /// under the store root without following symlinks. A matching name only
+    /// identifies a candidate; [`Self::recover_orphan`] establishes ownership.
+    fn scan_orphans(&self) -> Result<Vec<Orphan>, Error> {
         let mut findings = Vec::new();
-        self.walk_orphans(&self.root, known, &mut findings)?;
+        self.walk_orphans(&self.root, &mut findings)?;
         Ok(findings)
     }
-    fn walk_orphans(
-        &self,
-        directory: &Path,
-        known: &[String],
-        findings: &mut Vec<Orphan>,
-    ) -> Result<(), Error> {
+    fn walk_orphans(&self, directory: &Path, findings: &mut Vec<Orphan>) -> Result<(), Error> {
         for entry in fs::read_dir(directory)? {
             let entry = entry?;
             let path = entry.path();
@@ -731,14 +791,11 @@ impl Store {
                 continue;
             }
             let file_type = entry.file_type()?;
-            if file_type.is_symlink() {
-                continue;
-            }
             if file_type.is_dir() {
-                self.walk_orphans(&path, known, findings)?;
+                self.walk_orphans(&path, findings)?;
                 continue;
             }
-            if !file_type.is_file() {
+            if !file_type.is_file() && !file_type.is_symlink() {
                 continue;
             }
             let Ok(name) = entry.file_name().into_string() else {
@@ -747,16 +804,7 @@ impl Store {
             let Some(id) = orphan_id(&name) else {
                 continue;
             };
-            if known.iter().any(|candidate| candidate == &id) {
-                findings.push(Orphan::Known { id, path });
-            } else {
-                let relative = path
-                    .strip_prefix(&self.root)
-                    .unwrap_or(&path)
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                findings.push(Orphan::Unknown { name: relative });
-            }
+            findings.push(Orphan { id, path });
         }
         Ok(())
     }
@@ -807,6 +855,16 @@ impl Store {
             .get("patch")
             .ok_or_else(|| Error::Invalid("journal missing patch".into()))?;
         let patch = decode_patch(patch_node, Digest::of(before.as_bytes()))?;
+        let applied = patch.apply(&before, self.patch_budget());
+        match applied.outcome {
+            Outcome::Resolved(applied) if applied.text == after => {}
+            Outcome::Resolved(_) => {
+                return Err(Error::Invalid(
+                    "journal patch does not produce its recorded replacement".into(),
+                ));
+            }
+            _ => return Err(Error::from(applied.receipt.stopped)),
+        }
         Ok(Entry {
             path: field("path")?.into(),
             before,
@@ -873,12 +931,10 @@ fn patch_offset(node: &Node, key: &str) -> Result<usize, Error> {
     .ok_or_else(|| Error::Invalid(format!("journal patch edit {key} is invalid")))
 }
 /// One `.purrassist-<id>.tmp` replacement temporary file found while
-/// recovering, classified by whether its id matches a known journal.
-enum Orphan {
-    /// Matches a known journal directory; safe to remove.
-    Known { id: String, path: PathBuf },
-    /// Matches no known journal; reported but never deleted.
-    Unknown { name: String },
+/// recovering. Neither its name nor its identity alone authorizes deletion.
+struct Orphan {
+    id: String,
+    path: PathBuf,
 }
 /// Parse a `.purrassist-<id>.tmp` file name into its transaction id, or
 /// `None` if the name does not match that exact convention.
@@ -894,6 +950,7 @@ fn recovery_id(recovery: &Recovery) -> &str {
         | Recovery::OrphanRemoved(id)
         | Recovery::Corrupt { id, .. } => id,
         Recovery::OrphanUnknown(name) => name,
+        Recovery::OrphanPreserved { path, .. } => path,
     }
 }
 fn read_bounded(path: &Path, limit: u64) -> Result<String, Error> {

@@ -22,6 +22,9 @@ fn recovery_node(recovery: &Recovery) -> Node {
         Recovery::Corrupt { id, reason } => ("corrupt", id.as_str(), Some(reason.as_str())),
         Recovery::OrphanRemoved(id) => ("orphan_removed", id.as_str(), None),
         Recovery::OrphanUnknown(name) => ("orphan_unknown", name.as_str(), None),
+        Recovery::OrphanPreserved { path, reason } => {
+            ("orphan_preserved", path.as_str(), Some(reason.as_str()))
+        }
     };
     object([
         ("kind", string(kind)),

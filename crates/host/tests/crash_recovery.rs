@@ -312,7 +312,7 @@ fn known_orphan_is_removed_and_reported() {
     let before = store.read(FILE_NAME).unwrap();
     let commit = store.commit(&before, AFTER_TEXT).unwrap();
     let orphan_path = scratch.0.join(format!(".purrassist-{}.tmp", commit.id));
-    std::fs::write(&orphan_path, "leftover").unwrap();
+    std::fs::write(&orphan_path, &AFTER_TEXT.as_bytes()[..4]).unwrap();
     let recovered = store.recover().unwrap();
     assert!(
         recovered

@@ -271,9 +271,9 @@ pub(super) static ENTRIES: &[Entry] = &[
     ),
     entry!(
         "recover_files",
-        "Reconcile prepared journals with actual file versions without overwriting files, removing evidence-bearing orphan temporaries",
+        "Reconcile prepared journals without overwriting targets; remove only bounded compatible temporary bytes beside a validated journal's recorded target, preserving uncertain artifacts with reasons",
         r#"{"type":"object","additionalProperties":false}"#,
-        r#"{"type":"array","items":{"type":"object","additionalProperties":false,"required":["kind","id","reason"],"properties":{"kind":{"enum":["finalized","not_applied","conflict","corrupt","orphan_removed","orphan_unknown"]},"id":{"type":"string"},"reason":{"type":["string","null"]}}}}"#,
+        r#"{"type":"array","items":{"type":"object","additionalProperties":false,"required":["kind","id","reason"],"properties":{"kind":{"enum":["finalized","not_applied","conflict","corrupt","orphan_removed","orphan_unknown","orphan_preserved"]},"id":{"type":"string"},"reason":{"type":["string","null"]}}}}"#,
         true,
         |tools, _, args, cancellation| tools.recover_files(args, cancellation)
     ),
