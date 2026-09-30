@@ -479,7 +479,8 @@ or malformed markup remains opaque. Recognized declarations, processing
 instructions and closed lexical tags retain their complete spelling and then
 resume normalizing real following tags; genuinely unterminated tokens retain
 their whole remaining fragment opaque. Attribute separators use only HTML
-ASCII whitespace, preserving nonbreaking spaces and vertical tabs as data. Searching past an unrecognized outer token
+ASCII whitespace, preserving nonbreaking spaces and vertical tabs as data. Searching
+past an unrecognized outer token
 cannot turn tag-looking attribute data into a void element. Quoted attributes,
 comments and CDATA cannot introduce false raw-text starts.
 Unterminated opaque content extending to EOF retains its trailing newlines;
@@ -679,6 +680,64 @@ add guarded engine/harness/runner hashes and a private executable snapshot.
 The full local gate and hosted smoke campaigns on the exact final commit
 provide separate final-integration evidence; hosted smoke must execute
 1,000 mutations for each of all eight targets.
+
+### Recorded 10,000-mutation baselines
+
+Every row is copied from its actual successful phase report. Counts include fixed
+seeds in addition to the 10,000 mutations; they are observations of the recorded
+source/tool identities, rather than whole-crate coverage percentages.
+
+| Target | Executions | Regions | Retained | Differential checks | Mismatches | Crashes |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| [json](qualification/fuzz-json-linux-x86_64.json) | 10,021 | 3,799 | 86 | 0 | 0 | 0 |
+| [markdown](qualification/fuzz-markdown-linux-x86_64.json) | 10,015 | 5,524 | 158 | 9,683 | 0 | 0 |
+| [schema](qualification/fuzz-schema-linux-x86_64.json) | 10,016 | 4,766 | 95 | 0 | 0 | 0 |
+| [pattern](qualification/fuzz-pattern-linux-x86_64.json) | 10,011 | 1,748 | 76 | 2,669 | 0 | 0 |
+| [unified](qualification/fuzz-unified-linux-x86_64.json) | 10,003 | 609 | 20 | 0 | 0 | not recorded |
+| [fuzzy](qualification/fuzz-fuzzy-linux-x86_64.json) | 10,003 | 849 | 6 | 0 | 0 | not recorded |
+| [matching](qualification/fuzz-matching-linux-x86_64.json) | 10,004 | 1,390 | 22 | 0 | 0 | not recorded |
+| [patch](qualification/fuzz-patch-linux-x86_64.json) | 10,003 | 435 | 5 | 0 | 0 | not recorded |
+
+The final Markdown phase rejected 332 invalid UTF-8 inputs explicitly and
+reported zero resource non-results. Its 9,683 comparisons include 27 independently
+selected task-neutral profiles: five full task projections were checked and
+22 were source-certified unavailable, while all neutral content comparisons
+remained strict. Registered reference corrections recorded two backtick, one
+bare-destination and two email disagreements; the literal-admission guard
+recorded 21 original-reference disagreements. Corrected comparisons are
+separate from claims of agreement with an unmodified reference. All original
+answers, reasons and transformation counters remain in the report.
+
+The Markdown report is archived byte for byte from the completed campaign.
+Its actual launch commit and dirty-state metadata remain unchanged, even though
+subsequent commits recorded the same frozen source bytes. The final smoke gate
+provides separate integration evidence; it does not rewrite these baselines.
+
+### Final all-target smoke
+
+The final `env -u TARGET make fuzz` gate exited zero after its real coverage
+feedback test and all eight default 1,000-mutation campaigns. The
+[smoke evidence index](qualification/fuzz-smoke-linux-x86_64.json) records the
+actual invocation, observed launch/build identities and SHA-256 of each unedited
+report; the reports retain every tool identity and transformation record.
+All engine/harness/runner hashes still matched the current frozen source after
+completion. These are integration observations, separate from the 10,000-case
+phase baselines above and from hosted CI or packaging evidence.
+
+| Target | Executions | Differential checks | Regions | Mismatches | Crashes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| [json](qualification/fuzz-smoke-json-linux-x86_64.json) | 1,021 | 0 | 3,775 | 0 | 0 |
+| [markdown](qualification/fuzz-smoke-markdown-linux-x86_64.json) | 1,015 | 981 | 5,256 | 0 | 0 |
+| [schema](qualification/fuzz-smoke-schema-linux-x86_64.json) | 1,016 | 0 | 4,610 | 0 | 0 |
+| [pattern](qualification/fuzz-smoke-pattern-linux-x86_64.json) | 1,011 | 286 | 1,674 | 0 | 0 |
+| [unified](qualification/fuzz-smoke-unified-linux-x86_64.json) | 1,003 | 0 | 607 | 0 | 0 |
+| [fuzzy](qualification/fuzz-smoke-fuzzy-linux-x86_64.json) | 1,003 | 0 | 848 | 0 | 0 |
+| [matching](qualification/fuzz-smoke-matching-linux-x86_64.json) | 1,004 | 0 | 1,388 | 0 | 0 |
+| [patch](qualification/fuzz-smoke-patch-linux-x86_64.json) | 1,003 | 0 | 435 | 0 | 0 |
+
+The eight smoke campaigns executed 8,076 inputs in total, including their fixed
+seeds. None reported a crash or mismatch. Zero declared Markdown resource
+non-results were observed; other targets retain their documented refusal rules.
 
 The lightweight runner tests (`scripts/test-fuzz.py`) run in `make check`
 via `make hygiene`, including coverage-region admission and differential normalization tests;

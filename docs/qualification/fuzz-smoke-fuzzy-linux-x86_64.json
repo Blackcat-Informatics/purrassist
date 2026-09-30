@@ -1,0 +1,122 @@
+{
+  "format": "purrassist.fuzz.v1",
+  "target": "fuzzy",
+  "status": "passed",
+  "tools": {
+    "rustc": "rustc 1.100.0-nightly (4b6d04e70 2026-09-13)\nbinary: rustc\ncommit-hash: 4b6d04e706108ccfeafe2547fbe857dfe8972bad\ncommit-date: 2026-09-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0-nightly\nLLVM version: 23.1.1",
+    "llvm-cov": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1-rust-1.100.0-nightly\n  Optimized build.",
+    "llvm-profdata": "LLVM (http://llvm.org/):\n  LLVM version 23.1.1-rust-1.100.0-nightly\n  Optimized build."
+  },
+  "source_commit": "79e5d3705818a436dc1113f6619c8e1ba1efa071",
+  "source_dirty": true,
+  "nonignored_file_tree_sha256": "c1de24c670bc0ee4831e22ac1128c2092471f0b113b8666fe7bb744899022606",
+  "build": {
+    "command": [
+      "cargo",
+      "build",
+      "-p",
+      "purrassist-core",
+      "--example",
+      "fuzz-fuzzy",
+      "--locked",
+      "--config",
+      "profile.dev.opt-level=1",
+      "--config",
+      "profile.dev.debug=1",
+      "--config",
+      "profile.dev.strip=false",
+      "--config",
+      "profile.dev.debug-assertions=true",
+      "--config",
+      "profile.dev.overflow-checks=true",
+      "--message-format=json"
+    ],
+    "sha256": "02ed904ea20b5e5844e5a04dba7ff1060fe743da5fd92221114a2327cc252bde",
+    "inherited_rustflags_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "appended_rustflags": [
+      "-C",
+      "instrument-coverage"
+    ],
+    "engine_source_sha256": "70e41ff78819f3e983f2db66c6f0d4380cfd831a9c13fb361fd7999a30e4a3b3",
+    "harness_source_sha256": "71ae89602fb2712f030c8bff86cd93fb56f5d4892817ba49004091b698771c7a",
+    "runner_source_sha256": "79d1a3e268bf90dfe76ed023c7b1fb92daf59be68977d2dcaf478c392c57888d"
+  },
+  "seed": 6491701292666032971,
+  "requested_mutations": 1000,
+  "timeout_seconds": 10,
+  "maximum_input_bytes": 4096,
+  "executions": 1003,
+  "invalid_utf8": 51,
+  "differential_checks": 0,
+  "differential_mismatches": 0,
+  "crashes": 0,
+  "reference_rejections": 0,
+  "reference_timeouts": 0,
+  "resource_non_results": 0,
+  "resource_non_result_reasons": {},
+  "resource_non_result_cases": [],
+  "reference_profile_exclusions": 0,
+  "tasklist_projection_checks": 0,
+  "tasklist_projection_unavailable": 0,
+  "profile_exclusions": [],
+  "reference_admission_projections": 0,
+  "reference_admission_disagreements": 0,
+  "reference_admission_cases": [],
+  "hardbreak_reference_projections": 0,
+  "hardbreak_reference_disagreements": 0,
+  "hardbreak_reference_cases": [],
+  "paragraph_prefix_reference_projections": 0,
+  "paragraph_prefix_reference_disagreements": 0,
+  "paragraph_prefix_reference_cases": [],
+  "email_reference_checks": 0,
+  "email_reference_disagreements": 0,
+  "email_reference_cases": [],
+  "emphasis_reference_checks": 0,
+  "emphasis_reference_disagreements": 0,
+  "emphasis_reference_cases": [],
+  "backtick_reference_checks": 0,
+  "backtick_reference_disagreements": 0,
+  "backtick_reference_cases": [],
+  "destination_reference_checks": 0,
+  "destination_reference_disagreements": 0,
+  "destination_reference_cases": [],
+  "retained": [
+    {
+      "execution": 0,
+      "sha256": "26a78cdae4555568630c51cd3dc32cd4a9d8457c4b0272b3ddff1e7d0143ae30",
+      "new_regions": 484,
+      "parent_corpus_index": null,
+      "bytes": 25
+    },
+    {
+      "execution": 1,
+      "sha256": "1624e0dc1c16430aaf71881e92a856b817624124a8f8d0439c20b066803a0590",
+      "new_regions": 6,
+      "parent_corpus_index": null,
+      "bytes": 16
+    },
+    {
+      "execution": 2,
+      "sha256": "a479a9064375afaf2cc3cd8b888bcdb201ff37b748cbb4d65bee4f81ebfbf207",
+      "new_regions": 353,
+      "parent_corpus_index": null,
+      "bytes": 29
+    },
+    {
+      "execution": 3,
+      "sha256": "467c93bfc618488c16050dbad9971f43e2a9de02e15c36061b86040a0ae23494",
+      "new_regions": 2,
+      "parent_corpus_index": 2,
+      "bytes": 6
+    },
+    {
+      "execution": 13,
+      "sha256": "67649c42ffdcf14de97b52e8389e21c805829fcc0b8ecc33c7490f15998f7c3b",
+      "new_regions": 3,
+      "parent_corpus_index": 2,
+      "bytes": 21
+    }
+  ],
+  "regions": 848,
+  "current_execution": 1002
+}
