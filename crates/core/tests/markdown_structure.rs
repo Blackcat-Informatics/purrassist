@@ -483,7 +483,16 @@ fn relabel_reference_updates_definition_and_uses_and_refuses_stale_or_exhausted(
         let applied = round_trip(&source, &plan);
         assert_eq!(
             applied,
-            format!("[chai] and [chai][] and [x][chai]{newline}{newline}[chai]: /tea{newline}")
+            format!(
+                "[tea][chai] and [tea][chai] and [x][chai]{newline}{newline}[chai]: /tea{newline}"
+            )
+        );
+        assert_eq!(
+            doc.render_html(Dialect::Gfm, &mut g).unwrap(),
+            Document::parse(&applied, &mut g)
+                .unwrap()
+                .render_html(Dialect::Gfm, &mut g)
+                .unwrap()
         );
         assert_stale(&source, &plan);
         assert_eq!(

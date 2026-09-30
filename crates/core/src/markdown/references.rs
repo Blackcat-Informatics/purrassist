@@ -295,7 +295,9 @@ impl Document {
 
     /// Relabel a reference definition and rewrite every use that resolves to
     /// it (shortcut `[label]`, collapsed `[text][]`, and full `[text][label]`
-    /// forms) so every one keeps resolving. Uses are recognized everywhere
+    /// forms) so every one keeps resolving with its exact visible text or image
+    /// alt text. Shortcut and collapsed uses gain an explicit second label.
+    /// Uses are recognized everywhere
     /// CommonMark/GFM itself resolves a reference: paragraph and heading
     /// text and GFM table cells, at any container nesting depth (list
     /// items, block quotes). A code span, autolink, raw HTML, or code block
@@ -314,7 +316,8 @@ impl Document {
     /// # Errors
     /// Rejects a missing occurrence and an empty/multi-line/bracketed new
     /// label. Rejects a proposal that changes the number of definitions, an
-    /// unselected definition, or leaves a use unresolved. Resource
+    /// unselected definition, leaves a use unresolved, or changes rendered
+    /// content (including collisions with another label). Resource
     /// exhaustion and cancellation propagate without a partial plan.
     pub fn relabel_reference(
         &self,
@@ -363,15 +366,16 @@ impl Document {
             replacement: new_label.into(),
         }];
         for use_site in &uses {
-            let range = use_site
-                .label_span
-                .clone()
-                .filter(|span| !span.is_empty())
-                .unwrap_or_else(|| use_site.text_span.clone());
-            edits.push(TextEdit {
-                range,
-                replacement: new_label.into(),
-            });
+            let (range, replacement) = use_site.label_span.clone().map_or_else(
+                || {
+                    (
+                        use_site.span.end..use_site.span.end,
+                        format!("[{new_label}]"),
+                    )
+                },
+                |span| (span, new_label.into()),
+            );
+            edits.push(TextEdit { range, replacement });
         }
         let plan = EditPlan {
             source: self.digest,
@@ -415,6 +419,11 @@ impl Document {
             return Err(invalid(
                 "relabeling left a use unresolved against its definition",
             ));
+        }
+        for dialect in [Dialect::CommonMark, Dialect::Gfm] {
+            if self.render_html(dialect, governor)? != updated.render_html(dialect, governor)? {
+                return Err(invalid("relabeling changes rendered reference content"));
+            }
         }
         Ok(plan)
     }
