@@ -28,11 +28,13 @@ and merge sequence in [RELEASE.md](RELEASE.md).
 | Correction quality | `correction_evaluation`, `matching_oracle` | Four provenance-bound corpora, risk/coverage sweeps, exact distance and path oracles |
 | Coverage-guided/differential probes | `make fuzz` | Eight targets, retained source-region novelty, exact failure replay, V8/cmark-gfm comparisons |
 | Resource/performance observations | `make resources`, resource-limit checker | Latency, real allocations, heap/RSS, artifact hashes/sizes, cache-disabled cold build |
+| Structural helper detector | `make helper-test`, `make helper-census`, `make helper-check` | syn-based normalized body/shim/constant/table census, strict ledger validity and exact group enforcement; repository tooling only |
 | Local release artifacts | `make package` | Five Cargo-verified archives in dependency order; source identity and registered notice audit |
 
 These integration-test names are in `crates/core/tests` unless qualified with
 another crate. `make check` runs the full formatting, hygiene, Clippy,
-verification-profile workspace tests, and Rustdoc gate with warnings as errors.
+helper detector self-tests and ledger validity, verification-profile workspace
+tests, and Rustdoc gate with warnings as errors.
 Focused test results establish their listed contracts; they do not replace this
 gate. Verification retains debug assertions and overflow checks.
 
@@ -113,6 +115,25 @@ cache-disabled cold build cost from warm compilation. Reports contain raw
 measured observations and executable limits. Hygiene validates the committed
 report schema; hosted qualification regenerates measurements and applies limits
 to that fresh report. Results are machine-specific observations.
+
+## Helper census contract
+
+The unpublished helper census parses repository Rust and groups normalized
+function bodies, forwarding shims, integer constants and hex tables. These are
+structural candidates for review; equality under normalization does not prove
+semantic equivalence. `make helper-census` writes the actual inspection report.
+`make helper-check` additionally rejects unsanctioned groups and forbidden
+implementations against the exact helper ledger. Existing findings remain
+visible without blanket sanctions.
+
+`make check` requires detector positive/negative self-tests and independently
+validated ledger structure, resolved symbols and documentation anchors, plus
+reported cross-package includes. Strict enforcement rejects those include
+findings; the local gate does not impose that new architectural policy. This
+validates the installed detector and ledger; it does not claim
+the workspace has no structural duplicates. The WASM qualification harness
+deliberately shares the core portable transcript example through one cross-package
+include; that finding remains visible. See [HELPER-CENSUS.md](HELPER-CENSUS.md).
 
 ## Qualification commands
 

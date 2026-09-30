@@ -45,8 +45,9 @@ literals directly (no JavaScript engine is linked or invoked). None of this
 data is relicensed as first-party code.
 
 The accepted grammar-parser exception is Tree-sitter and its Python, Rust,
-JavaScript, and TypeScript grammar family. The pinned integration currently resolves 12 external runtime packages and 29
-packages in the full Cargo graph. Tree-sitter also brings regex/query support,
+JavaScript, and TypeScript grammar family. The shipping grammar integration resolves 12 external runtime packages.
+Repository tooling additionally includes the unpublished helper census; the exact
+full Cargo graph is checked against `vendor/dependencies.json`. Tree-sitter also brings regex/query support,
 a small language ABI crate, and a streaming iterator; its C build brings `cc`,
 platform compiler discovery, and a JSON-driven generation toolchain. Exact
 versions, licenses, and upstream repositories are recorded in the inventory.
@@ -198,3 +199,21 @@ allocators under `#![allow(unsafe_code)]`, confined to their bench files. They
 measure requested allocation rather than add a production allocator or dependency.
 The existing allocation-oracle test has the same isolated exception. Their unsafe
 blocks document the standard allocator delegation and counter invariants.
+
+## Structural helper census
+
+`purrassist-helper-census` is unpublished repository tooling ported from
+PurRDF's helper-centralization branch. It parses Rust with `syn`, traverses
+module/item bodies, and groups normalized implementations and forwarding shims.
+It uses the already registered `proc-macro2`, `syn` and `regex` versions, with
+span-location, full syntax/visitor and regex performance features. Their resolved
+transitive dependencies, including any feature-enabled additions, are covered by
+the same exact inventory and retained license notices. First-party SHA-256 and
+JSON serialization come from `purrassist-core`; fingerprints consequently differ
+from the source tool's BLAKE3 ids while normalized equality stays the same.
+
+No third-party dependency is added to the core, and no census code or dependency
+is bundled into a published crate. Upstream commit and original file digests are
+recorded in `crates/helper-census/UPSTREAM.json`; the source license headers and
+three first-party license copies are retained. Its documented repository commands
+distinguish an inspection report from strict helper-ledger enforcement.

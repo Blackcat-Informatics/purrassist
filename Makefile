@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 MAKEFLAGS += --no-print-directory
-.PHONY: check fmt lint test doc hygiene wasm-test benchmark package syntax-oracles resources fuzz-json
+.PHONY: check fmt lint test doc hygiene wasm-test benchmark package syntax-oracles resources fuzz-json helper-test helper-census helper-check
 
-check: fmt hygiene lint test doc
+check: fmt hygiene helper-test lint test doc
 
 fmt:
 	cargo fmt --all --check
@@ -45,3 +45,16 @@ resources:
 fuzz-json:
 	python3 scripts/test-fuzz-json.py
 	python3 scripts/fuzz-json.py $(FUZZ_ARGS)
+
+# The self-tests and ledger validity are mandatory. Inspection reports keep
+# existing unsanctioned groups visible; helper-check rejects those groups.
+helper-test:
+	cargo run --quiet --locked -p purrassist-helper-census -- --self-test
+	python3 scripts/check-shared-helpers.py --self-test
+	python3 scripts/check-shared-helpers.py --validate-ledger
+
+helper-census:
+	cargo run --quiet --locked -p purrassist-helper-census -- --baseline
+
+helper-check:
+	python3 scripts/check-shared-helpers.py

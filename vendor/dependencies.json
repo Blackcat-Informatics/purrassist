@@ -1,5 +1,6 @@
 {
   "cargo_packages": [
+    "aho-corasick@1.1.5",
     "cc@1.5.1",
     "equivalent@1.0.2",
     "find-msvc-tools@0.1.14",
@@ -116,6 +117,22 @@
     }
   ],
   "cargo_details": [
+    {
+      "name": "aho-corasick",
+      "version": "1.1.5",
+      "license": "Unlicense OR MIT",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "repository": "https://github.com/BurntSushi/aho-corasick",
+      "notices": [
+        "vendor/licenses/aho-corasick-1.1.5/LICENSE-MIT",
+        "vendor/licenses/aho-corasick-1.1.5/UNLICENSE"
+      ],
+      "notice_sha256": {
+        "vendor/licenses/aho-corasick-1.1.5/LICENSE-MIT": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+        "vendor/licenses/aho-corasick-1.1.5/UNLICENSE": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c"
+      },
+      "justification": "Tool-only transitive dependency of purrassist-helper-census forbidden-name regex detection, enabled by the pinned regex perf-dfa/perf-inline feature set. No dependency of purrassist-core; the unpublished census is not packaged or published."
+    },
     {
       "name": "cc",
       "version": "1.5.1",
@@ -234,7 +251,8 @@
       "notice_sha256": {
         "vendor/licenses/proc-macro2-1.0.107/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
         "vendor/licenses/proc-macro2-1.0.107/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
-      }
+      },
+      "additional_tooling_use": "Pinned direct dependency of unpublished purrassist-helper-census: syn full+visit parses Rust/module/cfg/AST structure; proc-macro2 span-locations provides token bodies and locations; regex admits ledger forbidden-name patterns. Existing resolved version retained. No dependency of purrassist-core."
     },
     {
       "name": "quote",
@@ -264,7 +282,8 @@
       "notice_sha256": {
         "vendor/licenses/regex-1.13.1/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/regex-1.13.1/LICENSE-MIT": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
-      }
+      },
+      "additional_tooling_use": "Pinned direct dependency of unpublished purrassist-helper-census: syn full+visit parses Rust/module/cfg/AST structure; proc-macro2 span-locations provides token bodies and locations; regex admits ledger forbidden-name patterns. Existing resolved version retained. No dependency of purrassist-core."
     },
     {
       "name": "regex-automata",
@@ -403,7 +422,8 @@
       "notice_sha256": {
         "vendor/licenses/syn-3.0.6/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
         "vendor/licenses/syn-3.0.6/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
-      }
+      },
+      "additional_tooling_use": "Pinned direct dependency of unpublished purrassist-helper-census: syn full+visit parses Rust/module/cfg/AST structure; proc-macro2 span-locations provides token bodies and locations; regex admits ledger forbidden-name patterns. Existing resolved version retained. No dependency of purrassist-core."
     },
     {
       "name": "tree-sitter",
@@ -562,6 +582,14 @@
     "host": {},
     "purrassist": {},
     "syntax": {},
-    "wasm-harness": {}
-  }
+    "wasm-harness": {},
+    "helper-census": {}
+  },
+  "first_party_ports": [
+    {
+      "name": "PurRDF structural helper census",
+      "manifest": "crates/helper-census/UPSTREAM.json",
+      "scope": "Unpublished developer tooling; full generic normalized-body/shim/constant/table detector, module traversal and strict ledger reporting. First-party port with original attribution retained."
+    }
+  ]
 }

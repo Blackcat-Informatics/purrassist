@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/syntax", "crates/purrassist", "crates/host", "crates/cli", "crates/wasm-harness"]
+members = ["crates/core", "crates/syntax", "crates/purrassist", "crates/host", "crates/cli", "crates/wasm-harness", "crates/helper-census"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,6 +13,9 @@ authors = ["Blackcat Informatics Inc."]
 repository = "https://github.com/Blackcat-Informatics/purrassist"
 
 [workspace.dependencies]
+proc-macro2 = { version = "=1.0.107", features = ["span-locations"] }
+syn = { version = "=3.0.6", features = ["full", "visit"] }
+regex = { version = "=1.13.1", default-features = false, features = ["std", "unicode", "perf-cache", "perf-dfa", "perf-onepass", "perf-backtrack", "perf-inline"] }
 purrassist-core = { path = "crates/core", version = "0.1.0" }
 purrassist-syntax = { path = "crates/syntax", version = "0.1.0" }
 purrassist = { path = "crates/purrassist", version = "0.1.0" }
