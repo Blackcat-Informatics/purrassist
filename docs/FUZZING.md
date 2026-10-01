@@ -3,14 +3,15 @@
 # Coverage-guided and differential qualification
 
 `scripts/fuzz.py --target <name>` generalizes the original single-purpose
-JSON runner (`scripts/fuzz-json.py`, now removed) across eight
+JSON runner (`scripts/fuzz-json.py`, now removed) across nine
 `purrassist-core` targets: `json`, `markdown`, `schema`, `pattern`,
-`unified`, `fuzzy`, `matching`, `patch`. Each target is a process-isolated
-Rust example (`crates/core/examples/fuzz_<target>.rs`, registered as
-`[[example]] name = "fuzz-<target>"` in `crates/core/Cargo.toml`) that reads
-bounded stdin (at most 4,096 bytes), asserts the target's invariants, and
-completes its protocol (`ok` or `invalid-utf8`, optionally followed by
-newline-delimited JSON differential records) or panics.
+`unified`, `fuzzy`, `matching`, `patch`, `tool-call`. Each target is a
+process-isolated Rust example (`crates/core/examples/fuzz_<target>.rs`, with
+`-` spelled `_`, registered as `[[example]] name = "fuzz-<target>"` in
+`crates/core/Cargo.toml`) that reads bounded stdin (at most 4,096 bytes),
+asserts the target's invariants, and completes its protocol (`ok` or
+`invalid-utf8`, optionally followed by newline-delimited JSON differential
+records) or panics.
 
 Run with Rust `nightly-2026-09-14` and its bundled `llvm-tools` component
 (`rustup component add llvm-tools`). `scripts/fuzz.py` resolves `llvm-cov`
@@ -46,8 +47,11 @@ skipping.
 
 ## Targets, invariants, and seed provenance
 
-Every probe rejects invalid UTF-8 explicitly before entering the core (the
-report counts those executions separately). Resource exhaustion
+Every probe except `tool-call` rejects invalid UTF-8 explicitly before
+entering the core (the report counts those executions in `invalid_utf8`).
+Tool-call recovery accepts arbitrary bytes and records each invalid UTF-8
+run as a loss, so the `tool-call` probe admits them and always completes
+with `ok`; the report counts those executions in `non_utf8_admitted`. Resource exhaustion
 (`StopReason::BudgetExceeded`/`Cancelled`) is a declared non-result, not a
 successful comparison. The Markdown probe emits exactly one HTML or closed
 resource-stop record, with the original source, parse/render/neutral-render
@@ -121,6 +125,52 @@ targets' mutation tokens so mutation can create or move field boundaries).
   (headings, lists, block quotes, fenced code, tables, reference links, GFM
   strikethrough/autolink/tasklist/tagfilter, setext headings, hard breaks).
   **Differential**: `cmark-gfm` — see below.
+- **`tool-call`**: one model turn as raw bytes, recovered
+  (`ToolSet::recover`, the `tool_call.recover.v1` operation) against a fixed
+  first-party tool set over every built-in dialect. The tool set has
+  read-only tools (`read_file` with a parameter alias, `list_dir`,
+  `get_weather` with an enumeration, `current_time` with no required
+  parameter) and mutating tools (`write_file` with string, enumeration,
+  number, integer, array, and nested object parameters; `delete_path` with
+  a tool alias and a repeatable parameter). Byte 0 is a control byte
+  selecting the repair policy (per tool, all `Structural`, all `Tolerant`),
+  the generation stop (`Stop`, `Length`, `ToolCalls`, `Unknown`), the
+  reasoning policy (separate, starting open, as content), and the tool
+  choice (`auto`, `none`, `required`, forced `read_file`); byte 1 selects
+  the effort (`Exact`, `Quick`, `Standard`, `Deep`), the ambiguity policy,
+  and a split seed; the rest is the turn. Invariants:
+  recovery never panics, names the output's digest, and stays within its
+  budget; a value outcome completed and `Unresolved` did not; an
+  `Ambiguous` outcome's readings match the receipt's alternative ledger;
+  a `Resolved` turn records no guess. (A13) A `Resolved` call records no
+  guess inference and no data loss, so no guessed call on a mutating tool
+  is `Resolved`; `usable()` holds only `Resolved` calls;
+  `usable_accepting_guesses()` never holds a guess on a tool that is not
+  read-only; a call embedded in reasoning is never `Resolved` and lies
+  inside a reasoning range. Every call, rejected-attempt, content, and
+  reasoning range lies within the output, never splits a well-formed UTF-8
+  character, and slices back to the retained source (a rejected attempt's
+  raw bytes are exactly its range); content, reasoning, and call ranges
+  never overlap. Every `Resolved` call printed in its own dialect
+  (`emit::emit`) recovers to the same tool with `Node::equivalent`
+  arguments and `Resolved`, and the printed text is stable (a fixed point
+  from its first recovery; a `Resolved` call is skipped only as
+  unrepresentable). Pushing the turn to a `Recognizer` whole, split in two
+  at the seeded position, or in seeded fixed-size chunks yields an equal
+  recognized turn (or the same error) and equal governor usage. Under a
+  budget too small for the output, recovery is `Unresolved` with
+  `StopReason::BudgetExceeded`, empty ledgers, and no alternatives. Seeds
+  are the canonical markup of every conformance fixture under
+  `crates/core/tests/data/tool-calls/conformance/` (read at seed-build time),
+  embedded `grammar::witness::generate` outputs for every built-in dialect
+  over the probe's tool shapes, the repair cases of issue #3 (stray plural
+  closers, missing `</parameter>`/`</function>`/`</tool_call>`, a whole JSON
+  body with a stray closer, nested parameters, fenced and prose-wrapped
+  calls, stringified arguments, dangling openers, near-miss, alias, and
+  hallucinated names, parameter aliases and typos, schema-guided typing,
+  repeated parameters, reasoning blocks, mixed dialects, invalid UTF-8),
+  and negative cases; the header bytes cycle through five fixed request
+  configurations.
 
 ## Differential probes
 
@@ -587,6 +637,13 @@ regressions in `crates/core/tests/pattern.rs` and
 - Inline HTML declarations require uppercase ASCII names followed by ASCII
   whitespace. Lowercase declarations and uppercase names without separating
   whitespace are escaped; block HTML retains its separate declaration rule.
+- (`tool-call`) A dialect class run that dies inside a multi-byte
+  character now fails at that character's lead byte. Grammar classes read
+  whole code points, so the run consumed the lead byte and failed on a
+  continuation byte; the rejected attempt's span then ended between the two
+  bytes of `é` in `{"id":"a","type":"function","function":{"name"é`.
+  Regression: `rejected_span_never_splits_a_character_a_class_cannot_consume`
+  in `crates/core/tests/tool_call_recover.rs`.
 
 ### Bounded HTML grammar diagnostics
 
@@ -656,7 +713,7 @@ Exact discovery counts are tied to compiler, flags, and source mapping; they
 are not comparable coverage percentages across toolchain versions.
 
 **Smoke** (`verify.yml` on pull requests, main-branch pushes, and manual
-runs): `make fuzz` runs the corpus-feedback test once and all eight targets
+runs): `make fuzz` runs the corpus-feedback test once and all nine targets
 with the runner's default 1,000 mutations each. `TARGET` and `FUZZ_ARGS`
 apply only to a selected-target invocation. **Qualification** (this task, evidence committed
 under `docs/qualification/`): 10,000 iterations per target, matching both
@@ -679,7 +736,7 @@ fields are never reconstructed retrospectively. New Markdown reports
 add guarded engine/harness/runner hashes and a private executable snapshot.
 The full local gate and hosted smoke campaigns on the exact final commit
 provide separate final-integration evidence; hosted smoke must execute
-1,000 mutations for each of all eight targets.
+1,000 mutations for each of all nine targets.
 
 ### Recorded 10,000-mutation baselines
 

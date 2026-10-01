@@ -419,7 +419,8 @@ pub enum Rejection {
     /// No configuration could consume the byte at `at`, and no repair
     /// within the search budget applied.
     Malformed {
-        /// Absolute offset of the byte that could not be consumed.
+        /// Absolute offset of the byte that could not be consumed, or of
+        /// the first byte of the well-formed character it belongs to.
         at: usize,
     },
     /// Captured text or a slot body is not well-formed UTF-8.

@@ -44,16 +44,16 @@ resources:
 	python3 scripts/test-resource-report.py
 	python3 scripts/measure-resources.py $(RESOURCE_ARGS)
 
-# TARGET selects one of json/markdown/schema/pattern/unified/fuzzy/matching/patch
+# TARGET selects one of json/markdown/schema/pattern/unified/fuzzy/matching/patch/tool-call
 # (see docs/FUZZING.md); FUZZ_ARGS forwards to scripts/fuzz.py (--iterations,
 # --seed, --timeout, --replay). With no TARGET, every target runs once at the
 # documented smoke count (scripts/fuzz.py's default of 1,000 mutations),
-# ignoring FUZZ_ARGS, so the gate stays deterministic across all eight targets.
+# ignoring FUZZ_ARGS, so the gate stays deterministic across all nine targets.
 fuzz:
 	python3 scripts/test-fuzz.py
 	python3 scripts/test-fuzz-feedback.py
 	@if [ -z "$(TARGET)" ]; then \
-		for target in json markdown schema pattern unified fuzzy matching patch; do \
+		for target in json markdown schema pattern unified fuzzy matching patch tool-call; do \
 			echo "== fuzz target: $$target =="; \
 			python3 scripts/fuzz.py --target $$target || exit 1; \
 		done; \

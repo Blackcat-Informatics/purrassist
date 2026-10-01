@@ -1110,6 +1110,17 @@ impl DfaState {
         self.utf8 = Utf8::Invalid;
         self
     }
+
+    /// The number of bytes of a partially decoded character this state has
+    /// consumed: zero at a character boundary and after invalid UTF-8.
+    pub(crate) const fn partial_bytes(self) -> usize {
+        match self.utf8 {
+            Utf8::Partial {
+                remaining, length, ..
+            } => (length - remaining) as usize,
+            Utf8::Boundary | Utf8::Invalid => 0,
+        }
+    }
 }
 
 /// After the second byte of a multi-byte character, the decoded prefix

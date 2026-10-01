@@ -520,7 +520,16 @@ impl<'s> Step<'_, 's> {
             // The run ended before this byte, which the continuation consumes.
             return self.closure(thread, next, pos, stack, out, governor);
         }
-        Self::fail(out, thread, pos, Rejection::Malformed { at: pos })
+        // Classes read whole characters: a run that dies on a continuation
+        // byte could not consume the character that byte belongs to, which
+        // began at its lead byte. Failing there keeps the rejected span from
+        // splitting a well-formed character.
+        let at = if byte & 0xC0 == 0x80 {
+            pos - state.partial_bytes()
+        } else {
+            pos
+        };
+        Self::fail(out, thread, at, Rejection::Malformed { at })
     }
 
     /// One byte of an `until`/`slot` body: hold back a possible delimiter

@@ -11,8 +11,8 @@ use purrassist_core::grammar::{Grammar, cost};
 use purrassist_core::json::{self, Node, Value};
 use purrassist_core::tool_call::{
     AmbiguityPolicy, CallOutcome, DialectId, DialectSet, Effects, Finish, FromNode, FromNodeError,
-    GenerationStop, IdGenerator, IdPolicy, Param, PolicySelection, ReasoningPolicy, RepairPolicy,
-    ToolCall, ToolCalls, ToolChoice, ToolDefinition, ToolRecoveryRequest, ToolSet,
+    GenerationStop, IdGenerator, IdPolicy, Param, PolicySelection, ReasoningPolicy, Rejection,
+    RepairPolicy, ToolCall, ToolCalls, ToolChoice, ToolDefinition, ToolRecoveryRequest, ToolSet,
     UnresolvedReason,
 };
 use purrassist_core::wire::WireValue;
@@ -1590,5 +1590,44 @@ fn held_reports_are_charged_and_exhaust_explicitly() {
             (held_turn.clone(), held_usage),
             "chunk {chunk}"
         );
+    }
+}
+
+/// Fuzz regression (`scripts/fuzz.py --target tool-call`): a class run that
+/// dies on a multi-byte character fails at that character's lead byte, so a
+/// rejected span never splits a well-formed UTF-8 character. Before the fix
+/// the name class consumed `0xC3` and failed on `0xA9`, ending the rejected
+/// span between the two bytes of `é`.
+#[test]
+fn rejected_span_never_splits_a_character_a_class_cannot_consume() {
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("get_weather")
+            .effects(Effects::ReadOnly)
+            .param("city", Param::string())],
+        Budget::default(),
+    )
+    .expect("tools");
+    for (input, at) in [
+        (
+            "{\"id\":\"a\",\"type\":\"function\",\"function\":{\"name\"\u{e9}",
+            46,
+        ),
+        (
+            "{\"id\":\"a\",\"type\":\"function\",\"function\":{\"name\": \"get_weathe\u{e9}r\"}}",
+            59,
+        ),
+    ] {
+        let result = tools.recover(input.as_bytes(), &ToolRecoveryRequest::default());
+        let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = result.outcome else {
+            panic!("{input:?}: one reading expected");
+        };
+        assert_eq!(calls.rejected.len(), 1, "{input:?}");
+        let rejected = &calls.rejected[0];
+        assert_eq!(rejected.span, 0..at, "{input:?}");
+        assert_eq!(rejected.reason, Rejection::Malformed { at }, "{input:?}");
+        assert!(input.is_char_boundary(rejected.span.end), "{input:?}");
+        assert_eq!(rejected.text(), Some(&input[..at]));
+        assert_eq!(calls.content.len(), 1, "{input:?}");
+        assert_eq!(calls.content[0], at..input.len(), "{input:?}");
     }
 }

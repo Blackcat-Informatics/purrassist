@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 """Deterministic source-region coverage-guided qualification (LLVM, pinned
 in vendor/tooling.json's `llvm-coverage` entry),
-generalized across eight `purrassist-core` targets, with differential probes
+generalized across nine `purrassist-core` targets, with differential probes
 against Node's `RegExp` (`pattern`) and `cmark-gfm` (`markdown`).
 
 Replaces the single-purpose `scripts/fuzz-json.py`; see `docs/FUZZING.md`.
@@ -180,6 +180,145 @@ PATCH_TOKENS = [
     b'a', b'b', b' ', b'\n', b'-', RS, 'é'.encode(), b'\xff',
 ]
 
+# `tool-call` input is raw bytes: byte 0 selects the request knobs (repair
+# policy, generation stop, reasoning policy, tool choice), byte 1 the effort,
+# the ambiguity policy, and the chunking split seed; the rest is one model
+# turn (see `crates/core/examples/fuzz_tool_call.rs`). Seeds pair each turn
+# with a header so the fixed seeds already span the request space.
+TOOL_CALL_HEADERS = [
+    b'\x00\x52',  # per tool, stop, separate reasoning, auto; standard effort
+    b'\x05\x91',  # all structural, length stop; quick effort
+    b'\x4a\x5e',  # all tolerant, tool_calls stop, tool choice none; reject ambiguity
+    b'\x9c\xf0',  # unknown stop, reasoning open at start, required; exact effort
+    b'\xe6\x23',  # all tolerant, length stop, reasoning as content, forced read_file; deep effort
+]
+
+
+def _tool_call_seed(index, turn):
+    return TOOL_CALL_HEADERS[index % len(TOOL_CALL_HEADERS)] + turn
+
+
+def _tool_call_conformance_markup():
+    """The canonical markup of every built-in dialect's conformance fixture,
+    read in sorted path order from
+    `crates/core/tests/data/tool-calls/conformance/<dialect>/*.json`."""
+    directory = ROOT / 'crates/core/tests/data/tool-calls/conformance'
+    return [json.loads(path.read_text())['markup'].encode()
+            for path in sorted(directory.glob('*/*.json'))]
+
+
+# Well-formed calls printed by `purrassist_core::grammar::witness::generate`
+# for every built-in dialect over the probe's own tool shapes, with the
+# listed witness seeds (`JsonArguments::Object` for seeds 0-1,
+# `Stringified` for seeds 2-3), embedded verbatim.
+TOOL_CALL_WITNESSES = [
+    # hermes.v1: read_file (seed 0)
+    b"<tool_call>\t{\t\t\"arguments\":{\"path\":\"tab\\tseparated \\n  block\\n\"}\t,\t\"name\"\t:\t\t\"read_file\"}</tool_call>",
+    # hermes.v1: get_weather, list_dir (seed 1)
+    b"<tool_call>{\t\"name\":\t\"get_weather\",\"arguments\":{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"}\t}\t\t</tool_call>\n<tool_call>{\t\t\"arguments\"\t:{\"path\":\"src/lib.rs\"}\t,\"name\":\"list_dir\"\t\t}\t\t</tool_call>",
+    # hermes.v1: write_file (seed 2)
+    b"<tool_call>\t\t{\t\"name\":\"write_file\",\"arguments\"\t\t:\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"\t}\t</tool_call>",
+    # hermes.v1: delete_path, read_file (seed 3)
+    b"<tool_call>{\"name\":\"delete_path\"\t,\t\"arguments\":\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"}\t\t</tool_call>\n<tool_call>\t{\t\"name\"\t:\t\t\"read_file\"\t\t,\t\"arguments\":\"{\\\"path\\\":\\\"  indented src/lib.rs\\\",\\\"limit\\\":417}\"}\t</tool_call>",
+    # openai-tool-calls.v1: read_file (seed 0)
+    b"{\"type\": \"function\",\t\t\"function\"\t:\t{\t\"arguments\":{\"path\":\"tab\\tseparated \\n  block\\n\"},\"name\"\t:\"read_file\"}\t\t,\"id\":\"call_0f4d3872\"\t\t}",
+    # openai-tool-calls.v1: get_weather, list_dir (seed 1)
+    b"{\n          \"type\":\"function\",\"function\"\t:{\"name\"\t:\t\t\"get_weather\",\"arguments\":{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"}\t\t}\t,\t\t\"id\"\t\t:\"call_c90789ba\"\t\t}\n{\n    \"type\": \"function\",\t\"id\":\t\"call_18e9685e\",\t\t\"function\":\t{\"arguments\"\t:{\"path\":\"tab\\tseparated trailing  \"},\"name\":\"list_dir\"\t\t}\t}",
+    # openai-tool-calls.v1: write_file (seed 2)
+    b"{\n\t\t\t\t\"type\":\"function\"\t\t,\"function\":{\"arguments\":\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"\t,\t\"name\"\t\t:\"write_file\"\t}\t\t,\"id\"\t:\"call_b3ac305a\"\t}",
+    # openai-tool-calls.v1: delete_path, read_file (seed 3)
+    b"{\n      \"type\": \"function\",\"id\"\t:\t\"call_618293ea\",\t\t\"function\"\t\t:{\t\"name\"\t:\t\"delete_path\",\t\"arguments\"\t\t:\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"\t\t}\t}\n{\n\t\t\t\t\"type\": \"function\"\t,\"function\":{\t\"arguments\":\"{\\\"path\\\":\\\"alpha\\\",\\\"limit\\\":-32}\"\t\t,\t\t\"name\":\t\t\"read_file\"\t\t}\t\t,\"id\":\t\t\"call_e427bb79\"\t\t}",
+    # qwen3-coder-xml.v1: read_file (seed 0)
+    b"<tool_call>\t<function=read_file>\n<parameter=path>\ntab\tseparated \n  block\n\n</parameter>\n</function>\t\t</tool_call>",
+    # qwen3-coder-xml.v1: get_weather, list_dir (seed 1)
+    b"<tool_call><function=get_weather>\n<parameter=city>\n\n  block\n src/lib.rs\n</parameter>\n<parameter=unit>\nfahrenheit\n</parameter>\n</function>\t</tool_call>\n<tool_call>\t<function=list_dir>\n<parameter=path>\nsrc/lib.rs\n</parameter>\n</function></tool_call>",
+    # qwen3-coder-xml.v1: write_file (seed 2)
+    b"<tool_call>\t\t<function=write_file>\n<parameter=path>\n  indented\n</parameter>\n<parameter=content>\ntab\tseparated beta gamma\n</parameter>\n<parameter=mode>\ncreate\n</parameter>\n<parameter=ratio>\n39.32\n</parameter>\n<parameter=count>\n-415\n</parameter>\n<parameter=options>\n{\"backup\":false}\n</parameter>\n</function>\t</tool_call>",
+    # qwen3-coder-xml.v1: delete_path, read_file (seed 3)
+    b"<tool_call><function=delete_path>\n<parameter=path>\nbeta gamma \n  block\n\n</parameter>\n<parameter=path>\n\n  block\n\n</parameter>\n</function></tool_call>\n<tool_call>\t<function=read_file>\n<parameter=path>\n  indented\n</parameter>\n</function>\t</tool_call>",
+]
+
+# The repair cases of issue #3, phrased against the probe's tool set.
+TOOL_CALL_REPAIRS = [
+    # The motivating case: a body of stray plural closers, no required
+    # parameter (resolves to `{}`) and a required one (never invented).
+    b'<tool_call>\n<function=current_time>\n</parameters>\n</parameters>\n</function>\n</tool_call>',
+    b'<tool_call><function=list_dir></parameters></parameters></function></tool_call>',
+    # Missing `</parameter>`, `</function>`, and `</tool_call>`.
+    b'<tool_call>\n<function=read_file>\n<parameter=path>\nsrc/a.rs\n<parameter=limit>\n5\n</function>\n</tool_call>',
+    b'<tool_call>\n<function=read_file>\n<parameter=path>\nsrc/a.rs\n</parameter>\n</tool_call>',
+    b'<tool_call>\n<function=read_file>\n<parameter=path>\nsrc/a.rs\n</parameter>\n</function>',
+    # A whole JSON body followed by one stray closer.
+    b'<tool_call>\n<function=read_file>\n{"path": "a.rs", "limit": 2}\n</parameter>\n</function>\n</tool_call>',
+    # Nested parameters, depth-matched, with an inline JSON object.
+    b'<tool_call>\n<function=write_file>\n<parameter=path>\nx\n</parameter>\n<parameter=content>\ny\n</parameter>\n'
+    b'<parameter=options>\n<parameter=owner>\n<parameter=name>\nci\n</parameter>\n</parameter>\n'
+    b'<parameter=retries>\n3\n</parameter>\n</parameter>\n</function>\n</tool_call>',
+    # Fenced and prose-wrapped calls; a Hermes body with a preamble.
+    b'Sure, calling it now:\n```json\n{"name": "get_weather", "arguments": {"city": "Lima"}}\n```\nDone.',
+    b'<tool_call>Here you go: {"name": "read_file", "arguments": {"path": "notes.txt"}}</tool_call>',
+    # Stringified arguments, valid and invalid.
+    b'<tool_call>{"name": "read_file", "arguments": "{\\"path\\": \\"a.rs\\", \\"limit\\": 3}"}</tool_call>',
+    b'<tool_call>{"name": "read_file", "arguments": "{\\"path\\": \\"a.rs\\", \\"limit\\": }"}</tool_call>',
+    # A dangling trailing opener after a complete call.
+    b'<tool_call>{"name": "list_dir", "arguments": {"path": "."}}</tool_call>\n<tool_call>{"name": "rea',
+    b'<tool_call>\n<function=read_file>\n<parameter=path>\nsrc/a.rs\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=wri',
+    # Name resolution: near miss, alias, hallucination.
+    b'<tool_call>{"name": "read_fiel", "arguments": {"path": "a.rs"}}</tool_call>',
+    b'<tool_call>{"name": "rm", "arguments": {"path": "build"}}</tool_call>',
+    b'<tool_call>{"name": "write_fiel", "arguments": {"path": "a", "content": "b"}}</tool_call>',
+    b'<tool_call>{"name": "launch_rockets", "arguments": {}}</tool_call>',
+    # Parameter names: explicit alias and typo.
+    b'<tool_call>\n<function=read_file>\n<parameter=file>\na.rs\n</parameter>\n</function>\n</tool_call>',
+    b'<tool_call>\n<function=read_file>\n<parameter=pth>\na.rs\n</parameter>\n</function>\n</tool_call>',
+    # Schema-guided typing: strings stay strings, exact numbers, enums.
+    b'<tool_call>\n<function=read_file>\n<parameter=path>\n12345\n</parameter>\n<parameter=limit>\n007\n</parameter>\n</function>\n</tool_call>',
+    b'<tool_call>{"name": "get_weather", "arguments": {"city": "true", "unit": " Fahrenheit "}}</tool_call>',
+    b'<tool_call>{"name": "write_file", "arguments": {"path": "a", "content": "b", "mode": "Overwrite", "ratio": "1.50", "count": 2.0}}</tool_call>',
+    # Repeated parameters: a scalar (never last-wins) and a repeatable one.
+    b'<tool_call>\n<function=read_file>\n<parameter=path>\na\n</parameter>\n<parameter=path>\nb\n</parameter>\n</function>\n</tool_call>',
+    b'<tool_call>\n<function=delete_path>\n<parameter=path>\na\n</parameter>\n<parameter=path>\nb\n</parameter>\n</function>\n</tool_call>',
+    # Reasoning: closed with an embedded call, unclosed, closed at a call opener.
+    b'<think>maybe <tool_call>{"name": "list_dir", "arguments": {"path": "."}}</tool_call></think>No call needed.',
+    b'<think>planning the edit\n<tool_call>{"name": "read_file", "arguments": {"path": "a.rs"}}</tool_call>',
+    b'plan</think>\n<tool_call>{"name": "read_file", "arguments": {"path": "a.rs"}}</tool_call>',
+    # Mixed dialects in one message, and invalid UTF-8 in content and arguments.
+    b'<tool_call>{"name": "get_weather", "arguments": {"city": "Oslo"}}</tool_call>\n'
+    b'<tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n</parameter>\n</function>\n</tool_call>',
+    b'Reading \xff\xfe now.\n<tool_call>{"name": "read_file", "arguments": {"path": "a.rs"}}</tool_call>',
+    b'<tool_call>\n<function=write_file>\n<parameter=path>\na\xc3\n</parameter>\n<parameter=content>\n\xe2\x82\n</parameter>\n</function>\n</tool_call>',
+]
+
+# Inputs that hold no recoverable call.
+TOOL_CALL_NEGATIVES = [
+    b'',
+    b'Just prose, no call.',
+    b'<tool_call>',
+    b'</tool_call></function></parameter>',
+    b'<tool_call></tool_call>',
+    b'<tool_call>{"name": 5, "arguments": []}</tool_call>',
+    b'<tool_call>\n<function=>\n</function>\n</tool_call>',
+    b'<parameter=path>\na.rs\n</parameter>',
+    b'{"role": "assistant", "content": "hi", "tool_calls": []}',
+    b'[' * 64 + b'{"name": "read_file"' + b']' * 64,
+    b'\xff\xfe\xfd',
+    b'<think></think><think>',
+]
+
+TOOL_CALL_SEEDS = [
+    _tool_call_seed(index, turn)
+    for index, turn in enumerate(
+        _tool_call_conformance_markup() + TOOL_CALL_WITNESSES + TOOL_CALL_REPAIRS + TOOL_CALL_NEGATIVES)
+]
+TOOL_CALL_TOKENS = [
+    b'<tool_call>', b'</tool_call>', b'<function=', b'</function>', b'<parameter=',
+    b'</parameter>', b'</parameters>', b'<think>', b'</think>', b'{"name":',
+    b'"arguments":', b'"tool_calls"', b'"function"', b'"id"', b'"type"', b'```',
+    b'```json\n', b'read_file', b'write_file', b'current_time', b'path', b'\n', b'\t',
+    b'"', b'\\', b'{', b'}', b'[', b']', b':', b',', b'>', b'<', b'null', b'1.50',
+    b'\x00', b'\x04', b'\x80', 'é'.encode(), b'\xff', b'\xe2\x82',
+]
+
 TARGETS = {
     'json': {'seeds': JSON_SEEDS, 'tokens': JSON_TOKENS, 'differential': None},
     'markdown': {'seeds': MARKDOWN_SEEDS, 'tokens': MARKDOWN_TOKENS, 'differential': 'markdown'},
@@ -189,7 +328,21 @@ TARGETS = {
     'fuzzy': {'seeds': FUZZY_SEEDS, 'tokens': FUZZY_TOKENS, 'differential': None},
     'matching': {'seeds': MATCHING_SEEDS, 'tokens': MATCHING_TOKENS, 'differential': None},
     'patch': {'seeds': PATCH_SEEDS, 'tokens': PATCH_TOKENS, 'differential': None},
+    'tool-call': {'seeds': TOOL_CALL_SEEDS, 'tokens': TOOL_CALL_TOKENS, 'differential': None,
+                  'input': 'bytes'},
 }
+
+
+def harness_source(target):
+    """The probe source of `target` (`fuzz-<target>` builds `fuzz_<target>.rs`,
+    with `-` spelled `_`)."""
+    return ROOT / f'crates/core/examples/fuzz_{target.replace("-", "_")}.rs'
+
+
+def admits_bytes(target):
+    """Whether `target`'s probe takes raw bytes (always completing with `ok`)
+    instead of rejecting invalid UTF-8 with `invalid-utf8`."""
+    return TARGETS[target].get('input', 'utf8') == 'bytes'
 
 
 class Random:
@@ -1378,7 +1531,7 @@ def input_identity(target):
         digest.update(str(path.relative_to(ROOT)).encode() + b'\0' + hashlib.sha256(path.read_bytes()).digest())
     return {
         'engine_source_sha256': digest.hexdigest(),
-        'harness_source_sha256': hashlib.sha256((ROOT / f'crates/core/examples/fuzz_{target}.rs').read_bytes()).hexdigest(),
+        'harness_source_sha256': hashlib.sha256(harness_source(target).read_bytes()).hexdigest(),
         'runner_source_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
     }
 
@@ -1491,6 +1644,11 @@ def probe(binary, data, directory, timeout, target, oracle, tool_paths, counts=N
         invalid = False
     except UnicodeDecodeError:
         invalid = True
+    if invalid and admits_bytes(target):
+        # A byte-input probe recovers the bytes; nothing was rejected.
+        invalid = False
+        if counts is not None:
+            counts['non_utf8_admitted'] = counts.get('non_utf8_admitted', 0) + 1
     if result.stderr:
         raise ValueError('probe reported a diagnostic on stderr')
     lines = result.stdout.split(b'\n')
@@ -1570,7 +1728,7 @@ def main():
               'nonignored_file_tree_sha256': source_digest(),
               'build': build_identity, 'seed': args.seed, 'requested_mutations': args.iterations,
               'timeout_seconds': args.timeout, 'maximum_input_bytes': 4096,
-              'executions': 0, 'invalid_utf8': 0, 'differential_checks': 0, 'differential_mismatches': 0,
+              'executions': 0, 'invalid_utf8': 0, 'non_utf8_admitted': 0, 'differential_checks': 0, 'differential_mismatches': 0,
               'crashes': 0, 'reference_rejections': 0, 'reference_timeouts': 0,
               'resource_non_results': 0, 'resource_non_result_reasons': {}, 'resource_non_result_cases': [],
               'reference_profile_exclusions': 0, 'tasklist_projection_checks': 0,

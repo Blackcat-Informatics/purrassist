@@ -16,7 +16,10 @@ use purrassist_core::{
     paths::{PathIndex, PathMatch},
     schema::{Schema, recovery::RecoveryRequest},
     text::{self, Normalization},
-    tool_call::{Effects, Param, ToolDefinition, ToolRecoveryRequest, ToolSet},
+    tool_call::{
+        DialectId, DialectSet, Effects, Emission, EmitTarget, ObjectSpec, Param, ToolDefinition,
+        ToolRecoveryRequest, ToolSet,
+    },
     wire::{WireValue, array, integer, object, string},
 };
 
@@ -85,9 +88,84 @@ pub fn transcript_json() -> String {
 
 /// Tool-call recovery over every built-in dialect: a near-miss name, a
 /// stray closer, reasoning, and invalid UTF-8, with the complete result and
-/// receipt (whose charges must be identical on every target).
+/// receipt (whose charges must be identical on every target), then, for
+/// each shipped dialect alone, an anchor turn (canonical markup with typed,
+/// nested, and verbatim arguments) and a repair turn, each recovered with
+/// emission to the `OpenAI` `tool_calls` array. Every emitted array's digest
+/// is pinned, so a target that recovers or prints differently fails here
+/// before the transcripts are even compared.
 fn tool_call_transcript() -> Node {
-    let tools = ToolSet::compile(
+    let tools = transcript_tools();
+    let mut output = b"<think>plan</think>Reading \xff.\n".to_vec();
+    output.extend_from_slice(
+        b"<tool_call>\n{\"name\": \"read_fiel\", \"arguments\": {\"path\": \"a.rs\", \"limit\": 5}}\n</tool_call>\n\
+          <tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n</parameter>\n</parameter>\n</function>\n</tool_call>",
+    );
+    let result = tools.recover(&output, &ToolRecoveryRequest::default());
+    assert!(matches!(result.outcome, Outcome::BestGuess(_)));
+    let mut dialects = Vec::new();
+    for case in DIALECT_CASES {
+        let set = DialectSet::new(
+            [case.dialect.clone()],
+            &mut Governor::new(Budget::default()),
+        )
+        .expect("one built-in dialect");
+        let mut turns = Vec::new();
+        for (kind, turn, status, pinned) in [
+            ("anchor", case.anchor, "resolved", case.anchor_digest),
+            (
+                "repair",
+                case.repair,
+                case.repair_status,
+                case.repair_digest,
+            ),
+        ] {
+            let request = ToolRecoveryRequest::default()
+                .dialects(set.clone())
+                .emit(EmitTarget::OpenAiToolCalls);
+            let result = tools.recover(turn.as_bytes(), &request);
+            let (actual, calls) = match &result.outcome {
+                Outcome::Resolved(calls) => ("resolved", calls),
+                Outcome::BestGuess(calls) => ("best_guess", calls),
+                other => panic!("{} {kind}: no single reading: {other:?}", case.dialect.id()),
+            };
+            assert_eq!(actual, status, "{} {kind}", case.dialect.id());
+            let usable = calls.usable_accepting_guesses().len();
+            assert_eq!(usable, calls.calls.len(), "{} {kind}", case.dialect.id());
+            let Some(Emission::OpenAiToolCalls(emitted)) = &calls.emitted else {
+                panic!("{} {kind}: no OpenAI emission", case.dialect.id())
+            };
+            assert_eq!(emitted.calls.len(), usable, "{} {kind}", case.dialect.id());
+            let array = emitted.output.to_json();
+            let digest = Digest::of(array.as_bytes()).to_string();
+            assert_eq!(digest, pinned, "{} {kind}: {array}", case.dialect.id());
+            turns.push(object([
+                ("kind", string(kind)),
+                ("status", string(status)),
+                ("openai_tool_calls", string(array)),
+                ("openai_tool_calls_digest", string(digest)),
+                ("result", result.to_node()),
+            ]));
+        }
+        dialects.push(object([
+            ("dialect", string(case.dialect.id())),
+            ("turns", array(turns)),
+        ]));
+    }
+    object([
+        ("operation", string("tool_call.recover")),
+        ("result", result.to_node()),
+        ("dialects", array(dialects)),
+    ])
+}
+
+/// Read-only and mutating tools with string, integer, number, boolean,
+/// enumeration, array, and nested object parameters.
+fn transcript_tools() -> ToolSet {
+    let owner = ObjectSpec::new()
+        .param("name", Param::string())
+        .param("uid", Param::integer());
+    ToolSet::compile(
         [
             ToolDefinition::new("read_file")
                 .effects(Effects::ReadOnly)
@@ -96,22 +174,72 @@ fn tool_call_transcript() -> Node {
             ToolDefinition::new("list_dir")
                 .effects(Effects::ReadOnly)
                 .param("path", Param::string().required()),
+            ToolDefinition::new("get_weather")
+                .effects(Effects::ReadOnly)
+                .param("city", Param::string().required())
+                .param("unit", Param::enumeration(&["celsius", "fahrenheit"])),
+            ToolDefinition::new("write_file")
+                .effects(Effects::Mutating)
+                .param("path", Param::string().required())
+                .param("content", Param::string().required())
+                .param("mode", Param::enumeration(&["create", "overwrite"]))
+                .param("ratio", Param::number())
+                .param("count", Param::integer())
+                .param("tags", Param::array(Param::string()))
+                .param(
+                    "options",
+                    Param::object(
+                        ObjectSpec::new()
+                            .param("backup", Param::boolean())
+                            .param("retries", Param::integer())
+                            .param("owner", Param::object(owner)),
+                    ),
+                ),
         ],
         Budget::default(),
     )
-    .expect("tools");
-    let mut output = b"<think>plan</think>Reading \xff.\n".to_vec();
-    output.extend_from_slice(
-        b"<tool_call>\n{\"name\": \"read_fiel\", \"arguments\": {\"path\": \"a.rs\", \"limit\": 5}}\n</tool_call>\n\
-          <tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n</parameter>\n</parameter>\n</function>\n</tool_call>",
-    );
-    let result = tools.recover(&output, &ToolRecoveryRequest::default());
-    assert!(matches!(result.outcome, Outcome::BestGuess(_)));
-    object([
-        ("operation", string("tool_call.recover")),
-        ("result", result.to_node()),
-    ])
+    .expect("tools")
 }
+
+/// One shipped dialect's transcript turns and their pinned emissions.
+struct DialectCase {
+    dialect: DialectId,
+    /// Canonical markup, as in the dialect's conformance anchors.
+    anchor: &'static str,
+    anchor_digest: &'static str,
+    /// Markup that needs a repair.
+    repair: &'static str,
+    repair_status: &'static str,
+    repair_digest: &'static str,
+}
+
+/// One case per entry of `DialectId::BUILT_IN` (checked by the test below).
+const DIALECT_CASES: [DialectCase; 3] = [
+    DialectCase {
+        dialect: DialectId::Hermes,
+        anchor: "<think>\nWrite the file.\n</think>\n\n<tool_call>\n{\"name\": \"write_file\", \"arguments\": {\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}}\n</tool_call>\n<tool_call>\n{\"arguments\": {\"path\": \"notes.txt\", \"limit\": 10}, \"name\": \"read_file\"}\n</tool_call>",
+        anchor_digest: "sha256:348ea24cb06acea03c0b3723ba085d9863234555f8260037524f8e01865315b4",
+        repair: "Sure, here it is: <tool_call>Calling now: {\"name\": \"get_wether\", \"arguments\": {\"city\": \"Oslo\", \"unit\": \"Celsius\"}}</tool_call></tool_call>",
+        repair_status: "best_guess",
+        repair_digest: "sha256:c8e84a46ac8751047d7950cfbe6ea8f8c3ed0a67195d1e4628a8d126d5280105",
+    },
+    DialectCase {
+        dialect: DialectId::OpenAiToolCalls,
+        anchor: "{\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_1\", \"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"arguments\": \"{\\\"city\\\":\\\"Lima\\\",\\\"unit\\\":\\\"fahrenheit\\\"}\"}}, {\"id\": \"call_2\", \"type\": \"function\", \"function\": {\"name\": \"read_file\", \"arguments\": \"{\\\"path\\\":\\\"src\\\",\\\"limit\\\":3}\"}}]}",
+        anchor_digest: "sha256:57acea27ce7fcf312b9aebabbece8c0034383ab2f707059ec15d856dd6793935",
+        repair: "[{\"id\": \"call_9\", \"type\": \"function\", \"function\": {\"name\": \"list_dri\", \"arguments\": \"{\\\"path\\\": \\\"src\\\"}\"}}]",
+        repair_status: "best_guess",
+        repair_digest: "sha256:76ba45e3c38a59f55393c2bda37e2a9d52106658a094f076243f96a0ebfedb50",
+    },
+    DialectCase {
+        dialect: DialectId::Qwen3CoderXml,
+        anchor: "<think>\nThe file needs a main function.\n</think>\n\n<tool_call>\n<function=write_file>\n<parameter=path>\nsrc/main.rs\n</parameter>\n<parameter=content>\nfn main() {\n    println!(\"hi\");\n\n\tlet  x = 1;  \n}\n\n</parameter>\n<parameter=mode>\noverwrite\n</parameter>\n<parameter=ratio>\n1.50\n</parameter>\n<parameter=count>\n-0\n</parameter>\n<parameter=tags>\n[\"a\", \"b c\"]\n</parameter>\n<parameter=options>\n<parameter=backup>\ntrue\n</parameter>\n<parameter=retries>\n3\n</parameter>\n<parameter=owner>\n{\"name\": \"ci\", \"uid\": 1000}\n</parameter>\n</parameter>\n</function>\n</tool_call>",
+        anchor_digest: "sha256:f11b71ecf1089a3b64ebc2bb998503c8e469a3a960b609ea07b59c5b21434e8d",
+        repair: "<tool_call>\n<function=read_file>\n<parameter=path>\nsrc/lib.rs\n<parameter=limit>\n40\n</parameters>\n</parameters>\n</function>\n<tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n</parameter>\n</function>",
+        repair_status: "resolved",
+        repair_digest: "sha256:0b6bccd24cb736c81b50d3b511b727d8b88eb2c4b1bb9464bb3920da2822ed71",
+    },
+];
 
 fn matching_transcript() -> Node {
     let candidate = Candidate {
@@ -501,4 +629,18 @@ fn list_transcript() -> Node {
         ("operation", string("list items")),
         ("results", array(results)),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DIALECT_CASES, DialectId};
+
+    #[test]
+    fn every_shipped_dialect_has_a_case() {
+        let covered: Vec<_> = DIALECT_CASES
+            .iter()
+            .map(|case| case.dialect.clone())
+            .collect();
+        assert_eq!(covered, DialectId::BUILT_IN);
+    }
 }

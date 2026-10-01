@@ -95,7 +95,7 @@ jobs:
       - name: Independent syntax oracles
         run: make syntax-oracles
       - name: Coverage-guided and differential fuzzing (smoke counts)
-        # Deterministic default: all eight targets, 1,000 mutations each.
+        # Deterministic default: all nine targets, 1,000 mutations each.
         run: make fuzz
       - name: Package crate archives and notices
         run: make package
