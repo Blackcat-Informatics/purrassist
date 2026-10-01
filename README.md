@@ -302,11 +302,26 @@ make resources  # allocations, heap/RSS, latency, artifact size, and uncached bu
 make package    # Cargo verification and registered source/license archive audit
 ```
 
+JSON Schema validation implements two dialects, selected by `$schema`: Draft
+2020-12 (the default) and Draft-07 (`http://json-schema.org/draft-07/schema#`,
+with or without the `#`, as MCP servers commonly declare). Draft-07 support
+covers tuple `items` with `additionalItems`, `definitions`, both forms of
+`dependencies`, `$ref` overriding its siblings, `$id` base-URI changes and
+plain-name `#anchor` identifiers, and annotation-only `format`; Draft-07
+validations report validator `purrassist.schema.draft-07.v1`. Draft 2019-09,
+draft-06, and earlier dialects are rejected at compilation. Witness generation,
+schema-guided recovery, and the tool-declaration adapters follow whichever of
+the two dialects applies.
+
 The checked-in main Draft 2020-12 corpus contains 1,301 tests, with another 121
 selected optional cases exercised, plus the complete vendored `optional/format/`
 corpus (878 cases across every 2020-12 format, including RFC 5892/5893 IDNA2008
 contextual and Bidi rules) run under a dialect declaring the format-assertion
-vocabulary; Unicode 17
+vocabulary. All 929 required Draft-07 cases pass; of 911 Draft-07 `optional/`
+cases (formats judged by their annotation results), 905 pass, and the 6 that
+do not are listed by group with reasons: content assertion (annotation-only by
+design) and a Draft 2019-09 cross-draft reference (not an implemented dialect).
+Unicode 17
 normalization contains 20,034 cases. These suites, regression tests, fixed helper
 transcripts, and bounded mutation probes run locally. Full release qualification
 requires the exact-commit gates and registry acceptance described in the

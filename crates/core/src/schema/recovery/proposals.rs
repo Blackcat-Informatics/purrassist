@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+use super::super::layout::Dependency;
 use super::{Walk, size};
 use crate::contract::{Effort, Resource, StopReason};
 use crate::json::{Member, Node, ParseFailure, Value, pointer_segment};
@@ -634,7 +635,8 @@ impl Walk<'_, '_> {
         }
         Ok(())
     }
-    /// `dependentSchemas` (Task 8 requirement 2): when a trigger key is
+    /// `dependentSchemas` or schema-form Draft-07 `dependencies` (Task 8
+    /// requirement 2): when a trigger key is
     /// present, the dependent schema's own constraints apply to the whole
     /// object, so it is followed at the object's own route/path rather than
     /// one member's.
@@ -649,26 +651,18 @@ impl Walk<'_, '_> {
     ) -> Result<(), StopReason> {
         let (route, path) = site;
         let schema = self.schema;
-        let body = schema.keywords(schema_id);
-        if let Some(Node {
-            value: Value::Object(dependencies),
-            ..
-        }) = body.get("dependentSchemas")
-        {
-            for dependency in dependencies {
-                if members.iter().any(|member| member.key == dependency.key) {
-                    self.propose(
-                        &Node::new(Value::Object(members.to_vec())),
-                        schema.child(
-                            schema_id,
-                            &format!("dependentSchemas/{}", pointer_segment(&dependency.key)),
-                        ),
-                        (route, path),
-                        depth + 1,
-                        visited,
-                        scope,
-                    )?;
-                }
+        for dependency in schema.dependencies(schema_id) {
+            if let Dependency::Schema { trigger, child } = dependency
+                && members.iter().any(|member| member.key == trigger)
+            {
+                self.propose(
+                    &Node::new(Value::Object(members.to_vec())),
+                    child,
+                    (route, path),
+                    depth + 1,
+                    visited,
+                    scope,
+                )?;
             }
         }
         Ok(())
@@ -762,8 +756,9 @@ impl Walk<'_, '_> {
         }
         Ok(())
     }
-    /// `prefixItems`/`items`/`contains`/`unevaluatedItems` (Task 8
-    /// requirement 2), each followed for every element it applies to.
+    /// `prefixItems`/`items`/`contains`/`unevaluatedItems`, or Draft-07
+    /// tuple `items`/`additionalItems` (Task 8 requirement 2), each followed
+    /// for every element it applies to.
     fn array_proposals(
         &mut self,
         schema_id: usize,
@@ -776,29 +771,15 @@ impl Walk<'_, '_> {
         let (route, path) = site;
         let schema = self.schema;
         let body = schema.keywords(schema_id);
-        let prefix = body
-            .get("prefixItems")
-            .and_then(|n| {
-                if let Value::Array(v) = &n.value {
-                    Some(v.len())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(0);
+        let layout = schema.item_layout(schema_id);
         for (position, item) in items.iter().enumerate() {
             let mut next = route.to_vec();
             next.push(position);
             let child_path = format!("{path}/{position}");
-            let key = if position < prefix {
-                Some(format!("prefixItems/{position}"))
-            } else if body.get("items").is_some() {
-                Some("items".into())
-            } else if body.get("unevaluatedItems").is_some() {
-                Some("unevaluatedItems".into())
-            } else {
-                None
-            };
+            let key = layout.keyword(position).or_else(|| {
+                body.get("unevaluatedItems")
+                    .map(|_| "unevaluatedItems".to_owned())
+            });
             if let Some(key) = key
                 && schema.index.locations[schema_id]
                     .children

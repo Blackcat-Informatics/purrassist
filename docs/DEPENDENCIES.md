@@ -12,8 +12,10 @@ fixtures retain the Unicode-3.0 license. UTS #39 confusables data (Unicode
 generated into a first-party skeleton lookup table by
 `scripts/generate-unicode.py`, with its source URL and SHA-256 pinned in
 `vendor/unicode/manifest.json` alongside the other Unicode Character Database
-inputs; no confusables detection library is linked. Official JSON Schema meta-schemas use
-the upstream BSD license; the full upstream license is retained beside them.
+inputs; no confusables detection library is linked. Official JSON Schema meta-schemas
+(Draft 2020-12 and Draft-07, the latter from the json-schema-spec `draft-07`
+branch, byte-identical to the published `http://json-schema.org/draft-07/schema`)
+use the upstream BSD license; the full upstream license is retained beside them.
 The JSON Schema Test Suite retains its MIT license. The WHATWG named-character
 table is incorporated as BSD-3-Clause source data; its original JSON fixture is
 CC-BY-4.0. The full upstream notice is packaged beside the generated table.

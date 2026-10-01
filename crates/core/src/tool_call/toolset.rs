@@ -287,7 +287,9 @@ impl CompiledTool {
         self.unknown_parameters
     }
 
-    /// The Draft 2020-12 argument schema text that [`Self::schema`] compiles.
+    /// The argument schema text that [`Self::schema`] compiles: Draft
+    /// 2020-12 for builder tools; for adapter tools, whichever dialect the
+    /// declaration's `$schema` selects (see [`crate::schema::Dialect`]).
     ///
     /// For an adapter-built tool this is the exact parameters schema text of
     /// its source declaration, byte for byte (whitespace, key order, escapes,

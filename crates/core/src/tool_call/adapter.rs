@@ -13,8 +13,10 @@
 //! 2. a typed projection into [`super::ArgumentShape`];
 //! 3. a [`crate::schema::Schema`] compiled from the *exact* parameters text
 //!    slice, never from a re-rendering, so the complete arguments of a call
-//!    are always validated by the Draft 2020-12 engine against what the
-//!    model was shown; and
+//!    are always validated against what the model was shown, under the
+//!    dialect its `$schema` selects (Draft 2020-12 by default, or Draft-07
+//!    for `http://json-schema.org/draft-07/schema#`, common in MCP
+//!    servers); and
 //! 4. the `(schema pointer, keyword)` list of every keyword the typed model
 //!    does not represent ([`super::CompiledTool::unmodeled_keywords`]).
 //!
@@ -45,8 +47,8 @@
 //! is not an object, a missing or non-string `name`, a non-string
 //! `description`, a duplicated `type`/`function`/`name`/`description`/
 //! parameters member, a parameters schema that is not a JSON object, whose
-//! root `type` (when present) is not `"object"`, or that the Draft 2020-12
-//! engine rejects, an invalid tool or parameter name, and any collision are
+//! root `type` (when present) is not `"object"`, or that the schema engine
+//! rejects (including a `$schema` naming any other dialect), an invalid tool or parameter name, and any collision are
 //! hard [`ToolSetError::InvalidDefinition`] or [`ToolSetError::Collision`]
 //! errors; no declaration is ever skipped. Errors raised before a
 //! declaration's name is known report an empty `tool` and the declaration's
@@ -66,8 +68,18 @@
 //! `dependentSchemas`, has an `enum` that is not a non-empty list of distinct
 //! strings under an absent or `"string"` type, or has no single supported
 //! `type` string (absent, `"null"`, or a type array such as
-//! `["string","null"]`). An array without object-form `items` has
-//! [`super::ValueShape::Unmodeled`] items. Adapters create no aliases.
+//! `["string","null"]`). An array without object-form `items` (including a
+//! Draft-07 tuple-form `items` array) has [`super::ValueShape::Unmodeled`]
+//! items. Adapters create no aliases.
+//!
+//! Draft-07 schemas follow Draft-07 rules: a parameter using `dependencies`
+//! (whose schema form is `dependentSchemas`) is unmodeled; a nested
+//! `$schema` that switches dialect makes its value unmodeled; a root `$ref`
+//! overrides its siblings, so such a root projects no parameters (every
+//! root member is listed below) and passes unknown parameters through; and
+//! `unevaluatedProperties`, not a Draft-07 keyword, never closes a scope.
+//! `definitions`, `additionalItems`, and `dependencies` are listed as
+//! unmodeled keywords like every other keyword the projection does not carry.
 //! Declared `default`s are validated against their exact subschema (resolved
 //! within the complete parameters schema, so `$ref`s work) and retained with
 //! source spans relative to [`super::CompiledTool::json_schema`]; a
@@ -97,7 +109,8 @@
 //! [`super::RepairPolicy::Structural`]; the policy is resolved from effects
 //! whenever it is read. Unknown-parameter handling is derived from the exact
 //! schema, the final authority, rather than from effects: an object scope
-//! with `additionalProperties: false` or `unevaluatedProperties: false`, and
+//! with `additionalProperties: false` or (Draft 2020-12 only)
+//! `unevaluatedProperties: false`, and
 //! none of the keywords above or `patternProperties` that could admit other
 //! members, is [`UnknownParameters::Error`]; every other scope (absent,
 //! `true`, or a schema) is [`UnknownParameters::PassThrough`], because the
@@ -120,7 +133,7 @@ use crate::contract::{
     Budget, Governor, Resource, ScratchCharge, ScratchVec, saturating_size as size,
 };
 use crate::json::{self, Member, Node, ParseFailure, Value, pointer_segment};
-use crate::schema::Schema;
+use crate::schema::{Dialect, Schema};
 use core::ops::Range;
 
 /// The effective parameters schema of a declaration that has none.
@@ -610,11 +623,7 @@ fn declare(
         "parameters schema",
         Schema::compile_governed(schema_text, governor),
     )?;
-    let mut projector = Projector {
-        tool: name,
-        governor,
-        unmodeled: Vec::new(),
-    };
+    let mut projector = Projector::new(name, schema.dialect(), governor);
     // Project the compiled document (the exact parameters text, parsed with
     // spans relative to it) so retained defaults never depend on where the
     // declaration sat in the input.
@@ -678,11 +687,22 @@ enum Tag {
 /// collecting unmodeled keywords on the way.
 struct Projector<'a> {
     tool: &'a str,
+    /// Dialect of the parameters schema root.
+    dialect: Dialect,
     governor: &'a mut Governor,
     unmodeled: Vec<(String, String)>,
 }
 
-impl Projector<'_> {
+impl<'a> Projector<'a> {
+    const fn new(tool: &'a str, dialect: Dialect, governor: &'a mut Governor) -> Self {
+        Self {
+            tool,
+            dialect,
+            governor,
+            unmodeled: Vec::new(),
+        }
+    }
+
     fn charge(&mut self, resource: Resource, amount: u64) -> Result<(), ToolSetError> {
         self.governor
             .charge(resource, amount)
@@ -725,11 +745,34 @@ impl Projector<'_> {
                 "the parameters schema must be a JSON object".into(),
             ));
         };
+        if self.dialect == Dialect::Draft07 && node.get("$ref").is_some() {
+            // Draft-07 `$ref` overrides every sibling: nothing beside it
+            // describes the arguments, so no parameter is projected.
+            self.note(members, "", Position::Root, Tag::Unmodeled)?;
+            return Ok(ObjectSpec {
+                parameters: Vec::new(),
+                unknown: Some(UnknownParameters::PassThrough),
+            });
+        }
         let tag = Tag::Object {
             required: self.required_declared(node)?,
         };
         self.note(members, "", Position::Root, tag)?;
         self.object(node, members, "", 2)
+    }
+
+    /// Whether `keyword` makes a value unmodeled: [`RESHAPING`], Draft-07
+    /// `dependencies` (its schema form is `dependentSchemas`), and a nested
+    /// `$schema` that switches away from the root's dialect.
+    fn reshaping(&self, member: &Member) -> bool {
+        RESHAPING.contains(&member.key.as_str())
+            || (self.dialect == Dialect::Draft07 && member.key == "dependencies")
+            || (member.key == "$schema"
+                && member
+                    .value
+                    .as_str()
+                    .and_then(Dialect::from_uri)
+                    .is_none_or(|dialect| dialect != self.dialect))
     }
 
     /// Project the schema at a parameter or item position.
@@ -749,9 +792,7 @@ impl Projector<'_> {
             .map(|values| self.string_enum(values))
             .transpose()?;
         let type_name = node.get("type").and_then(Node::as_str);
-        let reshaped = members
-            .iter()
-            .any(|member| RESHAPING.contains(&member.key.as_str()));
+        let reshaped = members.iter().any(|member| self.reshaping(member));
         let tag = match (reshaped, &enumeration, type_name) {
             (false, Some(Some(_)), None | Some("string")) => Tag::Enumeration,
             (false, None, Some("string")) => Tag::String,
@@ -839,12 +880,16 @@ impl Projector<'_> {
                 parameters.push((property.key.clone(), spec));
             }
         }
-        let closed = ["additionalProperties", "unevaluatedProperties"]
-            .iter()
-            .any(|keyword| {
-                node.get(keyword)
-                    .is_some_and(|value| value.value == Value::Bool(false))
-            });
+        // Draft-07 has no `unevaluatedProperties`; there it is ignored.
+        let closing: &[&str] = match self.dialect {
+            Dialect::Draft07 => &["additionalProperties"],
+            _ => &["additionalProperties", "unevaluatedProperties"],
+        };
+        let closed = closing.iter().any(|keyword| {
+            node.get(keyword)
+                .is_some_and(|value| value.value == Value::Bool(false))
+        });
+        // Draft-07 `dependencies` constrains but never admits members.
         let admitting = members.iter().any(|member| {
             member.key == "patternProperties" || RESHAPING.contains(&member.key.as_str())
         });

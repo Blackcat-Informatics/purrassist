@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+use super::layout::Dependency;
 use super::{Schema, Violation};
 use crate::contract::saturating_size as size;
 use crate::contract::{Evidence, Governor, Resource, StopReason, Validation};
@@ -580,46 +581,29 @@ impl Evaluator<'_, '_> {
                 }
             }
         }
-        if let Some(Node {
-            value: Value::Object(dependencies),
-            ..
-        }) = body.get("dependentRequired")
-        {
-            for dependency in dependencies {
-                if names.contains(dependency.key.as_str())
-                    && let Value::Array(required) = &dependency.value.value
-                {
+        for dependency in schema.dependencies(id) {
+            match dependency {
+                Dependency::Required {
+                    keyword,
+                    trigger,
+                    names: required,
+                } if names.contains(trigger) => {
                     for key in required.iter().filter_map(Node::as_str) {
                         if !names.contains(key) {
                             self.violation(
                                 result,
                                 id,
                                 path,
-                                "dependentRequired",
-                                format!("{} requires member {key:?}", dependency.key),
+                                keyword,
+                                format!("{trigger} requires member {key:?}"),
                             )?;
                         }
                     }
                 }
-            }
-        }
-        if let Some(Node {
-            value: Value::Object(dependencies),
-            ..
-        }) = body.get("dependentSchemas")
-        {
-            for dependency in dependencies {
-                if names.contains(dependency.key.as_str()) {
-                    result.merge(self.eval(
-                        schema.child(
-                            id,
-                            &format!("dependentSchemas/{}", pointer_segment(&dependency.key)),
-                        ),
-                        instance,
-                        path,
-                        depth + 1,
-                    )?);
+                Dependency::Schema { trigger, child } if names.contains(trigger) => {
+                    result.merge(self.eval(child, instance, path, depth + 1)?);
                 }
+                _ => {}
             }
         }
         for member in members {
@@ -727,24 +711,9 @@ impl Evaluator<'_, '_> {
                 }
             }
         }
-        let prefix = if let Some(Node {
-            value: Value::Array(prefix),
-            ..
-        }) = body.get("prefixItems")
-        {
-            prefix.len()
-        } else {
-            0
-        };
+        let layout = schema.item_layout(id);
         for (position, item) in items.iter().enumerate() {
-            let keyword = if position < prefix {
-                Some(format!("prefixItems/{position}"))
-            } else if body.get("items").is_some() {
-                Some("items".into())
-            } else {
-                None
-            };
-            if let Some(keyword) = keyword {
+            if let Some(keyword) = layout.keyword(position) {
                 let branch = self.eval(
                     schema.child(id, &keyword),
                     item,

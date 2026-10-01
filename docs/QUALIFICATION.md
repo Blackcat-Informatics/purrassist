@@ -12,7 +12,7 @@ and merge sequence in [RELEASE.md](RELEASE.md).
 | Contract | Executable evidence | Scope |
 | --- | --- | --- |
 | Pure, portable first-party core | `make hygiene`, `make wasm-test` | Zero runtime dependencies; registered data/tooling/source notices; executed transcripts |
-| JSON/schema validation | `schema_conformance`, `formats`, `vocabularies`, `schema_evidence` | 1,301 main Draft 2020-12 cases, 121 selected optional cases, all 878 vendored format/assertion cases; nested observations and instance-scoped annotations |
+| JSON/schema validation | `schema_conformance`, `draft07`, `formats`, `vocabularies`, `schema_evidence` | 1,301 main Draft 2020-12 cases, 121 selected optional cases, all 878 vendored format/assertion cases; all 929 required Draft-07 cases and 905 of 911 Draft-07 optional cases (6 listed exclusions: annotation-only content, Draft 2019-09 cross-draft reference); nested observations and instance-scoped annotations |
 | Pattern engine | `pattern`, `pattern_generation`, `witness_pattern_generation` | 441 test262 Unicode-property fixtures; derivative/backtracking agreement; assertion-sensitive witnesses and exclusions; 3,024 exhaustive finite generation cases |
 | Witness generation | `witness_algebra`, `witness_applicability`, `witness_formats`, `recursive_schemas` | 430 official-suite groups with valid instances witnessed; type-applicable bounds, occurrence-scoped contains counts, dialect-specific formats; explicit refutations and exhaustion; recursive/dynamic references |
 | Composed recovery | `recovery_goldens`, `corruption_oracle`, `recovery` | 66 curated goldens; deterministic known-origin corruptions; schema revalidation and guess labels |

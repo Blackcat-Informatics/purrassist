@@ -23,6 +23,7 @@
 //! false unsatisfiability claim: see `super::generate::attempt` on
 //! [`Canon::Or`].
 use super::super::Schema;
+use super::super::layout::Dependency;
 use super::invalid;
 use crate::contract::saturating_size as size;
 use crate::contract::{Governor, Resource, StopReason};
@@ -607,23 +608,19 @@ fn array_facets(schema: &Schema, id: usize, out: &mut Vec<Canon>) {
     {
         out.push(Canon::Local(Facet::UniqueItems));
     }
-    let mut own_prefix_len = 0;
-    if let Some(Node {
-        value: Value::Array(prefix),
-        ..
-    }) = body.get("prefixItems")
-    {
-        own_prefix_len = prefix.len();
-        let mut ids = Vec::with_capacity(prefix.len());
-        for position in 0..prefix.len() {
-            ids.push(schema.child(id, &format!("prefixItems/{position}")));
+    // `prefixItems` + `items`, or Draft-07 tuple `items` + `additionalItems`.
+    let layout = schema.item_layout(id);
+    if layout.prefix_len > 0 {
+        let mut ids = Vec::with_capacity(layout.prefix_len);
+        for position in 0..layout.prefix_len {
+            ids.push(schema.child(id, &format!("{}/{position}", layout.prefix)));
         }
         out.push(Canon::Local(Facet::PrefixItems(ids)));
     }
-    if body.get("items").is_some() {
+    if let Some(rest) = layout.rest {
         out.push(Canon::Local(Facet::Items(
-            schema.child(id, "items"),
-            own_prefix_len,
+            schema.child(id, rest),
+            layout.prefix_len,
         )));
     }
     if body.get("contains").is_some() {
@@ -725,45 +722,31 @@ fn object_facets(
                 .collect(),
         )));
     }
-    if let Some(Node {
-        value: Value::Object(dependencies),
-        ..
-    }) = body.get("dependentRequired")
-    {
-        let mut pairs = Vec::with_capacity(dependencies.len());
-        for dependency in dependencies {
-            if let Value::Array(required) = &dependency.value.value {
-                pairs.push((
-                    dependency.key.clone(),
-                    required
-                        .iter()
-                        .filter_map(Node::as_str)
-                        .map(str::to_string)
-                        .collect(),
-                ));
+    // `dependentRequired`/`dependentSchemas`, or Draft-07 `dependencies`
+    // split into the same two facets by entry form.
+    let mut required_pairs = Vec::new();
+    let mut schema_pairs = Vec::new();
+    for dependency in schema.dependencies(id) {
+        match dependency {
+            Dependency::Required { trigger, names, .. } => required_pairs.push((
+                trigger.to_string(),
+                names
+                    .iter()
+                    .filter_map(Node::as_str)
+                    .map(str::to_string)
+                    .collect(),
+            )),
+            Dependency::Schema { trigger, child } => {
+                schema_pairs.push((trigger.to_string(), child));
             }
         }
-        out.push(Canon::Local(Facet::DependentRequired(pairs)));
     }
-    if let Some(Node {
-        value: Value::Object(dependencies),
-        ..
-    }) = body.get("dependentSchemas")
-    {
-        let mut pairs = Vec::with_capacity(dependencies.len());
-        for dependency in dependencies {
-            pairs.push((
-                dependency.key.clone(),
-                schema.child(
-                    id,
-                    &format!(
-                        "dependentSchemas/{}",
-                        crate::json::pointer_segment(&dependency.key)
-                    ),
-                ),
-            ));
-        }
-        out.push(Canon::Local(Facet::DependentSchemas(pairs)));
+    let legacy = body.get("dependencies").is_some();
+    if legacy || body.get("dependentRequired").is_some() {
+        out.push(Canon::Local(Facet::DependentRequired(required_pairs)));
+    }
+    if legacy || body.get("dependentSchemas").is_some() {
+        out.push(Canon::Local(Facet::DependentSchemas(schema_pairs)));
     }
     if body.get("unevaluatedProperties").is_some() {
         out.push(Canon::Local(Facet::UnevaluatedProperties(

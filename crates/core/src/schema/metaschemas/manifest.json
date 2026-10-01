@@ -31,6 +31,10 @@
     "url": "https://raw.githubusercontent.com/json-schema-org/json-schema-spec/601a66c8b0f25246bf0e1fb488c5b5f030a79b72/meta/content.json",
     "sha256": "a10456605b2b5bb12a1b4dcfc0300f02f54d3e8bb3646bed7724583866627682"
   },
+  "draft-07-schema.json": {
+    "url": "https://raw.githubusercontent.com/json-schema-org/json-schema-spec/20a3fee852db88519dcb3bb329b7a872ebad8953/schema.json",
+    "sha256": "692e1d165e47afcb5f11b2ce1c639635ffa834035d6ecb6bcf3087481dae8404"
+  },
   "LICENSE": {
     "url": "https://raw.githubusercontent.com/json-schema-org/json-schema-spec/main/LICENSE",
     "sha256": "909b25a80d4945b21d3adb2fb17f90bf592e0274bdf117c069c088a8e44dc7b6"

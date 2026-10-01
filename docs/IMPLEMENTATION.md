@@ -14,7 +14,9 @@ computational engines remain wasmable.
 
 ## Agreed release scope
 
-- First-party JSON parsing, Draft 2020-12 schema validation, and composed healing.
+- First-party JSON parsing, Draft 2020-12 and Draft-07 schema validation
+  (dialect selected by `$schema`; Draft 2020-12 by default; other dialects
+  are rejected), and composed healing.
   Preserve duplicate occurrences and exact numeric spelling. Repair prose,
   fences, malformed syntax, truncated structures, wrappers, stringified JSON,
   approximate keys/enums, misplaced fields, and incompatible shapes/types.

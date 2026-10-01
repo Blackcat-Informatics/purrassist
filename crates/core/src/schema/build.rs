@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Governed schema bundle compilation and typed failure propagation.
-use super::{Index, Schema, SchemaError, at_route, builtin, bundle_digest, compile};
+use super::{
+    DRAFT_07, Dialect, Index, Schema, SchemaError, at_route, builtin, bundle_digest, compile,
+};
 use crate::{
     Governor, StopReason,
     contract::Resource,
@@ -61,6 +63,44 @@ impl Context<'_> {
         Ok(())
     }
 }
+/// Load the built-in or supplied document `uri` names (fragment ignored),
+/// first referenced from location `referrer`. A document without `$schema`
+/// inherits a Draft-07 referrer's dialect.
+fn load_document(
+    schema: &mut Schema,
+    context: &mut Context<'_>,
+    referrer: usize,
+    uri: &str,
+) -> Result<(), CompilationError> {
+    let resource = uri.split('#').next().unwrap_or(uri);
+    let text = builtin::resource(resource)
+        .or_else(|| context.resources.get(resource).map(String::as_str))
+        .ok_or_else(|| SchemaError {
+            location: uri.to_owned(),
+            message: "unresolved resource; supply it explicitly".into(),
+        })?;
+    let node = context.parse(text, resource)?;
+    let document = schema.documents.len();
+    let vocabularies = schema.index.locations[referrer].vocabularies;
+    if vocabularies.dialect == Dialect::Draft07 {
+        schema
+            .index
+            .document_dialects
+            .insert(document, vocabularies);
+    }
+    let id = compile::walk(
+        &node,
+        document,
+        &[],
+        "",
+        resource,
+        &mut schema.index,
+        context,
+    )?;
+    schema.index.resources.insert(resource.into(), id);
+    schema.documents.push(node);
+    Ok(())
+}
 pub(super) fn compile(
     source: &str,
     resources: &BTreeMap<String, String>,
@@ -95,7 +135,9 @@ pub(super) fn compile(
         documents: vec![root],
         index,
         root: 0,
-        digest: bundle_digest(source, resources),
+        // Final identity depends on which built-in dialect data the
+        // completed bundle observed; it is hashed once, after linkage.
+        digest: crate::digest::Digest::of(&[]),
     };
     let mut cursor = 0;
     while cursor < schema.index.locations.len() {
@@ -121,25 +163,7 @@ pub(super) fn compile(
             let uri = compile::resolve_uri(&base, &reference);
             let resource = uri.split('#').next().unwrap_or(&uri);
             if !schema.index.resources.contains_key(resource) {
-                let text = builtin::resource(resource)
-                    .or_else(|| resources.get(resource).map(String::as_str))
-                    .ok_or_else(|| SchemaError {
-                        location: uri.clone(),
-                        message: "unresolved resource; supply it explicitly".into(),
-                    })?;
-                let node = context.parse(text, resource)?;
-                let document = schema.documents.len();
-                let id = compile::walk(
-                    &node,
-                    document,
-                    &[],
-                    "",
-                    resource,
-                    &mut schema.index,
-                    &mut context,
-                )?;
-                schema.index.resources.insert(resource.into(), id);
-                schema.documents.push(node);
+                load_document(&mut schema, &mut context, cursor, &uri)?;
             }
             let target = schema.reference_target(&base, &reference)?;
             if !schema
@@ -164,5 +188,10 @@ pub(super) fn compile(
         }
         cursor += 1;
     }
+    schema.digest = bundle_digest(
+        source,
+        resources,
+        schema.dialect() == Dialect::Draft07 || schema.index.resources.contains_key(DRAFT_07),
+    );
     Ok(schema)
 }

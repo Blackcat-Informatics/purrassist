@@ -1,7 +1,73 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-use super::{CompilationError, DIALECT, SchemaError, build::Context};
+use super::{CompilationError, DIALECT, DRAFT_07, SchemaError, build::Context};
 use crate::json::{Node, Value};
+
+/// A JSON Schema dialect this engine implements natively.
+///
+/// A schema resource selects its dialect with `$schema`; one without
+/// `$schema` inherits the dialect of its enclosing schema (or, for a
+/// separately supplied resource, of the schema that first referenced it),
+/// and a root without `$schema` is Draft 2020-12. Any other `$schema` URI
+/// must name a caller-supplied Draft 2020-12 style meta-schema.
+///
+/// ```
+/// use purrassist_core::schema::{Dialect, Schema};
+/// let draft07 = Schema::compile(
+///     r#"{"$schema":"http://json-schema.org/draft-07/schema#","items":[{"type":"string"}]}"#,
+/// )?;
+/// assert_eq!(draft07.dialect(), Dialect::Draft07);
+/// assert_eq!(draft07.dialect().validator(), "purrassist.schema.draft-07.v1");
+/// assert_eq!(Schema::compile("{}")?.dialect(), Dialect::Draft202012);
+/// assert_eq!(Dialect::from_uri("http://json-schema.org/draft-07/schema"), Some(Dialect::Draft07));
+/// assert_eq!(Dialect::from_uri("http://json-schema.org/draft-04/schema#"), None);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Dialect {
+    /// Draft 2020-12 with the vocabularies its `$schema` meta-schema declares.
+    #[default]
+    Draft202012,
+    /// Draft-07: tuple `items` with `additionalItems`, `definitions`,
+    /// `dependencies`, `$ref` overriding its sibling keywords, and `$id`
+    /// plain-name fragments as anchors; `format` is an annotation only.
+    Draft07,
+}
+
+impl Dialect {
+    /// The dialect a `$schema` URI names, ignoring an empty trailing
+    /// fragment; `None` for any URI this engine does not implement natively
+    /// (including a custom meta-schema, which compilation then requires as an
+    /// explicitly supplied resource).
+    #[must_use]
+    pub fn from_uri(uri: &str) -> Option<Self> {
+        match uri.trim_end_matches('#') {
+            DIALECT => Some(Self::Draft202012),
+            DRAFT_07 => Some(Self::Draft07),
+            _ => None,
+        }
+    }
+
+    /// The canonical meta-schema URI of this dialect, without a fragment.
+    #[must_use]
+    pub const fn uri(self) -> &'static str {
+        match self {
+            Self::Draft202012 => DIALECT,
+            Self::Draft07 => DRAFT_07,
+        }
+    }
+
+    /// The validator identity recorded by
+    /// [`super::ValidationReport::to_validation`] for this dialect.
+    #[must_use]
+    pub const fn validator(self) -> &'static str {
+        match self {
+            Self::Draft202012 => "purrassist.schema.draft2020-12.v1",
+            Self::Draft07 => "purrassist.schema.draft-07.v1",
+        }
+    }
+}
 
 #[expect(
     clippy::struct_excessive_bools,
@@ -18,6 +84,8 @@ pub(super) struct Vocabularies {
     /// treats either boolean as "known vocabulary", since we recognize it
     /// either way; only its *absence* leaves `format` annotation-only).
     pub format_assert: bool,
+    /// Which keyword set and `$ref`/`$id` rules apply.
+    pub dialect: Dialect,
 }
 impl Default for Vocabularies {
     fn default() -> Self {
@@ -27,6 +95,7 @@ impl Default for Vocabularies {
             unevaluated: true,
             content: true,
             format_assert: false,
+            dialect: Dialect::Draft202012,
         }
     }
 }
@@ -41,6 +110,9 @@ impl Vocabularies {
         let uri = dialect.trim_end_matches('#');
         if uri == DIALECT {
             return Ok((Self::default(), Vec::new()));
+        }
+        if uri == DRAFT_07 {
+            return Ok((Self::draft07(), Vec::new()));
         }
         let error = |message: String| {
             CompilationError::InvalidSchema(SchemaError {
@@ -65,6 +137,7 @@ impl Vocabularies {
             unevaluated: false,
             content: false,
             format_assert: false,
+            dialect: Dialect::Draft202012,
         };
         let mut unsupported = Vec::new();
         for entry in entries {
@@ -96,7 +169,42 @@ impl Vocabularies {
         }
         Ok((result, unsupported))
     }
+    /// Draft-07's fixed keyword set: no vocabularies, and `format` is an
+    /// annotation only.
+    pub(super) const fn draft07() -> Self {
+        Self {
+            validation: true,
+            applicator: true,
+            unevaluated: false,
+            content: true,
+            format_assert: false,
+            dialect: Dialect::Draft07,
+        }
+    }
+    /// Whether `keyword` has defined behavior under this dialect and its
+    /// declared vocabularies. Keywords that belong only to the other dialect
+    /// are unknown, hence ignored, annotations.
     pub(super) fn enabled(self, keyword: &str) -> bool {
+        let foreign = match self.dialect {
+            Dialect::Draft202012 => matches!(keyword, "additionalItems" | "dependencies"),
+            Dialect::Draft07 => matches!(
+                keyword,
+                "$defs"
+                    | "$anchor"
+                    | "$dynamicRef"
+                    | "$dynamicAnchor"
+                    | "$vocabulary"
+                    | "prefixItems"
+                    | "dependentRequired"
+                    | "dependentSchemas"
+                    | "minContains"
+                    | "maxContains"
+                    | "contentSchema"
+            ),
+        };
+        if foreign {
+            return false;
+        }
         match keyword {
             "type" | "enum" | "const" | "multipleOf" | "maximum" | "exclusiveMaximum"
             | "minimum" | "exclusiveMinimum" | "maxLength" | "minLength" | "pattern"
@@ -106,6 +214,8 @@ impl Vocabularies {
             }
             "prefixItems"
             | "items"
+            | "additionalItems"
+            | "dependencies"
             | "contains"
             | "additionalProperties"
             | "properties"
@@ -124,6 +234,16 @@ impl Vocabularies {
             _ => true,
         }
     }
+    /// Whether `keyword` on schema object `node` takes effect: it is
+    /// [`Self::enabled`], and, under Draft-07, `node` has no `$ref` or the
+    /// keyword is `$ref` itself (Draft-07 `$ref` overrides every sibling;
+    /// `$schema` still selects the dialect that decides this).
+    pub(super) fn applies(self, node: &Node, keyword: &str) -> bool {
+        self.enabled(keyword)
+            && (self.dialect != Dialect::Draft07
+                || matches!(keyword, "$ref" | "$schema")
+                || node.get("$ref").is_none())
+    }
 }
 pub(super) struct Keywords<'a> {
     pub node: &'a Node,
@@ -132,7 +252,7 @@ pub(super) struct Keywords<'a> {
 impl<'a> Keywords<'a> {
     pub(super) fn get(&self, keyword: &str) -> Option<&'a Node> {
         self.vocabularies
-            .enabled(keyword)
+            .applies(self.node, keyword)
             .then(|| self.node.get(keyword))
             .flatten()
     }

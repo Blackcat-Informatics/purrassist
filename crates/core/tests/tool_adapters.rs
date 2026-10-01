@@ -517,7 +517,7 @@ fn invalid_declaration_is_hard_error() {
         (DeclarationForm::Mcp, r#"{"name":"a","inputSchema":{"pattern":"("}}"#.into(), "a", "parameters schema rejected"),
         (
             DeclarationForm::Mcp,
-            r#"{"name":"a","inputSchema":{"$schema":"http://json-schema.org/draft-07/schema#"}}"#.into(),
+            r#"{"name":"a","inputSchema":{"$schema":"http://json-schema.org/draft-04/schema#"}}"#.into(),
             "a",
             "parameters schema rejected",
         ),
@@ -973,5 +973,195 @@ fn cross_form_rendering() {
     assert_eq!(
         reread.argument_shape("echo").unwrap().arguments,
         built.argument_shape("echo").unwrap().arguments
+    );
+}
+
+/// An MCP `tools/list` result whose schemas declare Draft-07.
+const DRAFT07_MCP: &str = r##"{"tools":[
+  {"name":"plot","description":"Plot a point","inputSchema":{
+    "$schema":"http://json-schema.org/draft-07/schema#",
+    "type":"object",
+    "definitions":{"num":{"type":"number"}},
+    "properties":{
+      "point":{"type":"array","items":[{"type":"number"},{"type":"number"}],"additionalItems":false},
+      "scale":{"$ref":"#/definitions/num","type":"integer","default":1.5},
+      "label":{"type":"string"},
+      "color":{"type":"string","enum":["red","blue"]}
+    },
+    "required":["point"],
+    "dependencies":{"label":["color"],"color":{"required":["label"]}},
+    "additionalProperties":false
+  },"annotations":{"readOnlyHint":true}},
+  {"name":"echo","inputSchema":{"$schema":"http://json-schema.org/draft-07/schema","type":"object","properties":{"text":{"type":"string"}},"unevaluatedProperties":false}},
+  {"name":"wrapped","inputSchema":{"$schema":"http://json-schema.org/draft-07/schema#","definitions":{"args":{"type":"object","properties":{"q":{"type":"string"}}}},"$ref":"#/definitions/args","properties":{"ignored":{"type":"string"}},"type":"object"}}
+],"nextCursor":"c1"}"##;
+
+#[test]
+fn draft07_mcp_tools_adapt_losslessly() {
+    let tools = ToolSet::from_mcp(DRAFT07_MCP, Budget::default()).unwrap();
+    for (name, marker) in [
+        ("plot", "{\"name\":\"plot\""),
+        ("echo", "{\"name\":\"echo\""),
+        ("wrapped", "{\"name\":\"wrapped\""),
+    ] {
+        let source = object_from(DRAFT07_MCP, marker);
+        assert_exact(
+            DRAFT07_MCP,
+            &tools,
+            name,
+            DeclarationForm::Mcp,
+            source,
+            Some(value_after(source, "\"inputSchema\":")),
+        );
+        assert_eq!(
+            tools.tool(name).unwrap().schema().dialect(),
+            purrassist_core::schema::Dialect::Draft07
+        );
+    }
+
+    let plot = tools.tool("plot").unwrap();
+    assert_draft07_projection(&tools, plot);
+    assert_draft07_defaults(plot);
+    assert_draft07_validation(plot);
+    assert_draft07_root_rules(&tools);
+}
+
+/// Draft-07-only constructs are unmodeled, never mis-projected.
+fn assert_draft07_projection(tools: &ToolSet, plot: &CompiledTool) {
+    assert_eq!(
+        plot.unmodeled_keywords(),
+        pairs(&[
+            ("", "$schema"),
+            ("", "definitions"),
+            ("", "dependencies"),
+            ("/properties/point", "items"),
+            ("/properties/point", "additionalItems"),
+            ("/properties/scale", "$ref"),
+            ("/properties/scale", "type"),
+        ])
+    );
+    let arguments = &tools.argument_shape("plot").unwrap().arguments;
+    assert_eq!(
+        arguments.parameter("point").unwrap().value,
+        ValueShape::Array(Box::new(ValueShape::Unmodeled))
+    );
+    assert_eq!(
+        arguments.parameter("scale").unwrap().value,
+        ValueShape::Unmodeled
+    );
+    assert_eq!(
+        arguments.parameter("color").unwrap().value,
+        ValueShape::Enumeration(vec!["red".into(), "blue".into()])
+    );
+    assert_eq!(arguments.required, ["point"]);
+    assert_eq!(arguments.unknown_parameters, UnknownParameters::Error);
+}
+
+/// The default 1.5 conforms only because Draft-07 `$ref` overrides `type`.
+fn assert_draft07_defaults(plot: &CompiledTool) {
+    let defaults: Vec<_> = plot
+        .defaults()
+        .iter()
+        .map(|default| default.value.to_json())
+        .collect();
+    assert_eq!(defaults, ["1.5"]);
+    let scaled = |dialect: &str| {
+        format!(
+            r##"{{"name":"s","inputSchema":{{"$schema":"{dialect}","definitions":{{"num":{{"type":"number"}}}},"properties":{{"scale":{{"$ref":"#/definitions/num","type":"integer","default":1.5}}}}}}}}"##
+        )
+    };
+    let draft07 = ToolSet::from_mcp(
+        &scaled("http://json-schema.org/draft-07/schema#"),
+        Budget::default(),
+    )
+    .unwrap();
+    assert_eq!(draft07.defaults("s").unwrap().len(), 1);
+    let (tool, reason) = invalid_reason(ToolSet::from_mcp(
+        &scaled("https://json-schema.org/draft/2020-12/schema"),
+        Budget::default(),
+    ));
+    assert_eq!(tool, "s");
+    assert!(reason.contains("does not conform"), "{reason}");
+}
+
+/// The compiled schema validates with Draft-07 semantics.
+fn assert_draft07_validation(plot: &CompiledTool) {
+    for (arguments, valid) in [
+        (r#"{"point":[1,2]}"#, true),
+        (r#"{"point":[1,"x"]}"#, false),
+        (r#"{"point":[1,2,3]}"#, false),
+        (r#"{"point":[1,2],"label":"a"}"#, false),
+        (r#"{"point":[1,2],"color":"red"}"#, false),
+        (r#"{"point":[1,2],"label":"a","color":"red"}"#, true),
+        (r#"{"point":[1,2],"scale":0.5}"#, true),
+        (r#"{"point":[1,2],"scale":"x"}"#, false),
+        (r#"{"point":[1,2],"extra":1}"#, false),
+    ] {
+        let report = plot
+            .schema()
+            .validate(&json::parse(arguments).unwrap())
+            .unwrap();
+        assert_eq!(report.valid, valid, "{arguments}: {:?}", report.violations);
+        assert_eq!(
+            report.to_validation().validator,
+            "purrassist.schema.draft-07.v1"
+        );
+    }
+    // Under Draft 2020-12 the same `$ref` + sibling `type` rejects 0.5.
+    let as_2020 = Schema::compile(
+        r##"{"definitions":{"num":{"type":"number"}},"properties":{"scale":{"$ref":"#/definitions/num","type":"integer"}}}"##,
+    )
+    .unwrap();
+    assert!(
+        !as_2020
+            .validate(&json::parse(r#"{"scale":0.5}"#).unwrap())
+            .unwrap()
+            .valid
+    );
+}
+
+/// Draft-07 rules for `unevaluatedProperties` and a root `$ref`.
+fn assert_draft07_root_rules(tools: &ToolSet) {
+    // `unevaluatedProperties` is not a Draft-07 keyword: extras pass, and
+    // the projection does not claim the scope is closed.
+    let echo = tools.tool("echo").unwrap();
+    assert!(
+        echo.schema()
+            .validate(&json::parse(r#"{"text":"a","extra":1}"#).unwrap())
+            .unwrap()
+            .valid
+    );
+    assert_eq!(
+        tools
+            .argument_shape("echo")
+            .unwrap()
+            .arguments
+            .unknown_parameters,
+        UnknownParameters::PassThrough
+    );
+
+    // A Draft-07 root `$ref` overrides its siblings: no parameter is
+    // projected from the ignored `properties`, and every member is listed.
+    let wrapped = &tools.argument_shape("wrapped").unwrap().arguments;
+    assert_eq!(wrapped.parameters.len(), 0);
+    assert_eq!(wrapped.unknown_parameters, UnknownParameters::PassThrough);
+    assert_eq!(
+        tools.tool("wrapped").unwrap().unmodeled_keywords(),
+        pairs(&[
+            ("", "$schema"),
+            ("", "definitions"),
+            ("", "$ref"),
+            ("", "properties"),
+            ("", "type"),
+        ])
+    );
+    assert!(
+        !tools
+            .tool("wrapped")
+            .unwrap()
+            .schema()
+            .validate(&json::parse(r#"{"q":1}"#).unwrap())
+            .unwrap()
+            .valid
     );
 }

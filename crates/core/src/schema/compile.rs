@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-use super::{CompilationError, Index, Location, SchemaError, Vocabularies, build::Context};
+use super::{
+    CompilationError, Dialect, Index, Location, SchemaError, Vocabularies, build::Context,
+};
 use crate::contract::Resource;
 use crate::json::{Node, Value, pointer_segment};
 use crate::pattern::{Pattern, PatternCompileError};
@@ -19,22 +21,9 @@ pub(super) fn walk(
     if let Some(id) = index.by_route.get(&(document, route.to_vec())) {
         return Ok(*id);
     }
-    let fail = |message: String| {
-        CompilationError::InvalidSchema(SchemaError {
-            location: format!("{parent_base}#{pointer}"),
-            message,
-        })
-    };
+    let fail = failure(parent_base, pointer);
     if !matches!(node.value, Value::Bool(_) | Value::Object(_)) {
         return Err(fail("schema must be an object or boolean".into()));
-    }
-    let base = node
-        .get("$id")
-        .and_then(Node::as_str)
-        .map_or_else(|| parent_base.into(), |id| resolve_uri(parent_base, id));
-    let base = base.trim_end_matches('#').to_string();
-    if base.contains('#') {
-        return Err(fail("$id cannot contain a nonempty fragment".into()));
     }
     let inherited = (0..route.len())
         .rev()
@@ -44,8 +33,15 @@ pub(super) fn walk(
                 .get(&(document, route[..length].to_vec()))
                 .map(|id| index.locations[*id].vocabularies)
         })
+        .or_else(|| index.document_dialects.get(&document).copied())
         .unwrap_or_default();
-    let (vocabularies, unsupported) = match node.get("$schema").and_then(Node::as_str) {
+    let declared = node.get("$schema").and_then(Node::as_str);
+    let dialect = declared.map_or(inherited.dialect, |uri| {
+        Dialect::from_uri(uri).unwrap_or_default()
+    });
+    let identity = identify(node, parent_base, dialect, &fail)?;
+    let base = identity.base;
+    let (vocabularies, unsupported) = match declared {
         Some(dialect) => Vocabularies::load(dialect, context)?,
         None => (inherited, Vec::new()),
     };
@@ -61,18 +57,28 @@ pub(super) fn walk(
         base: base.clone(),
         children: BTreeMap::new(),
         patterns: BTreeMap::new(),
-        dynamic_anchor: node
-            .get("$dynamicAnchor")
-            .and_then(Node::as_str)
+        dynamic_anchor: vocabularies
+            .applies(node, "$dynamicAnchor")
+            .then(|| node.get("$dynamicAnchor").and_then(Node::as_str))
+            .flatten()
             .map(str::to_owned),
     });
-    if (node.get("$id").is_some() || route.is_empty())
+    if (identity.resource || route.is_empty())
         && let Some(prior) = index.resources.insert(base.clone(), id)
         && prior != id
     {
         return Err(fail(format!("duplicate schema resource identity: {base}")));
     }
+    if let Some(anchor) = identity.anchor
+        && let Some(prior) = index.anchors.insert(anchor, id)
+        && prior != id
+    {
+        return Err(fail("duplicate anchor".into()));
+    }
     for keyword in ["$anchor", "$dynamicAnchor"] {
+        if !vocabularies.applies(node, keyword) {
+            continue;
+        }
         if let Some(anchor) = node.get(keyword).and_then(Node::as_str) {
             if anchor.is_empty()
                 || !anchor.bytes().enumerate().all(|(position, byte)| {
@@ -92,6 +98,7 @@ pub(super) fn walk(
         }
     }
     if vocabularies.validation
+        && vocabularies.applies(node, "pattern")
         && let Some(pattern) = node.get("pattern").and_then(Node::as_str)
     {
         index.locations[id]
@@ -100,6 +107,94 @@ pub(super) fn walk(
     }
     compile_children(node, id, index, context)?;
     Ok(id)
+}
+/// Where a schema object sits in the URI space: its base URI, whether its
+/// `$id` establishes a schema resource there, and an anchor URI it declares.
+struct Identity {
+    base: String,
+    resource: bool,
+    anchor: Option<String>,
+}
+/// The identity `$id` gives `node` under `dialect`. Draft 2020-12 `$id`
+/// is a resource URI with no (or an empty) fragment.
+fn identify(
+    node: &Node,
+    parent_base: &str,
+    dialect: Dialect,
+    fail: &impl Fn(String) -> CompilationError,
+) -> Result<Identity, CompilationError> {
+    if dialect == Dialect::Draft07 {
+        return draft07_identity(node, parent_base, fail);
+    }
+    let base = node
+        .get("$id")
+        .and_then(Node::as_str)
+        .map_or_else(|| parent_base.into(), |id| resolve_uri(parent_base, id));
+    let base = base.trim_end_matches('#').to_string();
+    if base.contains('#') {
+        return Err(fail("$id cannot contain a nonempty fragment".into()));
+    }
+    Ok(Identity {
+        resource: node.get("$id").is_some(),
+        base,
+        anchor: None,
+    })
+}
+/// Draft-07 `$id`: ignored beside `$ref`; otherwise a URI reference resolved
+/// against the parent base whose non-fragment part (if any) establishes a
+/// resource and whose plain-name fragment (`#foo`, alone or after a URI)
+/// declares a location-independent anchor. A JSON Pointer fragment is
+/// rejected, since it cannot identify the schema object that declares it.
+fn draft07_identity(
+    node: &Node,
+    parent_base: &str,
+    fail: &impl Fn(String) -> CompilationError,
+) -> Result<Identity, CompilationError> {
+    let Some(id) = node
+        .get("$id")
+        .filter(|_| node.get("$ref").is_none())
+        .and_then(Node::as_str)
+    else {
+        return Ok(Identity {
+            base: parent_base.into(),
+            resource: false,
+            anchor: None,
+        });
+    };
+    let resolved = resolve_uri(parent_base, id);
+    let (resource, fragment) = resolved.split_once('#').unwrap_or((&resolved, ""));
+    let relocates = !id.starts_with('#');
+    let anchor = if fragment.is_empty() {
+        None
+    } else if fragment.bytes().enumerate().all(|(position, byte)| {
+        byte.is_ascii_alphabetic()
+            || (position > 0
+                && (byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b':' | b'.')))
+    }) {
+        Some(format!("{resource}#{fragment}"))
+    } else {
+        return Err(fail("$id fragment must be a plain name".into()));
+    };
+    Ok(Identity {
+        base: if relocates { resource } else { parent_base }.into(),
+        resource: relocates,
+        anchor,
+    })
+}
+/// An invalid-schema error constructor for the location `base#pointer`.
+fn failure(base: &str, pointer: &str) -> impl Fn(String) -> CompilationError {
+    move |message| {
+        CompilationError::InvalidSchema(SchemaError {
+            location: format!("{base}#{pointer}"),
+            message,
+        })
+    }
+}
+/// Draft-07 tuple form: `items` is an array of positional schemas.
+fn is_tuple(vocabularies: Vocabularies, member: &crate::json::Member) -> bool {
+    vocabularies.dialect == Dialect::Draft07
+        && member.key == "items"
+        && matches!(member.value.value, Value::Array(_))
 }
 fn compile_children(
     node: &Node,
@@ -113,27 +208,24 @@ fn compile_children(
     let pointer = location.pointer;
     let base = location.base;
     let vocabularies = location.vocabularies;
-    let fail = |message: String| {
-        CompilationError::InvalidSchema(SchemaError {
-            location: format!("{base}#{pointer}"),
-            message,
-        })
-    };
+    let fail = failure(&base, &pointer);
     let Value::Object(members) = &node.value else {
         return Ok(());
     };
     for (position, member) in members.iter().enumerate() {
         context.charge(Resource::Work, member.key.len().saturating_add(1))?;
-        if !vocabularies.enabled(&member.key) {
+        if !vocabularies.applies(node, &member.key) {
             continue;
         }
         let mut child_route = route.clone();
         child_route.push(position);
         let child_pointer = format!("{pointer}/{}", pointer_segment(&member.key));
+        let tuple = is_tuple(vocabularies, member);
         match member.key.as_str() {
             "additionalProperties"
             | "unevaluatedProperties"
             | "propertyNames"
+            | "additionalItems"
             | "items"
             | "contains"
             | "unevaluatedItems"
@@ -141,7 +233,9 @@ fn compile_children(
             | "if"
             | "then"
             | "else"
-            | "contentSchema" => {
+            | "contentSchema"
+                if !tuple =>
+            {
                 let child = walk(
                     &member.value,
                     document,
@@ -155,11 +249,17 @@ fn compile_children(
                     .children
                     .insert(member.key.clone(), child);
             }
-            "$defs" | "definitions" | "properties" | "patternProperties" | "dependentSchemas" => {
+            "$defs" | "definitions" | "properties" | "patternProperties" | "dependentSchemas"
+            | "dependencies" => {
                 let Value::Object(children) = &member.value.value else {
                     return Err(fail(format!("{} must be an object", member.key)));
                 };
                 for (child_position, child) in children.iter().enumerate() {
+                    // Draft-07 `dependencies`: a name array is not a schema.
+                    if matches!(child.value.value, Value::Array(_)) && member.key == "dependencies"
+                    {
+                        continue;
+                    }
                     let name = format!("{}/{}", member.key, pointer_segment(&child.key));
                     if member.key == "patternProperties" {
                         index.locations[id]
@@ -180,7 +280,7 @@ fn compile_children(
                     index.locations[id].children.insert(name, child_id);
                 }
             }
-            "allOf" | "anyOf" | "oneOf" | "prefixItems" => {
+            "allOf" | "anyOf" | "oneOf" | "prefixItems" | "items" => {
                 let children = schema_array(&member.value, &member.key, &fail)?;
                 for (child_position, child) in children.iter().enumerate() {
                     let mut next_route = child_route.clone();
@@ -217,7 +317,7 @@ fn check_keywords(
         if !keys.insert(&member.key) {
             return Err(fail(format!("duplicate schema keyword: {}", member.key)));
         }
-        if !vocabularies.enabled(&member.key) {
+        if !vocabularies.applies(node, &member.key) {
             continue;
         }
         let value = &member.value.value;
@@ -257,6 +357,10 @@ fn check_keywords(
             "dependentRequired" => {
                 matches!(value,Value::Object(entries) if entries.iter().all(|entry|string_set(&entry.value)))
             }
+            // Draft-07: each entry is a schema or a set of property names.
+            "dependencies" => {
+                matches!(value,Value::Object(entries) if entries.iter().all(|entry| !matches!(entry.value.value, Value::Array(_)) || string_set(&entry.value)))
+            }
             "enum" => {
                 matches!(value, Value::Array(_))
             }
@@ -283,7 +387,9 @@ fn check_keywords(
     if let Some(Node {
         value: Value::Object(vocabularies),
         ..
-    }) = node.get("$vocabulary")
+    }) = node
+        .get("$vocabulary")
+        .filter(|_| vocabularies.applies(node, "$vocabulary"))
     {
         for vocabulary in vocabularies {
             if vocabulary.value.value == Value::Bool(true)
