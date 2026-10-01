@@ -154,7 +154,7 @@ pub struct ParameterShape {
 /// let tools = ToolSet::compile([tool], Budget::default()).unwrap();
 /// let value = &tools.argument_shape("t").unwrap().arguments.parameters[0].value;
 /// assert_eq!(value, &ValueShape::Array(Box::new(ValueShape::Boolean)));
-/// assert_eq!(value.type_name(), "array");
+/// assert_eq!(value.type_name(), Some("array"));
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ValueShape {
@@ -172,28 +172,54 @@ pub enum ValueShape {
     Array(Box<Self>),
     /// A nested object scope.
     Object(ObjectShape),
+    /// A value whose declared schema the typed model cannot express without
+    /// loss: for example one using `anyOf`, `oneOf`, `allOf`, `not`,
+    /// `if`/`then`/`else`, `$ref`, `const`, `prefixItems`, a type array such
+    /// as `["string","null"]`, a non-string or duplicated `enum`, or no
+    /// determinable `type`. Only declaration adapters
+    /// ([`super::ToolSet::from_openai`] and its siblings) produce it.
+    ///
+    /// The value is validated only by the tool's exact source schema; repair
+    /// treats it structurally, as an opaque JSON value of any type, and never
+    /// guesses a narrower shape for it.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, tool_call::{ToolSet, ValueShape}};
+    /// let tools = ToolSet::from_anthropic(
+    ///     r#"{"name":"t","input_schema":{"type":"object","properties":{"id":{"type":["string","null"]}}}}"#,
+    ///     Budget::default(),
+    /// ).unwrap();
+    /// let id = &tools.argument_shape("t").unwrap().arguments.parameters[0];
+    /// assert_eq!(id.value, ValueShape::Unmodeled);
+    /// assert_eq!(id.value.type_name(), None);
+    /// ```
+    Unmodeled,
 }
 
 impl ValueShape {
-    /// The JSON Schema `type` keyword value this shape renders as.
+    /// The JSON Schema `type` keyword value this shape denotes, or `None`
+    /// for [`Self::Unmodeled`], which admits any JSON type its exact schema
+    /// accepts.
     ///
-    /// Enumerations render as `"string"`. For a repeatable parameter this
+    /// Enumerations denote `"string"`. For a repeatable parameter this
     /// is the item type; the parameter itself renders as `"array"`. Infallible.
     ///
     /// ```
     /// use purrassist_core::tool_call::ValueShape;
-    /// assert_eq!(ValueShape::Enumeration(vec!["a".into()]).type_name(), "string");
-    /// assert_eq!(ValueShape::Number.type_name(), "number");
+    /// assert_eq!(ValueShape::Enumeration(vec!["a".into()]).type_name(), Some("string"));
+    /// assert_eq!(ValueShape::Number.type_name(), Some("number"));
+    /// assert_eq!(ValueShape::Unmodeled.type_name(), None);
     /// ```
     #[must_use]
-    pub const fn type_name(&self) -> &'static str {
+    pub const fn type_name(&self) -> Option<&'static str> {
         match self {
-            Self::String(_) | Self::Enumeration(_) => "string",
-            Self::Integer => "integer",
-            Self::Number => "number",
-            Self::Boolean => "boolean",
-            Self::Array(_) => "array",
-            Self::Object(_) => "object",
+            Self::String(_) | Self::Enumeration(_) => Some("string"),
+            Self::Integer => Some("integer"),
+            Self::Number => Some("number"),
+            Self::Boolean => Some("boolean"),
+            Self::Array(_) => Some("array"),
+            Self::Object(_) => Some("object"),
+            Self::Unmodeled => None,
         }
     }
 }

@@ -115,6 +115,9 @@ pub(super) enum ParameterKind {
     Enumeration(Vec<String>),
     Array(Box<ParameterSpec>),
     Object(ObjectSpec),
+    /// A value the typed model cannot express; only declaration adapters
+    /// produce it, and only the exact source schema validates it.
+    Unmodeled,
 }
 
 /// One declared parameter: its type plus modifiers.
@@ -151,7 +154,7 @@ pub struct ParameterSpec {
 }
 
 impl ParameterSpec {
-    const fn of(kind: ParameterKind) -> Self {
+    pub(super) const fn of(kind: ParameterKind) -> Self {
         Self {
             kind,
             required: false,
@@ -614,10 +617,5 @@ impl ToolDefinition {
         self.arguments
             .unknown
             .unwrap_or_else(|| self.effects.default_unknown_parameters())
-    }
-
-    /// The repair policy: explicit, else effect-derived.
-    pub(super) fn resolved_policy(&self) -> RepairPolicy {
-        self.policy.unwrap_or_else(|| self.effects.default_policy())
     }
 }

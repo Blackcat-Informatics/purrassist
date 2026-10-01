@@ -1,0 +1,17 @@
+[
+  {"name": "get_weather",
+   "description": "Get the weather",
+   "input_schema": {
+     "type": "object",
+     "properties": {
+       "location": {"type": "string", "description": "City, e.g. San Francisco"},
+       "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+       "when": {"oneOf": [{"type": "string", "format": "date"}, {"const": "now"}]}
+     },
+     "required": ["location"],
+     "additionalProperties": false
+   },
+   "cache_control": {"type": "ephemeral"}
+  },
+  {"type": "custom", "input_schema": {"type":"object","properties":{"n":{"type":"number","default":-0.0}}}, "name": "count"}
+]

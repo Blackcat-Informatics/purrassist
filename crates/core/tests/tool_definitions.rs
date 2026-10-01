@@ -700,7 +700,7 @@ fn argument_grammar_lists_parameter_literals() {
     );
     assert_eq!(
         options.parameter("ratio").unwrap().value.type_name(),
-        "number"
+        Some("number")
     );
 }
 

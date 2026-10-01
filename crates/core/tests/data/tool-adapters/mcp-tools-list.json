@@ -1,0 +1,26 @@
+{
+  "tools": [
+    {
+      "name": "search_docs",
+      "title": "Search documentation",
+      "description": "Search the docs \/ wiki",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query":   { "type": "string", "minLength": 1 },
+          "limit":   { "type": "integer", "default": 10, "maximum": 1E2 },
+          "filters": { "type": "array", "items": { "type": "string", "enum": ["api", "guide"] } },
+          "cursor":  { "type": ["string", "null"] }
+        },
+        "required": ["query"],
+        "unevaluatedProperties": false,
+        "x-mcp-hint": "\u0041"
+      },
+      "outputSchema": { "type": "object" },
+      "annotations": { "readOnlyHint": true, "openWorldHint": false },
+      "_meta": { "vendor/x": 1.50 }
+    },
+    {"name":"get_time","inputSchema":{"type":"object","properties":{}}}
+  ],
+  "nextCursor": "page-2"
+}

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Governed compilation of tool definitions into a validated, indexed set.
+use super::adapter::{self, DeclarationForm, ToolDeclaration, ToolSource};
 use super::definition::{
     Effects, ObjectSpec, ParameterKind, ParameterSpec, RepairPolicy, ToolDefinition,
     UnknownParameters,
@@ -14,16 +15,17 @@ use crate::contract::{
     Budget, Governor, Resource, ScratchCharge, ScratchMap, ScratchVec, StopReason,
     saturating_size as size,
 };
-use crate::json::{Node, Value};
+use crate::json::{self, Node, Value, pointer_segment};
 use crate::pattern::{Pattern, PatternCompileError};
 use crate::schema::{CompilationError, Schema};
 use crate::text::comparison_key;
 use crate::wire;
 use core::fmt;
+use std::collections::BTreeMap;
 
 /// Portable per-parameter charge for its retained shape, name literal, and
 /// schema-node records (64-bit layout over-estimate; see [`ScratchCharge`]).
-const PARAMETER_RECORD: usize = 512;
+pub(super) const PARAMETER_RECORD: usize = 512;
 /// Portable per-step charge for the transient path used in diagnostics.
 const STEP_RECORD: usize = 32;
 /// Portable charge for one rendered schema object's members and keywords.
@@ -38,8 +40,16 @@ impl ScratchCharge for ToolDefinition {
 impl ScratchCharge for CompiledTool {
     const CHARGE: usize = 1024;
 }
+impl ScratchCharge for Pending {
+    const CHARGE: usize = 176;
+}
+impl ScratchCharge for Declared {
+    const CHARGE: usize = 1024;
+}
 const _: () = {
     assert!(core::mem::size_of::<ToolDefinition>() <= ToolDefinition::CHARGE);
+    assert!(core::mem::size_of::<Pending>() <= Pending::CHARGE);
+    assert!(core::mem::size_of::<Declared>() <= Declared::CHARGE);
     assert!(core::mem::size_of::<CompiledTool>() <= CompiledTool::CHARGE);
     assert!(
         core::mem::size_of::<ParameterShape>() + core::mem::size_of::<NameLiteral>()
@@ -157,7 +167,19 @@ impl fmt::Display for ToolSetError {
 
 impl std::error::Error for ToolSetError {}
 
-/// One compiled tool: resolved policies, canonical schema, and argument shape.
+/// One compiled tool: resolved policies, argument schema, argument shape, and
+/// provenance.
+///
+/// A tool built with [`ToolDefinition`] carries a canonical schema; a tool
+/// built by a declaration adapter ([`ToolSet::from_openai`],
+/// [`ToolSet::from_mcp`], [`ToolSet::from_anthropic`]) carries its exact
+/// source declaration and a schema compiled from the exact parameters text
+/// (see [`Self::source`]).
+///
+/// The repair policy is resolved from [`Self::effects`] when it is read, so
+/// it always agrees with the effects the tool carries; unknown-parameter
+/// handling is fixed at compilation because it is part of the validated
+/// schema.
 ///
 /// ```
 /// use purrassist_core::{Budget, json, tool_call::{Effects, Param, ToolDefinition, ToolSet, UnknownParameters}};
@@ -174,13 +196,15 @@ pub struct CompiledTool {
     aliases: Vec<String>,
     description: Option<String>,
     effects: Effects,
-    policy: RepairPolicy,
+    explicit_policy: Option<RepairPolicy>,
     unknown_parameters: UnknownParameters,
     schema_document: Node,
     schema_text: String,
     schema: Schema,
     shape: ArgumentShape,
     defaults: Vec<ParameterDefault>,
+    source: ToolSource,
+    unmodeled_keywords: Vec<(String, String)>,
 }
 
 impl CompiledTool {
@@ -234,6 +258,10 @@ impl CompiledTool {
 
     /// The resolved repair policy: explicit, else derived from effects.
     ///
+    /// Resolution happens on every call rather than at compilation, so the
+    /// policy of a tool without an explicit one always follows its
+    /// effects. Adapter-built tools never set one explicitly. Infallible.
+    ///
     /// ```
     /// use purrassist_core::{Budget, tool_call::{RepairPolicy, ToolDefinition, ToolSet}};
     /// let tools = ToolSet::compile([ToolDefinition::new("rm")], Budget::default()).unwrap();
@@ -241,7 +269,10 @@ impl CompiledTool {
     /// ```
     #[must_use]
     pub const fn policy(&self) -> RepairPolicy {
-        self.policy
+        match self.explicit_policy {
+            Some(policy) => policy,
+            None => self.effects.default_policy(),
+        }
     }
 
     /// The resolved top-level unknown-argument handling.
@@ -256,9 +287,15 @@ impl CompiledTool {
         self.unknown_parameters
     }
 
-    /// The canonical compact Draft 2020-12 argument schema text.
+    /// The Draft 2020-12 argument schema text that [`Self::schema`] compiles.
     ///
-    /// Exactly `self.schema_document().to_json()`. Each schema object lists
+    /// For an adapter-built tool this is the exact parameters schema text of
+    /// its source declaration, byte for byte (whitespace, key order, escapes,
+    /// number spellings, and every keyword, modeled or not), or
+    /// `{"type":"object"}` when the declaration had no parameters schema.
+    ///
+    /// For a [`ToolDefinition`] tool it is the canonical compact rendering,
+    /// exactly `self.schema_document().to_json()`. Each schema object lists
     /// its keywords in the fixed order `type`, `description`, `enum`,
     /// `items`, `properties`, `required`, `additionalProperties`, `pattern`,
     /// `default`; `properties` follow declaration order, `required` is sorted
@@ -282,7 +319,12 @@ impl CompiledTool {
         &self.schema_text
     }
 
-    /// The canonical argument schema as a JSON value.
+    /// The argument schema as a JSON value.
+    ///
+    /// For an adapter-built tool this is the parsed exact parameters text,
+    /// with source spans relative to [`Self::json_schema`]; for a
+    /// [`ToolDefinition`] tool it is the generated canonical document (no
+    /// spans).
     ///
     /// ```
     /// use purrassist_core::{Budget, tool_call::{ToolDefinition, ToolSet}};
@@ -331,6 +373,82 @@ impl CompiledTool {
     #[must_use]
     pub fn defaults(&self) -> &[ParameterDefault] {
         &self.defaults
+    }
+
+    /// Where this tool came from: a [`ToolDefinition`] builder or an exact
+    /// source declaration.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, tool_call::{DeclarationForm, ToolDefinition, ToolSet, ToolSource}};
+    /// let built = ToolSet::compile([ToolDefinition::new("ls")], Budget::default()).unwrap();
+    /// assert_eq!(built.tool("ls").unwrap().source(), &ToolSource::Builder);
+    /// let adapted = ToolSet::from_mcp(r#"{"name":"ls","inputSchema":{"type":"object"}}"#, Budget::default()).unwrap();
+    /// let ToolSource::Declaration(declaration) = adapted.tool("ls").unwrap().source() else { unreachable!() };
+    /// assert_eq!(declaration.form(), DeclarationForm::Mcp);
+    /// ```
+    #[must_use]
+    pub const fn source(&self) -> &ToolSource {
+        &self.source
+    }
+
+    /// Every keyword of an adapter-built tool's parameters schema that the
+    /// typed model does not represent, as `(schema pointer, keyword)` pairs.
+    ///
+    /// Pointers are RFC 6901 JSON Pointers relative to the parameters schema
+    /// (`""` for its root); see the adapter module documentation for exactly
+    /// which keywords count as represented. Empty for builder tools, which
+    /// only produce modeled keywords. Infallible.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, tool_call::ToolSet};
+    /// let tools = ToolSet::from_mcp(
+    ///     r#"{"name":"t","inputSchema":{"type":"object","x-vendor":1,"properties":{"a":{"type":"string","format":"uri"}}}}"#,
+    ///     Budget::default(),
+    /// ).unwrap();
+    /// assert_eq!(
+    ///     tools.tool("t").unwrap().unmodeled_keywords(),
+    ///     [("".to_owned(), "x-vendor".to_owned()), ("/properties/a".to_owned(), "format".to_owned())],
+    /// );
+    /// ```
+    #[must_use]
+    pub fn unmodeled_keywords(&self) -> &[(String, String)] {
+        &self.unmodeled_keywords
+    }
+
+    /// Render this tool's declaration in `form`.
+    ///
+    /// For an adapter-built tool whose source form is `form`, the result is
+    /// exactly the original declaration bytes. Otherwise it is the compact
+    /// canonical declaration of `form` (see [`DeclarationForm`]) carrying the
+    /// name, the description when present, and the parameters schema: the
+    /// exact source parameters text for adapter-built tools (verbatim, never
+    /// re-serialized) or the canonical [`Self::json_schema`] for builder
+    /// tools. Form-specific declaration fields such as `OpenAI` `strict` or
+    /// MCP `annotations` are retained only in their own form's exact text.
+    /// Infallible; the output is bounded by text already charged at
+    /// compilation.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, tool_call::{DeclarationForm, ToolSet}};
+    /// let source = r#"{ "name": "ls",  "input_schema": {"type":"object"} }"#;
+    /// let tools = ToolSet::from_anthropic(source, Budget::default()).unwrap();
+    /// let ls = tools.tool("ls").unwrap();
+    /// assert_eq!(ls.render_declaration(DeclarationForm::Anthropic), source);
+    /// assert_eq!(
+    ///     ls.render_declaration(DeclarationForm::Mcp),
+    ///     r#"{"name":"ls","inputSchema":{"type":"object"}}"#,
+    /// );
+    /// ```
+    #[must_use]
+    pub fn render_declaration(&self, form: DeclarationForm) -> String {
+        let parameters = match &self.source {
+            ToolSource::Declaration(declaration) if declaration.form() == form => {
+                return declaration.text().to_owned();
+            }
+            ToolSource::Declaration(declaration) => declaration.parameters_text(),
+            ToolSource::Builder => Some(self.schema_text.as_str()),
+        };
+        adapter::render_canonical(form, &self.name, self.description.as_deref(), parameters)
     }
 }
 
@@ -407,15 +525,28 @@ impl ToolSet {
         governor: &mut Governor,
     ) -> Result<Self, ToolSetError> {
         governor.check().map_err(ToolSetError::Resource)?;
-        let mut sorted: ScratchVec<ToolDefinition> = ScratchVec::new(governor);
+        let mut pending: ScratchVec<Pending> = ScratchVec::new(governor);
         for definition in definitions {
             governor
                 .charge(Resource::Work, 1)
                 .map_err(ToolSetError::Resource)?;
-            sorted.push(definition).map_err(ToolSetError::Resource)?;
+            pending
+                .push(Pending {
+                    definition,
+                    declaration: None,
+                })
+                .map_err(ToolSetError::Resource)?;
         }
+        Self::assemble(pending, governor)
+    }
+
+    /// Sort, name-check, collision-check, index, and compile pending tools.
+    pub(super) fn assemble(
+        mut sorted: ScratchVec<Pending>,
+        governor: &mut Governor,
+    ) -> Result<Self, ToolSetError> {
         let name_bytes = sorted.as_slice().iter().fold(0_u64, |total, tool| {
-            total.saturating_add(size(tool.name.len()))
+            total.saturating_add(size(tool.definition.name.len()))
         });
         governor
             .charge(
@@ -425,8 +556,8 @@ impl ToolSet {
             .map_err(ToolSetError::Resource)?;
         sorted
             .as_mut_slice()
-            .sort_by(|left, right| left.name.cmp(&right.name));
-        for definition in sorted.as_slice() {
+            .sort_by(|left, right| left.definition.name.cmp(&right.definition.name));
+        for Pending { definition, .. } in sorted.as_slice() {
             for literal in core::iter::once(&definition.name).chain(&definition.aliases) {
                 if !is_valid_name(literal) {
                     return Err(invalid(
@@ -436,17 +567,21 @@ impl ToolSet {
                 }
             }
         }
-        let literals = sorted.as_slice().iter().flat_map(|definition| {
-            core::iter::once(definition.name.as_str())
-                .chain(definition.aliases.iter().map(String::as_str))
-        });
+        let literals = sorted
+            .as_slice()
+            .iter()
+            .flat_map(|Pending { definition, .. }| {
+                core::iter::once(definition.name.as_str())
+                    .chain(definition.aliases.iter().map(String::as_str))
+            });
         if let Some((key, first, second)) = find_collision(literals, governor)? {
             return Err(ToolSetError::Collision { first, second, key });
         }
         let mut tools: ScratchVec<CompiledTool> = ScratchVec::new(governor);
         let mut index: ScratchMap<String, usize> = ScratchMap::new(governor);
-        for definition in sorted.as_slice() {
+        for entry in sorted.into_vec() {
             let position = tools.len();
+            let definition = &entry.definition;
             for literal in core::iter::once(&definition.name).chain(&definition.aliases) {
                 retain_text(governor, literal.len())?;
                 index
@@ -454,7 +589,7 @@ impl ToolSet {
                     .map_err(ToolSetError::Resource)?;
             }
             tools
-                .push(compile_tool(definition, governor)?)
+                .push(compile_tool(entry, governor)?)
                 .map_err(ToolSetError::Resource)?;
         }
         Ok(Self {
@@ -528,6 +663,24 @@ impl ToolSet {
         self.tool(tool).map(CompiledTool::json_schema)
     }
 
+    /// A tool's declaration rendered in `form`, by canonical name; see
+    /// [`CompiledTool::render_declaration`]. `None` for an unknown name.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, tool_call::{DeclarationForm, ToolDefinition, ToolSet}};
+    /// let tools = ToolSet::compile([ToolDefinition::new("ls").description("List")], Budget::default()).unwrap();
+    /// assert_eq!(
+    ///     tools.render_declaration("ls", DeclarationForm::OpenAi).unwrap(),
+    ///     r#"{"type":"function","function":{"name":"ls","description":"List","parameters":{"type":"object","properties":{},"additionalProperties":false}}}"#,
+    /// );
+    /// assert_eq!(tools.render_declaration("missing", DeclarationForm::Mcp), None);
+    /// ```
+    #[must_use]
+    pub fn render_declaration(&self, tool: &str, form: DeclarationForm) -> Option<String> {
+        self.tool(tool)
+            .map(|compiled| compiled.render_declaration(form))
+    }
+
     /// The argument shape of a tool, by canonical name.
     ///
     /// ```
@@ -555,7 +708,7 @@ impl ToolSet {
     }
 }
 
-fn invalid(tool: &str, reason: String) -> ToolSetError {
+pub(super) fn invalid(tool: &str, reason: String) -> ToolSetError {
     ToolSetError::InvalidDefinition {
         tool: tool.to_owned(),
         reason,
@@ -563,12 +716,12 @@ fn invalid(tool: &str, reason: String) -> ToolSetError {
 }
 
 /// A comparison-sort bound: `ceil(log2(n)) + 1` comparisons per element.
-fn sort_factor(length: usize) -> u64 {
+pub(super) fn sort_factor(length: usize) -> u64 {
     u64::from(length.bit_width()) + 1
 }
 
 /// Charge and permanently retain `bytes` of copied text.
-fn retain_text(governor: &mut Governor, bytes: usize) -> Result<(), ToolSetError> {
+pub(super) fn retain_text(governor: &mut Governor, bytes: usize) -> Result<(), ToolSetError> {
     governor
         .charge(Resource::Work, size(bytes))
         .map_err(ToolSetError::Resource)?;
@@ -613,11 +766,35 @@ fn find_collision<'a>(
     }))
 }
 
-fn compile_tool(
-    definition: &ToolDefinition,
-    governor: &mut Governor,
-) -> Result<CompiledTool, ToolSetError> {
+/// One tool awaiting set assembly: its typed definition and, for an
+/// adapter-built tool, everything retained from its exact declaration.
+pub(super) struct Pending {
+    pub(super) definition: ToolDefinition,
+    pub(super) declaration: Option<Box<Declared>>,
+}
+
+/// What a declaration adapter retains beyond the typed definition.
+pub(super) struct Declared {
+    /// The exact source declaration.
+    pub(super) source: ToolDeclaration,
+    /// The exact parameters text, or `{"type":"object"}` when absent.
+    pub(super) schema_text: String,
+    /// The validator compiled from `schema_text`.
+    pub(super) schema: Schema,
+    /// `(schema pointer, keyword)` pairs the typed model does not represent.
+    pub(super) unmodeled_keywords: Vec<(String, String)>,
+}
+
+/// The base URI under which an adapter tool's exact parameters schema is
+/// supplied when compiling a parameter subschema to validate a default.
+const ARGUMENTS_URI: &str = "urn:purrassist:tool-arguments";
+
+fn compile_tool(entry: Pending, governor: &mut Governor) -> Result<CompiledTool, ToolSetError> {
     governor.check().map_err(ToolSetError::Resource)?;
+    let Pending {
+        definition,
+        declaration,
+    } = entry;
     let text_bytes = definition
         .aliases
         .iter()
@@ -632,22 +809,57 @@ fn compile_tool(
         governor,
         path: Vec::new(),
         defaults: Vec::new(),
+        exact: declaration
+            .as_ref()
+            .map(|declared| declared.schema_text.as_str()),
+        resources: BTreeMap::new(),
     };
     let arguments = builder.object(&definition.arguments, unknown, 1)?;
     let defaults = builder.defaults;
-    governor
-        .charge(
-            Resource::ScratchBytes,
-            object_estimate(&definition.arguments),
-        )
-        .map_err(ToolSetError::Resource)?;
-    let schema_document = wire::object(object_fields(
-        &definition.arguments,
-        unknown,
-        vec![("type", wire::string("object"))],
-    ));
-    let schema_text = schema_document.to_json();
-    let schema = compile_schema(&definition.name, &schema_text, governor)?;
+    let (schema_document, schema_text, schema, source, unmodeled_keywords) =
+        if let Some(declared) = declaration {
+            let Declared {
+                source,
+                schema_text,
+                schema,
+                unmodeled_keywords,
+            } = *declared;
+            governor
+                .charge(Resource::ScratchBytes, schema.document().estimated_bytes())
+                .map_err(ToolSetError::Resource)?;
+            (
+                schema.document().clone(),
+                schema_text,
+                schema,
+                ToolSource::Declaration(source),
+                unmodeled_keywords,
+            )
+        } else {
+            governor
+                .charge(
+                    Resource::ScratchBytes,
+                    object_estimate(&definition.arguments),
+                )
+                .map_err(ToolSetError::Resource)?;
+            let schema_document = wire::object(object_fields(
+                &definition.arguments,
+                unknown,
+                vec![("type", wire::string("object"))],
+            ));
+            let schema_text = schema_document.to_json();
+            let schema = compiled(
+                &definition.name,
+                "generated schema",
+                Schema::compile_governed(&schema_text, governor),
+            )?;
+            (
+                schema_document,
+                schema_text,
+                schema,
+                ToolSource::Builder,
+                Vec::new(),
+            )
+        };
     let mut aliases = definition.aliases.clone();
     aliases.sort();
     Ok(CompiledTool {
@@ -655,7 +867,7 @@ fn compile_tool(
         aliases,
         description: definition.description.clone(),
         effects: definition.effects,
-        policy: definition.resolved_policy(),
+        explicit_policy: definition.policy,
         unknown_parameters: unknown,
         schema_document,
         schema_text,
@@ -665,13 +877,21 @@ fn compile_tool(
             arguments,
         },
         defaults,
+        source,
+        unmodeled_keywords,
     })
 }
 
-fn compile_schema(tool: &str, text: &str, governor: &mut Governor) -> Result<Schema, ToolSetError> {
-    Schema::compile_governed(text, governor).map_err(|error| match error {
+/// Map a schema compilation result for `tool`, labeling a rejection with
+/// `context` and passing resource exhaustion through unchanged.
+pub(super) fn compiled(
+    tool: &str,
+    context: &str,
+    result: Result<Schema, CompilationError>,
+) -> Result<Schema, ToolSetError> {
+    result.map_err(|error| match error {
         CompilationError::InvalidSchema(error) => {
-            invalid(tool, format!("generated schema rejected: {error}"))
+            invalid(tool, format!("{context} rejected: {error}"))
         }
         CompilationError::Resource(reason) => ToolSetError::Resource(reason),
     })
@@ -740,14 +960,19 @@ fn render_parameter(spec: &ParameterSpec, inherited: UnknownParameters) -> Node 
 /// annotations only when `annotated`.
 fn render_value(spec: &ParameterSpec, inherited: UnknownParameters, annotated: bool) -> Node {
     let type_name = match &spec.kind {
-        ParameterKind::String | ParameterKind::Enumeration(_) => "string",
-        ParameterKind::Integer => "integer",
-        ParameterKind::Number => "number",
-        ParameterKind::Boolean => "boolean",
-        ParameterKind::Array(_) => "array",
-        ParameterKind::Object(_) => "object",
+        ParameterKind::String | ParameterKind::Enumeration(_) => Some("string"),
+        ParameterKind::Integer => Some("integer"),
+        ParameterKind::Number => Some("number"),
+        ParameterKind::Boolean => Some("boolean"),
+        ParameterKind::Array(_) => Some("array"),
+        ParameterKind::Object(_) => Some("object"),
+        // Any JSON value: the exact source schema is the only constraint.
+        ParameterKind::Unmodeled => None,
     };
-    let mut fields = vec![("type", wire::string(type_name))];
+    let mut fields: Vec<(&'static str, Node)> = type_name
+        .map(|name| ("type", wire::string(name)))
+        .into_iter()
+        .collect();
     if let Some(description) = spec.description.as_ref().filter(|_| annotated) {
         fields.push(("description", wire::string(description.as_str())));
     }
@@ -814,6 +1039,11 @@ struct ShapeBuilder<'a> {
     governor: &'a mut Governor,
     path: Vec<ShapeStep>,
     defaults: Vec<ParameterDefault>,
+    /// The exact parameters schema text of an adapter-built tool; defaults
+    /// are then validated against its subschemas rather than a rendering.
+    exact: Option<&'a str>,
+    /// `exact` supplied under [`ARGUMENTS_URI`], filled on first use.
+    resources: BTreeMap<String, String>,
 }
 
 impl ShapeBuilder<'_> {
@@ -833,6 +1063,42 @@ impl ShapeBuilder<'_> {
             location.push_str(leaf);
         }
         location
+    }
+
+    /// The JSON Pointer of the current parameter within an adapter tool's
+    /// parameters schema: adapters project only `properties` members and
+    /// object-form `items`, so each step has exactly one schema location.
+    fn schema_pointer(&self) -> String {
+        let mut pointer = String::new();
+        for step in &self.path {
+            match step {
+                ShapeStep::Parameter(name) => {
+                    pointer.push_str("/properties/");
+                    pointer.push_str(&pointer_segment(name));
+                }
+                ShapeStep::Item => pointer.push_str("/items"),
+            }
+        }
+        pointer
+    }
+
+    /// Compile the exact subschema at the current parameter, resolving it
+    /// (and any `$ref` it contains) within the complete exact parameters
+    /// schema supplied as an explicit resource.
+    fn exact_subschema(&mut self, text: &str) -> Result<Schema, ToolSetError> {
+        if self.resources.is_empty() {
+            retain_text(self.governor, text.len())?;
+            self.resources
+                .insert(ARGUMENTS_URI.to_owned(), text.to_owned());
+        }
+        let reference = format!("{ARGUMENTS_URI}#{}", self.schema_pointer());
+        let root = format!("{{\"$ref\":{}}}", json::quote(&reference));
+        retain_text(self.governor, root.len())?;
+        compiled(
+            self.tool,
+            "parameters schema",
+            Schema::with_resources_governed(&root, &self.resources, self.governor),
+        )
     }
 
     fn invalid(&self, reason: &str) -> ToolSetError {
@@ -1020,6 +1286,7 @@ impl ShapeBuilder<'_> {
                 object.unknown.unwrap_or(inherited),
                 depth.saturating_add(1),
             )?),
+            ParameterKind::Unmodeled => ValueShape::Unmodeled,
         })
     }
 
@@ -1084,12 +1351,20 @@ impl ShapeBuilder<'_> {
         inherited: UnknownParameters,
         default: &Node,
     ) -> Result<(), ToolSetError> {
-        let _render = self
-            .governor
-            .lease_scratch(parameter_estimate(spec))
-            .map_err(ToolSetError::Resource)?;
-        let text = render_parameter(spec, inherited).to_json();
-        let schema = compile_schema(self.tool, &text, self.governor)?;
+        let schema = if let Some(text) = self.exact {
+            self.exact_subschema(text)?
+        } else {
+            let _render = self
+                .governor
+                .lease_scratch(parameter_estimate(spec))
+                .map_err(ToolSetError::Resource)?;
+            let text = render_parameter(spec, inherited).to_json();
+            compiled(
+                self.tool,
+                "generated schema",
+                Schema::compile_governed(&text, self.governor),
+            )?
+        };
         let report = schema
             .validate_with(default, self.governor)
             .map_err(ToolSetError::Resource)?;

@@ -11,6 +11,13 @@
 //! validated, never-applied defaults. [`FromNode`] converts validated
 //! argument values into Rust types exactly.
 //!
+//! Wire declarations (`OpenAI` `tools[].function`, MCP `tools/list`, Anthropic
+//! `tools[]`) are the primary input path: [`ToolSet::from_openai`],
+//! [`ToolSet::from_mcp`], and [`ToolSet::from_anthropic`] keep each
+//! declaration's exact bytes, compile its exact parameters schema, project it
+//! into the typed shape model, list every keyword the model does not
+//! represent, and render it back byte for byte (see [`DeclarationForm`]).
+//!
 //! Names (tools, aliases, parameters, parameter aliases) are non-empty and
 //! match `[A-Za-z0-9_.:-]+`; two collide when their [`collision_key`]s are
 //! equal. Results never depend on declaration order.
@@ -27,11 +34,13 @@
 //! assert!(compiled.schema().validate(&arguments).unwrap().valid);
 //! assert_eq!(u32::from_node(arguments.get("limit").unwrap()), Ok(5));
 //! ```
+mod adapter;
 mod definition;
 mod from_node;
 mod shape;
 mod toolset;
 
+pub use adapter::{DeclarationForm, ToolDeclaration, ToolSource};
 pub use definition::{
     Effects, ObjectSpec, Param, ParameterSpec, RepairPolicy, ToolDefinition, UnknownParameters,
 };
