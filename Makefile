@@ -10,6 +10,7 @@ fmt:
 
 hygiene:
 	python3 scripts/check-repository.py
+	python3 scripts/test-repository-audit.py
 	python3 scripts/check-release.py
 	python3 scripts/test-fuzz.py
 	python3 scripts/test-fuzz-feedback.py
