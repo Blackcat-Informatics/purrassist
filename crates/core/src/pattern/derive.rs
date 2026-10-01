@@ -71,6 +71,9 @@ struct Ctx {
     at_end: bool,
     prev_word: bool,
     next_word: bool,
+    /// Ask "can this term still become nullable in some future context?"
+    /// instead of "is it nullable here?" (see [`DerivativeDfa::is_dead`]).
+    viable: bool,
 }
 
 /// A resizable, governed [`Term`] store shared by the initial (compile-time)
@@ -395,7 +398,8 @@ fn cached_nullable(
     let flags = u32::from(ctx.at_start)
         | (u32::from(ctx.at_end) << 1)
         | (u32::from(ctx.prev_word) << 2)
-        | (u32::from(ctx.next_word) << 3);
+        | (u32::from(ctx.next_word) << 3)
+        | (u32::from(ctx.viable) << 4);
     let key = (id, flags);
     if let Some(&value) = cache.get(&key) {
         return Ok(value);
@@ -429,6 +433,21 @@ fn nullable(
 /// A scalar/zero-width term needs no traversal storage. Composite terms use
 /// the admitted continuation/memo path; both paths charge before inspecting.
 const fn scalar_nullable(term: Term, ctx: Ctx) -> Option<bool> {
+    if ctx.viable {
+        // Viability over-approximates every future context: any class may
+        // still consume a character, and `$`/`\b`/`\B` may still hold at
+        // some later position. Only `^` is position-bound.
+        return match term {
+            Term::Empty
+            | Term::Repeat(_, 0, _, _)
+            | Term::Class(_)
+            | Term::End
+            | Term::Boundary(_) => Some(true),
+            Term::Dead => Some(false),
+            Term::Start => Some(ctx.at_start),
+            Term::Concat(_, _) | Term::Or(_, _) | Term::Repeat(_, _, _, _) => None,
+        };
+    }
     match term {
         Term::Empty | Term::Repeat(_, 0, _, _) => Some(true),
         Term::Dead | Term::Class(_) => Some(false),
@@ -677,48 +696,454 @@ fn cached_step(
 }
 
 /// Unanchored search over `text`, per JSON Schema `pattern` semantics.
+///
+/// This is the only derivative matching loop: it drives [`DerivativeDfa`]
+/// byte by byte over `text`'s UTF-8 encoding and returns as soon as a match
+/// is established, exactly like a caller stepping the automaton itself.
 pub(super) fn is_match(
     compiled: &Compiled,
-    text: &[char],
+    text: &str,
     governor: &mut Governor,
 ) -> Result<bool, StopReason> {
-    let mut arena = MatchArena::seeded(&compiled.base, governor)?;
-    let mut cache: TransitionCache = ScratchMap::new(governor);
-    let mut nullability = NullableCache::new(governor);
-    let mut live = compiled.root;
-    let len = text.len();
-    let mut prev_word = false;
-    for i in 0..=len {
-        governor.charge(Resource::Work, 1)?;
-        let next_char = text.get(i).copied();
-        let ctx = Ctx {
-            at_start: i == 0,
-            at_end: next_char.is_none(),
-            prev_word,
-            next_word: next_char.is_some_and(is_word),
-        };
-        if cached_nullable(&arena, live, ctx, &mut nullability, governor)? {
+    let mut dfa = DerivativeDfa::new(compiled, governor)?;
+    let mut state = dfa.start();
+    for &byte in text.as_bytes() {
+        state = dfa.step(state, byte, governor)?;
+        if state.matched {
             return Ok(true);
         }
-        let Some(character) = next_char else { break };
-        let code = u32::from(character);
-        let (minterm, representative) = minterm_representative(&compiled.cuts, code);
-        let stepped = cached_step(
-            &mut arena,
-            &compiled.classes,
-            &mut cache,
-            &Transition {
-                state: live,
-                code: representative,
-                minterm,
-                ctx,
-            },
-            governor,
-        )?;
-        live = mk_or(stepped, compiled.root, &mut arena, governor)?;
-        prev_word = is_word(character);
     }
-    Ok(false)
+    dfa.accepting(state, governor)
+}
+
+/// The UTF-8 decoding position of a [`DfaState`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Utf8 {
+    /// At a character boundary.
+    Boundary,
+    /// Inside a character: `bits` are the payload bits decoded so far,
+    /// `remaining` continuation bytes are still expected and `length` is the
+    /// full encoded length. The prefix denotes the contiguous code-point
+    /// interval `[bits << 6r, (bits << 6r) | (2^6r - 1)]` for `r = remaining`
+    /// (UTF-8 preserves code-point order).
+    Partial {
+        bits: u32,
+        remaining: u8,
+        length: u8,
+    },
+    /// The bytes are not well-formed UTF-8; no continuation is accepted.
+    Invalid,
+}
+
+/// One explicit state of a [`DerivativeDfa`].
+///
+/// It records the live derivative term, the
+/// zero-width context of the current position, whether a match has already
+/// been found (search semantics make that sticky), and the UTF-8 decoding
+/// position, so a state between two bytes of one character is an ordinary
+/// value that can be stored and resumed later.
+///
+/// ```
+/// use purrassist_core::{Budget, Governor, pattern::Pattern};
+/// let pattern = Pattern::compile("^é$").unwrap();
+/// let mut governor = Governor::new(Budget::default());
+/// let mut dfa = pattern.byte_dfa(&mut governor)?.expect("derivative pattern");
+/// let start = dfa.start();
+/// let middle = dfa.step(start, 0xC3, &mut governor)?; // first byte of 'é'
+/// assert!(!dfa.accepting(middle, &mut governor)?);
+/// let saved = middle; // states are plain `Copy` values
+/// let end = dfa.step(saved, 0xA9, &mut governor)?;
+/// assert!(dfa.accepting(end, &mut governor)?);
+/// # Ok::<(), purrassist_core::StopReason>(())
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DfaState {
+    live: u32,
+    matched: bool,
+    at_start: bool,
+    prev_word: bool,
+    utf8: Utf8,
+}
+
+/// A resumable, byte-level automaton for one derivative-engine pattern,
+/// with JSON Schema `pattern` (unanchored search) semantics.
+///
+/// The automaton consumes UTF-8 bytes. Character classes act on whole code
+/// points, so a partially decoded character is an explicit [`DfaState`]
+/// whose transitions narrow the code-point interval its prefix denotes; the
+/// derivative is taken once the character completes, through the same
+/// cached, governed transition [`Pattern::generate`](super::Pattern::generate)
+/// uses. States, transitions and nullability results are discovered lazily
+/// and admitted against the governor passed to each call; the caches live as
+/// long as the automaton and release their scratch charge when it drops.
+///
+/// [`Pattern::is_match`](super::Pattern::is_match) is implemented by stepping
+/// this automaton over the whole text, so the two always agree.
+///
+/// ```
+/// use purrassist_core::{Budget, Governor, pattern::Pattern};
+/// let pattern = Pattern::compile(r"\bcat\b").unwrap();
+/// let mut governor = Governor::new(Budget::default());
+/// let mut dfa = pattern.byte_dfa(&mut governor)?.expect("derivative pattern");
+/// let mut state = dfa.start();
+/// for chunk in [&b"a ca"[..], b"t!"] {
+///     for &byte in chunk {
+///         state = dfa.step(state, byte, &mut governor)?;
+///     }
+/// }
+/// assert!(dfa.accepting(state, &mut governor)?);
+/// assert!(!dfa.is_dead(state, &mut governor)?);
+/// # Ok::<(), purrassist_core::StopReason>(())
+/// ```
+pub struct DerivativeDfa<'p> {
+    compiled: &'p Compiled,
+    session: Session,
+}
+
+impl core::fmt::Debug for DerivativeDfa<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("DerivativeDfa")
+            .field("root", &self.compiled.root)
+            .field("terms", &self.session.arena.items.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'p> DerivativeDfa<'p> {
+    pub(super) fn new(compiled: &'p Compiled, governor: &mut Governor) -> Result<Self, StopReason> {
+        Ok(Self {
+            compiled,
+            session: Session::new(compiled, governor)?,
+        })
+    }
+
+    /// The state before any byte has been consumed.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, pattern::Pattern};
+    /// let mut governor = Governor::new(Budget::default());
+    /// let pattern = Pattern::compile("^$").unwrap();
+    /// let mut dfa = pattern.byte_dfa(&mut governor)?.expect("derivative pattern");
+    /// let start = dfa.start();
+    /// assert!(dfa.accepting(start, &mut governor)?); // the empty text matches
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    #[must_use]
+    pub const fn start(&self) -> DfaState {
+        DfaState {
+            live: self.compiled.root,
+            matched: false,
+            at_start: true,
+            prev_word: false,
+            utf8: Utf8::Boundary,
+        }
+    }
+
+    /// Consume one UTF-8 byte.
+    ///
+    /// Charges one `Work` unit per byte: a character's lead byte charges all
+    /// of the character's bytes (as its length announces), so continuation
+    /// bytes make no governor call. At a character boundary the match
+    /// test for the current position is evaluated (once a match is found it
+    /// is sticky and later bytes only track UTF-8 well-formedness); when a
+    /// character completes, its derivative is computed through the lazy,
+    /// governed transition cache, which may intern new terms (`ScratchBytes`)
+    /// and traverse terms (`Work`). Malformed UTF-8 (a stray continuation
+    /// byte, an overlong form, a surrogate, a value above U+10FFFF, or a
+    /// missing continuation byte) moves to a dead, never-accepting state.
+    ///
+    /// # Errors
+    /// Returns `BudgetExceeded` or `Cancelled` from the governor; the input
+    /// `state` remains valid and can be stepped again under a fresh budget.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, pattern::Pattern};
+    /// let mut governor = Governor::new(Budget::default());
+    /// let pattern = Pattern::compile("^a").unwrap();
+    /// let mut dfa = pattern.byte_dfa(&mut governor)?.expect("derivative pattern");
+    /// let state = dfa.step(dfa.start(), b'a', &mut governor)?;
+    /// assert!(dfa.accepting(state, &mut governor)?);
+    /// let invalid = dfa.step(dfa.start(), 0xFF, &mut governor)?;
+    /// assert!(dfa.is_dead(invalid, &mut governor)?);
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    #[inline]
+    pub fn step(
+        &mut self,
+        state: DfaState,
+        byte: u8,
+        governor: &mut Governor,
+    ) -> Result<DfaState, StopReason> {
+        // Fast path: a continuation byte that does not complete its
+        // character only narrows the pending code-point interval.
+        if let Utf8::Partial {
+            bits,
+            remaining: remaining @ 2..,
+            length,
+        } = state.utf8
+        {
+            let mut next = state;
+            next.utf8 = match continue_character(bits, remaining, length, byte) {
+                Some((bits, remaining)) => Utf8::Partial {
+                    bits,
+                    remaining,
+                    length,
+                },
+                None => Utf8::Invalid,
+            };
+            return Ok(next);
+        }
+        self.step_slow(state, byte, governor)
+    }
+
+    /// [`Self::step`] at a character boundary, on a character's final
+    /// byte, or in the invalid state.
+    #[inline]
+    fn step_slow(
+        &mut self,
+        state: DfaState,
+        byte: u8,
+        governor: &mut Governor,
+    ) -> Result<DfaState, StopReason> {
+        let mut next = state;
+        let (bits, remaining, length) = match state.utf8 {
+            Utf8::Invalid => {
+                governor.charge(Resource::Work, 1)?;
+                return Ok(state);
+            }
+            Utf8::Boundary => {
+                let (bits, length) = match byte {
+                    0x00..=0x7F => (u32::from(byte), 1),
+                    0xC2..=0xDF => (u32::from(byte & 0x1F), 2),
+                    0xE0..=0xEF => (u32::from(byte & 0x0F), 3),
+                    0xF0..=0xF4 => (u32::from(byte & 0x07), 4),
+                    _ => {
+                        governor.charge(Resource::Work, 1)?;
+                        return Ok(next.invalid());
+                    }
+                };
+                // The lead byte charges the whole character's bytes, so a
+                // continuation byte needs no governor call of its own.
+                governor.charge(Resource::Work, u64::from(length))?;
+                if !state.matched {
+                    // A multi-byte lead byte never starts an ASCII word
+                    // character, so the next character's word status is
+                    // known from its first byte.
+                    let ctx = state.context(false, length == 1 && is_word(char::from(byte)));
+                    next.matched = cached_nullable(
+                        &self.session.arena,
+                        state.live,
+                        ctx,
+                        &mut self.session.nullability,
+                        governor,
+                    )?;
+                }
+                (bits, length - 1, length)
+            }
+            Utf8::Partial {
+                bits,
+                remaining,
+                length,
+            } => {
+                let Some((bits, remaining)) = continue_character(bits, remaining, length, byte)
+                else {
+                    return Ok(next.invalid());
+                };
+                (bits, remaining, length)
+            }
+        };
+        if remaining > 0 {
+            next.utf8 = Utf8::Partial {
+                bits,
+                remaining,
+                length,
+            };
+            return Ok(next);
+        }
+        next.utf8 = Utf8::Boundary;
+        let Some(character) = char::from_u32(bits) else {
+            return Ok(next.invalid());
+        };
+        if !next.matched {
+            let (minterm, code) = minterm_representative(&self.compiled.cuts, bits);
+            let ctx = state.context(false, is_word(character));
+            let stepped = cached_step(
+                &mut self.session.arena,
+                &self.compiled.classes,
+                &mut self.session.cache,
+                &Transition {
+                    state: state.live,
+                    code,
+                    minterm,
+                    ctx,
+                },
+                governor,
+            )?;
+            next.live = mk_or(
+                stepped,
+                self.compiled.root,
+                &mut self.session.arena,
+                governor,
+            )?;
+        }
+        next.at_start = false;
+        next.prev_word = is_word(character);
+        Ok(next)
+    }
+
+    /// Whether the bytes consumed so far form complete UTF-8 text that
+    /// contains a match (evaluating `$` and `\b` against the end of text).
+    /// A state inside a character, or after malformed UTF-8, never accepts.
+    ///
+    /// # Errors
+    /// Returns `BudgetExceeded` or `Cancelled` from the governor while
+    /// evaluating (and caching) the end-of-text nullability check.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, pattern::Pattern};
+    /// let mut governor = Governor::new(Budget::default());
+    /// let pattern = Pattern::compile("b$").unwrap();
+    /// let mut dfa = pattern.byte_dfa(&mut governor)?.expect("derivative pattern");
+    /// let state = dfa.step(dfa.start(), b'b', &mut governor)?;
+    /// assert!(dfa.accepting(state, &mut governor)?);
+    /// let state = dfa.step(state, b'c', &mut governor)?;
+    /// assert!(!dfa.accepting(state, &mut governor)?);
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    pub fn accepting(
+        &mut self,
+        state: DfaState,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        if state.utf8 != Utf8::Boundary {
+            return Ok(false);
+        }
+        if state.matched {
+            return Ok(true);
+        }
+        let ctx = state.context(true, false);
+        cached_nullable(
+            &self.session.arena,
+            state.live,
+            ctx,
+            &mut self.session.nullability,
+            governor,
+        )
+    }
+
+    /// Whether no continuation of the consumed bytes can ever be accepted.
+    ///
+    /// Sound but deliberately incomplete: `true` is a proof that every
+    /// extension is rejected; `false` means only that this cheap structural
+    /// test could not rule acceptance out. Malformed UTF-8 is dead and a
+    /// found match never is. Otherwise the state is dead when neither its
+    /// live term nor the pattern root (re-entered at every later position,
+    /// where `^` can no longer hold) is *viable*. Viability is nullability in
+    /// a context that over-approximates every future one: classes, `$`,
+    /// `\b` and `\B` count as satisfiable and only `^` depends on the
+    /// position. A term that is not viable is not nullable, and each of its
+    /// derivatives is again not viable (`Concat`/`Or`/`Repeat` derivatives
+    /// are built from derivatives of non-viable parts or nullable non-viable
+    /// left operands, which do not exist), so no future position can match.
+    ///
+    /// # Errors
+    /// Returns `BudgetExceeded` or `Cancelled` from the governor while
+    /// evaluating (and caching) the viability traversals.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, pattern::Pattern};
+    /// let mut governor = Governor::new(Budget::default());
+    /// let pattern = Pattern::compile("^[a-z]+$").unwrap();
+    /// let mut dfa = pattern.byte_dfa(&mut governor)?.expect("derivative pattern");
+    /// let letters = dfa.step(dfa.start(), b'q', &mut governor)?;
+    /// assert!(!dfa.is_dead(letters, &mut governor)?);
+    /// let digit = dfa.step(letters, b'7', &mut governor)?;
+    /// assert!(dfa.is_dead(digit, &mut governor)?);
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    pub fn is_dead(
+        &mut self,
+        state: DfaState,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        if state.utf8 == Utf8::Invalid {
+            return Ok(true);
+        }
+        if state.matched {
+            return Ok(false);
+        }
+        for (term, at_start) in [(state.live, state.at_start), (self.compiled.root, false)] {
+            let ctx = Ctx {
+                at_start,
+                at_end: false,
+                prev_word: false,
+                next_word: false,
+                viable: true,
+            };
+            if cached_nullable(
+                &self.session.arena,
+                term,
+                ctx,
+                &mut self.session.nullability,
+                governor,
+            )? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+}
+
+impl DfaState {
+    const fn context(self, at_end: bool, next_word: bool) -> Ctx {
+        Ctx {
+            at_start: self.at_start,
+            at_end,
+            prev_word: self.prev_word,
+            next_word,
+            viable: false,
+        }
+    }
+
+    const fn invalid(mut self) -> Self {
+        self.utf8 = Utf8::Invalid;
+        self
+    }
+}
+
+/// After the second byte of a multi-byte character, the decoded prefix
+/// interval lies either wholly inside or wholly outside the scalar values
+/// encodable at that length (the boundaries are aligned to the interval
+/// width), so this one check rejects overlong forms, surrogates, and values
+/// above U+10FFFF before the character completes.
+/// Add one continuation byte to a partial character with `remaining`
+/// continuation bytes expected; `None` when the byte is not a continuation
+/// byte or the prefix can no longer encode a scalar value (checked once the
+/// first continuation byte fixes the interval).
+#[inline]
+const fn continue_character(bits: u32, remaining: u8, length: u8, byte: u8) -> Option<(u32, u8)> {
+    if byte & 0xC0 != 0x80 {
+        return None;
+    }
+    let bits = (bits << 6) | (byte & 0x3F) as u32;
+    let remaining = remaining - 1;
+    if remaining + 2 == length && !valid_prefix(bits, remaining, length) {
+        return None;
+    }
+    Some((bits, remaining))
+}
+
+const fn valid_prefix(bits: u32, remaining: u8, length: u8) -> bool {
+    let shift = 6 * remaining as u32;
+    let low = bits << shift;
+    let high = low | ((1 << shift) - 1);
+    let minimum = match length {
+        2 => 0x80,
+        3 => 0x800,
+        _ => 0x1_0000,
+    };
+    low >= minimum && high <= 0x10_FFFF && !(low >= 0xD800 && high <= 0xDFFF)
 }
 
 /// Governed emptiness check for `compiled`'s *full* (start-to-end) language,
@@ -811,6 +1236,7 @@ impl From<NullCtx> for Ctx {
             at_end: value.at_end,
             prev_word: value.prev_word,
             next_word: value.next_word,
+            viable: false,
         }
     }
 }
@@ -968,5 +1394,224 @@ mod tests {
             }
             assert_eq!(governor.scratch_meter().live(), 0);
         }
+    }
+
+    /// The pre-byte-engine matcher, kept verbatim (over `char`s) as the
+    /// reference oracle for the byte-level automaton.
+    fn char_reference_is_match(compiled: &Compiled, text: &str) -> bool {
+        use super::{Ctx, cached_nullable, cached_step, is_word, minterm_representative, mk_or};
+        let governor = &mut Governor::new(Budget::default());
+        let mut session = Session::new(compiled, governor).unwrap();
+        let text: Vec<char> = text.chars().collect();
+        let mut live = compiled.root;
+        let mut prev_word = false;
+        for i in 0..=text.len() {
+            let next_char = text.get(i).copied();
+            let ctx = Ctx {
+                at_start: i == 0,
+                at_end: next_char.is_none(),
+                prev_word,
+                next_word: next_char.is_some_and(is_word),
+                viable: false,
+            };
+            if cached_nullable(
+                &session.arena,
+                live,
+                ctx,
+                &mut session.nullability,
+                governor,
+            )
+            .unwrap()
+            {
+                return true;
+            }
+            let Some(character) = next_char else { break };
+            let (minterm, code) = minterm_representative(&compiled.cuts, u32::from(character));
+            let stepped = cached_step(
+                &mut session.arena,
+                &compiled.classes,
+                &mut session.cache,
+                &super::Transition {
+                    state: live,
+                    code,
+                    minterm,
+                    ctx,
+                },
+                governor,
+            )
+            .unwrap();
+            live = mk_or(stepped, compiled.root, &mut session.arena, governor).unwrap();
+            prev_word = is_word(character);
+        }
+        false
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn byte_step_equals_char_match() {
+        use crate::pattern::Pattern;
+        let patterns = [
+            "^[a-z]+[0-9]{2}$",
+            "foo|bar",
+            r"^\d+$",
+            r"^\s$",
+            ".",
+            "[^]",
+            "^(a?)*$",
+            "^a$",
+            r"\ba\b",
+            r"\B_\B",
+            r"\bé",
+            "(a+)+b",
+            "(a+)+$",
+            "[a-z]+[0-9]*",
+            r"^\p{Script=Greek}+$",
+            r"^\P{L}+$",
+            "^é$",
+            "猫+",
+            "^😀{2}$",
+            "[α-ω]{2,3}",
+            "^.$",
+            "$",
+            "^",
+            "^$",
+            r"[^\s\S]",
+            "abc",
+            "^[^a]",
+            r"\u{1F600}|é",
+        ];
+        let texts = [
+            "",
+            "a",
+            "ab12",
+            "ab1",
+            "xxbarxx",
+            "\u{ff11}\u{ff12}",
+            "12",
+            "\u{a0}",
+            "\u{2028}",
+            "\n",
+            "a\n",
+            "a a",
+            "_a",
+            "a9",
+            "éa猫",
+            "a_9",
+            "é_猫",
+            "aaaaab",
+            "aaaa!",
+            "Ελλάδα",
+            "Hello",
+            "é",
+            "eé",
+            "猫猫",
+            "😀😀",
+            "😀",
+            "αβ",
+            "x😀y",
+            "abc",
+            "ÿa",
+        ];
+        let governor = &mut Governor::new(Budget::default());
+        for source in patterns {
+            let pattern = Pattern::compile(source).unwrap();
+            let compiled = pattern.compiled.as_ref().unwrap();
+            let mut dfa = pattern.byte_dfa(governor).unwrap().unwrap();
+            for text in texts {
+                let expected = char_reference_is_match(compiled, text);
+                assert_eq!(
+                    pattern.is_match(text, governor),
+                    Ok(expected),
+                    "{source:?} {text:?}"
+                );
+                assert_eq!(
+                    pattern.is_match_backtracking(text, governor),
+                    Ok(expected),
+                    "backtracking {source:?} {text:?}"
+                );
+                // Step every byte, saving the state at every split point
+                // (including between the bytes of one character), perturbing
+                // the shared caches with an unrelated text, then resuming.
+                let bytes = text.as_bytes();
+                let mut state = dfa.start();
+                for (index, &byte) in bytes.iter().enumerate() {
+                    let saved = state;
+                    let mut other = dfa.start();
+                    for &noise in "zé9 😀".as_bytes() {
+                        other = dfa.step(other, noise, governor).unwrap();
+                    }
+                    assert_eq!(saved, state);
+                    state = dfa.step(saved, byte, governor).unwrap();
+                    let boundary = text.is_char_boundary(index + 1);
+                    if !boundary {
+                        assert!(!dfa.accepting(state, governor).unwrap());
+                    }
+                    let prefix_accepts =
+                        boundary && char_reference_is_match(compiled, &text[..=index]);
+                    if boundary {
+                        assert_eq!(
+                            dfa.accepting(state, governor).unwrap(),
+                            prefix_accepts,
+                            "{source:?} prefix of {text:?}"
+                        );
+                    }
+                    if dfa.is_dead(state, governor).unwrap() {
+                        // Soundness: no tested continuation of a dead state accepts.
+                        for suffix in texts {
+                            let mut continued = state;
+                            for &byte in suffix.as_bytes() {
+                                continued = dfa.step(continued, byte, governor).unwrap();
+                            }
+                            assert!(
+                                !dfa.accepting(continued, governor).unwrap(),
+                                "{source:?} {text:?} dead at {index} but accepts {suffix:?}"
+                            );
+                            let mut combined = bytes[..=index].to_vec();
+                            combined.extend_from_slice(suffix.as_bytes());
+                            if let Ok(combined) = core::str::from_utf8(&combined) {
+                                assert!(!char_reference_is_match(compiled, combined));
+                            }
+                        }
+                    }
+                }
+                assert_eq!(
+                    dfa.accepting(state, governor),
+                    Ok(expected),
+                    "stepped {source:?} {text:?}"
+                );
+            }
+            // Malformed UTF-8 is dead and never accepts, including a lone
+            // continuation byte, an overlong form, a surrogate and a
+            // truncated sequence.
+            for malformed in [
+                &[0x80_u8][..],
+                &[0xC0, 0xAF],
+                &[0xED, 0xA0, 0x80],
+                &[0xF4, 0x90],
+            ] {
+                let mut state = dfa.start();
+                for &byte in malformed {
+                    state = dfa.step(state, byte, governor).unwrap();
+                }
+                assert!(dfa.is_dead(state, governor).unwrap(), "{malformed:?}");
+                assert!(!dfa.accepting(state, governor).unwrap());
+            }
+            let truncated = dfa.step(dfa.start(), 0xE7, governor).unwrap();
+            assert!(!dfa.accepting(truncated, governor).unwrap());
+            let broken = dfa.step(truncated, b'a', governor).unwrap();
+            assert!(dfa.is_dead(broken, governor).unwrap());
+        }
+        // `^`-anchored patterns become dead once the anchor can never hold.
+        let anchored = Pattern::compile("^[a-z]+$").unwrap();
+        let mut dfa = anchored.byte_dfa(governor).unwrap().unwrap();
+        let mut state = dfa.start();
+        for &byte in b"ab3" {
+            state = dfa.step(state, byte, governor).unwrap();
+        }
+        assert!(dfa.is_dead(state, governor).unwrap());
+        let open = Pattern::compile("[a-z]$").unwrap();
+        let mut dfa = open.byte_dfa(governor).unwrap().unwrap();
+        let state = dfa.step(dfa.start(), b'3', governor).unwrap();
+        assert!(!dfa.is_dead(state, governor).unwrap());
     }
 }

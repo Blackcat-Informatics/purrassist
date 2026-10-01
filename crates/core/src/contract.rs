@@ -717,6 +717,38 @@ impl<T: ScratchCharge> ScratchVec<T> {
         &self.inner
     }
 
+    /// Mutably borrow the elements. Never allocates.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, ScratchVec};
+    /// let governor = Governor::new(Budget::default());
+    /// let mut values: ScratchVec<u32> = ScratchVec::new(&governor);
+    /// values.extend([1, 2]).unwrap();
+    /// values.as_mut_slice()[0] = 5;
+    /// assert_eq!(values.as_slice(), &[5, 2]);
+    /// ```
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        &mut self.inner
+    }
+
+    /// Remove and return the last element. The capacity (and its charge) is
+    /// kept for reuse and released exactly once, on drop.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, ScratchVec};
+    /// let governor = Governor::new(Budget::default());
+    /// let mut values: ScratchVec<u32> = ScratchVec::new(&governor);
+    /// values.extend([1, 2]).unwrap();
+    /// let charged = governor.usage().total_scratch_charged;
+    /// assert_eq!(values.pop(), Some(2));
+    /// values.push(3).unwrap(); // reuses capacity: no new charge.
+    /// assert_eq!(values.as_slice(), &[1, 3]);
+    /// assert_eq!(governor.usage().total_scratch_charged, charged);
+    /// ```
+    pub fn pop(&mut self) -> Option<T> {
+        self.inner.pop()
+    }
+
     /// Remove every element, keeping the allocated (and charged) capacity
     /// for reuse; the charge is still released exactly once, on drop.
     ///

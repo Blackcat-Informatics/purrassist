@@ -2,26 +2,89 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Ordered, source-addressed JSON with exact decimal values.
+pub mod incremental;
 mod number;
 mod parser;
-mod repair;
 use crate::contract::saturating_size as size;
+use crate::contract::{Governor, Resource, ScratchCharge, StopReason};
 use core::fmt::Write;
 use core::ops::Range;
+pub use incremental::recover_syntax;
+pub(crate) use incremental::{Region, recover_region};
 pub use number::{Number, NumberError};
 pub use parser::{ParseError, ParseFailure, parse, parse_with};
-#[derive(Clone, Debug)]
-pub(crate) struct SyntaxEdit {
+
+/// One source edit made by tolerant syntax recovery
+/// ([`incremental::IncrementalRecovery`]).
+///
+/// `span` is a half-open byte range of the original input (absolute, even
+/// when the input was supplied in several chunks); an empty span is an
+/// insertion at that offset. `replacement` is the JSON text that stands in
+/// for the span, and `guessed` marks an invented value (a missing value, an
+/// unterminated string, a bare token read as a string, or an escape that had
+/// to be kept literally) rather than a purely syntactic correction.
+///
+/// ```
+/// use purrassist_core::{Budget, Governor, json::incremental::IncrementalRecovery};
+/// let mut governor = Governor::new(Budget::default());
+/// let mut parser = IncrementalRecovery::new(&governor);
+/// parser.feed(b"{a: 1", &mut governor).unwrap();
+/// let (_, _, edits) = parser.finish(&mut governor).unwrap();
+/// assert_eq!(edits[0].rule, "json.syntax.bare-key");
+/// assert_eq!(edits[0].span, 1..2);
+/// assert_eq!(edits[0].replacement, "\"a\"");
+/// assert!(!edits[0].guessed);
+/// assert_eq!(edits[1].rule, "json.syntax.close-container");
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SyntaxEdit {
+    /// Stable rule identifier, such as `json.syntax.missing-comma`.
     pub rule: &'static str,
-    pub span: core::ops::Range<usize>,
+    /// Original byte range replaced (empty for an insertion).
+    pub span: Range<usize>,
+    /// Replacement JSON text.
     pub replacement: String,
+    /// Whether the replacement invents content rather than correcting syntax.
     pub guessed: bool,
 }
-pub(crate) fn recover_syntax(
-    input: &str,
-    governor: &mut crate::Governor,
-) -> Result<(Node, usize, Vec<SyntaxEdit>), crate::StopReason> {
-    repair::recover(input, governor)
+
+/// Make room for one more element by doubling, charging the added capacity
+/// (at `T`'s portable [`ScratchCharge::CHARGE`]) before reserving it. Growth
+/// depends only on the logical length, never on the target or on chunking.
+fn reserve_one<T: ScratchCharge>(
+    values: &mut Vec<T>,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    if values.len() == values.capacity() {
+        let capacity = values.capacity().saturating_mul(2).max(4);
+        governor.charge(
+            Resource::ScratchBytes,
+            size((capacity - values.capacity()).saturating_mul(T::CHARGE)),
+        )?;
+        values
+            .try_reserve_exact(capacity - values.len())
+            .map_err(|_| StopReason::BudgetExceeded(Resource::ScratchBytes))?;
+    }
+    Ok(())
+}
+
+/// Append one scalar, charging doubled capacity before growing `output`.
+fn push_char(
+    output: &mut String,
+    character: char,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    if output.len() + character.len_utf8() > output.capacity() {
+        let capacity = (output.capacity().saturating_mul(2))
+            .max(output.len() + character.len_utf8())
+            .max(8);
+        governor.charge(Resource::ScratchBytes, size(capacity - output.capacity()))?;
+        output
+            .try_reserve_exact(capacity - output.len())
+            .map_err(|_| StopReason::BudgetExceeded(Resource::ScratchBytes))?;
+    }
+    output.push(character);
+    Ok(())
 }
 
 /// A JSON value occurrence with an optional original byte span.

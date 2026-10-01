@@ -212,13 +212,13 @@ impl Parser<'_, '_> {
                             let Some(character) = char::from_u32(scalar) else {
                                 return self.fail("isolated surrogate escape");
                             };
-                            self.push_character(&mut output, character)?;
+                            super::push_char(&mut output, character, self.governor)?;
                             continue;
                         }
                         _ => return self.fail("invalid string escape"),
                     };
                     self.advance(1)?;
-                    self.push_character(&mut output, character)?;
+                    super::push_char(&mut output, character, self.governor)?;
                 }
                 Some(0..=0x1f) => return self.fail("unescaped control character"),
                 Some(_) => {
@@ -226,27 +226,11 @@ impl Parser<'_, '_> {
                         return self.fail("unterminated string");
                     };
                     self.advance(character.len_utf8())?;
-                    self.push_character(&mut output, character)?;
+                    super::push_char(&mut output, character, self.governor)?;
                 }
                 None => return self.fail("unterminated string"),
             }
         }
-    }
-    fn push_character(&mut self, output: &mut String, character: char) -> Result<(), ParseFailure> {
-        if output.len() + character.len_utf8() > output.capacity() {
-            let capacity = (output.capacity().saturating_mul(2))
-                .max(output.len() + character.len_utf8())
-                .max(8);
-            self.governor
-                .charge(Resource::ScratchBytes, size(capacity - output.capacity()))?;
-            output
-                .try_reserve_exact(capacity - output.len())
-                .map_err(|_| {
-                    ParseFailure::Resource(StopReason::BudgetExceeded(Resource::ScratchBytes))
-                })?;
-        }
-        output.push(character);
-        Ok(())
     }
     fn hex4(&mut self) -> Result<u32, ParseFailure> {
         let mut value = 0;
@@ -269,7 +253,7 @@ impl Parser<'_, '_> {
         }
         loop {
             let item = self.value(depth + 1)?;
-            self.reserve(&mut items)?;
+            super::reserve_one(&mut items, self.governor)?;
             items.push(item);
             self.whitespace()?;
             if self.byte() == Some(b']') {
@@ -297,7 +281,7 @@ impl Parser<'_, '_> {
             self.expect(b':')?;
             self.whitespace()?;
             let value = self.value(depth + 1)?;
-            self.reserve(&mut members)?;
+            super::reserve_one(&mut members, self.governor)?;
             members.push(Member {
                 key,
                 key_span,
@@ -312,21 +296,6 @@ impl Parser<'_, '_> {
             self.whitespace()?;
         }
         Ok(Value::Object(members))
-    }
-    fn reserve<T: ScratchCharge>(&mut self, values: &mut Vec<T>) -> Result<(), ParseFailure> {
-        if values.len() == values.capacity() {
-            let capacity = values.capacity().saturating_mul(2).max(4);
-            self.governor.charge(
-                Resource::ScratchBytes,
-                size((capacity - values.capacity()).saturating_mul(T::CHARGE)),
-            )?;
-            values
-                .try_reserve_exact(capacity - values.len())
-                .map_err(|_| {
-                    ParseFailure::Resource(StopReason::BudgetExceeded(Resource::ScratchBytes))
-                })?;
-        }
-        Ok(())
     }
 }
 

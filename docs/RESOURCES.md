@@ -82,8 +82,9 @@ which `Pattern::compile` now delegates to with a default governor), repeated
 `Pattern::is_match` searches (including the backtracking search's own
 per-iteration state clones in `repeat`), the lexical-Jaccard token sets
 `matching.rs` computes for both strings at `Standard` effort and above, the
-malformed-token replacements JSON syntax repair re-encodes per repair
-(`json/repair.rs`), the lease/release sites in `matching.rs` and
+output JSON syntax recovery builds (`json/incremental.rs`: strings, arrays,
+members and edits charged by logical length as they grow, with no up-front
+per-input-byte allowance), the lease/release sites in `matching.rs` and
 `edits/fuzzy.rs`, Markdown's rendered-HTML output buffer
 (`markdown/render.rs`, via `ScratchString::reserve`/`into_string`), and helper
 request preparation (`crates/host/src/helpers.rs::Pending::prepare`, which now
@@ -109,6 +110,75 @@ duplicate is skipped when popped, without validation or expansion. The search
 order is the total key `(cost, tie, serial)`, where the state-supplied tie key
 makes equal-cost order independent of proposal emission order; schema recovery
 uses the unit tie key, so its order remains `(cost, serial)`.
+`Search::seed_with` admits a seed by its key and precomputed cost before its
+state and ledger are built: a duplicate at no lower cost charges only its
+key's `Work`, and its ledger (evidence, loss copies, guesses) is never built
+or charged.
+
+## Incremental JSON recovery and linear extraction
+
+`json::incremental::IncrementalRecovery` is the only tolerant JSON parser;
+`json::recover_syntax` is its single-chunk wrapper. It is push-based, keeps
+open containers on an explicit stack, and suspends anywhere: inside strings,
+escapes, `\u` surrogate pairs, bare tokens, comments, the two-character
+`//`, `/*` and `*/` delimiters, and multi-byte UTF-8 sequences. Lookahead
+characters are held unconsumed until the next character decides them, and
+end-of-input repairs happen only in `finish`. Each consumed byte charges one
+`Work` unit and each value one more; output storage is charged by logical
+length as it grows. Every charge is therefore a function of the byte
+sequence alone. `crates/core/tests/json_incremental.rs` checks that every
+single split point, and 64 seeded multi-split chunkings per input under two
+seeds, reproduce the batch node, spans, consumed length, edits and complete
+governor `Usage` over all recovery-golden inputs and fixtures, the JSON
+Schema suite's instance data (inputs up to 2,048 bytes) and suspension-heavy
+malformed inputs. The same file measures `Work` at 64 KiB, 256 KiB and 1 MiB
+for one large string value, wide and deep nesting, and repaired relaxed
+syntax; every work ratio is within 0.01% of its byte ratio (the test allows
+5%). For example, a 1,048,572-byte document holding one string costs
+1,048,574 Work.
+
+When strict parsing fails, schema recovery offers the value at offset 0 and
+every bracketed value as a candidate, each priced with the `json.extract`
+loss `5 + 10 × brackets` for each non-blank discarded side. Candidate
+discovery is linear. `scan::Tracker` (a string- and escape-aware, push-based
+tracker of maximal `{…}`/`[…]` regions) finds the next opener outside earlier
+parses, one tracked recovery parse reads each region, and every container
+nested in it becomes a candidate as a subtree, with the consumed end and
+edits its standalone recovery would have, without a re-parse. An opener a
+region parse consumed as text (inside a string, comment or bare token) gets
+one parse of its own unless an earlier such parse covered it; an opener
+nested in text that such a parse itself consumed as text is not offered
+again. Earlier recovery attempted a full parse from every bracket, which was
+quadratic in the number of brackets and charged permanent scratch per
+attempt.
+
+`schema::recovery::EXTRACT_WORK_PER_BYTE` (48) bounds discovery `Work` at
+`48 × n` for an `n`-byte input whose candidates are not nested in one another
+(its Rustdoc derives at most `39n`), and at `48 × (n + s)` in general, where
+`s` sums the source spans of nested candidates and is at most `n` times the
+nesting depth. The extraction test recovers, within that bound and without
+exhausting any budget:
+
+| Input | Bytes | Whole-recovery Work | Budget |
+| --- | ---: | ---: | --- |
+| Prose with 100,000 `{` (empty placeholders) | 200,047 | 800,141 | `Effort::Standard` |
+| A JSON string holding 100,000 `{` | 100,050 | 500,150 | `Effort::Standard` |
+| A 1 MiB tool-call argument in prose | 1,048,592 | 5,204,027 | Deep, scratch raised to 1 GiB |
+
+The 1 MiB case raises only the scratch limit: its recovered tree, candidate
+copy and search key storage exceed the presets' 64 MiB. Recovery goldens and
+a differential comparison against the previous implementation (goldens with
+and without guesses, the JSON Schema suite's instances, and curated prose
+with brackets) produce identical outcomes and ledgers; only usage changes.
+
+Derivative pattern matching (`Pattern::is_match` for
+`pattern.engine.derivative-v1`) steps the resumable byte-level automaton
+`pattern::DerivativeDfa` over the text's UTF-8 bytes. It charges one `Work`
+unit per byte plus the lazily built transition and nullability caches'
+`Work` and `ScratchBytes`, and no longer buffers the text as scalars;
+backtracking matching still admits its scalar buffer. A partially decoded
+character is an explicit `DfaState` value, so charges depend only on the
+byte sequence, not on how a caller splits it.
 
 ## Measured-allocation oracle
 
@@ -149,10 +219,15 @@ the committed test asserts:
   repetitions and alternatives. Its capture vectors, exploration stack and
   results now each own their admitted storage through shared scratch
   containers; their leases remain live until the actual allocations drop.
-- `json/repair.rs`'s syntax recovery re-encodes every repaired bare/malformed
+- The former JSON syntax repair re-encoded every repaired bare/malformed
   token's replacement through `Node::to_json`, one allocation per repaired
-  token, against a flat, too-small per-input-byte precharge; the precharge
-  is now sized against a per-token cost, not a per-byte guess.
+  token, against a flat, too-small per-input-byte precharge. Its successor,
+  `json/incremental.rs`, charges each replacement (at its worst-case quoted
+  length) and every output container and string as it grows, so no
+  per-input-byte precharge remains. The `json_recover_syntax` workload runs a
+  whole recovery, so its `K` now covers the same fixed receipt, search and
+  validation-log overhead as `recover`, which the old precharge used to
+  absorb.
 
 `K` is fixed test slack for observed residual allocation at the two tested
 scales, including per-call overhead (`Parser`/`Renderer` construction, digest
@@ -181,7 +256,7 @@ not the operation's own.
 | `recover` | One malformed key, 2 valid padding properties | 32 padding properties | 8,192 |
 | `recover_composed_ambiguous` | Duplicate-key array, 2 elements | 32 elements | 4,096 |
 | `json_parse` | Object, 2 extra key/value pairs | 32 pairs | 1,024 |
-| `json_recover_syntax` | Unquoted/single-quoted object, 2 extra keys | 32 extra keys | 2,048 |
+| `json_recover_syntax` | Unquoted/single-quoted object, 2 extra keys | 32 extra keys | 8,192 |
 | `pattern_compile` | `^[A-Za-z]{2}$`-shaped pattern | 32 repeated atoms | 2,048 |
 | `pattern_match` | `identifier_` doubled against `^[A-Za-z_]+$` | repeated 32x | 8,192 |
 | `markdown_render` | Heading, 2-item list, 2-row table, 2 references | 32 of each | 4,096 |

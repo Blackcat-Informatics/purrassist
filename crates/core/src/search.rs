@@ -27,8 +27,10 @@
 //! scratch charge backing the queue entry is released when the entry is
 //! popped (or when the search is dropped); the part backing the retained
 //! deduplication key (`key_len + 64`, once per distinct key) is released when
-//! the [`Search`] is dropped. Exhaustion or cancellation is returned as `Err`
-//! and never becomes an accepted answer.
+//! the [`Search`] is dropped. [`Search::seed_with`] checks a seed's key and
+//! cost before building it, so a duplicate charges only its key's `Work`.
+//! Exhaustion or cancellation is returned as `Err` and never becomes an
+//! accepted answer.
 use crate::contract::saturating_size as size;
 use crate::contract::{
     Evidence, Governor, Inference, InferenceKind, Loss, Outcome, Receipt, Resource, ScratchLease,
@@ -431,29 +433,120 @@ impl<S: SearchState> Search<S> {
         self.enqueue(governor, state, ledger)
     }
 
+    /// Enqueue an initial state whose ledger cost is known in advance, but
+    /// build the state and its ledger only if the candidate is admitted.
+    ///
+    /// `write_key` writes the candidate's canonical key (the same bytes its
+    /// [`SearchState::write_key`] would write). A key already queued at a
+    /// cost no greater than `cost` is a duplicate: `build` is never called,
+    /// nothing beyond the key's `Work` is charged, and `Ok(false)` is
+    /// returned. Otherwise `build` constructs the state and ledger, which
+    /// are queued exactly as by [`Search::seed`], and `Ok(true)` is
+    /// returned. Use this when building a ledger costs more than the key.
+    ///
+    /// # Errors
+    /// Returns any error from `write_key` or `build`, exhaustion of `Work`,
+    /// `Candidates`, or `ScratchBytes`, or cancellation, before the candidate
+    /// is queued; and [`StopReason::InvalidInput`] if the built ledger's cost
+    /// differs from `cost`.
+    ///
+    /// ```
+    /// use purrassist_core::search::{Acceptance, Ledger, Proposals, Search, SearchState};
+    /// use purrassist_core::{Budget, Governor, ScratchVec, StopReason};
+    ///
+    /// struct Word(&'static str);
+    /// impl SearchState for Word {
+    ///     type Tie = ();
+    ///     type Context<'c> = ();
+    ///     fn tie(&self) {}
+    ///     fn write_key(&self, key: &mut ScratchVec<u8>) -> Result<(), StopReason> {
+    ///         key.extend(self.0.bytes())
+    ///     }
+    ///     fn accept(&self, _: &mut (), _: &mut Governor) -> Result<Acceptance, StopReason> {
+    ///         Ok(Acceptance::Accepted { validation: 0 })
+    ///     }
+    ///     fn expand(&self, _: &mut (), _: &mut Proposals<'_, Self>, _: &mut Governor) -> Result<(), StopReason> {
+    ///         Ok(())
+    ///     }
+    /// }
+    /// let mut governor = Governor::new(Budget::default());
+    /// let mut search = Search::new(&governor);
+    /// let build = |_: &mut Governor| Ok((Word("hi"), Ledger::default()));
+    /// let key = |key: &mut ScratchVec<u8>| key.extend(*b"hi");
+    /// assert_eq!(search.seed_with(&mut governor, 0, key, build), Ok(true));
+    /// // The duplicate is rejected before its ledger would be built.
+    /// let never = |_: &mut Governor| -> Result<(Word, Ledger), StopReason> { unreachable!() };
+    /// assert_eq!(search.seed_with(&mut governor, 0, key, never), Ok(false));
+    /// assert_eq!(governor.usage().candidates, 1);
+    /// ```
+    pub fn seed_with(
+        &mut self,
+        governor: &mut Governor,
+        cost: u64,
+        write_key: impl FnOnce(&mut ScratchVec<u8>) -> Result<(), StopReason>,
+        build: impl FnOnce(&mut Governor) -> Result<(S, Ledger), StopReason>,
+    ) -> Result<bool, StopReason> {
+        if !self.admits(governor, cost, write_key)? {
+            return Ok(false);
+        }
+        let (state, ledger) = build(governor)?;
+        if ledger.cost != cost {
+            return Err(StopReason::InvalidInput(format!(
+                "seeded ledger cost {} differs from its admitted cost {cost}",
+                ledger.cost
+            )));
+        }
+        self.insert(governor, state, ledger)?;
+        Ok(true)
+    }
+
     fn enqueue(
         &mut self,
         governor: &mut Governor,
         state: S,
         ledger: Ledger,
     ) -> Result<(), StopReason> {
-        self.key.clear();
-        state.write_key(&mut self.key)?;
-        let key = self.key.as_slice();
-        governor.charge(Resource::Work, size(key.len()))?;
-        let known = self.seen.get(key).copied();
-        if known.is_some_and(|cost| cost <= ledger.cost) {
-            return Ok(());
+        if self.admits(governor, ledger.cost, |key| state.write_key(key))? {
+            self.insert(governor, state, ledger)?;
         }
+        Ok(())
+    }
+
+    /// Write a candidate's key into the reusable key buffer, charge its
+    /// `Work`, and report whether it is not a duplicate at `cost` or less.
+    fn admits(
+        &mut self,
+        governor: &mut Governor,
+        cost: u64,
+        write_key: impl FnOnce(&mut ScratchVec<u8>) -> Result<(), StopReason>,
+    ) -> Result<bool, StopReason> {
+        self.key.clear();
+        write_key(&mut self.key)?;
+        governor.charge(Resource::Work, size(self.key.len()))?;
+        Ok(self
+            .seen
+            .get(self.key.as_slice())
+            .is_none_or(|known| *known > cost))
+    }
+
+    /// Queue an admitted candidate whose key is in the key buffer.
+    fn insert(
+        &mut self,
+        governor: &mut Governor,
+        state: S,
+        ledger: Ledger,
+    ) -> Result<(), StopReason> {
+        let key = self.key.as_slice();
+        let known = self.seen.contains_key(key);
         governor.charge(Resource::Candidates, 1)?;
         let total = size(key.len())
             .saturating_mul(32)
             .saturating_add(ENTRY_OVERHEAD);
         governor.charge(Resource::ScratchBytes, total)?;
-        let retained = if known.is_none() {
-            size(key.len()).saturating_add(SEEN_OVERHEAD)
-        } else {
+        let retained = if known {
             0
+        } else {
+            size(key.len()).saturating_add(SEEN_OVERHEAD)
         };
         self.retained = self.retained.saturating_add(retained);
         let held = governor.scratch_lease_for(total - retained);

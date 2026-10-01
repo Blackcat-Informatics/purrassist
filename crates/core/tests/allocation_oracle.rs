@@ -390,9 +390,13 @@ fn oracle_json_recover_syntax() {
         (bytes, charged, size(input.len()))
     }
     let _guard = exclusive();
+    // The same fixed full-recovery overhead (receipt, search, validation
+    // log) as `oracle_recover`, hence the same `K`. Syntax recovery itself
+    // charges its output by logical length; it no longer pre-charges a
+    // per-input-byte allowance that used to absorb this overhead.
     assert_scaled(
         "json_recover_syntax",
-        2048,
+        8192,
         [run(SCALES[0]), run(SCALES[1])],
     );
 }
