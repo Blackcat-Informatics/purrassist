@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# Test-only dialect shaped like Hermes JSON tool calls: a JSON object with
+# a name and an arguments value read by the self-delimiting json codec, which
+# also decodes stringified arguments ("arguments": "{\"a\":1}").
+grammar "hermes-mini.v1";
+
+closer call-end = "</tool_call>" | "</tool_calls>";
+
+ident = /[A-Za-z_][A-Za-z0-9_.:-]*/;
+ws = /[ \t\r\n]+/;
+
+call = "<tool_call>" ws? "{" ws? "\"name\"" ws? ":" ws? "\"" name:ident "\"" ws? "," ws?
+       "\"arguments\"" ws? ":" arguments:slot(json, "</tool_call>", "</tool_calls>")
+       "}" ws? call-end;
+
+result = "<tool_response>" content:until("</tool_response>") "</tool_response>";
+
+declaration = "<tool name=\"" name:ident "\"/>";

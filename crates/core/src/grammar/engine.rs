@@ -32,8 +32,10 @@
 // shared across the grammar and tool-call modules, so `pub(crate)` (matching
 // `unreachable_pub`) wins, as in `pattern::derive`.
 #![allow(clippy::redundant_pub_crate)]
-use super::codec::{CodecEnd, CodecFault, CodecState, CodecStep};
-use super::cost::{K_CAPTURE, K_THREAD};
+use super::codec::{
+    CodecContext, CodecEnd, CodecFault, CodecKind, CodecState, CodecStep, CodecValue,
+};
+use super::cost::{K_CAPTURE, K_CODEC, K_THREAD};
 use super::edit::{EditOperator, MarkupEdit};
 use super::repair::{RepairContext, RepairState, Status};
 use super::{CaptureKind, CompiledGrammar, Inst, Program, index_u32};
@@ -44,8 +46,8 @@ use crate::pattern::{DerivativeDfa, DfaState};
 use crate::search::Ledger;
 use crate::search::Search;
 use crate::tool_call::{
-    ArgTree, CallSegment, CaptureSpan, Closure, DialectId, GenerationStop, ProductionKind, RawCall,
-    Rejection, Spanned,
+    ArgTree, CallSegment, CaptureSpan, Closure, CompiledTool, DialectId, GenerationStop,
+    ProductionKind, RawCall, Rejection, Spanned, ToolSet,
 };
 use core::ops::Range;
 
@@ -207,12 +209,28 @@ impl Arena {
         edit: MarkupEdit,
         governor: &mut Governor,
     ) -> Result<u32, StopReason> {
-        let bytes = size(edit.original.len() + edit.replacement.len()).saturating_add(96);
-        governor.charge(Resource::ScratchBytes, bytes)?;
-        self.charged = self.charged.saturating_add(bytes);
+        governor.charge(Resource::ScratchBytes, edit.estimated_bytes())?;
+        self.adopt_edit(prev, edit)
+    }
+
+    /// Record an edit whose retained size its creator already charged.
+    fn adopt_edit(&mut self, prev: u32, edit: MarkupEdit) -> Result<u32, StopReason> {
+        self.charged = self.charged.saturating_add(edit.estimated_bytes());
         self.edits.push(edit);
         let index = index_u32(self.edits.len() - 1);
         self.push(prev, HistKind::Edit(index))
+    }
+
+    /// Record a finished codec value and its edits after `prev`; the new
+    /// history and the edits' total cost.
+    fn codec_value(&mut self, prev: u32, value: CodecValue) -> Result<(u32, u64), StopReason> {
+        let mut hist = self.value(prev, value.tree)?;
+        let mut cost = 0_u64;
+        for edit in value.edits {
+            cost = cost.saturating_add(edit.rule().cost);
+            hist = self.adopt_edit(hist, edit)?;
+        }
+        Ok((hist, cost))
     }
 
     fn value(&mut self, prev: u32, tree: ArgTree) -> Result<u32, StopReason> {
@@ -230,8 +248,9 @@ impl Arena {
         state: CodecState,
         governor: &mut Governor,
     ) -> Result<u32, StopReason> {
-        governor.charge(Resource::ScratchBytes, CODEC_SLOT)?;
-        self.charged = self.charged.saturating_add(CODEC_SLOT);
+        let bytes = CODEC_SLOT.saturating_add(state.boxed_bytes());
+        governor.charge(Resource::ScratchBytes, bytes)?;
+        self.charged = self.charged.saturating_add(bytes);
         self.codecs.push(Some(state));
         Ok(index_u32(self.codecs.len() - 1))
     }
@@ -309,9 +328,10 @@ pub(crate) struct Step<'a, 's> {
     pub(crate) stall_cap: u32,
     pub(crate) visited: &'a mut Vec<u64>,
     pub(crate) pending: &'a mut Vec<(u32, u32)>,
+    pub(crate) tools: Option<&'s ToolSet>,
 }
 
-impl Step<'_, '_> {
+impl<'s> Step<'_, 's> {
     pub(crate) const fn byte(&self, pos: usize) -> u8 {
         self.buffer[pos - self.base]
     }
@@ -523,9 +543,7 @@ impl Step<'_, '_> {
             match self.feed(slot, released..to, governor)? {
                 Ok(Some(complete)) => end = Some(complete),
                 Ok(None) => {}
-                Err(CodecFault::InvalidUtf8 { at }) => {
-                    return Self::fail(out, thread, pos, Rejection::InvalidUtf8 { at });
-                }
+                Err(fault) => return Self::fail(out, thread, pos, rejection(fault)),
             }
         }
         let Some(end) = end else {
@@ -559,7 +577,7 @@ impl Step<'_, '_> {
         for at in range {
             match codec.feed(self.buffer[at - self.base], at, governor)? {
                 CodecStep::Consumed => {}
-                CodecStep::Complete => return Ok(Ok(Some(at))),
+                CodecStep::Complete { end } => return Ok(Ok(Some(end))),
                 CodecStep::Fault(fault) => return Ok(Err(fault)),
             }
         }
@@ -580,16 +598,75 @@ impl Step<'_, '_> {
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         if let Some(slot) = codec {
-            let codec = self.arena.take_codec(slot);
-            let body = self.bytes(thread.entry..end);
-            match codec.finish(body, thread.entry..end, how, governor)? {
-                Ok(tree) => thread.hist = self.arena.value(thread.hist, tree)?,
-                Err(CodecFault::InvalidUtf8 { at }) => {
-                    return Self::fail(out, thread, thread.pos, Rejection::InvalidUtf8 { at });
+            match self.finish_codec(slot, thread.hist, thread.entry..end, how, governor)? {
+                Ok((hist, cost)) => {
+                    thread.hist = hist;
+                    thread.cost = thread.cost.saturating_add(cost);
                 }
+                Err(fault) => return Self::fail(out, thread, thread.pos, rejection(fault)),
             }
         }
         self.closure(thread, next, end, stack, out, governor)
+    }
+
+    /// Finish the codec in `slot` over `body` and record its value and
+    /// edits after `hist`: the new history and the edits' cost.
+    fn finish_codec(
+        &mut self,
+        slot: u32,
+        hist: u32,
+        body: Range<usize>,
+        how: CodecEnd,
+        governor: &mut Governor,
+    ) -> Result<Result<(u32, u64), CodecFault>, StopReason> {
+        let codec = self.arena.take_codec(slot);
+        let context = self.context(codec.kind(), hist, governor)?;
+        let buffer = self.buffer;
+        let bytes = &buffer[body.start - self.base..body.end - self.base];
+        match codec.finish(bytes, body, how, context, governor)? {
+            Ok(value) => Ok(Ok(self.arena.codec_value(hist, value)?)),
+            Err(fault) => Ok(Err(fault)),
+        }
+    }
+
+    /// What a codec of `kind` finishing after history `hist` may know: the
+    /// argument shape of the declared tool named by the reading's first
+    /// `name:` capture, when the recognizer has a tool set.
+    fn context(
+        &self,
+        kind: CodecKind,
+        hist: u32,
+        governor: &mut Governor,
+    ) -> Result<CodecContext<'s>, StopReason> {
+        let Some(tools) = self.tools.filter(|_| kind.uses_context()) else {
+            return Ok(CodecContext::default());
+        };
+        let nodes = self.arena.nodes.as_slice();
+        let (mut node, mut close, mut name) = (hist, None, None);
+        loop {
+            governor.charge(Resource::Work, K_CODEC)?;
+            let HistNode { prev, kind } = nodes[node as usize];
+            match kind {
+                HistKind::Root => break,
+                HistKind::Close(CaptureKind::Name, at) => close = Some(at),
+                HistKind::Open(CaptureKind::Name, start) => {
+                    if let Some(end) = close {
+                        name = Some(start..end);
+                    }
+                }
+                _ => {}
+            }
+            node = prev;
+        }
+        let Some(name) = name else {
+            return Ok(CodecContext::default());
+        };
+        governor.charge(Resource::Work, size(name.len()).saturating_mul(K_CODEC))?;
+        let shape = core::str::from_utf8(self.bytes(name))
+            .ok()
+            .and_then(|name| tools.lookup_exact(name))
+            .map(CompiledTool::argument_shape);
+        Ok(CodecContext { shape })
     }
 
     fn finish_literal(
@@ -659,7 +736,9 @@ impl Step<'_, '_> {
                 Inst::Class { class, .. } => Sub::Class(self.dfas[class as usize].start()),
                 Inst::Until { .. } => Sub::Body(super::automaton::ROOT, None),
                 Inst::Slot { codec, .. } => {
-                    let slot = self.arena.begin_codec(codec.begin(at), governor)?;
+                    let slot = self
+                        .arena
+                        .begin_codec(codec.begin(at, governor)?, governor)?;
                     Sub::Body(super::automaton::ROOT, Some(slot))
                 }
             };
@@ -722,27 +801,34 @@ impl Step<'_, '_> {
         }
     }
 
-    /// The history of a configuration cut off by a length stop: an open
-    /// slot keeps the complete part of its body as its value.
-    fn truncate(&mut self, thread: Thread, governor: &mut Governor) -> Result<u32, StopReason> {
+    /// The history (and added cost) of a configuration cut off by a length
+    /// stop: an open slot keeps the complete part of its body as its value.
+    fn truncate(
+        &mut self,
+        thread: Thread,
+        governor: &mut Governor,
+    ) -> Result<(u32, u64), StopReason> {
         let (Inst::Slot { set, .. }, Sub::Body(state, Some(slot))) =
             (self.program.insts[thread.pc as usize], thread.sub)
         else {
-            return Ok(thread.hist);
+            return Ok((thread.hist, 0));
         };
         let matcher = &self.grammar.delimiters[set as usize].matcher;
         let released = thread.pos - matcher.depth(state) as usize;
         let end = match self.feed(slot, released..thread.pos, governor)? {
             Ok(Some(complete)) => complete,
             Ok(None) => thread.pos,
-            Err(_) => return Ok(thread.hist),
+            Err(_) => return Ok((thread.hist, 0)),
         };
-        let codec = self.arena.take_codec(slot);
-        let body = self.bytes(thread.entry..end);
-        match codec.finish(body, thread.entry..end, CodecEnd::Truncated, governor)? {
-            Ok(tree) => self.arena.value(thread.hist, tree),
-            Err(_) => Ok(thread.hist),
-        }
+        Ok(self
+            .finish_codec(
+                slot,
+                thread.hist,
+                thread.entry..end,
+                CodecEnd::Truncated,
+                governor,
+            )?
+            .unwrap_or((thread.hist, 0)))
     }
 
     /// Every equal-cost history ending at `hist`, each as a forward list of
@@ -828,10 +914,7 @@ impl Step<'_, '_> {
                 }
                 HistKind::Edit(index) => {
                     let edit = &self.arena.edits[index as usize];
-                    governor.charge(
-                        Resource::ScratchBytes,
-                        size(edit.original.len() + edit.replacement.len()).saturating_add(96),
-                    )?;
+                    governor.charge(Resource::ScratchBytes, edit.estimated_bytes())?;
                     edits.push(edit.clone());
                 }
                 HistKind::Root | HistKind::Pack(_) => {}
@@ -931,10 +1014,10 @@ impl Step<'_, '_> {
                 && self.at_end(span.end)
         }) {
             Closure::Unterminated
-        } else if edits.is_empty() {
-            Closure::Closed
-        } else {
+        } else if edits.iter().any(|edit| edit.rule().repair) {
             Closure::Repaired
+        } else {
+            Closure::Closed
         };
         Ok(Ok(RawCall {
             span,
@@ -986,6 +1069,14 @@ impl Step<'_, '_> {
             readings,
             derivations: Vec::new(),
         }))
+    }
+}
+
+/// The rejection of a call attempt whose codec faulted.
+const fn rejection(fault: CodecFault) -> Rejection {
+    match fault {
+        CodecFault::InvalidUtf8 { at } => Rejection::InvalidUtf8 { at },
+        CodecFault::Malformed { at } => Rejection::Malformed { at },
     }
 }
 
@@ -1131,12 +1222,14 @@ pub(crate) struct Engine<'s> {
     out: Out,
     visited: Vec<u64>,
     pending: Vec<(u32, u32)>,
+    tools: Option<&'s ToolSet>,
     pub(crate) events: Vec<Event>,
 }
 
 impl<'s> Engine<'s> {
     pub(crate) fn new(
         dialects: &'s [DialectId],
+        tools: Option<&'s ToolSet>,
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
         let mut grammars = Vec::with_capacity(dialects.len());
@@ -1177,6 +1270,7 @@ impl<'s> Engine<'s> {
             out: Out::new(governor),
             visited: Vec::new(),
             pending: Vec::new(),
+            tools,
             events: Vec::new(),
         })
     }
@@ -1214,6 +1308,7 @@ impl<'s> Engine<'s> {
                 stall_cap,
                 visited: &mut self.visited,
                 pending: &mut self.pending,
+                tools: self.tools,
             },
             &mut self.stack,
             &mut self.out,
@@ -1624,8 +1719,12 @@ impl<'s> Engine<'s> {
                 let mut best: Option<Thread> = None;
                 for thread in threads.iter().filter(|thread| thread.attempt == record.id) {
                     let (mut step, _, _) = self.split(table);
-                    let hist = step.truncate(*thread, governor)?;
-                    let candidate = Thread { hist, ..*thread };
+                    let (hist, added) = step.truncate(*thread, governor)?;
+                    let candidate = Thread {
+                        hist,
+                        cost: thread.cost.saturating_add(added),
+                        ..*thread
+                    };
                     best = Some(match best {
                         None => candidate,
                         Some(current) if candidate.cost < current.cost => candidate,

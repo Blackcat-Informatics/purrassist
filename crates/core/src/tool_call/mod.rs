@@ -50,8 +50,9 @@ pub use definition::{
 pub use dialect::{DialectId, DialectSet, DialectSetError};
 pub use from_node::{FromNode, FromNodeError};
 pub use ir::{
-    ArgLeaf, ArgOrigin, ArgTree, CallSegment, CaptureSpan, Choice, Closure, LEAF_CHARGE, Piece,
-    ProductionKind, RawCall, ReasoningClosure, ReasoningSegment, Rejection, Segment, Spanned,
+    ArgLeaf, ArgOrigin, ArgTree, ArgumentFault, CallSegment, CaptureSpan, Choice, Closure,
+    LEAF_CHARGE, Piece, ProductionKind, RawCall, ReasoningClosure, ReasoningSegment, Rejection,
+    Segment, Spanned, UnresolvedArgument,
 };
 pub use recognizer::{GenerationStop, ReasoningPolicy, RecognizedTurn, Recognizer};
 pub use shape::{

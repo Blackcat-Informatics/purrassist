@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# Test-only dialect shaped like Qwen3-Coder XML tool calls: a function
+# element whose body is read by the xml-params codec. The name precedes the
+# arguments, so the codec knows the call's declared tool.
+grammar "qwen-mini.v1";
+
+closer function-end = "</function>" | "</functions>";
+closer call-end = "</tool_call>" | "</tool_calls>";
+
+ident = /[A-Za-z_][A-Za-z0-9_.:-]*/;
+ws = /[ \t\r\n]+/;
+
+call = "<tool_call>" ws? "<function=" name:ident ">"
+       arguments:slot(xml-params, "</function>", "</functions>", "</tool_call>", "</tool_calls>")
+       function-end ws? call-end;
+
+result = "<tool_response>" content:until("</tool_response>") "</tool_response>";
+
+declaration = "<function name=\"" name:ident "\"/>";

@@ -478,7 +478,7 @@ fn is_canonical_escape(slice: &str, character: char) -> bool {
 }
 
 /// Four ASCII hexadecimal digits, as the strict parser reads `\uXXXX`.
-fn hex4(digits: &[u8]) -> Option<u32> {
+pub(crate) fn hex4(digits: &[u8]) -> Option<u32> {
     let digits = digits.get(..4)?;
     digits.iter().try_fold(0, |value, &byte| {
         char::from(byte)
@@ -489,7 +489,7 @@ fn hex4(digits: &[u8]) -> Option<u32> {
 
 /// Decode one escape exactly as strict JSON would decode the string literal
 /// `"` + `slice` + `"`, or `None` when that literal is not valid JSON.
-fn decode_escape(slice: &str) -> Option<char> {
+pub(crate) fn decode_escape(slice: &str) -> Option<char> {
     let bytes = slice.as_bytes();
     let simple = match bytes.get(1)? {
         b'"' => '"',
@@ -570,6 +570,31 @@ impl IncrementalRecovery {
             opening: false,
             settling: None,
         }
+    }
+
+    /// A parser whose first byte sits at absolute offset `base`: node and
+    /// edit spans are absolute, and the consumed length is still relative.
+    pub(crate) fn starting_at(base: usize, governor: &Governor) -> Self {
+        let mut parser = Self::new(governor);
+        parser.base = base;
+        parser.position = base;
+        parser
+    }
+
+    /// Whether the value and its trailing whitespace/comments are complete:
+    /// later bytes would not be consumed.
+    pub(crate) const fn is_done(&self) -> bool {
+        matches!(self.mode, Mode::Done)
+    }
+
+    /// Absolute offset just past the last consumed character.
+    pub(crate) const fn position(&self) -> usize {
+        self.position
+    }
+
+    /// The number of edits recorded so far.
+    pub(crate) const fn edit_count(&self) -> usize {
+        self.edits.len()
     }
 
     /// Consume the next chunk of input.

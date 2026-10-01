@@ -11,6 +11,7 @@
 //! ```text
 //! work = K_LEX·n + K_THREAD·(configuration steps) + K_EVENT·(segment events)
 //!      + K_CAPTURE·(captured bytes materialized) + K_ERR·(error configurations explored)
+//!      + K_CODEC·(codec scan bytes and lookups) + (JSON recovery units)
 //!      + (class-automaton units) + (search key bytes)
 //! ```
 //!
@@ -23,7 +24,10 @@
 //!   revisits at most [`DialectSet::lookbehind`] bytes;
 //! - a class terminal additionally charges its derivative automaton one unit
 //!   per byte plus one-time transition-cache admissions;
-//! - segment events and captured bytes are bounded by the input length.
+//! - segment events and captured bytes are bounded by the input length;
+//! - an argument codec scans its body a constant number of times (JSON
+//!   recovery charges one unit per byte and per value), so codec work is
+//!   linear in the slot body.
 //!
 //! The error term applies only at failure configurations: each configuration
 //! popped by the repair search charges [`K_ERR`] (and the search's own
@@ -44,6 +48,10 @@
 //! assert!(cost::INSERT_CLOSER + cost::DELETE_STRAY_CLOSER < cost::REJECT);
 //! // Deleting bytes costs more than inserting the expected closer.
 //! assert!(cost::INSERT_CLOSER < cost::DELETE_STRAY_CLOSER);
+//! // Reading well-formed argument markup costs nothing; guessing costs more
+//! // than correcting syntax.
+//! assert_eq!(cost::FRAMING_NEWLINE, 0);
+//! assert!(cost::JSON_REPAIR < cost::JSON_GUESS);
 //! ```
 
 /// `Work` per input byte for the lexical layer: the reasoning-marker
@@ -69,6 +77,21 @@ pub const K_ERR: u64 = 8;
 /// table entry (instruction, trie node, automaton state).
 pub const K_COMPILE: u64 = 1;
 
+/// `Work` per byte, lookup or node an argument codec visits.
+///
+/// That is: per slot-body byte an argument codec scans when it finishes a
+/// body (the `xml-params` structural pass, the stringified-arguments escape
+/// decoding), per declared-name lookup, per tree node, and per history node
+/// visited to find the call's name for a codec. Bytes a codec hands to the JSON
+/// recovery parser are charged by that parser (see
+/// [`crate::json::incremental`]).
+pub const K_CODEC: u64 = 1;
+
+/// `ScratchBytes` charged for the boxed state of one `json` codec slot, on
+/// top of the engine's per-slot charge (the parser's own growth is charged
+/// by the parser).
+pub const JSON_CODEC_STATE: u64 = 1024;
+
 /// Cost of substituting a declared closer variant (`</calls>` for `</call>`).
 pub const CLOSER_VARIANT: u64 = 1;
 
@@ -90,3 +113,30 @@ pub const REASONING_UNCLOSED: u64 = 4;
 
 /// Cost of rejecting a call attempt whose markup cannot be repaired.
 pub const REJECT: u64 = 16;
+
+/// Cost of ending an open XML parameter value at the opener of a parameter
+/// the call's tool declares (`tool_call.markup.missing-parameter-close`):
+/// the same as inserting any missing closer.
+pub const MISSING_PARAMETER_CLOSE: u64 = INSERT_CLOSER;
+
+/// Cost of consuming one XML framing newline (`tool_call.xml.framing-newline`):
+/// zero, since it is the dialect's reading of well-formed markup, not a
+/// repair.
+pub const FRAMING_NEWLINE: u64 = 0;
+
+/// Cost of decoding stringified arguments (`tool_call.arguments.stringified`):
+/// zero, since the encoding is lossless; such arguments are flagged for
+/// mandatory validation instead.
+pub const STRINGIFIED_ARGUMENTS: u64 = 0;
+
+/// Cost of one non-guessed tolerant JSON recovery edit inside an argument
+/// value (a comment, a requoted string or key, a respelled literal, a
+/// missing `:` or `,`, a trailing comma, a closed container).
+pub const JSON_REPAIR: u64 = 1;
+
+/// Cost of one guessed tolerant JSON recovery edit inside an argument value.
+///
+/// That is a missing value, a bare token read as a string, a literal escape,
+/// or an unterminated string: it invents content, so it costs more than any
+/// purely syntactic repair.
+pub const JSON_GUESS: u64 = 4;

@@ -36,11 +36,68 @@ pub struct Spanned<T> {
     pub span: Range<usize>,
 }
 
-/// Which codec produced an argument leaf.
+/// Which codec produced an argument leaf, and so how its
+/// [`ArgLeaf::raw`] bytes relate to its value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ArgOrigin {
-    /// The verbatim `raw` codec.
+    /// The verbatim `raw` codec: the raw bytes are the string value.
     Raw,
+    /// A JSON value read by the `json` codec (directly, or as a typed
+    /// `xml-params` value): the raw bytes are the value's JSON spelling.
+    Json,
+    /// A verbatim XML parameter string read by the `xml-params` codec: the
+    /// raw bytes are the string value (framing newlines excluded).
+    XmlText,
+    /// A JSON value decoded from inside a stringified-arguments JSON string:
+    /// the raw bytes are the escaped source text that encodes the value (or
+    /// the whole enclosing string when the escape decoding could not be
+    /// mapped exactly).
+    StringifiedJson,
+}
+
+/// Why an argument value could not be decoded. The value is absent from
+/// [`ArgTree::root`]; its raw bytes are kept in [`UnresolvedArgument::raw`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ArgumentFault {
+    /// `InvalidUtf8InArgument`: the value's bytes are not well-formed UTF-8;
+    /// `at` is the absolute offset of the first malformed sequence.
+    InvalidUtf8InArgument {
+        /// Absolute offset of the malformed sequence.
+        at: usize,
+    },
+    /// JSON that tolerant syntax recovery cannot repair (a mismatched
+    /// closer, a member without a key, ...), or text after the JSON value;
+    /// `at` is the absolute offset where decoding stopped.
+    InvalidJson {
+        /// Absolute offset where decoding stopped.
+        at: usize,
+    },
+    /// `stringified_arguments_invalid_json`: the arguments were a JSON string
+    /// whose content is not one JSON object (unrecoverable syntax, text after
+    /// the value, or a non-object value).
+    StringifiedArgumentsInvalidJson,
+}
+
+/// One argument value that could not be decoded.
+///
+/// ```
+/// use purrassist_core::tool_call::{ArgumentFault, UnresolvedArgument};
+/// let unresolved = UnresolvedArgument {
+///     pointer: "/path".into(),
+///     fault: ArgumentFault::InvalidUtf8InArgument { at: 12 },
+///     raw: 10..14,
+/// };
+/// assert!(unresolved.raw.contains(&12));
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnresolvedArgument {
+    /// JSON Pointer the value would have had; empty when the whole
+    /// arguments value is unresolved.
+    pub pointer: String,
+    /// Why it could not be decoded.
+    pub fault: ArgumentFault,
+    /// The value's verbatim source range.
+    pub raw: Range<usize>,
 }
 
 /// Scratch bytes charged per [`ArgLeaf`] on top of its pointer text.
@@ -61,13 +118,30 @@ pub struct ArgLeaf {
 }
 
 /// A call's arguments: a source-spanned value tree plus, per leaf, its
-/// origin and verbatim source range.
+/// origin and verbatim source range, every value that could not be decoded,
+/// and how the arguments were encoded.
+///
+/// A value listed in [`Self::unresolved`] is absent from [`Self::root`];
+/// when the whole arguments value is unresolved (an entry with the empty
+/// pointer), `root` is an empty-object placeholder spanning the raw bytes.
+/// A call with any unresolved argument cannot be executed as recognized.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArgTree {
     /// The value tree; every node read from input carries its span.
     pub root: Node,
     /// Every leaf read from input, in document order.
     pub leaves: Vec<ArgLeaf>,
+    /// Every value that could not be decoded, in document order.
+    pub unresolved: Vec<UnresolvedArgument>,
+    /// `arguments_were_stringified`: the arguments arrived as a JSON string
+    /// whose content was decoded as JSON (`"arguments": "{\"a\":1}"`). Such
+    /// arguments must be validated against the tool's schema before use.
+    pub arguments_were_stringified: bool,
+    /// The canonical name of the declared tool whose
+    /// [`ArgumentShape`](super::ArgumentShape) specialized decoding (see
+    /// [`ToolSet::argument_shape`](super::ToolSet::argument_shape)), or
+    /// `None` when no declared tool was known to the codec.
+    pub tool: Option<String>,
 }
 
 impl ArgTree {
@@ -82,13 +156,71 @@ impl ArgTree {
     /// ```
     #[must_use]
     pub const fn empty_object() -> Self {
+        Self::value(Node {
+            value: Value::Object(Vec::new()),
+            span: None,
+        })
+    }
+
+    /// A tree holding `root` with no leaves, no unresolved values, and no
+    /// tool.
+    ///
+    /// ```
+    /// use purrassist_core::json::{Node, Value};
+    /// use purrassist_core::tool_call::ArgTree;
+    /// let tree = ArgTree::value(Node { value: Value::Null, span: Some(3..7) });
+    /// assert_eq!(tree.root.to_json(), "null");
+    /// assert!(tree.leaves.is_empty() && tree.unresolved.is_empty() && tree.tool.is_none());
+    /// ```
+    #[must_use]
+    pub const fn value(root: Node) -> Self {
         Self {
-            root: Node {
-                value: Value::Object(Vec::new()),
-                span: None,
-            },
+            root,
             leaves: Vec::new(),
+            unresolved: Vec::new(),
+            arguments_were_stringified: false,
+            tool: None,
         }
+    }
+
+    /// An argument value that could not be decoded: an empty-object
+    /// placeholder spanning `raw`, with one unresolved entry at the empty
+    /// pointer.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::{ArgTree, ArgumentFault};
+    /// let tree = ArgTree::unresolved(ArgumentFault::InvalidJson { at: 4 }, 2..9);
+    /// assert!(!tree.is_resolved());
+    /// assert_eq!(tree.unresolved[0].pointer, "");
+    /// assert_eq!(tree.root.span, Some(2..9));
+    /// ```
+    #[must_use]
+    pub fn unresolved(fault: ArgumentFault, raw: Range<usize>) -> Self {
+        let mut tree = Self::value(Node {
+            value: Value::Object(Vec::new()),
+            span: Some(raw.clone()),
+        });
+        tree.unresolved.push(UnresolvedArgument {
+            pointer: String::new(),
+            fault,
+            raw,
+        });
+        tree
+    }
+
+    /// Whether every argument value was decoded.
+    ///
+    /// See [`ArgTree::unresolved`] for an example.
+    #[must_use]
+    pub const fn is_resolved(&self) -> bool {
+        self.unresolved.is_empty()
+    }
+
+    /// Whether the whole value is unresolved (`root` is a placeholder).
+    pub(crate) fn is_placeholder(&self) -> bool {
+        self.unresolved
+            .iter()
+            .any(|unresolved| unresolved.pointer.is_empty())
     }
 
     /// A conservative scratch estimate of this tree: the value's
@@ -103,51 +235,82 @@ impl ArgTree {
     /// ```
     #[must_use]
     pub fn estimated_bytes(&self) -> u64 {
-        self.leaves
+        let pointers = self
+            .leaves
             .iter()
-            .fold(self.root.estimated_bytes(), |total, leaf| {
+            .map(|leaf| leaf.pointer.len())
+            .chain(self.unresolved.iter().map(|value| value.pointer.len()));
+        pointers.fold(
+            self.root
+                .estimated_bytes()
+                .saturating_add(saturating_size(self.tool.as_ref().map_or(0, String::len))),
+            |total, pointer| {
                 total
                     .saturating_add(LEAF_CHARGE)
-                    .saturating_add(saturating_size(leaf.pointer.len()))
-            })
+                    .saturating_add(saturating_size(pointer))
+            },
+        )
     }
 
     /// An object built from `(name, value)` parameter pairs, in order;
     /// every leaf pointer is re-rooted under its parameter name.
     ///
+    /// Unresolved values are re-rooted the same way; a parameter whose whole
+    /// value is unresolved contributes no member. The result is stringified
+    /// when any parameter was.
+    ///
     /// ```
     /// use purrassist_core::json::{Node, Value};
-    /// use purrassist_core::tool_call::{ArgLeaf, ArgOrigin, ArgTree, Spanned};
-    /// let value = ArgTree {
-    ///     root: Node { value: Value::String("1".into()), span: Some(8..9) },
-    ///     leaves: vec![ArgLeaf { pointer: String::new(), origin: ArgOrigin::Raw, raw: 8..9 }],
-    /// };
-    /// let tree = ArgTree::from_parameters(vec![(Spanned { value: "a/b".into(), span: 5..8 }, value)]);
+    /// use purrassist_core::tool_call::{ArgLeaf, ArgOrigin, ArgTree, ArgumentFault, Spanned};
+    /// let mut value = ArgTree::value(Node { value: Value::String("1".into()), span: Some(8..9) });
+    /// value.leaves.push(ArgLeaf { pointer: String::new(), origin: ArgOrigin::Raw, raw: 8..9 });
+    /// let broken = ArgTree::unresolved(ArgumentFault::InvalidUtf8InArgument { at: 20 }, 20..21);
+    /// let tree = ArgTree::from_parameters(vec![
+    ///     (Spanned { value: "a/b".into(), span: 5..8 }, value),
+    ///     (Spanned { value: "c".into(), span: 17..18 }, broken),
+    /// ]);
     /// assert_eq!(tree.root.to_json(), r#"{"a/b":"1"}"#);
     /// assert_eq!(tree.leaves[0].pointer, "/a~1b");
+    /// assert_eq!(tree.unresolved[0].pointer, "/c");
     /// ```
     #[must_use]
     pub fn from_parameters(parameters: Vec<(Spanned<String>, Self)>) -> Self {
-        let mut members = Vec::with_capacity(parameters.len());
-        let mut leaves = Vec::new();
+        let mut tree = Self::empty_object();
         for (name, value) in parameters {
-            let prefix = format!("/{}", pointer_segment(&name.value));
-            leaves.extend(value.leaves.into_iter().map(|leaf| ArgLeaf {
+            tree.adopt(name, value);
+        }
+        tree
+    }
+
+    /// Append `value` as member `name` of this object tree, re-rooting its
+    /// leaves and unresolved values under the member's pointer.
+    pub(crate) fn adopt(&mut self, name: Spanned<String>, value: Self) {
+        let prefix = format!("/{}", pointer_segment(&name.value));
+        let whole = value.is_placeholder();
+        self.leaves
+            .extend(value.leaves.into_iter().map(|leaf| ArgLeaf {
                 pointer: format!("{prefix}{}", leaf.pointer),
                 ..leaf
             }));
+        self.unresolved.extend(
+            value
+                .unresolved
+                .into_iter()
+                .map(|unresolved| UnresolvedArgument {
+                    pointer: format!("{prefix}{}", unresolved.pointer),
+                    ..unresolved
+                }),
+        );
+        self.arguments_were_stringified |= value.arguments_were_stringified;
+        if whole {
+            return;
+        }
+        if let Value::Object(members) = &mut self.root.value {
             members.push(Member {
                 key: name.value,
                 key_span: Some(name.span),
                 value: value.root,
             });
-        }
-        Self {
-            root: Node {
-                value: Value::Object(members),
-                span: None,
-            },
-            leaves,
         }
     }
 }

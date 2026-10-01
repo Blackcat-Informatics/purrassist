@@ -52,6 +52,7 @@ use super::ir::{
     CallSegment, Choice, Piece, ProductionKind, RawCall, ReasoningClosure, ReasoningSegment,
     Segment,
 };
+use super::toolset::ToolSet;
 use crate::contract::saturating_size as size;
 use crate::contract::{
     Evidence, Governor, Inference, InferenceKind, Loss, Resource, SourceSpan, StopReason,
@@ -447,7 +448,59 @@ impl<'s> Recognizer<'s> {
         policy: ReasoningPolicy,
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
-        let engine = Engine::new(&set.dialects, governor)?;
+        Self::build(set, None, policy, governor)
+    }
+
+    /// A recognizer for one turn over `set` whose argument codecs know the
+    /// declared tools: when a call's `name:` capture precedes its arguments
+    /// slot and names a tool of `tools` (exactly, or by alias), the slot's
+    /// codec receives that tool's [`ArgumentShape`](super::ArgumentShape)
+    /// (see [`crate::grammar::codec`]). The `xml-params` codec types values
+    /// and decides parameter boundaries by it; the `json` codec records the
+    /// tool's canonical name ([`ArgTree::tool`](super::ArgTree::tool)).
+    ///
+    /// # Errors
+    /// Returns the governor's exhaustion or cancellation reason.
+    ///
+    /// ```
+    /// use purrassist_core::grammar::Grammar;
+    /// use purrassist_core::tool_call::{DialectId, DialectSet, GenerationStop, Param, ReasoningPolicy, Recognizer, ToolDefinition, ToolSet};
+    /// use purrassist_core::{Budget, Governor};
+    /// let mut governor = Governor::new(Budget::default());
+    /// let grammar = Grammar::compile_governed(
+    ///     r#"grammar "xml.v1";
+    ///        call = "<f=" name:/[a-z]+/ ">" arguments:slot(xml-params, "</f>") "</f>";
+    ///        result = "<r>" content:until("</r>") "</r>";
+    ///        declaration = "<d>";"#,
+    ///     &mut governor,
+    /// )
+    /// .unwrap();
+    /// let set = DialectSet::new([DialectId::custom(grammar)], &mut governor).unwrap();
+    /// let tools = ToolSet::compile([ToolDefinition::new("sum").param("n", Param::integer())], Budget::default()).unwrap();
+    /// let mut recognizer = Recognizer::with_tools(&set, &tools, ReasoningPolicy::default(), &mut governor)?;
+    /// recognizer.push(b"<f=sum><parameter=n>\n1.50\n</parameter></f>", &mut governor)?;
+    /// let turn = recognizer.finish(GenerationStop::Stop, &mut governor)?;
+    /// let call = &turn.calls()[0].readings[0];
+    /// assert_eq!(call.arguments.root.to_json(), r#"{"n":1.50}"#);
+    /// assert_eq!(call.arguments.tool.as_deref(), Some("sum"));
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    pub fn with_tools(
+        set: &'s DialectSet,
+        tools: &'s ToolSet,
+        policy: ReasoningPolicy,
+        governor: &mut Governor,
+    ) -> Result<Self, StopReason> {
+        Self::build(set, Some(tools), policy, governor)
+    }
+
+    fn build(
+        set: &'s DialectSet,
+        tools: Option<&'s ToolSet>,
+        policy: ReasoningPolicy,
+        governor: &mut Governor,
+    ) -> Result<Self, StopReason> {
+        let engine = Engine::new(&set.dialects, tools, governor)?;
         let starts_open = matches!(policy, ReasoningPolicy::Separate { starts_open: true });
         let root = TurnNode {
             prev: 0,
@@ -1275,6 +1328,30 @@ fn explain(edit: &MarkupEdit) -> String {
         EditOperator::ReasoningUnterminated => {
             "reasoning block never closed; kept as reasoning to the end of output".into()
         }
+        EditOperator::MissingParameterClose => format!(
+            "ended the open parameter value before a declared parameter opener (inserted `{replacement}`)"
+        ),
+        EditOperator::FramingNewline => {
+            "consumed one framing newline of an XML parameter value".into()
+        }
+        EditOperator::StringifiedArguments => {
+            format!("decoded stringified arguments `{original}` as JSON `{replacement}`")
+        }
+        EditOperator::JsonComment
+        | EditOperator::JsonMissingValue
+        | EditOperator::JsonLiteralCase
+        | EditOperator::JsonBareString
+        | EditOperator::JsonBareKey
+        | EditOperator::JsonString
+        | EditOperator::JsonUnterminatedString
+        | EditOperator::JsonLiteralEscape
+        | EditOperator::JsonMissingColon
+        | EditOperator::JsonMissingComma
+        | EditOperator::JsonTrailingComma
+        | EditOperator::JsonCloseContainer => format!(
+            "JSON argument recovery `{}`: read `{original}` as `{replacement}`",
+            edit.rule().id
+        ),
     }
 }
 
@@ -1308,8 +1385,23 @@ fn encode_call(call: &RawCall, out: &mut Vec<u8>) {
     encode_bytes(call.arguments.root.to_json().as_bytes(), out);
     for leaf in &call.arguments.leaves {
         encode_bytes(leaf.pointer.as_bytes(), out);
+        out.push(leaf.origin as u8);
         encode_range(&leaf.raw, out);
     }
+    for unresolved in &call.arguments.unresolved {
+        encode_bytes(unresolved.pointer.as_bytes(), out);
+        out.extend(format!("{:?}", unresolved.fault).as_bytes());
+        encode_range(&unresolved.raw, out);
+    }
+    out.push(u8::from(call.arguments.arguments_were_stringified));
+    encode_bytes(
+        call.arguments
+            .tool
+            .as_deref()
+            .unwrap_or_default()
+            .as_bytes(),
+        out,
+    );
     for capture in &call.captures {
         out.push(capture.kind as u8);
         encode_range(&capture.span, out);
