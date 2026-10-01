@@ -1158,12 +1158,24 @@ pub(crate) fn merge(
 ) -> Result<(), StopReason> {
     governor.charge(Resource::Work, size(threads.len()).saturating_mul(K_THREAD))?;
     let slice = threads.as_mut_slice();
-    slice.sort_by(|a, b| {
+    // In place: configurations equal in key, rank and history are equal
+    // but for `stall` (checked below in debug builds), which merging
+    // minimizes, so an unstable sort merges exactly as a stable one would,
+    // and allocates nothing uncharged.
+    slice.sort_unstable_by(|a, b| {
         a.key()
             .cmp(&b.key())
             .then(a.rank().cmp(&b.rank()))
             .then(a.hist.cmp(&b.hist))
     });
+    debug_assert!(slice.windows(2).all(|pair| {
+        let (mut first, mut second) = (pair[0], pair[1]);
+        (first.key(), first.rank(), first.hist) != (second.key(), second.rank(), second.hist) || {
+            first.stall = 0;
+            second.stall = 0;
+            first == second
+        }
+    }));
     let mut write = 0;
     for read in 0..slice.len() {
         let current = slice[read];
@@ -1495,8 +1507,12 @@ impl<'s> Engine<'s> {
         merge(&mut live, &mut self.arena, governor)?;
         let mut completed = core::mem::replace(&mut self.out.completed, ScratchVec::new(governor));
         let failed = core::mem::replace(&mut self.out.failed, ScratchVec::new(governor));
-        self.open(table);
+        self.open(table, governor)?;
         // Repairs for attempts left with nothing.
+        let _records = governor.lease_scratch(
+            size(self.tables[table].attempts.len())
+                .saturating_mul(size(<Attempt as ScratchCharge>::CHARGE)),
+        )?;
         let records: Vec<Attempt> = self.tables[table].attempts.as_slice().to_vec();
         for record in &records {
             let touches = |threads: &ScratchVec<Thread>| {
@@ -1508,12 +1524,12 @@ impl<'s> Engine<'s> {
             if touches(&live) || touches(&completed) || record.completed {
                 continue;
             }
-            let failures: Vec<Failure> = failed
-                .as_slice()
-                .iter()
-                .filter(|failure| failure.thread.attempt == record.id)
-                .copied()
-                .collect();
+            let mine = |failure: &&Failure| failure.thread.attempt == record.id;
+            let _failures = governor.lease_scratch(
+                size(failed.as_slice().iter().filter(mine).count())
+                    .saturating_mul(size(<Failure as ScratchCharge>::CHARGE)),
+            )?;
+            let failures: Vec<Failure> = failed.as_slice().iter().filter(mine).copied().collect();
             self.note_failure(table, record.id, &failures);
             let until = if eof.is_some() { at } else { at + 1 };
             for state in self.repair(table, record, &failures, until, eof, governor)? {
@@ -1532,7 +1548,11 @@ impl<'s> Engine<'s> {
     }
 
     /// Report every attempt that finished its opener in this step.
-    fn open(&mut self, table: usize) {
+    fn open(&mut self, table: usize, governor: &mut Governor) -> Result<(), StopReason> {
+        let _opened = governor.lease_scratch(
+            size(self.out.opened.len())
+                .saturating_mul(size(<(u64, usize) as ScratchCharge>::CHARGE)),
+        )?;
         let mut opened: Vec<(u64, usize)> = self.out.opened.as_slice().to_vec();
         opened.sort_unstable();
         for (attempt, position) in opened {
@@ -1548,6 +1568,7 @@ impl<'s> Engine<'s> {
                 });
             }
         }
+        Ok(())
     }
 
     /// Record why (and where) an attempt left with no configuration failed.

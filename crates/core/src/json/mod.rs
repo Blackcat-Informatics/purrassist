@@ -289,7 +289,7 @@ impl Node {
         total
     }
 
-    fn write_json(&self, output: &mut String) {
+    pub(crate) fn write_json(&self, output: &mut String) {
         match &self.value {
             Value::Null => output.push_str("null"),
             Value::Bool(value) => output.push_str(if *value { "true" } else { "false" }),

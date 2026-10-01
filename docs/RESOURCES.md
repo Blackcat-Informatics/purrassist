@@ -232,6 +232,21 @@ the committed test asserts:
   validation-log overhead as `recover`, which the old precharge used to
   absorb.
 
+The `tool_call_recover` row, added with the tool-call cost bound, found
+tool-call recovery allocating more per call than it charged (about 0.7 KiB
+per call on its workload, and up to 22 KiB per call for a Hermes call with
+16 arguments). Resolution copied every argument value into each partial
+reading of a call and again for every later parameter (quadratic in the
+parameter count), serialized each reading's arguments into an uncharged
+buffer to digest it, and kept its readings, drafts, slots and alternatives
+in uncharged containers; the recognizer copied its attempt and failure
+lists each step, and merged configurations with a stable sort whose merge
+buffer was uncharged. Resolution now moves values instead of copying them,
+streams the digests, and charges its structures at portable sizes asserted
+against `size_of`; the recognizer leases its per-step copies and merges in
+place. The recovered calls, outcomes and receipts are unchanged apart from
+the scratch usage they report.
+
 `K` is fixed test slack for observed residual allocation at the two tested
 scales, including per-call overhead (`Parser`/`Renderer` construction, digest
 computation) and retained-output structures without individual charged
@@ -276,6 +291,7 @@ not the operation's own.
 | `edits_unified` | One hunk, 2 padding lines before it | 32 padding lines | 2,048 |
 | `embeddings` | 2 non-matching candidates plus an exact one | 32 candidates | 2,048 |
 | `intent` | 2 unrelated rules plus a matching one | 32 rules | 2,048 |
+| `tool_call_recover` | Reasoning and prose, then 2 Qwen3-Coder XML calls alternating with 2 Hermes calls | 32 of each | 4,096 |
 
 These `K` values, the workloads at both scales, and the inequality above are
 asserted by `allocation_oracle.rs` itself; a regression that undercounts real
@@ -308,7 +324,7 @@ and predicate cuts own admitted capacities; the syntax estimate is leased and
 released on a failed compilation. Controls cover the formerly undercharged
 128-branch arena under a 140,000-byte budget, exact scratch and Work boundaries,
 and cancellation at initial, intermediate and final allocation checkpoints.
-The complete allocator oracle contains 30 controls.
+The complete allocator oracle contains 31 controls.
 
 The controls also require exact charged-peak budgets to succeed and one byte
 less to return typed scratch exhaustion, low Work to return typed exhaustion,
@@ -545,40 +561,169 @@ Full detail is in the committed report. Each row measures 200 samples in its own
 
 C and Rust peak values are measured separately and must not be added as a simultaneous peak.
 
-## Tool-call recovery budgets
+## Tool-call recovery cost bound
 
 `ToolSet::recover` charges every step of `tool_call.recover.v1` to one
-governor: retaining the output (one `Work`, one `InputBytes` and one
-`ScratchBytes` per byte, before anything else), the encoding scan (one `Work`
-per byte), recognition under the published work bound of
-`purrassist_core::grammar::cost`, resolution, and the recovered value. Fixed
-effort presets are sized for ordinary turns, so a large output needs a budget
-that grows with it. `ToolRecoveryRequest::sized(effort, n)` derives one from
-the preset and two published constants:
+governor, with the named constants of `purrassist_core::grammar::cost`.
+Recovering `n` output bytes charges exactly
+
+```text
+recover     = 2·n (retaining the output, the encoding scan) + recognition + resolution
+recognition = K_LEX·n + K_THREAD·(configuration steps) + K_EVENT·(segment events)
+            + K_CAPTURE·(captured bytes and history nodes materialized)
+            + K_ERR·(error configurations explored)
+            + K_CODEC·(codec scan bytes, name lookups and tree nodes)
+            + (JSON recovery units) + (class-automaton units) + (search key bytes)
+resolution  = one unit per member, option, alternative and validation step,
+              plus the recovered value, ids, checks and ledger entries
+```
+
+Each dialect `d` of the request's allow-list keeps at most `B_d`
+configurations live per input byte, where `B_d` is
+`CompiledGrammar::configuration_bound()` (one per program location plus one
+per byte position of each literal spelling); `K_d = K_THREAD·B_d` is its
+per-byte term. The published bound is
+
+```text
+work ≤ (2 + K_LEX + Σ_d K_d)·n + K_ERR·E,   K_d = K_THREAD·B_d
+```
+
+where `E` is the number of error configurations the repair search explores,
+capped by the effort's `Work` budget (explicit `BudgetExceeded` beyond it).
+The configuration term is an upper bound per byte: on the fast path only a
+handful of the `B_d` configurations are live at any byte, and the remaining
+linear terms (segment events, captured bytes, codec scans, JSON recovery
+units, resolution) are each a small constant per byte: whole recoveries
+measure 10 to 17 units per byte in total (the throughput table below), far
+inside the slack of any built-in `K_d`.
+`crates/core/tests/tool_call_cost.rs` checks the bound on 64 KiB and 1 MiB
+Qwen3-Coder XML and Hermes string arguments (`E = 0`: no repair is
+recorded), that the 64 KiB to 1 MiB work ratio is within 1.05x of the byte
+ratio, that pushing the same output in chunks of 1, 16 and 4096 bytes
+charges identical usage, and that adding a dialect to the allow-list adds
+at most its `K_d` per byte (measured: adding Hermes to a Qwen3-Coder XML
+allow-list adds 0 units per byte on a Qwen3-Coder XML argument and 7 on a
+Hermes argument, the configurations of the call it now reads; adding
+`OpenAI` adds 0). These are checks of the published inequality on those
+inputs, not a proof for every input; the effort budgets bound everything
+else.
+
+`resources_doc_matches_cost_constants` parses this section and requires
+every value below to equal the code's.
+
+| Constant | Value | Meaning |
+| --- | ---: | --- |
+| `K_LEX` | 1 | `Work` per input byte for the lexical layer |
+| `K_THREAD` | 1 | `Work` per configuration step |
+| `K_EVENT` | 1 | `Work` per segment event |
+| `K_CAPTURE` | 1 | `Work` per captured byte or history node materialized |
+| `K_ERR` | 8 | `Work` per error configuration the repair search explores |
+| `K_COMPILE` | 1 | `Work` per grammar source byte and compiled table entry |
+| `K_PRINT` | 1 | `Work` per expression visited and byte printed by the printer |
+| `K_WITNESS` | 1 | `Work` per value a witness generates |
+| `K_CODEC` | 1 | `Work` per byte, lookup or node an argument codec visits |
+| `JSON_CODEC_STATE` | 1024 | `ScratchBytes` for one `json` codec slot's state |
+| `CLOSER_VARIANT` | 1 | Repair cost: a declared closer variant |
+| `TERMINAL_CONFUSABLE` | 1 | Repair cost: a confusable spelling of a literal |
+| `CONSUMED_CLOSER` | 1 | Repair cost: a closer the stop sequence consumed |
+| `INSERT_CLOSER` | 2 | Repair cost: a missing closer |
+| `DELETE_STRAY_CLOSER` | 3 | Repair cost: a stray closer |
+| `REASONING_UNCLOSED` | 4 | Repair cost: a reasoning block closed at a call opener |
+| `REJECT` | 16 | Cost of rejecting an unrepairable call attempt |
+| `MISSING_PARAMETER_CLOSE` | 2 | Repair cost: a value ended at a declared parameter's opener |
+| `FRAMING_NEWLINE` | 0 | Reading one XML framing newline |
+| `STRINGIFIED_ARGUMENTS` | 0 | Decoding stringified arguments |
+| `JSON_REPAIR` | 1 | One non-guessed JSON recovery edit in a value |
+| `JSON_GUESS` | 4 | One guessed JSON recovery edit in a value |
+| `STRAY_CLOSER_GAP` | 32 | Longest whitespace run before an absorbed stray closer |
+| `QUEUED_REPORT` | 96 | `ScratchBytes` per queued recognizer report |
+| `EXTRACT_PROSE` | 2 | Repair cost: prose dropped inside a call |
+| `EXTRACT_FENCE` | 1 | Repair cost: a fence marker dropped inside a call |
+| `RECOVER_WORK_PER_BYTE` | 32 | `Work` per output byte `ToolRecoveryRequest::sized` adds |
+| `RECOVER_SCRATCH_PER_BYTE` | 48 | `ScratchBytes` per output byte `ToolRecoveryRequest::sized` adds |
+
+| Built-in dialect | `B_d` | `K_d` per byte |
+| --- | ---: | ---: |
+| `hermes.v1` | 635 | 635 |
+| `openai-tool-calls.v1` | 2151 | 2151 |
+| `qwen3-coder-xml.v1` | 442 | 442 |
+
+The default request allows all three, so its bound is
+`(2 + 1 + 3228)·n + 8·E = 3231·n + 8·E`.
+
+### Budgets for large outputs
+
+Fixed effort presets are sized for ordinary turns, so a large output needs a
+budget that grows with it. `ToolRecoveryRequest::sized(effort, n)` derives
+one from the preset and the two per-byte constants above:
 
 ```text
 work          = preset.work          + RECOVER_WORK_PER_BYTE    · n   (32 per byte)
-scratch_bytes = preset.scratch_bytes + RECOVER_SCRATCH_PER_BYTE · n   (16 per byte)
+scratch_bytes = preset.scratch_bytes + RECOVER_SCRATCH_PER_BYTE · n   (48 per byte)
 input_bytes   = max(preset.input_bytes, n)
 ```
 
 The derivation is saturating and deterministic; every other limit is the
 preset's, so repair search stays bounded by the effort.
-`tool_call_recover::sized_budget_handles_one_mib` recovers a 1 MiB string
-argument in each built-in-dialect shape and checks that the call is
-`Resolved` under the unmodified `Effort::Maximum` preset and under
-`sized(effort, n)` for every effort from `Quick` to `Maximum`, with identical
-charges in every case and peak scratch at most 16 bytes per input byte:
+`tool_call_cost::one_mib_argument_fits_published_budget` recovers a 1 MiB
+string argument in each built-in dialect's shape and checks that the call is
+`Resolved` under `sized(effort, n)` for every effort from `Quick` to
+`Maximum` (and, for Qwen3-Coder XML and Hermes, under the unmodified
+`Effort::Maximum` preset), with identical charges in every case, peak
+scratch at most 16 bytes per input byte for Qwen3-Coder XML and Hermes, and
+at most `RECOVER_SCRATCH_PER_BYTE` for `OpenAI` stringified arguments, whose
+escaped string is also decoded, recorded as the decoding's replacement and
+parsed again:
 
 | Input | Bytes | Work | Work per byte | Peak scratch | Scratch per byte |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Qwen3-Coder XML `<parameter>` string | 1,048,663 | 11,536,662 | 11.00 | 8,412,950 | 8.02 |
-| Hermes JSON string argument | 1,048,648 | 10,488,489 | 10.00 | 9,445,081 | 9.01 |
+| Qwen3-Coder XML `<parameter>` string | 1,048,663 | 11,536,663 | 11.00 | 8,415,425 | 8.02 |
+| Hermes JSON string argument | 1,048,648 | 10,488,490 | 10.00 | 9,447,556 | 9.00 |
+| `OpenAI` stringified string argument | 1,048,679 | 15,732,143 | 15.00 | 47,201,161 | 45.01 |
 
-Both use the default request (all three built-in dialects). The constants
+All use the default request (all three built-in dialects). The constants
 leave headroom over these fast-path measurements; inputs that need repair
 search spend from the preset part of the budget, and exhaustion is reported
 as `BudgetExceeded` naming the resource.
+
+## Tool-call recovery throughput (illustrative)
+
+`crates/core/benches/tool_calls.rs` (`cargo bench -p purrassist-core --bench
+tool_calls`; `-- --list` lists its workloads, `-- NAME` runs one) recovers a
+write call with a 1 KiB, 64 KiB or 1 MiB string argument as Qwen3-Coder XML,
+Hermes, `OpenAI` stringified arguments, and a Qwen3-Coder XML call followed
+by a Hermes call under a Qwen3-Coder + Hermes allow-list, each under
+`ToolRecoveryRequest::sized(Effort::Standard, n)`, and feeds a 64 KiB
+Qwen3-Coder XML output to a `Recognizer` in chunks of 1, 16 and 4096 bytes,
+asserting identical charged usage for every chunking. Work and peak scratch
+per byte are functions of the input alone; the wall-clock columns are
+**illustrative only**: one run on one machine, not a qualification
+threshold. This bench is deliberately not one of the pinned
+`LATENCY_CASES`/`RECOVERY_CASES`/`PROFILING_CASES` sets of
+`scripts/check-resource-limits.py`, so no committed report or limit depends
+on its timings.
+
+Recorded on Linux 7.2.7-1-cachyos x86_64 (AMD RYZEN AI MAX+ 395 w/ Radeon
+8060S, 32 hardware threads), `rustc 1.100.0-nightly (4b6d04e70 2026-09-13)`,
+commit `2b5c98b` with this change applied:
+
+| Workload | Bytes | Samples | Median ms | MiB/s | Work/byte | Peak scratch/byte |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `qwen_xml_1kib` | 1111 | 200 | 0.290 | 3.64 | 12.23 | 31.34 |
+| `qwen_xml_64kib` | 65623 | 30 | 14.759 | 4.24 | 11.02 | 8.39 |
+| `qwen_xml_1mib` | 1048663 | 7 | 229.810 | 4.35 | 11.00 | 8.02 |
+| `hermes_1kib` | 1096 | 200 | 0.309 | 3.38 | 11.83 | 42.94 |
+| `hermes_64kib` | 65608 | 30 | 15.729 | 3.97 | 10.03 | 9.14 |
+| `hermes_1mib` | 1048648 | 7 | 250.520 | 3.99 | 10.00 | 9.00 |
+| `openai_stringified_1kib` | 1127 | 200 | 0.357 | 3.00 | 16.73 | 54.37 |
+| `openai_stringified_64kib` | 65639 | 30 | 18.380 | 3.40 | 15.02 | 45.16 |
+| `openai_stringified_1mib` | 1048679 | 7 | 295.754 | 3.38 | 15.00 | 45.01 |
+| `mixed_qwen_hermes_1kib` | 1184 | 200 | 0.298 | 3.79 | 12.24 | 36.92 |
+| `mixed_qwen_hermes_64kib` | 65696 | 30 | 14.257 | 4.39 | 10.53 | 9.01 |
+| `mixed_qwen_hermes_1mib` | 1048736 | 7 | 218.880 | 4.56 | 10.50 | 8.53 |
+| `push_chunk_1` | 65623 | 30 | 12.385 | 5.05 | 8.00 | 5.17 |
+| `push_chunk_16` | 65623 | 30 | 12.133 | 5.15 | 8.00 | 5.17 |
+| `push_chunk_4096` | 65623 | 30 | 12.198 | 5.13 | 8.00 | 5.17 |
 
 ## Resource limits
 

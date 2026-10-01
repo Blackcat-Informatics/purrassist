@@ -177,6 +177,61 @@ def check_core_dev_dependencies(manifest):
     return errors
 
 
+def _distinct_requests(cases):
+    """Distinct cases after removing identity, category and truth metadata."""
+    return len({json.dumps({key: value for key, value in case.items()
+                            if key not in ('id', 'category', 'truth')}, sort_keys=True)
+                for case in cases})
+
+
+def check_evaluation_manifest(root):
+    """Verify every evaluation corpus against `manifest.json`.
+
+    Python-generated outputs (JSON arrays) are checked for digest and case
+    count, registered inputs and the Python generator for digest. Each
+    `generators` entry (a corpus written by another generator, such as the
+    Rust tool-call corpus example) is checked for its JSON Lines digest, case
+    count and distinct-request count, and every listed generator source for
+    its digest."""
+    errors = []
+    evaluation_root = root / 'crates/core/tests/data/evaluation'
+    evaluation_manifest = json.loads((evaluation_root / 'manifest.json').read_text())
+    for name, entry in evaluation_manifest['outputs'].items():
+        path = evaluation_root / name
+        if (hashlib.sha256(path.read_bytes()).hexdigest() != entry['sha256']
+                or len(json.loads(path.read_text())) != entry['cases']):
+            errors.append(f'evaluation/{name}: corpus digest or census mismatch')
+    for name, value in evaluation_manifest['inputs'].items():
+        if name.endswith('_sha256'):
+            input_path = root / evaluation_manifest['inputs'][name.removesuffix('_sha256')]
+            if hashlib.sha256(input_path.read_bytes()).hexdigest() != value:
+                errors.append(f'evaluation: registered input digest mismatch: {input_path.relative_to(root)}')
+    generator = root / evaluation_manifest['generator']
+    if hashlib.sha256(generator.read_bytes()).hexdigest() != evaluation_manifest['generator_sha256']:
+        errors.append('evaluation: generator digest mismatch')
+    for name, entry in evaluation_manifest.get('generators', {}).items():
+        path = evaluation_root / name
+        if not path.is_file():
+            errors.append(f'evaluation/{name}: registered corpus missing')
+            continue
+        data = path.read_bytes()
+        try:
+            cases = [json.loads(line) for line in data.decode('utf-8').splitlines()]
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            errors.append(f'evaluation/{name}: not JSON Lines')
+            continue
+        if (hashlib.sha256(data).hexdigest() != entry['sha256'] or len(cases) != entry['cases']
+                or _distinct_requests(cases) != entry['distinct_requests']):
+            errors.append(f'evaluation/{name}: corpus digest or census mismatch')
+        if not entry.get('sources'):
+            errors.append(f'evaluation/{name}: no registered generator sources')
+        for source, digest in entry.get('sources', {}).items():
+            source_path = root / source
+            if not source_path.is_file() or hashlib.sha256(source_path.read_bytes()).hexdigest() != digest:
+                errors.append(f'evaluation/{name}: generator source digest mismatch: {source}')
+    return errors
+
+
 def main():
     errors = []
     core = tomllib.loads((ROOT / 'crates/core/Cargo.toml').read_text())
@@ -249,21 +304,7 @@ def main():
             path = ROOT / name
             if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != entry.get('notice_sha256', {}).get(name):
                 errors.append(f'{identity}: license notice missing or changed: {name}')
-    evaluation_root = ROOT / 'crates/core/tests/data/evaluation'
-    evaluation_manifest = json.loads((evaluation_root / 'manifest.json').read_text())
-    for name, entry in evaluation_manifest['outputs'].items():
-        path = evaluation_root / name
-        if (hashlib.sha256(path.read_bytes()).hexdigest() != entry['sha256']
-                or len(json.loads(path.read_text())) != entry['cases']):
-            errors.append(f'evaluation/{name}: corpus digest or census mismatch')
-    for name, value in evaluation_manifest['inputs'].items():
-        if name.endswith('_sha256'):
-            input_path = ROOT / evaluation_manifest['inputs'][name.removesuffix('_sha256')]
-            if hashlib.sha256(input_path.read_bytes()).hexdigest() != value:
-                errors.append(f'evaluation: registered input digest mismatch: {input_path.relative_to(ROOT)}')
-    generator = ROOT / evaluation_manifest['generator']
-    if hashlib.sha256(generator.read_bytes()).hexdigest() != evaluation_manifest['generator_sha256']:
-        errors.append('evaluation: generator digest mismatch')
+    errors.extend(check_evaluation_manifest(ROOT))
     for crate_name, notices in inventory['packaged_notices'].items():
         for name, expected in notices.items():
             path = ROOT / 'crates' / crate_name / name

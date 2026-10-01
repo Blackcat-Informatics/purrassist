@@ -7,7 +7,7 @@ use super::{
     value,
 };
 use crate::contract::saturating_size as size;
-use crate::contract::{Governor, Resource, StopReason};
+use crate::contract::{Governor, Resource, ScratchCharge, ScratchVec, StopReason};
 use crate::grammar::cost::K_CODEC;
 use crate::grammar::edit::{EditOperator, MarkupEdit};
 use crate::json::incremental::{IncrementalRecovery, decode_escape};
@@ -397,9 +397,7 @@ fn stringified(
         }
         _ => ArgTree::unresolved(ArgumentFault::StringifiedArgumentsInvalidJson, outer),
     };
-    if let Some(map) = map {
-        governor.release_scratch(map.charged)?;
-    }
+    drop(map);
     tree.arguments_were_stringified = true;
     Ok((tree, edits))
 }
@@ -425,13 +423,39 @@ fn relocate(node: &mut Node, place: &impl Fn(Range<usize>) -> Range<usize>) {
 
 /// The source range of every decoded byte of a canonical `"`-quoted JSON
 /// string: the escape (or character) that produced it.
+///
+/// Stored as pieces rather than per byte: a run of plain ASCII characters
+/// maps byte for byte, and every escape or multi-byte character maps each
+/// of its decoded bytes to its whole source span. Its storage is a
+/// [`ScratchVec`] charged as it grows and released when the map drops.
 struct EscapeMap {
-    starts: Vec<usize>,
-    ends: Vec<usize>,
+    pieces: ScratchVec<Piece>,
     /// Absolute offset of the closing quote: where an empty range at the
     /// end of the decoded text maps.
     close: usize,
-    charged: u64,
+}
+
+/// One piece of an [`EscapeMap`].
+#[derive(Clone, Copy, Debug)]
+struct Piece {
+    /// Offset of the piece's first decoded byte.
+    decoded: usize,
+    /// Its decoded length.
+    decoded_len: usize,
+    /// Absolute offset of its first source byte.
+    source: usize,
+    /// Its source length.
+    source_len: usize,
+    /// A run of plain ASCII characters, mapped byte for byte (otherwise
+    /// one escape or character, every decoded byte mapped to all of it).
+    run: bool,
+}
+
+impl ScratchCharge for Piece {
+    const CHARGE: usize = {
+        assert!(core::mem::size_of::<Self>() <= 40);
+        40
+    };
 }
 
 impl EscapeMap {
@@ -442,47 +466,74 @@ impl EscapeMap {
         source: &[u8],
         start: usize,
         text: &str,
-        governor: &mut Governor,
+        governor: &Governor,
     ) -> Result<Option<Self>, StopReason> {
         let quoted = source.len() >= 2 && source[0] == b'"' && source[source.len() - 1] == b'"';
         if !quoted {
             return Ok(None);
         }
-        let charged = size(text.len()).saturating_mul(16);
-        governor.charge(Resource::ScratchBytes, charged)?;
         let mut map = Self {
-            starts: Vec::with_capacity(text.len()),
-            ends: Vec::with_capacity(text.len()),
+            pieces: ScratchVec::new(governor),
             close: start + source.len() - 1,
-            charged,
         };
         let content = &source[1..source.len() - 1];
         let expected = text.as_bytes();
         let mut index = 0;
+        let mut decoded = 0;
         while index < content.len() {
             let Some((character, width)) = Self::character(&content[index..]) else {
-                governor.release_scratch(charged)?;
                 return Ok(None);
             };
             let mut encoded = [0; 4];
             let bytes = character.encode_utf8(&mut encoded).as_bytes();
-            let at = map.starts.len();
-            if expected.get(at..at + bytes.len()) != Some(bytes) {
-                governor.release_scratch(charged)?;
+            if expected.get(decoded..decoded + bytes.len()) != Some(bytes) {
                 return Ok(None);
             }
             let from = start + 1 + index;
-            for _ in bytes {
-                map.starts.push(from);
-                map.ends.push(from + width);
+            let run = width == 1 && bytes.len() == 1;
+            let extends = run
+                && map
+                    .pieces
+                    .as_slice()
+                    .last()
+                    .is_some_and(|last| last.run && last.source + last.source_len == from);
+            if extends {
+                let last = map
+                    .pieces
+                    .as_mut_slice()
+                    .last_mut()
+                    .expect("the run being extended");
+                last.decoded_len += 1;
+                last.source_len += 1;
+            } else {
+                map.pieces.push(Piece {
+                    decoded,
+                    decoded_len: bytes.len(),
+                    source: from,
+                    source_len: width,
+                    run,
+                })?;
             }
+            decoded += bytes.len();
             index += width;
         }
-        if map.starts.len() != expected.len() {
-            governor.release_scratch(charged)?;
+        if decoded != expected.len() {
             return Ok(None);
         }
         Ok(Some(map))
+    }
+
+    /// The source range of decoded byte `at` (`at` is within the text).
+    fn byte(&self, at: usize) -> Range<usize> {
+        let pieces = self.pieces.as_slice();
+        let index = pieces.partition_point(|piece| piece.decoded + piece.decoded_len <= at);
+        let piece = pieces[index];
+        if piece.run {
+            let offset = piece.source + (at - piece.decoded);
+            offset..offset + 1
+        } else {
+            piece.source..piece.source + piece.source_len
+        }
     }
 
     /// The first character of string content `content` as strict JSON
@@ -513,11 +564,20 @@ impl EscapeMap {
 
     /// The source range of decoded range `range`.
     fn place(&self, range: Range<usize>) -> Range<usize> {
+        let decoded = self
+            .pieces
+            .as_slice()
+            .last()
+            .map_or(0, |last| last.decoded + last.decoded_len);
         if range.is_empty() {
-            let at = self.starts.get(range.start).copied().unwrap_or(self.close);
+            let at = if range.start < decoded {
+                self.byte(range.start).start
+            } else {
+                self.close
+            };
             return at..at;
         }
-        self.starts[range.start]..self.ends[range.end - 1]
+        self.byte(range.start).start..self.byte(range.end - 1).end
     }
 }
 
@@ -559,6 +619,35 @@ mod tests {
         let leaf = &value.tree.leaves[0];
         assert_eq!(leaf.origin, ArgOrigin::StringifiedJson);
         assert_eq!(&source[leaf.raw.clone()], r#"\"é\""#.as_bytes());
+    }
+
+    /// ASCII runs, escapes and multi-byte characters mixed: every leaf maps
+    /// to the exact source bytes that encode it, and an empty value maps to
+    /// the position of its source.
+    #[test]
+    fn stringified_spans_map_through_runs_and_escapes() {
+        let source =
+            r#""{\"name\":\"ab\\ncé\\u00e9z\",\"n\":12,\"e\":\"\",\"t\":true}""#.as_bytes();
+        let value = decode(source);
+        assert_eq!(
+            value.tree.root.to_json(),
+            r#"{"name":"ab\ncééz","n":12,"e":"","t":true}"#
+        );
+        let raw: Vec<&[u8]> = value
+            .tree
+            .leaves
+            .iter()
+            .map(|leaf| &source[leaf.raw.clone()])
+            .collect();
+        assert_eq!(
+            raw,
+            [
+                r#"\"ab\\ncé\\u00e9z\""#.as_bytes(),
+                b"12",
+                br#"\"\""#,
+                b"true"
+            ]
+        );
     }
 
     #[test]

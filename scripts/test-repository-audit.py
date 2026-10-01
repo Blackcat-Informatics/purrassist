@@ -3,7 +3,11 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 """Verify the dependency-free, network-free, ambient-free audit in
 `scripts/check-repository.py` against synthetic metadata and source fixtures."""
+import hashlib
 import importlib.util
+import json
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -134,6 +138,70 @@ class Inventory(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn('extra@0.1.0', errors[0])
         self.assertIn('maintainer approval', errors[0])
+
+
+class EvaluationManifest(unittest.TestCase):
+    """`check_evaluation_manifest` over a synthetic repository tree."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root)
+        evaluation = self.root / 'crates/core/tests/data/evaluation'
+        evaluation.mkdir(parents=True)
+        (self.root / 'input.txt').write_text('input\n')
+        (evaluation / 'generate.py').write_text('# generator\n')
+        (evaluation / 'cases.json').write_text(json.dumps([{'id': 'a', 'query': 'x'}]))
+        source = self.root / 'crates/core/examples/corpus.rs'
+        source.parent.mkdir(parents=True)
+        source.write_text('fn main() {}\n')
+        lines = [{'id': 'a', 'category': 'c', 'input': 'x', 'truth': 'Unresolved'},
+                 {'id': 'b', 'category': 'd', 'input': 'x', 'truth': []},
+                 {'id': 'c', 'category': 'c', 'input': 'y', 'truth': []}]
+        (evaluation / 'corpus.jsonl').write_text(''.join(json.dumps(line) + '\n' for line in lines))
+        digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+        self.manifest = {
+            'generator': 'crates/core/tests/data/evaluation/generate.py',
+            'generator_sha256': digest(evaluation / 'generate.py'),
+            'inputs': {'text': 'input.txt', 'text_sha256': digest(self.root / 'input.txt')},
+            'outputs': {'cases.json': {'cases': 1, 'sha256': digest(evaluation / 'cases.json')}},
+            'generators': {'corpus.jsonl': {
+                'sources': {'crates/core/examples/corpus.rs': digest(source)},
+                'cases': 3, 'distinct_requests': 2,
+                'sha256': digest(evaluation / 'corpus.jsonl')}},
+        }
+        self.write()
+
+    def write(self):
+        path = self.root / 'crates/core/tests/data/evaluation/manifest.json'
+        path.write_text(json.dumps(self.manifest, indent=2) + '\n')
+
+    def test_consistent_manifest_passes(self):
+        self.assertEqual(AUDIT.check_evaluation_manifest(self.root), [])
+
+    def test_changed_corpus_fails(self):
+        path = self.root / 'crates/core/tests/data/evaluation/corpus.jsonl'
+        path.write_text(path.read_text().replace('"y"', '"z"'))
+        errors = AUDIT.check_evaluation_manifest(self.root)
+        self.assertEqual(errors, ['evaluation/corpus.jsonl: corpus digest or census mismatch'])
+
+    def test_census_mismatch_fails(self):
+        self.manifest['generators']['corpus.jsonl']['distinct_requests'] = 3
+        self.write()
+        self.assertEqual(AUDIT.check_evaluation_manifest(self.root),
+                         ['evaluation/corpus.jsonl: corpus digest or census mismatch'])
+
+    def test_changed_generator_source_fails(self):
+        (self.root / 'crates/core/examples/corpus.rs').write_text('fn main() { changed() }\n')
+        self.assertEqual(AUDIT.check_evaluation_manifest(self.root), [
+            'evaluation/corpus.jsonl: generator source digest mismatch: crates/core/examples/corpus.rs'])
+
+    def test_missing_corpus_and_sources_fail(self):
+        (self.root / 'crates/core/tests/data/evaluation/corpus.jsonl').unlink()
+        self.assertEqual(AUDIT.check_evaluation_manifest(self.root),
+                         ['evaluation/corpus.jsonl: registered corpus missing'])
+
+    def test_current_repository_manifest_passes(self):
+        self.assertEqual(AUDIT.check_evaluation_manifest(AUDIT.ROOT), [])
 
 
 if __name__ == '__main__':

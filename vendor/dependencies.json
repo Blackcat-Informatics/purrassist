@@ -112,7 +112,7 @@
       "manifest": "crates/core/tests/data/test262/manifest.json"
     },
     {
-      "name": "Correction-evaluation corpora (string selection, path matching, phonetic ambiguity, JSON recovery)",
+      "name": "Correction-evaluation corpora (string selection, path matching, phonetic ambiguity, JSON recovery, tool-call recovery)",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
       "manifest": "crates/core/tests/data/evaluation/manifest.json"
     }

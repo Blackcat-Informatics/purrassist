@@ -208,8 +208,9 @@ pub const EXTRACT_FENCE: u64 = 1;
 /// bytes ([`K_CAPTURE`]), the argument codec's scan ([`K_CODEC`]) and the
 /// JSON recovery parser's units, and the per-byte resolution and
 /// digest work. On the fast path (string arguments with no repair) that is
-/// 10 to 11 units per byte over the built-in dialect set (see
-/// `docs/RESOURCES.md`); this constant leaves headroom above it. Repair
+/// 10 to 11 units per byte for Qwen3-Coder XML and Hermes arguments and 15
+/// for `OpenAI` stringified arguments, over the built-in dialect set (see
+/// `docs/RESOURCES.md`); this constant leaves headroom above them. Repair
 /// search beyond that stays bounded by the preset itself.
 ///
 /// [`ToolRecoveryRequest::sized`]: crate::tool_call::ToolRecoveryRequest::sized
@@ -220,7 +221,10 @@ pub const RECOVER_WORK_PER_BYTE: u64 = 32;
 ///
 /// It covers the retained source, the recognizer's capture and codec
 /// buffers, the argument value tree, and the recovered call's copy of it:
-/// 8 to 9 bytes per byte on the fast path (see `docs/RESOURCES.md`).
+/// 8 to 9 bytes per byte on the fast path for Qwen3-Coder XML and Hermes
+/// arguments, and 45 for `OpenAI` stringified arguments, whose escaped
+/// string is also decoded, recorded as the decoding's replacement, and
+/// parsed again (see `docs/RESOURCES.md`).
 ///
 /// [`ToolRecoveryRequest::sized`]: crate::tool_call::ToolRecoveryRequest::sized
-pub const RECOVER_SCRATCH_PER_BYTE: u64 = 16;
+pub const RECOVER_SCRATCH_PER_BYTE: u64 = 48;

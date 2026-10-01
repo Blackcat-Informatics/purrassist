@@ -2,15 +2,16 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Correction-evaluation corpora
 
-Four first-party, deterministic corpora consumed by
+Five first-party, deterministic corpora consumed by
 `crates/core/tests/correction_evaluation.rs` to measure the incorrect
 automatic-correction rate of `purrassist_core::matching`, `purrassist_core::paths`,
-and `purrassist_core::schema::recovery`. Registered as a `test_data` entry in
-`vendor/dependencies.json`.
+`purrassist_core::schema::recovery`, and tool-call recovery
+(`purrassist_core::tool_call::ToolSet::recover`). Registered as a `test_data`
+entry in `vendor/dependencies.json`.
 
 ## Provenance
 
-Every file here is produced by `generate.py` in this directory, run with
+Every JSON file here is produced by `generate.py` in this directory, run with
 `python3 crates/core/tests/data/evaluation/generate.py`. The generator uses
 no random-number generation, so re-running it against an unchanged
 `crates/core/tests/data/unicode/confusables.txt` reproduces byte-identical
@@ -71,15 +72,48 @@ Unicode license and provenance.
   cases exercise composed transformations. There are 714 examples and 686
   distinct requests: scalar stringification and integer type swapping overlap.
   Whitespace repetitions do not inflate this corpus.
+- `tool-calls.jsonl` -- tool-call recovery cases for `ToolSet::recover`, one
+  JSON record per line: `id`, `category` (the repair rule the mutation
+  inverts, or `canonical` for an unmutated witness), `dialect` (the
+  request's comma-separated dialect allow-list), `policy` (`per_tool`,
+  `structural` or `tolerant`), `stop` (`stop`, `tool_calls`, `length`, or
+  `{"sequence": ...}`), `input` (the model turn), and `truth`: the calls a
+  correct answer recovers (`name` and `arguments`, in order) or
+  `"Unresolved"` when the only correct answer is abstention. Every request is
+  distinct. See `docs/MATCHING-QUALITY.md` ("Tool-call recovery evaluation")
+  for the mutation families and the labelling rule.
+
+## Tool-call corpus provenance
+
+`tool-calls.jsonl` is produced by the `tool-call-corpus` example
+(`crates/core/examples/tool_call_corpus.rs`, sharing its generator with the
+evaluation test through `crates/core/tests/tool_call_corpus/mod.rs`). It is
+derived only from first-party material: the generator's own tool
+definitions and mutation tables, and well-formed calls printed by
+`purrassist_core::grammar::witness` from this project's built-in dialect
+grammars (`crates/core/src/tool_call/dialects/`). Witness seeds are fixed and
+the remaining choices use a first-party xorshift generator seeded from each
+case's coordinates, so the output is byte-for-byte reproducible; no model
+output, third-party transcript or external dataset is copied, and the file
+carries this project's license. `manifest.json` registers it under
+`generators`: its SHA-256 digest, case count, distinct-request count, the
+command that writes it, and the digests of both generator sources.
+`scripts/check-repository.py` verifies every one of them, and
+`correction_evaluation.rs::corpus_regenerates_identically` regenerates the
+corpus in memory (which also exercises the library the generator calls) and
+requires it to equal the committed file.
 
 ## Regenerating
 
 ```sh
 python3 crates/core/tests/data/evaluation/generate.py
+cargo run --locked -p purrassist-core --example tool-call-corpus
 ```
 
-This overwrites all four `*.json` files and `manifest.json` in place. Review
-the diff before committing a regeneration; `correction_evaluation.rs` pins
+The Python generator overwrites the four `*.json` files and `manifest.json`
+in place, keeping the manifest's `generators` entries. The example
+overwrites `tool-calls.jsonl` and its `generators` entry, keeping every other
+manifest entry. Review the diff before committing a regeneration; `correction_evaluation.rs` pins
 the exact case counts and outcome tallies documented in
 `docs/MATCHING-QUALITY.md`, so a corpus change requires updating both.
 
@@ -93,3 +127,9 @@ The exact Clopper–Pearson calculation in the quality report is a binomial-mode
 summary, whose confidence interpretation depends on independent trials and a
 common error probability. It is not an empirically established deployment
 error-rate guarantee. Score-threshold sweeps expose abstention alongside errors.
+
+The tool-call corpus applies one mutation family per case to synthetic
+witness calls; it measures whether each repair rule recovers exactly the
+original call or abstains, not how often real models produce each
+malformation, and its cases share tools, witness value vocabularies and
+mutation templates.

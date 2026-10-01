@@ -790,6 +790,55 @@ fn unknown_parameter_policy_each_mode() {
     assert_eq!(call.outcome, CallOutcome::BestGuess);
 }
 
+/// Under `Structural` a near-miss parameter name is never dropped in place
+/// of the rename the evidence favors: dropping `mdoe` would recover a
+/// different call (found by the tool-call mutation corpus). An undeclared
+/// name that is no near miss is still dropped with a loss.
+#[test]
+fn structural_never_drops_a_near_miss_parameter() {
+    let text =
+        r#"<tool_call>{"name": "f", "arguments": {"query": "a", "mdoe": "regex"}}</tool_call>"#;
+    let tools = compile([ToolDefinition::new("f")
+        .effects(Effects::ReadOnly)
+        .unknown_parameters(UnknownParameters::DropWithLoss)
+        .param("query", Param::string().required())
+        .param("mode", Param::enumeration(&["literal", "regex"]))]);
+    let structural = run_with(
+        DialectId::Hermes,
+        &tools,
+        text,
+        GenerationStop::ToolCalls,
+        &Policies::all(RepairPolicy::Structural),
+    );
+    assert_eq!(
+        one(&structural).outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::UnknownParameter {
+                pointer: "/mdoe".into()
+            }
+        }
+    );
+    let tolerant = run(DialectId::Hermes, &tools, text);
+    let call = one(&tolerant);
+    assert_eq!(call.outcome, CallOutcome::BestGuess);
+    assert_eq!(
+        call.arguments().to_json(),
+        r#"{"query":"a","mode":"regex"}"#
+    );
+    let text = r#"<tool_call>{"name": "f", "arguments": {"query": "a", "zzzzzz": 1}}</tool_call>"#;
+    let turn = run_with(
+        DialectId::Hermes,
+        &tools,
+        text,
+        GenerationStop::ToolCalls,
+        &Policies::all(RepairPolicy::Structural),
+    );
+    let call = one(&turn);
+    assert_eq!(call.outcome, CallOutcome::BestGuess);
+    assert_eq!(call.arguments().to_json(), r#"{"query":"a"}"#);
+    assert_eq!(rule_ids(call), ["tool_call.parameter.drop-unknown"]);
+}
+
 #[test]
 fn fenced_example_is_guess() {
     let call_text = qwen("f", "<parameter=a>\nx\n</parameter>");

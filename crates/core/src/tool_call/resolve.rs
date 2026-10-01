@@ -45,7 +45,11 @@
 //!    missing required parameter, relocated out of a nested object
 //!    (`json.key.relocate`); under any policy, dropped with a data loss
 //!    (`DropWithLoss`) or kept (`PassThrough`) by the scope's
-//!    [`UnknownParameters`]. Under `Error`, an unassignable parameter is
+//!    [`UnknownParameters`], except that under `Structural` a near miss of
+//!    a declared name (a name `json.key.match` would rename) is never
+//!    dropped: that would silently discard the value the evidence assigns
+//!    to a declared parameter. Under `Error`, and for such a near miss
+//!    under `DropWithLoss`, an unassignable parameter is
 //!    [`UnresolvedReason::UnknownParameter`]; a required parameter nothing
 //!    supplies is [`UnresolvedReason::MissingRequired`] (never invented).
 //! 4. **Repeats** (R3.4d). An array parameter collects every occurrence's
@@ -103,7 +107,7 @@ use crate::contract::{
     Evidence, Governor, Inference, InferenceKind, Loss, Outcome, Resource, ScratchVec, SourceSpan,
     StopReason, Validation,
 };
-use crate::digest::Digest;
+use crate::digest::{Digest, DigestBuilder};
 use crate::grammar::CaptureKind;
 use crate::grammar::edit::{EditOperator, LossKind};
 use crate::json::{Member, Node, Value, pointer_segment};
@@ -118,6 +122,44 @@ use std::collections::BTreeMap;
 
 /// Scratch bytes charged per ledger entry built by resolution.
 const ENTRY_BYTES: u64 = 256;
+
+/// Portable scratch charges of resolution's own structures: each one's size
+/// on a 64-bit target, asserted below never to undercount the target
+/// compiling this crate (see [`crate::contract::ScratchCharge`]). Every
+/// structure resolution builds per call, reading, parameter or alternative
+/// is charged at these sizes (and every value it copies at its
+/// [`Node::estimated_bytes`]), so resolution's allocations are charged in
+/// proportion to what it builds.
+const READING_BYTES: u64 = 232;
+/// See [`READING_BYTES`].
+const CALL_BYTES: u64 = 456;
+/// See [`READING_BYTES`].
+const DRAFT_BYTES: u64 = 144;
+/// See [`READING_BYTES`].
+const TYPED_BYTES: u64 = 176;
+/// See [`READING_BYTES`].
+const OCCURRENCE_BYTES: u64 = 128;
+/// See [`READING_BYTES`].
+const SLOT_BYTES: u64 = 104;
+/// See [`READING_BYTES`].
+const TARGET_BYTES: u64 = 176;
+/// See [`READING_BYTES`]: one reading's ranking record (its cost, two
+/// digests and its position).
+const RANKED_BYTES: u64 = 80;
+/// The portable charge of one object member.
+const MEMBER_BYTES: u64 = <Member as crate::contract::ScratchCharge>::CHARGE as u64;
+const _: () = {
+    use core::mem::size_of;
+    assert!(size_of::<CallReading>() as u64 <= READING_BYTES);
+    assert!(size_of::<Option<CallReading>>() as u64 <= READING_BYTES);
+    assert!(size_of::<ResolvedCall>() as u64 <= CALL_BYTES);
+    assert!(size_of::<Draft>() as u64 <= DRAFT_BYTES);
+    assert!(size_of::<Typed>() as u64 <= TYPED_BYTES);
+    assert!(size_of::<Occurrence>() as u64 <= OCCURRENCE_BYTES);
+    assert!(size_of::<Slot>() as u64 <= SLOT_BYTES);
+    assert!(size_of::<Target<'static>>() as u64 <= TARGET_BYTES);
+    assert!(size_of::<(u64, Digest, Digest, usize)>() as u64 <= RANKED_BYTES);
+};
 
 /// How the repair policy of each tool is chosen for one request (C6).
 ///
@@ -397,7 +439,9 @@ pub enum UnresolvedReason {
     /// The arguments are not a JSON object.
     ArgumentsNotObject,
     /// A parameter the tool does not declare, under
-    /// [`UnknownParameters::Error`].
+    /// [`UnknownParameters::Error`], or a near miss of a declared name
+    /// under `Structural` and [`UnknownParameters::DropWithLoss`] (never
+    /// dropped in place of the rename).
     UnknownParameter {
         /// JSON Pointer of the parameter as written.
         pointer: String,
@@ -973,6 +1017,10 @@ impl<'a> Resolver<'a> {
         Ok(match segment {
             Segment::Content(span) => ResolvedSegment::Content(span.clone()),
             Segment::Reasoning(reasoning) => {
+                governor.charge(
+                    Resource::ScratchBytes,
+                    size(reasoning.embedded.len()).saturating_mul(CALL_BYTES),
+                )?;
                 let mut embedded = Vec::with_capacity(reasoning.embedded.len());
                 for call in &reasoning.embedded {
                     embedded.push(self.call(call, governor)?);
@@ -983,7 +1031,11 @@ impl<'a> Resolver<'a> {
                     embedded,
                 }
             }
-            Segment::Call(call) => ResolvedSegment::Call(Box::new(self.call(call, governor)?)),
+            Segment::Call(call) => {
+                let call = self.call(call, governor)?;
+                governor.charge(Resource::ScratchBytes, CALL_BYTES)?;
+                ResolvedSegment::Call(Box::new(call))
+            }
             Segment::Result(result) => {
                 governor.charge(Resource::ScratchBytes, ENTRY_BYTES)?;
                 ResolvedSegment::Result(result.clone())
@@ -1044,30 +1096,44 @@ impl<'a> Resolver<'a> {
         segment: &CallSegment,
         governor: &mut Governor,
     ) -> Result<ResolvedCall, StopReason> {
-        let mut readings: Vec<(CallReading, Digest, Digest)> = Vec::new();
+        let mut groups: Vec<Vec<CallReading>> = Vec::with_capacity(segment.readings.len());
         for (index, raw) in segment.readings.iter().enumerate() {
             let base = self.base(segment.derivations.get(index), governor)?;
-            for mut reading in self.readings(raw, base, governor)? {
-                if self.policies.exact {
-                    exact(&mut reading, governor)?;
+            let mut readings = self.readings(raw, base, governor)?;
+            if self.policies.exact {
+                for reading in &mut readings {
+                    exact(reading, governor)?;
                 }
-                let (content, full) = reading_digests(&reading, governor)?;
-                readings.push((reading, content, full));
             }
+            groups.push(readings);
+        }
+        let total: usize = groups.iter().map(Vec::len).sum();
+        // The ranking records, the selection slots and the distinct
+        // readings are transient: at most two reading slots and two
+        // ranking-sized records per reading.
+        let _ranking = governor
+            .lease_scratch(size(total).saturating_mul(2 * (RANKED_BYTES + READING_BYTES)))?;
+        let mut slots: Vec<Option<CallReading>> = Vec::with_capacity(total);
+        let mut ranked: Vec<(u64, Digest, Digest, usize)> = Vec::with_capacity(total);
+        for reading in groups.into_iter().flatten() {
+            let (content, full) = reading_digests(&reading, governor)?;
+            ranked.push((reading.cost, full, content, slots.len()));
+            slots.push(Some(reading));
         }
         // A total order: least cost first, then by digest; one reading per
         // distinct call (tool, arguments, blocker), its best derivation.
-        readings.sort_by_key(|(reading, _, full)| (reading.cost, *full));
-        let mut unique: Vec<(CallReading, Digest)> = Vec::with_capacity(readings.len());
-        for (reading, content, _) in readings {
-            if !unique.iter().any(|(_, known)| *known == content) {
-                unique.push((reading, content));
+        ranked.sort_by_key(|&(cost, full, _, position)| (cost, full, position));
+        let mut unique: Vec<(Digest, usize)> = Vec::with_capacity(ranked.len());
+        for &(_, _, content, position) in &ranked {
+            if !unique.iter().any(|(known, _)| *known == content) {
+                unique.push((content, position));
             }
         }
         let mut readings: Vec<Option<CallReading>> = unique
-            .into_iter()
-            .map(|(reading, _)| Some(reading))
+            .iter()
+            .map(|&(_, position)| slots[position].take())
             .collect();
+        drop(slots);
         let admitted = |reading: &CallReading| {
             reading.blocker.is_none()
                 && reading
@@ -1095,6 +1161,11 @@ impl<'a> Resolver<'a> {
             .collect();
         let competing = 1 + tied.len();
         let reading = readings[first].take().expect("the selected reading");
+        // The alternatives are retained.
+        governor.charge(
+            Resource::ScratchBytes,
+            size(readings.len()).saturating_mul(READING_BYTES),
+        )?;
         let mut ordered: Vec<CallReading> = Vec::with_capacity(readings.len());
         for index in tied {
             ordered.push(readings[index].take().expect("a tied reading"));
@@ -1202,6 +1273,7 @@ impl<'a> Resolver<'a> {
                 String::new(),
                 governor,
             )?;
+            governor.charge(Resource::ScratchBytes, READING_BYTES)?;
             return Ok(vec![unresolved(UnresolvedReason::Truncated, exact, ledger)]);
         }
         let incomplete = (raw.closure == Closure::Unterminated)
@@ -1218,14 +1290,20 @@ impl<'a> Resolver<'a> {
                 })
         });
         let Some(name) = &raw.name else {
+            governor.charge(Resource::ScratchBytes, READING_BYTES)?;
             return Ok(vec![unresolved(
                 early.unwrap_or(UnresolvedReason::MissingName),
                 None,
                 base,
             )]);
         };
-        let mut readings = Vec::new();
-        for target in self.targets(raw, name, governor)? {
+        let targets = self.targets(raw, name, governor)?;
+        governor.charge(
+            Resource::ScratchBytes,
+            size(targets.len()).saturating_mul(TARGET_BYTES.saturating_add(READING_BYTES)),
+        )?;
+        let mut readings = Vec::with_capacity(targets.len());
+        for target in targets {
             let mut ledger = base.clone();
             governor.charge(
                 Resource::ScratchBytes,
@@ -1249,7 +1327,13 @@ impl<'a> Resolver<'a> {
                 readings.push(reading);
                 continue;
             }
-            readings.extend(self.arguments(raw, tool, ledger, cost, governor)?);
+            let produced = self.arguments(raw, tool, ledger, cost, governor)?;
+            // Room for the readings beyond the one reserved per target.
+            governor.charge(
+                Resource::ScratchBytes,
+                size(produced.len().saturating_sub(1)).saturating_mul(READING_BYTES),
+            )?;
+            readings.extend(produced);
         }
         Ok(readings)
     }
@@ -1422,6 +1506,10 @@ impl<'a> Resolver<'a> {
         };
         let root = &raw.arguments.root;
         let Value::Object(members) = &root.value else {
+            governor.charge(
+                Resource::ScratchBytes,
+                READING_BYTES.saturating_add(root.estimated_bytes()),
+            )?;
             return Ok(vec![make(
                 root.clone(),
                 ledger,
@@ -1440,6 +1528,11 @@ impl<'a> Resolver<'a> {
             &tool.argument_shape().arguments,
             &site,
             governor,
+        )?;
+        governor.charge(
+            Resource::ScratchBytes,
+            size(drafts.len())
+                .saturating_mul(READING_BYTES.saturating_add(size(tool.name().len()))),
         )?;
         let mut readings = Vec::with_capacity(drafts.len());
         for draft in drafts {
@@ -1508,8 +1601,13 @@ impl<'a> Resolver<'a> {
                     Resource::ScratchBytes,
                     members
                         .iter()
-                        .map(|member| member.value.estimated_bytes())
-                        .sum(),
+                        .map(|member| {
+                            MEMBER_BYTES
+                                .saturating_add(size(member.key.len()))
+                                .saturating_add(member.value.estimated_bytes())
+                        })
+                        .sum::<u64>()
+                        .saturating_add(DRAFT_BYTES),
                 )?;
                 return Ok(vec![Draft {
                     members: members.to_vec(),
@@ -1521,28 +1619,45 @@ impl<'a> Resolver<'a> {
         };
         let mut drafts = Vec::new();
         for (slots, ledger, cost) in assignments {
+            governor.charge(
+                Resource::ScratchBytes,
+                DRAFT_BYTES.saturating_add(size(slots.len()).saturating_mul(MEMBER_BYTES)),
+            )?;
             let mut partial = vec![Draft {
-                members: Vec::new(),
+                members: Vec::with_capacity(slots.len()),
                 ledger,
                 cost,
                 blocker: None,
             }];
             for slot in slots {
                 let alternatives: Vec<(Member, Typed)> = match slot {
-                    Slot::Kept(member) => vec![(member.clone(), Typed::plain(member.value))],
+                    Slot::Kept(member) => {
+                        governor.charge(Resource::ScratchBytes, TYPED_BYTES)?;
+                        vec![(member, Typed::plain(Node::new(Value::Null)))]
+                    }
                     Slot::Parameter(index, occurrences) => {
                         let parameter = &shape.parameters[index];
                         let key_span = occurrences[0].key_span.clone();
                         let typed =
                             self.parameter(scope, parameter, occurrences, site, governor)?;
+                        governor.charge(
+                            Resource::ScratchBytes,
+                            size(typed.len()).saturating_mul(
+                                MEMBER_BYTES.saturating_add(size(parameter.name.len())),
+                            ),
+                        )?;
                         typed
                             .into_iter()
-                            .map(|typed| {
+                            .map(|mut typed| {
+                                // The value moves into the member; only the
+                                // changes that produced it stay with it.
+                                let value =
+                                    core::mem::replace(&mut typed.value, Node::new(Value::Null));
                                 (
                                     Member {
                                         key: parameter.name.clone(),
                                         key_span: key_span.clone(),
-                                        value: typed.value.clone(),
+                                        value,
                                     },
                                     typed,
                                 )
@@ -1550,9 +1665,19 @@ impl<'a> Resolver<'a> {
                             .collect()
                     }
                 };
-                partial = product(&partial, &alternatives, governor)?;
+                partial = product(partial, alternatives, governor)?;
             }
-            drafts.extend(partial);
+            if drafts.is_empty() {
+                // The first assignment's drafts are the list itself.
+                drafts = partial;
+            } else {
+                governor.charge(
+                    Resource::ScratchBytes,
+                    size(drafts.len().saturating_add(partial.len()).saturating_mul(2))
+                        .saturating_mul(DRAFT_BYTES),
+                )?;
+                drafts.extend(partial);
+            }
         }
         Ok(drafts)
     }
@@ -1674,11 +1799,17 @@ fn options(
     governor: &mut Governor,
 ) -> Result<Vec<NameOption>, StopReason> {
     let mut options: Vec<NameOption> = Vec::new();
-    if tolerant {
-        for literal in &shape.names {
-            let Some(base) = name_cost(&member.key, &literal.literal, governor)? else {
-                continue;
-            };
+    // Whether the member is a near miss of a declared name (one
+    // `json.key.match` would rename it): needed to rename it under
+    // `Tolerant`, and to refuse dropping it otherwise.
+    let mut near_miss = false;
+    let consult = tolerant || shape.unknown_parameters == UnknownParameters::DropWithLoss;
+    for literal in shape.names.iter().filter(|_| consult) {
+        let Some(base) = name_cost(&member.key, &literal.literal, governor)? else {
+            continue;
+        };
+        near_miss = true;
+        if tolerant {
             let Some(index) = shape
                 .parameters
                 .iter()
@@ -1702,12 +1833,15 @@ fn options(
             }
         }
     }
+    // Without the rename, a near miss is unassignable: dropping it would
+    // silently discard the value the evidence assigns to a declared
+    // parameter. (Keeping it, under `PassThrough`, is its literal reading.)
     match shape.unknown_parameters {
-        UnknownParameters::Error => {}
-        UnknownParameters::DropWithLoss => options.push(NameOption {
+        UnknownParameters::DropWithLoss if tolerant || !near_miss => options.push(NameOption {
             action: Action::Drop,
             cost: rules::resolution_rule("tool_call.parameter.drop-unknown").cost,
         }),
+        UnknownParameters::Error | UnknownParameters::DropWithLoss => {}
         UnknownParameters::PassThrough => options.push(NameOption {
             action: Action::Keep,
             cost: rules::resolution_rule("tool_call.parameter.pass-through").cost,
@@ -1729,6 +1863,15 @@ impl Resolver<'_> {
         governor: &mut Governor,
     ) -> Result<Vec<Typed>, StopReason> {
         governor.charge(Resource::Work, size(occurrences.len()))?;
+        governor.charge(
+            Resource::ScratchBytes,
+            size(
+                2 * (site.pointer.len()
+                    + site.source.len()
+                    + 2
+                    + 2 * (parameter.name.len() + occurrences[0].key.len())),
+            ),
+        )?;
         let here = Site {
             pointer: format!("{}/{}", site.pointer, pointer_segment(&parameter.name)),
             source: format!("{}/{}", site.source, pointer_segment(&occurrences[0].key)),
@@ -1872,6 +2015,7 @@ impl Resolver<'_> {
             for base in &partial {
                 for alternative in &typed {
                     governor.charge(Resource::Work, 1)?;
+                    governor.charge(Resource::ScratchBytes, combined_bytes(base, alternative))?;
                     let mut combined = base.clone();
                     if let Value::Array(values) = &mut combined.value.value {
                         values.push(alternative.value.clone());
@@ -1897,7 +2041,10 @@ impl Resolver<'_> {
         governor: &mut Governor,
     ) -> Result<Vec<Typed>, StopReason> {
         governor.charge(Resource::Work, 1)?;
-        governor.charge(Resource::ScratchBytes, value.estimated_bytes())?;
+        governor.charge(
+            Resource::ScratchBytes,
+            value.estimated_bytes().saturating_add(TYPED_BYTES),
+        )?;
         match shape {
             ValueShape::String(_) | ValueShape::Unmodeled => Ok(vec![Typed::plain(value)]),
             ValueShape::Enumeration(literals) => {
@@ -1932,6 +2079,10 @@ impl Resolver<'_> {
                     for base in &partial {
                         for alternative in &typed {
                             governor.charge(Resource::Work, 1)?;
+                            governor.charge(
+                                Resource::ScratchBytes,
+                                combined_bytes(base, alternative),
+                            )?;
                             let mut combined = base.clone();
                             if let Value::Array(values) = &mut combined.value.value {
                                 values.push(alternative.value.clone());
@@ -2076,6 +2227,10 @@ impl Resolver<'_> {
         if found.is_empty() {
             return Ok(vec![Typed::plain(value)]);
         }
+        governor.charge(
+            Resource::ScratchBytes,
+            size(found.len().saturating_sub(1)).saturating_mul(TYPED_BYTES),
+        )?;
         let mut readings = Vec::with_capacity(found.len());
         for (literal, base) in found {
             let mut typed = Typed::plain(Node {
@@ -2285,19 +2440,40 @@ impl Names<'_> {
         state: &Assignment<'_>,
         governor: &mut Governor,
     ) -> Result<Vec<Slot>, StopReason> {
-        let mut slots: Vec<Slot> = Vec::new();
+        let mut slots: Vec<Slot> = Vec::with_capacity(self.members.len() + state.moves.len());
         let mut members: Vec<Member> = self.members.to_vec();
+        // The copied members, and per member its slot, occurrence and
+        // source pointer.
         governor.charge(
             Resource::ScratchBytes,
             members
                 .iter()
-                .map(|member| member.value.estimated_bytes())
+                .map(|member| {
+                    MEMBER_BYTES
+                        .saturating_add(SLOT_BYTES)
+                        .saturating_add(OCCURRENCE_BYTES)
+                        .saturating_add(size(member.key.len()))
+                        .saturating_add(member.value.estimated_bytes())
+                        .saturating_add(size(
+                            2 * (self.site.source.len()
+                                + self.site.pointer.len()
+                                + 2
+                                + 4 * member.key.len()),
+                        ))
+                })
                 .sum(),
         )?;
         let mut moved: Vec<(usize, Occurrence)> = Vec::new();
         for &(member, child, index) in &state.moves {
             if let Value::Object(children) = &members[member as usize].value.value {
                 let child_member = &children[child as usize];
+                governor.charge(
+                    Resource::ScratchBytes,
+                    OCCURRENCE_BYTES
+                        .saturating_add(SLOT_BYTES)
+                        .saturating_add(size(child_member.key.len()))
+                        .saturating_add(child_member.value.estimated_bytes()),
+                )?;
                 moved.push((
                     index as usize,
                     Occurrence {
@@ -2567,26 +2743,114 @@ fn exact(reading: &mut CallReading, governor: &mut Governor) -> Result<(), StopR
 
 /// Extend each partial draft by each alternative of the next slot.
 fn product(
-    partial: &[Draft],
-    alternatives: &[(Member, Typed)],
+    partial: Vec<Draft>,
+    mut alternatives: Vec<(Member, Typed)>,
     governor: &mut Governor,
 ) -> Result<Vec<Draft>, StopReason> {
-    let mut next = Vec::with_capacity(partial.len() * alternatives.len());
-    for draft in partial {
-        for (member, typed) in alternatives {
+    let count = partial.len().saturating_mul(alternatives.len());
+    governor.charge(
+        Resource::ScratchBytes,
+        size(count).saturating_mul(DRAFT_BYTES),
+    )?;
+    let mut next = Vec::with_capacity(count);
+    let drafts = partial.len();
+    for (index, draft) in partial.into_iter().enumerate() {
+        // The last draft takes the alternatives; earlier ones copy them.
+        let own = if index + 1 == drafts {
+            core::mem::take(&mut alternatives)
+        } else {
+            copy_alternatives(&alternatives, governor)?
+        };
+        let choices = own.len();
+        let mut draft = Some(draft);
+        for (choice, (member, typed)) in own.into_iter().enumerate() {
             governor.charge(Resource::Work, 1)?;
             if !next.is_empty() {
                 governor.charge(Resource::Candidates, 1)?;
             }
-            let mut combined = draft.clone();
-            combined.members.push(member.clone());
-            combined.ledger.extend(typed.ledger.clone());
+            // The last alternative takes the draft; earlier ones copy it.
+            let mut combined = if choice + 1 == choices {
+                draft.take().expect("the draft is taken once")
+            } else {
+                copy_draft(draft.as_ref().expect("the draft"), governor)?
+            };
+            combined.members.push(member);
+            combined.ledger.extend(typed.ledger);
             combined.cost = combined.cost.saturating_add(typed.cost);
-            combined.blocker = combined.blocker.or_else(|| typed.blocker.clone());
+            combined.blocker = combined.blocker.or(typed.blocker);
             next.push(combined);
         }
     }
     Ok(next)
+}
+
+/// The scratch of an array reading extended by one item: a copy of `base`
+/// (its value with room for the item, and its ledger) and of the item.
+fn combined_bytes(base: &Typed, alternative: &Typed) -> u64 {
+    let items = match &base.value.value {
+        Value::Array(values) => size(values.len().saturating_add(1).saturating_mul(2)),
+        _ => 0,
+    };
+    TYPED_BYTES
+        .saturating_add(base.value.estimated_bytes())
+        .saturating_add(
+            items.saturating_mul(size(<Node as crate::contract::ScratchCharge>::CHARGE)),
+        )
+        .saturating_add(alternative.value.estimated_bytes())
+        .saturating_add(
+            base.ledger
+                .entries()
+                .saturating_add(alternative.ledger.entries())
+                .saturating_mul(ENTRY_BYTES),
+        )
+}
+
+/// A charged copy of `draft`, with room for its remaining members.
+fn copy_draft(draft: &Draft, governor: &mut Governor) -> Result<Draft, StopReason> {
+    governor.charge(
+        Resource::ScratchBytes,
+        size(draft.members.capacity())
+            .saturating_mul(MEMBER_BYTES)
+            .saturating_add(
+                draft
+                    .members
+                    .iter()
+                    .map(|member| {
+                        size(member.key.len()).saturating_add(member.value.estimated_bytes())
+                    })
+                    .sum(),
+            )
+            .saturating_add(draft.ledger.entries().saturating_mul(ENTRY_BYTES)),
+    )?;
+    let mut members = Vec::with_capacity(draft.members.capacity());
+    members.extend(draft.members.iter().cloned());
+    Ok(Draft {
+        members,
+        ledger: draft.ledger.clone(),
+        cost: draft.cost,
+        blocker: draft.blocker.clone(),
+    })
+}
+
+/// A charged copy of a slot's alternatives.
+fn copy_alternatives(
+    alternatives: &[(Member, Typed)],
+    governor: &mut Governor,
+) -> Result<Vec<(Member, Typed)>, StopReason> {
+    governor.charge(
+        Resource::ScratchBytes,
+        alternatives
+            .iter()
+            .map(|(member, typed)| {
+                MEMBER_BYTES
+                    .saturating_add(TYPED_BYTES)
+                    .saturating_add(size(member.key.len()))
+                    .saturating_add(member.value.estimated_bytes())
+                    .saturating_add(typed.ledger.entries().saturating_mul(ENTRY_BYTES))
+            })
+            .sum(),
+    )?;
+    Ok(alternatives.to_vec())
 }
 
 /// Two digests of a reading: its content (tool, arguments, blocker), the
@@ -2596,34 +2860,46 @@ fn reading_digests(
     reading: &CallReading,
     governor: &mut Governor,
 ) -> Result<(Digest, Digest), StopReason> {
-    let mut encoded = Vec::new();
-    let mut part = |bytes: &[u8]| {
-        encoded.extend((bytes.len() as u64).to_be_bytes());
-        encoded.extend_from_slice(bytes);
+    // The arguments' JSON is the only transient copy: written into a
+    // buffer sized (and leased) by its conservative estimate, so it is
+    // allocated once; every other part streams into the digests.
+    let estimate = reading.arguments.estimated_bytes();
+    let lease = governor.lease_scratch(estimate)?;
+    let mut json = String::with_capacity(usize::try_from(estimate).unwrap_or(usize::MAX));
+    reading.arguments.write_json(&mut json);
+    let blocker = reading
+        .blocker
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    let mut builder = DigestBuilder::new();
+    let mut encoded = 0_usize;
+    let mut spans = 0_usize;
+    let mut part = |builder: &mut DigestBuilder, bytes: &[u8]| {
+        builder.update(&(bytes.len() as u64).to_be_bytes());
+        builder.update(bytes);
+        encoded += 8 + bytes.len();
     };
-    part(reading.tool.as_deref().unwrap_or("").as_bytes());
-    part(reading.arguments.to_json().as_bytes());
     part(
-        reading
-            .blocker
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or_default()
-            .as_bytes(),
+        &mut builder,
+        reading.tool.as_deref().unwrap_or("").as_bytes(),
     );
-    let content = Digest::of(&encoded);
+    part(&mut builder, json.as_bytes());
+    part(&mut builder, blocker.as_bytes());
+    drop(json);
+    drop(lease);
+    let content = builder.clone().finish();
     for evidence in &reading.repairs.evidence {
-        encoded.extend((evidence.rule.len() as u64).to_be_bytes());
-        encoded.extend(evidence.rule.as_bytes());
-        encoded.extend((evidence.explanation.len() as u64).to_be_bytes());
-        encoded.extend(evidence.explanation.as_bytes());
+        part(&mut builder, evidence.rule.as_bytes());
+        part(&mut builder, evidence.explanation.as_bytes());
         if let Some(span) = &evidence.span {
-            encoded.extend((span.bytes.start as u64).to_be_bytes());
-            encoded.extend((span.bytes.end as u64).to_be_bytes());
+            builder.update(&(span.bytes.start as u64).to_be_bytes());
+            builder.update(&(span.bytes.end as u64).to_be_bytes());
+            spans += 16;
         }
     }
-    governor.charge(Resource::Work, size(encoded.len()))?;
-    Ok((content, Digest::of(&encoded)))
+    governor.charge(Resource::Work, size(encoded + spans))?;
+    Ok((content, builder.finish()))
 }
 
 /// The provenance distinguishing two competing readings.

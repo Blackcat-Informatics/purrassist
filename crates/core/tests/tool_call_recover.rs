@@ -694,9 +694,9 @@ fn deterministic_pinned_digest() {
 }
 
 const PINNED_DIGEST: &str =
-    "sha256:662d540d6ed8537dda18fa3decad991e476c534012e8aac2cf47ef6f210ad376";
+    "sha256:154e011c0a408b5dc31c5f8b7eec3c0769308f93358e32ec4e0eb41c4b6749b6";
 const PINNED_AMBIGUOUS_DIGEST: &str =
-    "sha256:05a33f4770ea37df6e4f8e113c4b0c41dd8a48a9c9da7a5c60b8ac53c525b67d";
+    "sha256:abdba4c871474ab17f564ba3a9370ce09928ce09dac36b9c883601e08b9648fd";
 
 #[test]
 fn invalid_utf8_is_loss_and_bytes_retained() {
@@ -1325,75 +1325,8 @@ fn motivating_case_closers_only() {
     assert_eq!(value(&result).finish, Finish::Unresolved);
 }
 
-#[test]
-fn sized_budget_handles_one_mib() {
-    let tools = compile([ToolDefinition::new("write")
-        .effects(Effects::ReadOnly)
-        .param("content", Param::string().required())]);
-    let big = "a".repeat(1 << 20);
-    let inputs = [
-        (
-            "qwen",
-            format!(
-                "<tool_call>\n<function=write>\n<parameter=content>\n{big}\n</parameter>\n</function>\n</tool_call>"
-            ),
-        ),
-        (
-            "hermes",
-            hermes("write", &format!("{{\"content\": \"{big}\"}}")),
-        ),
-    ];
-    for (label, input) in &inputs {
-        let len = input.len();
-        let check = |result: &AssistResult<ToolCalls>, context: &str| {
-            let Outcome::Resolved(calls) = &result.outcome else {
-                panic!("{label} {context}: {:?}", result.receipt.stopped)
-            };
-            assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
-            assert_eq!(
-                calls.calls[0]
-                    .arguments
-                    .get("content")
-                    .and_then(Node::as_str),
-                Some(big.as_str())
-            );
-            let usage = result.receipt.usage;
-            let hundredths = |amount: u64| amount * 100 / len as u64;
-            let (work, scratch) = (hundredths(usage.work), hundredths(usage.peak_scratch_bytes));
-            println!(
-                "{label} {context}: len {len} work {} ({}.{:02}/byte) peak scratch {} ({}.{:02}/byte)",
-                usage.work,
-                work / 100,
-                work % 100,
-                usage.peak_scratch_bytes,
-                scratch / 100,
-                scratch % 100,
-            );
-            assert!(usage.work <= cost::RECOVER_WORK_PER_BYTE * len as u64);
-            assert!(usage.peak_scratch_bytes <= cost::RECOVER_SCRATCH_PER_BYTE * len as u64);
-            assert!(
-                usage.peak_scratch_bytes <= 16 * len as u64,
-                "{label} {context}: peak scratch {} over 16 bytes per input byte",
-                usage.peak_scratch_bytes
-            );
-            usage
-        };
-        let preset = tools.recover(input.as_bytes(), &ToolRecoveryRequest::new(Effort::Maximum));
-        let usage = check(&preset, "Maximum preset");
-        for effort in [
-            Effort::Quick,
-            Effort::Standard,
-            Effort::Deep,
-            Effort::Maximum,
-        ] {
-            let request = ToolRecoveryRequest::sized(effort, len);
-            let result = tools.recover(input.as_bytes(), &request);
-            let sized = check(&result, &format!("sized {effort:?}"));
-            // The charges are a function of the input alone.
-            assert_eq!(sized, usage, "{label} {effort:?}");
-        }
-    }
-}
+// The 1 MiB budget assertions (C4) live in `tool_call_cost.rs`
+// (`one_mib_argument_fits_published_budget`), with the published cost bound.
 
 #[test]
 fn exact_effort_accepts_canonical_markup() {

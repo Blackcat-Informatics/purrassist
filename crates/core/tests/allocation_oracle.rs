@@ -38,7 +38,7 @@ use std::fmt::Write as _;
 use std::sync::Mutex;
 
 use purrassist_core::{
-    Budget, CancellationToken, Governor, Outcome, ScratchMeter, StopReason,
+    Budget, CancellationToken, Effort, Governor, Outcome, ScratchMeter, StopReason,
     contract::Resource,
     edits,
     embeddings::{Embedding, EmbeddingIndex, EmbeddingPolicy},
@@ -49,6 +49,7 @@ use purrassist_core::{
     paths::PathIndex,
     pattern::{GenerateOptions, GenerateOutcome, Pattern, PatternCompileError},
     schema::{Schema, recovery::RecoveryRequest},
+    tool_call::{Effects, Param, ToolDefinition, ToolRecoveryRequest, ToolSet},
 };
 
 /// The "at least 16x larger" scale pair every workload is measured at.
@@ -859,6 +860,53 @@ fn oracle_intent() {
     }
     let _guard = exclusive();
     assert_scaled("intent", 2048, [run(SCALES[0]), run(SCALES[1])]);
+}
+
+#[test]
+fn oracle_tool_call_recover() {
+    // A reasoning block and prose, then `n` Qwen3-Coder XML calls
+    // alternating with `n` Hermes calls, recovered over every built-in
+    // dialect.
+    fn output(n: usize) -> String {
+        let mut text = String::from("<think>plan</think>Reading the files.\n");
+        for i in 0..n {
+            let _ = write!(
+                text,
+                "<tool_call>\n<function=read_file>\n<parameter=path>\nsrc/file{i}.rs\n</parameter>\n<parameter=limit>\n{i}\n</parameter>\n</function>\n</tool_call>\n\
+                 <tool_call>\n{{\"name\": \"search\", \"arguments\": {{\"query\": \"item {i}\", \"mode\": \"regex\"}}}}\n</tool_call>\n"
+            );
+        }
+        text
+    }
+    let tools = ToolSet::compile(
+        [
+            ToolDefinition::new("read_file")
+                .effects(Effects::ReadOnly)
+                .param("path", Param::string().required())
+                .param("limit", Param::integer()),
+            ToolDefinition::new("search")
+                .effects(Effects::ReadOnly)
+                .param("query", Param::string().required())
+                .param("mode", Param::enumeration(&["literal", "regex"])),
+        ],
+        Budget::default(),
+    )
+    .expect("tools");
+    let run = |n: usize| -> (u64, u64, u64) {
+        let input = output(n);
+        let request = ToolRecoveryRequest::sized(Effort::Standard, input.len());
+        let (charged, bytes) = measure(|| {
+            let result = tools.recover(input.as_bytes(), &request);
+            let Outcome::Resolved(calls) = &result.outcome else {
+                panic!("{:?}", result.receipt.stopped)
+            };
+            assert_eq!(calls.usable().len(), 2 * n);
+            result.receipt.usage.total_scratch_charged
+        });
+        (bytes, charged, size(input.len()))
+    };
+    let _guard = exclusive();
+    assert_scaled("tool_call_recover", 4096, [run(SCALES[0]), run(SCALES[1])]);
 }
 
 fn generation_budget() -> Budget {
