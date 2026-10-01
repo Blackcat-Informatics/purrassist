@@ -1,0 +1,43 @@
+{
+  "description": "A3b: the same near-miss name on a Mutating tool under Structural is Unresolved: the name guess is not admitted.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "input": "<tool_call>\n{\"name\": \"read_fiel\", \"arguments\": {\"path\": \"a.rs\"}}\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "calls": [
+    {
+      "tool": null,
+      "arguments": {
+        "path": "a.rs"
+      },
+      "outcome": "unresolved: rule_not_admitted: rule `tool_call.name.match` is not admitted under Structural",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

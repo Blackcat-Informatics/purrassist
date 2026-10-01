@@ -1,0 +1,53 @@
+{
+  "description": "An array parameter's XML value that is not a JSON array is read as one item (tool_call.xml.array-item).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "tag",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "input": "<tool_call>\n<function=tag>\n<parameter=tags>\nurgent\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "tag",
+      "arguments": {
+        "tags": [
+          "urgent"
+        ]
+      },
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.array-item"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.array-item"
+  ]
+}

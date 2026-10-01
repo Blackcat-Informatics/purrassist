@@ -1,0 +1,40 @@
+{
+  "description": "An undeclared parameter under DropWithLoss is dropped as a data loss (tool_call.parameter.drop-unknown): BestGuess.",
+  "tools": [
+    {
+      "name": "read_file",
+      "unknown": "drop",
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "input": "<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"a.rs\", \"verbose\": true}}\n</tool_call>",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "a.rs"
+      },
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.parameter.drop-unknown"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.parameter.drop-unknown"
+  ]
+}

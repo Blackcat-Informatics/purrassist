@@ -1,0 +1,61 @@
+{
+  "description": "Two OpenAI tool_calls elements carrying the same source id: under IdPolicy::Source the duplicate is renumbered and recorded (tool_call.id.dedup).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "openai-tool-calls.v1"
+  ],
+  "ids": "source",
+  "input": "[{\"id\": \"c1\", \"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"arguments\": \"{\\\"city\\\": \\\"Lima\\\"}\"}}, {\"id\": \"c1\", \"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"arguments\": \"{\\\"city\\\": \\\"Oslo\\\"}\"}}]",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "city": "Lima"
+      },
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.arguments.decode-string"
+      ]
+    },
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "city": "Oslo"
+      },
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.arguments.decode-string",
+        "tool_call.id.dedup"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.arguments.decode-string",
+    "tool_call.arguments.decode-string",
+    "tool_call.id.dedup"
+  ]
+}

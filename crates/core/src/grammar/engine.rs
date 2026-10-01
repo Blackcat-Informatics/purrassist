@@ -26,7 +26,12 @@
 //! configuration is held while the bytes after it spell closers of its
 //! grammar, separated by bounded whitespace, which it absorbs as stray
 //! closers (a `Trail`); it is reported once the following bytes cannot
-//! continue a gap and a closer spelling, within the recognizer's lookbehind. An
+//! continue a gap and a closer spelling, within the recognizer's lookbehind.
+//! A completion that ended its call by inserting the wrapper's closer
+//! mid-message is then held until the bytes after it decide the insertion
+//! (another call's opener or the end of output: kept; text and then a
+//! closer: the attempt is rejected; text and no closer: a guess), and the
+//! turn layer settles nothing after the call's end meanwhile. An
 //! attempt that completes, is rejected, or is absorbed emits [`Event`]s that
 //! the turn-level segmentation consumes. This layer never depends on the turn
 //! level, so its events are a pure function of the bytes.
@@ -1271,6 +1276,31 @@ struct Trail {
     at: usize,
     /// The end of the longest complete spelling matched so far.
     accepted: Option<usize>,
+    /// For a completion that inserted the call's wrapper closer
+    /// mid-message, once the stray closers after it are absorbed: the
+    /// lookahead deciding that insertion (see [`Engine::scan_trail`]).
+    scan: Option<Scan>,
+}
+
+/// The lookahead after a call ended by an inserted wrapper closer.
+#[derive(Clone, Copy, Debug)]
+struct Scan {
+    /// The first byte after the call that is not ASCII whitespace.
+    text: Option<usize>,
+}
+
+/// What the bytes after a held completion decided.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Verdict {
+    /// Not yet decided.
+    Held,
+    /// Report the completion as it is.
+    Report,
+    /// Report it, its inserted wrapper closer a guess
+    /// (`tool_call.markup.missing-wrapper-close.before-text`).
+    Guess,
+    /// Not a call: the text after it is inside its wrapper.
+    Reject,
 }
 
 struct GrammarRuntime<'s> {
@@ -1634,6 +1664,7 @@ impl<'s> Engine<'s> {
                     node: ROOT,
                     at: group.pos,
                     accepted: None,
+                    scan: None,
                 });
             }
         }
@@ -1653,13 +1684,33 @@ impl<'s> Engine<'s> {
         let mut index = 0;
         while index < self.tables[table].trails.len() {
             let mut trail = self.tables[table].trails[index];
-            if self.step_trail(table, &mut trail, until, end, governor)? {
-                self.tables[table].trails.remove(index);
-                self.emit(table, trail.thread, false, governor)?;
-            } else {
-                self.tables[table].trails[index] = trail;
-                index += 1;
+            let mut verdict = Verdict::Held;
+            if trail.scan.is_none() && self.step_trail(table, &mut trail, until, end, governor)? {
+                verdict = Verdict::Report;
+                if self.ended_by_insertion(trail.thread.hist, governor)? {
+                    trail.scan = Some(Scan { text: None });
+                    trail.at = trail.thread.pos;
+                }
             }
+            if trail.scan.is_some() {
+                verdict = self.scan_trail(table, &mut trail, until, end, governor)?;
+            }
+            match verdict {
+                Verdict::Held => {
+                    self.tables[table].trails[index] = trail;
+                    index += 1;
+                    continue;
+                }
+                Verdict::Report => {}
+                Verdict::Guess => self.guess_insertion(&mut trail.thread, governor)?,
+                Verdict::Reject => {
+                    self.tables[table].trails.remove(index);
+                    self.drop_completion(table, &trail);
+                    continue;
+                }
+            }
+            self.tables[table].trails.remove(index);
+            self.emit(table, trail.thread, false, governor)?;
         }
         Ok(())
     }
@@ -1713,6 +1764,177 @@ impl<'s> Engine<'s> {
                 return Ok(true);
             };
             self.absorb(trail, stop, governor)?;
+        }
+    }
+
+    /// Decide a call ended by inserting its wrapper's closer mid-message
+    /// (`tool_call.markup.missing-wrapper-close`, possibly followed by
+    /// absorbed stray closers) from the bytes after it, read up to `until`:
+    ///
+    /// - only whitespace, then the opener of another attempt of the same
+    ///   production or the end of output: the insertion is the only
+    ///   reading ([`Verdict::Report`]);
+    /// - text, then a closer spelling of the grammar before any such
+    ///   opener: the text is inside the wrapper, so the attempt is not a
+    ///   call ([`Verdict::Reject`]; trailing text inside a call is never
+    ///   an argument);
+    /// - text, then such an opener or the end of output with no closer
+    ///   before it: the text is content after the call or inside a wrapper
+    ///   that never closes, so the insertion is a guess ([`Verdict::Guess`]).
+    ///
+    /// Until then the completion is held, and with it its attempt (so the
+    /// capture window keeps its bytes, charged as scratch) and every turn
+    /// report after the call's end ([`Self::held_floor`]): the decision
+    /// never depends on how the output is chunked. Each byte read charges
+    /// `Work` per literal compared.
+    fn scan_trail(
+        &self,
+        table: usize,
+        trail: &mut Trail,
+        until: usize,
+        end: bool,
+        governor: &mut Governor,
+    ) -> Result<Verdict, StopReason> {
+        let grammar = self.grammars[self.tables[table].grammar].grammar;
+        let program = self.tables[table].program;
+        let openers: Vec<&[u8]> = program
+            .openers
+            .iter()
+            .filter_map(|&pc| match program.insts[pc as usize] {
+                Inst::Lit { lit, .. } => Some(grammar.literals[lit as usize].bytes.as_slice()),
+                _ => None,
+            })
+            .collect();
+        let closers: Vec<&[u8]> = grammar
+            .closers
+            .iter()
+            .flat_map(|class| class.spellings.iter().map(Vec::as_slice))
+            .collect();
+        let compared = size(openers.len() + closers.len()).saturating_mul(K_THREAD);
+        let Some(mut scan) = trail.scan else {
+            return Ok(Verdict::Report);
+        };
+        while trail.at < until {
+            governor.charge(Resource::Work, compared)?;
+            let at = trail.at;
+            let byte = self.buffer.as_slice()[at - self.base];
+            trail.at += 1;
+            if scan.text.is_none() && !matches!(byte, b' ' | b'\t' | b'\n' | b'\r') {
+                scan.text = Some(at);
+            }
+            let read = &self.buffer.as_slice()[trail.thread.pos - self.base..trail.at - self.base];
+            if let Some(opener) = openers.iter().find(|opener| read.ends_with(opener)) {
+                let start = trail.at - opener.len();
+                return Ok(if scan.text.is_some_and(|text| text < start) {
+                    Verdict::Guess
+                } else {
+                    Verdict::Report
+                });
+            }
+            if let Some(closer) = closers.iter().find(|closer| read.ends_with(closer)) {
+                // A closer after only whitespace is the wrapper's own,
+                // beyond the stray-closer gap: the call as it was read.
+                let start = trail.at - closer.len();
+                return Ok(if scan.text.is_some_and(|text| text < start) {
+                    Verdict::Reject
+                } else {
+                    Verdict::Report
+                });
+            }
+        }
+        trail.scan = Some(scan);
+        Ok(match (end, scan.text) {
+            (false, _) => Verdict::Held,
+            (true, None) => Verdict::Report,
+            (true, Some(_)) => Verdict::Guess,
+        })
+    }
+
+    /// The earliest end of a call whose inserted wrapper closer is still
+    /// being decided ([`Self::scan_trail`]): the turn layer settles no
+    /// report at or after it until the decision is made.
+    pub(crate) fn held_floor(&self) -> Option<usize> {
+        self.tables
+            .iter()
+            .flat_map(|table| table.trails.iter())
+            .filter(|trail| trail.scan.is_some())
+            .map(|trail| trail.thread.pos)
+            .min()
+    }
+
+    /// Record every inserted wrapper closer ending `thread`'s history as
+    /// the guess `tool_call.markup.missing-wrapper-close.before-text`,
+    /// adjusting its cost.
+    fn guess_insertion(
+        &mut self,
+        thread: &mut Thread,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let mut pending = vec![thread.hist];
+        let mut changed = false;
+        while let Some(at) = pending.pop() {
+            governor.charge(Resource::Work, K_THREAD)?;
+            let HistNode { prev, kind } = self.arena.nodes.as_slice()[at as usize];
+            match kind {
+                HistKind::Edit(index) => {
+                    let edit = &mut self.arena.edits[index as usize];
+                    match edit.operator {
+                        EditOperator::MissingWrapperClose => {
+                            edit.operator = EditOperator::MissingWrapperCloseBeforeText;
+                            changed = true;
+                        }
+                        EditOperator::DeleteStrayCloser => pending.push(prev),
+                        _ => {}
+                    }
+                }
+                HistKind::Pack(other) => pending.extend([prev, other]),
+                _ => {}
+            }
+        }
+        if changed {
+            thread.cost = thread
+                .cost
+                .saturating_sub(EditOperator::MissingWrapperClose.rule().cost)
+                .saturating_add(EditOperator::MissingWrapperCloseBeforeText.rule().cost);
+        }
+        Ok(())
+    }
+
+    /// Whether every history packed in `hist` ends with an inserted wrapper
+    /// closer, possibly followed by absorbed stray closers.
+    fn ended_by_insertion(&self, hist: u32, governor: &mut Governor) -> Result<bool, StopReason> {
+        let nodes = self.arena.nodes.as_slice();
+        let mut pending = vec![hist];
+        while let Some(at) = pending.pop() {
+            governor.charge(Resource::Work, K_THREAD)?;
+            let HistNode { prev, kind } = nodes[at as usize];
+            match kind {
+                HistKind::Edit(index) => match self.arena.edits[index as usize].operator {
+                    EditOperator::MissingWrapperClose => {}
+                    EditOperator::DeleteStrayCloser => pending.push(prev),
+                    _ => return Ok(false),
+                },
+                HistKind::Pack(other) => pending.extend([prev, other]),
+                _ => return Ok(false),
+            }
+        }
+        Ok(true)
+    }
+
+    /// Drop a held completion [`Self::scan_trail`] rejected: the attempt
+    /// keeps the failure that led to the insertion, so it is rejected, its
+    /// raw span and reason kept, unless another reading of it completes.
+    fn drop_completion(&mut self, table: usize, trail: &Trail) {
+        if let Some(record) = self.tables[table]
+            .attempts
+            .as_mut_slice()
+            .iter_mut()
+            .find(|record| record.id == trail.thread.attempt)
+        {
+            record.failure.get_or_insert(Rejection::Malformed {
+                at: trail.thread.pos,
+            });
+            record.end.get_or_insert(trail.thread.pos);
         }
     }
 

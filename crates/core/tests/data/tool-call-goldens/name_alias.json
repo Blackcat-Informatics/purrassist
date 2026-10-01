@@ -1,0 +1,42 @@
+{
+  "description": "A call naming a tool by its declared alias resolves to the canonical tool (tool_call.name.alias) and is Resolved.",
+  "tools": [
+    {
+      "name": "read_file",
+      "aliases": [
+        "cat"
+      ],
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "input": "<tool_call>\n{\"name\": \"cat\", \"arguments\": {\"path\": \"a.rs\"}}\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "a.rs"
+      },
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.name.alias"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.name.alias"
+  ]
+}

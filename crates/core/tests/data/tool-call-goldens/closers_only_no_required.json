@@ -1,0 +1,42 @@
+{
+  "description": "A3a: a Qwen3-Coder function body of only stray </parameters> closers, on a Mutating tool under Structural with no required parameter, is `f {}` with one markup loss (tool_call.markup.closers-only-empty), Resolved per call and top level.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "input": "<tool_call>\n<function=f>\n</parameters>\n</parameters>\n</function>\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {},
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.closers-only-empty"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.closers-only-empty"
+  ]
+}

@@ -37,7 +37,8 @@
 //! [`Readings::Single`]: markup repairs that leave no other reading.
 //! [`RepairPolicy::Tolerant`] admits every rule. Guesses (fuzzy tool and
 //! parameter names, approximate enumeration values, guessed JSON repairs,
-//! calls inside reasoning or examples) are therefore never part of a
+//! calls inside reasoning or examples, a call ended before text by a
+//! wrapper closer that never comes) are therefore never part of a
 //! `Structural` call. Ambiguity is reported whatever the policy: a call with
 //! several equally good readings is per-call `Ambiguous`, never a usable
 //! call.
@@ -83,7 +84,9 @@
 //!   and variant reading, `tool_call.stop.consumed-closer`, every
 //!   `json.syntax.*` repair, `tool_call.extract.*`, the guesses
 //!   (`tool_call.reasoning.unclosed`, `tool_call.reasoning.embedded-call`,
-//!   `tool_call.context.fenced-example`, `tool_call.name.match`,
+//!   `tool_call.context.fenced-example`,
+//!   `tool_call.markup.missing-wrapper-close.before-text`,
+//!   `tool_call.name.match`,
 //!   `json.key.match`, `json.key.relocate`, `tool_call.parameter.repeated`,
 //!   `json.enum.match`, `tool_call.markup.undeclared-parameter-boundary`),
 //!   `tool_call.value.enum-normalize`, and

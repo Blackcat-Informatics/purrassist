@@ -15,7 +15,11 @@
 //! 2. The turn layer is a least-cost (tropical) segmentation over those
 //!    reports. It settles each offset once the input is
 //!    [`DialectSet::lookbehind`] bytes past it, so repairs that reach back
-//!    (a missing closer inserted before the next opener) are always seen.
+//!    (a missing closer inserted before the next opener) are always seen;
+//!    a call ended by a wrapper closer inserted before text holds every
+//!    offset after it until the text is decided (another call's opener, a
+//!    closer, or the end of output; see
+//!    `tool_call.markup.missing-wrapper-close.before-text`).
 //!    Content may not contain a complete opener; an attempt whose opener
 //!    completed ends as a call (or result), or as a rejected segment
 //!    costing [`cost::REJECT`](crate::grammar::cost::REJECT). Equal-cost
@@ -66,10 +70,11 @@ use super::ir::{
 use super::toolset::ToolSet;
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Evidence, Governor, Inference, InferenceKind, Loss, Resource, SourceSpan, StopReason,
+    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchMeter, SourceSpan,
+    StopReason,
 };
 use crate::digest::{Digest, DigestBuilder};
-use crate::grammar::cost::{K_CAPTURE, K_EVENT, K_LEX, REASONING_UNCLOSED, REJECT};
+use crate::grammar::cost::{K_CAPTURE, K_EVENT, K_LEX, QUEUED_REPORT, REASONING_UNCLOSED, REJECT};
 use crate::grammar::edit::{EditOperator, MarkupEdit};
 use crate::grammar::engine::{Engine, Event};
 use crate::provenance::{Derivation, Forest, NodeId, permute};
@@ -191,6 +196,24 @@ enum Interp {
     Top(Base),
     Embedded(usize),
 }
+
+/// The scratch held by queued reports ([`QUEUED_REPORT`] each), released
+/// as they are processed; what is still held when the recognizer is dropped
+/// unprocessed is released then.
+#[derive(Debug)]
+struct Queued {
+    meter: ScratchMeter,
+    bytes: u64,
+}
+
+impl Drop for Queued {
+    fn drop(&mut self) {
+        let _ = self.meter.release(self.bytes);
+    }
+}
+
+// The portable per-report charge never undercounts a report's own size.
+const _: () = assert!(core::mem::size_of::<Pending>() as u64 <= QUEUED_REPORT);
 
 #[derive(Clone, Debug)]
 enum Pending {
@@ -429,6 +452,7 @@ pub struct Recognizer<'s> {
     digest: DigestBuilder,
     marker: u32,
     pending: Vec<Pending>,
+    queued: Queued,
     turn: Turn,
     context: ContextTracker,
     failed: Option<StopReason>,
@@ -545,6 +569,10 @@ impl<'s> Recognizer<'s> {
             digest: DigestBuilder::new(),
             marker: 0,
             pending: Vec::new(),
+            queued: Queued {
+                meter: governor.scratch_meter(),
+                bytes: 0,
+            },
             turn,
             context: ContextTracker::new(),
             failed: None,
@@ -610,23 +638,50 @@ impl<'s> Recognizer<'s> {
         {
             self.marker = matcher.step(self.marker, byte);
             if let Some((literal, length)) = matcher.found(self.marker) {
-                self.pending.push(Pending::Marker {
+                let marker = Pending::Marker {
                     start: at + 1 - length as usize,
                     end: at + 1,
                     pair: literal / 2,
                     open: literal % 2 == 0,
-                });
+                };
+                self.queue(marker, governor)?;
             }
         }
-        self.pending
-            .extend(self.engine.events.drain(..).map(Pending::Engine));
+        self.queue_events(governor)?;
         if let Some(limit) = (at + 1).checked_sub(self.set.lookbehind) {
+            // A call whose inserted wrapper closer is still being decided
+            // holds every report after its end.
+            let limit = self
+                .engine
+                .held_floor()
+                .map_or(limit, |floor| limit.min(floor.saturating_sub(1)));
             self.settle(limit, governor)?;
         }
         Ok(())
     }
 
-    /// Process every pending report at an offset up to `limit`.
+    /// Queue one report, charging [`QUEUED_REPORT`] scratch bytes until it
+    /// is processed: reports wait at most the lookbehind, or behind a call
+    /// whose inserted wrapper closer is still being decided, and a queue too
+    /// long for the budget is `BudgetExceeded(ScratchBytes)`.
+    fn queue(&mut self, pending: Pending, governor: &mut Governor) -> Result<(), StopReason> {
+        governor.charge(Resource::ScratchBytes, QUEUED_REPORT)?;
+        self.queued.bytes += QUEUED_REPORT;
+        self.pending.push(pending);
+        Ok(())
+    }
+
+    /// Queue every report the engine produced.
+    fn queue_events(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
+        let events = core::mem::take(&mut self.engine.events);
+        for event in events {
+            self.queue(Pending::Engine(event), governor)?;
+        }
+        Ok(())
+    }
+
+    /// Process every pending report at an offset up to `limit`, releasing
+    /// each one's queue charge.
     fn settle(&mut self, limit: usize, governor: &mut Governor) -> Result<(), StopReason> {
         if !self.pending.iter().any(|pending| pending.at() <= limit) {
             return Ok(());
@@ -635,6 +690,9 @@ impl<'s> Recognizer<'s> {
             .into_iter()
             .partition(|pending| pending.at() <= limit);
         self.pending = rest;
+        let released = size(ready.len()).saturating_mul(QUEUED_REPORT);
+        governor.release_scratch(released)?;
+        self.queued.bytes -= released;
         // Stable order: offset, then phase, then arrival.
         let mut ready: Vec<(usize, usize, Pending)> = ready
             .into_iter()
@@ -973,8 +1031,7 @@ impl<'s> Recognizer<'s> {
         let end = self.engine.fed();
         self.context.finish(end, governor)?;
         self.engine.finish(&stop, governor)?;
-        self.pending
-            .extend(self.engine.events.drain(..).map(Pending::Engine));
+        self.queue_events(governor)?;
         self.settle(usize::MAX, governor)?;
         if let Some(think) = self.turn.think.take()
             && think.promoted.is_none()
@@ -1406,6 +1463,9 @@ fn explain(edit: &MarkupEdit) -> String {
         EditOperator::MissingWrapperClose => {
             format!("inserted the call's missing final closer `{replacement}`")
         }
+        EditOperator::MissingWrapperCloseBeforeText => format!(
+            "inserted the call's missing final closer `{replacement}` before text that no closer follows; the text may instead be inside a wrapper that never closes"
+        ),
         EditOperator::MissingClosersAtEnd => format!(
             "inserted missing closer `{replacement}` at the end of output; usable only when the call is otherwise complete"
         ),

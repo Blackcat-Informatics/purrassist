@@ -1,0 +1,51 @@
+{
+  "description": "A call whose </tool_call> never comes, followed by prose to the end of output with no closer after it: the prose is content after the call or inside a wrapper that never closes, so the inserted closer is the guess tool_call.markup.missing-wrapper-close.before-text and the call on a read-only tool is BestGuess (usable only accepting guesses).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\n</function>\nDone.",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "x"
+      },
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.markup.missing-wrapper-close.before-text"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.missing-wrapper-close.before-text"
+  ]
+}

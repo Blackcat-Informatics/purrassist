@@ -172,6 +172,23 @@ pub const JSON_GUESS: u64 = 4;
 /// decision never depends on how the output is chunked.
 pub const STRAY_CLOSER_GAP: usize = 32;
 
+/// Scratch bytes charged for each report the recognizer's turn layer queues.
+///
+/// A report (an engine event or a reasoning marker) is charged when queued
+/// and released when processed: the portable 64-bit size of one queued
+/// report, asserted never to undercount it on the compiling target.
+///
+/// Reports normally wait at most [`DialectSet::lookbehind`] bytes; behind a
+/// call whose inserted wrapper closer is still being decided
+/// (`tool_call.markup.missing-wrapper-close.before-text`) they wait until
+/// the decision, so a long wait is bounded by the scratch budget and ends in
+/// `BudgetExceeded(ScratchBytes)`, never in uncharged growth. Reports are
+/// queued and processed per byte, so the charge is the same for every way
+/// the output is chunked.
+///
+/// [`DialectSet::lookbehind`]: crate::tool_call::DialectSet::lookbehind
+pub const QUEUED_REPORT: u64 = 96;
+
 /// Cost of dropping prose inside a call's markup (`tool_call.extract.prose`):
 /// the dropped text may carry data, so it costs as much as inserting a
 /// missing closer (and the call records a data loss).

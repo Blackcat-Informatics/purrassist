@@ -1,0 +1,62 @@
+{
+  "description": "Hermes arguments on a read-only tool (Tolerant): a missing value becomes null (json.syntax.missing-value); the call's outcome follows the rule's guess flag.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "n": {
+              "type": "integer"
+            },
+            "flag": {
+              "type": "boolean"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "<tool_call>\n{\"name\": \"f\", \"arguments\": {\"path\": \"a\", \"n\": }}\n</tool_call>",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "path": "a",
+        "n": null
+      },
+      "outcome": "unresolved: schema_validation: the arguments fail the tool's schema",
+      "rules": [
+        "json.syntax.missing-value"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [
+    "sha256:dd20a8d9d4010349911af50677ca83d855ed8ef974dd77f09fced6d8ceca97d2"
+  ],
+  "ledger_rules": [
+    "json.syntax.missing-value"
+  ]
+}

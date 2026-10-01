@@ -1,0 +1,60 @@
+{
+  "description": "A3d: a complete call followed by a call cut off inside a string value, under a length stop: the cut call is truncated (tool_call.truncated) and the turn finishes TruncatedWithCalls.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "stop": "length",
+  "input": "<tool_call>\n<function=f>\n<parameter=path>\na.rs\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=f>\n<parameter=path>\nb",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "truncated_with_calls",
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "path": "a.rs"
+      },
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline"
+      ]
+    },
+    {
+      "tool": "f",
+      "arguments": {
+        "path": "b"
+      },
+      "outcome": "unresolved: truncated: the call was cut off by a length stop",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.truncated"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.truncated"
+  ]
+}

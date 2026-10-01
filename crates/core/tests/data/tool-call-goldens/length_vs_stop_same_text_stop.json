@@ -1,0 +1,57 @@
+{
+  "description": "A3d: the same text under a plain stop: the unfinished call is malformed (a rejected attempt), never a truncation, and the turn finishes Unresolved.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "stop": "stop",
+  "input": "<tool_call>\n<function=f>\n<parameter=path>\na.rs\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=f>\n<parameter=path>\nb",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "path": "a.rs"
+      },
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline"
+      ]
+    }
+  ],
+  "rejected": [
+    {
+      "span": [
+        85,
+        128
+      ],
+      "reason": "Unterminated",
+      "raw": "<tool_call>\n<function=f>\n<parameter=path>\nb"
+    }
+  ],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.dangling-opener"
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "description": "A misspelled enumeration value on a read-only tool is matched approximately (json.enum.match, a guess): BestGuess.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "effects": {
+    "weather": "read_only"
+  },
+  "input": "<tool_call>\n{\"name\": \"weather\", \"arguments\": {\"unit\": \"celsuis\"}}\n</tool_call>",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "weather",
+      "arguments": {
+        "unit": "celsius"
+      },
+      "outcome": "best_guess",
+      "rules": [
+        "json.enum.match"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "json.enum.match"
+  ]
+}

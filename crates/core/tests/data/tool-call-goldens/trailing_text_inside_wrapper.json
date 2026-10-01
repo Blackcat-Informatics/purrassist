@@ -1,0 +1,43 @@
+{
+  "description": "Free text between </function> and </tool_call> is trailing text inside the wrapper, never an argument and never outside the call: the attempt is rejected with its raw span and reason kept, so nothing is usable, even on a read-only tool.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\n</function>\nthat is all\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        0,
+        66
+      ],
+      "reason": "Malformed { at: 66 }",
+      "raw": "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\n</function>\n"
+    }
+  ],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

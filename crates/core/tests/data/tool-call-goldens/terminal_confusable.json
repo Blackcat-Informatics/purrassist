@@ -1,0 +1,39 @@
+{
+  "description": "A custom dialect declaring a confusable spelling: <|end|> written with ASCII bars for the declared fullwidth terminal is accepted (tool_call.markup.terminal-confusable).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "ls",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "custom"
+  ],
+  "grammar": "grammar \"confusable-golden.v1\";\nconfusable \"｜\" \"|\";\ncall = \"<c>\" name:/[a-z_]+/ \"<｜end｜>\";\nresult = \"<r>\" content:until(\"</r>\") \"</r>\";\ndeclaration = \"<d>\";\n",
+  "input": "<c>ls<|end|>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "ls",
+      "arguments": {},
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.terminal-confusable"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.terminal-confusable"
+  ]
+}

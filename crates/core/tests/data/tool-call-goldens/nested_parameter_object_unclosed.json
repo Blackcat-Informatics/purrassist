@@ -1,0 +1,61 @@
+{
+  "description": "A3g: the same nested object whose own </parameter> is missing: the object ends where the function closes (tool_call.markup.parameter-closed-by-element).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "configure",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "options": {
+              "type": "object",
+              "properties": {
+                "depth": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "input": "<tool_call>\n<function=configure>\n<parameter=options>\n<parameter=depth>\n2\n</parameter>\n<parameter=name>\nx\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "configure",
+      "arguments": {
+        "options": {
+          "depth": 2,
+          "name": "x"
+        }
+      },
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.nested-parameter",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.markup.parameter-closed-by-element"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.nested-parameter",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.parameter-closed-by-element"
+  ]
+}

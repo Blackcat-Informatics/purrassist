@@ -91,7 +91,12 @@ edit but the framing newlines.
   the engine's weighted repair search, which may delete a stray closer
   (`tool_call.markup.stray-closer`) or insert a missing one mid-message
   (`tool_call.markup.missing-function-close`,
-  `tool_call.markup.missing-wrapper-close`) or at the end of output
+  `tool_call.markup.missing-wrapper-close` where the next call's opener or
+  the end of output follows; before text that no closer follows up to the
+  next opener or the end of output, the text may be content or inside a
+  wrapper that never closes, so the insertion is the guess
+  `tool_call.markup.missing-wrapper-close.before-text`, never usable under
+  `Structural`) or at the end of output
   (`tool_call.markup.missing-closers-at-end`, usable only when the call is
   otherwise complete), keeping the least-cost reading. A closer spelling
   immediately after a complete call (`</function></function>`,
@@ -112,8 +117,9 @@ conformance anchors, which hold canonical markup only.
   template always wraps each call separately.
 - Attributes or quoting in the opener (`<function name="x">`,
   `<parameter name="p">`): these belong to other XML dialects.
-- Text between parameters other than whitespace, and text after a whole-JSON
-  body (the call is malformed).
+- Text between parameters other than whitespace, text after a whole-JSON
+  body, and text between `</function>` and a later closer such as
+  `</tool_call>` (the call is malformed).
 - Python-style literals in typed values (`True`, `None`) are not canonical;
   the JSON codec's literal-case repair applies and is recorded.
 - Streaming deltas (no `delta` production).

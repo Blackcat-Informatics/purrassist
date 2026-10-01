@@ -1,0 +1,60 @@
+{
+  "description": "Hermes arguments on a read-only tool (Tolerant): a literal in the wrong case is respelled (json.syntax.literal-case); the call's outcome follows the rule's guess flag.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "n": {
+              "type": "integer"
+            },
+            "flag": {
+              "type": "boolean"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "<tool_call>\n{\"name\": \"f\", \"arguments\": {\"path\": \"a\", \"flag\": True}}\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "path": "a",
+        "flag": true
+      },
+      "outcome": "resolved",
+      "rules": [
+        "json.syntax.literal-case"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "json.syntax.literal-case"
+  ]
+}

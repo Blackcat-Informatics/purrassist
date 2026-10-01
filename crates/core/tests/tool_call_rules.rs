@@ -240,6 +240,7 @@ fn every_rule_has_cost_and_policy() {
         "tool_call.markup.missing-parameter-close",
         "tool_call.markup.missing-function-close",
         "tool_call.markup.missing-wrapper-close",
+        "tool_call.markup.missing-wrapper-close.before-text",
         "tool_call.markup.missing-closers-at-end",
         "tool_call.markup.nested-parameter",
         "tool_call.markup.json-body",
@@ -269,6 +270,14 @@ fn every_rule_has_cost_and_policy() {
         (Readings::Single, false, Grounding::Definition)
     );
     assert!(close.admits(RepairPolicy::Structural));
+    // A wrapper closer inserted before text is a guess; before another
+    // call's opener or the end of output it is the only reading.
+    let wrapper = rules::rule("tool_call.markup.missing-wrapper-close").expect("rule");
+    let before_text =
+        rules::rule("tool_call.markup.missing-wrapper-close.before-text").expect("rule");
+    assert!(!wrapper.guess && wrapper.admits(RepairPolicy::Structural));
+    assert!(before_text.guess && !before_text.admits(RepairPolicy::Structural));
+    assert_eq!(before_text.readings, Readings::Multiple);
 }
 
 #[test]

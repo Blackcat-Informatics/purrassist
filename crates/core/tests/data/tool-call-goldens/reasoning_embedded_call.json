@@ -1,0 +1,54 @@
+{
+  "description": "A call written inside a closed <think> block stays reasoning; it is only offered as an embedded alternative (ToolCalls::embedded, tool_call.reasoning.embedded-call, a guess), never a call and never usable.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "read_file": "read_only"
+  },
+  "input": "<think>maybe <tool_call>\n<function=read_file>\n<parameter=path>\na.rs\n</parameter>\n</function>\n</tool_call></think>done",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "content_only",
+  "calls": [],
+  "rejected": [],
+  "embedded": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "a.rs"
+      },
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.reasoning.embedded-call"
+      ]
+    }
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.reasoning.embedded-call"
+  ]
+}

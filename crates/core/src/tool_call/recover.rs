@@ -64,7 +64,13 @@
 //! `Unresolved` with [`UnresolvedReason::RepairNotPermitted`] naming it.
 //!
 //! A call written inside a closed reasoning block stays reasoning text: it
-//! is part of a [`ToolCalls::reasoning`] range, never a recovered call.
+//! is part of a [`ToolCalls::reasoning`] range, never a recovered call. It
+//! is offered only as a guess-flagged alternative in
+//! [`ToolCalls::embedded`] (`tool_call.reasoning.embedded-call`), itemized
+//! on that [`ToolCall`] like a per-call alternative: it is never
+//! `Resolved`, never selected by [`ToolCalls::usable`] or
+//! [`ToolCalls::usable_accepting_guesses`], receives no id, and does not
+//! affect the finish, the tool choice check, or the operation's outcome.
 //!
 //! A rejected attempt or a call to an undeclared tool does not make the
 //! operation `Unresolved`: it is a recorded fact (a [`RejectedCall`], or a
@@ -919,6 +925,32 @@ pub struct ToolCalls {
     pub calls: Vec<ToolCall>,
     /// The rejected call attempts, in output order.
     pub rejected: Vec<RejectedCall>,
+    /// The calls written inside closed reasoning blocks, in output order:
+    /// reasoning text offered only as guess-flagged alternatives
+    /// (`tool_call.reasoning.embedded-call`), so never `Resolved`. They are
+    /// not calls of the turn: [`Self::usable`] and
+    /// [`Self::usable_accepting_guesses`] never select them, their
+    /// [`ToolCall::id`] is empty and their [`ToolCall::index`] is their
+    /// position here, and they affect neither [`Self::finish`], nor
+    /// [`Self::tool_choice`], nor the operation's outcome. Each keeps its
+    /// own itemized repairs; the receipt itemizes the selected reading
+    /// only.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::{CallOutcome, Effects, Finish, Param, ToolDefinition, ToolRecoveryRequest, ToolSet};
+    /// use purrassist_core::{Budget, Outcome};
+    /// let tools = ToolSet::compile([ToolDefinition::new("ls").effects(Effects::ReadOnly).param("depth", Param::integer())], Budget::default()).unwrap();
+    /// let output = br#"<think>maybe <tool_call>{"name": "ls", "arguments": {"depth": 1}}</tool_call></think>No call needed."#;
+    /// let result = tools.recover(output, &ToolRecoveryRequest::default());
+    /// let Outcome::Resolved(calls) = result.outcome else { unreachable!() };
+    /// assert!(calls.calls.is_empty());
+    /// assert_eq!(calls.finish, Finish::ContentOnly);
+    /// let embedded = &calls.embedded[0];
+    /// assert_eq!((embedded.tool.as_deref(), embedded.outcome.clone()), (Some("ls"), CallOutcome::BestGuess));
+    /// assert!(embedded.repairs.evidence.iter().any(|evidence| evidence.rule == "tool_call.reasoning.embedded-call"));
+    /// assert!(calls.usable_accepting_guesses().is_empty());
+    /// ```
+    pub embedded: Vec<ToolCall>,
     /// The content ranges (tool results the model wrote count as content),
     /// adjacent ranges merged.
     pub content: Vec<Range<usize>>,
@@ -1124,10 +1156,10 @@ impl WireValue for ToolCall {
 
 impl WireValue for ToolCalls {
     /// `{calls, rejected: [{span, dialect, reason: {code, at}, raw: {text |
-    /// bytes_hex}, repairs}], content: [{start, end}], reasoning: [{start,
-    /// end}], finish, openai_finish_reason, tool_choice: {constraint,
-    /// passed, diagnostics}, next_id_start}`, each call as
-    /// [`ToolCall`]'s wire form, plus an `emitted` member (see
+    /// bytes_hex}, repairs}], embedded, content: [{start, end}], reasoning:
+    /// [{start, end}], finish, openai_finish_reason, tool_choice: {constraint,
+    /// passed, diagnostics}, next_id_start}`, each call and embedded call
+    /// as [`ToolCall`]'s wire form, plus an `emitted` member (see
     /// [`Emission`]) only when an emission was requested, so results of
     /// requests without one keep their wire form. Deterministic and
     /// infallible.
@@ -1146,6 +1178,10 @@ impl WireValue for ToolCalls {
                         ("repairs", ledger_node(&rejected.repairs)),
                     ])
                 })),
+            ),
+            (
+                "embedded",
+                array(self.embedded.iter().map(WireValue::to_node)),
             ),
             ("content", ranges(&self.content)),
             ("reasoning", ranges(&self.reasoning)),
@@ -1661,6 +1697,7 @@ impl Recovery<'_> {
             value: ToolCalls {
                 calls: Vec::new(),
                 rejected: Vec::new(),
+                embedded: Vec::new(),
                 content: Vec::new(),
                 reasoning: Vec::new(),
                 finish: Finish::ContentOnly,
@@ -1725,8 +1762,16 @@ impl Recovery<'_> {
             ResolvedSegment::Result(result) => {
                 push_range(&mut reading.value.content, &result.span);
             }
-            ResolvedSegment::Reasoning { reasoning, .. } => {
+            ResolvedSegment::Reasoning {
+                reasoning,
+                embedded,
+            } => {
                 push_range(&mut reading.value.reasoning, &reasoning.span);
+                for call in embedded {
+                    let index = reading.value.embedded.len();
+                    let (built, _) = tool_call(call, index, governor)?;
+                    reading.value.embedded.push(built);
+                }
                 let ledger = self.reasoning_ledger(reasoning, governor)?;
                 if self.policies.exact {
                     for evidence in &ledger.evidence {

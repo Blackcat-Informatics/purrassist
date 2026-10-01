@@ -694,9 +694,9 @@ fn deterministic_pinned_digest() {
 }
 
 const PINNED_DIGEST: &str =
-    "sha256:c150e86abcbb30f4d21822687330f92f555d20b9a3d8b9cb4d037893c98eb54d";
+    "sha256:662d540d6ed8537dda18fa3decad991e476c534012e8aac2cf47ef6f210ad376";
 const PINNED_AMBIGUOUS_DIGEST: &str =
-    "sha256:3b1dd6aff0bae9170f157dad5b54eed80c0cf62132707e882153c561c68ab36e";
+    "sha256:05a33f4770ea37df6e4f8e113c4b0c41dd8a48a9c9da7a5c60b8ac53c525b67d";
 
 #[test]
 fn invalid_utf8_is_loss_and_bytes_retained() {
@@ -1565,5 +1565,97 @@ fn exact_effort_rejects_segmentation_repair() {
         assert_eq!(validation.constraint, "effort=exact");
         assert!(!validation.passed);
         assert!(validation.diagnostics[0].contains("tool_call.reasoning.unclosed"));
+    }
+}
+
+/// Reports queued behind a call whose inserted wrapper closer is still
+/// being decided are charged as scratch (`cost::QUEUED_REPORT` each) until
+/// processed: the recognizer's peak reflects the queue, a scratch budget the
+/// same turn fits in when its wrapper closes (so its reports never queue)
+/// is too small for the held queue and ends in an explicit
+/// `BudgetExceeded(ScratchBytes)`, never a panic or a partial value, and
+/// the charges are identical however the output is chunked.
+#[test]
+fn held_reports_are_charged_and_exhaust_explicitly() {
+    const BLOCKS: usize = 4000;
+    let tools = compile([ToolDefinition::new("f")
+        .effects(Effects::ReadOnly)
+        .param("a", Param::string())]);
+    let call = "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\n</function>";
+    let thoughts = "<think>t</think>".repeat(BLOCKS);
+    // The wrapper closer never comes: every reasoning marker after the
+    // call waits for the end of output.
+    let held = format!("{call}\nDone.{thoughts}");
+    // The same turn with its closer: markers are processed as they come.
+    let closed = format!("{call}\n</tool_call>\nDone.{thoughts}");
+    let dialects = set(&[DialectId::Qwen3CoderXml]);
+    let recognize = |output: &str, chunk: usize, scratch: u64| {
+        let mut governor = Governor::new(Budget {
+            scratch_bytes: scratch,
+            ..Effort::Standard.budget()
+        });
+        let mut recognizer = purrassist_core::tool_call::Recognizer::with_tools(
+            &dialects,
+            &tools,
+            ReasoningPolicy::default(),
+            &mut governor,
+        )
+        .expect("recognizer");
+        let turn = output
+            .as_bytes()
+            .chunks(chunk)
+            .try_for_each(|piece| recognizer.push(piece, &mut governor))
+            .and_then(|()| recognizer.finish(GenerationStop::Stop, &mut governor));
+        (turn.map(|turn| format!("{turn:?}")), governor.usage())
+    };
+    let ample = Effort::Standard.budget().scratch_bytes;
+    let (held_turn, held_usage) = recognize(&held, held.len(), ample);
+    let (closed_turn, closed_usage) = recognize(&closed, closed.len(), ample);
+    assert!(held_turn.is_ok() && closed_turn.is_ok());
+    // Two markers per block were queued at once.
+    let queue = 2 * BLOCKS as u64 * cost::QUEUED_REPORT;
+    assert!(
+        held_usage.peak_scratch_bytes >= queue
+            && held_usage.peak_scratch_bytes > closed_usage.peak_scratch_bytes,
+        "{held_usage:?} vs {closed_usage:?}"
+    );
+    // A budget the closed turn fits in exactly is too small for the queue.
+    let tight = closed_usage.peak_scratch_bytes;
+    assert!(recognize(&closed, closed.len(), tight).0.is_ok());
+    let (exhausted, _) = recognize(&held, held.len(), tight);
+    assert_eq!(
+        exhausted,
+        Err(StopReason::BudgetExceeded(Resource::ScratchBytes))
+    );
+    // Through the operation: an explicit exhaustion, no value.
+    let mut request =
+        ToolRecoveryRequest::sized(Effort::Standard, held.len()).dialects(dialects.clone());
+    request.budget.scratch_bytes = tight;
+    let result = tools.recover(held.as_bytes(), &request);
+    assert_eq!(result.outcome, Outcome::Unresolved);
+    assert_eq!(
+        result.receipt.stopped,
+        StopReason::BudgetExceeded(Resource::ScratchBytes)
+    );
+    // With enough scratch the operation completes: the call is the
+    // before-text guess and every block is reasoning (merged ranges).
+    let request =
+        ToolRecoveryRequest::sized(Effort::Standard, held.len()).dialects(dialects.clone());
+    let result = tools.recover(held.as_bytes(), &request);
+    let Outcome::BestGuess(calls) = &result.outcome else {
+        panic!("{:?}", result.receipt.stopped)
+    };
+    assert_eq!(calls.calls[0].outcome, CallOutcome::BestGuess);
+    assert!(rules(&calls.calls[0]).contains(&"tool_call.markup.missing-wrapper-close.before-text"));
+    assert_eq!(calls.reasoning.len(), 1);
+    assert_eq!(calls.reasoning[0], held.len() - thoughts.len()..held.len());
+    assert!(result.receipt.usage.peak_scratch_bytes >= queue);
+    // The same turn and charges for every chunking.
+    for chunk in [1, 2, 3, 7, 64] {
+        assert_eq!(
+            recognize(&held, chunk, ample),
+            (held_turn.clone(), held_usage),
+            "chunk {chunk}"
+        );
     }
 }

@@ -1,0 +1,25 @@
+{
+  "description": "A3c: the same unmodeled anyOf/$ref parameter accepts a value matching one branch: the call is Resolved after validation against the exact schema.",
+  "tools_openai": "[{\"type\": \"function\", \"function\": {\"name\": \"pick\",  \"description\": \"Pick a mode.\",\n  \"parameters\": {\"type\": \"object\", \"$defs\": {\"mode\": {\"enum\": [\"fast\", \"slow\"]}},\n    \"properties\": {\"choice\": {\"anyOf\": [{\"$ref\": \"#/$defs/mode\"}, {\"type\": \"integer\", \"minimum\": 0}]}},\n    \"required\": [\"choice\"], \"x-vendor\": true}}}]",
+  "dialects": [
+    "hermes.v1"
+  ],
+  "input": "<tool_call>\n{\"name\": \"pick\", \"arguments\": {\"choice\": \"slow\"}}\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "pick",
+      "arguments": {
+        "choice": "slow"
+      },
+      "outcome": "resolved",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

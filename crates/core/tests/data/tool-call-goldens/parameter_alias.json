@@ -1,0 +1,42 @@
+{
+  "description": "A parameter named by its declared alias is renamed to the canonical parameter (tool_call.parameter.alias) and the call is Resolved.",
+  "tools": [
+    {
+      "name": "read_file",
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true,
+          "aliases": [
+            "file"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "input": "<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"file\": \"a.rs\"}}\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "a.rs"
+      },
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.parameter.alias"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.parameter.alias"
+  ]
+}

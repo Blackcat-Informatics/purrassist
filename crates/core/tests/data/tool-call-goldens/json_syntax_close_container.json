@@ -1,0 +1,63 @@
+{
+  "description": "Stringified OpenAI arguments whose object is left open at the end of the string: the container is closed (json.syntax.close-container) on a read-only tool.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "n": {
+              "type": "integer"
+            },
+            "flag": {
+              "type": "boolean"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "openai-tool-calls.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "{\"type\": \"function\", \"function\": {\"name\": \"f\", \"arguments\": \"{\\\"tags\\\": [\\\"a\\\"]\"}}",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "tags": [
+          "a"
+        ]
+      },
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.arguments.decode-string",
+        "json.syntax.close-container"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.arguments.decode-string",
+    "json.syntax.close-container"
+  ]
+}

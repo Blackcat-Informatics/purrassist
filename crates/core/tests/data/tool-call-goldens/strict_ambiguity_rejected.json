@@ -1,0 +1,37 @@
+{
+  "description": "AmbiguityPolicy::Reject with a per-call Ambiguous call (a repeated scalar): the operation is Unresolved with a failed tool_call.ambiguity validation.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "ambiguity": "reject",
+  "input": "<tool_call>\n<function=f>\n<parameter=path>\na\n</parameter>\n<parameter=path>\nb\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "unresolved",
+  "stopped": "no acceptable candidate found",
+  "failed_validations": [
+    "tool_call.ambiguity"
+  ],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.parameter.repeated",
+    "tool_call.parameter.repeated"
+  ]
+}

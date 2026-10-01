@@ -47,11 +47,20 @@
 //! | [`JsonMissingComma`](EditOperator::JsonMissingComma) | `json.syntax.missing-comma` | 1 | no | single | syntax | none | no |
 //! | [`JsonTrailingComma`](EditOperator::JsonTrailingComma) | `json.syntax.trailing-comma` | 1 | no | single | syntax | markup | no |
 //! | [`JsonCloseContainer`](EditOperator::JsonCloseContainer) | `json.syntax.close-container` | 1 | no | single | syntax | none | no |
+//! | [`MissingWrapperCloseBeforeText`](EditOperator::MissingWrapperCloseBeforeText) | `tool_call.markup.missing-wrapper-close.before-text` | 2 | yes | multiple | syntax | none | yes |
 //!
 //! The first seven operators are the engine's markup repairs: a missing
 //! closer inserted mid-message is a *function* close when more of the
 //! production follows it and a *wrapper* close when it ends the production
-//! (both symmetric with a missing `</parameter>`); closers inserted at the
+//! (both symmetric with a missing `</parameter>`). A wrapper close is the
+//! only reading when what follows the call (after whitespace and absorbed
+//! stray closers) is another call's opener or the end of output; when text
+//! follows and no closer of the grammar comes before the next opener or the
+//! end of output, the text may be content after the call or text inside an
+//! unterminated wrapper, so the insertion is the guess
+//! `tool_call.markup.missing-wrapper-close.before-text` (the last row: it is
+//! appended so the other operators keep their positions); when a closer does
+//! come, the text is inside the wrapper and the attempt is rejected. Closers inserted at the
 //! end of output under a non-length stop are
 //! `tool_call.markup.missing-closers-at-end`, usable only when the call is
 //! otherwise complete (D10, enforced by tool-call resolution). The reasoning
@@ -76,7 +85,7 @@
 //! assert_eq!(stray.id, "tool_call.markup.stray-closer");
 //! assert_eq!(stray.loss, Some(LossKind::Markup));
 //! assert!(!stray.guess && stray.repair);
-//! assert_eq!(OPERATORS.len(), 35);
+//! assert_eq!(OPERATORS.len(), 36);
 //! let framing = EditOperator::FramingNewline.rule();
 //! assert_eq!((framing.loss, framing.repair), (Some(LossKind::Markup), false));
 //! ```
@@ -117,7 +126,10 @@ pub enum EditOperator {
     /// follows (a function or parameter element's closer).
     MissingFunctionClose,
     /// Insert a missing closer mid-message that ends the production (the
-    /// call's outermost wrapper closer).
+    /// call's outermost wrapper closer) where, after whitespace and absorbed
+    /// stray closers, the opener of another call of the same production or
+    /// the end of output follows: the only reading. Before other text it is
+    /// [`Self::MissingWrapperCloseBeforeText`] instead.
     MissingWrapperClose,
     /// Insert a missing closer at the end of output under a non-length stop.
     MissingClosersAtEnd,
@@ -195,6 +207,13 @@ pub enum EditOperator {
     JsonTrailingComma,
     /// JSON recovery: close a container left open at the end of its value.
     JsonCloseContainer,
+    /// Insert the call's missing wrapper closer mid-message before text that
+    /// no closer of the grammar follows up to the next opener of the same
+    /// production or the end of output. The text may be content after the
+    /// call or text inside a wrapper that never closes, so this is a guess
+    /// admitting another reading. (Had a closer followed, the text would be
+    /// inside the wrapper and the attempt is rejected instead.)
+    MissingWrapperCloseBeforeText,
 }
 
 /// Static metadata of one [`EditOperator`].
@@ -286,7 +305,7 @@ const fn guessed_repair(operator: EditOperator, id: &'static str, cost: u64) -> 
 }
 
 /// The number of [`EditOperator`]s.
-pub const OPERATOR_COUNT: usize = 35;
+pub const OPERATOR_COUNT: usize = 36;
 
 /// Every grammar edit operator, in [`EditOperator`] order, as a constant
 /// table (the tool-call rule registry is built from it at compile time).
@@ -522,6 +541,11 @@ pub(crate) const OPERATOR_TABLE: [OperatorRule; OPERATOR_COUNT] = [
         false,
         None,
     ),
+    guessed_repair(
+        EditOperator::MissingWrapperCloseBeforeText,
+        "tool_call.markup.missing-wrapper-close.before-text",
+        cost::INSERT_CLOSER,
+    ),
 ];
 
 /// Every grammar edit operator, in [`EditOperator`] order.
@@ -556,7 +580,7 @@ impl EditOperator {
         if rule == "json.syntax.string" && guessed {
             return Some(Self::JsonUnterminatedString);
         }
-        OPERATORS[Self::JsonComment as usize..]
+        OPERATORS[Self::JsonComment as usize..=Self::JsonCloseContainer as usize]
             .iter()
             .find(|entry| entry.id == rule && entry.operator != Self::JsonUnterminatedString)
             .map(|entry| entry.operator)
