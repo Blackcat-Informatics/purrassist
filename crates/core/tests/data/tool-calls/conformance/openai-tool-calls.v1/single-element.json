@@ -1,0 +1,38 @@
+{
+  "description": "One tool_calls element with stringified arguments.",
+  "markup": "{\"id\": \"call_8f2a\", \"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"arguments\": \"{\\\"city\\\": \\\"Paris\\\"}\"}}",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "get_weather",
+      "arguments": {"city": "Paris"},
+      "id": "call_8f2a"
+    }
+  ]
+}

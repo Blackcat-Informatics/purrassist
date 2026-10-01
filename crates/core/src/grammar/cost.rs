@@ -77,6 +77,9 @@ pub const K_ERR: u64 = 8;
 /// table entry (instruction, trie node, automaton state).
 pub const K_COMPILE: u64 = 1;
 
+/// `Work` per expression visited and per byte printed by
+/// [`witness::generate`](super::witness::generate).
+pub const K_WITNESS: u64 = 1;
 /// `Work` per byte, lookup or node an argument codec visits.
 ///
 /// That is: per slot-body byte an argument codec scans when it finishes a

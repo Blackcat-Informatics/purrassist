@@ -1,0 +1,33 @@
+{
+  "description": "A function body that is one whole JSON object.",
+  "markup": "<tool_call>\n<function=read_file>\n{\"path\": \"README.md\", \"limit\": 5}\n</function>\n</tool_call>",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "description": "Read a text file.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "read_file",
+      "arguments": {"path": "README.md", "limit": 5}
+    }
+  ]
+}

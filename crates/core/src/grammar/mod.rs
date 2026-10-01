@@ -87,6 +87,14 @@
 //! again there). The turn-level segmentation over the resulting segments is
 //! global. Costs and the linear work bound are in [`cost`].
 //!
+//! # Built-in dialects and witnesses
+//!
+//! The built-in dialect grammars (`qwen3-coder-xml.v1`, `hermes.v1`,
+//! `openai-tool-calls.v1`) are written in this DSL and embedded in the crate;
+//! see [`DialectId`](crate::tool_call::DialectId). [`witness::generate`]
+//! runs a grammar's `call` production forward to print seeded, well-formed
+//! calls for given argument shapes, together with the calls they denote.
+//!
 //! ```
 //! use purrassist_core::grammar::{CaptureKind, Expr, Grammar};
 //! use purrassist_core::{Budget, Governor};
@@ -114,6 +122,7 @@ pub mod edit;
 pub(crate) mod engine;
 mod repair;
 mod syntax;
+pub mod witness;
 
 use crate::contract::{Governor, StopReason};
 use crate::digest::Digest;

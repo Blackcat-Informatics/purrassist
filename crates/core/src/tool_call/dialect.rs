@@ -14,39 +14,111 @@
 //! order the allow-list named them in, so permuting an allow-list never
 //! changes a recognition result.
 use crate::contract::saturating_size as size;
-use crate::contract::{Governor, Resource, StopReason};
+use crate::contract::{Budget, Governor, Resource, StopReason};
 use crate::digest::Digest;
-use crate::grammar::CompiledGrammar;
 use crate::grammar::automaton::Matcher;
 use crate::grammar::cost::K_COMPILE;
+use crate::grammar::{CompiledGrammar, Grammar};
 use core::cmp::Ordering;
 use core::fmt;
 use core::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// One dialect grammar the recognizer can run.
 ///
-/// The set of variants is closed, so the recognizer dispatches statically;
-/// a caller-supplied grammar is [`DialectId::Custom`]. Two ids are equal
-/// when their grammars have the same id and source digest.
+/// The set of variants is closed, so the recognizer dispatches statically.
+/// Three dialects are built in, each a first-party grammar embedded in the
+/// crate (see `docs/tool-calls/dialects/` for each grammar's public sources
+/// and what it deliberately does not accept):
+///
+/// | Variant | Versioned id | Shape |
+/// | --- | --- | --- |
+/// | [`DialectId::Qwen3CoderXml`] | `qwen3-coder-xml.v1` | `<tool_call><function=NAME><parameter=P>VALUE</parameter></function></tool_call>` |
+/// | [`DialectId::Hermes`] | `hermes.v1` | `<tool_call>{"name": NAME, "arguments": {...}}</tool_call>` |
+/// | [`DialectId::OpenAiToolCalls`] | `openai-tool-calls.v1` | `tool_calls` elements `{"id": ID, "type": "function", "function": {...}}` |
+///
+/// A built-in grammar is compiled once, on first use, under its own
+/// governor with a default [`Budget`]; that compilation is never charged to
+/// a caller's governor, so every charge a caller sees depends only on the
+/// bytes it processes. A caller-supplied grammar is [`DialectId::Custom`].
+/// Two ids are equal when their grammars have the same id and source
+/// digest.
 ///
 /// ```
 /// use purrassist_core::grammar::Grammar;
 /// use purrassist_core::tool_call::DialectId;
 /// use purrassist_core::{Budget, Governor};
+/// let hermes = DialectId::Hermes;
+/// assert_eq!(hermes.id(), "hermes.v1");
+/// assert_eq!(hermes.grammar().id(), "hermes.v1");
+/// assert_eq!(DialectId::from_id("hermes.v1"), Some(DialectId::Hermes));
 /// let text = "grammar \"demo.v1\"; call = \"<c>\"; result = \"<r>\"; declaration = \"<d>\";";
 /// let grammar = Grammar::compile_governed(text, &mut Governor::new(Budget::default())).unwrap();
 /// let dialect = DialectId::custom(grammar);
 /// assert_eq!(dialect.name(), "demo.v1");
 /// assert_eq!(dialect.clone(), dialect);
+/// // A custom grammar compiled from a built-in source is that dialect.
+/// let source = DialectId::Hermes.source().unwrap();
+/// let same = Grammar::compile_governed(source, &mut Governor::new(Budget::default())).unwrap();
+/// assert_eq!(DialectId::custom(same), DialectId::Hermes);
 /// ```
 #[derive(Clone)]
 pub enum DialectId {
+    /// `qwen3-coder-xml.v1`: Qwen3-Coder XML parameter calls.
+    Qwen3CoderXml,
+    /// `hermes.v1`: Hermes JSON calls in `<tool_call>` tags.
+    Hermes,
+    /// `openai-tool-calls.v1`: `OpenAI` chat-completions `tool_calls`
+    /// elements as text (also the output and round-trip target).
+    OpenAiToolCalls,
     /// A caller-compiled grammar.
     Custom(Arc<CompiledGrammar>),
 }
 
+/// The embedded source and lazily compiled grammar of one built-in dialect.
+struct BuiltIn {
+    id: &'static str,
+    source: &'static str,
+    compiled: OnceLock<CompiledGrammar>,
+}
+
+impl BuiltIn {
+    const fn new(id: &'static str, source: &'static str) -> Self {
+        Self {
+            id,
+            source,
+            compiled: OnceLock::new(),
+        }
+    }
+
+    fn grammar(&self) -> &CompiledGrammar {
+        self.compiled.get_or_init(|| {
+            Grammar::compile_governed(self.source, &mut Governor::new(Budget::default()))
+                .expect("every built-in dialect grammar compiles under the default budget")
+        })
+    }
+}
+
+static QWEN3_CODER_XML: BuiltIn = BuiltIn::new(
+    "qwen3-coder-xml.v1",
+    include_str!("dialects/qwen3-coder-xml.v1.grammar"),
+);
+static HERMES: BuiltIn = BuiltIn::new("hermes.v1", include_str!("dialects/hermes.v1.grammar"));
+static OPENAI_TOOL_CALLS: BuiltIn = BuiltIn::new(
+    "openai-tool-calls.v1",
+    include_str!("dialects/openai-tool-calls.v1.grammar"),
+);
+
 impl DialectId {
+    /// Every built-in dialect, ordered by id.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::DialectId;
+    /// let ids: Vec<&str> = DialectId::BUILT_IN.iter().map(DialectId::id).collect();
+    /// assert_eq!(ids, ["hermes.v1", "openai-tool-calls.v1", "qwen3-coder-xml.v1"]);
+    /// ```
+    pub const BUILT_IN: [Self; 3] = [Self::Hermes, Self::OpenAiToolCalls, Self::Qwen3CoderXml];
+
     /// Wrap a compiled grammar.
     ///
     /// See [`DialectId`] for an example.
@@ -55,7 +127,63 @@ impl DialectId {
         Self::Custom(Arc::new(grammar))
     }
 
-    /// The dialect's grammar.
+    const fn built_in(&self) -> Option<&'static BuiltIn> {
+        match self {
+            Self::Qwen3CoderXml => Some(&QWEN3_CODER_XML),
+            Self::Hermes => Some(&HERMES),
+            Self::OpenAiToolCalls => Some(&OPENAI_TOOL_CALLS),
+            Self::Custom(_) => None,
+        }
+    }
+
+    /// The built-in dialect with versioned id `id`, or `None` for any other
+    /// string (custom grammars are not registered by id).
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::DialectId;
+    /// assert_eq!(DialectId::from_id("qwen3-coder-xml.v1"), Some(DialectId::Qwen3CoderXml));
+    /// assert_eq!(DialectId::from_id("openai-tool-calls.v1"), Some(DialectId::OpenAiToolCalls));
+    /// assert_eq!(DialectId::from_id("hermes"), None);
+    /// ```
+    #[must_use]
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::BUILT_IN
+            .into_iter()
+            .find(|dialect| dialect.built_in().is_some_and(|built| built.id == id))
+    }
+
+    /// The dialect's versioned id: the built-in id, or a custom grammar's
+    /// declared id. For a built-in dialect this never compiles its grammar.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::DialectId;
+    /// for dialect in DialectId::BUILT_IN {
+    ///     assert_eq!(DialectId::from_id(dialect.id()), Some(dialect.clone()));
+    ///     assert_eq!(dialect.grammar().id(), dialect.id());
+    /// }
+    /// ```
+    #[must_use]
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Qwen3CoderXml => QWEN3_CODER_XML.id,
+            Self::Hermes => HERMES.id,
+            Self::OpenAiToolCalls => OPENAI_TOOL_CALLS.id,
+            Self::Custom(grammar) => grammar.id(),
+        }
+    }
+
+    /// The embedded grammar source of a built-in dialect; `None` for a
+    /// custom grammar. Compiling it with [`Grammar::compile_governed`]
+    /// yields a grammar equal to [`DialectId::grammar`], charged to the
+    /// caller's governor.
+    ///
+    /// See [`DialectId`] for an example.
+    #[must_use]
+    pub fn source(&self) -> Option<&'static str> {
+        self.built_in().map(|built| built.source)
+    }
+
+    /// The dialect's grammar; a built-in grammar is compiled on first use.
     ///
     /// ```
     /// # use purrassist_core::grammar::Grammar;
@@ -65,20 +193,25 @@ impl DialectId {
     /// # let grammar = Grammar::compile_governed(text, &mut Governor::new(Budget::default())).unwrap();
     /// let dialect = DialectId::custom(grammar);
     /// assert_eq!(dialect.grammar().id(), "demo.v1");
+    /// assert_eq!(DialectId::Qwen3CoderXml.grammar().reasoning(), Some((&b"<think>"[..], &b"</think>"[..])));
     /// ```
     #[must_use]
     pub fn grammar(&self) -> &CompiledGrammar {
         match self {
+            Self::Qwen3CoderXml => QWEN3_CODER_XML.grammar(),
+            Self::Hermes => HERMES.grammar(),
+            Self::OpenAiToolCalls => OPENAI_TOOL_CALLS.grammar(),
             Self::Custom(grammar) => grammar,
         }
     }
 
-    /// The dialect's versioned id (its grammar's id).
+    /// The dialect's versioned id (its grammar's id); the same as
+    /// [`DialectId::id`].
     ///
     /// See [`DialectId`] for an example.
     #[must_use]
     pub fn name(&self) -> &str {
-        self.grammar().id()
+        self.id()
     }
 
     fn identity(&self) -> (&str, Digest) {

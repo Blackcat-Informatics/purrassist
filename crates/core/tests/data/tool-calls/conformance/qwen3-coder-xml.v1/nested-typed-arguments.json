@@ -1,0 +1,75 @@
+{
+  "description": "A reasoning block, a multi-line verbatim string with significant whitespace, exact number spellings (1.50, -0), an enumeration, an array, and an object given as nested parameters holding an inline JSON object.",
+  "markup": "<think>\nThe file needs a main function.\n</think>\n\n<tool_call>\n<function=write_file>\n<parameter=path>\nsrc/main.rs\n</parameter>\n<parameter=content>\nfn main() {\n    println!(\"hi\");\n\n\tlet  x = 1;  \n}\n\n</parameter>\n<parameter=mode>\noverwrite\n</parameter>\n<parameter=ratio>\n1.50\n</parameter>\n<parameter=count>\n-0\n</parameter>\n<parameter=tags>\n[\"a\", \"b c\"]\n</parameter>\n<parameter=options>\n<parameter=backup>\ntrue\n</parameter>\n<parameter=retries>\n3\n</parameter>\n<parameter=owner>\n{\"name\": \"ci\", \"uid\": 1000}\n</parameter>\n</parameter>\n</function>\n</tool_call>",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "description": "Write a file.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "create",
+                "overwrite"
+              ]
+            },
+            "ratio": {
+              "type": "number"
+            },
+            "count": {
+              "type": "integer"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "options": {
+              "type": "object",
+              "properties": {
+                "backup": {
+                  "type": "boolean"
+                },
+                "retries": {
+                  "type": "integer"
+                },
+                "owner": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "uid": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "write_file",
+      "arguments": {"path": "src/main.rs", "content": "fn main() {\n    println!(\"hi\");\n\n\tlet  x = 1;  \n}\n", "mode": "overwrite", "ratio": 1.50, "count": -0, "tags": ["a", "b c"], "options": {"backup": true, "retries": 3, "owner": {"name": "ci", "uid": 1000}}}
+    }
+  ]
+}

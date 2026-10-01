@@ -1,0 +1,64 @@
+{
+  "description": "An assistant message object with content null and two tool_calls elements; the envelope is content and the order is kept.",
+  "markup": "{\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_1\", \"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"arguments\": \"{\\\"city\\\":\\\"Lima\\\",\\\"unit\\\":\\\"fahrenheit\\\"}\"}}, {\"id\": \"call_2\", \"type\": \"function\", \"function\": {\"name\": \"read_file\", \"arguments\": \"{\\\"path\\\":\\\"src\\\",\\\"limit\\\":3}\"}}]}",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "description": "Read a text file.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "get_weather",
+      "arguments": {"city":"Lima","unit":"fahrenheit"},
+      "id": "call_1"
+    },
+    {
+      "name": "read_file",
+      "arguments": {"path":"src","limit":3},
+      "id": "call_2"
+    }
+  ]
+}

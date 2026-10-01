@@ -1,0 +1,75 @@
+{
+  "description": "A reasoning block, a multi-line string with significant whitespace (JSON escapes), exact number spellings (2.50, 1e3, -7), an empty array, and nested objects.",
+  "markup": "<think>\nWrite the file.\n</think>\n\n<tool_call>\n{\"name\": \"write_file\", \"arguments\": {\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}}\n</tool_call>",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "description": "Write a file.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "create",
+                "overwrite"
+              ]
+            },
+            "ratio": {
+              "type": "number"
+            },
+            "count": {
+              "type": "integer"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "options": {
+              "type": "object",
+              "properties": {
+                "backup": {
+                  "type": "boolean"
+                },
+                "retries": {
+                  "type": "integer"
+                },
+                "owner": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "uid": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "write_file",
+      "arguments": {"path": "src/main.rs", "content": "fn main() {\n    println!(\"hi\");\n\n\tlet  x = 1;  \n}\n", "mode": "create", "ratio": 2.50, "count": 1e3, "tags": [], "options": {"backup": false, "retries": 0, "owner": {"name": "ops", "uid": -7}}}
+    }
+  ]
+}

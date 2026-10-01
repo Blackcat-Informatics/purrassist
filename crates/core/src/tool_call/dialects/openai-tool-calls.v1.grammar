@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# OpenAI chat-completions tool calls as text. A call is one element of a
+# message's "tool_calls" array:
+#   {"id": ID, "type": "function", "function": {"name": NAME, "arguments": ARGS}}
+# with its members in the order the API reference lists them. ARGS is read by
+# the self-delimiting json codec: the canonical stringified JSON is decoded
+# and flagged, a plain JSON object is read as it is. An assistant message
+# envelope ({"role": "assistant", "content": ..., "tool_calls": [...]}), a bare
+# tool_calls array, and the separators between elements are content around
+# the calls. A call opens only where an element's first member is "id": the
+# opener literals list compact, single-space and newline-indented (2-space
+# steps up to 16, tabs up to 4) spellings of that start, so other JSON
+# objects never open a call attempt. This is also the output (printing)
+# target: `declaration` is one request `tools` entry and `result` is one
+# request tool message. First-party grammar; see
+# docs/tool-calls/dialects/openai-tool-calls.v1.md for the public sources.
+grammar "openai-tool-calls.v1";
+
+tool-name = /[A-Za-z0-9_.:-]+/;
+call-id = /[A-Za-z0-9_.:-]+/;
+ws = /[ \t\r\n]+/;
+json-string = /"([^"\\\x00-\x1F]|\\["\\\/bfnrt]|\\u[0-9A-Fa-f]{4})*"/;
+
+element-open = "{\"id\""
+             | "{ \"id\""
+             | "{\n\"id\""
+             | "{\n  \"id\""
+             | "{\n    \"id\""
+             | "{\n      \"id\""
+             | "{\n        \"id\""
+             | "{\n          \"id\""
+             | "{\n            \"id\""
+             | "{\n              \"id\""
+             | "{\n                \"id\""
+             | "{\n\t\"id\""
+             | "{\n\t\t\"id\""
+             | "{\n\t\t\t\"id\""
+             | "{\n\t\t\t\t\"id\"";
+
+# The arguments slot ends where its JSON value does: NUL cannot occur in JSON
+# text, so the delimiter never cuts a value short.
+call = element-open ws? ":" ws? "\"" id:call-id "\"" ws? "," ws?
+       "\"type\"" ws? ":" ws? "\"function\"" ws? "," ws?
+       "\"function\"" ws? ":" ws? "{" ws?
+       "\"name\"" ws? ":" ws? "\"" name:tool-name "\"" ws? "," ws?
+       "\"arguments\"" ws? ":" arguments:slot(json, "\x00")
+       "}" ws? "}";
+
+tool-open = "{\"role\": \"tool\""
+          | "{ \"role\": \"tool\""
+          | "{\n\"role\": \"tool\""
+          | "{\n  \"role\": \"tool\""
+          | "{\n    \"role\": \"tool\""
+          | "{\n      \"role\": \"tool\""
+          | "{\n        \"role\": \"tool\""
+          | "{\n          \"role\": \"tool\""
+          | "{\n            \"role\": \"tool\""
+          | "{\n              \"role\": \"tool\""
+          | "{\n                \"role\": \"tool\""
+          | "{\n\t\"role\": \"tool\""
+          | "{\n\t\t\"role\": \"tool\""
+          | "{\n\t\t\t\"role\": \"tool\""
+          | "{\n\t\t\t\t\"role\": \"tool\""
+          | "{\"role\":\"tool\"";
+text-part = "{" ws? "\"type\"" ws? ":" ws? "\"text\"" ws? "," ws?
+            "\"text\"" ws? ":" ws? json-string ws? "}";
+
+# A request tool message: string content or an array of text parts.
+result = tool-open ws? "," ws?
+         "\"tool_call_id\"" ws? ":" ws? "\"" id:call-id "\"" ws? "," ws?
+         "\"content\"" ws? ":" ws?
+         content:(json-string | "[" ws? text-part (ws? "," ws? text-part)* ws? "]")
+         ws? "}";
+
+# One request `tools` entry.
+declaration = "{" ws? "\"type\"" ws? ":" ws? "\"function\"" ws? "," ws?
+              "\"function\"" ws? ":" ws? "{" ws?
+              "\"name\"" ws? ":" ws? "\"" name:tool-name "\""
+              (ws? "," ws? "\"description\"" ws? ":" ws? content:json-string)?
+              (ws? "," ws? "\"parameters\"" ws? ":" arguments:slot(json, "\x00"))?
+              (ws? "," ws? "\"strict\"" ws? ":" ws? ("true" | "false"))?
+              ws? "}" ws? "}";
