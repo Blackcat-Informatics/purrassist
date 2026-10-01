@@ -34,5 +34,5 @@ fn ambiguous_repairs_bind_passing_schema_validations_before_format_annotations()
         assert_eq!(validation.constraint, schema.digest().to_string());
         assert!(validation.passed);
     }
-    assert_eq!(result.receipt.sources[0].text, input);
+    assert_eq!(result.receipt.sources[0].text(), Some(input));
 }

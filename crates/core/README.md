@@ -11,7 +11,7 @@ use purrassist_core::{Outcome, schema::{Schema, recovery::RecoveryRequest}};
 let schema = Schema::compile(r#"{"type":"integer"}"#).unwrap();
 let result = schema.recover("[[42]]", RecoveryRequest::default());
 assert!(matches!(result.outcome, Outcome::Resolved(_)));
-assert_eq!(result.receipt.sources[0].text, "[[42]]");
+assert_eq!(result.receipt.sources[0].text(), Some("[[42]]"));
 ```
 
 Recovery may resolve, guess, preserve ambiguity, or exhaust its explicit budget.

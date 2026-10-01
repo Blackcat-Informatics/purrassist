@@ -23,7 +23,7 @@ use purrassist::{
     json::{Node, Value},
     matching::{self, Candidate, MatchRequest, SelectionPolicy as StringSelectionPolicy},
     syntax::{self, Language},
-    wire::{array, object, string},
+    wire::{WireValue, array, object, string},
 };
 use std::path::Path;
 
@@ -419,17 +419,6 @@ fn resolve_string(args: &Node, cancellation: Option<&CancellationToken>) -> Resu
                 receipt,
             }
         }
-    };
-    let result = AssistResult {
-        outcome: match result.outcome {
-            Outcome::Resolved(value) => Outcome::Resolved(value.to_node()),
-            Outcome::BestGuess(value) => Outcome::BestGuess(value.to_node()),
-            Outcome::Ambiguous(values) => {
-                Outcome::Ambiguous(values.iter().map(matching::RankedMatch::to_node).collect())
-            }
-            Outcome::Unresolved => Outcome::Unresolved,
-        },
-        receipt: result.receipt,
     };
     Ok(result.to_node())
 }

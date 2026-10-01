@@ -6,6 +6,7 @@ use purrassist_core::{
     contract::Resource,
     digest::Digest,
     matching::{self, Candidate, MatchRequest, SelectionPolicy},
+    wire::WireValue,
 };
 
 fn candidates(values: &[(&str, &str)]) -> Vec<Candidate> {

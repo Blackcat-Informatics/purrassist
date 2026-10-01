@@ -68,12 +68,7 @@ pub(super) fn apply(args: &Node, cancellation: Option<&CancellationToken>) -> Re
     result.receipt.usage = governor.usage();
     result.receipt.effort = effort;
     Ok(AssistResult {
-        outcome: match &result.outcome {
-            Outcome::Resolved(value) => Outcome::Resolved(applied(value)),
-            Outcome::BestGuess(value) => Outcome::BestGuess(applied(value)),
-            Outcome::Ambiguous(values) => Outcome::Ambiguous(values.iter().map(applied).collect()),
-            Outcome::Unresolved => Outcome::Unresolved,
-        },
+        outcome: result.outcome.map(|value| applied(&value)),
         receipt: result.receipt,
     }
     .to_node())

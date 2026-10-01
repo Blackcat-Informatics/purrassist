@@ -122,6 +122,49 @@ pub struct ValidationReport {
     pub pattern_evidence: Vec<crate::contract::Evidence>,
 }
 
+impl ValidationReport {
+    /// The receipt record of this whole-instance validation.
+    ///
+    /// The record names validator `purrassist.schema.draft2020-12.v1`, uses this report's schema digest as
+    /// its constraint, copies [`Self::valid`], and carries one diagnostic
+    /// `"{instance_path}: {message} ({schema_path})"` per violation in
+    /// report order. [`Self::format_evidence`] entries are separate
+    /// validation records and are not folded in; callers that publish them
+    /// append them after this record. Conversion is infallible and charges
+    /// nothing: callers retaining the result in a receipt account for its
+    /// bytes themselves.
+    ///
+    /// ```
+    /// use purrassist_core::{json, schema::Schema};
+    /// let schema = Schema::compile(r#"{"type":"integer"}"#).unwrap();
+    /// let report = schema.validate(&json::parse(r#""x""#).unwrap()).unwrap();
+    /// let validation = report.to_validation();
+    /// assert_eq!(validation.validator, "purrassist.schema.draft2020-12.v1");
+    /// assert!(!validation.passed);
+    /// assert_eq!(validation.constraint, schema.digest().to_string());
+    /// assert_eq!(validation.diagnostics.len(), 1);
+    /// assert!(validation.diagnostics[0].starts_with(": "));
+    /// ```
+    #[must_use]
+    pub fn to_validation(&self) -> crate::contract::Validation {
+        crate::contract::Validation {
+            validator: "purrassist.schema.draft2020-12.v1".into(),
+            constraint: self.schema.to_string(),
+            passed: self.valid,
+            diagnostics: self
+                .violations
+                .iter()
+                .map(|violation| {
+                    format!(
+                        "{}: {} ({})",
+                        violation.instance_path, violation.message, violation.schema_path
+                    )
+                })
+                .collect(),
+        }
+    }
+}
+
 impl Schema {
     /// Compile Draft 2020-12 with no external resources.
     ///

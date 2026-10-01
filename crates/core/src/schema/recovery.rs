@@ -6,7 +6,7 @@ use super::Schema;
 use crate::contract::saturating_size as size;
 use crate::contract::{
     AssistResult, Budget, Effort, Evidence, Governor, Inference, InferenceKind, Loss, Outcome,
-    Receipt, Resource, SourceSpan, StopReason, Validation,
+    Receipt, Resource, SourceSpan, StopReason,
 };
 use crate::json::{Node, ParseFailure, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -229,21 +229,7 @@ impl Search<'_> {
             self.governor
                 .charge(Resource::ScratchBytes, diagnostic_bytes)?;
             let validation = self.receipt.validations.len();
-            self.receipt.validations.push(Validation {
-                validator: "purrassist.schema.draft2020-12.v1".into(),
-                constraint: self.schema.digest.to_string(),
-                passed: report.valid,
-                diagnostics: report
-                    .violations
-                    .iter()
-                    .map(|violation| {
-                        format!(
-                            "{}: {} ({})",
-                            violation.instance_path, violation.message, violation.schema_path
-                        )
-                    })
-                    .collect(),
-            });
+            self.receipt.validations.push(report.to_validation());
             // Requirement 1 / Task 6 wiring: format annotation evidence and
             // pattern-engine evidence are search-time signals, not tied to
             // any one alternative, so they are retained unconditionally

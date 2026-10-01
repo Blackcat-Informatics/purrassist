@@ -16,7 +16,7 @@ use purrassist_core::{
     paths::{PathIndex, PathMatch},
     schema::{Schema, recovery::RecoveryRequest},
     text::{self, Normalization},
-    wire::{array, integer, object, string},
+    wire::{WireValue, array, integer, object, string},
 };
 
 /// Build the exact JSON transcript exercised by every portable target.

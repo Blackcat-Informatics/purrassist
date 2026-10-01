@@ -12,38 +12,14 @@ pub struct Digest([u8; 32]);
 
 impl Digest {
     /// Hash a complete buffer without copying it.
+    ///
+    /// Equal to feeding the same bytes, split anywhere, through a
+    /// [`DigestBuilder`].
     #[must_use]
     pub fn of(bytes: &[u8]) -> Self {
-        let mut state = [
-            0x6a09_e667,
-            0xbb67_ae85,
-            0x3c6e_f372,
-            0xa54f_f53a,
-            0x510e_527f,
-            0x9b05_688c,
-            0x1f83_d9ab,
-            0x5be0_cd19,
-        ];
-        let (chunks, remainder) = bytes.as_chunks::<64>();
-        for chunk in chunks {
-            compress(&mut state, chunk);
-        }
-        let mut tail = [0_u8; 128];
-        tail[..remainder.len()].copy_from_slice(remainder);
-        tail[remainder.len()] = 0x80;
-        let end = if remainder.len() < 56 { 64 } else { 128 };
-        let bit_len = u64::try_from(bytes.len())
-            .unwrap_or(u64::MAX)
-            .wrapping_mul(8);
-        tail[end - 8..end].copy_from_slice(&bit_len.to_be_bytes());
-        for chunk in tail[..end].as_chunks::<64>().0 {
-            compress(&mut state, chunk);
-        }
-        let mut output = [0; 32];
-        for (chunk, word) in output.as_chunks_mut::<4>().0.iter_mut().zip(state) {
-            chunk.copy_from_slice(&word.to_be_bytes());
-        }
-        Self(output)
+        let mut builder = DigestBuilder::new();
+        builder.update(bytes);
+        builder.finish()
     }
 
     /// The digest bytes in network order.
@@ -60,6 +36,125 @@ impl fmt::Display for Digest {
             write!(f, "{byte:02x}")?;
         }
         Ok(())
+    }
+}
+
+/// Incremental SHA-256 over bytes supplied in any number of pieces.
+///
+/// The finished identity equals [`Digest::of`] over the concatenation of every
+/// [`Self::update`] call, wherever the input was split. At most one partial
+/// 64-byte block is buffered; supplied bytes are never retained otherwise.
+///
+/// ```
+/// use purrassist_core::digest::{Digest, DigestBuilder};
+/// let mut builder = DigestBuilder::new();
+/// builder.update(b"ab");
+/// builder.update(b"c");
+/// assert_eq!(builder.finish(), Digest::of(b"abc"));
+/// ```
+///
+/// Hashing is infallible: there are no error cases. Inputs longer than
+/// `2^61 - 1` bytes, which FIPS 180-4 excludes, encode a wrapped bit length
+/// exactly as [`Digest::of`] does.
+#[derive(Clone, Debug)]
+pub struct DigestBuilder {
+    state: [u32; 8],
+    block: [u8; 64],
+    buffered: usize,
+    length: u64,
+}
+
+impl Default for DigestBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DigestBuilder {
+    /// Start hashing an empty message.
+    ///
+    /// ```
+    /// use purrassist_core::digest::{Digest, DigestBuilder};
+    /// assert_eq!(DigestBuilder::new().finish(), Digest::of(b""));
+    /// ```
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            state: [
+                0x6a09_e667,
+                0xbb67_ae85,
+                0x3c6e_f372,
+                0xa54f_f53a,
+                0x510e_527f,
+                0x9b05_688c,
+                0x1f83_d9ab,
+                0x5be0_cd19,
+            ],
+            block: [0; 64],
+            buffered: 0,
+            length: 0,
+        }
+    }
+
+    /// Append bytes to the message. This cannot fail and does not allocate.
+    ///
+    /// ```
+    /// use purrassist_core::digest::{Digest, DigestBuilder};
+    /// let mut builder = DigestBuilder::new();
+    /// builder.update(&[]);
+    /// builder.update(b"tea");
+    /// assert_eq!(builder.finish(), Digest::of(b"tea"));
+    /// ```
+    pub fn update(&mut self, mut bytes: &[u8]) {
+        self.length = self
+            .length
+            .wrapping_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+        if self.buffered > 0 {
+            let take = bytes.len().min(64 - self.buffered);
+            self.block[self.buffered..self.buffered + take].copy_from_slice(&bytes[..take]);
+            self.buffered += take;
+            bytes = &bytes[take..];
+            if self.buffered < 64 {
+                return;
+            }
+            compress(&mut self.state, &self.block);
+            self.buffered = 0;
+        }
+        let (chunks, remainder) = bytes.as_chunks::<64>();
+        for chunk in chunks {
+            compress(&mut self.state, chunk);
+        }
+        self.block[..remainder.len()].copy_from_slice(remainder);
+        self.buffered = remainder.len();
+    }
+
+    /// Pad the message and produce its identity.
+    ///
+    /// ```
+    /// use purrassist_core::digest::DigestBuilder;
+    /// let mut builder = DigestBuilder::new();
+    /// builder.update(b"abc");
+    /// assert_eq!(
+    ///     builder.finish().to_string(),
+    ///     "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    /// );
+    /// ```
+    #[must_use]
+    pub fn finish(mut self) -> Digest {
+        let mut tail = [0_u8; 128];
+        tail[..self.buffered].copy_from_slice(&self.block[..self.buffered]);
+        tail[self.buffered] = 0x80;
+        let end = if self.buffered < 56 { 64 } else { 128 };
+        let bit_len = self.length.wrapping_mul(8);
+        tail[end - 8..end].copy_from_slice(&bit_len.to_be_bytes());
+        for chunk in tail[..end].as_chunks::<64>().0 {
+            compress(&mut self.state, chunk);
+        }
+        let mut output = [0; 32];
+        for (chunk, word) in output.as_chunks_mut::<4>().0.iter_mut().zip(self.state) {
+            chunk.copy_from_slice(&word.to_be_bytes());
+        }
+        Digest(output)
     }
 }
 
@@ -176,7 +271,46 @@ fn compress(state: &mut [u32; 8], block: &[u8]) {
 
 #[cfg(test)]
 mod tests {
-    use super::Digest;
+    use super::{Digest, DigestBuilder};
+
+    #[test]
+    fn digest_builder_equals_of_for_every_split() {
+        let long: Vec<u8> = (0..200_u8).map(|byte| byte.wrapping_mul(37)).collect();
+        for input in [&b""[..], b"abc", &long] {
+            let expected = Digest::of(input);
+            for split in 0..=input.len() {
+                let mut builder = DigestBuilder::new();
+                builder.update(&input[..split]);
+                builder.update(&input[split..]);
+                assert_eq!(
+                    builder.finish(),
+                    expected,
+                    "split at {split} of {}",
+                    input.len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn digest_builder_equals_of_for_three_way_splits() {
+        let input: Vec<u8> = (0..200_u8).map(|byte| byte ^ 0x5a).collect();
+        let expected = Digest::of(&input);
+        for first in (0..=input.len()).step_by(7) {
+            for second in first..=input.len() {
+                let mut builder = DigestBuilder::new();
+                builder.update(&input[..first]);
+                builder.update(&input[first..second]);
+                builder.update(&input[second..]);
+                assert_eq!(builder.finish(), expected, "splits at {first} and {second}");
+            }
+        }
+        let mut bytewise = DigestBuilder::new();
+        for byte in &input {
+            bytewise.update(core::slice::from_ref(byte));
+        }
+        assert_eq!(bytewise.finish(), expected);
+    }
 
     #[test]
     fn standard_vectors() {

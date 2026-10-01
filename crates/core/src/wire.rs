@@ -4,7 +4,7 @@
 use crate::contract::saturating_size as size;
 use crate::contract::{
     AlternativeReceipt, AssistResult, Budget, Evidence, Inference, InferenceKind, Loss, Outcome,
-    Receipt, StopReason, Validation,
+    Receipt, SourceDocument, StopReason, Validation,
 };
 use crate::edits::{AppliedEdit, EditPlan};
 use crate::json::{Member, Node, Number, Value};
@@ -191,6 +191,36 @@ fn ambiguity(alternatives: &[AlternativeReceipt], validations: &[Validation]) ->
         ),
     ])
 }
+/// Serialize one retained source as receipt version 3 `sources[]` entry.
+///
+/// The object carries `digest` and exactly one of `text` (the retained bytes
+/// are valid UTF-8, encoded as a JSON string) or `bytes_hex` (they are not,
+/// encoded as lowercase hexadecimal, two digits per byte). Nothing is
+/// replaced, dropped, or normalized; this encoding cannot fail.
+///
+/// ```
+/// use purrassist_core::{contract::SourceDocument, digest::Digest, wire};
+/// let text = wire::source_document(&SourceDocument { digest: Digest::of(b"ok"), bytes: b"ok".to_vec() });
+/// assert_eq!(text.get("text").and_then(|node| node.as_str()), Some("ok"));
+/// assert!(text.get("bytes_hex").is_none());
+/// let binary = wire::source_document(&SourceDocument { digest: Digest::of(&[0xff, 0x0a]), bytes: vec![0xff, 0x0a] });
+/// assert_eq!(binary.get("bytes_hex").and_then(|node| node.as_str()), Some("ff0a"));
+/// assert!(binary.get("text").is_none());
+/// ```
+#[must_use]
+pub fn source_document(source: &SourceDocument) -> Node {
+    let digest = ("digest", string(source.digest.to_string()));
+    if let Some(text) = source.text() {
+        return object([digest, ("text", string(text))]);
+    }
+    let mut hex = String::with_capacity(source.bytes.len().saturating_mul(2));
+    for byte in &source.bytes {
+        hex.push(char::from(HEX_DIGITS[usize::from(byte >> 4)]));
+        hex.push(char::from(HEX_DIGITS[usize::from(byte & 0x0f)]));
+    }
+    object([digest, ("bytes_hex", string(hex))])
+}
+const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
 fn budget(value: Budget) -> Node {
     object([
         ("work", integer(value.work)),
@@ -217,15 +247,7 @@ impl Receipt {
         object([
             ("version", integer(u64::from(self.version))),
             ("source", string(self.source.to_string())),
-            (
-                "sources",
-                array(self.sources.iter().map(|source| {
-                    object([
-                        ("digest", string(source.digest.to_string())),
-                        ("text", string(&source.text)),
-                    ])
-                })),
-            ),
+            ("sources", array(self.sources.iter().map(source_document))),
             (
                 "alternatives",
                 array(self.alternatives.iter().map(|entry| {
@@ -353,13 +375,55 @@ impl AppliedEdit {
         ])
     }
 }
-impl AssistResult<Node> {
+/// A value with one documented JSON wire representation, used to encode an
+/// [`AssistResult`]'s answers.
+///
+/// Implementations must be deterministic: the bytes of `to_node().to_json()`
+/// are the identity hashed into `AlternativeReceipt::output` wherever an
+/// ambiguous operation publishes the value as an alternative. Implemented by
+/// [`Node`] (its own representation) and [`crate::matching::RankedMatch`].
+///
+/// ```
+/// use purrassist_core::{json::Node, wire::{self, WireValue}};
+/// let node: Node = wire::string("tea");
+/// assert_eq!(WireValue::to_node(&node).to_json(), "\"tea\"");
+/// ```
+///
+/// Encoding is infallible; a value that cannot be represented must not
+/// implement this trait.
+pub trait WireValue {
+    /// Encode this value in its documented wire representation.
+    fn to_node(&self) -> Node;
+}
+impl WireValue for Node {
+    /// A JSON node is its own wire representation, cloned unchanged.
+    fn to_node(&self) -> Node {
+        self.clone()
+    }
+}
+impl<T: WireValue> AssistResult<T> {
     /// Encode the answer's status and receipt without hiding guesses or alternatives.
+    ///
+    /// The object carries `status` (`resolved`, `best_guess`, `ambiguous`, or
+    /// `unresolved`), `value` (the single answer, or `null`), `alternatives`
+    /// (every ambiguous answer in receipt order, otherwise empty), and
+    /// `receipt`. Encoding is infallible.
+    ///
+    /// ```
+    /// use purrassist_core::{AssistResult, Budget, Effort, Outcome, Receipt, wire};
+    /// let result = AssistResult {
+    ///     outcome: Outcome::BestGuess(wire::integer(7)),
+    ///     receipt: Receipt::new(b"7", "example.v1", Effort::Standard, Budget::default()),
+    /// };
+    /// let node = result.to_node();
+    /// assert_eq!(node.get("status").and_then(|n| n.as_str()), Some("best_guess"));
+    /// assert_eq!(node.get("value").unwrap().to_json(), "7");
+    /// ```
     #[must_use]
     pub fn to_node(&self) -> Node {
         let (status, value, alternatives) = match &self.outcome {
-            Outcome::Resolved(value) => ("resolved", value.clone(), array([])),
-            Outcome::BestGuess(value) => ("best_guess", value.clone(), array([])),
+            Outcome::Resolved(value) => ("resolved", value.to_node(), array([])),
+            Outcome::BestGuess(value) => ("best_guess", value.to_node(), array([])),
             Outcome::Ambiguous(values) => {
                 // `values` is already in the same order as
                 // `self.receipt.alternatives` (see that field's
@@ -368,7 +432,11 @@ impl AssistResult<Node> {
                 // `crate::provenance::Published::order` when it published
                 // more than one alternative, exactly as `Receipt::alternatives`
                 // itself was ordered. Nothing is reordered again here.
-                ("ambiguous", Node::new(Value::Null), array(values.clone()))
+                (
+                    "ambiguous",
+                    Node::new(Value::Null),
+                    array(values.iter().map(WireValue::to_node)),
+                )
             }
             Outcome::Unresolved => ("unresolved", Node::new(Value::Null), array([])),
         };

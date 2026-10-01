@@ -45,8 +45,8 @@ fn composed_nested_syntax_key_and_type_repairs() {
     );
     assert!(!result.receipt.contains_guesses());
     assert_eq!(
-        result.receipt.sources[0].text,
-        "```json\n[[{temperatur: '42', drink: 'Tea',}]]\n```"
+        result.receipt.sources[0].text(),
+        Some("```json\n[[{temperatur: '42', drink: 'Tea',}]]\n```")
     );
     assert_eq!(result.receipt.sources[0].digest, result.receipt.source);
 }

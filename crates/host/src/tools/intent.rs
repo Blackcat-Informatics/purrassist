@@ -66,17 +66,7 @@ pub(super) fn resolve(
     let mut result = domain.resolve_governed(input, &concepts, &mut governor);
     result.receipt.effort = effort;
     Ok(AssistResult {
-        outcome: match result.outcome {
-            Outcome::Resolved(value) => Outcome::Resolved(value.to_node()),
-            Outcome::BestGuess(value) => Outcome::BestGuess(value.to_node()),
-            Outcome::Ambiguous(values) => Outcome::Ambiguous(
-                values
-                    .iter()
-                    .map(purrassist::intent::Interpretation::to_node)
-                    .collect(),
-            ),
-            Outcome::Unresolved => Outcome::Unresolved,
-        },
+        outcome: result.outcome.map(|value| value.to_node()),
         receipt: result.receipt,
     }
     .to_node())
