@@ -11,6 +11,7 @@ pub mod matching;
 pub mod pattern;
 pub mod schema;
 pub mod text;
+pub mod tool_call;
 
 pub use contract::{
     AssistResult, Budget, CancellationToken, Effort, Governor, Outcome, RECEIPT_VERSION, Receipt,

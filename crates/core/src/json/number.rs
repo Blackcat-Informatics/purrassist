@@ -102,19 +102,57 @@ impl Number {
     /// Read a nonnegative machine-sized integer, when representable exactly.
     #[must_use]
     pub fn to_usize(&self) -> Option<usize> {
+        match self.integer_magnitude() {
+            IntegerReading::Exact {
+                negative: false,
+                magnitude,
+            } => usize::try_from(magnitude).ok(),
+            _ => None,
+        }
+    }
+
+    /// Read the exact integer value as a sign and a 128-bit magnitude.
+    ///
+    /// The reading uses the mathematical value of the spelling, so `1e2`,
+    /// `100.0`, and `1.5e1` are integral while `1.5` and `1e-1` are not.
+    /// Negative zero reads as nonnegative zero. A nonzero integral value whose
+    /// magnitude exceeds `u128::MAX` is [`IntegerReading::OutOfRange`]; no
+    /// floating conversion or exponent-sized allocation occurs. Infallible.
+    ///
+    /// ```
+    /// use purrassist_core::json::{IntegerReading, Number};
+    /// let read = |text: &str| text.parse::<Number>().unwrap().integer_magnitude();
+    /// assert_eq!(read("-1.5e1"), IntegerReading::Exact { negative: true, magnitude: 15 });
+    /// assert_eq!(read("-0"), IntegerReading::Exact { negative: false, magnitude: 0 });
+    /// assert_eq!(read("1.5"), IntegerReading::Fractional);
+    /// assert_eq!(read("1e39"), IntegerReading::OutOfRange);
+    /// ```
+    #[must_use]
+    pub fn integer_magnitude(&self) -> IntegerReading {
         let parts = self.parts();
         if parts.digits == "0" {
-            return Some(0);
+            return IntegerReading::Exact {
+                negative: false,
+                magnitude: 0,
+            };
         }
-        if parts.negative || parts.exponent.negative {
-            return None;
+        if parts.exponent.negative {
+            return IntegerReading::Fractional;
         }
-        let exponent = parts.exponent.digits.parse::<u32>().ok()?;
-        parts
+        let magnitude = parts
+            .exponent
             .digits
-            .parse::<usize>()
-            .ok()?
-            .checked_mul(10_usize.checked_pow(exponent)?)
+            .parse::<u32>()
+            .ok()
+            .and_then(|exponent| 10_u128.checked_pow(exponent))
+            .zip(parts.digits.parse::<u128>().ok())
+            .and_then(|(scale, digits)| digits.checked_mul(scale));
+        magnitude.map_or(IntegerReading::OutOfRange, |magnitude| {
+            IntegerReading::Exact {
+                negative: parts.negative,
+                magnitude,
+            }
+        })
     }
 
     /// Test exact mathematical divisibility without allocating exponent-sized integers.
@@ -261,6 +299,28 @@ impl fmt::Display for Number {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
     }
+}
+
+/// The exact integer reading of a [`Number`] (see [`Number::integer_magnitude`]).
+///
+/// ```
+/// use purrassist_core::json::{IntegerReading, Number};
+/// let number: Number = "1e2".parse().unwrap();
+/// assert_eq!(number.integer_magnitude(), IntegerReading::Exact { negative: false, magnitude: 100 });
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IntegerReading {
+    /// An integral value with its sign and exact magnitude.
+    Exact {
+        /// Whether the value is strictly negative.
+        negative: bool,
+        /// The absolute value.
+        magnitude: u128,
+    },
+    /// The mathematical value has a nonzero fractional part.
+    Fractional,
+    /// An integral value whose magnitude exceeds `u128::MAX`.
+    OutOfRange,
 }
 
 /// Invalid JSON numeric spelling.

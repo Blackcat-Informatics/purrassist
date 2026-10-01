@@ -1,0 +1,43 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Typed tool definitions compiled into validated, indexed tool sets.
+//!
+//! A [`ToolDefinition`] declares a tool's canonical name, aliases, effects,
+//! policies, and typed parameters. [`ToolSet::compile_governed`] checks every
+//! definition under a governor and produces, per tool, a canonical Draft
+//! 2020-12 argument schema (text, document, and compiled validator), an
+//! engine-independent [`ArgumentShape`] for tool-call grammars, and the
+//! validated, never-applied defaults. [`FromNode`] converts validated
+//! argument values into Rust types exactly.
+//!
+//! Names (tools, aliases, parameters, parameter aliases) are non-empty and
+//! match `[A-Za-z0-9_.:-]+`; two collide when their [`collision_key`]s are
+//! equal. Results never depend on declaration order.
+//!
+//! ```
+//! use purrassist_core::{Budget, json, tool_call::{Effects, FromNode, Param, ToolDefinition, ToolSet}};
+//! let tool = ToolDefinition::new("read_file")
+//!     .effects(Effects::ReadOnly)
+//!     .param("path", Param::string().required().alias("file"))
+//!     .param("limit", Param::integer().default(json::parse("100").unwrap()));
+//! let tools = ToolSet::compile([tool], Budget::default()).unwrap();
+//! let compiled = tools.lookup_exact("read_file").unwrap();
+//! let arguments = json::parse(r#"{"path":"README.md","limit":5}"#).unwrap();
+//! assert!(compiled.schema().validate(&arguments).unwrap().valid);
+//! assert_eq!(u32::from_node(arguments.get("limit").unwrap()), Ok(5));
+//! ```
+mod definition;
+mod from_node;
+mod shape;
+mod toolset;
+
+pub use definition::{
+    Effects, ObjectSpec, Param, ParameterSpec, RepairPolicy, ToolDefinition, UnknownParameters,
+};
+pub use from_node::{FromNode, FromNodeError};
+pub use shape::{
+    ArgumentShape, NameLiteral, ObjectShape, ParameterDefault, ParameterShape, PatternConstraint,
+    ShapeStep, ValueShape,
+};
+pub use toolset::{CompiledTool, ToolSet, ToolSetError, collision_key, is_valid_name};
