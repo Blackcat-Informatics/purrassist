@@ -542,7 +542,7 @@ impl<'t> Reader<'_, 't, '_> {
                     Ok(item) => item,
                     Err(fault) => return Ok(Err(fault)),
                 };
-                if item.is_placeholder() {
+                if item.is_stand_in() {
                     return Ok(Ok(item));
                 }
                 self.record(EditOperator::ArrayItem, from..stop, b"")?;

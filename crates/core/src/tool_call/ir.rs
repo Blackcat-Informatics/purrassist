@@ -123,7 +123,7 @@ pub struct ArgLeaf {
 ///
 /// A value listed in [`Self::unresolved`] is absent from [`Self::root`];
 /// when the whole arguments value is unresolved (an entry with the empty
-/// pointer), `root` is an empty-object placeholder spanning the raw bytes.
+/// pointer), `root` is an empty-object stand-in spanning the raw bytes.
 /// A call with any unresolved argument cannot be executed as recognized.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArgTree {
@@ -184,7 +184,7 @@ impl ArgTree {
     }
 
     /// An argument value that could not be decoded: an empty-object
-    /// placeholder spanning `raw`, with one unresolved entry at the empty
+    /// stand-in spanning `raw`, with one unresolved entry at the empty
     /// pointer.
     ///
     /// ```
@@ -216,8 +216,8 @@ impl ArgTree {
         self.unresolved.is_empty()
     }
 
-    /// Whether the whole value is unresolved (`root` is a placeholder).
-    pub(crate) fn is_placeholder(&self) -> bool {
+    /// Whether the whole value is unresolved (`root` is the empty stand-in).
+    pub(crate) fn is_stand_in(&self) -> bool {
         self.unresolved
             .iter()
             .any(|unresolved| unresolved.pointer.is_empty())
@@ -286,7 +286,7 @@ impl ArgTree {
     /// leaves and unresolved values under the member's pointer.
     pub(crate) fn adopt(&mut self, name: Spanned<String>, value: Self) {
         let prefix = format!("/{}", pointer_segment(&name.value));
-        let whole = value.is_placeholder();
+        let whole = value.is_stand_in();
         self.leaves
             .extend(value.leaves.into_iter().map(|leaf| ArgLeaf {
                 pointer: format!("{prefix}{}", leaf.pointer),

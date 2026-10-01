@@ -30,7 +30,7 @@ fn both_uri_spellings_select_draft_07() {
             .dialect(),
         Dialect::Draft202012
     );
-    // Unimplemented dialects remain explicit compilation errors.
+    // Dialects other than 2020-12 and draft-07 remain explicit compilation errors.
     let error =
         Schema::compile(r#"{"$schema":"http://json-schema.org/draft-04/schema#"}"#).unwrap_err();
     assert!(error.message.contains("unresolved dialect"), "{error}");
