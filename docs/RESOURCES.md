@@ -98,6 +98,18 @@ matching `Receipt::retain_source`: the new collection types release when the
 memory they charged for is genuinely transient scratch this crate's own call
 stack controls, not memory a caller may go on holding indefinitely.
 
+Schema recovery runs on the generic best-first engine in `search.rs`. Each
+queued candidate charges `Work` for its deduplication key, one `Candidates`
+unit, and `key_len * 32 + 256` scratch bytes. Popping the candidate releases
+the queue-entry share; the retained deduplication key's share (`key_len + 64`,
+once per distinct key) and the reused, `ScratchVec`-charged key buffer are
+released when the search is dropped, as are entries still queued when the
+first accepted cost is exhausted. A queued entry made stale by a cheaper
+duplicate is skipped when popped, without validation or expansion. The search
+order is the total key `(cost, tie, serial)`, where the state-supplied tie key
+makes equal-cost order independent of proposal emission order; schema recovery
+uses the unit tie key, so its order remains `(cost, serial)`.
+
 ## Measured-allocation oracle
 
 `crates/core/tests/allocation_oracle.rs` installs a test-only counting

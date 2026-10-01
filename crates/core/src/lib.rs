@@ -30,4 +30,6 @@ pub mod patch;
 
 pub mod provenance;
 
+pub mod search;
+
 pub mod markdown;

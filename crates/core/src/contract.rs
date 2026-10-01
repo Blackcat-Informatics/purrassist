@@ -548,6 +548,7 @@ macro_rules! scratch_charge {
 // compiled for wasm32.
 scratch_charge!((), 0);
 scratch_charge!(bool, 1);
+scratch_charge!(u8, 1);
 scratch_charge!(u32, 4);
 scratch_charge!(u64, 8);
 scratch_charge!(usize, 8);
@@ -714,6 +715,24 @@ impl<T: ScratchCharge> ScratchVec<T> {
     #[must_use]
     pub fn as_slice(&self) -> &[T] {
         &self.inner
+    }
+
+    /// Remove every element, keeping the allocated (and charged) capacity
+    /// for reuse; the charge is still released exactly once, on drop.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, ScratchVec};
+    /// let governor = Governor::new(Budget::default());
+    /// let mut bytes: ScratchVec<u8> = ScratchVec::new(&governor);
+    /// bytes.extend(*b"key").unwrap();
+    /// let charged = governor.usage().total_scratch_charged;
+    /// bytes.clear();
+    /// bytes.extend(*b"abc").unwrap(); // reuses capacity: no new charge.
+    /// assert_eq!(bytes.as_slice(), b"abc");
+    /// assert_eq!(governor.usage().total_scratch_charged, charged);
+    /// ```
+    pub fn clear(&mut self) {
+        self.inner.clear();
     }
 
     /// Take ownership of a plain `Vec<T>`, permanently retaining the charge
