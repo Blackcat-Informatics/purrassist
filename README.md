@@ -62,6 +62,17 @@ Current surfaces include:
 - Python, Rust, JavaScript/JSX, TypeScript/TSX grammar inspection and validated
   punctuation repairs. Grammar acceptance does not prove program correctness.
 - Journaled single-file replacement and conditional undo for coordinated writers.
+- Tool-call recovery from raw model output: weighted, invertible dialect
+  grammars with best-first markup repair, resolution against typed tools or
+  lossless `OpenAI`/MCP/Anthropic declarations (Draft 2020-12 or Draft-07
+  schemas), per-call outcomes with itemized repairs, conservative guards for
+  mutating tools, and re-emission as any dialect or the `OpenAI` `tool_calls`
+  array. Three dialects ship: `qwen3-coder-xml.v1`, `hermes.v1`, and
+  `openai-tool-calls.v1`; callers add their own with the grammar DSL.
+  Streaming recognition, `purrassist-derive`, and the remaining dialects
+  (Anthropic tool_use, Llama 3.x, Mistral, DeepSeek, GLM, Kimi, Gemma, Harmony,
+  Pythonic, bare JSON) are tracked in issue #4. See
+  [tool-call recovery](docs/tool-calls/README.md).
 - CLI, stdio MCP, and resumable helper request/response adapters. No model is
   required, loaded, or contacted by default.
 
@@ -74,6 +85,7 @@ cargo run -p purrassist-cli -- call match_strings --root . < examples/match-stri
 cargo run -p purrassist-cli -- call resolve_string --root . < examples/resolve-string.json
 cargo run -p purrassist-cli -- decode --schema examples/temperature.schema.json \
   --input examples/temperature.input.txt
+cargo run -p purrassist-cli -- recover-tool-calls --tools tools.json --emit openai turn.txt
 cargo run -p purrassist-cli -- mcp --root /path/to/workspace
 ```
 
@@ -100,6 +112,17 @@ exposes the same witness-generation algebra: given `schema` and optional
 the generated `witness` value or non-empty `refutation` evidence, and a
 receipt; a governor hard stop while generating is reported as `exhausted`
 with `budget_exceeded` in the receipt's termination, never as `unsatisfiable`.
+
+`recover-tool-calls` reads one model turn as raw bytes from a file or stdin
+and recovers its tool calls against the declarations in `--tools`
+(`--tools-format openai`, `mcp`, or `anthropic`). It prints the same result as
+the `recover_tool_calls` MCP tool: per-call outcomes, itemized repairs and
+losses, rejected attempts, the tool-choice check, the turn's finish and its
+`OpenAI` `finish_reason`, an optional `--emit` re-emission (`openai` for the
+`tool_calls` array, or a dialect id), and a receipt. It never executes a call.
+`Finish::Unresolved` maps to the `finish_reason` `"stop"`, so read `finish`
+and `rejected` as well. The [integration guide](docs/tool-calls/INTEGRATION.md)
+lists every option, the integrator guarantees, and the evidence for each.
 
 `prepare_helper`/`complete_helper` expose optional external-model helper
 proposals (see [helpers](docs/HELPERS.md)) as a two-call tool pair: the first
@@ -297,7 +320,7 @@ make check       # formatting, attribution/dependencies, lint, optimized tests, 
 make wasm-test   # compare native/WASI recovery, matching, embeddings, Markdown, and grammars
 make syntax-oracles  # compare fixed syntax probes to independent compilers
 make benchmark  # recovery quality assertions and latency baseline
-make fuzz       # eight coverage-guided targets and independent pattern/Markdown oracles
+make fuzz       # nine coverage-guided targets and independent pattern/Markdown oracles
 make resources  # allocations, heap/RSS, latency, artifact size, and uncached build cost
 make package    # Cargo verification and registered source/license archive audit
 ```

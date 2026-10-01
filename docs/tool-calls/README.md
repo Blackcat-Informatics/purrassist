@@ -1,0 +1,256 @@
+<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. -->
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
+# Tool-call recovery
+
+Tool-call recovery reads one model turn, the raw output bytes of an assistant
+message, and recovers the tool calls it makes against the tools the model was
+offered. It returns every call with its own outcome, itemized repairs and
+losses, an id, and the turn's finish, plus a receipt; it never executes a
+call. The operation is `tool_call.recover.v1`, implemented in
+`purrassist_core::tool_call` and exposed through the Rust API, the
+`recover_tool_calls` MCP tool, and the `purrassist recover-tool-calls` CLI
+command.
+
+Three dialects are built in:
+
+| Dialect | Shape | Reference |
+| --- | --- | --- |
+| `qwen3-coder-xml.v1` | `<tool_call><function=NAME><parameter=P>VALUE</parameter></function></tool_call>` | [dialect](dialects/qwen3-coder-xml.v1.md) |
+| `hermes.v1` | `<tool_call>{"name": NAME, "arguments": {...}}</tool_call>` | [dialect](dialects/hermes.v1.md) |
+| `openai-tool-calls.v1` | `tool_calls` elements `{"id": ID, "type": "function", "function": {...}}` as text | [dialect](dialects/openai-tool-calls.v1.md) |
+
+Callers add their own dialects with the grammar DSL
+([GRAMMAR.md](GRAMMAR.md)). Streaming recognition, `purrassist-derive`, and the
+remaining dialects (Anthropic tool_use, Llama 3.x, Mistral, DeepSeek, GLM,
+Kimi, Gemma, Harmony, Pythonic, bare JSON) are tracked in issue #4.
+
+## Design
+
+- **Weighted, invertible grammars.** Each dialect is a declarative grammar.
+  Its `call` and `result` productions compile into byte-level recognizer
+  programs, and the same productions run forward as a printer. Recognition
+  and printing are inverses: a printed call recognizes to the same tool,
+  equivalent arguments, and no new loss.
+- **Best-first repair search.** Well-formed input is recognized
+  deterministically on a linear fast path. Where every configuration of a
+  call attempt fails, a best-first search over (position, configuration)
+  applies weighted edit operators: insert a missing closer, delete a stray
+  one, accept a declared variant or confusable spelling. The least-cost
+  repairs are kept and every applied operator is itemized. Argument codecs
+  (`json`, `xml-params`, `raw`) read argument bodies with their own recorded
+  repairs.
+- **Factorized ambiguity.** The turn is a least-cost segmentation into
+  content, reasoning, calls, tool results, and rejected attempts.
+  Equal-cost segmentations of one span are packed into a local choice;
+  independent choices are never multiplied out during recognition. Each call
+  is then resolved against the tool set (tool name, parameter names, repeats,
+  typing, schema validation), and its readings are ranked by cost and a
+  content digest, a total order independent of declaration order. Several
+  equally good readings of one call make that call `Ambiguous`; competing
+  segmentations of the whole message are enumerated, charged as candidates
+  before the first is built, and reported as an `Ambiguous` operation.
+
+Every rule a call can record is listed with its cost, guess flag, and loss
+kind in [RULES.md](RULES.md).
+
+## The API at a glance
+
+| Item | Role |
+| --- | --- |
+| `ToolDefinition`, `Param`, `ObjectSpec` | Typed builders: name, aliases, `Effects`, `RepairPolicy`, `UnknownParameters`, parameters. |
+| `ToolSet::compile`, `from_openai`, `from_mcp`, `from_anthropic` | A governed, validated tool set. Wire declarations are kept byte for byte and validated against their exact schema (Draft 2020-12 or Draft-07). |
+| `DialectId`, `DialectSet` | One dialect (built-in or `DialectId::custom`), and one model's dialect allow-list. |
+| `ToolRecoveryRequest` | Effort, budget, dialects, `ReasoningPolicy`, `GenerationStop`, `ToolChoice`, `IdPolicy`, `PolicySelection`, effects overrides, `AmbiguityPolicy`, `EmitTarget`. |
+| `ToolSet::recover`, `recover_governed` | Recover one turn; returns `AssistResult<ToolCalls>`. |
+| `ToolCalls` | `calls`, `rejected`, `embedded`, `content`, `reasoning`, `finish`, `tool_choice`, `next_id_start`, `emitted`; `usable()`, `usable_accepting_guesses()`, `reemit_with`. |
+| `ToolCall` | `id`, `tool`, `arguments`, `outcome`, `repairs`, `alternatives`, `keywords`; `arguments_as::<T>()`. |
+| `tool_call::emit` | Print calls in any dialect or as the `OpenAI` `tool_calls` array; print tool results and declarations. |
+
+Recovering a Qwen3-Coder XML call and printing it as Hermes markup and as the
+`OpenAI` `tool_calls` array (the `tool_call::emit` module doctest):
+
+```rust
+use purrassist_core::tool_call::{emit, DialectId, IdPolicy, Param, ToolDefinition, ToolRecoveryRequest, ToolSet};
+use purrassist_core::{Budget, Outcome};
+let tools = ToolSet::compile([ToolDefinition::new("read").param("path", Param::string().required())], Budget::default()).unwrap();
+let output = b"<tool_call>\n<function=read>\n<parameter=path>\nsrc/a b.rs\n</parameter>\n</function>\n</tool_call>";
+let Outcome::Resolved(calls) = tools.recover(output, &ToolRecoveryRequest::default()).outcome else { unreachable!() };
+let hermes = emit::emit(&tools, &calls, &DialectId::Hermes, &IdPolicy::default())?;
+assert_eq!(hermes.output, b"<tool_call>\n{\"name\":\"read\",\"arguments\":{\"path\":\"src/a b.rs\"}}\n</tool_call>");
+assert_eq!((hermes.calls.as_slice(), hermes.skipped.len()), (&[0][..], 0));
+let array = emit::openai_tool_calls(&calls, &IdPolicy::default())?;
+assert_eq!(
+    array.output.to_json(),
+    r#"[{"id":"call_0","type":"function","function":{"name":"read","arguments":"{\"path\":\"src/a b.rs\"}"}}]"#,
+);
+# Ok::<(), emit::EmitError>(())
+```
+
+A guess is usable only when the caller accepts guesses, and only on a
+read-only tool (the `ToolCalls::usable_accepting_guesses` doctest):
+
+```rust
+use purrassist_core::tool_call::{Effects, Param, ToolDefinition, ToolRecoveryRequest, ToolSet};
+use purrassist_core::{Budget, Outcome};
+let tools = ToolSet::compile([ToolDefinition::new("read_file").effects(Effects::ReadOnly)], Budget::default()).unwrap();
+let result = tools.recover(br#"<tool_call>{"name": "read_fiel", "arguments": {}}</tool_call>"#, &ToolRecoveryRequest::default());
+let Outcome::BestGuess(calls) = result.outcome else { unreachable!() };
+assert!(calls.usable().is_empty());
+assert_eq!(calls.usable_accepting_guesses()[0].tool.as_deref(), Some("read_file"));
+```
+
+## Policy matrix
+
+### Effects select the defaults
+
+| Effects | Default `RepairPolicy` | Default `UnknownParameters` |
+| --- | --- | --- |
+| `Mutating` (the default for every definition that does not state its effects) | `Structural` | `Error` |
+| `ReadOnly` | `Tolerant` | `DropWithLoss` |
+
+A definition may set its policy and unknown-parameter handling explicitly.
+Tools built from wire declarations (`from_openai`, `from_mcp`,
+`from_anthropic`) declare no effects, so they are `Mutating` and
+`Structural`; their unknown-parameter handling follows the exact schema
+(`Error` where `additionalProperties: false` closes the scope, `PassThrough`
+otherwise). The request overrides effects per tool
+(`ToolRecoveryRequest::effects`; naming an undeclared tool is a request
+error), and `PolicySelection::All(policy)` applies one policy to every tool,
+whatever it declares.
+
+### What each policy admits
+
+| Repair | `Structural` | `Tolerant` |
+| --- | --- | --- |
+| Canonical parsing and records (framing newlines, nested parameters, stringified arguments, aliases, truncation, ids, invalid UTF-8) | admitted | admitted |
+| Single-reading repairs (missing, stray, and variant closers, confusables, the missing `</parameter>` before a declared parameter, non-guessed JSON syntax repairs, enum case/whitespace normalization) | admitted | admitted |
+| Multiple-reading rules, the guesses (fuzzy tool and parameter names, approximate enum values, guessed JSON repairs, calls inside reasoning or code examples, a wrapper closed before text, repeated parameters) | not admitted: the call is `Unresolved` (`RuleNotAdmitted`) | admitted: the call is at most `BestGuess` |
+| A near-miss tool name | never matched; exact names and aliases only | a guess-flagged `tool_call.name.match` |
+| A near-miss parameter name | never renamed and never dropped in place of the rename (`UnknownParameter`) | renamed by `json.key.match`, a guess |
+
+`Structural` admits exactly the single-reading rules: repairs that leave no
+other reading of the input. A required argument is never invented under any
+policy, and a value is never coerced (a declared string is never parsed, and
+numbers keep their spelling).
+
+### Outcomes
+
+`CallOutcome::classify` is the single place that decides a call's outcome:
+
+| Call outcome | When |
+| --- | --- |
+| `Resolved` | One reading, every rule admitted, no guess, no data loss. Markup losses never demote. |
+| `BestGuess` | One reading with a guess inference or a data loss. |
+| `Ambiguous` | Several readings at the least cost, whatever the policy. |
+| `Unresolved { reason }` | No usable reading: an unknown tool, a missing required argument, a schema validation failure, a malformed or truncated call, a rule the policy does not admit, a repair under `Effort::Exact`, or a tool-choice violation. |
+
+**Markup and data losses.** A `markup` loss discards bytes that carry no
+argument data: closers, framing newlines, fence markers, a closers-only body.
+It is itemized and never demotes a call. A `data` loss discards bytes that may
+carry data: a dropped unknown parameter, a dropped repeated occurrence,
+dropped prose inside a call, truncation, a dangling opener, an unterminated
+reasoning block, bytes that are not UTF-8. It makes the call that records it
+at most `BestGuess`. Text outside every call is never dropped: it stays
+content.
+
+### Usability and emission
+
+| Call | `usable()` | `usable_accepting_guesses()` | Emitted |
+| --- | --- | --- | --- |
+| `Resolved` | yes | yes | yes |
+| `BestGuess`, read-only tool | no | yes | yes |
+| `BestGuess`, mutating tool | no | no | no (`GuessOnMutatingTool`) |
+| `Ambiguous` | no | no | no (`Ambiguous`) |
+| `Unresolved` | no | no | no (`Unresolved`, with its reason) |
+
+"Read-only" means the tool's effective effects after request overrides.
+Emission (`ToolRecoveryRequest::emit`, `tool_call::emit`) prints exactly the
+calls `usable_accepting_guesses()` selects, because emitted output carries no
+outcome and a downstream executor may run whatever it holds. Every call or
+rejected attempt that is not printed is listed in `Emitted::skipped`, so
+nothing is dropped silently. Calls written inside closed reasoning blocks
+(`ToolCalls::embedded`) are never selected, never receive an id, and never
+affect the finish.
+
+**Mutating guards.** A guess on a `Mutating` tool is never `Resolved`, never
+selected by either usability method, and never emitted. With default
+settings a `Mutating` tool is `Structural`, so a guess is not admitted at all,
+and an unknown parameter is an error rather than a drop.
+
+**Ambiguity.** `AmbiguityPolicy::Report` (the default) reports competing
+whole-message readings as an `Ambiguous` operation and an ambiguous call as a
+per-call `Ambiguous` outcome. `AmbiguityPolicy::Reject` makes any ambiguity,
+whole-message or per-call, an `Unresolved` operation with a failed
+`tool_call.ambiguity` validation and every alternative kept in the receipt.
+
+## Finish classes
+
+| `Finish` | When | `openai_finish_reason()` |
+| --- | --- | --- |
+| `Calls` | The turn made calls and nothing is wrong with any of them. | `"tool_calls"` |
+| `ContentOnly` | No call, nothing wrong. | `"stop"` |
+| `TruncatedWithCalls` | A `Length` stop after at least one call that is not cut off. | `"length"` |
+| `Truncated` | A `Length` stop with no call that is not cut off. | `"length"` |
+| `Unresolved` | A rejected attempt (other than one a length stop cut off), an `Unresolved` (other than by truncation) or `Ambiguous` call, or a failed tool-choice check. | `"stop"` |
+
+`"stop"` for `Finish::Unresolved` hides rejected and unresolved calls: read
+`ToolCalls::finish` and `ToolCalls::rejected`, never only the
+`finish_reason`. Truncation never upgrades malformed output.
+
+## Termination semantics
+
+The caller passes why the model stopped as `GenerationStop`; it decides what
+an open call at the end of output means.
+
+| Stop | An open call at the end of output |
+| --- | --- |
+| `Length` | Truncation: the call is a dangling reading of what was captured, `Unresolved` (`Truncated`) with a `tool_call.truncated` data loss; unless something else is wrong with the turn, the finish is `Truncated` or `TruncatedWithCalls` (`"length"`). |
+| `Stop`, `ToolCalls`, `ContentFilter`, `Unknown` | Malformed: completed only by inserting the missing closers at the end (`tool_call.markup.missing-closers-at-end`) when the call is otherwise complete (its name parsed, no value open, arguments complete, every required parameter present); otherwise a rejected attempt with a `tool_call.markup.dangling-opener` data loss and the finish `Unresolved`. |
+| `StopSequence(bytes)` | Like `Stop`, and when `bytes` equal the closer the call expects next, that closer is reinserted (`tool_call.stop.consumed-closer`). |
+
+Serving-layer repetition or degenerate-output stops map to
+`GenerationStop::Unknown`, which never reads an open call as truncation.
+
+## Effort
+
+`Effort::Exact` permits canonical parsing only: no rule that costs something
+or guesses (`Rule::is_repair`) is applied. A call that needs one is
+`Unresolved` with `UnresolvedReason::RepairNotPermitted` naming the rule, its
+span kept and no repaired value reported; a turn whose segmentation itself
+needs a repair (a reasoning block closed at a call opener) is an `Unresolved`
+operation with a failed `effort=exact` validation. Zero-cost parsing (framing
+newlines, nested parameter elements, stringified arguments, typed values,
+aliases) and records (truncation, ids, invalid UTF-8) still apply; the
+`Exact` column of [RULES.md](RULES.md) classifies every rule. `Quick`,
+`Standard` (the default), `Deep`, and `Maximum` select increasing finite
+budget presets and do not change which rules apply.
+
+## Budgets
+
+Every step is charged to one `Governor` with portable amounts, so charges
+depend only on the output, the tool set, and the request. Exhaustion,
+cancellation, and an invalid request are an `Unresolved` operation whose
+receipt names the stop (`BudgetExceeded` with the resource, `Cancelled`, or
+`InvalidInput`), never a partial value or a panic.
+
+Fixed presets are sized for ordinary turns. `ToolRecoveryRequest::sized(effort,
+n)` sizes a budget for an output of `n` bytes: the preset's work plus
+`RECOVER_WORK_PER_BYTE · n` (32 per byte), its scratch bytes plus
+`RECOVER_SCRATCH_PER_BYTE · n` (48 per byte), and at least `n` input bytes;
+every other limit is the preset's. The MCP tool and the CLI use it. The
+published work bound, its constants, and 1 MiB measurements are in
+[RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound).
+
+## Further reading
+
+- [INTEGRATION.md](INTEGRATION.md): integrator guarantees, how each is
+  enforced and tested, and the MCP and CLI surfaces.
+- [RULES.md](RULES.md): every rule, generated from and checked against the
+  registry.
+- [GRAMMAR.md](GRAMMAR.md): the dialect DSL and a custom-dialect walkthrough.
+- [dialects/](dialects/): public sources, accepted forms, printing, and
+  deliberate exclusions of each built-in dialect.
+- [MATCHING-QUALITY.md](../MATCHING-QUALITY.md#tool-call-recovery-evaluation):
+  the 3,234-case correction evaluation, per rule and per dialect.
+- [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound): the cost
+  bound, budgets for large outputs, and throughput.

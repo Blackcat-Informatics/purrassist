@@ -24,9 +24,14 @@ and merge sequence in [RELEASE.md](RELEASE.md).
 | Resource boundaries | `resource_accounting`, `schema_budgets`, `allocation_oracle`, syntax `allocation`, host `helpers` | Charge-before-allocation, cancellation, helper admission, measured allocator comparisons including zero-slack pattern compilation and generation, external parser accounts |
 | Filesystem transaction boundaries | host `files`, `crash_recovery`, `journal_limits`, `orphan_preservation`, `edit_tools` | Eight crash checkpoints; bounded escaped journals, retry/recovery, temporary ownership checks, stale plans, locks, conditional undo and explicit batch outcomes |
 | Shared Rust/CLI/MCP surface | host tests and CLI `protocol` | Single registry; every tool has CLI/MCP equivalence fixtures and schema-checked output |
+| Tool-call grammars and dialects | `grammar_engine`, `grammar_codecs`, `tool_call_dialects`, `tool_call_negative` | DSL compilation and errors; linear fast path; split-invariant push recognition; factorized ambiguity; `raw`/`json`/`xml-params` codecs; canonical anchor fixtures for `qwen3-coder-xml.v1`, `hermes.v1` and `openai-tool-calls.v1`; deliberate rejections |
+| Tool-call resolution and recovery | `tool_definitions`, `tool_adapters`, `tool_call_rules`, `tool_call_goldens`, `tool_call_recover`, `tool_call_roundtrip` | Typed definitions; byte-exact `OpenAI`/MCP/Anthropic render-back including Draft-07 MCP schemas; registry admission, costs and loss kinds; `RULES.md`/`GRAMMAR.md` checked against the code; one captured golden per rule; mutating-guess guards; `Exact` effort; stop-reason semantics; pinned order-independent result digest; print/recognize round trips for every dialect pair; `OpenAI` `tool_calls` shape |
+| Tool-call cost and quality | `tool_call_cost`, `correction_evaluation` | Published linear work bound and constants; 1 MiB arguments under `ToolRecoveryRequest::sized`; 3,234 mutated turns with zero incorrect automatic answers and 100% abstention recall |
+| Tool-call surfaces | host `tool_call_tools`, CLI `tool_calls_cli` and `protocol` | `recover_tool_calls` MCP tool and `recover-tool-calls` command equal direct core recovery; raw-byte input with invalid UTF-8 recorded; exit codes |
 | Independent syntax | `make syntax-oracles` | 15 positive/negative Python, Rust, JavaScript/JSX, TypeScript/TSX compiler probes |
 | Correction quality | `correction_evaluation`, `matching_oracle` | Four provenance-bound corpora, risk/coverage sweeps, exact distance and path oracles |
-| Coverage-guided/differential probes | `make fuzz` | Eight targets, retained source-region novelty, exact failure replay, V8/cmark-gfm comparisons |
+| Coverage-guided/differential probes | `make fuzz` | Nine targets (including `tool-call`), retained source-region novelty, exact failure replay, V8/cmark-gfm comparisons |
+| Tool-call fuzzing | `make fuzz` (`TARGET=tool-call` alone) | Raw-byte model turns over every built-in dialect with fuzzed policy, stop, reasoning, tool choice, effort, ambiguity and chunking; no panic, budget respected, mutating-guess guards and span invariants hold; see [FUZZING.md](FUZZING.md) |
 | Resource/performance observations | `make resources`, resource-limit checker | Latency, real allocations, heap/RSS, artifact hashes/sizes, cache-disabled cold build |
 | Structural helper detector | `make helper-test`, `make helper-census`, `make helper-check` | syn-based normalized body/shim/constant/table census, strict ledger validity and exact group enforcement; repository tooling only |
 | Local release artifacts | `make package` | Five Cargo-verified archives in dependency order; source identity and registered notice audit |
@@ -85,6 +90,24 @@ buffer/file operations through the same Rust, CLI, and MCP handlers. Helper
 adapters use caller-supplied responses and endpoints; the qualification
 transcripts perform no model-backed execution.
 
+## Tool-call recovery contracts
+
+Tool-call recovery retains the exact output bytes, including bytes that are
+not UTF-8, and itemizes every repair, loss and inference on the call that
+records it. A guess or a data loss makes a call at most a best guess; a guess
+on a mutating tool is never resolved, never usable and never emitted; a
+required argument is never invented and a value is never coerced. A length
+stop is truncation, and every other stop treats an open call as malformed.
+Emission prints only the calls `usable_accepting_guesses` selects and lists
+every other call and attempt as skipped. The integrator guarantees and the
+test proving each are mapped in
+[tool-calls/INTEGRATION.md](tool-calls/INTEGRATION.md); the 3,234-case
+evaluation is a deterministic generated corpus, so its zero-incorrect result
+establishes behavior on those cases rather than a production error rate.
+Streaming recognition, `purrassist-derive`, and the remaining dialects
+(Anthropic tool_use, Llama 3.x, Mistral, DeepSeek, GLM, Kimi, Gemma, Harmony,
+Pythonic, bare JSON) are tracked in issue #4.
+
 ## Resource and platform qualification
 
 The core scratch governor uses shared meters, leases, and budgeted containers.
@@ -114,7 +137,8 @@ recorded target-parent path, and bounded replacement-byte prefix. Unknown or
 unvalidated artifacts remain in place with an observable explanation.
 
 `make wasm-test` executes and compares native/WASI core, syntax, and fixed helper
-transcripts; it also executes the core transcript on wasm32-unknown-unknown
+transcripts (the core transcript includes a tool-call recovery with a fuzzy
+tool name and a stray closer across two dialects); it also executes the core transcript on wasm32-unknown-unknown
 through Node's WebAssembly API. The unpublished harness supplies the host-free
 entry point. Fixed accounting layout charges keep the core decisions and receipt
 transcripts independent of native pointer width. These transcripts establish
@@ -129,7 +153,7 @@ cases are not independent production samples; the interval cannot be interpreted
 as a production error guarantee. The independent distance oracle exhausts all
 14,641 ordered pairs of three-symbol strings up to length four.
 
-[FUZZING.md](FUZZING.md) describes the eight mutation targets, qualification
+[FUZZING.md](FUZZING.md) describes the nine mutation targets, qualification
 counts, retained coverage regions, independent-oracle scope, compilation
 rejections/timeouts, and replay. Reports live in `docs/qualification/` and retain
 the source/tool identities and deterministic seed. A bounded campaign establishes

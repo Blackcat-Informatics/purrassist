@@ -1,0 +1,390 @@
+<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. -->
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
+# Dialect grammar reference
+
+Every tool-call dialect is a declarative grammar written in a small textual
+DSL and compiled by `purrassist_core::grammar::Grammar::compile_governed`
+into a `CompiledGrammar`. One compiled grammar serves three purposes:
+
+- **Recognition.** The `call` and `result` productions are compiled into
+  byte-level recognizer programs. The recognizer runs every dialect of a
+  `DialectSet` concurrently over the output and repairs failed call attempts
+  with weighted edit operators (missing, stray, and variant closers, and
+  confusable spellings).
+- **Printing.** The productions are retained as written, so the printer can
+  run them forward: recovered calls, tool results, and tool declarations are
+  printed in any dialect, and recognizing what is printed gives back the same
+  calls.
+- **Witnesses.** `grammar::witness::generate` drives the printer with seeded
+  choices to print well-formed calls for given argument shapes, for tests and
+  corpora.
+
+The three built-in dialects are written in this DSL:
+[`qwen3-coder-xml.v1`](../../crates/core/src/tool_call/dialects/qwen3-coder-xml.v1.grammar),
+[`hermes.v1`](../../crates/core/src/tool_call/dialects/hermes.v1.grammar), and
+[`openai-tool-calls.v1`](../../crates/core/src/tool_call/dialects/openai-tool-calls.v1.grammar).
+A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
+[Add a custom dialect](#add-a-custom-dialect).
+
+## Lexical structure
+
+- A grammar file is a sequence of statements, each terminated by `;`.
+- `#` starts a comment that runs to the end of the line. Whitespace between
+  tokens is insignificant.
+- Identifiers match `[A-Za-z_][A-Za-z0-9_-]*`. Productions and closer classes
+  share one namespace. The keywords `grammar`, `reasoning`, `confusable`,
+  `closer`, `layout`, `until`, and `slot` cannot name a production or a closer.
+- String literals are double-quoted byte strings with the escapes `\\`, `\"`,
+  `\n`, `\r`, `\t`, `\xHH` (one byte), and `\u{HEX}` (one Unicode scalar
+  value, encoded as UTF-8). Every literal, delimiter, spelling, and marker is
+  non-empty.
+- Class terminals are written between slashes, `/pattern/`; `\/` is a slash
+  inside the pattern.
+
+## Statements
+
+| Statement | Meaning |
+| --- | --- |
+| `grammar "ID";` | The header, and the first statement. `ID` matches `[A-Za-z0-9._-]+`; by convention it is versioned (`name.v1`). |
+| `reasoning "OPEN" "CLOSE";` | The dialect's reasoning-block markers (at most one statement). |
+| `confusable "CANONICAL" "VARIANT";` | `VARIANT` is a confusable spelling of `CANONICAL` inside any literal. |
+| `closer NAME = "S1" \| "S2" ...;` | A closer class: `S1` is canonical, the rest are variant spellings. One spelling is allowed. |
+| `layout NAME "TEXT";` | Printing only: the class production `NAME` prints as `TEXT` wherever it occurs uncaptured, optional occurrences included. Recognition is unchanged. |
+| `NAME = EXPR;` | A production. |
+
+## Expressions
+
+| Form | Meaning |
+| --- | --- |
+| `"bytes"` | A literal terminal. |
+| `/pattern/` | A class terminal: a maximal run of bytes matching the pattern as a whole. |
+| `until("D1", "D2", ...)` | A verbatim body up to, not including, the first occurrence of any delimiter, or to the end of input. |
+| `slot(CODEC, "D1", ...)` | Like `until`, with the body decoded by the named argument codec. |
+| `NAME` | A production (inlined) or a closer class. |
+| `KIND:item` | A capture of `item`'s span. |
+| `a b` | Sequence. |
+| `a \| b` | Alternation. |
+| `item*`, `item+`, `item?` | Repetition: zero or more, one or more, optional. |
+| `( ... )` | Grouping. |
+
+Postfix repetition binds tightest, then capture (`KIND:item*` captures the
+whole repetition), then sequence, then alternation.
+
+### Terminals
+
+- **Literals** match their exact bytes, or one of their confusable spellings
+  (recorded as a repair).
+- **Class terminals** are ECMA-262 `u`-mode patterns compiled to a byte
+  automaton. The pattern is anchored and matched as a whole against a maximal
+  run; it must not match the empty string and must not need backtracking
+  (no backreferences or lookaround). A class terminal is how names, ids, and
+  whitespace are read: `tool-name = /[A-Za-z0-9_.:-]+/;`.
+- **`until`** reads a verbatim body, for example a tool result's content.
+  Its delimiters also match their confusable spellings, so a body ends at an
+  ASCII spelling of a fullwidth delimiter.
+- **`slot`** is an `until` whose body is read by a codec (below). A slot
+  holding the `json` codec is self-delimiting: the value may end before any
+  delimiter, and the grammar continues after it.
+
+### Productions
+
+A reference to a production inlines it. Recursion, direct or indirect, is a
+compile error: call framing is regular, and nested argument structure belongs
+to the codecs.
+
+## Closer classes
+
+```text
+closer call-end = "</tool_call>" | "</tool_calls>";
+```
+
+A closer class names the closing token of an element. Referencing `call-end`
+in a production is a closer terminal:
+
+- Recognition accepts every spelling. A variant spelling is recorded as
+  `tool_call.markup.closer-variant` (a markup loss).
+- Printing writes the canonical spelling.
+- Every spelling of every closer class is known to the repair search. A
+  missing closer is inserted mid-message
+  (`tool_call.markup.missing-function-close` when more of the production
+  follows it, `tool_call.markup.missing-wrapper-close` when it ends the
+  production) or at the end of output under a non-length stop
+  (`tool_call.markup.missing-closers-at-end`). A stray or repeated closer is
+  deleted (`tool_call.markup.stray-closer`), and closer spellings right
+  after a completed call are absorbed into it as stray closers, so they never
+  leak into content.
+- Only closer-class literals are inserted as missing closers. Declare every
+  closing token as a closer class, even with a single spelling, when it may
+  be omitted.
+
+A literal equal to the caller's stop sequence
+(`GenerationStop::StopSequence`) is reinserted at the end of output when the
+stop consumed it (`tool_call.stop.consumed-closer`).
+
+## Confusables
+
+```text
+confusable "｜" "|";
+```
+
+`VARIANT` is a confusable spelling of `CANONICAL` wherever `CANONICAL` occurs
+inside a literal. For each literal, the compiler enumerates every spelling
+that replaces the occurrences of any non-empty subset of the confusable pairs
+present in it. Recognition reads such a spelling as the literal, recorded as
+`tool_call.markup.terminal-confusable` (a markup loss); `until` and `slot`
+delimiters match their confusable spellings too. Printing writes the
+canonical spelling. Each spelling adds recognizer configurations
+(`CompiledGrammar::configuration_bound`), and so per-byte work; declare only
+the confusions a model actually makes.
+
+## Layout
+
+```text
+ws = /[ \t\r\n]+/;
+layout ws "\n";
+```
+
+`layout` changes printing only. It must name a production whose expression is
+a class terminal (directly or through references to such a production), and
+`TEXT` must be a member of that class. Every uncaptured occurrence of the
+production, including optional ones, prints as `TEXT`; without a layout an
+optional class occurrence is omitted when printing. Naming a closer class,
+naming a production that is not a class, giving text the class does not match,
+or a second `layout` for one production is a compile error. The built-in
+Qwen3-Coder XML and Hermes grammars use `layout` so that printed calls match
+the chat templates' newline layout byte for byte.
+
+## Reasoning markers
+
+`reasoning "<think>" "</think>";` declares the dialect's reasoning block.
+A `DialectSet` combines the markers of all its dialects. Under
+`ReasoningPolicy::Separate` (the default) the markers delimit reasoning
+blocks; a call inside a closed block stays reasoning text and is offered only
+as a guess-flagged alternative; an unclosed block containing a call opener is
+closed at the opener by a guess; `starts_open: true` begins the turn inside a
+block. Under `ReasoningPolicy::AsContent` the markers are plain content.
+
+## Argument codecs
+
+| Codec | Value |
+| --- | --- |
+| `raw` | The verbatim body as one UTF-8 string leaf. Malformed UTF-8 rejects the attempt, except a character cut off by a length stop. It records no edits. A `raw` value is always a string: a parameter declared as an integer, number, boolean, array, or object read through `raw` fails validation (`UnresolvedReason::SchemaValidation`), because no rule coerces a string into a typed value. |
+| `json` | One JSON value read by the push-based tolerant JSON parser: exact number spellings, each repair recorded with its `json.syntax.*` rule. Self-delimiting. A whole arguments value that is a JSON string holding JSON is decoded as stringified arguments and flagged (`tool_call.arguments.decode-string`). |
+| `xml-params` | A sequence of `<parameter=NAME>value</parameter>` elements, typed by the declared tool the call names: verbatim strings with one framing newline consumed on each side, typed values parsed as JSON, nested parameter elements for object parameters, a whole-JSON body, and the `</parameters>` variant. See [the Qwen3-Coder XML dialect](dialects/qwen3-coder-xml.v1.md) for every reading. |
+
+A codec may depend on the call's tool. When the recognizer is given the tool
+set and the grammar captured the call's `name:` before the slot, the codec
+receives the argument shape of the declared tool that name refers to (exact
+names and aliases). Without a shape every codec still decodes, without type
+information.
+
+Choose slot delimiters so that a missing closer is noticed at the next token:
+list the element's own closer spellings, the openers of sibling elements, and
+the enclosing call's closer spellings. A value that runs into a sibling's
+opener is then ended there by a repair rather than swallowing the rest of the
+call.
+
+## Captures
+
+| Capture | Records |
+| --- | --- |
+| `name:` | The tool name. |
+| `id:` | The call id (printed from the id policy's assignment). |
+| `arguments:` | The whole argument value; must wrap a `slot(...)`. |
+| `param-name:` | One parameter's name. |
+| `param-value:` | One parameter's value; must wrap a `slot(...)`. |
+| `reasoning:` | Reasoning text inside a production. |
+| `content:` | Free content, for example a tool result's body. |
+| `dropped:` | Text inside a call that is not part of it: a code-fence marker is recorded as `tool_call.extract.fence` (markup), any other text as `tool_call.extract.prose` (data). |
+
+`param-name:` and `param-value:` captures come in adjacent pairs, in that
+order, in one sequence. A production uses either one `arguments` slot or
+parameter pairs, never both.
+
+## Required productions
+
+| Production | Role |
+| --- | --- |
+| `call` | One tool call. Recognized in model output. |
+| `result` | One tool result as the model would see it. Recognized in model output (a result the model writes is content) and printed by `emit`. |
+| `declaration` | One tool declaration as a chat template lists it. Printing only. |
+
+`call` and `result` must begin with a literal opener (that is how the
+recognizer knows where an attempt may start) and must not match the empty
+string. Text outside every call and result is content.
+
+## Compile errors
+
+Every error except a missing production and a resource stop carries the byte
+offset in the grammar source (`GrammarError::offset`).
+
+| Error | Cause |
+| --- | --- |
+| `Syntax` | Malformed DSL: an unexpected character, a missing `;`, a bad escape, a missing or duplicated header. |
+| `EmptyLiteral` | A literal, delimiter, spelling, or marker is the empty string. |
+| `ReservedName` | A keyword used as a production or closer name. |
+| `DuplicateName` | A name defined twice, a second `reasoning` statement, or a second `layout` for one production. |
+| `UnknownName` | A reference to an undefined production or closer. |
+| `Recursive` | A production that refers to itself, directly or indirectly. |
+| `UnknownCapture` | A capture kind that is not one of the eight above. |
+| `UnknownCodec` | A slot naming a codec other than `raw`, `json`, or `xml-params`. |
+| `InvalidClass` | A class pattern that is malformed, needs backtracking, or matches the empty string. |
+| `MissingProduction` | `call`, `result`, or `declaration` is missing. |
+| `InvalidOpener` | `call` or `result` does not begin with a literal opener, or matches the empty string. |
+| `CaptureTarget` | An `arguments:` or `param-value:` capture that does not wrap a slot. |
+| `UnpairedParameter` | A `param-name`/`param-value` capture outside an adjacent pair in one sequence. |
+| `ConflictingArguments` | A production with both an `arguments` slot and parameter pairs. |
+| `InvalidLayout` | A `layout` naming a closer or a production that is not a class, or text the class does not match. |
+| `Resource` | The governor's budget was exhausted, or the caller cancelled. |
+
+Compilation charges `InputBytes` for the source, `Work` per source byte,
+syntax node, instruction, and compiled table entry, `Depth` per nesting
+level, and `ScratchBytes` for every retained table. A built-in grammar is
+compiled once, on first use, under its own default budget, never charged to a
+caller. The per-byte recognition cost of a dialect is `K_THREAD` times its
+`configuration_bound()`; the published bound and the built-in values are in
+[RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound).
+
+## Add a custom dialect
+
+This walkthrough defines a dialect for a model that writes each call between
+two special tokens spelled with fullwidth vertical bars, with one XML-style
+element per argument:
+
+```text
+<｜call｜>read_file#r1
+<arg name="path">src/lib.rs</arg>
+<｜end｜>
+```
+
+### 1. Write the grammar
+
+<!-- custom-dialect-grammar -->
+```text
+grammar "acme-call.v1";
+
+reasoning "<think>" "</think>";
+
+# The call markers are special tokens spelled with fullwidth vertical bars;
+# a model that writes an ASCII bar has made a confusable slip.
+confusable "｜" "|";
+
+# Every closing token is a closer class, so a missing, repeated or variant
+# closer is repaired rather than rejected.
+closer call-end = "<｜end｜>" | "<｜end_call｜>";
+closer arg-end = "</arg>" | "</args>";
+
+tool-name = /[A-Za-z0-9_.:-]+/;
+call-id = /[A-Za-z0-9_-]+/;
+ws = /[ \t\r\n]+/;
+# Printing: whitespace between elements is one newline.
+layout ws "\n";
+
+# A value ends at its closer, at the next argument's opener, or at the call's
+# closer, so a missing </arg> is noticed at the following token.
+arg = "<arg name=\"" param-name:tool-name "\">"
+      param-value:slot(raw, "</arg>", "</args>", "<arg name=", "<｜end｜>", "<｜end_call｜>")
+      arg-end;
+
+call = "<｜call｜>" name:tool-name ("#" id:call-id)? ws? (arg ws?)* call-end;
+
+result = "<｜result｜>" content:until("<｜end｜>") "<｜end｜>";
+
+declaration = "<tool name=\"" name:tool-name "\">" ws?
+              ("<description>" content:until("</description>") "</description>" ws?)?
+              "<schema>" arguments:slot(raw, "</schema>") "</schema>" ws? "</tool>";
+```
+
+Every argument is read by the `raw` codec, so this dialect carries string
+parameters. For typed parameters, read each value with
+`param-value:slot(json, ...)` or the whole body with
+`arguments:slot(json, ...)` or `arguments:slot(xml-params, ...)`.
+
+### 2. Compile it and recover with it
+
+```rust
+use purrassist_core::grammar::Grammar;
+use purrassist_core::tool_call::{
+    DialectId, DialectSet, Effects, Emission, EmitTarget, IdPolicy, Param, ToolDefinition,
+    ToolRecoveryRequest, ToolSet,
+};
+use purrassist_core::{Budget, Effort, Governor, Outcome};
+
+fn recover(grammar_source: &str, output: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    let mut governor = Governor::new(Budget::default());
+    // A GrammarError carries the byte offset of the problem.
+    let acme = DialectId::custom(Grammar::compile_governed(grammar_source, &mut governor)?);
+    let dialects = DialectSet::new([acme.clone()], &mut governor)?;
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("read_file")
+            .effects(Effects::ReadOnly)
+            .param("path", Param::string().required())],
+        Budget::default(),
+    )?;
+    let request = ToolRecoveryRequest::new(Effort::Standard)
+        .dialects(dialects)
+        .ids(IdPolicy::Source)
+        .emit(EmitTarget::Dialect(acme));
+    let result = tools.recover(output, &request);
+    if let Outcome::Resolved(calls) = &result.outcome {
+        for call in calls.usable() {
+            println!("{} {:?} {}", call.id, call.tool, call.arguments.to_json());
+        }
+        if let Some(Emission::Dialect { emitted, .. }) = &calls.emitted {
+            println!("{}", String::from_utf8_lossy(&emitted.output));
+        }
+    }
+    Ok(())
+}
+```
+
+A custom grammar can be combined with the built-in dialects in one
+`DialectSet`; a set is ordered canonically by `(id, digest)`, so the order of
+the allow-list never changes a result. Custom dialects are a Rust API: the
+CLI and MCP surfaces accept the built-in dialect ids.
+
+### 3. What recovery does with it
+
+Given this output, written with ASCII bars and a variant `</args>` closer:
+
+<!-- custom-dialect-output -->
+```text
+Let me read it.
+<|call|>read_file#r1
+<arg name="path">src/lib.rs</args>
+<|end|>
+```
+
+the turn is `Resolved`. The text before the call is content. The call is
+`read_file` with id `r1` (the `Source` id policy keeps it) and arguments
+`{"path":"src/lib.rs"}`, `Resolved` even under `Structural`, with three
+itemized markup repairs: two `tool_call.markup.terminal-confusable` (the
+ASCII-barred opener and closer) and one `tool_call.markup.closer-variant`
+(`</args>`). Printing the call back in the same dialect gives the canonical
+form, which recognizes with no repair at all:
+
+<!-- custom-dialect-emitted -->
+```text
+<｜call｜>read_file#r1
+<arg name="path">src/lib.rs</arg>
+<｜end｜>
+```
+
+The `grammar_doc_example_compiles` test in
+`crates/core/tests/tool_call_rules.rs` reads the three blocks above from this
+file, compiles the grammar, recovers the output, and checks every statement
+of this paragraph, so the walkthrough cannot drift from the engine.
+
+### 4. Checklist
+
+- Give the grammar a versioned id; two dialects are equal when their ids and
+  source digests are equal.
+- Start `call` and `result` with a distinctive literal opener. Content may not
+  contain a complete opener: every complete opener starts a call attempt.
+- Declare every closing token as a closer class, and list the variant
+  spellings models actually produce.
+- List sibling openers and enclosing closers among slot delimiters.
+- Use `layout` so printed calls match the chat template byte for byte.
+- Check printing round trips: `grammar::witness::generate` prints seeded
+  well-formed calls for the tools' argument shapes, and recognizing them must
+  give back the same calls with no repair.

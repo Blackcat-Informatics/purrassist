@@ -7,7 +7,9 @@
 //! terminals, the required missing-`</parameter>` repair, end-of-output
 //! completeness, stray closers, `OpenAI` member order, schema validation,
 //! request policies, and order independence. Every case runs grammar parses
-//! of built-in (or test) dialects through `resolve_forest`.
+//! of built-in (or test) dialects through `resolve_forest`. The published
+//! rule table (`docs/tool-calls/RULES.md`) and custom-dialect walkthrough
+//! (`docs/tool-calls/GRAMMAR.md`) are checked against the code here too.
 use purrassist_core::contract::{Evidence, Inference, InferenceKind, Loss};
 use purrassist_core::grammar::Grammar;
 use purrassist_core::grammar::edit::{EditOperator, Grounding, LossKind, OPERATORS, Readings};
@@ -1711,5 +1713,225 @@ fn repair_classification_matches_documentation() {
     assert_eq!(actual, documented);
     for rule in RULES {
         assert_eq!(rule.is_repair(), rule.cost > 0 || rule.guess, "{}", rule.id);
+    }
+}
+
+/// `docs/tool-calls/RULES.md`, whose tables `rules_doc_matches_registry`
+/// checks against the registry.
+const RULES_DOC: &str = include_str!("../../../docs/tool-calls/RULES.md");
+
+/// `docs/tool-calls/GRAMMAR.md`, whose custom-dialect walkthrough
+/// `grammar_doc_example_compiles` runs.
+const GRAMMAR_DOC: &str = include_str!("../../../docs/tool-calls/GRAMMAR.md");
+
+/// The table rows of the `heading` section of `doc` (every line whose first
+/// cell is backticked), split into trimmed cells.
+fn doc_rows<'d>(doc: &'d str, heading: &str) -> Vec<Vec<&'d str>> {
+    let start = doc
+        .find(heading)
+        .unwrap_or_else(|| panic!("the `{heading}` section"));
+    let section = &doc[start + heading.len()..];
+    let section = &section[..section.find("\n## ").unwrap_or(section.len())];
+    section
+        .lines()
+        .filter(|line| line.starts_with("| `"))
+        .map(|line| {
+            line.trim_start_matches('|')
+                .trim_end_matches('|')
+                .split(" | ")
+                .map(str::trim)
+                .collect()
+        })
+        .collect()
+}
+
+/// The checked columns of one registry rule, spelled as `RULES.md` spells
+/// them: id, cost, guess, readings, grounding, loss, policies, `Exact`
+/// treatment, and source.
+fn registry_row(rule: &rules::Rule) -> Vec<String> {
+    let readings = match rule.readings {
+        Readings::Single => "single",
+        Readings::Multiple => "multiple",
+    };
+    let grounding = match rule.grounding {
+        Grounding::Definition => "definition",
+        Grounding::Syntax => "syntax",
+    };
+    let loss = match rule.loss {
+        None => "none",
+        Some(LossKind::Markup) => "markup",
+        Some(LossKind::Data) => "data",
+    };
+    let policies: Vec<String> = rule
+        .policies
+        .iter()
+        .map(|policy| format!("`{policy:?}`"))
+        .collect();
+    vec![
+        format!("`{}`", rule.id),
+        rule.cost.to_string(),
+        if rule.guess { "yes" } else { "no" }.to_owned(),
+        readings.to_owned(),
+        grounding.to_owned(),
+        loss.to_owned(),
+        policies.join(", "),
+        if rule.is_repair() {
+            "refused"
+        } else {
+            "applied"
+        }
+        .to_owned(),
+        rule.operator.map_or_else(
+            || "resolution".to_owned(),
+            |operator| format!("`{operator:?}`"),
+        ),
+    ]
+}
+
+/// `docs/tool-calls/RULES.md` lists exactly the registry, in registry order,
+/// with every field equal to the code's, plus a non-empty meaning per rule;
+/// and exactly the disabled rules, none of which is in the registry.
+#[test]
+fn rules_doc_matches_registry() {
+    let expected: Vec<Vec<String>> = RULES.iter().map(registry_row).collect();
+    let documented: Vec<Vec<String>> = doc_rows(RULES_DOC, "## Registry")
+        .into_iter()
+        .map(|row| {
+            assert_eq!(row.len(), 10, "ten cells per registry row: {row:?}");
+            assert!(!row[9].is_empty(), "every rule has a meaning: {row:?}");
+            row[..9].iter().map(|cell| (*cell).to_owned()).collect()
+        })
+        .collect();
+    let regenerated: Vec<String> = expected
+        .iter()
+        .map(|row| format!("| {} | MEANING |", row.join(" | ")))
+        .collect();
+    assert_eq!(
+        documented,
+        expected,
+        "docs/tool-calls/RULES.md must list every registry rule in order; expected rows:\n{}",
+        regenerated.join("\n")
+    );
+    let disabled: Vec<&str> = doc_rows(RULES_DOC, "## Disabled rules")
+        .into_iter()
+        .map(|row| {
+            assert_eq!(row.len(), 2, "id and reason per disabled row: {row:?}");
+            assert!(!row[1].is_empty(), "every disabled rule has a reason");
+            row[0]
+        })
+        .collect();
+    let listed: Vec<String> = DISABLED.iter().map(|id| format!("`{id}`")).collect();
+    assert_eq!(disabled, listed);
+    for id in DISABLED {
+        assert!(rules::rule(id).is_none(), "`{id}` is never a registry rule");
+    }
+}
+
+/// The body of the first fenced block after `marker` in `doc`.
+fn fenced_after<'d>(doc: &'d str, marker: &str) -> &'d str {
+    let start = doc
+        .find(marker)
+        .unwrap_or_else(|| panic!("the `{marker}` marker"));
+    let rest = &doc[start + marker.len()..];
+    let rest = &rest[rest.find("```").expect("a fence after the marker")..];
+    let body = &rest[rest.find('\n').expect("the opening fence line") + 1..];
+    &body[..body.find("\n```").expect("the closing fence")]
+}
+
+/// The custom-dialect walkthrough of `docs/tool-calls/GRAMMAR.md` holds: its
+/// grammar compiles, its output recovers to the documented call with the
+/// documented repairs under every policy, and printing the call gives the
+/// documented canonical form, which recognizes with no repair.
+#[test]
+fn grammar_doc_example_compiles() {
+    use purrassist_core::tool_call::{Emission, EmitTarget, IdPolicy, ToolRecoveryRequest};
+    use purrassist_core::{Effort, Outcome};
+
+    let source = fenced_after(GRAMMAR_DOC, "<!-- custom-dialect-grammar -->");
+    let output = fenced_after(GRAMMAR_DOC, "<!-- custom-dialect-output -->");
+    let printed = fenced_after(GRAMMAR_DOC, "<!-- custom-dialect-emitted -->");
+    let mut governor = Governor::new(Budget::default());
+    let grammar = Grammar::compile_governed(source, &mut governor)
+        .unwrap_or_else(|error| panic!("the documented grammar compiles: {error}"));
+    assert_eq!(grammar.id(), "acme-call.v1");
+    let acme = DialectId::custom(grammar);
+    let dialects = DialectSet::new([acme.clone()], &mut governor).expect("dialect set");
+    let tools = compile([ToolDefinition::new("read_file")
+        .effects(Effects::ReadOnly)
+        .param("path", Param::string().required())]);
+    for policy in [
+        PolicySelection::PerTool,
+        PolicySelection::All(RepairPolicy::Structural),
+        PolicySelection::All(RepairPolicy::Tolerant),
+    ] {
+        let request = ToolRecoveryRequest::new(Effort::Standard)
+            .dialects(dialects.clone())
+            .ids(IdPolicy::Source)
+            .policy(policy)
+            .emit(EmitTarget::Dialect(acme.clone()));
+        let result = tools.recover(output.as_bytes(), &request);
+        let Outcome::Resolved(calls) = &result.outcome else {
+            panic!("{policy:?}: {:#?}", result.outcome)
+        };
+        assert_eq!(calls.calls.len(), 1, "{policy:?}");
+        let call = &calls.calls[0];
+        assert_eq!(call.outcome, CallOutcome::Resolved, "{policy:?}");
+        assert_eq!(
+            (
+                call.id.as_str(),
+                call.tool.as_deref(),
+                call.arguments.to_json().as_str()
+            ),
+            ("r1", Some("read_file"), r#"{"path":"src/lib.rs"}"#)
+        );
+        let mut applied: Vec<&str> = call
+            .repairs
+            .evidence
+            .iter()
+            .map(|evidence| evidence.rule.as_str())
+            .collect();
+        applied.sort_unstable();
+        assert_eq!(
+            applied,
+            [
+                "tool_call.markup.closer-variant",
+                "tool_call.markup.terminal-confusable",
+                "tool_call.markup.terminal-confusable",
+            ]
+        );
+        assert!(
+            call.repairs
+                .losses
+                .iter()
+                .all(|loss| loss.kind == LossKind::Markup)
+        );
+        let prose = "Let me read it.\n".len();
+        assert_eq!(
+            calls
+                .content
+                .iter()
+                .map(|range| (range.start, range.end))
+                .collect::<Vec<_>>(),
+            [(0, prose)],
+            "the text before the call is content"
+        );
+        let Some(Emission::Dialect { emitted, .. }) = &calls.emitted else {
+            panic!("the call is printed in the custom dialect")
+        };
+        assert_eq!(emitted.output, printed.as_bytes(), "{policy:?}");
+
+        let again = tools.recover(printed.as_bytes(), &request);
+        let Outcome::Resolved(reread) = &again.outcome else {
+            panic!("{:#?}", again.outcome)
+        };
+        assert_eq!(reread.calls.len(), 1);
+        assert_eq!(
+            reread.calls[0].arguments.to_json(),
+            r#"{"path":"src/lib.rs"}"#
+        );
+        assert!(
+            reread.calls[0].repairs.evidence.is_empty(),
+            "the canonical form recognizes with no repair"
+        );
     }
 }

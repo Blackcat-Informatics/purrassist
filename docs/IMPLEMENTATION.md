@@ -35,6 +35,25 @@ computational engines remain wasmable.
   unambiguous validated edits, with receipts and conditional undo.
 - Root-scoped file tools, coordinated writer locks, version checks, atomic
   single-file replacement, recovery journals, and explicit multi-file outcomes.
+- Tool-call recovery (`tool_call.recover.v1`, issue #3): recover the tool
+  calls of one model turn from raw output bytes against typed tool
+  definitions or lossless `OpenAI`, MCP, and Anthropic declarations, whose
+  exact parameters schemas are validated under Draft 2020-12 or Draft-07 (the
+  dialect MCP servers commonly declare). Dialects are weighted, invertible
+  grammars in a first-party DSL; three ship (`qwen3-coder-xml.v1`,
+  `hermes.v1`, `openai-tool-calls.v1`) and callers compile their own. A
+  best-first search repairs call markup with named, costed rules; each call
+  is resolved against its tool with a per-call outcome, itemized repairs,
+  markup/data losses, ranked alternatives, and caller-chosen ids. Effects
+  select conservative policies: a guess on a mutating tool is never resolved,
+  usable, or emitted. The model's stop reason is an input, truncation maps to
+  `finish_reason` `"length"`, and recovered calls print in any dialect or as
+  the `OpenAI` `tool_calls` array. Recovery is deterministic, governed by a
+  published linear cost bound, and exposed through Rust, CLI
+  (`recover-tool-calls`), and MCP (`recover_tool_calls`). Streaming
+  recognition, `purrassist-derive`, and the remaining dialects (Anthropic
+  tool_use, Llama 3.x, Mistral, DeepSeek, GLM, Kimi, Gemma, Harmony, Pythonic,
+  bare JSON) are tracked in issue #4. See `tool-calls/README.md`.
 - Rust facade, CLI, and stdio MCP server using the same operations.
 - Standard helper-provider adapters and caller-managed endpoints. No model is
   required. Bundled small models remain an evaluation track, not a prerequisite.
@@ -87,6 +106,18 @@ composed-recovery goldens, Unicode/path/phonetic ambiguity tests, crash/stale/
 retry/undo tests, preservation/replay/ledger properties, bounded fuzzing, and
 executed native/WASM comparisons with fixed helper transcripts. Measure quality,
 incorrect correction, latency, allocation, memory, build cost and artifact size.
+
+Tool-call recovery additionally requires: canonical anchor fixtures for every
+built-in dialect; one captured golden per registry rule; a negative corpus;
+print/recognize round trips for every dialect pair; byte-exact declaration
+render-back for all three wire forms, including Draft-07 MCP schemas; a pinned
+deterministic result digest independent of tool and dialect order; the
+published cost bound checked on 1 MiB arguments; a correction evaluation with
+zero incorrect automatic answers and full abstention recall; the registry and
+its published table in agreement (`tool-calls/RULES.md`); a coverage-guided
+`tool-call` fuzz target; and the tool-call transcript in the native/WASM
+comparison. `tool-calls/INTEGRATION.md` maps each integrator guarantee to its
+test.
 
 `make check` runs formatting, lint, optimized build/test, Rustdoc, and repository
 hygiene with warnings as errors. Verification preserves debug/overflow checks.
