@@ -391,6 +391,23 @@ fn fixtures() -> Vec<Fixture> {
             |node| assert_eq!(node.pointer("/value").unwrap().to_json(), "42"),
         ),
         fx(
+            "recover_tool_calls",
+            |_| {
+                r#"{"output":"<tool_call>\n<function=list_dir>\n<parameter=depth>\n2\n<parameter=path>\nsrc\n</parameter>\n</function>\n</tool_call>","tools":[{"type":"function","function":{"name":"list_dir","parameters":{"type":"object","properties":{"path":{"type":"string"},"depth":{"type":"integer"}},"required":["path"]}}}],"emit":"openai"}"#.into()
+            },
+            |node| {
+                assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+                assert_eq!(
+                    node.pointer("/value/calls/0/arguments").unwrap().to_json(),
+                    r#"{"depth":2,"path":"src"}"#
+                );
+                assert_eq!(
+                    node.pointer("/value/emitted/target").and_then(Node::as_str),
+                    Some("openai_tool_calls")
+                );
+            },
+        ),
+        fx(
             "validate_json",
             |_| r#"{"schema":{"type":"integer"},"instance":42}"#.into(),
             |node| assert_eq!(node.get("valid").unwrap().to_json(), "true"),
