@@ -356,6 +356,24 @@ impl<S> Accepted<S> {
     pub const fn is_empty(&self) -> bool {
         self.candidates.is_empty()
     }
+
+    /// The accepted states and their ledgers, in acceptance order, for a
+    /// caller that uses the minimum-cost states directly instead of
+    /// publishing them through [`Search::finish`].
+    ///
+    /// ```
+    /// # use purrassist_core::search::{Accepted, Ledger};
+    /// fn costs(accepted: Accepted<u8>) -> Vec<u64> {
+    ///     accepted.into_states().into_iter().map(|(_, ledger)| ledger.cost).collect()
+    /// }
+    /// ```
+    #[must_use]
+    pub fn into_states(self) -> Vec<(S, Ledger)> {
+        self.candidates
+            .into_iter()
+            .map(|(state, ledger, _)| (state, ledger))
+            .collect()
+    }
 }
 
 /// The successor sink handed to [`SearchState::expand`].

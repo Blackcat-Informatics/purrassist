@@ -74,6 +74,27 @@ pub struct Pattern {
     compiled: Option<derive::Compiled>,
 }
 
+/// A derivative-engine pattern's compiled automaton, detached from the
+/// pattern's syntax tree by [`Pattern::into_automaton`].
+#[derive(Clone, Debug)]
+pub struct ByteAutomaton {
+    compiled: derive::Compiled,
+}
+
+impl ByteAutomaton {
+    /// A resumable byte-level automaton over this pattern, with exactly
+    /// [`Pattern::byte_dfa`]'s semantics and resource contract.
+    ///
+    /// # Errors
+    /// Returns `BudgetExceeded` or `Cancelled` when the governor cannot admit
+    /// the automaton's working copy of the compiled term arena.
+    ///
+    /// See [`Pattern::into_automaton`] for an example.
+    pub fn dfa(&self, governor: &mut Governor) -> Result<DerivativeDfa<'_>, StopReason> {
+        DerivativeDfa::new(&self.compiled, governor)
+    }
+}
+
 /// Which engine [`Pattern::is_match`]/[`Pattern::generate`] use for this
 /// pattern; see the module documentation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -297,6 +318,33 @@ impl Pattern {
             .as_ref()
             .map(|compiled| DerivativeDfa::new(compiled, governor))
             .transpose()
+    }
+
+    /// Detach this pattern's derivative automaton from its syntax tree;
+    /// `None` when the pattern uses [`Engine::Backtrack`], which has no
+    /// finite automaton.
+    ///
+    /// The automaton owns only the compiled, read-only term arena and class
+    /// tables (already charged by [`Pattern::compile_governed`] and retained
+    /// as-is, with no copy), so unlike [`Pattern`] it is `Send + Sync` and
+    /// can live in shared, compiled artifacts.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, pattern::Pattern};
+    /// let mut governor = Governor::new(Budget::default());
+    /// let automaton = Pattern::compile(r"^[a-z]+$").unwrap().into_automaton().unwrap();
+    /// let mut dfa = automaton.dfa(&mut governor)?;
+    /// let mut state = dfa.start();
+    /// for &byte in b"abc" {
+    ///     state = dfa.step(state, byte, &mut governor)?;
+    /// }
+    /// assert!(dfa.accepting(state, &mut governor)?);
+    /// assert!(Pattern::compile(r"(a)\1").unwrap().into_automaton().is_none());
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    #[must_use]
+    pub fn into_automaton(self) -> Option<ByteAutomaton> {
+        self.compiled.map(|compiled| ByteAutomaton { compiled })
     }
 
     /// Which engine this pattern uses; see the module documentation.

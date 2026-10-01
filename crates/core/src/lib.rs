@@ -6,6 +6,7 @@
 
 pub mod contract;
 pub mod digest;
+pub mod grammar;
 pub mod json;
 pub mod matching;
 pub mod pattern;

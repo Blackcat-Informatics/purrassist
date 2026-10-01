@@ -36,7 +36,10 @@
 //! ```
 mod adapter;
 mod definition;
+mod dialect;
 mod from_node;
+mod ir;
+mod recognizer;
 mod shape;
 mod toolset;
 
@@ -44,7 +47,13 @@ pub use adapter::{DeclarationForm, ToolDeclaration, ToolSource};
 pub use definition::{
     Effects, ObjectSpec, Param, ParameterSpec, RepairPolicy, ToolDefinition, UnknownParameters,
 };
+pub use dialect::{DialectId, DialectSet, DialectSetError};
 pub use from_node::{FromNode, FromNodeError};
+pub use ir::{
+    ArgLeaf, ArgOrigin, ArgTree, CallSegment, CaptureSpan, Choice, Closure, LEAF_CHARGE, Piece,
+    ProductionKind, RawCall, ReasoningClosure, ReasoningSegment, Rejection, Segment, Spanned,
+};
+pub use recognizer::{GenerationStop, ReasoningPolicy, RecognizedTurn, Recognizer};
 pub use shape::{
     ArgumentShape, NameLiteral, ObjectShape, ParameterDefault, ParameterShape, PatternConstraint,
     ShapeStep, ValueShape,
