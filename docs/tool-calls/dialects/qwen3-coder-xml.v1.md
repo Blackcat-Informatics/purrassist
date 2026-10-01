@@ -39,6 +39,48 @@ first-party; no chat-template text is copied into this repository.
   optional `<description>`, and a `<parameters>` block (kept verbatim).
 - Reasoning: `<think>` ... `</think>`.
 
+## Printing (canonical form)
+
+The printer (`tool_call::emit`) runs the same productions forward with
+canonical choices: the first alternative carrying the most values, closer
+classes as their canonical spelling, and whitespace as the grammar's
+printing layout. The grammar declares `layout ws "\n";`, so every `ws`
+between tags prints as one newline: the layout the published chat template
+renders, so a printed call replayed into chat history is byte-identical to
+what the template would produce for the same call. (`layout` only affects
+printing; recognition accepts any whitespace as before.) Recognizing a
+printed call gives back the same tool, an equivalent argument tree, and no
+edit but the framing newlines.
+
+- `call`: `<tool_call>\n<function=NAME>\n` + elements + `</function>\n</tool_call>`,
+  that is `<tool_call>\n<function=NAME>\n<parameter=P>\nVALUE\n</parameter>\n</function>\n</tool_call>`
+  for one parameter; several calls are separated by one newline.
+- The body: one `<parameter=P>` element per top-level argument member, each
+  `<parameter=P>` `\n` VALUE `\n` `</parameter>` `\n`, after one leading
+  newline. A string value of a parameter the codec reads verbatim (declared
+  string, enumeration or unmodeled, or undeclared) is written verbatim
+  between the two framing newlines; every other value is inline compact
+  JSON with exact number spellings. Nested objects are written as inline
+  JSON, not as nested parameter elements (both read to the same tree; inline
+  JSON is the single canonical choice). A repeatable parameter is one element
+  per item.
+- The body is checked by decoding it with the codec under the tool's shape.
+  When that does not give back the same tree with framing newlines as the
+  only edits (for example an unmodeled parameter holding a non-string, or a
+  value containing `</parameter>`), the body is instead one whole JSON object
+  (`tool_call.markup.json-body`), which reads independently of the shape.
+  JSON text that would contain parameter markup or a call closer writes
+  every `<` as `\u003c`.
+- `result`: `<tool_response>CONTENT</tool_response>`, content verbatim (a
+  content containing `</tool_response>` cannot be printed). The tool message
+  carries no call id.
+- `declaration`: `<function>\n<name>NAME</name>\n<description>DESC</description>\n<parameters>SCHEMA</parameters>\n</function>`,
+  where `SCHEMA` is the tool's exact parameters schema text, verbatim (the
+  `<parameters>` body is read by the `raw` codec, so either the exact schema
+  text or the template's per-parameter XML expansion is accepted). The
+  template's XML expansion is not printed: it renders nested schemas lossily,
+  while the exact text is what arguments are validated against.
+
 ## Known variants handled by closer classes
 
 - `</functions>` is read as `</function>` and `</tool_calls>` as

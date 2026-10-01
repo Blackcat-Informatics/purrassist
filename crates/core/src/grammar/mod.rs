@@ -25,6 +25,7 @@
 //! | `reasoning "OPEN" "CLOSE";` | Reasoning-block markers for this dialect (at most one). |
 //! | `confusable "CANONICAL" "VARIANT";` | `VARIANT` is a confusable spelling of `CANONICAL` inside any literal. |
 //! | `closer NAME = "S1" \| "S2" ...;` | A closer class: `S1` is canonical, the rest are variant spellings. |
+//! | `layout NAME "TEXT";` | Printing only: the class production `NAME` is printed as `TEXT` (a member of the class) wherever it occurs uncaptured, optional occurrences included. Recognition is unchanged. |
 //! | `NAME = EXPR;` | A production. |
 //!
 //! Expressions:
@@ -102,9 +103,12 @@
 //!
 //! The built-in dialect grammars (`qwen3-coder-xml.v1`, `hermes.v1`,
 //! `openai-tool-calls.v1`) are written in this DSL and embedded in the crate;
-//! see [`DialectId`](crate::tool_call::DialectId). [`witness::generate`]
-//! runs a grammar's `call` production forward to print seeded, well-formed
-//! calls for given argument shapes, together with the calls they denote.
+//! see [`DialectId`](crate::tool_call::DialectId). The [`print`](mod@print) walker
+//! runs productions forward: [`witness::generate`] drives it with seeded
+//! choices to print well-formed calls for given argument shapes, together
+//! with the calls they denote, and [`tool_call::emit`](crate::tool_call::emit)
+//! drives it with canonical choices to print recovered calls, tool results
+//! and tool declarations in any dialect.
 //!
 //! ```
 //! use purrassist_core::grammar::{CaptureKind, Expr, Grammar};
@@ -131,6 +135,7 @@ mod compile;
 pub mod cost;
 pub mod edit;
 pub(crate) mod engine;
+pub mod print;
 mod repair;
 mod syntax;
 pub mod witness;
@@ -397,6 +402,16 @@ pub enum GrammarError {
         /// Byte offset of the production.
         offset: usize,
     },
+    /// A `layout` statement naming something other than a class production,
+    /// or giving text the class does not match.
+    InvalidLayout {
+        /// Byte offset of the named production.
+        offset: usize,
+        /// The name.
+        name: String,
+        /// Why it was refused.
+        message: String,
+    },
     /// The governor's budget was exhausted, or the caller cancelled.
     Resource(StopReason),
 }
@@ -424,7 +439,8 @@ impl GrammarError {
             | Self::InvalidOpener { offset, .. }
             | Self::CaptureTarget { offset, .. }
             | Self::UnpairedParameter { offset }
-            | Self::ConflictingArguments { offset } => Some(*offset),
+            | Self::ConflictingArguments { offset }
+            | Self::InvalidLayout { offset, .. } => Some(*offset),
             Self::MissingProduction { .. } | Self::Resource(_) => None,
         }
     }
@@ -477,6 +493,11 @@ impl fmt::Display for GrammarError {
                 formatter,
                 "byte {offset}: a production uses either an arguments slot or parameter pairs"
             ),
+            Self::InvalidLayout {
+                offset,
+                name,
+                message,
+            } => write!(formatter, "byte {offset}: layout `{name}`: {message}"),
             Self::Resource(reason) => write!(formatter, "{reason}"),
         }
     }
@@ -555,6 +576,21 @@ pub(crate) struct ClassTerminal {
     pub(crate) automaton: ByteAutomaton,
 }
 
+impl ClassTerminal {
+    /// Whether the class matches all of `text` (never the empty string).
+    pub(crate) fn accepts(&self, text: &[u8], governor: &mut Governor) -> Result<bool, StopReason> {
+        if text.is_empty() {
+            return Ok(false);
+        }
+        let mut dfa = self.automaton.dfa(governor)?;
+        let mut state = dfa.start();
+        for &byte in text {
+            state = dfa.step(state, byte, governor)?;
+        }
+        dfa.accepting(state, governor)
+    }
+}
+
 /// One delimiter set: the declared literals, and the matcher over them and
 /// their confusable spellings.
 #[derive(Clone, Debug)]
@@ -594,6 +630,7 @@ pub struct CompiledGrammar {
     pub(crate) programs: [Program; 2],
     pub(crate) stray: automaton::Trie,
     pub(crate) longest: usize,
+    pub(crate) layouts: Vec<Option<Vec<u8>>>,
 }
 
 // Compiled grammars are shared across threads (`DialectId::Custom` holds an
@@ -776,6 +813,25 @@ impl CompiledGrammar {
     #[must_use]
     pub fn confusables(&self) -> &[(Vec<u8>, Vec<u8>)] {
         &self.confusables
+    }
+
+    /// The printing layout of production `id`: the text a `layout`
+    /// statement gives it, which the canonical printer writes where the
+    /// production occurs uncaptured (including where it is optional).
+    ///
+    /// ```
+    /// # use purrassist_core::grammar::Grammar;
+    /// # use purrassist_core::{Budget, Governor};
+    /// let text = "grammar \"g\"; ws = /[ \\n]+/; layout ws \"\\n\"; call = \"<c>\" ws?; result = \"<r>\"; declaration = \"<d>\";";
+    /// let grammar = Grammar::compile_governed(text, &mut Governor::new(Budget::default())).unwrap();
+    /// let (ws, _) = grammar.production("ws").unwrap();
+    /// assert_eq!(grammar.layout(ws), Some(&b"\n"[..]));
+    /// let (call, _) = grammar.production("call").unwrap();
+    /// assert_eq!(grammar.layout(call), None);
+    /// ```
+    #[must_use]
+    pub fn layout(&self, id: ProductionId) -> Option<&[u8]> {
+        self.layouts[id.index()].as_deref()
     }
 
     /// The reasoning markers `(open, close)`, when declared.

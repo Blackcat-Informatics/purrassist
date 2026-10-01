@@ -35,6 +35,9 @@
 //! 6. Each reading's calls receive ids ([`IdPolicy`]), the tool choice is
 //!    enforced ([`ToolChoice`]), and every unmodeled keyword of an adapter
 //!    tool's schema on the call's path is reported ([`KeywordUse`]).
+//! 7. When the request names an [`EmitTarget`], each reading's calls are
+//!    printed for it ([`ToolCalls::emitted`]; see [`emit`]),
+//!    charged to the same governor.
 //!
 //! # Outcome
 //!
@@ -91,6 +94,7 @@
 //! function of the output, the tool set, and the request alone.
 //! [`ToolRecoveryRequest::sized`] sizes a budget for an output length.
 use super::adapter::consulted_by_repair;
+use super::emit::{self, Emission, EmitTarget};
 use super::recognizer::{edit_entries, escaped};
 use super::resolve::loss_kind;
 use super::{
@@ -469,6 +473,9 @@ pub struct ToolRecoveryRequest {
     pub effects: BTreeMap<String, Effects>,
     /// What ambiguity does to the outcome.
     pub ambiguity: AmbiguityPolicy,
+    /// What to print for the recovered calls ([`ToolCalls::emitted`]);
+    /// [`EmitTarget::None`] prints nothing.
+    pub emit: EmitTarget,
 }
 
 impl Default for ToolRecoveryRequest {
@@ -481,8 +488,8 @@ impl ToolRecoveryRequest {
     /// A request at `effort` with `budget = effort.budget()`, every built-in
     /// dialect ([`DialectSet::built_in`]), separate reasoning, a
     /// [`GenerationStop::Stop`], `Auto` tool choice, the default
-    /// [`IdPolicy`], per-tool policies, no effects overrides, and
-    /// [`AmbiguityPolicy::Report`].
+    /// [`IdPolicy`], per-tool policies, no effects overrides,
+    /// [`AmbiguityPolicy::Report`], and no emission.
     ///
     /// See [`ToolRecoveryRequest`] for an example.
     #[must_use]
@@ -498,6 +505,7 @@ impl ToolRecoveryRequest {
             policy: PolicySelection::PerTool,
             effects: BTreeMap::new(),
             ambiguity: AmbiguityPolicy::Report,
+            emit: EmitTarget::None,
         }
     }
 
@@ -642,6 +650,19 @@ impl ToolRecoveryRequest {
     #[must_use]
     pub const fn ambiguity(mut self, ambiguity: AmbiguityPolicy) -> Self {
         self.ambiguity = ambiguity;
+        self
+    }
+
+    /// Set what to print for the recovered calls.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::{EmitTarget, ToolRecoveryRequest};
+    /// let request = ToolRecoveryRequest::default().emit(EmitTarget::OpenAiToolCalls);
+    /// assert_eq!(request.emit, EmitTarget::OpenAiToolCalls);
+    /// ```
+    #[must_use]
+    pub fn emit(mut self, emit: EmitTarget) -> Self {
+        self.emit = emit;
         self
     }
 }
@@ -909,6 +930,10 @@ pub struct ToolCalls {
     pub tool_choice: ToolChoiceCheck,
     /// The id counter after this recovery (see [`IdPolicy`]).
     pub next_id_start: u64,
+    /// The calls printed for the request's [`EmitTarget`], with every call
+    /// and rejected attempt not printed; `None` for [`EmitTarget::None`].
+    /// Ids are the calls' assigned [`ToolCall::id`]s.
+    pub emitted: Option<Emission>,
 }
 
 impl ToolCalls {
@@ -1102,10 +1127,13 @@ impl WireValue for ToolCalls {
     /// bytes_hex}, repairs}], content: [{start, end}], reasoning: [{start,
     /// end}], finish, openai_finish_reason, tool_choice: {constraint,
     /// passed, diagnostics}, next_id_start}`, each call as
-    /// [`ToolCall`]'s wire form. Deterministic and infallible.
+    /// [`ToolCall`]'s wire form, plus an `emitted` member (see
+    /// [`Emission`]) only when an emission was requested, so results of
+    /// requests without one keep their wire form. Deterministic and
+    /// infallible.
     fn to_node(&self) -> Node {
         let ranges = |ranges: &[Range<usize>]| array(ranges.iter().map(byte_range));
-        object([
+        let mut node = object([
             ("calls", array(self.calls.iter().map(WireValue::to_node))),
             (
                 "rejected",
@@ -1138,7 +1166,15 @@ impl WireValue for ToolCalls {
                 ]),
             ),
             ("next_id_start", integer(self.next_id_start)),
-        ])
+        ]);
+        if let (Some(emitted), Value::Object(members)) = (&self.emitted, &mut node.value) {
+            members.push(crate::json::Member {
+                key: "emitted".into(),
+                key_span: None,
+                value: emitted.to_node(),
+            });
+        }
+        node
     }
 }
 
@@ -1634,6 +1670,7 @@ impl Recovery<'_> {
                     diagnostics: Vec::new(),
                 },
                 next_id_start: 0,
+                emitted: None,
             },
             facts: Vec::new(),
             parts: vec![Part::Message(encoding.clone())],
@@ -1669,6 +1706,8 @@ impl Recovery<'_> {
             }
         }
         reading.value.finish = self.finish(&reading.value);
+        reading.value.emitted =
+            emit::emission(self.tools, &reading.value, &self.request.emit, governor)?;
         Ok(reading)
     }
 
@@ -1766,80 +1805,22 @@ impl Recovery<'_> {
 
     /// Assign every call's id; returns the id counter after them.
     fn ids(&self, calls: &mut [ToolCall], governor: &mut Governor) -> Result<u64, StopReason> {
-        let count = size(calls.len());
-        match &self.request.ids {
-            IdPolicy::Prefix { prefix, start } => {
-                let next = start.checked_add(count).ok_or_else(|| {
-                    invalid_input(format!(
-                        "id counter {start} overflows numbering {count} calls"
-                    ))
-                })?;
-                for call in calls.iter_mut() {
-                    call.id = format!("{prefix}{}", start + size(call.index));
-                    governor.charge(Resource::ScratchBytes, size(call.id.len()))?;
-                }
-                Ok(next)
-            }
-            IdPolicy::Generator(generator) => {
-                let mut taken: BTreeMap<String, usize> = BTreeMap::new();
-                for call in calls.iter_mut() {
-                    let id = generator.id(call.index);
-                    governor.charge(Resource::Work, size(id.len()).saturating_add(1))?;
-                    governor.charge(
-                        Resource::ScratchBytes,
-                        size(id.len().saturating_mul(2)).saturating_add(ENTRY_BYTES),
-                    )?;
-                    if let Some(first) = taken.get(&id) {
-                        return Err(invalid_input(format!(
-                            "the id generator returned `{id}` for calls {first} and {}",
-                            call.index
-                        )));
-                    }
-                    taken.insert(id.clone(), call.index);
-                    call.id = id;
-                }
-                Ok(count)
-            }
-            IdPolicy::Source => {
-                let carried: BTreeSet<String> = calls
-                    .iter()
-                    .filter_map(|call| call.source_id.clone())
-                    .collect();
-                governor.charge(
-                    Resource::ScratchBytes,
-                    carried
-                        .iter()
-                        .map(|id| size(id.len()).saturating_add(ENTRY_BYTES))
-                        .sum(),
-                )?;
-                let mut taken: BTreeSet<String> = BTreeSet::new();
-                for call in calls.iter_mut() {
-                    governor.charge(Resource::Work, 1)?;
-                    let id = match &call.source_id {
-                        Some(id) if !taken.contains(id) => id.clone(),
-                        source => {
-                            let base = source.as_deref().unwrap_or("call");
-                            let mut id = format!("{base}#{}", call.index);
-                            let mut suffix = 1_u64;
-                            while taken.contains(&id) || carried.contains(&id) {
-                                governor.charge(Resource::Work, 1)?;
-                                id = format!("{base}#{}#{suffix}", call.index);
-                                suffix += 1;
-                            }
-                            self.dedup(call, source.is_some(), &id, governor)?;
-                            id
-                        }
-                    };
-                    governor.charge(
-                        Resource::ScratchBytes,
-                        size(id.len().saturating_mul(2)).saturating_add(ENTRY_BYTES),
-                    )?;
-                    taken.insert(id.clone());
-                    call.id = id;
-                }
-                Ok(count)
-            }
+        let sources: Vec<(usize, Option<String>)> = calls
+            .iter()
+            .map(|call| (call.index, call.source_id.clone()))
+            .collect();
+        let (ids, next) = assign_ids(
+            &self.request.ids,
+            &sources,
+            governor,
+            |position, duplicate, id, governor| {
+                self.dedup(&mut calls[position], duplicate, id, governor)
+            },
+        )?;
+        for (call, id) in calls.iter_mut().zip(ids) {
+            call.id = id;
         }
+        Ok(next)
     }
 
     /// Record a renumbered source id as a derived `tool_call.id.dedup`
@@ -2124,6 +2105,93 @@ impl Recovery<'_> {
             alternatives: published.alternatives,
             stopped,
         })
+    }
+}
+
+/// The id of every call under `policy` (see [`IdPolicy`]), by position,
+/// and the id counter after them. `calls` holds each call's index and the
+/// id it carries; `dedup(position, duplicate, id, governor)` is told of
+/// every carried id renumbered under [`IdPolicy::Source`] (`duplicate` when
+/// the call carried an id an earlier call holds). Recovery and
+/// [`emit`](super::emit) share it, so one policy numbers calls the same way.
+pub(crate) fn assign_ids(
+    policy: &IdPolicy,
+    calls: &[(usize, Option<String>)],
+    governor: &mut Governor,
+    mut dedup: impl FnMut(usize, bool, &str, &mut Governor) -> Result<(), StopReason>,
+) -> Result<(Vec<String>, u64), StopReason> {
+    let count = size(calls.len());
+    let mut ids = Vec::with_capacity(calls.len());
+    match policy {
+        IdPolicy::Prefix { prefix, start } => {
+            let next = start.checked_add(count).ok_or_else(|| {
+                invalid_input(format!(
+                    "id counter {start} overflows numbering {count} calls"
+                ))
+            })?;
+            for (index, _) in calls {
+                let id = format!("{prefix}{}", start + size(*index));
+                governor.charge(Resource::ScratchBytes, size(id.len()))?;
+                ids.push(id);
+            }
+            Ok((ids, next))
+        }
+        IdPolicy::Generator(generator) => {
+            let mut taken: BTreeMap<String, usize> = BTreeMap::new();
+            for (index, _) in calls {
+                let id = generator.id(*index);
+                governor.charge(Resource::Work, size(id.len()).saturating_add(1))?;
+                governor.charge(
+                    Resource::ScratchBytes,
+                    size(id.len().saturating_mul(2)).saturating_add(ENTRY_BYTES),
+                )?;
+                if let Some(first) = taken.get(&id) {
+                    return Err(invalid_input(format!(
+                        "the id generator returned `{id}` for calls {first} and {index}"
+                    )));
+                }
+                taken.insert(id.clone(), *index);
+                ids.push(id);
+            }
+            Ok((ids, count))
+        }
+        IdPolicy::Source => {
+            let carried: BTreeSet<&String> =
+                calls.iter().filter_map(|(_, id)| id.as_ref()).collect();
+            governor.charge(
+                Resource::ScratchBytes,
+                carried
+                    .iter()
+                    .map(|id| size(id.len()).saturating_add(ENTRY_BYTES))
+                    .sum(),
+            )?;
+            let mut taken: BTreeSet<String> = BTreeSet::new();
+            for (position, (index, source)) in calls.iter().enumerate() {
+                governor.charge(Resource::Work, 1)?;
+                let id = match source {
+                    Some(id) if !taken.contains(id) => id.clone(),
+                    source => {
+                        let base = source.as_deref().unwrap_or("call");
+                        let mut id = format!("{base}#{index}");
+                        let mut suffix = 1_u64;
+                        while taken.contains(&id) || carried.contains(&id) {
+                            governor.charge(Resource::Work, 1)?;
+                            id = format!("{base}#{index}#{suffix}");
+                            suffix += 1;
+                        }
+                        dedup(position, source.is_some(), &id, governor)?;
+                        id
+                    }
+                };
+                governor.charge(
+                    Resource::ScratchBytes,
+                    size(id.len().saturating_mul(2)).saturating_add(ENTRY_BYTES),
+                )?;
+                taken.insert(id.clone());
+                ids.push(id);
+            }
+            Ok((ids, count))
+        }
     }
 }
 

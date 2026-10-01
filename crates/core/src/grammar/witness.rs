@@ -11,7 +11,7 @@
 //! - a `name:` capture prints the tool's canonical name, an `id:` capture a
 //!   generated call id, and a `param-name:` capture the parameter's name;
 //!   each must be accepted by the class it captures, or generation fails;
-//! - any other class prints a string [`Pattern::generate`] finds for the
+//! - any other class prints a string [`Pattern::generate`](crate::pattern::Pattern::generate) finds for the
 //!   class (a shortest member of a seeded minimum length);
 //! - an `arguments:` slot prints shape-conforming arguments in the slot
 //!   codec's encoding (a JSON object, a stringified JSON object, or
@@ -37,9 +37,12 @@
 //!
 //! # Resources
 //!
-//! Charges [`K_WITNESS`] `Work` per expression visited and per byte printed,
-//! the printed text and recorded calls as `ScratchBytes`, and every class
-//! pattern compilation, match and generation under the same governor.
+//! The text is printed by the shared production walker of [`super::print`],
+//! driven by seeded choices: it charges [`K_PRINT`](super::cost::K_PRINT)
+//! `Work` per expression visited and per byte printed and the printed text
+//! as `ScratchBytes`; generation charges [`K_WITNESS`] `Work` per value and
+//! the recorded calls as `ScratchBytes`; every class pattern compilation,
+//! match and generation runs under the same governor.
 //!
 //! ```
 //! use purrassist_core::grammar::witness::{self, WitnessOptions};
@@ -65,13 +68,13 @@
 //! ```
 use super::codec::CodecKind;
 use super::cost::K_WITNESS;
+use super::print::{Fill, PrintError, Printer, Repetition, fits, unsupported};
 use super::{CaptureKind, ClassId, CompiledGrammar, DelimiterSetId, Expr};
 use crate::contract::saturating_size as size;
-use crate::contract::{Governor, Resource, StopReason};
+use crate::contract::{Governor, Resource};
 use crate::json::{Member, Node, Number, Value, quote};
-use crate::pattern::{GenerateOptions, GenerateOutcome, Pattern, PatternCompileError};
+use crate::pattern::{GenerateOptions, GenerateOutcome};
 use crate::tool_call::{ArgumentShape, ObjectShape, ParameterShape, ValueShape};
-use core::fmt;
 
 /// How a `json` codec slot prints a call's arguments.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -122,53 +125,22 @@ pub struct Witness {
     pub calls: Vec<WitnessCall>,
 }
 
-/// Why no witness was generated.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum WitnessError {
-    /// The `call` production has a form the generator cannot fill: a
-    /// `name:`, `id:` or `param-name:` capture that is not a class or a
-    /// literal, a slot outside an `arguments:` or `param-value:` capture, a
-    /// codec that cannot carry the value, or too few parameters for a
-    /// repetition's minimum.
-    Unsupported {
-        /// What could not be filled.
-        reason: String,
-    },
-    /// A name the shape requires is not accepted by the class capturing it,
-    /// or a printed value contains a delimiter ending its slot.
-    Unrepresentable {
-        /// The text that cannot be printed in place.
-        text: String,
-    },
-    /// A class has no member within the generation bounds.
-    NoCandidate {
-        /// The class pattern source.
-        class: String,
-    },
-    /// The governor's budget was exhausted, or the caller cancelled.
-    Resource(StopReason),
-}
-
-impl fmt::Display for WitnessError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unsupported { reason } => write!(formatter, "unsupported production: {reason}"),
-            Self::Unrepresentable { text } => {
-                write!(formatter, "`{text}` cannot be printed in place")
-            }
-            Self::NoCandidate { class } => write!(formatter, "class /{class}/ has no candidate"),
-            Self::Resource(reason) => write!(formatter, "{reason}"),
-        }
-    }
-}
-
-impl std::error::Error for WitnessError {}
-
-impl From<StopReason> for WitnessError {
-    fn from(reason: StopReason) -> Self {
-        Self::Resource(reason)
-    }
-}
+/// Why no witness was generated: the shared [`PrintError`] of the
+/// production printer this generator drives.
+///
+/// - [`PrintError::Unsupported`]: the `call` production has a form the
+///   generator cannot fill: a `name:`, `id:` or `param-name:` capture that
+///   is not a class or a literal, a slot outside an `arguments:` or
+///   `param-value:` capture, a codec that cannot carry the value, or too few
+///   parameters for a repetition's minimum.
+/// - [`PrintError::Unrepresentable`]: a name the shape requires is not
+///   accepted by the class capturing it, or a printed value contains a
+///   delimiter ending its slot.
+/// - [`PrintError::NoCandidate`]: a class has no member within the
+///   generation bounds.
+/// - [`PrintError::Resource`]: the governor's budget was exhausted, or the
+///   caller cancelled.
+pub type WitnessError = PrintError;
 
 /// Print one well-formed call per shape with `grammar`'s `call` production.
 ///
@@ -205,17 +177,18 @@ pub fn generate(
     options: WitnessOptions,
     governor: &mut Governor,
 ) -> Result<Witness, WitnessError> {
-    let mut printer = Printer {
-        grammar,
+    let mut printer = Printer::new(grammar);
+    let mut fill = Seeded {
         options,
         rng: SplitMix64(options.seed),
-        patterns: vec![None; grammar.classes.len()],
-        out: Vec::new(),
         call: None,
+        occurrences: Vec::new(),
         param: None,
     };
     let carrier = Carrier {
-        codec: printer.codec_of_call(),
+        codec: printer
+            .arguments_slot(grammar.call())
+            .map(|(codec, _)| codec),
         pairs: printer.holds(grammar.call()).parameters,
     };
     let mut calls = Vec::with_capacity(shapes.len());
@@ -223,14 +196,14 @@ pub fn generate(
         if index > 0 {
             printer.emit(b"\n", governor)?;
         }
-        let parameters = printer.object_parameters(&shape.arguments, governor)?;
-        printer.call = Some(Plan {
+        let parameters = fill.object_parameters(&shape.arguments, governor)?;
+        fill.call = Some(Plan {
             name: shape.tool.clone(),
             id: None,
             parameters,
         });
-        printer.walk(grammar.call(), None, governor)?;
-        let Some(plan) = printer.call.take() else {
+        printer.walk(&mut fill, grammar.call(), None, governor)?;
+        let Some(plan) = fill.call.take() else {
             unreachable!("the plan lives for the call")
         };
         let arguments = plan.expected(carrier);
@@ -247,7 +220,7 @@ pub fn generate(
             arguments,
         });
     }
-    let text = String::from_utf8(printer.out).map_err(|error| WitnessError::Unrepresentable {
+    let text = String::from_utf8(printer.out).map_err(|error| PrintError::Unrepresentable {
         text: String::from_utf8_lossy(error.as_bytes()).into_owned(),
     })?;
     Ok(Witness { text, calls })
@@ -368,368 +341,35 @@ const WORDS: [&str; 8] = [
     "\n  block\n",
 ];
 
-struct Printer<'g> {
-    grammar: &'g CompiledGrammar,
+/// The seeded choices and generated values of a witness.
+struct Seeded<'g> {
     options: WitnessOptions,
     rng: SplitMix64,
-    patterns: Vec<Option<Pattern>>,
-    out: Vec<u8>,
     call: Option<Plan<'g>>,
+    /// The parameter index of each occurrence of the current parameter-pair
+    /// repetition.
+    occurrences: Vec<usize>,
     param: Option<(usize, usize)>,
 }
 
-/// Which call captures an expression holds.
-#[derive(Clone, Copy, Debug, Default)]
-struct Holds {
-    name: bool,
-    count: usize,
-    parameters: bool,
-    dropped: bool,
-}
-
-impl<'g> Printer<'g> {
-    fn emit(&mut self, bytes: &[u8], governor: &mut Governor) -> Result<(), StopReason> {
-        governor.charge(Resource::Work, size(bytes.len()).saturating_mul(K_WITNESS))?;
-        governor.charge(Resource::ScratchBytes, size(bytes.len()))?;
-        self.out.extend_from_slice(bytes);
-        Ok(())
-    }
-
-    /// The codec of the call production's arguments or parameter slot.
-    fn codec_of_call(&self) -> Option<CodecKind> {
-        fn find(grammar: &CompiledGrammar, expr: &Expr) -> Option<CodecKind> {
-            match expr {
-                Expr::Capture {
-                    kind: CaptureKind::Arguments | CaptureKind::ParamValue,
-                    inner,
-                } => match **inner {
-                    Expr::Slot { codec, .. } => Some(codec),
-                    _ => find(grammar, inner),
-                },
-                Expr::Capture { inner, .. } | Expr::Repeat { inner, .. } => find(grammar, inner),
-                Expr::Sequence(items) | Expr::Choice(items) => {
-                    items.iter().find_map(|item| find(grammar, item))
-                }
-                Expr::Reference(id) => find(grammar, grammar.production_expr(*id)),
-                _ => None,
-            }
-        }
-        find(self.grammar, self.grammar.call())
-    }
-
-    fn holds(&self, expr: &Expr) -> Holds {
-        let mut holds = Holds::default();
-        self.collect_holds(expr, &mut holds);
-        holds
-    }
-
-    fn collect_holds(&self, expr: &Expr, holds: &mut Holds) {
-        match expr {
-            Expr::Capture { kind, inner } => {
-                match kind {
-                    CaptureKind::Name => holds.name = true,
-                    CaptureKind::ParamName => holds.parameters = true,
-                    CaptureKind::Dropped => holds.dropped = true,
-                    _ => {}
-                }
-                if !matches!(
-                    kind,
-                    CaptureKind::Content | CaptureKind::Reasoning | CaptureKind::Dropped
-                ) {
-                    holds.count += 1;
-                }
-                self.collect_holds(inner, holds);
-            }
-            Expr::Repeat { inner, .. } => self.collect_holds(inner, holds),
-            Expr::Sequence(items) | Expr::Choice(items) => {
-                for item in items {
-                    self.collect_holds(item, holds);
-                }
-            }
-            Expr::Reference(id) => self.collect_holds(self.grammar.production_expr(*id), holds),
-            _ => {}
-        }
-    }
-
-    fn walk(
-        &mut self,
-        expr: &Expr,
-        capture: Option<CaptureKind>,
-        governor: &mut Governor,
-    ) -> Result<(), WitnessError> {
-        governor.charge(Resource::Work, K_WITNESS)?;
-        let grammar = self.grammar;
-        match expr {
-            Expr::Literal(id) => {
-                let bytes = grammar.literal(*id);
-                if matches!(capture, Some(CaptureKind::Name)) {
-                    let plan = self.call.as_ref().expect("printing a call");
-                    if bytes != plan.name.as_bytes() {
-                        return Err(WitnessError::Unrepresentable {
-                            text: plan.name.clone(),
-                        });
-                    }
-                }
-                self.emit(bytes, governor)?;
-            }
-            Expr::Closer(id) => self.emit(&grammar.closer_spellings(*id)[0], governor)?,
-            Expr::Class(id) => self.class(*id, capture, governor)?,
-            Expr::Until(_) => {}
-            Expr::Slot { codec, delimiters } => {
-                self.slot(*codec, *delimiters, capture, governor)?;
-            }
-            Expr::Capture { kind, inner } => self.walk(inner, Some(*kind), governor)?,
-            Expr::Sequence(items) => {
-                for item in items {
-                    self.walk(item, capture, governor)?;
-                }
-            }
-            Expr::Choice(items) => {
-                let holds: Vec<Holds> = items.iter().map(|item| self.holds(item)).collect();
-                let best = holds
-                    .iter()
-                    .map(|hold| (hold.name, hold.count))
-                    .max()
-                    .unwrap_or((false, 0));
-                let candidates: Vec<usize> = (0..items.len())
-                    .filter(|&index| (holds[index].name, holds[index].count) == best)
-                    .collect();
-                let pick = candidates[self.rng.below(candidates.len())];
-                self.walk(&items[pick], capture, governor)?;
-            }
-            Expr::Repeat { inner, min, max } => {
-                self.repeat(inner, *min, *max, capture, governor)?;
-            }
-            Expr::Reference(id) => self.walk(grammar.production_expr(*id), capture, governor)?,
-        }
-        Ok(())
-    }
-
-    fn repeat(
-        &mut self,
-        inner: &Expr,
-        min: u32,
-        max: Option<u32>,
-        capture: Option<CaptureKind>,
-        governor: &mut Governor,
-    ) -> Result<(), WitnessError> {
-        let holds = self.holds(inner);
-        let fits = |count: usize| {
-            size(count) >= u64::from(min) && max.is_none_or(|max| size(count) <= u64::from(max))
-        };
-        if holds.parameters {
-            let plan = self.call.as_ref().expect("printing a call");
-            let occurrences: Vec<usize> = plan
-                .parameters
-                .iter()
-                .enumerate()
-                .flat_map(|(index, parameter)| {
-                    let count = match &parameter.value.value {
-                        Value::Array(items) if parameter.shape.repeatable => items.len(),
-                        _ => 1,
-                    };
-                    core::iter::repeat_n(index, count)
-                })
-                .collect();
-            if !fits(occurrences.len()) {
-                return Err(WitnessError::Unsupported {
-                    reason: format!(
-                        "{} parameter occurrences do not fit a repetition of {min}..{max:?}",
-                        occurrences.len()
-                    ),
-                });
-            }
-            let mut seen: Vec<usize> = Vec::new();
-            for index in occurrences {
-                let occurrence = seen.iter().filter(|&&other| other == index).count();
-                seen.push(index);
-                self.param = Some((index, occurrence));
-                self.walk(inner, capture, governor)?;
-            }
-            self.param = None;
-            return Ok(());
-        }
-        let count = if holds.dropped {
-            // Text a call drops is never part of a well-formed call.
-            min
-        } else if holds.count > 0 {
-            min.max(1)
-        } else {
-            let extra = u32::from(max.is_none_or(|max| max > min) && self.rng.coin());
-            min + extra
-        };
-        if !fits(count as usize) {
-            return Err(WitnessError::Unsupported {
-                reason: format!("a repetition of {min}..{max:?} cannot hold its captures"),
-            });
-        }
-        for _ in 0..count {
-            self.walk(inner, capture, governor)?;
-        }
-        Ok(())
+impl<'g> Seeded<'g> {
+    const fn plan(&self) -> &Plan<'g> {
+        self.call.as_ref().expect("printing a call")
     }
 
     /// The current parameter of a parameter-pair repetition, and which
     /// occurrence of it is printed.
     fn current(&self) -> Result<(&Generated<'g>, usize), WitnessError> {
-        let plan = self.call.as_ref().expect("printing a call");
-        let (index, occurrence) = self.param.ok_or_else(|| WitnessError::Unsupported {
-            reason: "a parameter capture outside a repetition".into(),
-        })?;
-        Ok((&plan.parameters[index], occurrence))
-    }
-
-    fn class(
-        &mut self,
-        id: ClassId,
-        capture: Option<CaptureKind>,
-        governor: &mut Governor,
-    ) -> Result<(), WitnessError> {
-        let text = match capture {
-            Some(CaptureKind::Name) => self.call.as_ref().expect("printing a call").name.clone(),
-            Some(CaptureKind::ParamName) => self.current()?.0.name.clone(),
-            Some(CaptureKind::Id) => {
-                let candidate = format!("call_{:08x}", self.rng.next() & 0xFFFF_FFFF);
-                let text = if self.accepts(id, candidate.as_bytes(), governor)? {
-                    candidate
-                } else {
-                    let min_len = 4 + self.rng.below(4);
-                    self.generate_class(id, min_len, governor)?
-                };
-                self.call.as_mut().expect("printing a call").id = Some(text.clone());
-                text
-            }
-            _ => {
-                let min_len = self.rng.below(3);
-                self.generate_class(id, min_len, governor)?
-            }
-        };
-        if !self.accepts(id, text.as_bytes(), governor)? {
-            return Err(WitnessError::Unrepresentable { text });
-        }
-        self.emit(text.as_bytes(), governor)?;
-        Ok(())
-    }
-
-    /// Whether class `id` matches all of `text`.
-    fn accepts(
-        &self,
-        id: ClassId,
-        text: &[u8],
-        governor: &mut Governor,
-    ) -> Result<bool, StopReason> {
-        if text.is_empty() {
-            return Ok(false);
-        }
-        let mut dfa = self.grammar.classes[id.index()].automaton.dfa(governor)?;
-        let mut state = dfa.start();
-        for &byte in text {
-            state = dfa.step(state, byte, governor)?;
-        }
-        dfa.accepting(state, governor)
-    }
-
-    /// A member of class `id` of at least `min_len` characters (or the
-    /// shortest member, when there is none that long).
-    fn generate_class(
-        &mut self,
-        id: ClassId,
-        min_len: usize,
-        governor: &mut Governor,
-    ) -> Result<String, WitnessError> {
-        let source = self.grammar.class_source(id);
-        if self.patterns[id.index()].is_none() {
-            let anchored = format!("^(?:{source})$");
-            let pattern =
-                Pattern::compile_governed(&anchored, governor).map_err(|error| match error {
-                    PatternCompileError::Resource(reason) => WitnessError::Resource(reason),
-                    PatternCompileError::Syntax(error) => WitnessError::Unsupported {
-                        reason: format!("class /{source}/: {error}"),
-                    },
-                })?;
-            self.patterns[id.index()] = Some(pattern);
-        }
-        let pattern = self.patterns[id.index()].as_ref().expect("compiled above");
-        for min_len in [min_len, 0] {
-            let outcome = pattern.generate(
-                governor,
-                GenerateOptions {
-                    min_len,
-                    max_len: Some(min_len + 16),
-                    avoid: &[],
-                },
-            )?;
-            if let GenerateOutcome::Witness(text) = outcome
-                && !text.is_empty()
-            {
-                return Ok(text);
-            }
-        }
-        Err(WitnessError::NoCandidate {
-            class: source.to_owned(),
-        })
-    }
-
-    fn slot(
-        &mut self,
-        codec: CodecKind,
-        delimiters: DelimiterSetId,
-        capture: Option<CaptureKind>,
-        governor: &mut Governor,
-    ) -> Result<(), WitnessError> {
-        let text = match (capture, codec) {
-            (Some(CaptureKind::Arguments), CodecKind::Json) => {
-                let plan = self.call.as_ref().expect("printing a call");
-                let object = plan
-                    .expected(Carrier {
-                        codec: Some(CodecKind::Json),
-                        pairs: false,
-                    })
-                    .to_json();
-                match self.options.json_arguments {
-                    JsonArguments::Object => object,
-                    JsonArguments::Stringified => quote(&object),
-                }
-            }
-            (Some(CaptureKind::Arguments), CodecKind::XmlParams) => self.xml_parameters()?,
-            (Some(CaptureKind::ParamValue), CodecKind::Raw) => {
-                let (parameter, occurrence) = self.current()?;
-                let value = occurrence_value(parameter, occurrence);
-                raw_text(value, &parameter.shape.value)
-            }
-            (Some(CaptureKind::ParamValue), CodecKind::Json) => {
-                let (parameter, occurrence) = self.current()?;
-                occurrence_value(parameter, occurrence).to_json()
-            }
-            _ => {
-                return Err(WitnessError::Unsupported {
-                    reason: format!(
-                        "a {} slot under {:?} cannot carry call arguments",
-                        codec.name(),
-                        capture.map(CaptureKind::name)
-                    ),
-                });
-            }
-        };
-        governor.charge(Resource::Work, size(text.len()).saturating_mul(K_WITNESS))?;
-        let bytes = text.as_bytes();
-        let cut = self.grammar.delimiters(delimiters).iter().any(|delimiter| {
-            bytes
-                .windows(delimiter.len())
-                .any(|window| window == delimiter)
-        });
-        if cut {
-            return Err(WitnessError::Unrepresentable { text });
-        }
-        self.emit(bytes, governor)?;
-        Ok(())
+        let (index, occurrence) = self
+            .param
+            .ok_or_else(|| unsupported("a parameter capture outside a repetition"))?;
+        Ok((&self.plan().parameters[index], occurrence))
     }
 
     /// The `xml-params` body of the current call.
     fn xml_parameters(&self) -> Result<String, WitnessError> {
-        let plan = self.call.as_ref().expect("printing a call");
         let mut body = String::from("\n");
-        for parameter in &plan.parameters {
+        for parameter in &self.plan().parameters {
             let items: Vec<&Node> = match &parameter.value.value {
                 Value::Array(items) if parameter.shape.repeatable => items.iter().collect(),
                 _ => vec![&parameter.value],
@@ -737,7 +377,7 @@ impl<'g> Printer<'g> {
             for item in items {
                 let text = raw_text(item, &parameter.shape.value);
                 if text.contains("<parameter=") || text.contains("</parameter") {
-                    return Err(WitnessError::Unrepresentable { text });
+                    return Err(PrintError::Unrepresentable { text });
                 }
                 body.push_str("<parameter=");
                 body.push_str(&parameter.name);
@@ -799,7 +439,7 @@ impl<'g> Printer<'g> {
                 )? {
                     GenerateOutcome::Witness(text) => Value::String(text),
                     GenerateOutcome::NoCandidate(_) => {
-                        return Err(WitnessError::NoCandidate {
+                        return Err(PrintError::NoCandidate {
                             class: constraint.source.clone(),
                         });
                     }
@@ -820,9 +460,7 @@ impl<'g> Printer<'g> {
                 Value::String(literals[self.rng.below(literals.len())].clone())
             }
             ValueShape::Enumeration(_) => {
-                return Err(WitnessError::Unsupported {
-                    reason: "an enumeration with no literal".into(),
-                });
+                return Err(unsupported("an enumeration with no literal"));
             }
             ValueShape::Integer => {
                 let magnitude = self.rng.below(1000);
@@ -855,6 +493,167 @@ impl<'g> Printer<'g> {
                 Value::Object(members)
             }
         }))
+    }
+}
+
+impl Fill for Seeded<'_> {
+    /// By the seed, among the alternatives holding the most call captures
+    /// (a name first).
+    fn choose(&mut self, printer: &Printer<'_>, alternatives: &[Expr]) -> usize {
+        let holds: Vec<_> = alternatives
+            .iter()
+            .map(|item| printer.holds(item))
+            .collect();
+        let best = holds
+            .iter()
+            .map(|hold| (hold.name, hold.count))
+            .max()
+            .unwrap_or((false, 0));
+        let candidates: Vec<usize> = (0..alternatives.len())
+            .filter(|&index| (holds[index].name, holds[index].count) == best)
+            .collect();
+        candidates[self.rng.below(candidates.len())]
+    }
+
+    fn repetition(
+        &mut self,
+        printer: &Printer<'_>,
+        inner: &Expr,
+        min: u32,
+        max: Option<u32>,
+    ) -> Result<Repetition, WitnessError> {
+        let holds = printer.holds(inner);
+        if holds.parameters {
+            let occurrences: Vec<usize> = self
+                .plan()
+                .parameters
+                .iter()
+                .enumerate()
+                .flat_map(|(index, parameter)| {
+                    let count = match &parameter.value.value {
+                        Value::Array(items) if parameter.shape.repeatable => items.len(),
+                        _ => 1,
+                    };
+                    core::iter::repeat_n(index, count)
+                })
+                .collect();
+            if !fits(occurrences.len(), min, max) {
+                return Err(unsupported(format!(
+                    "{} parameter occurrences do not fit a repetition of {min}..{max:?}",
+                    occurrences.len()
+                )));
+            }
+            let count = occurrences.len();
+            self.occurrences = occurrences;
+            return Ok(Repetition::Parameters(count));
+        }
+        let count = if holds.dropped {
+            // Text a call drops is never part of a well-formed call.
+            min
+        } else if holds.count > 0 {
+            min.max(1)
+        } else {
+            let extra = u32::from(max.is_none_or(|max| max > min) && self.rng.coin());
+            min + extra
+        };
+        if !fits(count as usize, min, max) {
+            return Err(unsupported(format!(
+                "a repetition of {min}..{max:?} cannot hold its captures"
+            )));
+        }
+        Ok(Repetition::Times(count))
+    }
+
+    fn occurrence(&mut self, occurrence: Option<usize>) {
+        self.param = occurrence.map(|position| {
+            let index = self.occurrences[position];
+            let earlier = self.occurrences[..position]
+                .iter()
+                .filter(|&&other| other == index)
+                .count();
+            (index, earlier)
+        });
+    }
+
+    fn literal(&mut self, capture: CaptureKind, bytes: &[u8]) -> Result<(), WitnessError> {
+        let plan = self.plan();
+        if capture == CaptureKind::Name && bytes != plan.name.as_bytes() {
+            return Err(PrintError::Unrepresentable {
+                text: plan.name.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    fn class(
+        &mut self,
+        printer: &mut Printer<'_>,
+        id: ClassId,
+        capture: Option<CaptureKind>,
+        governor: &mut Governor,
+    ) -> Result<String, WitnessError> {
+        Ok(match capture {
+            Some(CaptureKind::Name) => self.plan().name.clone(),
+            Some(CaptureKind::ParamName) => self.current()?.0.name.clone(),
+            Some(CaptureKind::Id) => {
+                let candidate = format!("call_{:08x}", self.rng.next() & 0xFFFF_FFFF);
+                let text = if printer.accepts(id, candidate.as_bytes(), governor)? {
+                    candidate
+                } else {
+                    let min_len = 4 + self.rng.below(4);
+                    printer.generate_class(id, min_len, governor)?
+                };
+                self.call.as_mut().expect("printing a call").id = Some(text.clone());
+                text
+            }
+            _ => {
+                let min_len = self.rng.below(3);
+                printer.generate_class(id, min_len, governor)?
+            }
+        })
+    }
+
+    fn slot(
+        &mut self,
+        _printer: &Printer<'_>,
+        codec: CodecKind,
+        _delimiters: DelimiterSetId,
+        capture: Option<CaptureKind>,
+    ) -> Result<String, WitnessError> {
+        match (capture, codec) {
+            (Some(CaptureKind::Arguments), CodecKind::Json) => {
+                let object = self
+                    .plan()
+                    .expected(Carrier {
+                        codec: Some(CodecKind::Json),
+                        pairs: false,
+                    })
+                    .to_json();
+                Ok(match self.options.json_arguments {
+                    JsonArguments::Object => object,
+                    JsonArguments::Stringified => quote(&object),
+                })
+            }
+            (Some(CaptureKind::Arguments), CodecKind::XmlParams) => self.xml_parameters(),
+            (Some(CaptureKind::ParamValue), CodecKind::Raw) => {
+                let (parameter, occurrence) = self.current()?;
+                let value = occurrence_value(parameter, occurrence);
+                Ok(raw_text(value, &parameter.shape.value))
+            }
+            (Some(CaptureKind::ParamValue), CodecKind::Json) => {
+                let (parameter, occurrence) = self.current()?;
+                Ok(occurrence_value(parameter, occurrence).to_json())
+            }
+            _ => Err(unsupported(format!(
+                "a {} slot under {:?} cannot carry call arguments",
+                codec.name(),
+                capture.map(CaptureKind::name)
+            ))),
+        }
+    }
+
+    fn until(&mut self, _capture: Option<CaptureKind>) -> Result<String, WitnessError> {
+        Ok(String::new())
     }
 }
 

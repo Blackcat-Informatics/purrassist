@@ -107,7 +107,8 @@ call = (open-id id-rest (sep type-member sep function-member | sep function-memb
        | open-function function-rest (sep id-member (sep type-member)? | sep type-member (sep id-member)?)?)
        ws? "}";
 
-tool-open = "{\"role\": \"tool\""
+tool-open = "{\"role\":\"tool\""
+          | "{\"role\": \"tool\""
           | "{ \"role\": \"tool\""
           | "{\n\"role\": \"tool\""
           | "{\n  \"role\": \"tool\""
@@ -121,8 +122,7 @@ tool-open = "{\"role\": \"tool\""
           | "{\n\t\"role\": \"tool\""
           | "{\n\t\t\"role\": \"tool\""
           | "{\n\t\t\t\"role\": \"tool\""
-          | "{\n\t\t\t\t\"role\": \"tool\""
-          | "{\"role\":\"tool\"";
+          | "{\n\t\t\t\t\"role\": \"tool\"";
 text-part = "{" ws? "\"type\"" ws? ":" ws? "\"text\"" ws? "," ws?
             "\"text\"" ws? ":" ws? json-string ws? "}";
 

@@ -159,35 +159,44 @@ impl Node {
     /// Resolve an RFC 6901 JSON Pointer. Ambiguous duplicate members fail lookup.
     #[must_use]
     pub fn pointer(&self, pointer: &str) -> Option<&Self> {
-        if pointer.is_empty() {
-            return Some(self);
-        }
         let mut current = self;
-        for part in pointer.strip_prefix('/')?.split('/') {
-            let mut key = String::new();
-            let mut chars = part.chars();
-            while let Some(character) = chars.next() {
-                key.push(if character == '~' {
-                    match chars.next()? {
-                        '0' => '~',
-                        '1' => '/',
-                        _ => return None,
-                    }
-                } else {
-                    character
-                });
-            }
+        for token in pointer_tokens(pointer)? {
+            let token = token?;
             current = match &current.value {
-                Value::Object(_) => current.get(&key)?,
-                Value::Array(items) => {
-                    if key.is_empty()
-                        || !key.bytes().all(|b| b.is_ascii_digit())
-                        || (key.len() > 1 && key.starts_with('0'))
-                    {
+                Value::Object(_) => current.get(&token)?,
+                Value::Array(items) => items.get(array_index(&token)?)?,
+                _ => return None,
+            };
+        }
+        Some(current)
+    }
+
+    /// Resolve an RFC 6901 JSON Pointer for mutation, with the lookup rules
+    /// of [`Node::pointer`] (ambiguous duplicate members fail).
+    ///
+    /// ```
+    /// use purrassist_core::json::{self, Node, Value};
+    /// let mut node = json::parse(r#"{"a":[1,{"b/c":2}],"d":1,"d":2}"#).unwrap();
+    /// *node.pointer_mut("/a/1/b~1c").unwrap() = Node::new(Value::Bool(true));
+    /// assert_eq!(node.to_json(), r#"{"a":[1,{"b/c":true}],"d":1,"d":2}"#);
+    /// assert!(node.pointer_mut("/d").is_none());
+    /// assert!(node.pointer_mut("/a/2").is_none());
+    /// ```
+    #[must_use]
+    pub fn pointer_mut(&mut self, pointer: &str) -> Option<&mut Self> {
+        let mut current = self;
+        for token in pointer_tokens(pointer)? {
+            let token = token?;
+            current = match &mut current.value {
+                Value::Object(members) => {
+                    let mut matches = members.iter_mut().filter(|member| member.key == token);
+                    let first = matches.next()?;
+                    if matches.next().is_some() {
                         return None;
                     }
-                    items.get(key.parse::<usize>().ok()?)?
+                    &mut first.value
                 }
+                Value::Array(items) => items.get_mut(array_index(&token)?)?,
                 _ => return None,
             };
         }
@@ -339,6 +348,48 @@ fn quote_into(input: &str, output: &mut String) {
         }
     }
     output.push('"');
+}
+
+/// The decoded reference tokens of an RFC 6901 pointer (`None` when it is
+/// neither empty nor starts with `/`; a token is `None` when it holds an
+/// invalid `~` escape).
+fn pointer_tokens(pointer: &str) -> Option<impl Iterator<Item = Option<String>> + '_> {
+    let rest = if pointer.is_empty() {
+        None
+    } else {
+        Some(pointer.strip_prefix('/')?)
+    };
+    Some(
+        rest.into_iter()
+            .flat_map(|rest| rest.split('/'))
+            .map(|part| {
+                let mut key = String::new();
+                let mut chars = part.chars();
+                while let Some(character) = chars.next() {
+                    key.push(if character == '~' {
+                        match chars.next()? {
+                            '0' => '~',
+                            '1' => '/',
+                            _ => return None,
+                        }
+                    } else {
+                        character
+                    });
+                }
+                Some(key)
+            }),
+    )
+}
+
+/// An RFC 6901 array index token: decimal digits without a leading zero.
+fn array_index(token: &str) -> Option<usize> {
+    if token.is_empty()
+        || !token.bytes().all(|byte| byte.is_ascii_digit())
+        || (token.len() > 1 && token.starts_with('0'))
+    {
+        return None;
+    }
+    token.parse().ok()
 }
 
 /// Escape a single JSON Pointer segment.

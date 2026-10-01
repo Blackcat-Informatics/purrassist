@@ -122,9 +122,11 @@
 //! Parsing, every retained text copy, the projection, keyword records, and
 //! schema compilation are charged to the governor with portable amounts;
 //! exhaustion is [`ToolSetError::Resource`] and is sticky on the governor.
+use super::DialectId;
 use super::definition::{
     Effects, ObjectSpec, ParameterKind, ParameterSpec, ToolDefinition, UnknownParameters,
 };
+use super::emit::NO_PARAMETERS;
 use super::toolset::{
     Declared, PARAMETER_RECORD, Pending, ToolSet, ToolSetError, compiled, invalid, retain_text,
     sort_factor,
@@ -135,9 +137,6 @@ use crate::contract::{
 use crate::json::{self, Member, Node, ParseFailure, Value, pointer_segment};
 use crate::schema::{Dialect, Schema};
 use core::ops::Range;
-
-/// The effective parameters schema of a declaration that has none.
-const NO_PARAMETERS: &str = r#"{"type":"object"}"#;
 
 /// Keywords whose presence makes a parameter's value unmodeled.
 const RESHAPING: [&str; 12] = [
@@ -172,15 +171,27 @@ pub(super) fn consulted_by_repair(keyword: &str) -> bool {
 /// Portable charge for one retained `(String, String)` keyword record.
 const KEYWORD_RECORD: u64 = 48;
 
-/// A wire format of tool declarations.
+/// A format of tool declarations: the three wire formats adapters read,
+/// and the system-prompt tool entries of the built-in prompt dialects.
 ///
-/// Canonical (non-source) renderings are compact JSON:
+/// Canonical (non-source) renderings of the wire formats are compact JSON:
 /// `{"type":"function","function":{"name":..,"description":..,"parameters":..}}`
 /// for `OpenAI`, `{"name":..,"description":..,"inputSchema":..}` for MCP, and
 /// `{"name":..,"description":..,"input_schema":..}` for Anthropic. The
 /// description appears only when present. `OpenAI` omits `parameters` for a
 /// tool declared without one; MCP and Anthropic, which require a schema,
 /// render `{"type":"object"}`.
+///
+/// [`DeclarationForm::Qwen3CoderXml`] and [`DeclarationForm::Hermes`] are
+/// printed by their dialect grammar's `declaration` production (see
+/// [`emit`](super::emit)): a Qwen3-Coder `<function>` entry
+/// `<function><name>NAME</name><description>DESC</description><parameters>SCHEMA</parameters></function>`
+/// and a Hermes `<tools>` entry
+/// `{"type":"function","function":{"name":"NAME","description":"DESC","parameters":SCHEMA}}`.
+/// `SCHEMA` is always the exact parameters schema text, verbatim (the
+/// chat template's per-parameter XML expansion of the schema is not
+/// reproduced: it is lossy for nested schemas, while the exact text is what
+/// arguments are validated against).
 ///
 /// ```
 /// use purrassist_core::{Budget, tool_call::{DeclarationForm, ToolSet}};
@@ -199,20 +210,57 @@ pub enum DeclarationForm {
     Mcp,
     /// Anthropic Messages API client tools.
     Anthropic,
+    /// A Qwen3-Coder system-prompt `<function>` entry (`qwen3-coder-xml.v1`).
+    Qwen3CoderXml,
+    /// A Hermes system-prompt `<tools>` entry (`hermes.v1`).
+    Hermes,
 }
 
 impl DeclarationForm {
+    /// Every declaration form.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::DeclarationForm;
+    /// assert_eq!(DeclarationForm::ALL.len(), 5);
+    /// ```
+    pub const ALL: [Self; 5] = [
+        Self::OpenAi,
+        Self::Mcp,
+        Self::Anthropic,
+        Self::Qwen3CoderXml,
+        Self::Hermes,
+    ];
+
+    /// The dialect whose `declaration` production prints this form, or
+    /// `None` for the wire formats.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::{DeclarationForm, DialectId};
+    /// assert_eq!(DeclarationForm::Hermes.dialect(), Some(DialectId::Hermes));
+    /// assert_eq!(DeclarationForm::Mcp.dialect(), None);
+    /// ```
+    #[must_use]
+    pub const fn dialect(self) -> Option<DialectId> {
+        match self {
+            Self::Qwen3CoderXml => Some(DialectId::Qwen3CoderXml),
+            Self::Hermes => Some(DialectId::Hermes),
+            Self::OpenAi | Self::Mcp | Self::Anthropic => None,
+        }
+    }
+
     const fn label(self) -> &'static str {
         match self {
             Self::OpenAi => "OpenAI",
             Self::Mcp => "MCP",
             Self::Anthropic => "Anthropic",
+            Self::Qwen3CoderXml => "Qwen3-Coder XML",
+            Self::Hermes => "Hermes",
         }
     }
 
     const fn parameters_key(self) -> &'static str {
         match self {
-            Self::OpenAi => "parameters",
+            Self::OpenAi | Self::Qwen3CoderXml | Self::Hermes => "parameters",
             Self::Mcp => "inputSchema",
             Self::Anthropic => "input_schema",
         }
@@ -449,8 +497,9 @@ impl ToolSet {
     }
 }
 
-/// Compact canonical declaration of `form`; `parameters` is embedded
-/// verbatim.
+/// Compact canonical declaration of a wire `form` (the prompt-dialect forms
+/// are printed by their grammars and render as `OpenAI`-shaped JSON here);
+/// `parameters` is embedded verbatim.
 pub(super) fn render_canonical(
     form: DeclarationForm,
     name: &str,
@@ -463,7 +512,9 @@ pub(super) fn render_canonical(
         fields.push_str(&json::quote(description));
     }
     let schema = match form {
-        DeclarationForm::OpenAi => parameters,
+        DeclarationForm::OpenAi | DeclarationForm::Qwen3CoderXml | DeclarationForm::Hermes => {
+            parameters
+        }
         DeclarationForm::Mcp | DeclarationForm::Anthropic => {
             Some(parameters.unwrap_or(NO_PARAMETERS))
         }
@@ -475,7 +526,9 @@ pub(super) fn render_canonical(
         fields.push_str(schema);
     }
     match form {
-        DeclarationForm::OpenAi => format!("{{\"type\":\"function\",\"function\":{{{fields}}}}}"),
+        DeclarationForm::OpenAi | DeclarationForm::Qwen3CoderXml | DeclarationForm::Hermes => {
+            format!("{{\"type\":\"function\",\"function\":{{{fields}}}}}")
+        }
         DeclarationForm::Mcp | DeclarationForm::Anthropic => format!("{{{fields}}}"),
     }
 }

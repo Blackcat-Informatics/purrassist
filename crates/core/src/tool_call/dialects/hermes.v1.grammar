@@ -21,6 +21,10 @@ closer call-end = "</tool_call>" | "</tool_calls>";
 
 tool-name = /[A-Za-z0-9_.:-]+/;
 ws = /[ \t\r\n]+/;
+# Whitespace between the wrapper tags and the JSON object; printed as one
+# newline, the chat template's layout (<tool_call>\n{...}\n</tool_call>).
+nl = ws;
+layout nl "\n";
 json-string = /"([^"\\\x00-\x1F]|\\["\\\/bfnrt]|\\u[0-9A-Fa-f]{4})*"/;
 # Text before the JSON object: it starts with neither whitespace nor `{`
 # (so canonical markup never holds any) and runs to the object's `{`.
@@ -32,9 +36,9 @@ name-member = "\"name\"" ws? ":" ws? "\"" name:tool-name "\"";
 arguments-member = "\"arguments\"" ws? ":"
                    arguments:slot(json, "</tool_call>", "</tool_calls>");
 
-call = "<tool_call>" ws? (dropped:preamble)? "{" ws?
+call = "<tool_call>" nl? (dropped:preamble)? "{" ws?
        (name-member ws? "," ws? arguments-member | arguments-member ws? "," ws? name-member)
-       ws? "}" ws? (dropped:fence ws?)? call-end;
+       ws? "}" nl? (dropped:fence ws?)? call-end;
 
 result = "<tool_response>" content:until("</tool_response>") "</tool_response>";
 

@@ -7,6 +7,7 @@ use super::definition::{
     Effects, ObjectSpec, ParameterKind, ParameterSpec, RepairPolicy, ToolDefinition,
     UnknownParameters,
 };
+use super::emit::{self, EmitError};
 use super::shape::{
     ArgumentShape, NameLiteral, ObjectShape, ParameterDefault, ParameterShape, PatternConstraint,
     ShapeStep, ValueShape,
@@ -437,40 +438,93 @@ impl CompiledTool {
         &self.unmodeled_keywords
     }
 
-    /// Render this tool's declaration in `form`.
+    /// Render this tool's declaration in `form` under a fresh governor with
+    /// the default [`Budget`].
     ///
     /// For an adapter-built tool whose source form is `form`, the result is
-    /// exactly the original declaration bytes. Otherwise it is the compact
-    /// canonical declaration of `form` (see [`DeclarationForm`]) carrying the
-    /// name, the description when present, and the parameters schema: the
-    /// exact source parameters text for adapter-built tools (verbatim, never
-    /// re-serialized) or the canonical [`Self::json_schema`] for builder
-    /// tools. Form-specific declaration fields such as `OpenAI` `strict` or
-    /// MCP `annotations` are retained only in their own form's exact text.
-    /// Infallible; the output is bounded by text already charged at
-    /// compilation.
+    /// exactly the original declaration bytes. For the other wire forms it is
+    /// the compact canonical declaration of `form` (see [`DeclarationForm`])
+    /// carrying the name, the description when present, and the parameters
+    /// schema: the exact source parameters text for adapter-built tools
+    /// (verbatim, never re-serialized) or the canonical [`Self::json_schema`]
+    /// for builder tools. Form-specific declaration fields such as `OpenAI`
+    /// `strict` or MCP `annotations` are retained only in their own form's
+    /// exact text. The prompt-dialect forms ([`DeclarationForm::dialect`])
+    /// are printed by the dialect grammar's `declaration` production with the
+    /// same name, description, and exact parameters text.
+    ///
+    /// # Errors
+    /// See [`Self::render_declaration_governed`]; the wire forms never fail.
     ///
     /// ```
     /// use purrassist_core::{Budget, tool_call::{DeclarationForm, ToolSet}};
     /// let source = r#"{ "name": "ls",  "input_schema": {"type":"object"} }"#;
     /// let tools = ToolSet::from_anthropic(source, Budget::default()).unwrap();
     /// let ls = tools.tool("ls").unwrap();
-    /// assert_eq!(ls.render_declaration(DeclarationForm::Anthropic), source);
+    /// assert_eq!(ls.render_declaration(DeclarationForm::Anthropic)?, source);
     /// assert_eq!(
-    ///     ls.render_declaration(DeclarationForm::Mcp),
+    ///     ls.render_declaration(DeclarationForm::Mcp)?,
     ///     r#"{"name":"ls","inputSchema":{"type":"object"}}"#,
     /// );
+    /// assert_eq!(
+    ///     ls.render_declaration(DeclarationForm::Qwen3CoderXml)?,
+    ///     "<function>\n<name>ls</name>\n<parameters>{\"type\":\"object\"}</parameters>\n</function>",
+    /// );
+    /// # Ok::<(), purrassist_core::tool_call::EmitError>(())
     /// ```
-    #[must_use]
-    pub fn render_declaration(&self, form: DeclarationForm) -> String {
+    pub fn render_declaration(&self, form: DeclarationForm) -> Result<String, EmitError> {
+        self.render_declaration_governed(form, &mut Governor::new(Budget::default()))
+    }
+
+    /// Render this tool's declaration in `form` against a caller-owned
+    /// governor (see [`Self::render_declaration`]). The wire forms copy
+    /// text already charged when the tool set was compiled and charge
+    /// nothing; the prompt-dialect forms charge their printing.
+    ///
+    /// # Errors
+    /// For a prompt-dialect form: [`EmitError::Unrepresentable`] when the
+    /// description or the parameters text would end its element early (a
+    /// Qwen3-Coder description containing `</description>`, a schema
+    /// containing `</parameters>` or, for Hermes, `</tools>`), and
+    /// [`EmitError::Resource`] on exhaustion or cancellation.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, tool_call::{DeclarationForm, EmitError, ToolDefinition, ToolSet}};
+    /// let tools = ToolSet::compile([ToolDefinition::new("ls").description("List </description> files")], Budget::default()).unwrap();
+    /// let ls = tools.tool("ls").unwrap();
+    /// let mut governor = Governor::new(Budget::default());
+    /// assert!(matches!(
+    ///     ls.render_declaration_governed(DeclarationForm::Qwen3CoderXml, &mut governor),
+    ///     Err(EmitError::Unrepresentable { .. })
+    /// ));
+    /// let hermes = ls.render_declaration_governed(DeclarationForm::Hermes, &mut governor)?;
+    /// assert!(hermes.starts_with(r#"{"type":"function","function":{"name":"ls","description":"List </description> files","parameters":{"#));
+    /// # Ok::<(), EmitError>(())
+    /// ```
+    pub fn render_declaration_governed(
+        &self,
+        form: DeclarationForm,
+        governor: &mut Governor,
+    ) -> Result<String, EmitError> {
         let parameters = match &self.source {
             ToolSource::Declaration(declaration) if declaration.form() == form => {
-                return declaration.text().to_owned();
+                return Ok(declaration.text().to_owned());
             }
             ToolSource::Declaration(declaration) => declaration.parameters_text(),
             ToolSource::Builder => Some(self.schema_text.as_str()),
         };
-        adapter::render_canonical(form, &self.name, self.description.as_deref(), parameters)
+        let description = self.description.as_deref();
+        form.dialect().map_or_else(
+            || {
+                Ok(adapter::render_canonical(
+                    form,
+                    &self.name,
+                    description,
+                    parameters,
+                ))
+            },
+            |dialect| emit::declaration(&dialect, &self.name, description, parameters, governor),
+        )
     }
 }
 
@@ -686,21 +740,33 @@ impl ToolSet {
     }
 
     /// A tool's declaration rendered in `form`, by canonical name; see
-    /// [`CompiledTool::render_declaration`]. `None` for an unknown name.
+    /// [`CompiledTool::render_declaration`].
+    ///
+    /// # Errors
+    /// [`EmitError::UnknownTool`] for an unknown name, otherwise as
+    /// [`CompiledTool::render_declaration`].
     ///
     /// ```
-    /// use purrassist_core::{Budget, tool_call::{DeclarationForm, ToolDefinition, ToolSet}};
+    /// use purrassist_core::{Budget, tool_call::{DeclarationForm, EmitError, ToolDefinition, ToolSet}};
     /// let tools = ToolSet::compile([ToolDefinition::new("ls").description("List")], Budget::default()).unwrap();
     /// assert_eq!(
-    ///     tools.render_declaration("ls", DeclarationForm::OpenAi).unwrap(),
+    ///     tools.render_declaration("ls", DeclarationForm::OpenAi)?,
     ///     r#"{"type":"function","function":{"name":"ls","description":"List","parameters":{"type":"object","properties":{},"additionalProperties":false}}}"#,
     /// );
-    /// assert_eq!(tools.render_declaration("missing", DeclarationForm::Mcp), None);
+    /// assert_eq!(
+    ///     tools.render_declaration("missing", DeclarationForm::Mcp),
+    ///     Err(EmitError::UnknownTool { name: "missing".into() }),
+    /// );
+    /// # Ok::<(), EmitError>(())
     /// ```
-    #[must_use]
-    pub fn render_declaration(&self, tool: &str, form: DeclarationForm) -> Option<String> {
+    pub fn render_declaration(
+        &self,
+        tool: &str,
+        form: DeclarationForm,
+    ) -> Result<String, EmitError> {
         self.tool(tool)
-            .map(|compiled| compiled.render_declaration(form))
+            .ok_or_else(|| EmitError::UnknownTool { name: tool.into() })?
+            .render_declaration(form)
     }
 
     /// The argument shape of a tool, by canonical name.

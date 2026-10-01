@@ -85,7 +85,7 @@ fn assert_exact(
     assert_eq!(&input[source.span()], expected_declaration);
     assert_eq!(
         tools.render_declaration(name, form).as_deref(),
-        Some(expected_declaration)
+        Ok(expected_declaration)
     );
     assert_eq!(source.parameters_text(), expected_parameters);
     assert_eq!(
@@ -222,7 +222,7 @@ fn anthropic_render_back_is_byte_exact() {
     let single = ToolSet::from_anthropic(weather, Budget::default()).unwrap();
     assert_eq!(
         single.render_declaration("get_weather", DeclarationForm::Anthropic),
-        Some(weather.to_owned())
+        Ok(weather.to_owned())
     );
 }
 
@@ -821,7 +821,7 @@ fn observable(tools: &ToolSet) -> Vec<String> {
                 DeclarationForm::Anthropic,
             ]
             .into_iter()
-            .map(|form| tool.render_declaration(form))
+            .map(|form| tool.render_declaration(form).expect("wire forms render"))
             .collect();
             format!(
                 "{}|{:?}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
@@ -911,7 +911,7 @@ fn cross_form_rendering() {
         );
         assert_eq!(
             again.render_declaration("read_file", form).as_deref(),
-            Some(rendered.as_str())
+            Ok(rendered.as_str())
         );
         assert_eq!(
             tool.unmodeled_keywords(),

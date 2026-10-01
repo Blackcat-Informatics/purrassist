@@ -67,6 +67,11 @@ pub(crate) enum Statement {
         spellings: Vec<Vec<u8>>,
         at: usize,
     },
+    Layout {
+        name: String,
+        text: Vec<u8>,
+        at: usize,
+    },
     Production {
         name: String,
         expr: PExpr,
@@ -82,11 +87,12 @@ pub(crate) struct Document {
 }
 
 /// Names that cannot name a production or closer.
-pub(crate) const KEYWORDS: [&str; 6] = [
+pub(crate) const KEYWORDS: [&str; 7] = [
     "grammar",
     "reasoning",
     "confusable",
     "closer",
+    "layout",
     "until",
     "slot",
 ];
@@ -375,6 +381,15 @@ impl Parser<'_, '_> {
                 Statement::Closer {
                     name,
                     spellings,
+                    at: name_at,
+                }
+            }
+            "layout" => {
+                let (name, name_at) = self.ident()?;
+                let (text, _) = self.string()?;
+                Statement::Layout {
+                    name,
+                    text,
                     at: name_at,
                 }
             }

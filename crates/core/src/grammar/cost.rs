@@ -88,8 +88,13 @@ pub const K_ERR: u64 = 8;
 /// table entry (instruction, trie node, automaton state).
 pub const K_COMPILE: u64 = 1;
 
-/// `Work` per expression visited and per byte printed by
-/// [`witness::generate`](super::witness::generate).
+/// `Work` per expression visited and per byte printed by the production
+/// printer ([`print`](super::print)), which drives
+/// [`witness::generate`](super::witness::generate) and every
+/// [`tool_call::emit`](crate::tool_call::emit) printing.
+pub const K_PRINT: u64 = 1;
+/// `Work` per value [`witness::generate`](super::witness::generate)
+/// generates (its printing is charged at [`K_PRINT`]).
 pub const K_WITNESS: u64 = 1;
 /// `Work` per byte, lookup or node an argument codec visits.
 ///

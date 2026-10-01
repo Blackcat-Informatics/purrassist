@@ -64,6 +64,26 @@ first-party.
 - This dialect is the output and round-trip target: its `declaration` and
   `result` productions are the request shapes a printer emits.
 
+## Printing (canonical form)
+
+The printer (`tool_call::emit`) runs the same productions forward with
+canonical choices: the first alternative carrying the most values, optional
+whitespace omitted. Every printed form is compact JSON.
+
+- `call`: `{"id":"ID","type":"function","function":{"name":"NAME","arguments":"ARGS"}}`
+  where `ARGS` is the compact JSON of the argument tree (exact number
+  spellings) carried as a JSON string; several elements are separated by
+  one newline. Each line is byte-identical to the corresponding element of
+  `emit::openai_tool_calls`, the `tool_calls` array value itself (no `role`,
+  no message envelope). An id the `call-id` class does not accept (such as
+  a deduplicated source id `call#0`) cannot be printed in this dialect; the
+  call is reported as skipped, never printed with another id.
+- `result`: `{"role":"tool","tool_call_id":"ID","content":"CONTENT"}`, the
+  content as a JSON string (the compact `{"role":"tool"` start is the first
+  `tool-open` alternative).
+- `declaration`: the canonical `OpenAI` `tools` entry
+  `{"type":"function","function":{"name":...,"description":...,"parameters":...}}`.
+
 ## Message versus array detection
 
 No detection step is needed: the grammar recognizes elements wherever they

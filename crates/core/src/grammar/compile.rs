@@ -657,6 +657,7 @@ struct Declared<'d> {
     reasoning: Option<(Vec<u8>, Vec<u8>)>,
     confusables: Vec<(Vec<u8>, Vec<u8>)>,
     bodies: Vec<(String, &'d PExpr)>,
+    layouts: Vec<(&'d str, &'d [u8], usize)>,
 }
 
 fn declare<'d>(
@@ -667,6 +668,7 @@ fn declare<'d>(
         reasoning: None,
         confusables: Vec::new(),
         bodies: Vec::new(),
+        layouts: Vec::new(),
     };
     let duplicate = |offset: usize, name: &str| GrammarError::DuplicateName {
         offset,
@@ -682,6 +684,9 @@ fn declare<'d>(
                 {
                     return Err(duplicate(*at, "reasoning"));
                 }
+            }
+            Statement::Layout { name, text, at } => {
+                declared.layouts.push((name.as_str(), text.as_slice(), *at));
             }
             Statement::Confusable {
                 canonical, variant, ..
@@ -832,12 +837,14 @@ pub(crate) fn compile(
         reasoning,
         confusables,
         bodies,
+        layouts: declared_layouts,
     } = declare(&mut builder, &document.statements)?;
     let mut productions = Vec::with_capacity(bodies.len());
     for (name, expr) in bodies {
         let expr = builder.resolve(expr)?;
         productions.push(Production { name, expr });
     }
+    let layouts = layouts(&mut builder, &productions, &declared_layouts)?;
     let required = |name: &'static str| {
         productions
             .iter()
@@ -910,5 +917,56 @@ pub(crate) fn compile(
         programs,
         stray: stray.trie,
         longest,
+        layouts,
     })
+}
+
+/// Each production's printing layout: the text a `layout` statement gives
+/// it, checked to be a member of the class the production names.
+fn layouts(
+    builder: &mut Builder<'_>,
+    productions: &[Production],
+    declared: &[(&str, &[u8], usize)],
+) -> Result<Vec<Option<Vec<u8>>>, GrammarError> {
+    let mut layouts: Vec<Option<Vec<u8>>> = vec![None; productions.len()];
+    for &(name, text, at) in declared {
+        let invalid = |message: &str| GrammarError::InvalidLayout {
+            offset: at,
+            name: name.to_owned(),
+            message: message.to_owned(),
+        };
+        let index = match builder.lookup(name) {
+            Some(Name::Production(index)) => index as usize,
+            Some(Name::Closer(_)) => return Err(invalid("a closer has canonical spellings")),
+            None => {
+                return Err(GrammarError::UnknownName {
+                    offset: at,
+                    name: name.to_owned(),
+                });
+            }
+        };
+        if layouts[index].is_some() {
+            return Err(GrammarError::DuplicateName {
+                offset: at,
+                name: format!("layout {name}"),
+            });
+        }
+        let mut expr = &productions[index].expr;
+        while let Expr::Reference(id) = expr {
+            expr = &productions[id.index()].expr;
+        }
+        let Expr::Class(class) = expr else {
+            return Err(invalid("only a class production has a layout"));
+        };
+        charge(
+            builder.governor,
+            size(text.len()).saturating_add(1),
+            size(text.len()),
+        )?;
+        if !builder.classes[class.index()].accepts(text, builder.governor)? {
+            return Err(invalid("the layout text is not a member of the class"));
+        }
+        layouts[index] = Some(text.to_vec());
+    }
+    Ok(layouts)
 }

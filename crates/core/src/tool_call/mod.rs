@@ -26,6 +26,12 @@
 //! ids, the tool choice check, and how the turn finished, plus a receipt
 //! (see [`recover`] for every step and outcome rule).
 //!
+//! [`emit`] prints in the other direction, through the same dialect
+//! grammars: recovered calls as canonical markup of any dialect or as the
+//! `OpenAI` `tool_calls` array, tool results, tool declarations
+//! ([`DeclarationForm`]), and minimal-diff re-emission of edited calls
+//! ([`ToolCalls::reemit_with`]).
+//!
 //! Names (tools, aliases, parameters, parameter aliases) are non-empty and
 //! match `[A-Za-z0-9_.:-]+`; two collide when their [`collision_key`]s are
 //! equal. Results never depend on declaration order.
@@ -46,6 +52,7 @@ mod adapter;
 mod context;
 mod definition;
 mod dialect;
+pub mod emit;
 mod from_node;
 mod ir;
 mod recognizer;
@@ -60,6 +67,10 @@ pub use definition::{
     Effects, ObjectSpec, Param, ParameterSpec, RepairPolicy, ToolDefinition, UnknownParameters,
 };
 pub use dialect::{DialectId, DialectSet, DialectSetError};
+pub use emit::{
+    CallEdit, Emission, EmitError, EmitTarget, Emitted, RenderedResult, SkipReason, Skipped,
+    ToolResult,
+};
 pub use from_node::{FromNode, FromNodeError};
 pub use ir::{
     ArgLeaf, ArgOrigin, ArgTree, ArgumentFault, CallSegment, CaptureSpan, Choice, Closure,

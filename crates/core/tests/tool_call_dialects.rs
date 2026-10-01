@@ -594,7 +594,9 @@ fn declaration_productions_match_tool_declarations() {
         let set = declaration_reader(&dialect);
         for fixture in fixtures(&dialect) {
             for tool in fixture.tools.tools() {
-                let declaration = tool.render_declaration(DeclarationForm::OpenAi);
+                let declaration = tool
+                    .render_declaration(DeclarationForm::OpenAi)
+                    .expect("declaration");
                 let turn = recognize(&set, &empty, &declaration);
                 let found = calls(&turn);
                 assert_eq!(found.len(), 1, "{declaration}");

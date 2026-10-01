@@ -18,6 +18,9 @@ closer call-end = "</tool_call>" | "</tool_calls>";
 
 tool-name = /[A-Za-z0-9_.:-]+/;
 ws = /[ \t\r\n]+/;
+# Printing: whitespace between tags is one newline, the chat template's
+# layout (<tool_call>\n<function=NAME>\n...\n</function>\n</tool_call>).
+layout ws "\n";
 
 call = "<tool_call>" ws? "<function=" name:tool-name ">"
        arguments:slot(xml-params, "</function>", "</functions>", "</tool_call>", "</tool_calls>")
@@ -26,8 +29,10 @@ call = "<tool_call>" ws? "<function=" name:tool-name ">"
 # A tool result as the chat template renders a tool message.
 result = "<tool_response>" content:until("</tool_response>") "</tool_response>";
 
-# One entry of the system prompt's tool list.
+# One entry of the system prompt's tool list. The parameters block is kept
+# verbatim (the raw codec): the printer writes the tool's exact parameters
+# schema text there.
 declaration = "<function>" ws? "<name>" name:tool-name "</name>" ws?
               ("<description>" content:until("</description>") "</description>" ws?)?
-              "<parameters>" until("</parameters>") "</parameters>" ws?
+              "<parameters>" arguments:slot(raw, "</parameters>") "</parameters>" ws?
               "</function>";

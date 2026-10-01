@@ -52,6 +52,27 @@ repository.
   one entry of the system prompt's tool list.
 - Reasoning: `<think>` ... `</think>`.
 
+## Printing (canonical form)
+
+The printer (`tool_call::emit`) runs the same productions forward with
+canonical choices: the first alternative carrying the most values (so
+`"name"` before `"arguments"`). The whitespace between the wrapper tags and
+the JSON object is the `nl` production, which the grammar gives the printing
+layout `"\n"` (`layout nl "\n";`), the template's wrapper layout; every other
+optional whitespace is omitted, so the object itself is compact JSON (the
+template's `json.dumps` spacing inside the object is not reproduced: the
+arguments are printed with their exact recovered spellings).
+
+- `call`: `<tool_call>\n{"name":"NAME","arguments":ARGS}\n</tool_call>`, where
+  `ARGS` is the compact JSON object of the argument tree with exact number
+  spellings and member order; several calls are separated by one newline.
+  JSON text that would contain `</tool_call>` writes every `<` as `\u003c`.
+- `result`: `<tool_response>CONTENT</tool_response>`, content verbatim; the
+  tool response carries no call id.
+- `declaration`: `{"type":"function","function":{"name":"NAME","description":"DESC","parameters":SCHEMA}}`
+  with `SCHEMA` the tool's exact parameters schema text, verbatim
+  (description and parameters omitted when the tool has none).
+
 ## The `"parameters"` key
 
 Not accepted. The Hermes call schema (`FunctionCall` in `schema.py`) has
