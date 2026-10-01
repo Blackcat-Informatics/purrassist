@@ -520,15 +520,24 @@ impl<'s> Step<'_, 's> {
             // The run ended before this byte, which the continuation consumes.
             return self.closure(thread, next, pos, stack, out, governor);
         }
-        // Classes read whole characters: a run that dies on a continuation
-        // byte could not consume the character that byte belongs to, which
-        // began at its lead byte. Failing there keeps the rejected span from
-        // splitting a well-formed character.
-        let at = if byte & 0xC0 == 0x80 {
-            pos - state.partial_bytes()
-        } else {
-            pos
-        };
+        // Classes read whole characters: a run that dies inside a character
+        // could not consume that character, so the run ends (when it can)
+        // at the character's lead byte, and the continuation replays the
+        // character from its first byte — a multi-byte confusable or closer
+        // spelling right after a class is then read exactly like an ASCII
+        // one.
+        let boundary = pos - state.partial_bytes();
+        if let Some(start) = state.character_start()
+            && thread.entry < boundary
+            && dfa.accepting(start, governor)?
+        {
+            thread.sub = Sub::Class(start);
+            return self.closure(thread, next, boundary, stack, out, governor);
+        }
+        // Otherwise a run that dies on a continuation byte fails at the
+        // lead byte of the character it could not consume, which keeps the
+        // rejected span from splitting a well-formed character.
+        let at = if byte & 0xC0 == 0x80 { boundary } else { pos };
         Self::fail(out, thread, at, Rejection::Malformed { at })
     }
 
@@ -787,11 +796,25 @@ impl<'s> Step<'_, 's> {
                 Self::fail(out, thread, pos, Rejection::Unterminated)
             }
             (Inst::Class { class, next }, Sub::Class(state)) => {
-                if thread.entry < pos && self.dfas[class as usize].accepting(state, governor)? {
-                    self.closure(thread, next, pos, stack, out, governor)
-                } else {
-                    Ok(())
+                let dfa = &mut self.dfas[class as usize];
+                if thread.entry < pos && dfa.accepting(state, governor)? {
+                    return self.closure(thread, next, pos, stack, out, governor);
                 }
+                // Input that ends inside a character: as in `step_class`,
+                // the run ends at the character's lead byte when it can, and
+                // the continuation replays the truncated character.
+                let boundary = pos - state.partial_bytes();
+                if let Some(start) = state.character_start()
+                    && thread.entry < boundary
+                    && dfa.accepting(start, governor)?
+                {
+                    let thread = Thread {
+                        sub: Sub::Class(start),
+                        ..thread
+                    };
+                    return self.closure(thread, next, boundary, stack, out, governor);
+                }
+                Ok(())
             }
             (Inst::Until { set, next } | Inst::Slot { set, next, .. }, Sub::Body(state, codec)) => {
                 let matcher = &self.grammar.delimiters[set as usize].matcher;
@@ -1019,7 +1042,7 @@ impl<'s> Step<'_, 's> {
         governor: &mut Governor,
     ) -> Result<Result<RawCall, Rejection>, StopReason> {
         let span = shape.span.clone();
-        let (captures, mut edits) = self.trace(path, span.end, governor)?;
+        let (captures, mut edits) = self.trace(path, shape.open_end, governor)?;
         let fields = match self.fields(&captures, governor)? {
             Ok(fields) => fields,
             Err(rejection) => return Ok(Err(rejection)),
@@ -1155,6 +1178,9 @@ pub(crate) struct Shape<'d> {
     pub(crate) dialect: &'d DialectId,
     pub(crate) kind: ProductionKind,
     pub(crate) dangling: bool,
+    /// Where the captures still open at the end of `span` close: before
+    /// the character a cut-off class run had only begun, else `span.end`.
+    pub(crate) open_end: usize,
     pub(crate) cost: u64,
 }
 
@@ -2028,11 +2054,20 @@ impl<'s> Engine<'s> {
         let kind = self.tables[table].kind;
         let dialect = self.grammars[self.tables[table].grammar].dialect.clone();
         let (step, _, _) = self.split(table);
+        // A length stop inside a character a class run had begun: the
+        // capture keeps the whole characters (as a cut-off slot does).
+        let open_end = match (step.program.insts[thread.pc as usize], thread.sub) {
+            (Inst::Class { .. }, Sub::Class(state)) if dangling => {
+                thread.pos - state.partial_bytes()
+            }
+            _ => thread.pos,
+        };
         let shape = Shape {
             span: thread.start..thread.pos,
             dialect: &dialect,
             kind,
             dangling,
+            open_end,
             cost: thread.cost,
         };
         let segment = step.segment(thread.hist, &shape, governor)?;
@@ -2216,13 +2251,25 @@ impl<'s> Engine<'s> {
                 }
             }
             if record.opened {
+                // The cut-off reading may itself be rejected (a capture that
+                // is not well-formed UTF-8): the attempt then ends rejected.
+                let live = self.tables[table]
+                    .attempts
+                    .as_slice()
+                    .iter()
+                    .find(|live| live.id == record.id)
+                    .copied()
+                    .expect("the attempt is live until it ends");
                 self.events.push(Event::Ended {
                     table: index_u32(table),
                     attempt: record.id,
                     start: record.start,
                     at: self.fed,
-                    completed: true,
-                    reason: Rejection::Unterminated,
+                    completed: live.completed,
+                    reason: match live.failure {
+                        Some(reason @ Rejection::InvalidUtf8 { .. }) => reason,
+                        _ => Rejection::Unterminated,
+                    },
                 });
             }
         }

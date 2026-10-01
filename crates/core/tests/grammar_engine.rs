@@ -1314,3 +1314,57 @@ fn exhaustion_and_cancellation_explicit() {
         Err(StopReason::Cancelled)
     );
 }
+
+/// A length stop inside a character a class run had begun keeps the whole
+/// characters of the open capture, and a cut-off reading that is itself
+/// rejected ends its attempt rejected rather than without a segmentation.
+#[test]
+fn length_stop_inside_a_class_character() {
+    let mini = set(&[MINI]);
+    for input in [&b"<tool><call=f\xC3"[..], b"<tool><call=f\xE2\x80"] {
+        let mut whole = Governor::new(Budget::default());
+        let turn = run(
+            &mini,
+            &[input],
+            GenerationStop::Length,
+            ReasoningPolicy::default(),
+            &mut whole,
+        )
+        .expect("recognized");
+        let call = one_call(&turn);
+        assert_eq!(call.closure, Closure::Dangling);
+        assert_eq!(call.span, 0..input.len());
+        let name = call.name.as_ref().expect("partial name");
+        assert_eq!((name.value.as_str(), name.span.clone()), ("f", 12..13));
+        for split in 0..=input.len() {
+            let mut governor = Governor::new(Budget::default());
+            let chunks = [&input[..split], &input[split..]];
+            let split_turn = run(
+                &mini,
+                &chunks,
+                GenerationStop::Length,
+                ReasoningPolicy::default(),
+                &mut governor,
+            )
+            .expect("recognized");
+            assert_eq!(split_turn, turn, "split at {split}");
+            assert_eq!(governor.usage(), whole.usage(), "usage at split {split}");
+        }
+        // Any other stop leaves the call unterminated, as before the cut.
+        let turn = recognize(&mini, input, GenerationStop::Stop);
+        assert!(matches!(
+            turn.selected()[0],
+            Segment::Rejected { span, reason: Rejection::Unterminated, .. } if *span == (0..input.len())
+        ));
+    }
+    let until = set(&[r#"grammar "until-name.v1";
+        call = "<c " name:until(">") ">";
+        result = "<r>" content:until("</r>") "</r>";
+        declaration = "<d>";"#]);
+    let turn = recognize(&until, b"<c f\xFF", GenerationStop::Length);
+    assert_eq!(turn.calls().len(), 0, "no call segment");
+    assert!(matches!(
+        turn.selected()[0],
+        Segment::Rejected { span, reason: Rejection::InvalidUtf8 { at: 4 }, .. } if *span == (0..5)
+    ));
+}

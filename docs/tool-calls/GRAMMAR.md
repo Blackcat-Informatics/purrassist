@@ -132,7 +132,11 @@ inside a literal. For each literal, the compiler enumerates every spelling
 that replaces the occurrences of any non-empty subset of the confusable pairs
 present in it. Recognition reads such a spelling as the literal, recorded as
 `tool_call.markup.terminal-confusable` (a markup loss); `until` and `slot`
-delimiters match their confusable spellings too. Printing writes the
+delimiters match their confusable spellings too. Either spelling may be any
+UTF-8 text: a class run reads whole characters and ends before the first
+character it cannot consume, so a multi-byte variant right after a class
+terminal (`"` written as `”` after a name) is read like an ASCII one,
+from its first byte. Printing writes the
 canonical spelling. Each spelling adds recognizer configurations
 (`CompiledGrammar::configuration_bound`), and so per-byte work; declare only
 the confusions a model actually makes.

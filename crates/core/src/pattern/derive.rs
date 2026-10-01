@@ -1121,6 +1121,26 @@ impl DfaState {
             Utf8::Boundary | Utf8::Invalid => 0,
         }
     }
+
+    /// The state at the start of the partially decoded character this state
+    /// is inside, `None` at a character boundary or after invalid UTF-8.
+    ///
+    /// Inside a character only the decoding state and the sticky match flag
+    /// differ from the state before its lead byte, and the lead byte sets
+    /// that flag only when the text before the character contains a match
+    /// with `$` false (and the next character not a word character): terms
+    /// have no negation, so that match also holds at the end of text. The
+    /// result is therefore [`DerivativeDfa::accepting`] exactly when the
+    /// bytes before the character's lead byte are.
+    pub(crate) const fn character_start(self) -> Option<Self> {
+        match self.utf8 {
+            Utf8::Partial { .. } => Some(Self {
+                utf8: Utf8::Boundary,
+                ..self
+            }),
+            Utf8::Boundary | Utf8::Invalid => None,
+        }
+    }
 }
 
 /// After the second byte of a multi-byte character, the decoded prefix

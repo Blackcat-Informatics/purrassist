@@ -909,6 +909,109 @@ fn confusable_terminal_repaired_with_cost() {
     assert_eq!(call.repairs().losses[0].loss.original, "<|end|>");
 }
 
+/// A confusable variant of any UTF-8 length right after a class run is
+/// repaired like an ASCII one: the class (which reads whole characters)
+/// ends at the boundary before the character it cannot consume, so the
+/// variant is matched from its first byte. The same variant inside the
+/// opener, both together, and the canonical spelling read as before. Every
+/// case is split-invariant at every cut.
+#[test]
+fn confusable_non_ascii_variant_after_class() {
+    let tools = compile([ToolDefinition::new("ls")]);
+    let rule = rules::of_operator(EditOperator::TerminalConfusable);
+    // Two-, three-, and four-byte variants of `"`; the four-byte one is a
+    // supplementary-plane character (U+1D11E).
+    for variant in ["\u{2ba}", "\u{201d}", "\u{1d11e}"] {
+        let mut governor = Governor::new(Budget::default());
+        let source = format!(
+            r#"grammar "confusable-test.v1";
+               confusable "\"" "{variant}";
+               call = "<c name=\"" name:/[a-z_]+/ "\"/>";
+               result = "<r>" content:until("</r>") "</r>";
+               declaration = "<d>";"#
+        );
+        let grammar = Grammar::compile_governed(&source, &mut governor).expect("grammar");
+        let dialects = set(&[DialectId::custom(grammar)]);
+        let opener = format!("<c name={variant}");
+        let closer = format!("{variant}/>");
+        // The input and the original text of each confusable repair.
+        let cases: [(String, Vec<&str>); 4] = [
+            (format!("<c name=\"ls{closer}"), vec![&closer]),
+            (format!("{opener}ls\"/>"), vec![&opener]),
+            (format!("{opener}ls{closer}"), vec![&opener, &closer]),
+            ("<c name=\"ls\"/>".into(), vec![]),
+        ];
+        for (text, originals) in &cases {
+            let run_split = |cuts: &[usize]| {
+                let mut governor = Governor::new(Budget::default());
+                let mut recognizer = Recognizer::with_tools(
+                    &dialects,
+                    &tools,
+                    ReasoningPolicy::default(),
+                    &mut governor,
+                )
+                .expect("recognizer");
+                let mut from = 0;
+                for &cut in cuts.iter().chain(core::iter::once(&text.len())) {
+                    recognizer
+                        .push(&text.as_bytes()[from..cut], &mut governor)
+                        .expect("push");
+                    from = cut;
+                }
+                let turn = recognizer
+                    .finish(GenerationStop::ToolCalls, &mut governor)
+                    .expect("finish");
+                let resolved = resolve_forest(&tools, &turn, &Policies::default(), &mut governor)
+                    .expect("resolved");
+                (turn, resolved, governor.usage())
+            };
+            let whole = run_split(&[]);
+            let call = one(&whole.1);
+            assert_eq!(call.outcome, CallOutcome::Resolved, "{text:?}: {call:#?}");
+            assert_eq!(call.tool(), Some("ls"), "{text:?}");
+            assert_eq!(call.span, 0..text.len(), "{text:?}");
+            assert_eq!(
+                rule_ids(call),
+                vec!["tool_call.markup.terminal-confusable"; originals.len()],
+                "{text:?}"
+            );
+            assert_eq!(
+                call.reading.cost,
+                rule.cost * originals.len() as u64,
+                "{text:?}"
+            );
+            let losses = &call.repairs().losses;
+            assert_eq!(losses.len(), originals.len(), "{text:?}");
+            for (loss, original) in losses.iter().zip(originals) {
+                assert_eq!(loss.kind, LossKind::Markup);
+                assert_eq!(loss.loss.original, *original, "{text:?}");
+                // The opener is at the start, the closer at the end.
+                let span = if text.starts_with(*original) {
+                    0..original.len()
+                } else {
+                    text.len() - original.len()..text.len()
+                };
+                assert_eq!(
+                    loss.loss.evidence.span.as_ref().expect("span").bytes,
+                    span,
+                    "{text:?}"
+                );
+            }
+            for cut in 1..text.len() {
+                let split = run_split(&[cut]);
+                assert_eq!(split.0, whole.0, "{text:?} split at {cut}");
+                assert_eq!(split.1, whole.1, "{text:?} split at {cut}");
+                assert_eq!(split.2, whole.2, "{text:?} split at {cut}");
+            }
+            let bytes: Vec<usize> = (1..text.len()).collect();
+            let bytewise = run_split(&bytes);
+            assert_eq!(bytewise.0, whole.0, "{text:?} byte by byte");
+            assert_eq!(bytewise.1, whole.1, "{text:?} byte by byte");
+            assert_eq!(bytewise.2, whole.2, "{text:?} byte by byte");
+        }
+    }
+}
+
 #[test]
 fn per_call_alternatives_exposed() {
     let tools = compile([
