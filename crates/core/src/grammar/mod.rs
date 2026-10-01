@@ -44,6 +44,9 @@
 //! looks for `call` and `result` in model output; each must begin with a
 //! literal opener (that is how a turn knows where a call may start), and
 //! must not match the empty string. `declaration` is retained for printing.
+//! A `dropped:` capture marks text inside a call that is not part of it
+//! (prose or a code-fence marker around a JSON body): the engine records it
+//! as a `tool_call.extract.fence` or `tool_call.extract.prose` edit.
 //! `arguments:` and `param-value:` captures must wrap a `slot(...)`; a
 //! production uses either one `arguments` slot or `param-name`/`param-value`
 //! pairs (adjacent, in that order, in one sequence), never both.
@@ -84,8 +87,16 @@
 //! least-cost repairs. Repair is local to each failure configuration: the
 //! search compares repairs by their cost up to the failing byte and does not
 //! revisit a cheaper repair whose continuation fails later (it repairs
-//! again there). The turn-level segmentation over the resulting segments is
-//! global. Costs and the linear work bound are in [`cost`].
+//! again there). A missing closer inserted mid-message is a *function*
+//! close when more of the production follows it and a *wrapper* close when
+//! it ends the production; inserting a call's last closer right before a
+//! closer spelling of the same grammar is not proposed (deleting that
+//! closer is), and closer spellings immediately following a completed call
+//! are absorbed into it as stray closers, so a repeated or stray closer
+//! never leaks into content. Closers inserted at the end of output (under a
+//! non-length stop) are `tool_call.markup.missing-closers-at-end`. The
+//! turn-level segmentation over the resulting segments is global. Costs and
+//! the linear work bound are in [`cost`].
 //!
 //! # Built-in dialects and witnesses
 //!
@@ -149,11 +160,17 @@ pub enum CaptureKind {
     Reasoning,
     /// `content:` — free content (for example a tool result's body).
     Content,
+    /// `dropped:` — text inside a call's markup that is not part of the
+    /// call (prose or a code-fence marker around a JSON body). The engine
+    /// records each as a `tool_call.extract.fence` edit when the text is
+    /// only a fence marker and as `tool_call.extract.prose` (a data loss)
+    /// otherwise.
+    Dropped,
 }
 
 impl CaptureKind {
     /// Every capture kind, in declaration order.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Name,
         Self::Id,
         Self::Arguments,
@@ -161,6 +178,7 @@ impl CaptureKind {
         Self::ParamValue,
         Self::Reasoning,
         Self::Content,
+        Self::Dropped,
     ];
 
     /// The DSL spelling of this capture.
@@ -179,6 +197,7 @@ impl CaptureKind {
             Self::ParamValue => "param-value",
             Self::Reasoning => "reasoning",
             Self::Content => "content",
+            Self::Dropped => "dropped",
         }
     }
 

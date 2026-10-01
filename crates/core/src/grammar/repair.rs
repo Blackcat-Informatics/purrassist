@@ -27,11 +27,11 @@
 // shared across the grammar and tool-call modules, so `pub(crate)` (matching
 // `unreachable_pub`) wins, as in `pattern::derive`.
 #![allow(clippy::redundant_pub_crate)]
-use super::Inst;
 use super::automaton::ROOT;
-use super::cost::K_ERR;
+use super::cost::{K_ERR, K_THREAD};
 use super::edit::{EditOperator, MarkupEdit};
 use super::engine::{Failure, Out, Step, Sub, Thread, extend_digest};
+use super::{Inst, Program};
 use crate::contract::{Evidence, Governor, Resource, ScratchVec, StopReason};
 use crate::digest::Digest;
 use crate::search::{Acceptance, Change, Proposals, SearchState};
@@ -169,7 +169,9 @@ impl<'a, 's> RepairState<'a, 's> {
 
     /// Insert `replacement` (the expected literal, or its missing suffix)
     /// at this configuration's position, continue at `next`, and propose
-    /// every outcome.
+    /// every outcome. With `complete == false` an insertion that completes
+    /// the production at once is not proposed.
+    #[allow(clippy::too_many_arguments)]
     fn insert(
         &self,
         context: &mut RepairContext<'a, 's>,
@@ -177,6 +179,7 @@ impl<'a, 's> RepairState<'a, 's> {
         operator: EditOperator,
         replacement: Vec<u8>,
         next: u32,
+        complete: bool,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         let at = self.thread.pos;
@@ -201,7 +204,7 @@ impl<'a, 's> RepairState<'a, 's> {
             governor,
         )?;
         // The inserted literal may complete the production at once.
-        for &thread in out.completed.as_slice() {
+        for &thread in out.completed.as_slice().iter().filter(|_| complete) {
             proposals.commit(
                 governor,
                 self.successor(thread, Status::Completed, operator),
@@ -210,6 +213,27 @@ impl<'a, 's> RepairState<'a, 's> {
         }
         self.replay(context, proposals, &mut seeds, operator, governor)
     }
+}
+
+/// Whether the production completes from `pc` without consuming input:
+/// whether an inserted literal continuing at `pc` is the production's last.
+fn completes(program: &Program, pc: u32, governor: &mut Governor) -> Result<bool, StopReason> {
+    let mut visited = vec![false; program.insts.len()];
+    let mut pending = vec![pc];
+    while let Some(pc) = pending.pop() {
+        let index = pc as usize;
+        if core::mem::replace(&mut visited[index], true) {
+            continue;
+        }
+        governor.charge(Resource::Work, K_THREAD)?;
+        match program.insts[index] {
+            Inst::Accept => return Ok(true),
+            Inst::Split(first, second) => pending.extend([first, second]),
+            Inst::Open { next, .. } | Inst::Close { next, .. } => pending.push(next),
+            Inst::Lit { .. } | Inst::Class { .. } | Inst::Until { .. } | Inst::Slot { .. } => {}
+        }
+    }
+    Ok(false)
 }
 
 /// The search ledger entry of one operator application.
@@ -309,12 +333,27 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
                 ];
                 if context.opened && literal.closer.is_some() {
                     let replacement = literal.bytes.clone();
+                    // A closer missing mid-message: the wrapper's when it
+                    // ends the production, an inner element's otherwise.
+                    let wrapper = completes(program, next, governor)?;
+                    let operator = if wrapper {
+                        EditOperator::MissingWrapperClose
+                    } else {
+                        EditOperator::MissingFunctionClose
+                    };
+                    // Ending the call by inserting its last closer right
+                    // before a closer spelling of this grammar would leave
+                    // that closer behind as content: a repeated or stray
+                    // closer belongs to the call, so only the deletion
+                    // (`tool_call.markup.stray-closer`) reads it.
+                    let complete = !(wrapper && grammar.stray.admits(pending));
                     self.insert(
                         context,
                         proposals,
-                        EditOperator::InsertCloser,
+                        operator,
                         replacement,
                         next,
+                        complete,
                         governor,
                     )?;
                 }
@@ -341,6 +380,7 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
                         EditOperator::ConsumedCloser,
                         replacement,
                         next,
+                        true,
                         governor,
                     )?;
                 }
@@ -348,9 +388,10 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
                     self.insert(
                         context,
                         proposals,
-                        EditOperator::InsertCloser,
+                        EditOperator::MissingClosersAtEnd,
                         suffix,
                         next,
+                        true,
                         governor,
                     )?;
                 }

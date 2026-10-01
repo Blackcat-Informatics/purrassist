@@ -43,10 +43,21 @@
 //! [`GenerationStop::Length`] cuts open calls off: each becomes a
 //! [`Closure::Dangling`] reading of what was captured (truncation). Every
 //! other stop treats an open call as malformed: it is completed only by
-//! inserting missing closers at the end ([`Closure::Unterminated`], left to
-//! the caller's completeness rule) or by reinserting the closer the stop
-//! sequence consumed ([`Closure::Repaired`], `tool_call.stop.consumed-closer`),
-//! and is otherwise [`Rejection::Unterminated`].
+//! inserting missing closers at the end ([`Closure::Unterminated`],
+//! `tool_call.markup.missing-closers-at-end`, left to the completeness rule
+//! of [`resolve_forest`](super::resolve_forest)) or by reinserting the
+//! closer the stop sequence consumed ([`Closure::Repaired`],
+//! `tool_call.stop.consumed-closer`), and is otherwise
+//! [`Rejection::Unterminated`].
+//!
+//! # Examples in context
+//!
+//! A call recognized inside fenced code, an inline code span, or a block
+//! quote carries the guess-flagged edit `tool_call.context.fenced-example`:
+//! it may be an example rather than a call. Fences are decided over the
+//! fence lines outside every recognized call and tool result, so a fence
+//! inside an argument value never affects other calls.
+use super::context::ContextTracker;
 use super::dialect::DialectSet;
 use super::ir::{
     CallSegment, Choice, Piece, ProductionKind, RawCall, ReasoningClosure, ReasoningSegment,
@@ -419,6 +430,7 @@ pub struct Recognizer<'s> {
     marker: u32,
     pending: Vec<Pending>,
     turn: Turn,
+    context: ContextTracker,
     failed: Option<StopReason>,
 }
 
@@ -534,6 +546,7 @@ impl<'s> Recognizer<'s> {
             marker: 0,
             pending: Vec::new(),
             turn,
+            context: ContextTracker::new(),
             failed: None,
         })
     }
@@ -590,6 +603,7 @@ impl<'s> Recognizer<'s> {
         let at = self.engine.fed();
         governor.charge(Resource::InputBytes, size(at + 1))?;
         governor.charge(Resource::Work, K_LEX)?;
+        self.context.step(byte, at, governor)?;
         self.engine.push(byte, governor)?;
         if let (ReasoningPolicy::Separate { .. }, Some(matcher)) =
             (self.policy, &self.set.marker_matcher)
@@ -957,6 +971,7 @@ impl<'s> Recognizer<'s> {
             return Err(reason);
         }
         let end = self.engine.fed();
+        self.context.finish(end, governor)?;
         self.engine.finish(&stop, governor)?;
         self.pending
             .extend(self.engine.events.drain(..).map(Pending::Engine));
@@ -984,6 +999,8 @@ impl<'s> Recognizer<'s> {
             turn: &self.turn,
             forest: Forest::new(governor),
             source,
+            context: &self.context,
+            len: end,
         };
         let pieces = builder.pieces(last, governor)?;
         let Builder { forest, .. } = builder;
@@ -1004,6 +1021,8 @@ struct Builder<'t> {
     turn: &'t Turn,
     forest: Forest,
     source: Digest,
+    context: &'t ContextTracker,
+    len: usize,
 }
 
 impl Builder<'_> {
@@ -1120,8 +1139,72 @@ impl Builder<'_> {
                 (_, piece) => pieces.push(piece),
             }
         }
+        self.mark_examples(&mut pieces, governor)?;
         self.annotate(&mut pieces, governor)?;
         Ok(pieces)
+    }
+
+    /// Flag every call recognized inside fenced code, an inline code span or
+    /// a block quote with the guess-flagged edit
+    /// `tool_call.context.fenced-example` (see [`ContextTracker`]).
+    fn mark_examples(
+        &self,
+        pieces: &mut [Piece],
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let mut excluded = Vec::new();
+        for piece in pieces.iter() {
+            let segments: &[Segment] = match piece {
+                Piece::Segment(segment) => core::slice::from_ref(segment),
+                Piece::Choice(choice) => &choice.readings[0],
+            };
+            for segment in segments {
+                if let Segment::Call(call) | Segment::Result(call) = segment {
+                    excluded.push(call.span.clone());
+                }
+            }
+        }
+        let mut calls: Vec<&mut CallSegment> = Vec::new();
+        for piece in pieces.iter_mut() {
+            match piece {
+                Piece::Segment(Segment::Call(call)) => calls.push(call),
+                Piece::Choice(choice) => {
+                    for reading in &mut choice.readings {
+                        for segment in reading {
+                            if let Segment::Call(call) = segment {
+                                calls.push(call);
+                            }
+                        }
+                    }
+                }
+                Piece::Segment(_) => {}
+            }
+        }
+        let spans: Vec<Range<usize>> = calls.iter().map(|call| call.span.clone()).collect();
+        let contexts = self
+            .context
+            .examples(&spans, &excluded, self.len, governor)?;
+        for (call, context) in calls.into_iter().zip(contexts) {
+            let Some(region) = context else {
+                continue;
+            };
+            for reading in &mut call.readings {
+                let edit = MarkupEdit {
+                    operator: EditOperator::ContextFencedExample,
+                    span: region.clone(),
+                    original: Vec::new(),
+                    replacement: Vec::new(),
+                };
+                governor.charge(Resource::ScratchBytes, edit.estimated_bytes())?;
+                let at = reading
+                    .edits
+                    .iter()
+                    .position(|other| other.span.start > region.start)
+                    .unwrap_or(reading.edits.len());
+                reading.edits.insert(at, edit);
+            }
+        }
+        Ok(())
     }
 
     /// Number the calls, build every derivation, and rank every
@@ -1308,7 +1391,15 @@ fn explain(edit: &MarkupEdit) -> String {
     let replacement = escaped(&edit.replacement);
     let original = escaped(&edit.original);
     match edit.operator {
-        EditOperator::InsertCloser => format!("inserted missing closer `{replacement}`"),
+        EditOperator::MissingFunctionClose => {
+            format!("inserted missing closer `{replacement}` before the markup that follows it")
+        }
+        EditOperator::MissingWrapperClose => {
+            format!("inserted the call's missing final closer `{replacement}`")
+        }
+        EditOperator::MissingClosersAtEnd => format!(
+            "inserted missing closer `{replacement}` at the end of output; usable only when the call is otherwise complete"
+        ),
         EditOperator::DeleteStrayCloser => format!("deleted stray closer `{original}`"),
         EditOperator::CloserVariant => {
             format!("read closer variant `{original}` as `{replacement}`")
@@ -1329,13 +1420,43 @@ fn explain(edit: &MarkupEdit) -> String {
             "reasoning block never closed; kept as reasoning to the end of output".into()
         }
         EditOperator::MissingParameterClose => format!(
-            "ended the open parameter value before a declared parameter opener (inserted `{replacement}`)"
+            "ended the open parameter value before the opener of a parameter the tool declares (inserted `{replacement}`); the alternative reading, that the value contains that opener as text, is not offered because a declared parameter's opener always ends an XML parameter value"
+        ),
+        EditOperator::ParameterClosedByElement => format!(
+            "ended the open parameter value where its enclosing element closes (inserted `{replacement}`)"
+        ),
+        EditOperator::UndeclaredParameterBoundary => format!(
+            "ended the open parameter value at a parameter opener of a call that names no declared tool (inserted `{replacement}`); the opener may also be text of the value"
+        ),
+        EditOperator::ClosersOnlyEmpty => format!(
+            "read a function body of only closers `{original}` as no arguments; valid only when the tool requires no parameter"
+        ),
+        EditOperator::NestedParameter => format!(
+            "read nested parameter elements after `{original}` as the members of an object parameter"
+        ),
+        EditOperator::JsonBody => {
+            "read a whole JSON object in the function body as the arguments".into()
+        }
+        EditOperator::ArrayItem => {
+            format!("read array parameter value `{original}` as one item of the array")
+        }
+        EditOperator::TrimNonverbatim => format!(
+            "trimmed whitespace around the value `{original}` of a non-verbatim declared type to `{replacement}`"
         ),
         EditOperator::FramingNewline => {
             "consumed one framing newline of an XML parameter value".into()
         }
         EditOperator::StringifiedArguments => {
             format!("decoded stringified arguments `{original}` as JSON `{replacement}`")
+        }
+        EditOperator::ExtractProse => {
+            format!("dropped prose `{original}` inside the call's markup")
+        }
+        EditOperator::ExtractFence => {
+            format!("dropped code-fence marker `{original}` inside the call's markup")
+        }
+        EditOperator::ContextFencedExample => {
+            "call recognized inside fenced code, an inline code span or a block quote; it may be an example rather than a call".into()
         }
         EditOperator::JsonComment
         | EditOperator::JsonMissingValue

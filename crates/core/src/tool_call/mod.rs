@@ -35,11 +35,14 @@
 //! assert_eq!(u32::from_node(arguments.get("limit").unwrap()), Ok(5));
 //! ```
 mod adapter;
+mod context;
 mod definition;
 mod dialect;
 mod from_node;
 mod ir;
 mod recognizer;
+pub mod resolve;
+pub mod rules;
 mod shape;
 mod toolset;
 
@@ -55,6 +58,12 @@ pub use ir::{
     Segment, Spanned, UnresolvedArgument,
 };
 pub use recognizer::{GenerationStop, ReasoningPolicy, RecognizedTurn, Recognizer};
+pub use resolve::{
+    CallFacts, CallLedger, CallLoss, CallOutcome, CallReading, Policies, PolicySelection,
+    ResolvedCall, ResolvedChoice, ResolvedPiece, ResolvedSegment, ResolvedTurn, UnresolvedReason,
+    resolve_forest,
+};
+pub use rules::{RULES, Rule};
 pub use shape::{
     ArgumentShape, NameLiteral, ObjectShape, ParameterDefault, ParameterShape, PatternConstraint,
     ShapeStep, ValueShape,

@@ -47,12 +47,19 @@ first-party; no chat-template text is copied into this repository.
 - `</parameters>` is read as `</parameter>` by the codec.
 - Repeated or missing closers: every closer-class spelling is also known to
   the engine's weighted repair search, which may delete a stray closer
-  (`tool_call.markup.stray-closer`) or insert a missing one
-  (`tool_call.markup.missing-closer`), keeping the least-cost reading; a
-  duplicate closer after a call that is already complete is content. A stray
-  `</parameter>` between parameters is deleted by the codec, and a declared
-  parameter's opener ends an unclosed value
-  (`tool_call.markup.missing-parameter-close`).
+  (`tool_call.markup.stray-closer`) or insert a missing one mid-message
+  (`tool_call.markup.missing-function-close`,
+  `tool_call.markup.missing-wrapper-close`) or at the end of output
+  (`tool_call.markup.missing-closers-at-end`, usable only when the call is
+  otherwise complete), keeping the least-cost reading. A closer spelling
+  immediately after a complete call (`</function></function>`,
+  `</tool_call></tool_call>`) is absorbed into that call as a stray closer,
+  never left as content. A stray `</parameter>` between parameters is
+  deleted by the codec, a body of only closers is no arguments
+  (`tool_call.markup.closers-only-empty`), a declared parameter's opener ends
+  an unclosed value (`tool_call.markup.missing-parameter-close`), and the
+  end of the function element ends one
+  (`tool_call.markup.parameter-closed-by-element`).
 
 These are repairs and are covered by the repair goldens, not by the
 conformance anchors, which hold canonical markup only.

@@ -54,8 +54,11 @@
 //! assert!(cost::JSON_REPAIR < cost::JSON_GUESS);
 //! ```
 
-/// `Work` per input byte for the lexical layer: the reasoning-marker
-/// automaton, the opener first-byte tables, and the capture window.
+/// `Work` per input byte for the lexical layer.
+///
+/// That is: the reasoning-marker automaton, the opener first-byte tables,
+/// the capture window, and the Markdown context scan (code fences, inline
+/// code, block quotes) that flags calls written as examples.
 pub const K_LEX: u64 = 1;
 
 /// `Work` per configuration step: one live configuration consuming one byte
@@ -127,7 +130,7 @@ pub const MISSING_PARAMETER_CLOSE: u64 = INSERT_CLOSER;
 /// repair.
 pub const FRAMING_NEWLINE: u64 = 0;
 
-/// Cost of decoding stringified arguments (`tool_call.arguments.stringified`):
+/// Cost of decoding stringified arguments (`tool_call.arguments.decode-string`):
 /// zero, since the encoding is lossless; such arguments are flagged for
 /// mandatory validation instead.
 pub const STRINGIFIED_ARGUMENTS: u64 = 0;
@@ -143,3 +146,25 @@ pub const JSON_REPAIR: u64 = 1;
 /// or an unterminated string: it invents content, so it costs more than any
 /// purely syntactic repair.
 pub const JSON_GUESS: u64 = 4;
+
+/// The longest whitespace run between a call and a stray closer it absorbs.
+///
+/// That is a run of ASCII whitespace (space, tab, newline, carriage return)
+/// between a completed call and a stray closer it absorbs, or between two
+/// absorbed closers (`tool_call.markup.stray-closer`).
+/// A longer run, and whitespace after the last absorbed closer, stays
+/// content. The bound keeps the hold of a completed call finite: its end is
+/// decided within this many bytes plus the longest literal, and a dialect
+/// set whose grammars declare closers adds it to its lookbehind, so the
+/// decision never depends on how the output is chunked.
+pub const STRAY_CLOSER_GAP: usize = 32;
+
+/// Cost of dropping prose inside a call's markup (`tool_call.extract.prose`):
+/// the dropped text may carry data, so it costs as much as inserting a
+/// missing closer (and the call records a data loss).
+pub const EXTRACT_PROSE: u64 = 2;
+
+/// Cost of dropping a code-fence marker inside a call's markup
+/// (`tool_call.extract.fence`): a markup-only deletion, like reading a
+/// closer variant.
+pub const EXTRACT_FENCE: u64 = 1;

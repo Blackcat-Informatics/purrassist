@@ -22,9 +22,13 @@
 //! of every live attempt. Zero-width cycles are cut by a stall bound.
 //!
 //! When every configuration of an attempt fails on a byte, the repair search
-//! (`super::repair`) runs over the failed configurations. An attempt that
-//! completes, is rejected, or is absorbed emits [`Event`]s that the
-//! turn-level segmentation consumes. This layer never depends on the turn
+//! (`super::repair`) runs over the failed configurations. A completed
+//! configuration is held while the bytes after it spell closers of its
+//! grammar, separated by bounded whitespace, which it absorbs as stray
+//! closers (a `Trail`); it is reported once the following bytes cannot
+//! continue a gap and a closer spelling, within the recognizer's lookbehind. An
+//! attempt that completes, is rejected, or is absorbed emits [`Event`]s that
+//! the turn-level segmentation consumes. This layer never depends on the turn
 //! level, so its events are a pure function of the bytes.
 // `unreachable_pub` and `redundant_pub_crate` disagree on the right
 // visibility for items of a crate-private module
@@ -35,7 +39,7 @@
 use super::codec::{
     CodecContext, CodecEnd, CodecFault, CodecKind, CodecState, CodecStep, CodecValue,
 };
-use super::cost::{K_CAPTURE, K_CODEC, K_THREAD};
+use super::cost::{K_CAPTURE, K_CODEC, K_THREAD, STRAY_CLOSER_GAP};
 use super::edit::{EditOperator, MarkupEdit};
 use super::repair::{RepairContext, RepairState, Status};
 use super::{CaptureKind, CompiledGrammar, Inst, Program, index_u32};
@@ -977,7 +981,7 @@ impl<'s> Step<'_, 's> {
                         fields.arguments = Some(self.value(*value, governor)?);
                     }
                 }
-                CaptureKind::Reasoning | CaptureKind::Content => {}
+                CaptureKind::Reasoning | CaptureKind::Content | CaptureKind::Dropped => {}
             }
         }
         if fields.arguments.is_none() && !parameters.is_empty() {
@@ -1001,18 +1005,46 @@ impl<'s> Step<'_, 's> {
         governor: &mut Governor,
     ) -> Result<Result<RawCall, Rejection>, StopReason> {
         let span = shape.span.clone();
-        let (captures, edits) = self.trace(path, span.end, governor)?;
+        let (captures, mut edits) = self.trace(path, span.end, governor)?;
         let fields = match self.fields(&captures, governor)? {
             Ok(fields) => fields,
             Err(rejection) => return Ok(Err(rejection)),
         };
+        let mut cost = shape.cost;
+        for (capture, _) in &captures {
+            if capture.kind != CaptureKind::Dropped || capture.span.is_empty() {
+                continue;
+            }
+            let original = self.bytes(capture.span.clone()).to_vec();
+            governor.charge(
+                Resource::Work,
+                size(original.len()).saturating_mul(K_CAPTURE),
+            )?;
+            let operator = if fence_marker(&original) {
+                EditOperator::ExtractFence
+            } else {
+                EditOperator::ExtractProse
+            };
+            let edit = MarkupEdit {
+                operator,
+                span: capture.span.clone(),
+                original,
+                replacement: Vec::new(),
+            };
+            governor.charge(Resource::ScratchBytes, edit.estimated_bytes())?;
+            cost = cost.saturating_add(operator.rule().cost);
+            let at = edits
+                .iter()
+                .position(|other| other.span.start > edit.span.start)
+                .unwrap_or(edits.len());
+            edits.insert(at, edit);
+        }
         let closure = if shape.dangling {
             Closure::Dangling
-        } else if edits.iter().any(|edit: &MarkupEdit| {
-            edit.operator == EditOperator::InsertCloser
-                && edit.span.start == span.end
-                && self.at_end(span.end)
-        }) {
+        } else if edits
+            .iter()
+            .any(|edit: &MarkupEdit| edit.operator == EditOperator::MissingClosersAtEnd)
+        {
             Closure::Unterminated
         } else if edits.iter().any(|edit| edit.rule().repair) {
             Closure::Repaired
@@ -1030,12 +1062,8 @@ impl<'s> Step<'_, 's> {
             captures: captures.into_iter().map(|(capture, _)| capture).collect(),
             closure,
             edits,
-            cost: shape.cost,
+            cost,
         }))
-    }
-
-    const fn at_end(&self, offset: usize) -> bool {
-        offset == self.base + self.buffer.len()
     }
 
     /// Materialize every reading of a completed (or cut-off) history.
@@ -1070,6 +1098,19 @@ impl<'s> Step<'_, 's> {
             derivations: Vec::new(),
         }))
     }
+}
+
+/// Whether dropped text is only a code-fence marker: a run of at least
+/// three backticks or tildes, optionally followed by an info string on the
+/// same line, with surrounding ASCII whitespace.
+fn fence_marker(text: &[u8]) -> bool {
+    let text = text.trim_ascii();
+    let Some(&fence) = text.first().filter(|byte| matches!(byte, b'`' | b'~')) else {
+        return false;
+    };
+    let run = text.iter().take_while(|&&byte| byte == fence).count();
+    let info = &text[run..];
+    run >= 3 && !info.contains(&b'\n') && !(fence == b'`' && info.contains(&b'`'))
 }
 
 /// The rejection of a call attempt whose codec faulted.
@@ -1201,6 +1242,31 @@ struct Table<'s> {
     program: &'s Program,
     threads: ScratchVec<Thread>,
     attempts: ScratchVec<Attempt>,
+    trails: Vec<Trail>,
+}
+
+/// A completed configuration held while closer spellings of its grammar
+/// that follow it are absorbed into it as stray closers
+/// (`tool_call.markup.stray-closer`), so a repeated or stray closer after a
+/// call never leaks into content. Closers may be separated from the call
+/// and from one another by ASCII whitespace (space, tab, newline, carriage
+/// return) of at most [`STRAY_CLOSER_GAP`] bytes; each absorbed span runs
+/// from the call's current end through the closer, whitespace included,
+/// and whitespace after the last absorbed closer stays content. The
+/// completion is reported once the bytes after it cannot continue a gap and
+/// a closer spelling: within `STRAY_CLOSER_GAP` plus the longest literal
+/// bytes of its current end, which the recognizer's lookbehind covers
+/// ([`DialectSet::lookbehind`](crate::tool_call::DialectSet::lookbehind)).
+#[derive(Clone, Copy, Debug)]
+struct Trail {
+    /// The completed configuration; `pos` is the call's current end.
+    thread: Thread,
+    /// The stray-closer trie node of the spelling being matched.
+    node: u32,
+    /// The next byte to examine.
+    at: usize,
+    /// The end of the longest complete spelling matched so far.
+    accepted: Option<usize>,
 }
 
 struct GrammarRuntime<'s> {
@@ -1255,6 +1321,7 @@ impl<'s> Engine<'s> {
                     program,
                     threads: ScratchVec::new(governor),
                     attempts: ScratchVec::new(governor),
+                    trails: Vec::new(),
                 });
             }
         }
@@ -1364,7 +1431,7 @@ impl<'s> Engine<'s> {
                 })?;
             }
         }
-        if self.tables[table].threads.is_empty() {
+        if self.tables[table].threads.is_empty() && self.tables[table].trails.is_empty() {
             return Ok(());
         }
         {
@@ -1389,6 +1456,7 @@ impl<'s> Engine<'s> {
         eof: Option<&GenerationStop>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        self.advance_trails(table, self.fed, eof.is_some(), governor)?;
         let mut live = core::mem::replace(&mut self.out.live, ScratchVec::new(governor));
         merge(&mut live, &mut self.arena, governor)?;
         let mut completed = core::mem::replace(&mut self.out.completed, ScratchVec::new(governor));
@@ -1492,6 +1560,10 @@ impl<'s> Engine<'s> {
                 .as_slice()
                 .iter()
                 .any(|thread| thread.attempt == record.id)
+                || self.tables[table]
+                    .trails
+                    .iter()
+                    .any(|trail| trail.thread.attempt == record.id)
             {
                 index += 1;
                 continue;
@@ -1550,8 +1622,143 @@ impl<'s> Engine<'s> {
         }
         let dangling = matches!(eof, Some(GenerationStop::Length));
         for group in groups {
-            self.emit(table, group, dangling, governor)?;
+            if eof.is_some() {
+                self.emit(table, group, dangling, governor)?;
+            } else {
+                self.tables[table].trails.push(Trail {
+                    thread: group,
+                    node: ROOT,
+                    at: group.pos,
+                    accepted: None,
+                });
+            }
         }
+        self.advance_trails(table, self.fed, eof.is_some(), governor)
+    }
+
+    /// Advance every held completion of `table` over the bytes up to
+    /// `until`, absorbing complete stray-closer spellings, and report each
+    /// completion the following bytes decide (every one when `end`).
+    fn advance_trails(
+        &mut self,
+        table: usize,
+        until: usize,
+        end: bool,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let mut index = 0;
+        while index < self.tables[table].trails.len() {
+            let mut trail = self.tables[table].trails[index];
+            if self.step_trail(table, &mut trail, until, end, governor)? {
+                self.tables[table].trails.remove(index);
+                self.emit(table, trail.thread, false, governor)?;
+            } else {
+                self.tables[table].trails[index] = trail;
+                index += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// Step one held completion up to `until`; whether it is decided.
+    fn step_trail(
+        &mut self,
+        table: usize,
+        trail: &mut Trail,
+        until: usize,
+        end: bool,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        let grammar = self.grammars[self.tables[table].grammar].grammar;
+        let stray = &grammar.stray;
+        loop {
+            if trail.at >= until {
+                if !end {
+                    return Ok(false);
+                }
+                let Some(stop) = trail.accepted else {
+                    return Ok(true);
+                };
+                self.absorb(trail, stop, governor)?;
+                continue;
+            }
+            governor.charge(Resource::Work, K_THREAD)?;
+            let byte = self.buffer.as_slice()[trail.at - self.base];
+            if trail.node == ROOT && matches!(byte, b' ' | b'\t' | b'\n' | b'\r') {
+                // Whitespace between closers: held, up to the bounded gap;
+                // a longer run stays content.
+                if trail.at - trail.thread.pos >= STRAY_CLOSER_GAP {
+                    return Ok(true);
+                }
+                trail.at += 1;
+                continue;
+            }
+            if let Some(child) = stray.step(trail.node, byte) {
+                trail.at += 1;
+                trail.node = child;
+                if stray.accept(child).is_some() {
+                    trail.accepted = Some(trail.at);
+                }
+                if stray.has_children(child) {
+                    continue;
+                }
+            }
+            // The spelling ended (a leaf) or cannot continue: absorb the
+            // longest complete spelling, or decide the completion.
+            let Some(stop) = trail.accepted else {
+                return Ok(true);
+            };
+            self.absorb(trail, stop, governor)?;
+        }
+    }
+
+    /// Absorb the stray closer from a held completion's end to `stop`.
+    fn absorb(
+        &mut self,
+        trail: &mut Trail,
+        stop: usize,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let start = trail.thread.pos;
+        let original = self.buffer.as_slice()[start - self.base..stop - self.base].to_vec();
+        governor.charge(Resource::Work, size(original.len()))?;
+        let HistNode { prev, kind } = self.arena.nodes.as_slice()[trail.thread.hist as usize];
+        let inserted = match kind {
+            HistKind::Edit(index) => {
+                let edit = &self.arena.edits[index as usize];
+                (edit.operator == EditOperator::MissingWrapperClose
+                    && edit.span.start == start
+                    && original.trim_ascii_start() == edit.replacement.as_slice())
+                .then_some(prev)
+            }
+            _ => None,
+        };
+        if let Some(prev) = inserted {
+            // The call's final closer was inserted where whitespace stood,
+            // and that very closer follows the whitespace: it was never
+            // missing. Undo the insertion and read the closer as written.
+            trail.thread.hist = prev;
+            trail.thread.cost = trail
+                .thread
+                .cost
+                .saturating_sub(EditOperator::MissingWrapperClose.rule().cost);
+        } else {
+            let edit = MarkupEdit {
+                operator: EditOperator::DeleteStrayCloser,
+                span: start..stop,
+                original,
+                replacement: Vec::new(),
+            };
+            trail.thread.hist = self.arena.edit(trail.thread.hist, edit, governor)?;
+            trail.thread.cost = trail
+                .thread
+                .cost
+                .saturating_add(EditOperator::DeleteStrayCloser.rule().cost);
+        }
+        trail.thread.pos = stop;
+        trail.at = stop;
+        trail.node = ROOT;
+        trail.accepted = None;
         Ok(())
     }
 
@@ -1688,6 +1895,7 @@ impl<'s> Engine<'s> {
             }
             self.out.clear();
             if *generation == GenerationStop::Length {
+                self.advance_trails(table, end, true, governor)?;
                 self.cut(table, governor)?;
             } else {
                 {
@@ -1705,6 +1913,7 @@ impl<'s> Engine<'s> {
             }
             self.tables[table].threads.clear();
             self.tables[table].attempts.clear();
+            self.tables[table].trails.clear();
         }
         Ok(())
     }

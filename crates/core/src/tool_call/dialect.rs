@@ -360,7 +360,16 @@ impl DialectSet {
         };
         let lookbehind = dialects
             .iter()
-            .map(|dialect| dialect.grammar().longest_literal())
+            .map(|dialect| {
+                let grammar = dialect.grammar();
+                // A completed call waits for whitespace and a stray closer.
+                let gap = if grammar.closers.is_empty() {
+                    0
+                } else {
+                    crate::grammar::cost::STRAY_CLOSER_GAP
+                };
+                grammar.longest_literal() + gap
+            })
             .chain(
                 markers
                     .iter()
@@ -404,8 +413,10 @@ impl DialectSet {
 
     /// How many bytes behind the input a repair or delimiter replay can
     /// reach: one more than the longest literal, delimiter or marker of any
-    /// dialect. The turn-level segmentation settles each offset once the
-    /// input is this far past it.
+    /// dialect, plus [`STRAY_CLOSER_GAP`](crate::grammar::cost::STRAY_CLOSER_GAP)
+    /// for a dialect that declares closers (a completed call absorbs stray
+    /// closers separated from it by that much whitespace). The turn-level
+    /// segmentation settles each offset once the input is this far past it.
     ///
     /// ```
     /// use purrassist_core::grammar::Grammar;

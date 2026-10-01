@@ -5,8 +5,14 @@
 # a "name" member and an "arguments" member, in either order. The arguments
 # value is read by the self-delimiting json codec (exact number spellings;
 # stringified arguments are decoded and flagged). Text before a call is
-# content. First-party grammar; see docs/tool-calls/dialects/hermes.v1.md
-# for the public sources and for why a "parameters" key is not accepted.
+# content. Inside the wrapper, text before the JSON object (a preamble or a
+# code-fence opener such as ```json) and a code-fence closer after it are
+# dropped: a fence marker is a markup loss (tool_call.extract.fence), any
+# other dropped text a data loss (tool_call.extract.prose). Text after the
+# object that is not a fence marker is never dropped, so trailing prose is
+# not swallowed into a call. First-party grammar; see
+# docs/tool-calls/dialects/hermes.v1.md for the public sources and for why a
+# "parameters" key is not accepted.
 grammar "hermes.v1";
 
 reasoning "<think>" "</think>";
@@ -16,14 +22,19 @@ closer call-end = "</tool_call>" | "</tool_calls>";
 tool-name = /[A-Za-z0-9_.:-]+/;
 ws = /[ \t\r\n]+/;
 json-string = /"([^"\\\x00-\x1F]|\\["\\\/bfnrt]|\\u[0-9A-Fa-f]{4})*"/;
+# Text before the JSON object: it starts with neither whitespace nor `{`
+# (so canonical markup never holds any) and runs to the object's `{`.
+preamble = /[^{<\s][^{<]*/;
+# A code-fence marker (no info string: it closes a fence).
+fence = /`{3,}|~{3,}/;
 
 name-member = "\"name\"" ws? ":" ws? "\"" name:tool-name "\"";
 arguments-member = "\"arguments\"" ws? ":"
                    arguments:slot(json, "</tool_call>", "</tool_calls>");
 
-call = "<tool_call>" ws? "{" ws?
+call = "<tool_call>" ws? (dropped:preamble)? "{" ws?
        (name-member ws? "," ws? arguments-member | arguments-member ws? "," ws? name-member)
-       ws? "}" ws? call-end;
+       ws? "}" ws? (dropped:fence ws?)? call-end;
 
 result = "<tool_response>" content:until("</tool_response>") "</tool_response>";
 

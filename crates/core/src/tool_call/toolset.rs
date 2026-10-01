@@ -269,9 +269,29 @@ impl CompiledTool {
     /// ```
     #[must_use]
     pub const fn policy(&self) -> RepairPolicy {
+        self.policy_for(self.effects)
+    }
+
+    /// The repair policy this tool would have with `effects` in place of
+    /// its own: explicit, else derived from `effects`. Infallible.
+    ///
+    /// Per-request effects overrides
+    /// ([`Policies::effects`](super::Policies::effects)) resolve the policy
+    /// through this, so an override changes the policy of a tool without an
+    /// explicit one exactly as declaring those effects would.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, tool_call::{Effects, RepairPolicy, ToolDefinition, ToolSet}};
+    /// let tools = ToolSet::compile([ToolDefinition::new("rm")], Budget::default()).unwrap();
+    /// let rm = tools.tool("rm").unwrap();
+    /// assert_eq!(rm.policy_for(Effects::ReadOnly), RepairPolicy::Tolerant);
+    /// assert_eq!(rm.policy_for(Effects::Mutating), RepairPolicy::Structural);
+    /// ```
+    #[must_use]
+    pub const fn policy_for(&self, effects: Effects) -> RepairPolicy {
         match self.explicit_policy {
             Some(policy) => policy,
-            None => self.effects.default_policy(),
+            None => effects.default_policy(),
         }
     }
 

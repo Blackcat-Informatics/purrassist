@@ -383,7 +383,7 @@ fn undeclared_opener_is_not_boundary() {
     let call = one_call(&turn);
     assert_eq!(call.arguments.root.to_json(), r#"{"a":"1","b":"2"}"#);
     assert_eq!(call.arguments.tool, None);
-    assert_eq!(operators(call), [EditOperator::InsertCloser]);
+    assert_eq!(operators(call), [EditOperator::UndeclaredParameterBoundary]);
 }
 
 #[test]
@@ -408,9 +408,12 @@ fn whole_json_body_accepted_only_when_entire() {
     let (turn, _) = recognize(&qwen_set, input.as_bytes());
     let call = one_call(&turn);
     assert_eq!(call.arguments.root.to_json(), r#"{"path":"a"}"#);
-    assert_eq!(operators(call), [EditOperator::DeleteStrayCloser]);
+    assert_eq!(
+        operators(call),
+        [EditOperator::JsonBody, EditOperator::DeleteStrayCloser]
+    );
     let at = input.find("</parameter>").expect("stray");
-    assert_eq!(call.edits[0].span, at..at + "</parameter>".len());
+    assert_eq!(call.edits[1].span, at..at + "</parameter>".len());
     assert_eq!(call.closure, Closure::Repaired);
     // Anything else after the object rejects the call.
     for input in [
@@ -454,7 +457,7 @@ fn stringified_arguments_decoded_then_flagged() {
     assert_eq!(&input[key], r#"\"path\""#);
     let edit = &call.edits[0];
     assert_eq!(edit.operator, EditOperator::StringifiedArguments);
-    assert_eq!(edit.rule().id, "tool_call.arguments.stringified");
+    assert_eq!(edit.rule().id, "tool_call.arguments.decode-string");
     let string = input.find("\"{").expect("string")..input.rfind("}\"").expect("end") + 2;
     assert_eq!(edit.span, string);
     assert_eq!(call.closure, Closure::Closed);

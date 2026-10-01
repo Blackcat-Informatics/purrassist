@@ -572,8 +572,8 @@ fn edit_operators_repair_mini_grammar() {
     let call = one_call(&turn);
     assert_eq!(call.arguments.root.to_json(), r#"{"a":"1","b":"2"}"#);
     assert_eq!(call.closure, Closure::Repaired);
-    assert_eq!(operators(call), [EditOperator::InsertCloser]);
-    let edit = edit_of(call, EditOperator::InsertCloser);
+    assert_eq!(operators(call), [EditOperator::MissingFunctionClose]);
+    let edit = edit_of(call, EditOperator::MissingFunctionClose);
     assert_eq!(
         (edit.span.clone(), edit.replacement.as_slice()),
         (22..22, &b"</arg>"[..])
@@ -581,8 +581,8 @@ fn edit_operators_repair_mini_grammar() {
     assert_eq!(call.cost, cost::INSERT_CLOSER);
     assert_operator(
         &turn,
-        EditOperator::InsertCloser,
-        ("tool_call.markup.missing-closer", 2, false, None),
+        EditOperator::MissingFunctionClose,
+        ("tool_call.markup.missing-function-close", 2, false, None),
     );
 
     // Closers-only body: both plural closers are stray and deleted.
@@ -1130,7 +1130,11 @@ fn stop_sequence_reinserts_expected_closer() {
         let turn = recognize(&mini, input, stop.clone());
         let call = one_call(&turn);
         assert_eq!(call.closure, Closure::Unterminated, "{stop:?}");
-        assert_eq!(operators(call), [EditOperator::InsertCloser], "{stop:?}");
+        assert_eq!(
+            operators(call),
+            [EditOperator::MissingClosersAtEnd],
+            "{stop:?}"
+        );
     }
 }
 
@@ -1149,7 +1153,7 @@ fn length_vs_stop_partial_call_distinguished() {
     let turn = recognize(&mini, input, GenerationStop::Stop);
     let call = one_call(&turn);
     assert_eq!(call.closure, Closure::Unterminated);
-    assert_eq!(operators(call), [EditOperator::InsertCloser; 3]);
+    assert_eq!(operators(call), [EditOperator::MissingClosersAtEnd; 3]);
 
     // Truncation never rescues malformed markup, and an open call that no
     // closer can complete is rejected under a non-length stop.

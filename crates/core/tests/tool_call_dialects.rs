@@ -116,7 +116,8 @@ fn calls(turn: &RecognizedTurn) -> Vec<&RawCall> {
 }
 
 /// A call read as canonical markup: closed, at no cost, with no edit but
-/// framing newlines and the stringified-arguments decoding.
+/// the dialect's own readings (framing newlines, the stringified-arguments
+/// decoding, a whole-JSON body, nested parameter elements).
 fn assert_canonical(call: &RawCall, context: &str) {
     assert_eq!(call.closure, Closure::Closed, "{context}");
     assert_eq!(call.cost, 0, "{context}");
@@ -129,7 +130,10 @@ fn assert_canonical(call: &RawCall, context: &str) {
         assert!(
             matches!(
                 edit.operator,
-                EditOperator::FramingNewline | EditOperator::StringifiedArguments
+                EditOperator::FramingNewline
+                    | EditOperator::StringifiedArguments
+                    | EditOperator::JsonBody
+                    | EditOperator::NestedParameter
             ),
             "{context}: unexpected edit {edit:?}"
         );

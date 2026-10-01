@@ -35,9 +35,16 @@ repository.
 - The arguments value is read by the self-delimiting `json` codec: exact
   number spellings, member order and duplicates kept. A JSON string holding
   JSON (stringified arguments) is decoded and flagged
-  (`arguments_were_stringified`, `tool_call.arguments.stringified`). When
+  (`arguments_were_stringified`, `tool_call.arguments.decode-string`). When
   `"name"` comes first, the codec knows the declared tool.
 - Text before a call (a preamble) and between calls is content.
+- Inside the wrapper, text before the JSON object (a preamble such as
+  `Sure:` or a code-fence opener such as ```` ```json ````) and a code-fence
+  closer after it are dropped (`dropped:` captures): a fence marker is a
+  markup loss (`tool_call.extract.fence`), any other dropped text a data loss
+  (`tool_call.extract.prose`) that keeps the call at most a best guess. Other
+  text after the object is never dropped, so trailing prose is not
+  swallowed into a call.
 - `result`: `<tool_response>CONTENT</tool_response>`.
 - `declaration`: one tool signature object
   `{"type": "function", "function": {"name": ..., "description": ...,

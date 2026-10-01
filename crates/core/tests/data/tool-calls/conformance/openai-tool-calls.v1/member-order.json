@@ -1,0 +1,54 @@
+{
+  "description": "A tool_calls array whose elements list their members in other orders: type first with arguments before name, an element without an id, and an element without a type. Ids are kept where present.",
+  "markup": "[{\"type\": \"function\", \"function\": {\"arguments\": \"{\\\"city\\\": \\\"Lima\\\"}\", \"name\": \"get_weather\"}, \"id\": \"call_1\"}, {\"function\": {\"name\": \"get_weather\", \"arguments\": \"{\\\"city\\\": \\\"Oslo\\\", \\\"unit\\\": \\\"celsius\\\"}\"}, \"type\": \"function\"}, {\"function\": {\"name\": \"get_weather\", \"arguments\": \"{\\\"city\\\": \\\"Quito\\\"}\"}, \"id\": \"call_3\"}]",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "get_weather",
+      "arguments": {
+        "city": "Lima"
+      },
+      "id": "call_1"
+    },
+    {
+      "name": "get_weather",
+      "arguments": {
+        "city": "Oslo",
+        "unit": "celsius"
+      }
+    },
+    {
+      "name": "get_weather",
+      "arguments": {
+        "city": "Quito"
+      },
+      "id": "call_3"
+    }
+  ]
+}

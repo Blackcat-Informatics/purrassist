@@ -1,10 +1,74 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+// `unreachable_pub` and `redundant_pub_crate` disagree on the right
+// visibility for items of a crate-private module
+// (https://github.com/rust-lang/rust-clippy/issues/6188); the shared name
+// costs are reused by tool-call resolution, so `pub(crate)` (matching
+// `unreachable_pub`) wins, as in `pattern::derive`.
+#![allow(clippy::redundant_pub_crate)]
 use super::super::layout::Dependency;
 use super::{Walk, size};
 use crate::contract::{Effort, Resource, StopReason};
 use crate::json::{Member, Node, ParseFailure, Value, pointer_segment};
 use std::collections::BTreeSet;
+
+/// Cost of a name match whose comparison keys (case-folded, compatibility
+/// normalized) are equal: the cheapest approximate name match.
+pub(crate) const FOLDED_NAME_COST: u64 = 2;
+/// Cost of a name match equal after also removing punctuation and
+/// separators.
+pub(crate) const DEPUNCTUATED_NAME_COST: u64 = 3;
+/// Base cost of a name match within a small edit distance; the distance is
+/// added.
+pub(crate) const EDITED_NAME_COST: u64 = 5;
+/// Cost of `json.key.relocate`: moving a required member out of a nested
+/// object to where it is required.
+pub(crate) const KEY_RELOCATE_COST: u64 = 12;
+/// Cost of removing a member no declaration admits
+/// (`json.key.remove-additional`, and the tool-call drop of an unknown
+/// parameter under a drop-with-loss policy).
+pub(crate) const KEY_REMOVE_COST: u64 = 50;
+
+/// The shared approximate-name cost of `json.key.match` and
+/// `json.enum.match` (and of every rule that reuses them): `None` when the
+/// names are byte-equal or too far apart, otherwise
+/// [`FOLDED_NAME_COST`] for equal comparison keys,
+/// [`DEPUNCTUATED_NAME_COST`] for keys equal without punctuation and
+/// separators, and [`EDITED_NAME_COST`] plus the Damerau–Levenshtein
+/// distance for keys at most two edits apart (and at most a third of the
+/// longer key's length, counting at least three).
+///
+/// Charges `Work` for both names' bytes and the edit distance.
+///
+/// # Errors
+/// Returns the governor's exhaustion or cancellation reason.
+pub(crate) fn name_cost(
+    actual: &str,
+    expected: &str,
+    governor: &mut crate::contract::Governor,
+) -> Result<Option<u64>, StopReason> {
+    governor.charge(
+        Resource::Work,
+        size(actual.len().saturating_add(expected.len())),
+    )?;
+    if actual == expected {
+        return Ok(None);
+    }
+    let left = crate::text::comparison_key(actual);
+    let right = crate::text::comparison_key(expected);
+    if left == right {
+        return Ok(Some(FOLDED_NAME_COST));
+    }
+    if crate::text::depunctuate(&left) == crate::text::depunctuate(&right) {
+        return Ok(Some(DEPUNCTUATED_NAME_COST));
+    }
+    let distance = crate::matching::damerau_levenshtein(&left, &right, governor)?;
+    let length = left.chars().count().max(right.chars().count());
+    Ok(
+        (distance <= 2 && distance.saturating_mul(3) <= length.max(3))
+            .then_some(EDITED_NAME_COST + size(distance)),
+    )
+}
 
 impl Walk<'_, '_> {
     /// Walk the schema alongside `node`, proposing local repairs and
@@ -361,27 +425,7 @@ impl Walk<'_, '_> {
         Ok(())
     }
     fn name_cost(&mut self, actual: &str, expected: &str) -> Result<Option<u64>, StopReason> {
-        self.governor.charge(
-            Resource::Work,
-            size(actual.len().saturating_add(expected.len())),
-        )?;
-        if actual == expected {
-            return Ok(None);
-        }
-        let left = crate::text::comparison_key(actual);
-        let right = crate::text::comparison_key(expected);
-        if left == right {
-            return Ok(Some(2));
-        }
-        if crate::text::depunctuate(&left) == crate::text::depunctuate(&right) {
-            return Ok(Some(3));
-        }
-        let distance = crate::matching::damerau_levenshtein(&left, &right, self.governor)?;
-        let length = left.chars().count().max(right.chars().count());
-        Ok(
-            (distance <= 2 && distance.saturating_mul(3) <= length.max(3))
-                .then_some(5 + size(distance)),
-        )
+        name_cost(actual, expected, self.governor)
     }
     fn object_proposals(
         &mut self,
@@ -517,7 +561,7 @@ impl Walk<'_, '_> {
                 (
                     Node::new(Value::Object(replacement)),
                     "json.key.remove-additional",
-                    50,
+                    KEY_REMOVE_COST,
                     false,
                 ),
             )?;
@@ -710,7 +754,7 @@ impl Walk<'_, '_> {
                                 (
                                     Node::new(Value::Object(replacement)),
                                     "json.key.relocate",
-                                    12,
+                                    KEY_RELOCATE_COST,
                                     false,
                                 ),
                             )?;

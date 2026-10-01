@@ -21,8 +21,10 @@
 //! - an `until` body is empty;
 //! - an alternation picks, by the seed, among the alternatives holding the
 //!   most call captures (a name first), and a repetition holding captures is
-//!   emitted once (once per parameter when it holds `param-name:`), while
-//!   other repetitions emit their minimum plus a seeded optional extra.
+//!   emitted once (once per parameter when it holds `param-name:`), a
+//!   repetition holding a `dropped:` capture its minimum (dropped text is
+//!   never part of a well-formed call), and other repetitions their minimum
+//!   plus a seeded optional extra.
 //!
 //! Every choice comes from a `SplitMix64` sequence seeded by
 //! [`WitnessOptions::seed`], so equal inputs give equal witnesses. Each
@@ -382,6 +384,7 @@ struct Holds {
     name: bool,
     count: usize,
     parameters: bool,
+    dropped: bool,
 }
 
 impl<'g> Printer<'g> {
@@ -426,9 +429,13 @@ impl<'g> Printer<'g> {
                 match kind {
                     CaptureKind::Name => holds.name = true,
                     CaptureKind::ParamName => holds.parameters = true,
+                    CaptureKind::Dropped => holds.dropped = true,
                     _ => {}
                 }
-                if !matches!(kind, CaptureKind::Content | CaptureKind::Reasoning) {
+                if !matches!(
+                    kind,
+                    CaptureKind::Content | CaptureKind::Reasoning | CaptureKind::Dropped
+                ) {
                     holds.count += 1;
                 }
                 self.collect_holds(inner, holds);
@@ -542,7 +549,10 @@ impl<'g> Printer<'g> {
             self.param = None;
             return Ok(());
         }
-        let count = if holds.count > 0 {
+        let count = if holds.dropped {
+            // Text a call drops is never part of a well-formed call.
+            min
+        } else if holds.count > 0 {
             min.max(1)
         } else {
             let extra = u32::from(max.is_none_or(|max| max > min) && self.rng.coin());

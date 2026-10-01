@@ -29,21 +29,29 @@ first-party.
 
 - `call`: one `tool_calls` element,
   `{"id": ID, "type": "function", "function": {"name": NAME, "arguments": ARGS}}`,
-  with members in that order and JSON whitespace between tokens. `ID` is
-  captured (`id:`).
+  with its three members in any order and JSON whitespace between tokens.
+  `"id"` may be missing (an id-less element is still a call; the recovery
+  operation's id policy assigns its id) and `"type"` may be missing, but
+  when present it is `"function"`. `"name"` and `"arguments"` come in either
+  order inside `"function"`. `ID` is captured (`id:`).
 - `ARGS` is read by the self-delimiting `json` codec. The canonical form, a
   string of JSON, is decoded and flagged (`arguments_were_stringified`,
-  `tool_call.arguments.stringified`); spans inside it map back through the
+  `tool_call.arguments.decode-string`); spans inside it map back through the
   escapes to the source bytes. A plain JSON object is read as it is.
 - The three text forms of the output: a single element; a bare `tool_calls`
   array; an assistant message object `{"role": "assistant", "content": ...,
   "tool_calls": [...]}`. Each element is one call, in source order; the
   envelope, brackets and separators are content around the calls.
 - Openers: a call attempt opens only where an object's first member is
-  `"id"`. The opener literals spell that start compactly (`{"id"`), with one
-  space (`{ "id"`), and pretty-printed on a new line indented by 0 to 16
-  spaces in steps of two or by 1 to 4 tabs. A message envelope, a tool
-  message, or other JSON in content therefore never opens a call attempt.
+  `"id"`, `"function"`, or the whole member `"type": "function"` (compact
+  or with one space after the colon). The opener literals spell each start
+  compactly (`{"id"`), with one space (`{ "id"`), and pretty-printed on a
+  new line indented by 0 to 16 spaces in steps of two or by 1 to 4 tabs. A
+  message envelope, a tool message, a content part (`{"type": "text", ...}`)
+  or other JSON in content therefore never opens a call attempt; an echoed
+  request `tools` entry (`{"type": "function", "function": {"name": ...,
+  "parameters": ...}}`) does open one, and is rejected at its `parameters`
+  member.
 - `result`: one request tool message,
   `{"role": "tool", "tool_call_id": ID, "content": CONTENT}`, where
   `CONTENT` is a JSON string or an array of `{"type": "text", "text": ...}`
@@ -70,10 +78,10 @@ recorded with its JSON rule ids (covered by the repair goldens).
 
 ## Deliberately not accepted
 
-- Element members in another order, or extra members (for example a
-  streaming `index`).
-- An element without `id` or `type`, the legacy `function_call` message
-  field, and non-function (custom) tool calls.
+- Extra members (for example a streaming `index`), and a `"type"` other
+  than `"function"`.
+- An element without `function`, the legacy `function_call` message field,
+  and non-function (custom) tool calls.
 - Pretty-printed starts with other indentation or CRLF line ends (the
   object is content, not a call attempt).
 - The message's `content` text is not decoded into prose; it stays inside

@@ -12,6 +12,9 @@ use crate::digest::Digest;
 use crate::json::{Node, ParseFailure, Value};
 use crate::scan;
 use crate::search::{Acceptance, Change, Ledger, Proposals, Search, SearchState};
+pub(crate) use proposals::{
+    EDITED_NAME_COST, FOLDED_NAME_COST, KEY_RELOCATE_COST, KEY_REMOVE_COST, name_cost,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Recovery policy; effort changes search bounds, never the schema's constraints.

@@ -7,11 +7,14 @@
 //! stable rule id, a cost (see [`super::cost`]), a guess flag, whether it
 //! admits a single or multiple readings, what grounds it, and the kind of
 //! loss it produces. [`OPERATORS`] lists them; the tool-call rule registry
-//! imports this table rather than restating it.
+//! ([`crate::tool_call::RULES`]) imports this table rather than restating it,
+//! and every rule id appears in exactly one row.
 //!
 //! | Operator | Rule id | Cost | Guess | Readings | Grounding | Loss | Repair |
 //! | --- | --- | --- | --- | --- | --- | --- | --- |
-//! | [`InsertCloser`](EditOperator::InsertCloser) | `tool_call.markup.missing-closer` | 2 | no | single | syntax | none | yes |
+//! | [`MissingFunctionClose`](EditOperator::MissingFunctionClose) | `tool_call.markup.missing-function-close` | 2 | no | single | syntax | none | yes |
+//! | [`MissingWrapperClose`](EditOperator::MissingWrapperClose) | `tool_call.markup.missing-wrapper-close` | 2 | no | single | syntax | none | yes |
+//! | [`MissingClosersAtEnd`](EditOperator::MissingClosersAtEnd) | `tool_call.markup.missing-closers-at-end` | 2 | no | single | syntax | none | yes |
 //! | [`DeleteStrayCloser`](EditOperator::DeleteStrayCloser) | `tool_call.markup.stray-closer` | 3 | no | single | syntax | markup | yes |
 //! | [`CloserVariant`](EditOperator::CloserVariant) | `tool_call.markup.closer-variant` | 1 | no | single | syntax | markup | yes |
 //! | [`TerminalConfusable`](EditOperator::TerminalConfusable) | `tool_call.markup.terminal-confusable` | 1 | no | single | syntax | markup | yes |
@@ -20,29 +23,52 @@
 //! | [`ReasoningEmbeddedCall`](EditOperator::ReasoningEmbeddedCall) | `tool_call.reasoning.embedded-call` | 0 | yes | multiple | syntax | none | no |
 //! | [`ReasoningUnterminated`](EditOperator::ReasoningUnterminated) | `tool_call.reasoning.unterminated` | 0 | no | single | syntax | data | no |
 //! | [`MissingParameterClose`](EditOperator::MissingParameterClose) | `tool_call.markup.missing-parameter-close` | 2 | no | single | definition | none | yes |
+//! | [`ParameterClosedByElement`](EditOperator::ParameterClosedByElement) | `tool_call.markup.parameter-closed-by-element` | 2 | no | single | syntax | none | yes |
+//! | [`UndeclaredParameterBoundary`](EditOperator::UndeclaredParameterBoundary) | `tool_call.markup.undeclared-parameter-boundary` | 2 | yes | multiple | syntax | none | yes |
+//! | [`ClosersOnlyEmpty`](EditOperator::ClosersOnlyEmpty) | `tool_call.markup.closers-only-empty` | 3 | no | single | definition | markup | yes |
+//! | [`NestedParameter`](EditOperator::NestedParameter) | `tool_call.markup.nested-parameter` | 0 | no | single | definition | none | no |
+//! | [`JsonBody`](EditOperator::JsonBody) | `tool_call.markup.json-body` | 0 | no | single | syntax | none | no |
+//! | [`ArrayItem`](EditOperator::ArrayItem) | `tool_call.xml.array-item` | 0 | no | single | definition | none | no |
+//! | [`TrimNonverbatim`](EditOperator::TrimNonverbatim) | `tool_call.value.trim-nonverbatim` | 0 | no | single | definition | none | no |
 //! | [`FramingNewline`](EditOperator::FramingNewline) | `tool_call.xml.framing-newline` | 0 | no | single | syntax | markup | no |
-//! | [`StringifiedArguments`](EditOperator::StringifiedArguments) | `tool_call.arguments.stringified` | 0 | no | single | syntax | none | no |
+//! | [`StringifiedArguments`](EditOperator::StringifiedArguments) | `tool_call.arguments.decode-string` | 0 | no | single | syntax | none | no |
+//! | [`ExtractProse`](EditOperator::ExtractProse) | `tool_call.extract.prose` | 2 | no | single | syntax | data | yes |
+//! | [`ExtractFence`](EditOperator::ExtractFence) | `tool_call.extract.fence` | 1 | no | single | syntax | markup | yes |
+//! | [`ContextFencedExample`](EditOperator::ContextFencedExample) | `tool_call.context.fenced-example` | 0 | yes | multiple | syntax | none | no |
 //! | [`JsonComment`](EditOperator::JsonComment) | `json.syntax.comment` | 1 | no | single | syntax | markup | no |
 //! | [`JsonMissingValue`](EditOperator::JsonMissingValue) | `json.syntax.missing-value` | 4 | yes | multiple | syntax | none | no |
 //! | [`JsonLiteralCase`](EditOperator::JsonLiteralCase) | `json.syntax.literal-case` | 1 | no | single | syntax | markup | no |
 //! | [`JsonBareString`](EditOperator::JsonBareString) | `json.syntax.bare-string` | 4 | yes | multiple | syntax | none | no |
 //! | [`JsonBareKey`](EditOperator::JsonBareKey) | `json.syntax.bare-key` | 1 | no | single | syntax | none | no |
 //! | [`JsonString`](EditOperator::JsonString) | `json.syntax.string` | 1 | no | single | syntax | markup | no |
-//! | [`JsonUnterminatedString`](EditOperator::JsonUnterminatedString) | `json.syntax.string` | 4 | yes | multiple | syntax | none | no |
+//! | [`JsonUnterminatedString`](EditOperator::JsonUnterminatedString) | `json.syntax.unterminated-string` | 4 | yes | multiple | syntax | none | no |
 //! | [`JsonLiteralEscape`](EditOperator::JsonLiteralEscape) | `json.syntax.literal-escape` | 4 | yes | multiple | syntax | none | no |
 //! | [`JsonMissingColon`](EditOperator::JsonMissingColon) | `json.syntax.missing-colon` | 1 | no | single | syntax | none | no |
 //! | [`JsonMissingComma`](EditOperator::JsonMissingComma) | `json.syntax.missing-comma` | 1 | no | single | syntax | none | no |
 //! | [`JsonTrailingComma`](EditOperator::JsonTrailingComma) | `json.syntax.trailing-comma` | 1 | no | single | syntax | markup | no |
 //! | [`JsonCloseContainer`](EditOperator::JsonCloseContainer) | `json.syntax.close-container` | 1 | no | single | syntax | none | no |
 //!
-//! The first eight operators are the engine's markup repairs. The rest are
-//! recorded by argument codecs ([`super::codec`]): the XML-parameter rules,
-//! the stringified-arguments decoding, and one operator per tolerant JSON
-//! recovery rule of [`crate::json::incremental`] (same rule ids; the
-//! unterminated-string case of `json.syntax.string` is a guess and so its own
-//! operator). *Repair* marks the operators that change call markup and so
-//! make a call [`Closure::Repaired`](crate::tool_call::Closure::Repaired);
-//! the others record how argument bytes were read.
+//! The first seven operators are the engine's markup repairs: a missing
+//! closer inserted mid-message is a *function* close when more of the
+//! production follows it and a *wrapper* close when it ends the production
+//! (both symmetric with a missing `</parameter>`); closers inserted at the
+//! end of output under a non-length stop are
+//! `tool_call.markup.missing-closers-at-end`, usable only when the call is
+//! otherwise complete (D10, enforced by tool-call resolution). The reasoning
+//! operators are recorded by the turn layer, the `extract` operators for a
+//! call's `dropped:` captures (a fence marker is markup; any other dropped
+//! text inside a call is data), and `tool_call.context.fenced-example` for a
+//! call recognized inside fenced code, an inline code span or a block quote.
+//! The rest are recorded by argument codecs ([`super::codec`]): the
+//! `xml-params` rules, the stringified-arguments decoding, and one operator
+//! per tolerant JSON recovery rule of [`crate::json::incremental`] (same rule
+//! ids, except that an *unterminated* string, which the JSON engine records
+//! as a guessed `json.syntax.string`, is its own rule
+//! `json.syntax.unterminated-string`: it has its own cost and guess flag, and
+//! one id names one rule). *Repair* marks the operators that change call
+//! markup and so make a call
+//! [`Closure::Repaired`](crate::tool_call::Closure::Repaired); the others
+//! record how bytes were read.
 //!
 //! ```
 //! use purrassist_core::grammar::edit::{EditOperator, LossKind, OPERATORS};
@@ -50,7 +76,7 @@
 //! assert_eq!(stray.id, "tool_call.markup.stray-closer");
 //! assert_eq!(stray.loss, Some(LossKind::Markup));
 //! assert!(!stray.guess && stray.repair);
-//! assert_eq!(OPERATORS.len(), 23);
+//! assert_eq!(OPERATORS.len(), 35);
 //! let framing = EditOperator::FramingNewline.rule();
 //! assert_eq!((framing.loss, framing.repair), (Some(LossKind::Markup), false));
 //! ```
@@ -87,8 +113,14 @@ pub enum LossKind {
 /// One weighted edit operator of the grammar engine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum EditOperator {
-    /// Insert a missing closer terminal.
-    InsertCloser,
+    /// Insert a missing closer mid-message that more of the production
+    /// follows (a function or parameter element's closer).
+    MissingFunctionClose,
+    /// Insert a missing closer mid-message that ends the production (the
+    /// call's outermost wrapper closer).
+    MissingWrapperClose,
+    /// Insert a missing closer at the end of output under a non-length stop.
+    MissingClosersAtEnd,
     /// Delete a closer spelling the grammar does not expect here.
     DeleteStrayCloser,
     /// Accept a declared variant spelling of the expected closer.
@@ -106,10 +138,39 @@ pub enum EditOperator {
     /// End an open XML parameter value at the opener of a parameter the
     /// call's tool declares (the value's `</parameter>` is missing).
     MissingParameterClose,
+    /// End an open XML parameter value (or nested parameter object) where
+    /// its enclosing element closes (the `</parameter>` is missing).
+    ParameterClosedByElement,
+    /// End an open XML parameter value at a `<parameter=` opener of a call
+    /// that names no declared tool: the opener may also be text of the
+    /// value, so the boundary is a guess.
+    UndeclaredParameterBoundary,
+    /// Read a function body made only of closers and whitespace as no
+    /// arguments (`{}`); usable only when the tool requires no parameter.
+    ClosersOnlyEmpty,
+    /// Read nested `<parameter=` elements as an object parameter's members.
+    NestedParameter,
+    /// Read a whole JSON object placed directly in a function body as the
+    /// arguments.
+    JsonBody,
+    /// Read an array parameter's XML value that is not a JSON array as one
+    /// item of the array.
+    ArrayItem,
+    /// Trim whitespace around a value of a non-verbatim declared type
+    /// (integer, number, boolean, enumeration) beyond the framing newlines.
+    TrimNonverbatim,
     /// Consume one framing newline on one side of an XML parameter value.
     FramingNewline,
     /// Decode arguments that arrived as a JSON string holding JSON.
     StringifiedArguments,
+    /// Drop prose inside a call's markup (a `dropped:` capture).
+    ExtractProse,
+    /// Drop a code-fence marker inside a call's markup (a `dropped:`
+    /// capture that is only a fence marker).
+    ExtractFence,
+    /// A call recognized inside fenced code, an inline code span or a block
+    /// quote: it may be an example rather than a call.
+    ContextFencedExample,
     /// JSON recovery: drop a comment.
     JsonComment,
     /// JSON recovery: insert `null` where a value is missing.
@@ -196,7 +257,13 @@ const fn note(
     rule(operator, id, cost, guess, Grounding::Syntax, loss)
 }
 
-/// A markup repair of the engine.
+/// A definition-grounded operator that records a reading rather than
+/// repairing markup.
+const fn reading(operator: EditOperator, id: &'static str) -> OperatorRule {
+    rule(operator, id, 0, false, Grounding::Definition, None)
+}
+
+/// A markup repair.
 const fn repair(
     operator: EditOperator,
     id: &'static str,
@@ -210,11 +277,37 @@ const fn repair(
     }
 }
 
-/// Every grammar edit operator, in [`EditOperator`] order.
-pub static OPERATORS: &[OperatorRule] = &[
+/// A guessed markup repair.
+const fn guessed_repair(operator: EditOperator, id: &'static str, cost: u64) -> OperatorRule {
+    OperatorRule {
+        repair: true,
+        ..rule(operator, id, cost, true, Grounding::Syntax, None)
+    }
+}
+
+/// The number of [`EditOperator`]s.
+pub const OPERATOR_COUNT: usize = 35;
+
+/// Every grammar edit operator, in [`EditOperator`] order, as a constant
+/// table (the tool-call rule registry is built from it at compile time).
+pub(crate) const OPERATOR_TABLE: [OperatorRule; OPERATOR_COUNT] = [
     repair(
-        EditOperator::InsertCloser,
-        "tool_call.markup.missing-closer",
+        EditOperator::MissingFunctionClose,
+        "tool_call.markup.missing-function-close",
+        cost::INSERT_CLOSER,
+        Grounding::Syntax,
+        None,
+    ),
+    repair(
+        EditOperator::MissingWrapperClose,
+        "tool_call.markup.missing-wrapper-close",
+        cost::INSERT_CLOSER,
+        Grounding::Syntax,
+        None,
+    ),
+    repair(
+        EditOperator::MissingClosersAtEnd,
+        "tool_call.markup.missing-closers-at-end",
         cost::INSERT_CLOSER,
         Grounding::Syntax,
         None,
@@ -275,6 +368,41 @@ pub static OPERATORS: &[OperatorRule] = &[
         Grounding::Definition,
         None,
     ),
+    repair(
+        EditOperator::ParameterClosedByElement,
+        "tool_call.markup.parameter-closed-by-element",
+        cost::INSERT_CLOSER,
+        Grounding::Syntax,
+        None,
+    ),
+    guessed_repair(
+        EditOperator::UndeclaredParameterBoundary,
+        "tool_call.markup.undeclared-parameter-boundary",
+        cost::INSERT_CLOSER,
+    ),
+    repair(
+        EditOperator::ClosersOnlyEmpty,
+        "tool_call.markup.closers-only-empty",
+        cost::DELETE_STRAY_CLOSER,
+        Grounding::Definition,
+        Some(LossKind::Markup),
+    ),
+    reading(
+        EditOperator::NestedParameter,
+        "tool_call.markup.nested-parameter",
+    ),
+    note(
+        EditOperator::JsonBody,
+        "tool_call.markup.json-body",
+        0,
+        false,
+        None,
+    ),
+    reading(EditOperator::ArrayItem, "tool_call.xml.array-item"),
+    reading(
+        EditOperator::TrimNonverbatim,
+        "tool_call.value.trim-nonverbatim",
+    ),
     note(
         EditOperator::FramingNewline,
         "tool_call.xml.framing-newline",
@@ -284,9 +412,30 @@ pub static OPERATORS: &[OperatorRule] = &[
     ),
     note(
         EditOperator::StringifiedArguments,
-        "tool_call.arguments.stringified",
+        "tool_call.arguments.decode-string",
         cost::STRINGIFIED_ARGUMENTS,
         false,
+        None,
+    ),
+    repair(
+        EditOperator::ExtractProse,
+        "tool_call.extract.prose",
+        cost::EXTRACT_PROSE,
+        Grounding::Syntax,
+        Some(LossKind::Data),
+    ),
+    repair(
+        EditOperator::ExtractFence,
+        "tool_call.extract.fence",
+        cost::EXTRACT_FENCE,
+        Grounding::Syntax,
+        Some(LossKind::Markup),
+    ),
+    note(
+        EditOperator::ContextFencedExample,
+        "tool_call.context.fenced-example",
+        0,
+        true,
         None,
     ),
     note(
@@ -333,7 +482,7 @@ pub static OPERATORS: &[OperatorRule] = &[
     ),
     note(
         EditOperator::JsonUnterminatedString,
-        "json.syntax.string",
+        "json.syntax.unterminated-string",
         cost::JSON_GUESS,
         true,
         None,
@@ -375,6 +524,9 @@ pub static OPERATORS: &[OperatorRule] = &[
     ),
 ];
 
+/// Every grammar edit operator, in [`EditOperator`] order.
+pub static OPERATORS: &[OperatorRule] = &OPERATOR_TABLE;
+
 impl EditOperator {
     /// This operator's static metadata.
     ///
@@ -389,21 +541,24 @@ impl EditOperator {
 
     /// The operator recording a tolerant JSON recovery edit with rule id
     /// `rule` (see [`crate::json::incremental`]); `guessed` separates an
-    /// unterminated string from a requoted one. `None` for any other id.
+    /// unterminated string (the guessed `json.syntax.string`, its own rule
+    /// [`EditOperator::JsonUnterminatedString`]) from a requoted one. `None`
+    /// for any other id.
     ///
     /// ```
     /// use purrassist_core::grammar::edit::EditOperator;
     /// assert_eq!(EditOperator::json("json.syntax.string", true), Some(EditOperator::JsonUnterminatedString));
     /// assert_eq!(EditOperator::json("json.syntax.string", false), Some(EditOperator::JsonString));
-    /// assert_eq!(EditOperator::json("tool_call.markup.missing-closer", false), None);
+    /// assert_eq!(EditOperator::json("tool_call.markup.stray-closer", false), None);
     /// ```
     #[must_use]
     pub fn json(rule: &str, guessed: bool) -> Option<Self> {
+        if rule == "json.syntax.string" && guessed {
+            return Some(Self::JsonUnterminatedString);
+        }
         OPERATORS[Self::JsonComment as usize..]
             .iter()
-            .find(|entry| {
-                entry.id == rule && (entry.guess == guessed || rule != "json.syntax.string")
-            })
+            .find(|entry| entry.id == rule && entry.operator != Self::JsonUnterminatedString)
             .map(|entry| entry.operator)
     }
 }
@@ -417,7 +572,7 @@ impl EditOperator {
 /// ```
 /// use purrassist_core::grammar::edit::{EditOperator, MarkupEdit};
 /// let edit = MarkupEdit {
-///     operator: EditOperator::InsertCloser,
+///     operator: EditOperator::MissingFunctionClose,
 ///     span: 7..7,
 ///     original: Vec::new(),
 ///     replacement: b"</arg>".to_vec(),
@@ -472,6 +627,10 @@ mod tests {
 
     #[test]
     fn every_json_recovery_rule_has_an_operator() {
+        let mut ids: Vec<&str> = OPERATORS.iter().map(|rule| rule.id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), OPERATORS.len(), "one id per rule");
         for rule in [
             "json.syntax.comment",
             "json.syntax.missing-value",
@@ -489,7 +648,12 @@ mod tests {
             assert_eq!(operator.rule().id, rule);
             assert!(!operator.rule().repair);
             let guessed = EditOperator::json(rule, true).expect("mapped");
-            assert_eq!(guessed.rule().id, rule);
+            if rule == "json.syntax.string" {
+                assert_eq!(guessed.rule().id, "json.syntax.unterminated-string");
+                assert!(guessed.rule().guess);
+            } else {
+                assert_eq!(guessed.rule().id, rule);
+            }
         }
     }
 }

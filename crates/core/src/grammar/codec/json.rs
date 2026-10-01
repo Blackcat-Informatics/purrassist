@@ -33,7 +33,7 @@ use core::ops::Range;
 /// as in `"arguments": "{\"a\":1}"`). The decoded object replaces the
 /// string, the tree is flagged
 /// [`arguments_were_stringified`](ArgTree::arguments_were_stringified), and
-/// a `tool_call.arguments.stringified` edit is recorded. Spans inside the
+/// a `tool_call.arguments.decode-string` edit is recorded. Spans inside the
 /// string are mapped back through the escape decoding to the exact source
 /// bytes that encode each value; when the string itself needed repair (an
 /// unterminated or non-`"`-quoted string, an invalid escape kept literally),

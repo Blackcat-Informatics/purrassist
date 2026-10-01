@@ -12,7 +12,8 @@ use crate::grammar::cost::K_CODEC;
 use crate::grammar::edit::{EditOperator, MarkupEdit};
 use crate::json::{Node, Value};
 use crate::tool_call::{
-    ArgLeaf, ArgOrigin, ArgTree, ArgumentFault, ObjectShape, Spanned, ValueShape,
+    ArgLeaf, ArgOrigin, ArgTree, ArgumentFault, ObjectShape, Spanned, UnresolvedArgument,
+    ValueShape,
 };
 use core::ops::Range;
 
@@ -35,53 +36,80 @@ const CLOSER_VARIANT: &[u8] = b"</parameters>";
 ///
 /// # Values
 ///
-/// - A parameter declared as a string (or enumeration, or with an unmodeled
-///   schema), and any undeclared parameter, is a verbatim string: exactly
-///   one framing newline on each side is consumed and recorded as a
+/// - A parameter declared as a string (or with an unmodeled schema), and
+///   any undeclared parameter, is a verbatim string: exactly one framing
+///   newline on each side is consumed and recorded as a
 ///   `tool_call.xml.framing-newline` edit (a non-guess, single-reading
 ///   markup loss); nothing else about the text changes (`123` and `true`
 ///   stay strings). Its leaf has origin [`ArgOrigin::XmlText`].
-/// - A parameter declared as an object, array, number, integer or boolean is
+/// - An enumeration value is read the same way, then trimmed of any
+///   whitespace left around it (a non-verbatim type), recorded as
+///   `tool_call.value.trim-nonverbatim`.
+/// - A parameter declared as an object, number, integer or boolean is
 ///   parsed from its verbatim text by the `json` codec (exact number
 ///   spellings, tolerant repairs recorded as edits, leaves with origin
-///   [`ArgOrigin::Json`]). An object parameter whose value begins with a
-///   `<parameter=` opener instead holds nested parameters, typed by the
-///   object's declared shape, so nested elements and inline JSON produce the
-///   same tree.
+///   [`ArgOrigin::Json`]). Whitespace around an integer, number or boolean
+///   beyond one framing newline on each side is recorded as
+///   `tool_call.value.trim-nonverbatim` (with the value's raw span). An
+///   object parameter whose value begins with a `<parameter=` opener instead
+///   holds nested parameters (recorded as `tool_call.markup.nested-parameter`),
+///   typed by the object's declared shape, so nested elements and inline
+///   JSON produce the same tree.
+/// - An array parameter whose value is a JSON array is parsed as one; any
+///   other value is one item of the array, read by the item type and
+///   recorded as `tool_call.xml.array-item`, so repeated elements collect
+///   into one array when the call is resolved.
 /// - Malformed UTF-8 inside a value leaves that parameter unresolved
 ///   ([`ArgumentFault::InvalidUtf8InArgument`], raw span kept); JSON that
 ///   cannot be recovered, or text after the JSON value, leaves it unresolved
 ///   with [`ArgumentFault::InvalidJson`].
-/// - Repeated parameters are all recorded, in order, as duplicate members.
+/// - Repeated parameters are all recorded, in order, as duplicate members
+///   (resolution decides what a repeat means for the declared type).
 ///
 /// # Boundaries
 ///
 /// A value ends at `</parameter>` (`</parameters>` is read as it, recorded
-/// as `tool_call.markup.closer-variant`), at the end of the body (the
-/// missing closer recorded as `tool_call.markup.missing-closer`), or at a
-/// `<parameter=NAME>` opener where `NAME` (or an alias) is declared in the
-/// value's object scope or an enclosing one: the missing closer is recorded
-/// as `tool_call.markup.missing-parameter-close` (single reading, non-guess,
-/// grounded in the definition), and an already-bound `NAME` simply repeats.
+/// as `tool_call.markup.closer-variant`), at a `<parameter=NAME>` opener
+/// where `NAME` (or an alias) is declared in the value's object scope or an
+/// enclosing one, or at the end of the body:
+///
+/// - at a declared parameter's opener the missing closer is recorded as
+///   `tool_call.markup.missing-parameter-close` (single reading, non-guess,
+///   grounded in the definition: a declared parameter's opener never occurs
+///   inside a value), and an already-bound `NAME` simply repeats;
+/// - where the enclosing element closes (the slot's delimiter), as
+///   `tool_call.markup.parameter-closed-by-element`;
+/// - at the end of output under a non-length stop, as
+///   `tool_call.markup.missing-closers-at-end` when the open value is a
+///   complete typed value; a *string* still open at the end of output makes
+///   the call malformed ([`CodecFault::Malformed`]), since the output may
+///   have ended inside the text;
+/// - at the end of output under a length stop, with no edit (truncation).
+///
 /// A typed value ended by a missing closer must be complete JSON there, or
 /// the call is malformed ([`CodecFault::Malformed`]). An opener whose name
 /// is not declared is not a boundary: it is text of a string value (and
 /// leaves a typed value incomplete). When the call names no declared tool
 /// (no tool set, an unknown or hallucinated name, or a grammar that captures
-/// the name after the arguments), every `<parameter=` opener is a boundary
-/// (recorded as the syntax-grounded `tool_call.markup.missing-closer`) and
-/// every value is a string; such a call is resolved, or found unresolvable
-/// (a hallucinated tool), against its tool later.
+/// the name after the arguments), every `<parameter=` opener is a boundary,
+/// recorded as the guess-flagged `tool_call.markup.undeclared-parameter-boundary`
+/// (the opener may also be text), and every value is a string; such a call
+/// is resolved, or found unresolvable (a hallucinated tool), against its
+/// tool later.
 ///
 /// A `</parameter>` outside any value closes the innermost nested object,
 /// or, at the top level, is a stray closer deleted as
-/// `tool_call.markup.stray-closer`. Any other text between parameters is
+/// `tool_call.markup.stray-closer`. A body made only of closers and
+/// whitespace is no arguments, recorded as one
+/// `tool_call.markup.closers-only-empty` markup loss (usable only when the
+/// tool requires no parameter). Any other text between parameters is
 /// malformed.
 ///
 /// # Whole-JSON bodies
 ///
 /// A body whose first non-whitespace byte is `{` is one JSON object
-/// (`<function=f>{"a":1}</function>`), accepted only when the object is the
+/// (`<function=f>{"a":1}</function>`, recorded as
+/// `tool_call.markup.json-body`), accepted only when the object is the
 /// entire body: after it, at most one stray `</parameter>` is deleted (as
 /// `tool_call.markup.stray-closer`) and only whitespace may follow; any
 /// other text is malformed.
@@ -114,7 +142,7 @@ const CLOSER_VARIANT: &[u8] = b"</parameters>";
 ///         "tool_call.xml.framing-newline",
 ///         "tool_call.xml.framing-newline",
 ///         "tool_call.markup.missing-parameter-close",
-///         "tool_call.markup.missing-closer",
+///         "tool_call.markup.parameter-closed-by-element",
 ///     ]
 /// );
 /// # Ok::<(), purrassist_core::StopReason>(())
@@ -205,16 +233,16 @@ impl<'t> Reader<'_, 't, '_> {
     ) -> Result<Result<CodecValue, CodecFault>, StopReason> {
         let tool = context.shape.map(|shape| shape.tool.clone());
         let first = self.skip_space(0)?;
-        let mut tree = if self.body.get(first) == Some(&b'{') {
-            match self.json_body(first, span)? {
-                Ok(tree) => tree,
-                Err(fault) => return Ok(Err(fault)),
-            }
+        let result = if self.body.get(first) == Some(&b'{') {
+            self.json_body(first, span)?
+        } else if let Some(tree) = self.closers_only(first, span.clone())? {
+            Ok(tree)
         } else {
-            match self.parameters(span, context)? {
-                Ok(tree) => tree,
-                Err(fault) => return Ok(Err(fault)),
-            }
+            self.parameters(span, context)?
+        };
+        let mut tree = match result {
+            Ok(tree) => tree,
+            Err(fault) => return Ok(Err(fault)),
         };
         tree.tool = tool;
         value(tree, self.edits, self.governor)
@@ -267,6 +295,35 @@ impl<'t> Reader<'_, 't, '_> {
         } else {
             None
         }
+    }
+
+    /// A body (from its first non-whitespace byte `first`) made only of
+    /// parameter closers and whitespace, holding at least one closer: no
+    /// arguments, with the closers recorded as one
+    /// `tool_call.markup.closers-only-empty` markup loss. Whether the call
+    /// may have no arguments is decided against its tool's required
+    /// parameters when the call is resolved.
+    fn closers_only(
+        &mut self,
+        first: usize,
+        span: Range<usize>,
+    ) -> Result<Option<ArgTree>, StopReason> {
+        let (mut at, mut last) = (first, None);
+        while at < self.body.len() {
+            let Some((width, _)) = self.closer(at) else {
+                return Ok(None);
+            };
+            last = Some(at + width);
+            at = self.skip_space(at + width)?;
+        }
+        let Some(last) = last else {
+            return Ok(None);
+        };
+        self.record(EditOperator::ClosersOnlyEmpty, first..last, b"")?;
+        Ok(Some(ArgTree::value(Node {
+            value: Value::Object(Vec::new()),
+            span: Some(span),
+        })))
     }
 
     /// The opener at `at`: `<parameter=` and a non-empty UTF-8 name free of
@@ -332,6 +389,18 @@ impl<'t> Reader<'_, 't, '_> {
             .adopt(name, tree);
     }
 
+    /// The operator recording a closer missing where the body ended: at the
+    /// end of output, the end-of-output rule (usable only when the call is
+    /// otherwise complete); where the enclosing element closed, the
+    /// element-close rule; nothing for a length cut (truncation).
+    const fn closed_at_end(&self) -> Option<EditOperator> {
+        match self.end {
+            CodecEnd::Delimited => Some(EditOperator::ParameterClosedByElement),
+            CodecEnd::EndOfInput => Some(EditOperator::MissingClosersAtEnd),
+            CodecEnd::Truncated => None,
+        }
+    }
+
     /// Read the top-level parameter sequence.
     fn parameters(
         &mut self,
@@ -373,8 +442,8 @@ impl<'t> Reader<'_, 't, '_> {
             at += width;
         }
         while self.frames.len() > 1 {
-            if self.end != CodecEnd::Truncated {
-                self.record(EditOperator::InsertCloser, at..at, CLOSER)?;
+            if let Some(operator) = self.closed_at_end() {
+                self.record(operator, at..at, CLOSER)?;
             }
             self.pop(at);
         }
@@ -398,41 +467,27 @@ impl<'t> Reader<'_, 't, '_> {
             scope.parameter(canonical).map(|parameter| &parameter.value)
         });
         let from = opener.end;
-        let typed = match declared {
-            Some(ValueShape::Object(inner)) => {
-                let next = self.skip_space(from)?;
-                if self.body[next..].starts_with(OPENER) {
-                    self.governor
-                        .charge(Resource::Depth, size(self.frames.len()))?;
-                    self.frames.push(Frame {
-                        scope: Some(inner),
-                        tree: ArgTree::value(Node {
-                            value: Value::Object(Vec::new()),
-                            span: Some(self.absolute(from..from)),
-                        }),
-                        name: Some(opener.name),
-                    });
-                    return Ok(Ok(from));
-                }
-                true
+        if let Some(ValueShape::Object(inner)) = declared {
+            let next = self.skip_space(from)?;
+            if self.body[next..].starts_with(OPENER) {
+                self.governor
+                    .charge(Resource::Depth, size(self.frames.len()))?;
+                self.record(EditOperator::NestedParameter, opener.start..from, b"")?;
+                self.frames.push(Frame {
+                    scope: Some(inner),
+                    tree: ArgTree::value(Node {
+                        value: Value::Object(Vec::new()),
+                        span: Some(self.absolute(from..from)),
+                    }),
+                    name: Some(opener.name),
+                });
+                return Ok(Ok(from));
             }
-            Some(
-                ValueShape::Array(_)
-                | ValueShape::Integer
-                | ValueShape::Number
-                | ValueShape::Boolean,
-            ) => true,
-            Some(ValueShape::String(_) | ValueShape::Enumeration(_) | ValueShape::Unmodeled)
-            | None => false,
-        };
+        }
         let (stop, terminator) = self.terminator(from)?;
-        let tree = if typed {
-            match self.typed(from, stop, terminator)? {
-                Ok(tree) => tree,
-                Err(fault) => return Ok(Err(fault)),
-            }
-        } else {
-            self.string(from, stop, terminator)?
+        let tree = match self.value(declared, from, stop, terminator)? {
+            Ok(tree) => tree,
+            Err(fault) => return Ok(Err(fault)),
         };
         self.frames
             .last_mut()
@@ -448,22 +503,60 @@ impl<'t> Reader<'_, 't, '_> {
             }
             Terminator::Boundary => {
                 // Grounded in the definition when the tool is known; with no
-                // known tool every opener is a boundary, a syntax repair.
+                // known tool every opener is a boundary, a guess (the opener
+                // may be text of the value).
                 let operator = if self.frames[0].scope.is_some() {
                     EditOperator::MissingParameterClose
                 } else {
-                    EditOperator::InsertCloser
+                    EditOperator::UndeclaredParameterBoundary
                 };
                 self.record(operator, stop..stop, CLOSER)?;
                 stop
             }
             Terminator::End => {
-                if self.end != CodecEnd::Truncated {
-                    self.record(EditOperator::InsertCloser, stop..stop, CLOSER)?;
+                if let Some(operator) = self.closed_at_end() {
+                    self.record(operator, stop..stop, CLOSER)?;
                 }
                 stop
             }
         }))
+    }
+
+    /// The value of a parameter declared as `declared` (`None` when the
+    /// parameter or the tool is not declared) in `from..stop`.
+    fn value(
+        &mut self,
+        declared: Option<&ValueShape>,
+        from: usize,
+        stop: usize,
+        terminator: Terminator,
+    ) -> Result<Result<ArgTree, CodecFault>, StopReason> {
+        match declared {
+            Some(ValueShape::Array(item)) => {
+                let next = self.skip_space(from)?;
+                if self.body[next..stop].starts_with(b"[") {
+                    return self.typed(from, stop, terminator, false);
+                }
+                // A value that is not a JSON array is one item of the array.
+                let item = match self.value(Some(item), from, stop, terminator)? {
+                    Ok(item) => item,
+                    Err(fault) => return Ok(Err(fault)),
+                };
+                if item.is_placeholder() {
+                    return Ok(Ok(item));
+                }
+                self.record(EditOperator::ArrayItem, from..stop, b"")?;
+                Ok(Ok(wrap_item(item)))
+            }
+            Some(ValueShape::Object(_)) => self.typed(from, stop, terminator, false),
+            Some(ValueShape::Integer | ValueShape::Number | ValueShape::Boolean) => {
+                self.typed(from, stop, terminator, true)
+            }
+            Some(ValueShape::Enumeration(_)) => self.string(from, stop, terminator, true),
+            Some(ValueShape::String(_) | ValueShape::Unmodeled) | None => {
+                self.string(from, stop, terminator, false)
+            }
+        }
     }
 
     /// Where the value starting at `from` ends, and what ends it.
@@ -494,13 +587,23 @@ impl<'t> Reader<'_, 't, '_> {
         terminator == Terminator::End && self.end == CodecEnd::Truncated
     }
 
-    /// A verbatim string value in `from..stop`.
+    /// A verbatim string value in `from..stop`; with `trim` (an enumeration
+    /// value), whitespace left after the framing newlines is trimmed and
+    /// recorded as `tool_call.value.trim-nonverbatim`. A string still open
+    /// at the end of output (not cut by a length stop) makes the call
+    /// malformed: the output may have ended inside the text.
     fn string(
         &mut self,
         from: usize,
         stop: usize,
         terminator: Terminator,
-    ) -> Result<ArgTree, StopReason> {
+        trim: bool,
+    ) -> Result<Result<ArgTree, CodecFault>, StopReason> {
+        if terminator == Terminator::End && self.end == CodecEnd::EndOfInput {
+            return Ok(Err(CodecFault::Malformed {
+                at: self.base + stop,
+            }));
+        }
         let cut = self.cut(terminator);
         let (mut start, mut end) = (from, stop);
         if start < end && self.body[start] == b'\n' {
@@ -511,6 +614,17 @@ impl<'t> Reader<'_, 't, '_> {
             self.record(EditOperator::FramingNewline, end - 1..end, b"")?;
             end -= 1;
         }
+        if trim {
+            let text = &self.body[start..end];
+            let inner = text.trim_ascii();
+            if inner.len() < text.len() {
+                let leading = text.len() - text.trim_ascii_start().len();
+                let trimmed = start + leading..start + leading + inner.len();
+                let replacement = inner.to_vec();
+                self.record(EditOperator::TrimNonverbatim, start..end, &replacement)?;
+                (start, end) = (trimmed.start, trimmed.end);
+            }
+        }
         self.charge(end - start)?;
         let text = match core::str::from_utf8(&self.body[start..end]) {
             Ok(text) => text,
@@ -520,10 +634,10 @@ impl<'t> Reader<'_, 't, '_> {
             }
             Err(error) => {
                 let at = self.base + start + error.valid_up_to();
-                return Ok(ArgTree::unresolved(
+                return Ok(Ok(ArgTree::unresolved(
                     ArgumentFault::InvalidUtf8InArgument { at },
                     self.absolute(from..stop),
-                ));
+                )));
             }
         };
         let raw = self.absolute(start..end);
@@ -536,16 +650,20 @@ impl<'t> Reader<'_, 't, '_> {
             origin: ArgOrigin::XmlText,
             raw,
         });
-        Ok(tree)
+        Ok(Ok(tree))
     }
 
     /// A typed value in `from..stop`, parsed by the `json` codec. A value
-    /// ended by a missing closer must be complete JSON.
+    /// ended by a missing closer must be complete JSON. With `scalar` (an
+    /// integer, number or boolean), whitespace around the value beyond one
+    /// framing newline on each side is recorded as
+    /// `tool_call.value.trim-nonverbatim`.
     fn typed(
         &mut self,
         from: usize,
         stop: usize,
         terminator: Terminator,
+        scalar: bool,
     ) -> Result<Result<ArgTree, CodecFault>, StopReason> {
         let cut = self.cut(terminator);
         let repaired = !cut && !matches!(terminator, Terminator::Closer(..));
@@ -566,6 +684,9 @@ impl<'t> Reader<'_, 't, '_> {
                 },
                 None,
             ) if !(incomplete && repaired) => {
+                if scalar {
+                    self.trim(from, stop)?;
+                }
                 let (tree, markup) = json_tree(
                     node,
                     edits,
@@ -588,6 +709,21 @@ impl<'t> Reader<'_, 't, '_> {
         Ok(Ok(ArgTree::unresolved(fault, raw)))
     }
 
+    /// Record the trim of a scalar's raw text in `from..stop` when it holds
+    /// whitespace beyond one framing newline on each side.
+    fn trim(&mut self, from: usize, stop: usize) -> Result<(), StopReason> {
+        let text = &self.body[from..stop];
+        let inner = text.trim_ascii();
+        let leading = &text[..text.len() - text.trim_ascii_start().len()];
+        let trailing = &text[text.trim_ascii_end().len()..];
+        let framing = |side: &[u8]| side.is_empty() || side == b"\n";
+        if inner.is_empty() || (framing(leading) && framing(trailing)) {
+            return Ok(());
+        }
+        let replacement = inner.to_vec();
+        self.record(EditOperator::TrimNonverbatim, from..stop, &replacement)
+    }
+
     /// A whole-JSON-object body starting at `first`, plus at most one stray
     /// closer.
     fn json_body(
@@ -601,6 +737,8 @@ impl<'t> Reader<'_, 't, '_> {
             self.end,
             self.governor,
         )?;
+        let value_end = trailing.map_or(self.body.len(), |stop| stop - self.base);
+        self.record(EditOperator::JsonBody, first..value_end, b"")?;
         let tree = match decoded {
             Decoded::Fault(fault) => return Ok(Ok(ArgTree::unresolved(fault, span))),
             Decoded::Value { node, edits, .. } => {
@@ -628,6 +766,34 @@ impl<'t> Reader<'_, 't, '_> {
         }
         Ok(Ok(tree))
     }
+}
+
+/// An item value as a one-element array, its leaves and unresolved values
+/// re-rooted under `/0`.
+fn wrap_item(item: ArgTree) -> ArgTree {
+    let span = item.root.span.clone();
+    let mut tree = ArgTree::value(Node {
+        value: Value::Array(vec![item.root]),
+        span,
+    });
+    tree.leaves = item
+        .leaves
+        .into_iter()
+        .map(|leaf| ArgLeaf {
+            pointer: format!("/0{}", leaf.pointer),
+            ..leaf
+        })
+        .collect();
+    tree.unresolved = item
+        .unresolved
+        .into_iter()
+        .map(|unresolved| UnresolvedArgument {
+            pointer: format!("/0{}", unresolved.pointer),
+            ..unresolved
+        })
+        .collect();
+    tree.arguments_were_stringified = item.arguments_were_stringified;
+    tree
 }
 
 /// Whether `scope` declares `name` (exactly, or as an alias).

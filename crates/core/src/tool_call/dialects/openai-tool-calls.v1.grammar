@@ -4,18 +4,23 @@
 # OpenAI chat-completions tool calls as text. A call is one element of a
 # message's "tool_calls" array:
 #   {"id": ID, "type": "function", "function": {"name": NAME, "arguments": ARGS}}
-# with its members in the order the API reference lists them. ARGS is read by
-# the self-delimiting json codec: the canonical stringified JSON is decoded
-# and flagged, a plain JSON object is read as it is. An assistant message
-# envelope ({"role": "assistant", "content": ..., "tool_calls": [...]}), a bare
-# tool_calls array, and the separators between elements are content around
-# the calls. A call opens only where an element's first member is "id": the
-# opener literals list compact, single-space and newline-indented (2-space
-# steps up to 16, tabs up to 4) spellings of that start, so other JSON
-# objects never open a call attempt. This is also the output (printing)
-# target: `declaration` is one request `tools` entry and `result` is one
-# request tool message. First-party grammar; see
-# docs/tool-calls/dialects/openai-tool-calls.v1.md for the public sources.
+# The members may come in any order; "id" may be missing (an id-less element
+# is still a call; ids are assigned later), "type" may be missing but when
+# present is "function", and "name" and "arguments" may come in either order
+# inside "function". ARGS is read by the self-delimiting json codec: the
+# canonical stringified JSON is decoded and flagged, a plain JSON object is
+# read as it is. An assistant message envelope ({"role": "assistant",
+# "content": ..., "tool_calls": [...]}), a bare tool_calls array, and the
+# separators between elements are content around the calls. A call opens only
+# where an element starts with one of its members: "id", "function", or the
+# whole "type": "function" member (compact or with one space after the colon),
+# so content parts ({"type": "text", ...}) and other JSON objects never open a
+# call attempt. The opener literals list compact, single-space and
+# newline-indented (2-space steps up to 16, tabs up to 4) spellings of each
+# start. This is also the output (printing) target: `declaration` is one
+# request `tools` entry and `result` is one request tool message.
+# First-party grammar; see docs/tool-calls/dialects/openai-tool-calls.v1.md
+# for the public sources.
 grammar "openai-tool-calls.v1";
 
 tool-name = /[A-Za-z0-9_.:-]+/;
@@ -23,30 +28,84 @@ call-id = /[A-Za-z0-9_.:-]+/;
 ws = /[ \t\r\n]+/;
 json-string = /"([^"\\\x00-\x1F]|\\["\\\/bfnrt]|\\u[0-9A-Fa-f]{4})*"/;
 
-element-open = "{\"id\""
-             | "{ \"id\""
-             | "{\n\"id\""
-             | "{\n  \"id\""
-             | "{\n    \"id\""
-             | "{\n      \"id\""
-             | "{\n        \"id\""
-             | "{\n          \"id\""
-             | "{\n            \"id\""
-             | "{\n              \"id\""
-             | "{\n                \"id\""
-             | "{\n\t\"id\""
-             | "{\n\t\t\"id\""
-             | "{\n\t\t\t\"id\""
-             | "{\n\t\t\t\t\"id\"";
+open-id = "{\"id\""
+        | "{ \"id\""
+        | "{\n\"id\""
+        | "{\n  \"id\""
+        | "{\n    \"id\""
+        | "{\n      \"id\""
+        | "{\n        \"id\""
+        | "{\n          \"id\""
+        | "{\n            \"id\""
+        | "{\n              \"id\""
+        | "{\n                \"id\""
+        | "{\n\t\"id\""
+        | "{\n\t\t\"id\""
+        | "{\n\t\t\t\"id\""
+        | "{\n\t\t\t\t\"id\"";
+open-function = "{\"function\""
+              | "{ \"function\""
+              | "{\n\"function\""
+              | "{\n  \"function\""
+              | "{\n    \"function\""
+              | "{\n      \"function\""
+              | "{\n        \"function\""
+              | "{\n          \"function\""
+              | "{\n            \"function\""
+              | "{\n              \"function\""
+              | "{\n                \"function\""
+              | "{\n\t\"function\""
+              | "{\n\t\t\"function\""
+              | "{\n\t\t\t\"function\""
+              | "{\n\t\t\t\t\"function\"";
+open-type = "{\"type\": \"function\""
+          | "{\"type\":\"function\""
+          | "{ \"type\": \"function\""
+          | "{ \"type\":\"function\""
+          | "{\n\"type\": \"function\""
+          | "{\n\"type\":\"function\""
+          | "{\n  \"type\": \"function\""
+          | "{\n  \"type\":\"function\""
+          | "{\n    \"type\": \"function\""
+          | "{\n    \"type\":\"function\""
+          | "{\n      \"type\": \"function\""
+          | "{\n      \"type\":\"function\""
+          | "{\n        \"type\": \"function\""
+          | "{\n        \"type\":\"function\""
+          | "{\n          \"type\": \"function\""
+          | "{\n          \"type\":\"function\""
+          | "{\n            \"type\": \"function\""
+          | "{\n            \"type\":\"function\""
+          | "{\n              \"type\": \"function\""
+          | "{\n              \"type\":\"function\""
+          | "{\n                \"type\": \"function\""
+          | "{\n                \"type\":\"function\""
+          | "{\n\t\"type\": \"function\""
+          | "{\n\t\"type\":\"function\""
+          | "{\n\t\t\"type\": \"function\""
+          | "{\n\t\t\"type\":\"function\""
+          | "{\n\t\t\t\"type\": \"function\""
+          | "{\n\t\t\t\"type\":\"function\""
+          | "{\n\t\t\t\t\"type\": \"function\""
+          | "{\n\t\t\t\t\"type\":\"function\"";
 
+sep = ws? "," ws?;
+id-rest = ws? ":" ws? "\"" id:call-id "\"";
+id-member = "\"id\"" id-rest;
+type-member = "\"type\"" ws? ":" ws? "\"function\"";
+name-member = "\"name\"" ws? ":" ws? "\"" name:tool-name "\"";
 # The arguments slot ends where its JSON value does: NUL cannot occur in JSON
 # text, so the delimiter never cuts a value short.
-call = element-open ws? ":" ws? "\"" id:call-id "\"" ws? "," ws?
-       "\"type\"" ws? ":" ws? "\"function\"" ws? "," ws?
-       "\"function\"" ws? ":" ws? "{" ws?
-       "\"name\"" ws? ":" ws? "\"" name:tool-name "\"" ws? "," ws?
-       "\"arguments\"" ws? ":" arguments:slot(json, "\x00")
-       "}" ws? "}";
+arguments-member = "\"arguments\"" ws? ":" arguments:slot(json, "\x00");
+function-rest = ws? ":" ws? "{" ws?
+                (name-member sep arguments-member | arguments-member sep name-member)
+                ws? "}";
+function-member = "\"function\"" function-rest;
+
+call = (open-id id-rest (sep type-member sep function-member | sep function-member (sep type-member)?)
+       | open-type (sep id-member sep function-member | sep function-member (sep id-member)?)
+       | open-function function-rest (sep id-member (sep type-member)? | sep type-member (sep id-member)?)?)
+       ws? "}";
 
 tool-open = "{\"role\": \"tool\""
           | "{ \"role\": \"tool\""
