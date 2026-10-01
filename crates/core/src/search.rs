@@ -23,7 +23,8 @@
 //! # Resource contract
 //!
 //! Every enqueued candidate charges `Work` for its key length, one
-//! `Candidates` unit, and `key_len * 32 + 256` scratch bytes. The part of that
+//! `Candidates` unit (none for a [`Search::uncounted`] search), and
+//! `key_len * 32 + 256` scratch bytes. The part of that
 //! scratch charge backing the queue entry is released when the entry is
 //! popped (or when the search is dropped); the part backing the retained
 //! deduplication key (`key_len + 64`, once per distinct key) is released when
@@ -326,6 +327,8 @@ pub struct Search<S: SearchState> {
     serial: u64,
     meter: ScratchMeter,
     retained: u64,
+    /// Whether each enqueued candidate charges one `Candidates` unit.
+    counted: bool,
 }
 
 /// The minimum-cost accepted candidates of one [`Search::run`], in
@@ -432,7 +435,44 @@ impl<S: SearchState> Search<S> {
             serial: 0,
             meter: governor.scratch_meter(),
             retained: 0,
+            counted: true,
         }
+    }
+
+    /// An empty search whose queue charges no `Candidates`: every other
+    /// charge is [`Search::new`]'s, so `Work` and `ScratchBytes` still bound
+    /// it. For an internal exploration whose accepted states are not yet
+    /// competing answers (the grammar engine's repair of a stuck dialect
+    /// attempt): the caller charges `Candidates` for what survives to
+    /// selection instead.
+    ///
+    /// ```
+    /// use purrassist_core::search::{Acceptance, Change, Proposals, Search, SearchState};
+    /// use purrassist_core::{Budget, Governor, ScratchVec, StopReason, search::Ledger};
+    /// #[derive(Clone)]
+    /// struct Done;
+    /// impl SearchState for Done {
+    ///     type Tie = ();
+    ///     type Context<'c> = ();
+    ///     fn tie(&self) {}
+    ///     fn write_key(&self, key: &mut ScratchVec<u8>) -> Result<(), StopReason> { key.push(0) }
+    ///     fn accept(&self, _: &mut (), _: &mut Governor) -> Result<Acceptance, StopReason> {
+    ///         Ok(Acceptance::Accepted { validation: 0 })
+    ///     }
+    ///     fn expand(&self, _: &mut (), _: &mut Proposals<'_, Self>, _: &mut Governor) -> Result<(), StopReason> { Ok(()) }
+    /// }
+    /// let mut governor = Governor::new(Budget { candidates: 0, ..Budget::default() });
+    /// let mut search = Search::uncounted(&governor);
+    /// search.seed(&mut governor, Done, Ledger::default())?;
+    /// assert_eq!(search.run(&mut (), &mut governor)?.into_states().len(), 1);
+    /// assert_eq!(governor.usage().candidates, 0);
+    /// # Ok::<(), StopReason>(())
+    /// ```
+    #[must_use]
+    pub fn uncounted(governor: &Governor) -> Self {
+        let mut search = Self::new(governor);
+        search.counted = false;
+        search
     }
 
     /// Enqueue an initial state with its own already-built ledger.
@@ -556,7 +596,9 @@ impl<S: SearchState> Search<S> {
     ) -> Result<(), StopReason> {
         let key = self.key.as_slice();
         let known = self.seen.contains_key(key);
-        governor.charge(Resource::Candidates, 1)?;
+        if self.counted {
+            governor.charge(Resource::Candidates, 1)?;
+        }
         let total = size(key.len())
             .saturating_mul(32)
             .saturating_add(ENTRY_OVERHEAD);

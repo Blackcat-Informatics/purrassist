@@ -13,6 +13,7 @@ use purrassist_core::{
     json::{Node, Value},
     matching::{self, Candidate, MatchRequest, SelectionPolicy},
     schema::{Schema, recovery::RecoveryRequest},
+    tool_call::{AmbiguityPolicy, Effects, Param, ToolDefinition, ToolRecoveryRequest, ToolSet},
 };
 use std::path::Path;
 
@@ -223,4 +224,80 @@ fn every_outcome_shape_validates_against_the_receipt_schema() {
     );
     assert_eq!(unresolved.outcome, Outcome::Unresolved);
     assert_valid(&schema, &unresolved.receipt.to_node());
+}
+
+/// A tool-call recovery over output with invalid UTF-8: the bytes are
+/// retained as `bytes_hex`, each invalid run is an itemized data loss, and
+/// the exact receipt is committed.
+#[test]
+fn golden_tool_call_invalid_utf8_receipt_matches_the_committed_fixture() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/data/receipts/v3-tool-call-invalid-utf8.json");
+    let fixture_text = std::fs::read_to_string(&path).expect("golden receipt fixture");
+    let fixture = purrassist_core::json::parse(&fixture_text).expect("fixture is valid JSON");
+
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("ls").effects(Effects::ReadOnly)],
+        Budget::default(),
+    )
+    .unwrap();
+    let mut output = b"hi \xff\xfe there ".to_vec();
+    output.extend_from_slice(
+        b"<tool_call>\n{\"name\": \"ls\", \"arguments\": {}}\n</tool_call>\n\xc3",
+    );
+    let result = tools.recover(&output, &ToolRecoveryRequest::default());
+    assert!(matches!(result.outcome, Outcome::BestGuess(_)));
+    let node = result.receipt.to_node();
+    assert!(
+        node.equivalent(&fixture),
+        "receipt wire shape drifted from the committed golden fixture at {}:\n\
+         got:      {}\n\
+         expected: {}",
+        path.display(),
+        node.to_json(),
+        fixture.to_json()
+    );
+    assert_eq!(
+        node.pointer("/sources/0/bytes_hex").and_then(Node::as_str),
+        Some(
+            "686920fffe207468657265203c746f6f6c5f63616c6c3e0a7b226e616d65223a20226c73222c2022617267756d656e7473223a207b7d7d0a3c2f746f6f6c5f63616c6c3e0ac3"
+        )
+    );
+    assert_valid(&receipt_schema(), &node);
+}
+
+/// Every tool-call recovery receipt shape validates: resolved, ambiguity
+/// rejected (with alternatives), and exhausted.
+#[test]
+fn tool_call_recovery_receipts_validate_against_the_receipt_schema() {
+    let schema = receipt_schema();
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("read")
+            .effects(Effects::ReadOnly)
+            .param("path", Param::string().required())],
+        Budget::default(),
+    )
+    .unwrap();
+    let resolved = tools.recover(
+        br#"<tool_call>{"name": "read", "arguments": {"path": "a"}}</tool_call>"#,
+        &ToolRecoveryRequest::default(),
+    );
+    assert!(matches!(resolved.outcome, Outcome::Resolved(_)));
+    assert_valid(&schema, &resolved.receipt.to_node());
+    let rejected = tools.recover(
+        br#"<tool_call>{"name": "read", "arguments": {"path": "a", "path": "b"}}</tool_call>"#,
+        &ToolRecoveryRequest::default().ambiguity(AmbiguityPolicy::Reject),
+    );
+    assert_eq!(rejected.outcome, Outcome::Unresolved);
+    assert_eq!(rejected.receipt.alternatives.len(), 2);
+    assert_valid(&schema, &rejected.receipt.to_node());
+    let exhausted = tools.recover(
+        b"<tool_call>",
+        &ToolRecoveryRequest::default().budget(Budget {
+            work: 3,
+            ..Budget::default()
+        }),
+    );
+    assert_eq!(exhausted.outcome, Outcome::Unresolved);
+    assert_valid(&schema, &exhausted.receipt.to_node());
 }

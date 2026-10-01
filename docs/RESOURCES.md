@@ -101,7 +101,10 @@ stack controls, not memory a caller may go on holding indefinitely.
 
 Schema recovery runs on the generic best-first engine in `search.rs`. Each
 queued candidate charges `Work` for its deduplication key, one `Candidates`
-unit, and `key_len * 32 + 256` scratch bytes. Popping the candidate releases
+unit, and `key_len * 32 + 256` scratch bytes. (The grammar engine's repair of
+a stuck tool-call dialect attempt uses `Search::uncounted`, whose queue
+charges no `Candidates`: there, only readings that survive to compete for
+selection are counted; see `purrassist_core::grammar::cost`.) Popping the candidate releases
 the queue-entry share; the retained deduplication key's share (`key_len + 64`,
 once per distinct key) and the reused, `ScratchVec`-charged key buffer are
 released when the search is dropped, as are entries still queued when the
@@ -541,6 +544,41 @@ Full detail is in the committed report. Each row measures 200 samples in its own
 | tsx | 185,994 | 196,384 | 545 | 25 | 53,032 | 2,288 | 4,378,624 |
 
 C and Rust peak values are measured separately and must not be added as a simultaneous peak.
+
+## Tool-call recovery budgets
+
+`ToolSet::recover` charges every step of `tool_call.recover.v1` to one
+governor: retaining the output (one `Work`, one `InputBytes` and one
+`ScratchBytes` per byte, before anything else), the encoding scan (one `Work`
+per byte), recognition under the published work bound of
+`purrassist_core::grammar::cost`, resolution, and the recovered value. Fixed
+effort presets are sized for ordinary turns, so a large output needs a budget
+that grows with it. `ToolRecoveryRequest::sized(effort, n)` derives one from
+the preset and two published constants:
+
+```text
+work          = preset.work          + RECOVER_WORK_PER_BYTE    · n   (32 per byte)
+scratch_bytes = preset.scratch_bytes + RECOVER_SCRATCH_PER_BYTE · n   (16 per byte)
+input_bytes   = max(preset.input_bytes, n)
+```
+
+The derivation is saturating and deterministic; every other limit is the
+preset's, so repair search stays bounded by the effort.
+`tool_call_recover::sized_budget_handles_one_mib` recovers a 1 MiB string
+argument in each built-in-dialect shape and checks that the call is
+`Resolved` under the unmodified `Effort::Maximum` preset and under
+`sized(effort, n)` for every effort from `Quick` to `Maximum`, with identical
+charges in every case and peak scratch at most 16 bytes per input byte:
+
+| Input | Bytes | Work | Work per byte | Peak scratch | Scratch per byte |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Qwen3-Coder XML `<parameter>` string | 1,048,663 | 11,536,662 | 11.00 | 8,412,950 | 8.02 |
+| Hermes JSON string argument | 1,048,648 | 10,488,489 | 10.00 | 9,445,081 | 9.01 |
+
+Both use the default request (all three built-in dialects). The constants
+leave headroom over these fast-path measurements; inputs that need repair
+search spend from the preset part of the budget, and exhaustion is reported
+as `BudgetExceeded` naming the resource.
 
 ## Resource limits
 

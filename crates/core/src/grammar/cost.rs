@@ -31,9 +31,17 @@
 //!
 //! The error term applies only at failure configurations: each configuration
 //! popped by the repair search charges [`K_ERR`] (and the search's own
-//! per-candidate `Work`, `Candidates` and `ScratchBytes`), and the number of
-//! explored configurations is capped by the caller's [`Effort`](crate::Effort)
-//! budget. Exhaustion is returned as an explicit
+//! per-candidate `Work` and `ScratchBytes`), and the number of explored
+//! configurations is capped by the caller's [`Effort`](crate::Effort)
+//! budget.
+//!
+//! `Candidates` counts only readings that genuinely compete for selection:
+//! every distinct reading of a completed segment beyond its first, and every
+//! distinct segmentation of a contested span (charged by the recognizer).
+//! A dialect attempt that dies on its own, and repairs the error search
+//! explores and discards, charge `Work` and `ScratchBytes` but no
+//! `Candidates`, so allowing more dialects never spends candidates on
+//! attempts that cannot compete. Exhaustion is returned as an explicit
 //! [`StopReason::BudgetExceeded`](crate::StopReason::BudgetExceeded).
 //!
 //! Every charge is a function of the byte sequence alone: pushing the same
@@ -168,3 +176,29 @@ pub const EXTRACT_PROSE: u64 = 2;
 /// (`tool_call.extract.fence`): a markup-only deletion, like reading a
 /// closer variant.
 pub const EXTRACT_FENCE: u64 = 1;
+
+/// `Work` per output byte that [`ToolRecoveryRequest::sized`] adds to an
+/// effort preset's budget for tool-call recovery.
+///
+/// Recovering `n` output bytes charges, per byte: one unit to retain the
+/// bytes in the receipt, one for the encoding scan, [`K_LEX`] plus the
+/// configuration steps of every dialect that is live at that byte, captured
+/// bytes ([`K_CAPTURE`]), the argument codec's scan ([`K_CODEC`]) and the
+/// JSON recovery parser's units, and the per-byte resolution and
+/// digest work. On the fast path (string arguments with no repair) that is
+/// 10 to 11 units per byte over the built-in dialect set (see
+/// `docs/RESOURCES.md`); this constant leaves headroom above it. Repair
+/// search beyond that stays bounded by the preset itself.
+///
+/// [`ToolRecoveryRequest::sized`]: crate::tool_call::ToolRecoveryRequest::sized
+pub const RECOVER_WORK_PER_BYTE: u64 = 32;
+
+/// `ScratchBytes` per output byte that [`ToolRecoveryRequest::sized`] adds
+/// to an effort preset's budget for tool-call recovery.
+///
+/// It covers the retained source, the recognizer's capture and codec
+/// buffers, the argument value tree, and the recovered call's copy of it:
+/// 8 to 9 bytes per byte on the fast path (see `docs/RESOURCES.md`).
+///
+/// [`ToolRecoveryRequest::sized`]: crate::tool_call::ToolRecoveryRequest::sized
+pub const RECOVER_SCRATCH_PER_BYTE: u64 = 16;

@@ -386,6 +386,31 @@ impl DialectSet {
         })
     }
 
+    /// The allow-list of every built-in dialect ([`DialectId::BUILT_IN`]).
+    ///
+    /// Like a built-in grammar, the set is built once, on first use, under
+    /// its own governor with a default [`Budget`], and cloned: building it is
+    /// never charged to a caller's governor.
+    ///
+    /// # Panics
+    /// Never: three built-in dialects always build under the default
+    /// budget (checked by this example and the dialect conformance tests).
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::{DialectId, DialectSet};
+    /// assert_eq!(DialectSet::built_in().dialects(), DialectId::BUILT_IN);
+    /// ```
+    #[must_use]
+    pub fn built_in() -> Self {
+        static BUILT_IN: OnceLock<DialectSet> = OnceLock::new();
+        BUILT_IN
+            .get_or_init(|| {
+                Self::new(DialectId::BUILT_IN, &mut Governor::new(Budget::default()))
+                    .expect("the built-in dialect set builds under the default budget")
+            })
+            .clone()
+    }
+
     /// The dialects, in canonical order.
     ///
     /// See [`DialectSet::new`] for an example.

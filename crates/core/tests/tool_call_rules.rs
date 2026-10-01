@@ -307,6 +307,7 @@ fn every_rule_declares_loss_kind() {
             "tool_call.parameter.repeated",
             "tool_call.truncated",
             "tool_call.markup.dangling-opener",
+            "tool_call.input.invalid-utf8",
         ]
     );
     // Rules that discard nothing declare no loss: insertions, readings,
@@ -1613,5 +1614,44 @@ fn stray_closer_absorption_is_split_invariant() {
         let bytewise = run_split(text, &bytes);
         assert_eq!(bytewise.1, whole.1, "{text:?} byte by byte");
         assert_eq!(bytewise.2, whole.2, "{text:?} byte by byte");
+    }
+}
+
+/// The parsing/record/repair classification documented in `rules.rs`: a
+/// rule is a repair exactly when it costs something or guesses, and these
+/// are every other rule.
+#[test]
+fn repair_classification_matches_documentation() {
+    let not_repairs: Vec<&str> = RULES
+        .iter()
+        .filter(|rule| !rule.is_repair())
+        .map(|rule| rule.id)
+        .collect();
+    let mut documented = vec![
+        // Parsing.
+        "tool_call.markup.nested-parameter",
+        "tool_call.markup.json-body",
+        "tool_call.xml.array-item",
+        "tool_call.value.trim-nonverbatim",
+        "tool_call.xml.framing-newline",
+        "tool_call.arguments.decode-string",
+        "tool_call.name.alias",
+        "tool_call.parameter.alias",
+        "tool_call.parameter.pass-through",
+        "tool_call.parameter.collect",
+        "tool_call.value.decode-typed",
+        // Records.
+        "tool_call.reasoning.unterminated",
+        "tool_call.truncated",
+        "tool_call.markup.dangling-opener",
+        "tool_call.id.dedup",
+        "tool_call.input.invalid-utf8",
+    ];
+    let mut actual = not_repairs.clone();
+    actual.sort_unstable();
+    documented.sort_unstable();
+    assert_eq!(actual, documented);
+    for rule in RULES {
+        assert_eq!(rule.is_repair(), rule.cost > 0 || rule.guess, "{}", rule.id);
     }
 }

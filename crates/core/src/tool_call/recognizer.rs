@@ -1331,38 +1331,47 @@ impl Builder<'_> {
         within: &Range<usize>,
         governor: &mut Governor,
     ) -> Result<Vec<NodeId>, StopReason> {
-        let rule = edit.rule();
-        let evidence = Evidence {
-            rule: rule.id.into(),
-            explanation: explain(edit),
-            span: Some(SourceSpan {
-                source: self.source,
-                bytes: edit.span.clone(),
-            }),
-            destination: format!("/turn/{}..{}", within.start, within.end),
-        };
-        let mut nodes = vec![self.forest.evidence(governor, evidence.clone())?];
-        if rule.loss.is_some() {
-            nodes.push(self.forest.loss(
-                governor,
-                Loss {
-                    evidence: evidence.clone(),
-                    original: escaped(&edit.original),
-                },
-            )?);
+        let (evidence, loss, inference) = edit_entries(edit, within, self.source);
+        let mut nodes = vec![self.forest.evidence(governor, evidence)?];
+        if let Some(loss) = loss {
+            nodes.push(self.forest.loss(governor, loss)?);
         }
-        if rule.guess {
-            nodes.push(self.forest.inference(
-                governor,
-                Inference {
-                    evidence,
-                    kind: InferenceKind::Guess,
-                    value: escaped(&edit.replacement),
-                },
-            )?);
+        if let Some(inference) = inference {
+            nodes.push(self.forest.inference(governor, inference)?);
         }
         Ok(nodes)
     }
+}
+
+/// The ledger entries of one markup edit applied within the segment at
+/// `within` of the output whose digest is `source`: its evidence, a loss of
+/// the original bytes when the edit's rule loses information, and a guess
+/// inference of the replacement when the rule guesses.
+pub(super) fn edit_entries(
+    edit: &MarkupEdit,
+    within: &Range<usize>,
+    source: Digest,
+) -> (Evidence, Option<Loss>, Option<Inference>) {
+    let rule = edit.rule();
+    let evidence = Evidence {
+        rule: rule.id.into(),
+        explanation: explain(edit),
+        span: Some(SourceSpan {
+            source,
+            bytes: edit.span.clone(),
+        }),
+        destination: format!("/turn/{}..{}", within.start, within.end),
+    };
+    let loss = rule.loss.is_some().then(|| Loss {
+        evidence: evidence.clone(),
+        original: escaped(&edit.original),
+    });
+    let inference = rule.guess.then(|| Inference {
+        evidence: evidence.clone(),
+        kind: InferenceKind::Guess,
+        value: escaped(&edit.replacement),
+    });
+    (evidence, loss, inference)
 }
 
 fn push_merged(segments: &mut Vec<Segment>, segment: Segment) {
@@ -1376,7 +1385,7 @@ fn push_merged(segments: &mut Vec<Segment>, segment: Segment) {
 }
 
 /// Bytes as text, with every byte outside well-formed UTF-8 written `\xHH`.
-fn escaped(bytes: &[u8]) -> String {
+pub(super) fn escaped(bytes: &[u8]) -> String {
     let mut text = String::with_capacity(bytes.len());
     for chunk in bytes.utf8_chunks() {
         text.push_str(chunk.valid());

@@ -16,6 +16,7 @@ use purrassist_core::{
     paths::{PathIndex, PathMatch},
     schema::{Schema, recovery::RecoveryRequest},
     text::{self, Normalization},
+    tool_call::{Effects, Param, ToolDefinition, ToolRecoveryRequest, ToolSet},
     wire::{WireValue, array, integer, object, string},
 };
 
@@ -78,7 +79,38 @@ pub fn transcript_json() -> String {
     transcript.push(markdown_transcript());
     transcript.push(list_transcript());
     transcript.push(reference_transcript());
+    transcript.push(tool_call_transcript());
     array(transcript).to_json()
+}
+
+/// Tool-call recovery over every built-in dialect: a near-miss name, a
+/// stray closer, reasoning, and invalid UTF-8, with the complete result and
+/// receipt (whose charges must be identical on every target).
+fn tool_call_transcript() -> Node {
+    let tools = ToolSet::compile(
+        [
+            ToolDefinition::new("read_file")
+                .effects(Effects::ReadOnly)
+                .param("path", Param::string().required())
+                .param("limit", Param::integer()),
+            ToolDefinition::new("list_dir")
+                .effects(Effects::ReadOnly)
+                .param("path", Param::string().required()),
+        ],
+        Budget::default(),
+    )
+    .expect("tools");
+    let mut output = b"<think>plan</think>Reading \xff.\n".to_vec();
+    output.extend_from_slice(
+        b"<tool_call>\n{\"name\": \"read_fiel\", \"arguments\": {\"path\": \"a.rs\", \"limit\": 5}}\n</tool_call>\n\
+          <tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n</parameter>\n</parameter>\n</function>\n</tool_call>",
+    );
+    let result = tools.recover(&output, &ToolRecoveryRequest::default());
+    assert!(matches!(result.outcome, Outcome::BestGuess(_)));
+    object([
+        ("operation", string("tool_call.recover")),
+        ("result", result.to_node()),
+    ])
 }
 
 fn matching_transcript() -> Node {

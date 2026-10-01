@@ -1189,10 +1189,34 @@ fn length_vs_stop_partial_call_distinguished() {
     ));
 }
 
+/// Repairs the error search explores and discards, and dialect attempts
+/// that die on their own, charge no `Candidates`: only readings that compete
+/// for selection do.
+#[test]
+fn repair_search_charges_no_candidates() {
+    let mut governor = Governor::new(Budget {
+        candidates: 0,
+        ..Budget::default()
+    });
+    let turn = run(
+        &set(&[MINI, AMBIGUOUS]),
+        &[b"<tool><call=f></args></args></call></tool> and <tool><call=g><arg=a>1<arg=b>2</arg></call></tool>"],
+        GenerationStop::Stop,
+        ReasoningPolicy::default(),
+        &mut governor,
+    )
+    .expect("repairs need no candidates");
+    assert_eq!(turn.calls().len(), 2);
+    assert!(governor.usage().evidence_entries > 0);
+    assert_eq!(governor.usage().candidates, 0);
+}
+
 #[test]
 fn exhaustion_and_cancellation_explicit() {
-    let mini = set(&[MINI]);
-    let input: &[u8] = b"<tool><call=f></args></args></call></tool> and <tool><call=g><arg=a>1<arg=b>2</arg></call></tool>";
+    // Repairs explored and discarded charge no candidates; the last call's
+    // two readings (name or id) genuinely compete.
+    let mini = set(&[MINI, AMBIGUOUS]);
+    let input: &[u8] = b"<tool><call=f></args></args></call></tool> and <tool><call=g><arg=a>1<arg=b>2</arg></call></tool> then <c>x</c>";
     let mut ordinary = Governor::new(Budget::default());
     run(
         &mini,
@@ -1203,7 +1227,10 @@ fn exhaustion_and_cancellation_explicit() {
     )
     .expect("recognized");
     let usage = ordinary.usage();
-    assert!(usage.candidates > 0 && usage.evidence_entries > 0);
+    assert!(
+        usage.candidates > 0 && usage.evidence_entries > 0,
+        "{usage:?}"
+    );
 
     let starve = |budget: Budget, resource: Resource| {
         let mut governor = Governor::new(budget);

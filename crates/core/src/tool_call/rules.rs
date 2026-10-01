@@ -49,13 +49,45 @@
 //! closers-only body, code-fence markers, framing newlines) are itemized but
 //! never demote a call; [`LossKind::Data`] losses (a dropped unknown
 //! parameter, a dropped repeated occurrence, dropped prose inside a call,
-//! truncation, a dangling opener, an unterminated reasoning block) demote
+//! truncation, a dangling opener, an unterminated reasoning block, bytes
+//! that are not UTF-8) demote
 //! the call that records them to at most `BestGuess`
 //! ([`CallOutcome::classify`](super::CallOutcome::classify)). Text *outside*
 //! every call (prose around a call, a fence wrapped around a call) is never
 //! dropped: it stays content, so it records no loss; a call written inside
 //! fenced code or quoted prose is instead flagged as a possible example
 //! (`tool_call.context.fenced-example`, a guess).
+//!
+//! # Parsing and repairs
+//!
+//! A rule is a *repair* exactly when it costs something or guesses
+//! ([`Rule::is_repair`]: `cost > 0 || guess`). Every other rule is
+//! *parsing* (a canonical reading of the dialect or the definition) or a
+//! *record* of a fact about the input, and is applied under every effort.
+//! Under [`Effort::Exact`](crate::Effort::Exact) no repair is applied: a call
+//! that needs one is `Unresolved` with
+//! [`UnresolvedReason::RepairNotPermitted`](super::UnresolvedReason::RepairNotPermitted)
+//! naming it (see [`Policies::exact`](super::Policies::exact)). From the
+//! table, that classification is:
+//!
+//! - parsing: `tool_call.markup.nested-parameter`,
+//!   `tool_call.markup.json-body`, `tool_call.xml.array-item`,
+//!   `tool_call.value.trim-nonverbatim`, `tool_call.xml.framing-newline`,
+//!   `tool_call.arguments.decode-string`, `tool_call.name.alias`,
+//!   `tool_call.parameter.alias`, `tool_call.parameter.pass-through`,
+//!   `tool_call.parameter.collect`, `tool_call.value.decode-typed`;
+//! - records: `tool_call.reasoning.unterminated`, `tool_call.truncated`,
+//!   `tool_call.markup.dangling-opener`, `tool_call.id.dedup`,
+//!   `tool_call.input.invalid-utf8`;
+//! - repairs: every other rule, including every markup insertion, deletion
+//!   and variant reading, `tool_call.stop.consumed-closer`, every
+//!   `json.syntax.*` repair, `tool_call.extract.*`, the guesses
+//!   (`tool_call.reasoning.unclosed`, `tool_call.reasoning.embedded-call`,
+//!   `tool_call.context.fenced-example`, `tool_call.name.match`,
+//!   `json.key.match`, `json.key.relocate`, `tool_call.parameter.repeated`,
+//!   `json.enum.match`, `tool_call.markup.undeclared-parameter-boundary`),
+//!   `tool_call.value.enum-normalize`, and
+//!   `tool_call.parameter.drop-unknown`.
 //!
 //! # Resolution rules
 //!
@@ -76,6 +108,7 @@
 //! | `tool_call.truncated` | 0 | no | single | syntax | data | a call cut off by a length stop |
 //! | `tool_call.markup.dangling-opener` | 0 | no | single | syntax | data | a call attempt still open at the end of output under a non-length stop |
 //! | `tool_call.id.dedup` | 0 | no | single | syntax | none | a missing or duplicate source call id renumbered (recorded by the recovery operation's id policy) |
+//! | `tool_call.input.invalid-utf8` | 0 | no | single | syntax | data | a maximal run of bytes that are not well-formed UTF-8 (recorded by the recovery operation; the bytes stay retained) |
 //!
 //! [`DISABLED`] lists the schema-recovery rules tool calls never apply:
 //! inventing a required value, stringifying a scalar, and decoding a JSON
@@ -165,6 +198,21 @@ impl Rule {
     pub fn admits(&self, policy: RepairPolicy) -> bool {
         self.policies.contains(&policy)
     }
+
+    /// Whether the rule is a repair (it costs something or guesses) rather
+    /// than parsing or a record; see the module documentation.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::rules;
+    /// assert!(rules::rule("tool_call.markup.stray-closer").unwrap().is_repair());
+    /// assert!(rules::rule("tool_call.context.fenced-example").unwrap().is_repair());
+    /// assert!(!rules::rule("tool_call.xml.framing-newline").unwrap().is_repair());
+    /// assert!(!rules::rule("tool_call.arguments.decode-string").unwrap().is_repair());
+    /// ```
+    #[must_use]
+    pub const fn is_repair(&self) -> bool {
+        self.cost > 0 || self.guess
+    }
 }
 
 const fn policies(readings: Readings) -> &'static [RepairPolicy] {
@@ -213,7 +261,7 @@ const fn resolution(
     }
 }
 
-const RESOLUTION: [Rule; 15] = [
+const RESOLUTION: [Rule; 16] = [
     resolution(
         "tool_call.name.alias",
         0,
@@ -313,6 +361,13 @@ const RESOLUTION: [Rule; 15] = [
         Some(LossKind::Data),
     ),
     resolution("tool_call.id.dedup", 0, false, Grounding::Syntax, None),
+    resolution(
+        "tool_call.input.invalid-utf8",
+        0,
+        false,
+        Grounding::Syntax,
+        Some(LossKind::Data),
+    ),
 ];
 
 /// The number of rules in [`RULES`].

@@ -155,6 +155,20 @@ const RESHAPING: [&str; 12] = [
     "then",
 ];
 
+/// Whether the typed projection repair works from depends on `keyword`
+/// when it is listed as unmodeled: a [`RESHAPING`] keyword, Draft-07
+/// `dependencies`, or `$schema` makes a value opaque to repair, and
+/// `unevaluatedProperties` or `patternProperties` decides how an object
+/// scope treats unknown members. Repair consults no other unmodeled
+/// keyword; those are enforced only by validation against the exact schema.
+pub(super) fn consulted_by_repair(keyword: &str) -> bool {
+    RESHAPING.contains(&keyword)
+        || matches!(
+            keyword,
+            "dependencies" | "$schema" | "unevaluatedProperties" | "patternProperties"
+        )
+}
+
 /// Portable charge for one retained `(String, String)` keyword record.
 const KEYWORD_RECORD: u64 = 48;
 

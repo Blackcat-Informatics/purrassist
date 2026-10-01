@@ -85,7 +85,7 @@ pub fn evidence(entry: &Evidence) -> Node {
         ),
     ])
 }
-fn losses(entries: &[Loss]) -> Node {
+pub(crate) fn losses(entries: &[Loss]) -> Node {
     array(entries.iter().map(|entry| {
         object([
             ("evidence", evidence(&entry.evidence)),
@@ -93,7 +93,7 @@ fn losses(entries: &[Loss]) -> Node {
         ])
     }))
 }
-fn inferences(entries: &[Inference]) -> Node {
+pub(crate) fn inferences(entries: &[Inference]) -> Node {
     array(entries.iter().map(|entry| {
         object([
             ("evidence", evidence(&entry.evidence)),
@@ -209,16 +209,45 @@ fn ambiguity(alternatives: &[AlternativeReceipt], validations: &[Validation]) ->
 /// ```
 #[must_use]
 pub fn source_document(source: &SourceDocument) -> Node {
-    let digest = ("digest", string(source.digest.to_string()));
-    if let Some(text) = source.text() {
-        return object([digest, ("text", string(text))]);
+    object([
+        ("digest", string(source.digest.to_string())),
+        exact_bytes(&source.bytes),
+    ])
+}
+
+/// The byte-exact member encoding `bytes`: `("text", string)` when they are
+/// valid UTF-8, otherwise `("bytes_hex", lowercase hexadecimal)`.
+pub(crate) fn exact_bytes(bytes: &[u8]) -> (&'static str, Node) {
+    if let Ok(text) = core::str::from_utf8(bytes) {
+        return ("text", string(text));
     }
-    let mut hex = String::with_capacity(source.bytes.len().saturating_mul(2));
-    for byte in &source.bytes {
+    let mut hex = String::with_capacity(bytes.len().saturating_mul(2));
+    for byte in bytes {
         hex.push(char::from(HEX_DIGITS[usize::from(byte >> 4)]));
         hex.push(char::from(HEX_DIGITS[usize::from(byte & 0x0f)]));
     }
-    object([digest, ("bytes_hex", string(hex))])
+    ("bytes_hex", string(hex))
+}
+
+/// A half-open byte range as `{"start", "end"}`, saturating at `u64::MAX`.
+pub(crate) fn byte_range(range: &core::ops::Range<usize>) -> Node {
+    object([
+        (
+            "start",
+            integer(u64::try_from(range.start).unwrap_or(u64::MAX)),
+        ),
+        ("end", integer(u64::try_from(range.end).unwrap_or(u64::MAX))),
+    ])
+}
+
+/// One validation result in the receipt's wire representation.
+pub(crate) fn validation(entry: &Validation) -> Node {
+    object([
+        ("validator", string(&entry.validator)),
+        ("constraint", string(&entry.constraint)),
+        ("passed", Node::new(Value::Bool(entry.passed))),
+        ("diagnostics", array(entry.diagnostics.iter().map(string))),
+    ])
 }
 const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
 fn budget(value: Budget) -> Node {
@@ -297,14 +326,7 @@ impl Receipt {
             ("inferences", inferences(&self.inferences)),
             (
                 "validations",
-                array(self.validations.iter().map(|entry| {
-                    object([
-                        ("validator", string(&entry.validator)),
-                        ("constraint", string(&entry.constraint)),
-                        ("passed", Node::new(Value::Bool(entry.passed))),
-                        ("diagnostics", array(entry.diagnostics.iter().map(string))),
-                    ])
-                })),
+                array(self.validations.iter().map(validation)),
             ),
             (
                 "termination",

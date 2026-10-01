@@ -156,6 +156,16 @@ pub struct Policies {
     /// none and default to [`Effects::Mutating`]). Naming a tool the set
     /// does not declare is a request error ([`Policies::validate`]).
     pub effects: BTreeMap<String, Effects>,
+    /// Canonical parsing only ([`crate::Effort::Exact`]): no repair rule
+    /// ([`Rule::is_repair`]) is applied. Every reading that needs one is
+    /// blocked by [`UnresolvedReason::RepairNotPermitted`] naming the first
+    /// such rule, carries `null` arguments and no repair entries (only its
+    /// parsing and record entries), and is never validated. Names are
+    /// never matched: a name that is neither a declared name nor an alias
+    /// is blocked by `RepairNotPermitted` naming `tool_call.name.match`
+    /// (without matching, a near-miss and a hallucinated name are not told
+    /// apart, and no matching work is charged).
+    pub exact: bool,
 }
 
 impl Policies {
@@ -170,6 +180,7 @@ impl Policies {
         Self {
             selection: PolicySelection::All(policy),
             effects: BTreeMap::new(),
+            exact: false,
         }
     }
 
@@ -286,20 +297,20 @@ impl CallLedger {
             .map(|evidence| evidence.rule.as_str())
     }
 
-    fn extend(&mut self, other: Self) {
+    pub(crate) fn extend(&mut self, other: Self) {
         self.evidence.extend(other.evidence);
         self.losses.extend(other.losses);
         self.inferences.extend(other.inferences);
     }
 
-    fn entries(&self) -> u64 {
+    pub(crate) fn entries(&self) -> u64 {
         size(self.evidence.len() + self.losses.len() + self.inferences.len())
     }
 
     /// Record one application of `rule`: its evidence, a loss of
     /// `original` when the rule loses information, and a guess inference
     /// of `value` when it guesses.
-    fn record(
+    pub(crate) fn record(
         &mut self,
         rule: &Rule,
         evidence: Evidence,
@@ -352,7 +363,7 @@ impl CallLedger {
 }
 
 /// The loss kind a rule id records; data for an unregistered id.
-fn loss_kind(rule: &str) -> LossKind {
+pub(crate) fn loss_kind(rule: &str) -> LossKind {
     rules::rule(rule)
         .and_then(|rule| rule.loss)
         .unwrap_or(LossKind::Data)
@@ -406,6 +417,49 @@ pub enum UnresolvedReason {
     },
     /// A length stop cut the call off (truncation).
     Truncated,
+    /// The request's tool choice was `none`, so no call may be made
+    /// (recorded by [`ToolSet::recover_governed`]).
+    ToolChoiceNone,
+    /// The request forced a call to another tool (recorded by
+    /// [`ToolSet::recover_governed`]).
+    ToolChoiceForced {
+        /// The canonical name of the tool the request forces.
+        expected: String,
+    },
+    /// Only canonical parsing is permitted ([`Policies::exact`]) and the
+    /// reading needs this repair rule.
+    RepairNotPermitted {
+        /// The first repair rule the reading needs.
+        rule: String,
+    },
+}
+
+impl UnresolvedReason {
+    /// A stable snake-case code naming the variant, used by wire forms.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::UnresolvedReason;
+    /// assert_eq!(UnresolvedReason::Truncated.code(), "truncated");
+    /// assert_eq!(UnresolvedReason::ToolChoiceForced { expected: "f".into() }.code(), "tool_choice_forced");
+    /// ```
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::MissingName => "missing_name",
+            Self::UnknownTool { .. } => "unknown_tool",
+            Self::RuleNotAdmitted { .. } => "rule_not_admitted",
+            Self::InvalidArgument { .. } => "invalid_argument",
+            Self::ArgumentsNotObject => "arguments_not_object",
+            Self::UnknownParameter { .. } => "unknown_parameter",
+            Self::MissingRequired { .. } => "missing_required",
+            Self::SchemaValidation => "schema_validation",
+            Self::Malformed { .. } => "malformed",
+            Self::Truncated => "truncated",
+            Self::ToolChoiceNone => "tool_choice_none",
+            Self::ToolChoiceForced { .. } => "tool_choice_forced",
+            Self::RepairNotPermitted { .. } => "repair_not_permitted",
+        }
+    }
 }
 
 impl fmt::Display for UnresolvedReason {
@@ -432,6 +486,19 @@ impl fmt::Display for UnresolvedReason {
             Self::SchemaValidation => formatter.write_str("the arguments fail the tool's schema"),
             Self::Malformed { detail } => write!(formatter, "malformed call: {detail}"),
             Self::Truncated => formatter.write_str("the call was cut off by a length stop"),
+            Self::ToolChoiceNone => {
+                formatter.write_str("the request's tool choice `none` forbids every call")
+            }
+            Self::ToolChoiceForced { expected } => {
+                write!(
+                    formatter,
+                    "the request's tool choice forces tool `{expected}`"
+                )
+            }
+            Self::RepairNotPermitted { rule } => write!(
+                formatter,
+                "repair `{rule}` is needed but only canonical parsing is permitted"
+            ),
         }
     }
 }
@@ -569,6 +636,10 @@ pub struct ResolvedCall {
     pub outcome: CallOutcome,
     /// The selected reading (the first of the least-cost readings).
     pub reading: CallReading,
+    /// How many distinct readings compete at the least cost: the selected
+    /// reading and the first `competing - 1` alternatives (1 unless the call
+    /// is `Ambiguous`).
+    pub competing: usize,
     /// Every other reading, best first (R5.2).
     pub alternatives: Vec<CallReading>,
     /// For an `Ambiguous` call, the provenance that distinguishes the two
@@ -976,7 +1047,10 @@ impl<'a> Resolver<'a> {
         let mut readings: Vec<(CallReading, Digest, Digest)> = Vec::new();
         for (index, raw) in segment.readings.iter().enumerate() {
             let base = self.base(segment.derivations.get(index), governor)?;
-            for reading in self.readings(raw, base, governor)? {
+            for mut reading in self.readings(raw, base, governor)? {
+                if self.policies.exact {
+                    exact(&mut reading, governor)?;
+                }
                 let (content, full) = reading_digests(&reading, governor)?;
                 readings.push((reading, content, full));
             }
@@ -1048,6 +1122,7 @@ impl<'a> Resolver<'a> {
             closure: first.closure,
             outcome,
             reading,
+            competing,
             alternatives: ordered,
             distinguishing,
         })
@@ -1236,6 +1311,15 @@ impl<'a> Resolver<'a> {
                 )
             });
             return Ok(vec![Target::Tool(tool, change)]);
+        }
+        if self.policies.exact {
+            // Exact parsing never matches names: reading any other name as a
+            // tool would need the guess `tool_call.name.match`.
+            return Ok(vec![Target::Blocked(
+                UnresolvedReason::RepairNotPermitted {
+                    rule: "tool_call.name.match".into(),
+                },
+            )]);
         }
         let result = matching::resolve_governed(
             &name.value,
@@ -2447,6 +2531,38 @@ fn rebase(node: &mut Node, offset: usize) {
         }
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
     }
+}
+
+/// Under exact parsing, block a reading that needs a repair: name the first
+/// repair rule, drop every repair entry, and keep no repaired value.
+fn exact(reading: &mut CallReading, governor: &mut Governor) -> Result<(), StopReason> {
+    let is_repair = |id: &str| rules::rule(id).is_none_or(Rule::is_repair);
+    let Some(rule) = reading
+        .repairs
+        .evidence
+        .iter()
+        .find(|evidence| is_repair(&evidence.rule))
+        .map(|evidence| evidence.rule.clone())
+    else {
+        return Ok(());
+    };
+    governor.charge(Resource::Work, reading.repairs.entries().saturating_add(1))?;
+    reading
+        .repairs
+        .evidence
+        .retain(|evidence| !is_repair(&evidence.rule));
+    reading
+        .repairs
+        .losses
+        .retain(|loss| !is_repair(&loss.loss.evidence.rule));
+    reading
+        .repairs
+        .inferences
+        .retain(|inference| !is_repair(&inference.evidence.rule));
+    reading.arguments = Node::new(Value::Null);
+    reading.validations.clear();
+    reading.blocker = Some(UnresolvedReason::RepairNotPermitted { rule });
+    Ok(())
 }
 
 /// Extend each partial draft by each alternative of the next slot.

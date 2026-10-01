@@ -18,6 +18,14 @@
 //! into the typed shape model, list every keyword the model does not
 //! represent, and render it back byte for byte (see [`DeclarationForm`]).
 //!
+//! [`ToolSet::recover`] and [`ToolSet::recover_governed`] recover the tool
+//! calls of one model turn (the `tool_call.recover.v1` operation): the
+//! [`Recognizer`] segments the raw output over a [`DialectSet`],
+//! [`resolve_forest`] resolves every call against the tool set, and the
+//! result is a [`ToolCalls`] value with per-call outcomes, itemized repairs,
+//! ids, the tool choice check, and how the turn finished, plus a receipt
+//! (see [`recover`] for every step and outcome rule).
+//!
 //! Names (tools, aliases, parameters, parameter aliases) are non-empty and
 //! match `[A-Za-z0-9_.:-]+`; two collide when their [`collision_key`]s are
 //! equal. Results never depend on declaration order.
@@ -41,6 +49,7 @@ mod dialect;
 mod from_node;
 mod ir;
 mod recognizer;
+pub mod recover;
 pub mod resolve;
 pub mod rules;
 mod shape;
@@ -58,6 +67,11 @@ pub use ir::{
     Segment, Spanned, UnresolvedArgument,
 };
 pub use recognizer::{GenerationStop, ReasoningPolicy, RecognizedTurn, Recognizer};
+pub use recover::{
+    AmbiguityPolicy, Finish, IdGenerator, IdPolicy, KeywordUse, RECOVER_OPERATION, RejectedCall,
+    TOOL_CALL_VALIDATOR, ToolCall, ToolCalls, ToolChoice, ToolChoiceCheck, ToolChoiceError,
+    ToolRecoveryRequest,
+};
 pub use resolve::{
     CallFacts, CallLedger, CallLoss, CallOutcome, CallReading, Policies, PolicySelection,
     ResolvedCall, ResolvedChoice, ResolvedPiece, ResolvedSegment, ResolvedTurn, UnresolvedReason,

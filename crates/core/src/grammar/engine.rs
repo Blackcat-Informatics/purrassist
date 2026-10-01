@@ -1079,6 +1079,10 @@ impl<'s> Step<'_, 's> {
             match self.reading(&path, shape, governor)? {
                 Ok(call) => {
                     if !readings.contains(&call) {
+                        // Every reading beyond the first competes.
+                        if !readings.is_empty() {
+                            governor.charge(Resource::Candidates, 1)?;
+                        }
                         readings.push(call);
                     }
                 }
@@ -1822,7 +1826,10 @@ impl<'s> Engine<'s> {
         if seeds.is_empty() {
             return Ok(Vec::new());
         }
-        let mut search = Search::new(governor);
+        // Repairs explored here are not competing answers: only the readings
+        // of a completed segment are (see `segment`), so the queue charges
+        // `Work` and `ScratchBytes` but no `Candidates`.
+        let mut search = Search::uncounted(governor);
         for seed in seeds {
             let ledger = Ledger {
                 cost: seed.thread.cost,
