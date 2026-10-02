@@ -220,6 +220,22 @@ declarations the model was shown and lose nothing.
   (`ToolCall::keywords`, with whether repair consulted it) and enforced by
   validation against the exact schema. A malformed declaration is a hard
   error; no declaration is skipped.
+- **Which bytes.** The adapters read exactly the text they are given, and
+  the render-back (`ToolDeclaration::text`, `parameters_text`) and the
+  schema digest (each call's schema validation `constraint`, which binds
+  the parameters text's exact bytes) refer to that text:
+  - Rust: the `&str` passed to `ToolSet::from_*`.
+  - CLI `recover-tool-calls --tools FILE`: the file's bytes, passed through
+    unparsed (whitespace, member order, number spellings and string
+    escapes as written).
+  - MCP `recover_tool_calls` with `tools` as a string holding the
+    declaration JSON: that string's characters, byte for byte.
+  - MCP `recover_tool_calls` with `tools` as a structured value: JSON-RPC
+    has already parsed it, so the adapters read its compact
+    re-serialization, which keeps member order, duplicate members and
+    number spellings (`1.50e3` stays `1.50e3`) but not the caller's
+    whitespace or string escape spellings. Pass the string form when the
+    digests must match the caller's own bytes.
 - **Proved by** `tool_adapters::openai_render_back_is_byte_exact`,
   `tool_adapters::mcp_render_back_is_byte_exact`,
   `tool_adapters::anthropic_render_back_is_byte_exact`,
@@ -227,7 +243,13 @@ declarations the model was shown and lose nothing.
   `tool_adapters::adapter_schema_compiled_from_exact_text_rejects_violation`,
   `tool_adapters::unmodeled_keywords_are_listed`,
   `tool_adapters::invalid_declaration_is_hard_error`, and
-  `tool_call_recover::anyof_ref_enforced_on_recovered_call`.
+  `tool_call_recover::anyof_ref_enforced_on_recovered_call`, the CLI test
+  `tool_calls_cli::tools_file_bytes_reach_the_adapter_exactly` (a
+  declaration file with unusual spacing, member order and `1.50e3`: the
+  receipt's schema digest is that of the file's parameters bytes), and the
+  host test `tool_call_tools::raw_declaration_string_is_read_byte_exact`
+  (the string form byte-exact; the structured form compact with member
+  order and number spellings kept).
 
 ### C6. One caller-chosen policy, stop reason as input
 
@@ -401,7 +423,9 @@ equivalence.
 
 The stdio MCP server (`purrassist mcp --root DIRECTORY`) lists
 `recover_tool_calls`. Its arguments are `output` (the turn, a string) and
-`tools` (the declarations) plus optional `tools_format` (`openai`, the
+`tools` (the declarations: the array or object itself, or a string holding
+the raw declaration JSON, which the adapters read byte for byte; see
+[C5](#c5-lossless-declaration-adapters)) plus optional `tools_format` (`openai`, the
 default, `mcp`, or `anthropic`), `dialects` (built-in dialect ids; default
 all of them), `stop` (`stop`, `length`, `tool_calls`, `content_filter`,
 `unknown`, or `{"stop_sequence": STRING}`), `tool_choice` (an `OpenAI` or

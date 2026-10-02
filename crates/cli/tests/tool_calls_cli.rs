@@ -1061,3 +1061,37 @@ fn exit_code_without_a_value() {
         Some("budget_exceeded")
     );
 }
+
+/// The adapters read the `--tools` file's exact bytes: a declaration with
+/// unusual but valid formatting (spaces around colons, `"function"`
+/// before `"type"`, `"name"` after `"parameters"`, `1.50e3` as a
+/// `maximum`) compiles its schema from the exact parameters text, so the
+/// receipt's schema digest is that of the file's bytes, not of a
+/// re-serialization.
+#[test]
+fn tools_file_bytes_reach_the_adapter_exactly() {
+    let parameters = r#"{"properties" : {"path":{"type":"string"},  "depth":{"maximum":1.50e3, "type":"integer"}},"type":"object","required":["path"]}"#;
+    let declarations = format!(
+        "[ {{  \"function\" : {{ \"parameters\" : {parameters} , \"name\" : \"list_dir\" }}, \"type\":\"function\" }} ]\n"
+    );
+    let turn =
+        br#"<tool_call>{"name": "list_dir", "arguments": {"path": "src", "depth": 2}}</tool_call>"#;
+    let (output, tools) = run_with(&declarations, &[], turn);
+    fs::remove_file(tools).unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let node = result(&output);
+    let exact = purrassist::Schema::compile(parameters)
+        .expect("the exact parameters text compiles")
+        .digest()
+        .to_string();
+    let canonical = purrassist::Schema::compile(&json::parse(parameters).unwrap().to_json())
+        .expect("the re-serialized text compiles")
+        .digest()
+        .to_string();
+    assert_ne!(exact, canonical, "formatting must change the digest");
+    assert_eq!(
+        node.pointer("/receipt/validations/0/constraint")
+            .and_then(Node::as_str),
+        Some(exact.as_str())
+    );
+}

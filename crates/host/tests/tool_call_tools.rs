@@ -683,3 +683,43 @@ fn unparsed_markup_over_mcp() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// `tools` may be a string holding the raw declaration JSON: the adapters
+/// read those bytes exactly, so the schema digest is that of the caller's
+/// parameters text. A structured `tools` value (already parsed by JSON-RPC)
+/// is written back compactly, keeping member order and number spellings,
+/// so its digest is that of the compact text.
+#[test]
+fn raw_declaration_string_is_read_byte_exact() {
+    let (tools, root) = tools("raw-declarations");
+    let parameters = r#"{"properties" : {"path":{"type":"string"},  "depth":{"maximum":1.50e3, "type":"integer"}},"type":"object","required":["path"]}"#;
+    let declarations = format!(
+        "[ {{  \"function\" : {{ \"parameters\" : {parameters} , \"name\" : \"list_dir\" }}, \"type\":\"function\" }} ]"
+    );
+    let output = r#"<tool_call>{"name": "list_dir", "arguments": {"path": "src"}}</tool_call>"#;
+    let digest = |text: &str| Schema::compile(text).unwrap().digest().to_string();
+    let constraint = |node: &Node| {
+        node.pointer("/receipt/validations/0/constraint")
+            .and_then(Node::as_str)
+            .map(str::to_owned)
+    };
+    let raw = json::parse(&format!(
+        r#"{{"output":{},"tools":{}}}"#,
+        json::quote(output),
+        json::quote(&declarations)
+    ))
+    .unwrap();
+    let node = tools.call("recover_tool_calls", &raw).unwrap();
+    assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+    assert_eq!(constraint(&node), Some(digest(parameters)));
+    let structured = json::parse(&format!(
+        r#"{{"output":{},"tools":{declarations}}}"#,
+        json::quote(output)
+    ))
+    .unwrap();
+    let node = tools.call("recover_tool_calls", &structured).unwrap();
+    let compact = json::parse(parameters).unwrap().to_json();
+    assert!(compact.contains("1.50e3") && compact.starts_with(r#"{"properties""#));
+    assert_eq!(constraint(&node), Some(digest(&compact)));
+    std::fs::remove_dir_all(root).unwrap();
+}

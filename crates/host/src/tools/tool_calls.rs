@@ -84,10 +84,7 @@ pub(super) fn recover(
     for (tool, effects) in effects(options.get("effects"))? {
         request = request.effects(tool, effects);
     }
-    let declarations = options
-        .get("tools")
-        .ok_or("missing argument tools")?
-        .to_json();
+    let declarations = declarations(options.get("tools").ok_or("missing argument tools")?);
     let format = text(options.get("tools_format"), "tools_format")?.unwrap_or("openai");
     let mut governor = super::governor(request.budget, cancellation);
     let compiled = match format {
@@ -113,6 +110,21 @@ pub(super) fn recover(
         }
     }
     Ok(tools.recover_governed(output, &request, &mut governor))
+}
+
+/// The declaration text the adapters read, whose exact bytes their
+/// render-back and schema digests refer to. A `tools` string is the
+/// caller's raw declaration JSON, passed through byte for byte (the CLI
+/// passes its `--tools` file this way, and MCP callers may too). A
+/// structured `tools` value (an array or object, which JSON-RPC has already
+/// parsed) is written back compactly: its member order, duplicate members
+/// and number spellings (`1.50e3` stays `1.50e3`) are kept, but the
+/// caller's whitespace and string escape spellings are not.
+fn declarations(tools: &Node) -> String {
+    match &tools.value {
+        Value::String(text) => text.clone(),
+        _ => tools.to_json(),
+    }
 }
 
 /// The `Unresolved` result of a stop before recovery began: the receipt

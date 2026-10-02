@@ -15,7 +15,9 @@ purrassist mcp --root /path/to/workspace
 `recover-tool-calls` reads one model turn as raw bytes from `FILE` or stdin
 (16 MiB limit; invalid UTF-8 is kept and recorded as a
 `tool_call.input.invalid-utf8` loss) and recovers its tool calls against the
-declarations in `--tools` (`--tools-format openai`, `mcp`, or `anthropic`).
+declarations in `--tools` (`--tools-format openai`, `mcp`, or `anthropic`),
+whose bytes the adapters read exactly as written (their render-back and schema
+digests refer to the file's own bytes).
 It prints the same result as the `recover_tool_calls` tool: per-call outcomes,
 itemized repairs and losses, rejected attempts, the tool-choice check, the
 turn's finish, an optional `--emit` re-emission (`openai` for the `tool_calls`

@@ -239,11 +239,10 @@ fn recover_tool_calls(args: &[String]) -> Result<u8, String> {
         }
         position += 2;
     }
+    // The file's exact text: the adapters' render-back and schema digests
+    // refer to the caller's bytes, not to a re-serialization.
     let declarations = read_input(Some(tools_path.ok_or("--tools is required")?))?;
-    options.push((
-        "tools",
-        json::parse(&declarations).map_err(|e| e.to_string())?,
-    ));
+    options.push(("tools", string(declarations)));
     if !dialects.is_empty() {
         options.push(("dialects", array(dialects)));
     }
