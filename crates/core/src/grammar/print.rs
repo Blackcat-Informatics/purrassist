@@ -446,6 +446,20 @@ impl<'g> Printer<'g> {
         }
     }
 
+    /// Whether `expr` holds a slot outside every capture (a value the
+    /// grammar reads and discards, which no printing can supply).
+    pub(crate) fn bare_slot(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Slot { .. } => true,
+            Expr::Sequence(items) | Expr::Choice(items) => {
+                items.iter().any(|item| self.bare_slot(item))
+            }
+            Expr::Repeat { inner, .. } => self.bare_slot(inner),
+            Expr::Reference(id) => self.bare_slot(self.grammar.production_expr(*id)),
+            _ => false,
+        }
+    }
+
     /// Whether `expr` is one terminal (directly or through references).
     fn terminal(&self, expr: &Expr) -> bool {
         match expr {

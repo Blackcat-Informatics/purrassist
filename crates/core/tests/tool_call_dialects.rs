@@ -220,6 +220,7 @@ fn all_registered_dialects_have_anchor_fixtures() {
     assert_eq!(
         ids,
         [
+            "anthropic-tool-use.v1",
             "deepseek-v3.1.v1",
             "deepseek-v3.v1",
             "hermes.v1",
@@ -427,6 +428,34 @@ fn assert_kimi_call(raw: &str, call: &RawCall, file: &str) {
     assert!(arguments.equivalent(&call.arguments.root), "{file}");
 }
 
+/// One Anthropic `tool_use` block: a JSON object whose type, id, name and
+/// input are the call's.
+fn assert_anthropic_block(raw: &str, call: &RawCall, file: &str) {
+    let block = json::parse(raw).expect("block JSON");
+    assert_eq!(
+        string_member(&block, "type").as_deref(),
+        Some("tool_use"),
+        "{file}"
+    );
+    assert_eq!(
+        string_member(&block, "id"),
+        call.id.as_ref().map(|id| id.value.clone()),
+        "{file}"
+    );
+    assert_eq!(
+        string_member(&block, "name").as_deref(),
+        call.name.as_ref().map(|name| name.value.as_str()),
+        "{file}"
+    );
+    assert!(
+        block
+            .get("input")
+            .expect("input")
+            .equivalent(&call.arguments.root),
+        "{file}"
+    );
+}
+
 #[test]
 fn ir_spans_slice_back_to_source() {
     for dialect in DialectId::BUILT_IN {
@@ -462,6 +491,8 @@ fn ir_spans_slice_back_to_source() {
                     assert_deepseek_call(&dialect, raw, call, &fixture.file);
                 } else if dialect == DialectId::KimiK2 {
                     assert_kimi_call(raw, call, &fixture.file);
+                } else if dialect == DialectId::AnthropicToolUse {
+                    assert_anthropic_block(raw, call, &fixture.file);
                 } else if dialect == DialectId::MistralV11 {
                     // [TOOL_CALLS]NAME[CALL_ID]ID[ARGS]{...}: the arguments
                     // after the last [ARGS] are the call's.
@@ -631,14 +662,39 @@ fn reasoning_markers_are_declared() {
         DialectId::MistralV11.grammar().reasoning(),
         Some((&b"[THINK]"[..], &b"[/THINK]"[..]))
     );
-    let set = dialect_set(&DialectId::BUILT_IN);
-    assert_eq!(
-        set.reasoning_markers(),
-        [
-            (b"<think>".to_vec(), b"</think>".to_vec()),
-            (b"[THINK]".to_vec(), b"[/THINK]".to_vec())
-        ]
+    // Anthropic thinking and redacted_thinking blocks, compact and with
+    // one space after each colon and comma.
+    let anthropic: Vec<(String, String)> = DialectId::AnthropicToolUse
+        .grammar()
+        .reasoning_markers()
+        .iter()
+        .map(|(open, close)| {
+            (
+                String::from_utf8(open.clone()).expect("UTF-8"),
+                String::from_utf8(close.clone()).expect("UTF-8"),
+            )
+        })
+        .collect();
+    assert_eq!(anthropic.len(), 4);
+    assert!(
+        anthropic
+            .iter()
+            .all(|(open, _)| open.starts_with("{\"type\":"))
     );
+    let set = dialect_set(&DialectId::BUILT_IN);
+    let mut expected = vec![
+        (b"<think>".to_vec(), b"</think>".to_vec()),
+        (b"[THINK]".to_vec(), b"[/THINK]".to_vec()),
+    ];
+    expected.extend(
+        DialectId::AnthropicToolUse
+            .grammar()
+            .reasoning_markers()
+            .iter()
+            .cloned(),
+    );
+    expected.sort();
+    assert_eq!(set.reasoning_markers(), expected);
 }
 
 fn results(turn: &RecognizedTurn) -> Vec<&RawCall> {
@@ -753,6 +809,36 @@ fn result_productions_read_tool_results() {
     );
 }
 
+/// Anthropic tool results are `tool_result` blocks: string content or an
+/// array of text blocks, naming the `tool_use` block they answer.
+#[test]
+fn anthropic_result_production_reads_tool_result_blocks() {
+    let tools = ToolSet::compile([], Budget::default()).expect("no tools");
+    let set = dialect_set(&[DialectId::AnthropicToolUse]);
+    for (source, expected) in [
+        (
+            r#"{"type":"tool_result","tool_use_id":"toolu_01","content":"22 C"}"#,
+            r#""22 C""#,
+        ),
+        (
+            r#"{"type": "tool_result", "tool_use_id": "toolu_01", "content": [{"type": "text", "text": "22 C"}], "is_error": false}"#,
+            r#"[{"type": "text", "text": "22 C"}]"#,
+        ),
+    ] {
+        let turn = recognize(&set, &tools, source);
+        let found = results(&turn);
+        assert_eq!(found.len(), 1, "{:#?}", turn.pieces());
+        assert_eq!(
+            found[0].capture_text(CaptureKind::Content, source.as_bytes()),
+            Some(expected)
+        );
+        assert_eq!(
+            found[0].id.as_ref().map(|id| id.value.as_str()),
+            Some("toolu_01")
+        );
+    }
+}
+
 /// Kimi-K2 tool results are tool messages headed `## Return of ID`.
 #[test]
 fn kimi_result_production_reads_tool_messages() {
@@ -864,6 +950,21 @@ fn declaration_productions_match_tool_declarations() {
                     .expect("schema")
             )
         );
+    }
+    // Anthropic tools entries are the Anthropic wire declaration form.
+    let set = declaration_reader(&DialectId::AnthropicToolUse);
+    for fixture in fixtures(&DialectId::AnthropicToolUse) {
+        for tool in fixture.tools.tools() {
+            let declaration = tool
+                .render_declaration(DeclarationForm::Anthropic)
+                .expect("declaration");
+            let turn = recognize(&set, &empty, &declaration);
+            let found = calls(&turn);
+            assert_eq!(found.len(), 1, "{declaration}");
+            assert_eq!(found[0].span, 0..declaration.len(), "{declaration}");
+            assert_eq!(found[0].name.as_ref().expect("name").value, tool.name());
+            assert!(found[0].arguments.root.equivalent(tool.schema_document()));
+        }
     }
     // Qwen3-Coder lists tools as XML function entries.
     let set = declaration_reader(&DialectId::Qwen3CoderXml);

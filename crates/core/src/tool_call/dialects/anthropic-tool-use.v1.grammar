@@ -1,0 +1,134 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# Anthropic Messages API tool calls as text. A call is one `tool_use`
+# content block:
+#   {"type": "tool_use", "id": ID, "name": NAME, "input": ARGS}
+# with its members in any order. The block is read wherever it occurs:
+# standalone, in a `content` array, in an assistant message
+# ({"role": "assistant", "content": [...]}) or in a whole API response
+# ({"id": "msg_...", "type": "message", ..., "content": [...],
+# "stop_reason": "tool_use"}); the envelope, the array and the other
+# blocks are content around the calls. ARGS is read by the self-delimiting
+# json codec (a stringified object is decoded and flagged). A block opens
+# at `{` but becomes a call attempt only on Anthropic evidence: its
+# `"type": "tool_use"` member, or an `"id"` beginning `toolu_` (so a block
+# that lost its type is still read); any other JSON object stays content.
+# Repairs, each recorded:
+# - `"arguments"` or `"parameters"` written for `"input"` after the block's
+#   evidence is read through a declared confusable
+#   (tool_call.markup.terminal-confusable);
+# - the block's closing brace is a closer class, so a missing one is
+#   inserted at the end of output (tool_call.markup.missing-closers-at-end).
+# `thinking` and `redacted_thinking` blocks are reasoning (compact and
+# single-space spellings). A streaming `content_block_start` event, whose
+# nested `content_block` would otherwise read as a call with empty input,
+# is a rejected attempt. First-party grammar; see
+# docs/tool-calls/dialects/anthropic-tool-use.v1.md for the public sources
+# and for what is deliberately not accepted.
+grammar "anthropic-tool-use.v1";
+
+reasoning "{\"type\":\"thinking\",\"thinking\":\"" "\",\"signature\":\"";
+reasoning "{\"type\": \"thinking\", \"thinking\": \"" "\", \"signature\": \"";
+reasoning "{\"type\":\"redacted_thinking\",\"data\":\"" "\"}";
+reasoning "{\"type\": \"redacted_thinking\", \"data\": \"" "\"}";
+
+# Keys some producers write for the block's arguments.
+confusable "\"input\"" "\"arguments\"";
+confusable "\"input\"" "\"parameters\"";
+
+closer block-end = "}";
+
+tool-name = /[A-Za-z0-9_.:-]+/;
+call-id = /[A-Za-z0-9_.:-]+/;
+toolu-id = /toolu_[A-Za-z0-9_.:-]*/;
+ws = /[ \t\r\n]+/;
+sep = ws? "," ws?;
+json-string = /"([^"\\\x00-\x1F]|\\["\\\/bfnrt]|\\u[0-9A-Fa-f]{4})*"/;
+
+# The members of a block. The arguments slot ends where its JSON value
+# does: NUL cannot occur in JSON text, so the delimiter never cuts a value
+# short.
+type-member = "\"type\"" ws? ":" ws? "\"tool_use\"" commit;
+id-member = "\"id\"" ws? ":" ws? "\"" id:call-id "\"";
+toolu-member = "\"id\"" ws? ":" ws? "\"" id:toolu-id "\"" commit;
+name-member = "\"name\"" ws? ":" ws? "\"" name:tool-name "\"";
+input-member = "\"input\"" ws? ":" ws? arguments:slot(json, "\x00");
+early-input-member = "\"in" "put\"" ws? ":" ws? arguments:slot(json, "\x00");
+
+# Every order of the members, factored by their first members (so the
+# alternatives fan out one member at a time). A block holds `"type": "tool_use"`, or (when
+# it lost its type) an id beginning `toolu_`; the id may be missing. The
+# canonical order comes first: it is how a block prints. An input before
+# the evidence is spelled as two literals, so the confusable keys
+# ("arguments", "parameters"), which apply inside any literal holding
+# `"input"`, are read only after the block's evidence: other dialects'
+# objects with an "arguments" or "parameters" member never run a second
+# arguments reading here.
+members = type-member sep (id-member sep (name-member sep input-member
+            | input-member sep name-member)
+          | name-member sep (id-member sep input-member
+            | input-member (sep id-member)?)
+          | input-member sep (id-member sep name-member
+            | name-member (sep id-member)?))
+        | id-member sep (type-member sep (name-member sep input-member
+            | input-member sep name-member)
+          | name-member sep (type-member sep input-member
+            | early-input-member sep type-member)
+          | early-input-member sep (type-member sep name-member
+            | name-member sep type-member))
+        | name-member sep (type-member sep (id-member sep input-member
+            | input-member (sep id-member)?)
+          | id-member sep (type-member sep input-member
+            | early-input-member sep type-member)
+          | early-input-member sep (type-member (sep id-member)?
+            | id-member sep type-member
+            | toolu-member)
+          | toolu-member sep input-member)
+        | early-input-member sep (type-member sep (id-member sep name-member
+            | name-member (sep id-member)?)
+          | id-member sep (type-member sep name-member
+            | name-member sep type-member)
+          | name-member sep (type-member (sep id-member)?
+            | id-member sep type-member
+            | toolu-member)
+          | toolu-member sep name-member)
+        | toolu-member sep (name-member sep input-member
+          | input-member sep name-member);
+
+# Optional block metadata the API may add after the members (who called
+# the tool, the toolset it belongs to): read, not part of the call.
+extra-key = "\"caller\"" | "\"toolset_name\"";
+extra-member = extra-key ws? ":" ws? slot(json, "\x00");
+block = "{" ws? members (sep extra-member)* ws? block-end;
+
+# Streaming events of a tool_use block: its content_block_start (whose
+# nested block would otherwise read as a call with empty input) and its
+# input_json_delta events (which carry the input). They are not calls: such
+# an event never completes and is reported as a rejected attempt spanning
+# its line, never silently content.
+index-member = "\"index\"" ws? ":" ws? /[0-9]+/;
+stream-event = "{" ws? "\"type\"" ws? ":" ws?
+               ("\"content_block_start\"" sep index-member sep "\"content_block\"" ws? ":" ws?
+                "{" ws? "\"type\"" ws? ":" ws? "\"tool_use\""
+               | "\"content_block_delta\"" sep index-member sep "\"delta\"" ws? ":" ws?
+                "{" ws? "\"type\"" ws? ":" ws? "\"input_json_delta\"")
+               commit until("\n", "\x00") "\x00";
+
+call = block | stream-event;
+
+# A tool_result block: the content as a string or an array of text blocks.
+text-block = "{" ws? "\"type\"" ws? ":" ws? "\"text\"" ws? "," ws?
+             "\"text\"" ws? ":" ws? json-string ws? "}";
+result = "{" ws? "\"type\"" ws? ":" ws? "\"tool_result\"" commit sep
+         "\"tool_use_id\"" ws? ":" ws? "\"" id:call-id "\"" sep
+         "\"content\"" ws? ":" ws?
+         content:(json-string | "[" ws? text-block (ws? "," ws? text-block)* ws? "]")
+         (sep "\"is_error\"" ws? ":" ws? ("true" | "false"))?
+         ws? "}";
+
+# One request `tools` entry (a client tool).
+declaration = "{" ws? "\"name\"" ws? ":" ws? "\"" name:tool-name "\""
+              (ws? "," ws? "\"description\"" ws? ":" ws? content:json-string)?
+              ws? "," ws? "\"input_schema\"" ws? ":" arguments:slot(json, "\x00")
+              ws? "}";

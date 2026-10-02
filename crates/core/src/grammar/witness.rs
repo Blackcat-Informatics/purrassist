@@ -612,8 +612,9 @@ impl Fill for Seeded<'_> {
             self.occurrences = occurrences;
             return Ok(Repetition::Parameters(count));
         }
-        let count = if holds.dropped {
-            // Text a call drops is never part of a well-formed call.
+        let count = if holds.dropped || printer.bare_slot(inner) {
+            // Text a call drops is never part of a well-formed call, and a
+            // slot no capture holds has no value to print.
             min
         } else if holds.count > 0 {
             min.max(1)

@@ -247,7 +247,8 @@ pub fn turn_id_prefix(turn: &Digest) -> String {
 ///   recorded as a derived `tool_call.id.dedup` inference naming the
 ///   assigned id; a call of a dialect whose markup carries no id
 ///   (DeepSeek-V3.1, DeepSeek-V3, Hermes, Llama 3 JSON, Qwen3-Coder XML)
-///   is numbered without one, as under `Prefix`.
+///   is numbered without one, as under `Prefix` (Hermes and Llama 3 JSON
+///   keep an id a model adds, as a source id).
 ///   [`ToolCalls::next_id_start`] is the number of calls.
 ///
 ///   Different turns get disjoint numbered ids without any caller state.
@@ -627,8 +628,8 @@ impl ToolRecoveryRequest {
     /// let output = b"<tool_call>\n{\"name\": \"ls\", \"arguments\": {}}\n</tool_call>";
     /// let request = ToolRecoveryRequest::sized(Effort::Standard, output);
     /// // Two `<tool_call>` openers (Qwen3-Coder XML and Hermes) and two `{`
-    /// // where a Llama 3 JSON attempt may open.
-    /// assert_eq!(request.budget, ToolRecoveryRequest::sized_budget(Effort::Standard, output.len(), 4));
+    /// // where a Llama 3 JSON and an Anthropic `tool_use` attempt may open.
+    /// assert_eq!(request.budget, ToolRecoveryRequest::sized_budget(Effort::Standard, output.len(), 6));
     /// assert_eq!(request.dialects.dialects(), DialectSet::built_in().dialects());
     /// ```
     #[must_use]

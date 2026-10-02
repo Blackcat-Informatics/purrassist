@@ -2,7 +2,11 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 #
 # Hermes JSON tool calls: a <tool_call> wrapper around one JSON object with
-# a "name" member and an "arguments" member, in either order. An object
+# a "name" member and an "arguments" member, in either order, optionally
+# after a provider type marker and an id (kept as the call's source id;
+# `optional-id`: a call without one omits nothing). An Anthropic-shaped
+# object ("input" for "arguments") is read with the key recorded as a
+# confusable spelling. An object
 # with an "arguments" member alone is a call that names no tool (the
 # resolver may read the tool from its arguments,
 # tool_call.name.from-arguments, a guess). The arguments
@@ -17,6 +21,12 @@
 # docs/tool-calls/dialects/hermes.v1.md for the public sources and for why a
 # "parameters" key is not accepted.
 grammar "hermes.v1";
+
+optional-id;
+
+# An Anthropic-shaped object inside the wrapper writes its arguments as
+# "input": read as "arguments" (tool_call.markup.terminal-confusable).
+confusable "\"arguments\"" "\"input\"";
 
 reasoning "<think>" "</think>";
 
@@ -39,7 +49,14 @@ name-member = "\"name\"" ws? ":" ws? "\"" name:tool-name "\"";
 arguments-member = "\"arguments\"" ws? ":"
                    arguments:slot(json, "</tool_call>", "</tool_calls>");
 
-call = "<tool_call>" nl? (dropped:preamble)? "{" ws?
+# Members some producers write before the call's own: a provider type
+# marker ("function", "tool_use"), which carries no call data, and the
+# call's id (kept as its source id).
+type-member = "\"type\"" ws? ":" ws? ("\"function\"" | "\"tool_use\"") ws? "," ws?;
+call-id = /[A-Za-z0-9_.:-]+/;
+id-member = "\"id\"" ws? ":" ws? "\"" id:call-id "\"" ws? "," ws?;
+
+call = "<tool_call>" nl? (dropped:preamble)? "{" ws? type-member? id-member?
        (name-member ws? "," ws? arguments-member | arguments-member ws? "," ws? name-member
         | arguments-member)
        ws? "}" nl? (dropped:fence ws?)? call-end;

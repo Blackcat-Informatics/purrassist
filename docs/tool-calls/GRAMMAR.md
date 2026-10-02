@@ -19,7 +19,7 @@ into a `CompiledGrammar`. One compiled grammar serves three purposes:
   choices to print well-formed calls for given argument shapes, for tests and
   corpora.
 
-The nine built-in dialects are written in this DSL:
+The ten built-in dialects are written in this DSL:
 [`qwen3-coder-xml.v1`](../../crates/core/src/tool_call/dialects/qwen3-coder-xml.v1.grammar),
 [`hermes.v1`](../../crates/core/src/tool_call/dialects/hermes.v1.grammar),
 [`openai-tool-calls.v1`](../../crates/core/src/tool_call/dialects/openai-tool-calls.v1.grammar),
@@ -27,8 +27,9 @@ The nine built-in dialects are written in this DSL:
 [`mistral-v3.v1`](../../crates/core/src/tool_call/dialects/mistral-v3.v1.grammar),
 [`mistral-v11.v1`](../../crates/core/src/tool_call/dialects/mistral-v11.v1.grammar),
 [`deepseek-v3.1.v1`](../../crates/core/src/tool_call/dialects/deepseek-v3.1.v1.grammar),
-[`deepseek-v3.v1`](../../crates/core/src/tool_call/dialects/deepseek-v3.v1.grammar), and
-[`kimi-k2.v1`](../../crates/core/src/tool_call/dialects/kimi-k2.v1.grammar).
+[`deepseek-v3.v1`](../../crates/core/src/tool_call/dialects/deepseek-v3.v1.grammar),
+[`kimi-k2.v1`](../../crates/core/src/tool_call/dialects/kimi-k2.v1.grammar), and
+[`anthropic-tool-use.v1`](../../crates/core/src/tool_call/dialects/anthropic-tool-use.v1.grammar).
 A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 [Add a custom dialect](#add-a-custom-dialect).
 
@@ -38,9 +39,9 @@ A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 - `#` starts a comment that runs to the end of the line. Whitespace between
   tokens is insignificant.
 - Identifiers match `[A-Za-z_][A-Za-z0-9_-]*`. Productions and closer classes
-  share one namespace. The keywords `grammar`, `reasoning`, `confusable`,
-  `closer`, `layout`, `until`, `slot`, `commit`, `next`, and `insert` cannot
-  name a production or a closer.
+  share one namespace. The keywords `grammar`, `optional-id`, `reasoning`,
+  `confusable`, `closer`, `layout`, `until`, `slot`, `commit`, `next`, and
+  `insert` cannot name a production or a closer.
 - String literals are double-quoted byte strings with the escapes `\\`, `\"`,
   `\n`, `\r`, `\t`, `\xHH` (one byte), and `\u{HEX}` (one Unicode scalar
   value, encoded as UTF-8). Every literal, delimiter, spelling, and marker is
@@ -53,9 +54,10 @@ A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 | Statement | Meaning |
 | --- | --- |
 | `grammar "ID";` | The header, and the first statement. `ID` matches `[A-Za-z0-9._-]+`; by convention it is versioned (`name.v1`). |
-| `reasoning "OPEN" "CLOSE";` | The dialect's reasoning-block markers (at most one statement). |
+| `reasoning "OPEN" "CLOSE";` | One pair of the dialect's reasoning-block markers. Several statements declare several spellings of a block (repeating a pair is `DuplicateName`). |
 | `confusable "CANONICAL" "VARIANT";` | `VARIANT` is a confusable spelling of `CANONICAL` inside any literal. |
 | `closer NAME = "S1" \| "S2" ...;` | A closer class: `S1` is canonical, the rest are variant spellings. One spelling is allowed. |
+| `optional-id;` | The call's `id:` capture reads an id a model may add, but the format does not provide for one: a call without an id is numbered without a `tool_call.id.dedup` inference, and printing writes no id (`CompiledGrammar::call_carries_ids` is false). The built-in Hermes and Llama 3 JSON dialects declare it. A second statement is `DuplicateName`. |
 | `layout NAME "TEXT";` | Printing only: the class production `NAME` prints as `TEXT` wherever it occurs uncaptured, optional occurrences included. Recognition is unchanged. |
 | `NAME = EXPR;` | A production. |
 
@@ -273,6 +275,9 @@ call = "[TOOL_CALLS]" ws? "[" ws? element (ws? "," ws? next element)* ws? array-
 ## Reasoning markers
 
 `reasoning "<think>" "</think>";` declares the dialect's reasoning block.
+A grammar may declare several marker pairs, one per spelling of a block (the
+built-in Anthropic dialect declares its `thinking` and `redacted_thinking`
+blocks, compact and spaced); `CompiledGrammar::reasoning_markers` lists them.
 A `DialectSet` combines the markers of all its dialects. Under
 `ReasoningPolicy::Separate` (the default) the markers delimit reasoning
 blocks; a call inside a closed block stays reasoning text and is offered only
@@ -339,7 +344,7 @@ offset in the grammar source (`GrammarError::offset`).
 | `Syntax` | Malformed DSL: an unexpected character, a missing `;`, a bad escape, a missing or duplicated header. |
 | `EmptyLiteral` | A literal, delimiter, spelling, or marker is the empty string. |
 | `ReservedName` | A keyword used as a production or closer name. |
-| `DuplicateName` | A name defined twice, a second `reasoning` statement, or a second `layout` for one production. |
+| `DuplicateName` | A name defined twice, a `reasoning` statement repeating an earlier marker pair, or a second `layout` for one production. |
 | `UnknownName` | A reference to an undefined production or closer. |
 | `Recursive` | A production that refers to itself, directly or indirectly. |
 | `UnknownCapture` | A capture kind that is not one of the eight above. |

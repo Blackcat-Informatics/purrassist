@@ -667,3 +667,68 @@ fn kimi_k2_recovers_and_emits_via_cli() {
     );
     fs::remove_file(tools).unwrap();
 }
+
+/// Anthropic `tool_use` blocks with no `--dialect`: an assistant message's
+/// blocks are the calls, each keeping its `toolu_` id, and a Hermes call
+/// emitted as `anthropic-tool-use.v1` recovers to the same call.
+#[test]
+fn anthropic_tool_use_recovers_and_emits_via_cli() {
+    let turn = r#"{"role":"assistant","content":[{"type":"text","text":"Two listings."},{"type":"tool_use","id":"toolu_01","name":"list_dir","input":{"path":"src"}},{"type":"tool_use","id":"toolu_02","name":"list_dir","input":{"path":"docs","depth":1}}]}"#;
+    let (output, tools) = run(&[], turn.as_bytes());
+    assert_eq!(output.status.code(), Some(0));
+    let node = result(&output);
+    assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+    for (index, (id, arguments)) in [
+        ("toolu_01", r#"{"path":"src"}"#),
+        ("toolu_02", r#"{"path":"docs","depth":1}"#),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(
+            node.pointer(&format!("/value/calls/{index}/dialect"))
+                .and_then(Node::as_str),
+            Some("anthropic-tool-use.v1")
+        );
+        assert_eq!(
+            node.pointer(&format!("/value/calls/{index}/id"))
+                .and_then(Node::as_str),
+            Some(id)
+        );
+        assert_eq!(
+            node.pointer(&format!("/value/calls/{index}/arguments"))
+                .unwrap()
+                .to_json(),
+            arguments
+        );
+    }
+    fs::remove_file(tools).unwrap();
+    let hermes =
+        b"<tool_call>\n{\"name\": \"list_dir\", \"arguments\": {\"path\": \"src\"}}\n</tool_call>";
+    let (output, tools) = run(&["--emit", "anthropic-tool-use.v1"], hermes);
+    let node = result(&output);
+    let emitted = node
+        .pointer("/value/emitted/output/text")
+        .and_then(Node::as_str)
+        .expect("emitted markup")
+        .to_owned();
+    let id = node
+        .pointer("/value/calls/0/id")
+        .and_then(Node::as_str)
+        .expect("id")
+        .to_owned();
+    assert_eq!(
+        emitted,
+        format!(r#"{{"type":"tool_use","id":"{id}","name":"list_dir","input":{{"path":"src"}}}}"#)
+    );
+    fs::remove_file(tools).unwrap();
+    let (output, tools) = run(&[], emitted.as_bytes());
+    let node = result(&output);
+    assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+    assert_eq!(
+        node.pointer("/value/calls/0/dialect")
+            .and_then(Node::as_str),
+        Some("anthropic-tool-use.v1")
+    );
+    fs::remove_file(tools).unwrap();
+}

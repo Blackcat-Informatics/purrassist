@@ -63,8 +63,14 @@ place of `"parameters"`.
 ## What the grammar accepts
 
 - `call`: one JSON object, with JSON whitespace between its tokens:
-  an optional leading `"type": "function"` member, then a `"name"` member and
-  a `"parameters"` member in either order, then the closing brace. The
+  an optional leading `"type": "function"` member, an optional `"id"`
+  member, then a `"name"` member and a `"parameters"` member in either
+  order, an optional `"id"` member, then the closing brace. An id, which
+  some fine-tunes add, is kept as the call's source id; Llama 3 markup does
+  not provide for ids (`optional-id;`), so a call without one is numbered
+  without an inference, and printing writes none. The commit points are
+  unchanged: an object without the `"parameters"`-after-`"name"` (or
+  `"name"`-after-`"parameters"`) evidence stays content. The
   arguments value is read by the self-delimiting `json` codec: exact number
   spellings, member order and duplicates kept; a JSON string holding JSON
   (stringified arguments) is decoded and flagged

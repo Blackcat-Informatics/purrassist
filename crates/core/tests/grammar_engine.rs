@@ -262,6 +262,15 @@ fn invalid_grammar_is_typed_error() {
             }),
         ),
         (
+            format!(
+                "grammar \"g\"; reasoning \"<t>\" \"</t>\"; reasoning \"<t>\" \"</t>\"; call = \"<c>\";{TAIL}"
+            ),
+            Box::new(move |text| GrammarError::DuplicateName {
+                offset: text.rfind("reasoning").expect("second reasoning"),
+                name: "reasoning".into(),
+            }),
+        ),
+        (
             format!("grammar \"g\"; call = \"<c>\"; call = \"<d>\";{TAIL}"),
             Box::new(move |text| GrammarError::DuplicateName {
                 offset: text.rfind("call =").expect("second call"),

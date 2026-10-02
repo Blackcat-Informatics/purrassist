@@ -48,6 +48,7 @@
 //!
 //! | Dialect | Canonical call |
 //! | --- | --- |
+//! | `anthropic-tool-use.v1` | `{"type":"tool_use","id":"ID","name":"NAME","input":ARGS}` (the API's member order; `ARGS` is compact) |
 //! | `qwen3-coder-xml.v1` | `<tool_call>\n<function=NAME>` + body + `</function>\n</tool_call>` (the chat template's layout) |
 //! | `deepseek-v3.1.v1` | `<｜tool▁calls▁begin｜>` + `<｜tool▁call▁begin｜>NAME<｜tool▁sep｜>ARGS<｜tool▁call▁end｜>` per call + `<｜tool▁calls▁end｜>`: every printed call in one section (the template's layout; `ARGS` is compact) |
 //! | `deepseek-v3.v1` | `<｜tool▁calls▁begin｜>` + `<｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME\n```json\nARGS\n```<｜tool▁call▁end｜>` per call, the calls separated by a newline, + `<｜tool▁calls▁end｜>`: every printed call in one section (the template's layout; `ARGS` is compact) |
@@ -829,7 +830,8 @@ fn prepare<'c>(
         .ok_or_else(|| unsupported("the call names no declared tool"))?;
     let mut prepared = Prepared {
         name,
-        id,
+        // An `optional-id` dialect reads ids a model adds but prints none.
+        id: id.filter(|_| printer.grammar.call_carries_ids()),
         arguments: None,
         parameters: None,
     };

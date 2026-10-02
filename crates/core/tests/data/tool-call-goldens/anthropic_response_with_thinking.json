@@ -1,0 +1,51 @@
+{
+  "description": "A whole Messages API response with every built-in dialect allowed: its thinking block is reasoning, its tool_use block the call, and the rest of the envelope content. The response's leading \"id\" does not open an OpenAI tool_calls element (that waits for a \"type\": \"function\" or \"function\" member).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "{\"id\":\"msg_01\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-x\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"Need the weather.\",\"signature\":\"EqQB\"},{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"get_weather\",\"input\":{\"city\":\"Oslo\"}}],\"stop_reason\":\"tool_use\",\"stop_sequence\":null}",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "city": "Oslo"
+      },
+      "candidate_dialects": [
+        "anthropic-tool-use.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

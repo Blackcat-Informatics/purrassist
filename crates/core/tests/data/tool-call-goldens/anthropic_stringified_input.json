@@ -1,0 +1,58 @@
+{
+  "description": "A tool_use block whose input is a JSON string holding the object (as some proxies write it): decoded and flagged (tool_call.arguments.decode-string), then validated like any arguments.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "anthropic-tool-use.v1"
+  ],
+  "stop": "stop",
+  "input": "{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"get_weather\",\"input\":\"{\\\"city\\\":\\\"Oslo\\\"}\"}",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "city": "Oslo"
+      },
+      "candidate_dialects": [
+        "anthropic-tool-use.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.arguments.decode-string"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.arguments.decode-string"
+  ]
+}

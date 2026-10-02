@@ -2506,3 +2506,113 @@ fn name_from_arguments() {
         } if rule == RULE
     ));
 }
+
+/// Anthropic `tool_use` blocks: in an assistant message or a whole API
+/// response (`thinking` and `redacted_thinking` blocks are reasoning), with
+/// their members reordered, without their type but with a `toolu_` id,
+/// with `"arguments"` for `"input"`, with stringified
+/// input, a missing closing brace, or an unclosed envelope, each resolve as
+/// `anthropic-tool-use.v1` alone with every repair recorded.
+#[test]
+fn anthropic_tool_use() {
+    for (name, rule, count) in [
+        ("anthropic_message_all_dialects", None, 2),
+        ("anthropic_response_with_thinking", None, 1),
+        ("anthropic_redacted_thinking", None, 1),
+        ("anthropic_members_reordered", None, 1),
+        ("anthropic_caller_metadata", None, 1),
+        ("anthropic_untyped_toolu_id", None, 1),
+        (
+            "anthropic_arguments_key",
+            Some("tool_call.markup.terminal-confusable"),
+            1,
+        ),
+        (
+            "anthropic_missing_block_brace",
+            Some("tool_call.markup.missing-closers-at-end"),
+            1,
+        ),
+        ("anthropic_envelope_unclosed", None, 1),
+        (
+            "anthropic_stringified_input",
+            Some("tool_call.arguments.decode-string"),
+            1,
+        ),
+    ] {
+        let (_, result) = golden(name);
+        assert!(matches!(result.outcome, Outcome::Resolved(_)), "{name}");
+        let calls = reading(&result);
+        assert_eq!(calls.calls.len(), count, "{name}: {calls:#?}");
+        assert_eq!(calls.rejected.len(), 0, "{name}");
+        assert!(
+            calls
+                .calls
+                .iter()
+                .all(|call| call.outcome == CallOutcome::Resolved
+                    && call.candidate_dialects == [DialectId::AnthropicToolUse]),
+            "{name}"
+        );
+        if let Some(rule) = rule {
+            assert!(
+                calls
+                    .calls
+                    .iter()
+                    .any(|call| rules_of(call).contains(&rule)),
+                "{name}: {rule}"
+            );
+        }
+    }
+    for name in [
+        "anthropic_response_with_thinking",
+        "anthropic_redacted_thinking",
+    ] {
+        let (_, result) = golden(name);
+        assert_eq!(reading(&result).reasoning.len(), 1, "{name}");
+    }
+    let (_, result) = golden("anthropic_message_all_dialects");
+    let ids: Vec<_> = reading(&result)
+        .calls
+        .iter()
+        .map(|call| call.source_id.as_deref())
+        .collect();
+    assert_eq!(ids, [Some("toolu_01"), Some("toolu_02")]);
+    // A confusable key before the block's evidence is not read as input;
+    // Llama 3 JSON reads the object, its trailing id the source id.
+    let (_, result) = golden("llama3_trailing_id_member");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved);
+    assert_eq!(call.dialect, DialectId::Llama3Json);
+    assert_eq!(call.source_id.as_deref(), Some("toolu_01"));
+    let (_, result) = golden("llama3_id_first_parameters");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved);
+    assert_eq!(call.candidate_dialects, [DialectId::Llama3Json]);
+    assert_eq!(call.source_id.as_deref(), Some("toolu_01"));
+    let (_, result) = golden("llama3_leading_id_member");
+    assert_eq!(the_call(&result).source_id.as_deref(), Some("call_7"));
+    // A block inside a Hermes wrapper is one Hermes call, its "input" key
+    // recorded as a confusable spelling.
+    let (_, result) = golden("anthropic_inside_hermes_wrapper");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved);
+    assert_eq!(call.candidate_dialects, [DialectId::Hermes]);
+    assert_eq!(call.source_id.as_deref(), Some("toolu_01"));
+    assert!(rules_of(call).contains(&"tool_call.markup.terminal-confusable"));
+    let (_, result) = golden("anthropic_untyped_without_evidence");
+    let calls = reading(&result);
+    assert_eq!((calls.calls.len(), calls.rejected.len()), (0, 0));
+    let (_, result) = golden("anthropic_truncated_input");
+    assert_eq!(
+        the_call(&result).outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::Truncated
+        }
+    );
+    // Streaming events are rejected attempts, never calls or silent
+    // content.
+    let (_, result) = golden("anthropic_stream_events_rejected");
+    let calls = reading(&result);
+    assert_eq!(calls.calls.len(), 0);
+    assert_eq!(calls.rejected.len(), 2);
+    assert_eq!(calls.finish, Finish::Unresolved);
+}

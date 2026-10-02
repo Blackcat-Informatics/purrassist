@@ -728,9 +728,9 @@ fn deterministic_pinned_digest() {
 }
 
 const PINNED_DIGEST: &str =
-    "sha256:3bb3c3745f59b34cb6eacfe88c75af29e5a4ef7253bc55ac4dac2c10b9ad190b";
+    "sha256:da9e32777bfbdf98dabd4dd449d82ca9cd4f11f210765997d8405e181c972012";
 const PINNED_PREFIX_DIGEST: &str =
-    "sha256:befa06637e443fc4e52d30b881e82e879d9290e16bbbd8c06dcc1c396a843e0f";
+    "sha256:63d9924836636c5b80867357517d11fcbde1b3e6ca0a6eeddaa8629fd8737c6c";
 const PINNED_AMBIGUOUS_DIGEST: &str =
     "sha256:db83855f8c9484b6220094cac86c83e115e90e283a94a049a4a5fb837157a4d4";
 const PINNED_PREFIX_AMBIGUOUS_DIGEST: &str =

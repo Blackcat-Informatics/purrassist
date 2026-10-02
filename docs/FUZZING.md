@@ -190,7 +190,10 @@ targets' mutation tokens so mutation can create or move field boundaries).
   an omitted section opener, the singular section tokens, ids without
   `:IDX` or the `functions.` prefix, a dotted name, a colon in the name,
   duplicate ids, Thinking reasoning, truncated arguments, a tool message),
-  and negative cases (including JSON content
+  Anthropic `tool_use` repairs (a block in a message and in a response with
+  a thinking block, reordered members, a block without its type, an
+  `"arguments"` key, stringified and cut-off input, a missing closing brace,
+  a streaming event, a tool result), and negative cases (including JSON content
   that is not call-shaped, a bare `[TOOL_CALLS]`, and nested unterminated
   call objects); the header bytes cycle through five
   fixed request configurations.

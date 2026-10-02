@@ -44,7 +44,11 @@ first-party.
   envelope, brackets and separators are content around the calls.
 - Openers: a call attempt opens only where an object's first member is
   `"id"`, `"function"`, or the whole member `"type": "function"` (compact
-  or with one space after the colon). The opener literals spell each start
+  or with one space after the colon). An element that starts with `"id"`
+  becomes a call attempt only at its `"type": "function"` or `"function"`
+  member (`commit`), so another object whose first member is `"id"` (an
+  Anthropic response, `{"id": "msg_...", "type": "message", ...}`) stays
+  content. The opener literals spell each start
   compactly (`{"id"`), with one space (`{ "id"`), and pretty-printed on a
   new line indented by 0 to 16 spaces in steps of two or by 1 to 4 tabs. A
   message envelope, a tool message, a content part (`{"type": "text", ...}`)

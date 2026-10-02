@@ -490,6 +490,7 @@ impl Base {
 
 const fn dialect_label(dialect: &DialectId) -> &'static str {
     match dialect {
+        DialectId::AnthropicToolUse => "anthropic",
         DialectId::DeepSeekV31 => "deepseek31",
         DialectId::DeepSeekV3 => "deepseek3",
         DialectId::Hermes => "hermes",
@@ -504,7 +505,7 @@ const fn dialect_label(dialect: &DialectId) -> &'static str {
 }
 
 /// The built-in dialects, in corpus order.
-const DIALECTS: [DialectId; 9] = [
+const DIALECTS: [DialectId; 10] = [
     DialectId::Qwen3CoderXml,
     DialectId::Hermes,
     DialectId::OpenAiToolCalls,
@@ -514,6 +515,7 @@ const DIALECTS: [DialectId; 9] = [
     DialectId::DeepSeekV31,
     DialectId::DeepSeekV3,
     DialectId::KimiK2,
+    DialectId::AnthropicToolUse,
 ];
 
 /// The witness of tool `tool` in `dialect` for corpus seed `seed`.
@@ -536,6 +538,7 @@ fn base(tools: &ToolSet, dialect: &DialectId, tool: usize, seed: u64) -> Base {
         | DialectId::DeepSeekV31
         | DialectId::DeepSeekV3
         | DialectId::KimiK2
+        | DialectId::AnthropicToolUse
             if seed < SEEDS =>
         {
             Form::Object
@@ -780,7 +783,7 @@ impl Base {
     fn closer(&self) -> &'static str {
         match self.dialect {
             DialectId::MistralV3 if self.text.trim_end().ends_with(']') => "]",
-            DialectId::Llama3Json | DialectId::MistralV3 => "}",
+            DialectId::Llama3Json | DialectId::MistralV3 | DialectId::AnthropicToolUse => "}",
             DialectId::DeepSeekV31 | DialectId::DeepSeekV3 => DEEPSEEK_SECTION_END,
             DialectId::KimiK2 => KIMI_SECTION_END,
             _ => "</tool_call>",
@@ -1127,7 +1130,10 @@ fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
     if wrapped {
         let end = base.wrapper_end();
         let closer = base.closer();
-        let tagged = !matches!(base.dialect, DialectId::Llama3Json | DialectId::MistralV3);
+        let tagged = !matches!(
+            base.dialect,
+            DialectId::Llama3Json | DialectId::MistralV3 | DialectId::AnthropicToolUse
+        );
         let variant = match base.closer() {
             "]" => "bracket",
             "}" => "brace",
@@ -1201,6 +1207,9 @@ fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
     }
     if base.dialect == DialectId::KimiK2 {
         kimi_mutations(base, &mut out);
+    }
+    if base.dialect == DialectId::AnthropicToolUse {
+        anthropic_mutations(base, &mut out);
     }
     out
 }
@@ -1297,6 +1306,63 @@ fn deepseek3_mutations(base: &Base, out: &mut Vec<Mutant>) {
             format!("{}tool{rest}", &base.text[..at]),
             Need::DataLoss,
         ));
+    }
+}
+
+/// Anthropic `tool_use` blocks: in a `content` array beside a text block,
+/// in an assistant message, in a whole API response; without their type
+/// (an id beginning `toolu_` is the evidence); and with `"arguments"` or
+/// `"parameters"` written for `"input"`.
+fn anthropic_mutations(base: &Base, out: &mut Vec<Mutant>) {
+    let text = &base.text;
+    for (variant, wrapped) in [
+        (
+            "content-array",
+            format!("[{{\"type\":\"text\",\"text\":\"Checking.\"}},{text}]"),
+        ),
+        (
+            "message",
+            format!("{{\"role\":\"assistant\",\"content\":[{text}]}}"),
+        ),
+        (
+            "response",
+            format!(
+                "{{\"id\":\"msg_01\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{text}],\"stop_reason\":\"tool_use\"}}"
+            ),
+        ),
+    ] {
+        out.push(mutant("canonical", variant, wrapped, Need::Exact));
+    }
+    out.push(mutant(
+        "canonical",
+        "untyped-toolu-id",
+        format!(
+            "{{\"id\":\"toolu_01\",\"name\":{},\"input\":{}}}",
+            json::quote(&base.call.name),
+            base.arguments_text()
+        ),
+        Need::Exact,
+    ));
+    // The keys are read for "input" only after the block's evidence (its
+    // "type": "tool_use").
+    let split = base.split();
+    if let Some(at) = split.prefix.rfind("\"input\"")
+        && split.prefix[..at].contains("\"tool_use\"")
+    {
+        for key in ["\"arguments\"", "\"parameters\""] {
+            out.push(mutant(
+                "tool_call.markup.terminal-confusable",
+                key.trim_matches('"').to_owned(),
+                format!(
+                    "{}{key}{}{}{}",
+                    &split.prefix[..at],
+                    &split.prefix[at + "\"input\"".len()..],
+                    base.arguments_text(),
+                    split.suffix
+                ),
+                Need::Exact,
+            ));
+        }
     }
 }
 
@@ -2077,7 +2143,7 @@ const fn policy_of(seed: u64) -> Policy {
     }
 }
 
-const ALL_DIALECTS: &str = "deepseek-v3.1.v1,deepseek-v3.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1";
+const ALL_DIALECTS: &str = "anthropic-tool-use.v1,deepseek-v3.1.v1,deepseek-v3.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1";
 
 /// The cases of every single-call mutation of `base`, appended to `cases`;
 /// with `under`, only those of categories with fewer than [`TARGET`] cases

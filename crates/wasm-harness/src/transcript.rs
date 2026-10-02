@@ -214,7 +214,15 @@ struct DialectCase {
 }
 
 /// One case per entry of `DialectId::BUILT_IN` (checked by the test below).
-const DIALECT_CASES: [DialectCase; 9] = [
+const DIALECT_CASES: [DialectCase; 10] = [
+    DialectCase {
+        dialect: DialectId::AnthropicToolUse,
+        anchor: "{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"Write the file, then read the notes.\",\"signature\":\"EqQB\"},{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"write_file\",\"input\":{\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}},{\"type\":\"tool_use\",\"id\":\"toolu_02\",\"name\":\"read_file\",\"input\":{\"path\": \"notes.txt\", \"limit\": 10}}]}",
+        anchor_digest: "sha256:b8be91e2a9bc78650a4d6843d8a4a5d574cfe959cfc59c162533b8bb5af74361",
+        repair: "[{\"id\":\"toolu_03\",\"name\":\"read_file\",\"parameters\":{\"path\": \"src/lib.rs\", \"limit\": 40}},{\"type\":\"tool_use\",\"id\":\"toolu_04\",\"name\":\"get_weather\",\"arguments\":{\"city\": \"Oslo\", \"unit\": \"celsius\"}",
+        repair_status: "resolved",
+        repair_digest: "sha256:b0225eb611c3053900112f33c8fb9b2e1af217670b5b91ea2490331446926aa0",
+    },
     DialectCase {
         dialect: DialectId::DeepSeekV31,
         anchor: "<think>Write the file, then read the notes.</think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>write_file<｜tool▁sep｜>{\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}<｜tool▁call▁end｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"notes.txt\", \"limit\": 10}<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜>",

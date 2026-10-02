@@ -602,7 +602,10 @@ fn tool_results_roundtrip() {
             let captured = found[0]
                 .capture_text(CaptureKind::Content, &rendered.bytes)
                 .unwrap_or_default();
-            if matches!(dialect, DialectId::OpenAiToolCalls | DialectId::MistralV3) {
+            if matches!(
+                dialect,
+                DialectId::OpenAiToolCalls | DialectId::MistralV3 | DialectId::AnthropicToolUse
+            ) {
                 // A tool message's string content is a JSON string, and it
                 // names the call it answers.
                 assert_eq!(

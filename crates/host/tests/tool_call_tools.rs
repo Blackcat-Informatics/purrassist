@@ -537,3 +537,46 @@ fn kimi_k2_dialect_over_mcp() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// The MCP tool accepts `anthropic-tool-use.v1` in its allow-list and as an
+/// emission target.
+#[test]
+fn anthropic_tool_use_dialect_over_mcp() {
+    let (tools, root) = tools("anthropic");
+    let output = r#"{"type":"tool_use","id":"toolu_01","name":"list_dir","input":{"path":"src"}}"#;
+    for extra in ["", r#","dialects":["anthropic-tool-use.v1"]"#] {
+        let node = tools
+            .call("recover_tool_calls", &arguments(output, extra))
+            .unwrap();
+        assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+        assert_eq!(
+            node.pointer("/value/calls/0/dialect")
+                .and_then(Node::as_str),
+            Some("anthropic-tool-use.v1")
+        );
+        assert_eq!(
+            node.pointer("/value/calls/0/id").and_then(Node::as_str),
+            Some("toolu_01")
+        );
+    }
+    let node = tools
+        .call(
+            "recover_tool_calls",
+            &arguments(QWEN, r#","emit":"anthropic-tool-use.v1""#),
+        )
+        .unwrap();
+    let id = node
+        .pointer("/value/calls/0/id")
+        .and_then(Node::as_str)
+        .expect("id")
+        .to_owned();
+    assert_eq!(
+        node.pointer("/value/emitted/output/text")
+            .and_then(Node::as_str),
+        Some(
+            format!(r#"{{"type":"tool_use","id":"{id}","name":"list_dir","input":{{"depth":2,"path":"src"}}}}"#)
+                .as_str()
+        )
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

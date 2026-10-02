@@ -212,6 +212,14 @@ def _tool_call_conformance_markup():
 # listed witness seeds (`JsonArguments::Object` for seeds 0-1,
 # `Stringified` for seeds 2-3), embedded verbatim.
 TOOL_CALL_WITNESSES = [
+    # anthropic-tool-use.v1: read_file (seed 0)
+    "{\"type\":\t\t\"tool_use\"\t,\t\"input\"\t:{\"path\":\"tab\\tseparated \\n  block\\n\"},\"name\"\t:\"read_file\"\t\t,\"id\":\"call_0f4d3872\"\t\t}".encode(),
+    # anthropic-tool-use.v1: get_weather, list_dir (seed 1)
+    "{\t\"type\":\t\"tool_use\",\"name\"\t:\t\t\"get_weather\",\"id\"\t\t:\t\"call_864a7135\"\t,\"input\":{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"}\t\t}\n{\"type\":\t\"tool_use\",\t\"id\":\t\t\"call_77ba0574\"\t,\"input\"\t:{\"path\":\"tab\\tseparated trailing  \"},\"name\":\t\t\"list_dir\"\t}".encode(),
+    # anthropic-tool-use.v1: write_file (seed 2)
+    "{\t\t\"type\":\"tool_use\",\"id\"\t\t:\t\"call_22bb690f\",\t\t\"name\"\t:\t\t\"write_file\",\t\"input\":\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"\t}".encode(),
+    # anthropic-tool-use.v1: delete_path, read_file (seed 3)
+    "{\"type\":\"tool_use\"\t,\t\"id\":\t\t\"call_e8c2cf2d\",\"input\"\t\t:\t\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"\t,\"name\"\t:\t\t\"delete_path\"\t\t}\n{\"type\":\"tool_use\"\t,\t\"input\":\t\"{\\\"path\\\":\\\"alpha tab\\\\tseparated\\\"}\"\t,\t\t\"name\":\"read_file\"\t\t,\t\t\"id\"\t\t:\"call_91b9c038\"\t\t}".encode(),
     # deepseek-v3.1.v1: read_file (seed 0)
     "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>\t\tread_file\t\t<｜tool▁sep｜>{\"path\":\"tab\\tseparated \\n  block\\n\"}\t<｜tool▁call▁end｜>\t<｜tool▁calls▁end｜>".encode(),
     # deepseek-v3.1.v1: get_weather, list_dir (seed 1)
@@ -229,13 +237,13 @@ TOOL_CALL_WITNESSES = [
     # deepseek-v3.v1: delete_path, read_file (seed 3)
     "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>\tdelete_path```json\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"\t\t```\t\t<｜tool▁call▁end｜><｜tool▁call▁begin｜>\t\tfunction\t<｜tool▁sep｜>read_file```json\t\"{\\\"path\\\":\\\"beta gamma tab\\\\tseparated\\\",\\\"limit\\\":-604}\"```\t<｜tool▁call▁end｜>\t\t<｜tool▁calls▁end｜>".encode(),
     # hermes.v1: read_file (seed 0)
-    b"<tool_call>\t{\t\t\"arguments\":{\"path\":\"tab\\tseparated \\n  block\\n\"}\t,\t\"name\"\t:\t\t\"read_file\"}</tool_call>",
+    "<tool_call>\t{\t\t\"type\":\t\"tool_use\"\t\t,\t\"id\":\"call_5a4485ac\"\t,\"name\"\t\t:\"read_file\",\"arguments\":{\"path\":\"tab\\tseparated \\n  block\\n\"}\t\t}</tool_call>".encode(),
     # hermes.v1: get_weather, list_dir (seed 1)
-    b"<tool_call>{\t\"name\":\t\"get_weather\",\"arguments\":{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"}\t}\t\t</tool_call>\n<tool_call>{\t\t\"arguments\"\t:{\"path\":\"src/lib.rs\"}\t,\"name\":\"list_dir\"\t\t}\t\t</tool_call>",
+    "<tool_call>{\t\"id\":\t\"call_4baa5dc0\",\"arguments\"\t\t:{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"},\"name\":\"get_weather\"\t\t}\t</tool_call>\n<tool_call>{\"id\"\t\t:\t\t\"call_5e4be0f5\"\t\t,\"name\"\t:\"list_dir\"\t,\"arguments\":{\"path\":\"line one\\nline two \\n  block\\n\"}\t\t}</tool_call>".encode(),
     # hermes.v1: write_file (seed 2)
-    b"<tool_call>\t\t{\t\"name\":\"write_file\",\"arguments\"\t\t:\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"\t}\t</tool_call>",
+    "<tool_call>\t\t{\t\"id\":\"call_e5ceef8e\",\t\t\"arguments\"\t\t:\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\",\t\t\"name\":\t\"write_file\"\t\t}</tool_call>".encode(),
     # hermes.v1: delete_path, read_file (seed 3)
-    b"<tool_call>{\"name\":\"delete_path\"\t,\t\"arguments\":\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"}\t\t</tool_call>\n<tool_call>\t{\t\"name\"\t:\t\t\"read_file\"\t\t,\t\"arguments\":\"{\\\"path\\\":\\\"  indented src/lib.rs\\\",\\\"limit\\\":417}\"}\t</tool_call>",
+    "<tool_call>{\"id\":\"call_305c487f\",\t\"name\":\t\t\"delete_path\"\t\t,\"arguments\"\t:\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"}\t</tool_call>\n<tool_call>{\t\t\"type\":\"function\"\t,\t\t\"id\":\t\"call_07be3ff1\",\"name\"\t:\t\"read_file\"\t\t,\t\t\"arguments\":\"{\\\"path\\\":\\\"\\\\n  block\\\\n alpha\\\",\\\"limit\\\":-209}\"\t\t}\t\t</tool_call>".encode(),
     # kimi-k2.v1: read_file (seed 0)
     "<|tool_calls_section_begin|><|tool_call_begin|>\t\tfunctions.read_file:0<|tool_call_argument_begin|>\t{\"path\":\"tab\\tseparated \\n  block\\n\"}\t<|tool_call_end|>\t\t<|tool_calls_section_end|>".encode(),
     # kimi-k2.v1: get_weather, list_dir (seed 1)
@@ -245,13 +253,13 @@ TOOL_CALL_WITNESSES = [
     # kimi-k2.v1: delete_path, read_file (seed 3)
     "<|tool_calls_section_begin|><|tool_call_begin|>functions.delete_path:0<|tool_call_argument_begin|>\t\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"<|tool_call_end|><|tool_call_begin|>functions.read_file:1\t<|tool_call_argument_begin|>\t\"{\\\"path\\\":\\\"alpha trailing  \\\"}\"<|tool_call_end|>\t<|tool_calls_section_end|>".encode(),
     # llama3-json.v1: read_file (seed 0)
-    b"<|python_tag|>{\t\t\"type\":\t\"function\"\t,\t\"parameters\":{\"path\":\"tab\\tseparated \\n  block\\n\"}\t,\"name\":\t\t\"read_file\"}",
+    "<|python_tag|>{\t\t\"type\":\t\"function\"\t,\t\"name\":\"read_file\"\t,\"parameters\"\t\t:{\"path\":\"tab\\tseparated \\n  block\\n\"},\"id\":\t\t\"call_4963bab0\"\t}".encode(),
     # llama3-json.v1: get_weather, list_dir (seed 1)
-    b"{\t\"name\"\t:\"get_weather\",\"parameters\"\t:\t\t{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"}}\n<|python_tag|>{\t\"type\"\t:\"function\",\"parameters\"\t\t:\t{\"path\":\"tab\\tseparated\"},\"name\":\t\"list_dir\"}",
+    "{\t\"id\"\t:\"call_90d7a28a\",\t\"parameters\":{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"},\"name\"\t\t:\t\"get_weather\"\t\t}\n{\t\t\"type\":\t\"function\",\"id\"\t:\"call_9fc66081\",\"name\"\t\t:\"list_dir\"\t,\"parameters\"\t:\t\t{\"path\":\"  indented tab\\tseparated\"}}".encode(),
     # llama3-json.v1: write_file (seed 2)
-    b"<|python_tag|>\t\t{\t\t\"name\":\"write_file\"\t\t,\t\"arguments\":\t\t\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"}",
+    "<|python_tag|>\t\t{\t\t\"id\":\"call_0fccd72d\",\t\"parameters\"\t\t:\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"\t,\t\t\"name\":\t\"write_file\"}".encode(),
     # llama3-json.v1: delete_path, read_file (seed 3)
-    b"{\"name\":\t\"delete_path\"\t,\"parameters\":\t\t\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"\t\t}\n{\t\"parameters\"\t:\"{\\\"path\\\":\\\"line one\\\\nline two\\\",\\\"limit\\\":-308}\"\t\t,\t\"name\":\"read_file\"\t}",
+    "{\"id\":\t\"call_93349fc3\",\"name\"\t\t:\t\t\"delete_path\",\t\"parameters\":\t\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"\t}\n<|python_tag|>{\t\"id\"\t:\t\t\"call_03bb1010\"\t,\t\"name\":\t\"read_file\"\t,\t\t\"arguments\":\"{\\\"path\\\":\\\"beta gamma\\\",\\\"limit\\\":557}\"\t\t}".encode(),
     # mistral-v11.v1: read_file (seed 0)
     b"[TOOL_CALLS]\tread_file\t\t[CALL_ID]\t\tcall_3cb13d09[ARGS]{\"path\":\"tab\\tseparated \\n  block\\n\"}",
     # mistral-v11.v1: get_weather, list_dir (seed 1)
@@ -422,6 +430,25 @@ TOOL_CALL_REPAIRS = [
     b'<|tool_calls_section_begin|><|tool_call_begin|>functions.mcp:read_file:0<|tool_call_argument_begin|>{"path": "a"}<|tool_call_end|><|tool_calls_section_end|>',
     b'<|tool_calls_section_begin|><|tool_call_begin|>3<|tool_call_argument_begin|>{"city": "Oslo"}<|tool_call_end|><|tool_call_begin|>4<|tool_call_argument_begin|>{"path": "a"}<|tool_call_end|><|tool_calls_section_end|>',
     b'<tool_call>\n{"arguments": {"path": "a.rs", "limit": 5}}\n</tool_call>',
+    # Anthropic tool_use blocks: in a message with a text block, in a whole
+    # response with a thinking block, reordered, without a type but with a
+    # toolu_ id, with "arguments" for "input", stringified input, cut off,
+    # without the closing brace, and streaming events.
+    b'{"role":"assistant","content":[{"type":"text","text":"ok"},{"type":"tool_use","id":"toolu_01","name":"read_file","input":{"path":"a.rs"}}]}',
+    b'{"id":"msg_01","type":"message","role":"assistant","content":[{"type":"thinking","thinking":"plan","signature":"x"},{"type":"tool_use","id":"toolu_01","name":"list_dir","input":{"path":"."}}],"stop_reason":"tool_use"}',
+    b'{"name":"read_file","input":{"path":"a"},"id":"toolu_01","type":"tool_use"}',
+    b'{"id":"toolu_01","name":"read_file","input":{"path":"a"}}',
+    b'{"type":"tool_use","id":"toolu_01","name":"read_file","arguments":{"path":"a"}}',
+    b'{"type":"tool_use","id":"toolu_01","name":"read_file","input":"{\\"path\\":\\"a\\"}"}',
+    b'{"type":"tool_use","id":"toolu_01","name":"read_file","input":{"path":"src/ma',
+    b'{"type":"tool_use","id":"toolu_01","name":"read_file","input":{"path":"a"}',
+    b'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01","name":"read_file","input":{}}}\n',
+    b'{"type":"tool_result","tool_use_id":"toolu_01","content":"ok"}',
+    # A Llama 3 JSON object with an id member first or last, and an
+    # Anthropic-shaped object inside a Hermes wrapper.
+    b'{"id": "call_7", "name": "read_file", "parameters": {"path": "a"}}',
+    b'{"name": "read_file", "parameters": {"path": "a"}, "id": "toolu_01"}',
+    b'<tool_call>{"type":"tool_use","id":"toolu_01","name":"read_file","input":{"path":"a"}}</tool_call>',
 ]
 
 # Inputs that hold no recoverable call.
@@ -451,6 +478,8 @@ TOOL_CALL_NEGATIVES = [
     "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>\n```json\n```".encode(),
     b'<|tool_calls_section_begin|>',
     b'<|tool_call_begin|>functions.:0<|tool_call_argument_begin|>',
+    b'{"name":"read_file","input":{"path":"a"}}',
+    b'{"type":"tool_use"}',
     "```json\n{\"path\": \"a.rs\"}\n```".encode(),
     b'[TOOL_CALLS] [' + b'{"name": "read_file", "arguments": ' * 16 + b']',
     b'[TOOL_RESULTS] {"content": "x", "call_id": "a1B2c3D4e"}[/TOOL_RESULTS]',
@@ -472,6 +501,7 @@ TOOL_CALL_TOKENS = [
     b'function', b'```javascript', "<｜tool▁outputs▁begin｜>".encode(),
     b'<|tool_calls_section_begin|>', b'<|tool_call_begin|>', b'<|tool_call_argument_begin|>',
     b'<|tool_call_end|>', b'<|tool_calls_section_end|>', b'functions.', b':0',
+    b'{"type":"tool_use",', b'"input":', b'"toolu_01"', b'"type":"thinking"', b'"content":[',
     b'<|tool_calls_begin|>', b'"id":', b'</s>', b'read_file', b'write_file', b'current_time', b'path', b'\n', b'\t',
     b'"', b'\\', b'{', b'}', b'[', b']', b':', b',', b'>', b'<', b'null', b'1.50',
     b'\x00', b'\x04', b'\x80', 'é'.encode(), b'\xff', b'\xe2\x82',

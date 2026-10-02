@@ -11,7 +11,7 @@ call. The operation is `tool_call.recover.v1`, implemented in
 `recover_tool_calls` MCP tool, and the `purrassist recover-tool-calls` CLI
 command.
 
-Nine dialects are built in:
+Ten dialects are built in:
 
 | Dialect | Shape | Reference |
 | --- | --- | --- |
@@ -23,12 +23,13 @@ Nine dialects are built in:
 | `deepseek-v3.1.v1` | `<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>NAME<｜tool▁sep｜>{...}<｜tool▁call▁end｜>...<｜tool▁calls▁end｜>` | [dialect](dialects/deepseek-v3.1.v1.md) |
 | `deepseek-v3.v1` | `<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME` + `` ```json `` block + `<｜tool▁call▁end｜>...<｜tool▁calls▁end｜>` | [dialect](dialects/deepseek-v3.v1.md) |
 | `kimi-k2.v1` | `<\|tool_calls_section_begin\|><\|tool_call_begin\|>functions.NAME:IDX<\|tool_call_argument_begin\|>{...}<\|tool_call_end\|>...<\|tool_calls_section_end\|>` | [dialect](dialects/kimi-k2.v1.md) |
+| `anthropic-tool-use.v1` | `tool_use` content blocks `{"type": "tool_use", "id": ID, "name": NAME, "input": {...}}`, standalone or in a message or response | [dialect](dialects/anthropic-tool-use.v1.md) |
 | `mistral-v11.v1` | `[TOOL_CALLS]NAME[CALL_ID]ID[ARGS]{...}` (`[CALL_ID]` optional), repeated per call | [dialect](dialects/mistral-v11.v1.md) |
 
 Callers add their own dialects with the grammar DSL
 ([GRAMMAR.md](GRAMMAR.md)). Streaming recognition, `purrassist-derive`, and the
-remaining dialects (Anthropic tool_use, GLM, Gemma, Harmony, Pythonic, bare
-JSON) are tracked in issue #4.
+remaining dialects (GLM, Gemma, Harmony, Pythonic, bare JSON) are tracked in
+issue #4.
 
 ## Design
 
@@ -161,7 +162,8 @@ with zero configuration. By default (`IdPolicy::Turn`):
   derived `tool_call.id.dedup` inference on the call and in the receipt; it
   never demotes the call. Dialects whose markup carries no id (DeepSeek-V3.1,
   DeepSeek-V3, Hermes, Llama 3 JSON, Qwen3-Coder XML) are numbered without an
-  inference.
+  inference; Hermes and Llama 3 JSON still keep an id a model adds as the
+  call's source id (`optional-id`).
 
 The same output always gets the same ids (C3); different outputs get
 different tags except with probability `2^-48` per pair, so among `n`
@@ -339,6 +341,6 @@ are in [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound).
 - [dialects/](dialects/): public sources, accepted forms, printing, and
   deliberate exclusions of each built-in dialect.
 - [MATCHING-QUALITY.md](../MATCHING-QUALITY.md#tool-call-recovery-evaluation):
-  the 9,900-case correction evaluation, per rule and per dialect.
+  the 11,068-case correction evaluation, per rule and per dialect.
 - [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound): the cost
   bound, budgets for large outputs, and throughput.

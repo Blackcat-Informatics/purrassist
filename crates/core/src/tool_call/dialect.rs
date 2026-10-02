@@ -27,13 +27,14 @@ use std::sync::{Arc, OnceLock};
 /// One dialect grammar the recognizer can run.
 ///
 /// The set of variants is closed, so the recognizer dispatches statically.
-/// Nine dialects are built in, each a first-party grammar embedded in the
+/// Ten dialects are built in, each a first-party grammar embedded in the
 /// crate (see `docs/tool-calls/dialects/` for each grammar's public sources
 /// and what it deliberately does not accept):
 ///
 /// | Variant | Versioned id | Shape |
 /// | --- | --- | --- |
 /// | [`DialectId::Qwen3CoderXml`] | `qwen3-coder-xml.v1` | `<tool_call><function=NAME><parameter=P>VALUE</parameter></function></tool_call>` |
+/// | [`DialectId::AnthropicToolUse`] | `anthropic-tool-use.v1` | `tool_use` content blocks `{"type": "tool_use", "id": ID, "name": NAME, "input": {...}}` |
 /// | [`DialectId::DeepSeekV31`] | `deepseek-v3.1.v1` | `<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>NAME<｜tool▁sep｜>{...}<｜tool▁call▁end｜>...<｜tool▁calls▁end｜>` |
 /// | [`DialectId::DeepSeekV3`] | `deepseek-v3.v1` | `<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME` + a fenced `json` block + `<｜tool▁call▁end｜>...<｜tool▁calls▁end｜>` |
 /// | [`DialectId::KimiK2`] | `kimi-k2.v1` | `<\|tool_calls_section_begin\|><\|tool_call_begin\|>functions.NAME:IDX<\|tool_call_argument_begin\|>{...}<\|tool_call_end\|>...<\|tool_calls_section_end\|>` |
@@ -72,6 +73,9 @@ use std::sync::{Arc, OnceLock};
 pub enum DialectId {
     /// `qwen3-coder-xml.v1`: Qwen3-Coder XML parameter calls.
     Qwen3CoderXml,
+    /// `anthropic-tool-use.v1`: Anthropic Messages API `tool_use` content
+    /// blocks as text.
+    AnthropicToolUse,
     /// `deepseek-v3.1.v1`: DeepSeek-V3.1 tool-calls sections.
     DeepSeekV31,
     /// `deepseek-v3.v1`: DeepSeek-V3 / R1 tool-calls sections with fenced
@@ -124,6 +128,10 @@ static QWEN3_CODER_XML: BuiltIn = BuiltIn::new(
     "qwen3-coder-xml.v1",
     include_str!("dialects/qwen3-coder-xml.v1.grammar"),
 );
+static ANTHROPIC_TOOL_USE: BuiltIn = BuiltIn::new(
+    "anthropic-tool-use.v1",
+    include_str!("dialects/anthropic-tool-use.v1.grammar"),
+);
 static DEEPSEEK_V31: BuiltIn = BuiltIn::new(
     "deepseek-v3.1.v1",
     include_str!("dialects/deepseek-v3.1.v1.grammar"),
@@ -160,6 +168,7 @@ impl DialectId {
     /// assert_eq!(
     ///     ids,
     ///     [
+    ///         "anthropic-tool-use.v1",
     ///         "deepseek-v3.1.v1",
     ///         "deepseek-v3.v1",
     ///         "hermes.v1",
@@ -172,7 +181,8 @@ impl DialectId {
     ///     ]
     /// );
     /// ```
-    pub const BUILT_IN: [Self; 9] = [
+    pub const BUILT_IN: [Self; 10] = [
+        Self::AnthropicToolUse,
         Self::DeepSeekV31,
         Self::DeepSeekV3,
         Self::Hermes,
@@ -195,6 +205,7 @@ impl DialectId {
     const fn built_in(&self) -> Option<&'static BuiltIn> {
         match self {
             Self::Qwen3CoderXml => Some(&QWEN3_CODER_XML),
+            Self::AnthropicToolUse => Some(&ANTHROPIC_TOOL_USE),
             Self::DeepSeekV31 => Some(&DEEPSEEK_V31),
             Self::DeepSeekV3 => Some(&DEEPSEEK_V3),
             Self::Hermes => Some(&HERMES),
@@ -237,6 +248,7 @@ impl DialectId {
     pub fn id(&self) -> &str {
         match self {
             Self::Qwen3CoderXml => QWEN3_CODER_XML.id,
+            Self::AnthropicToolUse => ANTHROPIC_TOOL_USE.id,
             Self::DeepSeekV31 => DEEPSEEK_V31.id,
             Self::DeepSeekV3 => DEEPSEEK_V3.id,
             Self::Hermes => HERMES.id,
@@ -276,6 +288,7 @@ impl DialectId {
     pub fn grammar(&self) -> &CompiledGrammar {
         match self {
             Self::Qwen3CoderXml => QWEN3_CODER_XML.grammar(),
+            Self::AnthropicToolUse => ANTHROPIC_TOOL_USE.grammar(),
             Self::DeepSeekV31 => DEEPSEEK_V31.grammar(),
             Self::DeepSeekV3 => DEEPSEEK_V3.grammar(),
             Self::Hermes => HERMES.grammar(),
@@ -428,7 +441,7 @@ impl DialectSet {
         }
         let mut markers: Vec<(Vec<u8>, Vec<u8>)> = dialects
             .iter()
-            .filter_map(|dialect| dialect.grammar().reasoning.clone())
+            .flat_map(|dialect| dialect.grammar().reasoning.iter().cloned())
             .collect();
         markers.sort();
         markers.dedup();
@@ -567,9 +580,9 @@ impl DialectSet {
     /// dialect's `call` production can open counts once for that dialect,
     /// so an opener two dialects share (`<tool_call>` in Qwen3-Coder XML
     /// and Hermes) counts twice, once per competing attempt. A dialect whose
-    /// attempts commit after their opener (`llama3-json.v1` opens at `{`
-    /// and commits on call-shaped evidence) counts every opener, committed
-    /// or not. It bounds the call attempts recovery can read or reject, and sizes the candidate
+    /// attempts commit after their opener (`llama3-json.v1` and
+    /// `anthropic-tool-use.v1` open at `{` and commit on call-shaped
+    /// evidence) counts every opener, committed or not. It bounds the call attempts recovery can read or reject, and sizes the candidate
     /// budget of [`ToolRecoveryRequest::sized_for`](super::ToolRecoveryRequest::sized_for).
     /// A pure, allocation-free scan; nothing is charged.
     ///
@@ -577,8 +590,9 @@ impl DialectSet {
     /// use purrassist_core::tool_call::DialectSet;
     /// let output = b"<tool_call>\n{\"name\": \"ls\", \"arguments\": {}}\n</tool_call>";
     /// // Qwen3-Coder XML and Hermes both open with `<tool_call>`; a Llama 3
-    /// // JSON attempt may open at each of the two `{`.
-    /// assert_eq!(DialectSet::built_in().call_openers(output), 4);
+    /// // JSON and an Anthropic `tool_use` attempt may open at each of the
+    /// // two `{`.
+    /// assert_eq!(DialectSet::built_in().call_openers(output), 6);
     /// assert_eq!(DialectSet::built_in().call_openers(b"no calls here"), 0);
     /// ```
     #[must_use]

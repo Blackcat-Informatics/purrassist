@@ -32,6 +32,14 @@ repository.
 - `call`: `<tool_call>`, optional whitespace, one JSON object holding a
   `"name"` member and an `"arguments"` member in either order, optional
   whitespace, `</tool_call>`. JSON whitespace is allowed between tokens.
+- Before those members, a provider type marker (`"type": "function"` or
+  `"type": "tool_use"`, which carries no call data) and an `"id"` member may
+  appear, in that order. The id is kept as the call's source id. Hermes
+  markup does not provide for ids (`optional-id;`), so a call without one is
+  numbered without an inference, and printing writes none.
+- An `"input"` key (an Anthropic `tool_use` block written inside the
+  wrapper) is read as `"arguments"` through a declared confusable
+  (`tool_call.markup.terminal-confusable`).
 - An object with an `"arguments"` member and no `"name"` is a call that
   names no tool: the wrapper is the evidence that it is a call. The resolver
   reads the tool from the arguments (`tool_call.name.from-arguments`, a
@@ -105,8 +113,8 @@ rather than reinterpreted.
 
 ## Deliberately not accepted
 
-- Members other than `name` and `arguments` in the call object (for example
-  an `id`).
+- Members other than `name` and `arguments` in the call object, except a
+  leading provider type marker and id (above).
 - Several call objects, or a JSON array of calls, inside one wrapper.
 - A call object without the `<tool_call>` wrapper.
 - Streaming deltas (no `delta` production).

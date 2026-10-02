@@ -896,10 +896,11 @@ struct Tables<'a> {
 /// The non-production statements of a document, and its production bodies
 /// in order (registered in the builder's namespace).
 struct Declared<'d> {
-    reasoning: Option<(Vec<u8>, Vec<u8>)>,
+    reasoning: Vec<(Vec<u8>, Vec<u8>)>,
     confusables: Vec<(Vec<u8>, Vec<u8>)>,
     bodies: Vec<(String, &'d PExpr)>,
     layouts: Vec<(&'d str, &'d [u8], usize)>,
+    optional_id: bool,
 }
 
 fn declare<'d>(
@@ -907,10 +908,11 @@ fn declare<'d>(
     statements: &'d [Statement],
 ) -> Result<Declared<'d>, GrammarError> {
     let mut declared = Declared {
-        reasoning: None,
+        reasoning: Vec::new(),
         confusables: Vec::new(),
         bodies: Vec::new(),
         layouts: Vec::new(),
+        optional_id: false,
     };
     let duplicate = |offset: usize, name: &str| GrammarError::DuplicateName {
         offset,
@@ -919,13 +921,17 @@ fn declare<'d>(
     for statement in statements {
         match statement {
             Statement::Reasoning { open, close, at } => {
-                if declared
-                    .reasoning
-                    .replace((open.clone(), close.clone()))
-                    .is_some()
-                {
+                let pair = (open.clone(), close.clone());
+                if declared.reasoning.contains(&pair) {
                     return Err(duplicate(*at, "reasoning"));
                 }
+                declared.reasoning.push(pair);
+            }
+            Statement::OptionalId { at } => {
+                if declared.optional_id {
+                    return Err(duplicate(*at, "optional-id"));
+                }
+                declared.optional_id = true;
             }
             Statement::Layout { name, text, at } => {
                 declared.layouts.push((name.as_str(), text.as_slice(), *at));
@@ -1038,7 +1044,7 @@ fn longest_literal(
     repairs: &[LiteralTables],
     stray: &Spellings,
     delimiters: &[DelimiterSet],
-    reasoning: Option<&(Vec<u8>, Vec<u8>)>,
+    reasoning: &[(Vec<u8>, Vec<u8>)],
 ) -> usize {
     literals
         .iter()
@@ -1080,6 +1086,7 @@ pub(crate) fn compile(
         confusables,
         bodies,
         layouts: declared_layouts,
+        optional_id,
     } = declare(&mut builder, &document.statements)?;
     let mut productions = Vec::with_capacity(bodies.len());
     for (name, expr) in bodies {
@@ -1136,14 +1143,10 @@ pub(crate) fn compile(
         )
     };
     let programs = [program(call)?, program(result)?];
-    let longest = longest_literal(
-        &literals,
-        &literal_tables,
-        &stray,
-        &delimiters,
-        reasoning.as_ref(),
-    );
-    let call_ids = captures(&productions, call, CaptureKind::Id);
+    let longest = longest_literal(&literals, &literal_tables, &stray, &delimiters, &reasoning);
+    // An `optional-id` grammar reads a call id where a model adds one, but
+    // its markup does not provide for one.
+    let call_ids = !optional_id && captures(&productions, call, CaptureKind::Id);
     Ok(CompiledGrammar {
         id: document.id,
         digest,

@@ -22,7 +22,7 @@
 //! | Statement | Meaning |
 //! | --- | --- |
 //! | `grammar "ID";` | Header; `ID` matches `[A-Za-z0-9._-]+`. |
-//! | `reasoning "OPEN" "CLOSE";` | Reasoning-block markers for this dialect (at most one). |
+//! | `reasoning "OPEN" "CLOSE";` | Reasoning-block markers for this dialect (one statement per marker pair). |
 //! | `confusable "CANONICAL" "VARIANT";` | `VARIANT` is a confusable spelling of `CANONICAL` inside any literal. |
 //! | `closer NAME = "S1" \| "S2" ...;` | A closer class: `S1` is canonical, the rest are variant spellings. |
 //! | `layout NAME "TEXT";` | Printing only: the class production `NAME` is printed as `TEXT` (a member of the class) wherever it occurs uncaptured, optional occurrences included. Recognition is unchanged. |
@@ -342,7 +342,7 @@ pub enum GrammarError {
         name: String,
     },
     /// A name defined twice (productions and closers share one namespace),
-    /// or a second `reasoning` statement.
+    /// or a `reasoning` statement repeating an earlier marker pair.
     DuplicateName {
         /// Byte offset of the second definition.
         offset: usize,
@@ -655,7 +655,7 @@ pub struct CompiledGrammar {
     pub(crate) call_ids: bool,
     pub(crate) result: ProductionId,
     pub(crate) declaration: ProductionId,
-    pub(crate) reasoning: Option<(Vec<u8>, Vec<u8>)>,
+    pub(crate) reasoning: Vec<(Vec<u8>, Vec<u8>)>,
     pub(crate) programs: [Program; 2],
     pub(crate) stray: automaton::Trie,
     pub(crate) longest: usize,
@@ -700,10 +700,13 @@ impl CompiledGrammar {
         &self.productions[self.call.index()].expr
     }
 
-    /// Whether the `call` production can carry a call id: some path
-    /// through it, following references, holds an `id:` capture. A call of
-    /// such a dialect that has no id omitted one the markup provides for;
-    /// a call of a dialect without one never carries an id.
+    /// Whether the `call` production carries call ids: some path through
+    /// it, following references, holds an `id:` capture, and the grammar
+    /// does not declare `optional-id;`. A call of such a dialect that has
+    /// no id omitted one the markup provides for, and printing writes the
+    /// call's id. An `optional-id` grammar still reads an id a model adds
+    /// (kept as the call's source id), but a call without one omitted
+    /// nothing, and printing writes none.
     ///
     /// ```
     /// use purrassist_core::tool_call::DialectId;
@@ -879,7 +882,8 @@ impl CompiledGrammar {
         self.layouts[id.index()].as_deref()
     }
 
-    /// The reasoning markers `(open, close)`, when declared.
+    /// The first reasoning marker pair `(open, close)`, when declared (see
+    /// [`CompiledGrammar::reasoning_markers`] for every pair).
     ///
     /// ```
     /// # use purrassist_core::grammar::Grammar;
@@ -891,8 +895,24 @@ impl CompiledGrammar {
     #[must_use]
     pub fn reasoning(&self) -> Option<(&[u8], &[u8])> {
         self.reasoning
-            .as_ref()
+            .first()
             .map(|(open, close)| (open.as_slice(), close.as_slice()))
+    }
+
+    /// Every reasoning marker pair `(open, close)`, in declaration order: a
+    /// grammar may declare several (one per spelling of a reasoning block).
+    ///
+    /// ```
+    /// # use purrassist_core::grammar::Grammar;
+    /// # use purrassist_core::{Budget, Governor};
+    /// let text = "grammar \"g\"; reasoning \"<think>\" \"</think>\"; reasoning \"[T]\" \"[/T]\"; call = \"<c>\"; result = \"<r>\"; declaration = \"<d>\";";
+    /// let grammar = Grammar::compile_governed(text, &mut Governor::new(Budget::default())).unwrap();
+    /// assert_eq!(grammar.reasoning_markers().len(), 2);
+    /// assert_eq!(grammar.reasoning_markers()[1], (b"[T]".to_vec(), b"[/T]".to_vec()));
+    /// ```
+    #[must_use]
+    pub fn reasoning_markers(&self) -> &[(Vec<u8>, Vec<u8>)] {
+        &self.reasoning
     }
 
     /// The maximum number of simultaneously live recognizer configurations

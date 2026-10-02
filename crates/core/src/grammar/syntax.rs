@@ -78,6 +78,9 @@ pub(crate) enum Statement {
         text: Vec<u8>,
         at: usize,
     },
+    OptionalId {
+        at: usize,
+    },
     Production {
         name: String,
         expr: PExpr,
@@ -93,8 +96,9 @@ pub(crate) struct Document {
 }
 
 /// Names that cannot name a production or closer.
-pub(crate) const KEYWORDS: [&str; 10] = [
+pub(crate) const KEYWORDS: [&str; 11] = [
     "grammar",
+    "optional-id",
     "reasoning",
     "confusable",
     "closer",
@@ -402,6 +406,7 @@ impl Parser<'_, '_> {
                     at: name_at,
                 }
             }
+            "optional-id" => Statement::OptionalId { at },
             "grammar" => return Err(syntax(at, "duplicate `grammar` header")),
             _ => {
                 reserved(&name, at)?;

@@ -1,0 +1,51 @@
+{
+  "description": "An object with a toolu_ id first, then name and \"parameters\", read with every built-in dialect allowed: Llama 3 JSON reads it with no repair (its leading \"id\" the source id), and the Anthropic reading needs the confusable key (cost 1), so the call resolves once, as llama3-json.v1.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "{\"id\":\"toolu_01\",\"name\":\"get_weather\",\"parameters\":{\"city\":\"Oslo\"}}",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "city": "Oslo"
+      },
+      "candidate_dialects": [
+        "llama3-json.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

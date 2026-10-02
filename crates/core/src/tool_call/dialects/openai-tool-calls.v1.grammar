@@ -15,7 +15,10 @@
 # where an element starts with one of its members: "id", "function", or the
 # whole "type": "function" member (compact or with one space after the colon),
 # so content parts ({"type": "text", ...}) and other JSON objects never open a
-# call attempt. The opener literals list compact, single-space and
+# call attempt. An element that starts with "id" becomes a call attempt only
+# at its "type": "function" or "function" member (`commit`), so another
+# object with an "id" first (an Anthropic message, {"id": "msg_...",
+# "type": "message", ...}) stays content. The opener literals list compact, single-space and
 # newline-indented (2-space steps up to 16, tabs up to 4) spellings of each
 # start. This is also the output (printing) target: `declaration` is one
 # request `tools` entry and `result` is one request tool message.
@@ -102,9 +105,10 @@ function-rest = ws? ":" ws? "{" ws?
                 ws? "}";
 function-member = "\"function\"" function-rest;
 
-call = (open-id id-rest (sep type-member sep function-member | sep function-member (sep type-member)?)
-       | open-type (sep id-member sep function-member | sep function-member (sep id-member)?)
-       | open-function function-rest (sep id-member (sep type-member)? | sep type-member (sep id-member)?)?)
+call = (open-id id-rest (sep type-member commit sep function-member
+                        | sep "\"function\"" commit function-rest (sep type-member)?)
+       | open-type commit (sep id-member sep function-member | sep function-member (sep id-member)?)
+       | open-function commit function-rest (sep id-member (sep type-member)? | sep type-member (sep id-member)?)?)
        ws? "}";
 
 tool-open = "{\"role\":\"tool\""
