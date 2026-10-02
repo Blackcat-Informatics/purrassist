@@ -52,6 +52,10 @@ pub(crate) enum Inst {
     /// The attempt is committed: from here on it is a call (or result)
     /// attempt, reported when it is rejected.
     Commit { next: u32 },
+    /// The next call of the attempt begins here.
+    Next { next: u32 },
+    /// Read an omitted token as inserted here.
+    Insert { lit: u32, next: u32 },
     /// The production matched.
     Accept,
 }
@@ -80,6 +84,11 @@ pub(crate) struct Program {
     /// a `commit`); empty for a program without one, whose attempts open
     /// at their opener literal.
     pub(crate) committed: Vec<bool>,
+    /// Whether the program separates calls with `next`: an attempt's
+    /// completions are then held until it ends, and one that a later
+    /// completion of the same attempt reads further at no more cost is
+    /// dropped (the attempt reads every call it can).
+    pub(crate) grouped: bool,
 }
 
 impl Program {
@@ -300,6 +309,8 @@ impl Builder<'_> {
                     .collect::<Result<_, _>>()?,
             ),
             PExpr::Commit => Expr::Commit,
+            PExpr::Next { .. } => Expr::Next,
+            PExpr::Insert { bytes } => Expr::Insert(LiteralId(self.intern_literal(bytes, None)?)),
             PExpr::Repeat { inner, op, .. } => {
                 let (min, max) = match op {
                     b'*' => (0, None),
@@ -353,7 +364,9 @@ fn check_pairs(expr: &PExpr, in_sequence: bool) -> Result<(), GrammarError> {
         | PExpr::Until { .. }
         | PExpr::Slot { .. }
         | PExpr::Name { .. }
-        | PExpr::Commit => Ok(()),
+        | PExpr::Commit
+        | PExpr::Next { .. }
+        | PExpr::Insert { .. } => Ok(()),
     }
 }
 
@@ -371,8 +384,89 @@ fn references(expr: &Expr, into: &mut Vec<u32>) {
         | Expr::Class(_)
         | Expr::Until(_)
         | Expr::Slot { .. }
-        | Expr::Commit => {}
+        | Expr::Commit
+        | Expr::Next
+        | Expr::Insert(_) => {}
     }
+}
+
+/// Whether `expr` can reach a `next`, following references. Productions
+/// are acyclic, so the walk terminates; each visit charges one `Work` unit.
+fn holds_next(
+    productions: &[Production],
+    expr: &Expr,
+    governor: &mut Governor,
+) -> Result<bool, GrammarError> {
+    charge(governor, 1, 0)?;
+    Ok(match expr {
+        Expr::Next => true,
+        Expr::Capture { inner, .. } | Expr::Repeat { inner, .. } => {
+            holds_next(productions, inner, governor)?
+        }
+        Expr::Sequence(items) | Expr::Choice(items) => {
+            let mut found = false;
+            for item in items {
+                if holds_next(productions, item, governor)? {
+                    found = true;
+                    break;
+                }
+            }
+            found
+        }
+        Expr::Reference(id) => holds_next(productions, &productions[id.index()].expr, governor)?,
+        Expr::Literal(_)
+        | Expr::Closer(_)
+        | Expr::Class(_)
+        | Expr::Until(_)
+        | Expr::Slot { .. }
+        | Expr::Commit
+        | Expr::Insert(_) => false,
+    })
+}
+
+/// Refuse a `next` that cannot separate calls: one inside a capture, or
+/// reachable from the `result` or `declaration` production (each prints and
+/// reads exactly one item).
+fn check_next(
+    productions: &[Production],
+    offsets: &[usize],
+    single: [ProductionId; 2],
+    governor: &mut Governor,
+) -> Result<(), GrammarError> {
+    fn captures_next(
+        productions: &[Production],
+        expr: &Expr,
+        governor: &mut Governor,
+    ) -> Result<bool, GrammarError> {
+        Ok(match expr {
+            Expr::Capture { inner, .. } => holds_next(productions, inner, governor)?,
+            Expr::Repeat { inner, .. } => captures_next(productions, inner, governor)?,
+            Expr::Sequence(items) | Expr::Choice(items) => {
+                let mut found = false;
+                for item in items {
+                    if captures_next(productions, item, governor)? {
+                        found = true;
+                        break;
+                    }
+                }
+                found
+            }
+            _ => false,
+        })
+    }
+    for (index, production) in productions.iter().enumerate() {
+        charge(governor, 1, 0)?;
+        let single = single.iter().any(|id| id.index() == index);
+        if (single && holds_next(productions, &production.expr, governor)?)
+            || captures_next(productions, &production.expr, governor)?
+        {
+            return Err(GrammarError::MisplacedNext {
+                offset: offsets[index],
+                name: production.name.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Whether a call of `root` can capture `kind`: some path through the
@@ -407,7 +501,9 @@ fn captures(productions: &[Production], root: ProductionId, kind: CaptureKind) -
             | Expr::Class(_)
             | Expr::Until(_)
             | Expr::Slot { .. }
-            | Expr::Commit => false,
+            | Expr::Commit
+            | Expr::Next
+            | Expr::Insert(_) => false,
         }
     }
     let mut memo = vec![None; productions.len()];
@@ -538,6 +634,8 @@ impl Emitter<'_, '_> {
                 self.emit(expr, next)?
             }
             Expr::Commit => self.push(Inst::Commit { next })?,
+            Expr::Next => self.push(Inst::Next { next })?,
+            Expr::Insert(id) => self.push(Inst::Insert { lit: id.0, next })?,
         })
     }
 }
@@ -556,7 +654,11 @@ fn epsilon_closure(insts: &[Inst], start: u32) -> Vec<u32> {
                 stack.push(second);
                 stack.push(first);
             }
-            Inst::Open { next, .. } | Inst::Close { next, .. } | Inst::Commit { next } => {
+            Inst::Open { next, .. }
+            | Inst::Close { next, .. }
+            | Inst::Commit { next }
+            | Inst::Next { next }
+            | Inst::Insert { next, .. } => {
                 stack.push(next);
             }
             _ => reached.push(pc),
@@ -590,7 +692,9 @@ fn committed(
             | Inst::Until { next, .. }
             | Inst::Slot { next, .. }
             | Inst::Open { next, .. }
-            | Inst::Close { next, .. } => stack.push(next),
+            | Inst::Close { next, .. }
+            | Inst::Next { next }
+            | Inst::Insert { next, .. } => stack.push(next),
             Inst::Split(first, second) => stack.extend([first, second]),
             Inst::Commit { .. } | Inst::Accept => {}
         }
@@ -727,13 +831,19 @@ fn compile_program(
                 parameters |= *kind == CaptureKind::ParamName;
                 0
             }
-            Inst::Split(..) | Inst::Close { .. } | Inst::Commit { .. } | Inst::Accept => 0,
+            Inst::Split(..)
+            | Inst::Close { .. }
+            | Inst::Commit { .. }
+            | Inst::Next { .. }
+            | Inst::Insert { .. }
+            | Inst::Accept => 0,
         });
     }
     if arguments && parameters {
         return Err(GrammarError::ConflictingArguments { offset });
     }
     let committed = committed(&insts, start, governor)?;
+    let grouped = insts.iter().any(|inst| matches!(inst, Inst::Next { .. }));
     Ok(Program {
         insts,
         start,
@@ -741,6 +851,7 @@ fn compile_program(
         first,
         bound,
         committed,
+        grouped,
     })
 }
 
@@ -970,16 +1081,17 @@ pub(crate) fn compile(
         ..
     } = builder;
     check_acyclic(&productions, &production_offsets, governor)?;
+    check_next(
+        &productions,
+        &production_offsets,
+        [result, declaration],
+        governor,
+    )?;
     let closer_ids = closer_literals(&mut literals, &closers, governor)?;
-    let mut literal_tables = Vec::with_capacity(literals.len());
-    for literal in &literals {
-        literal_tables.push(self::literal_tables(
-            literal,
-            &closers,
-            &confusables,
-            governor,
-        )?);
-    }
+    let literal_tables = literals
+        .iter()
+        .map(|literal| self::literal_tables(literal, &closers, &confusables, governor))
+        .collect::<Result<Vec<_>, _>>()?;
     let stray = stray_spellings(&closers, governor)?;
     let delimiters = delimiter_sets(sets, &confusables, governor)?;
     let tables = Tables {

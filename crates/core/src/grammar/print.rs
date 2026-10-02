@@ -38,7 +38,8 @@
 //! repetition with a zero minimum is always printable). Then:
 //!
 //! - an alternation prints its first printable alternative among those
-//!   holding the most kinds of available captures;
+//!   holding the most kinds of available captures, never a repaired form
+//!   (one holding `insert(...)`) when another alternative is printable;
 //! - a repetition holding `param-name:` prints once per argument member; one
 //!   holding a `dropped:` capture prints its minimum (dropped text is never
 //!   part of canonical markup); one holding an available capture, and
@@ -153,6 +154,10 @@ impl Kinds {
 }
 
 /// Which captures an expression holds.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag answers an independent question the printer asks of an expression"
+)]
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Holds {
     /// A `name:` capture.
@@ -163,6 +168,11 @@ pub(crate) struct Holds {
     pub(crate) parameters: bool,
     /// A `dropped:` capture.
     pub(crate) dropped: bool,
+    /// A `next` (the expression prints further calls).
+    pub(crate) next: bool,
+    /// An `insert(...)`: the expression is a repaired form, never printed
+    /// when another alternative can be.
+    pub(crate) insert: bool,
     /// Every capture kind held.
     pub(crate) kinds: Kinds,
 }
@@ -220,6 +230,8 @@ pub(crate) trait Fill {
     fn layouts(&self) -> bool {
         false
     }
+    /// A `next`: the printing moves on to the next call of the group.
+    fn next_call(&mut self, governor: &mut Governor) -> Result<(), PrintError>;
 }
 
 /// The production walker: the printed bytes and the class patterns compiled
@@ -310,7 +322,10 @@ impl<'g> Printer<'g> {
                 Some(text) if capture.is_none() && fill.layouts() => self.emit(text, governor)?,
                 _ => self.walk(fill, grammar.production_expr(*id), capture, governor)?,
             },
-            Expr::Commit => {}
+            // Zero-width markers print nothing; an omitted token stays
+            // omitted.
+            Expr::Commit | Expr::Insert(_) => {}
+            Expr::Next => fill.next_call(governor)?,
         }
         Ok(())
     }
@@ -369,6 +384,8 @@ impl<'g> Printer<'g> {
                 }
             }
             Expr::Reference(id) => self.collect_holds(self.grammar.production_expr(*id), holds),
+            Expr::Next => holds.next = true,
+            Expr::Insert(_) => holds.insert = true,
             _ => {}
         }
     }
@@ -496,6 +513,8 @@ pub(crate) struct Values<'v> {
 /// The canonical printing of [`Values`] (see the module documentation).
 pub(crate) struct Canonical<'v> {
     values: Values<'v>,
+    /// The values of the group's further calls, printed after each `next`.
+    rest: Vec<Values<'v>>,
     available: Kinds,
     occurrence: Option<usize>,
     printed: Kinds,
@@ -503,6 +522,23 @@ pub(crate) struct Canonical<'v> {
 
 impl<'v> Canonical<'v> {
     pub(crate) fn new(values: Values<'v>) -> Self {
+        Self::group(values, Vec::new())
+    }
+
+    /// The canonical printing of a group of calls in one production
+    /// instance: `first`, then each of `rest` after a `next`.
+    pub(crate) fn group(first: Values<'v>, mut rest: Vec<Values<'v>>) -> Self {
+        rest.reverse();
+        Self {
+            available: Self::kinds(&first),
+            values: first,
+            rest,
+            occurrence: None,
+            printed: Kinds::default(),
+        }
+    }
+
+    fn kinds(values: &Values<'_>) -> Kinds {
         let mut available = Kinds::default();
         for (present, kind) in [
             (values.name.is_some(), CaptureKind::Name),
@@ -516,12 +552,12 @@ impl<'v> Canonical<'v> {
                 available = available.with(kind);
             }
         }
-        Self {
-            values,
-            available,
-            occurrence: None,
-            printed: Kinds::default(),
-        }
+        available
+    }
+
+    /// Whether every call of the group was printed.
+    pub(crate) const fn finished(&self) -> bool {
+        self.rest.is_empty()
     }
 
     /// Whether a value of `kind` was printed.
@@ -567,8 +603,12 @@ impl<'v> Canonical<'v> {
 impl Fill for Canonical<'_> {
     fn choose(&mut self, printer: &Printer<'_>, alternatives: &[Expr]) -> usize {
         let mut best: Option<(u32, usize)> = None;
+        let repaired = |alternative: &Expr| printer.holds(alternative).insert;
+        let clean = alternatives.iter().any(|alternative| {
+            !repaired(alternative) && printer.printable(alternative, self.available)
+        });
         for (index, alternative) in alternatives.iter().enumerate() {
-            if !printer.printable(alternative, self.available) {
+            if !printer.printable(alternative, self.available) || (clean && repaired(alternative)) {
                 continue;
             }
             let score = printer.holds(alternative).kinds.shared(self.available);
@@ -587,6 +627,16 @@ impl Fill for Canonical<'_> {
         max: Option<u32>,
     ) -> Result<Repetition, PrintError> {
         let holds = printer.holds(inner);
+        if holds.next {
+            // Once per further call of the group.
+            let count = self.rest.len();
+            if !fits(count, min, max) {
+                return Err(unsupported(format!(
+                    "{count} further calls do not fit a repetition of {min}..{max:?}"
+                )));
+            }
+            return Ok(Repetition::Times(u32::try_from(count).unwrap_or(u32::MAX)));
+        }
         if holds.parameters {
             let count = self.values.parameters.map_or(0, <[Member]>::len);
             if !fits(count, min, max) {
@@ -683,6 +733,17 @@ impl Fill for Canonical<'_> {
 
     fn layouts(&self) -> bool {
         true
+    }
+
+    fn next_call(&mut self, _: &mut Governor) -> Result<(), PrintError> {
+        let values = self
+            .rest
+            .pop()
+            .ok_or_else(|| unsupported("a `next` with no further call to print"))?;
+        self.available = Self::kinds(&values);
+        self.values = values;
+        self.occurrence = None;
+        Ok(())
     }
 
     fn until(&mut self, capture: Option<CaptureKind>) -> Result<String, PrintError> {

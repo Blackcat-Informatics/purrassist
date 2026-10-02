@@ -37,7 +37,10 @@
 //! with the printer's canonical choices (first alternative carrying the
 //! most values; optional whitespace printed as the grammar's `layout` text
 //! where it declares one, omitted otherwise); calls are separated by one
-//! newline. Ids come from an [`IdPolicy`] applied exactly as recovery
+//! newline. A `call` production that separates calls with `next`
+//! (Mistral v3's array) prints every emitted call in one instance of it:
+//! each call is first printed alone, so a call the dialect cannot carry is
+//! skipped without failing the others. Ids come from an [`IdPolicy`] applied exactly as recovery
 //! applies it, so passing the request's policy reproduces
 //! [`ToolCall::id`].
 //!
@@ -47,6 +50,7 @@
 //! | `hermes.v1` | `<tool_call>\n{"name":"NAME","arguments":ARGS}\n</tool_call>` (the template's wrapper layout; the object is compact) |
 //! | `openai-tool-calls.v1` | `{"id":"ID","type":"function","function":{"name":"NAME","arguments":"ARGS"}}` |
 //! | `llama3-json.v1` | `{"name": "NAME", "parameters": ARGS}` (the template's layout; `ARGS` is compact) |
+//! | `mistral-v3.v1` | `[TOOL_CALLS] [{"name": "NAME", "arguments": ARGS, "id": "ID"}, ...]`: every printed call in one array (the template's layout; `ARGS` is compact) |
 //!
 //! `ARGS` is the compact JSON of the argument tree with every number's
 //! exact spelling ([`Node::to_json`]); the `OpenAI` dialect carries it
@@ -684,17 +688,47 @@ fn dialect_markup<S: AsRef<str>>(
     let (selected, mut skipped) = selection(calls);
     let mut printer = Printer::new(dialect.grammar());
     let mut emitted = Vec::with_capacity(selected.len());
+    let grouped = printer.holds(dialect.grammar().call()).next;
+    let mut group: Vec<(&ToolCall, Prepared<'_>)> = Vec::new();
     for call in selected {
         let mark = printer.out.len();
-        if mark > 0 {
+        if mark > 0 && !grouped {
             printer.emit(b"\n", governor)?;
         }
         let shape = tools
             .zip(call.tool.as_deref())
             .and_then(|(tools, tool)| tools.argument_shape(tool));
         let id = ids.get(call.index).map(AsRef::as_ref);
-        match print_call(&mut printer, call, id, shape, dialect, governor) {
-            Ok(()) => emitted.push(call.index),
+        // A production that separates calls with `next` prints the whole
+        // group in one instance; each call is first printed alone, so a
+        // call it cannot carry is skipped rather than failing the group.
+        let outcome = prepare(&printer, call, id, shape, dialect, governor).and_then(|prepared| {
+            let production = printer.grammar.call();
+            if grouped {
+                let mut alone = Printer::new(printer.grammar);
+                alone.walk(
+                    &mut Canonical::new(prepared.values()),
+                    production,
+                    None,
+                    governor,
+                )?;
+                group.push((call, prepared));
+                Ok(())
+            } else {
+                printer.walk(
+                    &mut Canonical::new(prepared.values()),
+                    production,
+                    None,
+                    governor,
+                )
+            }
+        });
+        match outcome {
+            Ok(()) => {
+                if !grouped {
+                    emitted.push(call.index);
+                }
+            }
             Err(PrintError::Resource(reason)) => return Err(reason),
             Err(error) => {
                 printer.out.truncate(mark);
@@ -707,6 +741,36 @@ fn dialect_markup<S: AsRef<str>>(
                         },
                     },
                 ));
+            }
+        }
+    }
+    if let Some(((_, first), rest)) = group.split_first() {
+        let mut fill = Canonical::group(
+            first.values(),
+            rest.iter().map(|(_, prepared)| prepared.values()).collect(),
+        );
+        match printer.walk(&mut fill, printer.grammar.call(), None, governor) {
+            Ok(()) if fill.finished() => emitted.extend(group.iter().map(|(call, _)| call.index)),
+            Err(PrintError::Resource(reason)) => return Err(reason),
+            result => {
+                // Every call printed alone, but the production cannot hold
+                // them together: none of them is printed.
+                let detail = result.err().map_or_else(
+                    || "the production prints fewer calls than the group holds".to_owned(),
+                    |error| error.to_string(),
+                );
+                printer.out.clear();
+                for (call, _) in &group {
+                    skipped.push((
+                        call.span.start,
+                        Skipped::Call {
+                            index: call.index,
+                            reason: SkipReason::Unrepresentable {
+                                detail: detail.clone(),
+                            },
+                        },
+                    ));
+                }
             }
         }
     }
@@ -723,36 +787,55 @@ fn stringifies(dialect: &DialectId) -> bool {
     *dialect == DialectId::OpenAiToolCalls
 }
 
-/// Print one call with the dialect's `call` production.
-fn print_call(
-    printer: &mut Printer<'_>,
-    call: &ToolCall,
-    id: Option<&str>,
+/// The values one call fills into the dialect's `call` production.
+struct Prepared<'c> {
+    name: &'c str,
+    id: Option<&'c str>,
+    arguments: Option<String>,
+    parameters: Option<&'c [Member]>,
+}
+
+impl Prepared<'_> {
+    fn values(&self) -> Values<'_> {
+        Values {
+            name: Some(self.name),
+            id: self.id,
+            arguments: self.arguments.as_deref(),
+            parameters: self.parameters,
+            ..Values::default()
+        }
+    }
+}
+
+/// The values of `call` for the dialect's `call` production.
+fn prepare<'c>(
+    printer: &Printer<'_>,
+    call: &'c ToolCall,
+    id: Option<&'c str>,
     shape: Option<&ArgumentShape>,
     dialect: &DialectId,
     governor: &mut Governor,
-) -> Result<(), PrintError> {
-    let grammar = printer.grammar;
-    let production = grammar.call();
+) -> Result<Prepared<'c>, PrintError> {
+    let production = printer.grammar.call();
     let name = call
         .tool
         .as_deref()
         .ok_or_else(|| unsupported("the call names no declared tool"))?;
-    let mut values = Values {
-        name: Some(name),
+    let mut prepared = Prepared {
+        name,
         id,
-        ..Values::default()
+        arguments: None,
+        parameters: None,
     };
-    let text;
     if printer.holds(production).parameters {
         let Value::Object(members) = &call.arguments.value else {
             return Err(unsupported(
                 "parameter pairs carry only an arguments object",
             ));
         };
-        values.parameters = Some(members);
+        prepared.parameters = Some(members);
     } else if let Some((codec, delimiters)) = printer.arguments_slot(production) {
-        text = arguments_text(
+        prepared.arguments = Some(arguments_text(
             printer,
             codec,
             delimiters,
@@ -760,10 +843,9 @@ fn print_call(
             shape,
             dialect,
             governor,
-        )?;
-        values.arguments = Some(&text);
+        )?);
     }
-    printer.walk(&mut Canonical::new(values), production, None, governor)
+    Ok(prepared)
 }
 
 /// The text of an `arguments:` slot of `codec` holding `arguments`.
@@ -1314,6 +1396,26 @@ fn splice_call(
         splices.push((span, text));
         return Ok(());
     }
+    if printer.holds(grammar.call()).next {
+        // A call that shares its production instance with other calls is
+        // never reprinted whole (its span holds the group's framing): its
+        // arguments value is replaced in place.
+        let span = call
+            .arguments
+            .span
+            .clone()
+            .ok_or_else(|| EmitError::Unrepresentable {
+                text: arguments.to_json(),
+            })?;
+        let json = guard_json(arguments.to_json(), &spelling.risky);
+        let text = if spelling.stringified {
+            json::quote(&json)
+        } else {
+            json
+        };
+        splices.push((span, text));
+        return Ok(());
+    }
     // Reprint the whole call in its dialect's canonical form.
     let mut printer = Printer::new(grammar);
     let reprinted = ToolCall {
@@ -1321,12 +1423,18 @@ fn splice_call(
         ..call.clone()
     };
     let id = call.source_id.as_deref().unwrap_or(&call.id);
-    print_call(
-        &mut printer,
+    let prepared = prepare(
+        &printer,
         &reprinted,
         Some(id),
         None,
         &call.dialect,
+        governor,
+    )?;
+    printer.walk(
+        &mut Canonical::new(prepared.values()),
+        grammar.call(),
+        None,
         governor,
     )?;
     let text = String::from_utf8(printer.out).map_err(|error| EmitError::Unrepresentable {

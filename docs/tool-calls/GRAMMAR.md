@@ -19,11 +19,12 @@ into a `CompiledGrammar`. One compiled grammar serves three purposes:
   choices to print well-formed calls for given argument shapes, for tests and
   corpora.
 
-The four built-in dialects are written in this DSL:
+The five built-in dialects are written in this DSL:
 [`qwen3-coder-xml.v1`](../../crates/core/src/tool_call/dialects/qwen3-coder-xml.v1.grammar),
 [`hermes.v1`](../../crates/core/src/tool_call/dialects/hermes.v1.grammar),
-[`openai-tool-calls.v1`](../../crates/core/src/tool_call/dialects/openai-tool-calls.v1.grammar), and
-[`llama3-json.v1`](../../crates/core/src/tool_call/dialects/llama3-json.v1.grammar).
+[`openai-tool-calls.v1`](../../crates/core/src/tool_call/dialects/openai-tool-calls.v1.grammar),
+[`llama3-json.v1`](../../crates/core/src/tool_call/dialects/llama3-json.v1.grammar), and
+[`mistral-v3.v1`](../../crates/core/src/tool_call/dialects/mistral-v3.v1.grammar).
 A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 [Add a custom dialect](#add-a-custom-dialect).
 
@@ -34,8 +35,8 @@ A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
   tokens is insignificant.
 - Identifiers match `[A-Za-z_][A-Za-z0-9_-]*`. Productions and closer classes
   share one namespace. The keywords `grammar`, `reasoning`, `confusable`,
-  `closer`, `layout`, `until`, `slot`, and `commit` cannot name a production
-  or a closer.
+  `closer`, `layout`, `until`, `slot`, `commit`, `next`, and `insert` cannot
+  name a production or a closer.
 - String literals are double-quoted byte strings with the escapes `\\`, `\"`,
   `\n`, `\r`, `\t`, `\xHH` (one byte), and `\u{HEX}` (one Unicode scalar
   value, encoded as UTF-8). Every literal, delimiter, spelling, and marker is
@@ -64,6 +65,8 @@ A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 | `slot(CODEC, "D1", ...)` | Like `until`, with the body decoded by the named argument codec. |
 | `NAME` | A production (inlined) or a closer class. |
 | `commit` | Zero-width: an attempt that passes it is a call (or result) attempt from here on. See [Commit points](#commit-points). |
+| `next` | Zero-width, in `call` only: the next call of the same attempt begins here. See [Several calls in one attempt](#several-calls-in-one-attempt). |
+| `insert("bytes")` | Zero-width: a token the model omitted, read as inserted here and recorded as the markup repair `tool_call.markup.missing-token`. It prints nothing, and the printer and witnesses never choose an alternative holding it when another can be printed. |
 | `KIND:item` | A capture of `item`'s span. |
 | `a b` | Sequence. |
 | `a \| b` | Alternation. |
@@ -200,6 +203,52 @@ call = "{" ws? "\"name\"" ws? ":" ws? "\"" name:tool-name "\"" ws? "," ws?
 Choose the commit point at the first evidence that the text is a call and
 not data, and keep every token before it free of repairs the format needs.
 
+## Several calls in one attempt
+
+Some formats write several calls behind one opener: Mistral v3 writes
+`[TOOL_CALLS]` once, then a JSON array with one object per call. The calls
+after the first have no opener of their own. `next` marks where the next
+call of the same attempt begins:
+
+```text
+element = "{" ... object-end;
+call = "[TOOL_CALLS]" ws? "[" ws? element (ws? "," ws? next element)* ws? array-end;
+```
+
+- Each part of the attempt is its own call: the first spans from the
+  opener to the first `next`, each later one from its `next` to the next,
+  the last to the end of the attempt. Separators placed before `next`
+  belong to the call before it; the closing framing belongs to the last
+  call. Each call has its own captures, edits, closure and cost.
+- A cut-off attempt (a length stop) is dangling in its last call only: the
+  calls before it are whole. Closers inserted at the end of output belong
+  to the last call.
+- Equal-cost readings that begin a call at different offsets are competing
+  segmentations of the attempt, so the turn's ambiguity rules apply.
+- A slot's codec learns the declared tool from the `name:` capture of its
+  own call, never from an earlier call of the attempt.
+- Printing: a production with `next` prints every emitted call in one
+  instance (a repetition holding `next` repeats once per further call), and
+  a witness prints all of its calls in one instance.
+- `next` may not appear inside a capture, or in a production reachable from
+  `result` or `declaration` (`GrammarError::MisplacedNext`).
+- An attempt reads every call it can. Its completions are held until the
+  attempt ends; a completion is dropped when a later completion of the same
+  attempt costs no more (it read a further call at no extra cost), or when
+  a length stop's cut-off reading reaches past it (the model was still
+  writing). So a production that may end after any call (`element (sep next
+  element)*` with nothing after it) ends after the last call-shaped part,
+  never earlier, and text after it is content; text that cannot be read as
+  a call is never absorbed. A cut-off reading that reaches no further than
+  a completion is dropped in its favour.
+- A form that omits the list's framing can say so with `insert`, recorded
+  as a markup repair:
+
+  ```text
+  call = "[TOOL_CALLS]" ws? ("[" ws? elements ws? array-end
+                            | insert("[") element (sep next element)* insert("]"));
+  ```
+
 ## Reasoning markers
 
 `reasoning "<think>" "</think>";` declares the dialect's reasoning block.
@@ -280,6 +329,7 @@ offset in the grammar source (`GrammarError::offset`).
 | `CaptureTarget` | An `arguments:` or `param-value:` capture that does not wrap a slot. |
 | `UnpairedParameter` | A `param-name`/`param-value` capture outside an adjacent pair in one sequence. |
 | `ConflictingArguments` | A production with both an `arguments` slot and parameter pairs. |
+| `MisplacedNext` | A `next` inside a capture, or reachable from `result` or `declaration`. |
 | `InvalidLayout` | A `layout` naming a closer or a production that is not a class, or text the class does not match. |
 | `Resource` | The governor's budget was exhausted, or the caller cancelled. |
 

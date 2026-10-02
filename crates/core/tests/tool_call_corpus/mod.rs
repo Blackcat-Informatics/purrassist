@@ -480,6 +480,7 @@ const fn dialect_label(dialect: &DialectId) -> &'static str {
     match dialect {
         DialectId::Hermes => "hermes",
         DialectId::Llama3Json => "llama3",
+        DialectId::MistralV3 => "mistral3",
         DialectId::OpenAiToolCalls => "openai",
         DialectId::Qwen3CoderXml => "qwen",
         DialectId::Custom(_) => "custom",
@@ -487,18 +488,19 @@ const fn dialect_label(dialect: &DialectId) -> &'static str {
 }
 
 /// The built-in dialects, in corpus order.
-const DIALECTS: [DialectId; 4] = [
+const DIALECTS: [DialectId; 5] = [
     DialectId::Qwen3CoderXml,
     DialectId::Hermes,
     DialectId::OpenAiToolCalls,
     DialectId::Llama3Json,
+    DialectId::MistralV3,
 ];
 
 /// The witness of tool `tool` in `dialect` for corpus seed `seed`.
 ///
 /// Qwen3-Coder XML prints parameter elements; `OpenAI` alternates
-/// stringified and object arguments by seed; Hermes and Llama 3 JSON print
-/// objects for the first [`SEEDS`] seeds (so stringifying them is a
+/// stringified and object arguments by seed; Hermes, Llama 3 JSON and
+/// Mistral v3 print objects for the first [`SEEDS`] seeds (so stringifying them is a
 /// mutation) and alternate for the supplementary seeds.
 fn base(tools: &ToolSet, dialect: &DialectId, tool: usize, seed: u64) -> Base {
     let compiled = &tools.tools()[tool];
@@ -507,7 +509,9 @@ fn base(tools: &ToolSet, dialect: &DialectId, tool: usize, seed: u64) -> Base {
         .expect("every tool has a shape");
     let form = match dialect {
         DialectId::Qwen3CoderXml => Form::Xml,
-        DialectId::Hermes | DialectId::Llama3Json if seed < SEEDS => Form::Object,
+        DialectId::Hermes | DialectId::Llama3Json | DialectId::MistralV3 if seed < SEEDS => {
+            Form::Object
+        }
         _ if seed.is_multiple_of(2) => Form::Stringified,
         _ => Form::Object,
     };
@@ -725,8 +729,9 @@ impl Base {
             .collect()
     }
 
-    /// The wrapper closer at the end of a Qwen or Hermes witness, or the
-    /// closing brace of a Llama 3 JSON call object.
+    /// The wrapper closer at the end of a Qwen or Hermes witness, the
+    /// closing brace of a Llama 3 JSON call object, or the last closer of
+    /// a Mistral v3 call (the array's bracket, or the bare object's brace).
     fn wrapper_end(&self) -> usize {
         let closer = self.closer();
         self.text
@@ -736,10 +741,10 @@ impl Base {
 
     /// The canonical closer ending a wrapped witness.
     fn closer(&self) -> &'static str {
-        if self.dialect == DialectId::Llama3Json {
-            "}"
-        } else {
-            "</tool_call>"
+        match self.dialect {
+            DialectId::MistralV3 if self.text.trim_end().ends_with(']') => "]",
+            DialectId::Llama3Json | DialectId::MistralV3 => "}",
+            _ => "</tool_call>",
         }
     }
 }
@@ -1080,8 +1085,12 @@ fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
     if wrapped {
         let end = base.wrapper_end();
         let closer = base.closer();
-        let tagged = base.dialect != DialectId::Llama3Json;
-        let variant = if tagged { "tool_call" } else { "brace" };
+        let tagged = !matches!(base.dialect, DialectId::Llama3Json | DialectId::MistralV3);
+        let variant = match base.closer() {
+            "]" => "bracket",
+            "}" => "brace",
+            _ => "tool_call",
+        };
         out.push(mutant(
             "tool_call.markup.missing-closers-at-end",
             variant,
@@ -1129,7 +1138,36 @@ fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
     if base.dialect == DialectId::Hermes {
         hermes_mutations(base, &mut out);
     }
+    if base.dialect == DialectId::MistralV3 {
+        mistral_mutations(base, &mut out);
+    }
     out
+}
+
+/// The parts of a bracketed Mistral v3 witness: the text through the token,
+/// the array's inside, and the text after the array.
+fn mistral_array(base: &Base) -> Option<(&str, &str, &str)> {
+    let text = &base.text;
+    let after = text.find("[TOOL_CALLS]")? + "[TOOL_CALLS]".len();
+    if !text[after..].trim_start().starts_with('[') || base.closer() != "]" {
+        return None;
+    }
+    let open = after + text[after..].find('[')?;
+    let close = text.rfind(']')?;
+    Some((&text[..open], &text[open + 1..close], &text[close + 1..]))
+}
+
+/// Mistral v3: the call array written without its brackets, read as the
+/// same call with each omitted bracket recorded as inserted.
+fn mistral_mutations(base: &Base, out: &mut Vec<Mutant>) {
+    if let Some((head, inside, tail)) = mistral_array(base) {
+        out.push(mutant(
+            "tool_call.markup.missing-token",
+            "bare-object",
+            format!("{head}{inside}{tail}"),
+            Need::Exact,
+        ));
+    }
 }
 
 /// Rename member `index` to `key`.
@@ -1674,6 +1712,17 @@ fn pair_mutations(first: &Base, second: &Base) -> Vec<Mutant> {
             ));
         }
     } else {
+        if let (Some((head, first_inside, _)), Some((_, second_inside, _))) =
+            (mistral_array(first), mistral_array(second))
+        {
+            // Two calls of one unbracketed list, one per line.
+            out.push(mutant(
+                "tool_call.markup.missing-token",
+                "unbracketed-pair",
+                format!("{head}{}\n{}", first_inside.trim(), second_inside.trim()),
+                Need::Exact,
+            ));
+        }
         let end = first.wrapper_end();
         out.push(mutant(
             "tool_call.markup.missing-wrapper-close",
@@ -1716,7 +1765,8 @@ const fn policy_of(seed: u64) -> Policy {
     }
 }
 
-const ALL_DIALECTS: &str = "hermes.v1,llama3-json.v1,openai-tool-calls.v1,qwen3-coder-xml.v1";
+const ALL_DIALECTS: &str =
+    "hermes.v1,llama3-json.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1";
 
 /// The cases of every single-call mutation of `base`, appended to `cases`;
 /// with `under`, only those of categories with fewer than [`TARGET`] cases

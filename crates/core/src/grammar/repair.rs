@@ -229,7 +229,11 @@ fn completes(program: &Program, pc: u32, governor: &mut Governor) -> Result<bool
         match program.insts[index] {
             Inst::Accept => return Ok(true),
             Inst::Split(first, second) => pending.extend([first, second]),
-            Inst::Open { next, .. } | Inst::Close { next, .. } | Inst::Commit { next } => {
+            Inst::Open { next, .. }
+            | Inst::Close { next, .. }
+            | Inst::Commit { next }
+            | Inst::Next { next }
+            | Inst::Insert { next, .. } => {
                 pending.push(next);
             }
             Inst::Lit { .. } | Inst::Class { .. } | Inst::Until { .. } | Inst::Slot { .. } => {}

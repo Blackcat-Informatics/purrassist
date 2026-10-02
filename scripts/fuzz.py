@@ -228,6 +228,14 @@ TOOL_CALL_WITNESSES = [
     b"<|python_tag|>\t\t{\t\t\"name\":\"write_file\"\t\t,\t\"arguments\":\t\t\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"}",
     # llama3-json.v1: delete_path, read_file (seed 3)
     b"{\"name\":\t\"delete_path\"\t,\"parameters\":\t\t\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"\t\t}\n{\t\"parameters\"\t:\"{\\\"path\\\":\\\"line one\\\\nline two\\\",\\\"limit\\\":-308}\"\t\t,\t\"name\":\"read_file\"\t}",
+    # mistral-v3.v1: read_file (seed 0)
+    b"[TOOL_CALLS]\t[{\t\t\"id\":\t\"call_00cc4d19\"\t,\"name\":\t\"read_file\",\"parameters\"\t\t:{\"path\":\"tab\\tseparated \\n  block\\n\"}}]",
+    # mistral-v3.v1: get_weather, list_dir (seed 1)
+    b"[TOOL_CALLS][\t{\"id\":\"call_90d7a28a\",\t\"arguments\":{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"},\t\t\"name\"\t:\t\t\"get_weather\"\t\t},{\"id\"\t\t:\"call_607e2c86\"\t,\"arguments\":{\"path\":\"tab\\tseparated \\n  block\\n\"}\t\t,\"name\"\t:\"list_dir\"\t}\t\t]",
+    # mistral-v3.v1: write_file (seed 2)
+    b"[TOOL_CALLS]\t\t[\t\t{\"name\":\t\t\"write_file\"\t,\t\"parameters\"\t:\t\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"\t\t,\"id\"\t:\"call_b3ac305a\"\t}]",
+    # mistral-v3.v1: delete_path, read_file (seed 3)
+    b"[TOOL_CALLS][{\"arguments\"\t:\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\",\t\t\"name\"\t\t:\"delete_path\"\t,\"id\"\t:\t\"call_de98af50\"\t}\t\t,\t\t{\t\"id\":\"call_49f77a23\"\t,\"name\":\t\"read_file\"\t,\t\t\"parameters\":\"{\\\"path\\\":\\\"alpha tab\\\\tseparated\\\"}\"\t\t}\t\t]",
     # openai-tool-calls.v1: read_file (seed 0)
     b"{\"type\": \"function\",\t\t\"function\"\t:\t{\t\"arguments\":{\"path\":\"tab\\tseparated \\n  block\\n\"},\"name\"\t:\"read_file\"}\t\t,\"id\":\"call_0f4d3872\"\t\t}",
     # openai-tool-calls.v1: get_weather, list_dir (seed 1)
@@ -308,6 +316,21 @@ TOOL_CALL_REPAIRS = [
     b'<|python_tag|>{"name": "get_weather", "arguments": {"city": "Lima"}}<|eom_id|>',
     b'<|python_tag|>brave_search.call(query="weather")<|eom_id|>',
     b'<tool_call>\n{"name": "read_file", "parameters": {"path": "a.rs"}}\n</tool_call>',
+    # Mistral v3: a missing closing bracket at the end and before the next
+    # array, a truncated last object, a bare object, a repeated bracket,
+    # duplicate model ids, the "parameters" key, and stringified arguments.
+    b'[TOOL_CALLS] [{"name": "read_file", "arguments": {"path": "a.rs"}, "id": "a1B2c3D4e"}, {"name": "list_dir", "arguments": {"path": "."}}',
+    b'[TOOL_CALLS] [{"name": "read_file", "arguments": {"path": "a.rs"}}\n[TOOL_CALLS] [{"name": "current_time", "arguments": {}}]',
+    b'[TOOL_CALLS] [{"name": "get_weather", "arguments": {"city": "Oslo"}}, {"name": "read_file", "arguments": {"path": "src/ma',
+    b'[TOOL_CALLS] {"name": "list_dir", "arguments": {"path": "src"}}',
+    b'[TOOL_CALLS] {"name": "list_dir", "arguments": {"path": "src"}}, {"name": "read_file", "arguments": {"path": "a.rs"}}',
+    b'[TOOL_CALLS] {"name": "list_dir", "arguments": {"path": "src"}}\n{"name": "current_time", "arguments": {}}\nDone.',
+    b'[TOOL_CALLS] {"name": "list_dir", "arguments": {"path": "src"}}\nLike {"path": "src", "depth": 1}.',
+    b'[TOOL_CALLS] {"name": "list_dir", "arguments": {"path": "src"}}, {"name": "read_file", "argu',
+    b'[TOOL_CALLS][{"name": "list_dir", "arguments": {"path": "."}, "id": "Zz9Yy8Xx7"}]]</s>',
+    b'[TOOL_CALLS] [{"name": "read_file", "arguments": {"path": "a"}, "id": "same12345"}, {"name": "read_file", "arguments": {"path": "b"}, "id": "same12345"}]',
+    b'[TOOL_CALLS] [{"name": "get_weather", "parameters": {"city": "Lima"}}]',
+    b'[TOOL_CALLS] [{"name": "read_file", "arguments": "{\\"path\\": \\"a.rs\\"}"}]',
 ]
 
 # Inputs that hold no recoverable call.
@@ -327,6 +350,9 @@ TOOL_CALL_NEGATIVES = [
     # JSON content that is not call-shaped stays content.
     b'Record: {"name": "Ada", "age": 36} and {"user": {"name": "Bob"}}',
     b'{"name": "read_file"' + b'{' * 64,
+    b'[TOOL_CALLS]',
+    b'[TOOL_CALLS] [' + b'{"name": "read_file", "arguments": ' * 16 + b']',
+    b'[TOOL_RESULTS] {"content": "x", "call_id": "a1B2c3D4e"}[/TOOL_RESULTS]',
 ]
 
 TOOL_CALL_SEEDS = [
@@ -339,7 +365,7 @@ TOOL_CALL_TOKENS = [
     b'</parameter>', b'</parameters>', b'<think>', b'</think>', b'{"name":',
     b'"arguments":', b'"tool_calls"', b'"function"', b'"id"', b'"type"', b'```',
     b'```json\n', b'"parameters":', b'<|python_tag|>', b'<|eom_id|>', b'<|eot_id|>',
-    b'; ', b'read_file', b'write_file', b'current_time', b'path', b'\n', b'\t',
+    b'; ', b'[TOOL_CALLS]', b'[TOOL_RESULTS]', b'"id":', b'</s>', b'read_file', b'write_file', b'current_time', b'path', b'\n', b'\t',
     b'"', b'\\', b'{', b'}', b'[', b']', b':', b',', b'>', b'<', b'null', b'1.50',
     b'\x00', b'\x04', b'\x80', 'é'.encode(), b'\xff', b'\xe2\x82',
 ]

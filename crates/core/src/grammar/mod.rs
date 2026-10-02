@@ -38,6 +38,8 @@
 //! | `slot(CODEC, "D1", ...)` | Like `until`, with the body decoded by the named [`codec`]. |
 //! | `NAME` | A production (inlined; recursion is rejected, since framing is regular) or a closer class. |
 //! | `commit` | Zero-width: an attempt opens (becomes a call or result attempt, reported when rejected) only once it passes a `commit` or completes, instead of at its opener literal. |
+//! | `next` | Zero-width, in `call` only: the next call of the same attempt begins here (one attempt, several calls, each its own segment; the attempt reads every call it can). |
+//! | `insert("bytes")` | Zero-width: a token the model omitted, read as inserted (`tool_call.markup.missing-token`, a markup repair). Never chosen when printing if another alternative can be. |
 //! | `KIND:item` | A capture of `item`'s span; `KIND` is one of [`CaptureKind`]. |
 //! | `a b` / `a \| b` | Sequence / alternation. |
 //! | `item*` `item+` `item?` | Repetition. |
@@ -306,6 +308,14 @@ pub enum Expr {
     /// `commit`: zero-width; an attempt that passes it is a call (or
     /// result) attempt from here on. It prints nothing.
     Commit,
+    /// `next`: zero-width; the next call of the same attempt begins here
+    /// (see [`Expr::Next`] in the DSL table). It prints nothing and moves
+    /// the printer to the next call.
+    Next,
+    /// `insert("bytes")`: zero-width; a token the model omitted, recorded
+    /// as an inserted markup repair (`tool_call.markup.missing-token`). It
+    /// prints nothing.
+    Insert(LiteralId),
 }
 
 /// Why a grammar did not compile. Every syntax or semantic error carries
@@ -416,6 +426,15 @@ pub enum GrammarError {
         /// Why it was refused.
         message: String,
     },
+    /// A `next` inside a capture, or reachable from the `result` or
+    /// `declaration` production: `next` separates the calls of one `call`
+    /// attempt.
+    MisplacedNext {
+        /// Byte offset of the production holding it.
+        offset: usize,
+        /// The production's name.
+        name: String,
+    },
     /// The governor's budget was exhausted, or the caller cancelled.
     Resource(StopReason),
 }
@@ -444,7 +463,8 @@ impl GrammarError {
             | Self::CaptureTarget { offset, .. }
             | Self::UnpairedParameter { offset }
             | Self::ConflictingArguments { offset }
-            | Self::InvalidLayout { offset, .. } => Some(*offset),
+            | Self::InvalidLayout { offset, .. }
+            | Self::MisplacedNext { offset, .. } => Some(*offset),
             Self::MissingProduction { .. } | Self::Resource(_) => None,
         }
     }
@@ -502,6 +522,10 @@ impl fmt::Display for GrammarError {
                 name,
                 message,
             } => write!(formatter, "byte {offset}: layout `{name}`: {message}"),
+            Self::MisplacedNext { offset, name } => write!(
+                formatter,
+                "byte {offset}: production `{name}`: `next` separates calls of a call attempt; it may not appear inside a capture, a result or a declaration"
+            ),
             Self::Resource(reason) => write!(formatter, "{reason}"),
         }
     }

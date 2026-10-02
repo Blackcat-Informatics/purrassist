@@ -48,6 +48,7 @@
 //! | [`JsonTrailingComma`](EditOperator::JsonTrailingComma) | `json.syntax.trailing-comma` | 1 | no | single | syntax | markup | no |
 //! | [`JsonCloseContainer`](EditOperator::JsonCloseContainer) | `json.syntax.close-container` | 1 | no | single | syntax | none | no |
 //! | [`MissingWrapperCloseBeforeText`](EditOperator::MissingWrapperCloseBeforeText) | `tool_call.markup.missing-wrapper-close.before-text` | 2 | yes | multiple | syntax | none | yes |
+//! | [`MissingToken`](EditOperator::MissingToken) | `tool_call.markup.missing-token` | 2 | no | single | syntax | none | yes |
 //!
 //! The first seven operators are the engine's markup repairs: a missing
 //! closer inserted mid-message is a *function* close when more of the
@@ -60,7 +61,9 @@
 //! unterminated wrapper, so the insertion is the guess
 //! `tool_call.markup.missing-wrapper-close.before-text` (the last row: it is
 //! appended so the other operators keep their positions); when a closer does
-//! come, the text is inside the wrapper and the attempt is rejected. Closers inserted at the
+//! come, the text is inside the wrapper and the attempt is rejected.
+//! `tool_call.markup.missing-token` (appended after it) records a token a
+//! grammar names with `insert("...")` as read where the model omitted it. Closers inserted at the
 //! end of output under a non-length stop are
 //! `tool_call.markup.missing-closers-at-end`, usable only when the call is
 //! otherwise complete (D10, enforced by tool-call resolution). The reasoning
@@ -85,7 +88,7 @@
 //! assert_eq!(stray.id, "tool_call.markup.stray-closer");
 //! assert_eq!(stray.loss, Some(LossKind::Markup));
 //! assert!(!stray.guess && stray.repair);
-//! assert_eq!(OPERATORS.len(), 36);
+//! assert_eq!(OPERATORS.len(), 37);
 //! let framing = EditOperator::FramingNewline.rule();
 //! assert_eq!((framing.loss, framing.repair), (Some(LossKind::Markup), false));
 //! ```
@@ -214,6 +217,10 @@ pub enum EditOperator {
     /// admitting another reading. (Had a closer followed, the text would be
     /// inside the wrapper and the attempt is rejected instead.)
     MissingWrapperCloseBeforeText,
+    /// Read a token the grammar's `insert("...")` names as omitted by the
+    /// model and inserted here (the brackets of a Mistral v3 call list
+    /// written without them).
+    MissingToken,
 }
 
 /// Static metadata of one [`EditOperator`].
@@ -305,7 +312,7 @@ const fn guessed_repair(operator: EditOperator, id: &'static str, cost: u64) -> 
 }
 
 /// The number of [`EditOperator`]s.
-pub const OPERATOR_COUNT: usize = 36;
+pub const OPERATOR_COUNT: usize = 37;
 
 /// Every grammar edit operator, in [`EditOperator`] order, as a constant
 /// table (the tool-call rule registry is built from it at compile time).
@@ -545,6 +552,13 @@ pub(crate) const OPERATOR_TABLE: [OperatorRule; OPERATOR_COUNT] = [
         EditOperator::MissingWrapperCloseBeforeText,
         "tool_call.markup.missing-wrapper-close.before-text",
         cost::INSERT_CLOSER,
+    ),
+    repair(
+        EditOperator::MissingToken,
+        "tool_call.markup.missing-token",
+        cost::INSERT_CLOSER,
+        Grounding::Syntax,
+        None,
     ),
 ];
 

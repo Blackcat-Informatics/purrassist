@@ -753,15 +753,21 @@ impl<'s> Recognizer<'s> {
                 Pending::Engine(Event::Completed {
                     table,
                     attempt,
-                    segment,
-                    cost,
+                    parts,
                     ..
                 }) => {
-                    let segment = match self.engine.kind(table) {
-                        ProductionKind::Call => Segment::Call(segment),
-                        ProductionKind::Result => Segment::Result(segment),
-                    };
-                    self.completed(&mut frame, at, attempt, segment, cost, governor)?;
+                    let kind = self.engine.kind(table);
+                    let parts = parts
+                        .into_iter()
+                        .map(|(segment, cost)| {
+                            let segment = match kind {
+                                ProductionKind::Call => Segment::Call(segment),
+                                ProductionKind::Result => Segment::Result(segment),
+                            };
+                            (segment, cost)
+                        })
+                        .collect();
+                    self.completed(&mut frame, attempt, parts, governor)?;
                 }
                 Pending::Engine(Event::Ended {
                     table,
@@ -929,30 +935,41 @@ impl<'s> Recognizer<'s> {
         Ok(())
     }
 
-    /// A segment of `attempt` ended at `at`.
+    /// The segments of `attempt` ended: one call (or result), or each
+    /// call of an attempt whose production separates calls with `next`,
+    /// in order, each with its cost.
     fn completed(
         &mut self,
         frame: &mut Frame,
-        at: usize,
         attempt: u64,
-        segment: Segment,
-        cost: u64,
+        parts: Vec<(Segment, u64)>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         let Some(interps) = self.turn.interps.get(&attempt).cloned() else {
             return Ok(());
         };
-        let index = self.turn.store(segment, governor)?;
+        let mut stored = Vec::with_capacity(parts.len());
+        for (segment, cost) in parts {
+            let end = segment.span().end;
+            stored.push((self.turn.store(segment, governor)?, cost, end));
+        }
         for interp in interps {
             match interp {
-                Interp::Top(base) => frame
-                    .candidates
-                    .push(self.turn.append(base, index, cost, at, governor)?),
+                Interp::Top(base) => {
+                    let mut chain = base;
+                    for &(index, cost, end) in &stored {
+                        let (cost, hist) = self.turn.append(chain, index, cost, end, governor)?;
+                        chain = Base { cost, hist };
+                    }
+                    frame.candidates.push((chain.cost, chain.hist));
+                }
                 Interp::Embedded(think_start) => {
                     if let Some(think) = self.turn.think.as_mut()
                         && think.start == think_start
                     {
-                        think.embedded.push(index);
+                        think
+                            .embedded
+                            .extend(stored.iter().map(|&(index, _, _)| index));
                     }
                 }
             }
@@ -1467,6 +1484,9 @@ fn explain(edit: &MarkupEdit) -> String {
         }
         EditOperator::MissingWrapperClose => {
             format!("inserted the call's missing final closer `{replacement}`")
+        }
+        EditOperator::MissingToken => {
+            format!("read the omitted token `{replacement}` as inserted here")
         }
         EditOperator::MissingWrapperCloseBeforeText => format!(
             "inserted the call's missing final closer `{replacement}` before text that no closer follows; the text may instead be inside a wrapper that never closes"

@@ -49,6 +49,10 @@ pub(crate) enum PExpr {
     Repeat { inner: Box<Self>, op: u8, at: usize },
     /// `commit`: the attempt is a call (or result) attempt from here on.
     Commit,
+    /// `next`: the next call of the same attempt begins here.
+    Next { at: usize },
+    /// `insert("bytes")`: a token the model omitted, read as inserted.
+    Insert { bytes: Vec<u8> },
 }
 
 /// One top-level statement.
@@ -89,7 +93,7 @@ pub(crate) struct Document {
 }
 
 /// Names that cannot name a production or closer.
-pub(crate) const KEYWORDS: [&str; 8] = [
+pub(crate) const KEYWORDS: [&str; 10] = [
     "grammar",
     "reasoning",
     "confusable",
@@ -98,6 +102,8 @@ pub(crate) const KEYWORDS: [&str; 8] = [
     "until",
     "slot",
     "commit",
+    "next",
+    "insert",
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -502,6 +508,13 @@ impl Parser<'_, '_> {
                         })
                     }
                     ("commit", token) if *token != Token::Punct(b':') => Ok(PExpr::Commit),
+                    ("next", token) if *token != Token::Punct(b':') => Ok(PExpr::Next { at }),
+                    ("insert", Token::Punct(b'(')) => {
+                        self.advance()?;
+                        let (bytes, _) = self.string()?;
+                        self.expect(b')')?;
+                        Ok(PExpr::Insert { bytes })
+                    }
                     (_, Token::Punct(b':')) => {
                         self.advance()?;
                         self.enter()?;

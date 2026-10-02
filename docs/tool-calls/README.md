@@ -11,7 +11,7 @@ call. The operation is `tool_call.recover.v1`, implemented in
 `recover_tool_calls` MCP tool, and the `purrassist recover-tool-calls` CLI
 command.
 
-Four dialects are built in:
+Five dialects are built in:
 
 | Dialect | Shape | Reference |
 | --- | --- | --- |
@@ -19,11 +19,12 @@ Four dialects are built in:
 | `hermes.v1` | `<tool_call>{"name": NAME, "arguments": {...}}</tool_call>` | [dialect](dialects/hermes.v1.md) |
 | `openai-tool-calls.v1` | `tool_calls` elements `{"id": ID, "type": "function", "function": {...}}` as text | [dialect](dialects/openai-tool-calls.v1.md) |
 | `llama3-json.v1` | `{"name": NAME, "parameters": {...}}`, optionally after `<\|python_tag\|>` | [dialect](dialects/llama3-json.v1.md) |
+| `mistral-v3.v1` | `[TOOL_CALLS] [{"name": NAME, "arguments": {...}, "id": ID}, ...]` | [dialect](dialects/mistral-v3.v1.md) |
 
 Callers add their own dialects with the grammar DSL
 ([GRAMMAR.md](GRAMMAR.md)). Streaming recognition, `purrassist-derive`, and the
-remaining dialects (Anthropic tool_use, Mistral, DeepSeek, GLM, Kimi, Gemma,
-Harmony, Pythonic, bare JSON) are tracked in issue #4.
+remaining dialects (Anthropic tool_use, Mistral v11, DeepSeek, GLM, Kimi,
+Gemma, Harmony, Pythonic, bare JSON) are tracked in issue #4.
 
 ## Design
 
@@ -137,7 +138,7 @@ Ids are caller-scoped and never collide across the rounds of a conversation,
 with zero configuration. By default (`IdPolicy::Turn`):
 
 - A call keeps the id the model wrote in its markup (an `OpenAI`
-  `tool_calls[].id`); `ToolCall::source_id` reports it.
+  `tool_calls[].id`, a Mistral v3 `"id"`); `ToolCall::source_id` reports it.
 - Every other call is numbered `call_<tag>_<index>`, where `<tag>` is the
   first 12 hexadecimal digits (48 bits) of the SHA-256 digest of the turn's
   output bytes (`tool_call::turn_id_prefix`; the digest is
@@ -326,6 +327,6 @@ are in [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound).
 - [dialects/](dialects/): public sources, accepted forms, printing, and
   deliberate exclusions of each built-in dialect.
 - [MATCHING-QUALITY.md](../MATCHING-QUALITY.md#tool-call-recovery-evaluation):
-  the 4,197-case correction evaluation, per rule and per dialect.
+  the 5,228-case correction evaluation, per rule and per dialect.
 - [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound): the cost
   bound, budgets for large outputs, and throughput.

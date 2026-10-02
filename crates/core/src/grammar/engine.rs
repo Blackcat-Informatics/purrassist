@@ -40,6 +40,10 @@
 //! literal completes, or, in a program with `commit` instructions, only when
 //! one of its configurations passes a commit or it completes; until then its
 //! failure is silent and the turn level holds every report from its start.
+//!
+//! A history records each `next` it passed with its offset and cost, so one
+//! completed attempt of a production with `next` materializes as several
+//! call segments ([`Parts`]), one per call.
 // `unreachable_pub` and `redundant_pub_crate` disagree on the right
 // visibility for items of a crate-private module
 // (https://github.com/rust-lang/rust-clippy/issues/6188); these items are
@@ -157,6 +161,9 @@ pub(crate) enum HistKind {
     Edit(u32),
     /// Two equal-cost histories: `prev` or this node's operand.
     Pack(u32),
+    /// A `next`: the call that began before ends and the next one begins at
+    /// this offset, with the configuration's cost so far.
+    Next(usize, u64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -341,7 +348,7 @@ pub(crate) struct Step<'a, 's> {
     pub(crate) base: usize,
     pub(crate) stall_cap: u32,
     pub(crate) visited: &'a mut Vec<u64>,
-    pub(crate) pending: &'a mut Vec<(u32, u32)>,
+    pub(crate) pending: &'a mut Vec<(u32, u32, u64)>,
     pub(crate) tools: Option<&'s ToolSet>,
 }
 
@@ -422,6 +429,8 @@ impl<'s> Step<'_, 's> {
             | Inst::Open { .. }
             | Inst::Close { .. }
             | Inst::Commit { .. }
+            | Inst::Next { .. }
+            | Inst::Insert { .. }
             | Inst::Accept => {
                 unreachable!("configurations wait only at terminals")
             }
@@ -683,7 +692,9 @@ impl<'s> Step<'_, 's> {
             governor.charge(Resource::Work, K_CODEC)?;
             let HistNode { prev, kind } = nodes[node as usize];
             match kind {
-                HistKind::Root => break,
+                // The name of the call this slot belongs to: no earlier
+                // than the call's own beginning.
+                HistKind::Root | HistKind::Next(..) => break,
                 HistKind::Close(CaptureKind::Name, at) => close = Some(at),
                 HistKind::Open(CaptureKind::Name, start) => {
                     if let Some(end) = close {
@@ -735,8 +746,8 @@ impl<'s> Step<'_, 's> {
         self.visited.clear();
         self.visited.resize(words, 0);
         self.pending.clear();
-        self.pending.push((pc, thread.hist));
-        while let Some((pc, hist)) = self.pending.pop() {
+        self.pending.push((pc, thread.hist, thread.cost));
+        while let Some((pc, hist, cost)) = self.pending.pop() {
             let (word, bit) = (pc as usize / 64, 1_u64 << (pc % 64));
             if self.visited[word] & bit != 0 {
                 continue;
@@ -745,30 +756,48 @@ impl<'s> Step<'_, 's> {
             governor.charge(Resource::Work, K_THREAD)?;
             let sub = match self.program.insts[pc as usize] {
                 Inst::Split(first, second) => {
-                    self.pending.push((second, hist));
-                    self.pending.push((first, hist));
+                    self.pending.push((second, hist, cost));
+                    self.pending.push((first, hist, cost));
                     continue;
                 }
                 Inst::Open { kind, next } => {
                     let node = self.arena.push(hist, HistKind::Open(kind, at))?;
-                    self.pending.push((next, node));
+                    self.pending.push((next, node, cost));
                     continue;
                 }
                 Inst::Close { kind, next } => {
                     let node = self.arena.push(hist, HistKind::Close(kind, at))?;
-                    self.pending.push((next, node));
+                    self.pending.push((next, node, cost));
                     continue;
                 }
                 // The attempt opens when a configuration past the commit
                 // reaches the turn level (see `Engine::commit`).
                 Inst::Commit { next } => {
-                    self.pending.push((next, hist));
+                    self.pending.push((next, hist, cost));
+                    continue;
+                }
+                Inst::Next { next } => {
+                    let node = self.arena.push(hist, HistKind::Next(at, cost))?;
+                    self.pending.push((next, node, cost));
+                    continue;
+                }
+                Inst::Insert { lit, next } => {
+                    let edit = MarkupEdit {
+                        operator: EditOperator::MissingToken,
+                        span: at..at,
+                        original: Vec::new(),
+                        replacement: self.grammar.literals[lit as usize].bytes.clone(),
+                    };
+                    let node = self.arena.edit(hist, edit, governor)?;
+                    let cost = cost.saturating_add(EditOperator::MissingToken.rule().cost);
+                    self.pending.push((next, node, cost));
                     continue;
                 }
                 Inst::Accept => {
                     out.completed.push(Thread {
                         pc,
                         hist,
+                        cost,
                         pos: at,
                         ..thread
                     })?;
@@ -790,6 +819,7 @@ impl<'s> Step<'_, 's> {
                 entry: at,
                 pos: at,
                 hist,
+                cost,
                 ..thread
             };
             self.queue(next, stack)?;
@@ -973,7 +1003,7 @@ impl<'s> Step<'_, 's> {
                     governor.charge(Resource::ScratchBytes, edit.estimated_bytes())?;
                     edits.push(edit.clone());
                 }
-                HistKind::Root | HistKind::Pack(_) => {}
+                HistKind::Root | HistKind::Pack(_) | HistKind::Next(..) => {}
             }
         }
         while let Some((kind, start, value)) = open.pop() {
@@ -1119,42 +1149,121 @@ impl<'s> Step<'_, 's> {
     }
 
     /// Materialize every reading of a completed (or cut-off) history.
+    ///
+    /// A history without `next` is one call. A history with `next` is one
+    /// call per part: the first spans from the attempt's start to the first
+    /// boundary, each further one from its boundary to the next, the last
+    /// to the attempt's end (and alone keeps a cut-off's dangling closure).
+    /// Readings are grouped by where their calls begin and by the cost each
+    /// call carries; each group is one sequence of call segments, with the
+    /// cost of each, and distinct groups are competing segmentations of the
+    /// attempt's span.
     pub(crate) fn segment(
         &self,
         hist: u32,
         shape: &Shape<'_>,
         governor: &mut Governor,
-    ) -> Result<Result<CallSegment, Rejection>, StopReason> {
-        let mut readings: Vec<RawCall> = Vec::new();
+    ) -> Result<Result<Vec<Parts>, Rejection>, StopReason> {
+        // (boundaries with their costs, readings of each call)
+        let mut groups: Vec<Grouped> = Vec::new();
         let mut rejection = None;
-        for path in self.histories(hist, governor)? {
-            match self.reading(&path, shape, governor)? {
-                Ok(call) => {
-                    if !readings.contains(&call) {
-                        // Every reading beyond the first competes.
-                        if !readings.is_empty() {
-                            governor.charge(Resource::Candidates, 1)?;
-                        }
-                        readings.push(call);
+        'paths: for path in self.histories(hist, governor)? {
+            let cuts: Vec<(usize, usize, u64)> = path
+                .iter()
+                .enumerate()
+                .filter_map(|(index, step)| match *step {
+                    HistKind::Next(at, cost) => Some((index, at, cost)),
+                    _ => None,
+                })
+                .collect();
+            let mut calls = Vec::with_capacity(cuts.len() + 1);
+            let mut from = 0;
+            for part in 0..=cuts.len() {
+                let last = part == cuts.len();
+                let start = if part == 0 {
+                    shape.span.start
+                } else {
+                    cuts[part - 1].1
+                };
+                let (to, end) = if last {
+                    (path.len(), shape.span.end)
+                } else {
+                    (cuts[part].0, cuts[part].1)
+                };
+                let before = if part == 0 { 0 } else { cuts[part - 1].2 };
+                let through = if last { shape.cost } else { cuts[part].2 };
+                let part_shape = Shape {
+                    span: start..end,
+                    dialect: shape.dialect,
+                    kind: shape.kind,
+                    dangling: last && shape.dangling,
+                    open_end: if last { shape.open_end } else { end },
+                    cost: through.saturating_sub(before),
+                };
+                match self.reading(&path[from..to], &part_shape, governor)? {
+                    Ok(call) => calls.push(call),
+                    Err(reason) => {
+                        rejection.get_or_insert(reason);
+                        continue 'paths;
                     }
                 }
-                Err(reason) => {
-                    rejection.get_or_insert(reason);
+                from = to + 1;
+            }
+            let boundaries: Vec<(usize, u64)> =
+                cuts.iter().map(|&(_, at, cost)| (at, cost)).collect();
+            let found = groups.iter().position(|(known, _)| *known == boundaries);
+            let index = found.unwrap_or_else(|| {
+                groups.push((boundaries, vec![Vec::new(); calls.len()]));
+                groups.len() - 1
+            });
+            let group = &mut groups[index].1;
+            for (readings, call) in group.iter_mut().zip(calls) {
+                if !readings.contains(&call) {
+                    // Every reading beyond the first competes.
+                    if !readings.is_empty() {
+                        governor.charge(Resource::Candidates, 1)?;
+                    }
+                    readings.push(call);
                 }
             }
         }
-        if readings.is_empty() {
+        if groups.is_empty() {
             return Ok(Err(
                 rejection.unwrap_or(Rejection::Malformed { at: shape.span.end })
             ));
         }
-        Ok(Ok(CallSegment {
-            span: shape.span.clone(),
-            readings,
-            derivations: Vec::new(),
-        }))
+        Ok(Ok(groups
+            .into_iter()
+            .map(|(boundaries, calls)| {
+                calls
+                    .into_iter()
+                    .enumerate()
+                    .map(|(part, readings)| {
+                        let before = if part == 0 { 0 } else { boundaries[part - 1].1 };
+                        let through = boundaries.get(part).map_or(shape.cost, |&(_, cost)| cost);
+                        let span = readings[0].span.clone();
+                        (
+                            CallSegment {
+                                span,
+                                readings,
+                                derivations: Vec::new(),
+                            },
+                            through.saturating_sub(before),
+                        )
+                    })
+                    .collect()
+            })
+            .collect()))
     }
 }
+
+/// One segmentation of a completed attempt: each call's segment, in order,
+/// with the cost it carries.
+pub(crate) type Parts = Vec<(CallSegment, u64)>;
+
+/// The readings of one segmentation while they are collected: where each
+/// later call begins (with the cost so far), and each call's readings.
+type Grouped = (Vec<(usize, u64)>, Vec<Vec<RawCall>>);
 
 /// Whether dropped text is only a code-fence marker: a run of at least
 /// three backticks or tildes, optionally followed by an info string on the
@@ -1280,13 +1389,14 @@ pub(crate) enum Event {
         start: usize,
         at: usize,
     },
-    /// Attempt `attempt` matched `segment`, ending at `at`.
+    /// Attempt `attempt` matched `parts` (one call segment, or one per
+    /// call of a production with `next`, each with its cost), ending at
+    /// `at`.
     Completed {
         table: u32,
         attempt: u64,
         at: usize,
-        segment: CallSegment,
-        cost: u64,
+        parts: Parts,
     },
     /// Attempt `attempt` has no configuration left at `at`.
     Ended {
@@ -1314,6 +1424,18 @@ struct Table<'s> {
     threads: ScratchVec<Thread>,
     attempts: ScratchVec<Attempt>,
     trails: Vec<Trail>,
+    /// Completions of a grouped program's live attempts (see
+    /// `Program::grouped`), released when the attempt ends.
+    held: Vec<Held>,
+}
+
+/// A completion of a grouped program's attempt, held until the attempt
+/// ends.
+struct Held {
+    attempt: u64,
+    event: Event,
+    cost: u64,
+    dangling: bool,
 }
 
 /// A completed configuration held while closer spellings of its grammar
@@ -1383,7 +1505,7 @@ pub(crate) struct Engine<'s> {
     stack: ScratchVec<Thread>,
     out: Out,
     visited: Vec<u64>,
-    pending: Vec<(u32, u32)>,
+    pending: Vec<(u32, u32, u64)>,
     tools: Option<&'s ToolSet>,
     pub(crate) events: Vec<Event>,
 }
@@ -1418,6 +1540,7 @@ impl<'s> Engine<'s> {
                     threads: ScratchVec::new(governor),
                     attempts: ScratchVec::new(governor),
                     trails: Vec::new(),
+                    held: Vec::new(),
                 });
             }
         }
@@ -1610,7 +1733,7 @@ impl<'s> Engine<'s> {
             self.open(table, governor)?;
         }
         self.complete(table, &mut completed, eof, governor)?;
-        self.retire(table, &live, at, eof);
+        self.retire(table, &live, at, eof, governor)?;
         self.tables[table].threads = live;
         Ok(())
     }
@@ -1707,7 +1830,8 @@ impl<'s> Engine<'s> {
         live: &ScratchVec<Thread>,
         at: usize,
         eof: Option<&GenerationStop>,
-    ) {
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
         let mut index = 0;
         while index < self.tables[table].attempts.len() {
             let record = self.tables[table].attempts.as_slice()[index];
@@ -1723,6 +1847,7 @@ impl<'s> Engine<'s> {
                 index += 1;
                 continue;
             }
+            self.release(table, record.id, governor)?;
             if record.opened {
                 self.events.push(Event::Ended {
                     table: index_u32(table),
@@ -1749,6 +1874,49 @@ impl<'s> Engine<'s> {
             attempts.copy_within(index + 1.., index);
             self.tables[table].attempts.pop();
         }
+        Ok(())
+    }
+
+    /// Report the held completions of `attempt`, a grouped program's, that
+    /// no other completion of it dominates. A completion is dominated by
+    /// one that ends later and either costs no more (it reads a further
+    /// call at no extra cost: the attempt reads every call it can, so a
+    /// call-shaped object after a call is never left as content) or is the
+    /// cut-off reading of a length stop (the attempt was still being
+    /// written past it); a cut-off reading is dominated by a completion
+    /// that reaches as far. Charges one `Work` unit per pair compared.
+    fn release(
+        &mut self,
+        table: usize,
+        attempt: u64,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let held = &mut self.tables[table].held;
+        if !held.iter().any(|entry| entry.attempt == attempt) {
+            return Ok(());
+        }
+        let (mine, rest): (Vec<Held>, Vec<Held>) = core::mem::take(held)
+            .into_iter()
+            .partition(|entry| entry.attempt == attempt);
+        self.tables[table].held = rest;
+        governor.charge(
+            Resource::Work,
+            size(mine.len()).saturating_mul(size(mine.len())),
+        )?;
+        let dominated = |entry: &Held| {
+            mine.iter().any(|other| {
+                (other.event.at() > entry.event.at()
+                    && (other.dangling || other.cost <= entry.cost))
+                    || (entry.dangling && !other.dangling && other.event.at() >= entry.event.at())
+            })
+        };
+        let keep: Vec<bool> = mine.iter().map(|entry| !dominated(entry)).collect();
+        for (entry, keep) in mine.into_iter().zip(keep) {
+            if keep {
+                self.events.push(entry.event);
+            }
+        }
+        Ok(())
     }
 
     /// Group completions by attempt and offset, pack equal-cost histories,
@@ -1986,6 +2154,11 @@ impl<'s> Engine<'s> {
         // An uncommitted attempt of a deferred program may still open at
         // its start: nothing at or after its start is settled until it
         // commits or ends.
+        let held = self
+            .tables
+            .iter()
+            .flat_map(|table| table.held.iter())
+            .map(|entry| entry.event.at());
         let uncommitted = self
             .tables
             .iter()
@@ -1993,7 +2166,7 @@ impl<'s> Engine<'s> {
             .flat_map(|table| table.attempts.as_slice().iter())
             .filter(|record| !record.opened)
             .map(|record| record.start);
-        trails.chain(uncommitted).min()
+        trails.chain(held).chain(uncommitted).min()
     }
 
     /// Record every inserted wrapper closer ending `thread`'s history as
@@ -2148,23 +2321,35 @@ impl<'s> Engine<'s> {
             open_end,
             cost: thread.cost,
         };
-        let segment = step.segment(thread.hist, &shape, governor)?;
+        let segmentations = step.segment(thread.hist, &shape, governor)?;
         let attempts = self.tables[table].attempts.as_mut_slice();
         let record = attempts
             .iter_mut()
             .find(|record| record.id == thread.attempt)
             .expect("completing attempt is live");
-        match segment {
-            Ok(segment) => {
+        match segmentations {
+            Ok(segmentations) => {
                 record.completed = true;
-                governor.charge(Resource::Work, super::cost::K_EVENT)?;
-                self.events.push(Event::Completed {
-                    table: index_u32(table),
-                    attempt: thread.attempt,
-                    at: thread.pos,
-                    segment,
-                    cost: thread.cost,
-                });
+                let grouped = self.tables[table].program.grouped;
+                for parts in segmentations {
+                    governor.charge(Resource::Work, super::cost::K_EVENT)?;
+                    let event = Event::Completed {
+                        table: index_u32(table),
+                        attempt: thread.attempt,
+                        at: thread.pos,
+                        parts,
+                    };
+                    if grouped {
+                        self.tables[table].held.push(Held {
+                            attempt: thread.attempt,
+                            event,
+                            cost: thread.cost,
+                            dangling,
+                        });
+                    } else {
+                        self.events.push(event);
+                    }
+                }
             }
             Err(reason) => {
                 record.failure.get_or_insert(reason);
@@ -2295,8 +2480,11 @@ impl<'s> Engine<'s> {
     fn cut(&mut self, table: usize, governor: &mut Governor) -> Result<(), StopReason> {
         let records: Vec<Attempt> = self.tables[table].attempts.as_slice().to_vec();
         let threads: Vec<Thread> = self.tables[table].threads.as_slice().to_vec();
+        let grouped = self.tables[table].program.grouped;
         for record in records {
-            if record.opened && !record.completed {
+            // A grouped attempt that completed a call may still be writing
+            // the next one: its cut-off reading competes too.
+            if record.opened && (!record.completed || grouped) {
                 let mut best: Option<Thread> = None;
                 for thread in threads.iter().filter(|thread| thread.attempt == record.id) {
                     let (mut step, _, _) = self.split(table);
@@ -2328,6 +2516,7 @@ impl<'s> Engine<'s> {
                     )?;
                 }
             }
+            self.release(table, record.id, governor)?;
             if record.opened {
                 // The cut-off reading may itself be rejected (a capture that
                 // is not well-formed UTF-8): the attempt then ends rejected.

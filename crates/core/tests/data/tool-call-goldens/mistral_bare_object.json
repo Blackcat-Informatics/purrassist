@@ -1,0 +1,63 @@
+{
+  "description": "A Mistral v3 call written as a single object after [TOOL_CALLS] without the array brackets: read as the same call, Resolved, with each omitted bracket recorded as an inserted markup token (tool_call.markup.missing-token).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v3.v1"
+  ],
+  "stop": "stop",
+  "input": "[TOOL_CALLS] {\"name\": \"get_weather\", \"arguments\": {\"city\": \"Lima\", \"unit\": \"celsius\"}}",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "city": "Lima",
+        "unit": "celsius"
+      },
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.missing-token",
+        "tool_call.markup.missing-token",
+        "tool_call.id.dedup"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.missing-token",
+    "tool_call.markup.missing-token",
+    "tool_call.id.dedup"
+  ]
+}

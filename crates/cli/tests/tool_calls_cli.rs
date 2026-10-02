@@ -395,3 +395,57 @@ fn llama3_json_recovers_and_emits_via_cli() {
     );
     fs::remove_file(tools).unwrap();
 }
+
+/// Mistral v3 with no `--dialect`: a `[TOOL_CALLS]` array is one call per
+/// element, each keeping the model's id, and two Hermes calls emitted as
+/// `mistral-v3.v1` print as one array that recovers to the same calls.
+#[test]
+fn mistral_v3_recovers_and_emits_via_cli() {
+    let turn = br#"[TOOL_CALLS] [{"name": "list_dir", "arguments": {"path": "src"}, "id": "a1B2c3D4e"}, {"name": "list_dir", "arguments": {"path": "docs", "depth": 1}, "id": "f5G6h7J8k"}]</s>"#;
+    let (output, tools) = run(&[], turn);
+    assert_eq!(output.status.code(), Some(0));
+    let node = result(&output);
+    assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+    for (index, (id, arguments)) in [
+        ("a1B2c3D4e", r#"{"path":"src"}"#),
+        ("f5G6h7J8k", r#"{"path":"docs","depth":1}"#),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let call = |field: &str| node.pointer(&format!("/value/calls/{index}/{field}"));
+        assert_eq!(
+            call("dialect").and_then(Node::as_str),
+            Some("mistral-v3.v1")
+        );
+        assert_eq!(call("id").and_then(Node::as_str), Some(id));
+        assert_eq!(call("source_id").and_then(Node::as_str), Some(id));
+        assert_eq!(call("arguments").unwrap().to_json(), arguments);
+    }
+    fs::remove_file(tools).unwrap();
+    let hermes = b"<tool_call>\n{\"name\": \"list_dir\", \"arguments\": {\"path\": \"src\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"list_dir\", \"arguments\": {\"path\": \"docs\"}}\n</tool_call>";
+    let (output, tools) = run(&["--emit", "mistral-v3.v1"], hermes);
+    let node = result(&output);
+    let emitted = node
+        .pointer("/value/emitted/output/text")
+        .and_then(Node::as_str)
+        .expect("emitted markup")
+        .to_owned();
+    let prefix = turn_id_prefix(&Digest::of(hermes));
+    assert_eq!(
+        emitted,
+        format!(
+            r#"[TOOL_CALLS] [{{"name": "list_dir", "arguments": {{"path":"src"}}, "id": "{prefix}0"}}, {{"name": "list_dir", "arguments": {{"path":"docs"}}, "id": "{prefix}1"}}]"#
+        )
+    );
+    fs::remove_file(tools).unwrap();
+    let (output, tools) = run(&[], emitted.as_bytes());
+    let node = result(&output);
+    assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+    assert_eq!(
+        node.pointer("/value/calls/1/source_id")
+            .and_then(Node::as_str),
+        Some(format!("{prefix}1").as_str())
+    );
+    fs::remove_file(tools).unwrap();
+}

@@ -222,6 +222,7 @@ fn all_registered_dialects_have_anchor_fixtures() {
         [
             "hermes.v1",
             "llama3-json.v1",
+            "mistral-v3.v1",
             "openai-tool-calls.v1",
             "qwen3-coder-xml.v1"
         ]
@@ -333,6 +334,37 @@ fn unescape(content: &str) -> String {
     node.as_str().expect("a string").to_owned()
 }
 
+/// A Llama 3 JSON or Mistral v3 call's span holds one JSON call object
+/// (after `<|python_tag|>`, or with the `[TOOL_CALLS]` array framing around
+/// it) whose name, id and arguments are the call's.
+fn assert_json_call_object(dialect: &DialectId, raw: &str, call: &RawCall, file: &str) {
+    let start = raw.find('{').expect("object start");
+    let end = raw.rfind('}').expect("object end");
+    let object = json::parse(&raw[start..=end]).expect("call object JSON");
+    assert_eq!(
+        string_member(&object, "name").as_deref(),
+        call.name.as_ref().map(|name| name.value.as_str()),
+        "{file}"
+    );
+    if *dialect == DialectId::MistralV3 {
+        assert_eq!(
+            string_member(&object, "id"),
+            call.id.as_ref().map(|id| id.value.clone()),
+            "{file}"
+        );
+    } else {
+        assert!(
+            raw.starts_with('{') || raw.starts_with("<|python_tag|>"),
+            "{file}"
+        );
+    }
+    let arguments = object
+        .get("parameters")
+        .or_else(|| object.get("arguments"))
+        .expect("arguments");
+    assert!(arguments.equivalent(&call.arguments.root), "{file}");
+}
+
 #[test]
 fn ir_spans_slice_back_to_source() {
     for dialect in DialectId::BUILT_IN {
@@ -364,23 +396,8 @@ fn ir_spans_slice_back_to_source() {
                     let arguments = string_member(function, "arguments").expect("arguments");
                     let decoded = json::parse(&arguments).expect("stringified arguments");
                     assert!(decoded.equivalent(&call.arguments.root), "{}", fixture.file);
-                } else if dialect == DialectId::Llama3Json {
-                    // One JSON call object, after an optional <|python_tag|>.
-                    let object = raw.strip_prefix("<|python_tag|>").unwrap_or(raw);
-                    let element = json::parse(object).expect("call object JSON");
-                    assert_eq!(
-                        string_member(&element, "name").as_deref(),
-                        call.name.as_ref().map(|name| name.value.as_str())
-                    );
-                    let arguments = element
-                        .get("parameters")
-                        .or_else(|| element.get("arguments"))
-                        .expect("parameters");
-                    assert!(
-                        arguments.equivalent(&call.arguments.root),
-                        "{}",
-                        fixture.file
-                    );
+                } else if matches!(dialect, DialectId::MistralV3 | DialectId::Llama3Json) {
+                    assert_json_call_object(&dialect, raw, call, &fixture.file);
                 } else {
                     assert!(raw.starts_with("<tool_call>"), "{}: {raw:?}", fixture.file);
                     assert!(raw.ends_with("</tool_call>"), "{}: {raw:?}", fixture.file);
@@ -519,6 +536,7 @@ fn reasoning_markers_are_declared() {
     }
     assert_eq!(DialectId::OpenAiToolCalls.grammar().reasoning(), None);
     assert_eq!(DialectId::Llama3Json.grammar().reasoning(), None);
+    assert_eq!(DialectId::MistralV3.grammar().reasoning(), None);
     let set = dialect_set(&DialectId::BUILT_IN);
     assert_eq!(
         set.reasoning_markers(),
@@ -584,6 +602,22 @@ fn result_productions_read_tool_results() {
         assert_eq!(&source[id.span.clone()], id.value);
         assert!(id.value.starts_with("call_"));
     }
+    // Mistral v3 tool results carry their content as a JSON string and the
+    // call id they answer.
+    let set = dialect_set(&[DialectId::MistralV3]);
+    let source =
+        r#"[TOOL_RESULTS] {"content": "22.0 \"C\"", "call_id": "a1B2c3D4e"}[/TOOL_RESULTS]"#;
+    let turn = recognize(&set, &tools, source);
+    let found = results(&turn);
+    assert_eq!(found.len(), 1, "{:#?}", turn.pieces());
+    assert_eq!(
+        content(found[0], source).as_deref(),
+        Some(r#""22.0 \"C\"""#)
+    );
+    assert_eq!(
+        found[0].id.as_ref().map(|id| id.value.as_str()),
+        Some("a1B2c3D4e")
+    );
     // Llama 3 tool results are ipython messages.
     let set = dialect_set(&[DialectId::Llama3Json]);
     let source = "<|start_header_id|>ipython<|end_header_id|>\n\n{\"temperature\": 22.0}<|eot_id|>";
@@ -628,6 +662,7 @@ fn declaration_productions_match_tool_declarations() {
         DialectId::OpenAiToolCalls,
         DialectId::Hermes,
         DialectId::Llama3Json,
+        DialectId::MistralV3,
     ] {
         let set = declaration_reader(&dialect);
         for fixture in fixtures(&dialect) {

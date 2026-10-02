@@ -1756,3 +1756,177 @@ fn llama3_evidence_and_honesty() {
     assert!(!call.is_usable());
     assert_eq!(reading(&result).finish, Finish::Truncated);
 }
+
+/// Mistral v3: each element of a `[TOOL_CALLS]` array is its own call; a
+/// missing or repeated closing bracket, an unclosed last object, and a
+/// bare object without brackets are repaired or read with every call
+/// `Resolved`, model ids kept as source ids.
+#[test]
+fn mistral_array_repairs() {
+    for (name, rule, count) in [
+        (
+            "mistral_missing_array_close_at_end",
+            Some("tool_call.markup.missing-closers-at-end"),
+            2,
+        ),
+        (
+            "mistral_missing_array_close_before_next",
+            Some("tool_call.markup.missing-wrapper-close"),
+            2,
+        ),
+        (
+            "mistral_last_object_unclosed_at_stop",
+            Some("tool_call.markup.missing-closers-at-end"),
+            2,
+        ),
+        (
+            "mistral_repeated_array_close",
+            Some("tool_call.markup.stray-closer"),
+            1,
+        ),
+        (
+            "mistral_bare_object",
+            Some("tool_call.markup.missing-token"),
+            1,
+        ),
+        (
+            "mistral_unbracketed_calls",
+            Some("tool_call.markup.missing-token"),
+            2,
+        ),
+        (
+            "mistral_unbracketed_calls_by_line",
+            Some("tool_call.markup.missing-token"),
+            2,
+        ),
+        (
+            "mistral_unbracketed_call_then_json_prose",
+            Some("tool_call.markup.missing-token"),
+            1,
+        ),
+    ] {
+        let (_, result) = golden(name);
+        assert!(matches!(result.outcome, Outcome::Resolved(_)), "{name}");
+        let calls = reading(&result);
+        assert_eq!(calls.calls.len(), count, "{name}: {calls:#?}");
+        assert_eq!(calls.finish, Finish::Calls, "{name}");
+        assert!(calls.rejected.is_empty(), "{name}");
+        assert!(
+            calls
+                .calls
+                .iter()
+                .all(|call| call.outcome == CallOutcome::Resolved)
+        );
+        assert!(
+            calls
+                .calls
+                .iter()
+                .all(|call| call.dialect == DialectId::MistralV3)
+        );
+        if let Some(rule) = rule {
+            assert!(
+                calls
+                    .calls
+                    .iter()
+                    .any(|call| rules_of(call).contains(&rule)),
+                "{name}"
+            );
+        }
+        assert_eq!(calls.usable().len(), count, "{name}");
+    }
+    let (_, result) = golden("mistral_missing_array_close_at_end");
+    let ids: Vec<Option<&str>> = reading(&result)
+        .calls
+        .iter()
+        .map(|call| call.source_id.as_deref())
+        .collect();
+    assert_eq!(ids, [Some("a1B2c3D4e"), Some("f5G6h7J8k")]);
+    let (_, result) = golden("mistral_duplicate_model_ids");
+    let calls = reading(&result);
+    assert_eq!(calls.calls[0].id, "same12345");
+    assert_ne!(calls.calls[1].id, "same12345");
+    assert!(rules_of(&calls.calls[1]).contains(&"tool_call.id.dedup"));
+    assert!(
+        calls
+            .calls
+            .iter()
+            .all(|call| call.outcome == CallOutcome::Resolved)
+    );
+}
+
+/// A Mistral v3 array cut off inside its last object: the earlier calls
+/// stay whole and usable, the last is truncated.
+#[test]
+fn mistral_truncated_last_object() {
+    let (_, result) = golden("mistral_truncated_last_object");
+    let calls = reading(&result);
+    assert_eq!(calls.calls.len(), 2);
+    assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
+    assert_eq!(
+        calls.calls[1].outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::Truncated
+        }
+    );
+    assert_eq!(calls.usable().len(), 1);
+    assert_eq!(calls.finish, Finish::TruncatedWithCalls);
+}
+
+/// The `[TOOL_CALLS]` token is the evidence: a Llama 3 object inside a
+/// Mistral array is part of the Mistral call, never a competing reading.
+#[test]
+fn mistral_evidence_beats_llama3_object() {
+    let (_, result) = golden("mistral_parameters_key_beats_llama3");
+    assert!(matches!(result.outcome, Outcome::Resolved(_)));
+    let call = the_call(&result);
+    assert_eq!(call.dialect, DialectId::MistralV3);
+    assert_eq!(call.candidate_dialects, [DialectId::MistralV3]);
+    assert_eq!(call.source_id.as_deref(), Some("a1B2c3D4e"));
+    assert_eq!(call.outcome, CallOutcome::Resolved);
+}
+
+/// Unbracketed Mistral v3 objects: every call-shaped object after a call
+/// continues the attempt, and nothing else is absorbed. Text after the last
+/// call, a plain JSON object included, stays content; a length stop inside
+/// the second object truncates that call alone.
+#[test]
+fn mistral_unbracketed_calls_read_by_evidence() {
+    let (golden_turn, result) = golden("mistral_unbracketed_call_then_json_prose");
+    let calls = reading(&result);
+    assert_eq!(calls.calls.len(), 1);
+    let content: Vec<&[u8]> = calls
+        .content
+        .iter()
+        .map(|range| &golden_turn.input[range.clone()])
+        .collect();
+    assert_eq!(
+        content,
+        [&b"\nThe reply will look like {\"city\": \"Paris\", \"temp\": 21}."[..]]
+    );
+    let (golden_turn, result) = golden("mistral_unbracketed_calls_by_line");
+    let calls = reading(&result);
+    let content: Vec<&[u8]> = calls
+        .content
+        .iter()
+        .map(|range| &golden_turn.input[range.clone()])
+        .collect();
+    assert_eq!(content, [&b"\nChecking both now."[..]]);
+    let (_, result) = golden("mistral_unbracketed_calls");
+    let ids: Vec<Option<&str>> = reading(&result)
+        .calls
+        .iter()
+        .map(|call| call.source_id.as_deref())
+        .collect();
+    assert_eq!(ids, [Some("a1B2c3D4e"), Some("f5G6h7J8k")]);
+    let (_, result) = golden("mistral_unbracketed_truncated_second");
+    let calls = reading(&result);
+    assert_eq!(calls.calls.len(), 2);
+    assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
+    assert_eq!(
+        calls.calls[1].outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::Truncated
+        }
+    );
+    assert_eq!(calls.finish, Finish::TruncatedWithCalls);
+}

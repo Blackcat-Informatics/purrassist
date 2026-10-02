@@ -1495,3 +1495,265 @@ fn commit_defers_opening_until_evidence() {
         }
     }
 }
+
+/// A dialect whose one attempt holds a list of calls separated by `next`.
+const LISTED: &str = r#"grammar "list.v1";
+closer end = "]";
+closer item-end = ")";
+ident = /[a-z]+/;
+item = "(" name:ident ":" arguments:slot(json, "\x00") item-end;
+call = "<calls>[" item ("," next item)* end;
+result = "<r>" content:until("</r>") "</r>";
+declaration = "<d>";
+"#;
+
+/// `next` is refused where it cannot separate calls: inside a capture, or
+/// reachable from `result` or `declaration`; and it is a keyword.
+#[test]
+fn next_is_refused_where_it_cannot_separate_calls() {
+    for (text, name) in [
+        (
+            "grammar \"g\"; call = \"<c>\"; result = \"<r>\" next \"x\"; declaration = \"<d>\";",
+            "result",
+        ),
+        (
+            "grammar \"g\"; call = \"<c>\" name:(\"a\" next \"b\"); result = \"<r>\"; declaration = \"<d>\";",
+            "call",
+        ),
+        (
+            "grammar \"g\"; sep = \",\" next; call = \"<c>\"; result = \"<r>\"; declaration = \"<d>\" sep;",
+            "declaration",
+        ),
+    ] {
+        let error =
+            Grammar::compile_governed(text, &mut Governor::new(Budget::default())).unwrap_err();
+        assert!(
+            matches!(&error, GrammarError::MisplacedNext { name: found, .. } if found == name),
+            "{text}: {error:?}"
+        );
+        assert!(error.offset().is_some());
+    }
+    let error = Grammar::compile_governed(
+        "grammar \"g\"; next = \"x\"; call = \"<c>\"; result = \"<r>\"; declaration = \"<d>\";",
+        &mut Governor::new(Budget::default()),
+    )
+    .unwrap_err();
+    assert!(matches!(error, GrammarError::ReservedName { ref name, .. } if name == "next"));
+}
+
+/// `next`: one attempt is several calls, each its own segment spanning
+/// from its boundary to the next; only the last call of a cut-off attempt
+/// is dangling; equal-cost readings that place a boundary differently are
+/// competing segmentations.
+#[test]
+fn next_separates_calls_of_one_attempt() {
+    let listed = set(&[LISTED]);
+    let input = br#"say <calls>[(a:{"x":1}),(b:{"y":[2]}),(c:{})] done"#;
+    let turn = recognize(&listed, input, GenerationStop::Stop);
+    let found = calls(&turn);
+    let names: Vec<&str> = found
+        .iter()
+        .map(|call| call.name.as_ref().expect("name").value.as_str())
+        .collect();
+    assert_eq!(names, ["a", "b", "c"]);
+    let spans: Vec<&[u8]> = found.iter().map(|call| &input[call.span.clone()]).collect();
+    assert_eq!(
+        spans,
+        [
+            &br#"<calls>[(a:{"x":1}),"#[..],
+            br#"(b:{"y":[2]}),"#,
+            b"(c:{})]"
+        ]
+    );
+    assert_eq!(found[1].arguments.root.to_json(), r#"{"y":[2]}"#);
+    assert!(
+        found
+            .iter()
+            .all(|call| call.cost == 0 && call.closure == Closure::Closed)
+    );
+    assert_partition(
+        &turn.selected().into_iter().cloned().collect::<Vec<_>>(),
+        input.len(),
+        "listed",
+    );
+
+    // Cut off inside the third call: the first two are whole.
+    let cut = br#"<calls>[(a:{"x":1}),(b:{}),(c:{"z""#;
+    let turn = recognize(&listed, cut, GenerationStop::Length);
+    let closures: Vec<Closure> = calls(&turn).iter().map(|call| call.closure).collect();
+    assert_eq!(
+        closures,
+        [Closure::Closed, Closure::Closed, Closure::Dangling]
+    );
+    // A missing list closer at the end belongs to the last call alone.
+    let turn = recognize(&listed, b"<calls>[(a:{}),(b:{})", GenerationStop::Stop);
+    let found = calls(&turn);
+    assert_eq!(found[0].edits, []);
+    assert_eq!(operators(found[1]), [EditOperator::MissingClosersAtEnd]);
+
+    // Equal-cost readings that begin the second call at different offsets
+    // are competing segmentations of the attempt.
+    let split = set(&["grammar \"split.v1\";
+        ident = /[a-z]+/;
+        call = \"<c>\" name:ident (\",\" next \" \" | \", \" next) name:ident \"</c>\";
+        result = \"<r>\"; declaration = \"<d>\";"]);
+    let turn = recognize(&split, b"<c>a, b</c>", GenerationStop::Stop);
+    assert!(turn.is_ambiguous(), "{:#?}", turn.pieces());
+
+    // Chunking invariance, usage included.
+    let both = set(&[LISTED, MINI]);
+    for input in [
+        &input[..],
+        cut,
+        b"<calls>[(a:{}),<tool><call=read></call></tool>",
+    ] {
+        for stop in [GenerationStop::Stop, GenerationStop::Length] {
+            let mut whole = Governor::new(Budget::default());
+            let expected = run(
+                &both,
+                &[input],
+                stop.clone(),
+                ReasoningPolicy::default(),
+                &mut whole,
+            )
+            .expect("recognized");
+            for split in 0..=input.len() {
+                let mut governor = Governor::new(Budget::default());
+                let turn = run(
+                    &both,
+                    &[&input[..split], &input[split..]],
+                    stop.clone(),
+                    ReasoningPolicy::default(),
+                    &mut governor,
+                )
+                .expect("recognized");
+                assert_eq!(turn, expected, "split at {split}");
+                assert_eq!(governor.usage(), whole.usage(), "usage at split {split}");
+            }
+        }
+    }
+}
+
+/// A list whose brackets the model may omit.
+const OMITTED: &str = r#"grammar "omit.v1";
+closer end = "]";
+closer item-end = ")";
+ident = /[a-z]+/;
+ws = /[ \n]+/;
+item = "(" name:ident ":" arguments:slot(json, "\x00") item-end;
+call = "<calls>" ("[" item ("," next item)* end | insert("[") item ((ws? "," ws? | ws) next item)* insert("]"));
+result = "<r>" content:until("</r>") "</r>";
+declaration = "<d>";
+"#;
+
+/// `insert("...")` reads an omitted token as inserted (a markup repair,
+/// `tool_call.markup.missing-token`), and a grouped attempt reads every
+/// call it can: a later completion that costs no more, or a length stop's
+/// cut-off reading past it, replaces an earlier one, so a call-shaped item
+/// is never left as content and anything else never absorbed. Chunking
+/// never changes the result.
+#[test]
+fn insert_and_grouped_attempts_read_every_call() {
+    let omitted = set(&[OMITTED]);
+    let compiled = dialect(OMITTED);
+    let Expr::Sequence(items) = compiled.grammar().call() else {
+        panic!("a sequence")
+    };
+    let Expr::Choice(forms) = &items[1] else {
+        panic!("a choice")
+    };
+    let Expr::Sequence(bare) = &forms[1] else {
+        panic!("a sequence")
+    };
+    assert!(matches!(bare[0], Expr::Insert(_)));
+
+    let input = br#"x <calls>(a:{}), (b:{"y":1})
+(c:{}) then (d) and (e:"#;
+    let turn = recognize(&omitted, input, GenerationStop::Stop);
+    let found = calls(&turn);
+    let names: Vec<&str> = found
+        .iter()
+        .map(|call| call.name.as_ref().expect("name").value.as_str())
+        .collect();
+    assert_eq!(names, ["a", "b", "c"], "{:#?}", turn.pieces());
+    assert_eq!(operators(found[0]), [EditOperator::MissingToken]);
+    assert_eq!(operators(found[1]), []);
+    assert_eq!(operators(found[2]), [EditOperator::MissingToken]);
+    assert_eq!(found[0].edits[0].replacement, b"[");
+    assert_eq!(found[2].edits[0].replacement, b"]");
+    assert!(
+        found
+            .iter()
+            .all(|call| call.closure == Closure::Repaired || call.edits.is_empty())
+    );
+    assert!(!turn.is_ambiguous());
+    let tail = turn.selected().last().expect("content").span();
+    assert_eq!(&input[tail], b" then (d) and (e:");
+
+    // A length stop inside the second item: the first is whole, the second
+    // cut off.
+    let turn = recognize(
+        &omitted,
+        br#"<calls>(a:{}), (b:{"y""#,
+        GenerationStop::Length,
+    );
+    let closures: Vec<Closure> = calls(&turn).iter().map(|call| call.closure).collect();
+    assert_eq!(closures, [Closure::Repaired, Closure::Dangling]);
+    // A length stop right after a whole item: that item, nothing invented.
+    let turn = recognize(&omitted, b"<calls>(a:{})", GenerationStop::Length);
+    assert_eq!(calls(&turn).len(), 1);
+
+    // Witnesses never choose the repaired form.
+    let tools = purrassist_core::tool_call::ToolSet::compile(
+        [purrassist_core::tool_call::ToolDefinition::new("a")],
+        Budget::default(),
+    )
+    .expect("tools");
+    let shape = tools.argument_shape("a").expect("shape");
+    for seed in 0..16 {
+        let witness = purrassist_core::grammar::witness::generate(
+            compiled.grammar(),
+            &[shape, shape],
+            purrassist_core::grammar::witness::WitnessOptions {
+                seed,
+                json_arguments: purrassist_core::grammar::witness::JsonArguments::Object,
+            },
+            &mut Governor::new(Budget::default()),
+        )
+        .expect("witness");
+        assert!(witness.text.starts_with("<calls>["), "{}", witness.text);
+        assert!(witness.text.ends_with(']'), "{}", witness.text);
+    }
+
+    let both = set(&[OMITTED, MINI]);
+    for input in [
+        &input[..],
+        br#"<calls>(a:{}), (b:{"y""#,
+        b"<calls>(a:{}) <tool><call=read></call></tool> (b:{})",
+    ] {
+        for stop in [GenerationStop::Stop, GenerationStop::Length] {
+            let mut whole = Governor::new(Budget::default());
+            let expected = run(
+                &both,
+                &[input],
+                stop.clone(),
+                ReasoningPolicy::default(),
+                &mut whole,
+            )
+            .expect("recognized");
+            for split in 0..=input.len() {
+                let mut governor = Governor::new(Budget::default());
+                let turn = run(
+                    &both,
+                    &[&input[..split], &input[split..]],
+                    stop.clone(),
+                    ReasoningPolicy::default(),
+                    &mut governor,
+                )
+                .expect("recognized");
+                assert_eq!(turn, expected, "split at {split}");
+                assert_eq!(governor.usage(), whole.usage(), "usage at split {split}");
+            }
+        }
+    }
+}

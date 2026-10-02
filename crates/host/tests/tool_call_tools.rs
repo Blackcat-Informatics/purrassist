@@ -354,3 +354,45 @@ fn llama3_json_dialect_over_mcp() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// The MCP tool accepts `mistral-v3.v1` in its allow-list and as an
+/// emission target, and keeps the model's call ids.
+#[test]
+fn mistral_v3_dialect_over_mcp() {
+    let (tools, root) = tools("mistral");
+    let output =
+        r#"[TOOL_CALLS] [{"name": "list_dir", "arguments": {"path": "src"}, "id": "a1B2c3D4e"}]"#;
+    for extra in ["", r#","dialects":["mistral-v3.v1"]"#] {
+        let node = tools
+            .call("recover_tool_calls", &arguments(output, extra))
+            .unwrap();
+        assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+        assert_eq!(
+            node.pointer("/value/calls/0/dialect")
+                .and_then(Node::as_str),
+            Some("mistral-v3.v1")
+        );
+        assert_eq!(
+            node.pointer("/value/calls/0/source_id")
+                .and_then(Node::as_str),
+            Some("a1B2c3D4e")
+        );
+    }
+    let node = tools
+        .call(
+            "recover_tool_calls",
+            &arguments(QWEN, r#","emit":"mistral-v3.v1""#),
+        )
+        .unwrap();
+    let emitted = node
+        .pointer("/value/emitted/output/text")
+        .and_then(Node::as_str)
+        .expect("emitted");
+    assert!(
+        emitted.starts_with(
+            r#"[TOOL_CALLS] [{"name": "list_dir", "arguments": {"depth":2,"path":"src"}, "id": "call_"#
+        ),
+        "{emitted}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

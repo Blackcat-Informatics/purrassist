@@ -27,7 +27,7 @@ use std::sync::{Arc, OnceLock};
 /// One dialect grammar the recognizer can run.
 ///
 /// The set of variants is closed, so the recognizer dispatches statically.
-/// Four dialects are built in, each a first-party grammar embedded in the
+/// Five dialects are built in, each a first-party grammar embedded in the
 /// crate (see `docs/tool-calls/dialects/` for each grammar's public sources
 /// and what it deliberately does not accept):
 ///
@@ -36,6 +36,7 @@ use std::sync::{Arc, OnceLock};
 /// | [`DialectId::Qwen3CoderXml`] | `qwen3-coder-xml.v1` | `<tool_call><function=NAME><parameter=P>VALUE</parameter></function></tool_call>` |
 /// | [`DialectId::Hermes`] | `hermes.v1` | `<tool_call>{"name": NAME, "arguments": {...}}</tool_call>` |
 /// | [`DialectId::Llama3Json`] | `llama3-json.v1` | `{"name": NAME, "parameters": {...}}`, optionally after `<\|python_tag\|>` |
+/// | [`DialectId::MistralV3`] | `mistral-v3.v1` | `[TOOL_CALLS] [{"name": NAME, "arguments": {...}, "id": ID}, ...]` |
 /// | [`DialectId::OpenAiToolCalls`] | `openai-tool-calls.v1` | `tool_calls` elements `{"id": ID, "type": "function", "function": {...}}` |
 ///
 /// A built-in grammar is compiled once, on first use, under its own
@@ -72,6 +73,8 @@ pub enum DialectId {
     /// `llama3-json.v1`: Llama 3.x JSON calls, optionally after
     /// `<|python_tag|>`.
     Llama3Json,
+    /// `mistral-v3.v1`: Mistral v3 `[TOOL_CALLS]` JSON arrays of calls.
+    MistralV3,
     /// `openai-tool-calls.v1`: `OpenAI` chat-completions `tool_calls`
     /// elements as text (also the output and round-trip target).
     OpenAiToolCalls,
@@ -112,6 +115,10 @@ static LLAMA3_JSON: BuiltIn = BuiltIn::new(
     "llama3-json.v1",
     include_str!("dialects/llama3-json.v1.grammar"),
 );
+static MISTRAL_V3: BuiltIn = BuiltIn::new(
+    "mistral-v3.v1",
+    include_str!("dialects/mistral-v3.v1.grammar"),
+);
 static OPENAI_TOOL_CALLS: BuiltIn = BuiltIn::new(
     "openai-tool-calls.v1",
     include_str!("dialects/openai-tool-calls.v1.grammar"),
@@ -125,12 +132,19 @@ impl DialectId {
     /// let ids: Vec<&str> = DialectId::BUILT_IN.iter().map(DialectId::id).collect();
     /// assert_eq!(
     ///     ids,
-    ///     ["hermes.v1", "llama3-json.v1", "openai-tool-calls.v1", "qwen3-coder-xml.v1"]
+    ///     [
+    ///         "hermes.v1",
+    ///         "llama3-json.v1",
+    ///         "mistral-v3.v1",
+    ///         "openai-tool-calls.v1",
+    ///         "qwen3-coder-xml.v1",
+    ///     ]
     /// );
     /// ```
-    pub const BUILT_IN: [Self; 4] = [
+    pub const BUILT_IN: [Self; 5] = [
         Self::Hermes,
         Self::Llama3Json,
+        Self::MistralV3,
         Self::OpenAiToolCalls,
         Self::Qwen3CoderXml,
     ];
@@ -148,6 +162,7 @@ impl DialectId {
             Self::Qwen3CoderXml => Some(&QWEN3_CODER_XML),
             Self::Hermes => Some(&HERMES),
             Self::Llama3Json => Some(&LLAMA3_JSON),
+            Self::MistralV3 => Some(&MISTRAL_V3),
             Self::OpenAiToolCalls => Some(&OPENAI_TOOL_CALLS),
             Self::Custom(_) => None,
         }
@@ -185,6 +200,7 @@ impl DialectId {
             Self::Qwen3CoderXml => QWEN3_CODER_XML.id,
             Self::Hermes => HERMES.id,
             Self::Llama3Json => LLAMA3_JSON.id,
+            Self::MistralV3 => MISTRAL_V3.id,
             Self::OpenAiToolCalls => OPENAI_TOOL_CALLS.id,
             Self::Custom(grammar) => grammar.id(),
         }
@@ -219,6 +235,7 @@ impl DialectId {
             Self::Qwen3CoderXml => QWEN3_CODER_XML.grammar(),
             Self::Hermes => HERMES.grammar(),
             Self::Llama3Json => LLAMA3_JSON.grammar(),
+            Self::MistralV3 => MISTRAL_V3.grammar(),
             Self::OpenAiToolCalls => OPENAI_TOOL_CALLS.grammar(),
             Self::Custom(grammar) => grammar,
         }

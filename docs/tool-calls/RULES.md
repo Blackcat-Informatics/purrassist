@@ -84,6 +84,7 @@ the code.
 | `json.syntax.trailing-comma` | 2 | no | single | syntax | markup | `Structural`, `Tolerant` | refused | `JsonTrailingComma` | A comma before a closing bracket or brace dropped. |
 | `json.syntax.close-container` | 2 | no | single | syntax | none | `Structural`, `Tolerant` | refused | `JsonCloseContainer` | A container left open at the end of the value closed. |
 | `tool_call.markup.missing-wrapper-close.before-text` | 4 | yes | multiple | syntax | none | `Tolerant` | refused | `MissingWrapperCloseBeforeText` | A missing wrapper closer inserted before text that no closer follows up to the next opener or the end of output; the text may instead be inside a wrapper that never closes. |
+| `tool_call.markup.missing-token` | 4 | no | single | syntax | none | `Structural`, `Tolerant` | refused | `MissingToken` | A token the dialect's grammar names as omissible (`insert("...")`), read as inserted where the model left it out (the brackets of a Mistral v3 call list written without them). |
 | `tool_call.name.alias` | 0 | no | single | definition | none | `Structural`, `Tolerant` | applied | resolution | A tool named by an explicit alias. |
 | `tool_call.name.match` | 2 | yes | multiple | definition | none | `Tolerant` | refused | resolution | A near-miss tool name accepted by approximate name matching (cost varies with the names compared; minimum listed). |
 | `tool_call.parameter.alias` | 0 | no | single | definition | none | `Structural`, `Tolerant` | applied | resolution | A parameter named by an explicit alias. |

@@ -172,8 +172,13 @@ targets' mutation tokens so mutation can create or move field boundaries).
   Llama 3 JSON repairs (a missing or repeated final brace, stringified
   parameters, arguments cut before `<|eom_id|>`, the `arguments` key after
   `<|python_tag|>`, a built-in Python-syntax call after the tag, a Llama 3
-  object inside a Hermes wrapper), and negative cases (including JSON
-  content that is not call-shaped); the header bytes cycle through five
+  object inside a Hermes wrapper), Mistral v3 repairs (a missing closing
+  bracket at the end and before the next array, a truncated last object,
+  unbracketed objects (one, two by comma or by line, one followed by a plain
+  JSON object in prose, two cut off), a repeated bracket, duplicate model ids, the `parameters`
+  key, stringified arguments), and negative cases (including JSON content
+  that is not call-shaped, a bare `[TOOL_CALLS]`, and nested unterminated
+  call objects); the header bytes cycle through five
   fixed request configurations.
 
 ## Differential probes

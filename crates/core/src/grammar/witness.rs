@@ -20,7 +20,8 @@
 //!   slot prints one parameter value;
 //! - an `until` body is empty;
 //! - an alternation picks, by the seed, among the alternatives holding the
-//!   most call captures (a name first), and a repetition holding captures is
+//!   most call captures (a name first), never a repaired form (one holding
+//!   `insert(...)`) when another alternative exists, and a repetition holding captures is
 //!   emitted once (once per parameter when it holds `param-name:`), a
 //!   repetition holding a `dropped:` capture its minimum (dropped text is
 //!   never part of a well-formed call), and other repetitions their minimum
@@ -184,6 +185,8 @@ pub fn generate(
         call: None,
         occurrences: Vec::new(),
         param: None,
+        group: Vec::new(),
+        printed: Vec::new(),
     };
     let carrier = Carrier {
         codec: printer
@@ -192,7 +195,37 @@ pub fn generate(
         pairs: printer.holds(grammar.call()).parameters,
     };
     let mut calls = Vec::with_capacity(shapes.len());
-    for (index, shape) in shapes.iter().enumerate() {
+    let grouped = printer.holds(grammar.call()).next;
+    if grouped {
+        // The production separates calls with `next`: every call is printed
+        // in one instance of it.
+        let Some((first, rest)) = shapes.split_first() else {
+            return Ok(Witness {
+                text: String::new(),
+                calls,
+            });
+        };
+        fill.group = rest.iter().rev().copied().collect();
+        let parameters = fill.object_parameters(&first.arguments, governor)?;
+        fill.call = Some(Plan {
+            name: first.tool.clone(),
+            id: None,
+            parameters,
+        });
+        printer.walk(&mut fill, grammar.call(), None, governor)?;
+        if !fill.group.is_empty() {
+            return Err(unsupported("the production printed fewer calls than given"));
+        }
+        let last = fill
+            .call
+            .take()
+            .ok_or_else(|| unsupported("the production printed no call"))?;
+        fill.printed.push(last);
+        for plan in core::mem::take(&mut fill.printed) {
+            calls.push(plan.finish(carrier, governor)?);
+        }
+    }
+    for (index, shape) in shapes.iter().enumerate().filter(|_| !grouped) {
         if index > 0 {
             printer.emit(b"\n", governor)?;
         }
@@ -206,19 +239,7 @@ pub fn generate(
         let Some(plan) = fill.call.take() else {
             unreachable!("the plan lives for the call")
         };
-        let arguments = plan.expected(carrier);
-        governor.charge(
-            Resource::ScratchBytes,
-            arguments
-                .estimated_bytes()
-                .saturating_add(size(plan.name.len()))
-                .saturating_add(size(plan.id.as_ref().map_or(0, String::len))),
-        )?;
-        calls.push(WitnessCall {
-            name: plan.name,
-            id: plan.id,
-            arguments,
-        });
+        calls.push(plan.finish(carrier, governor)?);
     }
     let text = String::from_utf8(printer.out).map_err(|error| PrintError::Unrepresentable {
         text: String::from_utf8_lossy(error.as_bytes()).into_owned(),
@@ -272,6 +293,27 @@ struct Carrier {
 }
 
 impl Plan<'_> {
+    /// The witness call this plan printed, charged.
+    fn finish(
+        self,
+        carrier: Carrier,
+        governor: &mut Governor,
+    ) -> Result<WitnessCall, WitnessError> {
+        let arguments = self.expected(carrier);
+        governor.charge(
+            Resource::ScratchBytes,
+            arguments
+                .estimated_bytes()
+                .saturating_add(size(self.name.len()))
+                .saturating_add(size(self.id.as_ref().map_or(0, String::len))),
+        )?;
+        Ok(WitnessCall {
+            name: self.name,
+            id: self.id,
+            arguments,
+        })
+    }
+
     /// The arguments the recognizer reads from the printed call: a
     /// repeatable parameter printed once per item becomes one duplicate
     /// member per occurrence, and a `raw` value is its printed text.
@@ -350,6 +392,11 @@ struct Seeded<'g> {
     /// repetition.
     occurrences: Vec<usize>,
     param: Option<(usize, usize)>,
+    /// The shapes of the group's calls still to print after a `next`, last
+    /// first.
+    group: Vec<&'g ArgumentShape>,
+    /// The group's calls printed before the current one.
+    printed: Vec<Plan<'g>>,
 }
 
 impl<'g> Seeded<'g> {
@@ -504,13 +551,19 @@ impl Fill for Seeded<'_> {
             .iter()
             .map(|item| printer.holds(item))
             .collect();
+        // A repaired form (one holding `insert`) is never a witness's choice
+        // when a well-formed alternative exists.
+        let clean = holds.iter().any(|hold| !hold.insert);
         let best = holds
             .iter()
+            .filter(|hold| !(clean && hold.insert))
             .map(|hold| (hold.name, hold.count))
             .max()
             .unwrap_or((false, 0));
         let candidates: Vec<usize> = (0..alternatives.len())
-            .filter(|&index| (holds[index].name, holds[index].count) == best)
+            .filter(|&index| {
+                !(clean && holds[index].insert) && (holds[index].name, holds[index].count) == best
+            })
             .collect();
         candidates[self.rng.below(candidates.len())]
     }
@@ -523,6 +576,16 @@ impl Fill for Seeded<'_> {
         max: Option<u32>,
     ) -> Result<Repetition, WitnessError> {
         let holds = printer.holds(inner);
+        if holds.next {
+            // Once per further call of the group.
+            let count = self.group.len();
+            if !fits(count, min, max) {
+                return Err(unsupported(format!(
+                    "{count} further calls do not fit a repetition of {min}..{max:?}"
+                )));
+            }
+            return Ok(Repetition::Times(u32::try_from(count).unwrap_or(u32::MAX)));
+        }
         if holds.parameters {
             let occurrences: Vec<usize> = self
                 .plan()
@@ -562,6 +625,24 @@ impl Fill for Seeded<'_> {
             )));
         }
         Ok(Repetition::Times(count))
+    }
+
+    fn next_call(&mut self, governor: &mut Governor) -> Result<(), WitnessError> {
+        let shape = self
+            .group
+            .pop()
+            .ok_or_else(|| unsupported("a `next` with no further call to print"))?;
+        let done = self.call.take().expect("printing a call");
+        self.printed.push(done);
+        let parameters = self.object_parameters(&shape.arguments, governor)?;
+        self.call = Some(Plan {
+            name: shape.tool.clone(),
+            id: None,
+            parameters,
+        });
+        self.occurrences.clear();
+        self.param = None;
+        Ok(())
     }
 
     fn occurrence(&mut self, occurrence: Option<usize>) {

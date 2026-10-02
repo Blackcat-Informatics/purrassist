@@ -1,0 +1,58 @@
+{
+  "description": "A Mistral v3 array followed by one bracket too many: the extra bracket is absorbed as a stray closer (tool_call.markup.stray-closer, a markup loss) and never leaks into content; the call is Resolved.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v3.v1"
+  ],
+  "stop": "stop",
+  "input": "[TOOL_CALLS] [{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Rome\"}, \"id\": \"Zz9Yy8Xx7\"}]]",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "city": "Rome"
+      },
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.stray-closer"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.stray-closer"
+  ]
+}

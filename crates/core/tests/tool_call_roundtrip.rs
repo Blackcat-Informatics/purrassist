@@ -164,7 +164,7 @@ fn every_pair_roundtrips() {
                     assert_eq!(&printed.output[range.clone()], b"\n", "{context}");
                 }
                 // Ids survive where the target carries them.
-                if target == DialectId::OpenAiToolCalls {
+                if target.grammar().call_carries_ids() {
                     for (before, after) in first.calls.iter().zip(&second.calls) {
                         assert_eq!(after.source_id.as_deref(), Some(before.id.as_str()));
                     }
@@ -471,7 +471,8 @@ fn declaration_forms_render_every_tool() {
                 let schema = parameters.unwrap_or(match form {
                     DeclarationForm::OpenAi
                     | DeclarationForm::Hermes
-                    | DeclarationForm::Llama3Json => "",
+                    | DeclarationForm::Llama3Json
+                    | DeclarationForm::MistralV3 => "",
                     _ => r#"{"type":"object"}"#,
                 });
                 assert!(
@@ -556,8 +557,9 @@ fn tool_results_roundtrip() {
             let captured = found[0]
                 .capture_text(CaptureKind::Content, &rendered.bytes)
                 .unwrap_or_default();
-            if dialect == DialectId::OpenAiToolCalls {
-                // A tool message's string content is a JSON string.
+            if matches!(dialect, DialectId::OpenAiToolCalls | DialectId::MistralV3) {
+                // A tool message's string content is a JSON string, and it
+                // names the call it answers.
                 assert_eq!(
                     json::parse(captured).expect("JSON string").as_str(),
                     Some(content),
@@ -678,6 +680,56 @@ fn put_in(dialect: &DialectId, call: fn(&str, u32) -> String, reasoning: &str, p
         )
         .expect("unchanged");
     assert_eq!(unchanged, source);
+}
+
+/// A call that shares one `[TOOL_CALLS]` array with others: an edit
+/// splices only the changed value, and every call recovers as before.
+#[test]
+fn put_minimal_diff_inside_a_call_array() {
+    let tools = read_tools();
+    let original = r#"[TOOL_CALLS] [{"name": "read", "arguments": {"path": "a.rs", "limit": 1}, "id": "aaaaaaaaa"}, {"name": "read", "arguments": {"path": "src/b.rs", "limit": 2}, "id": "bbbbbbbbb"}, {"name": "read", "arguments": {"path": "c.rs", "limit": 3}, "id": "ccccccccc"}]"#;
+    let source = original.as_bytes();
+    let recovered = recover_in(&tools, source, &DialectId::MistralV3);
+    assert_eq!(recovered.calls.len(), 3);
+    let span = recovered.calls[1]
+        .arguments
+        .pointer("/path")
+        .and_then(|node| node.span.clone())
+        .expect("spanned value");
+    let edited = recovered
+        .reemit_with(
+            source,
+            &[CallEdit::Value {
+                call: 1,
+                pointer: "/path".into(),
+                value: Node::new(Value::String("lib/d e.rs".into())),
+            }],
+        )
+        .expect("edited");
+    assert_spliced(source, &edited, span, "\"lib/d e.rs\"");
+    let again = recover_in(&tools, &edited, &DialectId::MistralV3);
+    let arguments: Vec<String> = again
+        .calls
+        .iter()
+        .map(|call| call.arguments.to_json())
+        .collect();
+    assert_eq!(
+        arguments,
+        [
+            r#"{"path":"a.rs","limit":1}"#,
+            r#"{"path":"lib/d e.rs","limit":2}"#,
+            r#"{"path":"c.rs","limit":3}"#
+        ]
+    );
+    let ids: Vec<Option<&str>> = again
+        .calls
+        .iter()
+        .map(|call| call.source_id.as_deref())
+        .collect();
+    assert_eq!(
+        ids,
+        [Some("aaaaaaaaa"), Some("bbbbbbbbb"), Some("ccccccccc")]
+    );
 }
 
 #[test]
@@ -863,9 +915,10 @@ fn emission_never_emits_unresolved_silently() {
     for dialect in DialectId::BUILT_IN {
         let printed = emit::emit(&tools, &calls, &dialect, &IdPolicy::Source).expect("emitted");
         check(&printed.calls, &printed.skipped, dialect.id());
-        if dialect == DialectId::OpenAiToolCalls {
-            // `call#0` is not an OpenAI-dialect id: those calls are skipped
-            // as unrepresentable, never printed with another id.
+        if dialect.grammar().call_carries_ids() {
+            // `call#0` is not an id the OpenAI or Mistral call-id class
+            // accepts: those calls are skipped as unrepresentable, never
+            // printed with another id.
             assert_eq!(printed.calls, Vec::<usize>::new());
             assert!(printed.skipped.iter().any(|skipped| matches!(
                 skipped,

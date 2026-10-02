@@ -214,7 +214,7 @@ struct DialectCase {
 }
 
 /// One case per entry of `DialectId::BUILT_IN` (checked by the test below).
-const DIALECT_CASES: [DialectCase; 4] = [
+const DIALECT_CASES: [DialectCase; 5] = [
     DialectCase {
         dialect: DialectId::Hermes,
         anchor: "<think>\nWrite the file.\n</think>\n\n<tool_call>\n{\"name\": \"write_file\", \"arguments\": {\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}}\n</tool_call>\n<tool_call>\n{\"arguments\": {\"path\": \"notes.txt\", \"limit\": 10}, \"name\": \"read_file\"}\n</tool_call>",
@@ -230,6 +230,14 @@ const DIALECT_CASES: [DialectCase; 4] = [
         repair: "{\"name\": \"read_file\", \"parameters\": {\"path\": \"src/lib.rs\", \"limit\": 40}\n{\"name\": \"get_weather\", \"parameters\": {\"city\": \"Oslo\", \"unit\": \"celsius\"}}}",
         repair_status: "resolved",
         repair_digest: "sha256:cf64b7392f46122a2ad98a32099dff59275c4aea1410b023f9446709a0729b6b",
+    },
+    DialectCase {
+        dialect: DialectId::MistralV3,
+        anchor: "[TOOL_CALLS] [{\"name\": \"write_file\", \"arguments\": {\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}, \"id\": \"a1B2c3D4e\"}, {\"name\": \"read_file\", \"arguments\": {\"path\": \"notes.txt\", \"limit\": 10}, \"id\": \"f5G6h7J8k\"}]</s>",
+        anchor_digest: "sha256:30b33a48978dbd2ed81606045cc3fd6d1edd77cff066419fc73415b0118805b1",
+        repair: "[TOOL_CALLS] [{\"name\": \"read_file\", \"arguments\": {\"path\": \"src/lib.rs\", \"limit\": 40}, \"id\": \"Wq7kP2xZr\"}, {\"name\": \"get_weather\", \"arguments\": {\"city\": \"Oslo\", \"unit\": \"celsius\"}",
+        repair_status: "resolved",
+        repair_digest: "sha256:33cfb6f0a503abbf4bc0e6fb3ec96c7bc7a284327bde9a8374e49e1170990c10",
     },
     DialectCase {
         dialect: DialectId::OpenAiToolCalls,
