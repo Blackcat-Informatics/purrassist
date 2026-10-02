@@ -494,7 +494,7 @@ impl Recovery<'_> {
 ///
 /// When strict parsing fails, recovery offers the value at offset 0 and every
 /// bracketed value as a candidate, each priced with the `json.extract` loss
-/// of the text around it. Discovery is linear: a [`scan::Tracker`] reads the
+/// of the text around it. Discovery is linear: a `scan::Tracker` reads the
 /// text between regions, one tracked recovery parse reads each region and
 /// yields every container nested in it as a subtree (no re-parse), and an
 /// opener that a parse consumed as text (inside a string, comment or bare

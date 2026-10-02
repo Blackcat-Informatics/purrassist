@@ -4,13 +4,20 @@ use purrassist::{
     Effort, Outcome, RecoveryRequest, Schema,
     json::{self, Member, Node, Value},
     matching::{self, Candidate, MatchRequest},
-    tool_call::{CallOutcome, Finish, ToolCalls},
+    tool_call::{CallOutcome, DialectId, Finish, ToolCalls},
     wire::{array, integer, object, string},
 };
 use std::io::{self, Read};
 
 const MAX_INPUT: u64 = 16 * 1024 * 1024;
-const HELP: &str = "PurRAssist: evidence-bearing recovery for imperfect AI output\n\nUsage:\n  purrassist decode --schema FILE [--input FILE] [--effort exact|quick|standard|deep|maximum] [--no-guesses]\n  purrassist validate --schema FILE [--input FILE]\n  purrassist match QUERY CANDIDATE...\n  purrassist recover-tool-calls --tools FILE [--tools-format openai|mcp|anthropic] [--dialect ID]... [--stop stop|length|tool_calls|content_filter|unknown|stop-sequence=STR] [--tool-choice auto|none|required|NAME] [--policy per-tool|structural|tolerant] [--effects NAME=read-only|mutating]... [--reasoning separate|separate-open|content] [--ambiguity report|reject] [--emit openai|DIALECT] [--ids-source | [--ids-prefix P] [--ids-start N]] [--effort exact|quick|standard|deep|maximum] [FILE]\n  purrassist call TOOL --root DIRECTORY\n  purrassist mcp --root DIRECTORY\n\nInput defaults to stdin. Decode emits a JSON answer and receipt.\nrecover-tool-calls reads one model turn as raw bytes (invalid UTF-8 is a recorded loss) and\nemits the recover_tool_calls tool's result; dialect ids: anthropic-tool-use.v1, bare-json.v1,\ndeepseek-v3.1.v1, deepseek-v3.v1, harmony.v1, hermes.v1, kimi-k2.v1, llama3-json.v1, mistral-v11.v1, mistral-v3.v1, openai-tool-calls.v1, qwen3-coder-xml.v1 (default all). Call markup no allowed dialect reads\n(a family not built in yet, or a built-in dialect left out of --dialect) is a rejected attempt\nwith reason unsupported_dialect, its bytes stay content, and the finish is unresolved. Call ids by default keep each id the model wrote\nand number every other call call_<12 hex of the output's SHA-256>_<index>, so\nturns never share ids (a missing or repeated model id is a recorded inference);\n--ids-source keeps the ids the output carries (deduplicated as ID#INDEX);\n--ids-prefix P/--ids-start N number every call P(N+index) (default prefix call_,\nstart 0; pass the result's next_id_start as the next round's --ids-start).\nExit: 0 resolved/best-guess, 3 ambiguous, 4 unresolved/invalid, 1 invocation error.\nrecover-tool-calls exits 0 when at least one call is usable and the tool-choice check passed\n(even if other attempts were rejected or unparsed; the JSON itemizes them) or for clean\ncontent_only; 3 when nothing is usable and a call or the operation is ambiguous; 4 when\nnothing is usable (unresolved calls, rejected or unparsed markup only, truncated, only\nunusable guesses, an exhausted budget or invalid input) or the tool-choice check failed,\neven with usable calls. The JSON output is the same either way.\n";
+const HELP: &str = "PurRAssist: evidence-bearing recovery for imperfect AI output\n\nUsage:\n  purrassist decode --schema FILE [--input FILE] [--effort exact|quick|standard|deep|maximum] [--no-guesses]\n  purrassist validate --schema FILE [--input FILE]\n  purrassist match QUERY CANDIDATE...\n  purrassist recover-tool-calls --tools FILE [--tools-format openai|mcp|anthropic] [--dialect ID]... [--stop stop|length|tool_calls|content_filter|unknown|stop-sequence=STR] [--tool-choice auto|none|required|NAME] [--policy per-tool|structural|tolerant] [--effects NAME=read-only|mutating]... [--reasoning separate|separate-open|content] [--ambiguity report|reject] [--emit openai|DIALECT] [--ids-source | [--ids-prefix P] [--ids-start N]] [--effort exact|quick|standard|deep|maximum] [FILE]\n  purrassist call TOOL --root DIRECTORY\n  purrassist mcp --root DIRECTORY\n\nInput defaults to stdin. Decode emits a JSON answer and receipt.\nrecover-tool-calls reads one model turn as raw bytes (invalid UTF-8 is a recorded loss) and\nemits the recover_tool_calls tool's result; built-in dialect ids for --dialect (default all)\nand --emit: {dialects}. Call markup no allowed dialect reads\n(a family not built in yet, or a built-in dialect left out of --dialect) is a rejected attempt\nwith reason unsupported_dialect, its bytes stay content, and the finish is unresolved. Call ids by default keep each id the model wrote\nand number every other call call_<12 hex of the output's SHA-256>_<index>, so\nturns never share ids (a missing or repeated model id is a recorded inference);\n--ids-source keeps the ids the output carries (deduplicated as ID#INDEX);\n--ids-prefix P/--ids-start N number every call P(N+index) (default prefix call_,\nstart 0; pass the result's next_id_start as the next round's --ids-start).\nExit: 0 resolved/best-guess, 3 ambiguous, 4 unresolved/invalid, 1 invocation error.\nrecover-tool-calls exits 0 when at least one call is usable and the tool-choice check passed\n(even if other attempts were rejected or unparsed; the JSON itemizes them) or for clean\ncontent_only; 3 when nothing is usable and a call or the operation is ambiguous; 4 when\nnothing is usable (unresolved calls, rejected or unparsed markup only, truncated, only\nunusable guesses, an exhausted budget or invalid input) or the tool-choice check failed,\neven with usable calls. The JSON output is the same either way.\n";
+
+/// The help text, with the built-in dialect ids taken from
+/// `DialectId::BUILT_IN` so the list cannot drift from the shipped set.
+fn help() -> String {
+    let ids: Vec<&str> = DialectId::BUILT_IN.iter().map(DialectId::id).collect();
+    HELP.replace("{dialects}", &ids.join(", "))
+}
 
 #[expect(
     clippy::redundant_pub_crate,
@@ -19,7 +26,7 @@ const HELP: &str = "PurRAssist: evidence-bearing recovery for imperfect AI outpu
 pub(super) fn run(args: &[String]) -> Result<u8, String> {
     match args.first().map(String::as_str) {
         None | Some("--help" | "-h" | "help") => {
-            print!("{HELP}");
+            print!("{}", help());
             Ok(0)
         }
         Some("--version") => {

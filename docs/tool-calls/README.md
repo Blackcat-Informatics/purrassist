@@ -29,8 +29,9 @@ Twelve dialects are built in:
 | `bare-json.v1` | an unwrapped `{"name": NAME, "arguments": {...}}` object: the whole turn, in prose, in a code fence, or an array element; never a declaration-shaped object | [dialect](dialects/bare-json.v1.md) |
 
 Callers add their own dialects with the grammar DSL
-([GRAMMAR.md](GRAMMAR.md)). Streaming recognition, `purrassist-derive`, and the
-remaining dialects (GLM, Gemma, Pythonic) are tracked in issue #4.
+([GRAMMAR.md](GRAMMAR.md)). Still tracked in issue #4: the `pythonic.v1`,
+`gemma3-tool-code.v1` and `glm-4.5.v1` dialects, the `*-stripped` variants,
+streaming recognition, and `purrassist-derive`.
 
 ## Design
 
@@ -45,7 +46,7 @@ remaining dialects (GLM, Gemma, Pythonic) are tracked in issue #4.
   applies weighted edit operators: insert a missing closer, delete a stray
   one, accept a declared variant or confusable spelling. The least-cost
   repairs are kept and every applied operator is itemized. Argument codecs
-  (`json`, `xml-params`, `raw`) read argument bodies with their own recorded
+  (`json`, `json-args`, `xml-params`, `raw`) read argument bodies with their own recorded
   repairs.
 - **Factorized ambiguity.** The turn is a least-cost segmentation into
   content, reasoning, calls, tool results, and rejected attempts. When the
@@ -162,9 +163,9 @@ with zero configuration. By default (`IdPolicy::Turn`):
   that repeats an earlier call's id, is numbered as above and recorded as a
   derived `tool_call.id.dedup` inference on the call and in the receipt; it
   never demotes the call. Dialects whose markup carries no id (DeepSeek-V3.1,
-  DeepSeek-V3, Hermes, Llama 3 JSON, Qwen3-Coder XML) are numbered without an
-  inference; Hermes and Llama 3 JSON still keep an id a model adds as the
-  call's source id (`optional-id`).
+  DeepSeek-V3, Harmony, Hermes, Llama 3 JSON, bare JSON, Qwen3-Coder XML) are
+  numbered without an inference; Hermes, Llama 3 JSON and bare JSON still
+  keep an id a model adds as the call's source id (`optional-id`).
 
 The same output always gets the same ids (C3); different outputs get
 different tags except with probability `2^-48` per pair, so among `n`

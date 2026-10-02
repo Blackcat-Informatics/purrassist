@@ -185,7 +185,7 @@ const KEYWORD_RECORD: u64 = 48;
 /// [`DeclarationForm::Qwen3CoderXml`], [`DeclarationForm::Hermes`],
 /// [`DeclarationForm::Llama3Json`], [`DeclarationForm::MistralV3`],
 /// [`DeclarationForm::MistralV11`], [`DeclarationForm::DeepSeekV31`],
-/// [`DeclarationForm::DeepSeekV3`], [`DeclarationForm::KimiK2`] and
+/// [`DeclarationForm::DeepSeekV3`], [`DeclarationForm::KimiK2`],
 /// [`DeclarationForm::Harmony`] and [`DeclarationForm::BareJson`] are
 /// printed by their dialect grammar's
 /// `declaration` production (see [`emit`](super::emit)): a Qwen3-Coder

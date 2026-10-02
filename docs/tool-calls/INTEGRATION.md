@@ -360,10 +360,10 @@ the caller threads no state:
 - A missing model id (in a dialect whose markup provides for one) or a model
   id an earlier call already holds is numbered so and recorded as a derived
   `tool_call.id.dedup` inference on the call and in the receipt; it never
-  demotes the call. DeepSeek-V3.1, DeepSeek-V3, Hermes, Llama 3 JSON and
-  Qwen3-Coder XML markup carries no id, so their calls are numbered without an
-  inference (Hermes and Llama 3 JSON keep an id a model adds as the source
-  id).
+  demotes the call. DeepSeek-V3.1, DeepSeek-V3, Harmony, Hermes, Llama 3
+  JSON, bare JSON and Qwen3-Coder XML markup carries no id, so their calls
+  are numbered without an inference (Hermes, Llama 3 JSON and bare JSON keep
+  an id a model adds as the source id: `optional-id`).
 - `next_id_start` is the number of calls.
 
 The same output always gets the same ids: recovering one turn twice is the

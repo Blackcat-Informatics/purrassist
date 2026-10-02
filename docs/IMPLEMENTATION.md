@@ -53,9 +53,10 @@ computational engines remain wasmable.
   `finish_reason` `"length"`, and recovered calls print in any dialect or as
   the `OpenAI` `tool_calls` array. Recovery is deterministic, governed by a
   published linear cost bound, and exposed through Rust, CLI
-  (`recover-tool-calls`), and MCP (`recover_tool_calls`). Streaming
-  recognition, `purrassist-derive`, and the remaining dialects (GLM,
-  Gemma, Pythonic) are tracked in issue #4. See `tool-calls/README.md`.
+  (`recover-tool-calls`), and MCP (`recover_tool_calls`). Still tracked in
+  issue #4: the `pythonic.v1`, `gemma3-tool-code.v1` and `glm-4.5.v1`
+  dialects, the `*-stripped` variants, streaming recognition, and
+  `purrassist-derive`. See `tool-calls/README.md`.
 - Rust facade, CLI, and stdio MCP server using the same operations.
 - Standard helper-provider adapters and caller-managed endpoints. No model is
   required. Bundled small models remain an evaluation track, not a prerequisite.

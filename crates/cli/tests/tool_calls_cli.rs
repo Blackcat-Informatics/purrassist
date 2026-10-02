@@ -1095,3 +1095,23 @@ fn tools_file_bytes_reach_the_adapter_exactly() {
         Some(exact.as_str())
     );
 }
+
+/// `--help` lists every built-in dialect id (generated from
+/// `DialectId::BUILT_IN`, so the list cannot drift from the shipped set).
+#[test]
+fn help_lists_every_built_in_dialect() {
+    let output = Command::new(env!("CARGO_BIN_EXE_purrassist"))
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert!(!help.contains("{dialects}"), "{help}");
+    for dialect in purrassist::tool_call::DialectId::BUILT_IN {
+        assert!(
+            help.contains(dialect.id()),
+            "{} missing from --help",
+            dialect.id()
+        );
+    }
+}

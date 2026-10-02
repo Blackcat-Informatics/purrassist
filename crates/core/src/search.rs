@@ -32,6 +32,11 @@
 //! cost before building it, so a duplicate charges only its key's `Work`.
 //! Exhaustion or cancellation is returned as `Err` and never becomes an
 //! accepted answer.
+// `unreachable_pub` and `redundant_pub_crate` disagree on the right
+// visibility for items of a crate-private module
+// (https://github.com/rust-lang/rust-clippy/issues/6188); `pub(crate)`
+// (matching `unreachable_pub`) wins, as in `grammar::engine`.
+#![allow(clippy::redundant_pub_crate)]
 use crate::contract::saturating_size as size;
 use crate::contract::{
     Evidence, Governor, Inference, InferenceKind, Loss, Outcome, Receipt, Resource, ScratchLease,
@@ -54,41 +59,7 @@ const SEEN_OVERHEAD: u64 = 64;
 /// [`SearchState::Context`] carries whatever shared, mutable search-wide
 /// state acceptance and expansion need (a validation log, a schema, a
 /// request); the search itself never inspects it.
-///
-/// ```
-/// use purrassist_core::search::{Acceptance, Proposals, SearchState};
-/// use purrassist_core::{Governor, ScratchVec, StopReason};
-///
-/// #[derive(Clone)]
-/// struct Count(u8);
-/// impl SearchState for Count {
-///     type Tie = u8;
-///     type Context<'c> = ();
-///     fn tie(&self) -> u8 {
-///         self.0
-///     }
-///     fn write_key(&self, key: &mut ScratchVec<u8>) -> Result<(), StopReason> {
-///         key.push(self.0)
-///     }
-///     fn accept(&self, _: &mut (), _: &mut Governor) -> Result<Acceptance, StopReason> {
-///         Ok(if self.0 == 3 {
-///             Acceptance::Accepted { validation: 0 }
-///         } else {
-///             Acceptance::Rejected
-///         })
-///     }
-///     fn expand(
-///         &self,
-///         _: &mut (),
-///         _: &mut Proposals<'_, Self>,
-///         _: &mut Governor,
-///     ) -> Result<(), StopReason> {
-///         Ok(())
-///     }
-/// }
-/// assert_eq!(Count(3).tie(), 3);
-/// ```
-pub trait SearchState: Sized {
+pub(crate) trait SearchState: Sized {
     /// Total-order tie-break key among equal-cost candidates. It must be
     /// derived only from the state itself, never from proposal order.
     type Tie: Ord;
@@ -140,14 +111,8 @@ pub trait SearchState: Sized {
 }
 
 /// The verdict of [`SearchState::accept`].
-///
-/// ```
-/// use purrassist_core::search::Acceptance;
-/// let verdict = Acceptance::Accepted { validation: 2 };
-/// assert_ne!(verdict, Acceptance::Rejected);
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Acceptance {
+pub(crate) enum Acceptance {
     /// The state is an acceptable answer; `validation` indexes the passing
     /// entry in the caller's receipt validation log that proves it.
     Accepted {
@@ -164,61 +129,35 @@ pub enum Acceptance {
 /// explanation. `original` is the discarded original text, recorded as a
 /// [`Loss`]; `guess` is the invented value, recorded as a
 /// [`InferenceKind::Guess`] inference (its presence is the guessed flag).
-///
-/// ```
-/// use purrassist_core::contract::Evidence;
-/// use purrassist_core::search::{Change, Ledger};
-/// let mut ledger = Ledger::default();
-/// ledger.record(Change {
-///     evidence: Evidence {
-///         rule: "demo.rule".into(),
-///         explanation: "replace with 1".into(),
-///         span: None,
-///         destination: "/x".into(),
-///     },
-///     cost: 3,
-///     original: Some("\"one\"".into()),
-///     guess: None,
-/// });
-/// assert_eq!((ledger.cost, ledger.evidence.len(), ledger.losses.len()), (3, 1, 1));
-/// assert!(ledger.inferences.is_empty());
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Change {
+pub(crate) struct Change {
     /// The rule, explanation, span, and destination of this change.
-    pub evidence: Evidence,
+    pub(crate) evidence: Evidence,
     /// Search cost added by this change.
-    pub cost: u64,
+    pub(crate) cost: u64,
     /// Original text discarded or irreversibly changed, if any.
-    pub original: Option<String>,
+    pub(crate) original: Option<String>,
     /// Invented value when the change is a guess.
-    pub guess: Option<String>,
+    pub(crate) guess: Option<String>,
 }
 
 /// Accumulated cost and provenance of one candidate.
-///
-/// ```
-/// use purrassist_core::search::Ledger;
-/// let ledger = Ledger::default();
-/// assert_eq!(ledger.cost, 0);
-/// assert_eq!(ledger.estimated_bytes(), 0);
-/// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Ledger {
+pub(crate) struct Ledger {
     /// Total search cost.
-    pub cost: u64,
+    pub(crate) cost: u64,
     /// Every recorded decision, in application order.
-    pub evidence: Vec<Evidence>,
+    pub(crate) evidence: Vec<Evidence>,
     /// Every discarded original, in application order.
-    pub losses: Vec<Loss>,
+    pub(crate) losses: Vec<Loss>,
     /// Every invented value, in application order.
-    pub inferences: Vec<Inference>,
+    pub(crate) inferences: Vec<Inference>,
 }
 
 impl Ledger {
     /// Append `change`: its evidence, its loss when `original` is present,
     /// and a guess inference when `guess` is present. The cost saturates.
-    pub fn record(&mut self, change: Change) {
+    pub(crate) fn record(&mut self, change: Change) {
         let Change {
             evidence,
             cost,
@@ -245,7 +184,7 @@ impl Ledger {
     /// A conservative scratch estimate for cloning this ledger's entries:
     /// 256 bytes per evidence, loss, and inference.
     #[must_use]
-    pub fn estimated_bytes(&self) -> u64 {
+    pub(crate) fn estimated_bytes(&self) -> u64 {
         size(self.evidence.len())
             .saturating_add(size(self.losses.len()))
             .saturating_add(size(self.inferences.len()))
@@ -264,63 +203,7 @@ struct Entry<S> {
 ///
 /// See the [module documentation](self) for the ordering, deduplication and
 /// resource contract.
-///
-/// ```
-/// use purrassist_core::search::{Acceptance, Ledger, Proposals, Search, SearchState};
-/// use purrassist_core::contract::{Evidence, Receipt};
-/// use purrassist_core::search::Change;
-/// use purrassist_core::{Budget, Effort, Governor, Outcome, ScratchVec, StopReason};
-///
-/// /// Count up from 0; 3 is the only acceptable value.
-/// #[derive(Clone, Debug, PartialEq)]
-/// struct Count(u8);
-/// impl SearchState for Count {
-///     type Tie = u8;
-///     type Context<'c> = Vec<u8>;
-///     fn tie(&self) -> u8 {
-///         self.0
-///     }
-///     fn write_key(&self, key: &mut ScratchVec<u8>) -> Result<(), StopReason> {
-///         key.push(self.0)
-///     }
-///     fn accept(&self, seen: &mut Vec<u8>, _: &mut Governor) -> Result<Acceptance, StopReason> {
-///         seen.push(self.0);
-///         Ok(if self.0 == 3 {
-///             Acceptance::Accepted { validation: 0 }
-///         } else {
-///             Acceptance::Rejected
-///         })
-///     }
-///     fn expand(
-///         &self,
-///         _: &mut Vec<u8>,
-///         proposals: &mut Proposals<'_, Self>,
-///         governor: &mut Governor,
-///     ) -> Result<(), StopReason> {
-///         let evidence = Evidence {
-///             rule: "count.up".into(),
-///             explanation: "add one".into(),
-///             span: None,
-///             destination: String::new(),
-///         };
-///         let change = Change { evidence, cost: 1, original: None, guess: None };
-///         proposals.commit(governor, Count(self.0 + 1), change)
-///     }
-/// }
-///
-/// let mut governor = Governor::new(Budget::default());
-/// let mut receipt = Receipt::new(b"0", "count.v1", Effort::Standard, Budget::default());
-/// let mut search = Search::new(&governor);
-/// search.seed(&mut governor, Count(0), Ledger::default())?;
-/// let mut seen = Vec::new();
-/// let accepted = search.run(&mut seen, &mut governor)?;
-/// let outcome = search.finish(accepted, &mut receipt, &mut governor)?;
-/// assert_eq!(outcome, Outcome::Resolved(Count(3)));
-/// assert_eq!(seen, [0, 1, 2, 3]);
-/// assert_eq!(receipt.evidence.len(), 3);
-/// # Ok::<(), StopReason>(())
-/// ```
-pub struct Search<S: SearchState> {
+pub(crate) struct Search<S: SearchState> {
     queue: BTreeMap<(u64, S::Tie, u64), Entry<S>>,
     seen: BTreeMap<Vec<u8>, u64>,
     key: ScratchVec<u8>,
@@ -333,45 +216,23 @@ pub struct Search<S: SearchState> {
 
 /// The minimum-cost accepted candidates of one [`Search::run`], in
 /// acceptance order, ready for [`Search::finish`].
-pub struct Accepted<S> {
+pub(crate) struct Accepted<S> {
     candidates: Vec<(S, Ledger, usize)>,
 }
 
 impl<S> Accepted<S> {
-    /// Number of accepted candidates.
-    ///
-    /// ```
-    /// # use purrassist_core::search::Accepted;
-    /// fn empty(accepted: &Accepted<u8>) -> bool { accepted.len() == 0 }
-    /// ```
-    #[must_use]
-    pub const fn len(&self) -> usize {
-        self.candidates.len()
-    }
-
     /// Whether nothing was accepted.
-    ///
-    /// ```
-    /// # use purrassist_core::search::Accepted;
-    /// fn none(accepted: &Accepted<u8>) -> bool { accepted.is_empty() }
-    /// ```
+    #[cfg(test)]
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
+    pub(crate) const fn is_empty(&self) -> bool {
         self.candidates.is_empty()
     }
 
     /// The accepted states and their ledgers, in acceptance order, for a
     /// caller that uses the minimum-cost states directly instead of
     /// publishing them through [`Search::finish`].
-    ///
-    /// ```
-    /// # use purrassist_core::search::{Accepted, Ledger};
-    /// fn costs(accepted: Accepted<u8>) -> Vec<u64> {
-    ///     accepted.into_states().into_iter().map(|(_, ledger)| ledger.cost).collect()
-    /// }
-    /// ```
     #[must_use]
-    pub fn into_states(self) -> Vec<(S, Ledger)> {
+    pub(crate) fn into_states(self) -> Vec<(S, Ledger)> {
         self.candidates
             .into_iter()
             .map(|(state, ledger, _)| (state, ledger))
@@ -384,22 +245,15 @@ impl<S> Accepted<S> {
 /// Every committed successor inherits a clone of the parent's [`Ledger`]
 /// with one more [`Change`], and is enqueued immediately under the search's
 /// ordering and deduplication rules.
-pub struct Proposals<'p, S: SearchState> {
+pub(crate) struct Proposals<'p, S: SearchState> {
     search: &'p mut Search<S>,
     parent: &'p Ledger,
 }
 
 impl<S: SearchState> Proposals<'_, S> {
     /// The ledger of the state being expanded.
-    ///
-    /// ```
-    /// # use purrassist_core::search::{Proposals, SearchState};
-    /// fn parent_cost<S: SearchState>(proposals: &Proposals<'_, S>) -> u64 {
-    ///     proposals.parent().cost
-    /// }
-    /// ```
     #[must_use]
-    pub const fn parent(&self) -> &Ledger {
+    pub(crate) const fn parent(&self) -> &Ledger {
         self.parent
     }
 
@@ -410,7 +264,7 @@ impl<S: SearchState> Proposals<'_, S> {
     /// # Errors
     /// Returns exhaustion of `Work`, `Candidates`, or `ScratchBytes`, or
     /// cancellation, before the candidate is queued.
-    pub fn commit(
+    pub(crate) fn commit(
         &mut self,
         governor: &mut Governor,
         state: S,
@@ -427,7 +281,7 @@ impl<S: SearchState> Search<S> {
     ///
     /// See the [`Search`] example.
     #[must_use]
-    pub fn new(governor: &Governor) -> Self {
+    pub(crate) fn new(governor: &Governor) -> Self {
         Self {
             queue: BTreeMap::new(),
             seen: BTreeMap::new(),
@@ -445,31 +299,8 @@ impl<S: SearchState> Search<S> {
     /// competing answers (the grammar engine's repair of a stuck dialect
     /// attempt): the caller charges `Candidates` for what survives to
     /// selection instead.
-    ///
-    /// ```
-    /// use purrassist_core::search::{Acceptance, Change, Proposals, Search, SearchState};
-    /// use purrassist_core::{Budget, Governor, ScratchVec, StopReason, search::Ledger};
-    /// #[derive(Clone)]
-    /// struct Done;
-    /// impl SearchState for Done {
-    ///     type Tie = ();
-    ///     type Context<'c> = ();
-    ///     fn tie(&self) {}
-    ///     fn write_key(&self, key: &mut ScratchVec<u8>) -> Result<(), StopReason> { key.push(0) }
-    ///     fn accept(&self, _: &mut (), _: &mut Governor) -> Result<Acceptance, StopReason> {
-    ///         Ok(Acceptance::Accepted { validation: 0 })
-    ///     }
-    ///     fn expand(&self, _: &mut (), _: &mut Proposals<'_, Self>, _: &mut Governor) -> Result<(), StopReason> { Ok(()) }
-    /// }
-    /// let mut governor = Governor::new(Budget { candidates: 0, ..Budget::default() });
-    /// let mut search = Search::uncounted(&governor);
-    /// search.seed(&mut governor, Done, Ledger::default())?;
-    /// assert_eq!(search.run(&mut (), &mut governor)?.into_states().len(), 1);
-    /// assert_eq!(governor.usage().candidates, 0);
-    /// # Ok::<(), StopReason>(())
-    /// ```
     #[must_use]
-    pub fn uncounted(governor: &Governor) -> Self {
+    pub(crate) fn uncounted(governor: &Governor) -> Self {
         let mut search = Self::new(governor);
         search.counted = false;
         search
@@ -482,7 +313,7 @@ impl<S: SearchState> Search<S> {
     /// # Errors
     /// Returns exhaustion of `Work`, `Candidates`, or `ScratchBytes`, or
     /// cancellation, before the candidate is queued.
-    pub fn seed(
+    pub(crate) fn seed(
         &mut self,
         governor: &mut Governor,
         state: S,
@@ -507,37 +338,7 @@ impl<S: SearchState> Search<S> {
     /// `Candidates`, or `ScratchBytes`, or cancellation, before the candidate
     /// is queued; and [`StopReason::InvalidInput`] if the built ledger's cost
     /// differs from `cost`.
-    ///
-    /// ```
-    /// use purrassist_core::search::{Acceptance, Ledger, Proposals, Search, SearchState};
-    /// use purrassist_core::{Budget, Governor, ScratchVec, StopReason};
-    ///
-    /// struct Word(&'static str);
-    /// impl SearchState for Word {
-    ///     type Tie = ();
-    ///     type Context<'c> = ();
-    ///     fn tie(&self) {}
-    ///     fn write_key(&self, key: &mut ScratchVec<u8>) -> Result<(), StopReason> {
-    ///         key.extend(self.0.bytes())
-    ///     }
-    ///     fn accept(&self, _: &mut (), _: &mut Governor) -> Result<Acceptance, StopReason> {
-    ///         Ok(Acceptance::Accepted { validation: 0 })
-    ///     }
-    ///     fn expand(&self, _: &mut (), _: &mut Proposals<'_, Self>, _: &mut Governor) -> Result<(), StopReason> {
-    ///         Ok(())
-    ///     }
-    /// }
-    /// let mut governor = Governor::new(Budget::default());
-    /// let mut search = Search::new(&governor);
-    /// let build = |_: &mut Governor| Ok((Word("hi"), Ledger::default()));
-    /// let key = |key: &mut ScratchVec<u8>| key.extend(*b"hi");
-    /// assert_eq!(search.seed_with(&mut governor, 0, key, build), Ok(true));
-    /// // The duplicate is rejected before its ledger would be built.
-    /// let never = |_: &mut Governor| -> Result<(Word, Ledger), StopReason> { unreachable!() };
-    /// assert_eq!(search.seed_with(&mut governor, 0, key, never), Ok(false));
-    /// assert_eq!(governor.usage().candidates, 1);
-    /// ```
-    pub fn seed_with(
+    pub(crate) fn seed_with(
         &mut self,
         governor: &mut Governor,
         cost: u64,
@@ -634,7 +435,7 @@ impl<S: SearchState> Search<S> {
     /// # Errors
     /// Returns any error from acceptance or expansion, including resource
     /// exhaustion and cancellation, unchanged.
-    pub fn run(
+    pub(crate) fn run(
         &mut self,
         context: &mut S::Context<'_>,
         governor: &mut Governor,
@@ -687,7 +488,7 @@ impl<S: SearchState> Search<S> {
     /// # Errors
     /// Returns resource exhaustion or cancellation before `receipt` is
     /// modified for an ambiguous result; nothing partial is published.
-    pub fn finish(
+    pub(crate) fn finish(
         &mut self,
         accepted: Accepted<S>,
         receipt: &mut Receipt,
@@ -1004,5 +805,243 @@ mod tests {
         );
         drop(search);
         assert_eq!(governor.scratch_meter().live(), 0);
+    }
+}
+
+/// The examples of this crate-private module's documentation, run as unit
+/// tests; some only show that a signature type-checks, so their helper
+/// functions are never called.
+#[cfg(test)]
+#[allow(dead_code)]
+mod doc_examples {
+    #[test]
+    fn example_0() {
+        use crate::search::{Acceptance, Proposals, SearchState};
+        use crate::{Governor, ScratchVec, StopReason};
+
+        #[derive(Clone)]
+        struct Count(u8);
+        impl SearchState for Count {
+            type Tie = u8;
+            type Context<'c> = ();
+            fn tie(&self) -> u8 {
+                self.0
+            }
+            fn write_key(&self, key: &mut ScratchVec<u8>) -> Result<(), StopReason> {
+                key.push(self.0)
+            }
+            fn accept(&self, (): &mut (), _: &mut Governor) -> Result<Acceptance, StopReason> {
+                Ok(if self.0 == 3 {
+                    Acceptance::Accepted { validation: 0 }
+                } else {
+                    Acceptance::Rejected
+                })
+            }
+            fn expand(
+                &self,
+                (): &mut (),
+                _: &mut Proposals<'_, Self>,
+                _: &mut Governor,
+            ) -> Result<(), StopReason> {
+                Ok(())
+            }
+        }
+        assert_eq!(Count(3).tie(), 3);
+    }
+
+    #[test]
+    fn example_1() {
+        use crate::search::Acceptance;
+        let verdict = Acceptance::Accepted { validation: 2 };
+        assert_ne!(verdict, Acceptance::Rejected);
+    }
+
+    #[test]
+    fn example_2() {
+        use crate::contract::Evidence;
+        use crate::search::{Change, Ledger};
+        let mut ledger = Ledger::default();
+        ledger.record(Change {
+            evidence: Evidence {
+                rule: "demo.rule".into(),
+                explanation: "replace with 1".into(),
+                span: None,
+                destination: "/x".into(),
+            },
+            cost: 3,
+            original: Some("\"one\"".into()),
+            guess: None,
+        });
+        assert_eq!(
+            (ledger.cost, ledger.evidence.len(), ledger.losses.len()),
+            (3, 1, 1)
+        );
+        assert_eq!(ledger.inferences, [] as [crate::contract::Inference; 0]);
+    }
+
+    #[test]
+    fn example_3() {
+        use crate::search::Ledger;
+        let ledger = Ledger::default();
+        assert_eq!(ledger.cost, 0);
+        assert_eq!(ledger.estimated_bytes(), 0);
+    }
+
+    #[test]
+    fn example_4() -> Result<(), crate::StopReason> {
+        use crate::contract::{Evidence, Receipt};
+        use crate::search::Change;
+        use crate::search::{Acceptance, Ledger, Proposals, Search, SearchState};
+        use crate::{Budget, Effort, Governor, Outcome, ScratchVec, StopReason};
+
+        /// Count up from 0; 3 is the only acceptable value.
+        #[derive(Clone, Debug, PartialEq)]
+        struct Count(u8);
+        impl SearchState for Count {
+            type Tie = u8;
+            type Context<'c> = Vec<u8>;
+            fn tie(&self) -> u8 {
+                self.0
+            }
+            fn write_key(&self, key: &mut ScratchVec<u8>) -> Result<(), StopReason> {
+                key.push(self.0)
+            }
+            fn accept(
+                &self,
+                seen: &mut Vec<u8>,
+                _: &mut Governor,
+            ) -> Result<Acceptance, StopReason> {
+                seen.push(self.0);
+                Ok(if self.0 == 3 {
+                    Acceptance::Accepted { validation: 0 }
+                } else {
+                    Acceptance::Rejected
+                })
+            }
+            fn expand(
+                &self,
+                _: &mut Vec<u8>,
+                proposals: &mut Proposals<'_, Self>,
+                governor: &mut Governor,
+            ) -> Result<(), StopReason> {
+                let evidence = Evidence {
+                    rule: "count.up".into(),
+                    explanation: "add one".into(),
+                    span: None,
+                    destination: String::new(),
+                };
+                let change = Change {
+                    evidence,
+                    cost: 1,
+                    original: None,
+                    guess: None,
+                };
+                proposals.commit(governor, Self(self.0 + 1), change)
+            }
+        }
+
+        let mut governor = Governor::new(Budget::default());
+        let mut receipt = Receipt::new(b"0", "count.v1", Effort::Standard, Budget::default());
+        let mut search = Search::new(&governor);
+        search.seed(&mut governor, Count(0), Ledger::default())?;
+        let mut seen = Vec::new();
+        let accepted = search.run(&mut seen, &mut governor)?;
+        let outcome = search.finish(accepted, &mut receipt, &mut governor)?;
+        assert_eq!(outcome, Outcome::Resolved(Count(3)));
+        assert_eq!(seen, [0, 1, 2, 3]);
+        assert_eq!(receipt.evidence.len(), 3);
+        Ok::<(), StopReason>(())
+    }
+
+    #[test]
+    fn example_5() {
+        use crate::search::Accepted;
+        fn costs(accepted: Accepted<u8>) -> Vec<u64> {
+            accepted
+                .into_states()
+                .into_iter()
+                .map(|(_, ledger)| ledger.cost)
+                .collect()
+        }
+    }
+
+    #[test]
+    fn example_6() {
+        use crate::search::{Proposals, SearchState};
+        fn parent_cost<S: SearchState>(proposals: &Proposals<'_, S>) -> u64 {
+            proposals.parent().cost
+        }
+    }
+
+    #[test]
+    fn example_7() -> Result<(), crate::StopReason> {
+        use crate::search::{Acceptance, Proposals, Search, SearchState};
+        use crate::{Budget, Governor, ScratchVec, StopReason, search::Ledger};
+        #[derive(Clone)]
+        struct Done;
+        impl SearchState for Done {
+            type Tie = ();
+            type Context<'c> = ();
+            fn tie(&self) {}
+            fn write_key(&self, key: &mut ScratchVec<u8>) -> Result<(), StopReason> {
+                key.push(0)
+            }
+            fn accept(&self, (): &mut (), _: &mut Governor) -> Result<Acceptance, StopReason> {
+                Ok(Acceptance::Accepted { validation: 0 })
+            }
+            fn expand(
+                &self,
+                (): &mut (),
+                _: &mut Proposals<'_, Self>,
+                _: &mut Governor,
+            ) -> Result<(), StopReason> {
+                Ok(())
+            }
+        }
+        let mut governor = Governor::new(Budget {
+            candidates: 0,
+            ..Budget::default()
+        });
+        let mut search = Search::uncounted(&governor);
+        search.seed(&mut governor, Done, Ledger::default())?;
+        assert_eq!(search.run(&mut (), &mut governor)?.into_states().len(), 1);
+        assert_eq!(governor.usage().candidates, 0);
+        Ok::<(), StopReason>(())
+    }
+
+    #[test]
+    fn example_8() {
+        use crate::search::{Acceptance, Ledger, Proposals, Search, SearchState};
+        use crate::{Budget, Governor, ScratchVec, StopReason};
+
+        struct Word(&'static str);
+        impl SearchState for Word {
+            type Tie = ();
+            type Context<'c> = ();
+            fn tie(&self) {}
+            fn write_key(&self, key: &mut ScratchVec<u8>) -> Result<(), StopReason> {
+                key.extend(self.0.bytes())
+            }
+            fn accept(&self, (): &mut (), _: &mut Governor) -> Result<Acceptance, StopReason> {
+                Ok(Acceptance::Accepted { validation: 0 })
+            }
+            fn expand(
+                &self,
+                (): &mut (),
+                _: &mut Proposals<'_, Self>,
+                _: &mut Governor,
+            ) -> Result<(), StopReason> {
+                Ok(())
+            }
+        }
+        let mut governor = Governor::new(Budget::default());
+        let mut search = Search::new(&governor);
+        let build = |_: &mut Governor| Ok((Word("hi"), Ledger::default()));
+        let key = |key: &mut ScratchVec<u8>| key.extend(*b"hi");
+        assert_eq!(search.seed_with(&mut governor, 0, key, build), Ok(true));
+        // The duplicate is rejected before its ledger would be built.
+        let never = |_: &mut Governor| -> Result<(Word, Ledger), StopReason> { unreachable!() };
+        assert_eq!(search.seed_with(&mut governor, 0, key, never), Ok(false));
+        assert_eq!(governor.usage().candidates, 1);
     }
 }

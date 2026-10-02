@@ -17,18 +17,22 @@
 //! reported as unclosed. Bytes of multi-byte UTF-8 characters are never
 //! ASCII delimiters, so byte-level scanning is exact for UTF-8 text and the
 //! result does not depend on how the input is split into calls.
-use crate::contract::saturating_size as size;
-use crate::contract::{Governor, Resource, ScratchCharge, ScratchVec, StopReason};
+// `unreachable_pub` and `redundant_pub_crate` disagree on the right
+// visibility for items of a crate-private module
+// (https://github.com/rust-lang/rust-clippy/issues/6188); `pub(crate)`
+// (matching `unreachable_pub`) wins, as in `grammar::engine`.
+#![allow(clippy::redundant_pub_crate)]
+use crate::contract::ScratchCharge;
 
 /// One maximal bracketed region, as absolute byte offsets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Region {
+pub(crate) struct Region {
     /// Offset of the opening `{` or `[`.
-    pub start: usize,
+    pub(crate) start: usize,
     /// Offset just past the closing bracket, or the end of input when unclosed.
-    pub end: usize,
+    pub(crate) end: usize,
     /// Whether the region's depth returned to zero.
-    pub closed: bool,
+    pub(crate) closed: bool,
 }
 impl ScratchCharge for Region {
     const CHARGE: usize = {
@@ -39,7 +43,7 @@ impl ScratchCharge for Region {
 
 /// A boundary reported by [`Tracker::push`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Event {
+pub(crate) enum Event {
     /// A region opened at this offset.
     Open(usize),
     /// A region closed.
@@ -47,25 +51,8 @@ pub enum Event {
 }
 
 /// A resumable, string- and escape-aware bracket-region tracker.
-///
-/// ```
-/// use purrassist_core::scan::{Event, Region, Tracker};
-/// let text = br#"say {"a": "}"} and [1, [2]"#;
-/// let mut tracker = Tracker::new(0);
-/// let events: Vec<Event> = text.iter().filter_map(|&byte| tracker.push(byte)).collect();
-/// assert_eq!(
-///     events,
-///     [
-///         Event::Open(4),
-///         Event::Close(Region { start: 4, end: 14, closed: true }),
-///         Event::Open(19),
-///     ]
-/// );
-/// // The string `"}"` did not close the object; `[1, [2]` is still open.
-/// assert_eq!(tracker.finish(), Some(Region { start: 19, end: 26, closed: false }));
-/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Tracker {
+pub(crate) struct Tracker {
     offset: usize,
     depth: usize,
     start: usize,
@@ -76,15 +63,8 @@ pub struct Tracker {
 impl Tracker {
     /// A tracker whose next byte is at absolute offset `offset`, outside any
     /// region.
-    ///
-    /// ```
-    /// use purrassist_core::scan::{Event, Tracker};
-    /// let mut tracker = Tracker::new(10);
-    /// assert_eq!(tracker.push(b'['), Some(Event::Open(10)));
-    /// assert_eq!(tracker.offset(), 11);
-    /// ```
     #[must_use]
-    pub const fn new(offset: usize) -> Self {
+    pub(crate) const fn new(offset: usize) -> Self {
         Self {
             offset,
             depth: 0,
@@ -95,28 +75,21 @@ impl Tracker {
     }
 
     /// Absolute offset of the next byte.
+    #[cfg(test)]
     #[must_use]
-    pub const fn offset(&self) -> usize {
+    pub(crate) const fn offset(&self) -> usize {
         self.offset
     }
 
     /// Current bracket depth (zero outside regions).
-    ///
-    /// ```
-    /// use purrassist_core::scan::Tracker;
-    /// let mut tracker = Tracker::new(0);
-    /// for &byte in b"{[\"]\"" {
-    ///     tracker.push(byte);
-    /// }
-    /// assert_eq!(tracker.depth(), 2);
-    /// ```
+    #[cfg(test)]
     #[must_use]
-    pub const fn depth(&self) -> usize {
+    pub(crate) const fn depth(&self) -> usize {
         self.depth
     }
 
     /// Read one byte, reporting a region boundary when it is one.
-    pub const fn push(&mut self, byte: u8) -> Option<Event> {
+    pub(crate) const fn push(&mut self, byte: u8) -> Option<Event> {
         let at = self.offset;
         self.offset += 1;
         if self.depth == 0 {
@@ -156,8 +129,9 @@ impl Tracker {
     }
 
     /// End of input: the region still open, if any, extended to the end.
+    #[cfg(test)]
     #[must_use]
-    pub const fn finish(self) -> Option<Region> {
+    pub(crate) const fn finish(self) -> Option<Region> {
         if self.depth == 0 {
             None
         } else {
@@ -170,37 +144,56 @@ impl Tracker {
     }
 }
 
-/// Every maximal region of `input`, in order, in one pass.
-///
-/// # Errors
-/// Charges one `Work` unit per byte and admits the returned list's storage
-/// against `ScratchBytes`; returns the governor's exhaustion or cancellation
-/// reason when either is refused.
-///
-/// ```
-/// use purrassist_core::{Budget, Governor, scan::{Region, regions}};
-/// let mut governor = Governor::new(Budget::default());
-/// let found = regions(b"a {b} c [d", &mut governor).unwrap();
-/// assert_eq!(
-///     found,
-///     [
-///         Region { start: 2, end: 5, closed: true },
-///         Region { start: 8, end: 10, closed: false },
-///     ]
-/// );
-/// assert_eq!(governor.usage().work, 10);
-/// ```
-pub fn regions(input: &[u8], governor: &mut Governor) -> Result<Vec<Region>, StopReason> {
-    governor.charge(Resource::Work, size(input.len()))?;
-    let mut tracker = Tracker::new(0);
-    let mut found = ScratchVec::new(governor);
-    for &byte in input {
-        if let Some(Event::Close(region)) = tracker.push(byte) {
-            found.push(region)?;
+/// The examples of this crate-private module's documentation, run as unit
+/// tests; some only show that a signature type-checks, so their helper
+/// functions are never called.
+#[cfg(test)]
+#[allow(dead_code)]
+mod doc_examples {
+    #[test]
+    fn example_0() {
+        use crate::scan::{Event, Region, Tracker};
+        let text = br#"say {"a": "}"} and [1, [2]"#;
+        let mut tracker = Tracker::new(0);
+        let events: Vec<Event> = text.iter().filter_map(|&byte| tracker.push(byte)).collect();
+        assert_eq!(
+            events,
+            [
+                Event::Open(4),
+                Event::Close(Region {
+                    start: 4,
+                    end: 14,
+                    closed: true
+                }),
+                Event::Open(19),
+            ]
+        );
+        // The string `"}"` did not close the object; `[1, [2]` is still open.
+        assert_eq!(
+            tracker.finish(),
+            Some(Region {
+                start: 19,
+                end: 26,
+                closed: false
+            })
+        );
+    }
+
+    #[test]
+    fn example_1() {
+        use crate::scan::{Event, Tracker};
+        let mut tracker = Tracker::new(10);
+        assert_eq!(tracker.push(b'['), Some(Event::Open(10)));
+        assert_eq!(tracker.offset(), 11);
+    }
+
+    #[test]
+    fn example_2() {
+        use crate::scan::Tracker;
+        let mut tracker = Tracker::new(0);
+        for &byte in b"{[\"]\"" {
+            tracker.push(byte);
         }
+        assert_eq!(tracker.depth(), 2);
     }
-    if let Some(region) = tracker.finish() {
-        found.push(region)?;
-    }
-    Ok(found.into_vec())
 }

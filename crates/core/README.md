@@ -14,6 +14,31 @@ assert!(matches!(result.outcome, Outcome::Resolved(_)));
 assert_eq!(result.receipt.sources[0].text(), Some("[[42]]"));
 ```
 
+## Tool-call recovery
+
+`tool_call` recovers the tool calls of one raw model turn against typed tool
+definitions or lossless `OpenAI`, MCP, and Anthropic declarations: each call
+gets its tool, schema-validated arguments, an outcome (`Resolved`,
+`BestGuess`, `Ambiguous`, `Unresolved`), and its itemized repairs; markup no
+allowed dialect reads is reported, never dropped. Twelve dialects ship as
+weighted, invertible grammars: `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`,
+`mistral-v3.v1`, `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`,
+`kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, and `bare-json.v1`.
+
+```rust
+use purrassist_core::tool_call::{CallOutcome, Effects, Param, ToolDefinition, ToolRecoveryRequest, ToolSet};
+use purrassist_core::{Budget, Outcome};
+let tools = ToolSet::compile(
+    [ToolDefinition::new("read_file").effects(Effects::ReadOnly).param("path", Param::string().required())],
+    Budget::default(),
+).unwrap();
+let turn = br#"Reading it. <tool_call>{"name": "read_file", "arguments": {"path": "a.rs"}}</tool_call>"#;
+let result = tools.recover(turn, &ToolRecoveryRequest::default());
+let Outcome::Resolved(calls) = result.outcome else { panic!("unexpected outcome") };
+assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
+assert_eq!(calls.calls[0].arguments.to_json(), r#"{"path":"a.rs"}"#);
+```
+
 Recovery may resolve, guess, preserve ambiguity, or exhaust its explicit budget.
 Guesses remain labeled after validation. The core never reads files, contacts
 models, or consults ambient clocks or randomness.

@@ -39,7 +39,7 @@
 //!    could name resolves under `Tolerant`: a `Structural` tool is reached by
 //!    its exact name or alias only.
 //! 3. **Parameter names** (R3.4b). Exact names and aliases bind directly.
-//!    The rest are assigned by a best-first [`Search`] over a per-scope
+//!    The rest are assigned by a best-first `Search` over a per-scope
 //!    state: under `Tolerant`, renamed to a declared parameter
 //!    (`json.key.match`, the shared schema-recovery name cost) or, for a
 //!    missing required parameter, relocated out of a nested object

@@ -32,8 +32,8 @@ pub mod patch;
 
 pub mod provenance;
 
-pub mod scan;
+pub(crate) mod scan;
 
-pub mod search;
+pub(crate) mod search;
 
 pub mod markdown;
