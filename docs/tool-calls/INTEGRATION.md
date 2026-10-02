@@ -440,6 +440,29 @@ result is `"status": "resolved"`. The call is `write_file` with arguments
 `a7e052aa565b` is the first 12 hexadecimal digits of the SHA-256 digest of
 `turn.txt` (with no trailing newline); another turn gets another tag.
 
-The exit status is 0 for resolved and best-guess results, 3 for ambiguous,
-4 for unresolved, and 1 for invocation errors. `--help` lists every option;
-the command never executes a call.
+The command exits 0 when at least one call is usable (`usable_accepting_guesses`) and the
+tool-choice check passed, even if other attempts in the turn were rejected or
+are unparsed call markup (the JSON itemizes them, so a script keyed on the
+exit code never discards good calls because of one stray opener), and for
+clean content (finish `content_only`). It exits 3 when nothing is usable and
+the operation or a call is ambiguous, and 4 when nothing is usable (unresolved
+calls, only rejected or unparsed call markup, a `truncated` turn, only guesses
+that may not be used, such as a mutating tool's, or an `Unresolved` operation:
+an exhausted budget, invalid input) or the tool-choice check failed, even with
+usable calls: a violated tool choice is a contract failure the caller must
+see. Invocation errors exit 1. The printed JSON is the same whatever the exit
+code; the code only summarizes it. `--help` lists every option; the command
+never executes a call. *Proved by* `tool_calls_cli::exit_code_reflects_what_is_usable`
+(resolved calls, usable calls beside a stray rejected opener, clean
+content, `truncated_with_calls`, `truncated`, a hallucinated name, a missing
+required argument, each violated tool choice, including `none` with a usable
+call, unparsed markup, an ambiguous call),
+`tool_calls_cli::busy_turn_resolves_every_call_by_default`, and
+`tool_calls_cli::exit_code_without_a_value` (rejected ambiguity, an exhausted
+budget).
+
+The `recover_tool_calls` MCP tool has no exit code. Like every other tool in
+the registry, a completed recovery is a successful tool result (`isError`
+false) whatever it recovered, and `isError` is true only when the request
+itself is invalid; the result's `status` and `value.finish` carry the same
+information the CLI's exit code summarizes.

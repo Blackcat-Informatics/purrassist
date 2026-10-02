@@ -4,12 +4,13 @@ use purrassist::{
     Effort, Outcome, RecoveryRequest, Schema,
     json::{self, Member, Node, Value},
     matching::{self, Candidate, MatchRequest},
+    tool_call::{CallOutcome, Finish, ToolCalls},
     wire::{array, integer, object, string},
 };
 use std::io::{self, Read};
 
 const MAX_INPUT: u64 = 16 * 1024 * 1024;
-const HELP: &str = "PurRAssist: evidence-bearing recovery for imperfect AI output\n\nUsage:\n  purrassist decode --schema FILE [--input FILE] [--effort exact|quick|standard|deep|maximum] [--no-guesses]\n  purrassist validate --schema FILE [--input FILE]\n  purrassist match QUERY CANDIDATE...\n  purrassist recover-tool-calls --tools FILE [--tools-format openai|mcp|anthropic] [--dialect ID]... [--stop stop|length|tool_calls|content_filter|unknown|stop-sequence=STR] [--tool-choice auto|none|required|NAME] [--policy per-tool|structural|tolerant] [--effects NAME=read-only|mutating]... [--reasoning separate|separate-open|content] [--ambiguity report|reject] [--emit openai|DIALECT] [--ids-source | [--ids-prefix P] [--ids-start N]] [--effort exact|quick|standard|deep|maximum] [FILE]\n  purrassist call TOOL --root DIRECTORY\n  purrassist mcp --root DIRECTORY\n\nInput defaults to stdin. Decode emits a JSON answer and receipt.\nrecover-tool-calls reads one model turn as raw bytes (invalid UTF-8 is a recorded loss) and\nemits the recover_tool_calls tool's result; dialect ids: anthropic-tool-use.v1, bare-json.v1,\ndeepseek-v3.1.v1, deepseek-v3.v1, harmony.v1, hermes.v1, kimi-k2.v1, llama3-json.v1, mistral-v11.v1, mistral-v3.v1, openai-tool-calls.v1, qwen3-coder-xml.v1 (default all). Call markup no allowed dialect reads\n(a family not built in yet, or a built-in dialect left out of --dialect) is a rejected attempt\nwith reason unsupported_dialect, its bytes stay content, and the finish is unresolved. Call ids by default keep each id the model wrote\nand number every other call call_<12 hex of the output's SHA-256>_<index>, so\nturns never share ids (a missing or repeated model id is a recorded inference);\n--ids-source keeps the ids the output carries (deduplicated as ID#INDEX);\n--ids-prefix P/--ids-start N number every call P(N+index) (default prefix call_,\nstart 0; pass the result's next_id_start as the next round's --ids-start).\nExit: 0 resolved/best-guess, 3 ambiguous, 4 unresolved/invalid, 1 invocation error.\n";
+const HELP: &str = "PurRAssist: evidence-bearing recovery for imperfect AI output\n\nUsage:\n  purrassist decode --schema FILE [--input FILE] [--effort exact|quick|standard|deep|maximum] [--no-guesses]\n  purrassist validate --schema FILE [--input FILE]\n  purrassist match QUERY CANDIDATE...\n  purrassist recover-tool-calls --tools FILE [--tools-format openai|mcp|anthropic] [--dialect ID]... [--stop stop|length|tool_calls|content_filter|unknown|stop-sequence=STR] [--tool-choice auto|none|required|NAME] [--policy per-tool|structural|tolerant] [--effects NAME=read-only|mutating]... [--reasoning separate|separate-open|content] [--ambiguity report|reject] [--emit openai|DIALECT] [--ids-source | [--ids-prefix P] [--ids-start N]] [--effort exact|quick|standard|deep|maximum] [FILE]\n  purrassist call TOOL --root DIRECTORY\n  purrassist mcp --root DIRECTORY\n\nInput defaults to stdin. Decode emits a JSON answer and receipt.\nrecover-tool-calls reads one model turn as raw bytes (invalid UTF-8 is a recorded loss) and\nemits the recover_tool_calls tool's result; dialect ids: anthropic-tool-use.v1, bare-json.v1,\ndeepseek-v3.1.v1, deepseek-v3.v1, harmony.v1, hermes.v1, kimi-k2.v1, llama3-json.v1, mistral-v11.v1, mistral-v3.v1, openai-tool-calls.v1, qwen3-coder-xml.v1 (default all). Call markup no allowed dialect reads\n(a family not built in yet, or a built-in dialect left out of --dialect) is a rejected attempt\nwith reason unsupported_dialect, its bytes stay content, and the finish is unresolved. Call ids by default keep each id the model wrote\nand number every other call call_<12 hex of the output's SHA-256>_<index>, so\nturns never share ids (a missing or repeated model id is a recorded inference);\n--ids-source keeps the ids the output carries (deduplicated as ID#INDEX);\n--ids-prefix P/--ids-start N number every call P(N+index) (default prefix call_,\nstart 0; pass the result's next_id_start as the next round's --ids-start).\nExit: 0 resolved/best-guess, 3 ambiguous, 4 unresolved/invalid, 1 invocation error.\nrecover-tool-calls exits 0 when at least one call is usable and the tool-choice check passed\n(even if other attempts were rejected or unparsed; the JSON itemizes them) or for clean\ncontent_only; 3 when nothing is usable and a call or the operation is ambiguous; 4 when\nnothing is usable (unresolved calls, rejected or unparsed markup only, truncated, only\nunusable guesses, an exhausted budget or invalid input) or the tool-choice check failed,\neven with usable calls. The JSON output is the same either way.\n";
 
 #[expect(
     clippy::redundant_pub_crate,
@@ -255,7 +256,41 @@ fn recover_tool_calls(args: &[String]) -> Result<u8, String> {
     let output = read_bytes(output_path)?;
     let result = purrassist_host::tools::recover_tool_calls(&output, &object(options))?;
     println!("{}", result.to_node().to_json());
-    Ok(exit_code(&result.outcome))
+    Ok(tool_calls_exit_code(&result.outcome))
+}
+
+/// The documented exit code of `recover-tool-calls`, a summary of what the
+/// caller can use (the printed JSON is the whole answer, itemizing every
+/// rejected attempt beside the usable calls):
+///
+/// - 0: at least one call is usable (`usable_accepting_guesses`) and the
+///   tool-choice check passed, even when other attempts in the turn were
+///   rejected or unparsed; or the finish is `content_only` (clean content);
+/// - 3: nothing is usable and the operation or a call is ambiguous;
+/// - 4: nothing is usable (an unresolved call, rejected or unparsed call
+///   markup, a cut-off turn, only unusable guesses, an `Unresolved`
+///   operation such as an exhausted budget), or the tool-choice check
+///   failed, even with usable calls: a violated tool choice is a contract
+///   failure the caller must see.
+fn tool_calls_exit_code(outcome: &Outcome<ToolCalls>) -> u8 {
+    let calls = match outcome {
+        Outcome::Resolved(calls) | Outcome::BestGuess(calls) => calls,
+        Outcome::Ambiguous(_) => return 3,
+        Outcome::Unresolved => return 4,
+    };
+    if !calls.tool_choice.passed {
+        4
+    } else if !calls.usable_accepting_guesses().is_empty() || calls.finish == Finish::ContentOnly {
+        0
+    } else if calls
+        .calls
+        .iter()
+        .any(|call| call.outcome == CallOutcome::Ambiguous)
+    {
+        3
+    } else {
+        4
+    }
 }
 /// A JSON object of owned keys, in order (the `--effects` overrides).
 fn members(entries: Vec<(String, Node)>) -> Node {
@@ -329,4 +364,19 @@ fn mcp(args: &[String]) -> Result<u8, String> {
     let tools = purrassist_host::tools::Tools::new(&args[1]).map_err(|e| e.to_string())?;
     crate::mcp_stdio::run(tools)?;
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tool_calls_exit_code;
+    use purrassist::Outcome;
+
+    /// An `Ambiguous` operation (readings of the turn that recover
+    /// different calls, reachable with caller grammars) exits 3, like the
+    /// other subcommands; an `Unresolved` one (no value) exits 4.
+    #[test]
+    fn operation_outcomes_without_a_single_reading() {
+        assert_eq!(tool_calls_exit_code(&Outcome::Ambiguous(Vec::new())), 3);
+        assert_eq!(tool_calls_exit_code(&Outcome::Unresolved), 4);
+    }
 }

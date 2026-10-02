@@ -15,19 +15,23 @@ use std::{
 
 const TOOLS: &str = r#"[{"type":"function","function":{"name":"list_dir","parameters":{"type":"object","properties":{"path":{"type":"string"},"depth":{"type":"integer"}},"required":["path"]}}}]"#;
 
-fn tools_file() -> PathBuf {
+fn tools_file(declarations: &str) -> PathBuf {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let path = std::env::temp_dir().join(format!(
         "purrassist-tool-calls-cli-{}-{}.json",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
-    fs::write(&path, TOOLS).unwrap();
+    fs::write(&path, declarations).unwrap();
     path
 }
 
 fn run(arguments: &[&str], stdin: &[u8]) -> (Output, PathBuf) {
-    let tools = tools_file();
+    run_with(TOOLS, arguments, stdin)
+}
+
+fn run_with(declarations: &str, arguments: &[&str], stdin: &[u8]) -> (Output, PathBuf) {
+    let tools = tools_file(declarations);
     let mut child = Command::new(env!("CARGO_BIN_EXE_purrassist"))
         .arg("recover-tool-calls")
         .arg("--tools")
@@ -66,6 +70,14 @@ fn qwen_xml_recovers_via_cli() {
         node.pointer("/value/calls/0/dialect")
             .and_then(Node::as_str),
         Some("qwen3-coder-xml.v1")
+    );
+    // Hermes also opens at `<tool_call>` but does not read a `<function=`
+    // body: the call is Qwen3-Coder XML's alone.
+    assert_eq!(
+        node.pointer("/value/calls/0/candidate_dialects")
+            .map(Node::to_json)
+            .as_deref(),
+        Some(r#"["qwen3-coder-xml.v1"]"#)
     );
     let emitted = node.pointer("/value/emitted/output").unwrap();
     let Value::Array(calls) = &emitted.value else {
@@ -148,6 +160,8 @@ fn default_ids_are_disjoint_across_turns() {
 /// G7: the CLI's default request sizes its candidate budget to the turn: a
 /// 64-call turn whose every call needs a markup repair, with a contested
 /// stray `<tool_call>` line after each, recovers every call `Resolved`.
+/// The stray openers are rejected attempts (the finish is `unresolved`),
+/// but every call is usable, so the exit code is 0.
 #[test]
 fn busy_turn_resolves_every_call_by_default() {
     let mut turn = String::new();
@@ -183,6 +197,10 @@ fn busy_turn_resolves_every_call_by_default() {
         );
     }
     assert!(node.pointer("/value/calls/64").is_none());
+    assert_eq!(
+        node.pointer("/value/finish").and_then(Node::as_str),
+        Some("unresolved")
+    );
     fs::remove_file(tools).unwrap();
 }
 
@@ -252,7 +270,7 @@ fn repeated_option_rejected() {
         );
         fs::remove_file(tools).unwrap();
     }
-    let tools = tools_file();
+    let tools = tools_file(TOOLS);
     let output = Command::new(env!("CARGO_BIN_EXE_purrassist"))
         .arg("recover-tool-calls")
         .arg("--tools")
@@ -882,4 +900,164 @@ fn unparsed_markup_is_reported_via_cli() {
         );
         fs::remove_file(tools).unwrap();
     }
+}
+
+/// Run `turn` and return the exit code and the turn's finish (`None` when
+/// the operation published no value).
+fn exit_and_finish(declarations: &str, arguments: &[&str], turn: &[u8]) -> (i32, Option<String>) {
+    let (output, tools) = run_with(declarations, arguments, turn);
+    fs::remove_file(tools).unwrap();
+    let node = result(&output);
+    (
+        output.status.code().expect("an exit code"),
+        node.pointer("/value/finish")
+            .and_then(Node::as_str)
+            .map(str::to_owned),
+    )
+}
+
+/// The exit code summarizes what the caller can use: 0 for a usable call
+/// with the tool choice passed (even beside a rejected attempt) or clean
+/// content, 3 for ambiguity with nothing usable, 4 when nothing is usable
+/// (an unresolved call, unparsed call markup only, a cut-off turn with no
+/// usable call) or the tool choice is violated, even with a usable call.
+/// The JSON is the whole answer either way.
+#[test]
+fn exit_code_reflects_what_is_usable() {
+    let call = |arguments: &str| {
+        format!("<tool_call>{{\"name\": \"list_dir\", \"arguments\": {arguments}}}</tool_call>")
+    };
+    let resolved = call(r#"{"path": "src"}"#);
+    let cut = "<tool_call>{\"name\": \"list_dir\", \"arguments\": {\"path\": \"sr";
+    let both = format!("{resolved}\n{cut}");
+    let stray = format!("{resolved}\n<tool_call>\n");
+    let hallucinated =
+        "<tool_call>{\"name\": \"send_email\", \"arguments\": {\"to\": \"a\"}}</tool_call>";
+    let missing = call("{}");
+    let repeated = "<tool_call>\n<function=list_dir>\n<parameter=path>\na\n</parameter>\n<parameter=path>\nb\n</parameter>\n</function>\n</tool_call>";
+    for (case, arguments, turn, code, finish) in [
+        ("resolved calls", &[][..], resolved.as_str(), 0, "calls"),
+        (
+            "usable call beside a stray rejected opener",
+            &[][..],
+            stray.as_str(),
+            0,
+            "unresolved",
+        ),
+        (
+            "clean content",
+            &[][..],
+            "The directory is empty.",
+            0,
+            "content_only",
+        ),
+        (
+            "truncated with calls",
+            &["--stop", "length"][..],
+            both.as_str(),
+            0,
+            "truncated_with_calls",
+        ),
+        (
+            "truncated, nothing usable",
+            &["--stop", "length"][..],
+            cut,
+            4,
+            "truncated",
+        ),
+        ("hallucinated name", &[][..], hallucinated, 4, "unresolved"),
+        (
+            "missing required argument",
+            &[][..],
+            missing.as_str(),
+            4,
+            "unresolved",
+        ),
+        (
+            "forced tool choice violated",
+            &["--tool-choice", "list_dir"][..],
+            "No call needed.",
+            4,
+            "unresolved",
+        ),
+        (
+            "tool choice none with a call",
+            &["--tool-choice", "none"][..],
+            resolved.as_str(),
+            4,
+            "unresolved",
+        ),
+        (
+            "tool choice required with no call",
+            &["--tool-choice", "required"][..],
+            "No call needed.",
+            4,
+            "unresolved",
+        ),
+        (
+            "unparsed markup only",
+            &[][..],
+            "[list_dir(path=\"src\")]",
+            4,
+            "unresolved",
+        ),
+        (
+            "an ambiguous call",
+            &["--policy", "tolerant"][..],
+            repeated,
+            3,
+            "unresolved",
+        ),
+    ] {
+        let (exit, finished) = exit_and_finish(TOOLS, arguments, turn.as_bytes());
+        assert_eq!(exit, code, "{case}");
+        assert_eq!(finished.as_deref(), Some(finish), "{case}");
+    }
+}
+
+/// Exit 4 when the operation publishes no value: ambiguity rejected under
+/// `--ambiguity reject`, and an exhausted candidate budget.
+#[test]
+fn exit_code_without_a_value() {
+    let repeated = "<tool_call>\n<function=list_dir>\n<parameter=path>\na\n</parameter>\n<parameter=path>\nb\n</parameter>\n</function>\n</tool_call>";
+    // Rejecting ambiguity leaves nothing usable: the operation is
+    // Unresolved.
+    let (exit, finished) = exit_and_finish(
+        TOOLS,
+        &["--policy", "tolerant", "--ambiguity", "reject"],
+        repeated.as_bytes(),
+    );
+    assert_eq!((exit, finished), (4, None));
+    // A call with 16 parameters each written twice (2^16 readings)
+    // exhausts the candidate budget: Unresolved, no value.
+    let mut properties = String::new();
+    let mut body = String::new();
+    for index in 0..16 {
+        let _ = write!(
+            properties,
+            "{}\"p{index}\":{{\"type\":\"string\"}}",
+            if index == 0 { "" } else { "," }
+        );
+        let _ = write!(
+            body,
+            "<parameter=p{index}>\na\n</parameter>\n<parameter=p{index}>\nb\n</parameter>\n"
+        );
+    }
+    let declarations = format!(
+        r#"[{{"type":"function","function":{{"name":"f","parameters":{{"type":"object","properties":{{{properties}}}}}}}}}]"#
+    );
+    let turn = format!("<tool_call>\n<function=f>\n{body}</function>\n</tool_call>");
+    let (output, tools) = run_with(&declarations, &[], turn.as_bytes());
+    fs::remove_file(tools).unwrap();
+    assert_eq!(output.status.code(), Some(4));
+    let node = result(&output);
+    assert_eq!(
+        node.get("status").and_then(Node::as_str),
+        Some("unresolved")
+    );
+    assert_eq!(
+        node.pointer("/receipt/termination/kind")
+            .and_then(Node::as_str),
+        Some("budget_exceeded")
+    );
 }

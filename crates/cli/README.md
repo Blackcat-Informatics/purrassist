@@ -30,8 +30,18 @@ call `P(N + index)` instead (prefix `call_`, start 0 when omitted; pass the
 result's `next_id_start` as the next round's `--ids-start`), and
 `--ids-source` keeps the output's ids, deduplicated as `ID#INDEX`; combining
 `--ids-source` with either numbering option is an invocation error. `--help`
-lists every option; repeated single-valued options are rejected. It exits 0 for resolved or best-guess
-results, 3 for ambiguous, 4 for unresolved, and 1 for invocation errors. It
+lists every option; repeated single-valued options are rejected. It exits 0 when at least one call is usable (`usable_accepting_guesses`) and the
+tool-choice check passed, even if other attempts in the turn were rejected or
+are unparsed call markup (the JSON itemizes them, so a script keyed on the
+exit code never discards good calls because of one stray opener), and for
+clean content (finish `content_only`). It exits 3 when nothing is usable and
+the operation or a call is ambiguous, and 4 when nothing is usable (unresolved
+calls, only rejected or unparsed call markup, a `truncated` turn, only guesses
+that may not be used, such as a mutating tool's, or an `Unresolved` operation:
+an exhausted budget, invalid input) or the tool-choice check failed, even with
+usable calls: a violated tool choice is a contract failure the caller must
+see. Invocation errors exit 1. The printed JSON is the same whatever the exit
+code; the code only summarizes it. It
 never executes a call.
 
 `call TOOL --root DIRECTORY` accepts a JSON argument object on stdin. Tools

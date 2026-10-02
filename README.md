@@ -125,7 +125,18 @@ losses, rejected attempts, the tool-choice check, the turn's finish and its
 `OpenAI` `finish_reason`, an optional `--emit` re-emission (`openai` for the
 `tool_calls` array, or a dialect id), and a receipt. It never executes a call.
 `Finish::Unresolved` maps to the `finish_reason` `"stop"`, so read `finish`
-and `rejected` as well. The [integration guide](docs/tool-calls/INTEGRATION.md)
+and `rejected` as well. The command exits 0 when at least one call is usable (`usable_accepting_guesses`) and the
+tool-choice check passed, even if other attempts in the turn were rejected or
+are unparsed call markup (the JSON itemizes them, so a script keyed on the
+exit code never discards good calls because of one stray opener), and for
+clean content (finish `content_only`). It exits 3 when nothing is usable and
+the operation or a call is ambiguous, and 4 when nothing is usable (unresolved
+calls, only rejected or unparsed call markup, a `truncated` turn, only guesses
+that may not be used, such as a mutating tool's, or an `Unresolved` operation:
+an exhausted budget, invalid input) or the tool-choice check failed, even with
+usable calls: a violated tool choice is a contract failure the caller must
+see. Invocation errors exit 1. The printed JSON is the same whatever the exit
+code; the code only summarizes it. The [integration guide](docs/tool-calls/INTEGRATION.md)
 lists every option, the integrator guarantees, and the evidence for each.
 
 `prepare_helper`/`complete_helper` expose optional external-model helper
