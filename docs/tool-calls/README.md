@@ -274,7 +274,25 @@ whole-message or per-call, an `Unresolved` operation with a failed
 | `ContentOnly` | No call, nothing wrong. | `"stop"` |
 | `TruncatedWithCalls` | A `Length` stop after at least one call that is not cut off. | `"length"` |
 | `Truncated` | A `Length` stop with no call that is not cut off. | `"length"` |
-| `Unresolved` | A rejected attempt (other than one a length stop cut off), an `Unresolved` (other than by truncation) or `Ambiguous` call, or a failed tool-choice check. | `"stop"` |
+| `Unresolved` | A rejected attempt (other than one a length stop cut off), including call markup no allowed dialect reads, an `Unresolved` (other than by truncation) or `Ambiguous` call, or a failed tool-choice check. | `"stop"` |
+
+Call markup that no dialect of the allow-list reads is never silent
+content. A linear detector (`detect_unparsed`) scans the turn's content for
+the distinctive openers and shapes of the families no built-in dialect
+parses yet (`pythonic.v1` call lists `[f(a=1)]` at the start of the turn or
+a line or after `<|python_start|>`, `gemma3-tool-code.v1` `` ```tool_code ``
+blocks, `glm-4.5.v1` `<arg_key>`/`<arg_value>` calls, and the stripped
+renderings `kimi-k2-stripped.v1`, `harmony-stripped.v1`,
+`deepseek-v3-stripped.v1`, `qwen3-coder-xml-stripped.v1` and
+`name-arguments-stripped.v1`), and for the built-in dialects the
+allow-list leaves out. Each hit is a `RejectedCall` with
+`Rejection::UnsupportedDialect { family }` (its `dialect` is the family's
+built-in dialect, or `None`; it has no `candidate_dialects`), recorded as
+`tool_call.markup.unparsed-dialect` evidence; its bytes stay content, and
+the finish is `Unresolved`. Stripped renderings that a built-in grammar
+reads (a Mistral v3 array or a Hermes object without its tokens is a bare
+JSON call, a Llama 3 object without `<|python_tag|>` is an untagged Llama 3
+call) are recovered, not reported.
 
 `"stop"` for `Finish::Unresolved` hides rejected and unresolved calls: read
 `ToolCalls::finish` and `ToolCalls::rejected`, never only the

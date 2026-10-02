@@ -830,3 +830,56 @@ fn bare_json_recovers_and_emits_via_cli() {
     );
     fs::remove_file(tools).unwrap();
 }
+
+/// Call markup no allowed dialect reads is reported, never silent content:
+/// a Pythonic list (not built in yet) and `[TOOL_CALLS]` under a
+/// Hermes-only allow-list are rejected attempts with reason
+/// `unsupported_dialect`, the bytes stay content, and the finish is
+/// `unresolved`.
+#[test]
+fn unparsed_markup_is_reported_via_cli() {
+    for (args, turn, family, built_in) in [
+        (
+            &[][..],
+            &br#"[list_dir(path="src")]"#[..],
+            "pythonic.v1",
+            false,
+        ),
+        (
+            &["--dialect", "hermes.v1"][..],
+            &br#"[TOOL_CALLS] [{"name": "list_dir", "arguments": {"path": "src"}}]"#[..],
+            "mistral-v3.v1",
+            true,
+        ),
+    ] {
+        let (output, tools) = run(args, turn);
+        let node = result(&output);
+        assert_eq!(
+            node.pointer("/value/finish").and_then(Node::as_str),
+            Some("unresolved")
+        );
+        assert_eq!(
+            node.pointer("/value/rejected/0/reason/code")
+                .and_then(Node::as_str),
+            Some("unsupported_dialect")
+        );
+        assert_eq!(
+            node.pointer("/value/rejected/0/reason/family")
+                .and_then(Node::as_str),
+            Some(family)
+        );
+        assert_eq!(
+            node.pointer("/value/rejected/0/reason/built_in")
+                .map(Node::to_json)
+                .as_deref(),
+            Some(if built_in { "true" } else { "false" })
+        );
+        assert_eq!(
+            node.pointer("/value/content/0/end")
+                .map(Node::to_json)
+                .as_deref(),
+            Some(turn.len().to_string().as_str())
+        );
+        fs::remove_file(tools).unwrap();
+    }
+}

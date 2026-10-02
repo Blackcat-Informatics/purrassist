@@ -489,6 +489,19 @@ TOOL_CALL_REPAIRS = [
     b'{"name": "read_file", "arguments": "{\\"path\\": \\"a\\"}"}',
     b'{"name": "write_file", "arguments": {"path": "a", "content": "{\\"name\\": \\"rm\\", \\"arguments\\": {}}"}}',
     b'{"tool_call_id": "call_9", "content": "ok"}',
+    # Unparsed markup (reported, never silent content): Pythonic lists, a
+    # Gemma 3 tool_code block, a GLM-4.5 call, stripped renderings, and
+    # call markup of a built-in dialect outside the allow-list.
+    b'[read_file(path="a"), list_dir(path=".")]',
+    b'Checking.\n[read_file(path="a")]',
+    b'<|python_start|>[read_file(path="a")]<|python_end|>',
+    b'```tool_code\nread_file(path="a")\n```',
+    b'<tool_call>read_file\n<arg_key>path</arg_key>\n<arg_value>a</arg_value>\n</tool_call>',
+    b'functions.read_file:0{"path": "a"}',
+    b'commentary to=functions.read_file json{"path": "a"}',
+    b'functionread_file\n```json\n{"path": "a"}\n```',
+    b'<function=read_file>\n<parameter=path>\na\n</parameter>\n</function>',
+    b'read_file{"path": "a"}',
 ]
 
 # Inputs that hold no recoverable call.
@@ -527,6 +540,8 @@ TOOL_CALL_NEGATIVES = [
     b'{"name": "read_file", "arguments": {"type": "object", "properties": {"path": {"type": "string"}}}}',
     b'{"name": "read_file", "description": "Read", "parameters": {"type": "object", "properties": {}}}',
     b'{"name": "read_file", "arguments": {"path": "a"',
+    b'f(x) = 2x, see [1]; [a(b)] is math and `g(a=1)` inline code',
+    b'```python\nprint(x)\n```',
     "```json\n{\"path\": \"a.rs\"}\n```".encode(),
     b'[TOOL_CALLS] [' + b'{"name": "read_file", "arguments": ' * 16 + b']',
     b'[TOOL_RESULTS] {"content": "x", "call_id": "a1B2c3D4e"}[/TOOL_RESULTS]',

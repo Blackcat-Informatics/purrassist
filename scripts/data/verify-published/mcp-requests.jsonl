@@ -17,3 +17,4 @@
 {"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"verify.txt"}}}
 {"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"undo_file","arguments":{"transaction":"58ae24ad63286e186dd89ddb06f08d039090a6e445ba613d5da682aa5b47fcda"}}}
 {"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"verify.txt"}}}
+{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"recover_tool_calls","arguments":{"output":"I will check.\n[list_dir(path=\"src\")]","tools":[{"type":"function","function":{"name":"list_dir","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}}]}}}

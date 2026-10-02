@@ -93,7 +93,27 @@ is reported as certain.
   `tool_call_recover::usable_never_yields_mutating_guess`,
   `tool_call_roundtrip::mutating_guess_never_emitted`, and
   `tool_call_goldens::no_mutating_guess_resolved_over_goldens`.
-- **Measured.** The 3,234-case correction evaluation records zero incorrect
+- **Call markup is never silent content.** Call markup that no dialect of
+  the allow-list reads (a family not built in yet: Pythonic call lists,
+  Gemma 3 `` ```tool_code `` blocks, GLM-4.5 `<arg_key>` calls, and the
+  stripped renderings of built-in dialects no grammar reads; or a built-in
+  dialect the allow-list leaves out, `[TOOL_CALLS]` under a Hermes-only
+  request) is reported as a `RejectedCall` with
+  `Rejection::UnsupportedDialect { family }` (wire `reason.code`
+  `unsupported_dialect`, with `family`, `built_in`, and a `detail` saying
+  "not built in yet" or "built in but not in the allow-list"), a
+  `tool_call.markup.unparsed-dialect` evidence entry in its repairs and the
+  receipt, and the finish `Unresolved`. Its bytes also stay content, and a
+  span a call, a rejected attempt or reasoning already holds is never
+  reported again. The detector (`detect_unparsed`) is linear and never
+  parses; Pythonic lists need a call-shaped `NAME(` with a keyword argument
+  at the start of the turn or a line, so prose with parentheses, math and
+  Python code blocks are not flagged. *Proved by*
+  `tool_call_goldens::unparsed_markup_is_reported` (one golden per family,
+  five built-in dialects outside the allow-list, and negatives), the CLI
+  test `tool_calls_cli::unparsed_markup_is_reported_via_cli`, and the host
+  test `tool_call_tools::unparsed_markup_over_mcp`.
+- **Measured.** The 13,404-case correction evaluation records zero incorrect
   automatic answers overall, per rule, and per dialect, and abstains on every
   case whose only correct answer is abstention
   (`correction_evaluation::tool_call_recovery_evaluation_has_zero_incorrect_corrections`;

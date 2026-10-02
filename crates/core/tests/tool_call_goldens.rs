@@ -497,7 +497,13 @@ fn rejected_nodes(calls: &ToolCalls) -> Node {
                             integer(rejected.span.end),
                         ])),
                     ),
-                    member("dialect", string(rejected.dialect.id())),
+                    member(
+                        "dialect",
+                        rejected
+                            .dialect
+                            .as_ref()
+                            .map_or(Node::new(Value::Null), |dialect| string(dialect.id())),
+                    ),
                     member(
                         "candidate_dialects",
                         Node::new(Value::Array(
@@ -1300,7 +1306,11 @@ fn mixed_complete_calls_then_dangling_opener() {
         rejected.candidate_dialects,
         [DialectId::Hermes, DialectId::Qwen3CoderXml]
     );
-    assert!(rejected.candidate_dialects.contains(&rejected.dialect));
+    assert!(
+        rejected
+            .candidate_dialects
+            .contains(rejected.dialect.as_ref().expect("a parser's attempt"))
+    );
     assert_eq!(
         rejected
             .repairs
@@ -1349,8 +1359,8 @@ fn shared_opener_rejections_collapse_under_the_default_allow_list() {
         assert_eq!(default.rejected.len(), 1, "{name}: {default:#?}");
         let rejected = &default.rejected[0];
         assert_eq!(
-            (&rejected.dialect, &rejected.span),
-            (&dialect, &reach),
+            (rejected.dialect.as_ref(), &rejected.span),
+            (Some(&dialect), &reach),
             "{name}"
         );
         assert_eq!(
@@ -1742,7 +1752,7 @@ fn llama3_evidence_and_honesty() {
     let calls = reading(&result);
     assert_eq!(calls.calls.len(), 0);
     assert_eq!(calls.rejected.len(), 1);
-    assert_eq!(calls.rejected[0].dialect, DialectId::Llama3Json);
+    assert_eq!(calls.rejected[0].dialect, Some(DialectId::Llama3Json));
     assert_eq!(calls.finish, Finish::Unresolved);
 
     let (_, result) = golden("llama3_truncated_arguments_length");
@@ -2142,7 +2152,7 @@ fn deepseek31_repairs() {
     let calls = reading(&result);
     assert_eq!(calls.calls.len(), 0);
     assert_eq!(calls.rejected.len(), 1);
-    assert_eq!(calls.rejected[0].dialect, DialectId::DeepSeekV31);
+    assert_eq!(calls.rejected[0].dialect, Some(DialectId::DeepSeekV31));
     assert_eq!(calls.finish, Finish::Unresolved);
 }
 
@@ -2789,4 +2799,81 @@ fn bare_json_calls() {
             reason: UnresolvedReason::MissingRequired { .. }
         }
     ));
+}
+
+/// Call markup no allowed dialect reads is never silent content: each
+/// family not built in yet, and each built-in dialect left out of the
+/// allow-list, is one rejected attempt with
+/// `Rejection::UnsupportedDialect` naming the family, whose bytes stay
+/// content, and the turn finishes `Unresolved`. Text that is not call
+/// markup (prose with parentheses, math, a Python code block) is never
+/// reported.
+#[test]
+fn unparsed_markup_is_reported() {
+    use purrassist_core::tool_call::{MarkupFamily, Rejection};
+    for (name, family) in [
+        ("unparsed_pythonic_list", MarkupFamily::Pythonic),
+        ("unparsed_pythonic_after_prose", MarkupFamily::Pythonic),
+        ("unparsed_gemma3_tool_code", MarkupFamily::Gemma3ToolCode),
+        ("unparsed_glm45", MarkupFamily::Glm45),
+        ("unparsed_kimi_k2_stripped", MarkupFamily::KimiK2Stripped),
+        ("unparsed_harmony_stripped", MarkupFamily::HarmonyStripped),
+        (
+            "unparsed_deepseek_v3_stripped",
+            MarkupFamily::DeepSeekV3Stripped,
+        ),
+        (
+            "unparsed_qwen_stripped",
+            MarkupFamily::Qwen3CoderXmlStripped,
+        ),
+        (
+            "unparsed_name_arguments_stripped",
+            MarkupFamily::NameArgumentsStripped,
+        ),
+        ("unparsed_mistral_v3_not_allowed", MarkupFamily::MistralV3),
+        ("unparsed_harmony_not_allowed", MarkupFamily::Harmony),
+        (
+            "unparsed_anthropic_not_allowed",
+            MarkupFamily::AnthropicToolUse,
+        ),
+        ("unparsed_hermes_not_allowed", MarkupFamily::Hermes),
+        ("unparsed_kimi_not_allowed", MarkupFamily::KimiK2),
+    ] {
+        let (_, result) = golden(name);
+        let calls = reading(&result);
+        assert!(calls.calls.is_empty(), "{name}");
+        assert_eq!(calls.finish, Finish::Unresolved, "{name}");
+        let reported: Vec<_> = calls
+            .rejected
+            .iter()
+            .filter(|rejected| rejected.reason == Rejection::UnsupportedDialect { family })
+            .collect();
+        assert_eq!(reported.len(), 1, "{name}: {:#?}", calls.rejected);
+        let rejected = reported[0];
+        assert_eq!(rejected.dialect, family.dialect(), "{name}");
+        assert!(rejected.candidate_dialects.is_empty(), "{name}");
+        assert_eq!(family.built_in(), name.ends_with("_not_allowed"), "{name}");
+        // The bytes stay content.
+        assert!(
+            calls
+                .content
+                .iter()
+                .any(|range| range.start <= rejected.span.start && rejected.span.end <= range.end),
+            "{name}"
+        );
+        assert_eq!(
+            rejected.repairs.evidence[0].rule, "tool_call.markup.unparsed-dialect",
+            "{name}"
+        );
+    }
+    // The GLM <tool_call> opener is Hermes's and Qwen3-Coder XML's rejected
+    // attempt; only the body after it is reported.
+    let (_, result) = golden("unparsed_glm45");
+    let calls = reading(&result);
+    assert_eq!(calls.rejected.len(), 2);
+    assert!(calls.rejected[0].span.end <= calls.rejected[1].span.start);
+    let (_, result) = golden("unparsed_negatives_stay_content");
+    let calls = reading(&result);
+    assert_eq!((calls.calls.len(), calls.rejected.len()), (0, 0));
+    assert_eq!(calls.finish, Finish::ContentOnly);
 }

@@ -444,6 +444,14 @@ pub enum Rejection {
         /// Absolute offset where the attempt was absorbed.
         at: usize,
     },
+    /// Call markup of a family no allowed dialect reads: a family not
+    /// built in yet, or a built-in dialect the request's allow-list leaves
+    /// out ([`detect_unparsed`](super::detect_unparsed)). No parser read
+    /// it; its bytes also stay content.
+    UnsupportedDialect {
+        /// The detected family.
+        family: super::MarkupFamily,
+    },
 }
 
 /// How a reasoning block ended.

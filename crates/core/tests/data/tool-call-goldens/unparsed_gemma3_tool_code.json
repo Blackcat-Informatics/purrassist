@@ -1,0 +1,52 @@
+{
+  "description": "A Gemma 3 ```tool_code block holding a call (gemma3-tool-code.v1, not built in yet): reported, the fenced bytes stay content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "I will look it up.\n```tool_code\nget_weather(city=\"Paris\")\n```\n",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        19,
+        61
+      ],
+      "dialect": null,
+      "candidate_dialects": [],
+      "reason": "UnsupportedDialect { family: Gemma3ToolCode }",
+      "raw": "```tool_code\nget_weather(city=\"Paris\")\n```"
+    }
+  ],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.unparsed-dialect"
+  ]
+}

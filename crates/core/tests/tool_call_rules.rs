@@ -1809,6 +1809,7 @@ fn repair_classification_matches_documentation() {
         "tool_call.markup.dangling-opener",
         "tool_call.id.dedup",
         "tool_call.input.invalid-utf8",
+        "tool_call.markup.unparsed-dialect",
     ];
     let mut actual = not_repairs.clone();
     actual.sort_unstable();

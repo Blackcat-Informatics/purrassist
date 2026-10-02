@@ -51,6 +51,7 @@
 mod adapter;
 mod context;
 mod definition;
+mod detect;
 mod dialect;
 pub mod emit;
 mod from_node;
@@ -66,6 +67,7 @@ pub use adapter::{DeclarationForm, ToolDeclaration, ToolSource};
 pub use definition::{
     Effects, ObjectSpec, Param, ParameterSpec, RepairPolicy, ToolDefinition, UnknownParameters,
 };
+pub use detect::{DETECTION_BYTES, Detection, MarkupFamily, detect_unparsed};
 pub use dialect::{DialectId, DialectSet, DialectSetError};
 pub use emit::{
     CallEdit, Emission, EmitError, EmitTarget, Emitted, RenderedResult, SkipReason, Skipped,

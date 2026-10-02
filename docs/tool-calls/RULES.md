@@ -102,6 +102,7 @@ the code.
 | `tool_call.markup.dangling-opener` | 0 | no | single | syntax | data | `Structural`, `Tolerant` | applied | resolution | A call attempt still open at the end of output under a non-length stop. |
 | `tool_call.id.dedup` | 0 | no | single | syntax | none | `Structural`, `Tolerant` | applied | resolution | A missing or duplicate source call id renumbered under `IdPolicy::Source`. |
 | `tool_call.input.invalid-utf8` | 0 | no | single | syntax | data | `Structural`, `Tolerant` | applied | resolution | A maximal run of bytes that are not well-formed UTF-8; the bytes stay retained. |
+| `tool_call.markup.unparsed-dialect` | 0 | no | single | syntax | none | `Structural`, `Tolerant` | applied | resolution | Call markup of a family no allowed dialect reads (not built in yet, or a built-in dialect the allow-list leaves out), reported as a rejected attempt; the bytes stay content. |
 
 ## Disabled rules
 
@@ -132,7 +133,9 @@ free text as an argument, or invents a value.
 - `resolution` rows are applied by `resolve_forest` against the tool set,
   except `tool_call.id.dedup` (recorded by the id policy) and
   `tool_call.input.invalid-utf8` (recorded by the recovery operation's
-  encoding scan).
+  encoding scan) and `tool_call.markup.unparsed-dialect` (recorded by the
+  recovery operation's unparsed-markup detector on the rejected attempt it
+  reports).
 
 How often each rule is exercised, and with what result, is in the tool-call
 section of [MATCHING-QUALITY.md](../MATCHING-QUALITY.md).

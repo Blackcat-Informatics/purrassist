@@ -1,0 +1,52 @@
+{
+  "description": "NAME{...} at the start of a line, a DeepSeek-V3.1 or Mistral v11 call with its special tokens removed (name-arguments-stripped.v1): reported.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "get_weather{\"city\": \"Paris\"}",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        0,
+        28
+      ],
+      "dialect": null,
+      "candidate_dialects": [],
+      "reason": "UnsupportedDialect { family: NameArgumentsStripped }",
+      "raw": "get_weather{\"city\": \"Paris\"}"
+    }
+  ],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.unparsed-dialect"
+  ]
+}

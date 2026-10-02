@@ -1,0 +1,52 @@
+{
+  "description": "A Harmony recipient with the message tokens removed (harmony-stripped.v1): reported.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "assistantcommentary to=functions.get_weather json{\"city\": \"Paris\"}",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        0,
+        66
+      ],
+      "dialect": null,
+      "candidate_dialects": [],
+      "reason": "UnsupportedDialect { family: HarmonyStripped }",
+      "raw": "assistantcommentary to=functions.get_weather json{\"city\": \"Paris\"}"
+    }
+  ],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.unparsed-dialect"
+  ]
+}

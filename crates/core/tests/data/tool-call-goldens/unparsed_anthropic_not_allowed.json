@@ -1,0 +1,77 @@
+{
+  "description": "An Anthropic tool_use block under a Llama 3 JSON-only allow-list: reported as anthropic-tool-use.v1, built in but not in the allow-list.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "llama3-json.v1"
+  ],
+  "stop": "stop",
+  "input": "{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"get_weather\",\"input\":{\"city\":\"Paris\"}}",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "calls",
+    "calls": [
+      {
+        "tool": "get_weather",
+        "arguments": {
+          "city": "Paris"
+        },
+        "candidate_dialects": [
+          "anthropic-tool-use.v1"
+        ],
+        "outcome": "resolved",
+        "rules": []
+      }
+    ],
+    "rejected": [],
+    "embedded": [],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        0,
+        81
+      ],
+      "dialect": "anthropic-tool-use.v1",
+      "candidate_dialects": [],
+      "reason": "UnsupportedDialect { family: AnthropicToolUse }",
+      "raw": "{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"get_weather\",\"input\":{\"city\":\"Paris\"}}"
+    }
+  ],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.unparsed-dialect"
+  ]
+}

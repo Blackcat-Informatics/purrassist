@@ -610,7 +610,17 @@ recognition = K_LEX·n + K_THREAD·(configuration steps) + K_EVENT·(segment eve
             + (JSON recovery units) + (class-automaton units) + (search key bytes)
 resolution  = one unit per member, option, alternative and validation step,
               plus the recovered value, ids, checks and ledger entries
+            + (unparsed-markup scan: one unit per content byte read)
 ```
+
+The unparsed-markup scan (`tool_call::detect_unparsed`) reads each reading's
+content once and, at each anchor, a bounded window (256 bytes, 64 for
+Harmony's message tokens); after a hit it resumes at the hit's end.
+`tool_call_cost::unparsed_markup_scan_is_linear` measures it on 64 KiB and
+1 MiB of prose (2.9 units per byte) and of inputs dense with each family's
+anchor (at most 29.5 units per byte, for `to=functions.` on every line),
+linear within 1.05x and under 32 units per byte. A turn that is a single
+call has no content to scan.
 
 Each dialect `d` of the request's allow-list keeps at most `B_d`
 configurations live per input byte, where `B_d` is

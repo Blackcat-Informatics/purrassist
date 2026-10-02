@@ -34,7 +34,10 @@
 //!   the output, never splits a well-formed UTF-8 character, and slices back
 //!   to the retained source (a rejected attempt's raw bytes are exactly its
 //!   range); every call's and rejected attempt's candidate dialects are
-//!   sorted, unique, and contain its dialect; content, reasoning, and call ranges never overlap; an embedded
+//!   sorted, unique, and contain its dialect, except that unparsed markup
+//!   (`Rejection::UnsupportedDialect`) has no candidate, names its family's
+//!   built-in dialect if any, and lies inside one content range; content,
+//!   reasoning, and call ranges never overlap; an embedded
 //!   call lies inside a reasoning range;
 //! - every `Resolved` call printed in its own dialect recovers to the same
 //!   tool with `Node::equivalent` arguments, `Resolved`; printing that
@@ -52,8 +55,9 @@ use purrassist_core::contract::Usage;
 use purrassist_core::digest::Digest;
 use purrassist_core::tool_call::{
     AmbiguityPolicy, CallOutcome, DialectId, DialectSet, Effects, GenerationStop, IdPolicy,
-    ObjectSpec, Param, PolicySelection, ReasoningPolicy, RecognizedTurn, Recognizer, RepairPolicy,
-    SkipReason, Skipped, ToolCalls, ToolChoice, ToolDefinition, ToolRecoveryRequest, ToolSet, emit,
+    ObjectSpec, Param, PolicySelection, ReasoningPolicy, RecognizedTurn, Recognizer, Rejection,
+    RepairPolicy, SkipReason, Skipped, ToolCalls, ToolChoice, ToolDefinition, ToolRecoveryRequest,
+    ToolSet, emit,
 };
 use purrassist_core::{AssistResult, Budget, Effort, Governor, Outcome, StopReason, json};
 use std::io::{self, Read};
@@ -196,6 +200,50 @@ fn check_disjoint(mut ranges: Vec<(Range<usize>, &str)>) {
     }
 }
 
+/// Every rejected attempt keeps its exact bytes; an attempt a parser made
+/// names its dialect among its sorted candidates, and unparsed markup has no
+/// candidate and lies inside one content range.
+fn check_rejected(output: &[u8], calls: &ToolCalls) {
+    for rejected in &calls.rejected {
+        check_range(output, &rejected.span, "rejected");
+        assert_eq!(
+            rejected.raw.as_slice(),
+            &output[rejected.span.clone()],
+            "a rejected attempt's raw bytes are not its range"
+        );
+        if let Some(text) = rejected.text() {
+            assert_eq!(text.as_bytes(), rejected.raw.as_slice());
+        }
+        if let Rejection::UnsupportedDialect { family } = rejected.reason {
+            // Unparsed markup: no allowed dialect attempted it, and its
+            // bytes stay content.
+            assert!(rejected.candidate_dialects.is_empty(), "{rejected:?}");
+            assert_eq!(rejected.dialect, family.dialect(), "{rejected:?}");
+            assert!(
+                calls
+                    .content
+                    .iter()
+                    .any(|range| range.start <= rejected.span.start
+                        && rejected.span.end <= range.end),
+                "unparsed markup outside content: {rejected:?}"
+            );
+        } else {
+            let dialect = rejected.dialect.as_ref().expect("a parser's attempt");
+            assert!(
+                rejected.candidate_dialects.contains(dialect),
+                "a rejected attempt's candidates omit its dialect: {rejected:?}"
+            );
+        }
+        assert!(
+            rejected
+                .candidate_dialects
+                .windows(2)
+                .all(|pair| pair[0] < pair[1]),
+            "candidate dialects are not sorted and unique: {rejected:?}"
+        );
+    }
+}
+
 /// Every structural and A13 invariant of one recovered value.
 fn check_calls(output: &[u8], calls: &ToolCalls) {
     for call in calls.calls.iter().chain(&calls.embedded) {
@@ -235,28 +283,7 @@ fn check_calls(output: &[u8], calls: &ToolCalls) {
             "usable_accepting_guesses() holds {call:?}"
         );
     }
-    for rejected in &calls.rejected {
-        check_range(output, &rejected.span, "rejected");
-        assert_eq!(
-            rejected.raw.as_slice(),
-            &output[rejected.span.clone()],
-            "a rejected attempt's raw bytes are not its range"
-        );
-        if let Some(text) = rejected.text() {
-            assert_eq!(text.as_bytes(), rejected.raw.as_slice());
-        }
-        assert!(
-            rejected.candidate_dialects.contains(&rejected.dialect),
-            "a rejected attempt's candidates omit its dialect: {rejected:?}"
-        );
-        assert!(
-            rejected
-                .candidate_dialects
-                .windows(2)
-                .all(|pair| pair[0] < pair[1]),
-            "candidate dialects are not sorted and unique: {rejected:?}"
-        );
-    }
+    check_rejected(output, calls);
     for range in &calls.content {
         check_range(output, range, "content");
     }

@@ -79,7 +79,7 @@
 //!   `tool_call.parameter.collect`, `tool_call.value.decode-typed`;
 //! - records: `tool_call.reasoning.unterminated`, `tool_call.truncated`,
 //!   `tool_call.markup.dangling-opener`, `tool_call.id.dedup`,
-//!   `tool_call.input.invalid-utf8`;
+//!   `tool_call.input.invalid-utf8`, `tool_call.markup.unparsed-dialect`;
 //! - repairs: every other rule, including every markup insertion, deletion
 //!   and variant reading, `tool_call.stop.consumed-closer`, every
 //!   `json.syntax.*` repair, `tool_call.extract.*`, the guesses
@@ -113,6 +113,7 @@
 //! | `tool_call.markup.dangling-opener` | 0 | no | single | syntax | data | a call attempt still open at the end of output under a non-length stop |
 //! | `tool_call.id.dedup` | 0 | no | single | syntax | none | a missing or duplicate source call id renumbered (recorded by the recovery operation's id policy) |
 //! | `tool_call.input.invalid-utf8` | 0 | no | single | syntax | data | a maximal run of bytes that are not well-formed UTF-8 (recorded by the recovery operation; the bytes stay retained) |
+//! | `tool_call.markup.unparsed-dialect` | 0 | no | single | syntax | none | call markup of a family no allowed dialect reads (not built in yet, or a built-in dialect the allow-list leaves out), reported as a rejected attempt by the recovery operation; the bytes stay content |
 //!
 //! [`DISABLED`] lists the schema-recovery rules tool calls never apply:
 //! inventing a required value, stringifying a scalar, and decoding a JSON
@@ -273,7 +274,7 @@ const fn resolution(
 /// costs more than the farthest near-miss name (`tool_call.name.match`).
 pub const NAME_FROM_ARGUMENTS_COST: u64 = 8;
 
-const RESOLUTION: [Rule; 17] = [
+const RESOLUTION: [Rule; 18] = [
     resolution(
         "tool_call.name.alias",
         0,
@@ -386,6 +387,13 @@ const RESOLUTION: [Rule; 17] = [
         false,
         Grounding::Syntax,
         Some(LossKind::Data),
+    ),
+    resolution(
+        "tool_call.markup.unparsed-dialect",
+        0,
+        false,
+        Grounding::Syntax,
+        None,
     ),
 ];
 

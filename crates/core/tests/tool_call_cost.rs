@@ -676,3 +676,56 @@ fn sized_budget_follows_the_published_formula() {
         .expect("dialects");
     assert_eq!(hermes.call_openers(output.as_bytes()), 6);
 }
+
+/// The unparsed-markup detector reads the content linearly: on prose and
+/// on inputs dense with every family's anchor, its work grows with the
+/// content within 1.05x of the byte ratio from 64 KiB to 1 MiB, at most
+/// 32 units per byte (`docs/RESOURCES.md` quotes these measurements).
+#[test]
+fn unparsed_markup_scan_is_linear() {
+    use purrassist_core::tool_call::detect_unparsed;
+    let hermes = DialectSet::new([DialectId::Hermes], &mut Governor::new(Budget::default()))
+        .expect("dialects");
+    for unit in [
+        "The quick (brown) fox [1] jumps over f(x) = 2x.\n",
+        "\n[f(a=1",
+        "{\"name\": \"x\", \"arguments\": {",
+        "<tool_call>x<arg_key>",
+        "to=functions.\n",
+        "<|channel|>to=functions.\n",
+        "[TOOL_CALLS]a\n",
+        "<｜tool▁call▁begin｜>",
+        "```tool_code\nf(",
+        "functions.x:0{",
+        "\nab{\"",
+        "\"function\": {\"name\": \"x\", \"arguments\": ",
+    ] {
+        let mut measured = Vec::new();
+        for size in [1 << 16, 1 << 20] {
+            let content = unit.repeat(size / unit.len());
+            let mut governor = Governor::new(Budget {
+                work: u64::MAX / 4,
+                ..Budget::default()
+            });
+            let whole = 0..content.len();
+            detect_unparsed(
+                content.as_bytes(),
+                core::slice::from_ref(&whole),
+                &hermes,
+                &mut governor,
+            )
+            .expect("detected");
+            let work = governor.usage().work;
+            println!("{unit:?} {} bytes: work {work}", content.len());
+            assert!(work <= 32 * content.len() as u64, "{unit:?}: {work}");
+            measured.push((content.len() as u128, u128::from(work)));
+        }
+        let ((small_bytes, small_work), (large_bytes, large_work)) = (measured[0], measured[1]);
+        let work_ratio = large_work * small_bytes;
+        let byte_ratio = small_work * large_bytes;
+        assert!(
+            work_ratio * 100 <= byte_ratio * 105 && byte_ratio * 100 <= work_ratio * 105,
+            "{unit:?}: work is not linear in the content"
+        );
+    }
+}

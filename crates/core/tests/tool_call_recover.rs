@@ -728,13 +728,13 @@ fn deterministic_pinned_digest() {
 }
 
 const PINNED_DIGEST: &str =
-    "sha256:80681eecb7d439ec3ab1de173c80cbe6b921864a6eb5e97a8e10550ee828c886";
+    "sha256:8e1959251b1bedcb5d990b33602205f9282f0b538aa96cd7240f296404043660";
 const PINNED_PREFIX_DIGEST: &str =
-    "sha256:efcb72cfdbea97695ff49a0f580a4bb5eced710f776fb0cf1ff51a61b57c4cd9";
+    "sha256:82e5a55684387debec0c3310c1d39392bbddf52f332197d876f9f2ce1abd2983";
 const PINNED_AMBIGUOUS_DIGEST: &str =
-    "sha256:b0ec442ed3d534174c9402070053d645cbb2d670e0da8efda1acd539676950cf";
+    "sha256:1551c779e1b84a254e2c9aae7586c8c138deced8edaf9ebac6ce6a17bcf7cae2";
 const PINNED_PREFIX_AMBIGUOUS_DIGEST: &str =
-    "sha256:c4f8f136dfc411dea4c12fbe8fb3cb938592c8e1a555fcfe36cd3f27593aeb77";
+    "sha256:3c79f4ff592764768b1b58f8974409ea6550dabe2bf766da55f8bd30fba05716";
 
 #[test]
 fn invalid_utf8_is_loss_and_bytes_retained() {
@@ -1978,7 +1978,7 @@ fn rejected_attempts_over_a_shared_opener_are_one_reading() {
         assert!(calls.calls.is_empty(), "{output:?}");
         assert_eq!(calls.rejected.len(), 1, "{output:?}: {:#?}", calls.rejected);
         let rejected = &calls.rejected[0];
-        assert_eq!(rejected.dialect, dialect, "{output:?}");
+        assert_eq!(rejected.dialect, Some(dialect), "{output:?}");
         assert_eq!(rejected.span.start, 0, "{output:?}");
         assert_eq!(
             rejected.candidate_dialects,

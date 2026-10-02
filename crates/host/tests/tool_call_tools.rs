@@ -644,3 +644,42 @@ fn bare_json_dialect_over_mcp() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// The MCP tool reports call markup no allowed dialect reads as a rejected
+/// attempt with reason `unsupported_dialect` (its output schema admits a
+/// `null` dialect and the family members).
+#[test]
+fn unparsed_markup_over_mcp() {
+    let (tools, root) = tools("unparsed");
+    let output = "```tool_code\nlist_dir(path=\"src\")\n```";
+    let node = tools
+        .call("recover_tool_calls", &arguments(output, ""))
+        .unwrap();
+    assert_eq!(
+        node.pointer("/value/finish").and_then(Node::as_str),
+        Some("unresolved")
+    );
+    let rejected = node
+        .pointer("/value/rejected/0")
+        .expect("a rejected attempt");
+    assert_eq!(
+        rejected.get("dialect").map(Node::to_json).as_deref(),
+        Some("null")
+    );
+    assert_eq!(
+        rejected.pointer("/reason/family").and_then(Node::as_str),
+        Some("gemma3-tool-code.v1")
+    );
+    let node = tools
+        .call(
+            "recover_tool_calls",
+            &arguments(QWEN, r#","dialects":["hermes.v1"]"#),
+        )
+        .unwrap();
+    assert_eq!(
+        node.pointer("/value/rejected/1/reason/family")
+            .and_then(Node::as_str),
+        Some("qwen3-coder-xml.v1")
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

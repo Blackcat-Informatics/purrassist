@@ -54,6 +54,13 @@
 //!    the dialect that read each call: a passing `dialect=ID` validation of
 //!    the call (validator [`TOOL_CALL_VALIDATOR`]). Readings still
 //!    indistinguishable after that are one reading.
+//!    In each reading, the call markup of the content that no dialect of
+//!    the request reads ([`detect_unparsed`]: a family not built in yet,
+//!    or a built-in dialect the allow-list leaves out) is reported as a
+//!    rejected attempt with [`Rejection::UnsupportedDialect`] and a
+//!    `tool_call.markup.unparsed-dialect` evidence entry; its bytes stay
+//!    content, so such markup is never silent content and the finish is
+//!    [`Finish::Unresolved`].
 //! 6. Each reading's calls receive ids ([`IdPolicy`]), the tool choice is
 //!    enforced ([`ToolChoice`]), and every unmodeled keyword of an adapter
 //!    tool's schema on the call's path is reported ([`KeywordUse`]).
@@ -136,7 +143,7 @@ use super::{
     CallLedger, CallLoss, CallOutcome, CallReading, DialectId, DialectSet, Effects, FromNode,
     FromNodeError, GenerationStop, Policies, PolicySelection, ReasoningPolicy, ReasoningSegment,
     Recognizer, Rejection, RepairPolicy, ResolvedCall, ResolvedPiece, ResolvedSegment,
-    ResolvedTurn, ToolSet, ToolSource, UnresolvedReason, resolve_forest, rules,
+    ResolvedTurn, ToolSet, ToolSource, UnresolvedReason, detect_unparsed, resolve_forest, rules,
 };
 use crate::contract::saturating_size as size;
 use crate::contract::{
@@ -960,7 +967,7 @@ pub struct KeywordUse {
 /// use purrassist_core::tool_call::{CallLedger, DialectId, RejectedCall, Rejection};
 /// let rejected = RejectedCall {
 ///     span: 0..3,
-///     dialect: DialectId::Hermes,
+///     dialect: Some(DialectId::Hermes),
 ///     candidate_dialects: vec![DialectId::Hermes],
 ///     raw: b"<tc".to_vec(),
 ///     reason: Rejection::Unterminated,
@@ -990,12 +997,17 @@ pub struct RejectedCall {
     pub span: Range<usize>,
     /// The dialect whose opener started the attempt reported: of the
     /// dialects that attempted a call at this opener, the one whose grammar
-    /// read furthest before failing.
-    pub dialect: DialectId,
+    /// read furthest before failing. For call markup no allowed dialect
+    /// reads ([`Rejection::UnsupportedDialect`]), the built-in dialect of
+    /// the detected family when it has one (the allow-list left it out),
+    /// and `None` for a family no built-in dialect parses yet.
+    pub dialect: Option<DialectId>,
     /// Every dialect whose opener started a rejected attempt at this
     /// offset in a reading of the turn that recovers the same calls, in
-    /// canonical [`DialectId`] order; always contains
-    /// [`dialect`](Self::dialect).
+    /// canonical [`DialectId`] order; it contains
+    /// [`dialect`](Self::dialect) for every attempt a parser made, and is
+    /// empty for unparsed markup ([`Rejection::UnsupportedDialect`]),
+    /// which no allowed dialect attempted.
     pub candidate_dialects: Vec<DialectId>,
     /// The attempt's exact bytes.
     pub raw: Vec<u8>,
@@ -1320,6 +1332,15 @@ fn rejection_node(reason: Rejection) -> Node {
         Rejection::InvalidUtf8 { at } => ("invalid_utf8", Some(at)),
         Rejection::Unterminated => ("unterminated", None),
         Rejection::Overlapped { at } => ("overlapped", Some(at)),
+        Rejection::UnsupportedDialect { family } => {
+            return object([
+                ("code", string("unsupported_dialect")),
+                ("at", null()),
+                ("family", string(family.id())),
+                ("built_in", Node::new(Value::Bool(family.built_in()))),
+                ("detail", string(family.message())),
+            ]);
+        }
     };
     object([
         ("code", string(code)),
@@ -1381,8 +1402,10 @@ impl WireValue for ToolCall {
 }
 
 impl WireValue for ToolCalls {
-    /// `{calls, rejected: [{span, dialect, candidate_dialects, reason: {code,
-    /// at}, raw: {text | bytes_hex}, repairs}], embedded, content: [{start, end}], reasoning:
+    /// `{calls, rejected: [{span, dialect (null for a family no built-in
+    /// dialect parses), candidate_dialects, reason: {code, at, and for
+    /// unsupported_dialect also family, built_in, detail}, raw: {text |
+    /// bytes_hex}, repairs}], embedded, content: [{start, end}], reasoning:
     /// [{start, end}], finish, openai_finish_reason, tool_choice: {constraint,
     /// passed, diagnostics}, next_id_start}`, each call and embedded call
     /// as [`ToolCall`]'s wire form, plus an `emitted` member (see
@@ -1398,7 +1421,13 @@ impl WireValue for ToolCalls {
                 array(self.rejected.iter().map(|rejected| {
                     object([
                         ("span", byte_range(&rejected.span)),
-                        ("dialect", string(rejected.dialect.id())),
+                        (
+                            "dialect",
+                            rejected
+                                .dialect
+                                .as_ref()
+                                .map_or_else(null, |dialect| string(dialect.id())),
+                        ),
                         (
                             "candidate_dialects",
                             array(
@@ -2113,6 +2142,7 @@ impl Recovery<'_> {
         for segment in segments {
             self.segment(&mut reading, segment, governor)?;
         }
+        self.unparsed(&mut reading, governor)?;
         reading.value.next_id_start = self.ids(&mut reading.value.calls, governor)?;
         self.tool_choice(&mut reading.value, forced);
         let check = &reading.value.tool_choice;
@@ -2214,13 +2244,86 @@ impl Recovery<'_> {
                 }
                 reading.value.rejected.push(RejectedCall {
                     span: span.clone(),
-                    dialect: dialect.clone(),
+                    dialect: Some(dialect.clone()),
                     candidate_dialects: vec![dialect.clone()],
                     raw: self.output[span.clone()].to_vec(),
                     reason: *reason,
                     repairs: repairs.clone(),
                 });
                 reading.parts.push(Part::Rejected(index));
+            }
+        }
+        Ok(())
+    }
+
+    /// Report the call markup of the reading's content that no allowed
+    /// dialect reads ([`detect_unparsed`]) as rejected attempts with
+    /// [`Rejection::UnsupportedDialect`], each recording the
+    /// `tool_call.markup.unparsed-dialect` evidence; the bytes stay
+    /// content. The rejected attempts stay ordered by span.
+    fn unparsed(&self, reading: &mut Reading, governor: &mut Governor) -> Result<(), StopReason> {
+        let found = detect_unparsed(
+            self.output,
+            &reading.value.content,
+            &self.request.dialects,
+            governor,
+        )?;
+        if found.is_empty() {
+            return Ok(());
+        }
+        for detection in found {
+            let span = detection.span;
+            let family = detection.family;
+            governor.charge(
+                Resource::ScratchBytes,
+                size(span.len()).saturating_add(ENTRY_BYTES),
+            )?;
+            let mut repairs = CallLedger::default();
+            let evidence = Evidence {
+                rule: "tool_call.markup.unparsed-dialect".into(),
+                explanation: format!(
+                    "bytes {}..{} are {}",
+                    span.start,
+                    span.end,
+                    family.message()
+                ),
+                span: Some(SourceSpan {
+                    source: self.source,
+                    bytes: span.clone(),
+                }),
+                destination: format!("/turn/{}..{}", span.start, span.end),
+            };
+            repairs.record(
+                rules::resolution_rule("tool_call.markup.unparsed-dialect"),
+                evidence,
+                String::new(),
+                String::new(),
+                governor,
+            )?;
+            let index = reading.value.rejected.len();
+            reading.value.rejected.push(RejectedCall {
+                raw: self.output[span.clone()].to_vec(),
+                span,
+                dialect: family.dialect(),
+                candidate_dialects: Vec::new(),
+                reason: Rejection::UnsupportedDialect { family },
+                repairs,
+            });
+            reading.parts.push(Part::Rejected(index));
+        }
+        // Keep the rejected attempts in span order.
+        let rejected = core::mem::take(&mut reading.value.rejected);
+        let mut order: Vec<usize> = (0..rejected.len()).collect();
+        order.sort_by_key(|&index| (rejected[index].span.start, rejected[index].span.end));
+        let mut moved = vec![0; rejected.len()];
+        for (new, &old) in order.iter().enumerate() {
+            moved[old] = new;
+        }
+        let mut slots: Vec<Option<RejectedCall>> = rejected.into_iter().map(Some).collect();
+        reading.value.rejected = order.iter().filter_map(|&old| slots[old].take()).collect();
+        for part in &mut reading.parts {
+            if let Part::Rejected(index) = part {
+                *index = moved[*index];
             }
         }
         Ok(())
@@ -2805,7 +2908,7 @@ const fn reach_of(span: &Range<usize>, reason: Rejection) -> usize {
         Rejection::Malformed { at }
         | Rejection::InvalidUtf8 { at }
         | Rejection::Overlapped { at } => at,
-        Rejection::Unterminated => span.end,
+        Rejection::Unterminated | Rejection::UnsupportedDialect { .. } => span.end,
     };
     end.saturating_sub(span.start)
 }
