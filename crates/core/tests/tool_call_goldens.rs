@@ -2877,3 +2877,40 @@ fn unparsed_markup_is_reported() {
     assert_eq!((calls.calls.len(), calls.rejected.len()), (0, 0));
     assert_eq!(calls.finish, Finish::ContentOnly);
 }
+
+/// A repeated non-repeatable parameter is never a silent last-wins: with
+/// every value valid the call is `Ambiguous` with both readings and the
+/// primary labelled as merely first-ranked; when the declared enumeration
+/// accepts only one value, that reading is chosen on evidence (a
+/// `BestGuess`, never `Resolved`), and the choice cites the blocked
+/// alternative. An array parameter still collects its occurrences.
+#[test]
+fn repeated_scalar_choice_is_labelled() {
+    let choice = |call: &ToolCall| {
+        call.repairs
+            .inferences
+            .iter()
+            .find(|inference| inference.evidence.rule == "tool_call.parameter.repeated-choice")
+            .map(|inference| inference.evidence.explanation.clone())
+            .expect("a recorded choice")
+    };
+    let (_, result) = golden("repeated_scalar_both_readings");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Ambiguous);
+    assert_eq!(call.alternatives.len(), 1);
+    assert_ne!(call.alternatives[0].arguments, call.arguments);
+    assert!(choice(call).contains("first-ranked"), "{}", choice(call));
+    let (_, result) = golden("repeated_scalar_enum_one_valid");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::BestGuess);
+    assert_eq!(
+        call.arguments.get("unit").and_then(Node::as_str),
+        Some("celsius")
+    );
+    assert!(choice(call).contains("on evidence"), "{}", choice(call));
+    assert!(choice(call).contains("blocked"), "{}", choice(call));
+    let (_, result) = golden("repeated_array_param_is_array");
+    let call = the_call(&result);
+    assert!(rules_of(call).contains(&"tool_call.parameter.collect"));
+    assert!(!rules_of(call).contains(&"tool_call.parameter.repeated-choice"));
+}

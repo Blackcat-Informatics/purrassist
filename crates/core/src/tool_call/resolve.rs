@@ -57,7 +57,15 @@
 //!    (`tool_call.parameter.collect`). Any other parameter occurring more
 //!    than once gives two readings, first occurrence and last occurrence
 //!    (`tool_call.parameter.repeated`, each dropping the other occurrences
-//!    as data losses): the call is `Ambiguous`, never last-wins.
+//!    as data losses): never last-wins. Evidence decides when it can: a
+//!    reading whose kept value fails the declared type, enumeration or
+//!    schema is blocked, and one that needs a repair costs more, so the
+//!    other is the call's only reading (`BestGuess`). When every value is
+//!    valid the call is `Ambiguous`. Either way the selected reading
+//!    records `tool_call.parameter.repeated-choice`, a guess naming the
+//!    occurrence its `arguments` keep and why (the evidence, or, for an
+//!    `Ambiguous` call, that it is merely the first-ranked reading), citing
+//!    the alternatives that keep the others.
 //! 5. **Typing** (R3.4c). A declared string is never parsed and numbers keep
 //!    their spelling. An enumeration value equal to exactly one literal
 //!    after case folding and whitespace normalization takes that literal
@@ -1210,6 +1218,8 @@ impl<'a> Resolver<'a> {
             competing,
             blocker: reading.blocker.as_ref(),
         });
+        let mut reading = reading;
+        self.label_repeated_choice(&mut reading, &ordered, competing, governor)?;
         let first = &segment.readings[0];
         Ok(ResolvedCall {
             span: segment.span.clone(),
@@ -1224,6 +1234,87 @@ impl<'a> Resolver<'a> {
             alternatives: ordered,
             distinguishing,
         })
+    }
+
+    /// Make the choice among the readings of a repeated parameter that may
+    /// not repeat explicit (`tool_call.parameter.repeated-choice`, a guess
+    /// recorded after classification, so it never changes the outcome).
+    /// When the selected reading kept one occurrence and others competed
+    /// equally (`competing > 1`, every value valid), the call is
+    /// `Ambiguous` and nothing preferred a value: the inference says the
+    /// primary `arguments` is the first-ranked reading (least cost, then
+    /// content digest) and points at the alternatives. When the reading
+    /// keeping another occurrence is blocked (its value fails the declared
+    /// type, enumeration or schema), or costs more (it needs a repair),
+    /// the choice is grounded in that evidence, which the inference cites.
+    fn label_repeated_choice(
+        &self,
+        reading: &mut CallReading,
+        alternatives: &[CallReading],
+        competing: usize,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        const REPEATED: &str = "tool_call.parameter.repeated";
+        if reading.blocker.is_some() {
+            return Ok(());
+        }
+        let kept: Vec<(String, String)> = reading
+            .repairs
+            .inferences
+            .iter()
+            .filter(|inference| inference.evidence.rule == REPEATED)
+            .map(|inference| {
+                (
+                    inference.evidence.destination.clone(),
+                    inference.value.clone(),
+                )
+            })
+            .collect();
+        let Some((destination, _)) = kept.first().cloned() else {
+            return Ok(());
+        };
+        let mut kept_list: Vec<String> = Vec::new();
+        for (place, value) in &kept {
+            let item = format!("{value} at {place}");
+            if !kept_list.contains(&item) {
+                kept_list.push(item);
+            }
+        }
+        let kept_text = kept_list.join(", ");
+        let others = alternatives.iter().enumerate().filter(|(_, other)| {
+            other
+                .repairs
+                .evidence
+                .iter()
+                .any(|entry| entry.rule == REPEATED)
+        });
+        let explanation = if competing > 1 {
+            let tied: Vec<String> = (0..competing - 1).map(|index| index.to_string()).collect();
+            format!(
+                "a parameter that may not repeat occurs several times and every occurrence's value is valid, so no evidence prefers one: the call is Ambiguous, the primary arguments are the first-ranked reading (least cost, then content digest), keeping {kept_text}, and alternative(s) [{}] keep the other occurrences",
+                tied.join(", ")
+            )
+        } else {
+            let reasons: Vec<String> = others
+                .map(|(index, other)| match &other.blocker {
+                    Some(blocker) => format!("alternative {index} is blocked ({blocker})"),
+                    None => format!(
+                        "alternative {index} costs {} against {}",
+                        other.cost, reading.cost
+                    ),
+                })
+                .collect();
+            if reasons.is_empty() {
+                format!("the reading keeping {kept_text} is the only one")
+            } else {
+                format!("kept {kept_text} on evidence: {}", reasons.join("; "))
+            }
+        };
+        let rule = rules::resolution_rule("tool_call.parameter.repeated-choice");
+        let evidence = self.evidence(rule.id, explanation, None, destination);
+        reading
+            .repairs
+            .record(rule, evidence, String::new(), kept_text, governor)
     }
 
     /// The ledger of a recognized reading's derivation: its edits and any

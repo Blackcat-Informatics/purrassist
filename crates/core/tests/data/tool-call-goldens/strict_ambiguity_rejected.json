@@ -32,6 +32,7 @@
     "tool_call.xml.framing-newline",
     "tool_call.xml.framing-newline",
     "tool_call.parameter.repeated",
+    "tool_call.parameter.repeated-choice",
     "tool_call.parameter.repeated"
   ]
 }

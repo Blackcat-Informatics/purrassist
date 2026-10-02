@@ -1,5 +1,5 @@
 {
-  "description": "A3k: a non-repeatable scalar parameter given twice: first-wins and last-wins are both readings (tool_call.parameter.repeated, a data loss), so the call is per-call Ambiguous.",
+  "description": "A3k: a non-repeatable scalar parameter given twice with two valid values: first-wins and last-wins are both readings (tool_call.parameter.repeated, a data loss) and no evidence prefers one, so the call is per-call Ambiguous with both readings (the primary and its alternative). The primary is not a silent last-wins: tool_call.parameter.repeated-choice records that it is merely the first-ranked reading and names the occurrence it keeps.",
   "tools_openai": [
     {
       "type": "function",
@@ -38,7 +38,8 @@
         "tool_call.xml.framing-newline",
         "tool_call.xml.framing-newline",
         "tool_call.xml.framing-newline",
-        "tool_call.parameter.repeated"
+        "tool_call.parameter.repeated",
+        "tool_call.parameter.repeated-choice"
       ]
     }
   ],
@@ -50,6 +51,7 @@
     "tool_call.xml.framing-newline",
     "tool_call.xml.framing-newline",
     "tool_call.xml.framing-newline",
-    "tool_call.parameter.repeated"
+    "tool_call.parameter.repeated",
+    "tool_call.parameter.repeated-choice"
   ]
 }

@@ -88,6 +88,7 @@
 //!   `tool_call.markup.missing-wrapper-close.before-text`,
 //!   `tool_call.name.match`, `tool_call.name.from-arguments`,
 //!   `json.key.match`, `json.key.relocate`, `tool_call.parameter.repeated`,
+//!   `tool_call.parameter.repeated-choice`,
 //!   `json.enum.match`, `tool_call.markup.undeclared-parameter-boundary`),
 //!   `tool_call.value.enum-normalize`, and
 //!   `tool_call.parameter.drop-unknown`.
@@ -105,6 +106,7 @@
 //! | `tool_call.parameter.drop-unknown` | 50 | no | single | definition | data | an undeclared parameter dropped under `DropWithLoss` |
 //! | `tool_call.parameter.pass-through` | 0 | no | single | definition | none | an undeclared parameter kept under `PassThrough` |
 //! | `tool_call.parameter.repeated` | 0 | yes | multiple | definition | data | one occurrence of a repeated non-repeatable parameter kept (first or last) |
+//! | `tool_call.parameter.repeated-choice` | 0 | yes | multiple | definition | none | which occurrence of a repeated non-repeatable parameter the selected reading keeps, and why: on evidence (the other readings are blocked or cost more) or, for an `Ambiguous` call, as the first-ranked reading, citing the alternatives |
 //! | `tool_call.parameter.collect` | 0 | no | single | definition | none | a repeatable parameter's occurrences collected into an array |
 //! | `tool_call.value.enum-normalize` | 2+ | no | single | definition | none | an enumeration value equal to one literal after case folding and whitespace normalization |
 //! | `json.enum.match` | 2+ | yes | multiple | definition | none | an enumeration value matched approximately |
@@ -274,7 +276,7 @@ const fn resolution(
 /// costs more than the farthest near-miss name (`tool_call.name.match`).
 pub const NAME_FROM_ARGUMENTS_COST: u64 = 8;
 
-const RESOLUTION: [Rule; 18] = [
+const RESOLUTION: [Rule; 19] = [
     resolution(
         "tool_call.name.alias",
         0,
@@ -337,6 +339,13 @@ const RESOLUTION: [Rule; 18] = [
         true,
         Grounding::Definition,
         Some(LossKind::Data),
+    ),
+    resolution(
+        "tool_call.parameter.repeated-choice",
+        0,
+        true,
+        Grounding::Definition,
+        None,
     ),
     resolution(
         "tool_call.parameter.collect",

@@ -46,10 +46,18 @@ is reported as certain.
   `tool_call_goldens` (one golden per rule, `every_rule_has_a_golden`).
 - **Guesses are labeled and demote.** A guess inference or a data loss makes a
   call at most `BestGuess`; several equally good readings make it
-  `Ambiguous`, with the competing readings in `ToolCall::alternatives`.
+  `Ambiguous`, with the competing readings in `ToolCall::alternatives`. A
+  non-repeatable parameter given more than once is never a silent last-wins:
+  when the declared type, enumeration or schema accepts only one of the
+  values, that reading is chosen on evidence (a `BestGuess`); when every
+  value is valid the call is `Ambiguous`, and either way the selected
+  reading records `tool_call.parameter.repeated-choice`, naming the
+  occurrence its `arguments` keep and why (the blocked alternative, or that
+  it is merely the first-ranked reading), citing the alternatives.
   *Proved by* `tool_call_rules::data_loss_demotes_to_best_guess`,
   `tool_call_rules::markup_loss_does_not_demote`,
-  `tool_call_rules::repeated_scalar_reports_both_readings`, and
+  `tool_call_rules::repeated_scalar_reports_both_readings`,
+  `tool_call_goldens::repeated_scalar_choice_is_labelled`, and
   `tool_call_rules::per_call_alternatives_exposed`.
 - **Ambiguity is evidence, never a dialect-label tie.** Dialects that share
   an opener (Qwen3-Coder XML and Hermes both open with `<tool_call>`) each
