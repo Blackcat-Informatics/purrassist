@@ -1662,6 +1662,7 @@ impl<'s> Engine<'s> {
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         let program = self.tables[table].program;
+        let mut spawned = None;
         if program.starts_with(byte) {
             let id = self.next_attempt;
             self.next_attempt += 1;
@@ -1673,23 +1674,33 @@ impl<'s> Engine<'s> {
                 failure: None,
                 end: None,
             })?;
-            for &pc in &program.openers {
-                self.tables[table].threads.push(Thread {
-                    pc,
-                    sub: Sub::Lit(0),
-                    attempt: id,
-                    start: at,
-                    entry: at,
-                    pos: at,
-                    cost: 0,
-                    hist: ROOT,
-                    opened: false,
-                    stall: 0,
-                    reach: at,
-                })?;
+            let thread = Thread {
+                pc: program.start,
+                sub: Sub::Lit(0),
+                attempt: id,
+                start: at,
+                entry: at,
+                pos: at,
+                cost: 0,
+                hist: ROOT,
+                opened: false,
+                stall: 0,
+                reach: at,
+            };
+            if program.start_closure {
+                // Zero-width instructions with effects (an `insert`) lie
+                // before the opener: follow them from the start.
+                spawned = Some(thread);
+            } else {
+                for &pc in &program.openers {
+                    self.tables[table].threads.push(Thread { pc, ..thread })?;
+                }
             }
         }
-        if self.tables[table].threads.is_empty() && self.tables[table].trails.is_empty() {
+        if spawned.is_none()
+            && self.tables[table].threads.is_empty()
+            && self.tables[table].trails.is_empty()
+        {
             return Ok(());
         }
         {
@@ -1701,6 +1712,9 @@ impl<'s> Engine<'s> {
         }
         self.out.clear();
         let (mut step, stack, out) = self.split(table);
+        if let Some(thread) = spawned {
+            step.closure(thread, thread.pc, at, stack, out, governor)?;
+        }
         step.advance(stack, at + 1, false, out, governor)?;
         self.settle(table, at, None, governor)
     }

@@ -498,3 +498,55 @@ fn mistral_v11_recovers_and_emits_via_cli() {
     );
     fs::remove_file(tools).unwrap();
 }
+
+/// DeepSeek-V3.1 with no `--dialect`: a tool-calls section is one call per
+/// call, and a Hermes call emitted as `deepseek-v3.1.v1` recovers to the
+/// same call.
+#[test]
+fn deepseek_v31_recovers_and_emits_via_cli() {
+    let turn = "<think>Two listings.</think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>list_dir<｜tool▁sep｜>{\"path\": \"src\"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>list_dir<｜tool▁sep｜>{\"path\": \"docs\", \"depth\": 1}<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
+    let (output, tools) = run(&[], turn.as_bytes());
+    assert_eq!(output.status.code(), Some(0));
+    let node = result(&output);
+    assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+    for (index, arguments) in [r#"{"path":"src"}"#, r#"{"path":"docs","depth":1}"#]
+        .into_iter()
+        .enumerate()
+    {
+        assert_eq!(
+            node.pointer(&format!("/value/calls/{index}/dialect"))
+                .and_then(Node::as_str),
+            Some("deepseek-v3.1.v1")
+        );
+        assert_eq!(
+            node.pointer(&format!("/value/calls/{index}/arguments"))
+                .unwrap()
+                .to_json(),
+            arguments
+        );
+    }
+    fs::remove_file(tools).unwrap();
+    let hermes =
+        b"<tool_call>\n{\"name\": \"list_dir\", \"arguments\": {\"path\": \"src\"}}\n</tool_call>";
+    let (output, tools) = run(&["--emit", "deepseek-v3.1.v1"], hermes);
+    let node = result(&output);
+    let emitted = node
+        .pointer("/value/emitted/output/text")
+        .and_then(Node::as_str)
+        .expect("emitted markup")
+        .to_owned();
+    assert_eq!(
+        emitted,
+        "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>list_dir<｜tool▁sep｜>{\"path\":\"src\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>"
+    );
+    fs::remove_file(tools).unwrap();
+    let (output, tools) = run(&[], emitted.as_bytes());
+    let node = result(&output);
+    assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+    assert_eq!(
+        node.pointer("/value/calls/0/dialect")
+            .and_then(Node::as_str),
+        Some("deepseek-v3.1.v1")
+    );
+    fs::remove_file(tools).unwrap();
+}

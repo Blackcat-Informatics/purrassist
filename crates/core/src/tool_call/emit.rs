@@ -47,6 +47,7 @@
 //! | Dialect | Canonical call |
 //! | --- | --- |
 //! | `qwen3-coder-xml.v1` | `<tool_call>\n<function=NAME>` + body + `</function>\n</tool_call>` (the chat template's layout) |
+//! | `deepseek-v3.1.v1` | `<｜tool▁calls▁begin｜>` + `<｜tool▁call▁begin｜>NAME<｜tool▁sep｜>ARGS<｜tool▁call▁end｜>` per call + `<｜tool▁calls▁end｜>`: every printed call in one section (the template's layout; `ARGS` is compact) |
 //! | `hermes.v1` | `<tool_call>\n{"name":"NAME","arguments":ARGS}\n</tool_call>` (the template's wrapper layout; the object is compact) |
 //! | `openai-tool-calls.v1` | `{"id":"ID","type":"function","function":{"name":"NAME","arguments":"ARGS"}}` |
 //! | `llama3-json.v1` | `{"name": "NAME", "parameters": ARGS}` (the template's layout; `ARGS` is compact) |

@@ -84,6 +84,11 @@ pub(crate) struct Program {
     /// a `commit`); empty for a program without one, whose attempts open
     /// at their opener literal.
     pub(crate) committed: Vec<bool>,
+    /// Whether a zero-width instruction other than a split (an `insert`, a
+    /// capture, a commit, a `next`) lies between the start and an opener:
+    /// a new attempt then follows the start's closure instead of starting
+    /// at the openers, so their effects are recorded.
+    pub(crate) start_closure: bool,
     /// Whether the program separates calls with `next`: an attempt's
     /// completions are then held until it ends, and one that a later
     /// completion of the same attempt reads further at no more cost is
@@ -844,6 +849,26 @@ fn compile_program(
     }
     let committed = committed(&insts, start, governor)?;
     let grouped = insts.iter().any(|inst| matches!(inst, Inst::Next { .. }));
+    let start_closure = {
+        let mut seen = vec![false; insts.len()];
+        let mut stack = vec![start];
+        let mut effects = false;
+        while let Some(pc) = stack.pop() {
+            if core::mem::replace(&mut seen[pc as usize], true) {
+                continue;
+            }
+            match insts[pc as usize] {
+                Inst::Split(first, second) => stack.extend([first, second]),
+                Inst::Open { .. }
+                | Inst::Close { .. }
+                | Inst::Commit { .. }
+                | Inst::Next { .. }
+                | Inst::Insert { .. } => effects = true,
+                _ => {}
+            }
+        }
+        effects
+    };
     Ok(Program {
         insts,
         start,
@@ -851,6 +876,7 @@ fn compile_program(
         first,
         bound,
         committed,
+        start_closure,
         grouped,
     })
 }

@@ -19,13 +19,14 @@ into a `CompiledGrammar`. One compiled grammar serves three purposes:
   choices to print well-formed calls for given argument shapes, for tests and
   corpora.
 
-The six built-in dialects are written in this DSL:
+The seven built-in dialects are written in this DSL:
 [`qwen3-coder-xml.v1`](../../crates/core/src/tool_call/dialects/qwen3-coder-xml.v1.grammar),
 [`hermes.v1`](../../crates/core/src/tool_call/dialects/hermes.v1.grammar),
 [`openai-tool-calls.v1`](../../crates/core/src/tool_call/dialects/openai-tool-calls.v1.grammar),
 [`llama3-json.v1`](../../crates/core/src/tool_call/dialects/llama3-json.v1.grammar),
-[`mistral-v3.v1`](../../crates/core/src/tool_call/dialects/mistral-v3.v1.grammar), and
-[`mistral-v11.v1`](../../crates/core/src/tool_call/dialects/mistral-v11.v1.grammar).
+[`mistral-v3.v1`](../../crates/core/src/tool_call/dialects/mistral-v3.v1.grammar),
+[`mistral-v11.v1`](../../crates/core/src/tool_call/dialects/mistral-v11.v1.grammar), and
+[`deepseek-v3.1.v1`](../../crates/core/src/tool_call/dialects/deepseek-v3.1.v1.grammar).
 A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 [Add a custom dialect](#add-a-custom-dialect).
 
@@ -67,7 +68,7 @@ A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 | `NAME` | A production (inlined) or a closer class. |
 | `commit` | Zero-width: an attempt that passes it is a call (or result) attempt from here on. See [Commit points](#commit-points). |
 | `next` | Zero-width, in `call` only: the next call of the same attempt begins here. See [Several calls in one attempt](#several-calls-in-one-attempt). |
-| `insert("bytes")` | Zero-width: a token the model omitted, read as inserted here and recorded as the markup repair `tool_call.markup.missing-token`. It prints nothing, and the printer and witnesses never choose an alternative holding it when another can be printed. |
+| `insert("bytes")` | Zero-width: a token the model omitted, read as inserted here and recorded as the markup repair `tool_call.markup.missing-token`. It prints nothing, and the printer and witnesses never choose an alternative holding it when another can be printed. An `insert` may come before a production's first literal (`call = "<open>" body \| insert("<open>") body;`): an attempt that opens at that literal records it. |
 | `KIND:item` | A capture of `item`'s span. |
 | `a b` | Sequence. |
 | `a \| b` | Alternation. |
@@ -146,7 +147,9 @@ terminal (`"` written as `”` after a name) is read like an ASCII one,
 from its first byte. Printing writes the
 canonical spelling. Each spelling adds recognizer configurations
 (`CompiledGrammar::configuration_bound`), and so per-byte work; declare only
-the confusions a model actually makes.
+the confusions a model actually makes. One canonical text may have several
+variants: the built-in DeepSeek-V3.1 dialect reads `｜` as `|`, and `▁` as
+`_` or a space, the renderings detokenizers produce for its special tokens.
 
 ## Layout
 

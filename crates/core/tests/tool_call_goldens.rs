@@ -2058,3 +2058,90 @@ fn mistral11_length_stop_at_a_complete_call() {
     );
     assert_eq!(reading(&result).finish, Finish::Truncated);
 }
+
+/// DeepSeek-V3.1: a missing section or call closer, an omitted section
+/// opener, and tokens spelled in ASCII are read with every call
+/// `Resolved` and the repair recorded; reasoning before the calls is
+/// reasoning; a confusable opener with no call after it is a rejected
+/// attempt, never silently content.
+#[test]
+fn deepseek31_repairs() {
+    for (name, rule, count) in [
+        (
+            "deepseek31_missing_section_end",
+            Some("tool_call.markup.missing-closers-at-end"),
+            2,
+        ),
+        (
+            "deepseek31_missing_call_end_between_calls",
+            Some("tool_call.markup.missing-function-close"),
+            2,
+        ),
+        (
+            "deepseek31_missing_section_begin",
+            Some("tool_call.markup.missing-token"),
+            1,
+        ),
+        (
+            "deepseek31_ascii_tokens",
+            Some("tool_call.markup.terminal-confusable"),
+            1,
+        ),
+        (
+            "deepseek31_ascii_bar_space_tokens",
+            Some("tool_call.markup.terminal-confusable"),
+            1,
+        ),
+        ("deepseek31_reasoning_then_calls", None, 1),
+        ("deepseek31_reasoning_starts_open", None, 1),
+    ] {
+        let (_, result) = golden(name);
+        assert!(matches!(result.outcome, Outcome::Resolved(_)), "{name}");
+        let calls = reading(&result);
+        assert_eq!(calls.calls.len(), count, "{name}: {calls:#?}");
+        assert_eq!(calls.rejected.len(), 0, "{name}");
+        assert!(
+            calls
+                .calls
+                .iter()
+                .all(|call| call.outcome == CallOutcome::Resolved)
+        );
+        assert!(
+            calls
+                .calls
+                .iter()
+                .all(|call| call.dialect == DialectId::DeepSeekV31)
+        );
+        if let Some(rule) = rule {
+            assert!(
+                calls
+                    .calls
+                    .iter()
+                    .any(|call| rules_of(call).contains(&rule)),
+                "{name}"
+            );
+        }
+    }
+    for name in [
+        "deepseek31_reasoning_then_calls",
+        "deepseek31_reasoning_starts_open",
+    ] {
+        let (_, result) = golden(name);
+        let calls = reading(&result);
+        assert_eq!(calls.reasoning.len(), 1, "{name}");
+        assert!(calls.content.is_empty(), "{name}: {:?}", calls.content);
+    }
+    let (_, result) = golden("deepseek31_truncated_arguments");
+    assert_eq!(
+        the_call(&result).outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::Truncated
+        }
+    );
+    let (_, result) = golden("deepseek31_confusable_opener_rejected");
+    let calls = reading(&result);
+    assert_eq!(calls.calls.len(), 0);
+    assert_eq!(calls.rejected.len(), 1);
+    assert_eq!(calls.rejected[0].dialect, DialectId::DeepSeekV31);
+    assert_eq!(calls.finish, Finish::Unresolved);
+}

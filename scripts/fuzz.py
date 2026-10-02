@@ -212,6 +212,14 @@ def _tool_call_conformance_markup():
 # listed witness seeds (`JsonArguments::Object` for seeds 0-1,
 # `Stringified` for seeds 2-3), embedded verbatim.
 TOOL_CALL_WITNESSES = [
+    # deepseek-v3.1.v1: read_file (seed 0)
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>\t\tread_file\t\t<｜tool▁sep｜>{\"path\":\"tab\\tseparated \\n  block\\n\"}\t<｜tool▁call▁end｜>\t<｜tool▁calls▁end｜>".encode(),
+    # deepseek-v3.1.v1: get_weather, list_dir (seed 1)
+    "<｜tool▁calls▁begin｜>\t<｜tool▁call▁begin｜>get_weather<｜tool▁sep｜>{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"}\t<｜tool▁call▁end｜><｜tool▁call▁begin｜>\tlist_dir\t\t<｜tool▁sep｜>{\"path\":\"alpha\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    # deepseek-v3.1.v1: write_file (seed 2)
+    "<｜tool▁calls▁begin｜>\t\t<｜tool▁call▁begin｜>\t\twrite_file<｜tool▁sep｜>\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    # deepseek-v3.1.v1: delete_path, read_file (seed 3)
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>delete_path<｜tool▁sep｜>\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"<｜tool▁call▁end｜>\t<｜tool▁call▁begin｜>\t\tread_file\t\t<｜tool▁sep｜>\"{\\\"path\\\":\\\"tab\\\\tseparated   indented\\\"}\"<｜tool▁call▁end｜>\t<｜tool▁calls▁end｜>".encode(),
     # hermes.v1: read_file (seed 0)
     b"<tool_call>\t{\t\t\"arguments\":{\"path\":\"tab\\tseparated \\n  block\\n\"}\t,\t\"name\"\t:\t\t\"read_file\"}</tool_call>",
     # hermes.v1: get_weather, list_dir (seed 1)
@@ -352,6 +360,19 @@ TOOL_CALL_REPAIRS = [
     b'[THINK]plan the read[/THINK]Reading.[TOOL_CALLS]read_file[ARGS]{"path": "a.rs"}',
     b'[TOOL_CALLS] [{"name": "list_dir", "arguments": {"path": "."}}]\n[TOOL_CALLS]read_file[ARGS]{"path": "b"}',
     b'[TOOL_RESULTS]a1B2c3D4e[TOOL_CONTENT]ok[/TOOL_RESULTS]',
+    # DeepSeek-V3.1: missing section and call closers, truncated arguments,
+    # reasoning before the section, ASCII and space renderings of the
+    # tokens, an omitted section opener, prose after the section, and a
+    # tool output.
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"a.rs\"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>list_dir<｜tool▁sep｜>{\"path\": \".\"}<｜tool▁call▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"a.rs\"}<｜tool▁call▁begin｜>list_dir<｜tool▁sep｜>{\"path\": \".\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"src/ma".encode(),
+    "<think>plan the read</think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"a.rs\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<|tool_calls_begin|><|tool_call_begin|>read_file<|tool_sep|>{\"path\": \"a.rs\"}<|tool_call_end|><|tool_calls_end|>".encode(),
+    "<|tool calls begin|><|tool call begin|>list_dir<|tool sep|>{\"path\": \".\"}<|tool call end|><|tool calls end|>".encode(),
+    "Now: <｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"a.rs\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"a.rs\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>\nDone.".encode(),
+    "<｜tool▁output▁begin｜>ok<｜tool▁output▁end｜>".encode(),
 ]
 
 # Inputs that hold no recoverable call.
@@ -375,6 +396,9 @@ TOOL_CALL_NEGATIVES = [
     b'[TOOL_CALLS]read_file',
     b'[TOOL_CALLS]read_file[CALL_ID][ARGS][ARGS]',
     b'[THINK][TOOL_CALLS][/THINK]',
+    "<｜tool▁calls▁begin｜>".encode(),
+    "<|tool calls begin|> nothing".encode(),
+    "<｜tool▁call▁begin｜>read_file<｜tool▁sep｜>".encode(),
     b'[TOOL_CALLS] [' + b'{"name": "read_file", "arguments": ' * 16 + b']',
     b'[TOOL_RESULTS] {"content": "x", "call_id": "a1B2c3D4e"}[/TOOL_RESULTS]',
 ]
@@ -390,7 +414,9 @@ TOOL_CALL_TOKENS = [
     b'"arguments":', b'"tool_calls"', b'"function"', b'"id"', b'"type"', b'```',
     b'```json\n', b'"parameters":', b'<|python_tag|>', b'<|eom_id|>', b'<|eot_id|>',
     b'; ', b'[TOOL_CALLS]', b'[TOOL_RESULTS]', b'[ARGS]', b'[CALL_ID]', b'[TOOL_CONTENT]',
-    b'[THINK]', b'[/THINK]', b'"id":', b'</s>', b'read_file', b'write_file', b'current_time', b'path', b'\n', b'\t',
+    b'[THINK]', b'[/THINK]', "<｜tool▁calls▁begin｜>".encode(), "<｜tool▁call▁begin｜>".encode(),
+    "<｜tool▁sep｜>".encode(), "<｜tool▁call▁end｜>".encode(), "<｜tool▁calls▁end｜>".encode(),
+    b'<|tool_calls_begin|>', b'"id":', b'</s>', b'read_file', b'write_file', b'current_time', b'path', b'\n', b'\t',
     b'"', b'\\', b'{', b'}', b'[', b']', b':', b',', b'>', b'<', b'null', b'1.50',
     b'\x00', b'\x04', b'\x80', 'é'.encode(), b'\xff', b'\xe2\x82',
 ]

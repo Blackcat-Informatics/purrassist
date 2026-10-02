@@ -27,13 +27,14 @@ use std::sync::{Arc, OnceLock};
 /// One dialect grammar the recognizer can run.
 ///
 /// The set of variants is closed, so the recognizer dispatches statically.
-/// Six dialects are built in, each a first-party grammar embedded in the
+/// Seven dialects are built in, each a first-party grammar embedded in the
 /// crate (see `docs/tool-calls/dialects/` for each grammar's public sources
 /// and what it deliberately does not accept):
 ///
 /// | Variant | Versioned id | Shape |
 /// | --- | --- | --- |
 /// | [`DialectId::Qwen3CoderXml`] | `qwen3-coder-xml.v1` | `<tool_call><function=NAME><parameter=P>VALUE</parameter></function></tool_call>` |
+/// | [`DialectId::DeepSeekV31`] | `deepseek-v3.1.v1` | `<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>NAME<｜tool▁sep｜>{...}<｜tool▁call▁end｜>...<｜tool▁calls▁end｜>` |
 /// | [`DialectId::Hermes`] | `hermes.v1` | `<tool_call>{"name": NAME, "arguments": {...}}</tool_call>` |
 /// | [`DialectId::Llama3Json`] | `llama3-json.v1` | `{"name": NAME, "parameters": {...}}`, optionally after `<\|python_tag\|>` |
 /// | [`DialectId::MistralV11`] | `mistral-v11.v1` | `[TOOL_CALLS]NAME[CALL_ID]ID[ARGS]{...}`, the `[CALL_ID]` segment optional, repeatable |
@@ -69,6 +70,8 @@ use std::sync::{Arc, OnceLock};
 pub enum DialectId {
     /// `qwen3-coder-xml.v1`: Qwen3-Coder XML parameter calls.
     Qwen3CoderXml,
+    /// `deepseek-v3.1.v1`: DeepSeek-V3.1 tool-calls sections.
+    DeepSeekV31,
     /// `hermes.v1`: Hermes JSON calls in `<tool_call>` tags.
     Hermes,
     /// `llama3-json.v1`: Llama 3.x JSON calls, optionally after
@@ -113,6 +116,10 @@ static QWEN3_CODER_XML: BuiltIn = BuiltIn::new(
     "qwen3-coder-xml.v1",
     include_str!("dialects/qwen3-coder-xml.v1.grammar"),
 );
+static DEEPSEEK_V31: BuiltIn = BuiltIn::new(
+    "deepseek-v3.1.v1",
+    include_str!("dialects/deepseek-v3.1.v1.grammar"),
+);
 static HERMES: BuiltIn = BuiltIn::new("hermes.v1", include_str!("dialects/hermes.v1.grammar"));
 static LLAMA3_JSON: BuiltIn = BuiltIn::new(
     "llama3-json.v1",
@@ -140,6 +147,7 @@ impl DialectId {
     /// assert_eq!(
     ///     ids,
     ///     [
+    ///         "deepseek-v3.1.v1",
     ///         "hermes.v1",
     ///         "llama3-json.v1",
     ///         "mistral-v11.v1",
@@ -149,7 +157,8 @@ impl DialectId {
     ///     ]
     /// );
     /// ```
-    pub const BUILT_IN: [Self; 6] = [
+    pub const BUILT_IN: [Self; 7] = [
+        Self::DeepSeekV31,
         Self::Hermes,
         Self::Llama3Json,
         Self::MistralV11,
@@ -169,6 +178,7 @@ impl DialectId {
     const fn built_in(&self) -> Option<&'static BuiltIn> {
         match self {
             Self::Qwen3CoderXml => Some(&QWEN3_CODER_XML),
+            Self::DeepSeekV31 => Some(&DEEPSEEK_V31),
             Self::Hermes => Some(&HERMES),
             Self::Llama3Json => Some(&LLAMA3_JSON),
             Self::MistralV11 => Some(&MISTRAL_V11),
@@ -208,6 +218,7 @@ impl DialectId {
     pub fn id(&self) -> &str {
         match self {
             Self::Qwen3CoderXml => QWEN3_CODER_XML.id,
+            Self::DeepSeekV31 => DEEPSEEK_V31.id,
             Self::Hermes => HERMES.id,
             Self::Llama3Json => LLAMA3_JSON.id,
             Self::MistralV11 => MISTRAL_V11.id,
@@ -244,6 +255,7 @@ impl DialectId {
     pub fn grammar(&self) -> &CompiledGrammar {
         match self {
             Self::Qwen3CoderXml => QWEN3_CODER_XML.grammar(),
+            Self::DeepSeekV31 => DEEPSEEK_V31.grammar(),
             Self::Hermes => HERMES.grammar(),
             Self::Llama3Json => LLAMA3_JSON.grammar(),
             Self::MistralV11 => MISTRAL_V11.grammar(),

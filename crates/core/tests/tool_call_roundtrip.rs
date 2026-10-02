@@ -482,7 +482,10 @@ fn declaration_forms_render_every_tool() {
                     tool.name()
                 );
                 if let Some(description) = tool.description() {
-                    let spelled = if form == DeclarationForm::Qwen3CoderXml {
+                    let spelled = if matches!(
+                        form,
+                        DeclarationForm::Qwen3CoderXml | DeclarationForm::DeepSeekV31
+                    ) {
                         description.to_owned()
                     } else {
                         json::quote(description)
@@ -498,7 +501,11 @@ fn declaration_forms_render_every_tool() {
                 assert_eq!(
                     captured.as_deref(),
                     parameters.or_else(|| {
-                        (form == DeclarationForm::Qwen3CoderXml).then_some(r#"{"type":"object"}"#)
+                        (matches!(
+                            form,
+                            DeclarationForm::Qwen3CoderXml | DeclarationForm::DeepSeekV31
+                        ))
+                        .then_some(r#"{"type":"object"}"#)
                     }),
                     "{rendered}"
                 );

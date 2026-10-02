@@ -178,6 +178,12 @@ fn mistral11(content: &str) -> String {
     format!("[TOOL_CALLS]write[CALL_ID]a1B2c3D4e[ARGS]{{\"content\": \"{content}\"}}")
 }
 
+fn deepseek31(content: &str) -> String {
+    format!(
+        "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>write<｜tool▁sep｜>{{\"content\": \"{content}\"}}<｜tool▁call▁end｜><｜tool▁calls▁end｜>"
+    )
+}
+
 /// The published bound for `n` bytes over `set` with no error
 /// configuration explored (`E = 0`).
 fn bound(set: &DialectSet, n: usize) -> u64 {
@@ -224,6 +230,7 @@ fn one_mib_argument_work_bound() {
         ("llama3", llama3),
         ("mistral", mistral),
         ("mistral11", mistral11),
+        ("deepseek31", deepseek31),
     ] {
         let mut measured = Vec::new();
         for size in [1 << 16, 1 << 20] {
@@ -265,7 +272,7 @@ fn one_mib_argument_work_bound() {
 /// `Effort::Maximum` preset and under `ToolRecoveryRequest::sized` for every
 /// effort from `Quick` to `Maximum`, with identical charges in every case
 /// and peak scratch at most 16 bytes per input byte for Qwen3-Coder XML,
-/// Hermes, Llama 3 JSON, Mistral v3 and Mistral v11 arguments (`docs/RESOURCES.md` quotes these
+/// Hermes, Llama 3 JSON, Mistral v3, Mistral v11 and DeepSeek-V3.1 arguments (`docs/RESOURCES.md` quotes these
 /// measurements). `OpenAI`
 /// stringified arguments decode their escaped string again, so they are
 /// held to `RECOVER_SCRATCH_PER_BYTE` instead, under `sized` budgets.
@@ -279,6 +286,7 @@ fn one_mib_argument_fits_published_budget() {
         ("llama3", llama3(&content), true),
         ("mistral", mistral(&content), true),
         ("mistral11", mistral11(&content), true),
+        ("deepseek31", deepseek31(&content), true),
         ("openai", openai(&content), false),
     ] {
         let len = input.len();
@@ -374,6 +382,7 @@ fn work_independent_of_dialect_count_beyond_bound() {
         llama3(&content),
         mistral(&content),
         mistral11(&content),
+        deepseek31(&content),
     ] {
         let n = input.len() as u64;
         let mut previous: Option<(u64, Vec<DialectId>)> = None;
@@ -405,6 +414,15 @@ fn work_independent_of_dialect_count_beyond_bound() {
                 DialectId::Llama3Json,
                 DialectId::MistralV3,
                 DialectId::MistralV11,
+            ],
+            vec![
+                DialectId::Qwen3CoderXml,
+                DialectId::Hermes,
+                DialectId::OpenAiToolCalls,
+                DialectId::Llama3Json,
+                DialectId::MistralV3,
+                DialectId::MistralV11,
+                DialectId::DeepSeekV31,
             ],
         ] {
             let set = DialectSet::new(dialects.clone(), &mut Governor::new(Budget::default()))

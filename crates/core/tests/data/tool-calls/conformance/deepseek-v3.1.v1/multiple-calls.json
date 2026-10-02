@@ -1,0 +1,62 @@
+{
+  "description": "A thinking-mode turn: reasoning closed by </think>, prose, then two calls chained in one section with no separator, as the model card instructs. Each call of the section is its own call.",
+  "markup": "<think>Check the weather and the notes.</think>Checking both.<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_weather<｜tool▁sep｜>{\"city\": \"Oslo\"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"notes.txt\", \"limit\": 10}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "description": "Read a text file.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "get_weather",
+      "arguments": {"city": "Oslo"}
+    },
+    {
+      "name": "read_file",
+      "arguments": {"path": "notes.txt", "limit": 10}
+    }
+  ]
+}

@@ -220,6 +220,7 @@ fn all_registered_dialects_have_anchor_fixtures() {
     assert_eq!(
         ids,
         [
+            "deepseek-v3.1.v1",
             "hermes.v1",
             "llama3-json.v1",
             "mistral-v11.v1",
@@ -397,6 +398,21 @@ fn ir_spans_slice_back_to_source() {
                     let arguments = string_member(function, "arguments").expect("arguments");
                     let decoded = json::parse(&arguments).expect("stringified arguments");
                     assert!(decoded.equivalent(&call.arguments.root), "{}", fixture.file);
+                } else if dialect == DialectId::DeepSeekV31 {
+                    // One call of a tool-calls section: its span holds the
+                    // call's tokens (and the section's own around the first
+                    // and last call), and the arguments sit between the
+                    // separator and the call's closer.
+                    let at =
+                        raw.find("<｜tool▁sep｜>").expect("separator") + "<｜tool▁sep｜>".len();
+                    let end = raw[at..].find("<｜tool▁call▁end｜>").expect("call closer") + at;
+                    let arguments = json::parse(&raw[at..end]).expect("arguments JSON");
+                    assert!(
+                        arguments.equivalent(&call.arguments.root),
+                        "{}",
+                        fixture.file
+                    );
+                    assert!(raw.contains("<｜tool▁call▁begin｜>"), "{}", fixture.file);
                 } else if dialect == DialectId::MistralV11 {
                     // [TOOL_CALLS]NAME[CALL_ID]ID[ARGS]{...}: the arguments
                     // after the last [ARGS] are the call's.
@@ -661,6 +677,16 @@ fn result_productions_read_tool_results() {
         assert_eq!(content(found[0], source).as_deref(), Some(expected));
         assert_eq!(found[0].id.as_ref().map(|found| found.value.as_str()), id);
     }
+    // DeepSeek-V3.1 tool results sit between the tool-output tokens.
+    let set = dialect_set(&[DialectId::DeepSeekV31]);
+    let source = "<｜tool▁output▁begin｜>{\"temperature\": 22.0}<｜tool▁output▁end｜>";
+    let turn = recognize(&set, &tools, source);
+    let found = results(&turn);
+    assert_eq!(found.len(), 1, "{:#?}", turn.pieces());
+    assert_eq!(
+        content(found[0], source).as_deref(),
+        Some("{\"temperature\": 22.0}")
+    );
     // Llama 3 tool results are ipython messages.
     let set = dialect_set(&[DialectId::Llama3Json]);
     let source = "<|start_header_id|>ipython<|end_header_id|>\n\n{\"temperature\": 22.0}<|eot_id|>";
@@ -724,6 +750,18 @@ fn declaration_productions_match_tool_declarations() {
             }
         }
     }
+    // DeepSeek-V3.1 lists tools under `## Tools` headings.
+    let set = declaration_reader(&DialectId::DeepSeekV31);
+    let declaration = "### read_file\nDescription: Read a text file.\nAny encoding.\n\nParameters: {\"type\": \"object\", \"properties\": {\"path\": {\"type\": \"string\"}}}";
+    let turn = recognize(&set, &empty, declaration);
+    let found = calls(&turn);
+    assert_eq!(found.len(), 1, "{:#?}", turn.pieces());
+    assert_eq!(found[0].span, 0..declaration.len());
+    assert_eq!(found[0].name.as_ref().expect("name").value, "read_file");
+    assert_eq!(
+        found[0].arguments.root.to_json(),
+        r#"{"type":"object","properties":{"path":{"type":"string"}}}"#
+    );
     // Qwen3-Coder lists tools as XML function entries.
     let set = declaration_reader(&DialectId::Qwen3CoderXml);
     let declaration = "<function>\n<name>read_file</name>\n<description>Read a text file.</description>\n<parameters>\n<parameter>\n<name>path</name>\n<type>string</type>\n</parameter>\n</parameters>\n</function>";

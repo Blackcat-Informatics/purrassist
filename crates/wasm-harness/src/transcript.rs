@@ -214,7 +214,15 @@ struct DialectCase {
 }
 
 /// One case per entry of `DialectId::BUILT_IN` (checked by the test below).
-const DIALECT_CASES: [DialectCase; 6] = [
+const DIALECT_CASES: [DialectCase; 7] = [
+    DialectCase {
+        dialect: DialectId::DeepSeekV31,
+        anchor: "<think>Write the file, then read the notes.</think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>write_file<｜tool▁sep｜>{\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}<｜tool▁call▁end｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"notes.txt\", \"limit\": 10}<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜>",
+        anchor_digest: "sha256:c1e0a3e11941e2ec3f20bcbd32087134760496ec4efcd45a84140eccfe4c7bfb",
+        repair: "<|tool_calls_begin|><|tool_call_begin|>read_file<|tool_sep|>{\"path\": \"src/lib.rs\", \"limit\": 40}<|tool_call_begin|>get_weather<|tool_sep|>{\"city\": \"Oslo\", \"unit\": \"celsius\"}<|tool_call_end|>",
+        repair_status: "resolved",
+        repair_digest: "sha256:05feb4cec42294e8b581ba64120a84292f64356e2e3ffb17c2c524c1489761ee",
+    },
     DialectCase {
         dialect: DialectId::Hermes,
         anchor: "<think>\nWrite the file.\n</think>\n\n<tool_call>\n{\"name\": \"write_file\", \"arguments\": {\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}}\n</tool_call>\n<tool_call>\n{\"arguments\": {\"path\": \"notes.txt\", \"limit\": 10}, \"name\": \"read_file\"}\n</tool_call>",
