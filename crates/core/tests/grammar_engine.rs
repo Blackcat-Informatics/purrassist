@@ -1368,3 +1368,130 @@ fn length_stop_inside_a_class_character() {
         Segment::Rejected { span, reason: Rejection::InvalidUtf8 { at: 4 }, .. } if *span == (0..5)
     ));
 }
+
+/// A dialect whose calls open at a bare `{` and commit only after `=>`.
+const COMMITTED: &str = r#"grammar "commit.v1";
+closer end = "}";
+ident = /[a-z]+/;
+ws = /[ \n]+/;
+call = "{" name:ident "=>" commit "(" arguments:slot(json, ")") ")" ws? end;
+result = "<r>" content:until("</r>") "</r>";
+declaration = "<d>";
+"#;
+
+/// A second dialect with a distinctive opener.
+const TAGGED: &str = r#"grammar "tag.v1";
+ident = /[a-z]+/;
+call = "<c>" name:ident "</c>";
+result = "<tr>";
+declaration = "<td>";
+"#;
+
+/// `commit`: an attempt of a program with `commit` opens only once it
+/// passes one (or completes). Before that its failure is silent and its
+/// bytes stay content; after it, the attempt is a call attempt that is
+/// repaired, rejected or truncated like any other. Reports inside an
+/// uncommitted attempt are held until it commits or ends, so the outcome
+/// is independent of chunking.
+#[test]
+fn commit_defers_opening_until_evidence() {
+    // The keyword is reserved and parses as a zero-width expression.
+    let error = Grammar::compile_governed(
+        "grammar \"g\"; commit = \"x\"; call = \"<c>\"; result = \"<r>\"; declaration = \"<d>\";",
+        &mut Governor::new(Budget::default()),
+    )
+    .unwrap_err();
+    assert!(matches!(error, GrammarError::ReservedName { ref name, .. } if name == "commit"));
+    let error = Grammar::compile_governed(
+        "grammar \"g\"; call = \"<c>\" commit:\"x\"; result = \"<r>\"; declaration = \"<d>\";",
+        &mut Governor::new(Budget::default()),
+    )
+    .unwrap_err();
+    assert!(matches!(error, GrammarError::UnknownCapture { .. }));
+    let committed = dialect(COMMITTED);
+    let Expr::Sequence(items) = committed.grammar().call() else {
+        panic!("a sequence")
+    };
+    assert_eq!(items[3], Expr::Commit);
+    let one = set(&[COMMITTED]);
+
+    // No evidence: content, no rejected attempt.
+    for input in [&b"a {b} and {cd and {e=}"[..], b"{", b"{abc"] {
+        for stop in [GenerationStop::Stop, GenerationStop::Length] {
+            let turn = recognize(&one, input, stop.clone());
+            assert!(
+                matches!(turn.selected()[..], [Segment::Content(_)]),
+                "{:?} {stop:?}: {:#?}",
+                String::from_utf8_lossy(input),
+                turn.pieces()
+            );
+        }
+    }
+    // Evidence: a call.
+    let turn = recognize(&one, br#"x {f=>({"a":1})} y"#, GenerationStop::Stop);
+    let call = one_call(&turn);
+    assert_eq!(call.name.as_ref().expect("name").value, "f");
+    assert_eq!(call.arguments.root.to_json(), r#"{"a":1}"#);
+    assert_eq!(call.cost, 0);
+    // Committed, then malformed: a rejected attempt from the opener.
+    let turn = recognize(&one, b"x {f=>?} y", GenerationStop::Stop);
+    assert!(
+        turn.selected().iter().any(|segment| matches!(
+            segment,
+            Segment::Rejected { span, .. } if span.start == 2
+        )),
+        "{:#?}",
+        turn.pieces()
+    );
+    // Committed, then cut: the closer is inserted under a stop, and the call
+    // is truncated under a length stop.
+    let turn = recognize(&one, br#"{f=>({"a":1})"#, GenerationStop::Stop);
+    assert_eq!(
+        operators(one_call(&turn)),
+        [EditOperator::MissingClosersAtEnd]
+    );
+    let turn = recognize(&one, br#"{f=>({"a""#, GenerationStop::Length);
+    assert_eq!(one_call(&turn).closure, Closure::Dangling);
+
+    // A call of another dialect inside an attempt that never commits is
+    // read; one inside a committed attempt is part of that attempt.
+    let both = set(&[COMMITTED, TAGGED]);
+    let turn = recognize(&both, b"{ab<c>x</c> done", GenerationStop::Stop);
+    let call = one_call(&turn);
+    assert_eq!(call.name.as_ref().expect("name").value, "x");
+    assert_eq!(call.span, 3..11);
+    let turn = recognize(&both, br#"{ab=>({"q":"<c>x</c>"})}"#, GenerationStop::Stop);
+    let call = one_call(&turn);
+    assert_eq!(call.name.as_ref().expect("name").value, "ab");
+
+    // Chunking invariance, usage included.
+    for input in [
+        &b"{ab<c>x</c> {f=>({\"a\":[1,{\"b\":2}]})} {g=> } {"[..],
+        br#"<c>y</c>{ab=>({"q":"<c>x</c>"})}{c"#,
+    ] {
+        for stop in [GenerationStop::Stop, GenerationStop::Length] {
+            let mut whole = Governor::new(Budget::default());
+            let expected = run(
+                &both,
+                &[input],
+                stop.clone(),
+                ReasoningPolicy::default(),
+                &mut whole,
+            )
+            .expect("recognized");
+            for split in 0..=input.len() {
+                let mut governor = Governor::new(Budget::default());
+                let turn = run(
+                    &both,
+                    &[&input[..split], &input[split..]],
+                    stop.clone(),
+                    ReasoningPolicy::default(),
+                    &mut governor,
+                )
+                .expect("recognized");
+                assert_eq!(turn, expected, "split at {split}");
+                assert_eq!(governor.usage(), whole.usage(), "usage at split {split}");
+            }
+        }
+    }
+}

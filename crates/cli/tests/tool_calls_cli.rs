@@ -347,3 +347,51 @@ fn ids_source_option() {
     assert_eq!(repeated.status.code(), Some(1));
     fs::remove_file(tools).unwrap();
 }
+
+/// Llama 3 JSON with no `--dialect`: the template's call object, with and
+/// without `<|python_tag|>`, is `Resolved` under the default allow-list, and
+/// a Hermes call emitted as `llama3-json.v1` recovers to the same call.
+#[test]
+fn llama3_json_recovers_and_emits_via_cli() {
+    for turn in [
+        &br#"{"name": "list_dir", "parameters": {"path": "src", "depth": 2}}"#[..],
+        b"<|python_tag|>{\n    \"type\": \"function\",\n    \"name\": \"list_dir\",\n    \"parameters\": {\"path\": \"src\", \"depth\": 2}\n}<|eom_id|>",
+    ] {
+        let (output, tools) = run(&[], turn);
+        assert_eq!(output.status.code(), Some(0));
+        let node = result(&output);
+        assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+        assert_eq!(
+            node.pointer("/value/calls/0/dialect")
+                .and_then(Node::as_str),
+            Some("llama3-json.v1")
+        );
+        assert_eq!(
+            node.pointer("/value/calls/0/arguments").unwrap().to_json(),
+            r#"{"path":"src","depth":2}"#
+        );
+        fs::remove_file(tools).unwrap();
+    }
+    let hermes = b"<tool_call>\n{\"name\": \"list_dir\", \"arguments\": {\"path\": \"src\", \"depth\": 2}}\n</tool_call>";
+    let (output, tools) = run(&["--emit", "llama3-json.v1"], hermes);
+    assert_eq!(output.status.code(), Some(0));
+    let node = result(&output);
+    let emitted = node
+        .pointer("/value/emitted/output/text")
+        .and_then(Node::as_str)
+        .expect("emitted markup")
+        .to_owned();
+    assert_eq!(
+        emitted,
+        r#"{"name": "list_dir", "parameters": {"path":"src","depth":2}}"#
+    );
+    fs::remove_file(tools).unwrap();
+    let (output, tools) = run(&[], emitted.as_bytes());
+    let node = result(&output);
+    assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+    assert_eq!(
+        node.pointer("/value/calls/0/arguments").unwrap().to_json(),
+        r#"{"path":"src","depth":2}"#
+    );
+    fs::remove_file(tools).unwrap();
+}

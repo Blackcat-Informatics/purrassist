@@ -169,8 +169,12 @@ targets' mutation tokens so mutation can create or move field boundaries).
   calls, stringified arguments, dangling openers, near-miss, alias, and
   hallucinated names, parameter aliases and typos, schema-guided typing,
   repeated parameters, reasoning blocks, mixed dialects, invalid UTF-8),
-  and negative cases; the header bytes cycle through five fixed request
-  configurations.
+  Llama 3 JSON repairs (a missing or repeated final brace, stringified
+  parameters, arguments cut before `<|eom_id|>`, the `arguments` key after
+  `<|python_tag|>`, a built-in Python-syntax call after the tag, a Llama 3
+  object inside a Hermes wrapper), and negative cases (including JSON
+  content that is not call-shaped); the header bytes cycle through five
+  fixed request configurations.
 
 ## Differential probes
 

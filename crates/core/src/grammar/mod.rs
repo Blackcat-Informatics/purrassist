@@ -37,6 +37,7 @@
 //! | `until("D1", "D2", ...)` | A verbatim body up to, not including, the first occurrence of any delimiter (or the end of input). |
 //! | `slot(CODEC, "D1", ...)` | Like `until`, with the body decoded by the named [`codec`]. |
 //! | `NAME` | A production (inlined; recursion is rejected, since framing is regular) or a closer class. |
+//! | `commit` | Zero-width: an attempt opens (becomes a call or result attempt, reported when rejected) only once it passes a `commit` or completes, instead of at its opener literal. |
 //! | `KIND:item` | A capture of `item`'s span; `KIND` is one of [`CaptureKind`]. |
 //! | `a b` / `a \| b` | Sequence / alternation. |
 //! | `item*` `item+` `item?` | Repetition. |
@@ -302,6 +303,9 @@ pub enum Expr {
     },
     /// Another production.
     Reference(ProductionId),
+    /// `commit`: zero-width; an attempt that passes it is a call (or
+    /// result) attempt from here on. It prints nothing.
+    Commit,
 }
 
 /// Why a grammar did not compile. Every syntax or semantic error carries

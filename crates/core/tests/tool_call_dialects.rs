@@ -219,7 +219,12 @@ fn all_registered_dialects_have_anchor_fixtures() {
     let ids: Vec<&str> = DialectId::BUILT_IN.iter().map(DialectId::id).collect();
     assert_eq!(
         ids,
-        ["hermes.v1", "openai-tool-calls.v1", "qwen3-coder-xml.v1"]
+        [
+            "hermes.v1",
+            "llama3-json.v1",
+            "openai-tool-calls.v1",
+            "qwen3-coder-xml.v1"
+        ]
     );
     for dialect in DialectId::BUILT_IN {
         let fixtures = fixtures(&dialect);
@@ -359,6 +364,23 @@ fn ir_spans_slice_back_to_source() {
                     let arguments = string_member(function, "arguments").expect("arguments");
                     let decoded = json::parse(&arguments).expect("stringified arguments");
                     assert!(decoded.equivalent(&call.arguments.root), "{}", fixture.file);
+                } else if dialect == DialectId::Llama3Json {
+                    // One JSON call object, after an optional <|python_tag|>.
+                    let object = raw.strip_prefix("<|python_tag|>").unwrap_or(raw);
+                    let element = json::parse(object).expect("call object JSON");
+                    assert_eq!(
+                        string_member(&element, "name").as_deref(),
+                        call.name.as_ref().map(|name| name.value.as_str())
+                    );
+                    let arguments = element
+                        .get("parameters")
+                        .or_else(|| element.get("arguments"))
+                        .expect("parameters");
+                    assert!(
+                        arguments.equivalent(&call.arguments.root),
+                        "{}",
+                        fixture.file
+                    );
                 } else {
                     assert!(raw.starts_with("<tool_call>"), "{}: {raw:?}", fixture.file);
                     assert!(raw.ends_with("</tool_call>"), "{}: {raw:?}", fixture.file);
@@ -496,6 +518,7 @@ fn reasoning_markers_are_declared() {
         );
     }
     assert_eq!(DialectId::OpenAiToolCalls.grammar().reasoning(), None);
+    assert_eq!(DialectId::Llama3Json.grammar().reasoning(), None);
     let set = dialect_set(&DialectId::BUILT_IN);
     assert_eq!(
         set.reasoning_markers(),
@@ -561,7 +584,18 @@ fn result_productions_read_tool_results() {
         assert_eq!(&source[id.span.clone()], id.value);
         assert!(id.value.starts_with("call_"));
     }
+    // Llama 3 tool results are ipython messages.
+    let set = dialect_set(&[DialectId::Llama3Json]);
+    let source = "<|start_header_id|>ipython<|end_header_id|>\n\n{\"temperature\": 22.0}<|eot_id|>";
+    let turn = recognize(&set, &tools, source);
+    let found = results(&turn);
+    assert_eq!(found.len(), 1, "{:#?}", turn.pieces());
+    assert_eq!(
+        content(found[0], source).as_deref(),
+        Some("{\"temperature\": 22.0}")
+    );
     // An assistant message envelope never opens a result or a call attempt.
+    let set = dialect_set(&[DialectId::OpenAiToolCalls]);
     let source = r#"{"role": "assistant", "content": "plain text", "tool_calls": []}"#;
     let turn = recognize(&set, &tools, source);
     assert!(
@@ -590,7 +624,11 @@ fn declaration_reader(dialect: &DialectId) -> DialectSet {
 #[test]
 fn declaration_productions_match_tool_declarations() {
     let empty = ToolSet::compile([], Budget::default()).expect("no tools");
-    for dialect in [DialectId::OpenAiToolCalls, DialectId::Hermes] {
+    for dialect in [
+        DialectId::OpenAiToolCalls,
+        DialectId::Hermes,
+        DialectId::Llama3Json,
+    ] {
         let set = declaration_reader(&dialect);
         for fixture in fixtures(&dialect) {
             for tool in fixture.tools.tools() {

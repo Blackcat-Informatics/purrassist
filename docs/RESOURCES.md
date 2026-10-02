@@ -631,14 +631,15 @@ units, resolution) are each a small constant per byte: whole recoveries
 measure 10 to 17 units per byte in total (the throughput table below), far
 inside the slack of any built-in `K_d`.
 `crates/core/tests/tool_call_cost.rs` checks the bound on 64 KiB and 1 MiB
-Qwen3-Coder XML and Hermes string arguments (`E = 0`: no repair is
-recorded), that the 64 KiB to 1 MiB work ratio is within 1.05x of the byte
+Qwen3-Coder XML, Hermes and Llama 3 JSON string arguments (`E = 0`: no
+repair is recorded), that the 64 KiB to 1 MiB work ratio is within 1.05x of the byte
 ratio, that pushing the same output in chunks of 1, 16 and 4096 bytes
 charges identical usage, and that adding a dialect to the allow-list adds
 at most its `K_d` per byte (measured: adding Hermes to a Qwen3-Coder XML
 allow-list adds 0 units per byte on a Qwen3-Coder XML argument and 7 on a
 Hermes argument, the configurations of the call it now reads; adding
-`OpenAI` adds 0). These are checks of the published inequality on those
+`OpenAI` adds 0; adding Llama 3 JSON adds 0 on Qwen3-Coder XML and Hermes
+arguments and 9 on a Llama 3 JSON argument). These are checks of the published inequality on those
 inputs, not a proof for every input; the effort budgets bound everything
 else.
 
@@ -680,11 +681,12 @@ every value below to equal the code's.
 | Built-in dialect | `B_d` | `K_d` per byte |
 | --- | ---: | ---: |
 | `hermes.v1` | 635 | 635 |
+| `llama3-json.v1` | 314 | 314 |
 | `openai-tool-calls.v1` | 2151 | 2151 |
 | `qwen3-coder-xml.v1` | 442 | 442 |
 
-The default request allows all three, so its bound is
-`(2 + 1 + 3228)·n + 8·E = 3231·n + 8·E`.
+The default request allows all four, so its bound is
+`(2 + 1 + 3542)·n + 8·E = 3545·n + 8·E`.
 
 ### Budgets for large outputs and busy turns
 
@@ -695,7 +697,9 @@ turn with many calls needs a budget that grows with it.
 phases. First a linear, allocation-free pre-scan counts the output's call
 openers `m` (`DialectSet::call_openers`: each byte offset where a dialect's
 `call` production can open, counted once per such dialect, so the
-`<tool_call>` that Qwen3-Coder XML and Hermes share counts twice). Then
+`<tool_call>` that Qwen3-Coder XML and Hermes share counts twice; Llama 3
+JSON, whose attempts open at `{` and commit only on call-shaped evidence,
+counts every `{`). Then
 `ToolRecoveryRequest::sized_budget(effort, n, m)` sizes the budget from the
 preset, the output length `n`, and the constants above:
 
@@ -741,9 +745,9 @@ every effort. The host and CLI tests
 `tool_call_cost::one_mib_argument_fits_published_budget` recovers a 1 MiB
 string argument in each built-in dialect's shape and checks that the call is
 `Resolved` under `sized(effort, output)` for every effort from `Quick` to
-`Maximum` (and, for Qwen3-Coder XML and Hermes, under the unmodified
-`Effort::Maximum` preset), with identical charges in every case, peak
-scratch at most 16 bytes per input byte for Qwen3-Coder XML and Hermes, and
+`Maximum` (and, for Qwen3-Coder XML, Hermes and Llama 3 JSON, under the
+unmodified `Effort::Maximum` preset), with identical charges in every case,
+peak scratch at most 16 bytes per input byte for those three, and
 at most `RECOVER_SCRATCH_PER_BYTE` for `OpenAI` stringified arguments, whose
 escaped string is also decoded, recorded as the decoding's replacement and
 parsed again. The charges include the call's schema validation (see
@@ -751,11 +755,12 @@ parsed again. The charges include the call's schema validation (see
 
 | Input | Bytes | Work | Work per byte | Peak scratch | Scratch per byte |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Qwen3-Coder XML `<parameter>` string | 1,048,663 | 11,536,663 | 11.00 | 8,415,425 | 8.02 |
-| Hermes JSON string argument | 1,048,648 | 10,488,490 | 10.00 | 9,447,556 | 9.00 |
-| `OpenAI` stringified string argument | 1,048,679 | 15,732,143 | 15.00 | 47,201,161 | 45.01 |
+| Qwen3-Coder XML `<parameter>` string | 1,048,663 | 11,536,824 | 11.00 | 8,415,731 | 8.03 |
+| Hermes JSON string argument | 1,048,648 | 10,489,218 | 10.00 | 9,447,862 | 9.01 |
+| Llama 3 JSON string argument | 1,048,624 | 12,585,322 | 12.00 | 9,448,798 | 9.01 |
+| `OpenAI` stringified string argument | 1,048,679 | 15,732,885 | 15.00 | 47,201,703 | 45.01 |
 
-All use the default request (all three built-in dialects); charging schema
+All use the default request (all four built-in dialects); charging schema
 validation's working set left these measurements unchanged, because
 validating one string argument peaks below the recognizer's buffers. The
 constants leave headroom over these fast-path measurements; inputs that need repair
@@ -767,8 +772,8 @@ as `BudgetExceeded` naming the resource.
 `crates/core/benches/tool_calls.rs` (`cargo bench -p purrassist-core --bench
 tool_calls`; `-- --list` lists its workloads, `-- NAME` runs one) recovers a
 write call with a 1 KiB, 64 KiB or 1 MiB string argument as Qwen3-Coder XML,
-Hermes, `OpenAI` stringified arguments, and a Qwen3-Coder XML call followed
-by a Hermes call under a Qwen3-Coder + Hermes allow-list, each under
+Hermes, `OpenAI` stringified arguments, Llama 3 JSON, and a Qwen3-Coder XML
+call followed by a Hermes call under a Qwen3-Coder + Hermes allow-list, each under
 `ToolRecoveryRequest::sized_for(Effort::Standard, output, dialects)`, and feeds a 64 KiB
 Qwen3-Coder XML output to a `Recognizer` in chunks of 1, 16 and 4096 bytes,
 asserting identical charged usage for every chunking. Work and peak scratch
@@ -781,25 +786,29 @@ on its timings.
 
 Recorded on Linux 7.2.7-1-cachyos x86_64 (AMD RYZEN AI MAX+ 395 w/ Radeon
 8060S, 32 hardware threads), `rustc 1.100.0-nightly (4b6d04e70 2026-09-13)`,
-commit `2b5c98b` with this change applied:
+commit `20b380b` with this change applied, while a tool-call fuzz campaign
+ran on the same machine:
 
 | Workload | Bytes | Samples | Median ms | MiB/s | Work/byte | Peak scratch/byte |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `qwen_xml_1kib` | 1111 | 200 | 0.290 | 3.64 | 12.23 | 31.34 |
-| `qwen_xml_64kib` | 65623 | 30 | 14.759 | 4.24 | 11.02 | 8.39 |
-| `qwen_xml_1mib` | 1048663 | 7 | 229.810 | 4.35 | 11.00 | 8.02 |
-| `hermes_1kib` | 1096 | 200 | 0.309 | 3.38 | 11.83 | 42.94 |
-| `hermes_64kib` | 65608 | 30 | 15.729 | 3.97 | 10.03 | 9.14 |
-| `hermes_1mib` | 1048648 | 7 | 250.520 | 3.99 | 10.00 | 9.00 |
-| `openai_stringified_1kib` | 1127 | 200 | 0.357 | 3.00 | 16.73 | 54.37 |
-| `openai_stringified_64kib` | 65639 | 30 | 18.380 | 3.40 | 15.02 | 45.16 |
-| `openai_stringified_1mib` | 1048679 | 7 | 295.754 | 3.38 | 15.00 | 45.01 |
-| `mixed_qwen_hermes_1kib` | 1184 | 200 | 0.298 | 3.79 | 12.24 | 36.92 |
-| `mixed_qwen_hermes_64kib` | 65696 | 30 | 14.257 | 4.39 | 10.53 | 9.01 |
-| `mixed_qwen_hermes_1mib` | 1048736 | 7 | 218.880 | 4.56 | 10.50 | 8.53 |
-| `push_chunk_1` | 65623 | 30 | 12.385 | 5.05 | 8.00 | 5.17 |
-| `push_chunk_16` | 65623 | 30 | 12.133 | 5.15 | 8.00 | 5.17 |
-| `push_chunk_4096` | 65623 | 30 | 12.198 | 5.13 | 8.00 | 5.17 |
+| `qwen_xml_1kib` | 1111 | 200 | 0.293 | 3.61 | 12.37 | 31.62 |
+| `qwen_xml_64kib` | 65623 | 30 | 14.895 | 4.20 | 11.02 | 8.40 |
+| `qwen_xml_1mib` | 1048663 | 7 | 236.728 | 4.22 | 11.00 | 8.02 |
+| `hermes_1kib` | 1096 | 200 | 0.345 | 3.02 | 12.49 | 48.81 |
+| `hermes_64kib` | 65608 | 30 | 17.011 | 3.67 | 10.04 | 9.15 |
+| `hermes_1mib` | 1048648 | 7 | 273.424 | 3.65 | 10.00 | 9.00 |
+| `openai_stringified_1kib` | 1127 | 200 | 0.403 | 2.66 | 17.39 | 54.85 |
+| `openai_stringified_64kib` | 65639 | 30 | 20.355 | 3.07 | 15.04 | 45.16 |
+| `openai_stringified_1mib` | 1048679 | 7 | 324.224 | 3.08 | 15.00 | 45.01 |
+| `llama3_json_1kib` | 1072 | 200 | 0.344 | 2.96 | 13.71 | 46.41 |
+| `llama3_json_64kib` | 65584 | 30 | 19.248 | 3.24 | 12.02 | 9.17 |
+| `llama3_json_1mib` | 1048624 | 7 | 308.479 | 3.24 | 12.00 | 9.01 |
+| `mixed_qwen_hermes_1kib` | 1184 | 200 | 0.333 | 3.38 | 12.24 | 37.42 |
+| `mixed_qwen_hermes_64kib` | 65696 | 30 | 15.455 | 4.05 | 10.53 | 9.02 |
+| `mixed_qwen_hermes_1mib` | 1048736 | 7 | 247.299 | 4.04 | 10.50 | 8.53 |
+| `push_chunk_1` | 65623 | 30 | 13.909 | 4.49 | 8.00 | 5.17 |
+| `push_chunk_16` | 65623 | 30 | 13.710 | 4.56 | 8.00 | 5.17 |
+| `push_chunk_4096` | 65623 | 30 | 13.558 | 4.61 | 8.00 | 5.17 |
 
 ## Resource limits
 

@@ -5,7 +5,7 @@
 //!
 //! Recovers one write call whose string argument is 1 KiB, 64 KiB or
 //! 1 MiB, printed as Qwen3-Coder XML, Hermes JSON, `OpenAI` stringified
-//! arguments, and a Qwen3-Coder XML call followed by a Hermes call (each
+//! arguments, Llama 3 JSON, and a Qwen3-Coder XML call followed by a Hermes call (each
 //! carrying half the argument) under a Qwen3-Coder + Hermes allow-list. The
 //! single-dialect shapes use the default request (every built-in dialect).
 //! Every recovery runs under `ToolRecoveryRequest::sized` and must be
@@ -33,10 +33,11 @@ use std::hint::black_box;
 use std::time::Instant;
 
 const SIZES: [(&str, usize); 3] = [("1kib", 1 << 10), ("64kib", 1 << 16), ("1mib", 1 << 20)];
-const SHAPES: [&str; 4] = [
+const SHAPES: [&str; 5] = [
     "qwen_xml",
     "hermes",
     "openai_stringified",
+    "llama3_json",
     "mixed_qwen_hermes",
 ];
 const CHUNKS: [usize; 3] = [1, 16, 4096];
@@ -81,6 +82,13 @@ fn openai(content: &str) -> String {
     )
 }
 
+fn llama3(content: &str) -> String {
+    format!(
+        "{{\"name\": \"write\", \"parameters\": {{\"content\": {}}}}}",
+        json::quote(content)
+    )
+}
+
 fn dialects(ids: &[DialectId]) -> DialectSet {
     DialectSet::new(ids.iter().cloned(), &mut Governor::new(Budget::default()))
         .expect("bench dialects")
@@ -93,6 +101,7 @@ fn workload(shape: &str, size: usize) -> (String, ToolRecoveryRequest, Vec<Strin
         "qwen_xml" => (qwen(&content), vec![content], DialectSet::built_in()),
         "hermes" => (hermes(&content), vec![content], DialectSet::built_in()),
         "openai_stringified" => (openai(&content), vec![content], DialectSet::built_in()),
+        "llama3_json" => (llama3(&content), vec![content], DialectSet::built_in()),
         "mixed_qwen_hermes" => {
             let first = argument(size / 2);
             let second = argument(size - size / 2);

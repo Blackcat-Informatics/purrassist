@@ -27,7 +27,7 @@ use std::sync::{Arc, OnceLock};
 /// One dialect grammar the recognizer can run.
 ///
 /// The set of variants is closed, so the recognizer dispatches statically.
-/// Three dialects are built in, each a first-party grammar embedded in the
+/// Four dialects are built in, each a first-party grammar embedded in the
 /// crate (see `docs/tool-calls/dialects/` for each grammar's public sources
 /// and what it deliberately does not accept):
 ///
@@ -35,6 +35,7 @@ use std::sync::{Arc, OnceLock};
 /// | --- | --- | --- |
 /// | [`DialectId::Qwen3CoderXml`] | `qwen3-coder-xml.v1` | `<tool_call><function=NAME><parameter=P>VALUE</parameter></function></tool_call>` |
 /// | [`DialectId::Hermes`] | `hermes.v1` | `<tool_call>{"name": NAME, "arguments": {...}}</tool_call>` |
+/// | [`DialectId::Llama3Json`] | `llama3-json.v1` | `{"name": NAME, "parameters": {...}}`, optionally after `<\|python_tag\|>` |
 /// | [`DialectId::OpenAiToolCalls`] | `openai-tool-calls.v1` | `tool_calls` elements `{"id": ID, "type": "function", "function": {...}}` |
 ///
 /// A built-in grammar is compiled once, on first use, under its own
@@ -68,6 +69,9 @@ pub enum DialectId {
     Qwen3CoderXml,
     /// `hermes.v1`: Hermes JSON calls in `<tool_call>` tags.
     Hermes,
+    /// `llama3-json.v1`: Llama 3.x JSON calls, optionally after
+    /// `<|python_tag|>`.
+    Llama3Json,
     /// `openai-tool-calls.v1`: `OpenAI` chat-completions `tool_calls`
     /// elements as text (also the output and round-trip target).
     OpenAiToolCalls,
@@ -104,6 +108,10 @@ static QWEN3_CODER_XML: BuiltIn = BuiltIn::new(
     include_str!("dialects/qwen3-coder-xml.v1.grammar"),
 );
 static HERMES: BuiltIn = BuiltIn::new("hermes.v1", include_str!("dialects/hermes.v1.grammar"));
+static LLAMA3_JSON: BuiltIn = BuiltIn::new(
+    "llama3-json.v1",
+    include_str!("dialects/llama3-json.v1.grammar"),
+);
 static OPENAI_TOOL_CALLS: BuiltIn = BuiltIn::new(
     "openai-tool-calls.v1",
     include_str!("dialects/openai-tool-calls.v1.grammar"),
@@ -115,9 +123,17 @@ impl DialectId {
     /// ```
     /// use purrassist_core::tool_call::DialectId;
     /// let ids: Vec<&str> = DialectId::BUILT_IN.iter().map(DialectId::id).collect();
-    /// assert_eq!(ids, ["hermes.v1", "openai-tool-calls.v1", "qwen3-coder-xml.v1"]);
+    /// assert_eq!(
+    ///     ids,
+    ///     ["hermes.v1", "llama3-json.v1", "openai-tool-calls.v1", "qwen3-coder-xml.v1"]
+    /// );
     /// ```
-    pub const BUILT_IN: [Self; 3] = [Self::Hermes, Self::OpenAiToolCalls, Self::Qwen3CoderXml];
+    pub const BUILT_IN: [Self; 4] = [
+        Self::Hermes,
+        Self::Llama3Json,
+        Self::OpenAiToolCalls,
+        Self::Qwen3CoderXml,
+    ];
 
     /// Wrap a compiled grammar.
     ///
@@ -131,6 +147,7 @@ impl DialectId {
         match self {
             Self::Qwen3CoderXml => Some(&QWEN3_CODER_XML),
             Self::Hermes => Some(&HERMES),
+            Self::Llama3Json => Some(&LLAMA3_JSON),
             Self::OpenAiToolCalls => Some(&OPENAI_TOOL_CALLS),
             Self::Custom(_) => None,
         }
@@ -167,6 +184,7 @@ impl DialectId {
         match self {
             Self::Qwen3CoderXml => QWEN3_CODER_XML.id,
             Self::Hermes => HERMES.id,
+            Self::Llama3Json => LLAMA3_JSON.id,
             Self::OpenAiToolCalls => OPENAI_TOOL_CALLS.id,
             Self::Custom(grammar) => grammar.id(),
         }
@@ -200,6 +218,7 @@ impl DialectId {
         match self {
             Self::Qwen3CoderXml => QWEN3_CODER_XML.grammar(),
             Self::Hermes => HERMES.grammar(),
+            Self::Llama3Json => LLAMA3_JSON.grammar(),
             Self::OpenAiToolCalls => OPENAI_TOOL_CALLS.grammar(),
             Self::Custom(grammar) => grammar,
         }
@@ -393,7 +412,7 @@ impl DialectSet {
     /// never charged to a caller's governor.
     ///
     /// # Panics
-    /// Never: three built-in dialects always build under the default
+    /// Never: the built-in dialects always build under the default
     /// budget (checked by this example and the dialect conformance tests).
     ///
     /// ```
@@ -483,16 +502,19 @@ impl DialectSet {
     /// ([`CompiledGrammar::call_openers`]): every byte offset where a
     /// dialect's `call` production can open counts once for that dialect,
     /// so an opener two dialects share (`<tool_call>` in Qwen3-Coder XML
-    /// and Hermes) counts twice, once per competing attempt. It bounds the
-    /// call attempts recovery can read or reject, and sizes the candidate
+    /// and Hermes) counts twice, once per competing attempt. A dialect whose
+    /// attempts commit after their opener (`llama3-json.v1` opens at `{`
+    /// and commits on call-shaped evidence) counts every opener, committed
+    /// or not. It bounds the call attempts recovery can read or reject, and sizes the candidate
     /// budget of [`ToolRecoveryRequest::sized_for`](super::ToolRecoveryRequest::sized_for).
     /// A pure, allocation-free scan; nothing is charged.
     ///
     /// ```
     /// use purrassist_core::tool_call::DialectSet;
     /// let output = b"<tool_call>\n{\"name\": \"ls\", \"arguments\": {}}\n</tool_call>";
-    /// // Qwen3-Coder XML and Hermes both open with `<tool_call>`.
-    /// assert_eq!(DialectSet::built_in().call_openers(output), 2);
+    /// // Qwen3-Coder XML and Hermes both open with `<tool_call>`; a Llama 3
+    /// // JSON attempt may open at each of the two `{`.
+    /// assert_eq!(DialectSet::built_in().call_openers(output), 4);
     /// assert_eq!(DialectSet::built_in().call_openers(b"no calls here"), 0);
     /// ```
     #[must_use]

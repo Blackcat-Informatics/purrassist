@@ -1,0 +1,37 @@
+{
+  "description": "One call as the Llama 3.1 chat template renders it: the whole turn is one JSON object with \"name\" and then \"parameters\", separated by single spaces.",
+  "markup": "{\"name\": \"get_weather\", \"parameters\": {\"city\": \"San Francisco\", \"unit\": \"fahrenheit\"}}",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "get_weather",
+      "arguments": {"city": "San Francisco", "unit": "fahrenheit"}
+    }
+  ]
+}

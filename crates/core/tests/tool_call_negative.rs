@@ -14,10 +14,14 @@
 //! fenced code or quoted prose may instead be a guess-flagged reading
 //! (`tool_call.context.fenced-example`): `BestGuess` at most under
 //! `Tolerant`, `Unresolved` under `Structural`, and never in `usable()`.
+//!
+//! JSON content without call-shaped evidence is plain content under the
+//! default allow-list (every built-in dialect): no Llama 3 JSON attempt
+//! commits, so there is no call and no rejected attempt.
 use core::ops::Range;
 use purrassist_core::tool_call::{
-    CallOutcome, DialectId, DialectSet, Effects, Finish, Param, Rejection, RepairPolicy, ToolCalls,
-    ToolDefinition, ToolRecoveryRequest, ToolSet, UnresolvedReason,
+    CallOutcome, DialectId, DialectSet, Effects, Finish, GenerationStop, Param, Rejection,
+    RepairPolicy, ToolCalls, ToolDefinition, ToolRecoveryRequest, ToolSet, UnresolvedReason,
 };
 use purrassist_core::{Budget, Governor, Outcome};
 
@@ -232,4 +236,37 @@ fn quoted_block_quote_lines_are_malformed() {
     // markup: it is not a call at all.
     let input = "> <tool_call>\n> <function=f>\n> <parameter=a>\n> x\n> </parameter>\n> </function>\n> </tool_call>\n";
     assert_rejected(input, &[(2..14, Rejection::Malformed { at: 14 })]);
+}
+
+/// JSON objects in prose, schemas, code, and objects with a `"name"` or a
+/// `"parameters"` member but not both in call order stay content under the
+/// default allow-list, whatever the stop.
+#[test]
+fn json_content_without_call_evidence_is_content() {
+    for input in [
+        r#"Saved {"name": "Ada", "age": 36}."#,
+        r#"{"name": "f"}"#,
+        r#"{"name": "f", "description": "no parameters member"}"#,
+        r#"{"parameters": {"a": "x"}}"#,
+        r#"{"parameters": {"a": "x"}, "title": "f"}"#,
+        r#"[{"name": "f", "value": 1}, {"name": "g", "value": 2}]"#,
+        r#"{"type": "object", "properties": {"name": {"type": "string"}}}"#,
+        "fn main() { let name = \"f\"; }",
+        r#"{"user": {"name": "f", "roles": ["a"]}, "parameters": 3}"#,
+        "{\n  \"name\": \"f\",\n  \"tags\": []\n}",
+        r#"{"name": "f", "#,
+    ] {
+        for effects in PROFILES {
+            for stop in [GenerationStop::Stop, GenerationStop::Length] {
+                let result = tools(effects)
+                    .recover(input.as_bytes(), &ToolRecoveryRequest::default().stop(stop));
+                let Outcome::Resolved(calls) = result.outcome else {
+                    panic!("{input:?}: {:?}", result.outcome)
+                };
+                assert!(calls.calls.is_empty(), "{input:?}: {:?}", calls.calls);
+                assert!(calls.rejected.is_empty(), "{input:?}: {:?}", calls.rejected);
+                assert_eq!(calls.content, vec![0..input.len()], "{input:?}");
+            }
+        }
+    }
 }

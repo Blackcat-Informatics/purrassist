@@ -479,6 +479,7 @@ impl Base {
 const fn dialect_label(dialect: &DialectId) -> &'static str {
     match dialect {
         DialectId::Hermes => "hermes",
+        DialectId::Llama3Json => "llama3",
         DialectId::OpenAiToolCalls => "openai",
         DialectId::Qwen3CoderXml => "qwen",
         DialectId::Custom(_) => "custom",
@@ -486,18 +487,19 @@ const fn dialect_label(dialect: &DialectId) -> &'static str {
 }
 
 /// The built-in dialects, in corpus order.
-const DIALECTS: [DialectId; 3] = [
+const DIALECTS: [DialectId; 4] = [
     DialectId::Qwen3CoderXml,
     DialectId::Hermes,
     DialectId::OpenAiToolCalls,
+    DialectId::Llama3Json,
 ];
 
 /// The witness of tool `tool` in `dialect` for corpus seed `seed`.
 ///
 /// Qwen3-Coder XML prints parameter elements; `OpenAI` alternates
-/// stringified and object arguments by seed; Hermes prints objects for the
-/// first [`SEEDS`] seeds (so stringifying them is a mutation) and alternates
-/// for the supplementary seeds.
+/// stringified and object arguments by seed; Hermes and Llama 3 JSON print
+/// objects for the first [`SEEDS`] seeds (so stringifying them is a
+/// mutation) and alternate for the supplementary seeds.
 fn base(tools: &ToolSet, dialect: &DialectId, tool: usize, seed: u64) -> Base {
     let compiled = &tools.tools()[tool];
     let shape = tools
@@ -505,7 +507,7 @@ fn base(tools: &ToolSet, dialect: &DialectId, tool: usize, seed: u64) -> Base {
         .expect("every tool has a shape");
     let form = match dialect {
         DialectId::Qwen3CoderXml => Form::Xml,
-        DialectId::Hermes if seed < SEEDS => Form::Object,
+        DialectId::Hermes | DialectId::Llama3Json if seed < SEEDS => Form::Object,
         _ if seed.is_multiple_of(2) => Form::Stringified,
         _ => Form::Object,
     };
@@ -723,11 +725,22 @@ impl Base {
             .collect()
     }
 
-    /// The wrapper closer at the end of a Qwen or Hermes witness.
+    /// The wrapper closer at the end of a Qwen or Hermes witness, or the
+    /// closing brace of a Llama 3 JSON call object.
     fn wrapper_end(&self) -> usize {
+        let closer = self.closer();
         self.text
-            .rfind("</tool_call>")
+            .rfind(closer)
             .expect("a wrapped witness ends with its closer")
+    }
+
+    /// The canonical closer ending a wrapped witness.
+    fn closer(&self) -> &'static str {
+        if self.dialect == DialectId::Llama3Json {
+            "}"
+        } else {
+            "</tool_call>"
+        }
     }
 }
 
@@ -1062,23 +1075,29 @@ fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
     truncated.stop = Ending::Length;
     out.push(truncated);
 
-    // Wrapper closers (Qwen and Hermes).
+    // Wrapper closers (Qwen and Hermes; the object's final brace for
+    // Llama 3 JSON, which has no variant spelling and no stop sequence).
     if wrapped {
         let end = base.wrapper_end();
+        let closer = base.closer();
+        let tagged = base.dialect != DialectId::Llama3Json;
+        let variant = if tagged { "tool_call" } else { "brace" };
         out.push(mutant(
             "tool_call.markup.missing-closers-at-end",
-            "tool_call",
+            variant,
             text[..end].to_owned(),
             Need::Exact,
         ));
-        let mut consumed = mutant(
-            "tool_call.stop.consumed-closer",
-            "tool_call",
-            text[..end].to_owned(),
-            Need::Exact,
-        );
-        consumed.stop = Ending::Sequence("</tool_call>");
-        out.push(consumed);
+        if tagged {
+            let mut consumed = mutant(
+                "tool_call.stop.consumed-closer",
+                "tool_call",
+                text[..end].to_owned(),
+                Need::Exact,
+            );
+            consumed.stop = Ending::Sequence("</tool_call>");
+            out.push(consumed);
+        }
         out.push(mutant(
             "tool_call.markup.missing-wrapper-close.before-text",
             "done",
@@ -1087,16 +1106,18 @@ fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
         ));
         out.push(mutant(
             "tool_call.markup.stray-closer",
-            "tool_call",
-            format!("{text}\n</tool_call>"),
+            variant,
+            format!("{text}\n{closer}"),
             Need::Exact,
         ));
-        out.push(mutant(
-            "tool_call.markup.closer-variant",
-            "tool_calls",
-            format!("{}</tool_calls>", &text[..end]),
-            Need::Exact,
-        ));
+        if tagged {
+            out.push(mutant(
+                "tool_call.markup.closer-variant",
+                "tool_calls",
+                format!("{}</tool_calls>", &text[..end]),
+                Need::Exact,
+            ));
+        }
     }
 
     if xml {
@@ -1663,7 +1684,7 @@ fn pair_mutations(first: &Base, second: &Base) -> Vec<Mutant> {
         out.push(mutant(
             "tool_call.markup.stray-closer",
             "between",
-            format!("{}\n</tool_call>\n{}", first.text, second.text),
+            format!("{}\n{}\n{}", first.text, first.closer(), second.text),
             Need::Exact,
         ));
     }
@@ -1695,7 +1716,7 @@ const fn policy_of(seed: u64) -> Policy {
     }
 }
 
-const ALL_DIALECTS: &str = "hermes.v1,openai-tool-calls.v1,qwen3-coder-xml.v1";
+const ALL_DIALECTS: &str = "hermes.v1,llama3-json.v1,openai-tool-calls.v1,qwen3-coder-xml.v1";
 
 /// The cases of every single-call mutation of `base`, appended to `cases`;
 /// with `under`, only those of categories with fewer than [`TARGET`] cases

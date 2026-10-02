@@ -214,7 +214,7 @@ struct DialectCase {
 }
 
 /// One case per entry of `DialectId::BUILT_IN` (checked by the test below).
-const DIALECT_CASES: [DialectCase; 3] = [
+const DIALECT_CASES: [DialectCase; 4] = [
     DialectCase {
         dialect: DialectId::Hermes,
         anchor: "<think>\nWrite the file.\n</think>\n\n<tool_call>\n{\"name\": \"write_file\", \"arguments\": {\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}}\n</tool_call>\n<tool_call>\n{\"arguments\": {\"path\": \"notes.txt\", \"limit\": 10}, \"name\": \"read_file\"}\n</tool_call>",
@@ -222,6 +222,14 @@ const DIALECT_CASES: [DialectCase; 3] = [
         repair: "Sure, here it is: <tool_call>Calling now: {\"name\": \"get_wether\", \"arguments\": {\"city\": \"Oslo\", \"unit\": \"Celsius\"}}</tool_call></tool_call>",
         repair_status: "best_guess",
         repair_digest: "sha256:81c28b0d74c3bcec95b1bf93265af004a5cc5d06b73784badf28689b815f03fb",
+    },
+    DialectCase {
+        dialect: DialectId::Llama3Json,
+        anchor: "<|python_tag|>{\n    \"type\": \"function\",\n    \"name\": \"write_file\",\n    \"parameters\": {\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}\n}<|eom_id|>",
+        anchor_digest: "sha256:75fba62908be6c306288dd21581b4eed33b1a518efbc445c8788647bff527e4a",
+        repair: "{\"name\": \"read_file\", \"parameters\": {\"path\": \"src/lib.rs\", \"limit\": 40}\n{\"name\": \"get_weather\", \"parameters\": {\"city\": \"Oslo\", \"unit\": \"celsius\"}}}",
+        repair_status: "resolved",
+        repair_digest: "sha256:cf64b7392f46122a2ad98a32099dff59275c4aea1410b023f9446709a0729b6b",
     },
     DialectCase {
         dialect: DialectId::OpenAiToolCalls,

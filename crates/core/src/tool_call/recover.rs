@@ -246,7 +246,8 @@ pub fn turn_id_prefix(turn: &Digest) -> String {
 ///   but which has none, or whose id an earlier call already holds, is
 ///   recorded as a derived `tool_call.id.dedup` inference naming the
 ///   assigned id; a call of a dialect whose markup carries no id (Hermes,
-///   Qwen3-Coder XML) is numbered without one, as under `Prefix`.
+///   Llama 3 JSON, Qwen3-Coder XML) is numbered without one, as under
+///   `Prefix`.
 ///   [`ToolCalls::next_id_start`] is the number of calls.
 ///
 ///   Different turns get disjoint numbered ids without any caller state.
@@ -625,7 +626,9 @@ impl ToolRecoveryRequest {
     /// use purrassist_core::{Effort, tool_call::{DialectSet, ToolRecoveryRequest}};
     /// let output = b"<tool_call>\n{\"name\": \"ls\", \"arguments\": {}}\n</tool_call>";
     /// let request = ToolRecoveryRequest::sized(Effort::Standard, output);
-    /// assert_eq!(request.budget, ToolRecoveryRequest::sized_budget(Effort::Standard, output.len(), 2));
+    /// // Two `<tool_call>` openers (Qwen3-Coder XML and Hermes) and two `{`
+    /// // where a Llama 3 JSON attempt may open.
+    /// assert_eq!(request.budget, ToolRecoveryRequest::sized_budget(Effort::Standard, output.len(), 4));
     /// assert_eq!(request.dialects.dialects(), DialectSet::built_in().dialects());
     /// ```
     #[must_use]

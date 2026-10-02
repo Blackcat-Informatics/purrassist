@@ -137,12 +137,13 @@ allow-list, with a published bound, and every limit is explicit.
   resource, never a partial value.
 - **Proved by** `tool_call_cost::resources_doc_matches_cost_constants` (every
   published constant and per-dialect bound equals the code's),
-  `tool_call_cost::one_mib_argument_work_bound` (1 MiB Qwen3-Coder XML and
-  Hermes arguments satisfy the bound and scale linearly from 64 KiB),
+  `tool_call_cost::one_mib_argument_work_bound` (1 MiB Qwen3-Coder XML,
+  Hermes and Llama 3 JSON arguments satisfy the bound and scale linearly
+  from 64 KiB),
   `tool_call_cost::one_mib_argument_fits_published_budget` (a 1 MiB argument
   in every built-in dialect is `Resolved` under `ToolRecoveryRequest::sized`
   for every effort from `Quick` to `Maximum`, with peak scratch at most 16
-  bytes per input byte for Qwen3-Coder XML and Hermes),
+  bytes per input byte for Qwen3-Coder XML, Hermes and Llama 3 JSON),
   `tool_call_cost::work_independent_of_dialect_count_beyond_bound`,
   `json_incremental::extract_many_brackets_is_linear`, and
   `tool_call_recover::exhaustion_is_explicit_every_resource`.
@@ -305,8 +306,8 @@ the caller threads no state:
 - A missing model id (in a dialect whose markup provides for one) or a model
   id an earlier call already holds is numbered so and recorded as a derived
   `tool_call.id.dedup` inference on the call and in the receipt; it never
-  demotes the call. Hermes and Qwen3-Coder XML markup carries no id, so
-  their calls are numbered without an inference.
+  demotes the call. Hermes, Llama 3 JSON and Qwen3-Coder XML markup carries
+  no id, so their calls are numbered without an inference.
 - `next_id_start` is the number of calls.
 
 The same output always gets the same ids: recovering one turn twice is the
@@ -368,7 +369,7 @@ The stdio MCP server (`purrassist mcp --root DIRECTORY`) lists
 `recover_tool_calls`. Its arguments are `output` (the turn, a string) and
 `tools` (the declarations) plus optional `tools_format` (`openai`, the
 default, `mcp`, or `anthropic`), `dialects` (built-in dialect ids; default
-all three), `stop` (`stop`, `length`, `tool_calls`, `content_filter`,
+all of them), `stop` (`stop`, `length`, `tool_calls`, `content_filter`,
 `unknown`, or `{"stop_sequence": STRING}`), `tool_choice` (an `OpenAI` or
 Anthropic form), `policy` (`per-tool`, `structural`, `tolerant`), `effects`,
 `reasoning` (`separate`, `separate-open`, `content`), `ambiguity` (`report`,

@@ -319,3 +319,38 @@ fn dangling_opener_after_a_call_keeps_the_call() {
     assert!(schema.validate(&actual).unwrap().valid);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// The MCP tool accepts `llama3-json.v1` in its dialect allow-list and as
+/// an emission target, and reads Llama 3 JSON under the default allow-list.
+#[test]
+fn llama3_json_dialect_over_mcp() {
+    let (tools, root) = tools("llama3");
+    let output = r#"{"name": "list_dir", "parameters": {"path": "src", "depth": 2}}"#;
+    for extra in ["", r#","dialects":["llama3-json.v1"]"#] {
+        let node = tools
+            .call("recover_tool_calls", &arguments(output, extra))
+            .unwrap();
+        assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+        assert_eq!(
+            node.pointer("/value/calls/0/dialect")
+                .and_then(Node::as_str),
+            Some("llama3-json.v1")
+        );
+        assert_eq!(
+            node.pointer("/value/calls/0/arguments").unwrap().to_json(),
+            r#"{"path":"src","depth":2}"#
+        );
+    }
+    let node = tools
+        .call(
+            "recover_tool_calls",
+            &arguments(QWEN, r#","emit":"llama3-json.v1""#),
+        )
+        .unwrap();
+    assert_eq!(
+        node.pointer("/value/emitted/output/text")
+            .and_then(Node::as_str),
+        Some(r#"{"name": "list_dir", "parameters": {"depth":2,"path":"src"}}"#)
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

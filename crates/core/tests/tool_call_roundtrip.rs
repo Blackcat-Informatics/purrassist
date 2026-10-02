@@ -469,7 +469,9 @@ fn declaration_forms_render_every_tool() {
                     continue;
                 }
                 let schema = parameters.unwrap_or(match form {
-                    DeclarationForm::OpenAi | DeclarationForm::Hermes => "",
+                    DeclarationForm::OpenAi
+                    | DeclarationForm::Hermes
+                    | DeclarationForm::Llama3Json => "",
                     _ => r#"{"type":"object"}"#,
                 });
                 assert!(
@@ -605,6 +607,10 @@ fn hermes_call(path: &str, limit: u32) -> String {
     )
 }
 
+fn llama3_call(path: &str, limit: u32) -> String {
+    format!("{{\"name\": \"read\", \"parameters\": {{\"path\": \"{path}\", \"limit\": {limit}}}}}")
+}
+
 fn openai_call(path: &str, limit: u32) -> String {
     format!(
         "{{\"id\": \"c{limit}\", \"type\": \"function\", \"function\": {{\"name\": \"read\", \"arguments\": \"{{\\\"path\\\": \\\"{path}\\\", \\\"limit\\\": {limit}}}\"}}}}"
@@ -679,6 +685,7 @@ fn put_minimal_diff() {
     let think = "<think>Which files?</think>";
     put_in(&DialectId::Qwen3CoderXml, qwen_call, think, "lib/d e.rs");
     put_in(&DialectId::Hermes, hermes_call, think, "\"lib/d e.rs\"");
+    put_in(&DialectId::Llama3Json, llama3_call, "", "\"lib/d e.rs\"");
     put_in(
         &DialectId::OpenAiToolCalls,
         openai_call,

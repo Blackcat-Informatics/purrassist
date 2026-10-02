@@ -220,6 +220,14 @@ TOOL_CALL_WITNESSES = [
     b"<tool_call>\t\t{\t\"name\":\"write_file\",\"arguments\"\t\t:\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"\t}\t</tool_call>",
     # hermes.v1: delete_path, read_file (seed 3)
     b"<tool_call>{\"name\":\"delete_path\"\t,\t\"arguments\":\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"}\t\t</tool_call>\n<tool_call>\t{\t\"name\"\t:\t\t\"read_file\"\t\t,\t\"arguments\":\"{\\\"path\\\":\\\"  indented src/lib.rs\\\",\\\"limit\\\":417}\"}\t</tool_call>",
+    # llama3-json.v1: read_file (seed 0)
+    b"<|python_tag|>{\t\t\"type\":\t\"function\"\t,\t\"parameters\":{\"path\":\"tab\\tseparated \\n  block\\n\"}\t,\"name\":\t\t\"read_file\"}",
+    # llama3-json.v1: get_weather, list_dir (seed 1)
+    b"{\t\"name\"\t:\"get_weather\",\"parameters\"\t:\t\t{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"}}\n<|python_tag|>{\t\"type\"\t:\"function\",\"parameters\"\t\t:\t{\"path\":\"tab\\tseparated\"},\"name\":\t\"list_dir\"}",
+    # llama3-json.v1: write_file (seed 2)
+    b"<|python_tag|>\t\t{\t\t\"name\":\"write_file\"\t\t,\t\"arguments\":\t\t\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"}",
+    # llama3-json.v1: delete_path, read_file (seed 3)
+    b"{\"name\":\t\"delete_path\"\t,\"parameters\":\t\t\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"\t\t}\n{\t\"parameters\"\t:\"{\\\"path\\\":\\\"line one\\\\nline two\\\",\\\"limit\\\":-308}\"\t\t,\t\"name\":\"read_file\"\t}",
     # openai-tool-calls.v1: read_file (seed 0)
     b"{\"type\": \"function\",\t\t\"function\"\t:\t{\t\"arguments\":{\"path\":\"tab\\tseparated \\n  block\\n\"},\"name\"\t:\"read_file\"}\t\t,\"id\":\"call_0f4d3872\"\t\t}",
     # openai-tool-calls.v1: get_weather, list_dir (seed 1)
@@ -287,6 +295,19 @@ TOOL_CALL_REPAIRS = [
     b'<tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n</parameter>\n</function>\n</tool_call>',
     b'Reading \xff\xfe now.\n<tool_call>{"name": "read_file", "arguments": {"path": "a.rs"}}</tool_call>',
     b'<tool_call>\n<function=write_file>\n<parameter=path>\na\xc3\n</parameter>\n<parameter=content>\n\xe2\x82\n</parameter>\n</function>\n</tool_call>',
+    # Llama 3 JSON: a missing final brace at the end and before the next
+    # call, a repeated brace, stringified parameters, arguments cut before
+    # an end-of-message token, a call after the tag with the `arguments`
+    # key, a built-in Python-syntax call after the tag, and a Hermes
+    # wrapper around a Llama 3 object.
+    b'{"name": "get_weather", "parameters": {"city": "Paris", "unit": "celsius"}',
+    b'{"name": "read_file", "parameters": {"path": "a.rs"}\n{"name": "list_dir", "parameters": {"path": "."}}',
+    b'{"name": "list_dir", "parameters": {"path": "."}}}',
+    b'{"name": "read_file", "parameters": "{\\"path\\": \\"a.rs\\"}"}; {"name": "current_time", "parameters": {}}',
+    b'<|python_tag|>{"name": "read_file", "parameters": {"path": "a.rs"<|eom_id|>',
+    b'<|python_tag|>{"name": "get_weather", "arguments": {"city": "Lima"}}<|eom_id|>',
+    b'<|python_tag|>brave_search.call(query="weather")<|eom_id|>',
+    b'<tool_call>\n{"name": "read_file", "parameters": {"path": "a.rs"}}\n</tool_call>',
 ]
 
 # Inputs that hold no recoverable call.
@@ -303,6 +324,9 @@ TOOL_CALL_NEGATIVES = [
     b'[' * 64 + b'{"name": "read_file"' + b']' * 64,
     b'\xff\xfe\xfd',
     b'<think></think><think>',
+    # JSON content that is not call-shaped stays content.
+    b'Record: {"name": "Ada", "age": 36} and {"user": {"name": "Bob"}}',
+    b'{"name": "read_file"' + b'{' * 64,
 ]
 
 TOOL_CALL_SEEDS = [
@@ -314,7 +338,8 @@ TOOL_CALL_TOKENS = [
     b'<tool_call>', b'</tool_call>', b'<function=', b'</function>', b'<parameter=',
     b'</parameter>', b'</parameters>', b'<think>', b'</think>', b'{"name":',
     b'"arguments":', b'"tool_calls"', b'"function"', b'"id"', b'"type"', b'```',
-    b'```json\n', b'read_file', b'write_file', b'current_time', b'path', b'\n', b'\t',
+    b'```json\n', b'"parameters":', b'<|python_tag|>', b'<|eom_id|>', b'<|eot_id|>',
+    b'; ', b'read_file', b'write_file', b'current_time', b'path', b'\n', b'\t',
     b'"', b'\\', b'{', b'}', b'[', b']', b':', b',', b'>', b'<', b'null', b'1.50',
     b'\x00', b'\x04', b'\x80', 'é'.encode(), b'\xff', b'\xe2\x82',
 ]

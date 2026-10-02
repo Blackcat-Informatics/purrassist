@@ -1674,3 +1674,85 @@ fn missing_wrapper_close_then_prose_then_call() {
     assert_eq!(first.outcome, CallOutcome::Resolved);
     assert!(rules_of(first).contains(&"tool_call.markup.missing-wrapper-close"));
 }
+
+/// Llama 3 JSON: the object's final brace is its closer, so a missing one
+/// at the end of output, before the next call, or a repeated one is
+/// repaired, and every repaired call is `Resolved`.
+#[test]
+fn llama3_closing_brace_repairs() {
+    for (name, rule, count) in [
+        (
+            "llama3_missing_final_brace_at_end",
+            "tool_call.markup.missing-closers-at-end",
+            1,
+        ),
+        (
+            "llama3_missing_brace_between_calls",
+            "tool_call.markup.missing-wrapper-close",
+            2,
+        ),
+        (
+            "llama3_repeated_final_brace",
+            "tool_call.markup.stray-closer",
+            1,
+        ),
+        (
+            "llama3_stringified_parameters",
+            "tool_call.arguments.decode-string",
+            1,
+        ),
+    ] {
+        let (_, result) = golden(name);
+        assert!(matches!(result.outcome, Outcome::Resolved(_)), "{name}");
+        let calls = reading(&result);
+        assert_eq!(calls.calls.len(), count, "{name}: {calls:#?}");
+        assert_eq!(calls.finish, Finish::Calls, "{name}");
+        assert!(calls.rejected.is_empty(), "{name}");
+        assert!(
+            calls
+                .calls
+                .iter()
+                .all(|call| call.outcome == CallOutcome::Resolved)
+        );
+        assert!(
+            calls
+                .calls
+                .iter()
+                .all(|call| call.dialect == DialectId::Llama3Json)
+        );
+        assert!(rules_of(&calls.calls[0]).contains(&rule), "{name}");
+        assert_eq!(calls.usable().len(), count, "{name}");
+    }
+}
+
+/// Llama 3 JSON never hides content or invents a call: JSON without the
+/// call-shaped `"parameters"` evidence stays content with no rejected
+/// attempt, a built-in Python-syntax call after `<|python_tag|>` is a
+/// rejected attempt, and a call cut off by a length stop is truncated.
+#[test]
+fn llama3_evidence_and_honesty() {
+    let (golden_turn, result) = golden("llama3_json_content_not_a_call");
+    let calls = reading(&result);
+    assert!(calls.calls.is_empty() && calls.rejected.is_empty());
+    assert_eq!(calls.finish, Finish::ContentOnly);
+    assert_eq!(calls.content.len(), 1);
+    assert_eq!(calls.content[0], 0..golden_turn.input.len());
+
+    let (_, result) = golden("llama3_python_tag_builtin_call_rejected");
+    let calls = reading(&result);
+    assert_eq!(calls.calls.len(), 0);
+    assert_eq!(calls.rejected.len(), 1);
+    assert_eq!(calls.rejected[0].dialect, DialectId::Llama3Json);
+    assert_eq!(calls.finish, Finish::Unresolved);
+
+    let (_, result) = golden("llama3_truncated_arguments_length");
+    let call = the_call(&result);
+    assert_eq!(
+        call.outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::Truncated
+        }
+    );
+    assert!(!call.is_usable());
+    assert_eq!(reading(&result).finish, Finish::Truncated);
+}

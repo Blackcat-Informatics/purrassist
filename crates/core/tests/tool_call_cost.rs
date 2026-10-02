@@ -164,6 +164,10 @@ fn hermes(content: &str) -> String {
     )
 }
 
+fn llama3(content: &str) -> String {
+    format!("{{\"name\": \"write\", \"parameters\": {{\"content\": \"{content}\"}}}}")
+}
+
 /// The published bound for `n` bytes over `set` with no error
 /// configuration explored (`E = 0`).
 fn bound(set: &DialectSet, n: usize) -> u64 {
@@ -204,7 +208,11 @@ fn one_mib_argument_work_bound() {
     let request = ToolRecoveryRequest::new(Effort::Standard).budget(
         ToolRecoveryRequest::sized_budget(Effort::Standard, 2 << 20, 2),
     );
-    for (label, print) in [("qwen", qwen as fn(&str) -> String), ("hermes", hermes)] {
+    for (label, print) in [
+        ("qwen", qwen as fn(&str) -> String),
+        ("hermes", hermes),
+        ("llama3", llama3),
+    ] {
         let mut measured = Vec::new();
         for size in [1 << 16, 1 << 20] {
             let content = "a".repeat(size);
@@ -244,8 +252,9 @@ fn one_mib_argument_work_bound() {
 /// C4: a 1 MiB string argument recovers under the unmodified
 /// `Effort::Maximum` preset and under `ToolRecoveryRequest::sized` for every
 /// effort from `Quick` to `Maximum`, with identical charges in every case
-/// and peak scratch at most 16 bytes per input byte for Qwen3-Coder XML and
-/// Hermes arguments (`docs/RESOURCES.md` quotes these measurements). `OpenAI`
+/// and peak scratch at most 16 bytes per input byte for Qwen3-Coder XML,
+/// Hermes and Llama 3 JSON arguments (`docs/RESOURCES.md` quotes these
+/// measurements). `OpenAI`
 /// stringified arguments decode their escaped string again, so they are
 /// held to `RECOVER_SCRATCH_PER_BYTE` instead, under `sized` budgets.
 #[test]
@@ -255,6 +264,7 @@ fn one_mib_argument_fits_published_budget() {
     for (label, input, sixteen) in [
         ("qwen", qwen(&content), true),
         ("hermes", hermes(&content), true),
+        ("llama3", llama3(&content), true),
         ("openai", openai(&content), false),
     ] {
         let len = input.len();
@@ -344,7 +354,7 @@ fn push_chunking_identical_work() {
 fn work_independent_of_dialect_count_beyond_bound() {
     let tools = tools();
     let content = "a".repeat(1 << 16);
-    for input in [qwen(&content), hermes(&content)] {
+    for input in [qwen(&content), hermes(&content), llama3(&content)] {
         let n = input.len() as u64;
         let mut previous: Option<(u64, Vec<DialectId>)> = None;
         for dialects in [
@@ -354,6 +364,12 @@ fn work_independent_of_dialect_count_beyond_bound() {
                 DialectId::Qwen3CoderXml,
                 DialectId::Hermes,
                 DialectId::OpenAiToolCalls,
+            ],
+            vec![
+                DialectId::Qwen3CoderXml,
+                DialectId::Hermes,
+                DialectId::OpenAiToolCalls,
+                DialectId::Llama3Json,
             ],
         ] {
             let set = DialectSet::new(dialects.clone(), &mut Governor::new(Budget::default()))

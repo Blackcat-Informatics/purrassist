@@ -310,6 +310,7 @@ impl<'g> Printer<'g> {
                 Some(text) if capture.is_none() && fill.layouts() => self.emit(text, governor)?,
                 _ => self.walk(fill, grammar.production_expr(*id), capture, governor)?,
             },
+            Expr::Commit => {}
         }
         Ok(())
     }

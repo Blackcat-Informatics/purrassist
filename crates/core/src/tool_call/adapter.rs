@@ -182,11 +182,12 @@ const KEYWORD_RECORD: u64 = 48;
 /// tool declared without one; MCP and Anthropic, which require a schema,
 /// render `{"type":"object"}`.
 ///
-/// [`DeclarationForm::Qwen3CoderXml`] and [`DeclarationForm::Hermes`] are
-/// printed by their dialect grammar's `declaration` production (see
-/// [`emit`](super::emit)): a Qwen3-Coder `<function>` entry
+/// [`DeclarationForm::Qwen3CoderXml`], [`DeclarationForm::Hermes`] and
+/// [`DeclarationForm::Llama3Json`] are printed by their dialect grammar's
+/// `declaration` production (see [`emit`](super::emit)): a Qwen3-Coder
+/// `<function>` entry
 /// `<function><name>NAME</name><description>DESC</description><parameters>SCHEMA</parameters></function>`
-/// and a Hermes `<tools>` entry
+/// and a Hermes `<tools>` entry or Llama 3 function entry (the same shape)
 /// `{"type":"function","function":{"name":"NAME","description":"DESC","parameters":SCHEMA}}`.
 /// `SCHEMA` is always the exact parameters schema text, verbatim (the
 /// chat template's per-parameter XML expansion of the schema is not
@@ -214,6 +215,8 @@ pub enum DeclarationForm {
     Qwen3CoderXml,
     /// A Hermes system-prompt `<tools>` entry (`hermes.v1`).
     Hermes,
+    /// A Llama 3.x prompt function entry (`llama3-json.v1`).
+    Llama3Json,
 }
 
 impl DeclarationForm {
@@ -221,14 +224,15 @@ impl DeclarationForm {
     ///
     /// ```
     /// use purrassist_core::tool_call::DeclarationForm;
-    /// assert_eq!(DeclarationForm::ALL.len(), 5);
+    /// assert_eq!(DeclarationForm::ALL.len(), 6);
     /// ```
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::OpenAi,
         Self::Mcp,
         Self::Anthropic,
         Self::Qwen3CoderXml,
         Self::Hermes,
+        Self::Llama3Json,
     ];
 
     /// The dialect whose `declaration` production prints this form, or
@@ -244,6 +248,7 @@ impl DeclarationForm {
         match self {
             Self::Qwen3CoderXml => Some(DialectId::Qwen3CoderXml),
             Self::Hermes => Some(DialectId::Hermes),
+            Self::Llama3Json => Some(DialectId::Llama3Json),
             Self::OpenAi | Self::Mcp | Self::Anthropic => None,
         }
     }
@@ -255,12 +260,13 @@ impl DeclarationForm {
             Self::Anthropic => "Anthropic",
             Self::Qwen3CoderXml => "Qwen3-Coder XML",
             Self::Hermes => "Hermes",
+            Self::Llama3Json => "Llama 3 JSON",
         }
     }
 
     const fn parameters_key(self) -> &'static str {
         match self {
-            Self::OpenAi | Self::Qwen3CoderXml | Self::Hermes => "parameters",
+            Self::OpenAi | Self::Qwen3CoderXml | Self::Hermes | Self::Llama3Json => "parameters",
             Self::Mcp => "inputSchema",
             Self::Anthropic => "input_schema",
         }
@@ -512,9 +518,10 @@ pub(super) fn render_canonical(
         fields.push_str(&json::quote(description));
     }
     let schema = match form {
-        DeclarationForm::OpenAi | DeclarationForm::Qwen3CoderXml | DeclarationForm::Hermes => {
-            parameters
-        }
+        DeclarationForm::OpenAi
+        | DeclarationForm::Qwen3CoderXml
+        | DeclarationForm::Hermes
+        | DeclarationForm::Llama3Json => parameters,
         DeclarationForm::Mcp | DeclarationForm::Anthropic => {
             Some(parameters.unwrap_or(NO_PARAMETERS))
         }
@@ -526,7 +533,10 @@ pub(super) fn render_canonical(
         fields.push_str(schema);
     }
     match form {
-        DeclarationForm::OpenAi | DeclarationForm::Qwen3CoderXml | DeclarationForm::Hermes => {
+        DeclarationForm::OpenAi
+        | DeclarationForm::Qwen3CoderXml
+        | DeclarationForm::Hermes
+        | DeclarationForm::Llama3Json => {
             format!("{{\"type\":\"function\",\"function\":{{{fields}}}}}")
         }
         DeclarationForm::Mcp | DeclarationForm::Anthropic => format!("{{{fields}}}"),

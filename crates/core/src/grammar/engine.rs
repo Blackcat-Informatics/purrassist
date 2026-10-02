@@ -35,6 +35,11 @@
 //! attempt that completes, is rejected, or is absorbed emits [`Event`]s that
 //! the turn-level segmentation consumes. This layer never depends on the turn
 //! level, so its events are a pure function of the bytes.
+//!
+//! An attempt opens (is reported, and may be rejected) when its opener
+//! literal completes, or, in a program with `commit` instructions, only when
+//! one of its configurations passes a commit or it completes; until then its
+//! failure is silent and the turn level holds every report from its start.
 // `unreachable_pub` and `redundant_pub_crate` disagree on the right
 // visibility for items of a crate-private module
 // (https://github.com/rust-lang/rust-clippy/issues/6188); these items are
@@ -413,7 +418,11 @@ impl<'s> Step<'_, 's> {
             Inst::Until { set, next } | Inst::Slot { set, next, .. } => {
                 self.step_body(thread, set, next, byte, stack, out, governor)
             }
-            Inst::Split(..) | Inst::Open { .. } | Inst::Close { .. } | Inst::Accept => {
+            Inst::Split(..)
+            | Inst::Open { .. }
+            | Inst::Close { .. }
+            | Inst::Commit { .. }
+            | Inst::Accept => {
                 unreachable!("configurations wait only at terminals")
             }
         }
@@ -705,7 +714,7 @@ impl<'s> Step<'_, 's> {
         out: &mut Out,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        if !thread.opened && self.program.openers.contains(&thread.pc) {
+        if !thread.opened && !self.program.deferred() && self.program.openers.contains(&thread.pc) {
             thread.opened = true;
             out.opened.push((thread.attempt, at))?;
         }
@@ -748,6 +757,12 @@ impl<'s> Step<'_, 's> {
                 Inst::Close { kind, next } => {
                     let node = self.arena.push(hist, HistKind::Close(kind, at))?;
                     self.pending.push((next, node));
+                    continue;
+                }
+                // The attempt opens when a configuration past the commit
+                // reaches the turn level (see `Engine::commit`).
+                Inst::Commit { next } => {
+                    self.pending.push((next, hist));
                     continue;
                 }
                 Inst::Accept => {
@@ -1542,6 +1557,14 @@ impl<'s> Engine<'s> {
         merge(&mut live, &mut self.arena, governor)?;
         let mut completed = core::mem::replace(&mut self.out.completed, ScratchVec::new(governor));
         let failed = core::mem::replace(&mut self.out.failed, ScratchVec::new(governor));
+        self.commit(
+            table,
+            live.as_slice()
+                .iter()
+                .chain(completed.as_slice())
+                .chain(failed.as_slice().iter().map(|failure| &failure.thread)),
+            governor,
+        )?;
         self.open(table, governor)?;
         // Repairs for attempts left with nothing.
         let _records = governor.lease_scratch(
@@ -1576,9 +1599,51 @@ impl<'s> Engine<'s> {
             }
         }
         merge(&mut live, &mut self.arena, governor)?;
+        // A repair may carry an attempt past its commit, and a completion
+        // always commits its attempt.
+        if self.tables[table].program.deferred() {
+            self.commit(
+                table,
+                live.as_slice().iter().chain(completed.as_slice()),
+                governor,
+            )?;
+            self.open(table, governor)?;
+        }
         self.complete(table, &mut completed, eof, governor)?;
         self.retire(table, &live, at, eof);
         self.tables[table].threads = live;
+        Ok(())
+    }
+
+    /// Queue the opening of every attempt of a deferred program (one with
+    /// `commit` instructions) that one of `threads` shows committed: a
+    /// configuration at a location only a committed attempt reaches, or a
+    /// completion. The attempt is reported opened one byte after its start,
+    /// so it orders before every report inside it, which the turn level
+    /// holds back while the attempt is uncommitted ([`Self::held_floor`]).
+    fn commit<'t>(
+        &mut self,
+        table: usize,
+        threads: impl Iterator<Item = &'t Thread>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let program = self.tables[table].program;
+        if !program.deferred() {
+            return Ok(());
+        }
+        for thread in threads {
+            governor.charge(Resource::Work, K_THREAD)?;
+            let accepted = matches!(program.insts[thread.pc as usize], Inst::Accept);
+            if (accepted || program.commits(thread.pc))
+                && self.tables[table]
+                    .attempts
+                    .as_slice()
+                    .iter()
+                    .any(|record| record.id == thread.attempt && !record.opened)
+            {
+                self.out.opened.push((thread.attempt, thread.start + 1))?;
+            }
+        }
         Ok(())
     }
 
@@ -1907,15 +1972,28 @@ impl<'s> Engine<'s> {
     }
 
     /// The earliest end of a call whose inserted wrapper closer is still
-    /// being decided ([`Self::scan_trail`]): the turn layer settles no
-    /// report at or after it until the decision is made.
+    /// being decided ([`Self::scan_trail`]), or start of an attempt of a
+    /// program with `commit` that has not committed yet ([`Self::commit`]):
+    /// the turn layer settles no report at or after it until the decision
+    /// is made or the attempt commits or ends.
     pub(crate) fn held_floor(&self) -> Option<usize> {
-        self.tables
+        let trails = self
+            .tables
             .iter()
             .flat_map(|table| table.trails.iter())
             .filter(|trail| trail.scan.is_some())
-            .map(|trail| trail.thread.pos)
-            .min()
+            .map(|trail| trail.thread.pos);
+        // An uncommitted attempt of a deferred program may still open at
+        // its start: nothing at or after its start is settled until it
+        // commits or ends.
+        let uncommitted = self
+            .tables
+            .iter()
+            .filter(|table| table.program.deferred())
+            .flat_map(|table| table.attempts.as_slice().iter())
+            .filter(|record| !record.opened)
+            .map(|record| record.start);
+        trails.chain(uncommitted).min()
     }
 
     /// Record every inserted wrapper closer ending `thread`'s history as

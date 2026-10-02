@@ -49,6 +49,9 @@ pub(crate) enum Inst {
     Open { kind: CaptureKind, next: u32 },
     /// Close the innermost capture.
     Close { kind: CaptureKind, next: u32 },
+    /// The attempt is committed: from here on it is a call (or result)
+    /// attempt, reported when it is rejected.
+    Commit { next: u32 },
     /// The production matched.
     Accept,
 }
@@ -72,9 +75,27 @@ pub(crate) struct Program {
     pub(crate) first: [u64; 4],
     /// The configuration bound (see `CompiledGrammar::configuration_bound`).
     pub(crate) bound: u64,
+    /// For a program with `commit` instructions, which locations only a
+    /// committed attempt reaches (every path from the start to them passes
+    /// a `commit`); empty for a program without one, whose attempts open
+    /// at their opener literal.
+    pub(crate) committed: Vec<bool>,
 }
 
 impl Program {
+    /// Whether the program's attempts open at a `commit` rather than at
+    /// their opener literal.
+    #[inline]
+    pub(crate) const fn deferred(&self) -> bool {
+        !self.committed.is_empty()
+    }
+
+    /// Whether a configuration at `pc` belongs to a committed attempt.
+    #[inline]
+    pub(crate) fn commits(&self, pc: u32) -> bool {
+        self.committed.get(pc as usize).copied().unwrap_or(false)
+    }
+
     #[inline]
     pub(crate) const fn starts_with(&self, byte: u8) -> bool {
         self.first[(byte >> 6) as usize] & (1 << (byte & 63)) != 0
@@ -278,6 +299,7 @@ impl Builder<'_> {
                     .map(|item| self.resolve(item))
                     .collect::<Result<_, _>>()?,
             ),
+            PExpr::Commit => Expr::Commit,
             PExpr::Repeat { inner, op, .. } => {
                 let (min, max) = match op {
                     b'*' => (0, None),
@@ -330,7 +352,8 @@ fn check_pairs(expr: &PExpr, in_sequence: bool) -> Result<(), GrammarError> {
         | PExpr::Class { .. }
         | PExpr::Until { .. }
         | PExpr::Slot { .. }
-        | PExpr::Name { .. } => Ok(()),
+        | PExpr::Name { .. }
+        | PExpr::Commit => Ok(()),
     }
 }
 
@@ -347,7 +370,8 @@ fn references(expr: &Expr, into: &mut Vec<u32>) {
         | Expr::Closer(_)
         | Expr::Class(_)
         | Expr::Until(_)
-        | Expr::Slot { .. } => {}
+        | Expr::Slot { .. }
+        | Expr::Commit => {}
     }
 }
 
@@ -382,7 +406,8 @@ fn captures(productions: &[Production], root: ProductionId, kind: CaptureKind) -
             | Expr::Closer(_)
             | Expr::Class(_)
             | Expr::Until(_)
-            | Expr::Slot { .. } => false,
+            | Expr::Slot { .. }
+            | Expr::Commit => false,
         }
     }
     let mut memo = vec![None; productions.len()];
@@ -512,6 +537,7 @@ impl Emitter<'_, '_> {
                 let expr = &self.productions[id.index()].expr;
                 self.emit(expr, next)?
             }
+            Expr::Commit => self.push(Inst::Commit { next })?,
         })
     }
 }
@@ -530,12 +556,46 @@ fn epsilon_closure(insts: &[Inst], start: u32) -> Vec<u32> {
                 stack.push(second);
                 stack.push(first);
             }
-            Inst::Open { next, .. } | Inst::Close { next, .. } => stack.push(next),
+            Inst::Open { next, .. } | Inst::Close { next, .. } | Inst::Commit { next } => {
+                stack.push(next);
+            }
             _ => reached.push(pc),
         }
     }
     reached.sort_unstable();
     reached
+}
+
+/// The locations only a committed attempt reaches: those not reachable
+/// from `start` without passing a `commit` instruction. Empty when the
+/// program has no `commit`. Charges one `Work` unit per instruction.
+fn committed(
+    insts: &[Inst],
+    start: u32,
+    governor: &mut Governor,
+) -> Result<Vec<bool>, GrammarError> {
+    if !insts.iter().any(|inst| matches!(inst, Inst::Commit { .. })) {
+        return Ok(Vec::new());
+    }
+    charge(governor, size(insts.len()), size(insts.len()))?;
+    let mut reached = vec![false; insts.len()];
+    let mut stack = vec![start];
+    while let Some(pc) = stack.pop() {
+        if core::mem::replace(&mut reached[pc as usize], true) {
+            continue;
+        }
+        match insts[pc as usize] {
+            Inst::Lit { next, .. }
+            | Inst::Class { next, .. }
+            | Inst::Until { next, .. }
+            | Inst::Slot { next, .. }
+            | Inst::Open { next, .. }
+            | Inst::Close { next, .. } => stack.push(next),
+            Inst::Split(first, second) => stack.extend([first, second]),
+            Inst::Commit { .. } | Inst::Accept => {}
+        }
+    }
+    Ok(reached.into_iter().map(|reached| !reached).collect())
 }
 
 /// Every confusable spelling of `bytes`: for each non-empty subset of the
@@ -667,18 +727,20 @@ fn compile_program(
                 parameters |= *kind == CaptureKind::ParamName;
                 0
             }
-            Inst::Split(..) | Inst::Close { .. } | Inst::Accept => 0,
+            Inst::Split(..) | Inst::Close { .. } | Inst::Commit { .. } | Inst::Accept => 0,
         });
     }
     if arguments && parameters {
         return Err(GrammarError::ConflictingArguments { offset });
     }
+    let committed = committed(&insts, start, governor)?;
     Ok(Program {
         insts,
         start,
         openers,
         first,
         bound,
+        committed,
     })
 }
 

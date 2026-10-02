@@ -19,10 +19,11 @@ into a `CompiledGrammar`. One compiled grammar serves three purposes:
   choices to print well-formed calls for given argument shapes, for tests and
   corpora.
 
-The three built-in dialects are written in this DSL:
+The four built-in dialects are written in this DSL:
 [`qwen3-coder-xml.v1`](../../crates/core/src/tool_call/dialects/qwen3-coder-xml.v1.grammar),
-[`hermes.v1`](../../crates/core/src/tool_call/dialects/hermes.v1.grammar), and
-[`openai-tool-calls.v1`](../../crates/core/src/tool_call/dialects/openai-tool-calls.v1.grammar).
+[`hermes.v1`](../../crates/core/src/tool_call/dialects/hermes.v1.grammar),
+[`openai-tool-calls.v1`](../../crates/core/src/tool_call/dialects/openai-tool-calls.v1.grammar), and
+[`llama3-json.v1`](../../crates/core/src/tool_call/dialects/llama3-json.v1.grammar).
 A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 [Add a custom dialect](#add-a-custom-dialect).
 
@@ -33,7 +34,8 @@ A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
   tokens is insignificant.
 - Identifiers match `[A-Za-z_][A-Za-z0-9_-]*`. Productions and closer classes
   share one namespace. The keywords `grammar`, `reasoning`, `confusable`,
-  `closer`, `layout`, `until`, and `slot` cannot name a production or a closer.
+  `closer`, `layout`, `until`, `slot`, and `commit` cannot name a production
+  or a closer.
 - String literals are double-quoted byte strings with the escapes `\\`, `\"`,
   `\n`, `\r`, `\t`, `\xHH` (one byte), and `\u{HEX}` (one Unicode scalar
   value, encoded as UTF-8). Every literal, delimiter, spelling, and marker is
@@ -61,6 +63,7 @@ A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 | `until("D1", "D2", ...)` | A verbatim body up to, not including, the first occurrence of any delimiter, or to the end of input. |
 | `slot(CODEC, "D1", ...)` | Like `until`, with the body decoded by the named argument codec. |
 | `NAME` | A production (inlined) or a closer class. |
+| `commit` | Zero-width: an attempt that passes it is a call (or result) attempt from here on. See [Commit points](#commit-points). |
 | `KIND:item` | A capture of `item`'s span. |
 | `a b` | Sequence. |
 | `a \| b` | Alternation. |
@@ -157,6 +160,45 @@ naming a production that is not a class, giving text the class does not match,
 or a second `layout` for one production is a compile error. The built-in
 Qwen3-Coder XML and Hermes grammars use `layout` so that printed calls match
 the chat templates' newline layout byte for byte.
+
+## Commit points
+
+A `call` or `result` attempt normally *opens* when its opener literal
+completes: from then on the turn holds its bytes, and an attempt that no
+repair completes is a rejected attempt (finish `Unresolved`). That is right
+for a distinctive opener such as `<tool_call>`, and wrong for a format with
+none: a Llama 3 JSON call is a plain `{"name": ..., "parameters": ...}`
+object, and an opener of `{` would turn every JSON object in prose into a
+rejected attempt.
+
+`commit` moves the opening point. In a program that contains `commit`, an
+attempt opens only when one of its configurations reaches a location that
+every path from the start passes a `commit` to reach, or when it completes:
+
+```text
+call = "{" ws? "\"name\"" ws? ":" ws? "\"" name:tool-name "\"" ws? "," ws?
+       "\"parameters\"" commit ws? ":" arguments:slot(json, "\x00") ws? call-end;
+```
+
+- Before it commits, an attempt that fails is silent: no rejection is
+  reported and its bytes stay content. A length or other stop before the
+  commit point leaves the bytes as content too. Repairs are limited as
+  before an opener completes (closer insertion and stray-closer deletion
+  need an opened attempt).
+- After it commits, the attempt is a call attempt like any other: repaired,
+  rejected, or truncated, from its opener's start.
+- Reports at or after the start of an uncommitted attempt (other dialects'
+  calls, reasoning markers) are held until it commits or ends, so the
+  result never depends on how the output is chunked. A committed attempt
+  takes the bytes from its start, so a call of another dialect inside it
+  is not read; a call inside an attempt that never commits is.
+- `commit` prints nothing. Several commits on one path are one.
+- An alternative that already starts with a distinctive token commits
+  right after it (`"<|python_tag|>" commit ...`), so whatever follows the
+  token is a call attempt.
+
+Choose the commit point at the first evidence that the text is a call and
+not data, and keep every token before it free of repairs the format needs.
 
 ## Reasoning markers
 
@@ -385,6 +427,8 @@ of this paragraph, so the walkthrough cannot drift from the engine.
   source digests are equal.
 - Start `call` and `result` with a distinctive literal opener. Content may not
   contain a complete opener: every complete opener starts a call attempt.
+  A format without one opens at its first byte and places a `commit` at its
+  first call-shaped evidence ([Commit points](#commit-points)).
 - Declare every closing token as a closer class, and list the variant
   spellings models actually produce.
 - List sibling openers and enclosing closers among slot delimiters.

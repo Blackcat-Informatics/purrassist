@@ -46,6 +46,7 @@
 //! | `qwen3-coder-xml.v1` | `<tool_call>\n<function=NAME>` + body + `</function>\n</tool_call>` (the chat template's layout) |
 //! | `hermes.v1` | `<tool_call>\n{"name":"NAME","arguments":ARGS}\n</tool_call>` (the template's wrapper layout; the object is compact) |
 //! | `openai-tool-calls.v1` | `{"id":"ID","type":"function","function":{"name":"NAME","arguments":"ARGS"}}` |
+//! | `llama3-json.v1` | `{"name": "NAME", "parameters": ARGS}` (the template's layout; `ARGS` is compact) |
 //!
 //! `ARGS` is the compact JSON of the argument tree with every number's
 //! exact spelling ([`Node::to_json`]); the `OpenAI` dialect carries it

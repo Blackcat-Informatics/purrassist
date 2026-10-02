@@ -1,0 +1,42 @@
+{
+  "description": "Plain JSON content that is not call-shaped (no \"parameters\" member after \"name\"), including an object whose first member is \"name\": no Llama 3 JSON attempt commits, so every byte stays content and nothing is rejected.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "llama3-json.v1"
+  ],
+  "stop": "stop",
+  "input": "Here is the record: {\"name\": \"Ada\", \"age\": 36} and a nested one {\"user\": {\"name\": \"Bob\", \"tags\": [\"x\"]}}.",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "content_only",
+  "calls": [],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

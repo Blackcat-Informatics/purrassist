@@ -11,18 +11,19 @@ call. The operation is `tool_call.recover.v1`, implemented in
 `recover_tool_calls` MCP tool, and the `purrassist recover-tool-calls` CLI
 command.
 
-Three dialects are built in:
+Four dialects are built in:
 
 | Dialect | Shape | Reference |
 | --- | --- | --- |
 | `qwen3-coder-xml.v1` | `<tool_call><function=NAME><parameter=P>VALUE</parameter></function></tool_call>` | [dialect](dialects/qwen3-coder-xml.v1.md) |
 | `hermes.v1` | `<tool_call>{"name": NAME, "arguments": {...}}</tool_call>` | [dialect](dialects/hermes.v1.md) |
 | `openai-tool-calls.v1` | `tool_calls` elements `{"id": ID, "type": "function", "function": {...}}` as text | [dialect](dialects/openai-tool-calls.v1.md) |
+| `llama3-json.v1` | `{"name": NAME, "parameters": {...}}`, optionally after `<\|python_tag\|>` | [dialect](dialects/llama3-json.v1.md) |
 
 Callers add their own dialects with the grammar DSL
 ([GRAMMAR.md](GRAMMAR.md)). Streaming recognition, `purrassist-derive`, and the
-remaining dialects (Anthropic tool_use, Llama 3.x, Mistral, DeepSeek, GLM,
-Kimi, Gemma, Harmony, Pythonic, bare JSON) are tracked in issue #4.
+remaining dialects (Anthropic tool_use, Mistral, DeepSeek, GLM, Kimi, Gemma,
+Harmony, Pythonic, bare JSON) are tracked in issue #4.
 
 ## Design
 
@@ -147,7 +148,7 @@ with zero configuration. By default (`IdPolicy::Turn`):
   that repeats an earlier call's id, is numbered as above and recorded as a
   derived `tool_call.id.dedup` inference on the call and in the receipt; it
   never demotes the call. Dialects whose markup carries no id (Hermes,
-  Qwen3-Coder XML) are numbered without an inference.
+  Llama 3 JSON, Qwen3-Coder XML) are numbered without an inference.
 
 The same output always gets the same ids (C3); different outputs get
 different tags except with probability `2^-48` per pair, so among `n`
@@ -325,6 +326,6 @@ are in [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound).
 - [dialects/](dialects/): public sources, accepted forms, printing, and
   deliberate exclusions of each built-in dialect.
 - [MATCHING-QUALITY.md](../MATCHING-QUALITY.md#tool-call-recovery-evaluation):
-  the 3,234-case correction evaluation, per rule and per dialect.
+  the 4,197-case correction evaluation, per rule and per dialect.
 - [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound): the cost
   bound, budgets for large outputs, and throughput.

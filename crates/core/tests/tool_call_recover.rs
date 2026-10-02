@@ -638,6 +638,14 @@ fn wire_digest(result: &AssistResult<ToolCalls>) -> String {
     Digest::of(result.to_node().to_json().as_bytes()).to_string()
 }
 
+/// The dialects the pinned digests were recorded with (permuted by the
+/// test below).
+const PINNED_DIALECTS: [DialectId; 3] = [
+    DialectId::Hermes,
+    DialectId::OpenAiToolCalls,
+    DialectId::Qwen3CoderXml,
+];
+
 #[test]
 fn deterministic_pinned_digest() {
     let definitions = || {
@@ -666,7 +674,7 @@ fn deterministic_pinned_digest() {
         let tools = compile(order.iter().map(|&index| all[index].clone()));
         let dialects: Vec<DialectId> = order
             .iter()
-            .map(|&index| DialectId::BUILT_IN[index].clone())
+            .map(|&index| PINNED_DIALECTS[index].clone())
             .collect();
         let result = tools.recover(
             output.as_bytes(),
@@ -686,10 +694,12 @@ fn deterministic_pinned_digest() {
     let all = definitions();
     let prefixed = compile(all).recover(
         output.as_bytes(),
-        &ToolRecoveryRequest::default().ids(IdPolicy::Prefix {
-            prefix: "call_".into(),
-            start: 0,
-        }),
+        &ToolRecoveryRequest::default()
+            .dialects(set(&PINNED_DIALECTS))
+            .ids(IdPolicy::Prefix {
+                prefix: "call_".into(),
+                start: 0,
+            }),
     );
     assert_eq!(wire_digest(&prefixed), PINNED_PREFIX_DIGEST);
     // The Ambiguous wire form is pinned too.

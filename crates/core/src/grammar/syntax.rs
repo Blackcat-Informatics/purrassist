@@ -47,6 +47,8 @@ pub(crate) enum PExpr {
     Choice(Vec<Self>, usize),
     /// `item*`, `item+`, `item?`.
     Repeat { inner: Box<Self>, op: u8, at: usize },
+    /// `commit`: the attempt is a call (or result) attempt from here on.
+    Commit,
 }
 
 /// One top-level statement.
@@ -87,7 +89,7 @@ pub(crate) struct Document {
 }
 
 /// Names that cannot name a production or closer.
-pub(crate) const KEYWORDS: [&str; 7] = [
+pub(crate) const KEYWORDS: [&str; 8] = [
     "grammar",
     "reasoning",
     "confusable",
@@ -95,6 +97,7 @@ pub(crate) const KEYWORDS: [&str; 7] = [
     "layout",
     "until",
     "slot",
+    "commit",
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -498,6 +501,7 @@ impl Parser<'_, '_> {
                             at,
                         })
                     }
+                    ("commit", token) if *token != Token::Punct(b':') => Ok(PExpr::Commit),
                     (_, Token::Punct(b':')) => {
                         self.advance()?;
                         self.enter()?;
