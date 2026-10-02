@@ -23,6 +23,30 @@
     "qwen3-coder-xml.v1"
   ],
   "input": "<tool_call>\n<function=read_file>\n{\"path\": \"a.rs\"}\n</parameter>\nand then I will read it\n</function>\n</tool_call>",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          0,
+          97
+        ],
+        "dialect": "qwen3-coder-xml.v1",
+        "candidate_dialects": [
+          "hermes.v1",
+          "qwen3-coder-xml.v1"
+        ],
+        "reason": "Malformed { at: 63 }",
+        "raw": "<tool_call>\n<function=read_file>\n{\"path\": \"a.rs\"}\n</parameter>\nand then I will read it\n</function"
+      }
+    ],
+    "embedded": [],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
   "outcome": "resolved",
   "stopped": "completed",
   "finish": "unresolved",
@@ -32,6 +56,10 @@
       "span": [
         0,
         97
+      ],
+      "dialect": "qwen3-coder-xml.v1",
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
       ],
       "reason": "Malformed { at: 63 }",
       "raw": "<tool_call>\n<function=read_file>\n{\"path\": \"a.rs\"}\n</parameter>\nand then I will read it\n</function"

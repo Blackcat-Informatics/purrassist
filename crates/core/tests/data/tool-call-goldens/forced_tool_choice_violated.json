@@ -49,6 +49,9 @@
       "arguments": {
         "path": "a.rs"
       },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
       "outcome": "unresolved: tool_choice_forced: the request's tool choice forces tool `read_file`",
       "rules": []
     }

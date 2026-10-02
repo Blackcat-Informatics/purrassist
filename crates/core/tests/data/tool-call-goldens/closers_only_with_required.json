@@ -30,6 +30,9 @@
     {
       "tool": "f",
       "arguments": {},
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
       "outcome": "unresolved: missing_required: required parameter `/path` is missing",
       "rules": [
         "tool_call.markup.closers-only-empty"

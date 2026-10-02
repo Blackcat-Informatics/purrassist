@@ -33,6 +33,9 @@
       "arguments": {
         "city": "Lima"
       },
+      "candidate_dialects": [
+        "openai-tool-calls.v1"
+      ],
       "outcome": "resolved",
       "rules": [
         "tool_call.arguments.decode-string"
@@ -43,6 +46,9 @@
       "arguments": {
         "city": "Oslo"
       },
+      "candidate_dialects": [
+        "openai-tool-calls.v1"
+      ],
       "outcome": "resolved",
       "rules": [
         "tool_call.arguments.decode-string",

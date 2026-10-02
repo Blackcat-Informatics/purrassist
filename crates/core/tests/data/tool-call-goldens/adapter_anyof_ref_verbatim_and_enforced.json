@@ -14,6 +14,9 @@
       "arguments": {
         "choice": "medium"
       },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
       "outcome": "unresolved: schema_validation: the arguments fail the tool's schema",
       "rules": []
     }

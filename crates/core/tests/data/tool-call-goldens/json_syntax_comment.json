@@ -44,6 +44,9 @@
       "arguments": {
         "path": "a"
       },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
       "outcome": "resolved",
       "rules": [
         "json.syntax.comment"

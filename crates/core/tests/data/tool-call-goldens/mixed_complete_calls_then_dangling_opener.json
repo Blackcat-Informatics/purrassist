@@ -1,0 +1,76 @@
+{
+  "description": "G1: under the default allow-list, a complete Qwen3-Coder XML call, a complete Hermes call, then a dangling <tool_call> opener under a stop. Qwen3-Coder XML and Hermes share the opener, so both attempt the dangling call; the readings that differ only in which dialect's attempt was rejected recover the same calls and are one reading. Both complete calls stay Resolved and usable, and the dangling remainder is one rejected attempt with a tool_call.markup.dangling-opener data loss naming both candidate dialects.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "<tool_call>\n<function=read_file>\n<parameter=path>\na.rs\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"b.rs\"}}\n</tool_call>\n<tool_call>",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "a.rs"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline"
+      ]
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "b.rs"
+      },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    }
+  ],
+  "rejected": [
+    {
+      "span": [
+        171,
+        182
+      ],
+      "dialect": "hermes.v1",
+      "candidate_dialects": [
+        "hermes.v1",
+        "qwen3-coder-xml.v1"
+      ],
+      "reason": "Unterminated",
+      "raw": "<tool_call>"
+    }
+  ],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.dangling-opener"
+  ]
+}

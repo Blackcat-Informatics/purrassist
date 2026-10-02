@@ -12,6 +12,14 @@
 //! captured from an actual run rather than
 //! hand-transcribed.
 //!
+//! Every fixture also runs under the default allow-list: every built-in
+//! dialect (plus the fixture's custom `grammar`, when it declares one), the
+//! allow-list `ToolRecoveryRequest::default` and the CLI use. Its result must
+//! equal the pinned run's captured fields, unless the fixture states its own
+//! `default_expect` (the captured fields of the default run). A fixture whose
+//! default run is `Ambiguous`, or loses a call its pinned run recovered,
+//! must justify it in `default_justification`.
+//!
 //! `PURRASSIST_BLESS=1` re-captures every fixture's captured fields from a
 //! fresh run (refused when `CI` is set, since blessing must never run
 //! unattended, and followed by a deliberate failure asking for a re-run
@@ -59,12 +67,23 @@ const CAPTURED: &[&str] = &[
     "ledger_rules",
 ];
 
-/// One loaded fixture with its tool set and request built.
+/// The member holding the default allow-list run's captured fields when
+/// they differ from the pinned run's.
+const DEFAULT_EXPECT: &str = "default_expect";
+
+/// The member justifying a default allow-list run that is `Ambiguous` or
+/// loses a call the pinned run recovered.
+const DEFAULT_JUSTIFICATION: &str = "default_justification";
+
+/// One loaded fixture with its tool set and requests built.
 struct Golden {
     path: PathBuf,
     node: Node,
     tools: ToolSet,
     request: ToolRecoveryRequest,
+    /// The same request under the default allow-list; `None` when the
+    /// fixture pins no dialect list (the pinned run is the default run).
+    default_request: Option<ToolRecoveryRequest>,
     input: Vec<u8>,
 }
 
@@ -238,13 +257,26 @@ fn effort_of(code: &str) -> Effort {
     }
 }
 
-fn dialect_set(golden: &Node, path: &Path) -> DialectSet {
-    let custom = text_of(golden, "grammar", path).map(|source| {
+fn custom_dialect(golden: &Node, path: &Path) -> Option<DialectId> {
+    text_of(golden, "grammar", path).map(|source| {
         DialectId::custom(
             Grammar::compile_governed(source, &mut Governor::new(Budget::default()))
                 .unwrap_or_else(|error| panic!("{}: grammar: {error}", path.display())),
         )
-    });
+    })
+}
+
+/// The default allow-list: every built-in dialect, plus the fixture's
+/// custom dialect when it declares a `grammar`.
+fn default_dialect_set(golden: &Node, path: &Path) -> DialectSet {
+    let mut ids = DialectSet::built_in().dialects().to_vec();
+    ids.extend(custom_dialect(golden, path));
+    DialectSet::new(ids, &mut Governor::new(Budget::default()))
+        .unwrap_or_else(|error| panic!("{}: default dialects: {error}", path.display()))
+}
+
+fn dialect_set(golden: &Node, path: &Path) -> DialectSet {
+    let custom = custom_dialect(golden, path);
     let ids: Vec<DialectId> = match golden.get("dialects") {
         None => return DialectSet::built_in(),
         Some(dialects) => items(dialects)
@@ -276,13 +308,17 @@ fn input_bytes(golden: &Node, path: &Path) -> Vec<u8> {
         .collect()
 }
 
-fn request(golden: &Node, path: &Path, input_len: usize) -> ToolRecoveryRequest {
+fn request(
+    golden: &Node,
+    path: &Path,
+    input_len: usize,
+    dialects: DialectSet,
+) -> ToolRecoveryRequest {
     let effort = golden
         .get("effort")
         .and_then(Node::as_str)
         .map_or(Effort::Standard, effort_of);
-    let mut request =
-        ToolRecoveryRequest::sized(effort, input_len).dialects(dialect_set(golden, path));
+    let mut request = ToolRecoveryRequest::sized(effort, input_len).dialects(dialects);
     if let Some(policy) = golden.get("policy").and_then(Node::as_str) {
         request = request.policy(match policy {
             "per_tool" => PolicySelection::PerTool,
@@ -333,10 +369,14 @@ fn load(path: &Path) -> Golden {
         std::fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     let node = parse(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     let input = input_bytes(&node, path);
+    let default_request = node
+        .get("dialects")
+        .map(|_| request(&node, path, input.len(), default_dialect_set(&node, path)));
     Golden {
         path: path.to_owned(),
         tools: tool_set(&node, path),
-        request: request(&node, path, input.len()),
+        request: request(&node, path, input.len(), dialect_set(&node, path)),
+        default_request,
         input,
         node,
     }
@@ -345,6 +385,14 @@ fn load(path: &Path) -> Golden {
 impl Golden {
     fn run(&self) -> AssistResult<ToolCalls> {
         self.tools.recover(&self.input, &self.request)
+    }
+
+    /// The run under the default allow-list, when it differs from the
+    /// pinned request.
+    fn run_default(&self) -> Option<AssistResult<ToolCalls>> {
+        self.default_request
+            .as_ref()
+            .map(|request| self.tools.recover(&self.input, request))
     }
 }
 
@@ -426,6 +474,15 @@ fn call_node(call: &ToolCall) -> Node {
                 .map_or_else(|| Node::new(Value::Null), string),
         ),
         member("arguments", call.arguments.clone()),
+        member(
+            "candidate_dialects",
+            Node::new(Value::Array(
+                call.candidate_dialects
+                    .iter()
+                    .map(|dialect| string(dialect.id()))
+                    .collect(),
+            )),
+        ),
         member("outcome", string(call_outcome(&call.outcome))),
         member("rules", strings(&rules)),
     ])
@@ -444,6 +501,17 @@ fn rejected_nodes(calls: &ToolCalls) -> Node {
                             integer(rejected.span.start),
                             integer(rejected.span.end),
                         ])),
+                    ),
+                    member("dialect", string(rejected.dialect.id())),
+                    member(
+                        "candidate_dialects",
+                        Node::new(Value::Array(
+                            rejected
+                                .candidate_dialects
+                                .iter()
+                                .map(|dialect| string(dialect.id()))
+                                .collect(),
+                        )),
                     ),
                     member("reason", string(format!("{:?}", rejected.reason))),
                     member(
@@ -545,15 +613,53 @@ fn captured_fields(result: &AssistResult<ToolCalls>) -> Vec<Member> {
 }
 
 /// Replace every captured field in `golden`, keeping every input member in
-/// its original order.
-fn reblessed(golden: &Node, result: &AssistResult<ToolCalls>) -> Node {
+/// its original order; the default allow-list run's captured fields are
+/// kept as `default_expect` only when they differ from the pinned run's.
+fn reblessed(
+    golden: &Node,
+    result: &AssistResult<ToolCalls>,
+    default: Option<&AssistResult<ToolCalls>>,
+) -> Node {
     let mut kept: Vec<Member> = members(golden)
         .iter()
-        .filter(|member| !CAPTURED.contains(&member.key.as_str()))
+        .filter(|member| !CAPTURED.contains(&member.key.as_str()) && member.key != DEFAULT_EXPECT)
         .cloned()
         .collect();
-    kept.extend(captured_fields(result));
+    let pinned = object(captured_fields(result));
+    if let Some(default) = default {
+        let default = object(captured_fields(default));
+        if !default.equivalent(&pinned) {
+            kept.push(member(DEFAULT_EXPECT, default));
+        }
+    }
+    kept.extend(members(&pinned).iter().cloned());
     object(kept)
+}
+
+/// The mismatches between `actual` captured fields and `expected`.
+fn mismatches(path: &Path, label: &str, expected: &Node, actual: &Node) -> Vec<String> {
+    let mut failures = Vec::new();
+    for field in members(actual) {
+        let wanted = expected.get(&field.key);
+        if !wanted.is_some_and(|wanted| wanted.equivalent(&field.value)) {
+            failures.push(format!(
+                "{}: {label} `{}` mismatch\n  expected: {}\n  actual:   {}",
+                path.display(),
+                field.key,
+                wanted.map_or_else(|| "(absent)".into(), Node::to_json),
+                field.value.to_json()
+            ));
+        }
+    }
+    for key in CAPTURED {
+        if expected.get(key).is_some() && actual.get(key).is_none() {
+            failures.push(format!(
+                "{}: {label} stale captured `{key}`",
+                path.display()
+            ));
+        }
+    }
+    failures
 }
 
 fn pretty(node: &Node) -> String {
@@ -612,6 +718,19 @@ fn all_goldens() -> Vec<(Golden, AssistResult<ToolCalls>)> {
         .collect()
 }
 
+/// Every golden's run under the default allow-list (the pinned run when
+/// the golden pins no dialect list).
+fn all_default_runs() -> Vec<(Golden, AssistResult<ToolCalls>)> {
+    golden_files()
+        .iter()
+        .map(|path| {
+            let golden = load(path);
+            let result = golden.run_default().unwrap_or_else(|| golden.run());
+            (golden, result)
+        })
+        .collect()
+}
+
 #[test]
 fn tool_call_goldens_match_captured_runs() {
     let bless = std::env::var("PURRASSIST_BLESS").as_deref() == Ok("1");
@@ -624,9 +743,13 @@ fn tool_call_goldens_match_captured_runs() {
     let mut failures = Vec::new();
     for (golden, result) in &goldens {
         let path = &golden.path;
+        let default = golden.run_default();
         if bless {
-            std::fs::write(path, pretty(&reblessed(&golden.node, result)))
-                .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            std::fs::write(
+                path,
+                pretty(&reblessed(&golden.node, result, default.as_ref())),
+            )
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
             continue;
         }
         if golden.node.get("outcome").is_none() {
@@ -637,22 +760,32 @@ fn tool_call_goldens_match_captured_runs() {
             continue;
         }
         let actual = object(captured_fields(result));
-        for field in members(&actual) {
-            let expected = golden.node.get(&field.key);
-            if !expected.is_some_and(|expected| expected.equivalent(&field.value)) {
-                failures.push(format!(
-                    "{}: `{}` mismatch\n  expected: {}\n  actual:   {}",
-                    path.display(),
-                    field.key,
-                    expected.map_or_else(|| "(absent)".into(), Node::to_json),
-                    field.value.to_json()
+        failures.extend(mismatches(path, "pinned", &golden.node, &actual));
+        match (&default, golden.node.get(DEFAULT_EXPECT)) {
+            (Some(default), Some(expected)) => {
+                let actual = object(captured_fields(default));
+                if actual.equivalent(&object(captured_fields(result))) {
+                    failures.push(format!(
+                        "{}: `{DEFAULT_EXPECT}` restates the pinned result; drop it",
+                        path.display()
+                    ));
+                }
+                failures.extend(mismatches(path, "default allow-list", expected, &actual));
+            }
+            (Some(default), None) => {
+                let actual = object(captured_fields(default));
+                failures.extend(mismatches(
+                    path,
+                    "default allow-list",
+                    &golden.node,
+                    &actual,
                 ));
             }
-        }
-        for key in CAPTURED {
-            if golden.node.get(key).is_some() && actual.get(key).is_none() {
-                failures.push(format!("{}: stale captured `{key}`", path.display()));
-            }
+            (None, Some(_)) => failures.push(format!(
+                "{}: `{DEFAULT_EXPECT}` without a pinned `dialects` list",
+                path.display()
+            )),
+            (None, None) => {}
         }
     }
     assert!(
@@ -708,7 +841,7 @@ fn has_data_loss(call: &ToolCall) -> bool {
 #[test]
 fn no_mutating_guess_resolved_over_goldens() {
     let mut checked = 0;
-    for (golden, result) in all_goldens() {
+    for (golden, result) in all_goldens().into_iter().chain(all_default_runs()) {
         let readings: Vec<&ToolCalls> = match &result.outcome {
             Outcome::Resolved(calls) | Outcome::BestGuess(calls) => vec![calls],
             Outcome::Ambiguous(readings) => readings.iter().collect(),
@@ -749,6 +882,97 @@ fn no_mutating_guess_resolved_over_goldens() {
         }
     }
     assert!(checked > 0);
+}
+
+/// The calls a run makes usable when guesses are accepted, as
+/// `(tool, arguments)` pairs.
+fn usable_calls(result: &AssistResult<ToolCalls>) -> Vec<(Option<String>, String)> {
+    match &result.outcome {
+        Outcome::Resolved(calls) | Outcome::BestGuess(calls) => calls
+            .usable_accepting_guesses()
+            .into_iter()
+            .map(|call| (call.tool.clone(), call.arguments.to_json()))
+            .collect(),
+        Outcome::Ambiguous(_) | Outcome::Unresolved => Vec::new(),
+    }
+}
+
+/// Under the default allow-list (every built-in dialect), no golden loses
+/// a call to ambiguity: a call its pinned run makes usable stays usable,
+/// and the default run is `Ambiguous` only when the pinned run is too.
+/// A golden whose readings are genuinely different calls must say why in
+/// `default_justification`.
+#[test]
+fn default_allow_list_never_loses_a_call() {
+    let mut compared = 0;
+    for path in golden_files() {
+        let golden = load(&path);
+        let Some(default) = golden.run_default() else {
+            continue;
+        };
+        compared += 1;
+        if golden.node.get(DEFAULT_JUSTIFICATION).is_some() {
+            continue;
+        }
+        let pinned = golden.run();
+        assert!(
+            !matches!(default.outcome, Outcome::Ambiguous(_))
+                || matches!(pinned.outcome, Outcome::Ambiguous(_)),
+            "{}: ambiguous only under the default allow-list: {:#?}",
+            path.display(),
+            default.outcome
+        );
+        let kept = usable_calls(&default);
+        for call in usable_calls(&pinned) {
+            assert!(
+                kept.contains(&call),
+                "{}: the default allow-list loses {call:?}",
+                path.display()
+            );
+        }
+    }
+    assert!(compared > 0);
+}
+
+/// An ambiguity always carries the evidence that tells its readings apart:
+/// no `Ambiguous` operation publishes a ranked-adjacent pair with an empty
+/// `distinguishing` list, and no `Ambiguous` call has an empty
+/// `distinguishing` list, under the pinned or the default allow-list.
+#[test]
+fn ambiguity_always_has_distinguishing_evidence() {
+    let mut ambiguous = 0;
+    for (golden, result) in all_goldens().into_iter().chain(all_default_runs()) {
+        let path = golden.path.display();
+        let wire = result.to_node();
+        if let Some(pairs) = wire
+            .pointer("/receipt/ambiguity/distinguishing")
+            .filter(|node| !matches!(node.value, Value::Null))
+        {
+            ambiguous += 1;
+            for pair in items(pairs) {
+                assert!(
+                    !items(pair).is_empty(),
+                    "{path}: an ambiguity without distinguishing evidence: {}",
+                    wire.to_json()
+                );
+            }
+        }
+        let readings: Vec<&ToolCalls> = match &result.outcome {
+            Outcome::Resolved(calls) | Outcome::BestGuess(calls) => vec![calls],
+            Outcome::Ambiguous(readings) => readings.iter().collect(),
+            Outcome::Unresolved => Vec::new(),
+        };
+        for call in readings.into_iter().flat_map(|calls| &calls.calls) {
+            if call.outcome == CallOutcome::Ambiguous {
+                ambiguous += 1;
+                assert!(
+                    !call.distinguishing.is_empty(),
+                    "{path}: an ambiguous call without distinguishing evidence: {call:#?}"
+                );
+            }
+        }
+    }
+    assert!(ambiguous > 0, "no golden exercises an ambiguity");
 }
 
 // ---------------------------------------------------------------------------
@@ -1053,6 +1277,99 @@ fn hermes_and_qwen_xml_mixed() {
     assert_eq!(calls.calls[1].dialect, DialectId::Qwen3CoderXml);
     assert!(calls.calls.iter().all(ToolCall::is_usable));
     assert_eq!(calls.finish, Finish::Calls);
+}
+
+/// G1: a complete Qwen3-Coder XML call and a complete Hermes call stay
+/// `Resolved` and usable under the default allow-list when a dangling
+/// `<tool_call>` follows them; the dangling attempt is one rejected attempt
+/// naming both dialects that share the opener.
+#[test]
+fn mixed_complete_calls_then_dangling_opener() {
+    let (golden, result) = golden("mixed_complete_calls_then_dangling_opener");
+    assert!(
+        golden.node.get("dialects").is_none(),
+        "runs the default allow-list"
+    );
+    let Outcome::BestGuess(calls) = &result.outcome else {
+        panic!("expected one reading, got {:#?}", result.outcome);
+    };
+    assert_eq!(calls.calls.len(), 2, "{calls:#?}");
+    assert_eq!(calls.calls[0].dialect, DialectId::Qwen3CoderXml);
+    assert_eq!(calls.calls[1].dialect, DialectId::Hermes);
+    assert!(calls.calls.iter().all(ToolCall::is_usable));
+    assert_eq!(calls.usable().len(), 2);
+    assert_eq!(calls.rejected.len(), 1);
+    let rejected = &calls.rejected[0];
+    assert_eq!(rejected.raw, b"<tool_call>");
+    assert_eq!(
+        rejected.candidate_dialects,
+        [DialectId::Hermes, DialectId::Qwen3CoderXml]
+    );
+    assert!(rejected.candidate_dialects.contains(&rejected.dialect));
+    assert_eq!(
+        rejected
+            .repairs
+            .losses
+            .iter()
+            .map(|loss| (loss.loss.evidence.rule.as_str(), loss.kind))
+            .collect::<Vec<_>>(),
+        [("tool_call.markup.dangling-opener", LossKind::Data)]
+    );
+    assert_eq!(calls.finish, Finish::Unresolved);
+    assert_eq!(result.receipt.alternatives.len(), 0);
+}
+
+/// G1: the four goldens that lost their calls to a dialect-label tie under
+/// the default allow-list give their pinned result, with the rejected
+/// attempt the body evidences and both candidate dialects recorded.
+#[test]
+fn shared_opener_rejections_collapse_under_the_default_allow_list() {
+    for (name, dialect, reach) in [
+        (
+            "dangling_trailing_tool_call",
+            DialectId::Qwen3CoderXml,
+            93..104,
+        ),
+        (
+            "length_vs_stop_same_text_stop",
+            DialectId::Qwen3CoderXml,
+            85..128,
+        ),
+        (
+            "trailing_text_inside_wrapper",
+            DialectId::Qwen3CoderXml,
+            0..66,
+        ),
+        (
+            "json_body_stray_closer_trailing_text",
+            DialectId::Qwen3CoderXml,
+            0..97,
+        ),
+    ] {
+        let golden = load(&goldens_dir().join(format!("{name}.json")));
+        let pinned = golden.run();
+        let default = golden.run_default().expect("a pinned dialect list");
+        let (pinned, default) = (reading(&pinned), reading(&default));
+        assert_eq!(default.calls, pinned.calls, "{name}");
+        assert_eq!(default.rejected.len(), 1, "{name}: {default:#?}");
+        let rejected = &default.rejected[0];
+        assert_eq!(
+            (&rejected.dialect, &rejected.span),
+            (&dialect, &reach),
+            "{name}"
+        );
+        assert_eq!(
+            rejected.candidate_dialects,
+            [DialectId::Hermes, DialectId::Qwen3CoderXml],
+            "{name}"
+        );
+        assert_eq!(
+            pinned.rejected[0].candidate_dialects,
+            [DialectId::Qwen3CoderXml],
+            "{name}"
+        );
+        assert_eq!(default.finish, pinned.finish, "{name}");
+    }
 }
 
 #[test]

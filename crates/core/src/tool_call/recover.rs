@@ -31,7 +31,26 @@
 //!    turn's competing segmentations, all charged as
 //!    [`Resource::Candidates`] (one per reading) before the first is built.
 //!    Exceeding the budget is a [`StopReason::BudgetExceeded`] naming
-//!    candidates, never a truncated list.
+//!    candidates, never a truncated list. Readings that recover the same
+//!    calls (each call's span, tool, arguments, outcome, repairs, and
+//!    alternatives, the calls embedded in reasoning, and every reasoning and
+//!    encoding ledger) and differ only in which dialect read each call and
+//!    how the bytes outside every call divide into rejected attempts and
+//!    content are one reading. This is the case where dialects sharing an
+//!    opener (Qwen3-Coder XML and Hermes both open with `<tool_call>`) each
+//!    reject an attempt no dialect reads, or several dialects read the same
+//!    call; each call's [`ToolCall::candidate_dialects`] names every dialect
+//!    that read it.
+//!    The reading kept is the one whose rejected attempts' dialects read the
+//!    most bytes before failing: the body is the evidence, so a `<function=`
+//!    body keeps the Qwen3-Coder XML attempt and a JSON body the Hermes one.
+//!    Each kept attempt's [`RejectedCall::candidate_dialects`] names every
+//!    dialect that attempted a call at its opener. Readings that recover
+//!    different calls but whose receipt derivations depend on exactly the
+//!    same evidence, losses, inferences, and validations are told apart by
+//!    the dialect that read each call: a passing `dialect=ID` validation of
+//!    the call (validator [`TOOL_CALL_VALIDATOR`]). Readings still
+//!    indistinguishable after that are one reading.
 //! 6. Each reading's calls receive ids ([`IdPolicy`]), the tool choice is
 //!    enforced ([`ToolChoice`]), and every unmodeled keyword of an adapter
 //!    tool's schema on the call's path is reported ([`KeywordUse`]).
@@ -52,8 +71,10 @@
 //!   then stops with [`StopReason::NoCandidate`], records a failed
 //!   `tool_call.ambiguity` validation, and keeps every alternative in
 //!   [`Receipt::alternatives`].
-//! - `Ambiguous` only for competing whole-message readings, in
-//!   [`Receipt::alternatives`] order.
+//! - `Ambiguous` only for competing whole-message readings that recover
+//!   different calls and that evidence distinguishes, in
+//!   [`Receipt::alternatives`] order: the receipt's `distinguishing`
+//!   annotation is never empty for a ranked-adjacent pair.
 //! - `BestGuess` when the selected reading records any guess inference or
 //!   any data loss (in a call, in a rejected attempt, in reasoning, or in
 //!   the input's encoding).
@@ -86,7 +107,9 @@
 //! then each segment's (a reasoning block's edits, a call's repairs
 //! including its id inference, a rejected attempt's repairs). Every
 //! per-call repair also stays on its [`ToolCall`] (C2). Its validations are
-//! the tool choice check, each call's schema validation, one validation per
+//! the tool choice check, each call's schema validation, each call's
+//! passing `dialect=ID` attestation when it tells apart whole-message
+//! readings whose ledgers are otherwise identical, one validation per
 //! reported unmodeled keyword, and, under [`AmbiguityPolicy::Reject`], the
 //! `tool_call.ambiguity` check.
 //!
@@ -118,7 +141,7 @@ use crate::digest::Digest;
 use crate::grammar::cost::{RECOVER_SCRATCH_PER_BYTE, RECOVER_WORK_PER_BYTE};
 use crate::grammar::edit::LossKind;
 use crate::json::{Node, Value, pointer_segment};
-use crate::provenance::{Derivation, Forest, ProvenanceNode, permute};
+use crate::provenance::{Derivation, Forest, NodeId, ProvenanceNode, permute};
 use crate::wire::{
     self, WireValue, array, byte_range, exact_bytes, inferences, integer, object, string,
 };
@@ -784,17 +807,57 @@ pub struct KeywordUse {
 
 /// A call attempt the recognizer rejected.
 ///
+/// Dialects that share an opener (Qwen3-Coder XML and Hermes both open with
+/// `<tool_call>`) each start an attempt there. When none of them reads a
+/// call, the readings of the turn that differ only in which dialect's
+/// attempt was rejected recover the same calls and are one reading: the
+/// attempt reported is the one whose dialect read furthest into the body
+/// before failing (the body is the evidence: a `<function=` body is read by
+/// Qwen3-Coder XML, a JSON object body by Hermes), and
+/// [`candidate_dialects`](Self::candidate_dialects) lists every dialect
+/// that attempted a call at the same opener.
+///
 /// ```
 /// use purrassist_core::tool_call::{CallLedger, DialectId, RejectedCall, Rejection};
-/// let rejected = RejectedCall { span: 0..3, dialect: DialectId::Hermes, raw: b"<tc".to_vec(), reason: Rejection::Unterminated, repairs: CallLedger::default() };
+/// let rejected = RejectedCall {
+///     span: 0..3,
+///     dialect: DialectId::Hermes,
+///     candidate_dialects: vec![DialectId::Hermes],
+///     raw: b"<tc".to_vec(),
+///     reason: Rejection::Unterminated,
+///     repairs: CallLedger::default(),
+/// };
 /// assert_eq!(rejected.text(), Some("<tc"));
+/// ```
+///
+/// A complete call followed by a dangling `<tool_call>` under the default
+/// allow-list: Qwen3-Coder XML and Hermes both attempted the dangling call,
+/// the complete call stays usable, and the dangling remainder is one
+/// rejected attempt naming both dialects:
+///
+/// ```
+/// use purrassist_core::tool_call::{DialectId, Param, ToolDefinition, ToolRecoveryRequest, ToolSet};
+/// use purrassist_core::{Budget, Outcome};
+/// let tools = ToolSet::compile([ToolDefinition::new("read").param("path", Param::string().required())], Budget::default()).unwrap();
+/// let output = b"<tool_call>{\"name\": \"read\", \"arguments\": {\"path\": \"a\"}}</tool_call>\n<tool_call>";
+/// let Outcome::BestGuess(calls) = tools.recover(output, &ToolRecoveryRequest::default()).outcome else { unreachable!() };
+/// assert_eq!(calls.usable().len(), 1);
+/// assert_eq!(calls.rejected.len(), 1);
+/// assert_eq!(calls.rejected[0].candidate_dialects, [DialectId::Hermes, DialectId::Qwen3CoderXml]);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RejectedCall {
     /// The attempt's source range.
     pub span: Range<usize>,
-    /// The dialect whose opener started it.
+    /// The dialect whose opener started the attempt reported: of the
+    /// dialects that attempted a call at this opener, the one whose grammar
+    /// read furthest before failing.
     pub dialect: DialectId,
+    /// Every dialect whose opener started a rejected attempt at this
+    /// offset in a reading of the turn that recovers the same calls, in
+    /// canonical [`DialectId`] order; always contains
+    /// [`dialect`](Self::dialect).
+    pub candidate_dialects: Vec<DialectId>,
     /// The attempt's exact bytes.
     pub raw: Vec<u8>,
     /// Why it was rejected.
@@ -846,6 +909,13 @@ pub struct ToolCall {
     pub span: Range<usize>,
     /// The dialect that recognized it.
     pub dialect: DialectId,
+    /// Every dialect that recognized this same call (same span, tool,
+    /// arguments, outcome, and repairs) in a reading of the turn, in
+    /// canonical [`DialectId`] order; always contains
+    /// [`dialect`](Self::dialect). Several dialects that read the same
+    /// bytes into the same call are one reading of the turn, never an
+    /// ambiguity, and each of them is named here.
+    pub candidate_dialects: Vec<DialectId>,
     /// The tool's effective effects, when a tool was identified.
     pub effects: Option<Effects>,
     /// The tool's effective repair policy, when a tool was identified.
@@ -923,7 +993,9 @@ impl ToolCall {
 pub struct ToolCalls {
     /// The calls, in output order.
     pub calls: Vec<ToolCall>,
-    /// The rejected call attempts, in output order.
+    /// The rejected call attempts, in output order. An attempt over an
+    /// opener several dialects share is reported once (see
+    /// [`RejectedCall`]).
     pub rejected: Vec<RejectedCall>,
     /// The calls written inside closed reasoning blocks, in output order:
     /// reasoning text offered only as guess-flagged alternatives
@@ -1114,7 +1186,7 @@ fn rejection_node(reason: Rejection) -> Node {
 
 impl WireValue for ToolCall {
     /// `{index, id, source_id, tool, name, arguments, span: {start, end},
-    /// dialect, effects, policy, outcome: {status, reason}, repairs:
+    /// dialect, candidate_dialects, effects, policy, outcome: {status, reason}, repairs:
     /// {evidence, losses (each with its `kind`), inferences}, alternatives,
     /// distinguishing: [{kind, rule}], keywords: [{pointer, keyword,
     /// used}]}`; absent values are `null`.
@@ -1128,6 +1200,14 @@ impl WireValue for ToolCall {
             ("arguments", self.arguments.clone()),
             ("span", byte_range(&self.span)),
             ("dialect", string(self.dialect.id())),
+            (
+                "candidate_dialects",
+                array(
+                    self.candidate_dialects
+                        .iter()
+                        .map(|dialect| string(dialect.id())),
+                ),
+            ),
             ("effects", effects_code(self.effects)),
             ("policy", policy_code(self.policy)),
             ("outcome", outcome_node(&self.outcome)),
@@ -1155,8 +1235,8 @@ impl WireValue for ToolCall {
 }
 
 impl WireValue for ToolCalls {
-    /// `{calls, rejected: [{span, dialect, reason: {code, at}, raw: {text |
-    /// bytes_hex}, repairs}], embedded, content: [{start, end}], reasoning:
+    /// `{calls, rejected: [{span, dialect, candidate_dialects, reason: {code,
+    /// at}, raw: {text | bytes_hex}, repairs}], embedded, content: [{start, end}], reasoning:
     /// [{start, end}], finish, openai_finish_reason, tool_choice: {constraint,
     /// passed, diagnostics}, next_id_start}`, each call and embedded call
     /// as [`ToolCall`]'s wire form, plus an `emitted` member (see
@@ -1173,6 +1253,15 @@ impl WireValue for ToolCalls {
                     object([
                         ("span", byte_range(&rejected.span)),
                         ("dialect", string(rejected.dialect.id())),
+                        (
+                            "candidate_dialects",
+                            array(
+                                rejected
+                                    .candidate_dialects
+                                    .iter()
+                                    .map(|dialect| string(dialect.id())),
+                            ),
+                        ),
                         ("reason", rejection_node(rejected.reason)),
                         ("raw", object([exact_bytes(&rejected.raw)])),
                         ("repairs", ledger_node(&rejected.repairs)),
@@ -1350,10 +1439,12 @@ struct Done {
 
 /// One part of a reading's ledger, in output order.
 enum Part {
-    /// Message-level repairs (encoding, reasoning, a rejected attempt).
+    /// Message-level repairs (encoding, reasoning).
     Message(CallLedger),
     /// The repairs of the call at this index.
     Call(usize),
+    /// The repairs of the rejected attempt at this index.
+    Rejected(usize),
 }
 
 /// What a reading keeps about one call beyond its value.
@@ -1385,7 +1476,14 @@ impl Reading {
         self.parts.iter().map(|part| match part {
             Part::Message(ledger) => ledger,
             Part::Call(index) => &self.value.calls[*index].repairs,
+            Part::Rejected(index) => &self.value.rejected[*index].repairs,
         })
+    }
+
+    /// The body evidence of the reading's rejected attempts: how many bytes
+    /// their dialects read before failing.
+    fn body_evidence(&self) -> usize {
+        self.value.rejected.iter().map(reach).sum()
     }
 
     fn ambiguous_calls(&self) -> impl Iterator<Item = usize> + '_ {
@@ -1808,14 +1906,16 @@ impl Recovery<'_> {
                     Resource::ScratchBytes,
                     size(span.len()).saturating_add(ledger_bytes(repairs)),
                 )?;
+                let index = reading.value.rejected.len();
                 reading.value.rejected.push(RejectedCall {
                     span: span.clone(),
                     dialect: dialect.clone(),
+                    candidate_dialects: vec![dialect.clone()],
                     raw: self.output[span.clone()].to_vec(),
                     reason: *reason,
                     repairs: repairs.clone(),
                 });
-                reading.parts.push(Part::Message(repairs.clone()));
+                reading.parts.push(Part::Rejected(index));
             }
         }
         Ok(())
@@ -2075,7 +2175,7 @@ impl Recovery<'_> {
                 stopped: StopReason::NoCandidate,
             });
         }
-        let (mut readings, outputs) = distinct(readings, governor)?;
+        let mut readings = same_calls(readings, governor)?;
         let reject = self.request.ambiguity == AmbiguityPolicy::Reject;
         let mut log = Log {
             entries: Vec::new(),
@@ -2086,25 +2186,37 @@ impl Recovery<'_> {
         let derivations = if reject && per_call {
             call_derivations(&readings[0], &mut forest, &mut log, governor)?
         } else {
-            let mut derivations = Vec::with_capacity(readings.len());
-            for (position, reading) in readings.iter().enumerate() {
-                let output = outputs
-                    .get(position)
-                    .copied()
-                    .unwrap_or_else(|| Digest::of(b""));
-                let mut derivation = Derivation::new(output, reading.cost);
-                for ledger in reading.ledgers() {
-                    push_ledger(&mut forest, &mut derivation, ledger, governor)?;
+            let mut derivations = whole_derivations(&readings, &mut forest, &mut log, governor)?;
+            if readings.len() > 1 {
+                let groups = indistinguishable(&derivations, governor)?;
+                if groups.len() < readings.len() {
+                    // Different calls no ledger tells apart: the dialect
+                    // that read each call is the evidence, attested as a
+                    // validation of the call.
+                    for group in groups.iter().filter(|group| group.len() > 1) {
+                        for &member in group {
+                            attest_dialects(&mut readings[member], governor)?;
+                        }
+                    }
+                    derivations = whole_derivations(&readings, &mut forest, &mut log, governor)?;
+                    let groups = indistinguishable(&derivations, governor)?;
+                    if groups.len() < readings.len() {
+                        // Still nothing tells them apart: one reading.
+                        readings = merge(readings, &groups, governor)?;
+                        derivations =
+                            whole_derivations(&readings, &mut forest, &mut log, governor)?;
+                    }
                 }
-                for (key, validation) in &reading.validations {
-                    let at = log.add(*key, validation, governor)?;
-                    derivation.push(forest.validation(governor, at, validation.passed)?);
-                }
-                derivations.push(derivation);
             }
             derivations
         };
         let published = forest.publish(&derivations, governor)?;
+        debug_assert!(
+            published.order.windows(2).all(|pair| !forest
+                .distinguishing(&derivations[pair[0]], &derivations[pair[1]])
+                .is_empty()),
+            "an ambiguity without distinguishing evidence"
+        );
         let ambiguous = readings.len() > 1 || per_call;
         if reject {
             log.add(
@@ -2240,28 +2352,255 @@ pub(crate) fn assign_ids(
     }
 }
 
-/// The readings with distinct values (the first of each), and the digest of
-/// each one's wire form; no digests for a single reading.
-fn distinct(
-    readings: Vec<Reading>,
-    governor: &mut Governor,
-) -> Result<(Vec<Reading>, Vec<Digest>), StopReason> {
-    if readings.len() < 2 {
-        return Ok((readings, Vec::new()));
+/// How far a rejected attempt's dialect read before it failed: the bytes
+/// from its opener to the byte it could not consume, or to the end of its
+/// span when the output stopped inside it.
+const fn reach(rejected: &RejectedCall) -> usize {
+    let end = match rejected.reason {
+        Rejection::Malformed { at }
+        | Rejection::InvalidUtf8 { at }
+        | Rejection::Overlapped { at } => at,
+        Rejection::Unterminated => rejected.span.end,
+    };
+    end.saturating_sub(rejected.span.start)
+}
+
+/// A call's wire form without its dialect labels: what the call is, not
+/// which dialect read it.
+fn call_identity(call: &ToolCall) -> Node {
+    let mut node = call.to_node();
+    if let Value::Object(members) = &mut node.value {
+        members.retain(|member| member.key != "dialect" && member.key != "candidate_dialects");
     }
-    let mut outputs = Vec::with_capacity(readings.len());
-    let mut unique = Vec::with_capacity(readings.len());
-    for reading in readings {
-        let json = reading.value.to_node().to_json();
-        governor.charge(Resource::Work, size(json.len()))?;
-        let _lease = governor.lease_scratch(size(json.len()))?;
-        let digest = Digest::of(json.as_bytes());
-        if !outputs.contains(&digest) {
-            outputs.push(digest);
-            unique.push(reading);
+    node
+}
+
+/// Extend each call's [`ToolCall::candidate_dialects`] in `calls` with the
+/// dialects of the call at the same position in `others` when that call is
+/// the same call ([`call_identity`]).
+fn union_call_dialects(
+    calls: &mut [ToolCall],
+    others: &[&[ToolCall]],
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    for (index, call) in calls.iter_mut().enumerate() {
+        let identity = call_identity(call).to_json();
+        let mut dialects: BTreeSet<DialectId> = call.candidate_dialects.iter().cloned().collect();
+        for other in others.iter().filter_map(|calls| calls.get(index)) {
+            let same = call_identity(other).to_json();
+            governor.charge(
+                Resource::Work,
+                size(identity.len().saturating_add(same.len())),
+            )?;
+            if same == identity {
+                dialects.extend(other.candidate_dialects.iter().cloned());
+            }
+        }
+        governor.charge(
+            Resource::ScratchBytes,
+            size(dialects.len()).saturating_mul(ENTRY_BYTES),
+        )?;
+        call.candidate_dialects = dialects.into_iter().collect();
+    }
+    Ok(())
+}
+
+/// The digest of everything a reading recovers: its calls (each with its
+/// outcome, repairs, and alternatives, whichever dialect read it), the calls embedded in
+/// reasoning, the reasoning ranges, and every message-level ledger other
+/// than a rejected attempt's. Content ranges and rejected attempts, the
+/// bytes outside every call, are not part of it.
+fn calls_key(reading: &Reading, governor: &mut Governor) -> Result<Digest, StopReason> {
+    let value = &reading.value;
+    let json = object([
+        ("calls", array(value.calls.iter().map(call_identity))),
+        ("embedded", array(value.embedded.iter().map(call_identity))),
+        ("reasoning", array(value.reasoning.iter().map(byte_range))),
+        (
+            "messages",
+            array(reading.parts.iter().filter_map(|part| match part {
+                Part::Message(ledger) => Some(ledger_node(ledger)),
+                Part::Call(_) | Part::Rejected(_) => None,
+            })),
+        ),
+    ])
+    .to_json();
+    governor.charge(Resource::Work, size(json.len()))?;
+    let _lease = governor.lease_scratch(size(json.len()))?;
+    Ok(Digest::of(json.as_bytes()))
+}
+
+/// The readings with distinct recovered calls ([`calls_key`]). Readings
+/// that recover the same calls and differ only in which dialect read each
+/// call and how the bytes outside every call divide into rejected attempts
+/// and content (which dialect's attempt was rejected, and where it failed)
+/// are one reading; see [`merge`].
+fn same_calls(readings: Vec<Reading>, governor: &mut Governor) -> Result<Vec<Reading>, StopReason> {
+    if readings.len() < 2 {
+        return Ok(readings);
+    }
+    let mut keys: Vec<Digest> = Vec::with_capacity(readings.len());
+    let mut groups: Vec<Vec<usize>> = Vec::with_capacity(readings.len());
+    for (position, reading) in readings.iter().enumerate() {
+        let key = calls_key(reading, governor)?;
+        governor.charge(Resource::Work, size(keys.len()).saturating_add(1))?;
+        if let Some(group) = keys.iter().position(|known| *known == key) {
+            groups[group].push(position);
+        } else {
+            keys.push(key);
+            groups.push(vec![position]);
         }
     }
-    Ok((unique, outputs))
+    if groups.len() == readings.len() {
+        return Ok(readings);
+    }
+    merge(readings, &groups, governor)
+}
+
+/// Each group of `readings` (indices, best first) as one reading: the
+/// member whose rejected attempts' dialects read the most bytes before
+/// failing (the body evidence), the earliest on a tie, with every rejected
+/// attempt's [`RejectedCall::candidate_dialects`] extended to the dialects
+/// that attempted a call at the same opener in any member, and every
+/// call's (and embedded call's) [`ToolCall::candidate_dialects`] extended
+/// to the dialects that read the same call in any member.
+fn merge(
+    readings: Vec<Reading>,
+    groups: &[Vec<usize>],
+    governor: &mut Governor,
+) -> Result<Vec<Reading>, StopReason> {
+    let mut slots: Vec<Option<Reading>> = readings.into_iter().map(Some).collect();
+    let mut merged = Vec::with_capacity(groups.len());
+    for group in groups {
+        let mut best = group[0];
+        for &member in &group[1..] {
+            let evidence = |at: usize| slots[at].as_ref().map_or(0, Reading::body_evidence);
+            if evidence(member) > evidence(best) {
+                best = member;
+            }
+        }
+        let mut attempts: BTreeMap<usize, BTreeSet<DialectId>> = BTreeMap::new();
+        for &member in group {
+            let reading = slots[member]
+                .as_ref()
+                .expect("each reading is in one group");
+            for rejected in &reading.value.rejected {
+                governor.charge(
+                    Resource::Work,
+                    size(rejected.candidate_dialects.len()).saturating_add(1),
+                )?;
+                attempts
+                    .entry(rejected.span.start)
+                    .or_default()
+                    .extend(rejected.candidate_dialects.iter().cloned());
+            }
+        }
+        let mut reading = slots[best].take().expect("each reading is in one group");
+        let members: Vec<&Reading> = group
+            .iter()
+            .filter_map(|&member| slots[member].as_ref())
+            .collect();
+        let calls: Vec<&[ToolCall]> = members.iter().map(|other| &other.value.calls[..]).collect();
+        union_call_dialects(&mut reading.value.calls, &calls, governor)?;
+        let embedded: Vec<&[ToolCall]> = members
+            .iter()
+            .map(|other| &other.value.embedded[..])
+            .collect();
+        union_call_dialects(&mut reading.value.embedded, &embedded, governor)?;
+        for rejected in &mut reading.value.rejected {
+            let candidates = &attempts[&rejected.span.start];
+            governor.charge(
+                Resource::ScratchBytes,
+                size(candidates.len()).saturating_mul(ENTRY_BYTES),
+            )?;
+            rejected.candidate_dialects = candidates.iter().cloned().collect();
+        }
+        merged.push(reading);
+    }
+    Ok(merged)
+}
+
+/// Record, as a passing `dialect=ID` validation of each call, the dialect
+/// that read it: the evidence that tells apart whole-message readings whose
+/// calls differ but whose ledgers do not.
+fn attest_dialects(reading: &mut Reading, governor: &mut Governor) -> Result<(), StopReason> {
+    for call in &reading.value.calls {
+        let constraint = format!("dialect={}", call.dialect.id());
+        governor.charge(
+            Resource::ScratchBytes,
+            size(constraint.len()).saturating_add(ENTRY_BYTES),
+        )?;
+        reading.validations.push((
+            (call.span.start, call.span.end),
+            Validation {
+                validator: TOOL_CALL_VALIDATOR.into(),
+                constraint,
+                passed: true,
+                diagnostics: Vec::new(),
+            },
+        ));
+    }
+    Ok(())
+}
+
+/// One derivation per whole-message reading: its ledgers and validations,
+/// identified by the digest of the reading's wire form (no digest for a
+/// single reading).
+fn whole_derivations(
+    readings: &[Reading],
+    forest: &mut Forest,
+    log: &mut Log,
+    governor: &mut Governor,
+) -> Result<Vec<Derivation>, StopReason> {
+    let mut derivations = Vec::with_capacity(readings.len());
+    for reading in readings {
+        let output = if readings.len() < 2 {
+            Digest::of(b"")
+        } else {
+            let json = reading.value.to_node().to_json();
+            governor.charge(Resource::Work, size(json.len()))?;
+            let _lease = governor.lease_scratch(size(json.len()))?;
+            Digest::of(json.as_bytes())
+        };
+        let mut derivation = Derivation::new(output, reading.cost);
+        for ledger in reading.ledgers() {
+            push_ledger(forest, &mut derivation, ledger, governor)?;
+        }
+        for (key, validation) in &reading.validations {
+            let at = log.add(*key, validation, governor)?;
+            derivation.push(forest.validation(governor, at, validation.passed)?);
+        }
+        derivations.push(derivation);
+    }
+    Ok(derivations)
+}
+
+/// The derivations grouped by the provenance they depend on, each group
+/// in [`Forest::rank`] order: derivations in one group have no
+/// distinguishing evidence ([`Forest::distinguishing`] is empty).
+fn indistinguishable(
+    derivations: &[Derivation],
+    governor: &mut Governor,
+) -> Result<Vec<Vec<usize>>, StopReason> {
+    let mut groups: Vec<(Vec<NodeId>, Vec<usize>)> = Vec::new();
+    for position in Forest::rank(derivations) {
+        let nodes = derivations[position].nodes();
+        governor.charge(
+            Resource::Work,
+            size(nodes.len()).saturating_mul(size(groups.len()).saturating_add(1)),
+        )?;
+        governor.charge(
+            Resource::ScratchBytes,
+            size(nodes.len()).saturating_mul(ENTRY_BYTES),
+        )?;
+        let mut nodes = nodes.to_vec();
+        nodes.sort_unstable();
+        match groups.iter_mut().find(|(known, _)| *known == nodes) {
+            Some((_, members)) => members.push(position),
+            None => groups.push((nodes, vec![position])),
+        }
+    }
+    Ok(groups.into_iter().map(|(_, members)| members).collect())
 }
 
 /// One derivation per competing reading of each ambiguous call of
@@ -2374,6 +2713,7 @@ fn tool_call(
             arguments: reading.arguments.clone(),
             span: resolved.span.clone(),
             dialect: resolved.dialect.clone(),
+            candidate_dialects: vec![resolved.dialect.clone()],
             effects: reading.effects,
             policy: reading.policy,
             outcome: resolved.outcome.clone(),

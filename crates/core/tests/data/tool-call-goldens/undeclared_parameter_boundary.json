@@ -34,6 +34,9 @@
         "a": "x",
         "b": "y"
       },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
       "outcome": "unresolved: unknown_tool: no declared tool matches `zz`",
       "rules": [
         "tool_call.xml.framing-newline",

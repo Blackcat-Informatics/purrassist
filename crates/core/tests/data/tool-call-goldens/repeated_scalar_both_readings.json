@@ -29,6 +29,9 @@
       "arguments": {
         "path": "b"
       },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
       "outcome": "ambiguous",
       "rules": [
         "tool_call.xml.framing-newline",

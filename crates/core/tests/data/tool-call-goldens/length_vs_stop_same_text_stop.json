@@ -21,6 +21,49 @@
   ],
   "stop": "stop",
   "input": "<tool_call>\n<function=f>\n<parameter=path>\na.rs\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=f>\n<parameter=path>\nb",
+  "default_expect": {
+    "outcome": "best_guess",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "calls": [
+      {
+        "tool": "f",
+        "arguments": {
+          "path": "a.rs"
+        },
+        "candidate_dialects": [
+          "qwen3-coder-xml.v1"
+        ],
+        "outcome": "resolved",
+        "rules": [
+          "tool_call.xml.framing-newline",
+          "tool_call.xml.framing-newline"
+        ]
+      }
+    ],
+    "rejected": [
+      {
+        "span": [
+          85,
+          128
+        ],
+        "dialect": "qwen3-coder-xml.v1",
+        "candidate_dialects": [
+          "hermes.v1",
+          "qwen3-coder-xml.v1"
+        ],
+        "reason": "Unterminated",
+        "raw": "<tool_call>\n<function=f>\n<parameter=path>\nb"
+      }
+    ],
+    "embedded": [],
+    "failed_validations": [],
+    "ledger_rules": [
+      "tool_call.xml.framing-newline",
+      "tool_call.xml.framing-newline",
+      "tool_call.markup.dangling-opener"
+    ]
+  },
   "outcome": "best_guess",
   "stopped": "completed",
   "finish": "unresolved",
@@ -30,6 +73,9 @@
       "arguments": {
         "path": "a.rs"
       },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
       "outcome": "resolved",
       "rules": [
         "tool_call.xml.framing-newline",
@@ -42,6 +88,10 @@
       "span": [
         85,
         128
+      ],
+      "dialect": "qwen3-coder-xml.v1",
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
       ],
       "reason": "Unterminated",
       "raw": "<tool_call>\n<function=f>\n<parameter=path>\nb"

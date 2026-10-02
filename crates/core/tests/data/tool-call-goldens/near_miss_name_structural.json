@@ -32,6 +32,9 @@
       "arguments": {
         "path": "a.rs"
       },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
       "outcome": "unresolved: rule_not_admitted: rule `tool_call.name.match` is not admitted under Structural",
       "rules": []
     }

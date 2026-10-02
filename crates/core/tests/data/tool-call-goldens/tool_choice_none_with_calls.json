@@ -33,6 +33,9 @@
       "arguments": {
         "path": "a.rs"
       },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
       "outcome": "unresolved: tool_choice_none: the request's tool choice `none` forbids every call",
       "rules": []
     }

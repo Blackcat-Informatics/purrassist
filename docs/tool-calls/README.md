@@ -48,7 +48,32 @@ Kimi, Gemma, Harmony, Pythonic, bare JSON) are tracked in issue #4.
   content digest, a total order independent of declaration order. Several
   equally good readings of one call make that call `Ambiguous`; competing
   segmentations of the whole message are enumerated, charged as candidates
-  before the first is built, and reported as an `Ambiguous` operation.
+  before the first is built, and reported as an `Ambiguous` operation only
+  when they recover different calls and the receipt holds evidence that
+  tells them apart (below).
+- **Evidence-based dialect detection.** Every allowed dialect attempts a
+  call at its opener, so dialects that share one (`<tool_call>` opens both
+  Qwen3-Coder XML and Hermes calls) compete over the same bytes. The body
+  is the evidence: a `<function=` body is read by Qwen3-Coder XML and a JSON
+  object body by Hermes, while the other dialect's attempt is rejected at
+  the body's first byte. A rejected attempt costs more than any repair a
+  call needs, so the least-cost segmentation reads a complete or repaired
+  call in the dialect its body evidences. When no dialect reads a call there
+  (a dangling, cut, or malformed `<tool_call>`), the segmentations differ
+  only in which dialect's attempt was rejected; they recover the same calls
+  with the same repairs, so they are one reading. Its rejected attempt is
+  the one whose dialect read furthest into the body before failing, and
+  `RejectedCall::candidate_dialects` names every dialect that attempted a
+  call at that opener. Likewise, dialects that read the same bytes into the
+  same call (same span, tool, arguments, outcome, and repairs) give one
+  reading, and `ToolCall::candidate_dialects` names every one of them
+  (always including the call's own `dialect`). Readings that recover
+  different calls with identical ledgers are a genuine ambiguity; the
+  dialect that read each call is then the evidence that tells them apart,
+  attested as a passing `dialect=ID` validation of the call
+  (`purrassist.tool_call.v1`). An `Ambiguous` operation therefore always
+  carries non-empty `distinguishing` evidence for each ranked-adjacent pair
+  of readings in its receipt.
 
 Every rule a call can record is listed with its cost, guess flag, and loss
 kind in [RULES.md](RULES.md).
@@ -62,8 +87,8 @@ kind in [RULES.md](RULES.md).
 | `DialectId`, `DialectSet` | One dialect (built-in or `DialectId::custom`), and one model's dialect allow-list. |
 | `ToolRecoveryRequest` | Effort, budget, dialects, `ReasoningPolicy`, `GenerationStop`, `ToolChoice`, `IdPolicy`, `PolicySelection`, effects overrides, `AmbiguityPolicy`, `EmitTarget`. |
 | `ToolSet::recover`, `recover_governed` | Recover one turn; returns `AssistResult<ToolCalls>`. |
-| `ToolCalls` | `calls`, `rejected`, `embedded`, `content`, `reasoning`, `finish`, `tool_choice`, `next_id_start`, `emitted`; `usable()`, `usable_accepting_guesses()`, `reemit_with`. |
-| `ToolCall` | `id`, `tool`, `arguments`, `outcome`, `repairs`, `alternatives`, `keywords`; `arguments_as::<T>()`. |
+| `ToolCalls` | `calls`, `rejected` (each `RejectedCall` with its `dialect` and `candidate_dialects`), `embedded`, `content`, `reasoning`, `finish`, `tool_choice`, `next_id_start`, `emitted`; `usable()`, `usable_accepting_guesses()`, `reemit_with`. |
+| `ToolCall` | `id`, `tool`, `arguments`, `dialect`, `candidate_dialects`, `outcome`, `repairs`, `alternatives`, `keywords`; `arguments_as::<T>()`. |
 | `tool_call::emit` | Print calls in any dialect or as the `OpenAI` `tool_calls` array; print tool results and declarations. |
 
 Recovering a Qwen3-Coder XML call and printing it as Hermes markup and as the
@@ -141,7 +166,7 @@ numbers keep their spelling).
 | --- | --- |
 | `Resolved` | One reading, every rule admitted, no guess, no data loss. Markup losses never demote. |
 | `BestGuess` | One reading with a guess inference or a data loss. |
-| `Ambiguous` | Several readings at the least cost, whatever the policy. |
+| `Ambiguous` | Several distinct readings of the call (a different tool, arguments, or blocker) at the least cost, whatever the policy. |
 | `Unresolved { reason }` | No usable reading: an unknown tool, a missing required argument, a schema validation failure, a malformed or truncated call, a rule the policy does not admit, a repair under `Effort::Exact`, or a tool-choice violation. |
 
 **Markup and data losses.** A `markup` loss discards bytes that carry no
@@ -179,7 +204,12 @@ and an unknown parameter is an error rather than a drop.
 
 **Ambiguity.** `AmbiguityPolicy::Report` (the default) reports competing
 whole-message readings as an `Ambiguous` operation and an ambiguous call as a
-per-call `Ambiguous` outcome. `AmbiguityPolicy::Reject` makes any ambiguity,
+per-call `Ambiguous` outcome. Whole-message readings compete only when they
+recover different calls: readings that differ only in which dialect read
+a call (`ToolCall::candidate_dialects`) or which dialect's attempt at a
+shared opener was rejected (`RejectedCall::candidate_dialects`) are one
+reading, so complete calls never drop out of the value because of a dialect
+label. `AmbiguityPolicy::Reject` makes any ambiguity,
 whole-message or per-call, an `Unresolved` operation with a failed
 `tool_call.ambiguity` validation and every alternative kept in the receipt.
 

@@ -30,6 +30,9 @@
     {
       "tool": "read_file",
       "arguments": {},
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
       "outcome": "unresolved: invalid_argument: argument `` cannot be decoded: StringifiedArgumentsInvalidJson",
       "rules": [
         "tool_call.arguments.decode-string"

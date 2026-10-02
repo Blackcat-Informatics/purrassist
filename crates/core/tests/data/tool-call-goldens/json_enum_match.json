@@ -36,6 +36,9 @@
       "arguments": {
         "unit": "celsius"
       },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
       "outcome": "best_guess",
       "rules": [
         "json.enum.match"

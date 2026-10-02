@@ -25,6 +25,9 @@
       "arguments": {
         "path": "a.rs"
       },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
       "outcome": "best_guess",
       "rules": [
         "tool_call.parameter.drop-unknown"

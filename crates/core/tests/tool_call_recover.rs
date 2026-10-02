@@ -694,9 +694,9 @@ fn deterministic_pinned_digest() {
 }
 
 const PINNED_DIGEST: &str =
-    "sha256:154e011c0a408b5dc31c5f8b7eec3c0769308f93358e32ec4e0eb41c4b6749b6";
+    "sha256:29078017cbc3c5953eb9d589bf0703fff4c0b61743a857290a8390a2115d3844";
 const PINNED_AMBIGUOUS_DIGEST: &str =
-    "sha256:abdba4c871474ab17f564ba3a9370ce09928ce09dac36b9c883601e08b9648fd";
+    "sha256:b8ab9fa7e70e8429cf8a4f9ed0468f8f6db5b7ea2aff35411a519d3f20d4b1ba";
 
 #[test]
 fn invalid_utf8_is_loss_and_bytes_retained() {
@@ -1630,4 +1630,228 @@ fn rejected_span_never_splits_a_character_a_class_cannot_consume() {
         assert_eq!(calls.content.len(), 1, "{input:?}");
         assert_eq!(calls.content[0], at..input.len(), "{input:?}");
     }
+}
+
+/// G1: under the default allow-list the body is the evidence that ranks
+/// genuinely different readings of a shared `<tool_call>` opener through
+/// the least-cost segmentation. A `<function=` body is a Qwen3-Coder XML
+/// call and a JSON object body a Hermes call, whole or repaired: the other
+/// dialect's attempt is rejected at the body's first byte, which costs more
+/// than any repair a call needs, so no reading competes.
+#[test]
+fn body_evidence_selects_the_dialect_of_a_shared_opener() {
+    let tools = compile([ToolDefinition::new("f")
+        .effects(Effects::ReadOnly)
+        .param("p", Param::string().required())]);
+    for (output, dialect, rules_expected) in [
+        (
+            "<tool_call>\n<function=f>\n<parameter=p>\nx\n</parameter>\n</function>\n</tool_call>",
+            DialectId::Qwen3CoderXml,
+            &[
+                "tool_call.xml.framing-newline",
+                "tool_call.xml.framing-newline",
+            ][..],
+        ),
+        (
+            "<tool_call>\n<function=f>\n<parameter=p>\nx\n</parameter>\n</tool_call>",
+            DialectId::Qwen3CoderXml,
+            &[
+                "tool_call.xml.framing-newline",
+                "tool_call.xml.framing-newline",
+                "tool_call.markup.missing-function-close",
+            ][..],
+        ),
+        (
+            "<tool_call>\n{\"name\": \"f\", \"arguments\": {\"p\": \"x\"}}\n</tool_call>",
+            DialectId::Hermes,
+            &[][..],
+        ),
+        (
+            "<tool_call>\n{\"name\": \"f\", \"arguments\": {\"p\": \"x\",}}\n</tool_call>",
+            DialectId::Hermes,
+            &["json.syntax.trailing-comma"][..],
+        ),
+    ] {
+        let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+        let Outcome::Resolved(calls) = &result.outcome else {
+            panic!("{output:?}: {:#?}", result.outcome);
+        };
+        assert_eq!(calls.calls.len(), 1, "{output:?}");
+        let call = &calls.calls[0];
+        assert_eq!(call.dialect, dialect, "{output:?}");
+        assert_eq!(call.arguments.to_json(), r#"{"p":"x"}"#, "{output:?}");
+        let mut recorded = rules(call);
+        recorded.sort_unstable();
+        let mut expected = rules_expected.to_vec();
+        expected.sort_unstable();
+        assert_eq!(recorded, expected, "{output:?}");
+        assert!(
+            calls.rejected.is_empty(),
+            "{output:?}: {:#?}",
+            calls.rejected
+        );
+        assert!(result.receipt.alternatives.is_empty(), "{output:?}");
+    }
+}
+
+/// G1: a dangling attempt over a shared opener is reported as the attempt
+/// of the dialect whose grammar read the body furthest, naming every
+/// dialect that attempted it; the readings that differ only in which
+/// dialect's attempt was rejected are one reading, never `Ambiguous`.
+#[test]
+fn rejected_attempts_over_a_shared_opener_are_one_reading() {
+    let tools = compile([ToolDefinition::new("f")
+        .effects(Effects::ReadOnly)
+        .param("p", Param::string().required())]);
+    for (output, dialect) in [
+        (
+            "<tool_call>\n<function=f>\n<parameter=p>\nx",
+            DialectId::Qwen3CoderXml,
+        ),
+        ("<tool_call>\n{\"name\": \"f\", \"argu", DialectId::Hermes),
+        (
+            "<tool_call>\n<function=f>\nprose\n</tool_call>",
+            DialectId::Qwen3CoderXml,
+        ),
+    ] {
+        let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+        assert!(
+            result.receipt.alternatives.is_empty(),
+            "{output:?}: {:#?}",
+            result.outcome
+        );
+        let calls = value(&result);
+        assert!(calls.calls.is_empty(), "{output:?}");
+        assert_eq!(calls.rejected.len(), 1, "{output:?}: {:#?}", calls.rejected);
+        let rejected = &calls.rejected[0];
+        assert_eq!(rejected.dialect, dialect, "{output:?}");
+        assert_eq!(rejected.span.start, 0, "{output:?}");
+        assert_eq!(
+            rejected.candidate_dialects,
+            [DialectId::Hermes, DialectId::Qwen3CoderXml],
+            "{output:?}"
+        );
+        let wire = calls.to_node();
+        assert_eq!(
+            wire.pointer("/rejected/0/candidate_dialects")
+                .map(Node::to_json),
+            Some(r#"["hermes.v1","qwen3-coder-xml.v1"]"#.to_owned()),
+            "{output:?}"
+        );
+        assert_eq!(calls.finish, Finish::Unresolved, "{output:?}");
+    }
+    // A pinned dialect attempts alone.
+    let result = tools.recover(
+        b"<tool_call>\n<function=f>\n<parameter=p>\nx",
+        &request(DialectId::Qwen3CoderXml),
+    );
+    assert_eq!(
+        value(&result).rejected[0].candidate_dialects,
+        [DialectId::Qwen3CoderXml]
+    );
+}
+
+/// G1: two dialects that read the same bytes into the same call are one
+/// reading, never an ambiguity, and the call names both dialects in
+/// `candidate_dialects` (on the value and on the wire).
+#[test]
+fn same_call_from_two_dialects_names_both() {
+    let tools = compile([ToolDefinition::new("f").effects(Effects::ReadOnly)]);
+    let twin = OVERLAP.replace("\"overlap.v1\"", "\"overlap-twin.v1\"");
+    let (first, second) = (custom(OVERLAP), custom(&twin));
+    let output = b"say <tool><call=f></call></tool> done";
+    for pair in [
+        [first.clone(), second.clone()],
+        [second.clone(), first.clone()],
+    ] {
+        let result = tools.recover(output, &ToolRecoveryRequest::default().dialects(set(&pair)));
+        let calls = value(&result);
+        assert_eq!(calls.calls.len(), 1);
+        let call = &calls.calls[0];
+        assert_eq!(call.tool.as_deref(), Some("f"));
+        let mut expected = vec![first.clone(), second.clone()];
+        expected.sort();
+        assert_eq!(call.candidate_dialects, expected);
+        assert!(call.candidate_dialects.contains(&call.dialect));
+        let mut names: Vec<String> = calls
+            .to_node()
+            .pointer("/calls/0/candidate_dialects")
+            .map(|node| match &node.value {
+                Value::Array(items) => items
+                    .iter()
+                    .map(|item| item.as_str().expect("an id").to_owned())
+                    .collect(),
+                other => panic!("{other:?}"),
+            })
+            .expect("candidate_dialects on the wire");
+        names.sort();
+        assert_eq!(names.len(), 2);
+        assert!(names[0].starts_with("overlap-twin.v1") && names[1].starts_with("overlap.v1"));
+        assert_eq!(result.receipt.alternatives.len(), 0);
+        assert_eq!(
+            result
+                .receipt
+                .to_node()
+                .pointer("/ambiguity")
+                .map(Node::to_json),
+            Some("null".to_owned())
+        );
+    }
+    // One dialect reads the call alone.
+    let result = tools.recover(
+        output,
+        &ToolRecoveryRequest::default().dialects(set(std::slice::from_ref(&first))),
+    );
+    assert_eq!(value(&result).calls[0].candidate_dialects, [first]);
+}
+
+/// G1: two dialects that read the same bytes into different calls with
+/// identical ledgers are a genuine ambiguity, and the dialect that read each
+/// call is its distinguishing evidence: a passing `dialect=ID` validation
+/// of the call, so `distinguishing` is never empty.
+#[test]
+fn different_calls_from_two_dialects_are_distinguished_by_dialect() {
+    let tools = compile([
+        ToolDefinition::new("fg").effects(Effects::ReadOnly),
+        ToolDefinition::new("g").effects(Effects::ReadOnly),
+    ]);
+    let whole = custom(
+        "grammar \"whole.v1\"; ident = /[a-z]+/; call = \"<x>\" name:ident \"</x>\"; result = \"<r>\"; declaration = \"<d>\";",
+    );
+    let tail = custom(
+        "grammar \"tail.v1\"; ident = /[a-z]+/; call = \"<x>f\" name:ident \"</x>\"; result = \"<r>\"; declaration = \"<d>\";",
+    );
+    let result = tools.recover(
+        b"<x>fg</x>",
+        &ToolRecoveryRequest::default().dialects(set(&[whole, tail])),
+    );
+    let Outcome::Ambiguous(values) = &result.outcome else {
+        panic!("{:#?}", result.outcome);
+    };
+    let mut tools_read: Vec<&str> = values
+        .iter()
+        .map(|value| value.calls[0].tool.as_deref().expect("a tool"))
+        .collect();
+    tools_read.sort_unstable();
+    assert_eq!(tools_read, ["fg", "g"]);
+    let wire = result.receipt.to_node();
+    let pairs = wire
+        .pointer("/ambiguity/distinguishing")
+        .expect("an annotation");
+    assert_eq!(
+        pairs.to_json(),
+        r#"[[{"kind":"validation","rule":"purrassist.tool_call.v1"},{"kind":"validation","rule":"purrassist.tool_call.v1"}]]"#
+    );
+    let attested: Vec<&str> = result
+        .receipt
+        .validations
+        .iter()
+        .filter(|validation| validation.constraint.starts_with("dialect="))
+        .map(|validation| validation.constraint.as_str())
+        .collect();
+    let mut attested = attested;
+    attested.sort_unstable();
+    assert_eq!(attested.len(), 2, "{:#?}", result.receipt.validations);
+    assert!(attested[0].starts_with("dialect=tail.v1"), "{attested:?}");
+    assert!(attested[1].starts_with("dialect=whole.v1"), "{attested:?}");
 }

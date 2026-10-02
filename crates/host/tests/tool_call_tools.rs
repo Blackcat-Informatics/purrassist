@@ -3,7 +3,7 @@
 //! The `recover_tool_calls` tool runs exactly core tool-call recovery, keeps
 //! exhaustion an explicit unresolved outcome, and rejects malformed requests.
 use purrassist::{
-    Effort, Governor,
+    Effort, Governor, Schema,
     json::{self, Node},
     tool_call::{EmitTarget, GenerationStop, IdPolicy, ToolChoice, ToolRecoveryRequest, ToolSet},
 };
@@ -177,5 +177,60 @@ fn tool_choice_json_forms() {
             "{malformed}: {error}"
         );
     }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// A complete call followed by a dangling `<tool_call>` under the default
+/// allow-list (every built-in dialect): the call stays usable, the dangling
+/// attempt names both dialects that share the opener, and the result
+/// validates against the tool's published output schema.
+#[test]
+fn dangling_opener_after_a_call_keeps_the_call() {
+    let (tools, root) = tools("dangling");
+    let output = format!("{QWEN}\n<tool_call>");
+    let actual = tools
+        .call(
+            "recover_tool_calls",
+            &arguments(&output, r#","effects":{"list_dir":"read-only"}"#),
+        )
+        .unwrap();
+    assert_eq!(
+        actual.get("status").and_then(Node::as_str),
+        Some("best_guess"),
+        "{}",
+        actual.to_json()
+    );
+    assert_eq!(
+        actual
+            .pointer("/value/calls/0/outcome/status")
+            .and_then(Node::as_str),
+        Some("resolved")
+    );
+    assert_eq!(
+        actual
+            .pointer("/value/calls/0/candidate_dialects")
+            .map(Node::to_json)
+            .as_deref(),
+        Some(r#"["qwen3-coder-xml.v1"]"#)
+    );
+    assert_eq!(
+        actual
+            .pointer("/value/rejected/0/candidate_dialects")
+            .map(Node::to_json)
+            .as_deref(),
+        Some(r#"["hermes.v1","qwen3-coder-xml.v1"]"#)
+    );
+    let definitions = Tools::definitions().unwrap();
+    let json::Value::Array(definitions) = definitions.value else {
+        panic!("tool definitions must be an array")
+    };
+    let definition = definitions
+        .iter()
+        .find(|definition| {
+            definition.get("name").and_then(Node::as_str) == Some("recover_tool_calls")
+        })
+        .unwrap();
+    let schema = Schema::compile(&definition.get("outputSchema").unwrap().to_json()).unwrap();
+    assert!(schema.validate(&actual).unwrap().valid);
     std::fs::remove_dir_all(root).unwrap();
 }

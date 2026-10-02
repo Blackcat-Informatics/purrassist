@@ -32,6 +32,9 @@
       "arguments": {
         "path": "a.rs"
       },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
       "outcome": "unresolved: rule_not_admitted: rule `tool_call.context.fenced-example` is not admitted under Structural",
       "rules": [
         "tool_call.context.fenced-example",

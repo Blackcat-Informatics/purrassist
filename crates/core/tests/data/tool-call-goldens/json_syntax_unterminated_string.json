@@ -44,6 +44,9 @@
       "arguments": {
         "path": "a.rs}"
       },
+      "candidate_dialects": [
+        "openai-tool-calls.v1"
+      ],
       "outcome": "best_guess",
       "rules": [
         "tool_call.arguments.decode-string",

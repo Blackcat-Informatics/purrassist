@@ -44,6 +44,9 @@
       "arguments": {
         "path": "a\\qb"
       },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
       "outcome": "best_guess",
       "rules": [
         "json.syntax.literal-escape",

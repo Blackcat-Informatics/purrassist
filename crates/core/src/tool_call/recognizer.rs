@@ -24,7 +24,12 @@
 //!    completed ends as a call (or result), or as a rejected segment
 //!    costing [`cost::REJECT`](crate::grammar::cost::REJECT). Equal-cost
 //!    segmentations of the same span are packed and reported as a local
-//!    [`Choice`]; independent choices are never multiplied out.
+//!    [`Choice`]; independent choices are never multiplied out. A choice is
+//!    recognition-level: dialects sharing an opener each reject their own
+//!    attempt at it, so the recognized turn keeps one segmentation per
+//!    dialect. Recovery ([`ToolSet::recover`](super::ToolSet::recover))
+//!    reads those that recover the same calls as one reading, keeping the
+//!    attempt the body evidences.
 //!
 //! [`Recognizer::push`] is a fold of a per-byte step, so the result and
 //! every governor charge are identical however the bytes are split.
@@ -1795,7 +1800,11 @@ impl RecognizedTurn {
             .collect()
     }
 
-    /// Whether some span has competing segmentations.
+    /// Whether some span has competing segmentations. Competing
+    /// segmentations that recover the same calls (for example, one rejected
+    /// attempt per dialect sharing an opener) are one reading of the
+    /// recovered turn ([`ToolSet::recover`](super::ToolSet::recover)), so a
+    /// recognized ambiguity need not make recovery `Ambiguous`.
     ///
     /// ```
     /// # use purrassist_core::grammar::Grammar;

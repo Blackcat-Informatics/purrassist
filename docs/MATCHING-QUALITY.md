@@ -144,7 +144,7 @@ test's assertions fails the build by design.
 | Path matching | 1594 | 1279 | 0 | 315 | 80.2% | 0.0% | 0.234% | 2% |
 | Phonetic ambiguity | 1408 | 1089 | 0 | 319 | 77.3% | 0.0% | 0.275% | 5% |
 | JSON recovery | 714 | 630 | 0 | 84 | 88.2% | 0.0% | 0.474% | 2% |
-| Tool-call recovery | 3234 | 2107 | 0 | 1127 | 65.2% | 0.0% | 0.142% | 1% |
+| Tool-call recovery | 3234 | 2155 | 0 | 1079 | 66.6% | 0.0% | 0.139% | 1% |
 
 "Coverage" is the fraction of cases an automatic decision was reached for at
 all (correct + incorrect, over the total); "risk" is the observed error rate
@@ -246,12 +246,14 @@ cases per rule, and abstention recall of 100%:
 
 Abstention recall: 1061 of 1061 truth-`Unresolved` cases abstained (100.0%).
 
-The 66 other abstentions are coverage gaps, not errors: 48 calls followed by
-a dangling `<tool_call>` opener under the all-dialect allow-list (Qwen3-Coder
-XML and Hermes both read the opener, so the whole message has two readings
-and is `Ambiguous`), and 18 read-only calls whose required arguments were
-nested one level down (`DropWithLoss` drops the unknown wrapper before
-`json.key.relocate` can apply, so the call is missing a required argument).
+The 18 other abstentions are coverage gaps, not errors: read-only calls whose
+required arguments were nested one level down (`DropWithLoss` drops the
+unknown wrapper before `json.key.relocate` can apply, so the call is missing a
+required argument). Calls followed by a dangling `<tool_call>` opener under
+the all-dialect allow-list are recovered: Qwen3-Coder XML and Hermes both
+attempt the dangling opener, and the readings that differ only in which
+dialect's attempt was rejected recover the same calls and are one reading
+(see [the tool-call README](tool-calls/README.md#design)).
 The corpus found one incorrect correction class while it was built: under
 `Structural`, a misspelled parameter of a `DropWithLoss` tool was dropped
 with a loss (a usable `BestGuess` on a read-only tool) instead of being
@@ -285,7 +287,7 @@ unassignable (`UnknownParameter`), so the call abstains.
 | `tool_call.id.dedup` | 32 | 32 | 0 | 0 | 0 |
 | `tool_call.markup.closer-variant` | 127 | 127 | 0 | 0 | 0 |
 | `tool_call.markup.closers-only-empty` | 29 | 1 | 0 | 28 | 28 |
-| `tool_call.markup.dangling-opener` | 96 | 48 | 0 | 48 | 0 |
+| `tool_call.markup.dangling-opener` | 96 | 96 | 0 | 0 | 0 |
 | `tool_call.markup.json-body` | 32 | 32 | 0 | 0 | 0 |
 | `tool_call.markup.missing-closers-at-end` | 64 | 64 | 0 | 0 | 0 |
 | `tool_call.markup.missing-function-close` | 32 | 32 | 0 | 0 | 0 |
@@ -316,15 +318,15 @@ and by dialect allow-list:
 
 | Dialect | Cases | Correct | Incorrect | Abstained |
 | --- | ---: | ---: | ---: | ---: |
-| `hermes` | 1152 | 747 | 0 | 405 |
+| `hermes` | 1152 | 763 | 0 | 389 |
 | `mixed` | 64 | 64 | 0 | 0 |
-| `openai` | 854 | 503 | 0 | 351 |
-| `qwen` | 1164 | 793 | 0 | 371 |
+| `openai` | 854 | 519 | 0 | 335 |
+| `qwen` | 1164 | 809 | 0 | 355 |
 
 | Allow-list | Cases | Correct | Incorrect | Abstained |
 | --- | ---: | ---: | ---: | ---: |
 | `hermes.v1` | 542 | 358 | 0 | 184 |
-| `hermes.v1,openai-tool-calls.v1,qwen3-coder-xml.v1` | 1712 | 1080 | 0 | 632 |
+| `hermes.v1,openai-tool-calls.v1,qwen3-coder-xml.v1` | 1712 | 1128 | 0 | 584 |
 | `hermes.v1,qwen3-coder-xml.v1` | 64 | 64 | 0 | 0 |
 | `openai-tool-calls.v1` | 382 | 231 | 0 | 151 |
 | `qwen3-coder-xml.v1` | 534 | 374 | 0 | 160 |

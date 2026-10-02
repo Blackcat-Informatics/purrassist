@@ -35,6 +35,9 @@
       "arguments": {
         "path": "a.rs"
       },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
       "outcome": "best_guess",
       "rules": [
         "tool_call.xml.framing-newline",

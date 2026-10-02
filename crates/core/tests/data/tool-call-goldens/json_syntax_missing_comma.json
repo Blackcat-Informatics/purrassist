@@ -45,6 +45,9 @@
         "path": "a",
         "n": 1
       },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
       "outcome": "resolved",
       "rules": [
         "json.syntax.missing-comma"

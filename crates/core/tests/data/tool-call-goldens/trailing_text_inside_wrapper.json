@@ -23,6 +23,30 @@
     "f": "read_only"
   },
   "input": "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\n</function>\nthat is all\n</tool_call>",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          0,
+          66
+        ],
+        "dialect": "qwen3-coder-xml.v1",
+        "candidate_dialects": [
+          "hermes.v1",
+          "qwen3-coder-xml.v1"
+        ],
+        "reason": "Malformed { at: 66 }",
+        "raw": "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\n</function>\n"
+      }
+    ],
+    "embedded": [],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
   "outcome": "resolved",
   "stopped": "completed",
   "finish": "unresolved",
@@ -32,6 +56,10 @@
       "span": [
         0,
         66
+      ],
+      "dialect": "qwen3-coder-xml.v1",
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
       ],
       "reason": "Malformed { at: 66 }",
       "raw": "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\n</function>\n"

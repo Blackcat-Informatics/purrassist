@@ -29,6 +29,9 @@
       "arguments": {
         "a": "x"
       },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
       "outcome": "unresolved: rule_not_admitted: rule `tool_call.markup.missing-wrapper-close.before-text` is not admitted under Structural",
       "rules": [
         "tool_call.xml.framing-newline",

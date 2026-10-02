@@ -28,6 +28,9 @@
     {
       "tool": "f",
       "arguments": null,
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
       "outcome": "unresolved: repair_not_permitted: repair `tool_call.markup.stray-closer` is needed but only canonical parsing is permitted",
       "rules": [
         "tool_call.xml.framing-newline",

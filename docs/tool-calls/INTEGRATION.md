@@ -51,6 +51,34 @@ is reported as certain.
   `tool_call_rules::markup_loss_does_not_demote`,
   `tool_call_rules::repeated_scalar_reports_both_readings`, and
   `tool_call_rules::per_call_alternatives_exposed`.
+- **Ambiguity is evidence, never a dialect-label tie.** Dialects that share
+  an opener (Qwen3-Coder XML and Hermes both open with `<tool_call>`) each
+  attempt a call there. A complete call is read by the dialect its body
+  evidences (a `<function=` body is Qwen3-Coder XML, a JSON object body is
+  Hermes): the other dialect's attempt is rejected, and a rejection costs
+  more than any repair a call needs. Whole-message readings that recover the
+  same calls and differ only in which dialect's attempt was rejected (a
+  dangling, cut, or malformed `<tool_call>`) are one reading: the rejected
+  attempt reported is the one whose dialect read furthest into the body, and
+  `RejectedCall::candidate_dialects` (wire `candidate_dialects`) names every
+  dialect that attempted it. Dialects that read the same bytes into the
+  same call are one reading too, and `ToolCall::candidate_dialects` (wire
+  `candidate_dialects`) names all of them, so no dialect attribution is
+  dropped. Readings that recover different calls with identical ledgers
+  carry a passing `dialect=ID` validation per call, so an `Ambiguous`
+  operation always publishes distinguishing evidence for every
+  ranked-adjacent pair, and complete calls never drop out of `value`
+  because of a dialect label. *Proved by*
+  `tool_call_recover::body_evidence_selects_the_dialect_of_a_shared_opener`,
+  `tool_call_recover::rejected_attempts_over_a_shared_opener_are_one_reading`,
+  `tool_call_recover::same_call_from_two_dialects_names_both`,
+  `tool_call_recover::different_calls_from_two_dialects_are_distinguished_by_dialect`,
+  `tool_call_goldens::default_allow_list_never_loses_a_call` (every golden
+  also runs under the default allow-list),
+  `tool_call_goldens::ambiguity_always_has_distinguishing_evidence`, the
+  `mixed_complete_calls_then_dangling_opener` golden, the `fuzz-tool-call`
+  harness, and the host test
+  `tool_call_tools::dangling_opener_after_a_call_keeps_the_call`.
 - **`AmbiguityPolicy::Reject`.** Any whole-message or per-call ambiguity makes
   the operation `Unresolved` with a failed `tool_call.ambiguity` validation,
   every alternative kept in the receipt. *Proved by*
@@ -184,7 +212,9 @@ its own response. Ids come from the caller's `IdPolicy`.
 the `OpenAI` wire format has no better value. `"stop"` therefore hides
 rejected and unresolved calls. Read `ToolCalls::finish` (wire `finish`) and
 `ToolCalls::rejected` (wire `rejected`) before deciding that a turn
-completed cleanly.
+completed cleanly. A rejected attempt's `dialect` is the dialect whose
+grammar read furthest before failing; `candidate_dialects` lists every
+dialect that attempted a call at the same opener.
 
 ### Map serving stops to `GenerationStop`
 

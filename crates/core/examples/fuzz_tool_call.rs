@@ -22,8 +22,9 @@
 //! Checks (a panic is a fuzz failure):
 //! - recovery never panics, names the output's digest, and stays within its
 //!   budget; a value outcome completed, `Unresolved` did not; an `Ambiguous`
-//!   outcome's readings match the receipt's alternatives; a `Resolved` turn
-//!   records no guess;
+//!   outcome's readings match the receipt's alternatives, and every
+//!   ranked-adjacent pair of them has distinguishing evidence; a `Resolved`
+//!   turn records no guess;
 //! - (A13) a `Resolved` call carries no guess and no data loss, so no guessed
 //!   call on a mutating tool is `Resolved`; `usable()` holds only `Resolved`
 //!   calls; `usable_accepting_guesses()` never holds a guess on a tool that
@@ -32,7 +33,8 @@
 //! - every call, rejected-attempt, content, and reasoning range lies within
 //!   the output, never splits a well-formed UTF-8 character, and slices back
 //!   to the retained source (a rejected attempt's raw bytes are exactly its
-//!   range); content, reasoning, and call ranges never overlap; an embedded
+//!   range); every call's and rejected attempt's candidate dialects are
+//!   sorted, unique, and contain its dialect; content, reasoning, and call ranges never overlap; an embedded
 //!   call lies inside a reasoning range;
 //! - every `Resolved` call printed in its own dialect recovers to the same
 //!   tool with `Node::equivalent` arguments, `Resolved`; printing that
@@ -198,6 +200,16 @@ fn check_disjoint(mut ranges: Vec<(Range<usize>, &str)>) {
 fn check_calls(output: &[u8], calls: &ToolCalls) {
     for call in calls.calls.iter().chain(&calls.embedded) {
         check_range(output, &call.span, "call");
+        assert!(
+            call.candidate_dialects.contains(&call.dialect),
+            "a call's candidates omit its dialect: {call:?}"
+        );
+        assert!(
+            call.candidate_dialects
+                .windows(2)
+                .all(|pair| pair[0] < pair[1]),
+            "candidate dialects are not sorted and unique: {call:?}"
+        );
         if call.outcome == CallOutcome::Resolved {
             assert!(
                 !call.repairs.guessed(),
@@ -233,6 +245,17 @@ fn check_calls(output: &[u8], calls: &ToolCalls) {
         if let Some(text) = rejected.text() {
             assert_eq!(text.as_bytes(), rejected.raw.as_slice());
         }
+        assert!(
+            rejected.candidate_dialects.contains(&rejected.dialect),
+            "a rejected attempt's candidates omit its dialect: {rejected:?}"
+        );
+        assert!(
+            rejected
+                .candidate_dialects
+                .windows(2)
+                .all(|pair| pair[0] < pair[1]),
+            "candidate dialects are not sorted and unique: {rejected:?}"
+        );
     }
     for range in &calls.content {
         check_range(output, range, "content");
@@ -371,6 +394,19 @@ fn check_result(
         Outcome::Ambiguous(values) => {
             assert!(values.len() > 1);
             assert_eq!(values.len(), receipt.alternatives.len());
+            let ambiguity = result.to_node();
+            let pairs = ambiguity
+                .pointer("/receipt/ambiguity/distinguishing")
+                .expect("an ambiguity annotation");
+            let json::Value::Array(pairs) = &pairs.value else {
+                panic!("distinguishing is an array")
+            };
+            for pair in pairs {
+                assert!(
+                    !matches!(&pair.value, json::Value::Array(nodes) if nodes.is_empty()),
+                    "an ambiguity without distinguishing evidence"
+                );
+            }
             values.as_slice()
         }
         Outcome::Unresolved => {

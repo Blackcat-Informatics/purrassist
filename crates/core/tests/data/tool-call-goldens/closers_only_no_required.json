@@ -27,6 +27,9 @@
     {
       "tool": "f",
       "arguments": {},
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
       "outcome": "resolved",
       "rules": [
         "tool_call.markup.closers-only-empty"

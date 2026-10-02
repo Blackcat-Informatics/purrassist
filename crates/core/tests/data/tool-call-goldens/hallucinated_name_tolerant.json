@@ -33,6 +33,9 @@
       "arguments": {
         "to": "someone"
       },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
       "outcome": "unresolved: unknown_tool: no declared tool matches `send_email`",
       "rules": []
     }

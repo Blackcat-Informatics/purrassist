@@ -33,6 +33,13 @@ first-party; no chat-template text is copied into this repository.
   as JSON with their exact spellings. An object parameter may hold nested
   `<parameter=...>` elements instead of inline JSON; both give the same
   tree. A body that is one whole JSON object is accepted as the arguments.
+- The `<tool_call>` opener is shared with [Hermes](hermes.v1.md). With both
+  dialects allowed (the default), each attempts a call there and the body
+  decides: a `<function=` body is read by this dialect, and the other dialect's attempt
+  is rejected at the body's first byte. An attempt neither dialect reads
+  (dangling, cut off, or malformed) is one rejected attempt in the dialect
+  that read furthest, with both dialects in its `candidate_dialects`; see
+  [the README](../README.md#design).
 - `result`: `<tool_response>CONTENT</tool_response>`, the rendering of a tool
   message.
 - `declaration`: one `<function>` entry of the tool list: `<name>`, an
