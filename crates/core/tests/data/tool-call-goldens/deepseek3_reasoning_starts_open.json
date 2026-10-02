@@ -1,0 +1,55 @@
+{
+  "description": "A DeepSeek-R1 turn whose prompt ended with <think>\\n: the output starts inside the reasoning block and closes it with </think> before the call (ReasoningPolicy::Separate with starts_open).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "deepseek-v3.v1"
+  ],
+  "stop": "stop",
+  "input": "The user wants the weather in Lima.\n</think>\n\n<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>get_weather\n```json\n{\"city\": \"Lima\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
+  "reasoning": "starts_open",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "city": "Lima"
+      },
+      "candidate_dialects": [
+        "deepseek-v3.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

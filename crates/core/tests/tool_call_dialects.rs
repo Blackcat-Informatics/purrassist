@@ -221,6 +221,7 @@ fn all_registered_dialects_have_anchor_fixtures() {
         ids,
         [
             "deepseek-v3.1.v1",
+            "deepseek-v3.v1",
             "hermes.v1",
             "llama3-json.v1",
             "mistral-v11.v1",
@@ -367,6 +368,35 @@ fn assert_json_call_object(dialect: &DialectId, raw: &str, call: &RawCall, file:
     assert!(arguments.equivalent(&call.arguments.root), "{file}");
 }
 
+/// One call of a `DeepSeek` tool-calls section: its span holds the call's
+/// tokens (and the section's own around the first and last call). V3.1
+/// arguments sit between the separator and the call's closer; V3 writes
+/// `function`, the separator, the name, and the arguments in a fenced JSON
+/// block before the call's closer.
+fn assert_deepseek_call(dialect: &DialectId, raw: &str, call: &RawCall, file: &str) {
+    let at = raw.find("<｜tool▁sep｜>").expect("separator");
+    let (open, end) = if *dialect == DialectId::DeepSeekV3 {
+        assert!(
+            raw[..at].ends_with("<｜tool▁call▁begin｜>function"),
+            "{file}: {raw:?}"
+        );
+        let open = raw[at..].find("```json\n").expect("opening fence") + at + "```json\n".len();
+        let end = raw[open..].find("\n```").expect("closing fence") + open;
+        (open, end)
+    } else {
+        let open = at + "<｜tool▁sep｜>".len();
+        let end = raw[open..]
+            .find("<｜tool▁call▁end｜>")
+            .expect("call closer")
+            + open;
+        (open, end)
+    };
+    let arguments = json::parse(&raw[open..end]).expect("arguments JSON");
+    assert!(arguments.equivalent(&call.arguments.root), "{file}");
+    assert!(raw.contains("<｜tool▁call▁begin｜>"), "{file}");
+    assert!(raw[end..].contains("<｜tool▁call▁end｜>"), "{file}");
+}
+
 #[test]
 fn ir_spans_slice_back_to_source() {
     for dialect in DialectId::BUILT_IN {
@@ -398,21 +428,8 @@ fn ir_spans_slice_back_to_source() {
                     let arguments = string_member(function, "arguments").expect("arguments");
                     let decoded = json::parse(&arguments).expect("stringified arguments");
                     assert!(decoded.equivalent(&call.arguments.root), "{}", fixture.file);
-                } else if dialect == DialectId::DeepSeekV31 {
-                    // One call of a tool-calls section: its span holds the
-                    // call's tokens (and the section's own around the first
-                    // and last call), and the arguments sit between the
-                    // separator and the call's closer.
-                    let at =
-                        raw.find("<｜tool▁sep｜>").expect("separator") + "<｜tool▁sep｜>".len();
-                    let end = raw[at..].find("<｜tool▁call▁end｜>").expect("call closer") + at;
-                    let arguments = json::parse(&raw[at..end]).expect("arguments JSON");
-                    assert!(
-                        arguments.equivalent(&call.arguments.root),
-                        "{}",
-                        fixture.file
-                    );
-                    assert!(raw.contains("<｜tool▁call▁begin｜>"), "{}", fixture.file);
+                } else if matches!(dialect, DialectId::DeepSeekV31 | DialectId::DeepSeekV3) {
+                    assert_deepseek_call(&dialect, raw, call, &fixture.file);
                 } else if dialect == DialectId::MistralV11 {
                     // [TOOL_CALLS]NAME[CALL_ID]ID[ARGS]{...}: the arguments
                     // after the last [ARGS] are the call's.
@@ -563,7 +580,12 @@ fn dialect_ids_round_trip() {
 
 #[test]
 fn reasoning_markers_are_declared() {
-    for dialect in [DialectId::Qwen3CoderXml, DialectId::Hermes] {
+    for dialect in [
+        DialectId::Qwen3CoderXml,
+        DialectId::Hermes,
+        DialectId::DeepSeekV31,
+        DialectId::DeepSeekV3,
+    ] {
         assert_eq!(
             dialect.grammar().reasoning(),
             Some((&b"<think>"[..], &b"</think>"[..]))
@@ -677,16 +699,6 @@ fn result_productions_read_tool_results() {
         assert_eq!(content(found[0], source).as_deref(), Some(expected));
         assert_eq!(found[0].id.as_ref().map(|found| found.value.as_str()), id);
     }
-    // DeepSeek-V3.1 tool results sit between the tool-output tokens.
-    let set = dialect_set(&[DialectId::DeepSeekV31]);
-    let source = "<｜tool▁output▁begin｜>{\"temperature\": 22.0}<｜tool▁output▁end｜>";
-    let turn = recognize(&set, &tools, source);
-    let found = results(&turn);
-    assert_eq!(found.len(), 1, "{:#?}", turn.pieces());
-    assert_eq!(
-        content(found[0], source).as_deref(),
-        Some("{\"temperature\": 22.0}")
-    );
     // Llama 3 tool results are ipython messages.
     let set = dialect_set(&[DialectId::Llama3Json]);
     let source = "<|start_header_id|>ipython<|end_header_id|>\n\n{\"temperature\": 22.0}<|eot_id|>";
@@ -706,6 +718,24 @@ fn result_productions_read_tool_results() {
         "{:#?}",
         turn.pieces()
     );
+}
+
+/// DeepSeek-V3.1 and V3 tool results sit between the tool-output tokens
+/// (V3 wraps a run of them in the tool-outputs tokens).
+#[test]
+fn deepseek_result_productions_read_tool_outputs() {
+    let tools = ToolSet::compile([], Budget::default()).expect("no tools");
+    for dialect in [DialectId::DeepSeekV31, DialectId::DeepSeekV3] {
+        let set = dialect_set(core::slice::from_ref(&dialect));
+        let source = "<｜tool▁output▁begin｜>{\"temperature\": 22.0}<｜tool▁output▁end｜>";
+        let turn = recognize(&set, &tools, source);
+        let found = results(&turn);
+        assert_eq!(found.len(), 1, "{}: {:#?}", dialect.id(), turn.pieces());
+        assert_eq!(
+            found[0].capture_text(CaptureKind::Content, source.as_bytes()),
+            Some("{\"temperature\": 22.0}")
+        );
+    }
 }
 
 /// A dialect whose `call` is the built-in dialect's `declaration`, so the
@@ -762,6 +792,26 @@ fn declaration_productions_match_tool_declarations() {
         found[0].arguments.root.to_json(),
         r#"{"type":"object","properties":{"path":{"type":"string"}}}"#
     );
+    // DeepSeek-V3 / R1 lists each tool as a fenced OpenAI tool object, in
+    // OpenAI member order or with the keys sorted (the vLLM template's
+    // `tojson`).
+    let set = declaration_reader(&DialectId::DeepSeekV3);
+    for declaration in [
+        "```json\n{\"type\": \"function\", \"function\": {\"name\": \"read_file\", \"description\": \"Read a text file.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"path\": {\"type\": \"string\"}}}}}\n```",
+        "```json\n{\"function\": {\"description\": \"Read a text file.\", \"name\": \"read_file\", \"parameters\": {\"properties\": {\"path\": {\"type\": \"string\"}}, \"type\": \"object\"}}, \"type\": \"function\"}\n```",
+    ] {
+        let turn = recognize(&set, &empty, declaration);
+        let found = calls(&turn);
+        assert_eq!(found.len(), 1, "{:#?}", turn.pieces());
+        assert_eq!(found[0].span, 0..declaration.len());
+        assert_eq!(found[0].name.as_ref().expect("name").value, "read_file");
+        assert!(
+            found[0].arguments.root.equivalent(
+                &json::parse(r#"{"type":"object","properties":{"path":{"type":"string"}}}"#)
+                    .expect("schema")
+            )
+        );
+    }
     // Qwen3-Coder lists tools as XML function entries.
     let set = declaration_reader(&DialectId::Qwen3CoderXml);
     let declaration = "<function>\n<name>read_file</name>\n<description>Read a text file.</description>\n<parameters>\n<parameter>\n<name>path</name>\n<type>string</type>\n</parameter>\n</parameters>\n</function>";

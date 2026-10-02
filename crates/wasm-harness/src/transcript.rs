@@ -214,7 +214,7 @@ struct DialectCase {
 }
 
 /// One case per entry of `DialectId::BUILT_IN` (checked by the test below).
-const DIALECT_CASES: [DialectCase; 7] = [
+const DIALECT_CASES: [DialectCase; 8] = [
     DialectCase {
         dialect: DialectId::DeepSeekV31,
         anchor: "<think>Write the file, then read the notes.</think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>write_file<｜tool▁sep｜>{\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}<｜tool▁call▁end｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"notes.txt\", \"limit\": 10}<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜>",
@@ -222,6 +222,14 @@ const DIALECT_CASES: [DialectCase; 7] = [
         repair: "<|tool_calls_begin|><|tool_call_begin|>read_file<|tool_sep|>{\"path\": \"src/lib.rs\", \"limit\": 40}<|tool_call_begin|>get_weather<|tool_sep|>{\"city\": \"Oslo\", \"unit\": \"celsius\"}<|tool_call_end|>",
         repair_status: "resolved",
         repair_digest: "sha256:05feb4cec42294e8b581ba64120a84292f64356e2e3ffb17c2c524c1489761ee",
+    },
+    DialectCase {
+        dialect: DialectId::DeepSeekV3,
+        anchor: "<think>\nWrite the file, then read the notes.\n</think>\n\n<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>write_file\n```json\n{\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}\n```<｜tool▁call▁end｜>\n<｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file\n```json\n{\"path\": \"notes.txt\", \"limit\": 10}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜>",
+        anchor_digest: "sha256:8e7f98cfd902d773a28bb6fe70a54202d8c0c68ba48cf03648c98a302e862c82",
+        repair: "<|tool_calls_begin|><|tool_call_begin|>function<|tool_sep|>read_file\n```\n{\"path\": \"src/lib.rs\", \"limit\": 40}\n<|tool_call_begin|>function<|tool_sep|>get_weather\n{\"city\": \"Oslo\", \"unit\": \"celsius\"}\n```<|tool_call_end|>",
+        repair_status: "resolved",
+        repair_digest: "sha256:8b47b741e93bd652782fbc8bb4b2a4f43d5277482a8a41558b187f060d1731e6",
     },
     DialectCase {
         dialect: DialectId::Hermes,

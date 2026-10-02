@@ -53,7 +53,7 @@
 use super::codec::{
     CodecContext, CodecEnd, CodecFault, CodecKind, CodecState, CodecStep, CodecValue,
 };
-use super::cost::{K_CAPTURE, K_CODEC, K_THREAD, STRAY_CLOSER_GAP};
+use super::cost::{K_CAPTURE, K_CODEC, K_THREAD, STRAY_CLOSER_GAP, UNDECLARED_NAME};
 use super::edit::{EditOperator, MarkupEdit};
 use super::repair::{RepairContext, RepairState, Status};
 use super::{CaptureKind, CompiledGrammar, Inst, Program, index_u32};
@@ -145,9 +145,18 @@ impl Thread {
         (self.pc, mode, node)
     }
 
-    /// The precedence among configurations sharing a key.
+    /// The precedence among configurations sharing a key: the earliest
+    /// attempt, then the least cost, then for an `until` body the earliest
+    /// entry (the longest body; it continues the same way whatever its
+    /// entry) and for a slot body the latest entry (the reading whose
+    /// grammar read the most bytes as markup before the value began, rather
+    /// than leaving them to the codec).
     const fn rank(&self) -> (usize, u64, usize) {
-        (self.start, self.cost, self.entry)
+        let entry = match self.sub {
+            Sub::Body(_, Some(_)) => usize::MAX - self.entry,
+            _ => self.entry,
+        };
+        (self.start, self.cost, entry)
     }
 }
 
@@ -1269,18 +1278,41 @@ impl<'s> Step<'_, 's> {
                         let before = if part == 0 { 0 } else { boundaries[part - 1].1 };
                         let through = boundaries.get(part).map_or(shape.cost, |&(_, cost)| cost);
                         let span = readings[0].span.clone();
+                        let weight = self.undeclared(shape.kind, &readings);
                         (
                             CallSegment {
                                 span,
                                 readings,
                                 derivations: Vec::new(),
                             },
-                            through.saturating_sub(before),
+                            through.saturating_sub(before).saturating_add(weight),
                         )
                     })
                     .collect()
             })
             .collect()))
+    }
+}
+
+impl Step<'_, '_> {
+    /// The selection weight of a call none of whose readings names a
+    /// declared tool ([`UNDECLARED_NAME`]), when the tool set is
+    /// known; zero for a result, or without a tool set.
+    fn undeclared(&self, kind: ProductionKind, readings: &[RawCall]) -> u64 {
+        let Some(tools) = self.tools else {
+            return 0;
+        };
+        let declared = readings.iter().any(|reading| {
+            reading
+                .name
+                .as_ref()
+                .is_some_and(|name| tools.lookup_exact(&name.value).is_some())
+        });
+        if kind == ProductionKind::Call && !declared {
+            UNDECLARED_NAME
+        } else {
+            0
+        }
     }
 }
 
@@ -1336,7 +1368,8 @@ pub(crate) struct Shape<'d> {
 }
 
 /// Merge configurations sharing a key: the earliest attempt, then the least
-/// cost, then the earliest entry wins; exact ties pack their histories.
+/// cost, then the entry (see `Thread::rank`) wins; exact ties pack their
+/// histories.
 pub(crate) fn merge(
     threads: &mut ScratchVec<Thread>,
     arena: &mut Arena,

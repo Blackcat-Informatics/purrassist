@@ -31,6 +31,30 @@
   ],
   "stop": "stop",
   "input": "Here: <|tool calls begin|> then nothing.",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          6,
+          27
+        ],
+        "dialect": "deepseek-v3.1.v1",
+        "candidate_dialects": [
+          "deepseek-v3.1.v1",
+          "deepseek-v3.v1"
+        ],
+        "reason": "Malformed { at: 27 }",
+        "raw": "<|tool calls begin|> "
+      }
+    ],
+    "embedded": [],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
   "outcome": "resolved",
   "stopped": "completed",
   "finish": "unresolved",

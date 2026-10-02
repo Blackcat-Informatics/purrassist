@@ -246,8 +246,8 @@ pub fn turn_id_prefix(turn: &Digest) -> String {
 ///   but which has none, or whose id an earlier call already holds, is
 ///   recorded as a derived `tool_call.id.dedup` inference naming the
 ///   assigned id; a call of a dialect whose markup carries no id
-///   (DeepSeek-V3.1, Hermes, Llama 3 JSON, Qwen3-Coder XML) is numbered
-///   without one, as under `Prefix`.
+///   (DeepSeek-V3.1, DeepSeek-V3, Hermes, Llama 3 JSON, Qwen3-Coder XML)
+///   is numbered without one, as under `Prefix`.
 ///   [`ToolCalls::next_id_start`] is the number of calls.
 ///
 ///   Different turns get disjoint numbered ids without any caller state.

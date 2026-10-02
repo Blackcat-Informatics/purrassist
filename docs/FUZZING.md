@@ -182,7 +182,11 @@ targets' mutation tokens so mutation can create or move field boundaries).
   call, `[THINK]` reasoning, a v3 array beside a v11 call), DeepSeek-V3.1
   repairs (missing section and call closers, truncated arguments, `<think>`
   before the section, ASCII and space renderings of the special tokens, an
-  omitted section opener, prose after the section), and negative cases (including JSON content
+  omitted section opener, prose after the section), DeepSeek-V3 repairs (a
+  missing, bare, repeated or foreign-language fence line, a missing or other
+  type, R1 `<think>` reasoning, a missing call closer between calls,
+  truncated fenced arguments, a fence inside a string value, a V3.1 section
+  beside a V3 section), and negative cases (including JSON content
   that is not call-shaped, a bare `[TOOL_CALLS]`, and nested unterminated
   call objects); the header bytes cycle through five
   fixed request configurations.

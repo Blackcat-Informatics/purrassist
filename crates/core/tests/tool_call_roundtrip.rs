@@ -473,7 +473,8 @@ fn declaration_forms_render_every_tool() {
                     | DeclarationForm::Hermes
                     | DeclarationForm::Llama3Json
                     | DeclarationForm::MistralV3
-                    | DeclarationForm::MistralV11 => "",
+                    | DeclarationForm::MistralV11
+                    | DeclarationForm::DeepSeekV3 => "",
                     _ => r#"{"type":"object"}"#,
                 });
                 assert!(
@@ -520,6 +521,29 @@ fn declaration_forms_render_every_tool() {
             .expect("qwen"),
         format!(
             "<function>\n<name>read_file</name>\n<description>Read a \"text\" file.</description>\n<parameters>{}</parameters>\n</function>",
+            builder.render_json_schema("read_file").expect("schema")
+        )
+    );
+}
+
+/// The DeepSeek-V3 declaration form: the `OpenAI` tool object in a fenced
+/// JSON block.
+#[test]
+fn deepseek_v3_declaration_form() {
+    let builder = ToolSet::compile(
+        [ToolDefinition::new("read_file")
+            .description("Read a \"text\" file.")
+            .param("path", Param::string().required())
+            .param("limit", Param::integer())],
+        Budget::default(),
+    )
+    .expect("builder");
+    assert_eq!(
+        builder
+            .render_declaration("read_file", DeclarationForm::DeepSeekV3)
+            .expect("deepseek-v3"),
+        format!(
+            "```json\n{{\"type\":\"function\",\"function\":{{\"name\":\"read_file\",\"description\":\"Read a \\\"text\\\" file.\",\"parameters\":{}}}}}\n```",
             builder.render_json_schema("read_file").expect("schema")
         )
     );

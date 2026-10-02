@@ -1,0 +1,58 @@
+{
+  "description": "A DeepSeek-V3 section that starts directly at <｜tool▁call▁begin｜>, its <｜tool▁calls▁begin｜> left out: the token is read as inserted (tool_call.markup.missing-token) and the call is Resolved.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "deepseek-v3.v1"
+  ],
+  "stop": "stop",
+  "input": "Calling now.<｜tool▁call▁begin｜>function<｜tool▁sep｜>get_weather\n```json\n{\"city\": \"Paris\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "city": "Paris"
+      },
+      "candidate_dialects": [
+        "deepseek-v3.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.missing-token"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.missing-token"
+  ]
+}

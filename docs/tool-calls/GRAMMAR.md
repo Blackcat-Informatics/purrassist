@@ -19,14 +19,15 @@ into a `CompiledGrammar`. One compiled grammar serves three purposes:
   choices to print well-formed calls for given argument shapes, for tests and
   corpora.
 
-The seven built-in dialects are written in this DSL:
+The eight built-in dialects are written in this DSL:
 [`qwen3-coder-xml.v1`](../../crates/core/src/tool_call/dialects/qwen3-coder-xml.v1.grammar),
 [`hermes.v1`](../../crates/core/src/tool_call/dialects/hermes.v1.grammar),
 [`openai-tool-calls.v1`](../../crates/core/src/tool_call/dialects/openai-tool-calls.v1.grammar),
 [`llama3-json.v1`](../../crates/core/src/tool_call/dialects/llama3-json.v1.grammar),
 [`mistral-v3.v1`](../../crates/core/src/tool_call/dialects/mistral-v3.v1.grammar),
-[`mistral-v11.v1`](../../crates/core/src/tool_call/dialects/mistral-v11.v1.grammar), and
-[`deepseek-v3.1.v1`](../../crates/core/src/tool_call/dialects/deepseek-v3.1.v1.grammar).
+[`mistral-v11.v1`](../../crates/core/src/tool_call/dialects/mistral-v11.v1.grammar),
+[`deepseek-v3.1.v1`](../../crates/core/src/tool_call/dialects/deepseek-v3.1.v1.grammar), and
+[`deepseek-v3.v1`](../../crates/core/src/tool_call/dialects/deepseek-v3.v1.grammar).
 A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 [Add a custom dialect](#add-a-custom-dialect).
 
@@ -92,7 +93,12 @@ whole repetition), then sequence, then alternation.
   ASCII spelling of a fullwidth delimiter.
 - **`slot`** is an `until` whose body is read by a codec (below). A slot
   holding the `json` codec is self-delimiting: the value may end before any
-  delimiter, and the grammar continues after it.
+  delimiter, and the grammar continues after it. When two readings of one
+  attempt reach the same slot at equal cost with values that begin at
+  different offsets (an `insert` before a fence, say, beside the fence
+  itself), the value that begins later is kept: its grammar read more of the
+  text as markup instead of leaving it to the codec. Of two `until` bodies
+  the one that begins earlier is kept.
 
 ### Productions
 
@@ -148,8 +154,9 @@ from its first byte. Printing writes the
 canonical spelling. Each spelling adds recognizer configurations
 (`CompiledGrammar::configuration_bound`), and so per-byte work; declare only
 the confusions a model actually makes. One canonical text may have several
-variants: the built-in DeepSeek-V3.1 dialect reads `｜` as `|`, and `▁` as
-`_` or a space, the renderings detokenizers produce for its special tokens.
+variants: the built-in DeepSeek-V3.1 and V3 dialects read `｜` as `|`, and
+`▁` as `_` or a space, the renderings detokenizers produce for their special
+tokens.
 
 ## Layout
 
@@ -297,7 +304,7 @@ call.
 | `param-value:` | One parameter's value; must wrap a `slot(...)`. |
 | `reasoning:` | Reasoning text inside a production. |
 | `content:` | Free content, for example a tool result's body. |
-| `dropped:` | Text inside a call that is not part of it: a code-fence marker is recorded as `tool_call.extract.fence` (markup), any other text as `tool_call.extract.prose` (data). |
+| `dropped:` | Text inside a call that is not part of it: a code-fence marker is recorded as `tool_call.extract.fence` (markup), any other text as `tool_call.extract.prose` (data). Dropped text is never printed: a repetition holding it prints its minimum, and the printer and witnesses never choose an alternative that always holds it when another can be printed (as with `insert`). |
 
 `param-name:` and `param-value:` captures come in adjacent pairs, in that
 order, in one sequence. A production uses either one `arguments` slot or

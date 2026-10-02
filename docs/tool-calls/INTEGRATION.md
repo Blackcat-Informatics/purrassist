@@ -138,13 +138,13 @@ allow-list, with a published bound, and every limit is explicit.
 - **Proved by** `tool_call_cost::resources_doc_matches_cost_constants` (every
   published constant and per-dialect bound equals the code's),
   `tool_call_cost::one_mib_argument_work_bound` (1 MiB Qwen3-Coder XML,
-  Hermes, Llama 3 JSON, Mistral v3, Mistral v11 and DeepSeek-V3.1 arguments
-  satisfy the bound and scale linearly from 64 KiB),
+  Hermes, Llama 3 JSON, Mistral v3, Mistral v11, DeepSeek-V3.1 and
+  DeepSeek-V3 arguments satisfy the bound and scale linearly from 64 KiB),
   `tool_call_cost::one_mib_argument_fits_published_budget` (a 1 MiB argument
   in every built-in dialect is `Resolved` under `ToolRecoveryRequest::sized`
   for every effort from `Quick` to `Maximum`, with peak scratch at most 16
   bytes per input byte for Qwen3-Coder XML, Hermes, Llama 3 JSON, Mistral v3,
-  Mistral v11 and DeepSeek-V3.1),
+  Mistral v11, DeepSeek-V3.1 and DeepSeek-V3),
   `tool_call_cost::work_independent_of_dialect_count_beyond_bound`,
   `json_incremental::extract_many_brackets_is_linear`, and
   `tool_call_recover::exhaustion_is_explicit_every_resource`.
@@ -308,8 +308,8 @@ the caller threads no state:
 - A missing model id (in a dialect whose markup provides for one) or a model
   id an earlier call already holds is numbered so and recorded as a derived
   `tool_call.id.dedup` inference on the call and in the receipt; it never
-  demotes the call. DeepSeek-V3.1, Hermes, Llama 3 JSON and Qwen3-Coder XML
-  markup carries no id, so their calls are numbered without an inference.
+  demotes the call. DeepSeek-V3.1, DeepSeek-V3, Hermes, Llama 3 JSON and
+  Qwen3-Coder XML markup carries no id, so their calls are numbered without an inference.
 - `next_id_start` is the number of calls.
 
 The same output always gets the same ids: recovering one turn twice is the

@@ -1,0 +1,44 @@
+{
+  "description": "A DeepSeek-V3.1 call to a tool literally named `function`, read with every built-in dialect allowed: <｜tool▁sep｜> is followed by JSON, not a name, so DeepSeek-V3 never reads it and the call resolves as DeepSeek-V3.1 alone.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "function",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "expr": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "expr"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>{\"expr\": \"x + 1\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "function",
+      "arguments": {
+        "expr": "x + 1"
+      },
+      "candidate_dialects": [
+        "deepseek-v3.1.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

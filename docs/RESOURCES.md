@@ -680,6 +680,7 @@ every value below to equal the code's.
 | `QUEUED_REPORT` | 96 | `ScratchBytes` per queued recognizer report |
 | `EXTRACT_PROSE` | 2 | Repair cost: prose dropped inside a call |
 | `EXTRACT_FENCE` | 1 | Repair cost: a fence marker dropped inside a call |
+| `UNDECLARED_NAME` | 4 | Selection weight of a call whose name denotes no declared tool |
 | `RECOVER_WORK_PER_BYTE` | 32 | `Work` per output byte `ToolRecoveryRequest::sized` adds |
 | `RECOVER_SCRATCH_PER_BYTE` | 48 | `ScratchBytes` per output byte `ToolRecoveryRequest::sized` adds |
 | `RECOVER_OPENER_CANDIDATE_DIVISOR` | 8 | `ToolRecoveryRequest::sized` adds `⌈preset.candidates / 8⌉` `Candidates` per call opener |
@@ -687,6 +688,7 @@ every value below to equal the code's.
 | Built-in dialect | `B_d` | `K_d` per byte |
 | --- | ---: | ---: |
 | `deepseek-v3.1.v1` | 2945 | 2945 |
+| `deepseek-v3.v1` | 4793 | 4793 |
 | `hermes.v1` | 635 | 635 |
 | `llama3-json.v1` | 314 | 314 |
 | `mistral-v11.v1` | 136 | 136 |
@@ -694,8 +696,8 @@ every value below to equal the code's.
 | `openai-tool-calls.v1` | 2151 | 2151 |
 | `qwen3-coder-xml.v1` | 442 | 442 |
 
-The default request allows all seven, so its bound is
-`(2 + 1 + 7889)·n + 8·E = 7892·n + 8·E`.
+The default request allows all eight, so its bound is
+`(2 + 1 + 12682)·n + 8·E = 12685·n + 8·E`.
 
 ### Budgets for large outputs and busy turns
 
@@ -755,9 +757,9 @@ every effort. The host and CLI tests
 string argument in each built-in dialect's shape and checks that the call is
 `Resolved` under `sized(effort, output)` for every effort from `Quick` to
 `Maximum` (and, for Qwen3-Coder XML, Hermes, Llama 3 JSON, Mistral v3,
-Mistral v11 and DeepSeek-V3.1, under the unmodified `Effort::Maximum`
-preset), with identical charges in every case, peak scratch at most 16 bytes
-per input byte for those six, and
+Mistral v11, DeepSeek-V3.1 and DeepSeek-V3, under the unmodified
+`Effort::Maximum` preset), with identical charges in every case, peak scratch
+at most 16 bytes per input byte for those seven, and
 at most `RECOVER_SCRATCH_PER_BYTE` for `OpenAI` stringified arguments, whose
 escaped string is also decoded, recorded as the decoding's replacement and
 parsed again. The charges include the call's schema validation (see
@@ -765,15 +767,20 @@ parsed again. The charges include the call's schema validation (see
 
 | Input | Bytes | Work | Work per byte | Peak scratch | Scratch per byte |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Qwen3-Coder XML `<parameter>` string | 1,048,663 | 11,537,106 | 11.00 | 8,416,475 | 8.03 |
-| Hermes JSON string argument | 1,048,648 | 10,489,424 | 10.00 | 9,448,110 | 9.01 |
-| Llama 3 JSON string argument | 1,048,624 | 12,585,490 | 12.00 | 9,448,798 | 9.01 |
-| Mistral v3 JSON string argument | 1,048,657 | 10,489,699 | 10.00 | 9,449,431 | 9.01 |
-| Mistral v11 JSON string argument | 1,048,632 | 10,488,328 | 10.00 | 9,453,904 | 9.02 |
-| DeepSeek-V3.1 JSON string argument | 1,048,720 | 15,732,914 | 15.00 | 12,596,419 | 12.01 |
-| `OpenAI` stringified string argument | 1,048,679 | 15,733,053 | 15.00 | 47,201,703 | 45.01 |
+| Qwen3-Coder XML `<parameter>` string | 1,048,663 | 11,537,464 | 11.00 | 8,417,219 | 8.03 |
+| Hermes JSON string argument | 1,048,648 | 10,489,706 | 10.00 | 9,448,358 | 9.01 |
+| Llama 3 JSON string argument | 1,048,624 | 12,585,734 | 12.00 | 9,448,798 | 9.01 |
+| Mistral v3 JSON string argument | 1,048,657 | 10,489,943 | 10.00 | 9,449,431 | 9.01 |
+| Mistral v11 JSON string argument | 1,048,632 | 10,488,572 | 10.00 | 9,453,904 | 9.02 |
+| DeepSeek-V3.1 JSON string argument | 1,048,720 | 15,734,948 | 15.00 | 12,597,375 | 12.01 |
+| DeepSeek-V3 fenced JSON string argument | 1,048,741 | 24,127,968 | 23.01 | 12,617,970 | 12.03 |
+| `OpenAI` stringified string argument | 1,048,679 | 15,733,297 | 15.00 | 47,201,703 | 45.01 |
 
-All use the default request (all seven built-in dialects); charging schema
+The DeepSeek-V3 input costs more work than the others because the
+DeepSeek-V3.1 dialect, which shares its section and call tokens, also keeps
+a candidate reading of the fenced arguments alive to the end (alone, the
+DeepSeek-V3 dialect charges 15 work per byte on the same input). All use the
+default request (all eight built-in dialects); charging schema
 validation's working set left these measurements unchanged, because
 validating one string argument peaks below the recognizer's buffers. The
 constants leave headroom over these fast-path measurements; inputs that need repair
@@ -786,7 +793,7 @@ as `BudgetExceeded` naming the resource.
 tool_calls`; `-- --list` lists its workloads, `-- NAME` runs one) recovers a
 write call with a 1 KiB, 64 KiB or 1 MiB string argument as Qwen3-Coder XML,
 Hermes, `OpenAI` stringified arguments, Llama 3 JSON, Mistral v3, Mistral
-v11, DeepSeek-V3.1, and a Qwen3-Coder XML call followed by a Hermes call under a Qwen3-Coder + Hermes allow-list, each under
+v11, DeepSeek-V3.1, DeepSeek-V3, and a Qwen3-Coder XML call followed by a Hermes call under a Qwen3-Coder + Hermes allow-list, each under
 `ToolRecoveryRequest::sized_for(Effort::Standard, output, dialects)`, and feeds a 64 KiB
 Qwen3-Coder XML output to a `Recognizer` in chunks of 1, 16 and 4096 bytes,
 asserting identical charged usage for every chunking. Work and peak scratch
@@ -799,37 +806,40 @@ on its timings.
 
 Recorded on Linux 7.2.7-1-cachyos x86_64 (AMD RYZEN AI MAX+ 395 w/ Radeon
 8060S, 32 hardware threads), `rustc 1.100.0-nightly (4b6d04e70 2026-09-13)`,
-commit `ca11236` with this change applied:
+commit `0ec3f3a` with this change applied:
 
 | Workload | Bytes | Samples | Median ms | MiB/s | Work/byte | Peak scratch/byte |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `qwen_xml_1kib` | 1111 | 200 | 0.311 | 3.40 | 12.63 | 38.88 |
-| `qwen_xml_64kib` | 65623 | 30 | 16.279 | 3.84 | 11.02 | 8.41 |
-| `qwen_xml_1mib` | 1048663 | 7 | 255.562 | 3.91 | 11.00 | 8.02 |
-| `hermes_1kib` | 1096 | 200 | 0.374 | 2.78 | 12.68 | 57.09 |
-| `hermes_64kib` | 65608 | 30 | 18.549 | 3.37 | 10.04 | 9.15 |
-| `hermes_1mib` | 1048648 | 7 | 293.464 | 3.40 | 10.00 | 9.00 |
-| `openai_stringified_1kib` | 1127 | 200 | 0.411 | 2.61 | 17.54 | 59.49 |
-| `openai_stringified_64kib` | 65639 | 30 | 21.135 | 2.96 | 15.04 | 45.16 |
-| `openai_stringified_1mib` | 1048679 | 7 | 343.395 | 2.91 | 15.00 | 45.01 |
-| `llama3_json_1kib` | 1072 | 200 | 0.384 | 2.65 | 13.86 | 53.94 |
-| `llama3_json_64kib` | 65584 | 30 | 20.552 | 3.04 | 12.03 | 9.17 |
-| `llama3_json_1mib` | 1048624 | 7 | 339.277 | 2.94 | 12.00 | 9.01 |
-| `mistral_v3_1kib` | 1105 | 200 | 0.368 | 2.85 | 12.83 | 57.28 |
-| `mistral_v3_64kib` | 65617 | 30 | 18.947 | 3.30 | 10.04 | 9.17 |
-| `mistral_v3_1mib` | 1048657 | 7 | 298.568 | 3.34 | 10.00 | 9.01 |
-| `mistral_v11_1kib` | 1080 | 200 | 0.346 | 2.97 | 11.85 | 58.66 |
-| `mistral_v11_64kib` | 65592 | 30 | 18.309 | 3.41 | 10.03 | 9.24 |
-| `mistral_v11_1mib` | 1048632 | 7 | 293.016 | 3.41 | 10.00 | 9.01 |
-| `deepseek_v31_1kib` | 1168 | 200 | 0.441 | 2.52 | 16.80 | 52.23 |
-| `deepseek_v31_64kib` | 65680 | 30 | 23.899 | 2.62 | 15.03 | 12.17 |
-| `deepseek_v31_1mib` | 1048720 | 7 | 380.059 | 2.63 | 15.00 | 12.01 |
-| `mixed_qwen_hermes_1kib` | 1184 | 200 | 0.341 | 3.30 | 12.24 | 37.42 |
-| `mixed_qwen_hermes_64kib` | 65696 | 30 | 15.710 | 3.98 | 10.53 | 9.02 |
-| `mixed_qwen_hermes_1mib` | 1048736 | 7 | 251.552 | 3.97 | 10.50 | 8.53 |
-| `push_chunk_1` | 65623 | 30 | 14.335 | 4.36 | 8.00 | 5.17 |
-| `push_chunk_16` | 65623 | 30 | 14.334 | 4.36 | 8.00 | 5.17 |
-| `push_chunk_4096` | 65623 | 30 | 14.016 | 4.46 | 8.00 | 5.17 |
+| `qwen_xml_1kib` | 1111 | 200 | 0.345 | 3.07 | 12.95 | 52.00 |
+| `qwen_xml_64kib` | 65623 | 30 | 16.067 | 3.90 | 11.03 | 8.42 |
+| `qwen_xml_1mib` | 1048663 | 7 | 261.180 | 3.83 | 11.00 | 8.03 |
+| `hermes_1kib` | 1096 | 200 | 0.393 | 2.66 | 12.94 | 69.36 |
+| `hermes_64kib` | 65608 | 30 | 19.282 | 3.24 | 10.05 | 9.16 |
+| `hermes_1mib` | 1048648 | 7 | 301.077 | 3.32 | 10.00 | 9.01 |
+| `openai_stringified_1kib` | 1127 | 200 | 0.449 | 2.39 | 17.76 | 70.74 |
+| `openai_stringified_64kib` | 65639 | 30 | 22.338 | 2.80 | 15.05 | 45.17 |
+| `openai_stringified_1mib` | 1048679 | 7 | 364.681 | 2.74 | 15.00 | 45.01 |
+| `llama3_json_1kib` | 1072 | 200 | 0.396 | 2.58 | 14.10 | 65.76 |
+| `llama3_json_64kib` | 65584 | 30 | 21.642 | 2.89 | 12.03 | 9.17 |
+| `llama3_json_1mib` | 1048624 | 7 | 335.337 | 2.98 | 12.00 | 9.01 |
+| `mistral_v3_1kib` | 1105 | 200 | 0.387 | 2.72 | 13.05 | 68.75 |
+| `mistral_v3_64kib` | 65617 | 30 | 19.146 | 3.27 | 10.05 | 9.18 |
+| `mistral_v3_1mib` | 1048657 | 7 | 299.670 | 3.34 | 10.00 | 9.01 |
+| `mistral_v11_1kib` | 1080 | 200 | 0.356 | 2.89 | 12.09 | 70.40 |
+| `mistral_v11_64kib` | 65592 | 30 | 18.655 | 3.35 | 10.03 | 9.25 |
+| `mistral_v11_1mib` | 1048632 | 7 | 296.191 | 3.38 | 10.00 | 9.02 |
+| `deepseek_v31_1kib` | 1168 | 200 | 0.560 | 1.99 | 18.55 | 65.77 |
+| `deepseek_v31_64kib` | 65680 | 30 | 24.956 | 2.51 | 15.06 | 12.19 |
+| `deepseek_v31_1mib` | 1048720 | 7 | 403.724 | 2.48 | 15.00 | 12.01 |
+| `deepseek_v3_1kib` | 1189 | 200 | 0.930 | 1.22 | 28.82 | 92.77 |
+| `deepseek_v3_64kib` | 65701 | 30 | 45.255 | 1.38 | 23.11 | 12.50 |
+| `deepseek_v3_1mib` | 1048741 | 7 | 718.682 | 1.39 | 23.01 | 12.03 |
+| `mixed_qwen_hermes_1kib` | 1184 | 200 | 0.334 | 3.38 | 12.24 | 37.42 |
+| `mixed_qwen_hermes_64kib` | 65696 | 30 | 15.625 | 4.01 | 10.53 | 9.02 |
+| `mixed_qwen_hermes_1mib` | 1048736 | 7 | 247.837 | 4.04 | 10.50 | 8.53 |
+| `push_chunk_1` | 65623 | 30 | 13.931 | 4.49 | 8.01 | 5.18 |
+| `push_chunk_16` | 65623 | 30 | 13.715 | 4.56 | 8.01 | 5.18 |
+| `push_chunk_4096` | 65623 | 30 | 13.787 | 4.54 | 8.01 | 5.18 |
 
 ## Resource limits
 

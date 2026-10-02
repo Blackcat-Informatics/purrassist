@@ -220,6 +220,14 @@ TOOL_CALL_WITNESSES = [
     "<｜tool▁calls▁begin｜>\t\t<｜tool▁call▁begin｜>\t\twrite_file<｜tool▁sep｜>\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
     # deepseek-v3.1.v1: delete_path, read_file (seed 3)
     "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>delete_path<｜tool▁sep｜>\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"<｜tool▁call▁end｜>\t<｜tool▁call▁begin｜>\t\tread_file\t\t<｜tool▁sep｜>\"{\\\"path\\\":\\\"tab\\\\tseparated   indented\\\"}\"<｜tool▁call▁end｜>\t<｜tool▁calls▁end｜>".encode(),
+    # deepseek-v3.v1: read_file (seed 0)
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>\t\tfunction<｜tool▁sep｜>\tread_file\t\t```json\t{\"path\":\"tab\\tseparated \\n  block\\n\"}```<｜tool▁call▁end｜>\t<｜tool▁calls▁end｜>".encode(),
+    # deepseek-v3.v1: get_weather, list_dir (seed 1)
+    "<｜tool▁calls▁begin｜>\t<｜tool▁call▁begin｜>function\t<｜tool▁sep｜>get_weather```json\t{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"}```<｜tool▁call▁end｜><｜tool▁call▁begin｜>function\t<｜tool▁sep｜>\tlist_dir```json{\"path\":\"trailing  \"}```\t\t<｜tool▁call▁end｜>\t<｜tool▁calls▁end｜>".encode(),
+    # deepseek-v3.v1: write_file (seed 2)
+    "<｜tool▁calls▁begin｜>\t\t<｜tool▁call▁begin｜>\t\tfunction<｜tool▁sep｜>write_file\t\t```json\t\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"```\t\t<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    # deepseek-v3.v1: delete_path, read_file (seed 3)
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>\tdelete_path```json\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"\t\t```\t\t<｜tool▁call▁end｜><｜tool▁call▁begin｜>\t\tfunction\t<｜tool▁sep｜>read_file```json\t\"{\\\"path\\\":\\\"beta gamma tab\\\\tseparated\\\",\\\"limit\\\":-604}\"```\t<｜tool▁call▁end｜>\t\t<｜tool▁calls▁end｜>".encode(),
     # hermes.v1: read_file (seed 0)
     b"<tool_call>\t{\t\t\"arguments\":{\"path\":\"tab\\tseparated \\n  block\\n\"}\t,\t\"name\"\t:\t\t\"read_file\"}</tool_call>",
     # hermes.v1: get_weather, list_dir (seed 1)
@@ -373,6 +381,21 @@ TOOL_CALL_REPAIRS = [
     "Now: <｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"a.rs\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
     "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"a.rs\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>\nDone.".encode(),
     "<｜tool▁output▁begin｜>ok<｜tool▁output▁end｜>".encode(),
+    # DeepSeek-V3 / R1: a missing, bare, repeated or foreign-language fence
+    # line, a missing or other type, R1 reasoning, a missing call closer
+    # between calls, truncated fenced arguments, a fence inside a string
+    # value, and a V3.1 section and a V3 section in one turn.
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file\n{\"path\": \"a.rs\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file\n```\n{\"path\": \"a.rs\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file\n```json\n{\"path\": \"a.rs\"}\n<｜tool▁call▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file\n```json\n```json\n{\"path\": \"a.rs\"}\n```\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file```javascript{\"path\": \"a.rs\"}```<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>tool<｜tool▁sep｜>read_file\n```json\n{\"path\": \"a.rs\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜><｜tool▁sep｜>read_file\n```json\n{\"path\": \"a.rs\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<think>\nplan the read\n</think>\n\n<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file\n```json\n{\"path\": \"a.rs\"}\n```\n<｜tool▁call▁begin｜>function<｜tool▁sep｜>list_dir\n```json\n{\"path\": \".\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file\n```json\n{\"path\": \"src/ma".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>write_file\n```json\n{\"path\": \"R.md\", \"content\": \"```sh\\nls\\n```\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"a\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>\n<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>list_dir\n```json\n{\"path\": \".\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
 ]
 
 # Inputs that hold no recoverable call.
@@ -399,6 +422,8 @@ TOOL_CALL_NEGATIVES = [
     "<｜tool▁calls▁begin｜>".encode(),
     "<|tool calls begin|> nothing".encode(),
     "<｜tool▁call▁begin｜>read_file<｜tool▁sep｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>\n```json\n```".encode(),
+    "```json\n{\"path\": \"a.rs\"}\n```".encode(),
     b'[TOOL_CALLS] [' + b'{"name": "read_file", "arguments": ' * 16 + b']',
     b'[TOOL_RESULTS] {"content": "x", "call_id": "a1B2c3D4e"}[/TOOL_RESULTS]',
 ]
@@ -416,6 +441,7 @@ TOOL_CALL_TOKENS = [
     b'; ', b'[TOOL_CALLS]', b'[TOOL_RESULTS]', b'[ARGS]', b'[CALL_ID]', b'[TOOL_CONTENT]',
     b'[THINK]', b'[/THINK]', "<｜tool▁calls▁begin｜>".encode(), "<｜tool▁call▁begin｜>".encode(),
     "<｜tool▁sep｜>".encode(), "<｜tool▁call▁end｜>".encode(), "<｜tool▁calls▁end｜>".encode(),
+    b'function', b'```javascript', "<｜tool▁outputs▁begin｜>".encode(),
     b'<|tool_calls_begin|>', b'"id":', b'</s>', b'read_file', b'write_file', b'current_time', b'path', b'\n', b'\t',
     b'"', b'\\', b'{', b'}', b'[', b']', b':', b',', b'>', b'<', b'null', b'1.50',
     b'\x00', b'\x04', b'\x80', 'é'.encode(), b'\xff', b'\xe2\x82',

@@ -1,0 +1,86 @@
+{
+  "description": "A DeepSeek-V3 section whose first call lacks <｜tool▁call▁end｜> before the next call: the closer is inserted (tool_call.markup.missing-function-close) and both calls are Resolved.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "deepseek-v3.v1"
+  ],
+  "stop": "stop",
+  "input": "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>get_weather\n```json\n{\"city\": \"Paris\"}\n```\n<｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file\n```json\n{\"path\": \"a.rs\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "city": "Paris"
+      },
+      "candidate_dialects": [
+        "deepseek-v3.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.missing-function-close"
+      ]
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "a.rs"
+      },
+      "candidate_dialects": [
+        "deepseek-v3.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.missing-function-close"
+  ]
+}

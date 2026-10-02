@@ -386,12 +386,17 @@ impl<'g> Printer<'g> {
         }
     }
 
-    /// Whether every printing of `expr` holds an `insert(...)`: a repaired
-    /// form, which an alternation never chooses when another of its
-    /// alternatives is printable.
+    /// Whether every printing of `expr` holds an `insert(...)` or a
+    /// `dropped:` capture: a repaired form, which an alternation never
+    /// chooses when another of its alternatives is printable (text a call
+    /// drops is never part of a well-formed call).
     pub(crate) fn repaired(&self, expr: &Expr) -> bool {
         match expr {
-            Expr::Insert(_) => true,
+            Expr::Insert(_)
+            | Expr::Capture {
+                kind: CaptureKind::Dropped,
+                ..
+            } => true,
             Expr::Capture { inner, .. } => self.repaired(inner),
             Expr::Sequence(items) => items.iter().any(|item| self.repaired(item)),
             Expr::Choice(items) => items.iter().all(|item| self.repaired(item)),

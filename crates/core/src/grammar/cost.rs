@@ -201,6 +201,16 @@ pub const EXTRACT_PROSE: u64 = 2;
 /// closer variant.
 pub const EXTRACT_FENCE: u64 = 1;
 
+/// Selection weight of a call whose name denotes no declared tool.
+///
+/// Applies when the recognizer knows the tool set and the name matches no
+/// tool exactly or by alias; it weighs as much as one guessed edit. Between competing readings of one span, a call
+/// whose name the tool set declares has more evidence than one whose name
+/// it does not, so the reading that names a declared tool wins unless it
+/// needs more than this much more repair. It weighs readings only; it is not
+/// a repair and records nothing.
+pub const UNDECLARED_NAME: u64 = 4;
+
 /// `Work` per output byte that [`ToolRecoveryRequest::sized`] adds to an
 /// effort preset's budget for tool-call recovery.
 ///

@@ -2145,3 +2145,202 @@ fn deepseek31_repairs() {
     assert_eq!(calls.rejected[0].dialect, DialectId::DeepSeekV31);
     assert_eq!(calls.finish, Finish::Unresolved);
 }
+
+/// DeepSeek-V3 / R1: a missing, bare, foreign-language or repeated fence
+/// line, a missing type, a missing section or call closer, an omitted
+/// section opener, and tokens spelled in ASCII are read with every call
+/// `Resolved` and each repair recorded.
+#[test]
+fn deepseek3_repairs() {
+    for (name, rules, count) in [
+        (
+            "deepseek3_missing_open_fence",
+            &["tool_call.markup.missing-token"][..],
+            1,
+        ),
+        (
+            "deepseek3_fence_without_info",
+            &["tool_call.markup.missing-token"],
+            1,
+        ),
+        (
+            "deepseek3_missing_close_fence",
+            &["tool_call.markup.missing-token"],
+            1,
+        ),
+        (
+            "deepseek3_unfenced_arguments",
+            &["tool_call.markup.missing-token"],
+            1,
+        ),
+        (
+            "deepseek3_repeated_fence_lines",
+            &["tool_call.extract.fence"],
+            1,
+        ),
+        (
+            "deepseek3_other_info_string",
+            &["tool_call.extract.fence", "tool_call.markup.missing-token"],
+            1,
+        ),
+        (
+            "deepseek3_missing_type",
+            &["tool_call.markup.missing-token"],
+            1,
+        ),
+        (
+            "deepseek3_missing_section_end",
+            &["tool_call.markup.missing-closers-at-end"],
+            2,
+        ),
+        (
+            "deepseek3_missing_call_end_between_calls",
+            &["tool_call.markup.missing-function-close"],
+            2,
+        ),
+        (
+            "deepseek3_missing_section_begin",
+            &["tool_call.markup.missing-token"],
+            1,
+        ),
+        (
+            "deepseek3_ascii_tokens",
+            &["tool_call.markup.terminal-confusable"],
+            1,
+        ),
+        ("deepseek3_r1_reasoning_then_calls", &[], 2),
+        ("deepseek3_reasoning_starts_open", &[], 1),
+    ] {
+        let (_, result) = golden(name);
+        assert!(matches!(result.outcome, Outcome::Resolved(_)), "{name}");
+        let calls = reading(&result);
+        assert_eq!(calls.calls.len(), count, "{name}: {calls:#?}");
+        assert_eq!(calls.rejected.len(), 0, "{name}");
+        assert!(
+            calls
+                .calls
+                .iter()
+                .all(|call| call.outcome == CallOutcome::Resolved
+                    && call.dialect == DialectId::DeepSeekV3),
+            "{name}"
+        );
+        for rule in rules {
+            assert!(
+                calls.calls.iter().any(|call| rules_of(call).contains(rule)),
+                "{name}: {rule}"
+            );
+        }
+    }
+}
+
+/// DeepSeek-V3 / R1: reasoning before the calls is reasoning; a type other
+/// than `function` is a data loss (a best guess); a length stop inside the
+/// fenced arguments truncates the call.
+#[test]
+fn deepseek3_reasoning_type_and_truncation() {
+    for name in [
+        "deepseek3_r1_reasoning_then_calls",
+        "deepseek3_reasoning_starts_open",
+    ] {
+        let (_, result) = golden(name);
+        let calls = reading(&result);
+        assert_eq!(calls.reasoning.len(), 1, "{name}");
+    }
+    // A type other than `function` is dropped as a data loss: the call is
+    // read as a function call, a best guess.
+    let (_, result) = golden("deepseek3_type_not_function");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::BestGuess);
+    assert_eq!(
+        loss_kinds(call, "tool_call.extract.prose"),
+        [LossKind::Data]
+    );
+    let (_, result) = golden("deepseek3_truncated_arguments");
+    assert_eq!(
+        the_call(&result).outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::Truncated
+        }
+    );
+    assert_eq!(reading(&result).finish, Finish::Truncated);
+}
+
+/// DeepSeek-V3 and V3.1 share their section and call tokens: with every
+/// built-in dialect allowed, each canonical body resolves as its own dialect
+/// alone, in one turn, and a V3.1 call to a tool named `function` is never
+/// read as V3.
+#[test]
+fn deepseek3_and_v31_disambiguate() {
+    let (_, result) = golden("deepseek3_and_v31_in_one_turn");
+    assert!(matches!(result.outcome, Outcome::Resolved(_)));
+    let calls = reading(&result);
+    let read: Vec<_> = calls
+        .calls
+        .iter()
+        .map(|call| {
+            (
+                call.name.as_deref(),
+                call.dialect.id(),
+                call.candidate_dialects.len(),
+                call.outcome.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        read,
+        [
+            (
+                Some("get_weather"),
+                "deepseek-v3.v1",
+                1,
+                CallOutcome::Resolved
+            ),
+            (
+                Some("read_file"),
+                "deepseek-v3.1.v1",
+                1,
+                CallOutcome::Resolved
+            ),
+        ]
+    );
+    assert_eq!(calls.rejected.len(), 0);
+    let (_, result) = golden("deepseek31_tool_named_function");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved);
+    assert_eq!(call.dialect, DialectId::DeepSeekV31);
+    assert_eq!(call.candidate_dialects, [DialectId::DeepSeekV31]);
+}
+
+/// A DeepSeek-V3 call cut mid-JSON under a stop: with every dialect
+/// allowed, the DeepSeek-V3 reading (which names the declared `read_file`)
+/// beats DeepSeek-V3.1's reading of the type word `function` as a tool
+/// name, with every repair recorded; with only DeepSeek-V3.1 allowed, its
+/// own reading is all there is, and nothing is executable.
+#[test]
+fn deepseek3_unclosed_arguments_at_stop() {
+    let (_, result) = golden("deepseek3_unclosed_arguments_at_stop");
+    let call = the_call(&result);
+    assert_eq!(call.dialect, DialectId::DeepSeekV3);
+    assert_eq!(call.tool.as_deref(), Some("read_file"));
+    assert_eq!(call.arguments.to_json(), r#"{"path":"src/ma"}"#);
+    for rule in [
+        "json.syntax.close-container",
+        "tool_call.markup.missing-token",
+        "tool_call.markup.missing-closers-at-end",
+    ] {
+        assert!(rules_of(call).contains(&rule), "{rule}");
+    }
+    assert!(matches!(
+        call.outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::Malformed { .. }
+        }
+    ));
+    let (_, result) = golden("deepseek3_unclosed_arguments_at_stop_v31_only");
+    let calls = reading(&result);
+    assert_eq!(calls.calls.len(), 1);
+    assert_eq!(calls.calls[0].dialect, DialectId::DeepSeekV31);
+    assert_eq!(calls.calls[0].tool, None);
+    assert!(is_unresolved(&calls.calls[0].outcome));
+    assert_eq!(calls.usable().len(), 0);
+}

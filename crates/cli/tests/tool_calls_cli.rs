@@ -550,3 +550,60 @@ fn deepseek_v31_recovers_and_emits_via_cli() {
     );
     fs::remove_file(tools).unwrap();
 }
+
+/// DeepSeek-V3 / R1 with no `--dialect`: a tool-calls section with fenced
+/// JSON arguments after R1 reasoning is one call per call, the V3.1 form in
+/// the same turn stays V3.1, and a Hermes call emitted as `deepseek-v3.v1`
+/// recovers to the same call.
+#[test]
+fn deepseek_v3_recovers_and_emits_via_cli() {
+    let turn = "<think>Two listings.</think>\n\n<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>list_dir\n```json\n{\"path\": \"src\"}\n```<｜tool▁call▁end｜>\n<｜tool▁call▁begin｜>function<｜tool▁sep｜>list_dir\n```json\n{\"path\": \"docs\", \"depth\": 1}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>\n<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>list_dir<｜tool▁sep｜>{\"path\": \"tests\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
+    let (output, tools) = run(&[], turn.as_bytes());
+    assert_eq!(output.status.code(), Some(0));
+    let node = result(&output);
+    assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+    for (index, (dialect, arguments)) in [
+        ("deepseek-v3.v1", r#"{"path":"src"}"#),
+        ("deepseek-v3.v1", r#"{"path":"docs","depth":1}"#),
+        ("deepseek-v3.1.v1", r#"{"path":"tests"}"#),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(
+            node.pointer(&format!("/value/calls/{index}/dialect"))
+                .and_then(Node::as_str),
+            Some(dialect)
+        );
+        assert_eq!(
+            node.pointer(&format!("/value/calls/{index}/arguments"))
+                .unwrap()
+                .to_json(),
+            arguments
+        );
+    }
+    fs::remove_file(tools).unwrap();
+    let hermes =
+        b"<tool_call>\n{\"name\": \"list_dir\", \"arguments\": {\"path\": \"src\"}}\n</tool_call>";
+    let (output, tools) = run(&["--emit", "deepseek-v3.v1"], hermes);
+    let node = result(&output);
+    let emitted = node
+        .pointer("/value/emitted/output/text")
+        .and_then(Node::as_str)
+        .expect("emitted markup")
+        .to_owned();
+    assert_eq!(
+        emitted,
+        "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>list_dir\n```json\n{\"path\":\"src\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>"
+    );
+    fs::remove_file(tools).unwrap();
+    let (output, tools) = run(&[], emitted.as_bytes());
+    let node = result(&output);
+    assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+    assert_eq!(
+        node.pointer("/value/calls/0/dialect")
+            .and_then(Node::as_str),
+        Some("deepseek-v3.v1")
+    );
+    fs::remove_file(tools).unwrap();
+}

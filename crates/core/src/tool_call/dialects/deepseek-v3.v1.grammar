@@ -1,0 +1,111 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# DeepSeek-V3 tool calls (DeepSeek-V3, V3-0324, R1, R1-0528): one
+# tool-calls section holding one or more calls, separated by a newline,
+#   <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME
+#   ```json
+#   ARGS
+#   ```<｜tool▁call▁end｜>...<｜tool▁calls▁end｜>
+# where `function` is the call's type and ARGS the arguments as JSON in a
+# fenced block. The special tokens are spelled with the fullwidth vertical
+# line (U+FF5C) and the lower one-eighth block (U+2581), read through the
+# same confusables as deepseek-v3.1.v1 (an ASCII `|`, and `_` or a space
+# for the block; tool_call.markup.terminal-confusable). Each call of a
+# section is its own call (`next`). Repairs, each recorded:
+# - a section whose <｜tool▁calls▁begin｜> was left out, a fence without its
+#   `json` info string, a missing opening fence line, a missing closing
+#   fence and a missing `function` type are read with the token inserted
+#   (tool_call.markup.missing-token);
+# - a repeated fence line, and an opening fence with another info string
+#   than `json` (then read as missing), is dropped (tool_call.extract.fence);
+# - a type other than `function` is dropped (tool_call.extract.prose, a
+#   data loss: the call is read as a function call);
+# - the call and section closers are closer classes, so a missing one is
+#   inserted (at the next call, or at the end of output) and a repeated one
+#   is absorbed.
+# Whitespace between the tokens and around the name is markup. The
+# arguments value is read by the self-delimiting json codec (exact number
+# spellings; stringified arguments are decoded and flagged). <think> ...
+# </think> is reasoning. First-party grammar; see
+# docs/tool-calls/dialects/deepseek-v3.v1.md for the public sources and for
+# what is deliberately not accepted.
+grammar "deepseek-v3.v1";
+
+reasoning "<think>" "</think>";
+
+# Detokenizers that do not keep the special tokens' own spellings: an ASCII
+# vertical line, and the word-boundary block as an underscore or a space.
+confusable "｜" "|";
+confusable "▁" "_";
+confusable "▁" " ";
+
+closer call-end = "<｜tool▁call▁end｜>";
+closer section-end = "<｜tool▁calls▁end｜>";
+
+tool-name = /[A-Za-z0-9_.:-]+/;
+# Any type word but `function` (so the canonical type has one reading).
+other-type = /f(?:u(?:n(?:c(?:t(?:i(?:o(?:n[A-Za-z0-9_.:-]+|[A-Za-mo-z0-9_.:-][A-Za-z0-9_.:-]*)?|[A-Za-np-z0-9_.:-][A-Za-z0-9_.:-]*)?|[A-Za-hj-z0-9_.:-][A-Za-z0-9_.:-]*)?|[A-Za-su-z0-9_.:-][A-Za-z0-9_.:-]*)?|[A-Za-bd-z0-9_.:-][A-Za-z0-9_.:-]*)?|[A-Za-mo-z0-9_.:-][A-Za-z0-9_.:-]*)?|[A-Za-tv-z0-9_.:-][A-Za-z0-9_.:-]*)?|[A-Za-eg-z0-9_.:-][A-Za-z0-9_.:-]*/;
+ws = /[ \t\r\n]+/;
+# Printing: the newlines of the template's layout (around the fence lines
+# and between calls).
+nl = /[ \t\r\n]+/;
+layout nl "\n";
+
+# The call's type: `function`, the only type there is.
+type = "function"
+     | dropped:other-type
+     | insert("function");
+
+fence-line = "```json" | "```";
+# A fence line with an info string other than `json` (```JSON,
+# ```javascript).
+other-fence = /```(?:j(?:s(?:o(?:n[A-Za-z0-9_+.-]+|[A-Za-mo-z0-9_+.-][A-Za-z0-9_+.-]*)?|[A-Za-np-z0-9_+.-][A-Za-z0-9_+.-]*)?|[A-Za-rt-z0-9_+.-][A-Za-z0-9_+.-]*)?|[A-Za-ik-z0-9_+.-][A-Za-z0-9_+.-]*)/;
+
+# The opening fence line, after the name: a fence with another info string
+# is dropped and the canonical one read as missing.
+open-fence = nl? "```json" nl?
+           | nl? "```" insert("json") nl?
+           | nl? dropped:other-fence insert("```json") nl?
+           | insert("```json") nl?;
+
+# The closing fence line, before the call closer.
+close-fence = nl? "```"
+            | insert("```");
+
+# The arguments value ends where its JSON value does; a closing fence at
+# the start of a line (a raw newline is never inside a JSON string), the
+# call's own closer, the section's closer, or the next call's opener ends a
+# value cut short. A fence inside a string value is part of the string.
+invocation = "<｜tool▁call▁begin｜>" ws? type ws? "<｜tool▁sep｜>" ws? name:tool-name
+             open-fence (dropped:fence-line nl?)?
+             arguments:slot(json, "\n```", "<｜tool▁call▁end｜>", "<｜tool▁calls▁end｜>", "<｜tool▁call▁begin｜>")
+             close-fence (ws? dropped:fence-line)?
+             ws? call-end;
+calls = invocation (nl? next invocation)* ws? section-end;
+
+call = "<｜tool▁calls▁begin｜>" ws? calls
+     | insert("<｜tool▁calls▁begin｜>") calls;
+
+# A tool result as the template renders a tool message (the template wraps
+# a run of results in <｜tool▁outputs▁begin｜> ... <｜tool▁outputs▁end｜>).
+result = "<｜tool▁output▁begin｜>" content:until("<｜tool▁output▁end｜>") "<｜tool▁output▁end｜>";
+
+# One tool of the system prompt as vLLM's DeepSeek-R1 tool template lists
+# it: the OpenAI tool object in a fenced JSON block. Printed with the
+# OpenAI member order; the template's own rendering (`tojson`, keys
+# sorted) is read too.
+json-string = /"([^"\\\x00-\x1F]|\\["\\\/bfnrt]|\\u[0-9A-Fa-f]{4})*"/;
+declaration = "```json" nl? declaration-object nl? "```";
+declaration-object =
+    "{" ws? "\"type\"" ws? ":" ws? "\"function\"" ws? "," ws?
+    "\"function\"" ws? ":" ws? "{" ws?
+    "\"name\"" ws? ":" ws? "\"" name:tool-name "\""
+    (ws? "," ws? "\"description\"" ws? ":" ws? content:json-string)?
+    (ws? "," ws? "\"parameters\"" ws? ":" arguments:slot(json, "\x00"))?
+    ws? "}" ws? "}"
+  | "{" ws? "\"function\"" ws? ":" ws? "{" ws?
+    ("\"description\"" ws? ":" ws? content:json-string ws? "," ws?)?
+    "\"name\"" ws? ":" ws? "\"" name:tool-name "\""
+    (ws? "," ws? "\"parameters\"" ws? ":" arguments:slot(json, "\x00"))?
+    ws? "}" ws? "," ws? "\"type\"" ws? ":" ws? "\"function\"" ws? "}";

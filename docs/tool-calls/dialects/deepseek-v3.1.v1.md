@@ -31,7 +31,7 @@ The tools are listed in the system prompt under `## Tools`, one
 
 DeepSeek-V3 (0324) and R1-0528 use a different call body (a `function` type,
 the name on its own line, and the arguments in a fenced JSON block); that is
-the separate `deepseek-v3.v1` dialect.
+the separate [`deepseek-v3.v1`](deepseek-v3.v1.md) dialect.
 
 ## Public sources
 
@@ -135,7 +135,7 @@ canonical choices:
 ## Deliberately not accepted
 
 - The DeepSeek-V3 / R1-0528 body (`function<｜tool▁sep｜>NAME` and a fenced
-  JSON block): the `deepseek-v3.v1` dialect.
+  JSON block): the [`deepseek-v3.v1`](deepseek-v3.v1.md) dialect.
 - Calls outside a section with both the section opener and every call
   opener lost.
 - Other renderings of the tokens than the declared ASCII bar, underscore and

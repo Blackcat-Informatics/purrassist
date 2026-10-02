@@ -491,6 +491,7 @@ impl Base {
 const fn dialect_label(dialect: &DialectId) -> &'static str {
     match dialect {
         DialectId::DeepSeekV31 => "deepseek31",
+        DialectId::DeepSeekV3 => "deepseek3",
         DialectId::Hermes => "hermes",
         DialectId::Llama3Json => "llama3",
         DialectId::MistralV3 => "mistral3",
@@ -502,7 +503,7 @@ const fn dialect_label(dialect: &DialectId) -> &'static str {
 }
 
 /// The built-in dialects, in corpus order.
-const DIALECTS: [DialectId; 7] = [
+const DIALECTS: [DialectId; 8] = [
     DialectId::Qwen3CoderXml,
     DialectId::Hermes,
     DialectId::OpenAiToolCalls,
@@ -510,6 +511,7 @@ const DIALECTS: [DialectId; 7] = [
     DialectId::MistralV3,
     DialectId::MistralV11,
     DialectId::DeepSeekV31,
+    DialectId::DeepSeekV3,
 ];
 
 /// The witness of tool `tool` in `dialect` for corpus seed `seed`.
@@ -530,6 +532,7 @@ fn base(tools: &ToolSet, dialect: &DialectId, tool: usize, seed: u64) -> Base {
         | DialectId::MistralV3
         | DialectId::MistralV11
         | DialectId::DeepSeekV31
+        | DialectId::DeepSeekV3
             if seed < SEEDS =>
         {
             Form::Object
@@ -720,7 +723,10 @@ impl Base {
                 format!("<function={}>", self.call.name),
                 format!("<function={name}>"),
             )
-        } else if matches!(self.dialect, DialectId::MistralV11 | DialectId::DeepSeekV31) {
+        } else if matches!(
+            self.dialect,
+            DialectId::MistralV11 | DialectId::DeepSeekV31 | DialectId::DeepSeekV3
+        ) {
             // A bare name right after the token.
             (self.call.name.clone(), name.to_owned())
         } else {
@@ -769,7 +775,7 @@ impl Base {
         match self.dialect {
             DialectId::MistralV3 if self.text.trim_end().ends_with(']') => "]",
             DialectId::Llama3Json | DialectId::MistralV3 => "}",
-            DialectId::DeepSeekV31 => DEEPSEEK_SECTION_END,
+            DialectId::DeepSeekV31 | DialectId::DeepSeekV3 => DEEPSEEK_SECTION_END,
             _ => "</tool_call>",
         }
     }
@@ -1149,7 +1155,7 @@ fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
             format!("{text}\n{closer}"),
             Need::Exact,
         ));
-        if tagged && base.dialect != DialectId::DeepSeekV31 {
+        if tagged && !matches!(base.dialect, DialectId::DeepSeekV31 | DialectId::DeepSeekV3) {
             out.push(mutant(
                 "tool_call.markup.closer-variant",
                 "tool_calls",
@@ -1174,19 +1180,24 @@ fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
     if base.dialect == DialectId::MistralV11 {
         mistral11_mutations(base, &mut out);
     }
-    if base.dialect == DialectId::DeepSeekV31 {
+    if matches!(base.dialect, DialectId::DeepSeekV31 | DialectId::DeepSeekV3) {
         deepseek31_mutations(base, &mut out);
+    }
+    if base.dialect == DialectId::DeepSeekV3 {
+        deepseek3_mutations(base, &mut out);
     }
     out
 }
 
-/// The closer of a DeepSeek-V3.1 tool-calls section.
+/// The closer of a DeepSeek-V3.1 or V3 tool-calls section.
 const DEEPSEEK_SECTION_END: &str = "<｜tool▁calls▁end｜>";
-/// The opener of a DeepSeek-V3.1 tool-calls section.
+/// The opener of a DeepSeek-V3.1 or V3 tool-calls section.
 const DEEPSEEK_SECTION_BEGIN: &str = "<｜tool▁calls▁begin｜>";
+/// The opener of one DeepSeek-V3.1 or V3 call.
+const DEEPSEEK_CALL_BEGIN: &str = "<｜tool▁call▁begin｜>";
 
-/// DeepSeek-V3.1: the special tokens spelled with ASCII `|` and `_` (a
-/// detokenizer's rendering), and the section opener left out.
+/// DeepSeek-V3.1 and V3: the special tokens spelled with ASCII `|` and `_`
+/// (a detokenizer's rendering), and the section opener left out.
 fn deepseek31_mutations(base: &Base, out: &mut Vec<Mutant>) {
     out.push(mutant(
         "tool_call.markup.terminal-confusable",
@@ -1200,6 +1211,75 @@ fn deepseek31_mutations(base: &Base, out: &mut Vec<Mutant>) {
             "section-begin",
             rest.trim_start().to_owned(),
             Need::Exact,
+        ));
+    }
+}
+
+/// DeepSeek-V3: the fenced arguments block with a fence line missing, bare
+/// (no `json` info string), naming another language, or repeated, and the
+/// call's `function` type missing or replaced.
+fn deepseek3_mutations(base: &Base, out: &mut Vec<Mutant>) {
+    let split = base.split();
+    let arguments = base.arguments_text();
+    let (Some(open), Some(close)) = (split.prefix.rfind("```json"), split.suffix.find("```"))
+    else {
+        return;
+    };
+    let head = &split.prefix[..open];
+    let after_open = &split.prefix[open + "```json".len()..];
+    let before_close = &split.suffix[..close];
+    let tail = &split.suffix[close + "```".len()..];
+    let fenced = |open_fence: &str, close_fence: &str| {
+        format!("{head}{open_fence}{after_open}{arguments}{before_close}{close_fence}{tail}")
+    };
+    for (category, variant, text) in [
+        (
+            "tool_call.markup.missing-token",
+            "open-fence",
+            fenced("", "```"),
+        ),
+        (
+            "tool_call.markup.missing-token",
+            "fence-info",
+            fenced("```", "```"),
+        ),
+        (
+            "tool_call.markup.missing-token",
+            "close-fence",
+            fenced("```json", ""),
+        ),
+        (
+            "tool_call.extract.fence",
+            "repeated-fences",
+            fenced("```json\n```json", "```\n```"),
+        ),
+        (
+            "tool_call.extract.fence",
+            "other-info",
+            fenced("```javascript", "```"),
+        ),
+    ] {
+        out.push(mutant(category, variant, text, Need::Exact));
+    }
+    // The type word right after the call opener.
+    let Some(at) = base.text.find(DEEPSEEK_CALL_BEGIN) else {
+        return;
+    };
+    let at = at + DEEPSEEK_CALL_BEGIN.len();
+    let at = at + (base.text[at..].len() - base.text[at..].trim_start().len());
+    if base.text[at..].starts_with("function") {
+        let rest = &base.text[at + "function".len()..];
+        out.push(mutant(
+            "tool_call.markup.missing-token",
+            "type",
+            format!("{}{rest}", &base.text[..at]),
+            Need::Exact,
+        ));
+        out.push(mutant(
+            "tool_call.extract.prose",
+            "type",
+            format!("{}tool{rest}", &base.text[..at]),
+            Need::DataLoss,
         ));
     }
 }
@@ -1794,25 +1874,32 @@ fn pair_mutations(first: &Base, second: &Base) -> Vec<Mutant> {
             ));
         }
     } else {
-        if first.dialect == DialectId::DeepSeekV31
-            && let Some(head) = first.text.strip_suffix(DEEPSEEK_SECTION_END)
+        if matches!(
+            first.dialect,
+            DialectId::DeepSeekV31 | DialectId::DeepSeekV3
+        ) && let Some(head) = first.text.strip_suffix(DEEPSEEK_SECTION_END)
             && let Some(tail) = second.text.strip_prefix(DEEPSEEK_SECTION_BEGIN)
         {
-            // Both calls in one section, and the same with the first call's
-            // closer left out.
+            // Both calls in one section (V3 separates them with a newline),
+            // and the same with the first call's closer left out.
             let head = head.trim_end();
             let tail = tail.trim_start();
+            let sep = if first.dialect == DialectId::DeepSeekV3 {
+                "\n"
+            } else {
+                ""
+            };
             out.push(mutant(
                 "canonical",
                 "one-section",
-                format!("{head}{tail}"),
+                format!("{head}{sep}{tail}"),
                 Need::Exact,
             ));
             if let Some(open) = head.strip_suffix("<｜tool▁call▁end｜>") {
                 out.push(mutant(
                     "tool_call.markup.missing-function-close",
                     "call-end",
-                    format!("{}{tail}", open.trim_end()),
+                    format!("{}{sep}{tail}", open.trim_end()),
                     Need::Exact,
                 ));
             }
@@ -1884,7 +1971,7 @@ const fn policy_of(seed: u64) -> Policy {
     }
 }
 
-const ALL_DIALECTS: &str = "deepseek-v3.1.v1,hermes.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1";
+const ALL_DIALECTS: &str = "deepseek-v3.1.v1,deepseek-v3.v1,hermes.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1";
 
 /// The cases of every single-call mutation of `base`, appended to `cases`;
 /// with `under`, only those of categories with fewer than [`TARGET`] cases
@@ -1929,6 +2016,44 @@ fn single_cases(
             stop: mutant.stop,
             input: mutant.text,
             truth,
+        });
+    }
+}
+
+/// DeepSeek-V3.1 and V3 sections in one turn, appended to `cases`: the two
+/// dialects share their section and call tokens, so each section must be
+/// read by its own dialect alone.
+fn deepseek_mixed_cases(bases: &[Base], cases: &mut Vec<Case>) {
+    let v31: Vec<&Base> = bases
+        .iter()
+        .filter(|base| base.dialect == DialectId::DeepSeekV31)
+        .collect();
+    let v3: Vec<&Base> = bases
+        .iter()
+        .filter(|base| base.dialect == DialectId::DeepSeekV3)
+        .collect();
+    for (index, (first, second)) in v31.iter().zip(v3.iter().rev()).enumerate() {
+        let (first, second) = if index % 2 == 0 {
+            (*first, *second)
+        } else {
+            (*second, *first)
+        };
+        cases.push(Case {
+            id: format!(
+                "mixed/{}:{}+{}:{}/s{}+s{}/canonical/mixed",
+                first.label(),
+                first.call.name,
+                second.label(),
+                second.call.name,
+                first.seed,
+                second.seed
+            ),
+            category: "canonical".to_owned(),
+            dialect: "deepseek-v3.1.v1,deepseek-v3.v1".to_owned(),
+            policy: Policy::PerTool,
+            stop: Ending::Stop,
+            input: format!("{}\n{}", first.text, second.text),
+            truth: Some(vec![first.call.clone(), second.call.clone()]),
         });
     }
 }
@@ -2032,6 +2157,7 @@ pub fn generate() -> Vec<Case> {
             });
         }
     }
+    deepseek_mixed_cases(&bases, &mut cases);
     let identities: BTreeSet<&str> = cases.iter().map(|case| case.id.as_str()).collect();
     assert_eq!(identities.len(), cases.len(), "case identities are unique");
     cases
