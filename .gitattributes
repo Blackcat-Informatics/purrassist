@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+# Tests compare checked-in goldens, fixtures, corpora, grammars, vendored
+# suites, and documentation byte-for-byte or by digest. Pin LF on every
+# platform so Windows checkouts do not rewrite them to CRLF.
+* text=auto eol=lf
+
+# Binary artifacts are never normalized.
+*.wasm binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.gz binary
+*.zip binary
+*.tar binary
