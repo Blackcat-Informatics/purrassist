@@ -694,9 +694,9 @@ fn deterministic_pinned_digest() {
 }
 
 const PINNED_DIGEST: &str =
-    "sha256:29078017cbc3c5953eb9d589bf0703fff4c0b61743a857290a8390a2115d3844";
+    "sha256:71210be4e55800e7954d155b26c246f2cb27111afd2016ca63e83f0811e16900";
 const PINNED_AMBIGUOUS_DIGEST: &str =
-    "sha256:b8ab9fa7e70e8429cf8a4f9ed0468f8f6db5b7ea2aff35411a519d3f20d4b1ba";
+    "sha256:4fc8c6de6637c4ab209d56df3c75a14d03303b5722f5bf9b10f2e7f2d8760b06";
 
 #[test]
 fn invalid_utf8_is_loss_and_bytes_retained() {
@@ -1562,7 +1562,7 @@ fn held_reports_are_charged_and_exhaust_explicitly() {
     );
     // Through the operation: an explicit exhaustion, no value.
     let mut request =
-        ToolRecoveryRequest::sized(Effort::Standard, held.len()).dialects(dialects.clone());
+        ToolRecoveryRequest::sized_for(Effort::Standard, held.as_bytes(), dialects.clone());
     request.budget.scratch_bytes = tight;
     let result = tools.recover(held.as_bytes(), &request);
     assert_eq!(result.outcome, Outcome::Unresolved);
@@ -1573,7 +1573,7 @@ fn held_reports_are_charged_and_exhaust_explicitly() {
     // With enough scratch the operation completes: the call is the
     // before-text guess and every block is reasoning (merged ranges).
     let request =
-        ToolRecoveryRequest::sized(Effort::Standard, held.len()).dialects(dialects.clone());
+        ToolRecoveryRequest::sized_for(Effort::Standard, held.as_bytes(), dialects.clone());
     let result = tools.recover(held.as_bytes(), &request);
     let Outcome::BestGuess(calls) = &result.outcome else {
         panic!("{:?}", result.receipt.stopped)

@@ -869,6 +869,54 @@ impl CompiledGrammar {
         self.programs.iter().map(|program| program.bound).sum()
     }
 
+    /// How many byte offsets of `output` begin a spelling of one of the
+    /// `call` production's opener literals: the canonical spelling, a
+    /// declared closer variant, or a confusable spelling. Every call this
+    /// grammar can read, and every attempt it can reject, starts at one of
+    /// them, so the count bounds the calls and call attempts of the output
+    /// (an opener cut off by the end of the output is not counted).
+    ///
+    /// A pure function of the bytes and the grammar: a scan of each byte
+    /// that can begin an opener against the opener spellings, with no
+    /// allocation and no governor, so it can size a budget before the
+    /// governed recovery starts (see
+    /// [`ToolRecoveryRequest::sized`](crate::tool_call::ToolRecoveryRequest::sized)).
+    ///
+    /// ```
+    /// # use purrassist_core::grammar::Grammar;
+    /// # use purrassist_core::{Budget, Governor};
+    /// let text = "grammar \"g\"; call = (\"<c>\" | \"[c]\") \"x\"; result = \"<r>\"; declaration = \"<d>\";";
+    /// let grammar = Grammar::compile_governed(text, &mut Governor::new(Budget::default())).unwrap();
+    /// assert_eq!(grammar.call_openers(b"<c>x [c]x <r> <c"), 2);
+    /// assert_eq!(grammar.call_openers(b""), 0);
+    /// ```
+    #[must_use]
+    pub fn call_openers(&self, output: &[u8]) -> u64 {
+        let program = &self.programs[0];
+        let opens_at = |rest: &[u8]| {
+            program.openers.iter().any(|&pc| {
+                let compile::Inst::Lit { lit, .. } = program.insts[pc as usize] else {
+                    return false;
+                };
+                let tables = &self.literal_tables[lit as usize];
+                rest.starts_with(&self.literals[lit as usize].bytes)
+                    || tables
+                        .variants
+                        .list
+                        .iter()
+                        .chain(&tables.confusables.list)
+                        .any(|spelling| rest.starts_with(spelling))
+            })
+        };
+        let mut count = 0_u64;
+        for (at, &byte) in output.iter().enumerate() {
+            if program.starts_with(byte) && opens_at(&output[at..]) {
+                count += 1;
+            }
+        }
+        count
+    }
+
     /// The longest byte length of any literal spelling, delimiter, or
     /// reasoning marker in this grammar: how far a repair or a delimiter
     /// replay may look back.

@@ -8,6 +8,7 @@ use purrassist::{
     tool_call::{EmitTarget, GenerationStop, IdPolicy, ToolChoice, ToolRecoveryRequest, ToolSet},
 };
 use purrassist_host::tools::Tools;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 const TOOLS: &str = r#"[{"type":"function","function":{"name":"list_dir","description":"List a directory","parameters":{"type":"object","properties":{"path":{"type":"string"},"depth":{"type":"integer"}},"required":["path"]}}}]"#;
@@ -39,7 +40,7 @@ fn final_result_matches_core_recover() {
     );
     let actual = tools.call("recover_tool_calls", &args).unwrap();
 
-    let request = ToolRecoveryRequest::sized(Effort::Deep, QWEN.len())
+    let request = ToolRecoveryRequest::sized(Effort::Deep, QWEN.as_bytes())
         .stop(GenerationStop::ToolCalls)
         .tool_choice(ToolChoice::Forced("list_dir".into()))
         .effects("list_dir", purrassist::tool_call::Effects::ReadOnly)
@@ -67,6 +68,51 @@ fn final_result_matches_core_recover() {
             .pointer("/value/emitted/output/0/function/name")
             .and_then(Node::as_str),
         Some("list_dir")
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// G7: the default MCP request sizes its candidate budget to the turn. A
+/// 64-call turn whose every call needs a markup repair, with a stray
+/// `<tool_call>` line after each that two dialects contest, recovers every
+/// call `Resolved` with no effort option.
+#[test]
+fn busy_turn_resolves_every_call_by_default() {
+    let (tools, root) = tools("busy");
+    let mut output = String::new();
+    for index in 0..64 {
+        let _ = write!(
+            output,
+            "<tool_call>\n<function=list_dir>\n<parameter=depth>\n{index}\n<parameter=path>\nsrc/{index}\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n"
+        );
+    }
+    let actual = tools
+        .call("recover_tool_calls", &arguments(&output, ""))
+        .unwrap();
+    assert_eq!(
+        actual.get("status").and_then(Node::as_str),
+        Some("best_guess"),
+        "{}",
+        actual
+            .pointer("/receipt/termination")
+            .map(Node::to_json)
+            .unwrap_or_default()
+    );
+    for index in 0..64 {
+        assert_eq!(
+            actual
+                .pointer(&format!("/value/calls/{index}/outcome/status"))
+                .and_then(Node::as_str),
+            Some("resolved"),
+            "call {index}"
+        );
+    }
+    assert!(actual.pointer("/value/calls/64").is_none());
+    assert_eq!(
+        actual
+            .pointer("/receipt/budget/candidates")
+            .map(Node::to_json),
+        Some((128 + 16 * 256).to_string())
     );
     std::fs::remove_dir_all(root).unwrap();
 }

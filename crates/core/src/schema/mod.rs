@@ -335,8 +335,34 @@ impl Schema {
 
     /// Validate with caller-controlled limits shared with a recovery operation.
     ///
+    /// The whole working set is charged to `governor` before it is
+    /// allocated: `Work` per schema location visited, `Depth` per nesting
+    /// level, and `ScratchBytes` for the evaluation's collections (at
+    /// portable element sizes), the member names and pattern keys they hold,
+    /// every transient child key and instance path, and each held
+    /// applicator branch, released when the evaluation drops them. The
+    /// report's violations and format evidence are retained output and keep
+    /// their charge.
+    ///
     /// # Errors
-    /// Governor failure is distinct from an instance failing its schema.
+    /// Governor failure is distinct from an instance failing its schema:
+    /// exhaustion or cancellation is an `Err` naming the stop, never a
+    /// report.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, StopReason, contract::Resource, json, schema::Schema};
+    /// let schema = Schema::compile(r#"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#).unwrap();
+    /// let instance = json::parse(r#"{"path":"a.txt"}"#).unwrap();
+    /// let mut governor = Governor::new(Budget::default());
+    /// assert!(schema.validate_with(&instance, &mut governor).unwrap().valid);
+    /// let working_set = governor.usage().peak_scratch_bytes;
+    /// assert!(working_set > 0);
+    /// let mut starved = Governor::new(Budget { scratch_bytes: working_set - 1, ..Budget::default() });
+    /// assert_eq!(
+    ///     schema.validate_with(&instance, &mut starved).map(|report| report.valid),
+    ///     Err(StopReason::BudgetExceeded(Resource::ScratchBytes))
+    /// );
+    /// ```
     pub fn validate_with(
         &self,
         instance: &Node,

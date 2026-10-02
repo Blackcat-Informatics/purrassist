@@ -478,4 +478,28 @@ impl DialectSet {
             .map(|dialect| dialect.grammar().configuration_bound())
             .sum()
     }
+
+    /// The call openers of `output` summed over the dialects
+    /// ([`CompiledGrammar::call_openers`]): every byte offset where a
+    /// dialect's `call` production can open counts once for that dialect,
+    /// so an opener two dialects share (`<tool_call>` in Qwen3-Coder XML
+    /// and Hermes) counts twice, once per competing attempt. It bounds the
+    /// call attempts recovery can read or reject, and sizes the candidate
+    /// budget of [`ToolRecoveryRequest::sized_for`](super::ToolRecoveryRequest::sized_for).
+    /// A pure, allocation-free scan; nothing is charged.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::DialectSet;
+    /// let output = b"<tool_call>\n{\"name\": \"ls\", \"arguments\": {}}\n</tool_call>";
+    /// // Qwen3-Coder XML and Hermes both open with `<tool_call>`.
+    /// assert_eq!(DialectSet::built_in().call_openers(output), 2);
+    /// assert_eq!(DialectSet::built_in().call_openers(b"no calls here"), 0);
+    /// ```
+    #[must_use]
+    pub fn call_openers(&self, output: &[u8]) -> u64 {
+        self.dialects
+            .iter()
+            .map(|dialect| dialect.grammar().call_openers(output))
+            .fold(0, u64::saturating_add)
+    }
 }

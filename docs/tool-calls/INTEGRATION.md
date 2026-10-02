@@ -141,14 +141,39 @@ allow-list, with a published bound, and every limit is explicit.
   Hermes arguments satisfy the bound and scale linearly from 64 KiB),
   `tool_call_cost::one_mib_argument_fits_published_budget` (a 1 MiB argument
   in every built-in dialect is `Resolved` under `ToolRecoveryRequest::sized`
-  for every effort from `Quick` to `Maximum`),
+  for every effort from `Quick` to `Maximum`, with peak scratch at most 16
+  bytes per input byte for Qwen3-Coder XML and Hermes),
   `tool_call_cost::work_independent_of_dialect_count_beyond_bound`,
   `json_incremental::extract_many_brackets_is_linear`, and
   `tool_call_recover::exhaustion_is_explicit_every_resource`.
-- **Sizing.** Use `ToolRecoveryRequest::sized(effort, output.len())` for
-  outputs larger than an ordinary turn; it adds 32 work units and 48 scratch
-  bytes per output byte to the preset. See
-  [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound).
+- **Memory, including validation.** Every allocation recovery makes is
+  charged to its governor, including the working set of each call's schema
+  validation (about 0.3 to 2.7 KiB per call on the measured tool schemas,
+  charged before it is allocated). A scratch limit below that working set
+  is an explicit `BudgetExceeded(ScratchBytes)`, never a validation that
+  succeeds on uncharged memory. *Proved by*
+  `allocation_oracle::oracle_tool_call_validation_charges_its_working_set`
+  and the `tool_call_recover` row of the allocation oracle.
+- **Sizing.** Use `ToolRecoveryRequest::sized(effort, output)` (or
+  `sized_for(effort, output, dialects)` for another allow-list); the MCP tool
+  and the CLI use it by default. It adds 32 work units and 48 scratch bytes
+  per output byte to the preset, and `⌈preset.candidates / 8⌉` candidates
+  per call opener of the output (16 per opener at `Standard`), counted by a
+  linear pre-scan (`DialectSet::call_openers`), so a busy turn does not
+  exhaust a budget sized for an ordinary one. Contested spans whose
+  segmentations recover the same calls are folded before whole-message
+  readings are enumerated, so they add readings instead of multiplying
+  them. Every limit stays finite and linear in the output length, and
+  readings that genuinely multiply still exhaust explicitly. *Proved by*
+  `tool_call_cost::busy_turn_resolves_every_call_under_sized` (64 calls,
+  each with a markup repair and a contested stray opener: every call
+  `Resolved` at `Effort::Standard`, where the fixed preset exhausts),
+  `tool_call_cost::per_call_competition_scales_with_calls`,
+  `tool_call_cost::crafted_reading_explosion_exhausts_explicitly`,
+  `tool_call_cost::sized_budget_follows_the_published_formula`, and the host
+  and CLI tests `tool_call_tools::busy_turn_resolves_every_call_by_default`
+  and `tool_calls_cli::busy_turn_resolves_every_call_by_default`. See
+  [RESOURCES.md](../RESOURCES.md#budgets-for-large-outputs-and-busy-turns).
 
 ### C5. Lossless declaration adapters
 

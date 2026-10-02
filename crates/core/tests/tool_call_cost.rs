@@ -13,8 +13,11 @@ use purrassist_core::tool_call::{
     CallOutcome, DialectId, DialectSet, Effects, GenerationStop, Param, ReasoningPolicy,
     Recognizer, ToolCalls, ToolDefinition, ToolRecoveryRequest, ToolSet,
 };
-use purrassist_core::{AssistResult, Budget, Effort, Governor, Outcome};
+use purrassist_core::{
+    AssistResult, Budget, Effort, Governor, Outcome, StopReason, contract::Resource,
+};
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 const RESOURCES: &str = include_str!("../../../docs/RESOURCES.md");
 const COST_SOURCE: &str = include_str!("../src/grammar/cost.rs");
@@ -56,6 +59,10 @@ fn constants() -> Vec<(&'static str, u64)> {
         ("EXTRACT_FENCE", cost::EXTRACT_FENCE),
         ("RECOVER_WORK_PER_BYTE", cost::RECOVER_WORK_PER_BYTE),
         ("RECOVER_SCRATCH_PER_BYTE", cost::RECOVER_SCRATCH_PER_BYTE),
+        (
+            "RECOVER_OPENER_CANDIDATE_DIVISOR",
+            cost::RECOVER_OPENER_CANDIDATE_DIVISOR,
+        ),
     ]
 }
 
@@ -193,7 +200,10 @@ fn resolved(
 #[test]
 fn one_mib_argument_work_bound() {
     let tools = tools();
-    let request = ToolRecoveryRequest::sized(Effort::Standard, 2 << 20);
+    // One budget sized for 2 MiB serves both scales.
+    let request = ToolRecoveryRequest::new(Effort::Standard).budget(
+        ToolRecoveryRequest::sized_budget(Effort::Standard, 2 << 20, 2),
+    );
     for (label, print) in [("qwen", qwen as fn(&str) -> String), ("hermes", hermes)] {
         let mut measured = Vec::new();
         for size in [1 << 16, 1 << 20] {
@@ -268,7 +278,7 @@ fn one_mib_argument_fits_published_budget() {
             let sized = resolved(
                 &tools,
                 &input,
-                &ToolRecoveryRequest::sized(effort, len),
+                &ToolRecoveryRequest::sized(effort, input.as_bytes()),
                 &content,
             );
             usages.push(sized.receipt.usage);
@@ -348,7 +358,7 @@ fn work_independent_of_dialect_count_beyond_bound() {
         ] {
             let set = DialectSet::new(dialects.clone(), &mut Governor::new(Budget::default()))
                 .expect("dialects");
-            let request = ToolRecoveryRequest::sized(Effort::Standard, input.len()).dialects(set);
+            let request = ToolRecoveryRequest::sized_for(Effort::Standard, input.as_bytes(), set);
             let result = tools.recover(input.as_bytes(), &request);
             assert!(
                 matches!(result.outcome, Outcome::Resolved(_)),
@@ -375,4 +385,204 @@ fn work_independent_of_dialect_count_beyond_bound() {
             previous = Some((work, dialects));
         }
     }
+}
+
+/// Declarations of a directory listing tool, as an integrator passes them:
+/// adapter tools are `Mutating`, so every call runs under `Structural`.
+const LIST_DIR: &str = r#"[{"type":"function","function":{"name":"list_dir","parameters":{"type":"object","properties":{"path":{"type":"string"},"depth":{"type":"integer"}},"required":["path"]}}}]"#;
+
+/// A busy turn: `calls` Qwen3-Coder XML calls, each missing a
+/// `</parameter>` (the `tool_call.markup.missing-parameter-close` repair),
+/// each followed by a stray `<tool_call>` line that both Qwen3-Coder XML
+/// and Hermes attempt and reject, so every attempt is a contested span.
+fn busy_turn(calls: usize) -> String {
+    let mut turn = String::new();
+    for index in 0..calls {
+        let _ = write!(
+            turn,
+            "<tool_call>\n<function=list_dir>\n<parameter=depth>\n{index}\n<parameter=path>\nsrc/{index}\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n"
+        );
+    }
+    turn
+}
+
+/// G7: the candidate budget is sized to the turn. A 64-call turn whose
+/// every call needs a markup repair, with a contested stray opener after
+/// each, exhausts the fixed `Effort::Standard` preset explicitly, and is
+/// recovered with every call `Resolved` under `ToolRecoveryRequest::sized`:
+/// `⌈128 / 8⌉ = 16` candidates for each of its 256 openers (64 calls and 64
+/// stray lines, each opened by two dialects). Competing segmentations of
+/// the stray lines that recover the same calls are folded per span, so the
+/// readings charged grow with the calls instead of doubling per call.
+#[test]
+fn busy_turn_resolves_every_call_under_sized() {
+    let tools = ToolSet::from_openai(LIST_DIR, Budget::default()).expect("declarations");
+    let output = busy_turn(64);
+    let preset = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::new(Effort::Standard),
+    );
+    assert_eq!(preset.outcome, Outcome::Unresolved);
+    assert_eq!(
+        preset.receipt.stopped,
+        StopReason::BudgetExceeded(Resource::Candidates)
+    );
+    assert!(preset.receipt.evidence.is_empty() && preset.receipt.alternatives.is_empty());
+
+    let openers = DialectSet::built_in().call_openers(output.as_bytes());
+    assert_eq!(openers, 256);
+    let request = ToolRecoveryRequest::sized(Effort::Standard, output.as_bytes());
+    assert_eq!(request.budget.candidates, 128 + 16 * 256);
+    let result = tools.recover(output.as_bytes(), &request);
+    let Outcome::BestGuess(calls) = &result.outcome else {
+        panic!("{:?}", result.receipt.stopped)
+    };
+    assert_eq!(result.receipt.stopped, StopReason::Completed);
+    assert_eq!(calls.calls.len(), 64);
+    for (index, call) in calls.calls.iter().enumerate() {
+        assert_eq!(call.outcome, CallOutcome::Resolved, "call {index}");
+        assert_eq!(
+            call.arguments.to_json(),
+            format!(r#"{{"depth":{index},"path":"src/{index}"}}"#)
+        );
+        assert!(
+            call.repairs
+                .evidence
+                .iter()
+                .any(|evidence| evidence.rule == "tool_call.markup.missing-parameter-close"),
+            "call {index}"
+        );
+    }
+    assert_eq!(calls.usable().len(), 64);
+    // Every stray opener is a recorded rejection naming both dialects.
+    assert_eq!(calls.rejected.len(), 64);
+    for rejected in &calls.rejected {
+        assert_eq!(
+            rejected.candidate_dialects,
+            [DialectId::Hermes, DialectId::Qwen3CoderXml]
+        );
+    }
+    // One reading per contested span plus the selected reading: linear.
+    assert_eq!(result.receipt.usage.candidates, 64 * 2 + 1);
+    assert_eq!(result.receipt.alternatives.len(), 0);
+}
+
+/// Competing readings that genuinely differ per call (a near-miss tool
+/// name and a repeated parameter on a read-only tool) are charged per call;
+/// the sized budget grows with the calls, so 64 of them recover (each call
+/// `Ambiguous` between its two readings) where the fixed preset exhausts.
+#[test]
+fn per_call_competition_scales_with_calls() {
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("write_file")
+            .effects(Effects::ReadOnly)
+            .param("path", Param::string().required())
+            .param("content", Param::string().required())],
+        Budget::default(),
+    )
+    .expect("tools");
+    let output = "<tool_call>\n<function=write_fiel>\n<parameter=path>\na\n</parameter>\n<parameter=path>\nc\n</parameter>\n<parameter=content>\nb\n</parameter>\n</function>\n</tool_call>\n".repeat(64);
+    let preset = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::new(Effort::Standard),
+    );
+    assert_eq!(
+        preset.receipt.stopped,
+        StopReason::BudgetExceeded(Resource::Candidates)
+    );
+    let result = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::sized(Effort::Standard, output.as_bytes()),
+    );
+    let Outcome::BestGuess(calls) = &result.outcome else {
+        panic!("{:?}", result.receipt.stopped)
+    };
+    assert_eq!(calls.calls.len(), 64);
+    assert!(
+        calls
+            .calls
+            .iter()
+            .all(|call| call.outcome == CallOutcome::Ambiguous && call.alternatives.len() == 1)
+    );
+}
+
+/// The sized budget stays finite: a crafted call whose readings multiply
+/// (16 parameters each written twice: 2^16 readings) exhausts `Candidates`
+/// explicitly at every effort, with no value and no ledger.
+#[test]
+fn crafted_reading_explosion_exhausts_explicitly() {
+    let mut definition = ToolDefinition::new("f").effects(Effects::ReadOnly);
+    let mut body = String::new();
+    for index in 0..16 {
+        definition = definition.param(format!("p{index}"), Param::string());
+        let _ = write!(
+            body,
+            "<parameter=p{index}>\na\n</parameter>\n<parameter=p{index}>\nb\n</parameter>\n"
+        );
+    }
+    let tools = ToolSet::compile([definition], Budget::default()).expect("tools");
+    let output = format!("<tool_call>\n<function=f>\n{body}</function>\n</tool_call>");
+    for effort in [
+        Effort::Quick,
+        Effort::Standard,
+        Effort::Deep,
+        Effort::Maximum,
+    ] {
+        let request = ToolRecoveryRequest::sized(effort, output.as_bytes());
+        let result = tools.recover(output.as_bytes(), &request);
+        assert_eq!(result.outcome, Outcome::Unresolved, "{effort:?}");
+        assert_eq!(
+            result.receipt.stopped,
+            StopReason::BudgetExceeded(Resource::Candidates),
+            "{effort:?}"
+        );
+        assert_eq!(result.receipt.usage.candidates, request.budget.candidates);
+        assert!(result.receipt.evidence.is_empty() && result.receipt.losses.is_empty());
+        assert_eq!(result.receipt.alternatives.len(), 0);
+        assert_eq!(
+            result.to_node().get("value").map(Node::to_json).as_deref(),
+            Some("null")
+        );
+    }
+}
+
+/// The published sizing formula, for every effort.
+#[test]
+fn sized_budget_follows_the_published_formula() {
+    let output = busy_turn(3);
+    let openers = DialectSet::built_in().call_openers(output.as_bytes());
+    assert_eq!(openers, 12);
+    for effort in [
+        Effort::Exact,
+        Effort::Quick,
+        Effort::Standard,
+        Effort::Deep,
+        Effort::Maximum,
+    ] {
+        let preset = effort.budget();
+        let budget = ToolRecoveryRequest::sized(effort, output.as_bytes()).budget;
+        let n = output.len() as u64;
+        assert_eq!(budget.work, preset.work + cost::RECOVER_WORK_PER_BYTE * n);
+        assert_eq!(
+            budget.scratch_bytes,
+            preset.scratch_bytes + cost::RECOVER_SCRATCH_PER_BYTE * n
+        );
+        assert_eq!(budget.input_bytes, preset.input_bytes.max(n));
+        assert_eq!(
+            budget.candidates,
+            preset.candidates
+                + preset
+                    .candidates
+                    .div_ceil(cost::RECOVER_OPENER_CANDIDATE_DIVISOR)
+                    * openers
+        );
+        assert_eq!(
+            (budget.depth, budget.evidence_entries, budget.helper_calls),
+            (preset.depth, preset.evidence_entries, preset.helper_calls)
+        );
+    }
+    // Restricting the allow-list counts only its dialects' openers.
+    let hermes = DialectSet::new([DialectId::Hermes], &mut Governor::new(Budget::default()))
+        .expect("dialects");
+    assert_eq!(hermes.call_openers(output.as_bytes()), 6);
 }

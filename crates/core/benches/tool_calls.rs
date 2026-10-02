@@ -104,7 +104,7 @@ fn workload(shape: &str, size: usize) -> (String, ToolRecoveryRequest, Vec<Strin
         }
         other => panic!("unknown shape {other}"),
     };
-    let request = ToolRecoveryRequest::sized(Effort::Standard, output.len()).dialects(set);
+    let request = ToolRecoveryRequest::sized_for(Effort::Standard, output.as_bytes(), set);
     (output, request, expected)
 }
 
@@ -196,7 +196,8 @@ fn recover(tools: &ToolSet, shape: &str, label: &str, size: usize) -> Row {
 fn push_chunked(tools: &ToolSet, chunk: usize) -> Row {
     let output = qwen(&argument(1 << 16));
     let set = dialects(&[DialectId::Qwen3CoderXml]);
-    let budget = ToolRecoveryRequest::sized(Effort::Standard, output.len()).budget;
+    let budget =
+        ToolRecoveryRequest::sized_for(Effort::Standard, output.as_bytes(), set.clone()).budget;
     let count = 30;
     let mut times = Vec::with_capacity(count);
     let mut usage = None;

@@ -46,9 +46,11 @@ Kimi, Gemma, Harmony, Pythonic, bare JSON) are tracked in issue #4.
   is then resolved against the tool set (tool name, parameter names, repeats,
   typing, schema validation), and its readings are ranked by cost and a
   content digest, a total order independent of declaration order. Several
-  equally good readings of one call make that call `Ambiguous`; competing
-  segmentations of the whole message are enumerated, charged as candidates
-  before the first is built, and reported as an `Ambiguous` operation only
+  equally good readings of one call make that call `Ambiguous`; the
+  segmentations of each contested span that recover the same calls are
+  folded into one, then the remaining whole-message readings are
+  enumerated, charged as candidates before the first is built, and
+  reported as an `Ambiguous` operation only
   when they recover different calls and the receipt holds evidence that
   tells them apart (below).
 - **Evidence-based dialect detection.** Every allowed dialect attempts a
@@ -264,12 +266,20 @@ receipt names the stop (`BudgetExceeded` with the resource, `Cancelled`, or
 `InvalidInput`), never a partial value or a panic.
 
 Fixed presets are sized for ordinary turns. `ToolRecoveryRequest::sized(effort,
-n)` sizes a budget for an output of `n` bytes: the preset's work plus
-`RECOVER_WORK_PER_BYTE · n` (32 per byte), its scratch bytes plus
-`RECOVER_SCRATCH_PER_BYTE · n` (48 per byte), and at least `n` input bytes;
-every other limit is the preset's. The MCP tool and the CLI use it. The
-published work bound, its constants, and 1 MiB measurements are in
-[RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound).
+output)` (and `sized_for(effort, output, dialects)` for another allow-list)
+sizes a budget for the output in two phases: a linear pre-scan counts its
+call openers `m` (`DialectSet::call_openers`), then the budget is the
+preset's work plus `RECOVER_WORK_PER_BYTE · n` (32 per byte), its scratch
+bytes plus `RECOVER_SCRATCH_PER_BYTE · n` (48 per byte), at least `n` input
+bytes, and its candidates plus `⌈preset.candidates / 8⌉ · m`
+(`RECOVER_OPENER_CANDIDATE_DIVISOR`; 16 per opener at `Standard`); every
+other limit is the preset's. The MCP tool and the CLI use it. Competing
+segmentations of a contested span that recover the same calls are folded
+before whole-message readings are enumerated, so a turn with many calls
+spends candidates linearly; readings that genuinely multiply still exhaust
+explicitly. Schema validation's working memory is charged to the same
+governor. The published work bound, its constants, and 1 MiB measurements
+are in [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound).
 
 ## Further reading
 

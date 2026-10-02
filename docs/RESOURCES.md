@@ -247,6 +247,40 @@ against `size_of`; the recognizer leases its per-step copies and merges in
 place. The recovered calls, outcomes and receipts are unchanged apart from
 the scratch usage they report.
 
+Schema validation of each call's arguments (`Schema::validate_with`, which
+resolution runs on the recovery's governor) also allocated about 1 to
+1.5 KiB per call that it did not charge: the evaluator kept its recursion
+set, member names, evaluated properties and items, and exercised patterns in
+`BTreeSet`s whose nodes (several hundred bytes each on a 64-bit target)
+were never charged, cloned base URIs into its scope stack, held applicator branches in
+growing vectors, and formatted child keys and instance paths uncharged.
+Measured on a generated two-string-parameter tool schema, validating
+`{"path":"a.txt","content":"hello"}` allocated 1,131 bytes (peak live 1,006)
+against 170 charged (peak 112), so a scratch limit between them validated on
+uncharged memory. The `tool_call_recover` row's slack hid the gap: other
+charges of the same recovery exceed its allocation by far more. The
+evaluator (`schema/evaluate.rs`) now keeps those collections in
+`ScratchVec`/`ScratchMap` at portable element charges, charges the strings
+they hold while held, leases each child key, instance path, reference
+resolution and held branch evaluation before building it (keys at their
+exact lengths), and charges each violation message by its allocated
+capacity. The same input now allocates 374 bytes (peak live 318) against
+515 charged (peak 412).
+`allocation_oracle::oracle_tool_call_validation_charges_its_working_set` is
+a zero-slack control over generated and declared (`$ref`, `anyOf`) tool
+schemas with valid and invalid arguments: every allocation is admitted by a
+charge first, the allocator's peak and total never exceed the charged peak
+and total, a scratch limit one byte below the measured allocator peak
+returns `BudgetExceeded(ScratchBytes)`, and the charged peak suffices:
+
+| Arguments | Allocator peak | Allocator total | Charged peak | Charged total |
+| --- | ---: | ---: | ---: | ---: |
+| `{"path":"a.txt","content":"hello"}` | 318 | 374 | 412 | 515 |
+| `{"path":"a","content":"b","mode":"fast","count":3}` | 389 | 526 | 449 | 716 |
+| `{"path":"a.txt"}` (missing `content`) | 750 | 777 | 862 | 935 |
+| Declared schema, valid `$ref`, `anyOf` and array arguments | 1,453 | 2,799 | 1,661 | 4,097 |
+| Declared schema, three violations | 2,684 | 4,700 | 3,084 | 5,675 |
+
 `K` is fixed test slack for observed residual allocation at the two tested
 scales, including per-call overhead (`Parser`/`Renderer` construction, digest
 computation) and retained-output structures without individual charged
@@ -324,7 +358,7 @@ and predicate cuts own admitted capacities; the syntax estimate is leased and
 released on a failed compilation. Controls cover the formerly undercharged
 128-branch arena under a 140,000-byte budget, exact scratch and Work boundaries,
 and cancellation at initial, intermediate and final allocation checkpoints.
-The complete allocator oracle contains 31 controls.
+The complete allocator oracle contains 32 controls.
 
 The controls also require exact charged-peak budgets to succeed and one byte
 less to return typed scratch exhaustion, low Work to return typed exhaustion,
@@ -641,6 +675,7 @@ every value below to equal the code's.
 | `EXTRACT_FENCE` | 1 | Repair cost: a fence marker dropped inside a call |
 | `RECOVER_WORK_PER_BYTE` | 32 | `Work` per output byte `ToolRecoveryRequest::sized` adds |
 | `RECOVER_SCRATCH_PER_BYTE` | 48 | `ScratchBytes` per output byte `ToolRecoveryRequest::sized` adds |
+| `RECOVER_OPENER_CANDIDATE_DIVISOR` | 8 | `ToolRecoveryRequest::sized` adds `⌈preset.candidates / 8⌉` `Candidates` per call opener |
 
 | Built-in dialect | `B_d` | `K_d` per byte |
 | --- | ---: | ---: |
@@ -651,29 +686,68 @@ every value below to equal the code's.
 The default request allows all three, so its bound is
 `(2 + 1 + 3228)·n + 8·E = 3231·n + 8·E`.
 
-### Budgets for large outputs
+### Budgets for large outputs and busy turns
 
-Fixed effort presets are sized for ordinary turns, so a large output needs a
-budget that grows with it. `ToolRecoveryRequest::sized(effort, n)` derives
-one from the preset and the two per-byte constants above:
+Fixed effort presets are sized for ordinary turns, so a large output or a
+turn with many calls needs a budget that grows with it.
+`ToolRecoveryRequest::sized(effort, output)` (built-in dialects) and
+`ToolRecoveryRequest::sized_for(effort, output, dialects)` derive one in two
+phases. First a linear, allocation-free pre-scan counts the output's call
+openers `m` (`DialectSet::call_openers`: each byte offset where a dialect's
+`call` production can open, counted once per such dialect, so the
+`<tool_call>` that Qwen3-Coder XML and Hermes share counts twice). Then
+`ToolRecoveryRequest::sized_budget(effort, n, m)` sizes the budget from the
+preset, the output length `n`, and the constants above:
 
 ```text
 work          = preset.work          + RECOVER_WORK_PER_BYTE    · n   (32 per byte)
 scratch_bytes = preset.scratch_bytes + RECOVER_SCRATCH_PER_BYTE · n   (48 per byte)
 input_bytes   = max(preset.input_bytes, n)
+candidates    = preset.candidates
+              + ⌈preset.candidates / RECOVER_OPENER_CANDIDATE_DIVISOR⌉ · m
 ```
 
-The derivation is saturating and deterministic; every other limit is the
-preset's, so repair search stays bounded by the effort.
+The candidate term is the effort's multiplier per opener: 1 at `Exact`, 2 at
+`Quick`, 16 at `Standard`, 128 at `Deep`, and 1,024 at `Maximum`. Competing
+readings are charged per call attempt (a second dialect's attempt at a
+shared opener, a call's second reading, each further segmentation of a
+contested span), so a fixed preset that suits an ordinary turn exhausts on
+a busy one; the opener term grows with the calls and keeps every limit
+finite and linear in `n` (`m ≤ n`). Recovery folds the segmentations of a
+contested span that recover the same calls before it enumerates
+whole-message readings, so such spans add readings instead of multiplying
+them. The derivation is saturating and deterministic; every other limit is
+the preset's, so repair search stays bounded by the effort, and readings
+that genuinely multiply (a call with many repeated parameters) still exhaust
+as `BudgetExceeded(Candidates)`.
+
+`tool_call_cost::busy_turn_resolves_every_call_under_sized` recovers 64
+Qwen3-Coder XML calls, each needing the
+`tool_call.markup.missing-parameter-close` repair and each followed by a
+stray `<tool_call>` that both dialects contest (`m = 256`): the unmodified
+`Effort::Standard` preset (128 candidates) exhausts explicitly, and
+`sized(Effort::Standard, output)` (128 + 16 · 256 = 4,224 candidates)
+recovers every call `Resolved`, charging 129 candidates.
+`tool_call_cost::per_call_competition_scales_with_calls` does the same for
+64 read-only calls that each have a near-miss name and a repeated parameter
+(192 candidates), and
+`tool_call_cost::crafted_reading_explosion_exhausts_explicitly` requires a
+call with 16 doubled parameters (2^16 readings) to exhaust `Candidates` at
+every effort. The host and CLI tests
+`tool_call_tools::busy_turn_resolves_every_call_by_default` and
+`tool_calls_cli::busy_turn_resolves_every_call_by_default` recover the same
+64-call turn through the MCP tool and the CLI with no effort option.
+
 `tool_call_cost::one_mib_argument_fits_published_budget` recovers a 1 MiB
 string argument in each built-in dialect's shape and checks that the call is
-`Resolved` under `sized(effort, n)` for every effort from `Quick` to
+`Resolved` under `sized(effort, output)` for every effort from `Quick` to
 `Maximum` (and, for Qwen3-Coder XML and Hermes, under the unmodified
 `Effort::Maximum` preset), with identical charges in every case, peak
 scratch at most 16 bytes per input byte for Qwen3-Coder XML and Hermes, and
 at most `RECOVER_SCRATCH_PER_BYTE` for `OpenAI` stringified arguments, whose
 escaped string is also decoded, recorded as the decoding's replacement and
-parsed again:
+parsed again. The charges include the call's schema validation (see
+"Measured-allocation oracle"):
 
 | Input | Bytes | Work | Work per byte | Peak scratch | Scratch per byte |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -681,8 +755,10 @@ parsed again:
 | Hermes JSON string argument | 1,048,648 | 10,488,490 | 10.00 | 9,447,556 | 9.00 |
 | `OpenAI` stringified string argument | 1,048,679 | 15,732,143 | 15.00 | 47,201,161 | 45.01 |
 
-All use the default request (all three built-in dialects). The constants
-leave headroom over these fast-path measurements; inputs that need repair
+All use the default request (all three built-in dialects); charging schema
+validation's working set left these measurements unchanged, because
+validating one string argument peaks below the recognizer's buffers. The
+constants leave headroom over these fast-path measurements; inputs that need repair
 search spend from the preset part of the budget, and exhaustion is reported
 as `BudgetExceeded` naming the resource.
 
@@ -693,7 +769,7 @@ tool_calls`; `-- --list` lists its workloads, `-- NAME` runs one) recovers a
 write call with a 1 KiB, 64 KiB or 1 MiB string argument as Qwen3-Coder XML,
 Hermes, `OpenAI` stringified arguments, and a Qwen3-Coder XML call followed
 by a Hermes call under a Qwen3-Coder + Hermes allow-list, each under
-`ToolRecoveryRequest::sized(Effort::Standard, n)`, and feeds a 64 KiB
+`ToolRecoveryRequest::sized_for(Effort::Standard, output, dialects)`, and feeds a 64 KiB
 Qwen3-Coder XML output to a `Recognizer` in chunks of 1, 16 and 4096 bytes,
 asserting identical charged usage for every chunking. Work and peak scratch
 per byte are functions of the input alone; the wall-clock columns are

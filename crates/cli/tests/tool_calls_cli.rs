@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Execute the shipped `recover-tool-calls` command on raw model output.
 use purrassist::json::{self, Node, Value};
+use std::fmt::Write as _;
 use std::{
     fs,
     io::Write,
@@ -83,6 +84,47 @@ fn qwen_xml_recovers_via_cli() {
     for path in [tools, other_tools, turn_path] {
         fs::remove_file(path).unwrap();
     }
+}
+
+/// G7: the CLI's default request sizes its candidate budget to the turn: a
+/// 64-call turn whose every call needs a markup repair, with a contested
+/// stray `<tool_call>` line after each, recovers every call `Resolved`.
+#[test]
+fn busy_turn_resolves_every_call_by_default() {
+    let mut turn = String::new();
+    for index in 0..64 {
+        let _ = write!(
+            turn,
+            "<tool_call>\n<function=list_dir>\n<parameter=depth>\n{index}\n<parameter=path>\nsrc/{index}\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n"
+        );
+    }
+    let (output, tools) = run(&[], turn.as_bytes());
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let node = result(&output);
+    assert_eq!(
+        node.get("status").and_then(Node::as_str),
+        Some("best_guess")
+    );
+    for index in 0..64 {
+        assert_eq!(
+            node.pointer(&format!("/value/calls/{index}/outcome/status"))
+                .and_then(Node::as_str),
+            Some("resolved"),
+            "call {index}"
+        );
+        assert_eq!(
+            node.pointer(&format!("/value/calls/{index}/arguments"))
+                .map(Node::to_json),
+            Some(format!(r#"{{"depth":{index},"path":"src/{index}"}}"#))
+        );
+    }
+    assert!(node.pointer("/value/calls/64").is_none());
+    fs::remove_file(tools).unwrap();
 }
 
 #[test]

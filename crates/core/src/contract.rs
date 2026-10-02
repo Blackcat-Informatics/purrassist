@@ -559,6 +559,8 @@ scratch_charge!(crate::json::Member, 104);
 scratch_charge!(crate::provenance::NodeId, 4);
 scratch_charge!(crate::pattern::derive::Term, 32); // largest variant: `Repeat(u32, u64, u64, bool)`.
 scratch_charge!(crate::provenance::ProvenanceNode, 160);
+scratch_charge!(crate::schema::Violation, 96); // four `String`s.
+scratch_charge!(Validation, 80); // two `String`s, a `bool`, and a `Vec<String>`.
 
 /// Round `bytes` up to the next 8-byte word, the same rounding an
 /// 8-byte-aligned struct field's own size implicitly gets.
@@ -696,6 +698,32 @@ impl<T: ScratchCharge> ScratchVec<T> {
         for value in values {
             self.push(value)?;
         }
+        Ok(())
+    }
+
+    /// Move every element of `other` to the end of this vector, growing
+    /// (and charging) this vector first if needed. `other` is left empty;
+    /// its capacity stays charged until it is dropped.
+    ///
+    /// # Errors
+    /// Returns `BudgetExceeded(ScratchBytes)` before any allocation; both
+    /// vectors are then unchanged.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, ScratchVec};
+    /// let governor = Governor::new(Budget::default());
+    /// let mut left: ScratchVec<u32> = ScratchVec::new(&governor);
+    /// let mut right: ScratchVec<u32> = ScratchVec::new(&governor);
+    /// left.push(1).unwrap();
+    /// right.extend([2, 3]).unwrap();
+    /// left.append(&mut right).unwrap();
+    /// assert_eq!((left.as_slice(), right.as_slice()), (&[1, 2, 3][..], &[][..]));
+    /// ```
+    pub fn append(&mut self, other: &mut Self) -> Result<(), StopReason> {
+        if self.inner.capacity() - self.inner.len() < other.inner.len() {
+            self.reserve(other.inner.len())?;
+        }
+        self.inner.append(&mut other.inner);
         Ok(())
     }
 

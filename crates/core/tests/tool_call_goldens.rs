@@ -308,17 +308,12 @@ fn input_bytes(golden: &Node, path: &Path) -> Vec<u8> {
         .collect()
 }
 
-fn request(
-    golden: &Node,
-    path: &Path,
-    input_len: usize,
-    dialects: DialectSet,
-) -> ToolRecoveryRequest {
+fn request(golden: &Node, path: &Path, input: &[u8], dialects: DialectSet) -> ToolRecoveryRequest {
     let effort = golden
         .get("effort")
         .and_then(Node::as_str)
         .map_or(Effort::Standard, effort_of);
-    let mut request = ToolRecoveryRequest::sized(effort, input_len).dialects(dialects);
+    let mut request = ToolRecoveryRequest::sized_for(effort, input, dialects);
     if let Some(policy) = golden.get("policy").and_then(Node::as_str) {
         request = request.policy(match policy {
             "per_tool" => PolicySelection::PerTool,
@@ -371,11 +366,11 @@ fn load(path: &Path) -> Golden {
     let input = input_bytes(&node, path);
     let default_request = node
         .get("dialects")
-        .map(|_| request(&node, path, input.len(), default_dialect_set(&node, path)));
+        .map(|_| request(&node, path, &input, default_dialect_set(&node, path)));
     Golden {
         path: path.to_owned(),
         tools: tool_set(&node, path),
-        request: request(&node, path, input.len(), dialect_set(&node, path)),
+        request: request(&node, path, &input, dialect_set(&node, path)),
         default_request,
         input,
         node,

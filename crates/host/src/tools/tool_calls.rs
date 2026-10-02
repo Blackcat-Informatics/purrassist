@@ -56,7 +56,24 @@ pub(super) fn recover(
         ));
     }
     let effort = super::effort(options)?;
-    let mut request = ToolRecoveryRequest::sized(effort, output.len())
+    let dialects = dialect_ids(options.get("dialects"))?;
+    // Two phases: count the call openers of the dialects that will read the
+    // output (a pure pre-scan), then size the one governor's budget from
+    // them and the output length.
+    let openers = dialects.as_ref().map_or_else(
+        || DialectSet::built_in().call_openers(output),
+        |ids| {
+            ids.iter()
+                .map(|dialect| dialect.grammar().call_openers(output))
+                .fold(0, u64::saturating_add)
+        },
+    );
+    let mut request = ToolRecoveryRequest::new(effort)
+        .budget(ToolRecoveryRequest::sized_budget(
+            effort,
+            output.len(),
+            openers,
+        ))
         .stop(stop(options.get("stop"))?)
         .tool_choice(tool_choice(options.get("tool_choice"))?)
         .policy(policy(options.get("policy"))?)
@@ -72,7 +89,6 @@ pub(super) fn recover(
         .ok_or("missing argument tools")?
         .to_json();
     let format = text(options.get("tools_format"), "tools_format")?.unwrap_or("openai");
-    let dialects = dialect_ids(options.get("dialects"))?;
     let mut governor = super::governor(request.budget, cancellation);
     let compiled = match format {
         "openai" => ToolSet::from_openai_governed(&declarations, &mut governor),

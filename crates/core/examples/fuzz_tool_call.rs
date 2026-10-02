@@ -106,7 +106,7 @@ fn tools() -> ToolSet {
 }
 
 /// The request knobs the two header bytes select.
-fn request(control: u8, split: u8, len: usize) -> ToolRecoveryRequest {
+fn request(control: u8, split: u8, output: &[u8]) -> ToolRecoveryRequest {
     let effort =
         [Effort::Exact, Effort::Quick, Effort::Standard, Effort::Deep][usize::from(split & 3)];
     let policy = [
@@ -139,7 +139,7 @@ fn request(control: u8, split: u8, len: usize) -> ToolRecoveryRequest {
     } else {
         AmbiguityPolicy::Reject
     };
-    ToolRecoveryRequest::sized(effort, len)
+    ToolRecoveryRequest::sized(effort, output)
         .policy(policy)
         .stop(stop)
         .reasoning(reasoning)
@@ -327,8 +327,7 @@ fn check_reemission(tools: &ToolSet, calls: &ToolCalls) {
         }
         let set = DialectSet::new([dialect.clone()], &mut Governor::new(Budget::default()))
             .expect("a one-dialect set");
-        let request =
-            ToolRecoveryRequest::sized(Effort::Standard, printed.output.len()).dialects(set);
+        let request = ToolRecoveryRequest::sized_for(Effort::Standard, &printed.output, set);
         let context = format!(
             "{} re-emission {:?}",
             dialect.id(),
@@ -498,7 +497,7 @@ fn main() {
     let split = bytes.get(1).copied().unwrap_or(0);
     let output = bytes.get(2..).unwrap_or_default();
     let tools = tools();
-    let request = request(control, split, output.len());
+    let request = request(control, split, output);
     let result = tools.recover(output, &request);
     check_result(&tools, output, &request, &result);
     check_chunking(&tools, output, &request, split >> 3);

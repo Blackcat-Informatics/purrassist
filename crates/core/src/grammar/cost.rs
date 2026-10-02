@@ -41,7 +41,9 @@
 //! A dialect attempt that dies on its own, and repairs the error search
 //! explores and discards, charge `Work` and `ScratchBytes` but no
 //! `Candidates`, so allowing more dialects never spends candidates on
-//! attempts that cannot compete. Exhaustion is returned as an explicit
+//! attempts that cannot compete. Competing readings grow with the calls of
+//! a turn, so [`RECOVER_OPENER_CANDIDATE_DIVISOR`] sizes the candidate
+//! budget per call opener. Exhaustion is returned as an explicit
 //! [`StopReason::BudgetExceeded`](crate::StopReason::BudgetExceeded).
 //!
 //! Every charge is a function of the byte sequence alone: pushing the same
@@ -228,3 +230,25 @@ pub const RECOVER_WORK_PER_BYTE: u64 = 32;
 ///
 /// [`ToolRecoveryRequest::sized`]: crate::tool_call::ToolRecoveryRequest::sized
 pub const RECOVER_SCRATCH_PER_BYTE: u64 = 48;
+
+/// The share of an effort preset's `Candidates` that
+/// [`ToolRecoveryRequest::sized`] adds per call opener.
+///
+/// Each opener of the output (counted once per dialect that can open a call
+/// there, see [`DialectSet::call_openers`]) adds `⌈preset.candidates /
+/// RECOVER_OPENER_CANDIDATE_DIVISOR⌉` candidates.
+///
+/// Competing readings are charged per call attempt: a second dialect's
+/// attempt at a shared opener, a call's second reading (a repeated scalar,
+/// a near-miss name), each further segmentation of a contested span. They
+/// grow with the number of calls, so a fixed preset that suits an ordinary
+/// turn exhausts on a busy one. One eighth of the preset per opener is 16
+/// candidates per opener at `Effort::Standard` and 2 at `Effort::Quick`,
+/// several times what a call with a repair and a repeated or near-miss
+/// name competes for, while keeping the budget linear in the openers (and
+/// so in the output length): a single call whose readings multiply still
+/// exhausts explicitly.
+///
+/// [`ToolRecoveryRequest::sized`]: crate::tool_call::ToolRecoveryRequest::sized
+/// [`DialectSet::call_openers`]: crate::tool_call::DialectSet::call_openers
+pub const RECOVER_OPENER_CANDIDATE_DIVISOR: u64 = 8;

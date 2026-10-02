@@ -30,6 +30,9 @@
 //! 5. Every whole-message reading is built: the product of the recognized
 //!    turn's competing segmentations, all charged as
 //!    [`Resource::Candidates`] (one per reading) before the first is built.
+//!    The segmentations of each contested span that recover the same calls
+//!    are folded into one first (the selection described next, made per
+//!    span), so such spans add readings instead of multiplying them.
 //!    Exceeding the budget is a [`StopReason::BudgetExceeded`] naming
 //!    candidates, never a truncated list. Readings that recover the same
 //!    calls (each call's span, tool, arguments, outcome, repairs, and
@@ -120,8 +123,11 @@
 //! for the encoding scan, recognition and resolution as documented on
 //! them, and `Work`, `ScratchBytes`, and `EvidenceEntries` for every value,
 //! id, check, and ledger entry this operation builds. Every charge is a
-//! function of the output, the tool set, and the request alone.
-//! [`ToolRecoveryRequest::sized`] sizes a budget for an output length.
+//! function of the output, the tool set, and the request alone. Each call's
+//! schema validation ([`crate::schema::Schema::validate_with`]) charges its
+//! working set to the same governor before allocating it.
+//! [`ToolRecoveryRequest::sized`] sizes a budget for an output: its length
+//! and its call openers.
 use super::adapter::consulted_by_repair;
 use super::emit::{self, Emission, EmitTarget};
 use super::recognizer::{edit_entries, escaped};
@@ -138,7 +144,9 @@ use crate::contract::{
     Loss, Outcome, Receipt, Resource, SourceSpan, StopReason, Validation, invalid_input,
 };
 use crate::digest::Digest;
-use crate::grammar::cost::{RECOVER_SCRATCH_PER_BYTE, RECOVER_WORK_PER_BYTE};
+use crate::grammar::cost::{
+    RECOVER_OPENER_CANDIDATE_DIVISOR, RECOVER_SCRATCH_PER_BYTE, RECOVER_WORK_PER_BYTE,
+};
 use crate::grammar::edit::LossKind;
 use crate::json::{Node, Value, pointer_segment};
 use crate::provenance::{Derivation, Forest, NodeId, ProvenanceNode, permute};
@@ -538,26 +546,76 @@ impl ToolRecoveryRequest {
         }
     }
 
-    /// [`Self::new`] with a budget sized for `input_len` output bytes:
-    /// `work = preset + RECOVER_WORK_PER_BYTE · input_len`, `scratch_bytes =
-    /// preset + RECOVER_SCRATCH_PER_BYTE · input_len` (see
-    /// [`crate::grammar::cost`]), and `input_bytes` at least `input_len`;
-    /// every other limit is the preset's. Saturating and deterministic.
+    /// [`Self::new`] with a budget sized for `output` over the built-in
+    /// dialects: [`Self::sized_for`] with [`DialectSet::built_in`].
+    ///
+    /// ```
+    /// use purrassist_core::{Effort, tool_call::{DialectSet, ToolRecoveryRequest}};
+    /// let output = b"<tool_call>\n{\"name\": \"ls\", \"arguments\": {}}\n</tool_call>";
+    /// let request = ToolRecoveryRequest::sized(Effort::Standard, output);
+    /// assert_eq!(request.budget, ToolRecoveryRequest::sized_budget(Effort::Standard, output.len(), 2));
+    /// assert_eq!(request.dialects.dialects(), DialectSet::built_in().dialects());
+    /// ```
+    #[must_use]
+    pub fn sized(effort: Effort, output: &[u8]) -> Self {
+        Self::sized_for(effort, output, DialectSet::built_in())
+    }
+
+    /// [`Self::new`] over `dialects` with a budget sized for `output`: the
+    /// output's length and its call openers under `dialects`
+    /// ([`DialectSet::call_openers`]) give [`Self::sized_budget`]. Counting
+    /// the openers is a linear, uncharged pre-scan; recovery then runs under
+    /// the sized budget. Use this, not [`Self::sized`], when the request
+    /// restricts or extends the dialect allow-list, so the candidate budget
+    /// counts the openers of the dialects that actually read the output.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Effort, Governor, tool_call::{DialectId, DialectSet, ToolRecoveryRequest}};
+    /// let set = DialectSet::new([DialectId::Hermes], &mut Governor::new(Budget::default())).unwrap();
+    /// let output = b"<tool_call>\n{\"name\": \"ls\", \"arguments\": {}}\n</tool_call>";
+    /// let request = ToolRecoveryRequest::sized_for(Effort::Standard, output, set);
+    /// assert_eq!(request.budget, ToolRecoveryRequest::sized_budget(Effort::Standard, output.len(), 1));
+    /// assert_eq!(request.dialects.dialects(), [DialectId::Hermes]);
+    /// ```
+    #[must_use]
+    pub fn sized_for(effort: Effort, output: &[u8], dialects: DialectSet) -> Self {
+        let openers = dialects.call_openers(output);
+        Self::new(effort)
+            .budget(Self::sized_budget(effort, output.len(), openers))
+            .dialects(dialects)
+    }
+
+    /// The budget for an output of `input_len` bytes with `openers` call
+    /// openers ([`DialectSet::call_openers`]) at `effort`, from the
+    /// preset `effort.budget()` and the constants of
+    /// [`crate::grammar::cost`]:
+    ///
+    /// ```text
+    /// work          = preset.work          + RECOVER_WORK_PER_BYTE    · input_len
+    /// scratch_bytes = preset.scratch_bytes + RECOVER_SCRATCH_PER_BYTE · input_len
+    /// input_bytes   = max(preset.input_bytes, input_len)
+    /// candidates    = preset.candidates
+    ///               + ⌈preset.candidates / RECOVER_OPENER_CANDIDATE_DIVISOR⌉ · openers
+    /// ```
+    ///
+    /// Every other limit is the preset's. Saturating, finite, and a function
+    /// of its arguments alone. Openers never exceed `input_len`, so every
+    /// limit is linear in the output length.
     ///
     /// ```
     /// use purrassist_core::{Effort, grammar::cost};
     /// use purrassist_core::tool_call::ToolRecoveryRequest;
-    /// let request = ToolRecoveryRequest::sized(Effort::Quick, 1 << 20);
+    /// let budget = ToolRecoveryRequest::sized_budget(Effort::Quick, 1 << 20, 64);
     /// let preset = Effort::Quick.budget();
-    /// assert_eq!(request.budget.work, preset.work + cost::RECOVER_WORK_PER_BYTE * (1 << 20));
-    /// assert_eq!(request.budget.scratch_bytes, preset.scratch_bytes + cost::RECOVER_SCRATCH_PER_BYTE * (1 << 20));
-    /// assert_eq!(request.budget.candidates, preset.candidates);
+    /// assert_eq!(budget.work, preset.work + cost::RECOVER_WORK_PER_BYTE * (1 << 20));
+    /// assert_eq!(budget.scratch_bytes, preset.scratch_bytes + cost::RECOVER_SCRATCH_PER_BYTE * (1 << 20));
+    /// assert_eq!(budget.candidates, 16 + 2 * 64);
+    /// assert_eq!(ToolRecoveryRequest::sized_budget(Effort::Standard, 0, 0), Effort::Standard.budget());
     /// ```
     #[must_use]
-    pub fn sized(effort: Effort, input_len: usize) -> Self {
-        let mut request = Self::new(effort);
+    pub fn sized_budget(effort: Effort, input_len: usize, openers: u64) -> Budget {
+        let mut budget = effort.budget();
         let length = size(input_len);
-        let budget = &mut request.budget;
         budget.work = budget
             .work
             .saturating_add(RECOVER_WORK_PER_BYTE.saturating_mul(length));
@@ -565,7 +623,11 @@ impl ToolRecoveryRequest {
             .scratch_bytes
             .saturating_add(RECOVER_SCRATCH_PER_BYTE.saturating_mul(length));
         budget.input_bytes = budget.input_bytes.max(length);
-        request
+        let per_opener = budget.candidates.div_ceil(RECOVER_OPENER_CANDIDATE_DIVISOR);
+        budget.candidates = budget
+            .candidates
+            .saturating_add(per_opener.saturating_mul(openers));
+        budget
     }
 
     /// Set the budget.
@@ -1468,6 +1530,142 @@ struct Reading {
     /// Under [`Effort::Exact`], every message-level repair the segmentation
     /// needed (a reasoning block closed at a call opener), as diagnostics.
     inexact: Vec<String>,
+    /// Every dialect that attempted a rejected call, by the attempt's
+    /// opener offset: the reading's own rejected attempts and those of the
+    /// options folded into its choices ([`Fold`]).
+    attempts: BTreeMap<usize, BTreeSet<DialectId>>,
+}
+
+/// One option of a contested span after equivalent segmentations are
+/// folded together: the segments of the kept segmentation, and the dialects
+/// every folded segmentation contributed.
+struct Fold<'t> {
+    segments: &'t [ResolvedSegment],
+    /// The dialects that read each call, by the call's source range.
+    calls: BTreeMap<(usize, usize), BTreeSet<DialectId>>,
+    /// The dialects that attempted each rejected call, by its opener offset.
+    attempts: BTreeMap<usize, BTreeSet<DialectId>>,
+}
+
+impl<'t> Fold<'t> {
+    fn new(segments: &'t [ResolvedSegment], governor: &mut Governor) -> Result<Self, StopReason> {
+        let mut fold = Self {
+            segments,
+            calls: BTreeMap::new(),
+            attempts: BTreeMap::new(),
+        };
+        fold.absorb(segments, governor)?;
+        Ok(fold)
+    }
+
+    /// Add the dialects of `segments`, a segmentation equivalent to the
+    /// kept one ([`equivalent_options`]).
+    fn absorb(
+        &mut self,
+        segments: &[ResolvedSegment],
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        for segment in segments {
+            let (entry, dialect) = match segment {
+                ResolvedSegment::Call(call) => (
+                    self.calls
+                        .entry((call.span.start, call.span.end))
+                        .or_default(),
+                    &call.dialect,
+                ),
+                ResolvedSegment::Rejected { span, dialect, .. } => {
+                    (self.attempts.entry(span.start).or_default(), dialect)
+                }
+                ResolvedSegment::Content(_)
+                | ResolvedSegment::Result(_)
+                | ResolvedSegment::Reasoning { .. } => continue,
+            };
+            governor.charge(Resource::Work, size(entry.len()).saturating_add(1))?;
+            if entry.insert(dialect.clone()) {
+                governor.charge(Resource::ScratchBytes, ENTRY_BYTES)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The body evidence of the segmentation's rejected attempts: how many
+    /// bytes their dialects read before failing (see [`Reading::body_evidence`]).
+    fn body_evidence(segments: &[ResolvedSegment]) -> usize {
+        segments
+            .iter()
+            .map(|segment| match segment {
+                ResolvedSegment::Rejected { span, reason, .. } => reach_of(span, *reason),
+                _ => 0,
+            })
+            .sum()
+    }
+}
+
+/// Whether two segmentations of one contested span recover the same calls
+/// (each call's span, name, id, closure, outcome, readings, and
+/// alternatives, whichever dialect read it) and the same reasoning: they
+/// differ at most in which dialect read each call and in how the bytes
+/// outside every call divide into rejected attempts and content. Whole
+/// readings that differ only in such a choice are one reading
+/// ([`same_calls`]), so folding them per span before the product keeps the
+/// product linear in the number of such spans instead of exponential.
+fn equivalent_options(
+    left: &[ResolvedSegment],
+    right: &[ResolvedSegment],
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    let kept = |segment: &&ResolvedSegment| {
+        matches!(
+            segment,
+            ResolvedSegment::Call(_) | ResolvedSegment::Reasoning { .. }
+        )
+    };
+    let mut left = left.iter().filter(kept);
+    let mut right = right.iter().filter(kept);
+    loop {
+        governor.charge(Resource::Work, 1)?;
+        match (left.next(), right.next()) {
+            (None, None) => return Ok(true),
+            (Some(ResolvedSegment::Call(a)), Some(ResolvedSegment::Call(b))) => {
+                if !same_call(a, b) {
+                    return Ok(false);
+                }
+            }
+            (Some(a @ ResolvedSegment::Reasoning { .. }), Some(b)) => {
+                if a != b {
+                    return Ok(false);
+                }
+            }
+            _ => return Ok(false),
+        }
+    }
+}
+
+/// Whether two resolved calls are the same call, whichever dialect read it.
+fn same_call(left: &ResolvedCall, right: &ResolvedCall) -> bool {
+    let ResolvedCall {
+        span,
+        dialect: _,
+        order,
+        id,
+        name,
+        closure,
+        outcome,
+        reading,
+        competing,
+        alternatives,
+        distinguishing,
+    } = left;
+    *span == right.span
+        && *order == right.order
+        && *id == right.id
+        && *name == right.name
+        && *closure == right.closure
+        && *outcome == right.outcome
+        && *reading == right.reading
+        && *competing == right.competing
+        && *alternatives == right.alternatives
+        && *distinguishing == right.distinguishing
 }
 
 impl Reading {
@@ -1728,6 +1926,16 @@ impl Recovery<'_> {
 
     /// Every whole-message reading of `turn`; when the turn has competing
     /// segmentations, their product is charged as candidates first.
+    ///
+    /// The segmentations of each contested span that recover the same calls
+    /// ([`equivalent_options`]) are folded into one option first: the one
+    /// whose rejected attempts' dialects read the most bytes (the earliest
+    /// on a tie), carrying every folded segmentation's dialects. This is the
+    /// selection [`same_calls`] makes over whole readings, made per span, so
+    /// the readings are the same, but a turn with many contested spans of
+    /// this kind (a `<tool_call>` attempt that Qwen3-Coder XML and Hermes
+    /// both reject, repeated over many calls) builds one reading instead of
+    /// one per combination.
     fn readings(
         &self,
         turn: &ResolvedTurn,
@@ -1735,44 +1943,47 @@ impl Recovery<'_> {
         forced: Option<&str>,
         governor: &mut Governor,
     ) -> Result<Vec<Reading>, StopReason> {
-        let radices: Vec<usize> = turn
-            .pieces
-            .iter()
-            .filter_map(|piece| match piece {
-                ResolvedPiece::Choice(choice) => Some(choice.readings.len()),
-                ResolvedPiece::Segment(_) => None,
-            })
-            .collect();
-        if !radices.is_empty() {
+        let mut choices: Vec<Vec<Fold<'_>>> = Vec::new();
+        for piece in &turn.pieces {
+            if let ResolvedPiece::Choice(choice) = piece {
+                choices.push(fold_options(&choice.readings, governor)?);
+            }
+        }
+        if !choices.is_empty() {
             // Every reading is admitted before any is built: a product over
             // the budget is exhaustion, never a truncated list.
-            let product = radices
-                .iter()
-                .fold(1_u64, |product, &radix| product.saturating_mul(size(radix)));
+            let product = choices.iter().fold(1_u64, |product, folds| {
+                product.saturating_mul(size(folds.len()))
+            });
             governor.charge(Resource::Candidates, product)?;
         }
-        let mut digits = vec![0_usize; radices.len()];
+        let mut digits = vec![0_usize; choices.len()];
         let mut readings = Vec::new();
         loop {
             let mut segments = Vec::with_capacity(turn.pieces.len());
+            let mut folds = Vec::with_capacity(choices.len());
             let mut choice = 0;
             for piece in &turn.pieces {
                 match piece {
                     ResolvedPiece::Segment(segment) => segments.push(segment),
-                    ResolvedPiece::Choice(options) => {
-                        segments.extend(&options.readings[digits[choice]]);
+                    ResolvedPiece::Choice(_) => {
+                        let fold = &choices[choice][digits[choice]];
+                        segments.extend(fold.segments);
+                        folds.push(fold);
                         choice += 1;
                     }
                 }
             }
-            readings.push(self.reading(&segments, turn.cost, encoding, forced, governor)?);
+            let mut reading = self.reading(&segments, turn.cost, encoding, forced, governor)?;
+            apply_folds(&mut reading, &folds, governor)?;
+            readings.push(reading);
             let mut position = 0;
             loop {
                 if position == digits.len() {
                     return Ok(readings);
                 }
                 digits[position] += 1;
-                if digits[position] < radices[position] {
+                if digits[position] < choices[position].len() {
                     break;
                 }
                 digits[position] = 0;
@@ -1812,6 +2023,7 @@ impl Recovery<'_> {
             validations: Vec::new(),
             cost,
             inexact: Vec::new(),
+            attempts: BTreeMap::new(),
         };
         for segment in segments {
             self.segment(&mut reading, segment, governor)?;
@@ -1907,6 +2119,14 @@ impl Recovery<'_> {
                     size(span.len()).saturating_add(ledger_bytes(repairs)),
                 )?;
                 let index = reading.value.rejected.len();
+                if reading
+                    .attempts
+                    .entry(span.start)
+                    .or_default()
+                    .insert(dialect.clone())
+                {
+                    governor.charge(Resource::ScratchBytes, ENTRY_BYTES)?;
+                }
                 reading.value.rejected.push(RejectedCall {
                     span: span.clone(),
                     dialect: dialect.clone(),
@@ -2352,17 +2572,120 @@ pub(crate) fn assign_ids(
     }
 }
 
+/// The options of one contested span with equivalent segmentations
+/// ([`equivalent_options`]) folded together, in the order of their kept
+/// segmentations. The kept segmentation of a group is its member with the
+/// most body evidence, the earliest on a tie: the member [`merge`] keeps
+/// among whole readings that differ only in this span.
+fn fold_options<'t>(
+    options: &'t [Vec<ResolvedSegment>],
+    governor: &mut Governor,
+) -> Result<Vec<Fold<'t>>, StopReason> {
+    // Each group: its member indices, in option order.
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for (index, option) in options.iter().enumerate() {
+        let mut found = None;
+        for (group, members) in groups.iter().enumerate() {
+            if equivalent_options(&options[members[0]], option, governor)? {
+                found = Some(group);
+                break;
+            }
+        }
+        governor.charge(Resource::ScratchBytes, ENTRY_BYTES)?;
+        match found {
+            Some(group) => groups[group].push(index),
+            None => groups.push(vec![index]),
+        }
+    }
+    let mut folds = Vec::with_capacity(groups.len());
+    for members in &groups {
+        let mut kept = members[0];
+        for &member in &members[1..] {
+            if Fold::body_evidence(&options[member]) > Fold::body_evidence(&options[kept]) {
+                kept = member;
+            }
+        }
+        let mut fold = Fold::new(&options[kept], governor)?;
+        for &member in members.iter().filter(|&&member| member != kept) {
+            fold.absorb(&options[member], governor)?;
+        }
+        folds.push((kept, fold));
+    }
+    // The readings' order is the order of the kept segmentations.
+    folds.sort_unstable_by_key(|(kept, _)| *kept);
+    Ok(folds.into_iter().map(|(_, fold)| fold).collect())
+}
+
+/// Record on a reading built from folded options the dialects of every
+/// folded segmentation: each call's [`ToolCall::candidate_dialects`], each
+/// rejected attempt's [`RejectedCall::candidate_dialects`], and the
+/// reading's attempts.
+fn apply_folds(
+    reading: &mut Reading,
+    folds: &[&Fold<'_>],
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    // Contested spans are disjoint, so each call's range is in one fold.
+    let mut calls: BTreeMap<(usize, usize), &BTreeSet<DialectId>> = BTreeMap::new();
+    for fold in folds {
+        for (&start, dialects) in &fold.attempts {
+            let known = reading.attempts.entry(start).or_default();
+            governor.charge(Resource::Work, size(dialects.len()).saturating_add(1))?;
+            for dialect in dialects {
+                if known.insert(dialect.clone()) {
+                    governor.charge(Resource::ScratchBytes, ENTRY_BYTES)?;
+                }
+            }
+        }
+        for (&range, dialects) in &fold.calls {
+            governor.charge(Resource::Work, 1)?;
+            if dialects.len() > 1 {
+                calls.insert(range, dialects);
+            }
+        }
+    }
+    if !calls.is_empty() {
+        for call in &mut reading.value.calls {
+            governor.charge(Resource::Work, 1)?;
+            if let Some(dialects) = calls.get(&(call.span.start, call.span.end)) {
+                governor.charge(
+                    Resource::ScratchBytes,
+                    size(dialects.len()).saturating_mul(ENTRY_BYTES),
+                )?;
+                call.candidate_dialects = dialects.iter().cloned().collect();
+            }
+        }
+    }
+    for rejected in &mut reading.value.rejected {
+        if let Some(dialects) = reading.attempts.get(&rejected.span.start)
+            && dialects.len() > rejected.candidate_dialects.len()
+        {
+            governor.charge(
+                Resource::ScratchBytes,
+                size(dialects.len()).saturating_mul(ENTRY_BYTES),
+            )?;
+            rejected.candidate_dialects = dialects.iter().cloned().collect();
+        }
+    }
+    Ok(())
+}
+
 /// How far a rejected attempt's dialect read before it failed: the bytes
 /// from its opener to the byte it could not consume, or to the end of its
 /// span when the output stopped inside it.
 const fn reach(rejected: &RejectedCall) -> usize {
-    let end = match rejected.reason {
+    reach_of(&rejected.span, rejected.reason)
+}
+
+/// [`reach`] of an attempt over `span` rejected for `reason`.
+const fn reach_of(span: &Range<usize>, reason: Rejection) -> usize {
+    let end = match reason {
         Rejection::Malformed { at }
         | Rejection::InvalidUtf8 { at }
         | Rejection::Overlapped { at } => at,
-        Rejection::Unterminated => rejected.span.end,
+        Rejection::Unterminated => span.end,
     };
-    end.saturating_sub(rejected.span.start)
+    end.saturating_sub(span.start)
 }
 
 /// A call's wire form without its dialect labels: what the call is, not
@@ -2484,15 +2807,12 @@ fn merge(
             let reading = slots[member]
                 .as_ref()
                 .expect("each reading is in one group");
-            for rejected in &reading.value.rejected {
-                governor.charge(
-                    Resource::Work,
-                    size(rejected.candidate_dialects.len()).saturating_add(1),
-                )?;
+            for (&start, dialects) in &reading.attempts {
+                governor.charge(Resource::Work, size(dialects.len()).saturating_add(1))?;
                 attempts
-                    .entry(rejected.span.start)
+                    .entry(start)
                     .or_default()
-                    .extend(rejected.candidate_dialects.iter().cloned());
+                    .extend(dialects.iter().cloned());
             }
         }
         let mut reading = slots[best].take().expect("each reading is in one group");
@@ -2515,6 +2835,7 @@ fn merge(
             )?;
             rejected.candidate_dialects = candidates.iter().cloned().collect();
         }
+        reading.attempts = attempts;
         merged.push(reading);
     }
     Ok(merged)

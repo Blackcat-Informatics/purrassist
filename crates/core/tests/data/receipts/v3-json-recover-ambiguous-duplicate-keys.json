@@ -125,8 +125,8 @@
   "usage": {
     "work": 79,
     "candidates": 3,
-    "peak_scratch_bytes": 9254,
-    "total_scratch_charged": 15519,
+    "peak_scratch_bytes": 9638,
+    "total_scratch_charged": 16795,
     "evidence_entries": 12,
     "helper_calls": 0
   },
