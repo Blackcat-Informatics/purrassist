@@ -19,7 +19,10 @@ use std::path::PathBuf;
 /// One anchor fixture: canonical markup, its declared tools, and the calls
 /// it denotes.
 struct Fixture {
+    /// The full path, for diagnostics only.
     file: String,
+    /// The file name component, compared without separator assumptions.
+    name: String,
     markup: String,
     tools: ToolSet,
     expected: Vec<Expected>,
@@ -55,6 +58,11 @@ fn fixtures(dialect: &DialectId) -> Vec<Fixture> {
         .into_iter()
         .map(|path| {
             let file = path.display().to_string();
+            let name = path
+                .file_name()
+                .expect("fixture file name")
+                .to_string_lossy()
+                .into_owned();
             let text = std::fs::read_to_string(&path).expect("fixture text");
             let document = json::parse(&text).unwrap_or_else(|error| panic!("{file}: {error:?}"));
             let markup = string_member(&document, "markup").expect("markup");
@@ -75,6 +83,7 @@ fn fixtures(dialect: &DialectId) -> Vec<Fixture> {
                 .collect();
             Fixture {
                 file,
+                name,
                 markup,
                 tools,
                 expected,
@@ -1099,9 +1108,10 @@ fn every_canonical_fixture_in_one_mixed_turn() {
         let fixture = fixtures(&dialect)
             .into_iter()
             .find(|fixture| {
-                fixture.file.ends_with("/single-call.json")
-                    || fixture.file.ends_with("/single-block.json")
-                    || fixture.file.ends_with("/single-element.json")
+                matches!(
+                    fixture.name.as_str(),
+                    "single-call.json" | "single-block.json" | "single-element.json"
+                )
             })
             .unwrap_or_else(|| panic!("{}: a single-call fixture", dialect.id()));
         assert_eq!(fixture.expected.len(), 1, "{}", fixture.file);
@@ -1114,7 +1124,7 @@ fn every_canonical_fixture_in_one_mixed_turn() {
     // One tool set declaring every fixture's tools (get_weather, read_file).
     let tools = fixtures(&DialectId::BareJson)
         .into_iter()
-        .find(|fixture| fixture.file.ends_with("/single-call.json"))
+        .find(|fixture| fixture.name == "single-call.json")
         .expect("bare-json single call")
         .tools;
     let request = ToolRecoveryRequest::sized(Effort::Standard, markup.as_bytes());
