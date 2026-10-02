@@ -236,6 +236,14 @@ TOOL_CALL_WITNESSES = [
     "<｜tool▁calls▁begin｜>\t\t<｜tool▁call▁begin｜>\t\tfunction<｜tool▁sep｜>write_file\t\t```json\t\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"```\t\t<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
     # deepseek-v3.v1: delete_path, read_file (seed 3)
     "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>\tdelete_path```json\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"\t\t```\t\t<｜tool▁call▁end｜><｜tool▁call▁begin｜>\t\tfunction\t<｜tool▁sep｜>read_file```json\t\"{\\\"path\\\":\\\"beta gamma tab\\\\tseparated\\\",\\\"limit\\\":-604}\"```\t<｜tool▁call▁end｜>\t\t<｜tool▁calls▁end｜>".encode(),
+    # harmony.v1: read_file (seed 0)
+    "<|start|>assistant\t\t<|channel|>\tcommentary\t\tto=functions.read_file<|constrain|>json<|message|>\t{\"path\":\"tab\\tseparated \\n  block\\n\"}<|call|>".encode(),
+    # harmony.v1: get_weather, list_dir (seed 1)
+    "<|start|>\tassistantto=functions.get_weather<|channel|>analysis\t\t<|message|>{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"}<|call|>\n<|start|>assistant\tto=functions.list_dir<|channel|>commentary\t\tjson\t\t<|message|>\t{\"path\":\"tab\\tseparated\"}<|call|>".encode(),
+    # harmony.v1: write_file (seed 2)
+    "<|start|>\t\tassistant\t\t<|channel|>commentary\t\tto=functions.write_file\t\tjson<|message|>\t\t\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"<|call|>".encode(),
+    # harmony.v1: delete_path, read_file (seed 3)
+    "<|start|>assistant<|channel|>\tanalysisto=functions.delete_path\tjson<|message|>\t\t\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"<|call|>\n<|start|>assistant\t<|channel|>\t\tfinalto=functions.read_file\t<|constrain|>\t\tjson<|message|>\t\"{\\\"path\\\":\\\"beta gamma tab\\\\tseparated\\\",\\\"limit\\\":-604}\"\t<|call|>".encode(),
     # hermes.v1: read_file (seed 0)
     "<tool_call>\t{\t\t\"type\":\t\"tool_use\"\t\t,\t\"id\":\"call_5a4485ac\"\t,\"name\"\t\t:\"read_file\",\"arguments\":{\"path\":\"tab\\tseparated \\n  block\\n\"}\t\t}</tool_call>".encode(),
     # hermes.v1: get_weather, list_dir (seed 1)
@@ -449,6 +457,19 @@ TOOL_CALL_REPAIRS = [
     b'{"id": "call_7", "name": "read_file", "parameters": {"path": "a"}}',
     b'{"name": "read_file", "parameters": {"path": "a"}, "id": "toolu_01"}',
     b'<tool_call>{"type":"tool_use","id":"toolu_01","name":"read_file","input":{"path":"a"}}</tool_call>',
+    # Harmony: analysis then a call, the renderer layout, no start prefix, a
+    # preamble, <|end|> for <|call|>, a missing end, <|channel>, a recipient
+    # without functions., after <|message|>, trailing text, cut-off
+    # arguments, built-in browser and python recipients, a tool message.
+    b'<|channel|>analysis<|message|>plan<|end|><|start|>assistant<|channel|>commentary to=functions.read_file <|constrain|>json<|message|>{"path":"a"}<|call|>',
+    b'<|start|>assistant to=functions.read_file<|channel|>commentary <|constrain|>json<|message|>{"path":"a"}<|call|>',
+    b' to=functions.list_dir<|channel|>commentary json<|message|>{"path":"."}<|call|>',
+    b'<|channel|>commentary<|message|>Checking.<|end|><|start|>assistant<|channel|>commentary to=functions.read_file<|message|>{"path":"a"}<|end|>',
+    b'<|channel>commentary to=read_file <|constrain|>json<|message|>{"path":"a"}',
+    b'<|channel|>commentary<|message|>to=functions.read_file {"path":"a"} thanks<|call|>',
+    b'<|channel|>commentary to=functions.read_file <|constrain|>json<|message|>{"path":"src/ma',
+    b'<|start|>assistant<|channel|>analysis to=browser.search <|constrain|>json<|message|>{"query":"x"}<|call|><|start|>assistant<|channel|>analysis to=python<|message|>print(1)<|call|>',
+    b'<|start|>functions.read_file to=assistant<|channel|>commentary<|message|>ok<|end|>',
 ]
 
 # Inputs that hold no recoverable call.
@@ -480,6 +501,8 @@ TOOL_CALL_NEGATIVES = [
     b'<|tool_call_begin|>functions.:0<|tool_call_argument_begin|>',
     b'{"name":"read_file","input":{"path":"a"}}',
     b'{"type":"tool_use"}',
+    b'<|start|>assistant<|channel|>final<|message|>Done.<|return|>',
+    b'<|channel|>commentary to=<|message|>',
     "```json\n{\"path\": \"a.rs\"}\n```".encode(),
     b'[TOOL_CALLS] [' + b'{"name": "read_file", "arguments": ' * 16 + b']',
     b'[TOOL_RESULTS] {"content": "x", "call_id": "a1B2c3D4e"}[/TOOL_RESULTS]',
@@ -502,6 +525,8 @@ TOOL_CALL_TOKENS = [
     b'<|tool_calls_section_begin|>', b'<|tool_call_begin|>', b'<|tool_call_argument_begin|>',
     b'<|tool_call_end|>', b'<|tool_calls_section_end|>', b'functions.', b':0',
     b'{"type":"tool_use",', b'"input":', b'"toolu_01"', b'"type":"thinking"', b'"content":[',
+    b'<|start|>', b'<|channel|>', b'<|message|>', b'<|call|>', b'<|end|>', b'<|return|>',
+    b'<|constrain|>', b' to=functions.', b'analysis', b'commentary',
     b'<|tool_calls_begin|>', b'"id":', b'</s>', b'read_file', b'write_file', b'current_time', b'path', b'\n', b'\t',
     b'"', b'\\', b'{', b'}', b'[', b']', b':', b',', b'>', b'<', b'null', b'1.50',
     b'\x00', b'\x04', b'\x80', 'é'.encode(), b'\xff', b'\xe2\x82',

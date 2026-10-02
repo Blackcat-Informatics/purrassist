@@ -185,14 +185,16 @@ const KEYWORD_RECORD: u64 = 48;
 /// [`DeclarationForm::Qwen3CoderXml`], [`DeclarationForm::Hermes`],
 /// [`DeclarationForm::Llama3Json`], [`DeclarationForm::MistralV3`],
 /// [`DeclarationForm::MistralV11`], [`DeclarationForm::DeepSeekV31`],
-/// [`DeclarationForm::DeepSeekV3`] and [`DeclarationForm::KimiK2`] are printed by their dialect grammar's
+/// [`DeclarationForm::DeepSeekV3`], [`DeclarationForm::KimiK2`] and
+/// [`DeclarationForm::Harmony`] are printed by their dialect grammar's
 /// `declaration` production (see [`emit`](super::emit)): a Qwen3-Coder
 /// `<function>` entry
 /// `<function><name>NAME</name><description>DESC</description><parameters>SCHEMA</parameters></function>`,
 /// a DeepSeek-V3.1 `## Tools` entry
 /// `### NAME\nDescription: DESC\n\nParameters: SCHEMA`, a DeepSeek-V3
 /// fenced entry (the shape below between a `` ```json `` line and a
-/// `` ``` `` line), and a Hermes
+/// `` ``` `` line), a Harmony `# Tools` entry
+/// `// DESC\ntype NAME = (_: SCHEMA) => any;`, and a Hermes
 /// `<tools>` entry, Llama 3 function entry, Mistral `[AVAILABLE_TOOLS]`
 /// entry or Kimi-K2 `tool_declare` entry (the same shape)
 /// `{"type":"function","function":{"name":"NAME","description":"DESC","parameters":SCHEMA}}`.
@@ -234,6 +236,8 @@ pub enum DeclarationForm {
     DeepSeekV3,
     /// A Kimi-K2 `tool_declare` entry (`kimi-k2.v1`).
     KimiK2,
+    /// A Harmony developer-message `# Tools` function (`harmony.v1`).
+    Harmony,
 }
 
 impl DeclarationForm {
@@ -241,9 +245,9 @@ impl DeclarationForm {
     ///
     /// ```
     /// use purrassist_core::tool_call::DeclarationForm;
-    /// assert_eq!(DeclarationForm::ALL.len(), 11);
+    /// assert_eq!(DeclarationForm::ALL.len(), 12);
     /// ```
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::OpenAi,
         Self::Mcp,
         Self::Anthropic,
@@ -255,6 +259,7 @@ impl DeclarationForm {
         Self::DeepSeekV31,
         Self::DeepSeekV3,
         Self::KimiK2,
+        Self::Harmony,
     ];
 
     /// The dialect whose `declaration` production prints this form, or
@@ -276,6 +281,7 @@ impl DeclarationForm {
             Self::DeepSeekV31 => Some(DialectId::DeepSeekV31),
             Self::DeepSeekV3 => Some(DialectId::DeepSeekV3),
             Self::KimiK2 => Some(DialectId::KimiK2),
+            Self::Harmony => Some(DialectId::Harmony),
             Self::OpenAi | Self::Mcp | Self::Anthropic => None,
         }
     }
@@ -293,6 +299,7 @@ impl DeclarationForm {
             Self::DeepSeekV31 => "DeepSeek-V3.1",
             Self::DeepSeekV3 => "DeepSeek-V3",
             Self::KimiK2 => "Kimi-K2",
+            Self::Harmony => "Harmony",
         }
     }
 
@@ -306,7 +313,8 @@ impl DeclarationForm {
             | Self::MistralV11
             | Self::DeepSeekV31
             | Self::DeepSeekV3
-            | Self::KimiK2 => "parameters",
+            | Self::KimiK2
+            | Self::Harmony => "parameters",
             Self::Mcp => "inputSchema",
             Self::Anthropic => "input_schema",
         }
@@ -566,7 +574,8 @@ pub(super) fn render_canonical(
         | DeclarationForm::MistralV11
         | DeclarationForm::DeepSeekV31
         | DeclarationForm::DeepSeekV3
-        | DeclarationForm::KimiK2 => parameters,
+        | DeclarationForm::KimiK2
+        | DeclarationForm::Harmony => parameters,
         DeclarationForm::Mcp | DeclarationForm::Anthropic => {
             Some(parameters.unwrap_or(NO_PARAMETERS))
         }
@@ -586,7 +595,8 @@ pub(super) fn render_canonical(
         | DeclarationForm::MistralV11
         | DeclarationForm::DeepSeekV31
         | DeclarationForm::DeepSeekV3
-        | DeclarationForm::KimiK2 => {
+        | DeclarationForm::KimiK2
+        | DeclarationForm::Harmony => {
             format!("{{\"type\":\"function\",\"function\":{{{fields}}}}}")
         }
         DeclarationForm::Mcp | DeclarationForm::Anthropic => format!("{{{fields}}}"),

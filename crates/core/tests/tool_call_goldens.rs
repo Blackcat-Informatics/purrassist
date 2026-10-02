@@ -2616,3 +2616,101 @@ fn anthropic_tool_use() {
     assert_eq!(calls.rejected.len(), 2);
     assert_eq!(calls.finish, Finish::Unresolved);
 }
+
+/// Harmony (gpt-oss): a call message in the documented and renderer
+/// layouts, with or without `<|start|>assistant`, after an analysis message
+/// (reasoning) or a commentary preamble (content), and its repairs; built-in
+/// recipients are calls (to a declared tool of that name, or Unresolved),
+/// never silent content.
+#[test]
+fn harmony_messages() {
+    for (name, rule, count) in [
+        ("harmony_analysis_then_call", None, 1),
+        ("harmony_recipient_in_role", None, 1),
+        ("harmony_without_start", None, 1),
+        ("harmony_preamble_then_call", None, 1),
+        ("harmony_two_messages", None, 2),
+        ("harmony_builtin_browser_declared", None, 1),
+        (
+            "harmony_end_for_call",
+            Some("tool_call.markup.closer-variant"),
+            1,
+        ),
+        (
+            "harmony_missing_call_at_end",
+            Some("tool_call.markup.missing-closers-at-end"),
+            1,
+        ),
+        (
+            "harmony_channel_spelling",
+            Some("tool_call.markup.terminal-confusable"),
+            1,
+        ),
+        (
+            "harmony_recipient_without_namespace",
+            Some("tool_call.markup.missing-token"),
+            1,
+        ),
+    ] {
+        let (_, result) = golden(name);
+        assert!(matches!(result.outcome, Outcome::Resolved(_)), "{name}");
+        let calls = reading(&result);
+        assert_eq!(calls.calls.len(), count, "{name}: {calls:#?}");
+        assert_eq!(calls.rejected.len(), 0, "{name}");
+        assert!(
+            calls
+                .calls
+                .iter()
+                .all(|call| call.outcome == CallOutcome::Resolved
+                    && call.candidate_dialects == [DialectId::Harmony]),
+            "{name}"
+        );
+        if let Some(rule) = rule {
+            assert!(
+                calls
+                    .calls
+                    .iter()
+                    .any(|call| rules_of(call).contains(&rule)),
+                "{name}: {rule}"
+            );
+        }
+    }
+    let (_, result) = golden("harmony_analysis_then_call");
+    assert_eq!(reading(&result).reasoning.len(), 1);
+    let (_, result) = golden("harmony_final_answer_is_content");
+    let calls = reading(&result);
+    assert_eq!((calls.calls.len(), calls.rejected.len()), (0, 0));
+    assert_eq!(calls.reasoning.len(), 1);
+    for name in ["harmony_recipient_after_message", "harmony_trailing_text"] {
+        let (_, result) = golden(name);
+        let call = the_call(&result);
+        assert_eq!(call.outcome, CallOutcome::BestGuess, "{name}");
+        assert_eq!(
+            loss_kinds(call, "tool_call.extract.prose"),
+            [LossKind::Data],
+            "{name}"
+        );
+    }
+    let (_, result) = golden("harmony_truncated_arguments");
+    assert_eq!(
+        the_call(&result).outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::Truncated
+        }
+    );
+    for name in [
+        "harmony_builtin_browser_undeclared",
+        "harmony_builtin_python",
+    ] {
+        let (_, result) = golden(name);
+        assert!(
+            matches!(
+                the_call(&result).outcome,
+                CallOutcome::Unresolved {
+                    reason: UnresolvedReason::UnknownTool { .. }
+                }
+            ),
+            "{name}"
+        );
+    }
+}

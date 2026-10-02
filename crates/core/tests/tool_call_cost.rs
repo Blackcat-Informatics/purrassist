@@ -191,6 +191,12 @@ fn anthropic(content: &str) -> String {
     )
 }
 
+fn harmony(content: &str) -> String {
+    format!(
+        "<|start|>assistant<|channel|>commentary to=functions.write <|constrain|>json<|message|>{{\"content\": \"{content}\"}}<|call|>"
+    )
+}
+
 fn kimi(content: &str) -> String {
     format!(
         "<|tool_calls_section_begin|><|tool_call_begin|>functions.write:0<|tool_call_argument_begin|>{{\"content\": \"{content}\"}}<|tool_call_end|><|tool_calls_section_end|>"
@@ -253,6 +259,7 @@ fn one_mib_argument_work_bound() {
         ("deepseek3", deepseek3),
         ("kimi", kimi),
         ("anthropic", anthropic),
+        ("harmony", harmony),
     ] {
         let mut measured = Vec::new();
         for size in [1 << 16, 1 << 20] {
@@ -294,7 +301,7 @@ fn one_mib_argument_work_bound() {
 /// `Effort::Maximum` preset and under `ToolRecoveryRequest::sized` for every
 /// effort from `Quick` to `Maximum`, with identical charges in every case
 /// and peak scratch at most 16 bytes per input byte for Qwen3-Coder XML,
-/// Hermes, Llama 3 JSON, Mistral v3, Mistral v11, DeepSeek-V3.1, DeepSeek-V3, Kimi-K2 and Anthropic arguments (`docs/RESOURCES.md` quotes these
+/// Hermes, Llama 3 JSON, Mistral v3, Mistral v11, DeepSeek-V3.1, DeepSeek-V3, Kimi-K2, Anthropic and Harmony arguments (`docs/RESOURCES.md` quotes these
 /// measurements). `OpenAI`
 /// stringified arguments decode their escaped string again, so they are
 /// held to `RECOVER_SCRATCH_PER_BYTE` instead, under `sized` budgets.
@@ -312,6 +319,7 @@ fn one_mib_argument_fits_published_budget() {
         ("deepseek3", deepseek3(&content), true),
         ("kimi", kimi(&content), true),
         ("anthropic", anthropic(&content), true),
+        ("harmony", harmony(&content), true),
         ("openai", openai(&content), false),
     ] {
         let len = input.len();
@@ -411,6 +419,7 @@ fn work_independent_of_dialect_count_beyond_bound() {
         deepseek3(&content),
         kimi(&content),
         anthropic(&content),
+        harmony(&content),
     ] {
         let n = input.len() as u64;
         let mut previous: Option<(u64, Vec<DialectId>)> = None;
@@ -425,6 +434,7 @@ fn work_independent_of_dialect_count_beyond_bound() {
             DialectId::DeepSeekV3,
             DialectId::KimiK2,
             DialectId::AnthropicToolUse,
+            DialectId::Harmony,
         ];
         for count in 1..=order.len() {
             let dialects = order[..count].to_vec();

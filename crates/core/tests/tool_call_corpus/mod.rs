@@ -493,6 +493,7 @@ const fn dialect_label(dialect: &DialectId) -> &'static str {
         DialectId::AnthropicToolUse => "anthropic",
         DialectId::DeepSeekV31 => "deepseek31",
         DialectId::DeepSeekV3 => "deepseek3",
+        DialectId::Harmony => "harmony",
         DialectId::Hermes => "hermes",
         DialectId::KimiK2 => "kimi",
         DialectId::Llama3Json => "llama3",
@@ -505,7 +506,7 @@ const fn dialect_label(dialect: &DialectId) -> &'static str {
 }
 
 /// The built-in dialects, in corpus order.
-const DIALECTS: [DialectId; 10] = [
+const DIALECTS: [DialectId; 11] = [
     DialectId::Qwen3CoderXml,
     DialectId::Hermes,
     DialectId::OpenAiToolCalls,
@@ -516,6 +517,7 @@ const DIALECTS: [DialectId; 10] = [
     DialectId::DeepSeekV3,
     DialectId::KimiK2,
     DialectId::AnthropicToolUse,
+    DialectId::Harmony,
 ];
 
 /// The witness of tool `tool` in `dialect` for corpus seed `seed`.
@@ -539,6 +541,7 @@ fn base(tools: &ToolSet, dialect: &DialectId, tool: usize, seed: u64) -> Base {
         | DialectId::DeepSeekV3
         | DialectId::KimiK2
         | DialectId::AnthropicToolUse
+        | DialectId::Harmony
             if seed < SEEDS =>
         {
             Form::Object
@@ -735,6 +738,7 @@ impl Base {
                 | DialectId::DeepSeekV31
                 | DialectId::DeepSeekV3
                 | DialectId::KimiK2
+                | DialectId::Harmony
         ) {
             // A bare name right after the token.
             (self.call.name.clone(), name.to_owned())
@@ -786,6 +790,7 @@ impl Base {
             DialectId::Llama3Json | DialectId::MistralV3 | DialectId::AnthropicToolUse => "}",
             DialectId::DeepSeekV31 | DialectId::DeepSeekV3 => DEEPSEEK_SECTION_END,
             DialectId::KimiK2 => KIMI_SECTION_END,
+            DialectId::Harmony => HARMONY_CALL,
             _ => "</tool_call>",
         }
     }
@@ -1139,6 +1144,7 @@ fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
             "}" => "brace",
             DEEPSEEK_SECTION_END => "tool_calls_end",
             KIMI_SECTION_END => "tool_calls_section_end",
+            HARMONY_CALL => "call",
             _ => "tool_call",
         };
         out.push(mutant(
@@ -1157,12 +1163,23 @@ fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
             consumed.stop = Ending::Sequence(closer);
             out.push(consumed);
         }
-        out.push(mutant(
-            "tool_call.markup.missing-wrapper-close.before-text",
-            "done",
-            format!("{}\nDone.", &text[..end]),
-            Need::Guess,
-        ));
+        if base.dialect == DialectId::Harmony {
+            // A Harmony message has no outside: text after the arguments
+            // with no end token is inside the message, dropped as prose.
+            out.push(mutant(
+                "tool_call.extract.prose",
+                "done-at-end",
+                format!("{}\nDone.", &text[..end]),
+                Need::DataLoss,
+            ));
+        } else {
+            out.push(mutant(
+                "tool_call.markup.missing-wrapper-close.before-text",
+                "done",
+                format!("{}\nDone.", &text[..end]),
+                Need::Guess,
+            ));
+        }
         out.push(mutant(
             "tool_call.markup.stray-closer",
             variant,
@@ -1172,7 +1189,10 @@ fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
         if tagged
             && !matches!(
                 base.dialect,
-                DialectId::DeepSeekV31 | DialectId::DeepSeekV3 | DialectId::KimiK2
+                DialectId::DeepSeekV31
+                    | DialectId::DeepSeekV3
+                    | DialectId::KimiK2
+                    | DialectId::Harmony
             )
         {
             out.push(mutant(
@@ -1210,6 +1230,9 @@ fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
     }
     if base.dialect == DialectId::AnthropicToolUse {
         anthropic_mutations(base, &mut out);
+    }
+    if base.dialect == DialectId::Harmony {
+        harmony_mutations(base, &mut out);
     }
     out
 }
@@ -1363,6 +1386,85 @@ fn anthropic_mutations(base: &Base, out: &mut Vec<Mutant>) {
                 Need::Exact,
             ));
         }
+    }
+}
+
+/// The end of a Harmony call message.
+const HARMONY_CALL: &str = "<|call|>";
+
+/// Harmony: the call in its documented and renderer layouts, after an
+/// analysis message and a commentary preamble, without its content type;
+/// with `<|end|>` for `<|call|>`, a `<|channel>` spelling, the recipient
+/// without `functions.`, text after the arguments, and the recipient after
+/// `<|message|>`.
+fn harmony_mutations(base: &Base, out: &mut Vec<Mutant>) {
+    let name = &base.call.name;
+    let arguments = base.arguments_text();
+    let documented = format!(
+        "<|start|>assistant<|channel|>commentary to=functions.{name} <|constrain|>json<|message|>{arguments}<|call|>"
+    );
+    for (category, variant, text, need) in [
+        ("canonical", "documented", documented.clone(), Need::Exact),
+        (
+            "canonical",
+            "renderer",
+            format!(
+                "<|start|>assistant to=functions.{name}<|channel|>commentary <|constrain|>json<|message|>{arguments}<|call|>"
+            ),
+            Need::Exact,
+        ),
+        (
+            "canonical",
+            "analysis-first",
+            format!("<|channel|>analysis<|message|>Need to call {name}.<|end|>{documented}"),
+            Need::Exact,
+        ),
+        (
+            "canonical",
+            "preamble",
+            format!("<|channel|>commentary<|message|>Calling {name} now.<|end|>{documented}"),
+            Need::Exact,
+        ),
+        (
+            "canonical",
+            "no-content-type",
+            format!("<|channel|>commentary to=functions.{name}<|message|>{arguments}<|call|>"),
+            Need::Exact,
+        ),
+        (
+            "tool_call.markup.closer-variant",
+            "end",
+            documented.replace("<|call|>", "<|end|>"),
+            Need::Exact,
+        ),
+        (
+            "tool_call.markup.terminal-confusable",
+            "channel",
+            documented.replace("<|channel|>", "<|channel>"),
+            Need::Exact,
+        ),
+        (
+            "tool_call.markup.missing-token",
+            "namespace",
+            documented.replace("to=functions.", "to="),
+            Need::Exact,
+        ),
+        (
+            "tool_call.extract.prose",
+            "trailing",
+            documented.replace("<|call|>", " done<|call|>"),
+            Need::DataLoss,
+        ),
+        (
+            "tool_call.extract.prose",
+            "recipient-in-body",
+            format!(
+                "<|start|>assistant<|channel|>commentary<|message|>to=functions.{name} {arguments}<|call|>"
+            ),
+            Need::DataLoss,
+        ),
+    ] {
+        out.push(mutant(category, variant, text, need));
     }
 }
 
@@ -2143,7 +2245,7 @@ const fn policy_of(seed: u64) -> Policy {
     }
 }
 
-const ALL_DIALECTS: &str = "anthropic-tool-use.v1,deepseek-v3.1.v1,deepseek-v3.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1";
+const ALL_DIALECTS: &str = "anthropic-tool-use.v1,deepseek-v3.1.v1,deepseek-v3.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1";
 
 /// The cases of every single-call mutation of `base`, appended to `cases`;
 /// with `under`, only those of categories with fewer than [`TARGET`] cases

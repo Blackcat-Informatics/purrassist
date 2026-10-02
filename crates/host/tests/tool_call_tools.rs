@@ -580,3 +580,36 @@ fn anthropic_tool_use_dialect_over_mcp() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// The MCP tool accepts `harmony.v1` in its allow-list and as an emission
+/// target.
+#[test]
+fn harmony_dialect_over_mcp() {
+    let (tools, root) = tools("harmony");
+    let output = "<|channel|>commentary to=functions.list_dir <|constrain|>json<|message|>{\"path\": \"src\"}<|call|>";
+    for extra in ["", r#","dialects":["harmony.v1"]"#] {
+        let node = tools
+            .call("recover_tool_calls", &arguments(output, extra))
+            .unwrap();
+        assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+        assert_eq!(
+            node.pointer("/value/calls/0/dialect")
+                .and_then(Node::as_str),
+            Some("harmony.v1")
+        );
+    }
+    let node = tools
+        .call(
+            "recover_tool_calls",
+            &arguments(QWEN, r#","emit":"harmony.v1""#),
+        )
+        .unwrap();
+    assert_eq!(
+        node.pointer("/value/emitted/output/text")
+            .and_then(Node::as_str),
+        Some(
+            "<|start|>assistant<|channel|>commentary to=functions.list_dir <|constrain|>json<|message|>{\"depth\":2,\"path\":\"src\"}<|call|>"
+        )
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

@@ -234,6 +234,11 @@ pub(crate) trait Fill {
     fn ordinal(&mut self) -> String;
     /// A composite id was printed as `text`.
     fn composite_id(&mut self, text: &str);
+    /// The tool name the current call prints, if known: an alternation
+    /// never chooses an alternative whose name terminal cannot spell it.
+    fn name(&self) -> Option<&str> {
+        None
+    }
 }
 
 /// The production walker: the printed bytes and the class patterns compiled
@@ -330,8 +335,21 @@ impl<'g> Printer<'g> {
                 }
             }
             Expr::Choice(items) => {
-                let pick = fill.choose(self, items);
-                self.walk(fill, &items[pick], capture, governor)?;
+                // Only the alternatives whose name terminal (if any) can
+                // spell the call's name.
+                let mut fitting = Vec::with_capacity(items.len());
+                for item in items {
+                    if self.name_fits(item, fill.name(), governor)? {
+                        fitting.push(item.clone());
+                    }
+                }
+                if fitting.is_empty() || fitting.len() == items.len() {
+                    let pick = fill.choose(self, items);
+                    self.walk(fill, &items[pick], capture, governor)?;
+                } else {
+                    let pick = fill.choose(self, &fitting);
+                    self.walk(fill, &fitting[pick], capture, governor)?;
+                }
             }
             Expr::Repeat { inner, min, max } => match fill.repetition(self, inner, *min, *max)? {
                 Repetition::Times(count) => {
@@ -443,6 +461,47 @@ impl<'g> Printer<'g> {
             Expr::Repeat { inner, min, .. } => *min > 0 && self.repaired(inner),
             Expr::Reference(id) => self.repaired(self.grammar.production_expr(*id)),
             _ => false,
+        }
+    }
+
+    /// Whether the first `name:` capture `expr` holds (in sequence, through
+    /// references) can spell `name`: a capture of one class terminal that
+    /// rejects it cannot. Every other expression fits.
+    fn name_fits(
+        &self,
+        expr: &Expr,
+        name: Option<&str>,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        let Some(name) = name else {
+            return Ok(true);
+        };
+        let grammar = self.grammar;
+        let mut expr = expr;
+        loop {
+            match expr {
+                Expr::Capture {
+                    kind: CaptureKind::Name,
+                    inner,
+                } => {
+                    let mut inner = &**inner;
+                    while let Expr::Reference(id) = inner {
+                        inner = grammar.production_expr(*id);
+                    }
+                    return match inner {
+                        Expr::Class(id) => self.accepts(*id, name.as_bytes(), governor),
+                        _ => Ok(true),
+                    };
+                }
+                Expr::Reference(id) => expr = grammar.production_expr(*id),
+                Expr::Sequence(items) => {
+                    let Some(found) = items.iter().find(|item| self.holds(item).name) else {
+                        return Ok(true);
+                    };
+                    expr = found;
+                }
+                _ => return Ok(true),
+            }
         }
     }
 
@@ -687,6 +746,10 @@ impl<'v> Canonical<'v> {
 }
 
 impl Fill for Canonical<'_> {
+    fn name(&self) -> Option<&str> {
+        self.values.name
+    }
+
     fn choose(&mut self, printer: &Printer<'_>, alternatives: &[Expr]) -> usize {
         let mut best: Option<(u32, usize)> = None;
         let repaired = |alternative: &Expr| printer.repaired(alternative);

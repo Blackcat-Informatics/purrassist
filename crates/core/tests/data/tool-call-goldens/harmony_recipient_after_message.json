@@ -1,0 +1,51 @@
+{
+  "description": "A recipient written after <|message|>: the call is read, the early <|message|> dropped (tool_call.extract.prose, a data loss: the body might have been a preamble), so it is a best guess.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "location"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "harmony.v1"
+  ],
+  "stop": "stop",
+  "input": "<|start|>assistant<|channel|>commentary<|message|>to=functions.get_weather {\"location\":\"SF\"}<|call|>",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "location": "SF"
+      },
+      "candidate_dialects": [
+        "harmony.v1"
+      ],
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.extract.prose"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.extract.prose"
+  ]
+}

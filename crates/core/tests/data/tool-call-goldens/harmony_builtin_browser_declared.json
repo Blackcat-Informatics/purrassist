@@ -1,0 +1,47 @@
+{
+  "description": "A built-in browser recipient (to=browser.search, in the analysis channel) when the caller declares a tool of that name: the call resolves to it.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "browser.search",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "harmony.v1"
+  ],
+  "stop": "stop",
+  "input": "<|start|>assistant<|channel|>analysis to=browser.search <|constrain|>json<|message|>{\"query\":\"gpt-oss\"}<|call|>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "browser.search",
+      "arguments": {
+        "query": "gpt-oss"
+      },
+      "candidate_dialects": [
+        "harmony.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

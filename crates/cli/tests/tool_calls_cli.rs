@@ -732,3 +732,48 @@ fn anthropic_tool_use_recovers_and_emits_via_cli() {
     );
     fs::remove_file(tools).unwrap();
 }
+
+/// Harmony with no `--dialect`: a gpt-oss turn's analysis is reasoning and
+/// its commentary message to `functions.NAME` the call, and a Hermes call
+/// emitted as `harmony.v1` recovers to the same call.
+#[test]
+fn harmony_recovers_and_emits_via_cli() {
+    let turn = "<|channel|>analysis<|message|>List the sources.<|end|><|start|>assistant<|channel|>commentary to=functions.list_dir <|constrain|>json<|message|>{\"path\": \"src\"}<|call|>";
+    let (output, tools) = run(&[], turn.as_bytes());
+    assert_eq!(output.status.code(), Some(0));
+    let node = result(&output);
+    assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+    assert_eq!(
+        node.pointer("/value/calls/0/dialect")
+            .and_then(Node::as_str),
+        Some("harmony.v1")
+    );
+    assert_eq!(
+        node.pointer("/value/calls/0/arguments").unwrap().to_json(),
+        r#"{"path":"src"}"#
+    );
+    fs::remove_file(tools).unwrap();
+    let hermes =
+        b"<tool_call>\n{\"name\": \"list_dir\", \"arguments\": {\"path\": \"src\"}}\n</tool_call>";
+    let (output, tools) = run(&["--emit", "harmony.v1"], hermes);
+    let node = result(&output);
+    let emitted = node
+        .pointer("/value/emitted/output/text")
+        .and_then(Node::as_str)
+        .expect("emitted markup")
+        .to_owned();
+    assert_eq!(
+        emitted,
+        "<|start|>assistant<|channel|>commentary to=functions.list_dir <|constrain|>json<|message|>{\"path\":\"src\"}<|call|>"
+    );
+    fs::remove_file(tools).unwrap();
+    let (output, tools) = run(&[], emitted.as_bytes());
+    let node = result(&output);
+    assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+    assert_eq!(
+        node.pointer("/value/calls/0/dialect")
+            .and_then(Node::as_str),
+        Some("harmony.v1")
+    );
+    fs::remove_file(tools).unwrap();
+}

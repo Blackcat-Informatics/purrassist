@@ -27,7 +27,7 @@ use std::sync::{Arc, OnceLock};
 /// One dialect grammar the recognizer can run.
 ///
 /// The set of variants is closed, so the recognizer dispatches statically.
-/// Ten dialects are built in, each a first-party grammar embedded in the
+/// Eleven dialects are built in, each a first-party grammar embedded in the
 /// crate (see `docs/tool-calls/dialects/` for each grammar's public sources
 /// and what it deliberately does not accept):
 ///
@@ -38,6 +38,7 @@ use std::sync::{Arc, OnceLock};
 /// | [`DialectId::DeepSeekV31`] | `deepseek-v3.1.v1` | `<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>NAME<｜tool▁sep｜>{...}<｜tool▁call▁end｜>...<｜tool▁calls▁end｜>` |
 /// | [`DialectId::DeepSeekV3`] | `deepseek-v3.v1` | `<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME` + a fenced `json` block + `<｜tool▁call▁end｜>...<｜tool▁calls▁end｜>` |
 /// | [`DialectId::KimiK2`] | `kimi-k2.v1` | `<\|tool_calls_section_begin\|><\|tool_call_begin\|>functions.NAME:IDX<\|tool_call_argument_begin\|>{...}<\|tool_call_end\|>...<\|tool_calls_section_end\|>` |
+/// | [`DialectId::Harmony`] | `harmony.v1` | `<\|channel\|>commentary to=functions.NAME <\|constrain\|>json<\|message\|>{...}<\|call\|>` |
 /// | [`DialectId::Hermes`] | `hermes.v1` | `<tool_call>{"name": NAME, "arguments": {...}}</tool_call>` |
 /// | [`DialectId::Llama3Json`] | `llama3-json.v1` | `{"name": NAME, "parameters": {...}}`, optionally after `<\|python_tag\|>` |
 /// | [`DialectId::MistralV11`] | `mistral-v11.v1` | `[TOOL_CALLS]NAME[CALL_ID]ID[ARGS]{...}`, the `[CALL_ID]` segment optional, repeatable |
@@ -81,6 +82,9 @@ pub enum DialectId {
     /// `deepseek-v3.v1`: DeepSeek-V3 / R1 tool-calls sections with fenced
     /// JSON arguments.
     DeepSeekV3,
+    /// `harmony.v1`: `OpenAI` Harmony (gpt-oss) assistant messages with a
+    /// recipient.
+    Harmony,
     /// `hermes.v1`: Hermes JSON calls in `<tool_call>` tags.
     Hermes,
     /// `kimi-k2.v1`: Kimi-K2 tool-calls sections with `functions.NAME:IDX`
@@ -140,6 +144,7 @@ static DEEPSEEK_V3: BuiltIn = BuiltIn::new(
     "deepseek-v3.v1",
     include_str!("dialects/deepseek-v3.v1.grammar"),
 );
+static HARMONY: BuiltIn = BuiltIn::new("harmony.v1", include_str!("dialects/harmony.v1.grammar"));
 static HERMES: BuiltIn = BuiltIn::new("hermes.v1", include_str!("dialects/hermes.v1.grammar"));
 static KIMI_K2: BuiltIn = BuiltIn::new("kimi-k2.v1", include_str!("dialects/kimi-k2.v1.grammar"));
 static LLAMA3_JSON: BuiltIn = BuiltIn::new(
@@ -171,6 +176,7 @@ impl DialectId {
     ///         "anthropic-tool-use.v1",
     ///         "deepseek-v3.1.v1",
     ///         "deepseek-v3.v1",
+    ///         "harmony.v1",
     ///         "hermes.v1",
     ///         "kimi-k2.v1",
     ///         "llama3-json.v1",
@@ -181,10 +187,11 @@ impl DialectId {
     ///     ]
     /// );
     /// ```
-    pub const BUILT_IN: [Self; 10] = [
+    pub const BUILT_IN: [Self; 11] = [
         Self::AnthropicToolUse,
         Self::DeepSeekV31,
         Self::DeepSeekV3,
+        Self::Harmony,
         Self::Hermes,
         Self::KimiK2,
         Self::Llama3Json,
@@ -208,6 +215,7 @@ impl DialectId {
             Self::AnthropicToolUse => Some(&ANTHROPIC_TOOL_USE),
             Self::DeepSeekV31 => Some(&DEEPSEEK_V31),
             Self::DeepSeekV3 => Some(&DEEPSEEK_V3),
+            Self::Harmony => Some(&HARMONY),
             Self::Hermes => Some(&HERMES),
             Self::KimiK2 => Some(&KIMI_K2),
             Self::Llama3Json => Some(&LLAMA3_JSON),
@@ -251,6 +259,7 @@ impl DialectId {
             Self::AnthropicToolUse => ANTHROPIC_TOOL_USE.id,
             Self::DeepSeekV31 => DEEPSEEK_V31.id,
             Self::DeepSeekV3 => DEEPSEEK_V3.id,
+            Self::Harmony => HARMONY.id,
             Self::Hermes => HERMES.id,
             Self::KimiK2 => KIMI_K2.id,
             Self::Llama3Json => LLAMA3_JSON.id,
@@ -291,6 +300,7 @@ impl DialectId {
             Self::AnthropicToolUse => ANTHROPIC_TOOL_USE.grammar(),
             Self::DeepSeekV31 => DEEPSEEK_V31.grammar(),
             Self::DeepSeekV3 => DEEPSEEK_V3.grammar(),
+            Self::Harmony => HARMONY.grammar(),
             Self::Hermes => HERMES.grammar(),
             Self::KimiK2 => KIMI_K2.grammar(),
             Self::Llama3Json => LLAMA3_JSON.grammar(),

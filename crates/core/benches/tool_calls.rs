@@ -6,8 +6,9 @@
 //! Recovers one write call whose string argument is 1 KiB, 64 KiB or
 //! 1 MiB, printed as Qwen3-Coder XML, Hermes JSON, `OpenAI` stringified
 //! arguments, Llama 3 JSON, Mistral v3, Mistral v11, DeepSeek-V3.1,
-//! DeepSeek-V3, Kimi-K2, Anthropic `tool_use`, and a Qwen3-Coder XML call
-//! followed by a Hermes call (each carrying half the argument) under a Qwen3-Coder + Hermes allow-list. The
+//! DeepSeek-V3, Kimi-K2, Anthropic `tool_use`, Harmony, and a Qwen3-Coder
+//! XML call followed by a Hermes call (each carrying half the argument)
+//! under a Qwen3-Coder + Hermes allow-list. The
 //! single-dialect shapes use the default request (every built-in dialect).
 //! Every recovery runs under `ToolRecoveryRequest::sized` and must be
 //! `Resolved` with the argument intact. Each workload reports the median
@@ -34,7 +35,7 @@ use std::hint::black_box;
 use std::time::Instant;
 
 const SIZES: [(&str, usize); 3] = [("1kib", 1 << 10), ("64kib", 1 << 16), ("1mib", 1 << 20)];
-const SHAPES: [&str; 11] = [
+const SHAPES: [&str; 12] = [
     "qwen_xml",
     "hermes",
     "openai_stringified",
@@ -45,6 +46,7 @@ const SHAPES: [&str; 11] = [
     "deepseek_v3",
     "kimi_k2",
     "anthropic_tool_use",
+    "harmony",
     "mixed_qwen_hermes",
 ];
 const CHUNKS: [usize; 3] = [1, 16, 4096];
@@ -138,6 +140,13 @@ fn anthropic(content: &str) -> String {
     )
 }
 
+fn harmony(content: &str) -> String {
+    format!(
+        "<|start|>assistant<|channel|>commentary to=functions.write <|constrain|>json<|message|>{{\"content\": {}}}<|call|>",
+        json::quote(content)
+    )
+}
+
 fn dialects(ids: &[DialectId]) -> DialectSet {
     DialectSet::new(ids.iter().cloned(), &mut Governor::new(Budget::default()))
         .expect("bench dialects")
@@ -157,6 +166,7 @@ fn workload(shape: &str, size: usize) -> (String, ToolRecoveryRequest, Vec<Strin
         "deepseek_v3" => (deepseek3(&content), vec![content], DialectSet::built_in()),
         "kimi_k2" => (kimi(&content), vec![content], DialectSet::built_in()),
         "anthropic_tool_use" => (anthropic(&content), vec![content], DialectSet::built_in()),
+        "harmony" => (harmony(&content), vec![content], DialectSet::built_in()),
         "mixed_qwen_hermes" => {
             let first = argument(size / 2);
             let second = argument(size - size / 2);

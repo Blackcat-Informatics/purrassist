@@ -214,7 +214,7 @@ struct DialectCase {
 }
 
 /// One case per entry of `DialectId::BUILT_IN` (checked by the test below).
-const DIALECT_CASES: [DialectCase; 10] = [
+const DIALECT_CASES: [DialectCase; 11] = [
     DialectCase {
         dialect: DialectId::AnthropicToolUse,
         anchor: "{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"Write the file, then read the notes.\",\"signature\":\"EqQB\"},{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"write_file\",\"input\":{\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}},{\"type\":\"tool_use\",\"id\":\"toolu_02\",\"name\":\"read_file\",\"input\":{\"path\": \"notes.txt\", \"limit\": 10}}]}",
@@ -238,6 +238,14 @@ const DIALECT_CASES: [DialectCase; 10] = [
         repair: "<|tool_calls_begin|><|tool_call_begin|>function<|tool_sep|>read_file\n```\n{\"path\": \"src/lib.rs\", \"limit\": 40}\n<|tool_call_begin|>function<|tool_sep|>get_weather\n{\"city\": \"Oslo\", \"unit\": \"celsius\"}\n```<|tool_call_end|>",
         repair_status: "resolved",
         repair_digest: "sha256:8b47b741e93bd652782fbc8bb4b2a4f43d5277482a8a41558b187f060d1731e6",
+    },
+    DialectCase {
+        dialect: DialectId::Harmony,
+        anchor: "<|channel|>analysis<|message|>Write the file, then read the notes.<|end|><|start|>assistant<|channel|>commentary to=functions.write_file <|constrain|>json<|message|>{\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}<|call|><|start|>assistant to=functions.read_file<|channel|>commentary <|constrain|>json<|message|>{\"path\": \"notes.txt\", \"limit\": 10}<|call|>",
+        anchor_digest: "sha256:7ce6d235a22c648993a3306becd45e1895434d7175d5ea0810336a430a808905",
+        repair: "<|channel>commentary to=read_file <|constrain|>json<|message|>{\"path\": \"src/lib.rs\", \"limit\": 40}<|end|><|start|>assistant<|channel|>commentary to=functions.get_weather<|message|>{\"city\": \"Oslo\", \"unit\": \"celsius\"}",
+        repair_status: "resolved",
+        repair_digest: "sha256:8802c2e4b438099b46c86a661fd8c81c19c294f5b8b32a5559942892cdeb2c9e",
     },
     DialectCase {
         dialect: DialectId::Hermes,

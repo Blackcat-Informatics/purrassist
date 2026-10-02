@@ -544,6 +544,10 @@ impl<'g> Seeded<'g> {
 }
 
 impl Fill for Seeded<'_> {
+    fn name(&self) -> Option<&str> {
+        self.call.as_ref().map(|plan| plan.name.as_str())
+    }
+
     /// By the seed, among the alternatives holding the most call captures
     /// (a name first).
     fn choose(&mut self, printer: &Printer<'_>, alternatives: &[Expr]) -> usize {

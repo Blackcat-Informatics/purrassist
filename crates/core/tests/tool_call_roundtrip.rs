@@ -487,7 +487,8 @@ fn declaration_forms_render_every_tool() {
                     | DeclarationForm::MistralV3
                     | DeclarationForm::MistralV11
                     | DeclarationForm::DeepSeekV3
-                    | DeclarationForm::KimiK2 => "",
+                    | DeclarationForm::KimiK2
+                    | DeclarationForm::Harmony => "",
                     _ => r#"{"type":"object"}"#,
                 });
                 assert!(
@@ -498,7 +499,9 @@ fn declaration_forms_render_every_tool() {
                 if let Some(description) = tool.description() {
                     let spelled = if matches!(
                         form,
-                        DeclarationForm::Qwen3CoderXml | DeclarationForm::DeepSeekV31
+                        DeclarationForm::Qwen3CoderXml
+                            | DeclarationForm::DeepSeekV31
+                            | DeclarationForm::Harmony
                     ) {
                         description.to_owned()
                     } else {
@@ -567,9 +570,10 @@ fn tool_results_roundtrip() {
     let empty = ToolSet::compile([], Budget::default()).expect("no tools");
     for dialect in DialectId::BUILT_IN {
         for content in ["22 \"C\" <b>", "line one\n  line two\n", ""] {
+            // A Harmony tool message is addressed from the tool by name.
             let result = ToolResult {
                 id: Some("call_3"),
-                name: None,
+                name: (dialect == DialectId::Harmony).then_some("read"),
                 content,
             };
             let rendered = emit::render_tool_result(&dialect, &result).expect("rendered");
@@ -620,6 +624,11 @@ fn tool_results_roundtrip() {
                 assert_eq!(captured, content, "{context}");
                 assert_eq!(found[0].id.as_ref().expect("id").value, "call_3");
                 assert_eq!(rendered.omitted, []);
+            } else if dialect == DialectId::Harmony {
+                // Verbatim content, from the tool it answers.
+                assert_eq!(captured, content, "{context}");
+                assert_eq!(found[0].name.as_ref().expect("name").value, "read");
+                assert_eq!(rendered.omitted, [CaptureKind::Id], "{context}");
             } else {
                 assert_eq!(captured, content, "{context}");
                 assert!(found[0].id.is_none());

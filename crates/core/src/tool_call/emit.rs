@@ -53,6 +53,7 @@
 //! | `deepseek-v3.1.v1` | `<｜tool▁calls▁begin｜>` + `<｜tool▁call▁begin｜>NAME<｜tool▁sep｜>ARGS<｜tool▁call▁end｜>` per call + `<｜tool▁calls▁end｜>`: every printed call in one section (the template's layout; `ARGS` is compact) |
 //! | `deepseek-v3.v1` | `<｜tool▁calls▁begin｜>` + `<｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME\n```json\nARGS\n```<｜tool▁call▁end｜>` per call, the calls separated by a newline, + `<｜tool▁calls▁end｜>`: every printed call in one section (the template's layout; `ARGS` is compact) |
 //! | `kimi-k2.v1` | `<\|tool_calls_section_begin\|>` + `<\|tool_call_begin\|>functions.NAME:IDX<\|tool_call_argument_begin\|>ARGS<\|tool_call_end\|>` per call + `<\|tool_calls_section_end\|>`: every printed call in one section (the template's layout; `IDX` is the call's position in the section, `ARGS` is compact) |
+//! | `harmony.v1` | `<\|start\|>assistant<\|channel\|>commentary to=functions.NAME <\|constrain\|>json<\|message\|>ARGS<\|call\|>` (the documented call layout; `ARGS` is compact), one message per call |
 //! | `hermes.v1` | `<tool_call>\n{"name":"NAME","arguments":ARGS}\n</tool_call>` (the template's wrapper layout; the object is compact) |
 //! | `openai-tool-calls.v1` | `{"id":"ID","type":"function","function":{"name":"NAME","arguments":"ARGS"}}` |
 //! | `llama3-json.v1` | `{"name": "NAME", "parameters": ARGS}` (the template's layout; `ARGS` is compact) |

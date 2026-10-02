@@ -144,7 +144,7 @@ test's assertions fails the build by design.
 | Path matching | 1594 | 1279 | 0 | 315 | 80.2% | 0.0% | 0.234% | 2% |
 | Phonetic ambiguity | 1408 | 1089 | 0 | 319 | 77.3% | 0.0% | 0.275% | 5% |
 | JSON recovery | 714 | 630 | 0 | 84 | 88.2% | 0.0% | 0.474% | 2% |
-| Tool-call recovery | 11068 | 7501 | 0 | 3567 | 67.8% | 0.0% | 0.040% | 1% |
+| Tool-call recovery | 12396 | 8449 | 0 | 3947 | 68.2% | 0.0% | 0.035% | 1% |
 
 "Coverage" is the fraction of cases an automatic decision was reached for at
 all (correct + incorrect, over the total); "risk" is the observed error rate
@@ -207,7 +207,7 @@ small oracle exhaustively proves the Unicode tables.
 
 ## Tool-call recovery evaluation
 
-`crates/core/tests/data/evaluation/tool-calls.jsonl` holds 11,068 mutated model
+`crates/core/tests/data/evaluation/tool-calls.jsonl` holds 12,396 mutated model
 turns, each with its `id`, `category` (the rule expected to repair it),
 `dialect` (the request's dialect allow-list), `policy`, `stop`, `input` and
 `truth`. The `tool-call-corpus` example generates it deterministically: it
@@ -243,7 +243,13 @@ call counter and a Hermes call object without its `name` (a guess, so
 an assistant message and in a whole API response, drop its type (keeping a
 `toolu_` id), and write `"arguments"` or `"parameters"` for `"input"` after
 the block's type (`tool_call.markup.terminal-confusable`), while the closer
-mutations act on the block's closing brace. Turns
+mutations act on the block's closing brace; Harmony cases write the call in
+its documented and renderer layouts, after an analysis message or a
+preamble, without the content type, with `<|end|>` for `<|call|>`, a
+`<|channel>` spelling, a recipient without `functions.` or after
+`<|message|>`, and text after the arguments (a data loss: a Harmony message
+has no outside, so text after a call with no end token is dropped from the
+message rather than read as text after it). Turns
 of two calls (one dialect, Qwen3-Coder XML mixed with Hermes, and a
 DeepSeek-V3.1 section with a DeepSeek-V3 section) cover the multi-call
 rules. `truth` is the original call or calls
@@ -268,9 +274,9 @@ any answer to a truth-`Unresolved` case. The test pins the totals above,
 asserts zero incorrect answers overall, per rule and per dialect, at least 20
 cases per rule, and abstention recall of 100%:
 
-Abstention recall: 3486 of 3486 truth-`Unresolved` cases abstained (100.0%).
+Abstention recall: 3857 of 3857 truth-`Unresolved` cases abstained (100.0%).
 
-The 81 other abstentions are coverage gaps, not errors: read-only calls whose
+The 90 other abstentions are coverage gaps, not errors: read-only calls whose
 required arguments were nested one level down (`DropWithLoss` drops the
 unknown wrapper before `json.key.relocate` can apply, so the call is missing a
 required argument). Calls followed by a dangling `<tool_call>` opener under
@@ -286,57 +292,57 @@ unassignable (`UnknownParameter`), so the call abstains.
 
 | Rule | Cases | Correct | Incorrect | Abstained | Truth `Unresolved` |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `canonical` | 960 | 960 | 0 | 0 | 0 |
-| `json.enum.match` | 140 | 80 | 0 | 60 | 60 |
-| `json.key.match` | 310 | 120 | 0 | 190 | 190 |
-| `json.key.relocate` | 252 | 0 | 0 | 252 | 171 |
-| `json.required.invent` | 280 | 0 | 0 | 280 | 280 |
-| `json.syntax.bare-key` | 279 | 279 | 0 | 0 | 0 |
-| `json.syntax.bare-string` | 153 | 54 | 0 | 99 | 99 |
+| `canonical` | 1184 | 1184 | 0 | 0 | 0 |
+| `json.enum.match` | 154 | 88 | 0 | 66 | 66 |
+| `json.key.match` | 341 | 132 | 0 | 209 | 209 |
+| `json.key.relocate` | 280 | 0 | 0 | 280 | 190 |
+| `json.required.invent` | 308 | 0 | 0 | 308 | 308 |
+| `json.syntax.bare-key` | 310 | 310 | 0 | 0 | 0 |
+| `json.syntax.bare-string` | 170 | 60 | 0 | 110 | 110 |
 | `json.syntax.close-container` | 24 | 24 | 0 | 0 | 0 |
-| `json.syntax.comment` | 279 | 279 | 0 | 0 | 0 |
-| `json.syntax.literal-case` | 63 | 63 | 0 | 0 | 0 |
-| `json.syntax.missing-colon` | 279 | 279 | 0 | 0 | 0 |
-| `json.syntax.missing-comma` | 234 | 234 | 0 | 0 | 0 |
-| `json.syntax.missing-value` | 162 | 0 | 0 | 162 | 162 |
-| `json.syntax.string` | 243 | 243 | 0 | 0 | 0 |
-| `json.syntax.trailing-comma` | 279 | 279 | 0 | 0 | 0 |
+| `json.syntax.comment` | 310 | 310 | 0 | 0 | 0 |
+| `json.syntax.literal-case` | 70 | 70 | 0 | 0 | 0 |
+| `json.syntax.missing-colon` | 310 | 310 | 0 | 0 | 0 |
+| `json.syntax.missing-comma` | 260 | 260 | 0 | 0 | 0 |
+| `json.syntax.missing-value` | 180 | 0 | 0 | 180 | 180 |
+| `json.syntax.string` | 270 | 270 | 0 | 0 | 0 |
+| `json.syntax.trailing-comma` | 310 | 310 | 0 | 0 | 0 |
 | `json.syntax.unterminated-string` | 24 | 12 | 0 | 12 | 12 |
-| `json.type.decode-string` | 54 | 0 | 0 | 54 | 54 |
-| `json.type.stringify-scalar` | 144 | 0 | 0 | 144 | 144 |
-| `tool_call.arguments.decode-string` | 272 | 272 | 0 | 0 | 0 |
-| `tool_call.context.fenced-example` | 320 | 120 | 0 | 200 | 200 |
+| `json.type.decode-string` | 60 | 0 | 0 | 60 | 60 |
+| `json.type.stringify-scalar` | 160 | 0 | 0 | 160 | 160 |
+| `tool_call.arguments.decode-string` | 304 | 304 | 0 | 0 | 0 |
+| `tool_call.context.fenced-example` | 352 | 132 | 0 | 220 | 220 |
 | `tool_call.extract.fence` | 96 | 96 | 0 | 0 | 0 |
-| `tool_call.extract.prose` | 64 | 32 | 0 | 32 | 32 |
+| `tool_call.extract.prose` | 160 | 80 | 0 | 80 | 80 |
 | `tool_call.id.dedup` | 64 | 64 | 0 | 0 | 0 |
-| `tool_call.markup.closer-variant` | 127 | 127 | 0 | 0 | 0 |
+| `tool_call.markup.closer-variant` | 159 | 159 | 0 | 0 | 0 |
 | `tool_call.markup.closers-only-empty` | 29 | 1 | 0 | 28 | 28 |
-| `tool_call.markup.dangling-opener` | 320 | 320 | 0 | 0 | 0 |
+| `tool_call.markup.dangling-opener` | 352 | 352 | 0 | 0 | 0 |
 | `tool_call.markup.json-body` | 32 | 32 | 0 | 0 | 0 |
-| `tool_call.markup.missing-closers-at-end` | 256 | 256 | 0 | 0 | 0 |
+| `tool_call.markup.missing-closers-at-end` | 288 | 288 | 0 | 0 | 0 |
 | `tool_call.markup.missing-function-close` | 128 | 128 | 0 | 0 | 0 |
 | `tool_call.markup.missing-parameter-close` | 26 | 26 | 0 | 0 | 0 |
-| `tool_call.markup.missing-token` | 352 | 352 | 0 | 0 | 0 |
-| `tool_call.markup.missing-wrapper-close` | 256 | 256 | 0 | 0 | 0 |
+| `tool_call.markup.missing-token` | 384 | 384 | 0 | 0 | 0 |
+| `tool_call.markup.missing-wrapper-close` | 288 | 288 | 0 | 0 | 0 |
 | `tool_call.markup.missing-wrapper-close.before-text` | 256 | 96 | 0 | 160 | 160 |
 | `tool_call.markup.nested-parameter` | 24 | 24 | 0 | 0 | 0 |
 | `tool_call.markup.parameter-closed-by-element` | 31 | 31 | 0 | 0 | 0 |
-| `tool_call.markup.stray-closer` | 635 | 607 | 0 | 28 | 28 |
-| `tool_call.markup.terminal-confusable` | 160 | 160 | 0 | 0 | 0 |
+| `tool_call.markup.stray-closer` | 699 | 671 | 0 | 28 | 28 |
+| `tool_call.markup.terminal-confusable` | 192 | 192 | 0 | 0 | 0 |
 | `tool_call.markup.undeclared-parameter-boundary` | 26 | 0 | 0 | 26 | 26 |
-| `tool_call.name.alias` | 80 | 80 | 0 | 0 | 0 |
+| `tool_call.name.alias` | 88 | 88 | 0 | 0 | 0 |
 | `tool_call.name.from-arguments` | 64 | 24 | 0 | 40 | 40 |
-| `tool_call.name.match` | 640 | 120 | 0 | 520 | 520 |
-| `tool_call.parameter.alias` | 80 | 80 | 0 | 0 | 0 |
+| `tool_call.name.match` | 704 | 132 | 0 | 572 | 572 |
+| `tool_call.parameter.alias` | 88 | 88 | 0 | 0 | 0 |
 | `tool_call.parameter.collect` | 24 | 24 | 0 | 0 | 0 |
-| `tool_call.parameter.drop-unknown` | 320 | 160 | 0 | 160 | 160 |
-| `tool_call.parameter.repeated` | 280 | 0 | 0 | 280 | 280 |
-| `tool_call.reasoning.embedded-call` | 320 | 0 | 0 | 320 | 320 |
-| `tool_call.reasoning.unclosed` | 320 | 120 | 0 | 200 | 200 |
-| `tool_call.reasoning.unterminated` | 320 | 320 | 0 | 0 | 0 |
-| `tool_call.stop.consumed-closer` | 160 | 160 | 0 | 0 | 0 |
-| `tool_call.truncated` | 640 | 320 | 0 | 320 | 320 |
-| `tool_call.value.enum-normalize` | 140 | 140 | 0 | 0 | 0 |
+| `tool_call.parameter.drop-unknown` | 352 | 176 | 0 | 176 | 176 |
+| `tool_call.parameter.repeated` | 308 | 0 | 0 | 308 | 308 |
+| `tool_call.reasoning.embedded-call` | 352 | 0 | 0 | 352 | 352 |
+| `tool_call.reasoning.unclosed` | 352 | 132 | 0 | 220 | 220 |
+| `tool_call.reasoning.unterminated` | 352 | 352 | 0 | 0 | 0 |
+| `tool_call.stop.consumed-closer` | 192 | 192 | 0 | 0 | 0 |
+| `tool_call.truncated` | 704 | 352 | 0 | 352 | 352 |
+| `tool_call.value.enum-normalize` | 154 | 154 | 0 | 0 | 0 |
 | `tool_call.value.trim-nonverbatim` | 25 | 25 | 0 | 0 | 0 |
 | `tool_call.xml.array-item` | 22 | 22 | 0 | 0 | 0 |
 
@@ -349,6 +355,7 @@ and by dialect allow-list:
 | `anthropic` | 1168 | 816 | 0 | 352 |
 | `deepseek3` | 1360 | 992 | 0 | 368 |
 | `deepseek31` | 1136 | 784 | 0 | 352 |
+| `harmony` | 1328 | 948 | 0 | 380 |
 | `hermes` | 1162 | 765 | 0 | 397 |
 | `kimi` | 1232 | 860 | 0 | 372 |
 | `llama3` | 976 | 624 | 0 | 352 |
@@ -361,10 +368,11 @@ and by dialect allow-list:
 | Allow-list | Cases | Correct | Incorrect | Abstained |
 | --- | ---: | ---: | ---: | ---: |
 | `anthropic-tool-use.v1` | 536 | 376 | 0 | 160 |
-| `anthropic-tool-use.v1,deepseek-v3.1.v1,deepseek-v3.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1` | 5950 | 4011 | 0 | 1939 |
+| `anthropic-tool-use.v1,deepseek-v3.1.v1,deepseek-v3.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1` | 6662 | 4515 | 0 | 2147 |
 | `deepseek-v3.1.v1` | 520 | 360 | 0 | 160 |
 | `deepseek-v3.1.v1,deepseek-v3.v1` | 32 | 32 | 0 | 0 |
 | `deepseek-v3.v1` | 632 | 464 | 0 | 168 |
+| `harmony.v1` | 616 | 444 | 0 | 172 |
 | `hermes.v1` | 546 | 357 | 0 | 189 |
 | `hermes.v1,qwen3-coder-xml.v1` | 64 | 64 | 0 | 0 |
 | `kimi-k2.v1` | 568 | 396 | 0 | 172 |

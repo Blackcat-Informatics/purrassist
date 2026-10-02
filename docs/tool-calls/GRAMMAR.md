@@ -19,7 +19,7 @@ into a `CompiledGrammar`. One compiled grammar serves three purposes:
   choices to print well-formed calls for given argument shapes, for tests and
   corpora.
 
-The ten built-in dialects are written in this DSL:
+The eleven built-in dialects are written in this DSL:
 [`qwen3-coder-xml.v1`](../../crates/core/src/tool_call/dialects/qwen3-coder-xml.v1.grammar),
 [`hermes.v1`](../../crates/core/src/tool_call/dialects/hermes.v1.grammar),
 [`openai-tool-calls.v1`](../../crates/core/src/tool_call/dialects/openai-tool-calls.v1.grammar),
@@ -28,8 +28,9 @@ The ten built-in dialects are written in this DSL:
 [`mistral-v11.v1`](../../crates/core/src/tool_call/dialects/mistral-v11.v1.grammar),
 [`deepseek-v3.1.v1`](../../crates/core/src/tool_call/dialects/deepseek-v3.1.v1.grammar),
 [`deepseek-v3.v1`](../../crates/core/src/tool_call/dialects/deepseek-v3.v1.grammar),
-[`kimi-k2.v1`](../../crates/core/src/tool_call/dialects/kimi-k2.v1.grammar), and
-[`anthropic-tool-use.v1`](../../crates/core/src/tool_call/dialects/anthropic-tool-use.v1.grammar).
+[`kimi-k2.v1`](../../crates/core/src/tool_call/dialects/kimi-k2.v1.grammar),
+[`anthropic-tool-use.v1`](../../crates/core/src/tool_call/dialects/anthropic-tool-use.v1.grammar), and
+[`harmony.v1`](../../crates/core/src/tool_call/dialects/harmony.v1.grammar).
 A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 [Add a custom dialect](#add-a-custom-dialect).
 
@@ -309,7 +310,7 @@ call.
 
 | Capture | Records |
 | --- | --- |
-| `name:` | The tool name. |
+| `name:` | The tool name. When printing, an alternation never chooses an alternative whose first `name:` capture is a class terminal that cannot spell the call's name (the built-in Harmony grammar reads `browser.search` and `python` recipients through their own classes). |
 | `id:` | The call id (printed from the id policy's assignment). An `id:` capture whose expression holds a `name:` capture is a *composite id* (Kimi-K2's `functions.NAME:IDX`): recognition takes the whole span as the call's id and the inner capture as its name; printing writes the expression with the call's name, and each uncaptured class terminal inside it as the call's position in the printed instance (0, 1, …) when the class accepts that, so the printed ids are distinct. |
 | `arguments:` | The whole argument value; must wrap a `slot(...)`. |
 | `param-name:` | One parameter's name. |

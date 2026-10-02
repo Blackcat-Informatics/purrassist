@@ -223,6 +223,7 @@ fn all_registered_dialects_have_anchor_fixtures() {
             "anthropic-tool-use.v1",
             "deepseek-v3.1.v1",
             "deepseek-v3.v1",
+            "harmony.v1",
             "hermes.v1",
             "kimi-k2.v1",
             "llama3-json.v1",
@@ -428,6 +429,21 @@ fn assert_kimi_call(raw: &str, call: &RawCall, file: &str) {
     assert!(arguments.equivalent(&call.arguments.root), "{file}");
 }
 
+/// One Harmony assistant message addressed to `functions.NAME`: the
+/// recipient names the call's tool, and the body between `<|message|>` and
+/// `<|call|>` is its arguments.
+fn assert_harmony_message(raw: &str, call: &RawCall, file: &str) {
+    let name = call.name.as_ref().expect("name");
+    assert!(
+        raw.contains(&format!("to=functions.{}", name.value)),
+        "{file}: {raw:?}"
+    );
+    let start = raw.find("<|message|>").expect("message token") + "<|message|>".len();
+    let end = raw.rfind("<|call|>").expect("call token");
+    let arguments = json::parse(&raw[start..end]).expect("arguments JSON");
+    assert!(arguments.equivalent(&call.arguments.root), "{file}");
+}
+
 /// One Anthropic `tool_use` block: a JSON object whose type, id, name and
 /// input are the call's.
 fn assert_anthropic_block(raw: &str, call: &RawCall, file: &str) {
@@ -493,6 +509,8 @@ fn ir_spans_slice_back_to_source() {
                     assert_kimi_call(raw, call, &fixture.file);
                 } else if dialect == DialectId::AnthropicToolUse {
                     assert_anthropic_block(raw, call, &fixture.file);
+                } else if dialect == DialectId::Harmony {
+                    assert_harmony_message(raw, call, &fixture.file);
                 } else if dialect == DialectId::MistralV11 {
                     // [TOOL_CALLS]NAME[CALL_ID]ID[ARGS]{...}: the arguments
                     // after the last [ARGS] are the call's.
@@ -682,9 +700,18 @@ fn reasoning_markers_are_declared() {
             .all(|(open, _)| open.starts_with("{\"type\":"))
     );
     let set = dialect_set(&DialectId::BUILT_IN);
+    // Harmony's analysis channel.
+    assert_eq!(
+        DialectId::Harmony.grammar().reasoning(),
+        Some((&b"<|channel|>analysis<|message|>"[..], &b"<|end|>"[..]))
+    );
     let mut expected = vec![
         (b"<think>".to_vec(), b"</think>".to_vec()),
         (b"[THINK]".to_vec(), b"[/THINK]".to_vec()),
+        (
+            b"<|channel|>analysis<|message|>".to_vec(),
+            b"<|end|>".to_vec(),
+        ),
     ];
     expected.extend(
         DialectId::AnthropicToolUse
@@ -839,6 +866,26 @@ fn anthropic_result_production_reads_tool_result_blocks() {
     }
 }
 
+/// Harmony tool results are tool messages from `functions.NAME` to the
+/// assistant.
+#[test]
+fn harmony_result_production_reads_tool_messages() {
+    let tools = ToolSet::compile([], Budget::default()).expect("no tools");
+    let set = dialect_set(&[DialectId::Harmony]);
+    let source = "<|start|>functions.get_weather to=assistant<|channel|>commentary<|message|>{\"sunny\": true}<|end|>";
+    let turn = recognize(&set, &tools, source);
+    let found = results(&turn);
+    assert_eq!(found.len(), 1, "{:#?}", turn.pieces());
+    assert_eq!(
+        found[0].capture_text(CaptureKind::Content, source.as_bytes()),
+        Some("{\"sunny\": true}")
+    );
+    assert_eq!(
+        found[0].name.as_ref().map(|name| name.value.as_str()),
+        Some("get_weather")
+    );
+}
+
 /// Kimi-K2 tool results are tool messages headed `## Return of ID`.
 #[test]
 fn kimi_result_production_reads_tool_messages() {
@@ -965,6 +1012,18 @@ fn declaration_productions_match_tool_declarations() {
             assert_eq!(found[0].name.as_ref().expect("name").value, tool.name());
             assert!(found[0].arguments.root.equivalent(tool.schema_document()));
         }
+    }
+    // Harmony lists functions as TypeScript-like declarations, the schema
+    // kept as JSON.
+    let set = declaration_reader(&DialectId::Harmony);
+    for declaration in [
+        "// Read a text file.\ntype read_file = (_: {\"type\": \"object\", \"properties\": {\"path\": {\"type\": \"string\"}}}) => any;",
+        "type current_time = () => any;",
+    ] {
+        let turn = recognize(&set, &empty, declaration);
+        let found = calls(&turn);
+        assert_eq!(found.len(), 1, "{:#?}", turn.pieces());
+        assert_eq!(found[0].span, 0..declaration.len());
     }
     // Qwen3-Coder lists tools as XML function entries.
     let set = declaration_reader(&DialectId::Qwen3CoderXml);

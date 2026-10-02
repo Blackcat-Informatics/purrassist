@@ -193,7 +193,11 @@ targets' mutation tokens so mutation can create or move field boundaries).
   Anthropic `tool_use` repairs (a block in a message and in a response with
   a thinking block, reordered members, a block without its type, an
   `"arguments"` key, stringified and cut-off input, a missing closing brace,
-  a streaming event, a tool result), and negative cases (including JSON content
+  a streaming event, a tool result), Harmony repairs (analysis then a call,
+  the renderer layout, no start prefix, a preamble, `<|end|>` for
+  `<|call|>`, a missing end, `<|channel>`, a recipient without `functions.`
+  or after `<|message|>`, trailing text, cut-off arguments, built-in browser
+  and python recipients, a tool message), and negative cases (including JSON content
   that is not call-shaped, a bare `[TOOL_CALLS]`, and nested unterminated
   call objects); the header bytes cycle through five
   fixed request configurations.
