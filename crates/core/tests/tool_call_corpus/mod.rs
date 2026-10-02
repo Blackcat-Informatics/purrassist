@@ -491,6 +491,7 @@ impl Base {
 const fn dialect_label(dialect: &DialectId) -> &'static str {
     match dialect {
         DialectId::AnthropicToolUse => "anthropic",
+        DialectId::BareJson => "bare",
         DialectId::DeepSeekV31 => "deepseek31",
         DialectId::DeepSeekV3 => "deepseek3",
         DialectId::Harmony => "harmony",
@@ -506,7 +507,7 @@ const fn dialect_label(dialect: &DialectId) -> &'static str {
 }
 
 /// The built-in dialects, in corpus order.
-const DIALECTS: [DialectId; 11] = [
+const DIALECTS: [DialectId; 12] = [
     DialectId::Qwen3CoderXml,
     DialectId::Hermes,
     DialectId::OpenAiToolCalls,
@@ -518,6 +519,7 @@ const DIALECTS: [DialectId; 11] = [
     DialectId::KimiK2,
     DialectId::AnthropicToolUse,
     DialectId::Harmony,
+    DialectId::BareJson,
 ];
 
 /// The witness of tool `tool` in `dialect` for corpus seed `seed`.
@@ -542,6 +544,7 @@ fn base(tools: &ToolSet, dialect: &DialectId, tool: usize, seed: u64) -> Base {
         | DialectId::KimiK2
         | DialectId::AnthropicToolUse
         | DialectId::Harmony
+        | DialectId::BareJson
             if seed < SEEDS =>
         {
             Form::Object
@@ -922,9 +925,11 @@ fn bare_safe(text: &str) -> bool {
 fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
     let mut out = Vec::new();
     let text = &base.text;
+    // A bare JSON object has no closer to repair: it is a call only when
+    // complete, so a missing or doubled final brace is not mutated here.
     let wrapped = !matches!(
         base.dialect,
-        DialectId::OpenAiToolCalls | DialectId::MistralV11
+        DialectId::OpenAiToolCalls | DialectId::MistralV11 | DialectId::BareJson
     );
     let xml = base.form == Form::Xml;
     let json_form = !xml;
@@ -1234,6 +1239,9 @@ fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
     if base.dialect == DialectId::Harmony {
         harmony_mutations(base, &mut out);
     }
+    if base.dialect == DialectId::BareJson {
+        bare_mutations(base, &mut out);
+    }
     out
 }
 
@@ -1462,6 +1470,49 @@ fn harmony_mutations(base: &Base, out: &mut Vec<Mutant>) {
                 "<|start|>assistant<|channel|>commentary<|message|>to=functions.{name} {arguments}<|call|>"
             ),
             Need::DataLoss,
+        ),
+    ] {
+        out.push(mutant(category, variant, text, need));
+    }
+}
+
+/// Bare JSON: the call object among prose, in a `json` code fence, as the
+/// element of an array (with a second element that is not a call), with its
+/// members in the other order, and with a trailing id.
+fn bare_mutations(base: &Base, out: &mut Vec<Mutant>) {
+    let text = &base.text;
+    let name = json::quote(&base.call.name);
+    let arguments = base.arguments_text();
+    for (category, variant, text, need) in [
+        (
+            "canonical",
+            "in-prose",
+            format!("I'll look that up.\n{text}\nOne moment."),
+            Need::Exact,
+        ),
+        (
+            "canonical",
+            "array",
+            format!("[{text}, {{\"name\": \"note\", \"value\": 1}}]"),
+            Need::Exact,
+        ),
+        (
+            "canonical",
+            "arguments-first",
+            format!("{{\"arguments\": {arguments}, \"name\": {name}}}"),
+            Need::Exact,
+        ),
+        (
+            "canonical",
+            "trailing-id",
+            format!("{{\"name\": {name}, \"arguments\": {arguments}, \"id\": \"call_7\"}}"),
+            Need::Exact,
+        ),
+        (
+            "tool_call.context.fenced-example",
+            "json-fence",
+            format!("Calling it:\n```json\n{text}\n```\n"),
+            Need::Guess,
         ),
     ] {
         out.push(mutant(category, variant, text, need));
@@ -2201,7 +2252,15 @@ fn pair_mutations(first: &Base, second: &Base) -> Vec<Mutant> {
                 Need::Exact,
             ));
         }
-        if first.dialect != DialectId::MistralV11 {
+        if first.dialect == DialectId::BareJson {
+            // Two call objects as the elements of one array.
+            out.push(mutant(
+                "canonical",
+                "array-pair",
+                format!("[{},\n{}]", first.text, second.text),
+                Need::Exact,
+            ));
+        } else if first.dialect != DialectId::MistralV11 {
             let end = first.wrapper_end();
             out.push(mutant(
                 "tool_call.markup.missing-wrapper-close",
@@ -2245,7 +2304,7 @@ const fn policy_of(seed: u64) -> Policy {
     }
 }
 
-const ALL_DIALECTS: &str = "anthropic-tool-use.v1,deepseek-v3.1.v1,deepseek-v3.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1";
+const ALL_DIALECTS: &str = "anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1";
 
 /// The cases of every single-call mutation of `base`, appended to `cases`;
 /// with `under`, only those of categories with fewer than [`TARGET`] cases

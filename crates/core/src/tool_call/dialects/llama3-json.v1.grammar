@@ -20,11 +20,17 @@
 # so a missing final brace is inserted and a repeated one is absorbed. An
 # "id" member, which some fine-tunes add first or last, is read as the
 # call's source id (`optional-id`: a call without one omits nothing).
+# Without the tag, a {"name": ..., "parameters": ...} object is also the
+# shape of a pasted tool declaration: when the parameters value has a JSON
+# Schema's shape ("type": "object" and a "properties" object) and the
+# declared tool does not resolve it as written, the object is content, not
+# a call (`declaration-content`); after the tag it is always a call.
 # First-party grammar; see docs/tool-calls/dialects/llama3-json.v1.md for the
 # public sources and for what is deliberately not accepted.
 grammar "llama3-json.v1";
 
 optional-id;
+declaration-content;
 
 closer call-end = "}";
 

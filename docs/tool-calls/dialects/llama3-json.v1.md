@@ -117,7 +117,17 @@ than content.
 Without the tag, only `"parameters"` is evidence. The `{"name": ...,
 "arguments": ...}` objects inside Hermes calls and OpenAI `tool_calls`
 elements are never read a second time as Llama 3 calls, and a bare object
-with `"arguments"` is left to a dialect that owns that shape. A Llama 3 call
+with `"arguments"` is left to [`bare-json.v1`](bare-json.v1.md).
+
+A complete untagged object can still be a pasted tool declaration rather
+than a call: `{"name": "get_weather", "parameters": {"type": "object",
+"properties": {...}}}`. The grammar declares `declaration-content;`
+([GRAMMAR.md](../GRAMMAR.md#statements)): when the object begins the call
+(no `<|python_tag|>`) and its parameters value has a JSON Schema's shape (a
+`"type"` of `"object"` and a `"properties"` object), it is content unless
+the named tool is declared and resolves those arguments as written, with no
+guess and no loss. After `<|python_tag|>` the object is always a call
+(golden `llama3_python_tag_declaration_shaped_call`). A Llama 3 call
 inside another dialect's call (inside a Hermes wrapper, for example) is part
 of that call: the outer call holds its bytes.
 
@@ -146,7 +156,9 @@ whitespace is omitted.
 - Built-in tool calls in Python call syntax after `<|python_tag|>`, and code
   for the code interpreter: a rejected attempt, not reinterpreted.
 - The `"arguments"` key without `<|python_tag|>`; bare `{"name", "arguments"}`
-  objects belong to another shape.
+  objects are `bare-json.v1`'s.
+- An untagged object whose parameters are a JSON Schema the named tool does
+  not resolve as written: content (`declaration-content`).
 - Members other than `"type"`, `"name"` and `"parameters"` (or
   `"arguments"` after the tag), and a `"type"` other than `"function"` or
   anywhere but first.

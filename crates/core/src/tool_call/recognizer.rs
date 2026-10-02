@@ -295,6 +295,41 @@ impl Turn {
         Ok(u32::try_from(self.store.len() - 1).unwrap_or(u32::MAX))
     }
 
+    /// The scratch charged for the stored segments no segmentation ending
+    /// at `last` uses (a call another dialect's attempt covered, an
+    /// alternative that lost on cost): it is released when the turn is
+    /// built, since the recognized turn keeps only the segments its paths
+    /// reach. One `Work` unit per history node visited.
+    fn unused_bytes(&self, last: u32, governor: &mut Governor) -> Result<u64, StopReason> {
+        let _marks = governor.lease_scratch(size(self.nodes.len() + self.store.len()))?;
+        let mut seen = vec![false; self.nodes.len()];
+        let mut used = vec![false; self.store.len()];
+        let mut stack = vec![last];
+        while let Some(node) = stack.pop() {
+            if core::mem::replace(&mut seen[node as usize], true) {
+                continue;
+            }
+            governor.charge(Resource::Work, 1)?;
+            let TurnNode { prev, kind, .. } = self.nodes[node as usize];
+            match kind {
+                TurnKind::Root => {}
+                TurnKind::Pack(other) => stack.extend([prev, other]),
+                TurnKind::Content(_) => stack.push(prev),
+                TurnKind::Stored(index, _) => {
+                    used[index as usize] = true;
+                    stack.push(prev);
+                }
+            }
+        }
+        Ok(self
+            .store
+            .iter()
+            .zip(used)
+            .filter(|(_, used)| !used)
+            .map(|(segment, _)| segment_bytes(segment))
+            .fold(0, u64::saturating_add))
+    }
+
     /// The history of `top` with its content run closed at `at`.
     fn close(&mut self, top: Top, at: usize, governor: &mut Governor) -> Result<u32, StopReason> {
         if top.boundary < at {
@@ -754,6 +789,7 @@ impl<'s> Recognizer<'s> {
                     table,
                     attempt,
                     parts,
+                    charged,
                     ..
                 }) => {
                     let kind = self.engine.kind(table);
@@ -767,7 +803,7 @@ impl<'s> Recognizer<'s> {
                             (segment, cost)
                         })
                         .collect();
-                    self.completed(&mut frame, attempt, parts, governor)?;
+                    self.completed(&mut frame, attempt, parts, charged, governor)?;
                 }
                 Pending::Engine(Event::Ended {
                     table,
@@ -943,10 +979,14 @@ impl<'s> Recognizer<'s> {
         frame: &mut Frame,
         attempt: u64,
         parts: Vec<(Segment, u64)>,
+        charged: u64,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         let Some(interps) = self.turn.interps.get(&attempt).cloned() else {
-            return Ok(());
+            // An attempt with no interpretation (it began inside another
+            // attempt's committed span): its parts are dropped unread.
+            drop(parts);
+            return governor.release_scratch(charged);
         };
         let mut stored = Vec::with_capacity(parts.len());
         for (segment, cost) in parts {
@@ -1083,6 +1123,8 @@ impl<'s> Recognizer<'s> {
         };
         let pieces = builder.pieces(last, governor)?;
         let Builder { forest, .. } = builder;
+        let unused = self.turn.unused_bytes(last, governor)?;
+        governor.release_scratch(unused)?;
         Ok(RecognizedTurn {
             source,
             len: end,

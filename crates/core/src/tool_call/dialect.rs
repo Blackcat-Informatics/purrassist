@@ -27,12 +27,13 @@ use std::sync::{Arc, OnceLock};
 /// One dialect grammar the recognizer can run.
 ///
 /// The set of variants is closed, so the recognizer dispatches statically.
-/// Eleven dialects are built in, each a first-party grammar embedded in the
+/// Twelve dialects are built in, each a first-party grammar embedded in the
 /// crate (see `docs/tool-calls/dialects/` for each grammar's public sources
 /// and what it deliberately does not accept):
 ///
 /// | Variant | Versioned id | Shape |
 /// | --- | --- | --- |
+/// | [`DialectId::BareJson`] | `bare-json.v1` | an unwrapped `{"name": NAME, "arguments": {...}}` object, alone, in prose, fenced, or in an array |
 /// | [`DialectId::Qwen3CoderXml`] | `qwen3-coder-xml.v1` | `<tool_call><function=NAME><parameter=P>VALUE</parameter></function></tool_call>` |
 /// | [`DialectId::AnthropicToolUse`] | `anthropic-tool-use.v1` | `tool_use` content blocks `{"type": "tool_use", "id": ID, "name": NAME, "input": {...}}` |
 /// | [`DialectId::DeepSeekV31`] | `deepseek-v3.1.v1` | `<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>NAME<｜tool▁sep｜>{...}<｜tool▁call▁end｜>...<｜tool▁calls▁end｜>` |
@@ -100,6 +101,9 @@ pub enum DialectId {
     /// `openai-tool-calls.v1`: `OpenAI` chat-completions `tool_calls`
     /// elements as text (also the output and round-trip target).
     OpenAiToolCalls,
+    /// `bare-json.v1`: unwrapped JSON call objects, alone, in prose, in a
+    /// code fence, or in an array.
+    BareJson,
     /// A caller-compiled grammar.
     Custom(Arc<CompiledGrammar>),
 }
@@ -159,6 +163,10 @@ static MISTRAL_V3: BuiltIn = BuiltIn::new(
     "mistral-v3.v1",
     include_str!("dialects/mistral-v3.v1.grammar"),
 );
+static BARE_JSON: BuiltIn = BuiltIn::new(
+    "bare-json.v1",
+    include_str!("dialects/bare-json.v1.grammar"),
+);
 static OPENAI_TOOL_CALLS: BuiltIn = BuiltIn::new(
     "openai-tool-calls.v1",
     include_str!("dialects/openai-tool-calls.v1.grammar"),
@@ -174,6 +182,7 @@ impl DialectId {
     ///     ids,
     ///     [
     ///         "anthropic-tool-use.v1",
+    ///         "bare-json.v1",
     ///         "deepseek-v3.1.v1",
     ///         "deepseek-v3.v1",
     ///         "harmony.v1",
@@ -187,8 +196,9 @@ impl DialectId {
     ///     ]
     /// );
     /// ```
-    pub const BUILT_IN: [Self; 11] = [
+    pub const BUILT_IN: [Self; 12] = [
         Self::AnthropicToolUse,
+        Self::BareJson,
         Self::DeepSeekV31,
         Self::DeepSeekV3,
         Self::Harmony,
@@ -222,6 +232,7 @@ impl DialectId {
             Self::MistralV11 => Some(&MISTRAL_V11),
             Self::MistralV3 => Some(&MISTRAL_V3),
             Self::OpenAiToolCalls => Some(&OPENAI_TOOL_CALLS),
+            Self::BareJson => Some(&BARE_JSON),
             Self::Custom(_) => None,
         }
     }
@@ -266,6 +277,7 @@ impl DialectId {
             Self::MistralV11 => MISTRAL_V11.id,
             Self::MistralV3 => MISTRAL_V3.id,
             Self::OpenAiToolCalls => OPENAI_TOOL_CALLS.id,
+            Self::BareJson => BARE_JSON.id,
             Self::Custom(grammar) => grammar.id(),
         }
     }
@@ -307,6 +319,7 @@ impl DialectId {
             Self::MistralV11 => MISTRAL_V11.grammar(),
             Self::MistralV3 => MISTRAL_V3.grammar(),
             Self::OpenAiToolCalls => OPENAI_TOOL_CALLS.grammar(),
+            Self::BareJson => BARE_JSON.grammar(),
             Self::Custom(grammar) => grammar,
         }
     }
@@ -590,9 +603,9 @@ impl DialectSet {
     /// dialect's `call` production can open counts once for that dialect,
     /// so an opener two dialects share (`<tool_call>` in Qwen3-Coder XML
     /// and Hermes) counts twice, once per competing attempt. A dialect whose
-    /// attempts commit after their opener (`llama3-json.v1` and
-    /// `anthropic-tool-use.v1` open at `{` and commit on call-shaped
-    /// evidence) counts every opener, committed or not. It bounds the call attempts recovery can read or reject, and sizes the candidate
+    /// attempts commit after their opener (`llama3-json.v1`,
+    /// `anthropic-tool-use.v1` and `bare-json.v1` open at `{` and commit on
+    /// call-shaped evidence) counts every opener, committed or not. It bounds the call attempts recovery can read or reject, and sizes the candidate
     /// budget of [`ToolRecoveryRequest::sized_for`](super::ToolRecoveryRequest::sized_for).
     /// A pure, allocation-free scan; nothing is charged.
     ///
@@ -600,9 +613,9 @@ impl DialectSet {
     /// use purrassist_core::tool_call::DialectSet;
     /// let output = b"<tool_call>\n{\"name\": \"ls\", \"arguments\": {}}\n</tool_call>";
     /// // Qwen3-Coder XML and Hermes both open with `<tool_call>`; a Llama 3
-    /// // JSON and an Anthropic `tool_use` attempt may open at each of the
-    /// // two `{`.
-    /// assert_eq!(DialectSet::built_in().call_openers(output), 6);
+    /// // JSON, an Anthropic `tool_use` and a bare JSON attempt may open at
+    /// // each of the two `{`.
+    /// assert_eq!(DialectSet::built_in().call_openers(output), 8);
     /// assert_eq!(DialectSet::built_in().call_openers(b"no calls here"), 0);
     /// ```
     #[must_use]

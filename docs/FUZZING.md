@@ -197,9 +197,13 @@ targets' mutation tokens so mutation can create or move field boundaries).
   the renderer layout, no start prefix, a preamble, `<|end|>` for
   `<|call|>`, a missing end, `<|channel>`, a recipient without `functions.`
   or after `<|message|>`, trailing text, cut-off arguments, built-in browser
-  and python recipients, a tool message), and negative cases (including JSON content
-  that is not call-shaped, a bare `[TOOL_CALLS]`, and nested unterminated
-  call objects); the header bytes cycle through five
+  and python recipients, a tool message), bare JSON calls (alone, in prose,
+  in a fence, in an array, arguments first, a trailing id, stringified
+  arguments, a call object nested in another's arguments), and negative
+  cases (including JSON content that is not call-shaped, records with a
+  name, nameless and non-object arguments, a pasted declaration and a JSON
+  Schema as arguments, a bare `[TOOL_CALLS]`, and nested unterminated call
+  objects); the header bytes cycle through five
   fixed request configurations.
 
 ## Differential probes

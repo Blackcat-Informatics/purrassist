@@ -628,8 +628,9 @@ impl ToolRecoveryRequest {
     /// let output = b"<tool_call>\n{\"name\": \"ls\", \"arguments\": {}}\n</tool_call>";
     /// let request = ToolRecoveryRequest::sized(Effort::Standard, output);
     /// // Two `<tool_call>` openers (Qwen3-Coder XML and Hermes) and two `{`
-    /// // where a Llama 3 JSON and an Anthropic `tool_use` attempt may open.
-    /// assert_eq!(request.budget, ToolRecoveryRequest::sized_budget(Effort::Standard, output.len(), 6));
+    /// // where a Llama 3 JSON, an Anthropic `tool_use` and a bare JSON
+    /// // attempt may open.
+    /// assert_eq!(request.budget, ToolRecoveryRequest::sized_budget(Effort::Standard, output.len(), 8));
     /// assert_eq!(request.dialects.dialects(), DialectSet::built_in().dialects());
     /// ```
     #[must_use]

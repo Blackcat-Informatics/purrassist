@@ -214,7 +214,7 @@ struct DialectCase {
 }
 
 /// One case per entry of `DialectId::BUILT_IN` (checked by the test below).
-const DIALECT_CASES: [DialectCase; 11] = [
+const DIALECT_CASES: [DialectCase; 12] = [
     DialectCase {
         dialect: DialectId::AnthropicToolUse,
         anchor: "{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"Write the file, then read the notes.\",\"signature\":\"EqQB\"},{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"write_file\",\"input\":{\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}},{\"type\":\"tool_use\",\"id\":\"toolu_02\",\"name\":\"read_file\",\"input\":{\"path\": \"notes.txt\", \"limit\": 10}}]}",
@@ -222,6 +222,14 @@ const DIALECT_CASES: [DialectCase; 11] = [
         repair: "[{\"id\":\"toolu_03\",\"name\":\"read_file\",\"parameters\":{\"path\": \"src/lib.rs\", \"limit\": 40}},{\"type\":\"tool_use\",\"id\":\"toolu_04\",\"name\":\"get_weather\",\"arguments\":{\"city\": \"Oslo\", \"unit\": \"celsius\"}",
         repair_status: "resolved",
         repair_digest: "sha256:b0225eb611c3053900112f33c8fb9b2e1af217670b5b91ea2490331446926aa0",
+    },
+    DialectCase {
+        dialect: DialectId::BareJson,
+        anchor: "[{\"name\": \"write_file\", \"arguments\": {\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}}, {\"arguments\": {\"path\": \"notes.txt\", \"limit\": 10}, \"name\": \"read_file\", \"id\": \"call_r2\"}]",
+        anchor_digest: "sha256:9c28425e4112e5317f53ff14f6d61ecd8c308c4963a404051c839a1c4b786cd1",
+        repair: "Reading it now: {\"name\": \"read_file\", \"arguments\": {path: \"src/lib.rs\", \"limit\": 40,}} and {\"name\": \"get_weather\", \"arguments\": \"{\\\"city\\\": \\\"Oslo\\\", \\\"unit\\\": \\\"celsius\\\"}\"}.",
+        repair_status: "resolved",
+        repair_digest: "sha256:745bc8ca233511f808b04b6f3259b5ff7cd98083f4558207e4ea3328988961a3",
     },
     DialectCase {
         dialect: DialectId::DeepSeekV31,

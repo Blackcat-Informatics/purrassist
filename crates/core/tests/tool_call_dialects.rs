@@ -221,6 +221,7 @@ fn all_registered_dialects_have_anchor_fixtures() {
         ids,
         [
             "anthropic-tool-use.v1",
+            "bare-json.v1",
             "deepseek-v3.1.v1",
             "deepseek-v3.v1",
             "harmony.v1",
@@ -340,9 +341,9 @@ fn unescape(content: &str) -> String {
     node.as_str().expect("a string").to_owned()
 }
 
-/// A Llama 3 JSON or Mistral v3 call's span holds one JSON call object
-/// (after `<|python_tag|>`, or with the `[TOOL_CALLS]` array framing around
-/// it) whose name, id and arguments are the call's.
+/// A Llama 3 JSON, Mistral v3 or bare JSON call's span holds one JSON call
+/// object (after `<|python_tag|>`, with the `[TOOL_CALLS]` array framing
+/// around it, or alone) whose name, id and arguments are the call's.
 fn assert_json_call_object(dialect: &DialectId, raw: &str, call: &RawCall, file: &str) {
     let start = raw.find('{').expect("object start");
     let end = raw.rfind('}').expect("object end");
@@ -352,7 +353,7 @@ fn assert_json_call_object(dialect: &DialectId, raw: &str, call: &RawCall, file:
         call.name.as_ref().map(|name| name.value.as_str()),
         "{file}"
     );
-    if *dialect == DialectId::MistralV3 {
+    if matches!(dialect, DialectId::MistralV3 | DialectId::BareJson) {
         assert_eq!(
             string_member(&object, "id"),
             call.id.as_ref().map(|id| id.value.clone()),
@@ -529,7 +530,10 @@ fn ir_spans_slice_back_to_source() {
                             fixture.file
                         );
                     }
-                } else if matches!(dialect, DialectId::MistralV3 | DialectId::Llama3Json) {
+                } else if matches!(
+                    dialect,
+                    DialectId::MistralV3 | DialectId::Llama3Json | DialectId::BareJson
+                ) {
                     assert_json_call_object(&dialect, raw, call, &fixture.file);
                 } else {
                     assert!(raw.starts_with("<tool_call>"), "{}: {raw:?}", fixture.file);
@@ -676,6 +680,7 @@ fn reasoning_markers_are_declared() {
     assert_eq!(DialectId::OpenAiToolCalls.grammar().reasoning(), None);
     assert_eq!(DialectId::Llama3Json.grammar().reasoning(), None);
     assert_eq!(DialectId::MistralV3.grammar().reasoning(), None);
+    assert_eq!(DialectId::BareJson.grammar().reasoning(), None);
     assert_eq!(
         DialectId::MistralV11.grammar().reasoning(),
         Some((&b"[THINK]"[..], &b"[/THINK]"[..]))
@@ -886,6 +891,34 @@ fn harmony_result_production_reads_tool_messages() {
     );
 }
 
+/// Bare JSON tool results are complete `{"tool_call_id", "content"}`
+/// objects; any other JSON object stays content.
+#[test]
+fn bare_json_result_production_reads_result_objects() {
+    let tools = ToolSet::compile([], Budget::default()).expect("no tools");
+    let set = dialect_set(&[DialectId::BareJson]);
+    let source =
+        "{\"tool_call_id\": \"call_1\", \"content\": \"22 C\"} {\"tool_call_id\": \"call_2\"}";
+    let turn = recognize(&set, &tools, source);
+    let found = results(&turn);
+    assert_eq!(found.len(), 1, "{:#?}", turn.pieces());
+    assert_eq!(
+        found[0].capture_text(CaptureKind::Content, source.as_bytes()),
+        Some("\"22 C\"")
+    );
+    assert_eq!(
+        found[0].id.as_ref().map(|id| id.value.as_str()),
+        Some("call_1")
+    );
+    assert!(
+        turn.selected()
+            .iter()
+            .all(|segment| !matches!(segment, Segment::Rejected { .. })),
+        "{:#?}",
+        turn.pieces()
+    );
+}
+
 /// Kimi-K2 tool results are tool messages headed `## Return of ID`.
 #[test]
 fn kimi_result_production_reads_tool_messages() {
@@ -1013,6 +1046,22 @@ fn declaration_productions_match_tool_declarations() {
             assert!(found[0].arguments.root.equivalent(tool.schema_document()));
         }
     }
+    // Bare JSON function objects: name, description and parameters.
+    let set = declaration_reader(&DialectId::BareJson);
+    for fixture in fixtures(&DialectId::BareJson) {
+        for tool in fixture.tools.tools() {
+            let declaration = tool
+                .render_declaration(DeclarationForm::BareJson)
+                .expect("declaration");
+            assert!(declaration.starts_with("{\"name\":"), "{declaration}");
+            let turn = recognize(&set, &empty, &declaration);
+            let found = calls(&turn);
+            assert_eq!(found.len(), 1, "{declaration}");
+            assert_eq!(found[0].span, 0..declaration.len(), "{declaration}");
+            assert_eq!(found[0].name.as_ref().expect("name").value, tool.name());
+            assert!(found[0].arguments.root.equivalent(tool.schema_document()));
+        }
+    }
     // Harmony lists functions as TypeScript-like declarations, the schema
     // kept as JSON.
     let set = declaration_reader(&DialectId::Harmony);
@@ -1033,4 +1082,63 @@ fn declaration_productions_match_tool_declarations() {
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].span, 0..declaration.len());
     assert_eq!(found[0].name.as_ref().expect("name").value, "read_file");
+}
+
+/// The canonical single-call fixture of every built-in dialect, written one
+/// after another in one turn and recovered under the default allow-list
+/// (every built-in dialect): every call is `Resolved`, in order, read by
+/// its own dialect alone (single-dialect `candidate_dialects`), with no
+/// rejected attempt.
+#[test]
+fn every_canonical_fixture_in_one_mixed_turn() {
+    use purrassist_core::tool_call::{CallOutcome, ToolRecoveryRequest};
+    use purrassist_core::{Effort, Outcome};
+    let mut markup = String::new();
+    let mut expected = Vec::new();
+    for dialect in DialectId::BUILT_IN {
+        let fixture = fixtures(&dialect)
+            .into_iter()
+            .find(|fixture| {
+                fixture.file.ends_with("/single-call.json")
+                    || fixture.file.ends_with("/single-block.json")
+                    || fixture.file.ends_with("/single-element.json")
+            })
+            .unwrap_or_else(|| panic!("{}: a single-call fixture", dialect.id()));
+        assert_eq!(fixture.expected.len(), 1, "{}", fixture.file);
+        if !markup.is_empty() {
+            markup.push('\n');
+        }
+        markup.push_str(&fixture.markup);
+        expected.push((dialect, fixture.expected[0].name.clone()));
+    }
+    // One tool set declaring every fixture's tools (get_weather, read_file).
+    let tools = fixtures(&DialectId::BareJson)
+        .into_iter()
+        .find(|fixture| fixture.file.ends_with("/single-call.json"))
+        .expect("bare-json single call")
+        .tools;
+    let request = ToolRecoveryRequest::sized(Effort::Standard, markup.as_bytes());
+    assert_eq!(request.dialects.dialects(), DialectId::BUILT_IN);
+    let result = tools.recover(markup.as_bytes(), &request);
+    let Outcome::Resolved(calls) = &result.outcome else {
+        panic!("{:?}", result.outcome)
+    };
+    assert!(calls.rejected.is_empty(), "{:#?}", calls.rejected);
+    assert_eq!(calls.calls.len(), expected.len(), "{:#?}", calls.calls);
+    for (call, (dialect, name)) in calls.calls.iter().zip(&expected) {
+        assert_eq!(call.outcome, CallOutcome::Resolved, "{}", dialect.id());
+        assert_eq!(
+            call.tool.as_deref(),
+            Some(name.as_str()),
+            "{}",
+            dialect.id()
+        );
+        assert_eq!(&call.dialect, dialect);
+        assert_eq!(
+            call.candidate_dialects,
+            core::slice::from_ref(dialect),
+            "{}",
+            dialect.id()
+        );
+    }
 }

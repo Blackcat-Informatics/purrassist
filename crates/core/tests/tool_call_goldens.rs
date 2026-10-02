@@ -2714,3 +2714,79 @@ fn harmony_messages() {
         );
     }
 }
+
+/// Bare JSON: an unwrapped call object is recovered alone, in prose, in a
+/// fence (a guess), in an array, with its members in either order, with a
+/// trailing id and with stringified arguments; a call object inside
+/// another dialect's wrapper is that dialect's alone. JSON content that is
+/// not call-shaped (a record with a name, a nameless arguments object, a
+/// non-object arguments value, an extra member, an object cut short) and
+/// declaration-shaped objects (a pasted declaration, a JSON Schema as the
+/// arguments of a tool that does not take it, in bare JSON or untagged
+/// Llama 3 JSON) stay content: no call and no rejected attempt.
+#[test]
+fn bare_json_calls() {
+    for (name, count) in [
+        ("bare_json_whole_turn", 1),
+        ("bare_json_call_in_prose", 1),
+        ("bare_json_array_of_calls", 2),
+        ("bare_json_arguments_first_with_id", 1),
+        ("bare_json_stringified_arguments", 1),
+        ("bare_json_schema_for_schema_tool", 1),
+    ] {
+        let (_, result) = golden(name);
+        assert!(matches!(result.outcome, Outcome::Resolved(_)), "{name}");
+        let calls = reading(&result);
+        assert_eq!(calls.calls.len(), count, "{name}: {calls:#?}");
+        assert_eq!(calls.rejected.len(), 0, "{name}");
+        assert!(
+            calls
+                .calls
+                .iter()
+                .all(|call| call.outcome == CallOutcome::Resolved
+                    && call.candidate_dialects == [DialectId::BareJson]),
+            "{name}"
+        );
+    }
+    let (_, result) = golden("bare_json_call_in_prose");
+    assert_eq!(reading(&result).content.len(), 2);
+    let (_, result) = golden("bare_json_arguments_first_with_id");
+    assert_eq!(the_call(&result).id, "call_42");
+    assert_eq!(the_call(&result).source_id.as_deref(), Some("call_42"));
+    let (_, result) = golden("bare_json_stringified_arguments");
+    assert!(rules_of(the_call(&result)).contains(&"tool_call.arguments.decode-string"));
+    let (_, result) = golden("bare_json_fenced_call");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::BestGuess);
+    assert!(rules_of(call).contains(&"tool_call.context.fenced-example"));
+    let (_, result) = golden("bare_json_in_hermes_wrapper");
+    assert_eq!(the_call(&result).candidate_dialects, [DialectId::Hermes]);
+    for name in [
+        "bare_json_answer_object_with_name",
+        "bare_json_extra_member_is_content",
+        "bare_json_truncated_object_is_content",
+        "bare_json_schema_is_content",
+        "bare_json_pasted_declaration_is_content",
+        "llama3_declaration_is_content",
+    ] {
+        let (golden, result) = golden(name);
+        assert!(matches!(result.outcome, Outcome::Resolved(_)), "{name}");
+        let calls = reading(&result);
+        assert_eq!(
+            (calls.calls.len(), calls.rejected.len()),
+            (0, 0),
+            "{name}: {calls:#?}"
+        );
+        // Every byte is content.
+        let covered: usize = calls.content.iter().map(ExactSizeIterator::len).sum();
+        assert_eq!(covered, golden.input.len(), "{name}");
+    }
+    // After <|python_tag|> the object is a call whatever its arguments.
+    let (_, result) = golden("llama3_python_tag_declaration_shaped_call");
+    assert!(matches!(
+        the_call(&result).outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::MissingRequired { .. }
+        }
+    ));
+}

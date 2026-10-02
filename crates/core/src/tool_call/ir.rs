@@ -379,6 +379,13 @@ pub struct RawCall {
     pub edits: Vec<MarkupEdit>,
     /// The total edit cost of this reading.
     pub cost: u64,
+    /// Whether the call's first source byte is `{`: no opener token (a
+    /// tag, a special token, a wrapper) comes before its JSON object, so
+    /// the object's own members are the only evidence that it is a call.
+    /// A `declaration-content` grammar weighs such a call against the
+    /// declared tool when its arguments have a tool declaration's shape
+    /// ([`CompiledGrammar::declaration_content`](crate::grammar::CompiledGrammar::declaration_content)).
+    pub bare: bool,
 }
 
 impl RawCall {

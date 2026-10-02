@@ -67,12 +67,13 @@ Current surfaces include:
   lossless `OpenAI`/MCP/Anthropic declarations (Draft 2020-12 or Draft-07
   schemas), per-call outcomes with itemized repairs, conservative guards for
   mutating tools, and re-emission as any dialect or the `OpenAI` `tool_calls`
-  array. Eleven dialects ship: `qwen3-coder-xml.v1`, `hermes.v1`,
+  array. Twelve dialects ship: `qwen3-coder-xml.v1`, `hermes.v1`,
   `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`,
   `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`,
-  `anthropic-tool-use.v1`, and `harmony.v1`; callers add their own with the
-  grammar DSL. Streaming recognition, `purrassist-derive`, and the remaining
-  dialects (GLM, Gemma, Pythonic, bare JSON) are tracked in issue #4. See
+  `anthropic-tool-use.v1`, `harmony.v1`, and `bare-json.v1`; callers add
+  their own with the grammar DSL. Streaming recognition,
+  `purrassist-derive`, and the remaining dialects (GLM, Gemma, Pythonic) are
+  tracked in issue #4. See
   [tool-call recovery](docs/tool-calls/README.md).
 - CLI, stdio MCP, and resumable helper request/response adapters. No model is
   required, loaded, or contacted by default.

@@ -728,13 +728,13 @@ fn deterministic_pinned_digest() {
 }
 
 const PINNED_DIGEST: &str =
-    "sha256:da9e32777bfbdf98dabd4dd449d82ca9cd4f11f210765997d8405e181c972012";
+    "sha256:80681eecb7d439ec3ab1de173c80cbe6b921864a6eb5e97a8e10550ee828c886";
 const PINNED_PREFIX_DIGEST: &str =
-    "sha256:63d9924836636c5b80867357517d11fcbde1b3e6ca0a6eeddaa8629fd8737c6c";
+    "sha256:efcb72cfdbea97695ff49a0f580a4bb5eced710f776fb0cf1ff51a61b57c4cd9";
 const PINNED_AMBIGUOUS_DIGEST: &str =
-    "sha256:db83855f8c9484b6220094cac86c83e115e90e283a94a049a4a5fb837157a4d4";
+    "sha256:b0ec442ed3d534174c9402070053d645cbb2d670e0da8efda1acd539676950cf";
 const PINNED_PREFIX_AMBIGUOUS_DIGEST: &str =
-    "sha256:4fc8c6de6637c4ab209d56df3c75a14d03303b5722f5bf9b10f2e7f2d8760b06";
+    "sha256:c4f8f136dfc411dea4c12fbe8fb3cb938592c8e1a555fcfe36cd3f27593aeb77";
 
 #[test]
 fn invalid_utf8_is_loss_and_bytes_retained() {

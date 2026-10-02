@@ -58,7 +58,7 @@ use super::edit::{EditOperator, MarkupEdit};
 use super::repair::{RepairContext, RepairState, Status};
 use super::{CaptureKind, CompiledGrammar, Inst, Program, index_u32};
 use crate::contract::saturating_size as size;
-use crate::contract::{Governor, Resource, ScratchCharge, ScratchVec, StopReason};
+use crate::contract::{Governor, Resource, ScratchCharge, ScratchMeter, ScratchVec, StopReason};
 use crate::digest::Digest;
 use crate::pattern::{DerivativeDfa, DfaState};
 use crate::search::Ledger;
@@ -197,7 +197,16 @@ pub(crate) struct Arena {
     /// Live codec states, out of line so a configuration stays `Copy`
     /// whatever state a codec keeps; each body configuration owns its slot.
     codecs: Vec<Option<CodecState>>,
+    /// The scratch charged for `values`, `edits` and `codecs`, released by
+    /// [`Self::reset`] or, for what is still held, when the arena drops.
     charged: u64,
+    meter: ScratchMeter,
+}
+
+impl Drop for Arena {
+    fn drop(&mut self) {
+        let _ = self.meter.release(self.charged);
+    }
 }
 
 /// Scratch bytes charged per codec slot (a codec charges any further heap
@@ -218,6 +227,7 @@ impl Arena {
             edits: Vec::new(),
             codecs: Vec::new(),
             charged: 0,
+            meter: governor.scratch_meter(),
         })
     }
 
@@ -1179,7 +1189,9 @@ impl<'s> Step<'_, 's> {
         } else {
             Closure::Closed
         };
+        let bare = !span.is_empty() && self.bytes(span.start..span.start + 1) == b"{";
         Ok(Ok(RawCall {
+            bare,
             span,
             dialect: shape.dialect.clone(),
             kind: shape.kind,
@@ -1461,12 +1473,15 @@ pub(crate) enum Event {
     },
     /// Attempt `attempt` matched `parts` (one call segment, or one per
     /// call of a production with `next`, each with its cost), ending at
-    /// `at`.
+    /// `at`. `charged` is the scratch materializing `parts` charged (zero
+    /// when one completion has several segmentations): the turn level
+    /// releases it when it drops the parts unused.
     Completed {
         table: u32,
         attempt: u64,
         at: usize,
         parts: Parts,
+        charged: u64,
     },
     /// Attempt `attempt` has no configuration left at `at`.
     Ended {
@@ -2515,7 +2530,14 @@ impl<'s> Engine<'s> {
             open_end,
             cost: thread.cost,
         };
+        let before = governor.scratch_meter().total_charged();
         let segmentations = step.segment(thread.hist, &shape, governor)?;
+        // Materializing charges only retained scratch (no lease), so the
+        // growth of the cumulative total is what the parts hold.
+        let charged = governor
+            .scratch_meter()
+            .total_charged()
+            .saturating_sub(before);
         let attempts = self.tables[table].attempts.as_mut_slice();
         let record = attempts
             .iter_mut()
@@ -2525,6 +2547,7 @@ impl<'s> Engine<'s> {
             Ok(segmentations) => {
                 record.completed = true;
                 let grouped = self.tables[table].program.grouped;
+                let charged = if segmentations.len() == 1 { charged } else { 0 };
                 for parts in segmentations {
                     governor.charge(Resource::Work, super::cost::K_EVENT)?;
                     let event = Event::Completed {
@@ -2532,6 +2555,7 @@ impl<'s> Engine<'s> {
                         attempt: thread.attempt,
                         at: thread.pos,
                         parts,
+                        charged,
                     };
                     if grouped {
                         let (costs, arguments) = match &event {

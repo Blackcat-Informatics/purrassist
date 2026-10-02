@@ -4,7 +4,8 @@
 //! Argument codecs through the recognizer: the `xml-params` codec (D9
 //! framing, verbatim strings, typed values, declared-parameter boundaries,
 //! nesting, whole-JSON bodies, repeats), the `json` codec (exact spellings,
-//! stringified arguments), malformed UTF-8 as unresolved arguments, and
+//! stringified arguments), the `json-args` codec (arguments values only),
+//! malformed UTF-8 as unresolved arguments, and
 //! chunking invariance of values and governor usage.
 use purrassist_core::contract::{Resource, Usage};
 use purrassist_core::grammar::Grammar;
@@ -121,9 +122,41 @@ fn codecs_are_registered_in_the_dsl() {
         CodecKind::from_name("xml-params"),
         Some(CodecKind::XmlParams)
     );
-    assert_eq!(CodecKind::ALL.len(), 3);
+    assert_eq!(CodecKind::from_name("json-args"), Some(CodecKind::JsonArgs));
+    assert_eq!(CodecKind::ALL.len(), 4);
     for kind in CodecKind::ALL {
         assert_eq!(CodecKind::from_name(kind.name()), Some(kind));
+    }
+}
+
+/// The `json-args` codec reads an object, or a string that is empty or
+/// holds stringified arguments; any other value faults at its first byte,
+/// so the attempt is rejected (or, uncommitted, stays content).
+#[test]
+fn json_args_reads_only_arguments_values() {
+    let set = set(
+        r#"grammar "args.v1"; call = "<c>" name:"write" " " arguments:slot(json-args, "</c>") "</c>"; result = "<r>"; declaration = "<d>";"#,
+    );
+    for (input, expected) in [
+        (r#"<c>write {"count": 3}</c>"#, Some(r#"{"count":3}"#)),
+        (r#"<c>write  {"count": 3}</c>"#, Some(r#"{"count":3}"#)),
+        (r#"<c>write "{\"count\": 3}"</c>"#, Some(r#"{"count":3}"#)),
+        (r#"<c>write " {\"count\": 3}"</c>"#, Some(r#"{"count":3}"#)),
+        (r#"<c>write ""</c>"#, Some("{}")),
+        ("<c>write 3</c>", None),
+        ("<c>write [1]</c>", None),
+        ("<c>write null</c>", None),
+        (r#"<c>write "prose"</c>"#, None),
+    ] {
+        let (turn, _) = recognize(&set, input.as_bytes());
+        match expected {
+            Some(json) => assert_eq!(one_call(&turn).arguments.root.to_json(), json, "{input}"),
+            None => assert!(
+                matches!(rejected(&turn), Some(Rejection::Malformed { .. })),
+                "{input}: {:#?}",
+                turn.pieces()
+            ),
+        }
     }
 }
 

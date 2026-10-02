@@ -81,13 +81,20 @@ pub enum CodecKind {
     Raw,
     /// One tolerant JSON value (see [`JsonCodec`]).
     Json,
+    /// One tolerant JSON value that must be an arguments value: an object,
+    /// or a string that is empty or holds stringified arguments (its text
+    /// begins with `{` after spaces). A value beginning any other way
+    /// faults at that byte, so a grammar without other evidence that its
+    /// text is a call does not read `{"name": ..., "arguments": 3}` or
+    /// `{"name": ..., "arguments": "prose"}` as one.
+    JsonArgs,
     /// XML parameter elements (see [`XmlParamsCodec`]).
     XmlParams,
 }
 
 impl CodecKind {
     /// Every codec, in declaration order.
-    pub const ALL: [Self; 3] = [Self::Raw, Self::Json, Self::XmlParams];
+    pub const ALL: [Self; 4] = [Self::Raw, Self::Json, Self::JsonArgs, Self::XmlParams];
 
     /// The slot name this codec is registered under.
     ///
@@ -101,6 +108,7 @@ impl CodecKind {
         match self {
             Self::Raw => "raw",
             Self::Json => "json",
+            Self::JsonArgs => "json-args",
             Self::XmlParams => "xml-params",
         }
     }
@@ -118,6 +126,7 @@ impl CodecKind {
         match name {
             "raw" => Some(Self::Raw),
             "json" => Some(Self::Json),
+            "json-args" => Some(Self::JsonArgs),
             "xml-params" => Some(Self::XmlParams),
             _ => None,
         }
@@ -137,6 +146,7 @@ impl CodecKind {
         Ok(match self {
             Self::Raw => CodecState::Raw(RawCodec::begin(at, governor)?),
             Self::Json => CodecState::Json(Box::new(JsonCodec::begin(at, governor)?)),
+            Self::JsonArgs => CodecState::Json(Box::new(JsonCodec::begin_arguments(at, governor)?)),
             Self::XmlParams => CodecState::XmlParams(XmlParamsCodec::begin(at, governor)?),
         })
     }
@@ -395,6 +405,7 @@ impl CodecState {
     pub(crate) const fn kind(&self) -> CodecKind {
         match self {
             Self::Raw(_) => CodecKind::Raw,
+            Self::Json(codec) if codec.arguments_only() => CodecKind::JsonArgs,
             Self::Json(_) => CodecKind::Json,
             Self::XmlParams(_) => CodecKind::XmlParams,
         }

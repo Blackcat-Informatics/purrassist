@@ -859,10 +859,12 @@ impl Fill for Canonical<'_> {
                     .map(str::to_owned)
                     .ok_or_else(|| Self::missing(CaptureKind::Arguments))
             }
-            (Some(CaptureKind::ParamValue), CodecKind::Json) => Ok(guard_json(
-                self.member()?.value.to_json(),
-                printer.grammar.delimiters(delimiters),
-            )),
+            (Some(CaptureKind::ParamValue), CodecKind::Json | CodecKind::JsonArgs) => {
+                Ok(guard_json(
+                    self.member()?.value.to_json(),
+                    printer.grammar.delimiters(delimiters),
+                ))
+            }
             (Some(CaptureKind::ParamValue), CodecKind::Raw) => {
                 let value = &self.member()?.value;
                 match &value.value {

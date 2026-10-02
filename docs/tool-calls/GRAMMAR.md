@@ -19,7 +19,7 @@ into a `CompiledGrammar`. One compiled grammar serves three purposes:
   choices to print well-formed calls for given argument shapes, for tests and
   corpora.
 
-The eleven built-in dialects are written in this DSL:
+The twelve built-in dialects are written in this DSL:
 [`qwen3-coder-xml.v1`](../../crates/core/src/tool_call/dialects/qwen3-coder-xml.v1.grammar),
 [`hermes.v1`](../../crates/core/src/tool_call/dialects/hermes.v1.grammar),
 [`openai-tool-calls.v1`](../../crates/core/src/tool_call/dialects/openai-tool-calls.v1.grammar),
@@ -29,8 +29,9 @@ The eleven built-in dialects are written in this DSL:
 [`deepseek-v3.1.v1`](../../crates/core/src/tool_call/dialects/deepseek-v3.1.v1.grammar),
 [`deepseek-v3.v1`](../../crates/core/src/tool_call/dialects/deepseek-v3.v1.grammar),
 [`kimi-k2.v1`](../../crates/core/src/tool_call/dialects/kimi-k2.v1.grammar),
-[`anthropic-tool-use.v1`](../../crates/core/src/tool_call/dialects/anthropic-tool-use.v1.grammar), and
-[`harmony.v1`](../../crates/core/src/tool_call/dialects/harmony.v1.grammar).
+[`anthropic-tool-use.v1`](../../crates/core/src/tool_call/dialects/anthropic-tool-use.v1.grammar),
+[`harmony.v1`](../../crates/core/src/tool_call/dialects/harmony.v1.grammar), and
+[`bare-json.v1`](../../crates/core/src/tool_call/dialects/bare-json.v1.grammar).
 A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 [Add a custom dialect](#add-a-custom-dialect).
 
@@ -40,9 +41,10 @@ A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 - `#` starts a comment that runs to the end of the line. Whitespace between
   tokens is insignificant.
 - Identifiers match `[A-Za-z_][A-Za-z0-9_-]*`. Productions and closer classes
-  share one namespace. The keywords `grammar`, `optional-id`, `reasoning`,
-  `confusable`, `closer`, `layout`, `until`, `slot`, `commit`, `next`, and
-  `insert` cannot name a production or a closer.
+  share one namespace. The keywords `grammar`, `optional-id`,
+  `declaration-content`, `reasoning`, `confusable`, `closer`, `layout`,
+  `until`, `slot`, `commit`, `next`, and `insert` cannot name a production or
+  a closer.
 - String literals are double-quoted byte strings with the escapes `\\`, `\"`,
   `\n`, `\r`, `\t`, `\xHH` (one byte), and `\u{HEX}` (one Unicode scalar
   value, encoded as UTF-8). Every literal, delimiter, spelling, and marker is
@@ -59,6 +61,7 @@ A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 | `confusable "CANONICAL" "VARIANT";` | `VARIANT` is a confusable spelling of `CANONICAL` inside any literal. |
 | `closer NAME = "S1" \| "S2" ...;` | A closer class: `S1` is canonical, the rest are variant spellings. One spelling is allowed. |
 | `optional-id;` | The call's `id:` capture reads an id a model may add, but the format does not provide for one: a call without an id is numbered without a `tool_call.id.dedup` inference, and printing writes no id (`CompiledGrammar::call_carries_ids` is false). The built-in Hermes and Llama 3 JSON dialects declare it. A second statement is `DuplicateName`. |
+| `declaration-content;` | A call whose source begins with its JSON object (`{`, no opener token before it) and whose arguments as written have the shape of a tool declaration's parameters schema (an object whose `"type"` is `"object"` and whose `"properties"` is an object) is content, not a call, unless the named tool is declared and resolves those arguments with no guess and no loss (`CallOutcome::Resolved`): a JSON Schema or tool declaration pasted as an answer is not a call to the tool it describes (`CompiledGrammar::declaration_content`). The built-in Llama 3 JSON and bare JSON dialects declare it; after Llama 3's `<\|python_tag\|>` the object is always a call. A second statement is `DuplicateName`. |
 | `layout NAME "TEXT";` | Printing only: the class production `NAME` prints as `TEXT` wherever it occurs uncaptured, optional occurrences included. Recognition is unchanged. |
 | `NAME = EXPR;` | A production. |
 
@@ -292,6 +295,7 @@ block. Under `ReasoningPolicy::AsContent` the markers are plain content.
 | --- | --- |
 | `raw` | The verbatim body as one UTF-8 string leaf. Malformed UTF-8 rejects the attempt, except a character cut off by a length stop. It records no edits. A `raw` value is always a string: a parameter declared as an integer, number, boolean, array, or object read through `raw` fails validation (`UnresolvedReason::SchemaValidation`), because no rule coerces a string into a typed value. |
 | `json` | One JSON value read by the push-based tolerant JSON parser: exact number spellings, each repair recorded with its `json.syntax.*` rule. Self-delimiting. A whole arguments value that is a JSON string holding JSON is decoded as stringified arguments and flagged (`tool_call.arguments.decode-string`). Under a length stop, a value that is already complete at the cut (only whitespace after it) ends there, as at a delimiter, when the production completes from the slot with no further input: a call that ends with its arguments value is then complete, not cut off. |
+| `json-args` | The `json` codec for an arguments value: the value must be an object, or a string that is empty or whose text begins with `{` after spaces (stringified arguments). Any other value (a number, an array, `null`, prose in a string) faults at its first byte, rejecting a committed attempt and leaving an uncommitted one as content, so a grammar whose only call evidence is the object itself (`bare-json.v1`) never reads `{"name": "pi", "arguments": 3}` as a call. |
 | `xml-params` | A sequence of `<parameter=NAME>value</parameter>` elements, typed by the declared tool the call names: verbatim strings with one framing newline consumed on each side, typed values parsed as JSON, nested parameter elements for object parameters, a whole-JSON body, and the `</parameters>` variant. See [the Qwen3-Coder XML dialect](dialects/qwen3-coder-xml.v1.md) for every reading. |
 
 A codec may depend on the call's tool. When the recognizer is given the tool
@@ -349,7 +353,7 @@ offset in the grammar source (`GrammarError::offset`).
 | `UnknownName` | A reference to an undefined production or closer. |
 | `Recursive` | A production that refers to itself, directly or indirectly. |
 | `UnknownCapture` | A capture kind that is not one of the eight above. |
-| `UnknownCodec` | A slot naming a codec other than `raw`, `json`, or `xml-params`. |
+| `UnknownCodec` | A slot naming a codec other than `raw`, `json`, `json-args`, or `xml-params`. |
 | `InvalidClass` | A class pattern that is malformed, needs backtracking, or matches the empty string. |
 | `MissingProduction` | `call`, `result`, or `declaration` is missing. |
 | `InvalidOpener` | `call` or `result` does not begin with a literal opener, or matches the empty string. |

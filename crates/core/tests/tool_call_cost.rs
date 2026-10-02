@@ -197,6 +197,10 @@ fn harmony(content: &str) -> String {
     )
 }
 
+fn bare(content: &str) -> String {
+    format!("{{\"name\": \"write\", \"arguments\": {{\"content\": \"{content}\"}}}}")
+}
+
 fn kimi(content: &str) -> String {
     format!(
         "<|tool_calls_section_begin|><|tool_call_begin|>functions.write:0<|tool_call_argument_begin|>{{\"content\": \"{content}\"}}<|tool_call_end|><|tool_calls_section_end|>"
@@ -260,6 +264,7 @@ fn one_mib_argument_work_bound() {
         ("kimi", kimi),
         ("anthropic", anthropic),
         ("harmony", harmony),
+        ("bare", bare),
     ] {
         let mut measured = Vec::new();
         for size in [1 << 16, 1 << 20] {
@@ -301,7 +306,7 @@ fn one_mib_argument_work_bound() {
 /// `Effort::Maximum` preset and under `ToolRecoveryRequest::sized` for every
 /// effort from `Quick` to `Maximum`, with identical charges in every case
 /// and peak scratch at most 16 bytes per input byte for Qwen3-Coder XML,
-/// Hermes, Llama 3 JSON, Mistral v3, Mistral v11, DeepSeek-V3.1, DeepSeek-V3, Kimi-K2, Anthropic and Harmony arguments (`docs/RESOURCES.md` quotes these
+/// Hermes, Llama 3 JSON, Mistral v3, Mistral v11, DeepSeek-V3.1, DeepSeek-V3, Kimi-K2, Anthropic, Harmony and bare JSON arguments (`docs/RESOURCES.md` quotes these
 /// measurements). `OpenAI`
 /// stringified arguments decode their escaped string again, so they are
 /// held to `RECOVER_SCRATCH_PER_BYTE` instead, under `sized` budgets.
@@ -320,6 +325,7 @@ fn one_mib_argument_fits_published_budget() {
         ("kimi", kimi(&content), true),
         ("anthropic", anthropic(&content), true),
         ("harmony", harmony(&content), true),
+        ("bare", bare(&content), true),
         ("openai", openai(&content), false),
     ] {
         let len = input.len();
@@ -420,6 +426,7 @@ fn work_independent_of_dialect_count_beyond_bound() {
         kimi(&content),
         anthropic(&content),
         harmony(&content),
+        bare(&content),
     ] {
         let n = input.len() as u64;
         let mut previous: Option<(u64, Vec<DialectId>)> = None;
@@ -435,6 +442,7 @@ fn work_independent_of_dialect_count_beyond_bound() {
             DialectId::KimiK2,
             DialectId::AnthropicToolUse,
             DialectId::Harmony,
+            DialectId::BareJson,
         ];
         for count in 1..=order.len() {
             let dialects = order[..count].to_vec();

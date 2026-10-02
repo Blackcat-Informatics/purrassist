@@ -436,6 +436,24 @@ fn read_declaration(dialect: &DialectId, rendered: &str) -> (String, Option<Stri
     (read.name.as_ref().expect("name").value.clone(), captured)
 }
 
+/// What a declaration form renders for a tool declared without a
+/// parameters schema: nothing, or the empty object schema for the forms
+/// that require one.
+const fn absent_schema(form: DeclarationForm) -> &'static str {
+    match form {
+        DeclarationForm::OpenAi
+        | DeclarationForm::Hermes
+        | DeclarationForm::Llama3Json
+        | DeclarationForm::MistralV3
+        | DeclarationForm::MistralV11
+        | DeclarationForm::DeepSeekV3
+        | DeclarationForm::KimiK2
+        | DeclarationForm::Harmony
+        | DeclarationForm::BareJson => "",
+        _ => r#"{"type":"object"}"#,
+    }
+}
+
 #[test]
 fn declaration_forms_render_every_tool() {
     let builder = ToolSet::compile(
@@ -480,17 +498,7 @@ fn declaration_forms_render_every_tool() {
                     assert_eq!(rendered, declaration.text(), "byte-exact source form");
                     continue;
                 }
-                let schema = parameters.unwrap_or(match form {
-                    DeclarationForm::OpenAi
-                    | DeclarationForm::Hermes
-                    | DeclarationForm::Llama3Json
-                    | DeclarationForm::MistralV3
-                    | DeclarationForm::MistralV11
-                    | DeclarationForm::DeepSeekV3
-                    | DeclarationForm::KimiK2
-                    | DeclarationForm::Harmony => "",
-                    _ => r#"{"type":"object"}"#,
-                });
+                let schema = parameters.unwrap_or_else(|| absent_schema(form));
                 assert!(
                     rendered.contains(schema),
                     "{} {form:?}: {rendered}",
@@ -608,7 +616,10 @@ fn tool_results_roundtrip() {
                 .unwrap_or_default();
             if matches!(
                 dialect,
-                DialectId::OpenAiToolCalls | DialectId::MistralV3 | DialectId::AnthropicToolUse
+                DialectId::OpenAiToolCalls
+                    | DialectId::MistralV3
+                    | DialectId::AnthropicToolUse
+                    | DialectId::BareJson
             ) {
                 // A tool message's string content is a JSON string, and it
                 // names the call it answers.

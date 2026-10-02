@@ -777,3 +777,56 @@ fn harmony_recovers_and_emits_via_cli() {
     );
     fs::remove_file(tools).unwrap();
 }
+
+/// Bare JSON with no `--dialect`: an unwrapped call object in prose is the
+/// call and the prose content, a JSON record with a name stays content, and
+/// a Hermes call emitted as `bare-json.v1` recovers to the same call.
+#[test]
+fn bare_json_recovers_and_emits_via_cli() {
+    let turn =
+        "Listing it now.\n{\"name\": \"list_dir\", \"arguments\": {\"path\": \"src\"}}\nDone.";
+    let (output, tools) = run(&[], turn.as_bytes());
+    assert_eq!(output.status.code(), Some(0));
+    let node = result(&output);
+    assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+    assert_eq!(
+        node.pointer("/value/calls/0/dialect")
+            .and_then(Node::as_str),
+        Some("bare-json.v1")
+    );
+    assert_eq!(
+        node.pointer("/value/calls/0/arguments").unwrap().to_json(),
+        r#"{"path":"src"}"#
+    );
+    fs::remove_file(tools).unwrap();
+    let (output, tools) = run(&[], br#"Record: {"name": "Ada", "born": 1815}"#);
+    let node = result(&output);
+    assert_eq!(
+        node.pointer("/value/finish").and_then(Node::as_str),
+        Some("content_only")
+    );
+    fs::remove_file(tools).unwrap();
+    let hermes =
+        b"<tool_call>\n{\"name\": \"list_dir\", \"arguments\": {\"path\": \"src\"}}\n</tool_call>";
+    let (output, tools) = run(&["--emit", "bare-json.v1"], hermes);
+    let node = result(&output);
+    let emitted = node
+        .pointer("/value/emitted/output/text")
+        .and_then(Node::as_str)
+        .expect("emitted markup")
+        .to_owned();
+    assert_eq!(
+        emitted,
+        "{\"name\":\"list_dir\",\"arguments\":{\"path\":\"src\"}}"
+    );
+    fs::remove_file(tools).unwrap();
+    let (output, tools) = run(&[], emitted.as_bytes());
+    let node = result(&output);
+    assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+    assert_eq!(
+        node.pointer("/value/calls/0/dialect")
+            .and_then(Node::as_str),
+        Some("bare-json.v1")
+    );
+    fs::remove_file(tools).unwrap();
+}

@@ -96,6 +96,23 @@ pub struct JsonCodec {
     /// The parser stopped on unrecoverable syntax: later bytes are only
     /// consumed.
     stalled: bool,
+    /// What is still checked of the value's leading bytes.
+    lead: Lead,
+}
+
+/// The leading-byte check of the `json-args` codec ([`CodecKind::JsonArgs`]):
+/// the value must be an object, or a string that is empty or begins with
+/// `{` (stringified arguments).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Lead {
+    /// The `json` codec: any value.
+    Any,
+    /// `json-args`, before the value's first byte.
+    Value,
+    /// `json-args`, after the value's opening `"`.
+    Quoted,
+    /// `json-args`, the value's leading bytes were checked.
+    Checked,
 }
 
 /// A JSON value decoded from a byte range.
@@ -112,6 +129,44 @@ pub(super) enum Decoded {
     Fault(ArgumentFault),
 }
 
+impl JsonCodec {
+    /// The `json-args` codec ([`CodecKind::JsonArgs`]): like
+    /// [`Codec::begin`], but the value must be an object, or a string that
+    /// is empty or whose text begins with `{` after spaces (stringified
+    /// arguments); any other leading byte faults ([`CodecFault::Malformed`]).
+    ///
+    /// # Errors
+    /// As [`Codec::begin`].
+    ///
+    /// ```
+    /// use purrassist_core::grammar::codec::{Codec, CodecFault, CodecStep, JsonCodec};
+    /// use purrassist_core::{Budget, Governor};
+    /// let mut governor = Governor::new(Budget::default());
+    /// let mut codec = JsonCodec::begin_arguments(0, &mut governor)?;
+    /// assert_eq!(codec.feed(b' ', 0, &mut governor)?, CodecStep::Consumed);
+    /// assert_eq!(codec.feed(b'3', 1, &mut governor)?, CodecStep::Fault(CodecFault::Malformed { at: 1 }));
+    /// // A string must hold stringified arguments.
+    /// let mut prose = JsonCodec::begin_arguments(0, &mut governor)?;
+    /// assert_eq!(prose.feed(b'"', 0, &mut governor)?, CodecStep::Consumed);
+    /// assert_eq!(prose.feed(b'h', 1, &mut governor)?, CodecStep::Fault(CodecFault::Malformed { at: 1 }));
+    /// let mut stringified = JsonCodec::begin_arguments(0, &mut governor)?;
+    /// assert_eq!(stringified.feed(b'"', 0, &mut governor)?, CodecStep::Consumed);
+    /// assert_eq!(stringified.feed(b'{', 1, &mut governor)?, CodecStep::Consumed);
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    pub fn begin_arguments(at: usize, governor: &mut Governor) -> Result<Self, StopReason> {
+        let mut codec = <Self as Codec>::begin(at, governor)?;
+        codec.lead = Lead::Value;
+        Ok(codec)
+    }
+
+    /// Whether this is the `json-args` codec.
+    #[must_use]
+    pub const fn arguments_only(&self) -> bool {
+        !matches!(self.lead, Lead::Any)
+    }
+}
+
 impl Codec for JsonCodec {
     const KIND: CodecKind = CodecKind::Json;
 
@@ -123,6 +178,7 @@ impl Codec for JsonCodec {
             parser: IncrementalRecovery::starting_at(at, governor),
             fault: None,
             stalled: false,
+            lead: Lead::Any,
         })
     }
 
@@ -134,6 +190,19 @@ impl Codec for JsonCodec {
     ) -> Result<CodecStep, StopReason> {
         if self.stalled {
             return Ok(CodecStep::Consumed);
+        }
+        match self.lead {
+            Lead::Any | Lead::Checked => {}
+            // The string's first character: a stringified object (after
+            // spaces), or the closing quote of an empty string.
+            Lead::Quoted if byte == b' ' => {}
+            Lead::Quoted if matches!(byte, b'{' | b'"') => self.lead = Lead::Checked,
+            Lead::Value if byte.is_ascii_whitespace() => {}
+            Lead::Value if byte == b'{' => self.lead = Lead::Checked,
+            Lead::Value if byte == b'"' => self.lead = Lead::Quoted,
+            Lead::Quoted | Lead::Value => {
+                return Ok(CodecStep::Fault(CodecFault::Malformed { at }));
+            }
         }
         // The bytes handed to the parser in this step: a malformed sequence
         // is replaced, byte for byte, by `?`, so the parser can still find

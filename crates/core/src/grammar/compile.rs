@@ -901,6 +901,7 @@ struct Declared<'d> {
     bodies: Vec<(String, &'d PExpr)>,
     layouts: Vec<(&'d str, &'d [u8], usize)>,
     optional_id: bool,
+    declaration_content: bool,
 }
 
 fn declare<'d>(
@@ -913,6 +914,7 @@ fn declare<'d>(
         bodies: Vec::new(),
         layouts: Vec::new(),
         optional_id: false,
+        declaration_content: false,
     };
     let duplicate = |offset: usize, name: &str| GrammarError::DuplicateName {
         offset,
@@ -932,6 +934,12 @@ fn declare<'d>(
                     return Err(duplicate(*at, "optional-id"));
                 }
                 declared.optional_id = true;
+            }
+            Statement::DeclarationContent { at } => {
+                if declared.declaration_content {
+                    return Err(duplicate(*at, "declaration-content"));
+                }
+                declared.declaration_content = true;
             }
             Statement::Layout { name, text, at } => {
                 declared.layouts.push((name.as_str(), text.as_slice(), *at));
@@ -1087,6 +1095,7 @@ pub(crate) fn compile(
         bodies,
         layouts: declared_layouts,
         optional_id,
+        declaration_content,
     } = declare(&mut builder, &document.statements)?;
     let mut productions = Vec::with_capacity(bodies.len());
     for (name, expr) in bodies {
@@ -1159,6 +1168,7 @@ pub(crate) fn compile(
         productions,
         call,
         call_ids,
+        declaration_content,
         result,
         declaration,
         reasoning,

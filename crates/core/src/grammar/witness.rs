@@ -717,7 +717,7 @@ impl Fill for Seeded<'_> {
         capture: Option<CaptureKind>,
     ) -> Result<String, WitnessError> {
         match (capture, codec) {
-            (Some(CaptureKind::Arguments), CodecKind::Json) => {
+            (Some(CaptureKind::Arguments), CodecKind::Json | CodecKind::JsonArgs) => {
                 let object = self
                     .plan()
                     .expected(Carrier {
@@ -736,7 +736,7 @@ impl Fill for Seeded<'_> {
                 let value = occurrence_value(parameter, occurrence);
                 Ok(raw_text(value, &parameter.shape.value))
             }
-            (Some(CaptureKind::ParamValue), CodecKind::Json) => {
+            (Some(CaptureKind::ParamValue), CodecKind::Json | CodecKind::JsonArgs) => {
                 let (parameter, occurrence) = self.current()?;
                 Ok(occurrence_value(parameter, occurrence).to_json())
             }

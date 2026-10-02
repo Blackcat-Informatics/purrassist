@@ -40,10 +40,11 @@ computational engines remain wasmable.
   definitions or lossless `OpenAI`, MCP, and Anthropic declarations, whose
   exact parameters schemas are validated under Draft 2020-12 or Draft-07 (the
   dialect MCP servers commonly declare). Dialects are weighted, invertible
-  grammars in a first-party DSL; eleven ship (`qwen3-coder-xml.v1`,
+  grammars in a first-party DSL; twelve ship (`qwen3-coder-xml.v1`,
   `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`,
   `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`,
-  `anthropic-tool-use.v1`, `harmony.v1`) and callers compile their own. A
+  `anthropic-tool-use.v1`, `harmony.v1`, `bare-json.v1`) and callers compile
+  their own. A
   best-first search repairs call markup with named, costed rules; each call
   is resolved against its tool with a per-call outcome, itemized repairs,
   markup/data losses, ranked alternatives, and caller-chosen ids. Effects
@@ -54,7 +55,7 @@ computational engines remain wasmable.
   published linear cost bound, and exposed through Rust, CLI
   (`recover-tool-calls`), and MCP (`recover_tool_calls`). Streaming
   recognition, `purrassist-derive`, and the remaining dialects (GLM,
-  Gemma, Pythonic, bare JSON) are tracked in issue #4. See `tool-calls/README.md`.
+  Gemma, Pythonic) are tracked in issue #4. See `tool-calls/README.md`.
 - Rust facade, CLI, and stdio MCP server using the same operations.
 - Standard helper-provider adapters and caller-managed endpoints. No model is
   required. Bundled small models remain an evaluation track, not a prerequisite.

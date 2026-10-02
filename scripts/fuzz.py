@@ -220,6 +220,14 @@ TOOL_CALL_WITNESSES = [
     "{\t\t\"type\":\"tool_use\",\"id\"\t\t:\t\"call_22bb690f\",\t\t\"name\"\t:\t\t\"write_file\",\t\"input\":\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"\t}".encode(),
     # anthropic-tool-use.v1: delete_path, read_file (seed 3)
     "{\"type\":\"tool_use\"\t,\t\"id\":\t\t\"call_e8c2cf2d\",\"input\"\t\t:\t\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"\t,\"name\"\t:\t\t\"delete_path\"\t\t}\n{\"type\":\"tool_use\"\t,\t\"input\":\t\"{\\\"path\\\":\\\"alpha tab\\\\tseparated\\\"}\"\t,\t\t\"name\":\"read_file\"\t\t,\t\t\"id\"\t\t:\"call_91b9c038\"\t\t}".encode(),
+    # bare-json.v1: read_file (seed 0)
+    "{\t\"name\"\t\t:\t\"read_file\"\t,\t\"arguments\"\t\t:{\"path\":\"tab\\tseparated \\n  block\\n\"},\t\"id\":\"call_f5407269\"\t\t}".encode(),
+    # bare-json.v1: get_weather, list_dir (seed 1)
+    "{\"arguments\":{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"}\t,\"name\":\"get_weather\"\t,\t\t\"id\":\"call_5c2a449c\"\t\t}\n{\t\"id\":\"call_5a072c6d\",\t\t\"arguments\"\t\t:{\"path\":\"\\n  block\\n trailing  \"},\t\"name\":\t\"list_dir\"}".encode(),
+    # bare-json.v1: write_file (seed 2)
+    "{\t\t\"arguments\":\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\",\"name\":\t\t\"write_file\"\t,\t\"id\"\t\t:\"call_861af7d1\"\t}".encode(),
+    # bare-json.v1: delete_path, read_file (seed 3)
+    "{\"id\":\"call_d7d47acc\"\t,\t\"name\":\t\t\"delete_path\"\t\t,\"arguments\"\t:\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"\t}\n{\"name\"\t:\"read_file\",\t\"arguments\"\t\t:\"{\\\"path\\\":\\\"\\\\n  block\\\\n alpha\\\",\\\"limit\\\":-209}\"\t,\t\"id\":\"call_d72aeb2f\"\t}".encode(),
     # deepseek-v3.1.v1: read_file (seed 0)
     "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>\t\tread_file\t\t<｜tool▁sep｜>{\"path\":\"tab\\tseparated \\n  block\\n\"}\t<｜tool▁call▁end｜>\t<｜tool▁calls▁end｜>".encode(),
     # deepseek-v3.1.v1: get_weather, list_dir (seed 1)
@@ -470,6 +478,17 @@ TOOL_CALL_REPAIRS = [
     b'<|channel|>commentary to=functions.read_file <|constrain|>json<|message|>{"path":"src/ma',
     b'<|start|>assistant<|channel|>analysis to=browser.search <|constrain|>json<|message|>{"query":"x"}<|call|><|start|>assistant<|channel|>analysis to=python<|message|>print(1)<|call|>',
     b'<|start|>functions.read_file to=assistant<|channel|>commentary<|message|>ok<|end|>',
+    # Bare JSON: a call alone, in prose, in a fence, in an array, arguments
+    # first with a trailing id, stringified arguments, a call object nested
+    # in another's arguments, a bare tool result.
+    b'{"name": "read_file", "arguments": {"path": "a"}}',
+    b'Reading it.\n{"name": "read_file", "arguments": {"path": "a"}}\nDone.',
+    b'Example:\n```json\n{"name": "list_dir", "arguments": {"path": "."}}\n```\n',
+    b'[{"name": "read_file", "arguments": {"path": "a"}}, {"name": "list_dir", "arguments": {"path": "b"}}]',
+    b'{"arguments": {"path": "a"}, "name": "read_file", "id": "call_9"}',
+    b'{"name": "read_file", "arguments": "{\\"path\\": \\"a\\"}"}',
+    b'{"name": "write_file", "arguments": {"path": "a", "content": "{\\"name\\": \\"rm\\", \\"arguments\\": {}}"}}',
+    b'{"tool_call_id": "call_9", "content": "ok"}',
 ]
 
 # Inputs that hold no recoverable call.
@@ -503,6 +522,11 @@ TOOL_CALL_NEGATIVES = [
     b'{"type":"tool_use"}',
     b'<|start|>assistant<|channel|>final<|message|>Done.<|return|>',
     b'<|channel|>commentary to=<|message|>',
+    b'{"name": "read_file", "arguments": 3} {"name": "Ada", "arguments": "she argued"}',
+    b'{"arguments": {"path": "a"}} {"name": "read_file", "arguments": {"path": "a"}, "mode": 1}',
+    b'{"name": "read_file", "arguments": {"type": "object", "properties": {"path": {"type": "string"}}}}',
+    b'{"name": "read_file", "description": "Read", "parameters": {"type": "object", "properties": {}}}',
+    b'{"name": "read_file", "arguments": {"path": "a"',
     "```json\n{\"path\": \"a.rs\"}\n```".encode(),
     b'[TOOL_CALLS] [' + b'{"name": "read_file", "arguments": ' * 16 + b']',
     b'[TOOL_RESULTS] {"content": "x", "call_id": "a1B2c3D4e"}[/TOOL_RESULTS]',

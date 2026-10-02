@@ -922,6 +922,29 @@ pub fn resolve_forest(
     })
 }
 
+/// Whether a recognized call is content by the counter-evidence of a
+/// `declaration-content` grammar
+/// ([`CompiledGrammar::declaration_content`](crate::grammar::CompiledGrammar::declaration_content)):
+/// its object is bare ([`RawCall::bare`]), its arguments as written have a
+/// tool declaration's parameters shape (an object whose `"type"` is
+/// `"object"` and whose `"properties"` is an object), and the declared tool
+/// does not take them as they are (the call is not
+/// [`CallOutcome::Resolved`]: the named tool is undeclared, or its arguments
+/// schema needs a guess or a loss to accept them).
+fn declaration_content(segment: &CallSegment, call: &ResolvedCall) -> bool {
+    let raw = &segment.readings[0];
+    if !raw.bare || !raw.dialect.grammar().declaration_content() {
+        return false;
+    }
+    let root = &raw.arguments.root;
+    let shaped = matches!(root.get("type").map(|node| &node.value), Some(Value::String(kind)) if kind == "object")
+        && matches!(
+            root.get("properties").map(|node| &node.value),
+            Some(Value::Object(_))
+        );
+    shaped && call.outcome != CallOutcome::Resolved
+}
+
 /// A value with the changes that produced it.
 #[derive(Clone, Debug)]
 struct Typed {
@@ -1031,10 +1054,14 @@ impl<'a> Resolver<'a> {
                     embedded,
                 }
             }
-            Segment::Call(call) => {
-                let call = self.call(call, governor)?;
-                governor.charge(Resource::ScratchBytes, CALL_BYTES)?;
-                ResolvedSegment::Call(Box::new(call))
+            Segment::Call(segment) => {
+                let call = self.call(segment, governor)?;
+                if declaration_content(segment, &call) {
+                    ResolvedSegment::Content(segment.span.clone())
+                } else {
+                    governor.charge(Resource::ScratchBytes, CALL_BYTES)?;
+                    ResolvedSegment::Call(Box::new(call))
+                }
             }
             Segment::Result(result) => {
                 governor.charge(Resource::ScratchBytes, ENTRY_BYTES)?;

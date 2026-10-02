@@ -653,6 +653,7 @@ pub struct CompiledGrammar {
     pub(crate) productions: Vec<Production>,
     pub(crate) call: ProductionId,
     pub(crate) call_ids: bool,
+    pub(crate) declaration_content: bool,
     pub(crate) result: ProductionId,
     pub(crate) declaration: ProductionId,
     pub(crate) reasoning: Vec<(Vec<u8>, Vec<u8>)>,
@@ -717,6 +718,26 @@ impl CompiledGrammar {
     #[must_use]
     pub const fn call_carries_ids(&self) -> bool {
         self.call_ids
+    }
+
+    /// Whether the grammar declares `declaration-content;`: a call of this
+    /// dialect whose source begins with its JSON object (no opener token
+    /// before it) and whose arguments have the shape of a tool
+    /// declaration's parameters schema (an object with `"type": "object"`
+    /// and a `"properties"` object) is content, not a call, unless the
+    /// named tool is declared and resolves those arguments with no guess
+    /// and no loss (`CallOutcome::Resolved`). A pasted JSON Schema or tool
+    /// declaration is then never read as a call to the tool it describes.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::DialectId;
+    /// assert!(DialectId::Llama3Json.grammar().declaration_content());
+    /// assert!(DialectId::BareJson.grammar().declaration_content());
+    /// assert!(!DialectId::Hermes.grammar().declaration_content());
+    /// ```
+    #[must_use]
+    pub const fn declaration_content(&self) -> bool {
+        self.declaration_content
     }
 
     /// The `result` production.

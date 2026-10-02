@@ -11,7 +11,7 @@ call. The operation is `tool_call.recover.v1`, implemented in
 `recover_tool_calls` MCP tool, and the `purrassist recover-tool-calls` CLI
 command.
 
-Eleven dialects are built in:
+Twelve dialects are built in:
 
 | Dialect | Shape | Reference |
 | --- | --- | --- |
@@ -26,10 +26,11 @@ Eleven dialects are built in:
 | `anthropic-tool-use.v1` | `tool_use` content blocks `{"type": "tool_use", "id": ID, "name": NAME, "input": {...}}`, standalone or in a message or response | [dialect](dialects/anthropic-tool-use.v1.md) |
 | `harmony.v1` | gpt-oss messages `<\|channel\|>commentary to=functions.NAME <\|constrain\|>json<\|message\|>{...}<\|call\|>`, the analysis channel as reasoning | [dialect](dialects/harmony.v1.md) |
 | `mistral-v11.v1` | `[TOOL_CALLS]NAME[CALL_ID]ID[ARGS]{...}` (`[CALL_ID]` optional), repeated per call | [dialect](dialects/mistral-v11.v1.md) |
+| `bare-json.v1` | an unwrapped `{"name": NAME, "arguments": {...}}` object: the whole turn, in prose, in a code fence, or an array element; never a declaration-shaped object | [dialect](dialects/bare-json.v1.md) |
 
 Callers add their own dialects with the grammar DSL
 ([GRAMMAR.md](GRAMMAR.md)). Streaming recognition, `purrassist-derive`, and the
-remaining dialects (GLM, Gemma, Pythonic, bare JSON) are tracked in issue #4.
+remaining dialects (GLM, Gemma, Pythonic) are tracked in issue #4.
 
 ## Design
 
@@ -341,6 +342,6 @@ are in [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound).
 - [dialects/](dialects/): public sources, accepted forms, printing, and
   deliberate exclusions of each built-in dialect.
 - [MATCHING-QUALITY.md](../MATCHING-QUALITY.md#tool-call-recovery-evaluation):
-  the 12,396-case correction evaluation, per rule and per dialect.
+  the 13,404-case correction evaluation, per rule and per dialect.
 - [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound): the cost
   bound, budgets for large outputs, and throughput.
