@@ -311,6 +311,11 @@ pub(crate) struct Failure {
     pub(crate) thread: Thread,
     pub(crate) at: usize,
     pub(crate) reason: Rejection,
+    /// Kept from an earlier step while a sibling configuration lived on:
+    /// only a respelling (a closer variant or a confusable spelling) may
+    /// repair it, as every other repair of the attempt is proposed at the
+    /// step where it runs out of configurations.
+    pub(crate) respell: bool,
 }
 
 impl ScratchCharge for Failure {
@@ -399,7 +404,12 @@ impl<'s> Step<'_, 's> {
     }
 
     fn fail(out: &mut Out, thread: Thread, at: usize, reason: Rejection) -> Result<(), StopReason> {
-        out.failed.push(Failure { thread, at, reason })
+        out.failed.push(Failure {
+            thread,
+            at,
+            reason,
+            respell: false,
+        })
     }
 
     /// Queue `thread`, which has moved to `thread.pos`.
@@ -1487,6 +1497,10 @@ struct Table<'s> {
     /// Completions of a grouped program's live attempts (see
     /// `Program::grouped`), released when the attempt ends.
     held: Vec<Held>,
+    /// Literal failures of live attempts kept as repair seeds while a
+    /// configuration of the same attempt that began its terminal at or
+    /// before the failed literal's start is still live (see `settle`).
+    failures: ScratchVec<Failure>,
 }
 
 /// A completion of a grouped program's attempt, held until the attempt
@@ -1613,6 +1627,7 @@ impl<'s> Engine<'s> {
                     attempts: ScratchVec::new(governor),
                     trails: Vec::new(),
                     held: Vec::new(),
+                    failures: ScratchVec::new(governor),
                 });
             }
         }
@@ -1766,6 +1781,14 @@ impl<'s> Engine<'s> {
         merge(&mut live, &mut self.arena, governor)?;
         let mut completed = core::mem::replace(&mut self.out.completed, ScratchVec::new(governor));
         let failed = core::mem::replace(&mut self.out.failed, ScratchVec::new(governor));
+        // A literal that failed while a sibling configuration of its
+        // attempt, begun at the same place or earlier, lived on (the
+        // canonical `<|tool_call_begin|>` beside a variant spelling of a
+        // section closer that shares its first bytes) is still a repair
+        // seed, by respelling only, when the attempt later runs out of
+        // configurations. The table keeps such failures between steps.
+        let earlier =
+            core::mem::replace(&mut self.tables[table].failures, ScratchVec::new(governor));
         self.commit(
             table,
             live.as_slice()
@@ -1792,21 +1815,37 @@ impl<'s> Engine<'s> {
                 continue;
             }
             let mine = |failure: &&Failure| failure.thread.attempt == record.id;
+            let held = earlier
+                .as_slice()
+                .iter()
+                .filter(|_| eof.is_none())
+                .filter(mine)
+                .map(|failure| Failure {
+                    respell: true,
+                    ..*failure
+                });
             let _failures = governor.lease_scratch(
-                size(failed.as_slice().iter().filter(mine).count())
+                size(failed.as_slice().iter().filter(mine).count() + held.clone().count())
                     .saturating_mul(size(<Failure as ScratchCharge>::CHARGE)),
             )?;
-            let failures: Vec<Failure> = failed.as_slice().iter().filter(mine).copied().collect();
+            let failures: Vec<Failure> = failed
+                .as_slice()
+                .iter()
+                .filter(mine)
+                .copied()
+                .chain(held)
+                .collect();
             self.note_failure(table, record.id, &failures);
             let until = if eof.is_some() { at } else { at + 1 };
             for state in self.repair(table, record, &failures, until, eof, governor)? {
                 match state.status {
                     Status::Live => live.push(state.thread)?,
                     Status::Completed => completed.push(state.thread)?,
-                    Status::Failed | Status::Stuck => {}
+                    Status::Failed | Status::Respelled | Status::Stuck => {}
                 }
             }
         }
+        self.hold_failures(table, earlier, &failed, &live)?;
         merge(&mut live, &mut self.arena, governor)?;
         // A repair may carry an attempt past its commit, and a completion
         // always commits its attempt.
@@ -1821,6 +1860,56 @@ impl<'s> Engine<'s> {
         self.complete(table, &mut completed, eof, governor)?;
         self.retire(table, &live, at, eof, governor)?;
         self.tables[table].threads = live;
+        Ok(())
+    }
+
+    /// Keep the literal failures of `table` a still-live sibling
+    /// configuration of the same attempt began beside (at the failed
+    /// literal's start or earlier), when the literal has a respelling: the
+    /// held ones (`earlier`) compacted in place, then this step's
+    /// (`failed`). They seed respelling repairs if the attempt later runs
+    /// out of configurations (see `settle`).
+    fn hold_failures(
+        &mut self,
+        table: usize,
+        mut earlier: ScratchVec<Failure>,
+        failed: &ScratchVec<Failure>,
+        live: &ScratchVec<Thread>,
+    ) -> Result<(), StopReason> {
+        let grammar = self.grammars[self.tables[table].grammar].grammar;
+        let program = self.tables[table].program;
+        let sibling = |failure: &Failure| {
+            // Only a literal with a respelling can be repaired later.
+            let respellable = match program.insts[failure.thread.pc as usize] {
+                Inst::Lit { lit, .. } => {
+                    let tables = &grammar.literal_tables[lit as usize];
+                    !tables.variants.trie.is_empty() || !tables.confusables.trie.is_empty()
+                }
+                _ => false,
+            };
+            respellable
+                && matches!(failure.thread.sub, Sub::Lit(_))
+                && live.as_slice().iter().any(|thread| {
+                    thread.attempt == failure.thread.attempt && thread.entry <= failure.thread.entry
+                })
+        };
+        let mut write = 0;
+        for read in 0..earlier.len() {
+            let failure = earlier.as_slice()[read];
+            if sibling(&failure) {
+                earlier.as_mut_slice()[write] = failure;
+                write += 1;
+            }
+        }
+        while earlier.len() > write {
+            earlier.pop();
+        }
+        for failure in failed.as_slice() {
+            if sibling(failure) {
+                earlier.push(*failure)?;
+            }
+        }
+        self.tables[table].failures = earlier;
         Ok(())
     }
 
@@ -1882,17 +1971,16 @@ impl<'s> Engine<'s> {
 
     /// Record why (and where) an attempt left with no configuration failed.
     fn note_failure(&mut self, table: usize, attempt: u64, failures: &[Failure]) {
-        let Some(first) = failures
-            .iter()
-            .min_by_key(|failure| (failure.at, failure.reason))
-        else {
+        // Where the attempt failed is where its own configurations ran out,
+        // not where an earlier sibling's literal did (a respelling seed).
+        let current = || failures.iter().filter(|failure| !failure.respell);
+        let Some(first) = current().min_by_key(|failure| (failure.at, failure.reason)) else {
             return;
         };
         // The rejected span ends where the furthest failing token began: a
         // partial literal may start the next opener.
         let program = self.tables[table].program;
-        let end = failures
-            .iter()
+        let end = current()
             .map(|failure| match program.insts[failure.thread.pc as usize] {
                 Inst::Lit { .. } => failure.thread.entry,
                 _ => failure.at,
@@ -2593,6 +2681,7 @@ impl<'s> Engine<'s> {
             }
             self.tables[table].threads.clear();
             self.tables[table].attempts.clear();
+            self.tables[table].failures.clear();
             self.tables[table].trails.clear();
         }
         Ok(())

@@ -86,7 +86,7 @@
 //!   (`tool_call.reasoning.unclosed`, `tool_call.reasoning.embedded-call`,
 //!   `tool_call.context.fenced-example`,
 //!   `tool_call.markup.missing-wrapper-close.before-text`,
-//!   `tool_call.name.match`,
+//!   `tool_call.name.match`, `tool_call.name.from-arguments`,
 //!   `json.key.match`, `json.key.relocate`, `tool_call.parameter.repeated`,
 //!   `json.enum.match`, `tool_call.markup.undeclared-parameter-boundary`),
 //!   `tool_call.value.enum-normalize`, and
@@ -98,6 +98,7 @@
 //! | --- | --- | --- | --- | --- | --- | --- |
 //! | `tool_call.name.alias` | 0 | no | single | definition | none | the call names a tool by an explicit alias |
 //! | `tool_call.name.match` | 2+ | yes | multiple | definition | none | a near-miss tool name accepted by [`matching::resolve_governed`](crate::matching::resolve_governed) |
+//! | `tool_call.name.from-arguments` | 8 | yes | multiple | definition | none | a call naming no tool read as a declared tool its arguments fit: every required parameter present, every member a declared parameter or alias; several such tools make the call `Ambiguous` |
 //! | `tool_call.parameter.alias` | 0 | no | single | definition | none | a parameter named by an explicit alias |
 //! | `json.key.match` | 2+ | yes | multiple | definition | none | a near-miss parameter name renamed to a declared one |
 //! | `json.key.relocate` | 12 | yes | multiple | definition | none | a required parameter moved out of a nested object |
@@ -264,7 +265,15 @@ const fn resolution(
     }
 }
 
-const RESOLUTION: [Rule; 16] = [
+/// Base cost of `tool_call.name.from-arguments`.
+///
+/// The rule reads a call naming no tool as the one declared tool its
+/// arguments fit. The arguments are weaker
+/// evidence of a tool's identity than any spelling of its name, so this
+/// costs more than the farthest near-miss name (`tool_call.name.match`).
+pub const NAME_FROM_ARGUMENTS_COST: u64 = 8;
+
+const RESOLUTION: [Rule; 17] = [
     resolution(
         "tool_call.name.alias",
         0,
@@ -275,6 +284,13 @@ const RESOLUTION: [Rule; 16] = [
     resolution(
         "tool_call.name.match",
         FOLDED_NAME_COST,
+        true,
+        Grounding::Definition,
+        None,
+    ),
+    resolution(
+        "tool_call.name.from-arguments",
+        NAME_FROM_ARGUMENTS_COST,
         true,
         Grounding::Definition,
         None,

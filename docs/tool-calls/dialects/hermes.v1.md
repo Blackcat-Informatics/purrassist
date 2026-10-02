@@ -32,6 +32,13 @@ repository.
 - `call`: `<tool_call>`, optional whitespace, one JSON object holding a
   `"name"` member and an `"arguments"` member in either order, optional
   whitespace, `</tool_call>`. JSON whitespace is allowed between tokens.
+- An object with an `"arguments"` member and no `"name"` is a call that
+  names no tool: the wrapper is the evidence that it is a call. The resolver
+  reads the tool from the arguments (`tool_call.name.from-arguments`, a
+  guess; see [RULES.md](../RULES.md)): one fitting declared tool makes it a
+  `BestGuess`, several `Ambiguous`, none `Unresolved`. (Llama 3 JSON does not
+  get this reading: an object with only a `"parameters"` member has no
+  wrapper or token to show it is a call rather than data such as a schema.)
 - The arguments value is read by the self-delimiting `json` codec: exact
   number spellings, member order and duplicates kept. A JSON string holding
   JSON (stringified arguments) is decoded and flagged

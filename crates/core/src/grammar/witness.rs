@@ -647,6 +647,14 @@ impl Fill for Seeded<'_> {
         Ok(())
     }
 
+    fn ordinal(&mut self) -> String {
+        self.printed.len().to_string()
+    }
+
+    fn composite_id(&mut self, text: &str) {
+        self.call.as_mut().expect("printing a call").id = Some(text.to_owned());
+    }
+
     fn occurrence(&mut self, occurrence: Option<usize>) {
         self.param = occurrence.map(|position| {
             let index = self.occurrences[position];

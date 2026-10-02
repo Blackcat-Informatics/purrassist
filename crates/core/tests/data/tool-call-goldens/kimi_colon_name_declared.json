@@ -1,0 +1,45 @@
+{
+  "description": "A Kimi-K2 id whose tool name holds a colon (functions.ns:tool:0): the name is everything between the functions. prefix and the id's final :IDX, so it names the declared `ns:tool` and the call is Resolved with the whole id as its model id. vLLM and SGLang end the name at the first colon instead.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "ns:tool",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "q": {
+              "type": "string"
+            }
+          },
+          "required": []
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "kimi-k2.v1"
+  ],
+  "stop": "stop",
+  "input": "<|tool_calls_section_begin|><|tool_call_begin|>functions.ns:tool:0<|tool_call_argument_begin|>{\"q\": \"x\"}<|tool_call_end|><|tool_calls_section_end|>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "ns:tool",
+      "arguments": {
+        "q": "x"
+      },
+      "candidate_dialects": [
+        "kimi-k2.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

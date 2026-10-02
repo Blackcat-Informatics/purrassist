@@ -689,8 +689,9 @@ fn deterministic_pinned_digest() {
     );
     assert_eq!(digests[0], PINNED_DIGEST);
     // The explicit `Prefix` policy (`call_0`, `call_1`, ...) is pinned too:
-    // its wire form is exactly the one recovery published before ids were
-    // numbered from the turn's digest by default.
+    // its calls and ids are exactly the ones recovery published before ids
+    // were numbered from the turn's digest by default (the digest also
+    // covers the receipt's charged usage).
     let all = definitions();
     let prefixed = compile(all).recover(
         output.as_bytes(),
@@ -727,9 +728,9 @@ fn deterministic_pinned_digest() {
 }
 
 const PINNED_DIGEST: &str =
-    "sha256:350a2f00e98e876408d623e0d11beacf4583fbd4c1eed328c30898a86141b7f0";
+    "sha256:3bb3c3745f59b34cb6eacfe88c75af29e5a4ef7253bc55ac4dac2c10b9ad190b";
 const PINNED_PREFIX_DIGEST: &str =
-    "sha256:71210be4e55800e7954d155b26c246f2cb27111afd2016ca63e83f0811e16900";
+    "sha256:befa06637e443fc4e52d30b881e82e879d9290e16bbbd8c06dcc1c396a843e0f";
 const PINNED_AMBIGUOUS_DIGEST: &str =
     "sha256:db83855f8c9484b6220094cac86c83e115e90e283a94a049a4a5fb837157a4d4";
 const PINNED_PREFIX_AMBIGUOUS_DIGEST: &str =

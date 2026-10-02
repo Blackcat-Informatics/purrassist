@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 #
 # Hermes JSON tool calls: a <tool_call> wrapper around one JSON object with
-# a "name" member and an "arguments" member, in either order. The arguments
+# a "name" member and an "arguments" member, in either order. An object
+# with an "arguments" member alone is a call that names no tool (the
+# resolver may read the tool from its arguments,
+# tool_call.name.from-arguments, a guess). The arguments
 # value is read by the self-delimiting json codec (exact number spellings;
 # stringified arguments are decoded and flagged). Text before a call is
 # content. Inside the wrapper, text before the JSON object (a preamble or a
@@ -37,7 +40,8 @@ arguments-member = "\"arguments\"" ws? ":"
                    arguments:slot(json, "</tool_call>", "</tool_calls>");
 
 call = "<tool_call>" nl? (dropped:preamble)? "{" ws?
-       (name-member ws? "," ws? arguments-member | arguments-member ws? "," ws? name-member)
+       (name-member ws? "," ws? arguments-member | arguments-member ws? "," ws? name-member
+        | arguments-member)
        ws? "}" nl? (dropped:fence ws?)? call-end;
 
 result = "<tool_response>" content:until("</tool_response>") "</tool_response>";

@@ -500,3 +500,40 @@ fn deepseek_v3_dialect_over_mcp() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// The MCP tool accepts `kimi-k2.v1` in its allow-list and as an emission
+/// target.
+#[test]
+fn kimi_k2_dialect_over_mcp() {
+    let (tools, root) = tools("kimi");
+    let output = "<|tool_calls_section_begin|><|tool_call_begin|>functions.list_dir:0<|tool_call_argument_begin|>{\"path\": \"src\"}<|tool_call_end|><|tool_calls_section_end|>";
+    for extra in ["", r#","dialects":["kimi-k2.v1"]"#] {
+        let node = tools
+            .call("recover_tool_calls", &arguments(output, extra))
+            .unwrap();
+        assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+        assert_eq!(
+            node.pointer("/value/calls/0/dialect")
+                .and_then(Node::as_str),
+            Some("kimi-k2.v1")
+        );
+        assert_eq!(
+            node.pointer("/value/calls/0/id").and_then(Node::as_str),
+            Some("functions.list_dir:0")
+        );
+    }
+    let node = tools
+        .call(
+            "recover_tool_calls",
+            &arguments(QWEN, r#","emit":"kimi-k2.v1""#),
+        )
+        .unwrap();
+    assert_eq!(
+        node.pointer("/value/emitted/output/text")
+            .and_then(Node::as_str),
+        Some(
+            "<|tool_calls_section_begin|><|tool_call_begin|>functions.list_dir:0<|tool_call_argument_begin|>{\"depth\":2,\"path\":\"src\"}<|tool_call_end|><|tool_calls_section_end|>"
+        )
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

@@ -236,6 +236,14 @@ TOOL_CALL_WITNESSES = [
     b"<tool_call>\t\t{\t\"name\":\"write_file\",\"arguments\"\t\t:\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"\t}\t</tool_call>",
     # hermes.v1: delete_path, read_file (seed 3)
     b"<tool_call>{\"name\":\"delete_path\"\t,\t\"arguments\":\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"}\t\t</tool_call>\n<tool_call>\t{\t\"name\"\t:\t\t\"read_file\"\t\t,\t\"arguments\":\"{\\\"path\\\":\\\"  indented src/lib.rs\\\",\\\"limit\\\":417}\"}\t</tool_call>",
+    # kimi-k2.v1: read_file (seed 0)
+    "<|tool_calls_section_begin|><|tool_call_begin|>\t\tfunctions.read_file:0<|tool_call_argument_begin|>\t{\"path\":\"tab\\tseparated \\n  block\\n\"}\t<|tool_call_end|>\t\t<|tool_calls_section_end|>".encode(),
+    # kimi-k2.v1: get_weather, list_dir (seed 1)
+    "<|tool_calls_section_begin|>\t<|tool_call_begin|>functions.get_weather:0<|tool_call_argument_begin|>{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"}<|tool_call_end|>\t<|tool_call_begin|>functions.list_dir:1\t<|tool_call_argument_begin|>\t\t{\"path\":\"src/lib.rs alpha\"}\t\t<|tool_call_end|><|tool_calls_section_end|>".encode(),
+    # kimi-k2.v1: write_file (seed 2)
+    "<|tool_calls_section_begin|>\t\t<|tool_call_begin|>\t\tfunctions.write_file:0<|tool_call_argument_begin|>\t\t\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"\t<|tool_call_end|>\t<|tool_calls_section_end|>".encode(),
+    # kimi-k2.v1: delete_path, read_file (seed 3)
+    "<|tool_calls_section_begin|><|tool_call_begin|>functions.delete_path:0<|tool_call_argument_begin|>\t\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"<|tool_call_end|><|tool_call_begin|>functions.read_file:1\t<|tool_call_argument_begin|>\t\"{\\\"path\\\":\\\"alpha trailing  \\\"}\"<|tool_call_end|>\t<|tool_calls_section_end|>".encode(),
     # llama3-json.v1: read_file (seed 0)
     b"<|python_tag|>{\t\t\"type\":\t\"function\"\t,\t\"parameters\":{\"path\":\"tab\\tseparated \\n  block\\n\"}\t,\"name\":\t\t\"read_file\"}",
     # llama3-json.v1: get_weather, list_dir (seed 1)
@@ -396,6 +404,24 @@ TOOL_CALL_REPAIRS = [
     "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file\n```json\n{\"path\": \"src/ma".encode(),
     "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>write_file\n```json\n{\"path\": \"R.md\", \"content\": \"```sh\\nls\\n```\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
     "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"a\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>\n<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>list_dir\n```json\n{\"path\": \".\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    # Kimi-K2: missing section and call closers, an omitted section opener,
+    # the singular section tokens, ids without `:IDX` or the `functions.`
+    # prefix, a dotted name, a colon in the name, duplicate ids, Thinking
+    # reasoning, truncated arguments, and a tool message.
+    b'<|tool_calls_section_begin|><|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{"path": "a.rs"}<|tool_call_end|><|tool_call_begin|>functions.list_dir:1<|tool_call_argument_begin|>{"path": "."}<|tool_call_end|>',
+    b'<|tool_calls_section_begin|><|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{"path": "a.rs"}<|tool_call_begin|>functions.list_dir:1<|tool_call_argument_begin|>{"path": "."}<|tool_call_end|><|tool_calls_section_end|>',
+    b'Now: <|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{"path": "a.rs"}<|tool_call_end|><|tool_calls_section_end|>',
+    b'<|tool_call_section_begin|><|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{"path": "a.rs"}<|tool_call_end|><|tool_call_section_end|>',
+    b'<|tool_calls_section_begin|><|tool_call_begin|>functions.read_file<|tool_call_argument_begin|>{"path": "a.rs"}<|tool_call_end|><|tool_call_begin|>list_dir:1<|tool_call_argument_begin|>{"path": "."}<|tool_call_end|><|tool_calls_section_end|>',
+    b'<|tool_calls_section_begin|><|tool_call_begin|>functions.mcp.read_file:0<|tool_call_argument_begin|>{"path": "a"}<|tool_call_end|><|tool_call_begin|>functions.ns:read_file:1<|tool_call_argument_begin|>{"path": "b"}<|tool_call_end|><|tool_calls_section_end|>',
+    b'<|tool_calls_section_begin|><|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{"path": "a"}<|tool_call_end|><|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{"path": "b"}<|tool_call_end|><|tool_calls_section_end|>',
+    b'<think>plan the read</think>Reading.<|tool_calls_section_begin|><|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{"path": "src/ma',
+    b'<|im_system|>tool<|im_middle|>## Return of functions.read_file:0\nok<|im_end|>',
+    # A colon-namespaced name, and calls naming no tool (a Kimi-K2 bare call
+    # counter, a Hermes object without "name") read by their arguments.
+    b'<|tool_calls_section_begin|><|tool_call_begin|>functions.mcp:read_file:0<|tool_call_argument_begin|>{"path": "a"}<|tool_call_end|><|tool_calls_section_end|>',
+    b'<|tool_calls_section_begin|><|tool_call_begin|>3<|tool_call_argument_begin|>{"city": "Oslo"}<|tool_call_end|><|tool_call_begin|>4<|tool_call_argument_begin|>{"path": "a"}<|tool_call_end|><|tool_calls_section_end|>',
+    b'<tool_call>\n{"arguments": {"path": "a.rs", "limit": 5}}\n</tool_call>',
 ]
 
 # Inputs that hold no recoverable call.
@@ -423,6 +449,8 @@ TOOL_CALL_NEGATIVES = [
     "<|tool calls begin|> nothing".encode(),
     "<｜tool▁call▁begin｜>read_file<｜tool▁sep｜>".encode(),
     "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>\n```json\n```".encode(),
+    b'<|tool_calls_section_begin|>',
+    b'<|tool_call_begin|>functions.:0<|tool_call_argument_begin|>',
     "```json\n{\"path\": \"a.rs\"}\n```".encode(),
     b'[TOOL_CALLS] [' + b'{"name": "read_file", "arguments": ' * 16 + b']',
     b'[TOOL_RESULTS] {"content": "x", "call_id": "a1B2c3D4e"}[/TOOL_RESULTS]',
@@ -442,6 +470,8 @@ TOOL_CALL_TOKENS = [
     b'[THINK]', b'[/THINK]', "<｜tool▁calls▁begin｜>".encode(), "<｜tool▁call▁begin｜>".encode(),
     "<｜tool▁sep｜>".encode(), "<｜tool▁call▁end｜>".encode(), "<｜tool▁calls▁end｜>".encode(),
     b'function', b'```javascript', "<｜tool▁outputs▁begin｜>".encode(),
+    b'<|tool_calls_section_begin|>', b'<|tool_call_begin|>', b'<|tool_call_argument_begin|>',
+    b'<|tool_call_end|>', b'<|tool_calls_section_end|>', b'functions.', b':0',
     b'<|tool_calls_begin|>', b'"id":', b'</s>', b'read_file', b'write_file', b'current_time', b'path', b'\n', b'\t',
     b'"', b'\\', b'{', b'}', b'[', b']', b':', b',', b'>', b'<', b'null', b'1.50',
     b'\x00', b'\x04', b'\x80', 'é'.encode(), b'\xff', b'\xe2\x82',

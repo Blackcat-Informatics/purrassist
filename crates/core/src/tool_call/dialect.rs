@@ -27,7 +27,7 @@ use std::sync::{Arc, OnceLock};
 /// One dialect grammar the recognizer can run.
 ///
 /// The set of variants is closed, so the recognizer dispatches statically.
-/// Eight dialects are built in, each a first-party grammar embedded in the
+/// Nine dialects are built in, each a first-party grammar embedded in the
 /// crate (see `docs/tool-calls/dialects/` for each grammar's public sources
 /// and what it deliberately does not accept):
 ///
@@ -36,6 +36,7 @@ use std::sync::{Arc, OnceLock};
 /// | [`DialectId::Qwen3CoderXml`] | `qwen3-coder-xml.v1` | `<tool_call><function=NAME><parameter=P>VALUE</parameter></function></tool_call>` |
 /// | [`DialectId::DeepSeekV31`] | `deepseek-v3.1.v1` | `<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>NAME<｜tool▁sep｜>{...}<｜tool▁call▁end｜>...<｜tool▁calls▁end｜>` |
 /// | [`DialectId::DeepSeekV3`] | `deepseek-v3.v1` | `<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME` + a fenced `json` block + `<｜tool▁call▁end｜>...<｜tool▁calls▁end｜>` |
+/// | [`DialectId::KimiK2`] | `kimi-k2.v1` | `<\|tool_calls_section_begin\|><\|tool_call_begin\|>functions.NAME:IDX<\|tool_call_argument_begin\|>{...}<\|tool_call_end\|>...<\|tool_calls_section_end\|>` |
 /// | [`DialectId::Hermes`] | `hermes.v1` | `<tool_call>{"name": NAME, "arguments": {...}}</tool_call>` |
 /// | [`DialectId::Llama3Json`] | `llama3-json.v1` | `{"name": NAME, "parameters": {...}}`, optionally after `<\|python_tag\|>` |
 /// | [`DialectId::MistralV11`] | `mistral-v11.v1` | `[TOOL_CALLS]NAME[CALL_ID]ID[ARGS]{...}`, the `[CALL_ID]` segment optional, repeatable |
@@ -78,6 +79,9 @@ pub enum DialectId {
     DeepSeekV3,
     /// `hermes.v1`: Hermes JSON calls in `<tool_call>` tags.
     Hermes,
+    /// `kimi-k2.v1`: Kimi-K2 tool-calls sections with `functions.NAME:IDX`
+    /// ids.
+    KimiK2,
     /// `llama3-json.v1`: Llama 3.x JSON calls, optionally after
     /// `<|python_tag|>`.
     Llama3Json,
@@ -129,6 +133,7 @@ static DEEPSEEK_V3: BuiltIn = BuiltIn::new(
     include_str!("dialects/deepseek-v3.v1.grammar"),
 );
 static HERMES: BuiltIn = BuiltIn::new("hermes.v1", include_str!("dialects/hermes.v1.grammar"));
+static KIMI_K2: BuiltIn = BuiltIn::new("kimi-k2.v1", include_str!("dialects/kimi-k2.v1.grammar"));
 static LLAMA3_JSON: BuiltIn = BuiltIn::new(
     "llama3-json.v1",
     include_str!("dialects/llama3-json.v1.grammar"),
@@ -158,6 +163,7 @@ impl DialectId {
     ///         "deepseek-v3.1.v1",
     ///         "deepseek-v3.v1",
     ///         "hermes.v1",
+    ///         "kimi-k2.v1",
     ///         "llama3-json.v1",
     ///         "mistral-v11.v1",
     ///         "mistral-v3.v1",
@@ -166,10 +172,11 @@ impl DialectId {
     ///     ]
     /// );
     /// ```
-    pub const BUILT_IN: [Self; 8] = [
+    pub const BUILT_IN: [Self; 9] = [
         Self::DeepSeekV31,
         Self::DeepSeekV3,
         Self::Hermes,
+        Self::KimiK2,
         Self::Llama3Json,
         Self::MistralV11,
         Self::MistralV3,
@@ -191,6 +198,7 @@ impl DialectId {
             Self::DeepSeekV31 => Some(&DEEPSEEK_V31),
             Self::DeepSeekV3 => Some(&DEEPSEEK_V3),
             Self::Hermes => Some(&HERMES),
+            Self::KimiK2 => Some(&KIMI_K2),
             Self::Llama3Json => Some(&LLAMA3_JSON),
             Self::MistralV11 => Some(&MISTRAL_V11),
             Self::MistralV3 => Some(&MISTRAL_V3),
@@ -232,6 +240,7 @@ impl DialectId {
             Self::DeepSeekV31 => DEEPSEEK_V31.id,
             Self::DeepSeekV3 => DEEPSEEK_V3.id,
             Self::Hermes => HERMES.id,
+            Self::KimiK2 => KIMI_K2.id,
             Self::Llama3Json => LLAMA3_JSON.id,
             Self::MistralV11 => MISTRAL_V11.id,
             Self::MistralV3 => MISTRAL_V3.id,
@@ -270,6 +279,7 @@ impl DialectId {
             Self::DeepSeekV31 => DEEPSEEK_V31.grammar(),
             Self::DeepSeekV3 => DEEPSEEK_V3.grammar(),
             Self::Hermes => HERMES.grammar(),
+            Self::KimiK2 => KIMI_K2.grammar(),
             Self::Llama3Json => LLAMA3_JSON.grammar(),
             Self::MistralV11 => MISTRAL_V11.grammar(),
             Self::MistralV3 => MISTRAL_V3.grammar(),

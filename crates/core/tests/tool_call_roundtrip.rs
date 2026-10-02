@@ -163,8 +163,20 @@ fn every_pair_roundtrips() {
                 for range in &second.content {
                     assert_eq!(&printed.output[range.clone()], b"\n", "{context}");
                 }
-                // Ids survive where the target carries them.
-                if target.grammar().call_carries_ids() {
+                // Ids survive where the target carries them. A Kimi-K2 id
+                // is composite: `functions.NAME:IDX`, IDX the call's
+                // position among the printed calls.
+                if target == DialectId::KimiK2 {
+                    for (position, (before, after)) in
+                        first.calls.iter().zip(&second.calls).enumerate()
+                    {
+                        let expected = format!(
+                            "functions.{}:{position}",
+                            before.tool.as_deref().expect("tool")
+                        );
+                        assert_eq!(after.source_id.as_deref(), Some(expected.as_str()));
+                    }
+                } else if target.grammar().call_carries_ids() {
                     for (before, after) in first.calls.iter().zip(&second.calls) {
                         assert_eq!(after.source_id.as_deref(), Some(before.id.as_str()));
                     }
@@ -474,7 +486,8 @@ fn declaration_forms_render_every_tool() {
                     | DeclarationForm::Llama3Json
                     | DeclarationForm::MistralV3
                     | DeclarationForm::MistralV11
-                    | DeclarationForm::DeepSeekV3 => "",
+                    | DeclarationForm::DeepSeekV3
+                    | DeclarationForm::KimiK2 => "",
                     _ => r#"{"type":"object"}"#,
                 });
                 assert!(
@@ -599,7 +612,7 @@ fn tool_results_roundtrip() {
                 );
                 assert_eq!(found[0].id.as_ref().expect("id").value, "call_3");
                 assert_eq!(rendered.omitted, []);
-            } else if dialect == DialectId::MistralV11 {
+            } else if matches!(dialect, DialectId::MistralV11 | DialectId::KimiK2) {
                 // Verbatim content, after the id of the call it answers.
                 assert_eq!(captured, content, "{context}");
                 assert_eq!(found[0].id.as_ref().expect("id").value, "call_3");
@@ -952,7 +965,7 @@ fn emission_never_emits_unresolved_silently() {
     for dialect in DialectId::BUILT_IN {
         let printed = emit::emit(&tools, &calls, &dialect, &IdPolicy::Source).expect("emitted");
         check(&printed.calls, &printed.skipped, dialect.id());
-        if dialect.grammar().call_carries_ids() {
+        if dialect.grammar().call_carries_ids() && dialect != DialectId::KimiK2 {
             // `call#0` is not an id the OpenAI or Mistral call-id class
             // accepts: those calls are skipped as unrepresentable, never
             // printed with another id.

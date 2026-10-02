@@ -1,0 +1,51 @@
+{
+  "description": "A call naming no tool whose arguments fit get_weather, under the Structural policy: tool_call.name.from-arguments is a guess and is not admitted, so the call is Unresolved (rule not admitted).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "kimi-k2.v1"
+  ],
+  "stop": "stop",
+  "input": "<|tool_calls_section_begin|><|tool_call_begin|>3<|tool_call_argument_begin|>{\"city\": \"Oslo\"}<|tool_call_end|><|tool_calls_section_end|>",
+  "policy": "structural",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "calls": [
+    {
+      "tool": null,
+      "arguments": {
+        "city": "Oslo"
+      },
+      "candidate_dialects": [
+        "kimi-k2.v1"
+      ],
+      "outcome": "unresolved: rule_not_admitted: rule `tool_call.name.from-arguments` is not admitted under Structural",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

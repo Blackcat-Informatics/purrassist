@@ -1,0 +1,64 @@
+{
+  "description": "A Kimi-K2-Thinking turn: reasoning closed by </think>, prose, then two calls chained in one section with no separator, their ids numbered 0 and 1. Each call of the section is its own call.",
+  "markup": "<think>Check the weather and the notes.</think>Checking both.<|tool_calls_section_begin|><|tool_call_begin|>functions.get_weather:0<|tool_call_argument_begin|>{\"city\": \"Oslo\"}<|tool_call_end|><|tool_call_begin|>functions.read_file:1<|tool_call_argument_begin|>{\"path\": \"notes.txt\", \"limit\": 10}<|tool_call_end|><|tool_calls_section_end|>",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "description": "Read a text file.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "get_weather",
+      "id": "functions.get_weather:0",
+      "arguments": {"city": "Oslo"}
+    },
+    {
+      "name": "read_file",
+      "id": "functions.read_file:1",
+      "arguments": {"path": "notes.txt", "limit": 10}
+    }
+  ]
+}

@@ -42,13 +42,16 @@
 //! each call is first printed alone, so a call the dialect cannot carry is
 //! skipped without failing the others. Ids come from an [`IdPolicy`] applied exactly as recovery
 //! applies it, so passing the request's policy reproduces
-//! [`ToolCall::id`].
+//! [`ToolCall::id`], except in a composite id (Kimi-K2's
+//! `functions.NAME:IDX`, which must hold the tool name): that is printed
+//! from the call's name and its position among the printed calls.
 //!
 //! | Dialect | Canonical call |
 //! | --- | --- |
 //! | `qwen3-coder-xml.v1` | `<tool_call>\n<function=NAME>` + body + `</function>\n</tool_call>` (the chat template's layout) |
 //! | `deepseek-v3.1.v1` | `<｜tool▁calls▁begin｜>` + `<｜tool▁call▁begin｜>NAME<｜tool▁sep｜>ARGS<｜tool▁call▁end｜>` per call + `<｜tool▁calls▁end｜>`: every printed call in one section (the template's layout; `ARGS` is compact) |
 //! | `deepseek-v3.v1` | `<｜tool▁calls▁begin｜>` + `<｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME\n```json\nARGS\n```<｜tool▁call▁end｜>` per call, the calls separated by a newline, + `<｜tool▁calls▁end｜>`: every printed call in one section (the template's layout; `ARGS` is compact) |
+//! | `kimi-k2.v1` | `<\|tool_calls_section_begin\|>` + `<\|tool_call_begin\|>functions.NAME:IDX<\|tool_call_argument_begin\|>ARGS<\|tool_call_end\|>` per call + `<\|tool_calls_section_end\|>`: every printed call in one section (the template's layout; `IDX` is the call's position in the section, `ARGS` is compact) |
 //! | `hermes.v1` | `<tool_call>\n{"name":"NAME","arguments":ARGS}\n</tool_call>` (the template's wrapper layout; the object is compact) |
 //! | `openai-tool-calls.v1` | `{"id":"ID","type":"function","function":{"name":"NAME","arguments":"ARGS"}}` |
 //! | `llama3-json.v1` | `{"name": "NAME", "parameters": ARGS}` (the template's layout; `ARGS` is compact) |

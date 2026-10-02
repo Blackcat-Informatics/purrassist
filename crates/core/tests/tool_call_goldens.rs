@@ -2344,3 +2344,165 @@ fn deepseek3_unclosed_arguments_at_stop() {
     assert!(is_unresolved(&calls.calls[0].outcome));
     assert_eq!(calls.usable().len(), 0);
 }
+
+/// Kimi-K2: missing section and call closers, an omitted section opener,
+/// the singular section-token spellings, a missing `:IDX`, unprefixed and
+/// dotted ids, duplicate ids and Thinking reasoning are read with every
+/// call `Resolved` and each repair or inference recorded; each well-formed
+/// `functions.NAME:IDX` is the call's model id; a name ends at the id's final
+/// `:IDX`.
+#[test]
+fn kimi_repairs() {
+    for (name, rule, count) in [
+        (
+            "kimi_missing_section_end",
+            Some("tool_call.markup.missing-closers-at-end"),
+            2,
+        ),
+        (
+            "kimi_missing_call_end_between_calls",
+            Some("tool_call.markup.missing-function-close"),
+            2,
+        ),
+        (
+            "kimi_missing_section_begin",
+            Some("tool_call.markup.missing-token"),
+            1,
+        ),
+        (
+            "kimi_singular_section_tokens",
+            Some("tool_call.markup.terminal-confusable"),
+            1,
+        ),
+        ("kimi_missing_call_index", Some("tool_call.id.dedup"), 1),
+        ("kimi_duplicate_ids", Some("tool_call.id.dedup"), 2),
+        ("kimi_thinking_reasoning_then_calls", None, 2),
+        ("kimi_unprefixed_and_dotted_ids", None, 2),
+    ] {
+        let (_, result) = golden(name);
+        assert!(matches!(result.outcome, Outcome::Resolved(_)), "{name}");
+        let calls = reading(&result);
+        assert_eq!(calls.calls.len(), count, "{name}: {calls:#?}");
+        assert_eq!(calls.rejected.len(), 0, "{name}");
+        assert!(
+            calls
+                .calls
+                .iter()
+                .all(|call| call.outcome == CallOutcome::Resolved
+                    && call.dialect == DialectId::KimiK2),
+            "{name}"
+        );
+        if let Some(rule) = rule {
+            assert!(
+                calls.calls.iter().any(|call| rules_of(call).contains(&rule)
+                    || call
+                        .repairs
+                        .inferences
+                        .iter()
+                        .any(|inference| inference.evidence.rule == rule)),
+                "{name}: {rule}"
+            );
+        }
+    }
+    let (_, result) = golden("kimi_unprefixed_and_dotted_ids");
+    let ids: Vec<_> = reading(&result)
+        .calls
+        .iter()
+        .map(|call| (call.tool.as_deref(), call.source_id.as_deref()))
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            (Some("mcp.search"), Some("functions.mcp.search:0")),
+            (Some("read_file"), Some("read_file:1")),
+        ]
+    );
+    let (_, result) = golden("kimi_missing_call_index");
+    assert_eq!(the_call(&result).source_id, None);
+    let (_, result) = golden("kimi_thinking_reasoning_then_calls");
+    assert_eq!(reading(&result).reasoning.len(), 1);
+    let (_, result) = golden("kimi_truncated_arguments");
+    assert_eq!(
+        the_call(&result).outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::Truncated
+        }
+    );
+    // A name may hold colons: it ends at the id's final `:IDX`.
+    let (_, result) = golden("kimi_colon_name_declared");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved);
+    assert_eq!(call.tool.as_deref(), Some("ns:tool"));
+    assert_eq!(call.source_id.as_deref(), Some("functions.ns:tool:0"));
+    // An undeclared colon name is an unknown tool, never coerced to a
+    // declared prefix of it.
+    let (_, result) = golden("kimi_colon_name_undeclared");
+    let call = the_call(&result);
+    assert_eq!(call.tool, None);
+    assert!(matches!(
+        &call.outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::UnknownTool { name }
+        } if name == "ns:other"
+    ));
+}
+
+/// `tool_call.name.from-arguments`: a call that names no tool (a Kimi-K2
+/// bare call counter, a Hermes object without `name`) is read as the one
+/// declared tool its arguments fit, a guess; several fitting tools make it
+/// `Ambiguous`, none leave it `Unresolved`; a mutating tool's guess is never
+/// usable, and `Structural` does not admit the rule.
+#[test]
+fn name_from_arguments() {
+    const RULE: &str = "tool_call.name.from-arguments";
+    for (name, tool) in [
+        ("name_from_arguments_unique", "get_weather"),
+        ("hermes_nameless_arguments", "read_file"),
+    ] {
+        let (_, result) = golden(name);
+        let call = the_call(&result);
+        assert_eq!(call.outcome, CallOutcome::BestGuess, "{name}");
+        assert_eq!(call.tool.as_deref(), Some(tool), "{name}");
+        assert!(call.is_usable_accepting_guesses(), "{name}");
+        assert!(
+            call.repairs
+                .inferences
+                .iter()
+                .any(|inference| inference.evidence.rule == RULE),
+            "{name}"
+        );
+    }
+    let (_, result) = golden("name_from_arguments_ambiguous");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Ambiguous);
+    let mut tools: Vec<&str> = core::iter::once(call.tool.as_deref())
+        .chain(
+            call.alternatives
+                .iter()
+                .map(|alternative| alternative.tool.as_deref()),
+        )
+        .flatten()
+        .collect();
+    tools.sort_unstable();
+    assert_eq!(tools, ["list_dir", "read_file"]);
+    let (_, result) = golden("name_from_arguments_none");
+    assert_eq!(
+        the_call(&result).outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::MissingName
+        }
+    );
+    let (_, result) = golden("name_from_arguments_mutating_guard");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::BestGuess);
+    assert_eq!(call.tool.as_deref(), Some("write_file"));
+    assert!(!call.is_usable_accepting_guesses());
+    assert_eq!(reading(&result).usable_accepting_guesses().len(), 0);
+    let (_, result) = golden("name_from_arguments_structural");
+    assert!(matches!(
+        &the_call(&result).outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::RuleNotAdmitted { rule, .. }
+        } if rule == RULE
+    ));
+}

@@ -138,13 +138,13 @@ allow-list, with a published bound, and every limit is explicit.
 - **Proved by** `tool_call_cost::resources_doc_matches_cost_constants` (every
   published constant and per-dialect bound equals the code's),
   `tool_call_cost::one_mib_argument_work_bound` (1 MiB Qwen3-Coder XML,
-  Hermes, Llama 3 JSON, Mistral v3, Mistral v11, DeepSeek-V3.1 and
-  DeepSeek-V3 arguments satisfy the bound and scale linearly from 64 KiB),
+  Hermes, Llama 3 JSON, Mistral v3, Mistral v11, DeepSeek-V3.1,
+  DeepSeek-V3 and Kimi-K2 arguments satisfy the bound and scale linearly from 64 KiB),
   `tool_call_cost::one_mib_argument_fits_published_budget` (a 1 MiB argument
   in every built-in dialect is `Resolved` under `ToolRecoveryRequest::sized`
   for every effort from `Quick` to `Maximum`, with peak scratch at most 16
   bytes per input byte for Qwen3-Coder XML, Hermes, Llama 3 JSON, Mistral v3,
-  Mistral v11, DeepSeek-V3.1 and DeepSeek-V3),
+  Mistral v11, DeepSeek-V3.1, DeepSeek-V3 and Kimi-K2),
   `tool_call_cost::work_independent_of_dialect_count_beyond_bound`,
   `json_incremental::extract_many_brackets_is_linear`, and
   `tool_call_recover::exhaustion_is_explicit_every_resource`.

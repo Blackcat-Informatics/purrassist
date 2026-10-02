@@ -186,7 +186,11 @@ targets' mutation tokens so mutation can create or move field boundaries).
   missing, bare, repeated or foreign-language fence line, a missing or other
   type, R1 `<think>` reasoning, a missing call closer between calls,
   truncated fenced arguments, a fence inside a string value, a V3.1 section
-  beside a V3 section), and negative cases (including JSON content
+  beside a V3 section), Kimi-K2 repairs (missing section and call closers,
+  an omitted section opener, the singular section tokens, ids without
+  `:IDX` or the `functions.` prefix, a dotted name, a colon in the name,
+  duplicate ids, Thinking reasoning, truncated arguments, a tool message),
+  and negative cases (including JSON content
   that is not call-shaped, a bare `[TOOL_CALLS]`, and nested unterminated
   call objects); the header bytes cycle through five
   fixed request configurations.

@@ -223,6 +223,7 @@ fn all_registered_dialects_have_anchor_fixtures() {
             "deepseek-v3.1.v1",
             "deepseek-v3.v1",
             "hermes.v1",
+            "kimi-k2.v1",
             "llama3-json.v1",
             "mistral-v11.v1",
             "mistral-v3.v1",
@@ -397,6 +398,35 @@ fn assert_deepseek_call(dialect: &DialectId, raw: &str, call: &RawCall, file: &s
     assert!(raw[end..].contains("<｜tool▁call▁end｜>"), "{file}");
 }
 
+/// One call of a Kimi-K2 tool-calls section: the composite id
+/// `functions.NAME:IDX` between the call opener and the argument token is
+/// the call's id and holds its name; the arguments end at the call closer.
+fn assert_kimi_call(raw: &str, call: &RawCall, file: &str) {
+    let open = raw.find("<|tool_call_begin|>").expect("call opener") + "<|tool_call_begin|>".len();
+    let argument = raw
+        .find("<|tool_call_argument_begin|>")
+        .expect("argument token");
+    let id = raw[open..argument].trim();
+    assert_eq!(
+        call.id.as_ref().map(|id| id.value.as_str()),
+        Some(id),
+        "{file}"
+    );
+    let name = call.name.as_ref().expect("name");
+    assert_eq!(
+        id.strip_prefix("functions.")
+            .unwrap_or(id)
+            .rsplit_once(':')
+            .map(|(name, _)| name),
+        Some(name.value.as_str()),
+        "{file}"
+    );
+    let start = argument + "<|tool_call_argument_begin|>".len();
+    let end = raw[start..].find("<|tool_call_end|>").expect("call closer") + start;
+    let arguments = json::parse(&raw[start..end]).expect("arguments JSON");
+    assert!(arguments.equivalent(&call.arguments.root), "{file}");
+}
+
 #[test]
 fn ir_spans_slice_back_to_source() {
     for dialect in DialectId::BUILT_IN {
@@ -430,6 +460,8 @@ fn ir_spans_slice_back_to_source() {
                     assert!(decoded.equivalent(&call.arguments.root), "{}", fixture.file);
                 } else if matches!(dialect, DialectId::DeepSeekV31 | DialectId::DeepSeekV3) {
                     assert_deepseek_call(&dialect, raw, call, &fixture.file);
+                } else if dialect == DialectId::KimiK2 {
+                    assert_kimi_call(raw, call, &fixture.file);
                 } else if dialect == DialectId::MistralV11 {
                     // [TOOL_CALLS]NAME[CALL_ID]ID[ARGS]{...}: the arguments
                     // after the last [ARGS] are the call's.
@@ -585,6 +617,7 @@ fn reasoning_markers_are_declared() {
         DialectId::Hermes,
         DialectId::DeepSeekV31,
         DialectId::DeepSeekV3,
+        DialectId::KimiK2,
     ] {
         assert_eq!(
             dialect.grammar().reasoning(),
@@ -720,6 +753,25 @@ fn result_productions_read_tool_results() {
     );
 }
 
+/// Kimi-K2 tool results are tool messages headed `## Return of ID`.
+#[test]
+fn kimi_result_production_reads_tool_messages() {
+    let tools = ToolSet::compile([], Budget::default()).expect("no tools");
+    let set = dialect_set(&[DialectId::KimiK2]);
+    let source = "<|im_system|>tool<|im_middle|>## Return of functions.get_weather:0\n{\"temperature\": 22.0}<|im_end|>";
+    let turn = recognize(&set, &tools, source);
+    let found = results(&turn);
+    assert_eq!(found.len(), 1, "{:#?}", turn.pieces());
+    assert_eq!(
+        found[0].capture_text(CaptureKind::Content, source.as_bytes()),
+        Some("{\"temperature\": 22.0}")
+    );
+    assert_eq!(
+        found[0].id.as_ref().map(|id| id.value.as_str()),
+        Some("functions.get_weather:0")
+    );
+}
+
 /// DeepSeek-V3.1 and V3 tool results sit between the tool-output tokens
 /// (V3 wraps a run of them in the tool-outputs tokens).
 #[test]
@@ -763,6 +815,7 @@ fn declaration_productions_match_tool_declarations() {
         DialectId::Llama3Json,
         DialectId::MistralV3,
         DialectId::MistralV11,
+        DialectId::KimiK2,
     ] {
         let set = declaration_reader(&dialect);
         for fixture in fixtures(&dialect) {

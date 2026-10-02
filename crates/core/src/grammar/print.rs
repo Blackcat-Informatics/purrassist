@@ -229,6 +229,11 @@ pub(crate) trait Fill {
     }
     /// A `next`: the printing moves on to the next call of the group.
     fn next_call(&mut self, governor: &mut Governor) -> Result<(), PrintError>;
+    /// The text of an uncaptured class terminal inside a composite id (an
+    /// `id:` capture holding a `name:` capture): the call's index.
+    fn ordinal(&mut self) -> String;
+    /// A composite id was printed as `text`.
+    fn composite_id(&mut self, text: &str);
 }
 
 /// The production walker: the printed bytes and the class patterns compiled
@@ -237,6 +242,8 @@ pub(crate) struct Printer<'g> {
     pub(crate) grammar: &'g CompiledGrammar,
     patterns: Vec<Option<Pattern>>,
     pub(crate) out: Vec<u8>,
+    /// Inside a composite id.
+    composite: bool,
 }
 
 impl<'g> Printer<'g> {
@@ -245,6 +252,7 @@ impl<'g> Printer<'g> {
             grammar,
             patterns: vec![None; grammar.classes.len()],
             out: Vec::new(),
+            composite: false,
         }
     }
 
@@ -276,7 +284,17 @@ impl<'g> Printer<'g> {
             }
             Expr::Closer(id) => self.emit(&grammar.closer_spellings(*id)[0], governor)?,
             Expr::Class(id) => {
-                let text = fill.class(self, *id, capture, governor)?;
+                let mut ordinal = None;
+                if capture.is_none() && self.composite {
+                    let text = fill.ordinal();
+                    if self.accepts(*id, text.as_bytes(), governor)? {
+                        ordinal = Some(text);
+                    }
+                }
+                let text = match ordinal {
+                    Some(text) => text,
+                    None => fill.class(self, *id, capture, governor)?,
+                };
                 if !self.accepts(*id, text.as_bytes(), governor)? {
                     return Err(PrintError::Unrepresentable { text });
                 }
@@ -290,6 +308,20 @@ impl<'g> Printer<'g> {
                 let text = fill.slot(self, *codec, *delimiters, capture)?;
                 governor.charge(Resource::Work, size(text.len()).saturating_mul(K_PRINT))?;
                 self.bounded(&text, *delimiters, governor)?;
+            }
+            Expr::Capture {
+                kind: CaptureKind::Id,
+                inner,
+            } if self.holds(inner).name => {
+                // A composite id: the call's name and index, printed through
+                // the id's own expression.
+                let start = self.out.len();
+                let outer = core::mem::replace(&mut self.composite, true);
+                let printed = self.walk(fill, inner, None, governor);
+                self.composite = outer;
+                printed?;
+                let text = String::from_utf8_lossy(&self.out[start..]).into_owned();
+                fill.composite_id(&text);
             }
             Expr::Capture { kind, inner } => self.walk(fill, inner, Some(*kind), governor)?,
             Expr::Sequence(items) => {
@@ -386,10 +418,11 @@ impl<'g> Printer<'g> {
         }
     }
 
-    /// Whether every printing of `expr` holds an `insert(...)` or a
-    /// `dropped:` capture: a repaired form, which an alternation never
-    /// chooses when another of its alternatives is printable (text a call
-    /// drops is never part of a well-formed call).
+    /// Whether every printing of `expr` holds an `insert(...)`, a
+    /// `dropped:` capture, or a `name:` capture of more than one terminal:
+    /// a form an alternation never chooses when another of its alternatives
+    /// is printable (text a call drops is never part of a well-formed call,
+    /// and a name prints as one terminal).
     pub(crate) fn repaired(&self, expr: &Expr) -> bool {
         match expr {
             Expr::Insert(_)
@@ -397,6 +430,13 @@ impl<'g> Printer<'g> {
                 kind: CaptureKind::Dropped,
                 ..
             } => true,
+            // A name read through a sequence (Kimi-K2's colon-separated name
+            // parts): its value prints only through a single terminal, so
+            // another alternative prints it.
+            Expr::Capture {
+                kind: CaptureKind::Name,
+                inner,
+            } if !self.terminal(inner) => true,
             Expr::Capture { inner, .. } => self.repaired(inner),
             Expr::Sequence(items) => items.iter().any(|item| self.repaired(item)),
             Expr::Choice(items) => items.iter().all(|item| self.repaired(item)),
@@ -406,9 +446,22 @@ impl<'g> Printer<'g> {
         }
     }
 
+    /// Whether `expr` is one terminal (directly or through references).
+    fn terminal(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Literal(_) | Expr::Class(_) => true,
+            Expr::Reference(id) => self.terminal(self.grammar.production_expr(*id)),
+            _ => false,
+        }
+    }
+
     /// Whether `expr` can be printed with only the `available` captures.
     pub(crate) fn printable(&self, expr: &Expr, available: Kinds) -> bool {
         match expr {
+            Expr::Capture {
+                kind: CaptureKind::Id,
+                inner,
+            } if self.holds(inner).name => self.printable(inner, available),
             Expr::Capture { kind, inner } => {
                 available.contains(*kind) && self.printable(inner, available)
             }
@@ -534,6 +587,8 @@ pub(crate) struct Canonical<'v> {
     available: Kinds,
     occurrence: Option<usize>,
     printed: Kinds,
+    /// The current call's position in the group.
+    position: usize,
 }
 
 impl<'v> Canonical<'v> {
@@ -551,6 +606,7 @@ impl<'v> Canonical<'v> {
             rest,
             occurrence: None,
             printed: Kinds::default(),
+            position: 0,
         }
     }
 
@@ -759,7 +815,18 @@ impl Fill for Canonical<'_> {
         self.available = Self::kinds(&values);
         self.values = values;
         self.occurrence = None;
+        self.position += 1;
         Ok(())
+    }
+
+    /// The call's position in the group, so the printed composite ids of
+    /// one instance are distinct.
+    fn ordinal(&mut self) -> String {
+        self.position.to_string()
+    }
+
+    fn composite_id(&mut self, _: &str) {
+        self.printed = self.printed.with(CaptureKind::Id);
     }
 
     fn until(&mut self, capture: Option<CaptureKind>) -> Result<String, PrintError> {

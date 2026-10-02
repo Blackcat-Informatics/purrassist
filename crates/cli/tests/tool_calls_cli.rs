@@ -607,3 +607,63 @@ fn deepseek_v3_recovers_and_emits_via_cli() {
     );
     fs::remove_file(tools).unwrap();
 }
+
+/// Kimi-K2 with no `--dialect`: a Thinking turn's section is one call per
+/// call, each keeping its `functions.NAME:IDX` id, and a Hermes call emitted
+/// as `kimi-k2.v1` recovers to the same call.
+#[test]
+fn kimi_k2_recovers_and_emits_via_cli() {
+    let turn = "<think>Two listings.</think><|tool_calls_section_begin|><|tool_call_begin|>functions.list_dir:0<|tool_call_argument_begin|>{\"path\": \"src\"}<|tool_call_end|><|tool_call_begin|>functions.list_dir:1<|tool_call_argument_begin|>{\"path\": \"docs\", \"depth\": 1}<|tool_call_end|><|tool_calls_section_end|>";
+    let (output, tools) = run(&[], turn.as_bytes());
+    assert_eq!(output.status.code(), Some(0));
+    let node = result(&output);
+    assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+    for (index, (id, arguments)) in [
+        ("functions.list_dir:0", r#"{"path":"src"}"#),
+        ("functions.list_dir:1", r#"{"path":"docs","depth":1}"#),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(
+            node.pointer(&format!("/value/calls/{index}/dialect"))
+                .and_then(Node::as_str),
+            Some("kimi-k2.v1")
+        );
+        assert_eq!(
+            node.pointer(&format!("/value/calls/{index}/id"))
+                .and_then(Node::as_str),
+            Some(id)
+        );
+        assert_eq!(
+            node.pointer(&format!("/value/calls/{index}/arguments"))
+                .unwrap()
+                .to_json(),
+            arguments
+        );
+    }
+    fs::remove_file(tools).unwrap();
+    let hermes =
+        b"<tool_call>\n{\"name\": \"list_dir\", \"arguments\": {\"path\": \"src\"}}\n</tool_call>";
+    let (output, tools) = run(&["--emit", "kimi-k2.v1"], hermes);
+    let node = result(&output);
+    let emitted = node
+        .pointer("/value/emitted/output/text")
+        .and_then(Node::as_str)
+        .expect("emitted markup")
+        .to_owned();
+    assert_eq!(
+        emitted,
+        "<|tool_calls_section_begin|><|tool_call_begin|>functions.list_dir:0<|tool_call_argument_begin|>{\"path\":\"src\"}<|tool_call_end|><|tool_calls_section_end|>"
+    );
+    fs::remove_file(tools).unwrap();
+    let (output, tools) = run(&[], emitted.as_bytes());
+    let node = result(&output);
+    assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+    assert_eq!(
+        node.pointer("/value/calls/0/dialect")
+            .and_then(Node::as_str),
+        Some("kimi-k2.v1")
+    );
+    fs::remove_file(tools).unwrap();
+}

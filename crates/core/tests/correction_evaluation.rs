@@ -645,9 +645,9 @@ fn evaluate(name: &str, tally: Tally, total_cases: usize, limit: f64) {
 }
 
 /// The tool-call corpus tallies `docs/MATCHING-QUALITY.md` quotes.
-const TOOL_CALL_CASES: usize = 8636;
-const TOOL_CALL_CORRECT: u64 = 5813;
-const TOOL_CALL_ABSTAINED: u64 = 2823;
+const TOOL_CALL_CASES: usize = 9900;
+const TOOL_CALL_CORRECT: u64 = 6685;
+const TOOL_CALL_ABSTAINED: u64 = 3215;
 
 // ---------------------------------------------------------------------
 // Documented numbers: `docs/MATCHING-QUALITY.md`'s evaluation table quotes

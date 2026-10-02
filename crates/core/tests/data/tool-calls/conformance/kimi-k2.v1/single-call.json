@@ -1,0 +1,38 @@
+{
+  "description": "One call as the Kimi-K2-Instruct template renders it: a tool-calls section with one call (the id functions.NAME:IDX, the argument token, the arguments as JSON), the section closer, and the end-of-message token (content).",
+  "markup": "<|tool_calls_section_begin|><|tool_call_begin|>functions.get_weather:0<|tool_call_argument_begin|>{\"city\": \"San Francisco\", \"unit\": \"fahrenheit\"}<|tool_call_end|><|tool_calls_section_end|><|im_end|>",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "get_weather",
+      "id": "functions.get_weather:0",
+      "arguments": {"city": "San Francisco", "unit": "fahrenheit"}
+    }
+  ]
+}

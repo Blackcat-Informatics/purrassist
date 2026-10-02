@@ -11,7 +11,7 @@ call. The operation is `tool_call.recover.v1`, implemented in
 `recover_tool_calls` MCP tool, and the `purrassist recover-tool-calls` CLI
 command.
 
-Eight dialects are built in:
+Nine dialects are built in:
 
 | Dialect | Shape | Reference |
 | --- | --- | --- |
@@ -22,12 +22,13 @@ Eight dialects are built in:
 | `mistral-v3.v1` | `[TOOL_CALLS] [{"name": NAME, "arguments": {...}, "id": ID}, ...]` | [dialect](dialects/mistral-v3.v1.md) |
 | `deepseek-v3.1.v1` | `<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>NAME<｜tool▁sep｜>{...}<｜tool▁call▁end｜>...<｜tool▁calls▁end｜>` | [dialect](dialects/deepseek-v3.1.v1.md) |
 | `deepseek-v3.v1` | `<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME` + `` ```json `` block + `<｜tool▁call▁end｜>...<｜tool▁calls▁end｜>` | [dialect](dialects/deepseek-v3.v1.md) |
+| `kimi-k2.v1` | `<\|tool_calls_section_begin\|><\|tool_call_begin\|>functions.NAME:IDX<\|tool_call_argument_begin\|>{...}<\|tool_call_end\|>...<\|tool_calls_section_end\|>` | [dialect](dialects/kimi-k2.v1.md) |
 | `mistral-v11.v1` | `[TOOL_CALLS]NAME[CALL_ID]ID[ARGS]{...}` (`[CALL_ID]` optional), repeated per call | [dialect](dialects/mistral-v11.v1.md) |
 
 Callers add their own dialects with the grammar DSL
 ([GRAMMAR.md](GRAMMAR.md)). Streaming recognition, `purrassist-derive`, and the
-remaining dialects (Anthropic tool_use, GLM, Kimi, Gemma, Harmony, Pythonic,
-bare JSON) are tracked in issue #4.
+remaining dialects (Anthropic tool_use, GLM, Gemma, Harmony, Pythonic, bare
+JSON) are tracked in issue #4.
 
 ## Design
 
@@ -54,7 +55,8 @@ bare JSON) are tracked in issue #4.
   Equal-cost segmentations of one span are packed into a local choice;
   independent choices are never multiplied out during recognition. Each call
   is then resolved against the tool set (tool name, parameter names, repeats,
-  typing, schema validation), and its readings are ranked by cost and a
+  typing, schema validation; a call that names no tool is read as the one
+  declared tool its arguments fit, a guess, `tool_call.name.from-arguments`), and its readings are ranked by cost and a
   content digest, a total order independent of declaration order. Several
   equally good readings of one call make that call `Ambiguous`; the
   segmentations of each contested span that recover the same calls are
@@ -337,6 +339,6 @@ are in [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound).
 - [dialects/](dialects/): public sources, accepted forms, printing, and
   deliberate exclusions of each built-in dialect.
 - [MATCHING-QUALITY.md](../MATCHING-QUALITY.md#tool-call-recovery-evaluation):
-  the 8,636-case correction evaluation, per rule and per dialect.
+  the 9,900-case correction evaluation, per rule and per dialect.
 - [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound): the cost
   bound, budgets for large outputs, and throughput.

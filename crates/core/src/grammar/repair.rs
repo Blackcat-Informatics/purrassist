@@ -43,6 +43,9 @@ use core::marker::PhantomData;
 pub(crate) enum Status {
     /// Failed mid-input; rewound to the start of its literal.
     Failed,
+    /// Failed at an earlier step beside a sibling configuration that lived
+    /// on; rewound, and repaired only by a respelling.
+    Respelled,
     /// Waiting at a literal at the end of input.
     Stuck,
     /// Consumed every byte up to the current position.
@@ -103,15 +106,23 @@ impl<'a, 's> RepairState<'a, 's> {
             return None;
         }
         let pending = step.bytes(thread.entry..failure.at + 1);
-        let applies = (opened && (literal.closer.is_some() || step.grammar.stray.admits(pending)))
-            || (!tables.variants.trie.is_empty() && tables.variants.trie.admits(pending))
+        let respelled = (!tables.variants.trie.is_empty() && tables.variants.trie.admits(pending))
             || (!tables.confusables.trie.is_empty() && tables.confusables.trie.admits(pending));
+        let applies = respelled
+            || (!failure.respell
+                && opened
+                && (literal.closer.is_some() || step.grammar.stray.admits(pending)));
         let rewound = Thread {
             sub: Sub::Lit(0),
             pos: thread.entry,
             ..thread
         };
-        applies.then(|| make(rewound, Status::Failed))
+        let status = if failure.respell {
+            Status::Respelled
+        } else {
+            Status::Failed
+        };
+        applies.then(|| make(rewound, status))
     }
 
     fn successor(&self, thread: Thread, status: Status, operator: EditOperator) -> Self {
@@ -299,7 +310,7 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
         governor.charge(Resource::Work, K_ERR)?;
         Ok(match self.status {
             Status::Live | Status::Completed => Acceptance::Accepted { validation: 0 },
-            Status::Failed | Status::Stuck => Acceptance::Rejected,
+            Status::Failed | Status::Respelled | Status::Stuck => Acceptance::Rejected,
         })
     }
 
@@ -321,11 +332,12 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
         let tables = &grammar.literal_tables[lit as usize];
         let at = self.thread.pos;
         match self.status {
-            Status::Failed => {
+            Status::Failed | Status::Respelled => {
+                let respell = self.status == Status::Respelled;
                 let pending = context.step.bytes(at..context.until);
                 let modes = [
                     (
-                        context.opened && grammar.stray.admits(pending),
+                        !respell && context.opened && grammar.stray.admits(pending),
                         Sub::Skip(ROOT),
                         EditOperator::DeleteStrayCloser,
                     ),
@@ -341,7 +353,7 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
                         EditOperator::TerminalConfusable,
                     ),
                 ];
-                if context.opened && literal.closer.is_some() {
+                if !respell && context.opened && literal.closer.is_some() {
                     let replacement = literal.bytes.clone();
                     // A closer missing mid-message: the wrapper's when it
                     // ends the production, an inner element's otherwise.

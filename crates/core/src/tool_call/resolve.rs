@@ -1289,15 +1289,11 @@ impl<'a> Resolver<'a> {
                     fault: fault.fault,
                 })
         });
-        let Some(name) = &raw.name else {
-            governor.charge(Resource::ScratchBytes, READING_BYTES)?;
-            return Ok(vec![unresolved(
-                early.unwrap_or(UnresolvedReason::MissingName),
-                None,
-                base,
-            )]);
+        let targets = match &raw.name {
+            Some(name) => self.targets(raw, name, governor)?,
+            None if early.is_some() => vec![Target::Blocked(UnresolvedReason::MissingName)],
+            None => self.targets_from_arguments(raw, governor)?,
         };
-        let targets = self.targets(raw, name, governor)?;
         governor.charge(
             Resource::ScratchBytes,
             size(targets.len()).saturating_mul(TARGET_BYTES.saturating_add(READING_BYTES)),
@@ -1479,6 +1475,104 @@ impl<'a> Resolver<'a> {
                     tool.name().to_owned(),
                     base.saturating_mul(rules::multiplier(rule.grounding)),
                 )),
+            ));
+        }
+        Ok(targets)
+    }
+
+    /// The tools a call that names no tool can denote: the declared tools
+    /// its arguments fit (`tool_call.name.from-arguments`). A tool fits when
+    /// every required parameter is present and every member is one of its
+    /// declared parameters or aliases (an undeclared member is no evidence
+    /// for a tool, even one that keeps it under `PassThrough`). No fitting
+    /// tool leaves the call
+    /// [`UnresolvedReason::MissingName`]; a fitting tool under `Structural`
+    /// blocks the guess, as for `tool_call.name.match`.
+    fn targets_from_arguments(
+        &self,
+        raw: &RawCall,
+        governor: &mut Governor,
+    ) -> Result<Vec<Target<'a>>, StopReason> {
+        const RULE: &str = "tool_call.name.from-arguments";
+        let Value::Object(members) = &raw.arguments.root.value else {
+            return Ok(vec![Target::Blocked(UnresolvedReason::MissingName)]);
+        };
+        let mut found: Vec<&CompiledTool> = Vec::new();
+        for tool in self.tools.tools() {
+            governor.charge(Resource::Work, size(members.len()).saturating_add(1))?;
+            let object = &tool.argument_shape().arguments;
+            governor.charge(
+                Resource::ScratchBytes,
+                size(members.len()).saturating_mul(size(core::mem::size_of::<&str>())),
+            )?;
+            let mut present: Vec<&str> = Vec::with_capacity(members.len());
+            let mut fits = true;
+            for member in members {
+                // A member the tool does not declare is no evidence that the
+                // call names it, even where the tool would keep the member.
+                match object.resolve_name(&member.key) {
+                    Some(canonical) => present.push(canonical),
+                    None => fits = false,
+                }
+            }
+            fits &= object
+                .required
+                .iter()
+                .all(|required| present.contains(&required.as_str()));
+            if fits {
+                found.push(tool);
+            }
+        }
+        if found.is_empty() {
+            return Ok(vec![Target::Blocked(UnresolvedReason::MissingName)]);
+        }
+        if self.policies.exact {
+            return Ok(vec![Target::Blocked(
+                UnresolvedReason::RepairNotPermitted { rule: RULE.into() },
+            )]);
+        }
+        if found
+            .iter()
+            .any(|tool| self.policies.effective(tool).1 == RepairPolicy::Structural)
+        {
+            return Ok(vec![Target::Blocked(UnresolvedReason::RuleNotAdmitted {
+                rule: RULE.into(),
+                policy: RepairPolicy::Structural,
+            })]);
+        }
+        let rule = rules::resolution_rule(RULE);
+        let keys: Vec<String> = members
+            .iter()
+            .map(|member| format!("`{}`", member.key))
+            .collect();
+        let keys = if keys.is_empty() {
+            "no members".to_owned()
+        } else {
+            keys.join(", ")
+        };
+        let count = found.len();
+        let mut targets = Vec::with_capacity(count);
+        for tool in found {
+            let explanation = if count == 1 {
+                format!(
+                    "the call names no tool; its arguments ({keys}) fit tool `{}` and no other declared tool",
+                    tool.name()
+                )
+            } else {
+                format!(
+                    "the call names no tool; its arguments ({keys}) fit tool `{}`, one of {count} declared tools they fit",
+                    tool.name()
+                )
+            };
+            let evidence = self.evidence(
+                rule.id,
+                explanation,
+                Some(raw.span.clone()),
+                destination(raw, ""),
+            );
+            targets.push(Target::Tool(
+                tool,
+                Some((rule, evidence, tool.name().to_owned(), rule.cost)),
             ));
         }
         Ok(targets)

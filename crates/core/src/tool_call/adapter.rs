@@ -184,8 +184,8 @@ const KEYWORD_RECORD: u64 = 48;
 ///
 /// [`DeclarationForm::Qwen3CoderXml`], [`DeclarationForm::Hermes`],
 /// [`DeclarationForm::Llama3Json`], [`DeclarationForm::MistralV3`],
-/// [`DeclarationForm::MistralV11`], [`DeclarationForm::DeepSeekV31`] and
-/// [`DeclarationForm::DeepSeekV3`] are printed by their dialect grammar's
+/// [`DeclarationForm::MistralV11`], [`DeclarationForm::DeepSeekV31`],
+/// [`DeclarationForm::DeepSeekV3`] and [`DeclarationForm::KimiK2`] are printed by their dialect grammar's
 /// `declaration` production (see [`emit`](super::emit)): a Qwen3-Coder
 /// `<function>` entry
 /// `<function><name>NAME</name><description>DESC</description><parameters>SCHEMA</parameters></function>`,
@@ -193,8 +193,8 @@ const KEYWORD_RECORD: u64 = 48;
 /// `### NAME\nDescription: DESC\n\nParameters: SCHEMA`, a DeepSeek-V3
 /// fenced entry (the shape below between a `` ```json `` line and a
 /// `` ``` `` line), and a Hermes
-/// `<tools>` entry, Llama 3 function entry or Mistral `[AVAILABLE_TOOLS]`
-/// entry (the same shape)
+/// `<tools>` entry, Llama 3 function entry, Mistral `[AVAILABLE_TOOLS]`
+/// entry or Kimi-K2 `tool_declare` entry (the same shape)
 /// `{"type":"function","function":{"name":"NAME","description":"DESC","parameters":SCHEMA}}`.
 /// `SCHEMA` is always the exact parameters schema text, verbatim (the
 /// chat template's per-parameter XML expansion of the schema is not
@@ -232,6 +232,8 @@ pub enum DeclarationForm {
     DeepSeekV31,
     /// A DeepSeek-V3 / R1 fenced JSON tool entry (`deepseek-v3.v1`).
     DeepSeekV3,
+    /// A Kimi-K2 `tool_declare` entry (`kimi-k2.v1`).
+    KimiK2,
 }
 
 impl DeclarationForm {
@@ -239,9 +241,9 @@ impl DeclarationForm {
     ///
     /// ```
     /// use purrassist_core::tool_call::DeclarationForm;
-    /// assert_eq!(DeclarationForm::ALL.len(), 10);
+    /// assert_eq!(DeclarationForm::ALL.len(), 11);
     /// ```
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::OpenAi,
         Self::Mcp,
         Self::Anthropic,
@@ -252,6 +254,7 @@ impl DeclarationForm {
         Self::MistralV11,
         Self::DeepSeekV31,
         Self::DeepSeekV3,
+        Self::KimiK2,
     ];
 
     /// The dialect whose `declaration` production prints this form, or
@@ -272,6 +275,7 @@ impl DeclarationForm {
             Self::MistralV11 => Some(DialectId::MistralV11),
             Self::DeepSeekV31 => Some(DialectId::DeepSeekV31),
             Self::DeepSeekV3 => Some(DialectId::DeepSeekV3),
+            Self::KimiK2 => Some(DialectId::KimiK2),
             Self::OpenAi | Self::Mcp | Self::Anthropic => None,
         }
     }
@@ -288,6 +292,7 @@ impl DeclarationForm {
             Self::MistralV11 => "Mistral v11",
             Self::DeepSeekV31 => "DeepSeek-V3.1",
             Self::DeepSeekV3 => "DeepSeek-V3",
+            Self::KimiK2 => "Kimi-K2",
         }
     }
 
@@ -300,7 +305,8 @@ impl DeclarationForm {
             | Self::MistralV3
             | Self::MistralV11
             | Self::DeepSeekV31
-            | Self::DeepSeekV3 => "parameters",
+            | Self::DeepSeekV3
+            | Self::KimiK2 => "parameters",
             Self::Mcp => "inputSchema",
             Self::Anthropic => "input_schema",
         }
@@ -559,7 +565,8 @@ pub(super) fn render_canonical(
         | DeclarationForm::MistralV3
         | DeclarationForm::MistralV11
         | DeclarationForm::DeepSeekV31
-        | DeclarationForm::DeepSeekV3 => parameters,
+        | DeclarationForm::DeepSeekV3
+        | DeclarationForm::KimiK2 => parameters,
         DeclarationForm::Mcp | DeclarationForm::Anthropic => {
             Some(parameters.unwrap_or(NO_PARAMETERS))
         }
@@ -578,7 +585,8 @@ pub(super) fn render_canonical(
         | DeclarationForm::MistralV3
         | DeclarationForm::MistralV11
         | DeclarationForm::DeepSeekV31
-        | DeclarationForm::DeepSeekV3 => {
+        | DeclarationForm::DeepSeekV3
+        | DeclarationForm::KimiK2 => {
             format!("{{\"type\":\"function\",\"function\":{{{fields}}}}}")
         }
         DeclarationForm::Mcp | DeclarationForm::Anthropic => format!("{{{fields}}}"),

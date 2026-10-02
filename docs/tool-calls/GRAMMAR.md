@@ -19,15 +19,16 @@ into a `CompiledGrammar`. One compiled grammar serves three purposes:
   choices to print well-formed calls for given argument shapes, for tests and
   corpora.
 
-The eight built-in dialects are written in this DSL:
+The nine built-in dialects are written in this DSL:
 [`qwen3-coder-xml.v1`](../../crates/core/src/tool_call/dialects/qwen3-coder-xml.v1.grammar),
 [`hermes.v1`](../../crates/core/src/tool_call/dialects/hermes.v1.grammar),
 [`openai-tool-calls.v1`](../../crates/core/src/tool_call/dialects/openai-tool-calls.v1.grammar),
 [`llama3-json.v1`](../../crates/core/src/tool_call/dialects/llama3-json.v1.grammar),
 [`mistral-v3.v1`](../../crates/core/src/tool_call/dialects/mistral-v3.v1.grammar),
 [`mistral-v11.v1`](../../crates/core/src/tool_call/dialects/mistral-v11.v1.grammar),
-[`deepseek-v3.1.v1`](../../crates/core/src/tool_call/dialects/deepseek-v3.1.v1.grammar), and
-[`deepseek-v3.v1`](../../crates/core/src/tool_call/dialects/deepseek-v3.v1.grammar).
+[`deepseek-v3.1.v1`](../../crates/core/src/tool_call/dialects/deepseek-v3.1.v1.grammar),
+[`deepseek-v3.v1`](../../crates/core/src/tool_call/dialects/deepseek-v3.v1.grammar), and
+[`kimi-k2.v1`](../../crates/core/src/tool_call/dialects/kimi-k2.v1.grammar).
 A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 [Add a custom dialect](#add-a-custom-dialect).
 
@@ -153,10 +154,16 @@ terminal (`"` written as `”` after a name) is read like an ASCII one,
 from its first byte. Printing writes the
 canonical spelling. Each spelling adds recognizer configurations
 (`CompiledGrammar::configuration_bound`), and so per-byte work; declare only
-the confusions a model actually makes. One canonical text may have several
+the confusions a model actually makes. A confusable or closer-variant
+spelling is read even when another literal the grammar expects at the same
+place shares its first bytes and is still being matched when the spelling
+departs from its canonical form (Kimi-K2's singular
+`<|tool_call_section_end|>` beside `<|tool_call_begin|>`): the failed literal
+stays a respelling seed until the sibling fails too. One canonical text may have several
 variants: the built-in DeepSeek-V3.1 and V3 dialects read `｜` as `|`, and
 `▁` as `_` or a space, the renderings detokenizers produce for their special
-tokens.
+tokens; a canonical text may also be longer than one character (Kimi-K2's
+`confusable "calls_section" "call_section"`).
 
 ## Layout
 
@@ -298,7 +305,7 @@ call.
 | Capture | Records |
 | --- | --- |
 | `name:` | The tool name. |
-| `id:` | The call id (printed from the id policy's assignment). |
+| `id:` | The call id (printed from the id policy's assignment). An `id:` capture whose expression holds a `name:` capture is a *composite id* (Kimi-K2's `functions.NAME:IDX`): recognition takes the whole span as the call's id and the inner capture as its name; printing writes the expression with the call's name, and each uncaptured class terminal inside it as the call's position in the printed instance (0, 1, …) when the class accepts that, so the printed ids are distinct. |
 | `arguments:` | The whole argument value; must wrap a `slot(...)`. |
 | `param-name:` | One parameter's name. |
 | `param-value:` | One parameter's value; must wrap a `slot(...)`. |
