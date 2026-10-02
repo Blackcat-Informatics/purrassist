@@ -7,8 +7,8 @@ use purrassist::{
     AssistResult, CancellationToken, Effort, Governor, Outcome, Receipt, StopReason,
     json::{Node, Value},
     tool_call::{
-        AmbiguityPolicy, DialectId, DialectSet, DialectSetError, Effects, EmitTarget,
-        GenerationStop, IdPolicy, PolicySelection, RECOVER_OPERATION, ReasoningPolicy,
+        AmbiguityPolicy, DEFAULT_ID_PREFIX, DialectId, DialectSet, DialectSetError, Effects,
+        EmitTarget, GenerationStop, IdPolicy, PolicySelection, RECOVER_OPERATION, ReasoningPolicy,
         RepairPolicy, ToolCalls, ToolChoice, ToolRecoveryRequest, ToolSet, ToolSetError,
     },
 };
@@ -267,13 +267,7 @@ fn ids(node: Option<&Node>) -> Result<IdPolicy, String> {
     match &node.value {
         Value::String(text) if text == "source" => Ok(IdPolicy::Source),
         Value::Object(members) => {
-            let IdPolicy::Prefix {
-                mut prefix,
-                mut start,
-            } = IdPolicy::default()
-            else {
-                unreachable!("the default id policy is a prefix policy")
-            };
+            let (mut prefix, mut start) = (DEFAULT_ID_PREFIX.to_owned(), 0);
             for member in members {
                 match (member.key.as_str(), &member.value.value) {
                     ("prefix", Value::String(text)) => text.clone_into(&mut prefix),

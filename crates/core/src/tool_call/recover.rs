@@ -193,12 +193,76 @@ pub trait IdGenerator: Send + Sync {
     fn id(&self, call_index: usize) -> String;
 }
 
+/// The text that starts every [`IdPolicy::Prefix`] id unless the caller
+/// names another prefix, and every id [`IdPolicy::Turn`] assigns.
+pub const DEFAULT_ID_PREFIX: &str = "call_";
+
+/// The number of hexadecimal digits of the turn digest in an
+/// [`IdPolicy::Turn`] id: 12 digits, 48 bits.
+pub const TURN_TAG_DIGITS: usize = 12;
+
+/// The text before the call index of every id [`IdPolicy::Turn`] assigns.
+///
+/// For the turn whose output bytes have digest `turn` it is `call_{tag}_`,
+/// where `tag` is the first [`TURN_TAG_DIGITS`] lowercase hexadecimal
+/// digits of the SHA-256 digest of the output (the digest the receipt names
+/// as its source, and [`ToolCalls::turn`]). Infallible.
+///
+/// ```
+/// use purrassist_core::digest::Digest;
+/// use purrassist_core::tool_call::turn_id_prefix;
+/// let prefix = turn_id_prefix(&Digest::of(b"abc"));
+/// // SHA-256("abc") = ba7816bf8f01cfea414140de5dae2223...
+/// assert_eq!(prefix, "call_ba7816bf8f01_");
+/// ```
+#[must_use]
+pub fn turn_id_prefix(turn: &Digest) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut prefix = String::with_capacity(DEFAULT_ID_PREFIX.len() + TURN_TAG_DIGITS + 1);
+    prefix.push_str(DEFAULT_ID_PREFIX);
+    for byte in &turn.as_bytes()[..TURN_TAG_DIGITS / 2] {
+        prefix.push(char::from(HEX[usize::from(byte >> 4)]));
+        prefix.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    prefix.push('_');
+    prefix
+}
+
 /// How recovered calls receive ids (R5.6).
 ///
-/// - `Prefix { prefix, start }`: call `i` is `{prefix}{start + i}`, and
-///   [`ToolCalls::next_id_start`] is `start + calls`; passing it back as the
-///   next round's `start` makes ids of successive rounds never collide. A
-///   counter that would overflow `u64` is an invalid request.
+/// Ids are caller-scoped: within one result they are always distinct, and
+/// every policy gives a way to keep them from colliding across the rounds
+/// of a conversation.
+///
+/// - `Turn` (the default; zero configuration): a call keeps the id the
+///   model wrote in its markup (an `OpenAI` `tool_calls[].id`), reported as
+///   both [`ToolCall::id`] and [`ToolCall::source_id`]. Every other call is
+///   numbered `call_{tag}_{i}` ([`turn_id_prefix`]), where `tag` is the first
+///   12 hexadecimal digits of the SHA-256 digest of the turn's output bytes
+///   and `i` is the call's index. If that id is itself taken (by an id
+///   assigned earlier or carried by any call of the result), `_{k}` is
+///   appended for the least `k = 1, 2, ...` that is free. A call whose
+///   dialect provides for an id ([`CompiledGrammar::call_carries_ids`](crate::grammar::CompiledGrammar::call_carries_ids))
+///   but which has none, or whose id an earlier call already holds, is
+///   recorded as a derived `tool_call.id.dedup` inference naming the
+///   assigned id; a call of a dialect whose markup carries no id (Hermes,
+///   Qwen3-Coder XML) is numbered without one, as under `Prefix`.
+///   [`ToolCalls::next_id_start`] is the number of calls.
+///
+///   Different turns get disjoint numbered ids without any caller state.
+///   The same output bytes always get the same ids (C3): recovering one
+///   turn twice is the same turn. Two different outputs share a tag with
+///   probability `2^-48`; among `n` distinct turns of one conversation the
+///   chance that any two share a tag is at most `n(n-1)/2^49` (the birthday
+///   bound): about `1.8e-11` for 100 turns, `1.8e-7` for 10,000, and
+///   `1.8e-5` for 100,000. A conversation that may repeat an identical turn
+///   and must still number it apart chains `Prefix` through
+///   `next_id_start`.
+/// - `Prefix { prefix, start }`: call `i` is `{prefix}{start + i}`, whatever
+///   id the output carries, and [`ToolCalls::next_id_start`] is
+///   `start + calls`; passing it back as the next round's `start` makes ids
+///   of successive rounds never collide. A counter that would overflow
+///   `u64` is an invalid request.
 /// - `Generator(generator)`: call `i` is `generator.id(i)`; a duplicate is an
 ///   invalid request ([`StopReason::InvalidInput`]).
 /// - `Source`: the id the call carries in the output. A missing id becomes
@@ -209,16 +273,32 @@ pub trait IdGenerator: Send + Sync {
 ///   such id is recorded as a derived `tool_call.id.dedup` inference.
 ///
 /// For `Generator` and `Source`, [`ToolCalls::next_id_start`] is the number
-/// of calls. The default is `Prefix { prefix: "call_", start: 0 }`.
+/// of calls.
 ///
 /// ```
-/// use purrassist_core::tool_call::IdPolicy;
-/// let IdPolicy::Prefix { prefix, start } = IdPolicy::default() else { unreachable!() };
-/// assert_eq!((prefix.as_str(), start), ("call_", 0));
-/// assert_eq!(format!("{:?}", IdPolicy::Source), "Source");
+/// use purrassist_core::tool_call::{Effects, IdPolicy, ToolDefinition, ToolRecoveryRequest, ToolSet};
+/// use purrassist_core::{Budget, Outcome};
+/// assert!(matches!(IdPolicy::default(), IdPolicy::Turn));
+/// let tools = ToolSet::compile([ToolDefinition::new("ls").effects(Effects::ReadOnly)], Budget::default()).unwrap();
+/// let ids = |output: &[u8]| {
+///     let Outcome::Resolved(calls) = tools.recover(output, &ToolRecoveryRequest::default()).outcome else { unreachable!() };
+///     calls.calls.into_iter().map(|call| call.id).collect::<Vec<_>>()
+/// };
+/// let first = ids(br#"<tool_call>{"name": "ls", "arguments": {}}</tool_call>"#);
+/// let second = ids(br#"<tool_call>{"name": "ls", "arguments": {} }</tool_call>"#);
+/// assert!(first[0].starts_with("call_") && first[0].ends_with("_0"));
+/// assert_ne!(first, second);
+/// assert_eq!(first, ids(br#"<tool_call>{"name": "ls", "arguments": {}}</tool_call>"#));
+/// // The model's own id is kept.
+/// let openai = br#"{"id": "call_abc", "type": "function", "function": {"name": "ls", "arguments": "{}"}}"#;
+/// assert_eq!(ids(openai), ["call_abc"]);
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub enum IdPolicy {
+    /// The model's ids, and ids numbered from the turn's digest for every
+    /// call without one of its own.
+    #[default]
+    Turn,
     /// Sequential ids with a fixed prefix.
     Prefix {
         /// The text before the number.
@@ -232,18 +312,10 @@ pub enum IdPolicy {
     Source,
 }
 
-impl Default for IdPolicy {
-    fn default() -> Self {
-        Self::Prefix {
-            prefix: "call_".into(),
-            start: 0,
-        }
-    }
-}
-
 impl fmt::Debug for IdPolicy {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Turn => formatter.write_str("Turn"),
             Self::Prefix { prefix, start } => formatter
                 .debug_struct("Prefix")
                 .field("prefix", prefix)
@@ -948,7 +1020,8 @@ impl RejectedCall {
 /// let result = tools.recover(br#"<tool_call>{"name": "ls", "arguments": {"depth": 2}}</tool_call>"#, &ToolRecoveryRequest::default());
 /// let Outcome::Resolved(calls) = result.outcome else { unreachable!() };
 /// let call = &calls.calls[0];
-/// assert_eq!((call.id.as_str(), call.tool.as_deref()), ("call_0", Some("ls")));
+/// // `call_` + the first 12 hex digits of the output's SHA-256 + `_` + index.
+/// assert_eq!((call.id.as_str(), call.tool.as_deref()), ("call_473f1a043a7d_0", Some("ls")));
 /// assert_eq!(call.arguments.to_json(), r#"{"depth":2}"#);
 /// assert!(call.is_usable());
 /// ```
@@ -1096,6 +1169,12 @@ pub struct ToolCalls {
     pub tool_choice: ToolChoiceCheck,
     /// The id counter after this recovery (see [`IdPolicy`]).
     pub next_id_start: u64,
+    /// The SHA-256 digest of the turn's output bytes: the receipt's source
+    /// digest, from which [`IdPolicy::Turn`] numbers calls
+    /// ([`turn_id_prefix`]), so emitting these calls under it reproduces
+    /// recovery's ids. Not part of the wire form, which names the digest in
+    /// its receipt.
+    pub turn: Digest,
     /// The calls printed for the request's [`EmitTarget`], with every call
     /// and rejected attempt not printed; `None` for [`EmitTarget::None`].
     /// Ids are the calls' assigned [`ToolCall::id`]s.
@@ -2016,6 +2095,7 @@ impl Recovery<'_> {
                     diagnostics: Vec::new(),
                 },
                 next_id_start: 0,
+                turn: self.source,
                 emitted: None,
             },
             facts: Vec::new(),
@@ -2170,12 +2250,10 @@ impl Recovery<'_> {
 
     /// Assign every call's id; returns the id counter after them.
     fn ids(&self, calls: &mut [ToolCall], governor: &mut Governor) -> Result<u64, StopReason> {
-        let sources: Vec<(usize, Option<String>)> = calls
-            .iter()
-            .map(|call| (call.index, call.source_id.clone()))
-            .collect();
+        let sources: Vec<IdSource> = calls.iter().map(IdSource::of).collect();
         let (ids, next) = assign_ids(
             &self.request.ids,
+            &self.source,
             &sources,
             governor,
             |position, duplicate, id, governor| {
@@ -2201,6 +2279,9 @@ impl Recovery<'_> {
             Some(source) if duplicate => {
                 format!("source call id `{source}` repeats an earlier call's id; numbered `{id}`")
             }
+            _ if matches!(self.request.ids, IdPolicy::Turn) => format!(
+                "the call carries no id, though its dialect's markup provides for one; numbered `{id}`"
+            ),
             _ => format!("the call carries no source id; numbered `{id}`"),
         };
         let evidence = Evidence {
@@ -2485,15 +2566,35 @@ impl Recovery<'_> {
     }
 }
 
+/// What id assignment needs of one call: its index, the id it carries,
+/// and whether its dialect's markup provides for an id.
+pub(crate) struct IdSource {
+    pub(crate) index: usize,
+    pub(crate) carried: Option<String>,
+    pub(crate) slot: bool,
+}
+
+impl IdSource {
+    pub(crate) fn of(call: &ToolCall) -> Self {
+        Self {
+            index: call.index,
+            carried: call.source_id.clone(),
+            slot: call.dialect.grammar().call_carries_ids(),
+        }
+    }
+}
+
 /// The id of every call under `policy` (see [`IdPolicy`]), by position,
-/// and the id counter after them. `calls` holds each call's index and the
-/// id it carries; `dedup(position, duplicate, id, governor)` is told of
-/// every carried id renumbered under [`IdPolicy::Source`] (`duplicate` when
+/// and the id counter after them. `turn` is the digest of the turn's
+/// output ([`IdPolicy::Turn`]); `dedup(position, duplicate, id, governor)`
+/// is told of every id assigned in place of a missing or repeated carried
+/// one under [`IdPolicy::Source`] and [`IdPolicy::Turn`] (`duplicate` when
 /// the call carried an id an earlier call holds). Recovery and
 /// [`emit`](super::emit) share it, so one policy numbers calls the same way.
 pub(crate) fn assign_ids(
     policy: &IdPolicy,
-    calls: &[(usize, Option<String>)],
+    turn: &Digest,
+    calls: &[IdSource],
     governor: &mut Governor,
     mut dedup: impl FnMut(usize, bool, &str, &mut Governor) -> Result<(), StopReason>,
 ) -> Result<(Vec<String>, u64), StopReason> {
@@ -2506,8 +2607,8 @@ pub(crate) fn assign_ids(
                     "id counter {start} overflows numbering {count} calls"
                 ))
             })?;
-            for (index, _) in calls {
-                let id = format!("{prefix}{}", start + size(*index));
+            for call in calls {
+                let id = format!("{prefix}{}", start + size(call.index));
                 governor.charge(Resource::ScratchBytes, size(id.len()))?;
                 ids.push(id);
             }
@@ -2515,8 +2616,9 @@ pub(crate) fn assign_ids(
         }
         IdPolicy::Generator(generator) => {
             let mut taken: BTreeMap<String, usize> = BTreeMap::new();
-            for (index, _) in calls {
-                let id = generator.id(*index);
+            for call in calls {
+                let index = call.index;
+                let id = generator.id(index);
                 governor.charge(Resource::Work, size(id.len()).saturating_add(1))?;
                 governor.charge(
                     Resource::ScratchBytes,
@@ -2527,36 +2629,51 @@ pub(crate) fn assign_ids(
                         "the id generator returned `{id}` for calls {first} and {index}"
                     )));
                 }
-                taken.insert(id.clone(), *index);
+                taken.insert(id.clone(), index);
                 ids.push(id);
             }
             Ok((ids, count))
         }
-        IdPolicy::Source => {
-            let carried: BTreeSet<&String> =
-                calls.iter().filter_map(|(_, id)| id.as_ref()).collect();
+        IdPolicy::Source | IdPolicy::Turn => {
+            let turn = matches!(policy, IdPolicy::Turn).then(|| turn_id_prefix(turn));
+            let carried: BTreeSet<&String> = calls
+                .iter()
+                .filter_map(|call| call.carried.as_ref())
+                .collect();
             governor.charge(
                 Resource::ScratchBytes,
                 carried
                     .iter()
                     .map(|id| size(id.len()).saturating_add(ENTRY_BYTES))
-                    .sum(),
+                    .sum::<u64>()
+                    .saturating_add(turn.as_ref().map_or(0, |tag| size(tag.len()))),
             )?;
             let mut taken: BTreeSet<String> = BTreeSet::new();
-            for (position, (index, source)) in calls.iter().enumerate() {
+            for (position, call) in calls.iter().enumerate() {
                 governor.charge(Resource::Work, 1)?;
-                let id = match source {
+                let index = call.index;
+                let id = match &call.carried {
                     Some(id) if !taken.contains(id) => id.clone(),
                     source => {
-                        let base = source.as_deref().unwrap_or("call");
-                        let mut id = format!("{base}#{index}");
+                        let (base, separator) = turn.as_ref().map_or_else(
+                            || {
+                                let carried = source.as_deref().unwrap_or("call");
+                                (format!("{carried}#{index}"), "#")
+                            },
+                            |tag| (format!("{tag}{index}"), "_"),
+                        );
+                        let mut id = base.clone();
                         let mut suffix = 1_u64;
                         while taken.contains(&id) || carried.contains(&id) {
                             governor.charge(Resource::Work, 1)?;
-                            id = format!("{base}#{index}#{suffix}");
+                            id = format!("{base}{separator}{suffix}");
                             suffix += 1;
                         }
-                        dedup(position, source.is_some(), &id, governor)?;
+                        // Under `Turn`, numbering a call whose dialect
+                        // carries no id is the policy, not a repair.
+                        if turn.is_none() || source.is_some() || call.slot {
+                            dedup(position, source.is_some(), &id, governor)?;
+                        }
                         id
                     }
                 };

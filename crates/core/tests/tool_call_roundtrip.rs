@@ -14,7 +14,7 @@ use purrassist_core::tool_call::{
     CallEdit, CallOutcome, CompiledTool, DeclarationForm, DialectId, DialectSet, Effects, Emission,
     EmitTarget, Finish, GenerationStop, IdGenerator, IdPolicy, Param, PolicySelection,
     ReasoningPolicy, Recognizer, RepairPolicy, Segment, SkipReason, Skipped, ToolCall, ToolCalls,
-    ToolDefinition, ToolRecoveryRequest, ToolResult, ToolSet, ToolSource,
+    ToolDefinition, ToolRecoveryRequest, ToolResult, ToolSet, ToolSource, turn_id_prefix,
 };
 use purrassist_core::wire::WireValue;
 use purrassist_core::{Budget, Governor, Outcome};
@@ -773,9 +773,13 @@ fn emit_option_end_to_end() {
         match &emission {
             Emission::OpenAiToolCalls(emitted) => {
                 assert_eq!(emitted.calls, [0, 2]);
+                // Default ids: the turn's digest tag and the call index.
+                let tag = turn_id_prefix(&calls.turn);
                 assert_eq!(
                     emitted.output.to_json(),
-                    r#"[{"id":"call_0","type":"function","function":{"name":"pay","arguments":"{\"amount\":1.50}"}},{"id":"call_2","type":"function","function":{"name":"pay","arguments":"{\"amount\":3}"}}]"#
+                    format!(
+                        r#"[{{"id":"{tag}0","type":"function","function":{{"name":"pay","arguments":"{{\"amount\":1.50}}"}}}},{{"id":"{tag}2","type":"function","function":{{"name":"pay","arguments":"{{\"amount\":3}}"}}}}]"#
+                    )
                 );
             }
             Emission::Dialect { dialect, emitted } => {

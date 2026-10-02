@@ -52,7 +52,8 @@
       "outcome": "resolved",
       "rules": [
         "tool_call.arguments.decode-string",
-        "json.syntax.close-container"
+        "json.syntax.close-container",
+        "tool_call.id.dedup"
       ]
     }
   ],
@@ -61,6 +62,7 @@
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.arguments.decode-string",
-    "json.syntax.close-container"
+    "json.syntax.close-container",
+    "tool_call.id.dedup"
   ]
 }

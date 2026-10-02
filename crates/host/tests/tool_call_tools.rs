@@ -4,8 +4,12 @@
 //! exhaustion an explicit unresolved outcome, and rejects malformed requests.
 use purrassist::{
     Effort, Governor, Schema,
+    digest::Digest,
     json::{self, Node},
-    tool_call::{EmitTarget, GenerationStop, IdPolicy, ToolChoice, ToolRecoveryRequest, ToolSet},
+    tool_call::{
+        EmitTarget, GenerationStop, IdPolicy, ToolChoice, ToolRecoveryRequest, ToolSet,
+        turn_id_prefix,
+    },
 };
 use purrassist_host::tools::Tools;
 use std::fmt::Write as _;
@@ -69,6 +73,41 @@ fn final_result_matches_core_recover() {
             .and_then(Node::as_str),
         Some("list_dir")
     );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// G5: with no `ids` option, the MCP tool numbers calls from each turn's
+/// digest, so two rounds get disjoint ids without caller state; the same
+/// turn gets the same ids; a model's own `OpenAI` id is kept; and an
+/// explicit `{"prefix", "start"}` numbers exactly as before.
+#[test]
+fn default_ids_are_disjoint_across_turns() {
+    let (tools, root) = tools("ids");
+    let ids = |output: &str, extra: &str| {
+        let actual = tools
+            .call("recover_tool_calls", &arguments(output, extra))
+            .unwrap();
+        (0..)
+            .map_while(|index| {
+                actual
+                    .pointer(&format!("/value/calls/{index}/id"))
+                    .and_then(Node::as_str)
+                    .map(str::to_owned)
+            })
+            .collect::<Vec<_>>()
+    };
+    let second = QWEN.replace("src", "docs");
+    let round_one = ids(QWEN, "");
+    let round_two = ids(&second, "");
+    let tag = |output: &str| turn_id_prefix(&Digest::of(output.as_bytes()));
+    assert_eq!(round_one, [format!("{}0", tag(QWEN))]);
+    assert_eq!(round_two, [format!("{}0", tag(&second))]);
+    assert_ne!(round_one, round_two);
+    assert_eq!(ids(QWEN, ""), round_one);
+    assert_eq!(ids(QWEN, r#","ids":{}"#), ["call_0"]);
+    assert_eq!(ids(QWEN, r#","ids":{"start":3}"#), ["call_3"]);
+    let openai = r#"[{"id":"call_model","type":"function","function":{"name":"list_dir","arguments":"{\"path\":\"src\"}"}}]"#;
+    assert_eq!(ids(openai, ""), ["call_model"]);
     std::fs::remove_dir_all(root).unwrap();
 }
 

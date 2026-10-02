@@ -19,9 +19,16 @@ declarations in `--tools` (`--tools-format openai`, `mcp`, or `anthropic`).
 It prints the same result as the `recover_tool_calls` tool: per-call outcomes,
 itemized repairs and losses, rejected attempts, the tool-choice check, the
 turn's finish, an optional `--emit` re-emission (`openai` for the `tool_calls`
-array, or a dialect id), and a receipt. Call ids are numbered from
-`--ids-prefix`/`--ids-start` (default `call_0`, `call_1`, ...), or with
-`--ids-source` taken from the output itself (deduplicated); combining
+array, or a dialect id), and a receipt. By default each call keeps the id
+the model wrote (an `OpenAI` `tool_calls[].id`), and every other call is
+numbered `call_<tag>_<index>`, where `<tag>` is the first 12 hexadecimal
+digits of the output's SHA-256 digest: different turns never share ids
+without any caller state, the same output always gets the same ids, and a
+missing or repeated model id is numbered and recorded as a
+`tool_call.id.dedup` inference. `--ids-prefix P`/`--ids-start N` number every
+call `P(N + index)` instead (prefix `call_`, start 0 when omitted; pass the
+result's `next_id_start` as the next round's `--ids-start`), and
+`--ids-source` keeps the output's ids, deduplicated as `ID#INDEX`; combining
 `--ids-source` with either numbering option is an invocation error. `--help`
 lists every option; repeated single-valued options are rejected. It exits 0 for resolved or best-guess
 results, 3 for ambiguous, 4 for unresolved, and 1 for invocation errors. It

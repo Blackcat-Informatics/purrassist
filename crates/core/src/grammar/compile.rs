@@ -351,6 +351,49 @@ fn references(expr: &Expr, into: &mut Vec<u32>) {
     }
 }
 
+/// Whether a call of `root` can capture `kind`: some path through the
+/// production, following references, holds a `kind:` capture. Linear in the
+/// resolved syntax tree (each production is walked once), which compiling
+/// has already charged node by node; productions are acyclic.
+fn captures(productions: &[Production], root: ProductionId, kind: CaptureKind) -> bool {
+    fn walk(
+        productions: &[Production],
+        expr: &Expr,
+        kind: CaptureKind,
+        memo: &mut [Option<bool>],
+    ) -> bool {
+        match expr {
+            Expr::Capture { kind: found, inner } => {
+                *found == kind || walk(productions, inner, kind, memo)
+            }
+            Expr::Repeat { inner, .. } => walk(productions, inner, kind, memo),
+            Expr::Sequence(items) | Expr::Choice(items) => {
+                items.iter().any(|item| walk(productions, item, kind, memo))
+            }
+            Expr::Reference(id) => {
+                if let Some(known) = memo[id.index()] {
+                    return known;
+                }
+                let found = walk(productions, &productions[id.index()].expr, kind, memo);
+                memo[id.index()] = Some(found);
+                found
+            }
+            Expr::Literal(_)
+            | Expr::Closer(_)
+            | Expr::Class(_)
+            | Expr::Until(_)
+            | Expr::Slot { .. } => false,
+        }
+    }
+    let mut memo = vec![None; productions.len()];
+    walk(
+        productions,
+        &productions[root.index()].expr,
+        kind,
+        &mut memo,
+    )
+}
+
 /// Refuse a production reachable from itself.
 fn check_acyclic(
     productions: &[Production],
@@ -900,6 +943,7 @@ pub(crate) fn compile(
         &delimiters,
         reasoning.as_ref(),
     );
+    let call_ids = captures(&productions, call, CaptureKind::Id);
     Ok(CompiledGrammar {
         id: document.id,
         digest,
@@ -911,6 +955,7 @@ pub(crate) fn compile(
         delimiters,
         productions,
         call,
+        call_ids,
         result,
         declaration,
         reasoning,

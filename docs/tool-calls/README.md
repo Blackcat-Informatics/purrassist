@@ -89,8 +89,9 @@ kind in [RULES.md](RULES.md).
 | `DialectId`, `DialectSet` | One dialect (built-in or `DialectId::custom`), and one model's dialect allow-list. |
 | `ToolRecoveryRequest` | Effort, budget, dialects, `ReasoningPolicy`, `GenerationStop`, `ToolChoice`, `IdPolicy`, `PolicySelection`, effects overrides, `AmbiguityPolicy`, `EmitTarget`. |
 | `ToolSet::recover`, `recover_governed` | Recover one turn; returns `AssistResult<ToolCalls>`. |
-| `ToolCalls` | `calls`, `rejected` (each `RejectedCall` with its `dialect` and `candidate_dialects`), `embedded`, `content`, `reasoning`, `finish`, `tool_choice`, `next_id_start`, `emitted`; `usable()`, `usable_accepting_guesses()`, `reemit_with`. |
-| `ToolCall` | `id`, `tool`, `arguments`, `dialect`, `candidate_dialects`, `outcome`, `repairs`, `alternatives`, `keywords`; `arguments_as::<T>()`. |
+| `ToolCalls` | `calls`, `rejected` (each `RejectedCall` with its `dialect` and `candidate_dialects`), `embedded`, `content`, `reasoning`, `finish`, `tool_choice`, `next_id_start`, `turn` (the output's digest), `emitted`; `usable()`, `usable_accepting_guesses()`, `reemit_with`. |
+| `IdPolicy` | `Turn` (default: the model's own ids, every other call `call_<12 hex of the output's SHA-256>_<index>`), `Prefix { prefix, start }`, `Generator`, `Source`; see [call ids](#call-ids). |
+| `ToolCall` | `id`, `source_id`, `tool`, `arguments`, `dialect`, `candidate_dialects`, `outcome`, `repairs`, `alternatives`, `keywords`; `arguments_as::<T>()`. |
 | `tool_call::emit` | Print calls in any dialect or as the `OpenAI` `tool_calls` array; print tool results and declarations. |
 
 Recovering a Qwen3-Coder XML call and printing it as Hermes markup and as the
@@ -108,10 +109,13 @@ assert_eq!((hermes.calls.as_slice(), hermes.skipped.len()), (&[0][..], 0));
 let array = emit::openai_tool_calls(&calls, &IdPolicy::default())?;
 assert_eq!(
     array.output.to_json(),
-    r#"[{"id":"call_0","type":"function","function":{"name":"read","arguments":"{\"path\":\"src/a b.rs\"}"}}]"#,
+    r#"[{"id":"call_03cf7be79285_0","type":"function","function":{"name":"read","arguments":"{\"path\":\"src/a b.rs\"}"}}]"#,
 );
 # Ok::<(), emit::EmitError>(())
 ```
+
+The id `call_03cf7be79285_0` is the default numbering: `call_`, the first 12
+hexadecimal digits of the SHA-256 digest of the output, and the call index.
 
 A guess is usable only when the caller accepts guesses, and only on a
 read-only tool (the `ToolCalls::usable_accepting_guesses` doctest):
@@ -125,6 +129,36 @@ let Outcome::BestGuess(calls) = result.outcome else { unreachable!() };
 assert!(calls.usable().is_empty());
 assert_eq!(calls.usable_accepting_guesses()[0].tool.as_deref(), Some("read_file"));
 ```
+
+### Call ids
+
+Ids are caller-scoped and never collide across the rounds of a conversation,
+with zero configuration. By default (`IdPolicy::Turn`):
+
+- A call keeps the id the model wrote in its markup (an `OpenAI`
+  `tool_calls[].id`); `ToolCall::source_id` reports it.
+- Every other call is numbered `call_<tag>_<index>`, where `<tag>` is the
+  first 12 hexadecimal digits (48 bits) of the SHA-256 digest of the turn's
+  output bytes (`tool_call::turn_id_prefix`; the digest is
+  `ToolCalls::turn` and the receipt's source). An assigned id that another
+  call of the turn already holds gets `_<k>` appended for the least free
+  `k`.
+- A model id that is missing where the dialect's markup provides for one, or
+  that repeats an earlier call's id, is numbered as above and recorded as a
+  derived `tool_call.id.dedup` inference on the call and in the receipt; it
+  never demotes the call. Dialects whose markup carries no id (Hermes,
+  Qwen3-Coder XML) are numbered without an inference.
+
+The same output always gets the same ids (C3); different outputs get
+different tags except with probability `2^-48` per pair, so among `n`
+distinct turns of one conversation a shared tag has probability at most
+`n(n-1)/2^49`: about `1.8e-11` for 100 turns, `1.8e-7` for 10,000, and
+`1.8e-5` for 100,000. A conversation that can repeat a byte-identical turn and
+must number it apart uses `IdPolicy::Prefix { prefix, start }` and passes
+each result's `next_id_start` as the next round's `start`.
+`IdPolicy::Generator` uses a caller generator, and `IdPolicy::Source` keeps
+the output's ids, deduplicated as `<id>#<index>`. Emission under a policy
+numbers calls exactly as recovery under that policy does.
 
 ## Policy matrix
 

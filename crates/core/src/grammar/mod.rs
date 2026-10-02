@@ -624,6 +624,7 @@ pub struct CompiledGrammar {
     pub(crate) delimiters: Vec<DelimiterSet>,
     pub(crate) productions: Vec<Production>,
     pub(crate) call: ProductionId,
+    pub(crate) call_ids: bool,
     pub(crate) result: ProductionId,
     pub(crate) declaration: ProductionId,
     pub(crate) reasoning: Option<(Vec<u8>, Vec<u8>)>,
@@ -669,6 +670,22 @@ impl CompiledGrammar {
     #[must_use]
     pub fn call(&self) -> &Expr {
         &self.productions[self.call.index()].expr
+    }
+
+    /// Whether the `call` production can carry a call id: some path
+    /// through it, following references, holds an `id:` capture. A call of
+    /// such a dialect that has no id omitted one the markup provides for;
+    /// a call of a dialect without one never carries an id.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::DialectId;
+    /// assert!(DialectId::OpenAiToolCalls.grammar().call_carries_ids());
+    /// assert!(!DialectId::Hermes.grammar().call_carries_ids());
+    /// assert!(!DialectId::Qwen3CoderXml.grammar().call_carries_ids());
+    /// ```
+    #[must_use]
+    pub const fn call_carries_ids(&self) -> bool {
+        self.call_ids
     }
 
     /// The `result` production.

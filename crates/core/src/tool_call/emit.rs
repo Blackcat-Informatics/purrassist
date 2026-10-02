@@ -97,11 +97,11 @@
 //! let array = emit::openai_tool_calls(&calls, &IdPolicy::default())?;
 //! assert_eq!(
 //!     array.output.to_json(),
-//!     r#"[{"id":"call_0","type":"function","function":{"name":"read","arguments":"{\"path\":\"src/a b.rs\"}"}}]"#,
+//!     r#"[{"id":"call_03cf7be79285_0","type":"function","function":{"name":"read","arguments":"{\"path\":\"src/a b.rs\"}"}}]"#,
 //! );
 //! # Ok::<(), emit::EmitError>(())
 //! ```
-use super::recover::assign_ids;
+use super::recover::{IdSource, assign_ids};
 use super::{
     ArgumentShape, CallOutcome, DialectId, IdPolicy, ObjectShape, Rejection, ToolCall, ToolCalls,
     ToolSet, UnresolvedReason, ValueShape,
@@ -617,17 +617,12 @@ fn numbered(
     policy: &IdPolicy,
     governor: &mut Governor,
 ) -> Result<Vec<String>, EmitError> {
-    let sources: Vec<(usize, Option<String>)> = calls
-        .calls
-        .iter()
-        .map(|call| (call.index, call.source_id.clone()))
-        .collect();
-    let (ids, _) = assign_ids(policy, &sources, governor, |_, _, _, _| Ok(())).map_err(
-        |reason| match reason {
+    let sources: Vec<IdSource> = calls.calls.iter().map(IdSource::of).collect();
+    let (ids, _) = assign_ids(policy, &calls.turn, &sources, governor, |_, _, _, _| Ok(()))
+        .map_err(|reason| match reason {
             StopReason::InvalidInput(reason) => EmitError::InvalidIds { reason },
             other => EmitError::Resource(other),
-        },
-    )?;
+        })?;
     Ok(ids)
 }
 

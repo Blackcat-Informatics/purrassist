@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Execute the shipped `recover-tool-calls` command on raw model output.
+use purrassist::digest::Digest;
 use purrassist::json::{self, Node, Value};
+use purrassist::tool_call::turn_id_prefix;
 use std::fmt::Write as _;
 use std::{
     fs,
@@ -71,9 +73,15 @@ fn qwen_xml_recovers_via_cli() {
     };
     assert_eq!(calls.len(), 1);
     assert!(calls[0].get("role").is_none());
+    // The default id: `call_`, the first 12 hex digits of the turn's
+    // SHA-256, and the call index.
     assert_eq!(
         emitted.to_json(),
-        r#"[{"id":"call_0","type":"function","function":{"name":"list_dir","arguments":"{\"depth\":2,\"path\":\"src\"}"}}]"#
+        r#"[{"id":"call_ba5fc71a5a13_0","type":"function","function":{"name":"list_dir","arguments":"{\"depth\":2,\"path\":\"src\"}"}}]"#
+    );
+    assert_eq!(
+        format!("{}0", turn_id_prefix(&Digest::of(turn))),
+        "call_ba5fc71a5a13_0"
     );
 
     // The same output read from a FILE argument gives the same result.
@@ -84,6 +92,57 @@ fn qwen_xml_recovers_via_cli() {
     for path in [tools, other_tools, turn_path] {
         fs::remove_file(path).unwrap();
     }
+}
+
+/// G5: with zero configuration, two different turns of a conversation get
+/// disjoint call ids, the same turn always gets the same ids, and the
+/// explicit numbering options are unchanged.
+#[test]
+fn default_ids_are_disjoint_across_turns() {
+    let call = |path: &str| {
+        format!(
+            "<tool_call>\n<function=list_dir>\n<parameter=path>\n{path}\n</parameter>\n</function>\n</tool_call>\n"
+        )
+    };
+    let ids = |arguments: &[&str], turn: &str| {
+        let (output, tools) = run(arguments, turn.as_bytes());
+        fs::remove_file(tools).unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let node = result(&output);
+        let Some(Value::Array(calls)) = node.pointer("/value/calls").map(|calls| &calls.value)
+        else {
+            panic!("no calls: {node:?}")
+        };
+        calls
+            .iter()
+            .map(|call| call.get("id").and_then(Node::as_str).unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let first = format!("{}{}", call("src"), call("docs"));
+    let second = format!("{}{}", call("tests"), call("benches"));
+    let round_one = ids(&[], &first);
+    let round_two = ids(&[], &second);
+    let tag = |turn: &str| turn_id_prefix(&Digest::of(turn.as_bytes()));
+    assert_eq!(
+        round_one,
+        [format!("{}0", tag(&first)), format!("{}1", tag(&first))]
+    );
+    assert_eq!(
+        round_two,
+        [format!("{}0", tag(&second)), format!("{}1", tag(&second))]
+    );
+    assert!(round_one.iter().all(|id| !round_two.contains(id)));
+    assert_eq!(ids(&[], &first), round_one);
+    assert_eq!(
+        ids(&["--ids-prefix", "call_"], &first),
+        ["call_0", "call_1"]
+    );
+    assert_eq!(ids(&["--ids-start", "2"], &second), ["call_2", "call_3"]);
 }
 
 /// G7: the CLI's default request sizes its candidate budget to the turn: a

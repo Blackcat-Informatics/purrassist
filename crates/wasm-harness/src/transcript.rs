@@ -218,26 +218,26 @@ const DIALECT_CASES: [DialectCase; 3] = [
     DialectCase {
         dialect: DialectId::Hermes,
         anchor: "<think>\nWrite the file.\n</think>\n\n<tool_call>\n{\"name\": \"write_file\", \"arguments\": {\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}}\n</tool_call>\n<tool_call>\n{\"arguments\": {\"path\": \"notes.txt\", \"limit\": 10}, \"name\": \"read_file\"}\n</tool_call>",
-        anchor_digest: "sha256:348ea24cb06acea03c0b3723ba085d9863234555f8260037524f8e01865315b4",
+        anchor_digest: "sha256:c7f907179005d6a43506b78ea504a6eaa0c929332c9acdf90dec10c6a4ad2efb",
         repair: "Sure, here it is: <tool_call>Calling now: {\"name\": \"get_wether\", \"arguments\": {\"city\": \"Oslo\", \"unit\": \"Celsius\"}}</tool_call></tool_call>",
         repair_status: "best_guess",
-        repair_digest: "sha256:c8e84a46ac8751047d7950cfbe6ea8f8c3ed0a67195d1e4628a8d126d5280105",
+        repair_digest: "sha256:81c28b0d74c3bcec95b1bf93265af004a5cc5d06b73784badf28689b815f03fb",
     },
     DialectCase {
         dialect: DialectId::OpenAiToolCalls,
         anchor: "{\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_1\", \"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"arguments\": \"{\\\"city\\\":\\\"Lima\\\",\\\"unit\\\":\\\"fahrenheit\\\"}\"}}, {\"id\": \"call_2\", \"type\": \"function\", \"function\": {\"name\": \"read_file\", \"arguments\": \"{\\\"path\\\":\\\"src\\\",\\\"limit\\\":3}\"}}]}",
-        anchor_digest: "sha256:57acea27ce7fcf312b9aebabbece8c0034383ab2f707059ec15d856dd6793935",
+        anchor_digest: "sha256:9a7f6e37d469b42c1c8c56eae3c6bbc43538a7c468e0f8665d05e2b1a6e9b2be",
         repair: "[{\"id\": \"call_9\", \"type\": \"function\", \"function\": {\"name\": \"list_dri\", \"arguments\": \"{\\\"path\\\": \\\"src\\\"}\"}}]",
         repair_status: "best_guess",
-        repair_digest: "sha256:76ba45e3c38a59f55393c2bda37e2a9d52106658a094f076243f96a0ebfedb50",
+        repair_digest: "sha256:206148a554d9576b8d4d22226de181a2c38077d9220b8ab8fec32b99ee363a48",
     },
     DialectCase {
         dialect: DialectId::Qwen3CoderXml,
         anchor: "<think>\nThe file needs a main function.\n</think>\n\n<tool_call>\n<function=write_file>\n<parameter=path>\nsrc/main.rs\n</parameter>\n<parameter=content>\nfn main() {\n    println!(\"hi\");\n\n\tlet  x = 1;  \n}\n\n</parameter>\n<parameter=mode>\noverwrite\n</parameter>\n<parameter=ratio>\n1.50\n</parameter>\n<parameter=count>\n-0\n</parameter>\n<parameter=tags>\n[\"a\", \"b c\"]\n</parameter>\n<parameter=options>\n<parameter=backup>\ntrue\n</parameter>\n<parameter=retries>\n3\n</parameter>\n<parameter=owner>\n{\"name\": \"ci\", \"uid\": 1000}\n</parameter>\n</parameter>\n</function>\n</tool_call>",
-        anchor_digest: "sha256:f11b71ecf1089a3b64ebc2bb998503c8e469a3a960b609ea07b59c5b21434e8d",
+        anchor_digest: "sha256:1ab02681843a1102e50b307617d017f8fd0a4340bfeff52e561b512a38ea81c3",
         repair: "<tool_call>\n<function=read_file>\n<parameter=path>\nsrc/lib.rs\n<parameter=limit>\n40\n</parameters>\n</parameters>\n</function>\n<tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n</parameter>\n</function>",
         repair_status: "resolved",
-        repair_digest: "sha256:0b6bccd24cb736c81b50d3b511b727d8b88eb2c4b1bb9464bb3920da2822ed71",
+        repair_digest: "sha256:474d182638a95680a7a182ef47a1ccd610af7404896b99feee3f4cee996ea9bb",
     },
 ];
 

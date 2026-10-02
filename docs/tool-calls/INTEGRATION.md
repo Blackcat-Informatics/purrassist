@@ -220,14 +220,30 @@ and `emit::openai_tool_calls` return the `tool_calls` array itself: exactly
 `{"id", "type": "function", "function": {"name", "arguments"}}` per emitted
 call, with `arguments` the compact JSON string of the recovered arguments.
 There is no `role` and no message envelope; the caller places the array in
-its own response. Ids come from the caller's `IdPolicy`.
+its own response. Ids come from the request's `IdPolicy` and are
+caller-scoped: distinct within the turn, and, with zero configuration,
+distinct across the rounds of a conversation. The default, `IdPolicy::Turn`,
+keeps each id the model wrote (an `OpenAI` `tool_calls[].id`) and numbers
+every other call `call_<tag>_<index>`, where `<tag>` is the first 12
+hexadecimal digits of the SHA-256 digest of the turn's output; a model id
+that is missing where the dialect provides for one, or repeats an earlier
+call's id, is numbered so and recorded as a derived `tool_call.id.dedup`
+inference (see [Ids across rounds](#ids-across-rounds)).
 
 - **Proved by** `tool_call_roundtrip::openai_shape_exact`,
   `tool_call_roundtrip::emit_option_end_to_end`,
   `tool_call_roundtrip::emission_never_emits_unresolved_silently`,
-  `tool_call_recover::ids_never_collide_each_policy`, and the CLI test
+  `tool_call_recover::ids_never_collide_each_policy`,
+  `tool_call_recover::default_ids_are_disjoint_across_turns`,
+  `tool_call_recover::default_ids_are_deterministic_per_turn`,
+  `tool_call_recover::default_ids_preserve_model_ids_and_repair_duplicates`,
+  `tool_call_recover::explicit_prefix_is_unchanged`,
+  `tool_call_recover::deterministic_pinned_digest` (the explicit
+  `Prefix { prefix: "call_", start: 0 }` wire form is pinned to the digest
+  recovery published before the default changed), the CLI tests
   `tool_calls_cli::qwen_xml_recovers_via_cli` (the emitted element has no
-  `role`).
+  `role`) and `tool_calls_cli::default_ids_are_disjoint_across_turns`, and the
+  host test `tool_call_tools::default_ids_are_disjoint_across_turns`.
 
 ## Integration notes
 
@@ -274,13 +290,44 @@ the reasoning text before `</think>` is read as content.
 
 ### Ids across rounds
 
-`IdPolicy::Prefix { prefix, start }` numbers calls `prefix + (start + i)`.
+With no id option (Rust `IdPolicy::Turn`, the default; MCP without `ids`; CLI
+without `--ids-*`), ids never collide across the turns of a conversation and
+the caller threads no state:
+
+- A call keeps the id the model wrote (an `OpenAI` `tool_calls[].id`),
+  reported as both `id` and `source_id`.
+- Every other call is `call_<tag>_<index>`: `<tag>` is the first 12
+  hexadecimal digits of the SHA-256 digest of the turn's output bytes
+  (`tool_call::turn_id_prefix`; the digest is `ToolCalls::turn` and the
+  receipt's source digest) and `<index>` is the call's position. An assigned
+  id that another call of the turn already holds gets `_<k>` appended for
+  the least free `k`.
+- A missing model id (in a dialect whose markup provides for one) or a model
+  id an earlier call already holds is numbered so and recorded as a derived
+  `tool_call.id.dedup` inference on the call and in the receipt; it never
+  demotes the call. Hermes and Qwen3-Coder XML markup carries no id, so
+  their calls are numbered without an inference.
+- `next_id_start` is the number of calls.
+
+The same output always gets the same ids: recovering one turn twice is the
+same turn. Two different outputs share a tag with probability `2^-48`, so
+among `n` distinct turns of one conversation the chance that any two share a
+tag is at most `n(n-1)/2^49` (about `1.8e-11` for 100 turns, `1.8e-7` for
+10,000, and `1.8e-5` for 100,000). A conversation that can repeat a
+byte-identical turn and must still number it apart chains the explicit
+counter instead.
+
+`IdPolicy::Prefix { prefix, start }` numbers every call
+`prefix + (start + i)`, whatever id the model wrote, exactly as before.
 `ToolCalls::next_id_start` is the counter after this recovery; pass it as the
 next round's `start` (MCP `"ids": {"prefix": "call_", "start": N}`, CLI
-`--ids-start N`) so ids never collide across the turns of one conversation.
-`IdPolicy::Generator` uses a caller generator (a duplicate id is an invalid
-request), and `IdPolicy::Source` keeps the ids the output carries,
-deduplicated with a recorded `tool_call.id.dedup` inference.
+`--ids-prefix P --ids-start N`; an omitted prefix is `call_` and an omitted
+start is 0). `IdPolicy::Generator` uses a caller generator (a duplicate id
+is an invalid request), and `IdPolicy::Source` (MCP `"ids": "source"`, CLI
+`--ids-source`) keeps the ids the output carries, deduplicated as
+`<id>#<index>` with a recorded `tool_call.id.dedup` inference. Emission
+under a policy (`tool_call::emit`) numbers calls exactly as recovery under
+that policy does.
 
 ### The missing `</parameter>` repair
 
@@ -325,7 +372,8 @@ all three), `stop` (`stop`, `length`, `tool_calls`, `content_filter`,
 `unknown`, or `{"stop_sequence": STRING}`), `tool_choice` (an `OpenAI` or
 Anthropic form), `policy` (`per-tool`, `structural`, `tolerant`), `effects`,
 `reasoning` (`separate`, `separate-open`, `content`), `ambiguity` (`report`,
-`reject`), `ids` (`"source"` or `{"prefix", "start"}`), `emit` (`none`,
+`reject`), `ids` (omitted for the default turn-scoped ids, `"source"`, or
+`{"prefix", "start"}`; see [Ids across rounds](#ids-across-rounds)), `emit` (`none`,
 `openai`, or a dialect id), and `effort`. The result is in
 `structuredContent` (and as text in `content`):
 
@@ -359,8 +407,11 @@ result is `"status": "resolved"`. The call is `write_file` with arguments
 `openai_finish_reason` is `tool_calls`, and `emitted.output` is:
 
 ```json
-[{"id":"call_0","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"notes.txt\",\"content\":\"hello\"}"}}]
+[{"id":"call_a7e052aa565b_0","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"notes.txt\",\"content\":\"hello\"}"}}]
 ```
+
+`a7e052aa565b` is the first 12 hexadecimal digits of the SHA-256 digest of
+`turn.txt` (with no trailing newline); another turn gets another tag.
 
 The exit status is 0 for resolved and best-guess results, 3 for ambiguous,
 4 for unresolved, and 1 for invocation errors. `--help` lists every option;

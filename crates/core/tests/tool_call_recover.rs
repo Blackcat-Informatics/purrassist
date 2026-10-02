@@ -9,11 +9,12 @@ use purrassist_core::digest::Digest;
 use purrassist_core::grammar::edit::LossKind;
 use purrassist_core::grammar::{Grammar, cost};
 use purrassist_core::json::{self, Node, Value};
+use purrassist_core::tool_call::emit;
 use purrassist_core::tool_call::{
     AmbiguityPolicy, CallOutcome, DialectId, DialectSet, Effects, Finish, FromNode, FromNodeError,
     GenerationStop, IdGenerator, IdPolicy, Param, PolicySelection, ReasoningPolicy, Rejection,
     RepairPolicy, ToolCall, ToolCalls, ToolChoice, ToolDefinition, ToolRecoveryRequest, ToolSet,
-    UnresolvedReason,
+    UnresolvedReason, turn_id_prefix,
 };
 use purrassist_core::wire::WireValue;
 use purrassist_core::{
@@ -679,6 +680,18 @@ fn deterministic_pinned_digest() {
         "{digests:?}"
     );
     assert_eq!(digests[0], PINNED_DIGEST);
+    // The explicit `Prefix` policy (`call_0`, `call_1`, ...) is pinned too:
+    // its wire form is exactly the one recovery published before ids were
+    // numbered from the turn's digest by default.
+    let all = definitions();
+    let prefixed = compile(all).recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default().ids(IdPolicy::Prefix {
+            prefix: "call_".into(),
+            start: 0,
+        }),
+    );
+    assert_eq!(wire_digest(&prefixed), PINNED_PREFIX_DIGEST);
     // The Ambiguous wire form is pinned too.
     let tools = compile([ToolDefinition::new("f").effects(Effects::ReadOnly)]);
     let mut ambiguous = Vec::new();
@@ -691,11 +704,25 @@ fn deterministic_pinned_digest() {
     }
     assert_eq!(ambiguous[0], ambiguous[1]);
     assert_eq!(ambiguous[0], PINNED_AMBIGUOUS_DIGEST);
+    let prefixed = tools.recover(
+        b"say <tool><call=f></call></tool> done",
+        &ToolRecoveryRequest::default()
+            .dialects(set(&[custom(MINI), custom(OVERLAP)]))
+            .ids(IdPolicy::Prefix {
+                prefix: "call_".into(),
+                start: 0,
+            }),
+    );
+    assert_eq!(wire_digest(&prefixed), PINNED_PREFIX_AMBIGUOUS_DIGEST);
 }
 
 const PINNED_DIGEST: &str =
+    "sha256:350a2f00e98e876408d623e0d11beacf4583fbd4c1eed328c30898a86141b7f0";
+const PINNED_PREFIX_DIGEST: &str =
     "sha256:71210be4e55800e7954d155b26c246f2cb27111afd2016ca63e83f0811e16900";
 const PINNED_AMBIGUOUS_DIGEST: &str =
+    "sha256:db83855f8c9484b6220094cac86c83e115e90e283a94a049a4a5fb837157a4d4";
+const PINNED_PREFIX_AMBIGUOUS_DIGEST: &str =
     "sha256:4fc8c6de6637c4ab209d56df3c75a14d03303b5722f5bf9b10f2e7f2d8760b06";
 
 #[test]
@@ -941,6 +968,222 @@ fn ids_never_collide_each_policy() {
             .count(),
         3
     );
+}
+
+/// The ids of a result's calls, in order.
+fn ids(result: &AssistResult<ToolCalls>) -> Vec<String> {
+    value(result)
+        .calls
+        .iter()
+        .map(|call| call.id.clone())
+        .collect()
+}
+
+/// The `tool_call.id.dedup` inferences a call records.
+fn id_inferences(call: &ToolCall) -> Vec<&str> {
+    call.repairs
+        .inferences
+        .iter()
+        .filter(|inference| inference.evidence.rule == "tool_call.id.dedup")
+        .map(|inference| inference.value.as_str())
+        .collect()
+}
+
+#[test]
+fn default_ids_are_disjoint_across_turns() {
+    let tools = compile([ToolDefinition::new("list")
+        .effects(Effects::ReadOnly)
+        .param("path", Param::string())]);
+    // Two rounds of one conversation, recovered with zero configuration and
+    // no state threaded between them.
+    let first = format!("{}\n{}", hermes("list", "{}"), hermes("list", "{}"));
+    let second = format!(
+        "{}\n{}",
+        hermes("list", r#"{"path": "a"}"#),
+        hermes("list", r#"{"path": "b"}"#)
+    );
+    let mut seen = std::collections::BTreeSet::new();
+    for output in [&first, &second] {
+        let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+        let calls = value(&result);
+        let tag = turn_id_prefix(&calls.turn);
+        assert_eq!(calls.turn, result.receipt.source);
+        assert_eq!(tag.len(), "call_".len() + 12 + 1);
+        assert_eq!(ids(&result), [format!("{tag}0"), format!("{tag}1")]);
+        assert_eq!(calls.next_id_start, 2);
+        for call in &calls.calls {
+            assert!(seen.insert(call.id.clone()), "{} repeats", call.id);
+            // Hermes markup carries no id: numbering it is the policy, not
+            // a repair.
+            assert_eq!(id_inferences(call), Vec::<&str>::new(), "{call:#?}");
+            assert_eq!(call.source_id, None);
+        }
+    }
+    assert_eq!(seen.len(), 4);
+}
+
+#[test]
+fn default_ids_are_deterministic_per_turn() {
+    let tools = compile([ToolDefinition::new("list").effects(Effects::ReadOnly)]);
+    let output = format!("Listing.\n{}", hermes("list", "{}"));
+    let once = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+    let twice = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+    assert_eq!(ids(&once), ids(&twice));
+    assert_eq!(once.to_node().to_json(), twice.to_node().to_json());
+    // The tag is the output digest's leading 12 hex digits.
+    let digest = Digest::of(output.as_bytes()).to_string();
+    assert_eq!(
+        ids(&once),
+        [format!(
+            "call_{}_0",
+            &digest["sha256:".len().."sha256:".len() + 12]
+        )]
+    );
+}
+
+#[test]
+fn explicit_prefix_is_unchanged() {
+    let tools = compile([ToolDefinition::new("get_weather")
+        .effects(Effects::ReadOnly)
+        .param("city", Param::string().required())]);
+    let hermes_two = format!(
+        "{}\n{}",
+        hermes("get_weather", r#"{"city": "Lima"}"#),
+        hermes("get_weather", r#"{"city": "Oslo"}"#)
+    );
+    let prefix = IdPolicy::Prefix {
+        prefix: "call_".into(),
+        start: 0,
+    };
+    let result = tools.recover(
+        hermes_two.as_bytes(),
+        &ToolRecoveryRequest::default().ids(prefix),
+    );
+    assert_eq!(ids(&result), ["call_0", "call_1"]);
+    assert_eq!(value(&result).next_id_start, 2);
+    // `Prefix` numbers every call, whatever id the model wrote, and records
+    // no inference.
+    let openai = r#"[{"id": "m1", "type": "function", "function": {"name": "get_weather", "arguments": "{\"city\": \"Lima\"}"}}]"#;
+    let result = tools.recover(
+        openai.as_bytes(),
+        &request(DialectId::OpenAiToolCalls).ids(IdPolicy::Prefix {
+            prefix: "t".into(),
+            start: 7,
+        }),
+    );
+    let calls = value(&result);
+    assert_eq!(ids(&result), ["t7"]);
+    assert_eq!(calls.calls[0].source_id.as_deref(), Some("m1"));
+    assert_eq!(id_inferences(&calls.calls[0]), Vec::<&str>::new());
+    assert_eq!(calls.next_id_start, 8);
+}
+
+#[test]
+fn default_ids_preserve_model_ids_and_repair_duplicates() {
+    let tools = compile([ToolDefinition::new("get_weather")
+        .effects(Effects::ReadOnly)
+        .param("city", Param::string().required())]);
+    let element = |id: Option<&str>, city: &str| {
+        let id = id
+            .map(|id| format!(r#""id": "{id}", "#))
+            .unwrap_or_default();
+        format!(
+            r#"{{{id}"type": "function", "function": {{"name": "get_weather", "arguments": "{{\"city\": \"{city}\"}}"}}}}"#
+        )
+    };
+    // Distinct model ids are kept as written and reported.
+    let output = format!(
+        "[{}, {}]",
+        element(Some("call_lima"), "Lima"),
+        element(Some("call_oslo"), "Oslo")
+    );
+    let result = tools.recover(output.as_bytes(), &request(DialectId::OpenAiToolCalls));
+    let calls = value(&result);
+    assert_eq!(ids(&result), ["call_lima", "call_oslo"]);
+    for call in &calls.calls {
+        assert_eq!(call.source_id.as_deref(), Some(call.id.as_str()));
+        assert_eq!(id_inferences(call), Vec::<&str>::new());
+        assert_eq!(call.outcome, CallOutcome::Resolved);
+    }
+    assert!(
+        result
+            .to_node()
+            .to_json()
+            .contains(r#""source_id":"call_lima""#)
+    );
+    // A repeated model id and a missing one are numbered from the turn's
+    // tag, each recorded as a derived inference that does not demote.
+    let output = format!(
+        "[{}, {}, {}]",
+        element(Some("c1"), "Lima"),
+        element(Some("c1"), "Oslo"),
+        element(None, "Rome")
+    );
+    let result = tools.recover(output.as_bytes(), &request(DialectId::OpenAiToolCalls));
+    let calls = value(&result);
+    let tag = turn_id_prefix(&calls.turn);
+    assert_eq!(
+        ids(&result),
+        ["c1".to_owned(), format!("{tag}1"), format!("{tag}2")]
+    );
+    assert_eq!(calls.next_id_start, 3);
+    assert_eq!(id_inferences(&calls.calls[0]), Vec::<&str>::new());
+    for call in &calls.calls[1..] {
+        assert_eq!(id_inferences(call), [call.id.as_str()], "{call:#?}");
+        assert_eq!(call.outcome, CallOutcome::Resolved);
+        let inference = call
+            .repairs
+            .inferences
+            .iter()
+            .find(|inference| inference.evidence.rule == "tool_call.id.dedup")
+            .expect("id inference");
+        assert_eq!(inference.kind, InferenceKind::Derived);
+    }
+    let explanations: Vec<&str> = calls.calls[1..]
+        .iter()
+        .flat_map(|call| &call.repairs.evidence)
+        .filter(|evidence| evidence.rule == "tool_call.id.dedup")
+        .map(|evidence| evidence.explanation.as_str())
+        .collect();
+    assert!(
+        explanations[0].contains("source call id `c1` repeats"),
+        "{explanations:?}"
+    );
+    assert!(
+        explanations[1].contains("carries no id"),
+        "{explanations:?}"
+    );
+    assert_eq!(
+        result
+            .receipt
+            .inferences
+            .iter()
+            .filter(|inference| inference.evidence.rule == "tool_call.id.dedup")
+            .count(),
+        2
+    );
+    // A model id equal to the id the turn would assign another call is
+    // kept; the assigned id moves aside to the least free `_{k}` suffix, so
+    // ids stay distinct. (A model cannot write its own turn's digest, so
+    // the carried id is set on recovered calls and numbered by emission,
+    // which shares recovery's assignment.)
+    let output = format!("[{}, {}]", element(None, "Lima"), element(None, "Oslo"));
+    let result = tools.recover(output.as_bytes(), &request(DialectId::OpenAiToolCalls));
+    let mut calls = value(&result).clone();
+    let tag = turn_id_prefix(&calls.turn);
+    calls.calls[1].source_id = Some(format!("{tag}0"));
+    let array = emit::openai_tool_calls(&calls, &IdPolicy::Turn).expect("array");
+    let emitted: Vec<String> = match &array.output.value {
+        Value::Array(items) => items
+            .iter()
+            .map(|item| match item.get("id").map(|id| &id.value) {
+                Some(Value::String(id)) => id.clone(),
+                other => panic!("no id: {other:?}"),
+            })
+            .collect(),
+        other => panic!("not an array: {other:?}"),
+    };
+    assert_eq!(emitted, [format!("{tag}0_1"), format!("{tag}0")]);
 }
 
 fn adapter_read_file() -> ToolSet {
@@ -1279,7 +1522,7 @@ fn usable_never_yields_mutating_guess() {
     assert_eq!(calls.calls[1].outcome, CallOutcome::BestGuess);
     assert_eq!(calls.calls[1].effects, Some(Effects::Mutating));
     let usable: Vec<&str> = calls.usable().iter().map(|call| call.id.as_str()).collect();
-    assert_eq!(usable, ["call_2"]);
+    assert_eq!(usable, [format!("{}2", turn_id_prefix(&calls.turn))]);
     let accepting: Vec<&str> = calls
         .usable_accepting_guesses()
         .iter()
