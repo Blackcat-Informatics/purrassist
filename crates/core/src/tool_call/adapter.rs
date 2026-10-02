@@ -183,9 +183,10 @@ const KEYWORD_RECORD: u64 = 48;
 /// render `{"type":"object"}`.
 ///
 /// [`DeclarationForm::Qwen3CoderXml`], [`DeclarationForm::Hermes`],
-/// [`DeclarationForm::Llama3Json`] and [`DeclarationForm::MistralV3`] are
-/// printed by their dialect grammar's `declaration` production (see
-/// [`emit`](super::emit)): a Qwen3-Coder `<function>` entry
+/// [`DeclarationForm::Llama3Json`], [`DeclarationForm::MistralV3`] and
+/// [`DeclarationForm::MistralV11`] are printed by their dialect grammar's
+/// `declaration` production (see [`emit`](super::emit)): a Qwen3-Coder
+/// `<function>` entry
 /// `<function><name>NAME</name><description>DESC</description><parameters>SCHEMA</parameters></function>`
 /// and a Hermes `<tools>` entry, Llama 3 function entry or Mistral
 /// `[AVAILABLE_TOOLS]` entry (the same shape)
@@ -220,6 +221,8 @@ pub enum DeclarationForm {
     Llama3Json,
     /// A Mistral `[AVAILABLE_TOOLS]` entry (`mistral-v3.v1`).
     MistralV3,
+    /// A Mistral v11+ `[AVAILABLE_TOOLS]` entry (`mistral-v11.v1`).
+    MistralV11,
 }
 
 impl DeclarationForm {
@@ -227,9 +230,9 @@ impl DeclarationForm {
     ///
     /// ```
     /// use purrassist_core::tool_call::DeclarationForm;
-    /// assert_eq!(DeclarationForm::ALL.len(), 7);
+    /// assert_eq!(DeclarationForm::ALL.len(), 8);
     /// ```
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::OpenAi,
         Self::Mcp,
         Self::Anthropic,
@@ -237,6 +240,7 @@ impl DeclarationForm {
         Self::Hermes,
         Self::Llama3Json,
         Self::MistralV3,
+        Self::MistralV11,
     ];
 
     /// The dialect whose `declaration` production prints this form, or
@@ -254,6 +258,7 @@ impl DeclarationForm {
             Self::Hermes => Some(DialectId::Hermes),
             Self::Llama3Json => Some(DialectId::Llama3Json),
             Self::MistralV3 => Some(DialectId::MistralV3),
+            Self::MistralV11 => Some(DialectId::MistralV11),
             Self::OpenAi | Self::Mcp | Self::Anthropic => None,
         }
     }
@@ -267,6 +272,7 @@ impl DeclarationForm {
             Self::Hermes => "Hermes",
             Self::Llama3Json => "Llama 3 JSON",
             Self::MistralV3 => "Mistral v3",
+            Self::MistralV11 => "Mistral v11",
         }
     }
 
@@ -276,7 +282,8 @@ impl DeclarationForm {
             | Self::Qwen3CoderXml
             | Self::Hermes
             | Self::Llama3Json
-            | Self::MistralV3 => "parameters",
+            | Self::MistralV3
+            | Self::MistralV11 => "parameters",
             Self::Mcp => "inputSchema",
             Self::Anthropic => "input_schema",
         }
@@ -532,7 +539,8 @@ pub(super) fn render_canonical(
         | DeclarationForm::Qwen3CoderXml
         | DeclarationForm::Hermes
         | DeclarationForm::Llama3Json
-        | DeclarationForm::MistralV3 => parameters,
+        | DeclarationForm::MistralV3
+        | DeclarationForm::MistralV11 => parameters,
         DeclarationForm::Mcp | DeclarationForm::Anthropic => {
             Some(parameters.unwrap_or(NO_PARAMETERS))
         }
@@ -548,7 +556,8 @@ pub(super) fn render_canonical(
         | DeclarationForm::Qwen3CoderXml
         | DeclarationForm::Hermes
         | DeclarationForm::Llama3Json
-        | DeclarationForm::MistralV3 => {
+        | DeclarationForm::MistralV3
+        | DeclarationForm::MistralV11 => {
             format!("{{\"type\":\"function\",\"function\":{{{fields}}}}}")
         }
         DeclarationForm::Mcp | DeclarationForm::Anthropic => format!("{{{fields}}}"),

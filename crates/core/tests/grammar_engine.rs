@@ -1757,3 +1757,38 @@ fn insert_and_grouped_attempts_read_every_call() {
         }
     }
 }
+
+/// Under a length stop, a call that ends with a self-delimiting value is
+/// complete when that value is complete at the cut (only whitespace after
+/// it): there is no closing token it could still be missing. A value cut
+/// inside, or a production that still needs a token after the value, is
+/// cut off as before.
+#[test]
+fn length_stop_after_a_complete_trailing_value() {
+    let trailing = set(&["grammar \"tail.v1\";
+        ident = /[a-z]+/;
+        call = \"<c>\" name:ident \":\" arguments:slot(json, \"\\x00\");
+        result = \"<r>\"; declaration = \"<d>\";"]);
+    for (input, closure) in [
+        (&br#"<c>f:{"a":[1,2]}"#[..], Closure::Closed),
+        (br#"<c>f:{"a":[1,2]}  "#, Closure::Closed),
+        (br#"<c>f:"text""#, Closure::Closed),
+        (br#"<c>f:{"a":[1,2"#, Closure::Dangling),
+        (b"<c>f:12", Closure::Dangling),
+    ] {
+        let turn = recognize(&trailing, input, GenerationStop::Length);
+        assert_eq!(
+            one_call(&turn).closure,
+            closure,
+            "{:?}",
+            String::from_utf8_lossy(input)
+        );
+    }
+    let closed = set(&["grammar \"closed.v1\";
+        closer end = \"</c>\";
+        ident = /[a-z]+/;
+        call = \"<c>\" name:ident \":\" arguments:slot(json, \"</c>\") end;
+        result = \"<r>\"; declaration = \"<d>\";"]);
+    let turn = recognize(&closed, br#"<c>f:{"a":1}"#, GenerationStop::Length);
+    assert_eq!(one_call(&turn).closure, Closure::Dangling);
+}

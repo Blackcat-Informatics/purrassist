@@ -887,34 +887,61 @@ impl<'s> Step<'_, 's> {
         }
     }
 
-    /// The history (and added cost) of a configuration cut off by a length
-    /// stop: an open slot keeps the complete part of its body as its value.
-    fn truncate(
+    /// A configuration at a length stop. When it is in a self-delimiting
+    /// slot whose value is already complete, and the production completes
+    /// from the slot without further input (nothing but optional markup or
+    /// an `insert` after it), the call is whole: the codec finishes as at a
+    /// delimiter, the completions go to `out`, and `None` is returned.
+    /// Otherwise the history (and added cost) of the configuration cut off:
+    /// an open slot keeps the complete part of its body as its value.
+    fn cut_thread(
         &mut self,
         thread: Thread,
+        stack: &mut ScratchVec<Thread>,
+        out: &mut Out,
         governor: &mut Governor,
-    ) -> Result<(u32, u64), StopReason> {
-        let (Inst::Slot { set, .. }, Sub::Body(state, Some(slot))) =
+    ) -> Result<Option<(u32, u64)>, StopReason> {
+        let (Inst::Slot { set, next, .. }, Sub::Body(state, Some(slot))) =
             (self.program.insts[thread.pc as usize], thread.sub)
         else {
-            return Ok((thread.hist, 0));
+            return Ok(Some((thread.hist, 0)));
         };
         let matcher = &self.grammar.delimiters[set as usize].matcher;
         let released = thread.pos - matcher.depth(state) as usize;
-        let end = match self.feed(slot, released..thread.pos, governor)? {
-            Ok(Some(complete)) => complete,
-            Ok(None) => thread.pos,
-            Err(_) => return Ok((thread.hist, 0)),
+        let Ok(complete) = self.feed(slot, released..thread.pos, governor)? else {
+            return Ok(Some((thread.hist, 0)));
         };
-        Ok(self
-            .finish_codec(
+        let whole = complete.or_else(|| {
+            self.arena.codecs[slot as usize]
+                .as_ref()
+                .and_then(CodecState::complete_end)
+        });
+        if let Some(end) = whole
+            && super::repair::completes(self.program, next, governor)?
+        {
+            self.end_body(
+                thread,
+                Some(slot),
+                end,
+                CodecEnd::EndOfInput,
+                next,
+                stack,
+                out,
+                governor,
+            )?;
+            return Ok(None);
+        }
+        let end = complete.unwrap_or(thread.pos);
+        Ok(Some(
+            self.finish_codec(
                 slot,
                 thread.hist,
                 thread.entry..end,
                 CodecEnd::Truncated,
                 governor,
             )?
-            .unwrap_or((thread.hist, 0)))
+            .unwrap_or((thread.hist, 0)),
+        ))
     }
 
     /// Every equal-cost history ending at `hist`, each as a forward list of
@@ -1434,8 +1461,20 @@ struct Table<'s> {
 struct Held {
     attempt: u64,
     event: Event,
-    cost: u64,
+    /// The cost each call of the completion carries, in order.
+    costs: Vec<u64>,
     dangling: bool,
+    /// Whether the last call of a cut-off reading began its arguments: only
+    /// then is it evidence that the attempt went on past an earlier
+    /// completion (a name alone, or a separator, may be text after it).
+    arguments: bool,
+}
+
+impl Held {
+    /// What the completion's first `calls` calls cost together.
+    fn prefix(&self, calls: usize) -> u64 {
+        self.costs.iter().take(calls).sum()
+    }
 }
 
 /// A completed configuration held while closer spellings of its grammar
@@ -1879,12 +1918,16 @@ impl<'s> Engine<'s> {
 
     /// Report the held completions of `attempt`, a grouped program's, that
     /// no other completion of it dominates. A completion is dominated by
-    /// one that ends later and either costs no more (it reads a further
-    /// call at no extra cost: the attempt reads every call it can, so a
-    /// call-shaped object after a call is never left as content) or is the
-    /// cut-off reading of a length stop (the attempt was still being
-    /// written past it); a cut-off reading is dominated by a completion
-    /// that reaches as far. Charges one `Work` unit per pair compared.
+    /// one that ends later and reads more calls, its first calls costing no
+    /// more than the dominated completion's calls (it reads the same calls
+    /// no worse, and further ones: the attempt reads every call it can, so
+    /// a call-shaped object after a call is never left as content, whatever
+    /// repair reading it needs), or by the cut-off reading of a length stop
+    /// that ends later, reads more calls and began its last call's
+    /// arguments (the attempt was still being written past it). A cut-off
+    /// reading is dominated by a completion that reaches as far, or reads as
+    /// many calls no worse, or by any completion when its last call never
+    /// began its arguments. Charges one `Work` unit per pair compared.
     fn release(
         &mut self,
         table: usize,
@@ -1905,9 +1948,25 @@ impl<'s> Engine<'s> {
         )?;
         let dominated = |entry: &Held| {
             mine.iter().any(|other| {
-                (other.event.at() > entry.event.at()
-                    && (other.dangling || other.cost <= entry.cost))
-                    || (entry.dangling && !other.dangling && other.event.at() >= entry.event.at())
+                let later = other.event.at() > entry.event.at();
+                let more = other.costs.len() > entry.costs.len();
+                if other.dangling {
+                    // Cut off while writing a further call's arguments.
+                    later && more && other.arguments
+                } else if entry.dangling {
+                    // A cut-off reading of no more calls than a completion
+                    // reads, or one whose last call never began its
+                    // arguments, or one that reaches no further.
+                    !entry.arguments
+                        || other.event.at() >= entry.event.at()
+                        || (other.costs.len() >= entry.costs.len()
+                            && other.prefix(entry.costs.len()) <= entry.prefix(entry.costs.len()))
+                } else {
+                    // The same calls read no worse, and further ones.
+                    later
+                        && more
+                        && other.prefix(entry.costs.len()) <= entry.prefix(entry.costs.len())
+                }
             })
         };
         let keep: Vec<bool> = mine.iter().map(|entry| !dominated(entry)).collect();
@@ -2340,11 +2399,28 @@ impl<'s> Engine<'s> {
                         parts,
                     };
                     if grouped {
+                        let (costs, arguments) = match &event {
+                            Event::Completed { parts, .. } => (
+                                parts.iter().map(|(_, cost)| *cost).collect(),
+                                parts.last().is_some_and(|(segment, _)| {
+                                    segment.readings.iter().any(|reading| {
+                                        reading.captures.iter().any(|capture| {
+                                            matches!(
+                                                capture.kind,
+                                                CaptureKind::Arguments | CaptureKind::ParamName
+                                            )
+                                        })
+                                    })
+                                }),
+                            ),
+                            _ => (Vec::new(), false),
+                        };
                         self.tables[table].held.push(Held {
                             attempt: thread.attempt,
                             event,
-                            cost: thread.cost,
+                            costs,
                             dangling,
+                            arguments,
                         });
                     } else {
                         self.events.push(event);
@@ -2475,8 +2551,35 @@ impl<'s> Engine<'s> {
         Ok(())
     }
 
+    /// Report the completions of whole calls found at a length stop (see
+    /// `Step::cut_thread`), equal-cost histories at one end packed; whether
+    /// there were any.
+    fn whole_calls(
+        &mut self,
+        table: usize,
+        completed: &mut ScratchVec<Thread>,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        let slice = completed.as_mut_slice();
+        slice.sort_by_key(|thread| (thread.pos, thread.cost, thread.hist));
+        let mut groups: Vec<Thread> = Vec::new();
+        for thread in completed.as_slice() {
+            match groups.last_mut() {
+                Some(last) if last.pos == thread.pos && last.cost == thread.cost => {
+                    last.hist = self.arena.pack(last.hist, thread.hist)?;
+                }
+                _ => groups.push(*thread),
+            }
+        }
+        for thread in &groups {
+            self.emit(table, *thread, false, governor)?;
+        }
+        Ok(!groups.is_empty())
+    }
+
     /// A length stop: every open attempt becomes a cut-off reading of its
-    /// least-cost configurations.
+    /// least-cost configurations, except that a call whose arguments value
+    /// was complete at the cut completes.
     fn cut(&mut self, table: usize, governor: &mut Governor) -> Result<(), StopReason> {
         let records: Vec<Attempt> = self.tables[table].attempts.as_slice().to_vec();
         let threads: Vec<Thread> = self.tables[table].threads.as_slice().to_vec();
@@ -2486,9 +2589,15 @@ impl<'s> Engine<'s> {
             // the next one: its cut-off reading competes too.
             if record.opened && (!record.completed || grouped) {
                 let mut best: Option<Thread> = None;
+                let mut stack = ScratchVec::new(governor);
+                let mut whole = Out::new(governor);
                 for thread in threads.iter().filter(|thread| thread.attempt == record.id) {
                     let (mut step, _, _) = self.split(table);
-                    let (hist, added) = step.truncate(*thread, governor)?;
+                    let Some((hist, added)) =
+                        step.cut_thread(*thread, &mut stack, &mut whole, governor)?
+                    else {
+                        continue;
+                    };
                     let candidate = Thread {
                         hist,
                         cost: thread.cost.saturating_add(added),
@@ -2504,7 +2613,10 @@ impl<'s> Engine<'s> {
                         Some(current) => current,
                     });
                 }
-                if let Some(thread) = best {
+                // A call whose arguments value was complete at the cut is
+                // whole: the stop cut the output after it, not the call.
+                let completed = self.whole_calls(table, &mut whole.completed, governor)?;
+                if let Some(thread) = best.filter(|_| grouped || !completed) {
                     self.emit(
                         table,
                         Thread {

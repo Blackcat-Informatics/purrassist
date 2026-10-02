@@ -217,7 +217,11 @@ impl<'a, 's> RepairState<'a, 's> {
 
 /// Whether the production completes from `pc` without consuming input:
 /// whether an inserted literal continuing at `pc` is the production's last.
-fn completes(program: &Program, pc: u32, governor: &mut Governor) -> Result<bool, StopReason> {
+pub(crate) fn completes(
+    program: &Program,
+    pc: u32,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
     let mut visited = vec![false; program.insts.len()];
     let mut pending = vec![pc];
     while let Some(pc) = pending.pop() {

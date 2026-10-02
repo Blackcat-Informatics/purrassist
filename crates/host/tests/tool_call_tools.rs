@@ -396,3 +396,41 @@ fn mistral_v3_dialect_over_mcp() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// The MCP tool accepts `mistral-v11.v1` in its allow-list and as an
+/// emission target.
+#[test]
+fn mistral_v11_dialect_over_mcp() {
+    let (tools, root) = tools("mistral11");
+    let output = r#"[TOOL_CALLS]list_dir[CALL_ID]a1B2c3D4e[ARGS]{"path": "src"}"#;
+    for extra in ["", r#","dialects":["mistral-v11.v1"]"#] {
+        let node = tools
+            .call("recover_tool_calls", &arguments(output, extra))
+            .unwrap();
+        assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+        assert_eq!(
+            node.pointer("/value/calls/0/source_id")
+                .and_then(Node::as_str),
+            Some("a1B2c3D4e")
+        );
+    }
+    let node = tools
+        .call(
+            "recover_tool_calls",
+            &arguments(QWEN, r#","emit":"mistral-v11.v1""#),
+        )
+        .unwrap();
+    let emitted = node
+        .pointer("/value/emitted/output/text")
+        .and_then(Node::as_str)
+        .expect("emitted");
+    assert!(
+        emitted.starts_with("[TOOL_CALLS]list_dir[CALL_ID]call_"),
+        "{emitted}"
+    );
+    assert!(
+        emitted.ends_with(r#"[ARGS]{"depth":2,"path":"src"}"#),
+        "{emitted}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

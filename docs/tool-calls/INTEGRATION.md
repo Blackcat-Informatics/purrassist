@@ -138,13 +138,13 @@ allow-list, with a published bound, and every limit is explicit.
 - **Proved by** `tool_call_cost::resources_doc_matches_cost_constants` (every
   published constant and per-dialect bound equals the code's),
   `tool_call_cost::one_mib_argument_work_bound` (1 MiB Qwen3-Coder XML,
-  Hermes, Llama 3 JSON and Mistral v3 arguments satisfy the bound and scale
-  linearly from 64 KiB),
+  Hermes, Llama 3 JSON, Mistral v3 and Mistral v11 arguments satisfy the
+  bound and scale linearly from 64 KiB),
   `tool_call_cost::one_mib_argument_fits_published_budget` (a 1 MiB argument
   in every built-in dialect is `Resolved` under `ToolRecoveryRequest::sized`
   for every effort from `Quick` to `Maximum`, with peak scratch at most 16
-  bytes per input byte for Qwen3-Coder XML, Hermes, Llama 3 JSON and
-  Mistral v3),
+  bytes per input byte for Qwen3-Coder XML, Hermes, Llama 3 JSON, Mistral v3
+  and Mistral v11),
   `tool_call_cost::work_independent_of_dialect_count_beyond_bound`,
   `json_incremental::extract_many_brackets_is_linear`, and
   `tool_call_recover::exhaustion_is_explicit_every_resource`.
@@ -297,7 +297,8 @@ without `--ids-*`), ids never collide across the turns of a conversation and
 the caller threads no state:
 
 - A call keeps the id the model wrote (an `OpenAI` `tool_calls[].id`, a
-  Mistral v3 `"id"`), reported as both `id` and `source_id`.
+  Mistral v3 `"id"`, a Mistral v11 `[CALL_ID]`), reported as both `id` and
+  `source_id`.
 - Every other call is `call_<tag>_<index>`: `<tag>` is the first 12
   hexadecimal digits of the SHA-256 digest of the turn's output bytes
   (`tool_call::turn_id_prefix`; the digest is `ToolCalls::turn` and the

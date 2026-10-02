@@ -32,11 +32,11 @@
       "command": "cargo run --locked -p purrassist-core --example tool-call-corpus",
       "sources": {
         "crates/core/examples/tool_call_corpus.rs": "a7cdb96dad9531b305987dd7a7d29c4f96d573ccc84d3475dae421d0ea9d2d29",
-        "crates/core/tests/tool_call_corpus/mod.rs": "a1623da2c3a7e03db9ba6e971f2fb56efaf4fa2021a6f6e870eb8c576e9069ad"
+        "crates/core/tests/tool_call_corpus/mod.rs": "76391c6d5f04ac2e78754f4c3c540047a3f05965a1a5c6b6b2c68c0e87fa8d59"
       },
-      "cases": 5228,
-      "distinct_requests": 5228,
-      "sha256": "25dedcfe6a872cb433880e96fc79d87e03ee280302de21ccff299f94ce6c93cb"
+      "cases": 6108,
+      "distinct_requests": 6108,
+      "sha256": "ded2a6187c557419a84371af3a1328025a13eadf0b95e5654588a3e04a0fcaee"
     }
   }
 }

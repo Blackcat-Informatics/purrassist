@@ -19,12 +19,13 @@ into a `CompiledGrammar`. One compiled grammar serves three purposes:
   choices to print well-formed calls for given argument shapes, for tests and
   corpora.
 
-The five built-in dialects are written in this DSL:
+The six built-in dialects are written in this DSL:
 [`qwen3-coder-xml.v1`](../../crates/core/src/tool_call/dialects/qwen3-coder-xml.v1.grammar),
 [`hermes.v1`](../../crates/core/src/tool_call/dialects/hermes.v1.grammar),
 [`openai-tool-calls.v1`](../../crates/core/src/tool_call/dialects/openai-tool-calls.v1.grammar),
-[`llama3-json.v1`](../../crates/core/src/tool_call/dialects/llama3-json.v1.grammar), and
-[`mistral-v3.v1`](../../crates/core/src/tool_call/dialects/mistral-v3.v1.grammar).
+[`llama3-json.v1`](../../crates/core/src/tool_call/dialects/llama3-json.v1.grammar),
+[`mistral-v3.v1`](../../crates/core/src/tool_call/dialects/mistral-v3.v1.grammar), and
+[`mistral-v11.v1`](../../crates/core/src/tool_call/dialects/mistral-v11.v1.grammar).
 A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 [Add a custom dialect](#add-a-custom-dialect).
 
@@ -234,13 +235,16 @@ call = "[TOOL_CALLS]" ws? "[" ws? element (ws? "," ws? next element)* ws? array-
   `result` or `declaration` (`GrammarError::MisplacedNext`).
 - An attempt reads every call it can. Its completions are held until the
   attempt ends; a completion is dropped when a later completion of the same
-  attempt costs no more (it read a further call at no extra cost), or when
-  a length stop's cut-off reading reaches past it (the model was still
+  attempt reads more calls and reads its own calls no worse (the summed
+  cost of those calls is no higher), whatever repair the further calls
+  need, or when a length stop's cut-off reading reaches past it with more
+  calls, the last of which began its arguments (the model was still
   writing). So a production that may end after any call (`element (sep next
   element)*` with nothing after it) ends after the last call-shaped part,
   never earlier, and text after it is content; text that cannot be read as
-  a call is never absorbed. A cut-off reading that reaches no further than
-  a completion is dropped in its favour.
+  a call is never absorbed. A cut-off reading is dropped in favour of a
+  completion that reaches as far or reads as many calls no worse, and of
+  any completion when its last call never began its arguments.
 - A form that omits the list's framing can say so with `insert`, recorded
   as a markup repair:
 
@@ -264,7 +268,7 @@ block. Under `ReasoningPolicy::AsContent` the markers are plain content.
 | Codec | Value |
 | --- | --- |
 | `raw` | The verbatim body as one UTF-8 string leaf. Malformed UTF-8 rejects the attempt, except a character cut off by a length stop. It records no edits. A `raw` value is always a string: a parameter declared as an integer, number, boolean, array, or object read through `raw` fails validation (`UnresolvedReason::SchemaValidation`), because no rule coerces a string into a typed value. |
-| `json` | One JSON value read by the push-based tolerant JSON parser: exact number spellings, each repair recorded with its `json.syntax.*` rule. Self-delimiting. A whole arguments value that is a JSON string holding JSON is decoded as stringified arguments and flagged (`tool_call.arguments.decode-string`). |
+| `json` | One JSON value read by the push-based tolerant JSON parser: exact number spellings, each repair recorded with its `json.syntax.*` rule. Self-delimiting. A whole arguments value that is a JSON string holding JSON is decoded as stringified arguments and flagged (`tool_call.arguments.decode-string`). Under a length stop, a value that is already complete at the cut (only whitespace after it) ends there, as at a delimiter, when the production completes from the slot with no further input: a call that ends with its arguments value is then complete, not cut off. |
 | `xml-params` | A sequence of `<parameter=NAME>value</parameter>` elements, typed by the declared tool the call names: verbatim strings with one framing newline consumed on each side, typed values parsed as JSON, nested parameter elements for object parameters, a whole-JSON body, and the `</parameters>` variant. See [the Qwen3-Coder XML dialect](dialects/qwen3-coder-xml.v1.md) for every reading. |
 
 A codec may depend on the call's tool. When the recognizer is given the tool

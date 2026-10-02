@@ -228,6 +228,14 @@ TOOL_CALL_WITNESSES = [
     b"<|python_tag|>\t\t{\t\t\"name\":\"write_file\"\t\t,\t\"arguments\":\t\t\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"}",
     # llama3-json.v1: delete_path, read_file (seed 3)
     b"{\"name\":\t\"delete_path\"\t,\"parameters\":\t\t\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"\t\t}\n{\t\"parameters\"\t:\"{\\\"path\\\":\\\"line one\\\\nline two\\\",\\\"limit\\\":-308}\"\t\t,\t\"name\":\"read_file\"\t}",
+    # mistral-v11.v1: read_file (seed 0)
+    b"[TOOL_CALLS]\tread_file\t\t[CALL_ID]\t\tcall_3cb13d09[ARGS]{\"path\":\"tab\\tseparated \\n  block\\n\"}",
+    # mistral-v11.v1: get_weather, list_dir (seed 1)
+    b"[TOOL_CALLS]get_weather\t[CALL_ID]call_74616796\t[ARGS]{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"}[TOOL_CALLS]\t\tlist_dir[CALL_ID]call_5c2a449c\t\t[ARGS]{\"path\":\"line one\\nline two\"}",
+    # mistral-v11.v1: write_file (seed 2)
+    b"[TOOL_CALLS]\t\twrite_file\t[CALL_ID]call_dcc507e4[ARGS]\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"",
+    # mistral-v11.v1: delete_path, read_file (seed 3)
+    b"[TOOL_CALLS]delete_path[CALL_ID]call_a2036b72[ARGS]\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"[TOOL_CALLS]read_file\t\t[CALL_ID]call_979d2193\t\t[ARGS]\"{\\\"path\\\":\\\"tab\\\\tseparated   indented\\\"}\"",
     # mistral-v3.v1: read_file (seed 0)
     b"[TOOL_CALLS]\t[{\t\t\"id\":\t\"call_00cc4d19\"\t,\"name\":\t\"read_file\",\"parameters\"\t\t:{\"path\":\"tab\\tseparated \\n  block\\n\"}}]",
     # mistral-v3.v1: get_weather, list_dir (seed 1)
@@ -331,6 +339,19 @@ TOOL_CALL_REPAIRS = [
     b'[TOOL_CALLS] [{"name": "read_file", "arguments": {"path": "a"}, "id": "same12345"}, {"name": "read_file", "arguments": {"path": "b"}, "id": "same12345"}]',
     b'[TOOL_CALLS] [{"name": "get_weather", "parameters": {"city": "Lima"}}]',
     b'[TOOL_CALLS] [{"name": "read_file", "arguments": "{\\"path\\": \\"a.rs\\"}"}]',
+    # Mistral v11: a missing [ARGS], whitespace around the name, truncated
+    # and unclosed arguments, a second call without its [TOOL_CALLS], call
+    # ids, prose after a call, reasoning, and a v3 array beside a v11 call.
+    b'[TOOL_CALLS]read_file{"path": "a.rs"}',
+    b'[TOOL_CALLS] list_dir \n[ARGS] {"path": "."}',
+    b'[TOOL_CALLS]read_file[ARGS]{"path": "src/ma',
+    b'[TOOL_CALLS]read_file[ARGS]{"path": "a.rs"',
+    b'[TOOL_CALLS]read_file[ARGS]{"path": "a.rs"}\nlist_dir[ARGS]{"path": "."}\nDone.',
+    b'[TOOL_CALLS]read_file[CALL_ID]a1B2c3D4e[ARGS]{"path": "a"}[TOOL_CALLS]current_time[CALL_ID]a1B2c3D4e[ARGS]{}</s>',
+    b'[TOOL_CALLS]read_file[ARGS]{"path": "a.rs"}\nDone. Like {"x": 1}',
+    b'[THINK]plan the read[/THINK]Reading.[TOOL_CALLS]read_file[ARGS]{"path": "a.rs"}',
+    b'[TOOL_CALLS] [{"name": "list_dir", "arguments": {"path": "."}}]\n[TOOL_CALLS]read_file[ARGS]{"path": "b"}',
+    b'[TOOL_RESULTS]a1B2c3D4e[TOOL_CONTENT]ok[/TOOL_RESULTS]',
 ]
 
 # Inputs that hold no recoverable call.
@@ -351,6 +372,9 @@ TOOL_CALL_NEGATIVES = [
     b'Record: {"name": "Ada", "age": 36} and {"user": {"name": "Bob"}}',
     b'{"name": "read_file"' + b'{' * 64,
     b'[TOOL_CALLS]',
+    b'[TOOL_CALLS]read_file',
+    b'[TOOL_CALLS]read_file[CALL_ID][ARGS][ARGS]',
+    b'[THINK][TOOL_CALLS][/THINK]',
     b'[TOOL_CALLS] [' + b'{"name": "read_file", "arguments": ' * 16 + b']',
     b'[TOOL_RESULTS] {"content": "x", "call_id": "a1B2c3D4e"}[/TOOL_RESULTS]',
 ]
@@ -365,7 +389,8 @@ TOOL_CALL_TOKENS = [
     b'</parameter>', b'</parameters>', b'<think>', b'</think>', b'{"name":',
     b'"arguments":', b'"tool_calls"', b'"function"', b'"id"', b'"type"', b'```',
     b'```json\n', b'"parameters":', b'<|python_tag|>', b'<|eom_id|>', b'<|eot_id|>',
-    b'; ', b'[TOOL_CALLS]', b'[TOOL_RESULTS]', b'"id":', b'</s>', b'read_file', b'write_file', b'current_time', b'path', b'\n', b'\t',
+    b'; ', b'[TOOL_CALLS]', b'[TOOL_RESULTS]', b'[ARGS]', b'[CALL_ID]', b'[TOOL_CONTENT]',
+    b'[THINK]', b'[/THINK]', b'"id":', b'</s>', b'read_file', b'write_file', b'current_time', b'path', b'\n', b'\t',
     b'"', b'\\', b'{', b'}', b'[', b']', b':', b',', b'>', b'<', b'null', b'1.50',
     b'\x00', b'\x04', b'\x80', 'é'.encode(), b'\xff', b'\xe2\x82',
 ]

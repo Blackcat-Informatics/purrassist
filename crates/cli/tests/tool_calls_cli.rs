@@ -449,3 +449,52 @@ fn mistral_v3_recovers_and_emits_via_cli() {
     );
     fs::remove_file(tools).unwrap();
 }
+
+/// Mistral v11 with no `--dialect`: `[TOOL_CALLS]NAME[CALL_ID]ID[ARGS]{...}`
+/// calls keep the model's ids, and a Hermes call emitted as
+/// `mistral-v11.v1` recovers to the same call.
+#[test]
+fn mistral_v11_recovers_and_emits_via_cli() {
+    let turn = br#"[TOOL_CALLS]list_dir[CALL_ID]a1B2c3D4e[ARGS]{"path": "src"}[TOOL_CALLS]list_dir[ARGS]{"path": "docs", "depth": 1}</s>"#;
+    let (output, tools) = run(&[], turn);
+    assert_eq!(output.status.code(), Some(0));
+    let node = result(&output);
+    assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+    assert_eq!(
+        node.pointer("/value/calls/0/source_id")
+            .and_then(Node::as_str),
+        Some("a1B2c3D4e")
+    );
+    for index in 0..2 {
+        assert_eq!(
+            node.pointer(&format!("/value/calls/{index}/dialect"))
+                .and_then(Node::as_str),
+            Some("mistral-v11.v1")
+        );
+    }
+    fs::remove_file(tools).unwrap();
+    let hermes =
+        b"<tool_call>\n{\"name\": \"list_dir\", \"arguments\": {\"path\": \"src\"}}\n</tool_call>";
+    let (output, tools) = run(&["--emit", "mistral-v11.v1"], hermes);
+    let node = result(&output);
+    let emitted = node
+        .pointer("/value/emitted/output/text")
+        .and_then(Node::as_str)
+        .expect("emitted markup")
+        .to_owned();
+    let prefix = turn_id_prefix(&Digest::of(hermes));
+    assert_eq!(
+        emitted,
+        format!(r#"[TOOL_CALLS]list_dir[CALL_ID]{prefix}0[ARGS]{{"path":"src"}}"#)
+    );
+    fs::remove_file(tools).unwrap();
+    let (output, tools) = run(&[], emitted.as_bytes());
+    let node = result(&output);
+    assert_eq!(node.get("status").and_then(Node::as_str), Some("resolved"));
+    assert_eq!(
+        node.pointer("/value/calls/0/dialect")
+            .and_then(Node::as_str),
+        Some("mistral-v11.v1")
+    );
+    fs::remove_file(tools).unwrap();
+}

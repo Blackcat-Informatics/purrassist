@@ -408,6 +408,16 @@ impl CodecState {
         }
     }
 
+    /// Where a self-delimiting value already complete ends: the end of
+    /// input then ends it with no recovery edit. `None` for a value still
+    /// open, and for the codecs that are not self-delimiting.
+    pub(crate) const fn complete_end(&self) -> Option<usize> {
+        match self {
+            Self::Json(codec) => codec.complete_end(),
+            Self::Raw(_) | Self::XmlParams(_) => None,
+        }
+    }
+
     pub(crate) fn feed(
         &mut self,
         byte: u8,

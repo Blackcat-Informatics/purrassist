@@ -587,6 +587,13 @@ impl IncrementalRecovery {
         matches!(self.mode, Mode::Done)
     }
 
+    /// Whether the top-level value is complete: [`Self::is_done`], or only
+    /// whitespace has followed it, so the end of input ends it with no
+    /// recovery edit.
+    pub(crate) const fn value_complete(&self) -> bool {
+        matches!(self.mode, Mode::Done | Mode::Space(After::Top))
+    }
+
     /// Absolute offset just past the last consumed character.
     pub(crate) const fn position(&self) -> usize {
         self.position

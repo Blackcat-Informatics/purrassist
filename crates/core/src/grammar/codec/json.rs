@@ -210,6 +210,21 @@ impl Codec for JsonCodec {
 }
 
 impl JsonCodec {
+    /// Where the value fed so far ends, when it is already one complete
+    /// JSON value (only whitespace may follow it) that well-formed UTF-8
+    /// spelled: the end of input then ends it with no recovery edit.
+    pub(crate) const fn complete_end(&self) -> Option<usize> {
+        if self.stalled
+            || self.fault.is_some()
+            || self.held_len != 0
+            || !self.parser.value_complete()
+        {
+            None
+        } else {
+            Some(self.parser.position())
+        }
+    }
+
     /// The decoded value, applying end-of-input repairs for an input that
     /// ended as `end` says.
     fn decode(self, end: CodecEnd, governor: &mut Governor) -> Result<Decoded, StopReason> {

@@ -170,9 +170,6 @@ pub(crate) struct Holds {
     pub(crate) dropped: bool,
     /// A `next` (the expression prints further calls).
     pub(crate) next: bool,
-    /// An `insert(...)`: the expression is a repaired form, never printed
-    /// when another alternative can be.
-    pub(crate) insert: bool,
     /// Every capture kind held.
     pub(crate) kinds: Kinds,
 }
@@ -385,8 +382,22 @@ impl<'g> Printer<'g> {
             }
             Expr::Reference(id) => self.collect_holds(self.grammar.production_expr(*id), holds),
             Expr::Next => holds.next = true,
-            Expr::Insert(_) => holds.insert = true,
             _ => {}
+        }
+    }
+
+    /// Whether every printing of `expr` holds an `insert(...)`: a repaired
+    /// form, which an alternation never chooses when another of its
+    /// alternatives is printable.
+    pub(crate) fn repaired(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Insert(_) => true,
+            Expr::Capture { inner, .. } => self.repaired(inner),
+            Expr::Sequence(items) => items.iter().any(|item| self.repaired(item)),
+            Expr::Choice(items) => items.iter().all(|item| self.repaired(item)),
+            Expr::Repeat { inner, min, .. } => *min > 0 && self.repaired(inner),
+            Expr::Reference(id) => self.repaired(self.grammar.production_expr(*id)),
+            _ => false,
         }
     }
 
@@ -603,7 +614,7 @@ impl<'v> Canonical<'v> {
 impl Fill for Canonical<'_> {
     fn choose(&mut self, printer: &Printer<'_>, alternatives: &[Expr]) -> usize {
         let mut best: Option<(u32, usize)> = None;
-        let repaired = |alternative: &Expr| printer.holds(alternative).insert;
+        let repaired = |alternative: &Expr| printer.repaired(alternative);
         let clean = alternatives.iter().any(|alternative| {
             !repaired(alternative) && printer.printable(alternative, self.available)
         });

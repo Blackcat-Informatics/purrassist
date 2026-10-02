@@ -11,7 +11,7 @@ call. The operation is `tool_call.recover.v1`, implemented in
 `recover_tool_calls` MCP tool, and the `purrassist recover-tool-calls` CLI
 command.
 
-Five dialects are built in:
+Six dialects are built in:
 
 | Dialect | Shape | Reference |
 | --- | --- | --- |
@@ -20,11 +20,12 @@ Five dialects are built in:
 | `openai-tool-calls.v1` | `tool_calls` elements `{"id": ID, "type": "function", "function": {...}}` as text | [dialect](dialects/openai-tool-calls.v1.md) |
 | `llama3-json.v1` | `{"name": NAME, "parameters": {...}}`, optionally after `<\|python_tag\|>` | [dialect](dialects/llama3-json.v1.md) |
 | `mistral-v3.v1` | `[TOOL_CALLS] [{"name": NAME, "arguments": {...}, "id": ID}, ...]` | [dialect](dialects/mistral-v3.v1.md) |
+| `mistral-v11.v1` | `[TOOL_CALLS]NAME[CALL_ID]ID[ARGS]{...}` (`[CALL_ID]` optional), repeated per call | [dialect](dialects/mistral-v11.v1.md) |
 
 Callers add their own dialects with the grammar DSL
 ([GRAMMAR.md](GRAMMAR.md)). Streaming recognition, `purrassist-derive`, and the
-remaining dialects (Anthropic tool_use, Mistral v11, DeepSeek, GLM, Kimi,
-Gemma, Harmony, Pythonic, bare JSON) are tracked in issue #4.
+remaining dialects (Anthropic tool_use, DeepSeek, GLM, Kimi, Gemma, Harmony,
+Pythonic, bare JSON) are tracked in issue #4.
 
 ## Design
 
@@ -138,7 +139,8 @@ Ids are caller-scoped and never collide across the rounds of a conversation,
 with zero configuration. By default (`IdPolicy::Turn`):
 
 - A call keeps the id the model wrote in its markup (an `OpenAI`
-  `tool_calls[].id`, a Mistral v3 `"id"`); `ToolCall::source_id` reports it.
+  `tool_calls[].id`, a Mistral v3 `"id"`, a Mistral v11 `[CALL_ID]`);
+  `ToolCall::source_id` reports it.
 - Every other call is numbered `call_<tag>_<index>`, where `<tag>` is the
   first 12 hexadecimal digits (48 bits) of the SHA-256 digest of the turn's
   output bytes (`tool_call::turn_id_prefix`; the digest is
@@ -272,7 +274,7 @@ an open call at the end of output means.
 
 | Stop | An open call at the end of output |
 | --- | --- |
-| `Length` | Truncation: the call is a dangling reading of what was captured, `Unresolved` (`Truncated`) with a `tool_call.truncated` data loss; unless something else is wrong with the turn, the finish is `Truncated` or `TruncatedWithCalls` (`"length"`). |
+| `Length` | Truncation: the call is a dangling reading of what was captured, `Unresolved` (`Truncated`) with a `tool_call.truncated` data loss; unless something else is wrong with the turn, the finish is `Truncated` or `TruncatedWithCalls` (`"length"`). A call that ends with a self-delimiting arguments value (Mistral v11's `[ARGS]{...}`, with no closing token after it) is complete when that value is complete at the cut: it is not cut off, so it is read as under a stop, and the finish is `TruncatedWithCalls`. |
 | `Stop`, `ToolCalls`, `ContentFilter`, `Unknown` | Malformed: completed only by inserting the missing closers at the end (`tool_call.markup.missing-closers-at-end`) when the call is otherwise complete (its name parsed, no value open, arguments complete, every required parameter present); otherwise a rejected attempt with a `tool_call.markup.dangling-opener` data loss and the finish `Unresolved`. |
 | `StopSequence(bytes)` | Like `Stop`, and when `bytes` equal the closer the call expects next, that closer is reinserted (`tool_call.stop.consumed-closer`). |
 
@@ -327,6 +329,6 @@ are in [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound).
 - [dialects/](dialects/): public sources, accepted forms, printing, and
   deliberate exclusions of each built-in dialect.
 - [MATCHING-QUALITY.md](../MATCHING-QUALITY.md#tool-call-recovery-evaluation):
-  the 5,228-case correction evaluation, per rule and per dialect.
+  the 6,108-case correction evaluation, per rule and per dialect.
 - [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound): the cost
   bound, budgets for large outputs, and throughput.

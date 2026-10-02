@@ -176,7 +176,11 @@ targets' mutation tokens so mutation can create or move field boundaries).
   bracket at the end and before the next array, a truncated last object,
   unbracketed objects (one, two by comma or by line, one followed by a plain
   JSON object in prose, two cut off), a repeated bracket, duplicate model ids, the `parameters`
-  key, stringified arguments), and negative cases (including JSON content
+  key, stringified arguments), Mistral v11 repairs (a missing `[ARGS]`,
+  whitespace around the name, truncated and unclosed arguments, a second
+  call without its `[TOOL_CALLS]`, duplicate `[CALL_ID]` ids, prose after a
+  call, `[THINK]` reasoning, a v3 array beside a v11 call), and negative
+  cases (including JSON content
   that is not call-shaped, a bare `[TOOL_CALLS]`, and nested unterminated
   call objects); the header bytes cycle through five
   fixed request configurations.

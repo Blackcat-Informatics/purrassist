@@ -551,19 +551,21 @@ impl Fill for Seeded<'_> {
             .iter()
             .map(|item| printer.holds(item))
             .collect();
-        // A repaired form (one holding `insert`) is never a witness's choice
-        // when a well-formed alternative exists.
-        let clean = holds.iter().any(|hold| !hold.insert);
-        let best = holds
+        // A repaired form (one that always holds `insert`) is never a
+        // witness's choice when a well-formed alternative exists.
+        let repaired: Vec<bool> = alternatives
             .iter()
-            .filter(|hold| !(clean && hold.insert))
-            .map(|hold| (hold.name, hold.count))
+            .map(|item| printer.repaired(item))
+            .collect();
+        let clean = repaired.iter().any(|repaired| !repaired);
+        let allowed = |index: usize| !(clean && repaired[index]);
+        let best = (0..alternatives.len())
+            .filter(|&index| allowed(index))
+            .map(|index| (holds[index].name, holds[index].count))
             .max()
             .unwrap_or((false, 0));
         let candidates: Vec<usize> = (0..alternatives.len())
-            .filter(|&index| {
-                !(clean && holds[index].insert) && (holds[index].name, holds[index].count) == best
-            })
+            .filter(|&index| allowed(index) && (holds[index].name, holds[index].count) == best)
             .collect();
         candidates[self.rng.below(candidates.len())]
     }

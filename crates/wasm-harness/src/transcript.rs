@@ -214,7 +214,7 @@ struct DialectCase {
 }
 
 /// One case per entry of `DialectId::BUILT_IN` (checked by the test below).
-const DIALECT_CASES: [DialectCase; 5] = [
+const DIALECT_CASES: [DialectCase; 6] = [
     DialectCase {
         dialect: DialectId::Hermes,
         anchor: "<think>\nWrite the file.\n</think>\n\n<tool_call>\n{\"name\": \"write_file\", \"arguments\": {\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}}\n</tool_call>\n<tool_call>\n{\"arguments\": {\"path\": \"notes.txt\", \"limit\": 10}, \"name\": \"read_file\"}\n</tool_call>",
@@ -230,6 +230,14 @@ const DIALECT_CASES: [DialectCase; 5] = [
         repair: "{\"name\": \"read_file\", \"parameters\": {\"path\": \"src/lib.rs\", \"limit\": 40}\n{\"name\": \"get_weather\", \"parameters\": {\"city\": \"Oslo\", \"unit\": \"celsius\"}}}",
         repair_status: "resolved",
         repair_digest: "sha256:cf64b7392f46122a2ad98a32099dff59275c4aea1410b023f9446709a0729b6b",
+    },
+    DialectCase {
+        dialect: DialectId::MistralV11,
+        anchor: "[THINK]Write the file, then read the notes.[/THINK][TOOL_CALLS]write_file[CALL_ID]a1B2c3D4e[ARGS]{\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}[TOOL_CALLS]read_file[CALL_ID]f5G6h7J8k[ARGS]{\"path\": \"notes.txt\", \"limit\": 10}</s>",
+        anchor_digest: "sha256:30b33a48978dbd2ed81606045cc3fd6d1edd77cff066419fc73415b0118805b1",
+        repair: "[TOOL_CALLS] read_file\n{\"path\": \"src/lib.rs\", \"limit\": 40}\nget_weather[ARGS]{\"city\": \"Oslo\", \"unit\": \"celsius\"",
+        repair_status: "resolved",
+        repair_digest: "sha256:840d2aad58e7db4390971f66d054fddde97c4f1451e065e69ec8beb25f413b26",
     },
     DialectCase {
         dialect: DialectId::MistralV3,

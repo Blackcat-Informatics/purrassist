@@ -1,0 +1,91 @@
+{
+  "description": "Two Mistral v11 calls where only the first has [TOOL_CALLS]: the second (a name and [ARGS]) continues the attempt with the omitted token read as inserted (tool_call.markup.missing-token); both calls are Resolved and the prose after them is content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v11.v1"
+  ],
+  "stop": "stop",
+  "input": "[TOOL_CALLS]get_weather[ARGS]{\"city\": \"Oslo\"}\nread_file[ARGS]{\"path\": \"notes.txt\"}\nChecking both now.",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "city": "Oslo"
+      },
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.id.dedup"
+      ]
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "notes.txt"
+      },
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.missing-token",
+        "tool_call.id.dedup"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.id.dedup",
+    "tool_call.markup.missing-token",
+    "tool_call.id.dedup"
+  ]
+}

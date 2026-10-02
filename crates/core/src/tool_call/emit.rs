@@ -50,6 +50,7 @@
 //! | `hermes.v1` | `<tool_call>\n{"name":"NAME","arguments":ARGS}\n</tool_call>` (the template's wrapper layout; the object is compact) |
 //! | `openai-tool-calls.v1` | `{"id":"ID","type":"function","function":{"name":"NAME","arguments":"ARGS"}}` |
 //! | `llama3-json.v1` | `{"name": "NAME", "parameters": ARGS}` (the template's layout; `ARGS` is compact) |
+//! | `mistral-v11.v1` | `[TOOL_CALLS]NAME[CALL_ID]ID[ARGS]ARGS` per call (the v11 layout; `ARGS` is compact) |
 //! | `mistral-v3.v1` | `[TOOL_CALLS] [{"name": "NAME", "arguments": ARGS, "id": "ID"}, ...]`: every printed call in one array (the template's layout; `ARGS` is compact) |
 //!
 //! `ARGS` is the compact JSON of the argument tree with every number's

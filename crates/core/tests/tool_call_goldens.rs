@@ -1930,3 +1930,131 @@ fn mistral_unbracketed_calls_read_by_evidence() {
     );
     assert_eq!(calls.finish, Finish::TruncatedWithCalls);
 }
+
+/// Mistral v11: an omitted `[ARGS]`, whitespace around the name, an
+/// unclosed arguments object at a stop, and a second call whose
+/// `[TOOL_CALLS]` is omitted are all read with every call `Resolved`; the
+/// model's `[CALL_ID]` ids are kept; prose after a call is content.
+#[test]
+fn mistral11_repairs() {
+    for (name, rule, count) in [
+        (
+            "mistral11_missing_args_token",
+            Some("tool_call.markup.missing-token"),
+            1,
+        ),
+        ("mistral11_whitespace_around_name", None, 1),
+        (
+            "mistral11_unclosed_arguments_at_stop",
+            Some("json.syntax.close-container"),
+            1,
+        ),
+        (
+            "mistral11_second_token_missing",
+            Some("tool_call.markup.missing-token"),
+            2,
+        ),
+        ("mistral11_call_ids", None, 2),
+        ("mistral11_text_after_call", None, 1),
+    ] {
+        let (_, result) = golden(name);
+        assert!(matches!(result.outcome, Outcome::Resolved(_)), "{name}");
+        let calls = reading(&result);
+        assert_eq!(calls.calls.len(), count, "{name}: {calls:#?}");
+        assert!(calls.rejected.is_empty(), "{name}");
+        assert!(
+            calls
+                .calls
+                .iter()
+                .all(|call| call.outcome == CallOutcome::Resolved)
+        );
+        assert!(
+            calls
+                .calls
+                .iter()
+                .all(|call| call.dialect == DialectId::MistralV11)
+        );
+        if let Some(rule) = rule {
+            assert!(
+                calls
+                    .calls
+                    .iter()
+                    .any(|call| rules_of(call).contains(&rule)),
+                "{name}"
+            );
+        }
+    }
+    let (_, result) = golden("mistral11_call_ids");
+    let ids: Vec<Option<&str>> = reading(&result)
+        .calls
+        .iter()
+        .map(|call| call.source_id.as_deref())
+        .collect();
+    assert_eq!(ids, [Some("a1B2c3D4e"), Some("f5G6h7J8k")]);
+    let (golden_turn, result) = golden("mistral11_text_after_call");
+    let calls = reading(&result);
+    assert_eq!(calls.content.len(), 1);
+    assert!(golden_turn.input[calls.content[0].clone()].starts_with(b"Done."));
+    let (_, result) = golden("mistral11_text_after_call_length");
+    let calls = reading(&result);
+    assert_eq!(calls.calls.len(), 1);
+    assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
+    assert_eq!(calls.finish, Finish::TruncatedWithCalls);
+    let (_, result) = golden("mistral11_truncated_arguments");
+    assert_eq!(
+        the_call(&result).outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::Truncated
+        }
+    );
+}
+
+/// Mistral v3 and v11 share the `[TOOL_CALLS]` opener; each canonical call
+/// is read by its own dialect alone.
+#[test]
+fn mistral_dialects_disambiguate_by_body() {
+    let (_, result) = golden("mistral_v3_and_v11_canonical");
+    assert!(matches!(result.outcome, Outcome::Resolved(_)));
+    let calls = reading(&result);
+    let dialects: Vec<(&DialectId, &[DialectId])> = calls
+        .calls
+        .iter()
+        .map(|call| (&call.dialect, call.candidate_dialects.as_slice()))
+        .collect();
+    assert_eq!(
+        dialects,
+        [
+            (&DialectId::MistralV3, &[DialectId::MistralV3][..]),
+            (&DialectId::MistralV11, &[DialectId::MistralV11][..])
+        ]
+    );
+    assert_eq!(calls.rejected.len(), 0);
+}
+
+/// A Mistral v11 call ends with its arguments' JSON value: under a length
+/// stop, a call whose value is complete is a complete call (`Resolved`,
+/// finish `truncated_with_calls`), and a call cut inside its value is
+/// truncated.
+#[test]
+fn mistral11_length_stop_at_a_complete_call() {
+    let (_, result) = golden("mistral11_complete_call_at_length");
+    assert!(matches!(result.outcome, Outcome::Resolved(_)));
+    let calls = reading(&result);
+    assert_eq!(calls.calls.len(), 2);
+    assert!(
+        calls
+            .calls
+            .iter()
+            .all(|call| call.outcome == CallOutcome::Resolved)
+    );
+    assert_eq!(calls.usable().len(), 2);
+    assert_eq!(calls.finish, Finish::TruncatedWithCalls);
+    let (_, result) = golden("mistral11_truncated_arguments");
+    assert_eq!(
+        the_call(&result).outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::Truncated
+        }
+    );
+    assert_eq!(reading(&result).finish, Finish::Truncated);
+}

@@ -1,0 +1,83 @@
+{
+  "description": "Canonical Mistral v3 and v11 calls in one turn with both Mistral dialects allowed: both open at [TOOL_CALLS], and each body is the evidence, so each call is read by its own dialect alone (its candidate dialects name only that dialect) and the other dialect's attempt is never reported.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v11.v1",
+    "mistral-v3.v1"
+  ],
+  "stop": "stop",
+  "input": "[TOOL_CALLS] [{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Oslo\"}, \"id\": \"a1B2c3D4e\"}]\n[TOOL_CALLS]read_file[CALL_ID]f5G6h7J8k[ARGS]{\"path\": \"b.rs\"}",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "city": "Oslo"
+      },
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "b.rs"
+      },
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

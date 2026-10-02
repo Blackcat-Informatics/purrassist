@@ -1,0 +1,58 @@
+{
+  "description": "A Mistral v11 call followed by a line of prose: the prose has no [ARGS], so it is not call-shaped and stays content; the call is Resolved.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v11.v1"
+  ],
+  "stop": "stop",
+  "input": "[TOOL_CALLS]get_weather[ARGS]{\"city\": \"Paris\"}\nDone. It will look like {\"temp\": 21}.",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "city": "Paris"
+      },
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.id.dedup"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.id.dedup"
+  ]
+}

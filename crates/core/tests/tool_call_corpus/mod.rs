@@ -481,6 +481,7 @@ const fn dialect_label(dialect: &DialectId) -> &'static str {
         DialectId::Hermes => "hermes",
         DialectId::Llama3Json => "llama3",
         DialectId::MistralV3 => "mistral3",
+        DialectId::MistralV11 => "mistral11",
         DialectId::OpenAiToolCalls => "openai",
         DialectId::Qwen3CoderXml => "qwen",
         DialectId::Custom(_) => "custom",
@@ -488,12 +489,13 @@ const fn dialect_label(dialect: &DialectId) -> &'static str {
 }
 
 /// The built-in dialects, in corpus order.
-const DIALECTS: [DialectId; 5] = [
+const DIALECTS: [DialectId; 6] = [
     DialectId::Qwen3CoderXml,
     DialectId::Hermes,
     DialectId::OpenAiToolCalls,
     DialectId::Llama3Json,
     DialectId::MistralV3,
+    DialectId::MistralV11,
 ];
 
 /// The witness of tool `tool` in `dialect` for corpus seed `seed`.
@@ -509,7 +511,12 @@ fn base(tools: &ToolSet, dialect: &DialectId, tool: usize, seed: u64) -> Base {
         .expect("every tool has a shape");
     let form = match dialect {
         DialectId::Qwen3CoderXml => Form::Xml,
-        DialectId::Hermes | DialectId::Llama3Json | DialectId::MistralV3 if seed < SEEDS => {
+        DialectId::Hermes
+        | DialectId::Llama3Json
+        | DialectId::MistralV3
+        | DialectId::MistralV11
+            if seed < SEEDS =>
+        {
             Form::Object
         }
         _ if seed.is_multiple_of(2) => Form::Stringified,
@@ -698,6 +705,9 @@ impl Base {
                 format!("<function={}>", self.call.name),
                 format!("<function={name}>"),
             )
+        } else if self.dialect == DialectId::MistralV11 {
+            // A bare name right after the token.
+            (self.call.name.clone(), name.to_owned())
         } else {
             (json::quote(&self.call.name), json::quote(name))
         };
@@ -875,7 +885,10 @@ fn bare_safe(text: &str) -> bool {
 fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
     let mut out = Vec::new();
     let text = &base.text;
-    let wrapped = base.dialect != DialectId::OpenAiToolCalls;
+    let wrapped = !matches!(
+        base.dialect,
+        DialectId::OpenAiToolCalls | DialectId::MistralV11
+    );
     let xml = base.form == Form::Xml;
     let json_form = !xml;
 
@@ -1141,7 +1154,32 @@ fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
     if base.dialect == DialectId::MistralV3 {
         mistral_mutations(base, &mut out);
     }
+    if base.dialect == DialectId::MistralV11 {
+        mistral11_mutations(base, &mut out);
+    }
     out
+}
+
+/// Mistral v11: the `[ARGS]` token left out between the name (or id) and
+/// an arguments object, read as inserted.
+fn mistral11_mutations(base: &Base, out: &mut Vec<Mutant>) {
+    let split = base.split();
+    if base.form == Form::Object
+        && let Some(at) = split.prefix.rfind("[ARGS]")
+    {
+        out.push(mutant(
+            "tool_call.markup.missing-token",
+            "args",
+            format!(
+                "{}{}{}{}",
+                &split.prefix[..at],
+                &split.prefix[at + "[ARGS]".len()..],
+                base.arguments_text(),
+                split.suffix
+            ),
+            Need::Exact,
+        ));
+    }
 }
 
 /// The parts of a bracketed Mistral v3 witness: the text through the token,
@@ -1712,6 +1750,18 @@ fn pair_mutations(first: &Base, second: &Base) -> Vec<Mutant> {
             ));
         }
     } else {
+        if first.dialect == DialectId::MistralV11
+            && let Some(rest) = second.text.trim_start().strip_prefix("[TOOL_CALLS]")
+            && second.split().prefix.contains("[ARGS]")
+        {
+            // The second call's [TOOL_CALLS] left out.
+            out.push(mutant(
+                "tool_call.markup.missing-token",
+                "second-token",
+                format!("{}\n{}", first.text, rest.trim_start()),
+                Need::Exact,
+            ));
+        }
         if let (Some((head, first_inside, _)), Some((_, second_inside, _))) =
             (mistral_array(first), mistral_array(second))
         {
@@ -1723,19 +1773,21 @@ fn pair_mutations(first: &Base, second: &Base) -> Vec<Mutant> {
                 Need::Exact,
             ));
         }
-        let end = first.wrapper_end();
-        out.push(mutant(
-            "tool_call.markup.missing-wrapper-close",
-            "first",
-            format!("{}\n{}", &first.text[..end], second.text),
-            Need::Exact,
-        ));
-        out.push(mutant(
-            "tool_call.markup.stray-closer",
-            "between",
-            format!("{}\n{}\n{}", first.text, first.closer(), second.text),
-            Need::Exact,
-        ));
+        if first.dialect != DialectId::MistralV11 {
+            let end = first.wrapper_end();
+            out.push(mutant(
+                "tool_call.markup.missing-wrapper-close",
+                "first",
+                format!("{}\n{}", &first.text[..end], second.text),
+                Need::Exact,
+            ));
+            out.push(mutant(
+                "tool_call.markup.stray-closer",
+                "between",
+                format!("{}\n{}\n{}", first.text, first.closer(), second.text),
+                Need::Exact,
+            ));
+        }
     }
     out
 }
@@ -1766,7 +1818,7 @@ const fn policy_of(seed: u64) -> Policy {
 }
 
 const ALL_DIALECTS: &str =
-    "hermes.v1,llama3-json.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1";
+    "hermes.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1";
 
 /// The cases of every single-call mutation of `base`, appended to `cases`;
 /// with `under`, only those of categories with fewer than [`TARGET`] cases

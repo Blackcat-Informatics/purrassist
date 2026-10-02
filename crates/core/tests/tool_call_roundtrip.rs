@@ -472,7 +472,8 @@ fn declaration_forms_render_every_tool() {
                     DeclarationForm::OpenAi
                     | DeclarationForm::Hermes
                     | DeclarationForm::Llama3Json
-                    | DeclarationForm::MistralV3 => "",
+                    | DeclarationForm::MistralV3
+                    | DeclarationForm::MistralV11 => "",
                     _ => r#"{"type":"object"}"#,
                 });
                 assert!(
@@ -565,6 +566,11 @@ fn tool_results_roundtrip() {
                     Some(content),
                     "{context}"
                 );
+                assert_eq!(found[0].id.as_ref().expect("id").value, "call_3");
+                assert_eq!(rendered.omitted, []);
+            } else if dialect == DialectId::MistralV11 {
+                // Verbatim content, after the id of the call it answers.
+                assert_eq!(captured, content, "{context}");
                 assert_eq!(found[0].id.as_ref().expect("id").value, "call_3");
                 assert_eq!(rendered.omitted, []);
             } else {
