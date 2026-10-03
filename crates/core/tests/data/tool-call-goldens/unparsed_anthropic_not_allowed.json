@@ -35,6 +35,11 @@
     "outcome": "resolved",
     "stopped": "completed",
     "finish": "calls",
+    "verdict": "run",
+    "usable_calls": {
+      "strict": 1,
+      "accepting_guesses": 1
+    },
     "calls": [
       {
         "tool": "get_weather",
@@ -56,6 +61,11 @@
   "outcome": "resolved",
   "stopped": "completed",
   "finish": "unresolved",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
   "calls": [],
   "rejected": [
     {

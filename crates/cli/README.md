@@ -32,18 +32,23 @@ call `P(N + index)` instead (prefix `call_`, start 0 when omitted; pass the
 result's `next_id_start` as the next round's `--ids-start`), and
 `--ids-source` keeps the output's ids, deduplicated as `ID#INDEX`; combining
 `--ids-source` with either numbering option is an invocation error. `--help`
-lists every option; repeated single-valued options are rejected. It exits 0 when at least one call is usable (`usable_accepting_guesses`) and the
-tool-choice check passed, even if other attempts in the turn were rejected or
-are unparsed call markup (the JSON itemizes them, so a script keyed on the
-exit code never discards good calls because of one stray opener), and for
-clean content (finish `content_only`). It exits 3 when nothing is usable and
-the operation or a call is ambiguous, and 4 when nothing is usable (unresolved
-calls, only rejected or unparsed call markup, a `truncated` turn, only guesses
-that may not be used, such as a mutating tool's, or an `Unresolved` operation:
-an exhausted budget, invalid input) or the tool-choice check failed, even with
-usable calls: a violated tool choice is a contract failure the caller must
-see. Invocation errors exit 1. The printed JSON is the same whatever the exit
-code; the code only summarizes it. It
+lists every option; repeated single-valued options are rejected. The exit
+code is `tool_call::exit_code` of the result, so it always agrees with the
+printed `value.verdict`: 0 for `run` (the tool-choice check passed and at
+least one call is usable, `usable_accepting_guesses`, even beside rejected
+attempts or unparsed call markup, which the JSON itemizes) and `no_calls`
+(clean content, finish `content_only`); 3 for `ambiguous` (nothing usable
+and a call is ambiguous) or an `Ambiguous` operation; 4 for `nothing_usable`
+(unresolved calls, only rejected or unparsed call markup, a `truncated`
+turn, only guesses that may not be used, such as a mutating tool's, or a
+failed tool-choice check even beside usable calls) or an `Unresolved`
+operation (an exhausted budget, invalid input). The JSON's `status` is the
+certainty of the reading of the turn, not whether anything can run: a turn
+whose only call names an undeclared tool is `status: "resolved"` with
+`verdict: "nothing_usable"` and exits 4 (see the tool-calls
+[INTEGRATION.md](https://github.com/Blackcat-Informatics/purrassist/blob/main/docs/tool-calls/INTEGRATION.md#reading-a-result-status-finish-and-verdict)).
+Invocation errors exit 1. The printed JSON is the same whatever the exit
+code. It
 never executes a call.
 
 `call TOOL --root DIRECTORY` accepts a JSON argument object on stdin. Tools

@@ -7,7 +7,8 @@
 //! parameters and unknown-parameter modes adapters cannot express), an
 //! optional custom `grammar`, and the request (`dialects`, `policy`,
 //! `effects`, `stop`, `tool_choice`, `effort`, `reasoning`, `ids`,
-//! `ambiguity`). The outcome, finish, calls, rejected attempts, calls
+//! `ambiguity`). The outcome, finish, usability verdict and usable-call
+//! counts, calls, rejected attempts, calls
 //! embedded in reasoning, failed validations and the recorded rule ids are
 //! captured from an actual run rather than
 //! hand-transcribed.
@@ -59,6 +60,8 @@ const CAPTURED: &[&str] = &[
     "outcome",
     "stopped",
     "finish",
+    "verdict",
+    "usable_calls",
     "calls",
     "rejected",
     "embedded",
@@ -532,6 +535,17 @@ fn rejected_nodes(calls: &ToolCalls) -> Node {
 fn reading_fields(calls: &ToolCalls) -> Vec<Member> {
     vec![
         member("finish", string(calls.finish.code())),
+        member("verdict", string(calls.verdict().code())),
+        member(
+            "usable_calls",
+            object(vec![
+                member("strict", integer(calls.usable().len())),
+                member(
+                    "accepting_guesses",
+                    integer(calls.usable_accepting_guesses().len()),
+                ),
+            ]),
+        ),
         member(
             "calls",
             Node::new(Value::Array(calls.calls.iter().map(call_node).collect())),
@@ -3142,4 +3156,79 @@ fn invalid_utf8_in_arguments_keeps_the_call() {
     let call = the_call(&result);
     assert_eq!(call.outcome, CallOutcome::BestGuess);
     assert!(rules_of(call).contains(&"tool_call.value.invalid-utf8"));
+}
+
+/// F5: over every golden, pinned and under the default allow-list, the
+/// usability verdict on the wire (`value.verdict`, `value.usable_calls`,
+/// `value.usable_calls_accepting_guesses`) is [`ToolCalls::verdict`] and
+/// the usable-call counts, and the CLI's exit code
+/// ([`purrassist_core::tool_call::exit_code`]) agrees with the documented
+/// rule restated independently here: 0 exactly when the tool-choice check
+/// passed and a call is usable accepting guesses or the turn is clean
+/// content, 3 when instead a call (or the operation) is ambiguous, 4
+/// otherwise. `status` is the reading's certainty and is not consulted.
+#[test]
+fn verdict_and_exit_code_agree_over_goldens() {
+    use purrassist_core::tool_call::{Verdict, exit_code};
+    let mut verdicts = std::collections::BTreeSet::new();
+    for (golden, result) in all_goldens().into_iter().chain(all_default_runs()) {
+        let name = golden.path.display().to_string();
+        let code = exit_code(&result.outcome);
+        let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = &result.outcome else {
+            let expected = if matches!(result.outcome, Outcome::Ambiguous(_)) {
+                3
+            } else {
+                4
+            };
+            assert_eq!(code, expected, "{name}");
+            continue;
+        };
+        let value = result.to_node();
+        let value = value.get("value").expect("a value");
+        let verdict = calls.verdict();
+        verdicts.insert(verdict.code());
+        assert_eq!(
+            value.get("verdict").and_then(Node::as_str),
+            Some(verdict.code()),
+            "{name}"
+        );
+        assert_eq!(
+            value.get("usable_calls").map(Node::to_json),
+            Some(calls.usable().len().to_string()),
+            "{name}"
+        );
+        assert_eq!(
+            value
+                .get("usable_calls_accepting_guesses")
+                .map(Node::to_json),
+            Some(calls.usable_accepting_guesses().len().to_string()),
+            "{name}"
+        );
+        let passed = calls.tool_choice.passed;
+        let usable = !calls.usable_accepting_guesses().is_empty();
+        let content = calls.finish == Finish::ContentOnly;
+        let ambiguous = calls
+            .calls
+            .iter()
+            .any(|call| call.outcome == CallOutcome::Ambiguous);
+        let expected = if passed && (usable || content) {
+            0
+        } else if passed && ambiguous {
+            3
+        } else {
+            4
+        };
+        assert_eq!(code, expected, "{name}");
+        assert_eq!(
+            code == 0,
+            matches!(verdict, Verdict::Run | Verdict::NoCalls),
+            "{name}"
+        );
+        assert_eq!(verdict == Verdict::Run, passed && usable, "{name}");
+    }
+    // The goldens exercise every verdict.
+    assert_eq!(
+        verdicts.into_iter().collect::<Vec<_>>(),
+        ["ambiguous", "no_calls", "nothing_usable", "run"]
+    );
 }

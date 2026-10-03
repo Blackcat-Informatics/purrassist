@@ -327,7 +327,9 @@ inference (see [Ids across rounds](#ids-across-rounds)).
 the `OpenAI` wire format has no better value. `"stop"` therefore hides
 rejected and unresolved calls. Read `ToolCalls::finish` (wire `finish`) and
 `ToolCalls::rejected` (wire `rejected`) before deciding that a turn
-completed cleanly. A rejected attempt's `dialect` is the dialect whose
+completed cleanly, and branch on `verdict` (not `status`) for whether
+anything can run ([Reading a result](#reading-a-result-status-finish-and-verdict)).
+A rejected attempt's `dialect` is the dialect whose
 grammar read furthest before failing; `candidate_dialects` lists every
 dialect that attempted a call at the same opener.
 
@@ -491,7 +493,9 @@ Anthropic form), `policy` (`per-tool`, `structural`, `tolerant`), `effects`,
 `reject`), `ids` (omitted for the default turn-scoped ids, `"source"`, or
 `{"prefix", "start"}`; see [Ids across rounds](#ids-across-rounds)), `emit` (`none`,
 `openai`, or a dialect id), and `effort`. The result is in
-`structuredContent` (and as text in `content`):
+`structuredContent` (and as text in `content`); branch on `value.verdict`
+for what can run, not on `status` (see
+[Reading a result](#reading-a-result-status-finish-and-verdict)):
 
 ```json
 {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"recover_tool_calls","arguments":{
@@ -529,19 +533,24 @@ result is `"status": "resolved"`. The call is `write_file` with arguments
 `a7e052aa565b` is the first 12 hexadecimal digits of the SHA-256 digest of
 `turn.txt` (with no trailing newline); another turn gets another tag.
 
-The command exits 0 when at least one call is usable (`usable_accepting_guesses`) and the
-tool-choice check passed, even if other attempts in the turn were rejected or
-are unparsed call markup (the JSON itemizes them, so a script keyed on the
-exit code never discards good calls because of one stray opener), and for
-clean content (finish `content_only`). It exits 3 when nothing is usable and
-the operation or a call is ambiguous, and 4 when nothing is usable (unresolved
-calls, only rejected or unparsed call markup, a `truncated` turn, only guesses
-that may not be used, such as a mutating tool's, or an `Unresolved` operation:
-an exhausted budget, invalid input) or the tool-choice check failed, even with
-usable calls: a violated tool choice is a contract failure the caller must
-see. Invocation errors exit 1. The printed JSON is the same whatever the exit
-code; the code only summarizes it. `--help` lists every option; the command
-never executes a call. *Proved by* `tool_calls_cli::exit_code_reflects_what_is_usable`
+The command's exit code is `tool_call::exit_code` of the result: the
+selected reading's `value.verdict` mapped to 0 (`run`, `no_calls`), 3
+(`ambiguous`) or 4 (`nothing_usable`), 3 for an `Ambiguous` operation and 4
+for an `Unresolved` one (see [Reading a result](#reading-a-result-status-finish-and-verdict)),
+so the exit code and the printed JSON can never disagree. It exits 0 when
+the tool-choice check passed and at least one call is usable
+(`usable_accepting_guesses`), even if other attempts in the turn were
+rejected or are unparsed call markup (the JSON itemizes them, so a script
+keyed on the exit code never discards good calls because of one stray
+opener), or the turn is clean content (finish `content_only`). It exits 3
+when nothing is usable and a call or the operation is ambiguous, and 4 when
+nothing is usable (unresolved calls, only rejected or unparsed call markup,
+a `truncated` turn, only guesses that may not be used, such as a mutating
+tool's, or an `Unresolved` operation: an exhausted budget, invalid input) or
+the tool-choice check failed, even with usable calls: a violated tool choice
+is a contract failure the caller must see. Invocation errors exit 1. The
+printed JSON is the same whatever the exit code. `--help` lists every
+option; the command never executes a call. *Proved by* `tool_calls_cli::exit_code_reflects_what_is_usable`
 (resolved calls, usable calls beside a stray rejected opener, clean
 content, `truncated_with_calls`, `truncated`, a hallucinated name, a missing
 required argument, each violated tool choice, including `none` with a usable
@@ -553,5 +562,46 @@ budget).
 The `recover_tool_calls` MCP tool has no exit code. Like every other tool in
 the registry, a completed recovery is a successful tool result (`isError`
 false) whatever it recovered, and `isError` is true only when the request
-itself is invalid; the result's `status` and `value.finish` carry the same
-information the CLI's exit code summarizes.
+itself is invalid. Its `value.verdict` is the field the CLI's exit code
+summarizes; `status` is not (see below).
+
+### Reading a result: status, finish and verdict
+
+`status` and the usability of the calls are different questions, answered
+by different fields:
+
+- **`status`** is the certainty of the recovered *reading of the turn*,
+  with the same meaning as in every other operation's result: `resolved`
+  (one reading of the output), `best_guess` (a reading chosen among others,
+  or carrying a guess or a data loss), `ambiguous` (competing readings,
+  none selected: `value` is null and each reading is in `alternatives`), or
+  `unresolved` (no reading: an exhausted budget, invalid input, rejected
+  ambiguity). It is **not** a verdict on the calls: a turn read with full
+  certainty may hold nothing to run. A turn whose only call names an
+  undeclared tool, misses a required argument, or violates the tool choice
+  is `status: "resolved"` (that is unambiguously what the model wrote) with
+  `value.finish: "unresolved"` and `value.verdict: "nothing_usable"`.
+- **`value.verdict`** is the usability verdict, one field to branch on
+  (`ToolCalls::verdict`). `value.usable_calls` counts the calls that may run
+  as is (`Resolved`, `ToolCalls::usable`), and
+  `value.usable_calls_accepting_guesses` also counts best guesses on
+  read-only tools (`ToolCalls::usable_accepting_guesses`).
+- **`value.finish`** classifies the turn (calls, content, truncation, or
+  something wrong somewhere: it is `unresolved` whenever any attempt was
+  rejected, even beside usable calls). Per-call `outcome` and
+  `value.tool_choice` give the reasons.
+
+| `status` | `value.verdict` | Typical `value.finish` | Exit | What the caller should do |
+| --- | --- | --- | --- | --- |
+| `resolved`, `best_guess` | `run` | `calls`, `truncated_with_calls`, `unresolved` (a stray attempt beside usable calls) | 0 | Run the usable calls: `usable_calls` (strict) or, accepting read-only guesses, `usable_calls_accepting_guesses`; report `rejected` |
+| `resolved`, `best_guess` | `no_calls` | `content_only` | 0 | Use the content; nothing to run |
+| `resolved`, `best_guess` | `ambiguous` | `unresolved` | 3 | Choose among the ambiguous call's `alternatives`, or re-ask |
+| `resolved`, `best_guess` | `nothing_usable` | `unresolved`, `truncated`, or any finish when `tool_choice.passed` is false | 4 | Run nothing; re-ask or report the per-call reasons and the tool-choice diagnostics |
+| `ambiguous` | none (`value` is null; each of `alternatives` carries its own `verdict`) | none | 3 | Choose a reading, or re-ask |
+| `unresolved` | none (`value` is null) | none | 4 | Read `receipt.termination`; run nothing |
+
+*Proved by* `tool_call_goldens::verdict_and_exit_code_agree_over_goldens`
+(over every golden, pinned and under the default allow-list: the wire
+`verdict` and counts are `ToolCalls::verdict` and the usable-call counts,
+and the exit code agrees with the rule above, restated independently) and
+the CLI tests above.

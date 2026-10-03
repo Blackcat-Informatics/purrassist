@@ -4,7 +4,7 @@ use purrassist::{
     Effort, Outcome, RecoveryRequest, Schema,
     json::{self, Member, Node, Value},
     matching::{self, Candidate, MatchRequest},
-    tool_call::{CallOutcome, DialectId, Finish, ToolCalls},
+    tool_call::{DialectId, ToolCalls},
     wire::{array, integer, object, string},
 };
 use std::io::{self, Read};
@@ -265,39 +265,16 @@ fn recover_tool_calls(args: &[String]) -> Result<u8, String> {
     Ok(tool_calls_exit_code(&result.outcome))
 }
 
-/// The documented exit code of `recover-tool-calls`, a summary of what the
-/// caller can use (the printed JSON is the whole answer, itemizing every
-/// rejected attempt beside the usable calls):
-///
-/// - 0: at least one call is usable (`usable_accepting_guesses`) and the
-///   tool-choice check passed, even when other attempts in the turn were
-///   rejected or unparsed; or the finish is `content_only` (clean content);
-/// - 3: nothing is usable and the operation or a call is ambiguous;
-/// - 4: nothing is usable (an unresolved call, rejected or unparsed call
-///   markup, a cut-off turn, only unusable guesses, an `Unresolved`
-///   operation such as an exhausted budget), or the tool-choice check
-///   failed, even with usable calls: a violated tool choice is a contract
-///   failure the caller must see.
+/// The documented exit code of `recover-tool-calls`: exactly
+/// [`purrassist::tool_call::exit_code`], the selected reading's usability
+/// verdict (`value.verdict` in the printed JSON) mapped to 0 (`run`,
+/// `no_calls`), 3 (`ambiguous`, or an `Ambiguous` operation) or 4
+/// (`nothing_usable`, or an `Unresolved` operation), so the exit code and
+/// the JSON can never disagree. The printed JSON is the whole answer.
 fn tool_calls_exit_code(outcome: &Outcome<ToolCalls>) -> u8 {
-    let calls = match outcome {
-        Outcome::Resolved(calls) | Outcome::BestGuess(calls) => calls,
-        Outcome::Ambiguous(_) => return 3,
-        Outcome::Unresolved => return 4,
-    };
-    if !calls.tool_choice.passed {
-        4
-    } else if !calls.usable_accepting_guesses().is_empty() || calls.finish == Finish::ContentOnly {
-        0
-    } else if calls
-        .calls
-        .iter()
-        .any(|call| call.outcome == CallOutcome::Ambiguous)
-    {
-        3
-    } else {
-        4
-    }
+    purrassist::tool_call::exit_code(outcome)
 }
+
 /// A JSON object of owned keys, in order (the `--effects` overrides).
 fn members(entries: Vec<(String, Node)>) -> Node {
     Node::new(Value::Object(

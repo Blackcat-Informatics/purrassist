@@ -35,6 +35,11 @@
     "outcome": "resolved",
     "stopped": "completed",
     "finish": "unresolved",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
     "calls": [],
     "rejected": [
       {
@@ -58,6 +63,11 @@
   "outcome": "resolved",
   "stopped": "completed",
   "finish": "unresolved",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
   "calls": [],
   "rejected": [
     {

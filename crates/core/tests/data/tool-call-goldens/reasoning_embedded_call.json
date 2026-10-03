@@ -29,6 +29,11 @@
   "outcome": "resolved",
   "stopped": "completed",
   "finish": "content_only",
+  "verdict": "no_calls",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
   "calls": [],
   "rejected": [],
   "embedded": [

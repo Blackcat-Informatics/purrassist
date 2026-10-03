@@ -29,6 +29,11 @@
   "outcome": "best_guess",
   "stopped": "completed",
   "finish": "calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 1
+  },
   "calls": [
     {
       "tool": "read_file",

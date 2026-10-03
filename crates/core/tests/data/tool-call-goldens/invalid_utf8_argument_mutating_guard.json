@@ -36,6 +36,11 @@
   "outcome": "best_guess",
   "stopped": "completed",
   "finish": "calls",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
   "calls": [
     {
       "tool": "write_file",

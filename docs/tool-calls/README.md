@@ -104,7 +104,7 @@ kind in [RULES.md](RULES.md).
 | `DialectId`, `DialectSet` | One dialect (built-in or `DialectId::custom`), and one model's dialect allow-list. |
 | `ToolRecoveryRequest` | Effort, budget, dialects, `ReasoningPolicy`, `GenerationStop`, `ToolChoice`, `IdPolicy`, `PolicySelection`, effects overrides, `AmbiguityPolicy`, `EmitTarget`. |
 | `ToolSet::recover`, `recover_governed` | Recover one turn; returns `AssistResult<ToolCalls>`. |
-| `ToolCalls` | `calls`, `rejected` (each `RejectedCall` with its `dialect` and `candidate_dialects`), `embedded`, `content`, `reasoning`, `finish`, `tool_choice`, `next_id_start`, `turn` (the output's digest), `emitted`; `usable()`, `usable_accepting_guesses()`, `reemit_with`. |
+| `ToolCalls` | `calls`, `rejected` (each `RejectedCall` with its `dialect` and `candidate_dialects`), `embedded`, `content`, `reasoning`, `finish`, `tool_choice`, `next_id_start`, `turn` (the output's digest), `emitted`; `usable()`, `usable_accepting_guesses()`, `verdict()` (wire `verdict`, with `usable_calls` and `usable_calls_accepting_guesses`), `reemit_with`. |
 | `IdPolicy` | `Turn` (default: the model's own ids, every other call `call_<12 hex of the output's SHA-256>_<index>`), `Prefix { prefix, start }`, `Generator`, `Source`; see [call ids](#call-ids). |
 | `ToolCall` | `id`, `source_id`, `tool`, `arguments`, `dialect`, `candidate_dialects`, `outcome`, `repairs`, `alternatives`, `keywords`; `arguments_as::<T>()`. |
 | `tool_call::emit` | Print calls in any dialect or as the `OpenAI` `tool_calls` array; print tool results and declarations. |
@@ -268,6 +268,17 @@ reading, so complete calls never drop out of the value because of a dialect
 label. `AmbiguityPolicy::Reject` makes any ambiguity,
 whole-message or per-call, an `Unresolved` operation with a failed
 `tool_call.ambiguity` validation and every alternative kept in the receipt.
+
+**Status is not a usability verdict.** The operation's `status`
+(`Resolved`, `BestGuess`, `Ambiguous`, `Unresolved`) is the certainty of the
+reading of the turn, as in every other operation; it does not say whether
+anything can run. A turn whose only call names an undeclared tool is read
+with certainty (`Resolved`) and has nothing to run. Branch on
+`ToolCalls::verdict()` (wire `value.verdict`): `run`, `no_calls`, `ambiguous`
+or `nothing_usable`, with `usable_calls` and `usable_calls_accepting_guesses`
+counting what may run; the CLI's exit code is `tool_call::exit_code` of it.
+See [INTEGRATION.md](INTEGRATION.md#reading-a-result-status-finish-and-verdict)
+for the status × verdict table.
 
 ## Finish classes
 

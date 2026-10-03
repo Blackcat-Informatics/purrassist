@@ -73,6 +73,11 @@
   "outcome": "resolved",
   "stopped": "completed",
   "finish": "calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
   "calls": [
     {
       "tool": "define_type",

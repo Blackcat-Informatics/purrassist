@@ -320,6 +320,80 @@ fn dangling_opener_after_a_call_keeps_the_call() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// F5: `status` is the certainty of the reading of the turn and
+/// `value.verdict` is the usability verdict. A turn read with certainty
+/// whose only call names an undeclared tool, misses a required argument, or
+/// violates the tool choice is `status: "resolved"`, `finish: "unresolved"`
+/// and `verdict: "nothing_usable"` with no usable call, a successful tool
+/// result (`isError` false); a usable call is `verdict: "run"`; every
+/// result validates against the published output schema.
+#[test]
+fn status_is_the_reading_and_verdict_is_usability() {
+    let (tools, root) = tools("verdict");
+    let definitions = Tools::definitions().unwrap();
+    let json::Value::Array(definitions) = definitions.value else {
+        panic!("tool definitions must be an array")
+    };
+    let definition = definitions
+        .iter()
+        .find(|definition| {
+            definition.get("name").and_then(Node::as_str) == Some("recover_tool_calls")
+        })
+        .unwrap();
+    let schema = Schema::compile(&definition.get("outputSchema").unwrap().to_json()).unwrap();
+    let call = |name: &str, arguments: &str| {
+        format!(r#"<tool_call>{{"name": "{name}", "arguments": {arguments}}}</tool_call>"#)
+    };
+    for (output, extra, verdict, usable) in [
+        (
+            call("rm_rf", r#"{"path": "src"}"#),
+            "",
+            "nothing_usable",
+            "0",
+        ),
+        (call("list_dir", "{}"), "", "nothing_usable", "0"),
+        (
+            call("list_dir", r#"{"path": "src"}"#),
+            r#","tool_choice":"none""#,
+            "nothing_usable",
+            "0",
+        ),
+        (call("list_dir", r#"{"path": "src"}"#), "", "run", "1"),
+        ("Just text.".to_owned(), "", "no_calls", "0"),
+    ] {
+        let result = tools
+            .call("recover_tool_calls", &arguments(&output, extra))
+            .unwrap();
+        assert_eq!(
+            result.get("status").and_then(Node::as_str),
+            Some("resolved"),
+            "{output}"
+        );
+        assert_eq!(
+            result.pointer("/value/verdict").and_then(Node::as_str),
+            Some(verdict),
+            "{output}{extra}"
+        );
+        assert_eq!(
+            result
+                .pointer("/value/usable_calls")
+                .map(Node::to_json)
+                .as_deref(),
+            Some(usable),
+            "{output}{extra}"
+        );
+        if verdict == "nothing_usable" {
+            assert_eq!(
+                result.pointer("/value/finish").and_then(Node::as_str),
+                Some("unresolved"),
+                "{output}{extra}"
+            );
+        }
+        assert!(schema.validate(&result).unwrap().valid, "{output}{extra}");
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// The MCP tool accepts `llama3-json.v1` in its dialect allow-list and as
 /// an emission target, and reads Llama 3 JSON under the default allow-list.
 #[test]

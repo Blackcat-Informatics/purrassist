@@ -108,7 +108,11 @@
 //! [`ToolCall`] whose own [`CallOutcome`] is `Unresolved`), and the turn's
 //! [`Finish`] is [`Finish::Unresolved`]. Per-call outcomes come from
 //! [`CallOutcome::classify`]; [`ToolCalls::usable`] and
-//! [`ToolCalls::usable_accepting_guesses`] select what may run.
+//! [`ToolCalls::usable_accepting_guesses`] select what may run, and
+//! [`ToolCalls::verdict`] is the one usability verdict ([`Verdict`]). The
+//! operation's outcome is the certainty of the reading of the turn, as in
+//! every operation: a turn with nothing to run is still `Resolved` when it
+//! has one reading.
 //!
 //! # Receipt
 //!
@@ -910,6 +914,103 @@ impl Finish {
     }
 }
 
+/// What a caller should do with a recovered reading: the usability verdict
+/// of [`ToolCalls`] ([`ToolCalls::verdict`], wire `value.verdict`).
+///
+/// The operation's `status` ([`Outcome`]) is the certainty
+/// of the *reading of the turn* (one reading, a best guess among several,
+/// competing readings, or none), shared with every other operation; it is
+/// not a verdict on the calls. A turn read with certainty may still hold
+/// nothing to run (a hallucinated tool name, a missing required argument, a
+/// violated tool choice): this verdict says so.
+///
+/// | Verdict | Meaning | Caller |
+/// | --- | --- | --- |
+/// | `Run` | the tool-choice check passed and at least one call is usable when guesses are accepted ([`ToolCalls::usable_accepting_guesses`]) | run [`ToolCalls::usable`] (strict) or [`ToolCalls::usable_accepting_guesses`] |
+/// | `NoCalls` | the tool-choice check passed and the turn is clean content (finish `content_only`) | use the content; nothing to run |
+/// | `Ambiguous` | the tool-choice check passed, nothing is usable, and a call is `Ambiguous` | choose among the call's `alternatives`, or re-ask |
+/// | `NothingUsable` | nothing to run: no usable call, or the tool-choice check failed (even beside usable calls) | re-ask or report; never run a call |
+///
+/// The CLI's exit code is [`Self::exit_code`] of this verdict.
+///
+/// ```
+/// use purrassist_core::tool_call::{ToolDefinition, ToolRecoveryRequest, ToolSet, Verdict};
+/// use purrassist_core::{Budget, Outcome};
+/// let tools = ToolSet::compile([ToolDefinition::new("ls")], Budget::default()).unwrap();
+/// let request = ToolRecoveryRequest::default();
+/// // The turn is read with certainty, but the only call names no tool.
+/// let result = tools.recover(br#"<tool_call>{"name": "rm", "arguments": {}}</tool_call>"#, &request);
+/// let Outcome::Resolved(calls) = &result.outcome else { panic!() };
+/// assert_eq!(calls.verdict(), Verdict::NothingUsable);
+/// assert_eq!(calls.verdict().exit_code(), 4);
+/// let result = tools.recover(br#"<tool_call>{"name": "ls", "arguments": {}}</tool_call>"#, &request);
+/// let Outcome::Resolved(calls) = &result.outcome else { panic!() };
+/// assert_eq!((calls.verdict(), calls.verdict().code()), (Verdict::Run, "run"));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// At least one call may run, and the tool choice is satisfied.
+    Run,
+    /// Clean content: no call, nothing wrong.
+    NoCalls,
+    /// Nothing usable, and a call is ambiguous.
+    Ambiguous,
+    /// Nothing to run, or the tool-choice check failed.
+    NothingUsable,
+}
+
+impl Verdict {
+    /// The wire code: `run`, `no_calls`, `ambiguous`, or `nothing_usable`.
+    ///
+    /// See [`Verdict`] for an example.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Run => "run",
+            Self::NoCalls => "no_calls",
+            Self::Ambiguous => "ambiguous",
+            Self::NothingUsable => "nothing_usable",
+        }
+    }
+
+    /// The `recover-tool-calls` CLI's exit code for a recovered reading:
+    /// 0 for `Run` and `NoCalls`, 3 for `Ambiguous`, 4 for `NothingUsable`.
+    /// (Without a reading, an `Ambiguous` operation exits 3 and an
+    /// `Unresolved` one 4; see [`exit_code`].)
+    ///
+    /// See [`Verdict`] for an example.
+    #[must_use]
+    pub const fn exit_code(self) -> u8 {
+        match self {
+            Self::Run | Self::NoCalls => 0,
+            Self::Ambiguous => 3,
+            Self::NothingUsable => 4,
+        }
+    }
+}
+
+/// The `recover-tool-calls` CLI's exit code for a recovery outcome.
+///
+/// It is the selected reading's [`Verdict::exit_code`], 3 for an
+/// `Ambiguous` operation (competing readings, no selection) and 4 for an
+/// `Unresolved` one (no reading: an exhausted budget, invalid input).
+///
+/// ```
+/// use purrassist_core::Outcome;
+/// use purrassist_core::tool_call::{ToolCalls, exit_code};
+/// assert_eq!(exit_code(&Outcome::<ToolCalls>::Unresolved), 4);
+/// ```
+#[must_use]
+pub fn exit_code(outcome: &crate::Outcome<ToolCalls>) -> u8 {
+    match outcome {
+        crate::Outcome::Resolved(calls) | crate::Outcome::BestGuess(calls) => {
+            calls.verdict().exit_code()
+        }
+        crate::Outcome::Ambiguous(_) => 3,
+        crate::Outcome::Unresolved => 4,
+    }
+}
+
 /// The result of enforcing the request's [`ToolChoice`].
 ///
 /// ```
@@ -1140,6 +1241,10 @@ impl ToolCall {
 
 /// Every call of one turn, with what surrounds them.
 ///
+/// Whether anything can run is [`Self::verdict`] (wire `verdict`, with the
+/// `usable_calls` and `usable_calls_accepting_guesses` counts), never the
+/// operation's status, which is the certainty of the reading of the turn.
+///
 /// See [`ToolSet::recover`] for an example.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolCalls {
@@ -1226,6 +1331,30 @@ impl ToolCalls {
             .iter()
             .filter(|call| call.is_usable_accepting_guesses())
             .collect()
+    }
+
+    /// What a caller should do with this reading (see [`Verdict`]): the
+    /// one usability verdict, from the tool-choice check, the usable calls,
+    /// the finish and the calls' outcomes.
+    ///
+    /// See [`Verdict`] for an example.
+    #[must_use]
+    pub fn verdict(&self) -> Verdict {
+        if !self.tool_choice.passed {
+            Verdict::NothingUsable
+        } else if self.calls.iter().any(ToolCall::is_usable_accepting_guesses) {
+            Verdict::Run
+        } else if self.finish == Finish::ContentOnly {
+            Verdict::NoCalls
+        } else if self
+            .calls
+            .iter()
+            .any(|call| call.outcome == CallOutcome::Ambiguous)
+        {
+            Verdict::Ambiguous
+        } else {
+            Verdict::NothingUsable
+        }
     }
 }
 
@@ -1427,7 +1556,10 @@ impl WireValue for ToolCalls {
     /// unsupported_dialect also family, built_in, detail}, raw: {text |
     /// bytes_hex}, repairs}], embedded, content: [{start, end}], reasoning:
     /// [{start, end}], finish, openai_finish_reason, tool_choice: {constraint,
-    /// passed, diagnostics}, next_id_start}`, each call and embedded call
+    /// passed, diagnostics}, next_id_start, verdict, usable_calls,
+    /// usable_calls_accepting_guesses}` (the [`Verdict`] code and the
+    /// counts of [`ToolCalls::usable`] and
+    /// [`ToolCalls::usable_accepting_guesses`]), each call and embedded call
     /// as [`ToolCall`]'s wire form, plus an `emitted` member (see
     /// [`Emission`]) only when an emission was requested, so results of
     /// requests without one keep their wire form. Deterministic and
@@ -1486,6 +1618,12 @@ impl WireValue for ToolCalls {
                 ]),
             ),
             ("next_id_start", integer(self.next_id_start)),
+            ("verdict", string(self.verdict().code())),
+            ("usable_calls", integer(size(self.usable().len()))),
+            (
+                "usable_calls_accepting_guesses",
+                integer(size(self.usable_accepting_guesses().len())),
+            ),
         ]);
         if let (Some(emitted), Value::Object(members)) = (&self.emitted, &mut node.value) {
             members.push(crate::json::Member {
@@ -1510,6 +1648,12 @@ impl ToolSet {
     /// with one itemized markup loss, and the call is `Resolved` as `f {}`;
     /// with a required parameter nothing may be invented, so the call is
     /// `Unresolved` and the turn's finish says so.
+    ///
+    /// The outcome's status is the certainty of the *reading of the turn*,
+    /// as in every operation, not a verdict on the calls: the second turn
+    /// below is read with certainty (`Resolved`) and has nothing to run.
+    /// [`ToolCalls::verdict`] (wire `value.verdict`) is the usability
+    /// verdict; see [`Verdict`] for what a caller does with each.
     ///
     /// ```
     /// use purrassist_core::tool_call::{CallOutcome, Finish, Param, ToolDefinition, ToolRecoveryRequest, ToolSet, UnresolvedReason};
@@ -1537,6 +1681,7 @@ impl ToolSet {
     /// assert!(matches!(calls.calls[0].outcome, CallOutcome::Unresolved { reason: UnresolvedReason::MissingRequired { .. } }));
     /// assert_eq!(calls.finish, Finish::Unresolved);
     /// assert!(calls.usable().is_empty());
+    /// assert_eq!(calls.verdict(), purrassist_core::tool_call::Verdict::NothingUsable);
     /// ```
     #[must_use]
     pub fn recover(&self, output: &[u8], request: &ToolRecoveryRequest) -> AssistResult<ToolCalls> {
