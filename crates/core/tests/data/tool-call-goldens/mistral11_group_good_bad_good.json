@@ -1,0 +1,91 @@
+{
+  "description": "T2: Mistral v11 calls, each opening with its own [TOOL_CALLS] (good, malformed arguments, good): the first and third calls are recovered and usable. The malformed call is read with an inserted [ARGS] and an empty value cut by the [ARGS] it wrote, so it is unresolved (never usable), and its [ARGS]{...} is left as text: the grammar admits inserting [ARGS] where [ARGS] follows.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v11.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "Hi [TOOL_CALLS]f[ARGS]{\"a\":\"x\"}[TOOL_CALLS]f[ARGS]{\"a\":\"y\" oops}[TOOL_CALLS]f[ARGS]{\"a\":\"z\"} done",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 2,
+    "accepting_guesses": 2
+  },
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "x"
+      },
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.id.dedup"
+      ]
+    },
+    {
+      "tool": "f",
+      "arguments": null,
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "outcome": "unresolved: arguments_not_object: the arguments are not a JSON object",
+      "rules": [
+        "tool_call.markup.missing-token",
+        "json.syntax.missing-value",
+        "tool_call.id.dedup"
+      ]
+    },
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "z"
+      },
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.id.dedup"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [
+    "Hi ",
+    "[ARGS]{\"a\":\"y\" oops}",
+    "done"
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.id.dedup",
+    "tool_call.markup.missing-token",
+    "json.syntax.missing-value",
+    "tool_call.id.dedup",
+    "tool_call.id.dedup"
+  ]
+}

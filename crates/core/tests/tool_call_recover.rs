@@ -730,9 +730,9 @@ fn deterministic_pinned_digest() {
 }
 
 const PINNED_DIGEST: &str =
-    "sha256:b545abc2a0cbf2334816fc65728bcc9990571f3f6a9b983448fbffc14dfc4a63";
+    "sha256:381253d1ae2806d0f4469989a1b8b1a65caa1b1fd0d9561ccce5a981d48c7eee";
 const PINNED_PREFIX_DIGEST: &str =
-    "sha256:0f412ce8ece8c360176e4ebe4bda326a652c3c692bf6ced5a6d438404b348fe5";
+    "sha256:bc5bee7bfeca812d832eb0b65e1de17d463a2a7eca9c48715dbb268486a82566";
 const PINNED_AMBIGUOUS_DIGEST: &str =
     "sha256:8f1a3d63fdf1b0d02b0a0eb8b584d69410e3cf2f773bcf785292d1bf69e2e245";
 const PINNED_PREFIX_AMBIGUOUS_DIGEST: &str =
@@ -1315,7 +1315,10 @@ fn tool_choice_from_openai_and_anthropic_json() {
 /// the block, and the call after the closer is still a call. A call two
 /// attempts read (a call of the attempt reading several, and the attempt
 /// its own opener began) is offered once, and the embedded calls are in
-/// span order (F5): the exact list is asserted, tool names included.
+/// span order (F5): the exact list is asserted, tool names included. The
+/// block's closing `[/THINK]` belongs to the block (T2): a call that ran
+/// into it is cut at it (`tool_call.reasoning.marker-cut`), so `s`, whose
+/// only arguments were the marker's bytes, ends at 26 and is unresolved.
 #[test]
 fn calls_an_attempt_reads_inside_a_closed_block_stay_embedded() {
     let tools = compile([
@@ -1327,13 +1330,13 @@ fn calls_an_attempt_reads_inside_a_closed_block_stay_embedded() {
         (
             "[TOOL_CALLS]t[TOOL_CALLS]s[/THINK]",
             0..34,
-            vec![(0..13, "t"), (13..34, "s")],
+            vec![(0..13, "t"), (13..26, "s")],
             None,
         ),
         (
             "[TOOL_CALLS]t[TOOL_CALLS]s[/THINK][TOOL_CALLS]g",
             0..34,
-            vec![(0..13, "t"), (13..34, "s")],
+            vec![(0..13, "t"), (13..26, "s")],
             Some(34..47),
         ),
         (
@@ -1358,6 +1361,26 @@ fn calls_an_attempt_reads_inside_a_closed_block_stay_embedded() {
             .map(|call| (call.span.clone(), call.tool.as_deref().unwrap_or("")))
             .collect();
         assert_eq!(found, embedded, "{output:?}");
+        // No embedded call reaches into the block's closing marker; `s`
+        // was cut at it exactly when it had read the marker's bytes (it
+        // then has no arguments of its own and is unresolved).
+        let marker = output.find("[/THINK]").expect("a closing marker");
+        let cut = !output[..marker].ends_with('}');
+        for call in &calls.embedded {
+            assert!(call.span.end <= marker, "{output:?}: {call:?}");
+            let was_cut = rules(call).contains(&"tool_call.reasoning.marker-cut");
+            assert_eq!(
+                was_cut,
+                cut && call.tool.as_deref() == Some("s"),
+                "{output:?}: {call:?}"
+            );
+            if was_cut {
+                assert!(
+                    matches!(call.outcome, CallOutcome::Unresolved { .. }),
+                    "{output:?}: {call:?}"
+                );
+            }
+        }
         let spans: Vec<_> = calls.calls.iter().map(|call| call.span.clone()).collect();
         assert_eq!(spans, after.into_iter().collect::<Vec<_>>(), "{output:?}");
     }

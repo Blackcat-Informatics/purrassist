@@ -126,6 +126,19 @@ pub const CONSUMED_CLOSER: u64 = 1;
 /// Cost of inserting a missing closer.
 pub const INSERT_CLOSER: u64 = 2;
 
+/// Cost of ending an attempt that reads several calls before the call it
+/// could not read (`tool_call.markup.group-split`): the same as inserting
+/// the group's missing closer there.
+pub const GROUP_SPLIT: u64 = INSERT_CLOSER;
+
+/// Cost of reading a misspelled closer (`tool_call.markup.closer-misspelled`).
+///
+/// That is a closer token within edit distance one of exactly one closer of
+/// the grammar, read as that closer: more than a declared variant or
+/// confusable spelling, which a grammar states, and no more than inserting a
+/// missing closer.
+pub const CLOSER_MISSPELLED: u64 = 2;
+
 /// Cost of deleting a stray closer (it discards input bytes).
 pub const DELETE_STRAY_CLOSER: u64 = 3;
 

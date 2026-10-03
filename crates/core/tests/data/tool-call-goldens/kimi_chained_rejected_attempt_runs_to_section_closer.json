@@ -1,5 +1,5 @@
 {
-  "description": "S3/F4: a section-less Kimi-K2 attempt chains its calls, each opening with <|tool_call_begin|>, so a repeated opener continues the attempt rather than nesting a level: the attempt broken in its second call runs to the section closer, and the prose before and after stays content.",
+  "description": "S3/F4/T2: a section-less Kimi-K2 attempt chains its calls, each opening with <|tool_call_begin|>, so a repeated opener continues the attempt rather than nesting a level. Its first call is well-formed and is recovered in its own right (tool_call.markup.group-split); the attempt broken in its second call is rejected from that call's opener to the section closer, and the prose before and after stays content.",
   "tools_openai": [
     {
       "type": "function",
@@ -27,17 +27,32 @@
     "outcome": "resolved",
     "stopped": "completed",
     "finish": "unresolved",
-    "openai_finish_reason": "stop",
-    "verdict": "nothing_usable",
+    "openai_finish_reason": "tool_calls",
+    "verdict": "run",
     "usable_calls": {
-      "strict": 0,
-      "accepting_guesses": 0
+      "strict": 1,
+      "accepting_guesses": 1
     },
-    "calls": [],
+    "calls": [
+      {
+        "tool": "f",
+        "arguments": {
+          "a": "x"
+        },
+        "candidate_dialects": [
+          "kimi-k2.v1"
+        ],
+        "outcome": "resolved",
+        "rules": [
+          "tool_call.markup.missing-token",
+          "tool_call.markup.group-split"
+        ]
+      }
+    ],
     "rejected": [
       {
         "span": [
-          14,
+          101,
           219
         ],
         "dialect": "kimi-k2.v1",
@@ -47,7 +62,7 @@
           "kimi-k2.v1"
         ],
         "reason": "Malformed { at: 134 }",
-        "raw": "<|tool_call_begin|>functions.f:0<|tool_call_argument_begin|>{\"a\": \"x\"}<|tool_call_end|><|tool_call_begin|>functions.f:1 oops<|tool_call_argument_begin|>{\"a\": \"y\"}<|tool_call_end|><|tool_calls_section_end|>"
+        "raw": "<|tool_call_begin|>functions.f:1 oops<|tool_call_argument_begin|>{\"a\": \"y\"}<|tool_call_end|><|tool_calls_section_end|>"
       }
     ],
     "embedded": [],
@@ -56,22 +71,40 @@
       " done"
     ],
     "failed_validations": [],
-    "ledger_rules": []
+    "ledger_rules": [
+      "tool_call.markup.missing-token",
+      "tool_call.markup.group-split"
+    ]
   },
   "outcome": "resolved",
   "stopped": "completed",
   "finish": "unresolved",
-  "openai_finish_reason": "stop",
-  "verdict": "nothing_usable",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
   "usable_calls": {
-    "strict": 0,
-    "accepting_guesses": 0
+    "strict": 1,
+    "accepting_guesses": 1
   },
-  "calls": [],
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "x"
+      },
+      "candidate_dialects": [
+        "kimi-k2.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.missing-token",
+        "tool_call.markup.group-split"
+      ]
+    }
+  ],
   "rejected": [
     {
       "span": [
-        14,
+        101,
         219
       ],
       "dialect": "kimi-k2.v1",
@@ -79,7 +112,7 @@
         "kimi-k2.v1"
       ],
       "reason": "Malformed { at: 134 }",
-      "raw": "<|tool_call_begin|>functions.f:0<|tool_call_argument_begin|>{\"a\": \"x\"}<|tool_call_end|><|tool_call_begin|>functions.f:1 oops<|tool_call_argument_begin|>{\"a\": \"y\"}<|tool_call_end|><|tool_calls_section_end|>"
+      "raw": "<|tool_call_begin|>functions.f:1 oops<|tool_call_argument_begin|>{\"a\": \"y\"}<|tool_call_end|><|tool_calls_section_end|>"
     }
   ],
   "embedded": [],
@@ -88,5 +121,8 @@
     " done"
   ],
   "failed_validations": [],
-  "ledger_rules": []
+  "ledger_rules": [
+    "tool_call.markup.missing-token",
+    "tool_call.markup.group-split"
+  ]
 }

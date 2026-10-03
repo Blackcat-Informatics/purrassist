@@ -74,8 +74,8 @@
 use super::context::ContextTracker;
 use super::dialect::{DialectId, DialectSet};
 use super::ir::{
-    CallSegment, Choice, Piece, ProductionKind, RawCall, ReasoningClosure, ReasoningSegment,
-    Segment,
+    ArgTree, ArgumentFault, CallSegment, Choice, Closure, Piece, ProductionKind, RawCall,
+    ReasoningClosure, ReasoningSegment, Segment,
 };
 use super::toolset::ToolSet;
 use crate::contract::saturating_size as size;
@@ -86,7 +86,7 @@ use crate::contract::{
 use crate::digest::{Digest, DigestBuilder};
 use crate::grammar::cost::{K_CAPTURE, K_EVENT, K_LEX, QUEUED_REPORT, REASONING_UNCLOSED, REJECT};
 use crate::grammar::edit::{EditOperator, MarkupEdit};
-use crate::grammar::engine::{Engine, Event};
+use crate::grammar::engine::{Engine, Event, Salvaged};
 use crate::provenance::{Derivation, Forest, NodeId, permute};
 use core::fmt;
 use core::fmt::Write as _;
@@ -286,7 +286,7 @@ struct Turn {
     /// to the segment then.
     /// Keyed by block start; each entry's scratch is covered by its stored
     /// segment's charge.
-    blocks: BTreeMap<usize, Vec<(usize, u32)>>,
+    blocks: BTreeMap<usize, Vec<(usize, Option<usize>, u32)>>,
 }
 
 impl Turn {
@@ -403,11 +403,15 @@ impl Turn {
         Ok(())
     }
 
-    /// The reasoning segment of `think` ending at `end`.
+    /// The reasoning segment of `think` ending at `end`; `marker` is where
+    /// its closing marker begins, when a marker closed it. A call that ran
+    /// into the marker is cut at it (`tool_call.reasoning.marker-cut`): the
+    /// marker's bytes belong to the block.
     fn reasoning(
         &mut self,
         think: &Think,
         end: usize,
+        marker: Option<usize>,
         closure: ReasoningClosure,
         edits: Vec<MarkupEdit>,
         governor: &mut Governor,
@@ -421,7 +425,9 @@ impl Turn {
             if segment.span.end > end {
                 continue;
             }
-            let mut segment = segment.clone();
+            let Some(mut segment) = cut_at_marker(segment, marker) else {
+                continue;
+            };
             for reading in &mut segment.readings {
                 reading.edits.push(MarkupEdit {
                     operator: EditOperator::ReasoningEmbeddedCall,
@@ -467,7 +473,7 @@ impl Turn {
         self.blocks
             .entry(think.start)
             .or_default()
-            .push((end, index));
+            .push((end, marker, index));
         Ok(index)
     }
 
@@ -484,20 +490,23 @@ impl Turn {
         let (Segment::Call(call) | Segment::Result(call)) = &self.store[part as usize] else {
             return Ok(());
         };
-        let blocks: Vec<u32> = self
+        let blocks: Vec<(Option<usize>, u32)> = self
             .blocks
             .get(&start)
             .into_iter()
             .flatten()
-            .filter(|(end, _)| call.span.end <= *end)
-            .map(|&(_, index)| index)
+            .filter(|(end, _, _)| call.span.end <= *end)
+            .map(|&(_, marker, index)| (marker, index))
             .collect();
         if blocks.is_empty() {
             return Ok(());
         }
-        let call = call.clone();
-        for index in blocks {
+        let whole = call.clone();
+        for (marker, index) in blocks {
             governor.charge(Resource::Work, 1)?;
+            let Some(call) = cut_at_marker(&whole, marker) else {
+                continue;
+            };
             let Segment::Reasoning(reasoning) = &mut self.store[index as usize] else {
                 continue;
             };
@@ -537,6 +546,80 @@ impl Turn {
         }
         Ok(())
     }
+}
+
+/// `segment` cut at a reasoning block's closing marker at `marker`
+/// (`tool_call.reasoning.marker-cut`): unchanged when it ends before the
+/// marker (or no marker closed the block), `None` when it begins inside it.
+/// A cut reading keeps what it read before the marker: a name, id or
+/// capture reaching into the marker is dropped, and arguments read from the
+/// marker's bytes are not arguments (the reading's arguments are then
+/// unresolved at the marker), so a call whose arguments came from the
+/// marker is never usable.
+/// An attempt that ended, as the engine reported it at `at`.
+#[derive(Clone, Copy)]
+struct Ended {
+    table: u32,
+    attempt: u64,
+    start: usize,
+    at: usize,
+    completed: bool,
+    reason: super::Rejection,
+}
+
+fn cut_at_marker(segment: &CallSegment, marker: Option<usize>) -> Option<CallSegment> {
+    let Some(marker) = marker.filter(|marker| segment.span.end > *marker) else {
+        return Some(segment.clone());
+    };
+    if segment.span.start >= marker {
+        return None;
+    }
+    let mut cut = segment.clone();
+    cut.span = segment.span.start..marker;
+    for reading in &mut cut.readings {
+        let end = reading.span.end;
+        reading.span = reading.span.start..marker;
+        if reading
+            .name
+            .as_ref()
+            .is_some_and(|name| name.span.end > marker)
+        {
+            reading.name = None;
+        }
+        if reading.id.as_ref().is_some_and(|id| id.span.end > marker) {
+            reading.id = None;
+        }
+        let lost = reading
+            .captures
+            .iter()
+            .any(|capture| capture.span.end > marker)
+            || reading
+                .arguments
+                .root
+                .span
+                .as_ref()
+                .is_some_and(|span| span.end > marker);
+        reading
+            .captures
+            .retain(|capture| capture.span.end <= marker);
+        if lost {
+            reading.arguments = ArgTree::unresolved(
+                ArgumentFault::InvalidJson { at: marker },
+                marker..end.max(marker),
+            );
+        }
+        reading.edits.retain(|edit| edit.span.end <= marker);
+        reading.edits.push(MarkupEdit {
+            operator: EditOperator::ReasoningMarkerCut,
+            span: marker..end.max(marker),
+            original: Vec::new(),
+            replacement: Vec::new(),
+        });
+        if reading.closure == Closure::Closed {
+            reading.closure = Closure::Repaired;
+        }
+    }
+    Some(cut)
 }
 
 fn segment_bytes(segment: &Segment) -> u64 {
@@ -920,26 +1003,18 @@ impl<'s> Recognizer<'s> {
                     start,
                     completed,
                     reason,
+                    salvage,
                     ..
                 }) => {
-                    let Some(interps) = self.turn.interps.remove(&attempt) else {
-                        continue;
+                    let ended = Ended {
+                        table,
+                        attempt,
+                        start,
+                        at,
+                        completed,
+                        reason,
                     };
-                    if !completed {
-                        let segment = Segment::Rejected {
-                            span: start..at,
-                            dialect: self.engine.dialect(table).clone(),
-                            reason,
-                        };
-                        let index = self.turn.store(segment, governor)?;
-                        for interp in interps {
-                            if let Interp::Top(base) = interp {
-                                frame
-                                    .candidates
-                                    .push(self.turn.append(base, index, REJECT, at, governor)?);
-                            }
-                        }
-                    }
+                    self.ended(&mut frame, ended, salvage, governor)?;
                 }
                 Pending::Marker {
                     start,
@@ -1041,6 +1116,7 @@ impl<'s> Recognizer<'s> {
         let segment = self.turn.reasoning(
             think,
             start,
+            None,
             ReasoningClosure::ClosedAtOpener,
             vec![edit],
             governor,
@@ -1137,6 +1213,129 @@ impl<'s> Recognizer<'s> {
         Ok(())
     }
 
+    /// Attempt `ended.attempt` has no configuration left: a rejected one is
+    /// a rejected segment on every interpretation (after the calls it read
+    /// whole before the call it failed in, when it `salvage`d them).
+    fn ended(
+        &mut self,
+        frame: &mut Frame,
+        ended: Ended,
+        salvage: Option<Salvaged>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let Some(interps) = self.turn.interps.remove(&ended.attempt) else {
+            if let Some(salvage) = salvage {
+                governor.release_scratch(salvage.charged)?;
+            }
+            return Ok(());
+        };
+        if ended.completed {
+            return Ok(());
+        }
+        let dialect = self.engine.dialect(ended.table).clone();
+        if let Some(salvage) = salvage {
+            let kind = self.engine.kind(ended.table);
+            return self.salvaged(
+                frame,
+                &interps,
+                kind,
+                salvage,
+                ended.at,
+                &dialect,
+                ended.reason,
+                governor,
+            );
+        }
+        let segment = Segment::Rejected {
+            span: ended.start..ended.at,
+            dialect,
+            reason: ended.reason,
+        };
+        let index = self.turn.store(segment, governor)?;
+        for interp in interps {
+            if let Interp::Top(base) = interp {
+                frame
+                    .candidates
+                    .push(self.turn.append(base, index, REJECT, ended.at, governor)?);
+            }
+        }
+        Ok(())
+    }
+
+    /// A rejected attempt of a production with `next` that read whole
+    /// calls before the call it failed in (`tool_call.markup.group-split`):
+    /// each segmentation of those calls, then the rejected attempt from the
+    /// failing call's start to `at` (none when it failed at its first
+    /// byte), on every interpretation of the attempt. Inside reasoning the
+    /// calls are offered as embedded calls.
+    #[allow(clippy::too_many_arguments)]
+    fn salvaged(
+        &mut self,
+        frame: &mut Frame,
+        interps: &[Interp],
+        kind: ProductionKind,
+        salvage: Salvaged,
+        at: usize,
+        dialect: &DialectId,
+        reason: super::Rejection,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let rejected = if salvage.at < at {
+            Some(self.turn.store(
+                Segment::Rejected {
+                    span: salvage.at..at,
+                    dialect: dialect.clone(),
+                    reason,
+                },
+                governor,
+            )?)
+        } else {
+            None
+        };
+        for parts in salvage.segmentations {
+            let mut stored = Vec::with_capacity(parts.len());
+            for (segment, cost) in parts {
+                let end = segment.span.end;
+                let segment = match kind {
+                    ProductionKind::Call => Segment::Call(segment),
+                    ProductionKind::Result => Segment::Result(segment),
+                };
+                stored.push((self.turn.store(segment, governor)?, cost, end));
+            }
+            for interp in interps {
+                match *interp {
+                    Interp::Top(base) => {
+                        let mut chain = base;
+                        for &(index, cost, end) in &stored {
+                            let (cost, hist) =
+                                self.turn.append(chain, index, cost, end, governor)?;
+                            chain = Base { cost, hist };
+                        }
+                        if let Some(index) = rejected {
+                            let (cost, hist) =
+                                self.turn.append(chain, index, REJECT, at, governor)?;
+                            chain = Base { cost, hist };
+                        }
+                        frame.candidates.push((chain.cost, chain.hist));
+                    }
+                    Interp::Embedded(think_start) => {
+                        if let Some(think) = self.turn.think.as_mut()
+                            && think.start == think_start
+                        {
+                            think
+                                .embedded
+                                .extend(stored.iter().map(|&(index, _, _)| index));
+                        }
+                        for &(index, _, _) in &stored {
+                            self.turn.embed_late(think_start, index, governor)?;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// A reasoning closer ended at `at`.
     fn think_closed(
         &mut self,
@@ -1165,9 +1364,14 @@ impl<'s> Recognizer<'s> {
         if !closes || think.start > start {
             return Ok(());
         }
-        let segment =
-            self.turn
-                .reasoning(&think, at, ReasoningClosure::Closed, Vec::new(), governor)?;
+        let segment = self.turn.reasoning(
+            &think,
+            at,
+            Some(start),
+            ReasoningClosure::Closed,
+            Vec::new(),
+            governor,
+        )?;
         let prior = Base {
             cost: think.cost,
             hist: think.hist,
@@ -1196,6 +1400,7 @@ impl<'s> Recognizer<'s> {
         let segment = self.turn.reasoning(
             think,
             end,
+            None,
             ReasoningClosure::Unterminated,
             vec![edit],
             governor,
@@ -1666,6 +1871,25 @@ pub(super) fn escaped(bytes: &[u8]) -> String {
     text
 }
 
+/// The explanation of an edit that keeps a call recoverable: an attempt
+/// split before the call it could not read, a misspelled closer, or a call
+/// cut at a reasoning marker.
+fn explain_recovery(edit: &MarkupEdit, original: &str, replacement: &str) -> String {
+    match edit.operator {
+        EditOperator::GroupSplit => format!(
+            "ended the attempt reading several calls at byte {} before the call it could not read; the calls read whole before it are recovered, and the failing call is a rejected attempt of its own",
+            edit.span.start
+        ),
+        EditOperator::CloserMisspelled => format!(
+            "read misspelled closer `{original}` as `{replacement}`, the only closer of the grammar within edit distance one"
+        ),
+        _ => format!(
+            "cut the call at the reasoning block's closing marker at byte {}: the marker belongs to the block, so what the call read from bytes {}..{} is dropped",
+            edit.span.start, edit.span.start, edit.span.end
+        ),
+    }
+}
+
 fn explain(edit: &MarkupEdit) -> String {
     let replacement = escaped(&edit.replacement);
     let original = escaped(&edit.original);
@@ -1743,6 +1967,9 @@ fn explain(edit: &MarkupEdit) -> String {
         EditOperator::ExtractFence => {
             format!("dropped code-fence marker `{original}` inside the call's markup")
         }
+        EditOperator::GroupSplit
+        | EditOperator::CloserMisspelled
+        | EditOperator::ReasoningMarkerCut => explain_recovery(edit, &original, &replacement),
         EditOperator::ContextFencedExample => {
             "call recognized inside fenced code, an inline code span or a block quote; it may be an example rather than a call".into()
         }

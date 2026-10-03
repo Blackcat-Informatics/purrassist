@@ -184,6 +184,57 @@ is reported as certain.
   complete a literal it began; a rejected span never ends inside a literal
   it began; and `at` lies inside the span, at its end, or past it by at
   most the longest literal spelling (inside a partial literal).
+- **A malformed call does not discard the calls around it.** In an attempt
+  that reads several calls (a production with `next`: a Kimi-K2 or DeepSeek
+  v3/v3.1 section, a section-less chain of Kimi-K2 or DeepSeek calls, a
+  Mistral v3 list, chained Mistral v11 calls), every call read whole before
+  the call the grammar could not read is recovered in its own right
+  (`tool_call.markup.group-split`, recorded on the last of them at the
+  boundary; a markup repair, single reading, so it does not demote and is
+  admitted under `Structural`), and the rejected attempt begins at the
+  failing call's own opener and runs to its call closer (or the section
+  closer). Later calls are recovered where the grammar resynchronizes: at
+  the next per-call opener (`<|tool_call_begin|>`, `<｜tool▁call▁begin｜>`,
+  `[TOOL_CALLS]`). A Mistral v3 list element has no opener of its own, so
+  the elements after a malformed one are not resynchronized by Mistral v3
+  (under the default allow-list, bare JSON reads a well-formed element as a
+  call). The same holds under a length stop. *Proved by* the goldens
+  `kimi_group_good_bad_good`, `kimi_sectionless_group_good_bad_good`,
+  `kimi_chained_rejected_attempt_runs_to_section_closer`,
+  `deepseek3_group_good_bad_good`, `deepseek31_group_good_bad_good`,
+  `mistral3_group_good_bad_good`, `mistral3_group_good_bad_good_length_stop`
+  and `mistral11_group_good_bad_good`, each also under the default
+  allow-list.
+- **A misspelled closer still closes its call.** A closer token one edit
+  away from exactly one closer of the grammar (one byte inserted, deleted or
+  substituted, or two adjacent bytes swapped, between the closer's
+  delimiters, which it keeps: `</functio>`, `</paramete>`, `</tool_cal>`,
+  `<|tool_call_ed|>`, `</fucntion>`) is read as that closer
+  (`tool_call.markup.closer-misspelled`, the original bytes recorded; a
+  markup repair, single reading, so it does not demote, like the other
+  closer repairs), and the prose after it stays content. A token one edit
+  away from two closers (DeepSeek's `<｜tool▁callz▁end｜>`, one edit from
+  both `<｜tool▁call▁end｜>` and `<｜tool▁calls▁end｜>`) is not respelled.
+  A spelling the grammar declares (a closer variant, a `confusable`) is read
+  by its own rule first. This is a generic engine operator over every
+  closer class, distinct from the declared confusable spellings of
+  `tool_call.markup.terminal-confusable`. *Proved by* the goldens
+  `qwen_function_closer_misspelled`, `qwen_parameter_closer_misspelled`,
+  `qwen_function_closer_transposed`, `hermes_call_closer_misspelled`,
+  `kimi_call_closer_misspelled`, `deepseek31_closer_misspelled` and
+  `deepseek31_closer_misspelled_ambiguous` (not admitted), each also under
+  the default allow-list, and the unit tests of `grammar::misspelling`.
+- **Reasoning markers are never call content.** The bytes of a reasoning
+  block's closing marker belong to the block: a call found inside the block
+  that ran into the marker is cut at it (`tool_call.reasoning.marker-cut`, a
+  data loss): a name, id or capture reaching into the marker is dropped, and
+  arguments read from it are unresolved, so the call is never usable (a
+  Mistral v11 call with no `[ARGS]` that read `[/THINK]` as its arguments).
+  *Proved by* the `reasoning_marker_not_call_arguments` and
+  `embedded_calls_once_in_span_order` goldens,
+  `tool_call_recover::calls_an_attempt_reads_inside_a_closed_block_stay_embedded`,
+  and the `fuzz-tool-call` invariant that no call, embedded call or
+  rejected attempt holds bytes of a reasoning range's opener or closer.
 - **Call markup is never silent content.** Call markup that no dialect of
   the allow-list reads (a family not built in yet: Pythonic call lists,
   Gemma 3 `` ```tool_code `` blocks, GLM-4.5 `<arg_key>` calls, and the

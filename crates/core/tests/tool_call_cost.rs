@@ -42,6 +42,8 @@ fn constants() -> Vec<(&'static str, u64)> {
         ("TERMINAL_CONFUSABLE", cost::TERMINAL_CONFUSABLE),
         ("CONSUMED_CLOSER", cost::CONSUMED_CLOSER),
         ("INSERT_CLOSER", cost::INSERT_CLOSER),
+        ("GROUP_SPLIT", cost::GROUP_SPLIT),
+        ("CLOSER_MISSPELLED", cost::CLOSER_MISSPELLED),
         ("DELETE_STRAY_CLOSER", cost::DELETE_STRAY_CLOSER),
         ("REASONING_UNCLOSED", cost::REASONING_UNCLOSED),
         ("REJECT", cost::REJECT),

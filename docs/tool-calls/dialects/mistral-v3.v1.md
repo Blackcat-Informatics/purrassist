@@ -155,6 +155,11 @@ reprinted whole.
 - Elements with other members (a `"type"`, an `"index"`), and an element
   missing `"name"` or `"arguments"`.
 - A missing comma between elements of a bracketed array.
+- Resynchronizing after a malformed element: the elements before it are
+  recovered (`tool_call.markup.group-split`) and the malformed element is a
+  rejected attempt, but an element has no opener of its own, so the
+  elements after it are not read by this dialect (bare JSON reads a
+  well-formed one when it is allowed).
 - The Mistral v11+ layout `[TOOL_CALLS]NAME[ARGS]{...}`
   (`mistral-v11.v1`), and the output of tokenizers that strip the
   `[TOOL_CALLS]` token.

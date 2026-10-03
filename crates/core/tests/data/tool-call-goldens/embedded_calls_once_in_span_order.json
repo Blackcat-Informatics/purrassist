@@ -91,16 +91,14 @@
     },
     {
       "tool": "s",
-      "arguments": [
-        "/THINK"
-      ],
+      "arguments": {},
       "candidate_dialects": [
         "mistral-v11.v1"
       ],
-      "outcome": "unresolved: arguments_not_object: the arguments are not a JSON object",
+      "outcome": "unresolved: invalid_argument: the arguments value cannot be decoded: JSON that cannot be recovered at byte 26",
       "rules": [
         "tool_call.markup.missing-token",
-        "json.syntax.bare-string",
+        "tool_call.reasoning.marker-cut",
         "tool_call.reasoning.embedded-call"
       ]
     }
@@ -115,7 +113,7 @@
     "json.syntax.missing-value",
     "tool_call.reasoning.embedded-call",
     "tool_call.markup.missing-token",
-    "json.syntax.bare-string",
+    "tool_call.reasoning.marker-cut",
     "tool_call.reasoning.embedded-call"
   ]
 }

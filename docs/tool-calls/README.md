@@ -44,7 +44,11 @@ streaming recognition, and `purrassist-derive`.
   deterministically on a linear fast path. Where every configuration of a
   call attempt fails, a best-first search over (position, configuration)
   applies weighted edit operators: insert a missing closer, delete a stray
-  one, accept a declared variant or confusable spelling. The least-cost
+  one, accept a declared variant or confusable spelling. A closer token one
+  edit away from exactly one closer of the grammar is read as that closer
+  (`tool_call.markup.closer-misspelled`), and an attempt reading several
+  calls that fails in one of them keeps the calls it read whole before it
+  (`tool_call.markup.group-split`). The least-cost
   repairs are kept and every applied operator is itemized. Argument codecs
   (`json`, `json-args`, `xml-params`, `raw`) read argument bodies with their own recorded
   repairs.

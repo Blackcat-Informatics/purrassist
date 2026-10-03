@@ -138,6 +138,7 @@ mod compile;
 pub mod cost;
 pub mod edit;
 pub(crate) mod engine;
+mod misspelling;
 pub mod print;
 mod repair;
 mod syntax;

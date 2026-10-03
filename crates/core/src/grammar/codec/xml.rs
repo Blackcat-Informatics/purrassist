@@ -198,12 +198,23 @@ struct Opener {
 /// What ended a parameter value.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Terminator {
-    /// A closer of this width; `true` for the variant spelling.
-    Closer(usize, bool),
+    /// A closer of this width, and how it is spelled.
+    Closer(usize, Spelling),
     /// The opener of a declared parameter.
     Boundary,
     /// The end of the body.
     End,
+}
+
+/// How a parameter closer is spelled.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Spelling {
+    /// `</parameter>`.
+    Canonical,
+    /// `</parameters>` (`tool_call.markup.closer-variant`).
+    Variant,
+    /// One edit away from `</parameter>` (`tool_call.markup.closer-misspelled`).
+    Misspelled,
 }
 
 /// One object scope being read: the top-level arguments or a nested object
@@ -297,15 +308,39 @@ impl<'t> Reader<'_, 't, '_> {
         Ok(from + skipped)
     }
 
-    /// The closer at `at`: its width, and whether it is the variant.
-    fn closer(&self, at: usize) -> Option<(usize, bool)> {
+    /// The closer at `at`: its width, and how it is spelled. A token within
+    /// one edit of `</parameter>` that keeps its shape and is no exact
+    /// spelling (`</paramete>`) is read as it, recorded as
+    /// `tool_call.markup.closer-misspelled`.
+    fn closer(&self, at: usize) -> Option<(usize, Spelling)> {
         let rest = &self.body[at..];
         if rest.starts_with(CLOSER_VARIANT) {
-            Some((CLOSER_VARIANT.len(), true))
-        } else if rest.starts_with(CLOSER) {
-            Some((CLOSER.len(), false))
-        } else {
-            None
+            return Some((CLOSER_VARIANT.len(), Spelling::Variant));
+        }
+        if rest.starts_with(CLOSER) {
+            return Some((CLOSER.len(), Spelling::Canonical));
+        }
+        if !rest.starts_with(b"</") {
+            return None;
+        }
+        let end = rest
+            .iter()
+            .take(CLOSER_VARIANT.len() + 1)
+            .position(|&byte| byte == b'>')?;
+        let token = &rest[..=end];
+        let spellings = [CLOSER.to_vec(), CLOSER_VARIANT.to_vec()];
+        (crate::grammar::misspelling::misspelled_class(token, [spellings.as_slice()]) == Some(0))
+            .then_some((token.len(), Spelling::Misspelled))
+    }
+
+    /// Record the respelling of a closer read at `at..at + width`, if any.
+    fn respelled(&mut self, at: usize, width: usize, spelling: Spelling) -> Result<(), StopReason> {
+        match spelling {
+            Spelling::Canonical => Ok(()),
+            Spelling::Variant => self.record(EditOperator::CloserVariant, at..at + width, CLOSER),
+            Spelling::Misspelled => {
+                self.record(EditOperator::CloserMisspelled, at..at + width, CLOSER)
+            }
         }
     }
 
@@ -443,13 +478,11 @@ impl<'t> Reader<'_, 't, '_> {
                 };
                 continue;
             }
-            let Some((width, variant)) = self.closer(at) else {
+            let Some((width, spelling)) = self.closer(at) else {
                 return Ok(Err(CodecFault::Malformed { at: self.base + at }));
             };
             if self.frames.len() > 1 {
-                if variant {
-                    self.record(EditOperator::CloserVariant, at..at + width, CLOSER)?;
-                }
+                self.respelled(at, width, spelling)?;
                 self.pop(at);
             } else {
                 self.record(EditOperator::DeleteStrayCloser, at..at + width, b"")?;
@@ -524,10 +557,8 @@ impl<'t> Reader<'_, 't, '_> {
             .tree
             .adopt(opener.name, tree);
         Ok(Ok(match terminator {
-            Terminator::Closer(width, variant) => {
-                if variant {
-                    self.record(EditOperator::CloserVariant, stop..stop + width, CLOSER)?;
-                }
+            Terminator::Closer(width, spelling) => {
+                self.respelled(stop, width, spelling)?;
                 stop + width
             }
             Terminator::Boundary => {
@@ -597,8 +628,8 @@ impl<'t> Reader<'_, 't, '_> {
                 break Terminator::End;
             };
             at += offset;
-            if let Some((width, variant)) = self.closer(at) {
-                break Terminator::Closer(width, variant);
+            if let Some((width, spelling)) = self.closer(at) {
+                break Terminator::Closer(width, spelling);
             }
             if let Some(opener) = self.opener(at)?
                 && self.boundary(&opener.name.value)?

@@ -683,6 +683,8 @@ every value below to equal the code's.
 | `TERMINAL_CONFUSABLE` | 1 | Repair cost: a confusable spelling of a literal |
 | `CONSUMED_CLOSER` | 1 | Repair cost: a closer the stop sequence consumed |
 | `INSERT_CLOSER` | 2 | Repair cost: a missing closer |
+| `GROUP_SPLIT` | 2 | Repair cost: an attempt reading several calls ended before the call it could not read |
+| `CLOSER_MISSPELLED` | 2 | Repair cost: a closer token one edit away from exactly one closer |
 | `DELETE_STRAY_CLOSER` | 3 | Repair cost: a stray closer |
 | `REASONING_UNCLOSED` | 4 | Repair cost: a reasoning block closed at a call opener |
 | `REJECT` | 16 | Cost of rejecting an unrepairable call attempt |

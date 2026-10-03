@@ -50,6 +50,9 @@
 //! | [`MissingWrapperCloseBeforeText`](EditOperator::MissingWrapperCloseBeforeText) | `tool_call.markup.missing-wrapper-close.before-text` | 2 | yes | multiple | syntax | none | yes |
 //! | [`MissingToken`](EditOperator::MissingToken) | `tool_call.markup.missing-token` | 2 | no | single | syntax | none | yes |
 //! | [`InvalidUtf8Value`](EditOperator::InvalidUtf8Value) | `tool_call.value.invalid-utf8` | 0 | no | single | syntax | data | no |
+//! | [`GroupSplit`](EditOperator::GroupSplit) | `tool_call.markup.group-split` | 2 | no | single | syntax | none | yes |
+//! | [`CloserMisspelled`](EditOperator::CloserMisspelled) | `tool_call.markup.closer-misspelled` | 2 | no | single | syntax | markup | yes |
+//! | [`ReasoningMarkerCut`](EditOperator::ReasoningMarkerCut) | `tool_call.reasoning.marker-cut` | 0 | no | single | syntax | data | no |
 //!
 //! The first seven operators are the engine's markup repairs: a missing
 //! closer inserted mid-message is a *function* close when more of the
@@ -68,7 +71,17 @@
 //! `tool_call.value.invalid-utf8` (appended last) records bytes inside a
 //! call that are not well-formed UTF-8, read as U+FFFD by the codec or
 //! capture that holds them (a data loss, so the call is at most
-//! `BestGuess`). Closers inserted at the
+//! `BestGuess`). The last three are appended after it:
+//! `tool_call.markup.group-split` ends an attempt reading several calls (a
+//! production with `next`) before the call it could not read, so the calls
+//! read whole before it are recovered and the failing call is a rejected
+//! attempt of its own; `tool_call.markup.closer-misspelled` reads a closer
+//! token within edit distance one of exactly one closer of the grammar as
+//! that closer (a markup repair of its own, distinct from the declared
+//! confusable spellings of `tool_call.markup.terminal-confusable`); and
+//! `tool_call.reasoning.marker-cut` cuts a call found inside a reasoning
+//! block at the block's closing marker, whose bytes belong to the block.
+//! Closers inserted at the
 //! end of output under a non-length stop are
 //! `tool_call.markup.missing-closers-at-end`, usable only when the call is
 //! otherwise complete (D10, enforced by tool-call resolution). The reasoning
@@ -97,7 +110,7 @@
 //! assert_eq!(stray.id, "tool_call.markup.stray-closer");
 //! assert_eq!(stray.loss, Some(LossKind::Markup));
 //! assert!(!stray.guess && stray.repair);
-//! assert_eq!(OPERATORS.len(), 38);
+//! assert_eq!(OPERATORS.len(), 41);
 //! let framing = EditOperator::FramingNewline.rule();
 //! assert_eq!((framing.loss, framing.repair), (Some(LossKind::Markup), false));
 //! ```
@@ -235,6 +248,19 @@ pub enum EditOperator {
     /// maximal malformed subpart: a data loss whose edit keeps the original
     /// bytes and their exact offsets.
     InvalidUtf8Value,
+    /// End an attempt reading several calls (a production with `next`)
+    /// before the call it could not read: the calls read whole before it
+    /// are recovered in their own right, and the failing call and what
+    /// follows it are a rejected attempt.
+    GroupSplit,
+    /// Read a closer token within edit distance one of exactly one closer
+    /// of the grammar (one byte inserted, deleted or substituted, or two
+    /// adjacent bytes swapped, inside its delimiters) as that closer.
+    CloserMisspelled,
+    /// Cut a call found inside a reasoning block at the block's closing
+    /// marker: the marker's bytes belong to the reasoning block, never to
+    /// the call, so what the call read from them is dropped.
+    ReasoningMarkerCut,
 }
 
 /// Static metadata of one [`EditOperator`].
@@ -326,7 +352,7 @@ const fn guessed_repair(operator: EditOperator, id: &'static str, cost: u64) -> 
 }
 
 /// The number of [`EditOperator`]s.
-pub const OPERATOR_COUNT: usize = 38;
+pub const OPERATOR_COUNT: usize = 41;
 
 /// Every grammar edit operator, in [`EditOperator`] order, as a constant
 /// table (the tool-call rule registry is built from it at compile time).
@@ -577,6 +603,27 @@ pub(crate) const OPERATOR_TABLE: [OperatorRule; OPERATOR_COUNT] = [
     note(
         EditOperator::InvalidUtf8Value,
         "tool_call.value.invalid-utf8",
+        0,
+        false,
+        Some(LossKind::Data),
+    ),
+    repair(
+        EditOperator::GroupSplit,
+        "tool_call.markup.group-split",
+        cost::GROUP_SPLIT,
+        Grounding::Syntax,
+        None,
+    ),
+    repair(
+        EditOperator::CloserMisspelled,
+        "tool_call.markup.closer-misspelled",
+        cost::CLOSER_MISSPELLED,
+        Grounding::Syntax,
+        Some(LossKind::Markup),
+    ),
+    note(
+        EditOperator::ReasoningMarkerCut,
+        "tool_call.reasoning.marker-cut",
         0,
         false,
         Some(LossKind::Data),

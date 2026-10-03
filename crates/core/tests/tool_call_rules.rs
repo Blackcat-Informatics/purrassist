@@ -307,6 +307,7 @@ fn every_rule_declares_loss_kind() {
             "json.syntax.literal-case",
             "json.syntax.string",
             "json.syntax.trailing-comma",
+            "tool_call.markup.closer-misspelled",
         ]
     );
     assert_eq!(
@@ -315,6 +316,7 @@ fn every_rule_declares_loss_kind() {
             "tool_call.reasoning.unterminated",
             "tool_call.extract.prose",
             "tool_call.value.invalid-utf8",
+            "tool_call.reasoning.marker-cut",
             "tool_call.parameter.drop-unknown",
             "tool_call.parameter.repeated",
             "tool_call.truncated",
@@ -323,8 +325,10 @@ fn every_rule_declares_loss_kind() {
         ]
     );
     // Rules that discard nothing declare no loss: insertions, readings,
-    // name and value resolution.
+    // name and value resolution, and a group ended before a failing call
+    // (that call is a rejected attempt, its bytes kept).
     for id in [
+        "tool_call.markup.group-split",
         "tool_call.markup.missing-parameter-close",
         "tool_call.markup.missing-closers-at-end",
         "tool_call.value.trim-nonverbatim",
@@ -1813,6 +1817,7 @@ fn repair_classification_matches_documentation() {
         "tool_call.input.invalid-utf8",
         "tool_call.value.invalid-utf8",
         "tool_call.markup.unparsed-dialect",
+        "tool_call.reasoning.marker-cut",
     ];
     let mut actual = not_repairs.clone();
     actual.sort_unstable();

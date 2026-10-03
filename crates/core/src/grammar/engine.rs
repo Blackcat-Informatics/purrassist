@@ -68,6 +68,7 @@ use crate::tool_call::{
     ArgTree, CallSegment, CaptureSpan, Closure, CompiledTool, DialectId, GenerationStop,
     ProductionKind, RawCall, Rejection, Spanned, ToolSet,
 };
+use core::cmp::Reverse;
 use core::ops::Range;
 
 /// The root of every call history.
@@ -103,6 +104,16 @@ pub(crate) enum Sub {
     /// Inside an `until`/`slot` body: matcher state and, for a slot, the
     /// arena slot of its codec's state.
     Body(u32, Option<u32>),
+    /// Reading a misspelled closer (`tool_call.markup.closer-misspelled`):
+    /// the slip was made, and the rest of the canonical spelling is read
+    /// exactly from the first index; the second is how many canonical
+    /// bytes matched before the slip.
+    Misspelled(u32, u32),
+    /// Reading a misspelled closer whose slip swapped the canonical bytes
+    /// at the first index and the next: the byte at that index comes next,
+    /// then the canonical spelling resumes after the pair; the second
+    /// index is how many canonical bytes matched before the slip.
+    Transposed(u32, u32),
 }
 
 impl Sub {
@@ -128,6 +139,8 @@ impl Sub {
             Self::Json(table, node) => (6 + *table, *node),
             Self::JsonSkip(state) => (9, *state),
             Self::JsonInner(state, node) => (10 + *state, *node),
+            Self::Misspelled(index, _) => (20, *index),
+            Self::Transposed(index, _) => (21, *index),
         }
     }
 }
@@ -505,6 +518,18 @@ impl<'s> Step<'_, 's> {
         let (trie, operator, node) = match thread.sub {
             Sub::Lit(depth) => {
                 if canonical[depth as usize] != byte {
+                    if grammar.literals[lit as usize].closer.is_some() {
+                        self.misspell(
+                            thread,
+                            lit,
+                            next,
+                            depth as usize,
+                            byte,
+                            stack,
+                            out,
+                            governor,
+                        )?;
+                    }
                     return Self::fail(out, thread, pos, Rejection::Malformed { at: pos });
                 }
                 if depth as usize + 1 == canonical.len() {
@@ -532,6 +557,9 @@ impl<'s> Step<'_, 's> {
             Sub::JsonInner(state, node) => {
                 return self
                     .step_json_inner(thread, lit, next, byte, state, node, stack, out, governor);
+            }
+            Sub::Misspelled(..) | Sub::Transposed(..) => {
+                return self.step_misspelled(thread, lit, next, byte, stack, out, governor);
             }
             Sub::Class(_) | Sub::Body(..) => unreachable!("literal configurations only"),
         };
@@ -569,6 +597,185 @@ impl<'s> Step<'_, 's> {
             return self.queue(thread, stack);
         }
         self.finish_literal(thread, next, pos + 1, stack, out, governor)
+    }
+
+    /// One byte of a misspelled closer of literal `lit` after its slip: the
+    /// rest of the canonical spelling, read exactly.
+    #[allow(clippy::too_many_arguments)]
+    fn step_misspelled(
+        &mut self,
+        mut thread: Thread,
+        lit: u32,
+        next: u32,
+        byte: u8,
+        stack: &mut ScratchVec<Thread>,
+        out: &mut Out,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let canonical = &self.grammar.literals[lit as usize].bytes;
+        let pos = thread.pos;
+        let (index, slip, step) = match thread.sub {
+            Sub::Misspelled(index, slip) => (index as usize, slip, 1),
+            Sub::Transposed(index, slip) => (index as usize, slip, 2),
+            _ => unreachable!("misspelled closer configurations only"),
+        };
+        if canonical[index] != byte {
+            return Self::unspell(out, thread, slip);
+        }
+        let resume = index + step;
+        if resume == canonical.len() {
+            return self.finish_misspelled(thread, lit, next, slip, pos + 1, stack, out, governor);
+        }
+        thread.sub = Sub::Misspelled(index_u32(resume), slip);
+        thread.pos = pos + 1;
+        self.queue(thread, stack)
+    }
+
+    /// The canonical spelling of closer literal `lit` failed on `byte` after
+    /// its first `depth` bytes: queue each reading of `byte` as the one slip
+    /// of a misspelled closer (`tool_call.markup.closer-misspelled`) that
+    /// keeps the closer's delimiters: substituted for the expected byte,
+    /// inserted before it, the expected byte deleted (`byte` is the one
+    /// after it), or the expected byte and the next swapped. Each carries
+    /// the repair's cost; [`Self::finish_misspelled`] admits the token only
+    /// when it misspells this closer and no other.
+    #[allow(clippy::too_many_arguments)]
+    fn misspell(
+        &mut self,
+        thread: Thread,
+        lit: u32,
+        next: u32,
+        depth: usize,
+        byte: u8,
+        stack: &mut ScratchVec<Thread>,
+        out: &mut Out,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let canonical = &self.grammar.literals[lit as usize].bytes;
+        let tables = &self.grammar.literal_tables[lit as usize];
+        let (lead, trail) = super::misspelling::delimiters(canonical);
+        let inner_end = canonical.len() - trail;
+        if inner_end < lead + super::misspelling::MIN_INNER || depth < lead || depth > inner_end {
+            return Ok(());
+        }
+        // A spelling the grammar declares (a closer variant, a confusable)
+        // is read by its own repair, never as a misspelling.
+        let pending = self.bytes(thread.entry..thread.pos + 1);
+        if tables.variants.trie.admits(pending) || tables.confusables.trie.admits(pending) {
+            return Ok(());
+        }
+        let slip = index_u32(depth);
+        let cost = thread.cost.saturating_add(super::cost::CLOSER_MISSPELLED);
+        let pos = thread.pos;
+        let at = |sub| Thread {
+            sub,
+            cost,
+            pos: pos + 1,
+            ..thread
+        };
+        // A substituted or inserted byte is a word byte of the token.
+        let word = super::misspelling::word(byte);
+        // Substituted, or the expected byte deleted with `byte` the next.
+        for resume in [depth + 1, depth + 2] {
+            let fits = depth < inner_end
+                && if resume == depth + 1 {
+                    word
+                } else {
+                    depth + 1 < canonical.len() && canonical[depth + 1] == byte
+                };
+            if !fits {
+                continue;
+            }
+            if resume == canonical.len() {
+                self.finish_misspelled(
+                    at(Sub::Lit(0)),
+                    lit,
+                    next,
+                    slip,
+                    pos + 1,
+                    stack,
+                    out,
+                    governor,
+                )?;
+            } else {
+                self.queue(at(Sub::Misspelled(index_u32(resume), slip)), stack)?;
+            }
+        }
+        // Inserted before the expected byte.
+        if word {
+            self.queue(at(Sub::Misspelled(slip, slip)), stack)?;
+        }
+        // The expected byte and the next swapped.
+        if depth + 1 < inner_end && canonical[depth + 1] == byte && canonical[depth] != byte {
+            self.queue(at(Sub::Transposed(slip, slip)), stack)?;
+        }
+        Ok(())
+    }
+
+    /// A misspelling reading of a closer died: report the canonical
+    /// spelling's failure at the slip (after `slip` matched bytes) again,
+    /// as the configuration that failed there, so the attempt's repairs
+    /// (a stray closer deleted, a missing closer inserted) are proposed
+    /// from it as if no misspelling had been read.
+    fn unspell(out: &mut Out, thread: Thread, slip: u32) -> Result<(), StopReason> {
+        let at = thread.entry + slip as usize;
+        Self::fail(
+            out,
+            Thread {
+                sub: Sub::Lit(slip),
+                pos: at,
+                cost: thread.cost.saturating_sub(super::cost::CLOSER_MISSPELLED),
+                ..thread
+            },
+            at,
+            Rejection::Malformed { at },
+        )
+    }
+
+    /// A misspelled closer token of literal `lit` ended at `end`: admit it
+    /// when it misspells this closer's class and no other closer of the
+    /// grammar, recording `tool_call.markup.closer-misspelled` with the
+    /// original bytes.
+    #[allow(clippy::too_many_arguments)]
+    fn finish_misspelled(
+        &mut self,
+        mut thread: Thread,
+        lit: u32,
+        next: u32,
+        slip: u32,
+        end: usize,
+        stack: &mut ScratchVec<Thread>,
+        out: &mut Out,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let grammar = self.grammar;
+        let literal = &grammar.literals[lit as usize];
+        let Some(class) = literal.closer else {
+            return Ok(());
+        };
+        let token = self.bytes(thread.entry..end);
+        governor.charge(
+            Resource::Work,
+            size(token.len()).saturating_mul(size(grammar.closers.len())),
+        )?;
+        let found = super::misspelling::misspelled_class(
+            token,
+            grammar
+                .closers
+                .iter()
+                .map(|closer| closer.spellings.as_slice()),
+        );
+        if found != Some(class.index()) {
+            return Self::unspell(out, thread, slip);
+        }
+        let edit = MarkupEdit {
+            operator: EditOperator::CloserMisspelled,
+            span: thread.entry..end,
+            original: token.to_vec(),
+            replacement: literal.bytes.clone(),
+        };
+        thread.hist = self.arena.edit(thread.hist, edit, governor)?;
+        self.finish_literal(thread, next, end, stack, out, governor)
     }
 
     /// One byte of a JSON-syntax deletion before literal `lit` (a
@@ -762,6 +969,7 @@ impl<'s> Step<'_, 's> {
             unreachable!("body configurations only")
         };
         let pos = thread.pos;
+        self.misspelled_delimiter(thread, set, next, byte, stack, out, governor)?;
         let matcher = &self.grammar.delimiters[set as usize].matcher;
         let released = pos - matcher.depth(state) as usize;
         let stepped = matcher.step(state, byte);
@@ -792,6 +1000,114 @@ impl<'s> Step<'_, 's> {
             out,
             governor,
         )
+    }
+
+    /// A body that `byte` may end a misspelled closer delimiter of
+    /// (`</functio>` for `</function>`): when the bytes ending at it
+    /// misspell exactly one closer of the grammar, and that closer is one of
+    /// the body's delimiters, a configuration that ends the body where the
+    /// token begins is queued beside the body, which reads on; the closer
+    /// literal after the body then reads the token as misspelled
+    /// ([`Self::finish_misspelled`]). Only a body whose codec reads its
+    /// bytes when it finishes (`raw`, `xml-params`, or none) is ended
+    /// early: a `json` codec has read past the token already and ends its
+    /// value by itself.
+    #[allow(clippy::too_many_arguments)]
+    fn misspelled_delimiter(
+        &mut self,
+        thread: Thread,
+        set: u32,
+        next: u32,
+        byte: u8,
+        stack: &mut ScratchVec<Thread>,
+        out: &mut Out,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let kind = match self.program.insts[thread.pc as usize] {
+            Inst::Slot { codec, .. } => Some(codec),
+            _ => None,
+        };
+        if kind.is_some_and(|kind| !matches!(kind, CodecKind::Raw | CodecKind::XmlParams)) {
+            return Ok(());
+        }
+        let grammar = self.grammar;
+        let pos = thread.pos;
+        let declared = &grammar.delimiters[set as usize].declared;
+        // The closer classes among the body's delimiters that `byte` may
+        // end, and the token widths a misspelling of one may have.
+        let mut classes: Vec<usize> = Vec::new();
+        let mut candidates: Vec<usize> = Vec::new();
+        for delimiter in declared
+            .iter()
+            .filter(|delimiter| delimiter.last() == Some(&byte))
+        {
+            let Some(class) = grammar
+                .closers
+                .iter()
+                .position(|closer| closer.spellings.contains(delimiter))
+            else {
+                continue;
+            };
+            if !classes.contains(&class) {
+                classes.push(class);
+            }
+            for width in delimiter.len().saturating_sub(1)..=delimiter.len() + 1 {
+                let Some(start) = (pos + 1).checked_sub(width) else {
+                    continue;
+                };
+                // The token keeps the closer's first byte (its delimiters
+                // are never misspelled): only then is it compared.
+                if start > thread.entry
+                    && start >= self.base
+                    && self.byte(start) == delimiter[0]
+                    && !candidates.contains(&start)
+                {
+                    candidates.push(start);
+                }
+            }
+        }
+        let mut starts: Vec<usize> = Vec::new();
+        for start in candidates {
+            governor.charge(
+                Resource::Work,
+                size(pos + 1 - start).saturating_mul(size(grammar.closers.len())),
+            )?;
+            let token = self.bytes(start..pos + 1);
+            let found = super::misspelling::misspelled_class(
+                token,
+                grammar
+                    .closers
+                    .iter()
+                    .map(|closer| closer.spellings.as_slice()),
+            );
+            if found.is_some_and(|class| classes.contains(&class)) {
+                starts.push(start);
+            }
+        }
+        for start in starts {
+            let codec = match kind {
+                Some(kind) => Some(
+                    self.arena
+                        .begin_codec(kind.begin(thread.entry, governor)?, governor)?,
+                ),
+                None => None,
+            };
+            let fork = Thread {
+                sub: Sub::Body(0, codec),
+                ..thread
+            };
+            self.end_body(
+                fork,
+                codec,
+                start,
+                CodecEnd::Delimited,
+                next,
+                stack,
+                out,
+                governor,
+            )?;
+        }
+        Ok(())
     }
 
     /// Offer `range`'s bytes to `codec`; the offset where a self-delimiting
@@ -1661,7 +1977,41 @@ pub(crate) enum Event {
         at: usize,
         completed: bool,
         reason: Rejection,
+        /// For a rejected attempt of a production with `next` that read
+        /// whole calls before the one it failed in: those calls (see
+        /// [`Salvaged`]); the rejected span then begins where the failing
+        /// call does.
+        salvage: Option<Salvaged>,
     },
+}
+
+/// The calls a rejected attempt of a production with `next` read whole
+/// before the call it failed in (`tool_call.markup.group-split`): each
+/// segmentation of the span from the attempt's start to `at`, where the
+/// failing call begins, and the scratch materializing them charged (as for
+/// [`Event::Completed`]).
+#[derive(Clone, Debug)]
+pub(crate) struct Salvaged {
+    pub(crate) at: usize,
+    pub(crate) segmentations: Vec<Parts>,
+    pub(crate) charged: u64,
+}
+
+/// Where a stuck attempt of a production with `next` last began a call:
+/// the boundary's offset, the history before it, and the cost there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Boundary {
+    attempt: u64,
+    at: usize,
+    hist: u32,
+    cost: u64,
+}
+
+impl ScratchCharge for Boundary {
+    const CHARGE: usize = {
+        assert!(core::mem::size_of::<Self>() <= 32);
+        32
+    };
 }
 
 impl Event {
@@ -1686,6 +2036,9 @@ struct Table<'s> {
     /// configuration of the same attempt that began its terminal at or
     /// before the failed literal's start is still live (see `settle`).
     failures: ScratchVec<Failure>,
+    /// For a grouped program, the last call boundary of each attempt that
+    /// got stuck after one (see [`Salvaged`]).
+    boundaries: ScratchVec<Boundary>,
 }
 
 /// A completion of a grouped program's attempt, held until the attempt
@@ -1813,6 +2166,7 @@ impl<'s> Engine<'s> {
                     trails: Vec::new(),
                     held: Vec::new(),
                     failures: ScratchVec::new(governor),
+                    boundaries: ScratchVec::new(governor),
                 });
             }
         }
@@ -2021,6 +2375,7 @@ impl<'s> Engine<'s> {
                 .chain(held)
                 .collect();
             self.note_failure(table, record.id, &failures);
+            self.note_boundary(table, record.id, &failures, governor)?;
             let until = if eof.is_some() { at } else { at + 1 };
             for state in self.repair(table, record, &failures, until, eof, governor)? {
                 match state.status {
@@ -2208,6 +2563,143 @@ impl<'s> Engine<'s> {
         record.end = Some(end);
     }
 
+    /// For a grouped program, record where the failing configurations of
+    /// stuck `attempt` last began a call (a `next` they passed): the
+    /// furthest such boundary, the least cost there, and the history before
+    /// it. The calls before it were read whole; should the attempt end
+    /// rejected, they are recovered and the rejection begins there. One
+    /// `Work` unit per history node visited.
+    fn note_boundary(
+        &mut self,
+        table: usize,
+        attempt: u64,
+        failures: &[Failure],
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        if !self.tables[table].program.grouped {
+            return Ok(());
+        }
+        let mut best: Option<Boundary> = None;
+        for failure in failures.iter().filter(|failure| !failure.respell) {
+            let mut node = failure.thread.hist;
+            loop {
+                governor.charge(Resource::Work, 1)?;
+                let HistNode { prev, kind } = self.arena.nodes.as_slice()[node as usize];
+                match kind {
+                    HistKind::Root => break,
+                    HistKind::Next(at, cost) => {
+                        let candidate = Boundary {
+                            attempt,
+                            at,
+                            hist: prev,
+                            cost,
+                        };
+                        let better = best.is_none_or(|known| {
+                            (Reverse(candidate.at), candidate.cost, candidate.hist)
+                                < (Reverse(known.at), known.cost, known.hist)
+                        });
+                        if better {
+                            best = Some(candidate);
+                        }
+                        break;
+                    }
+                    _ => node = prev,
+                }
+            }
+        }
+        // A later stuck step whose failures passed no boundary (a repair
+        // carried the attempt on) keeps the one recorded before.
+        let Some(best) = best else {
+            return Ok(());
+        };
+        let boundaries = &mut self.tables[table].boundaries;
+        if let Some(known) = boundaries
+            .as_mut_slice()
+            .iter_mut()
+            .find(|known| known.attempt == attempt)
+        {
+            *known = best;
+        } else {
+            boundaries.push(best)?;
+        }
+        Ok(())
+    }
+
+    /// Take the boundary recorded for `attempt`, if any.
+    fn take_boundary(&mut self, table: usize, attempt: u64) -> Option<Boundary> {
+        let boundaries = &mut self.tables[table].boundaries;
+        let index = boundaries
+            .as_slice()
+            .iter()
+            .position(|known| known.attempt == attempt)?;
+        let found = boundaries.as_slice()[index];
+        let last = boundaries.len() - 1;
+        boundaries.as_mut_slice().swap(index, last);
+        boundaries.pop();
+        Some(found)
+    }
+
+    /// The calls rejected `record` read whole before the boundary recorded
+    /// for it, when the rejection (ending at `end`) lies past it: each
+    /// segmentation of the span up to the boundary, its last call carrying
+    /// a `tool_call.markup.group-split` edit at the boundary.
+    fn salvage(
+        &mut self,
+        table: usize,
+        record: &Attempt,
+        end: usize,
+        governor: &mut Governor,
+    ) -> Result<Option<Salvaged>, StopReason> {
+        let Some(boundary) = self.take_boundary(table, record.id) else {
+            return Ok(None);
+        };
+        if record.completed || boundary.at <= record.start || boundary.at > end {
+            return Ok(None);
+        }
+        let kind = self.tables[table].kind;
+        let dialect = self.grammars[self.tables[table].grammar].dialect.clone();
+        let (step, _, _) = self.split(table);
+        let shape = Shape {
+            span: record.start..boundary.at,
+            dialect: &dialect,
+            kind,
+            dangling: false,
+            open_end: boundary.at,
+            cost: boundary.cost,
+        };
+        let before = governor.scratch_meter().total_charged();
+        let Ok(mut segmentations) = step.segment(boundary.hist, &shape, governor)? else {
+            return Ok(None);
+        };
+        let rule = EditOperator::GroupSplit.rule();
+        for parts in &mut segmentations {
+            if let Some((segment, cost)) = parts.last_mut() {
+                *cost = cost.saturating_add(rule.cost);
+                for reading in &mut segment.readings {
+                    reading.edits.push(MarkupEdit {
+                        operator: EditOperator::GroupSplit,
+                        span: boundary.at..boundary.at,
+                        original: Vec::new(),
+                        replacement: Vec::new(),
+                    });
+                    reading.cost = reading.cost.saturating_add(rule.cost);
+                    if reading.closure == Closure::Closed {
+                        reading.closure = Closure::Repaired;
+                    }
+                }
+            }
+        }
+        let charged = governor
+            .scratch_meter()
+            .total_charged()
+            .saturating_sub(before);
+        Ok(Some(Salvaged {
+            at: boundary.at,
+            charged: if segmentations.len() == 1 { charged } else { 0 },
+            segmentations,
+        }))
+    }
+
     /// Retire the attempts `live` no longer holds a configuration of.
     fn retire(
         &mut self,
@@ -2234,18 +2726,20 @@ impl<'s> Engine<'s> {
             }
             self.release(table, record.id, governor)?;
             if record.opened {
+                // A rejected span ends before the token that could not be
+                // consumed; a completed attempt's last report comes after
+                // all of its completions.
+                let end = match (eof, record.completed) {
+                    (Some(_), _) => at,
+                    (None, true) => at + 1,
+                    (None, false) => record.end.unwrap_or(at),
+                };
+                let salvage = self.salvage(table, &record, end, governor)?;
                 self.events.push(Event::Ended {
                     table: index_u32(table),
                     attempt: record.id,
                     start: record.start,
-                    // A rejected span ends before the token that could not
-                    // be consumed; a completed attempt's last report comes
-                    // after all of its completions.
-                    at: match (eof, record.completed) {
-                        (Some(_), _) => at,
-                        (None, true) => at + 1,
-                        (None, false) => record.end.unwrap_or(at),
-                    },
+                    at: end,
                     completed: record.completed,
                     reason: match (eof, record.failure) {
                         (_, Some(reason @ Rejection::InvalidUtf8 { .. }))
@@ -2253,7 +2747,10 @@ impl<'s> Engine<'s> {
                         (Some(_), _) => Rejection::Unterminated,
                         (None, None) => Rejection::Overlapped { at },
                     },
+                    salvage,
                 });
+            } else {
+                self.take_boundary(table, record.id);
             }
             let attempts = self.tables[table].attempts.as_mut_slice();
             attempts.copy_within(index + 1.., index);
@@ -2904,6 +3401,7 @@ impl<'s> Engine<'s> {
             keep(&mut table.failures, |failure| {
                 failure.thread.attempt != attempt
             });
+            keep(&mut table.boundaries, |known| known.attempt != attempt);
             table.trails.retain(|trail| trail.thread.attempt != attempt);
             table.held.retain(|entry| entry.attempt != attempt);
         }
@@ -3025,6 +3523,7 @@ impl<'s> Engine<'s> {
                 }
             }
             self.release(table, record.id, governor)?;
+            self.take_boundary(table, record.id);
             if record.opened {
                 // The cut-off reading may itself be rejected (a capture that
                 // is not well-formed UTF-8): the attempt then ends rejected.
@@ -3045,6 +3544,8 @@ impl<'s> Engine<'s> {
                         Some(reason @ Rejection::InvalidUtf8 { .. }) => reason,
                         _ => Rejection::Unterminated,
                     },
+                    // A length stop keeps the cut-off reading instead.
+                    salvage: None,
                 });
             }
         }

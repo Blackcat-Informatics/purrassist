@@ -53,6 +53,8 @@
 //!   content after it up to the next segment holds none;
 //! - (F7) a rejected span never ends inside a literal it began;
 //! - (F5) every embedded call is offered once, in span order;
+//! - (T2) no call, embedded call or rejected attempt holds bytes of a
+//!   reasoning range's opener or closer marker in the same reading;
 //! - (F8) a malformed attempt's `at` lies inside its span or at its end, or
 //!   past it only inside a literal the failing reading began and matched
 //!   in part (at most the longest literal spelling past the end);
@@ -957,6 +959,68 @@ fn check_reasoning_keeps_calls(
     }
 }
 
+/// T2: no byte belongs to both a reasoning marker and a call in one
+/// reading. A reasoning range's markers are its opener (the range begins
+/// with an opener spelling of an allowed dialect) and its closer (it ends
+/// with a closer spelling); no call, embedded call or rejected attempt of
+/// the reading overlaps them.
+fn check_markers_not_calls(
+    output: &[u8],
+    request: &ToolRecoveryRequest,
+    result: &AssistResult<ToolCalls>,
+) {
+    let readings: Vec<&ToolCalls> = match &result.outcome {
+        Outcome::Resolved(calls) | Outcome::BestGuess(calls) => vec![calls],
+        Outcome::Ambiguous(values) => values.iter().collect(),
+        Outcome::Unresolved => Vec::new(),
+    };
+    let mut pairs: Vec<(&[u8], &[u8])> = Vec::new();
+    for dialect in request.dialects.dialects() {
+        for (open, close) in dialect.grammar().reasoning_markers() {
+            pairs.push((open, close));
+        }
+    }
+    let overlaps = |a: &Range<usize>, b: &Range<usize>| a.start < b.end && b.start < a.end;
+    for calls in readings {
+        for range in &calls.reasoning {
+            let text = &output[range.clone()];
+            let mut markers: Vec<Range<usize>> = Vec::new();
+            if let Some(open) = pairs
+                .iter()
+                .map(|(open, _)| *open)
+                .filter(|open| !open.is_empty() && text.starts_with(open))
+                .map(<[u8]>::len)
+                .max()
+            {
+                markers.push(range.start..range.start + open);
+            }
+            if let Some(close) = pairs
+                .iter()
+                .map(|(_, close)| *close)
+                .filter(|close| !close.is_empty() && text.ends_with(close))
+                .map(<[u8]>::len)
+                .max()
+            {
+                markers.push(range.end - close..range.end);
+            }
+            let spans = calls
+                .calls
+                .iter()
+                .chain(&calls.embedded)
+                .map(|call| &call.span)
+                .chain(calls.rejected.iter().map(|rejected| &rejected.span));
+            for span in spans {
+                for marker in &markers {
+                    assert!(
+                        !overlaps(span, marker),
+                        "the call or attempt at {span:?} holds bytes of the reasoning marker at {marker:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 fn main() {
     let mut bytes = Vec::new();
     io::stdin().take(4097).read_to_end(&mut bytes).unwrap();
@@ -969,6 +1033,7 @@ fn main() {
     let result = tools.recover(output, &request);
     check_result(&tools, output, &request, &result);
     check_reasoning_keeps_calls(&tools, output, &request, &result);
+    check_markers_not_calls(output, &request, &result);
     check_chunking(&tools, output, &request, split >> 3);
     check_exhaustion(&tools, output, &request);
     println!("ok");

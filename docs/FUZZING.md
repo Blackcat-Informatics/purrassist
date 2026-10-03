@@ -164,7 +164,9 @@ targets' mutation tokens so mutation can create or move field boundaries).
   A malformed attempt's `at` lies inside its span, at its end, or past it
   only inside a literal the failing reading began and matched in part (at
   most the longest literal spelling past the end). (F5) Every embedded
-  call is offered once, in span order. Every `Resolved` call printed in its own dialect
+  call is offered once, in span order. (T2) No call, embedded call or
+  rejected attempt holds bytes of a reasoning range's opener or closer
+  marker in the same reading. Every `Resolved` call printed in its own dialect
   (`emit::emit`) recovers to the same tool with `Node::equivalent`
   arguments and `Resolved`, and the printed text is stable (a fixed point
   from its first recovery; a `Resolved` call is skipped only as

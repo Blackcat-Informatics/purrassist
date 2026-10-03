@@ -616,6 +616,22 @@ TOOL_CALL_REGRESSIONS = [
     # T1/F8: a reading matches `{` through a deleted stray `/` before it
     # fails, so `at` lies one byte past the span, inside that literal.
     b'\xe6#[THINK][TOOL_CALLS][/TH"[/TH"id"',
+    # T2: a malformed call in the middle of an attempt reading several
+    # calls; the calls before it are recovered (group-split), the third
+    # where the grammar resynchronizes.
+    b'\x00\x52Hi <|tool_calls_section_begin|><|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{"path":"a"}<|tool_call_end|>'
+    b'<|tool_call_begin|>functions.read_file:1 oops<|tool_call_argument_begin|>{"path":"b"}<|tool_call_end|>'
+    b'<|tool_call_begin|>functions.read_file:2<|tool_call_argument_begin|>{"path":"c"}<|tool_call_end|><|tool_calls_section_end|> done',
+    'Hi <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{"path":"a"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>read_file oops<｜tool▁sep｜>{"path":"b"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{"path":"c"}<｜tool▁call▁end｜><｜tool▁calls▁end｜> done'.encode().join([b'\x00\x52', b'']),
+    b'\x00\x52Hi [TOOL_CALLS] [{"name": "read_file", "arguments": {"path": "a"}}, {"name": "read_file" oops, "arguments": {"path": "b"}}, {"name": "read_file", "arguments": {"path": "c"}}] done',
+    b'\x04\x52Hi [TOOL_CALLS] [{"name": "read_file", "arguments": {"path": "a"}}, {"name": "read_file" oops, "arguments": {"path": "b"}}, {"name": "read_file", "argum',
+    # T2: misspelled closers read as the one closer they misspell, and a
+    # token one edit from two closers left alone.
+    b'\x00\x52<tool_call>\n<function=read_file>\n<parameter=path>\na\n</paramete>\n</functio>\n</tool_call> The answer.',
+    b'\x00\x52<tool_call>{"name": "read_file", "arguments": {"path": "a"}}</tool_cal> The answer.',
+    'Hi <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{"path":"a"}<｜tool▁callz▁end｜><｜tool▁calls▁end｜> The answer.'.encode().join([b'\x00\x52', b'']),
+    # T2: a reasoning marker is never read as a call's arguments.
+    b'\x10\x52[TOOL_CALLS]read_file[TOOL_CALLS]current_time[/THINK]Answer.',
     # An attempt reading several calls begins inside a starts_open block
     # and ends after its closer: the calls it read inside stay embedded.
     b'\x5b\x9c[TOOL_CALLS]t[TOOL_CALLS]S[/THINK][TOOL_CALLS]g',
