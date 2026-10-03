@@ -151,16 +151,20 @@ targets' mutation tokens so mutation can create or move field boundaries).
   reasoning range lies within the output, never splits a well-formed UTF-8
   character, and slices back to the retained source (a rejected attempt's
   raw bytes are exactly its range); content, reasoning, and call ranges
-  never overlap. (S3) A rejected attempt keeps its own closing markup: when
-  a parser's attempt does not end with a closer of the `call` alternative
-  it opened (a closer other than a bare bracket, which prose also writes;
-  an inner element's closer, `</function>` inside `<tool_call>`, is not
-  one), the content after it,
-  up to the next call, reasoning block, or attempt, holds no such closer.
-  (F4) A rejected attempt runs past where its grammar failed (the furthest
-  the recognizer read an attempt of its dialect at that opener, in any
-  reading) only to a closer of its dialect, so bytes after a closer-less
-  attempt stay content. Every `Resolved` call printed in its own dialect
+  never overlap. (S3/F6) A rejected attempt keeps its own closing markup:
+  when a parser's attempt does not end with a literal that ends a call of
+  its dialect (any alternative's closer or a chained call's own, such as
+  Kimi-K2's `<|tool_call_end|>`; a single byte, which prose also writes, is
+  not one), the content after it, up to the next call, reasoning block, or
+  attempt, holds no such literal. (F4) A rejected attempt runs past where
+  its grammar failed (the furthest the recognizer read an attempt of its
+  dialect at that opener, in any reading) only to such a literal or to
+  complete a literal it began, so bytes after a closer-less attempt stay
+  content. (F7) A rejected span never ends inside a literal it began. (F8)
+  A malformed attempt's `at` lies inside its span, at its end, or past it
+  only inside a literal the failing reading began and matched in part (at
+  most the longest literal spelling past the end). (F5) Every embedded
+  call is offered once, in span order. Every `Resolved` call printed in its own dialect
   (`emit::emit`) recovers to the same tool with `Node::equivalent`
   arguments and `Resolved`, and the printed text is stable (a fixed point
   from its first recovery; a `Resolved` call is skipped only as

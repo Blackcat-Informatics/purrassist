@@ -454,7 +454,11 @@ pub enum Rejection {
     /// within the search budget applied.
     Malformed {
         /// Absolute offset of the byte that could not be consumed, or of
-        /// the first byte of the well-formed character it belongs to.
+        /// the first byte of the well-formed character it belongs to. It
+        /// lies inside the rejected span, at its end, or past it only
+        /// inside a literal the failing reading began at or before that end
+        /// and matched only in part, which the span leaves out (see
+        /// `RejectedCall::span`).
         at: usize,
     },
     /// The attempt failed at a byte beginning a sequence that is not
@@ -527,7 +531,10 @@ pub enum Segment {
     /// A call attempt whose markup could not be recognized; the raw span is
     /// retained.
     Rejected {
-        /// The attempt's source range, from its opener to where it failed.
+        /// The attempt's source range, from its opener to where its grammar
+        /// stopped reading: the end of the last token it read whole (a
+        /// literal matched only in part is left out). Recovery extends it
+        /// over the attempt's own markup (`RejectedCall::span`).
         span: Range<usize>,
         /// The dialect whose opener started the attempt.
         dialect: DialectId,

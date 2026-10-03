@@ -1473,6 +1473,7 @@ pub(crate) fn compile(
     }
     let longest = longest_literal(&literals, &literal_tables, &stray, &delimiters, &reasoning);
     let call_ends = call_ends(&programs[0], &literals, &literal_tables, governor)?;
+    let call_literals = call_literals(&programs[0], &literals, &literal_tables, governor)?;
     // An `optional-id` grammar reads a call id where a model adds one, but
     // its markup does not provide for one.
     let call_ids = !optional_id && captures(&productions, call, CaptureKind::Id);
@@ -1495,11 +1496,99 @@ pub(crate) fn compile(
         reasoning,
         explicit_reasoning,
         call_ends,
+        call_literals,
         programs,
         stray: stray.trie,
         longest,
         layouts,
     })
+}
+
+/// The instructions `inst` continues at.
+fn successors(inst: &Inst) -> Vec<u32> {
+    match *inst {
+        Inst::Lit { next, .. }
+        | Inst::Class { next, .. }
+        | Inst::Until { next, .. }
+        | Inst::Slot { next, .. }
+        | Inst::Open { next, .. }
+        | Inst::Close { next, .. }
+        | Inst::Commit { next }
+        | Inst::Next { next }
+        | Inst::Insert { next, .. } => vec![next],
+        Inst::Split(first, second) => vec![first, second],
+        Inst::Accept => Vec::new(),
+    }
+}
+
+/// Per instruction of `program`, whether an instruction `seed` holds for
+/// is reachable from it without input: one backward walk over the epsilon
+/// instructions (`next` among them only when `through_next`).
+fn reach_back(program: &Program, seed: impl Fn(&Inst) -> bool, through_next: bool) -> Vec<bool> {
+    let count = program.insts.len();
+    let mut before: Vec<Vec<u32>> = vec![Vec::new(); count];
+    let mut stack = Vec::new();
+    for (pc, inst) in program.insts.iter().enumerate() {
+        let pc = index_u32(pc);
+        if seed(inst) {
+            stack.push(pc);
+        }
+        match *inst {
+            Inst::Split(first, second) => {
+                before[first as usize].push(pc);
+                before[second as usize].push(pc);
+            }
+            Inst::Next { next } if through_next => before[next as usize].push(pc),
+            Inst::Open { next, .. }
+            | Inst::Close { next, .. }
+            | Inst::Commit { next }
+            | Inst::Insert { next, .. } => before[next as usize].push(pc),
+            _ => {}
+        }
+    }
+    let mut reached = vec![false; count];
+    while let Some(pc) = stack.pop() {
+        if !core::mem::replace(&mut reached[pc as usize], true) {
+            stack.extend(before[pc as usize].iter().copied());
+        }
+    }
+    reached
+}
+
+/// Every spelling (canonical, declared variant, confusable) of every
+/// literal the `call` program matches, longest first, without repeats.
+fn call_literals(
+    program: &Program,
+    literals: &[Literal],
+    tables: &[LiteralTables],
+    governor: &mut Governor,
+) -> Result<Vec<Vec<u8>>, GrammarError> {
+    charge(governor, size(program.insts.len()), 0)?;
+    let mut lits: Vec<u32> = program
+        .insts
+        .iter()
+        .filter_map(|inst| match *inst {
+            Inst::Lit { lit, .. } => Some(lit),
+            _ => None,
+        })
+        .collect();
+    lits.sort_unstable();
+    lits.dedup();
+    let mut spellings: Vec<Vec<u8>> = Vec::new();
+    for lit in lits {
+        let tables = &tables[lit as usize];
+        for spelling in core::iter::once(&literals[lit as usize].bytes)
+            .chain(&tables.variants.list)
+            .chain(&tables.confusables.list)
+        {
+            charge(governor, size(spellings.len()), size(spelling.len()))?;
+            if !spellings.contains(spelling) {
+                spellings.push(spelling.clone());
+            }
+        }
+    }
+    spellings.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+    Ok(spellings)
 }
 
 /// Per opener alternative of the `call` production, the spellings of its
@@ -1515,12 +1604,12 @@ fn call_ends(
     tables: &[LiteralTables],
     governor: &mut Governor,
 ) -> Result<Vec<CallEnd>, GrammarError> {
-    // One walk of the call program per opener alternative, and one
-    // backward walk for completion.
+    // One walk of the call program per opener alternative, and two
+    // backward walks (production and call completion).
     charge(
         governor,
         size(program.openers.len())
-            .saturating_add(1)
+            .saturating_add(2)
             .saturating_mul(size(program.insts.len())),
         size(program.insts.len()).saturating_mul(16),
     )?;
@@ -1531,49 +1620,17 @@ fn call_ends(
             .chain(tables.confusables.list.iter().cloned())
             .collect::<Vec<_>>()
     };
-    let next_of = |inst: &Inst| -> Vec<u32> {
-        match *inst {
-            Inst::Lit { next, .. }
-            | Inst::Class { next, .. }
-            | Inst::Until { next, .. }
-            | Inst::Slot { next, .. }
-            | Inst::Open { next, .. }
-            | Inst::Close { next, .. }
-            | Inst::Commit { next }
-            | Inst::Next { next }
-            | Inst::Insert { next, .. } => vec![next],
-            Inst::Split(first, second) => vec![first, second],
-            Inst::Accept => Vec::new(),
-        }
-    };
     // Whether the production completes from each instruction without
-    // input: one backward walk from `Accept` over the epsilon instructions.
-    let count = program.insts.len();
-    let mut before: Vec<Vec<u32>> = vec![Vec::new(); count];
-    let mut stack = Vec::new();
-    for (pc, inst) in program.insts.iter().enumerate() {
-        let pc = index_u32(pc);
-        match *inst {
-            Inst::Accept => stack.push(pc),
-            Inst::Split(first, second) => {
-                before[first as usize].push(pc);
-                before[second as usize].push(pc);
-            }
-            Inst::Open { next, .. }
-            | Inst::Close { next, .. }
-            | Inst::Commit { next }
-            | Inst::Next { next }
-            | Inst::Insert { next, .. } => before[next as usize].push(pc),
-            _ => {}
-        }
-    }
-    let mut completing = vec![false; count];
-    while let Some(pc) = stack.pop() {
-        if !core::mem::replace(&mut completing[pc as usize], true) {
-            stack.extend(before[pc as usize].iter().copied());
-        }
-    }
+    // input, and whether one call ends there (the production completes or
+    // the next call of the attempt begins, a `next`).
+    let completing = reach_back(program, |inst| matches!(inst, Inst::Accept), true);
+    let ending = reach_back(
+        program,
+        |inst| matches!(inst, Inst::Accept | Inst::Next { .. }),
+        false,
+    );
     let completes = |pc: u32| completing[pc as usize];
+    let ends_call = |pc: u32| ending[pc as usize];
     Ok(program
         .openers
         .iter()
@@ -1584,6 +1641,7 @@ fn call_ends(
             let mut seen = vec![false; program.insts.len()];
             let mut stack = vec![opener];
             let mut ends: Vec<Vec<u8>> = Vec::new();
+            let mut call_closers: Vec<Vec<u8>> = Vec::new();
             let mut chained = false;
             while let Some(pc) = stack.pop() {
                 if core::mem::replace(&mut seen[pc as usize], true) {
@@ -1601,19 +1659,28 @@ fn call_ends(
                 }
                 if let Inst::Lit { lit, next } = *inst
                     && pc != opener
-                    && completes(next)
                 {
-                    for spelling in spellings(lit) {
-                        if !ends.contains(&spelling) {
-                            ends.push(spelling);
+                    if completes(next) {
+                        for spelling in spellings(lit) {
+                            if !ends.contains(&spelling) {
+                                ends.push(spelling);
+                            }
+                        }
+                    }
+                    if ends_call(next) {
+                        for spelling in spellings(lit) {
+                            if !call_closers.contains(&spelling) {
+                                call_closers.push(spelling);
+                            }
                         }
                     }
                 }
-                stack.extend(next_of(inst));
+                stack.extend(successors(inst));
             }
             Some(CallEnd {
                 openers: spellings(lit),
                 closers: ends,
+                call_closers,
                 chained,
             })
         })

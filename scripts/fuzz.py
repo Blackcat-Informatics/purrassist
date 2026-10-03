@@ -599,6 +599,23 @@ TOOL_CALL_REGRESSIONS = [
     # section closer rather than leaving it as content.
     b'\x00\x52Let me check. <|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{"path": "a"}<|tool_call_end|>'
     b'<|tool_call_begin|>functions.read_file:1 oops<|tool_call_argument_begin|>{"path": "b"}<|tool_call_end|><|tool_calls_section_end|> done',
+    # T1/F5: two attempts read the same call inside a starts_open block; it
+    # is embedded once, in span order.
+    b'\x10\x52[TOOL_CALLS]read_file{"path":"a"}[TOOL_CALLS]current_time{}[/THINK]Answer.',
+    # T1/F6: a call's own closer (Kimi-K2 <|tool_call_end|>, DeepSeek
+    # <｜tool▁call▁end｜>) ends a rejected attempt with no section closer;
+    # the prose after it stays content.
+    b'\x00\x52Hi <|tool_calls_section_begin|><|tool_call_begin|>functions.read_file:0 oops<|tool_call_argument_begin|>{"path":"a"}<|tool_call_end|> The answer is 42.',
+    'Hi <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file oops\n```json\n{"path":"a"}\n```<｜tool▁call▁end｜> The answer is 42.'.encode().join([b'\x00\x52', b'']),
+    b'\x00\x52<|tool_call_begin|>functions.read_file:0 oops<|tool_call_argument_begin|>{"path":"a"}<|tool_call_end|><|tool_call_begin|>functions.read_file:1<|tool_call_argument_begin|>{"path":"b"}<|tool_call_end|> done',
+    # T1/F7: a rejected span never ends inside a literal (`</function` of
+    # `</function>`), bare, with newlines, and wrapped.
+    b'\x00\x52pre <function=read_file><function=read_file><parameter=path>1</parameter></function> post',
+    b'\x00\x52pre <function=read_file>\n<function=read_file>\n<parameter=path>\n1\n</parameter>\n</function> post',
+    b'\x00\x52pre <tool_call><function=read_file><function=read_file><parameter=path>1</parameter></function></tool_call> post',
+    # T1/F8: a reading matches `{` through a deleted stray `/` before it
+    # fails, so `at` lies one byte past the span, inside that literal.
+    b'\xe6#[THINK][TOOL_CALLS][/TH"[/TH"id"',
     # An attempt reading several calls begins inside a starts_open block
     # and ends after its closer: the calls it read inside stay embedded.
     b'\x5b\x9c[TOOL_CALLS]t[TOOL_CALLS]S[/THINK][TOOL_CALLS]g',

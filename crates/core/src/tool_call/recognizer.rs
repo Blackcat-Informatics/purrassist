@@ -450,6 +450,11 @@ impl Turn {
                     && segment.span.end <= outer.end
             })
         });
+        // One call per span, in span order: two attempts that read the same
+        // call (a call of an attempt reading several, and the attempt its
+        // own opener began) offer it once, the first one completed.
+        embedded.sort_by_key(|segment| (segment.span.start, segment.span.end));
+        embedded.dedup_by(|later, first| later.span == first.span);
         let index = self.store(
             Segment::Reasoning(ReasoningSegment {
                 span: think.start..end,
@@ -497,12 +502,14 @@ impl Turn {
                 continue;
             };
             governor.charge(Resource::Work, size(reasoning.embedded.len()))?;
-            // A call another embedded call contains is part of that call.
-            if reasoning.embedded.iter().any(|outer| {
-                outer.span != call.span
-                    && outer.span.start <= call.span.start
-                    && call.span.end <= outer.span.end
-            }) {
+            // A call another embedded call contains is part of that call,
+            // and a call already offered (another attempt read it) is not
+            // offered again.
+            if reasoning
+                .embedded
+                .iter()
+                .any(|outer| outer.span.start <= call.span.start && call.span.end <= outer.span.end)
+            {
                 continue;
             }
             let before = segment_bytes(&self.store[index as usize]);
@@ -510,8 +517,7 @@ impl Turn {
                 continue;
             };
             reasoning.embedded.retain(|inner| {
-                inner.span == call.span
-                    || !(call.span.start <= inner.span.start && inner.span.end <= call.span.end)
+                !(call.span.start <= inner.span.start && inner.span.end <= call.span.end)
             });
             let mut segment = call.clone();
             for reading in &mut segment.readings {
@@ -522,7 +528,10 @@ impl Turn {
                     replacement: Vec::new(),
                 });
             }
-            reasoning.embedded.push(segment);
+            let at = reasoning.embedded.partition_point(|other| {
+                (other.span.start, other.span.end) < (segment.span.start, segment.span.end)
+            });
+            reasoning.embedded.insert(at, segment);
             let after = segment_bytes(&self.store[index as usize]);
             governor.charge(Resource::ScratchBytes, after.saturating_sub(before))?;
         }

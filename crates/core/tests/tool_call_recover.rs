@@ -1312,7 +1312,10 @@ fn tool_choice_from_openai_and_anthropic_json() {
 /// inside the block were dropped: they completed only when the attempt
 /// ended, after the block's segment was stored. Each is now offered as an
 /// embedded call of the block it ends inside, as when the attempt ends in
-/// the block, and the call after the closer is still a call.
+/// the block, and the call after the closer is still a call. A call two
+/// attempts read (a call of the attempt reading several, and the attempt
+/// its own opener began) is offered once, and the embedded calls are in
+/// span order (F5): the exact list is asserted, tool names included.
 #[test]
 fn calls_an_attempt_reads_inside_a_closed_block_stay_embedded() {
     let tools = compile([
@@ -1320,11 +1323,24 @@ fn calls_an_attempt_reads_inside_a_closed_block_stay_embedded() {
         ToolDefinition::new("s").effects(Effects::ReadOnly),
         ToolDefinition::new("g").effects(Effects::ReadOnly),
     ]);
-    for (output, after) in [
-        ("[TOOL_CALLS]t[TOOL_CALLS]s[/THINK]", None),
+    for (output, reasoning, embedded, after) in [
+        (
+            "[TOOL_CALLS]t[TOOL_CALLS]s[/THINK]",
+            0..34,
+            vec![(0..13, "t"), (13..34, "s")],
+            None,
+        ),
         (
             "[TOOL_CALLS]t[TOOL_CALLS]s[/THINK][TOOL_CALLS]g",
+            0..34,
+            vec![(0..13, "t"), (13..34, "s")],
             Some(34..47),
+        ),
+        (
+            "[TOOL_CALLS]t{\"x\":1}[TOOL_CALLS]s{\"y\":2}[/THINK]Answer.",
+            0..48,
+            vec![(0..20, "t"), (20..40, "s")],
+            None,
         ),
     ] {
         let result = tools.recover(
@@ -1335,15 +1351,13 @@ fn calls_an_attempt_reads_inside_a_closed_block_stay_embedded() {
         let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = &result.outcome else {
             panic!("{output:?}: {:#?}", result.outcome)
         };
-        assert_eq!(calls.reasoning, vec![0..34], "{output:?}");
-        let mut embedded: Vec<_> = calls
+        assert_eq!(calls.reasoning, vec![reasoning], "{output:?}");
+        let found: Vec<(core::ops::Range<usize>, &str)> = calls
             .embedded
             .iter()
-            .map(|call| call.span.clone())
+            .map(|call| (call.span.clone(), call.tool.as_deref().unwrap_or("")))
             .collect();
-        embedded.sort_by_key(|span| (span.start, span.end));
-        embedded.dedup();
-        assert_eq!(embedded, [0..13, 13..34], "{output:?}");
+        assert_eq!(found, embedded, "{output:?}");
         let spans: Vec<_> = calls.calls.iter().map(|call| call.span.clone()).collect();
         assert_eq!(spans, after.into_iter().collect::<Vec<_>>(), "{output:?}");
     }

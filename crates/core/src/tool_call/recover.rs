@@ -1143,16 +1143,38 @@ pub struct KeywordUse {
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RejectedCall {
-    /// The attempt's source range: the whole call markup it began. An
-    /// attempt a parser made runs from its opener to the end literal of the
-    /// `call` alternative it opened (nesting by that alternative's opener,
-    /// or by bracket for a JSON call) and any repeated closers right after
-    /// it, found before the next call reopening that alternative, a
-    /// reasoning block, or reported unparsed markup; a call or attempt
-    /// inside the broken wrapper is kept, and this range covers it. Without
-    /// such a closer the range is what the grammar read, from the opener to
-    /// where it failed, and the bytes after it stay content. Content never
-    /// holds these bytes. Unparsed markup
+    /// The attempt's source range: the call markup it began, and nothing
+    /// that is not shown to be its markup. It is decided in three steps:
+    ///
+    /// 1. Where the grammar stopped reading: the end of the last token it
+    ///    read whole, which is where the furthest token it could not read
+    ///    begins. A literal it matched only in part is left out (it may be
+    ///    prose, or begin the next opener), so the reason's
+    ///    [`Malformed { at }`](Rejection::Malformed) (the first byte no
+    ///    reading could consume) lies inside the span, at its end, or past
+    ///    it only inside such a partial literal (read up to `at`, perhaps
+    ///    through one repaired byte): `<function=f<oops` is rejected over
+    ///    `<function=f` (`0..11`) with `at` 12, past the `<` that began a
+    ///    literal.
+    /// 2. Never inside a literal: when the bytes there complete a literal
+    ///    spelling of the dialect that began inside the span (a closer
+    ///    variant read as a prefix of the canonical `</function>`), the
+    ///    span runs to its end.
+    /// 3. To its closer: an attempt a parser made runs on to the end
+    ///    literal of the `call` alternative it opened (nesting by that
+    ///    alternative's opener unless the alternative chains calls that
+    ///    each open with it, or by bracket for a JSON call) and any repeated
+    ///    closers right after it, found before the next call reopening that
+    ///    alternative, a reasoning block, or reported unparsed markup; a
+    ///    call or attempt inside the broken wrapper is kept, and this range
+    ///    covers it. Without that closer, it runs to the end of the last
+    ///    literal before the next segment that ends a call of its dialect
+    ///    (a chained call's own `<|tool_call_end|>`, another alternative's
+    ///    `</function>`), when there is one.
+    ///
+    /// Otherwise the span ends at step 2 and the bytes after it stay
+    /// content (prose after a broken opener is the answer). Content never
+    /// holds the span's bytes. Unparsed markup
     /// ([`Rejection::UnsupportedDialect`]) covers only the detected markup,
     /// whose bytes also stay content.
     pub span: Range<usize>,
@@ -1574,6 +1596,21 @@ fn typed_schema(explanation: &str) -> Option<&str> {
 }
 
 /// The nesting state of a rejected attempt's markup scan.
+/// What ends a rejected attempt's markup (see
+/// [`Recovery::close_rejections`]).
+struct Markup<'g> {
+    /// The opener spellings of the alternative it opened.
+    openers: Vec<Vec<u8>>,
+    /// That alternative's end literals.
+    closers: Vec<Vec<u8>>,
+    /// Whether a repeated opener nests a level.
+    nests: bool,
+    /// Every multi-byte literal that ends a call of the dialect.
+    call_closers: Vec<Vec<u8>>,
+    /// Every literal spelling of the dialect's `call` production.
+    literals: &'g [Vec<u8>],
+}
+
 struct Nesting {
     depth: usize,
     quoted: bool,
@@ -2508,23 +2545,25 @@ impl Recovery<'_> {
         Ok(reading)
     }
 
-    /// Extend every rejected attempt over its own markup: a rejected
-    /// attempt ends where its grammar failed, but the call markup it began
-    /// runs on to the end literal of the alternative it opened (its wrapper
-    /// or section closer, any declared spelling, at nesting depth one:
-    /// another opener of the same alternative opens a level, unless the
-    /// alternative chains calls that each open with it), so its raw
-    /// text is the whole call and no closing markup is left as content.
-    /// The search reads the content after the attempt; a call or rejected
-    /// attempt inside the broken wrapper (a bare JSON object recovered from
-    /// it, an inner element's own failure) is kept and passed over, so the
-    /// rejection's span covers it, and the search stops at a reasoning
-    /// block, reported unparsed markup (whose bytes stay content under its
-    /// own report), or a call or attempt opening the same alternative again
-    /// (a sibling). Repeated closers right after the end literal are
-    /// absorbed as stray closers. Without an end literal before such a
-    /// boundary the attempt is not extended: it keeps the span its grammar
-    /// read, and everything after it stays content, since nothing shows it
+    /// Extend every rejected attempt over its own markup (see
+    /// [`RejectedCall::span`]): a rejected attempt ends where its grammar
+    /// stopped reading, but the call markup it began runs on to the end
+    /// literal of the alternative it opened (its wrapper or section closer,
+    /// any declared spelling, at nesting depth one: another opener of the
+    /// same alternative opens a level, unless the alternative chains calls
+    /// that each open with it), so its raw text is the whole call and no
+    /// closing markup is left as content. The search reads the content
+    /// after the attempt; a call or rejected attempt inside the broken
+    /// wrapper (a bare JSON object recovered from it, an inner element's
+    /// own failure) is kept and passed over, so the rejection's span covers
+    /// it, and the search stops at a reasoning block, reported unparsed
+    /// markup (whose bytes stay content under its own report), or a call or
+    /// attempt opening the same alternative again (a sibling). Repeated
+    /// closers right after the end literal are absorbed as stray closers.
+    /// Without an end literal before such a boundary the attempt ends at
+    /// the last literal ending a call of its dialect before the next
+    /// segment, or else where its grammar stopped reading (never inside a
+    /// literal); everything after it stays content, since nothing shows it
     /// is markup (a broken opener followed by the answer in prose).
     fn close_rejections(
         &self,
@@ -2560,14 +2599,28 @@ impl Recovery<'_> {
                     .max_by_key(|(length, _)| *length);
                 best.map_or_else(|| ends.iter().collect(), |(_, end)| vec![end])
             };
-            let openers: Vec<Vec<u8>> = opened.iter().flat_map(|end| end.openers.clone()).collect();
-            let closers: Vec<Vec<u8>> = opened.iter().flat_map(|end| end.closers.clone()).collect();
-            // A repeated opener nests a level, unless the alternative
-            // chains several calls that each open with it.
-            let nests = !opened.iter().any(|end| end.chained);
-            if closers.is_empty() {
-                continue;
-            }
+            let markup = Markup {
+                openers: opened.iter().flat_map(|end| end.openers.clone()).collect(),
+                closers: opened.iter().flat_map(|end| end.closers.clone()).collect(),
+                // A repeated opener nests a level, unless the alternative
+                // chains several calls that each open with it.
+                nests: !opened.iter().any(|end| end.chained),
+                // Every literal that ends a call of the dialect, in any
+                // alternative, a section's or a chained call's own; a
+                // single byte (a JSON bracket, a separator) is prose too.
+                call_closers: {
+                    let mut closers: Vec<Vec<u8>> = ends
+                        .iter()
+                        .flat_map(|end| end.call_closers.iter())
+                        .filter(|spelling| spelling.len() > 1)
+                        .cloned()
+                        .collect();
+                    closers.sort();
+                    closers.dedup();
+                    closers
+                },
+                literals: dialect.grammar().call_literals(),
+            };
             // The segments after the attempt, in order.
             let mut boundaries: Vec<(Range<usize>, bool)> = value
                 .calls
@@ -2592,7 +2645,7 @@ impl Recovery<'_> {
                 .filter(|(range, _)| range.start >= span.end && !range.is_empty())
                 .collect();
             boundaries.sort_by_key(|(range, _)| range.start);
-            let end = self.markup_end(&span, &openers, nests, &closers, &boundaries, governor)?;
+            let end = self.markup_end(&span, &markup, &boundaries, governor)?;
             if end <= span.end {
                 continue;
             }
@@ -2605,20 +2658,17 @@ impl Recovery<'_> {
         Ok(())
     }
 
-    /// Where the markup of a rejected attempt at `span`, of the alternative
-    /// with `openers` (nesting a level each when `nests`) and `closers`,
-    /// ends (see [`Self::close_rejections`]);
-    /// `boundaries` are the segments after it in order, each marked whether
-    /// the scan may pass over it.
+    /// Where the markup of a rejected attempt at `span` ends (see
+    /// [`Self::close_rejections`]); `boundaries` are the segments after it
+    /// in order, each marked whether the scan may pass over it.
     fn markup_end(
         &self,
         span: &Range<usize>,
-        openers: &[Vec<u8>],
-        nests: bool,
-        closers: &[Vec<u8>],
+        markup: &Markup<'_>,
         boundaries: &[(Range<usize>, bool)],
         governor: &mut Governor,
     ) -> Result<usize, StopReason> {
+        let (openers, closers, nests) = (&markup.openers, &markup.closers, markup.nests);
         let len = self.output.len();
         let at = |spellings: &[Vec<u8>], position: usize| {
             spellings
@@ -2696,11 +2746,8 @@ impl Recovery<'_> {
                 _ => break,
             }
         }
-        // Without its closer before the stop, the attempt keeps the span
-        // its grammar read: what follows is not shown to be its markup, so
-        // it stays content (prose after a broken opener is the answer).
         let Some(mut end) = found else {
-            return Ok(span.end);
+            return self.unclosed_end(span, markup, boundaries, governor);
         };
         // Repeated closers right after the end (whitespace between) are
         // the attempt's stray closers, as after a completed call.
@@ -2721,6 +2768,78 @@ impl Recovery<'_> {
                         end = probe;
                     }
                     _ => break,
+                }
+            }
+        }
+        Ok(end)
+    }
+
+    /// Where a rejected attempt at `span` without its alternative's closer
+    /// before the stop ends: at the end of the last literal that ends a
+    /// call of its dialect (a chained call's own closer, another
+    /// alternative's) before the next segment, when there is one, so no
+    /// closer of the attempt is left as content; otherwise where its
+    /// grammar stopped reading, never inside a literal it began. What
+    /// follows is not shown to be its markup and stays content (prose
+    /// after a broken opener is the answer).
+    fn unclosed_end(
+        &self,
+        span: &Range<usize>,
+        markup: &Markup<'_>,
+        boundaries: &[(Range<usize>, bool)],
+        governor: &mut Governor,
+    ) -> Result<usize, StopReason> {
+        let limit = boundaries
+            .iter()
+            .map(|(range, _)| range.start)
+            .find(|start| *start >= span.end)
+            .unwrap_or(self.output.len());
+        let base = self.complete_literal(span, markup.literals, limit, governor)?;
+        let mut last = None;
+        let mut position = base;
+        while position < limit {
+            governor.charge(Resource::Work, 1)?;
+            let length = markup
+                .call_closers
+                .iter()
+                .filter(|spelling| self.output[position..limit].starts_with(spelling))
+                .map(Vec::len)
+                .max();
+            if let Some(length) = length {
+                position += length;
+                last = Some(position);
+            } else {
+                position += 1;
+            }
+        }
+        Ok(last.unwrap_or(base))
+    }
+
+    /// `span`'s end, moved to the end of the longest literal spelling that
+    /// began inside the span and runs on past its end (within `limit`): the
+    /// grammar may stop reading inside a literal (a closer variant is a
+    /// prefix of the canonical spelling), and a rejected span never splits
+    /// one.
+    fn complete_literal(
+        &self,
+        span: &Range<usize>,
+        literals: &[Vec<u8>],
+        limit: usize,
+        governor: &mut Governor,
+    ) -> Result<usize, StopReason> {
+        let mut end = span.end;
+        for spelling in literals {
+            governor.charge(Resource::Work, size(spelling.len()))?;
+            for inside in 1..spelling.len() {
+                let Some(start) = span.end.checked_sub(inside) else {
+                    break;
+                };
+                if start < span.start {
+                    break;
+                }
+                let stop = start + spelling.len();
+                if stop <= limit && self.output[start..].starts_with(spelling) {
+                    end = end.max(stop);
                 }
             }
         }

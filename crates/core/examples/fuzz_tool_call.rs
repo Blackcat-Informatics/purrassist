@@ -44,12 +44,18 @@
 //!   the wire `verdict` and usable-call counts match;
 //! - (F4) a rejected attempt runs past where its grammar failed (the
 //!   furthest the recognizer read an attempt of its dialect at its opener)
-//!   only to a closer of its dialect, so prose after a broken opener stays
+//!   only to a literal that ends a call of its dialect, or to complete a
+//!   literal begun before it, so prose after a broken opener stays
 //!   content;
-//! - (S3) a rejected attempt keeps its own closing markup: when its raw
-//!   text does not end with a closer of the alternative it opened (one that
-//!   is not a bare bracket), the content after it up to the next segment
-//!   holds none;
+//! - (S3/F6) a rejected attempt keeps its own closing markup: when its
+//!   raw text does not end with a literal that ends a call of its dialect
+//!   (any alternative's, a chained call's own; not a single byte), the
+//!   content after it up to the next segment holds none;
+//! - (F7) a rejected span never ends inside a literal it began;
+//! - (F5) every embedded call is offered once, in span order;
+//! - (F8) a malformed attempt's `at` lies inside its span or at its end, or
+//!   past it only inside a literal the failing reading began and matched
+//!   in part (at most the longest literal spelling past the end);
 //! - every call, rejected-attempt, content, and reasoning range lies within
 //!   the output, never splits a well-formed UTF-8 character, and slices back
 //!   to the retained source (a rejected attempt's raw bytes are exactly its
@@ -80,7 +86,6 @@
 use core::ops::Range;
 use purrassist_core::contract::Usage;
 use purrassist_core::digest::Digest;
-use purrassist_core::grammar::CallEnd;
 use purrassist_core::tool_call::{
     AmbiguityPolicy, CallOutcome, DialectId, DialectSet, Effects, Finish, GenerationStop, IdPolicy,
     ObjectSpec, Param, Piece, PolicySelection, ReasoningPolicy, RecognizedTurn, Recognizer,
@@ -273,12 +278,29 @@ fn check_rejected(output: &[u8], calls: &ToolCalls) {
     }
 }
 
-/// S3: a rejected attempt keeps its own closing markup. For an attempt a
-/// parser made whose opened alternative ends with a distinctive closer
-/// (not a bare bracket, which prose also writes), when its raw text does
-/// not end with one of that alternative's closer spellings, the content
-/// after it, up to the next call, reasoning block or other attempt, holds
-/// none: the closer would have ended the attempt.
+/// Every literal that ends a call of `dialect`, in any alternative (a
+/// section's or wrapper's closer, a chained call's own `<|tool_call_end|>`,
+/// another alternative's `</function>`), longer than one byte: a single
+/// byte (a JSON bracket, a separator) is also prose.
+fn dialect_closers(dialect: &DialectId) -> Vec<Vec<u8>> {
+    let mut closers: Vec<Vec<u8>> = dialect
+        .grammar()
+        .call_ends()
+        .iter()
+        .flat_map(|end| end.call_closers.iter())
+        .filter(|closer| closer.len() > 1)
+        .cloned()
+        .collect();
+    closers.sort();
+    closers.dedup();
+    closers
+}
+
+/// S3/F6: a rejected attempt keeps its own closing markup. For an attempt
+/// a parser made, when its raw text does not end with a literal that ends
+/// a call of its dialect ([`dialect_closers`]), the content after it, up to
+/// the next call, reasoning block or other attempt, holds none: that
+/// closer belongs to the attempt.
 fn check_rejected_markup(output: &[u8], calls: &ToolCalls) {
     for rejected in &calls.rejected {
         if matches!(rejected.reason, Rejection::UnsupportedDialect { .. }) {
@@ -287,27 +309,7 @@ fn check_rejected_markup(output: &[u8], calls: &ToolCalls) {
         let Some(dialect) = &rejected.dialect else {
             continue;
         };
-        // The closers of the alternative the attempt opened (its longest
-        // opener spelling), or of every alternative when none matches: an
-        // inner element's closer (`</function>` inside a broken
-        // `<tool_call>`) does not end the attempt.
-        let ends = dialect.grammar().call_ends();
-        let opener = |end: &CallEnd| {
-            end.openers
-                .iter()
-                .filter(|spelling| rejected.raw.starts_with(spelling))
-                .map(Vec::len)
-                .max()
-        };
-        let longest = ends.iter().filter_map(opener).max();
-        let closers: Vec<&Vec<u8>> = ends
-            .iter()
-            .filter(|end| longest.is_none() || opener(end) == longest)
-            .flat_map(|end| &end.closers)
-            .collect();
-        if closers.is_empty() || closers.iter().any(|closer| closer.len() == 1) {
-            continue;
-        }
+        let closers = dialect_closers(dialect);
         if closers.iter().any(|closer| rejected.raw.ends_with(closer)) {
             continue;
         }
@@ -338,6 +340,67 @@ fn check_rejected_markup(output: &[u8], calls: &ToolCalls) {
                 );
             }
         }
+    }
+}
+
+/// F7: a rejected span never ends inside a literal it began: the content
+/// right after it never starts with the rest of a literal spelling of its
+/// dialect that begins inside the span.
+fn check_rejected_literals(output: &[u8], calls: &ToolCalls) {
+    for rejected in &calls.rejected {
+        if matches!(rejected.reason, Rejection::UnsupportedDialect { .. }) {
+            continue;
+        }
+        let Some(dialect) = &rejected.dialect else {
+            continue;
+        };
+        let end = rejected.span.end;
+        if !calls.content.iter().any(|range| range.start == end) {
+            continue;
+        }
+        for spelling in dialect.grammar().call_literals() {
+            for inside in 1..spelling.len() {
+                let Some(start) = end.checked_sub(inside) else {
+                    break;
+                };
+                if start < rejected.span.start {
+                    break;
+                }
+                assert!(
+                    !output[start..].starts_with(spelling),
+                    "rejected attempt {:?} ends inside the literal {:?}",
+                    rejected.span,
+                    String::from_utf8_lossy(spelling)
+                );
+            }
+        }
+    }
+}
+
+/// F8: a malformed attempt's `at` (the first byte no reading could
+/// consume) lies inside its span or at its end, or past its end only
+/// inside a literal the failing reading began at or before that end and
+/// matched only in part (the span leaves it out: it may be prose or begin
+/// the next opener). Such a reading consumed less than the literal (one
+/// stray byte deleted at most), so `at` is at most the longest literal
+/// spelling past the span's end.
+fn check_rejected_at(calls: &ToolCalls) {
+    for rejected in &calls.rejected {
+        let (Rejection::Malformed { at }, Some(dialect)) = (rejected.reason, &rejected.dialect)
+        else {
+            continue;
+        };
+        let end = rejected.span.end;
+        let longest = dialect
+            .grammar()
+            .call_literals()
+            .first()
+            .map_or(0, Vec::len);
+        assert!(
+            at >= rejected.span.start && at <= end + longest,
+            "rejected attempt {:?} fails at {at}, beyond a literal past its end",
+            rejected.span
+        );
     }
 }
 
@@ -383,7 +446,21 @@ fn check_calls(output: &[u8], calls: &ToolCalls) {
     }
     check_verdict(calls);
     check_rejected(output, calls);
+    // F5: every embedded call is offered once, in span order.
+    assert!(
+        calls.embedded.windows(2).all(|pair| {
+            (pair[0].span.start, pair[0].span.end) < (pair[1].span.start, pair[1].span.end)
+        }),
+        "embedded calls repeat a span or are out of order: {:?}",
+        calls
+            .embedded
+            .iter()
+            .map(|call| call.span.clone())
+            .collect::<Vec<_>>()
+    );
     check_rejected_markup(output, calls);
+    check_rejected_literals(output, calls);
+    check_rejected_at(calls);
     for range in &calls.content {
         check_range(output, range, "content");
     }
@@ -693,9 +770,10 @@ fn read_spans(
 /// F4: recovery never moves bytes that are not shown to be call markup
 /// from content into a rejected attempt. A parser's rejected attempt may
 /// run past where its grammar failed (the furthest the recognizer read an
-/// attempt of its dialect at its opener) only to a closer of its dialect:
-/// its raw text then ends with one. Otherwise the bytes after the failure
-/// point are not the attempt's and stay content.
+/// attempt of its dialect at its opener) only to a literal that ends a
+/// call of its dialect (its raw text then ends with one), or to complete a
+/// literal spelling that began before that point. Otherwise the bytes
+/// after the failure point are not the attempt's and stay content.
 fn check_rejected_extension(output: &[u8], calls: &ToolCalls, read: &[(Range<usize>, DialectId)]) {
     for rejected in &calls.rejected {
         if matches!(rejected.reason, Rejection::UnsupportedDialect { .. }) {
@@ -712,20 +790,27 @@ fn check_rejected_extension(output: &[u8], calls: &ToolCalls, read: &[(Range<usi
         else {
             continue;
         };
-        if rejected.span.end <= failed {
+        let end = rejected.span.end;
+        if end <= failed {
             continue;
         }
-        let closed = dialect
-            .grammar()
+        let grammar = dialect.grammar();
+        let closed = grammar
             .call_ends()
             .iter()
-            .flat_map(|end| &end.closers)
+            .flat_map(|ends| &ends.call_closers)
             .any(|closer| rejected.raw.ends_with(closer));
+        let completed = grammar.call_literals().iter().any(|spelling| {
+            end >= spelling.len()
+                && end - spelling.len() < failed
+                && end - spelling.len() >= rejected.span.start
+                && output[end - spelling.len()..end] == spelling[..]
+        });
         assert!(
-            closed,
+            closed || completed,
             "rejected attempt {:?} runs past where it failed ({failed}) without its closer: {:?}",
             rejected.span,
-            String::from_utf8_lossy(&output[failed..rejected.span.end])
+            String::from_utf8_lossy(&output[failed..end])
         );
     }
 }

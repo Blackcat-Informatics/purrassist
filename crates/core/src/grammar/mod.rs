@@ -642,6 +642,11 @@ pub struct CallEnd {
     pub openers: Vec<Vec<u8>>,
     /// The spellings of the literals that can end it.
     pub closers: Vec<Vec<u8>>,
+    /// The spellings of the literals that can end one call of it: the
+    /// literals that can end it, and those after which the next call of an
+    /// attempt reading several calls begins (Kimi-K2's
+    /// `<|tool_call_end|>` inside a section). A superset of `closers`.
+    pub call_closers: Vec<Vec<u8>>,
     /// Whether its opener literal recurs inside one call (an attempt that
     /// reads several calls chained with no separator, each opening with
     /// it, as Kimi-K2's `<|tool_call_begin|>` elements): a repeated opener
@@ -677,6 +682,8 @@ pub struct CompiledGrammar {
     pub(crate) explicit_reasoning: Vec<bool>,
     /// See [`Self::call_ends`].
     pub(crate) call_ends: Vec<CallEnd>,
+    /// See [`Self::call_literals`].
+    pub(crate) call_literals: Vec<Vec<u8>>,
     pub(crate) programs: [Program; 2],
     pub(crate) stray: automaton::Trie,
     pub(crate) longest: usize,
@@ -1047,14 +1054,33 @@ impl CompiledGrammar {
     /// assert!(ends[0].openers.contains(&b"<tool_call>".to_vec()));
     /// assert!(ends[0].closers.contains(&b"</tool_call>".to_vec()));
     /// assert!(!ends[0].chained);
+    /// assert!(ends[0].call_closers.contains(&b"</tool_call>".to_vec()));
     /// // A section-less Kimi-K2 attempt chains its calls.
     /// let kimi = DialectId::KimiK2.grammar().call_ends();
     /// let bare = kimi.iter().find(|end| end.openers.contains(&b"<|tool_call_begin|>".to_vec())).unwrap();
     /// assert!(bare.chained);
+    /// // Each chained call ends at its own closer.
+    /// assert!(bare.call_closers.contains(&b"<|tool_call_end|>".to_vec()));
     /// ```
     #[must_use]
     pub fn call_ends(&self) -> &[CallEnd] {
         &self.call_ends
+    }
+
+    /// Every spelling (canonical, declared closer variant, confusable) of
+    /// every literal the `call` production matches, longest first. A
+    /// rejected attempt's span never ends inside one of them that began
+    /// in the span.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::DialectId;
+    /// let literals = DialectId::Qwen3CoderXml.grammar().call_literals();
+    /// assert!(literals.contains(&b"</function>".to_vec()));
+    /// assert!(literals.windows(2).all(|pair| pair[0].len() >= pair[1].len()));
+    /// ```
+    #[must_use]
+    pub fn call_literals(&self) -> &[Vec<u8>] {
+        &self.call_literals
     }
 
     /// How many byte offsets of `output` begin a spelling of one of the

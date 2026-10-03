@@ -122,41 +122,68 @@ is reported as certain.
   `tool_call_roundtrip::mutating_guess_never_emitted`, and
   `tool_call_goldens::no_mutating_guess_resolved_over_goldens`.
 - **A rejected attempt keeps its whole call markup, and only markup.** A
-  parser's rejected attempt runs from its opener to the end literal of the
-  `call` alternative it opened (the wrapper or section closer in any
-  declared or confusable spelling, at nesting depth one: another opener of
-  that alternative opens a level, unless the alternative chains several
-  calls that each open with it, as a section-less Kimi-K2 attempt does; a
-  JSON object or array call nests by its brackets outside strings) when
-  that closer comes before the next call
-  opening the same alternative, a reasoning block, or reported unparsed
-  markup, plus any repeated closers right after it. Its `span` and `raw`
-  are then that whole markup and content excludes it, so no wrapper token
-  is left as assistant text. A call or attempt inside the broken wrapper (a
-  bare JSON object read from its body, an inner element's own failure) is
-  kept, and the wrapper's rejected span covers it. Without such a closer
-  the attempt is not extended: its span is what its grammar read, from the
-  opener to where it failed, and everything after it stays content
+  parser's rejected attempt (`RejectedCall::span`, `raw`) is decided in
+  three steps:
+  1. *Where its grammar stopped reading*: the end of the last token it read
+     whole, which is where the furthest token it could not read begins. A
+     literal it matched only in part is left out (it may be prose or begin
+     the next opener), so `reason.at` (the first byte no reading could
+     consume) lies inside the span, at its end, or past it only inside
+     such a partial literal (read up to `at`, perhaps through one repaired
+     byte): `<function=f<oops` is rejected over `<function=f` (`0..11`)
+     with `at` 12, past the `<` that began a literal.
+  2. *Never inside a literal*: when the bytes there complete a literal
+     spelling of the dialect that began inside the span (the grammar read a
+     closer variant that is a prefix of `</function>`), the span runs to
+     its end: `pre <function=f><function=f>…</function> post` keeps
+     `</function>` whole and leaves ` post` as content.
+  3. *To its closer*: it runs on to the end literal of the `call`
+     alternative it opened (the wrapper or section closer in any declared
+     or confusable spelling, at nesting depth one: another opener of that
+     alternative opens a level, unless the alternative chains several calls
+     that each open with it, as a section-less Kimi-K2 attempt does; a JSON
+     object or array call nests by its brackets outside strings) when that
+     closer comes before the next call opening the same alternative, a
+     reasoning block, or reported unparsed markup, plus any repeated
+     closers right after it. A call or attempt inside the broken wrapper (a
+     bare JSON object read from its body, an inner element's own failure)
+     is kept, and the wrapper's rejected span covers it. Without that
+     closer it runs to the end of the last literal before the next segment
+     that ends a call of its dialect: a chained call's own closer
+     (Kimi-K2's `<|tool_call_end|>`, DeepSeek's `<｜tool▁call▁end｜>`) or
+     another alternative's (`</function>` after a broken `<tool_call>`).
+
+  Otherwise the span ends at step 2 and everything after it stays content
   (`Sure, I could call <function=f but actually no tool is needed. The
   answer is 42.` keeps `<function=f` as the attempt and the answer as
-  content). Unparsed markup (`unsupported_dialect`) is not extended: its
-  bytes stay content. The end literals are derived per grammar when it is
-  compiled (`CompiledGrammar::call_ends`). *Proved by* the negative corpus
-  (`tool_call_negative`, wrapped and unwrapped, each asserting that content
-  holds no call markup, and
+  content), so no call token is left as assistant text and no prose is
+  taken. Unparsed markup (`unsupported_dialect`) is not extended: its bytes
+  stay content. The literals are derived per grammar when it is compiled
+  (`CompiledGrammar::call_ends`, with each alternative's `closers` and
+  `call_closers`, and `CompiledGrammar::call_literals`). *Proved by* the
+  negative corpus (`tool_call_negative`, wrapped and unwrapped, each
+  asserting that content holds no call markup, and
   `tool_call_negative::stray_closers_after_rejected_attempt`),
   `tool_call_recover::rejected_wrapper_covers_the_call_recovered_inside_it`,
   `tool_call_recover::rejected_span_never_splits_a_character_a_class_cannot_consume`
   (with and without the closing brace), the goldens (which record each
-  reading's content beside its rejected spans), among them
-  `rejected_opener_then_prose_stays_content`,
+  reading's content beside its rejected spans, every one also under the
+  default allow-list), among them `rejected_opener_then_prose_stays_content`,
   `rejected_opener_then_prose_then_call`,
   `rejected_attempt_with_closer_covers_its_markup`,
-  `rejected_attempt_stray_closers_absorbed` and
-  `kimi_chained_rejected_attempt_runs_to_section_closer`, and two `fuzz-tool-call`
-  invariants: content after a rejected attempt holds no closer of its
-  dialect, and an attempt runs past where its grammar failed only to such
-  a closer.
+  `rejected_attempt_stray_closers_absorbed`,
+  `kimi_chained_rejected_attempt_runs_to_section_closer`,
+  `kimi_call_closer_ends_rejected_attempt`,
+  `deepseek31_call_closer_ends_rejected_attempt`,
+  `deepseek3_call_closer_ends_rejected_attempt`,
+  `kimi_sectionless_rejected_call_before_sibling` and
+  `rejected_span_completes_literal_bare`, `_newlines` and `_wrapped`, and
+  four `fuzz-tool-call` invariants: content after a rejected attempt that
+  does not end with a literal ending a call of its dialect holds none; an
+  attempt runs past where its grammar failed only to such a literal or to
+  complete a literal it began; a rejected span never ends inside a literal
+  it began; and `at` lies inside the span, at its end, or past it by at
+  most the longest literal spelling (inside a partial literal).
 - **Call markup is never silent content.** Call markup that no dialect of
   the allow-list reads (a family not built in yet: Pythonic call lists,
   Gemma 3 `` ```tool_code `` blocks, GLM-4.5 `<arg_key>` calls, and the
@@ -455,12 +482,15 @@ swallowed. Without a closer, the block is closed at the first call opener
 one, the calls inside are offered as `embedded` alternatives
 (`tool_call.reasoning.embedded-call`), including those an attempt reading
 several calls (Mistral v11 `[TOOL_CALLS]` elements) read inside the block
-before running on past its closer. *Proved by*
+before running on past its closer; a call two attempts read is offered
+once, and the embedded calls are in span order. *Proved by*
 `tool_call_goldens::reasoning_never_swallows_calls` (Hermes, Mistral v3,
 Llama 3, bare JSON, Qwen3-Coder XML and Anthropic calls, unclosed and
 closed, under the default allow-list, plus the `separate` and `as_content`
 modes),
 `tool_call_recover::calls_an_attempt_reads_inside_a_closed_block_stay_embedded`,
+the `embedded_calls_once_in_span_order` and
+`embedded_calls_once_with_arguments` goldens,
 and the tool-call fuzz probe's reasoning invariant (a call the turn
 recovers with reasoning as content never vanishes under a reasoning mode).
 
