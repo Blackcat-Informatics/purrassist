@@ -86,7 +86,7 @@ use crate::contract::{
 use crate::digest::{Digest, DigestBuilder};
 use crate::grammar::cost::{K_CAPTURE, K_EVENT, K_LEX, QUEUED_REPORT, REASONING_UNCLOSED, REJECT};
 use crate::grammar::edit::{EditOperator, MarkupEdit};
-use crate::grammar::engine::{Engine, Event, Salvaged};
+use crate::grammar::engine::{Engine, Event, Part, Salvaged};
 use crate::provenance::{Derivation, Forest, NodeId, permute};
 use core::fmt;
 use core::fmt::Write as _;
@@ -276,7 +276,9 @@ struct Turn {
     store: Vec<Segment>,
     top: Option<Top>,
     think: Option<Think>,
-    interps: BTreeMap<u64, Vec<Interp>>,
+    /// Each attempt with an interpretation, until its end is reported:
+    /// where it began, and its interpretations.
+    interps: BTreeMap<u64, (usize, Vec<Interp>)>,
     /// The base of the last opener start that ended a content run.
     last_kill: Option<(usize, Base)>,
     /// Every stored reasoning segment: its end and store index, by its
@@ -556,6 +558,21 @@ impl Turn {
 /// marker's bytes are not arguments (the reading's arguments are then
 /// unresolved at the marker), so a call whose arguments came from the
 /// marker is never usable.
+/// The turn-level segment of one part of a completed attempt of `dialect`.
+fn part_segment(kind: ProductionKind, dialect: &DialectId, part: Part) -> Segment {
+    match part {
+        Part::Call(segment) => match kind {
+            ProductionKind::Call => Segment::Call(segment),
+            ProductionKind::Result => Segment::Result(segment),
+        },
+        Part::Rejected { span, reason } => Segment::Rejected {
+            span,
+            dialect: dialect.clone(),
+            reason,
+        },
+    }
+}
+
 /// An attempt that ended, as the engine reported it at `at`.
 #[derive(Clone, Copy)]
 struct Ended {
@@ -565,6 +582,7 @@ struct Ended {
     at: usize,
     completed: bool,
     reason: super::Rejection,
+    outread: bool,
 }
 
 fn cut_at_marker(segment: &CallSegment, marker: Option<usize>) -> Option<CallSegment> {
@@ -985,15 +1003,10 @@ impl<'s> Recognizer<'s> {
                     ..
                 }) => {
                     let kind = self.engine.kind(table);
+                    let dialect = self.engine.dialect(table).clone();
                     let parts = parts
                         .into_iter()
-                        .map(|(segment, cost)| {
-                            let segment = match kind {
-                                ProductionKind::Call => Segment::Call(segment),
-                                ProductionKind::Result => Segment::Result(segment),
-                            };
-                            (segment, cost)
-                        })
+                        .map(|(part, cost)| (part_segment(kind, &dialect, part), cost))
                         .collect();
                     self.completed(&mut frame, attempt, parts, charged, governor)?;
                 }
@@ -1004,6 +1017,7 @@ impl<'s> Recognizer<'s> {
                     completed,
                     reason,
                     salvage,
+                    outread,
                     ..
                 }) => {
                     let ended = Ended {
@@ -1013,6 +1027,7 @@ impl<'s> Recognizer<'s> {
                         at,
                         completed,
                         reason,
+                        outread,
                     };
                     self.ended(&mut frame, ended, salvage, governor)?;
                 }
@@ -1086,7 +1101,7 @@ impl<'s> Recognizer<'s> {
             // reading it.
             self.engine.abandon(attempt, governor)?;
         } else {
-            self.turn.interps.insert(attempt, interps);
+            self.turn.interps.insert(attempt, (start, interps));
         }
         Ok(())
     }
@@ -1173,7 +1188,7 @@ impl<'s> Recognizer<'s> {
         charged: u64,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let Some(interps) = self.turn.interps.get(&attempt).cloned() else {
+        let Some((_, interps)) = self.turn.interps.get(&attempt).cloned() else {
             // An attempt with no interpretation (it began inside another
             // attempt's committed span): its parts are dropped unread.
             drop(parts);
@@ -1223,7 +1238,7 @@ impl<'s> Recognizer<'s> {
         salvage: Option<Salvaged>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let Some(interps) = self.turn.interps.remove(&ended.attempt) else {
+        let Some((_, interps)) = self.turn.interps.remove(&ended.attempt) else {
             if let Some(salvage) = salvage {
                 governor.release_scratch(salvage.charged)?;
             }
@@ -1232,6 +1247,15 @@ impl<'s> Recognizer<'s> {
         if ended.completed {
             return Ok(());
         }
+        // Body evidence: another dialect's attempt that began at the same
+        // opener read past where this one failed and read a whole call (see
+        // `Engine::defer`), so the bytes after the opener are that dialect's
+        // markup. This rejection is recorded (it names the dialect among the
+        // opener's candidates) but is not a reading of the opener: a reading
+        // that rejected the opener here and read the bytes after it as other
+        // calls would rest on strictly less grammar evidence than the
+        // attempt that read further.
+        let outread = ended.outread;
         let dialect = self.engine.dialect(ended.table).clone();
         if let Some(salvage) = salvage {
             let kind = self.engine.kind(ended.table);
@@ -1252,6 +1276,9 @@ impl<'s> Recognizer<'s> {
             reason: ended.reason,
         };
         let index = self.turn.store(segment, governor)?;
+        if outread {
+            return Ok(());
+        }
         for interp in interps {
             if let Interp::Top(base) = interp {
                 frame
@@ -1294,12 +1321,9 @@ impl<'s> Recognizer<'s> {
         };
         for parts in salvage.segmentations {
             let mut stored = Vec::with_capacity(parts.len());
-            for (segment, cost) in parts {
-                let end = segment.span.end;
-                let segment = match kind {
-                    ProductionKind::Call => Segment::Call(segment),
-                    ProductionKind::Result => Segment::Result(segment),
-                };
+            for (part, cost) in parts {
+                let segment = part_segment(kind, dialect, part);
+                let end = segment.span().end;
                 stored.push((self.turn.store(segment, governor)?, cost, end));
             }
             for interp in interps {
@@ -1421,8 +1445,21 @@ impl<'s> Recognizer<'s> {
     ///
     /// See [`Recognizer`] for an example.
     pub fn finish(
+        self,
+        stop: GenerationStop,
+        governor: &mut Governor,
+    ) -> Result<RecognizedTurn, StopReason> {
+        self.finish_over(stop, None, governor)
+    }
+
+    /// [`Self::finish`], given the whole `output` when the caller holds it:
+    /// a rejected attempt's markup then extends as far as recovery reads it
+    /// (`RejectedCall::span`) when fences inside it are kept out of the
+    /// prose context; without it, the span its grammar read is used.
+    pub(crate) fn finish_over(
         mut self,
         stop: GenerationStop,
+        output: Option<&[u8]>,
         governor: &mut Governor,
     ) -> Result<RecognizedTurn, StopReason> {
         if let Some(reason) = self.failed.take() {
@@ -1458,6 +1495,7 @@ impl<'s> Recognizer<'s> {
             source,
             context: &self.context,
             len: end,
+            output,
         };
         let pieces = builder.pieces(last, governor)?;
         let Builder { forest, .. } = builder;
@@ -1498,6 +1536,8 @@ struct Builder<'t> {
     source: Digest,
     context: &'t ContextTracker,
     len: usize,
+    /// The whole output, when the caller holds it.
+    output: Option<&'t [u8]>,
 }
 
 impl Builder<'_> {
@@ -1627,18 +1667,64 @@ impl Builder<'_> {
         pieces: &mut [Piece],
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let mut excluded = Vec::new();
+        // The selected reading's segments, in order.
+        let mut reading: Vec<&Segment> = Vec::new();
         for piece in pieces.iter() {
-            let segments: &[Segment] = match piece {
-                Piece::Segment(segment) => core::slice::from_ref(segment),
-                Piece::Choice(choice) => &choice.readings[0],
-            };
-            for segment in segments {
-                if let Segment::Call(call) | Segment::Result(call) = segment {
-                    excluded.push(call.span.clone());
-                }
+            match piece {
+                Piece::Segment(segment) => reading.push(segment),
+                Piece::Choice(choice) => reading.extend(&choice.readings[0]),
             }
         }
+        let mut excluded = Vec::new();
+        for (index, segment) in reading.iter().enumerate() {
+            match segment {
+                Segment::Call(call) | Segment::Result(call) => excluded.push(call.span.clone()),
+                // A rejected attempt's bytes are call markup, not prose: a
+                // fence inside it opens no fenced block. With the whole
+                // output, its markup extends as recovery reads it.
+                Segment::Rejected { span, dialect, .. } => {
+                    let end = match self.output {
+                        Some(output) => {
+                            let boundaries: Vec<(Range<usize>, bool)> = reading[index + 1..]
+                                .iter()
+                                .filter_map(|later| match later {
+                                    Segment::Call(call) | Segment::Result(call) => {
+                                        Some((call.span.clone(), true))
+                                    }
+                                    Segment::Rejected { span, .. } => Some((span.clone(), true)),
+                                    Segment::Reasoning(reasoning) => {
+                                        Some((reasoning.span.clone(), false))
+                                    }
+                                    Segment::Content(_) => None,
+                                })
+                                .filter(|(range, _)| range.start >= span.end && !range.is_empty())
+                                .collect();
+                            super::recover::rejected_end(
+                                output,
+                                span,
+                                dialect,
+                                &boundaries,
+                                governor,
+                            )?
+                        }
+                        None => span.end,
+                    };
+                    excluded.push(span.start..end.max(span.end));
+                }
+                Segment::Content(_) | Segment::Reasoning(_) => {}
+            }
+        }
+        // A rejected attempt's markup may cover calls inside it: one range
+        // per covered stretch, sorted by start.
+        excluded.sort_by_key(|range| range.start);
+        let mut merged: Vec<Range<usize>> = Vec::with_capacity(excluded.len());
+        for range in excluded {
+            match merged.last_mut() {
+                Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+                _ => merged.push(range),
+            }
+        }
+        let excluded = merged;
         let mut calls: Vec<&mut CallSegment> = Vec::new();
         for piece in pieces.iter_mut() {
             match piece {

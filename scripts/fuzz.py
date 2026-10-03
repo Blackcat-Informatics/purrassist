@@ -632,6 +632,23 @@ TOOL_CALL_REGRESSIONS = [
     'Hi <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{"path":"a"}<｜tool▁callz▁end｜><｜tool▁calls▁end｜> The answer.'.encode().join([b'\x00\x52', b'']),
     # T2: a reasoning marker is never read as a call's arguments.
     b'\x10\x52[TOOL_CALLS]read_file[TOOL_CALLS]current_time[/THINK]Answer.',
+    # T3: a resynchronizing Mistral v3 list (the v11 rejection at the shared
+    # opener outread), written [ARGS] never inserted, an unreadable JSON
+    # value rejected to its balancing bracket, fences inside rejected markup.
+    b'\x00\x52Hi [TOOL_CALLS] [{"name": "read_file", "arguments": {"path": "a"}}, {"name": "read_file" oops, "arguments": {"path": "b"}}, {"name": "read_file", "arguments": {"path": "c"}}] done',
+    b'\x00\x52Hi [TOOL_CALLS]read_file[ARGS]{"path":"a",} The answer.',
+    b'\x00\x52Hi [TOOL_CALLS]read_file[ARGS]{"path": ::: } The answer.',
+    b'\x00\x52<tool_call>{"name": "read_file", "arguments": {"path": "a"}}</tool_call>\n<tool_call>\n```json\n{"name": "read_file" oops "arguments": {"path": "b"}}\n```\n</tool_call>\n<tool_call>{"name": "read_file", "arguments": {"path": "c"}}</tool_call>',
+    b'\x00\x52<tool_call>{"name": "read_file", "arguments": {"path": "a"}}</tool_call>\n<tool_call>\n```json\n{"name": "read_file" oops "arguments": {"path": "b"}}\n</tool_call>\n<tool_call>{"name": "read_file", "arguments": {"path": "c"}}</tool_call>',
+    # Mistral v11 [CALL_ID] written where [ARGS] could be read as omitted.
+    b'\x00\x52[TOOL_CALLS]read_file[CALL_ID]call_1[ARGS]{"path":{"a":',
+    # An OpenAI object whose name string is cut: its rejection runs to the
+    # bracket balancing the value it opened (the F4 oracle admits it).
+    b'\x05\x91[\n  {\n    "id": "call_a1",\n    "type": "function",\n    "function": {\n      "name": "write_fi  "arguments": "{\\"path\\": \\"src\\"}"\n    }\n  }\n]',
+    # A Hermes attempt stops inside the key literal `"id"` with Harmony
+    # markup after it: the attempt owns the literal before unparsed markup
+    # is scanned, so the report never starts inside it.
+    b'\x00R<tool_call>{"id":"call_305c487f",\t"name":\t\t"delete_pa"id":th"\t\t,"arguments"\t:"{\\"path\\":[\\"beta gamma \\\\n  block\\\\n\\",\\"\\\\n  block\\\\n\\"]}"}\t< to=functions./tool_call>\n<tool_call>{\t\t"type":"function"\t,\t\t"id":\t"call_07be3ff1","name"\t:\t"read_file"\t\t,\t\t"arguments":"{\\"path\\":\\"\\\\n  block\\\\n alpha\\",\\"limit\\":-209}"\t\t}\t\t</tool_call>',
     # An attempt reading several calls begins inside a starts_open block
     # and ends after its closer: the calls it read inside stay embedded.
     b'\x5b\x9c[TOOL_CALLS]t[TOOL_CALLS]S[/THINK][TOOL_CALLS]g',

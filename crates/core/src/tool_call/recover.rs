@@ -1170,7 +1170,9 @@ pub struct RejectedCall {
     ///    covers it. Without that closer, it runs to the end of the last
     ///    literal before the next segment that ends a call of its dialect
     ///    (a chained call's own `<|tool_call_end|>`, another alternative's
-    ///    `</function>`), when there is one.
+    ///    `</function>`), when there is one; else, when it left a JSON value
+    ///    open (more brackets opened than closed, outside strings), to the
+    ///    bracket that balances it.
     ///
     /// Otherwise the span ends at step 2 and the bytes after it stay
     /// content (prose after a broken opener is the answer). Content never
@@ -1596,6 +1598,312 @@ fn typed_schema(explanation: &str) -> Option<&str> {
 }
 
 /// The nesting state of a rejected attempt's markup scan.
+/// The bytes a rejected attempt's markup is read over.
+struct MarkupScan<'o> {
+    output: &'o [u8],
+}
+
+/// Where the markup of `dialect`'s rejected attempt at `span` over `output`
+/// ends (see [`Recovery::close_rejections`]): `boundaries` are the segments
+/// after it, in order, each marked whether the scan may pass over it (a call
+/// or attempt inside the broken wrapper) or stops at it (a reasoning block,
+/// reported unparsed markup). The recognizer reads the same end to keep
+/// fences inside rejected markup out of the prose context.
+pub(super) fn rejected_end(
+    output: &[u8],
+    span: &Range<usize>,
+    dialect: &DialectId,
+    boundaries: &[(Range<usize>, bool)],
+    governor: &mut Governor,
+) -> Result<usize, StopReason> {
+    let ends = dialect.grammar().call_ends();
+    let at = |spellings: &[Vec<u8>], position: usize| {
+        spellings
+            .iter()
+            .filter(|spelling| output[position..].starts_with(spelling))
+            .map(Vec::len)
+            .max()
+    };
+    // The alternative the attempt opened (its longest opener spelling), or
+    // every alternative when no spelling matches.
+    let opened: Vec<&CallEnd> = {
+        let best = ends
+            .iter()
+            .filter_map(|end| at(&end.openers, span.start).map(|length| (length, end)))
+            .max_by_key(|(length, _)| *length);
+        best.map_or_else(|| ends.iter().collect(), |(_, end)| vec![end])
+    };
+    let markup = Markup {
+        openers: opened.iter().flat_map(|end| end.openers.clone()).collect(),
+        closers: opened.iter().flat_map(|end| end.closers.clone()).collect(),
+        // A repeated opener nests a level, unless the alternative chains
+        // several calls that each open with it.
+        nests: !opened.iter().any(|end| end.chained),
+        // Every literal that ends a call of the dialect, in any alternative,
+        // a section's or a chained call's own; a single byte (a JSON
+        // bracket, a separator) is prose too.
+        call_closers: {
+            let mut closers: Vec<Vec<u8>> = ends
+                .iter()
+                .flat_map(|end| end.call_closers.iter())
+                .filter(|spelling| spelling.len() > 1)
+                .cloned()
+                .collect();
+            closers.sort();
+            closers.dedup();
+            closers
+        },
+        literals: dialect.grammar().call_literals(),
+    };
+    MarkupScan { output }.markup_end(span, &markup, boundaries, governor)
+}
+
+impl MarkupScan<'_> {
+    /// Where the markup of a rejected attempt at `span` ends (see
+    /// [`Recovery::close_rejections`]); `boundaries` are the segments after it
+    /// in order, each marked whether the scan may pass over it.
+    fn markup_end(
+        &self,
+        span: &Range<usize>,
+        markup: &Markup<'_>,
+        boundaries: &[(Range<usize>, bool)],
+        governor: &mut Governor,
+    ) -> Result<usize, StopReason> {
+        let (openers, closers, nests) = (&markup.openers, &markup.closers, markup.nests);
+        let len = self.output.len();
+        let at = |spellings: &[Vec<u8>], position: usize| {
+            spellings
+                .iter()
+                .filter(|spelling| self.output[position..].starts_with(spelling))
+                .map(Vec::len)
+                .max()
+        };
+        // An alternative whose end literal is a bracket (a JSON object
+        // or array call) nests by that bracket, outside JSON strings;
+        // any other nests by its opener spellings. The scan starts at
+        // the attempt's own start, so the depth at its failure is known.
+        let brackets: Vec<(u8, u8)> = [(b'{', b'}'), (b'[', b']')]
+            .into_iter()
+            .filter(|(_, close)| closers.iter().any(|spelling| spelling == &[*close]))
+            .collect();
+        let mut state = Nesting {
+            depth: 0,
+            quoted: false,
+            escaped: false,
+        };
+        let mut position = span.start;
+        let mut next = boundaries.iter();
+        let mut found = None;
+        'scan: loop {
+            let (limit, boundary) = match next.next() {
+                Some((range, call)) => (range.start, Some((range, *call))),
+                None => (len, None),
+            };
+            while position < limit {
+                governor.charge(Resource::Work, 1)?;
+                let byte = self.output[position];
+                if !brackets.is_empty() {
+                    position += 1;
+                    if state.quoted {
+                        match byte {
+                            _ if state.escaped => state.escaped = false,
+                            b'\\' => state.escaped = true,
+                            b'"' => state.quoted = false,
+                            _ => {}
+                        }
+                    } else if byte == b'"' {
+                        state.quoted = true;
+                    } else if brackets.iter().any(|(open, _)| *open == byte) {
+                        state.depth += 1;
+                    } else if brackets.iter().any(|(_, close)| *close == byte) {
+                        state.depth = state.depth.saturating_sub(1);
+                        if state.depth == 0 && position > span.end {
+                            found = Some(position);
+                            break 'scan;
+                        }
+                    }
+                } else if let Some(length) = at(closers, position) {
+                    state.depth = state.depth.saturating_sub(1);
+                    position += length;
+                    if state.depth == 0 && position > span.end {
+                        found = Some(position.min(limit));
+                        break 'scan;
+                    }
+                } else if let Some(length) = at(openers, position) {
+                    if nests || state.depth == 0 {
+                        state.depth += 1;
+                    }
+                    position += length;
+                } else {
+                    position += 1;
+                }
+            }
+            match boundary {
+                // A call or attempt inside the broken wrapper that does
+                // not reopen its alternative.
+                Some((range, true)) if at(openers, range.start).is_none() => {
+                    position = range.end;
+                }
+                _ => break,
+            }
+        }
+        let Some(mut end) = found else {
+            return self.unclosed_end(span, markup, boundaries, governor);
+        };
+        // Repeated closers right after the end (whitespace between) are
+        // the attempt's stray closers, as after a completed call.
+        if brackets.is_empty() {
+            let limit = boundaries
+                .iter()
+                .map(|(range, _)| range.start)
+                .find(|start| *start >= end)
+                .unwrap_or(len);
+            let mut probe = end;
+            loop {
+                while probe < limit && self.output[probe].is_ascii_whitespace() {
+                    probe += 1;
+                }
+                match at(closers, probe) {
+                    Some(length) if probe + length <= limit => {
+                        probe += length;
+                        end = probe;
+                    }
+                    _ => break,
+                }
+            }
+        }
+        Ok(end)
+    }
+
+    /// Where a rejected attempt at `span` without its alternative's closer
+    /// before the stop ends: at the end of the last literal that ends a
+    /// call of its dialect (a chained call's own closer, another
+    /// alternative's) before the next segment, when there is one, so no
+    /// closer of the attempt is left as content; otherwise where its
+    /// grammar stopped reading, never inside a literal it began. What
+    /// follows is not shown to be its markup and stays content (prose
+    /// after a broken opener is the answer).
+    fn unclosed_end(
+        &self,
+        span: &Range<usize>,
+        markup: &Markup<'_>,
+        boundaries: &[(Range<usize>, bool)],
+        governor: &mut Governor,
+    ) -> Result<usize, StopReason> {
+        let limit = boundaries
+            .iter()
+            .map(|(range, _)| range.start)
+            .find(|start| *start >= span.end)
+            .unwrap_or(self.output.len());
+        let base = self.complete_literal(span, markup.literals, limit, governor)?;
+        let mut last = None;
+        let mut position = base;
+        while position < limit {
+            governor.charge(Resource::Work, 1)?;
+            let length = markup
+                .call_closers
+                .iter()
+                .filter(|spelling| self.output[position..limit].starts_with(spelling))
+                .map(Vec::len)
+                .max();
+            if let Some(length) = length {
+                position += length;
+                last = Some(position);
+            } else {
+                position += 1;
+            }
+        }
+        if let Some(last) = last {
+            return Ok(last);
+        }
+        self.balance_brackets(span.start, base, limit, governor)
+    }
+
+    /// `end`, moved past a JSON value the markup from `start` left open: when
+    /// the bytes `start..end` open more brackets (`{`, `[`) than they close,
+    /// outside JSON strings, the end of the bracket that balances them
+    /// before `limit` (an arguments object whose value no repair read, with
+    /// no closer of the dialect after it); otherwise `end`.
+    fn balance_brackets(
+        &self,
+        start: usize,
+        end: usize,
+        limit: usize,
+        governor: &mut Governor,
+    ) -> Result<usize, StopReason> {
+        let mut state = Nesting {
+            depth: 0,
+            quoted: false,
+            escaped: false,
+        };
+        let step = |state: &mut Nesting, byte: u8| {
+            if state.quoted {
+                match byte {
+                    _ if state.escaped => state.escaped = false,
+                    b'\\' => state.escaped = true,
+                    b'"' => state.quoted = false,
+                    _ => {}
+                }
+            } else {
+                match byte {
+                    b'"' => state.quoted = true,
+                    b'{' | b'[' => state.depth += 1,
+                    b'}' | b']' => state.depth = state.depth.saturating_sub(1),
+                    _ => {}
+                }
+            }
+        };
+        governor.charge(Resource::Work, size(end - start))?;
+        for &byte in &self.output[start..end] {
+            step(&mut state, byte);
+        }
+        if state.depth == 0 {
+            return Ok(end);
+        }
+        let mut position = end;
+        while position < limit {
+            governor.charge(Resource::Work, 1)?;
+            step(&mut state, self.output[position]);
+            position += 1;
+            if state.depth == 0 {
+                return Ok(position);
+            }
+        }
+        Ok(end)
+    }
+
+    /// `span`'s end, moved to the end of the longest literal spelling that
+    /// began inside the span and runs on past its end (within `limit`): the
+    /// grammar may stop reading inside a literal (a closer variant is a
+    /// prefix of the canonical spelling), and a rejected span never splits
+    /// one.
+    fn complete_literal(
+        &self,
+        span: &Range<usize>,
+        literals: &[Vec<u8>],
+        limit: usize,
+        governor: &mut Governor,
+    ) -> Result<usize, StopReason> {
+        let mut end = span.end;
+        for spelling in literals {
+            governor.charge(Resource::Work, size(spelling.len()))?;
+            for inside in 1..spelling.len() {
+                let Some(start) = span.end.checked_sub(inside) else {
+                    break;
+                };
+                if start < span.start {
+                    break;
+                }
+                let stop = start + spelling.len();
+                if stop <= limit && self.output[start..].starts_with(spelling) {
+                    end = end.max(stop);
+                }
+            }
+        }
+        Ok(end)
+    }
+}
+
 /// What ends a rejected attempt's markup (see
 /// [`Recovery::close_rejections`]).
 struct Markup<'g> {
@@ -2317,7 +2625,8 @@ impl Recovery<'_> {
             governor,
         )?;
         recognizer.push(self.output, governor)?;
-        let turn = recognizer.finish(self.request.stop.clone(), governor)?;
+        let turn =
+            recognizer.finish_over(self.request.stop.clone(), Some(self.output), governor)?;
         let resolved = resolve_forest(self.tools, &turn, &self.policies, governor)?;
         let attempted = turn.rejected_attempts().to_vec();
         drop(turn);
@@ -2512,7 +2821,9 @@ impl Recovery<'_> {
                     .insert(dialect.clone());
             }
         }
-        self.unparsed(&mut reading, governor)?;
+        // A report never starts inside a literal a rejected attempt began.
+        let owned = self.owned_literals(&reading.value, governor)?;
+        self.unparsed(&mut reading, &owned, governor)?;
         // After unparsed markup is reported: its reports are boundaries.
         self.close_rejections(&mut reading.value, governor)?;
         reading.value.next_id_start = self.ids(&mut reading.value.calls, governor)?;
@@ -2543,6 +2854,59 @@ impl Recovery<'_> {
         reading.value.emitted =
             emit::emission(self.tools, &reading.value, &self.request.emit, governor)?;
         Ok(reading)
+    }
+
+    /// The bytes after each rejected attempt that complete the literal it
+    /// stopped inside: an attempt that stopped reading inside a literal
+    /// spelling of its dialect's call production (a key, a wrapper token)
+    /// owns the rest of that spelling, before the next segment. Unparsed
+    /// markup is scanned without them, so no report starts inside the
+    /// attempt's literal; [`Self::close_rejections`] then extends the
+    /// attempt over them (and possibly further).
+    fn owned_literals(
+        &self,
+        value: &ToolCalls,
+        governor: &mut Governor,
+    ) -> Result<Vec<Range<usize>>, StopReason> {
+        let mut owned = Vec::new();
+        for (index, rejected) in value.rejected.iter().enumerate() {
+            let Some(dialect) = &rejected.dialect else {
+                continue;
+            };
+            let span = &rejected.span;
+            // The next segment after the attempt bounds the literal.
+            let limit = value
+                .calls
+                .iter()
+                .map(|call| &call.span)
+                .chain(value.reasoning.iter())
+                .chain(
+                    value
+                        .rejected
+                        .iter()
+                        .enumerate()
+                        .filter(|(other, _)| *other != index)
+                        .map(|(_, rejected)| &rejected.span),
+                )
+                .filter(|range| range.start >= span.end && !range.is_empty())
+                .map(|range| range.start)
+                .min()
+                .unwrap_or(self.output.len());
+            let end = MarkupScan {
+                output: self.output,
+            }
+            .complete_literal(
+                span,
+                dialect.grammar().call_literals(),
+                limit,
+                governor,
+            )?;
+            if end > span.end {
+                governor.charge(Resource::ScratchBytes, ENTRY_BYTES)?;
+                owned.push(span.end..end);
+            }
+        }
+        Ok(owned)
     }
 
     /// Extend every rejected attempt over its own markup (see
@@ -2582,45 +2946,6 @@ impl Recovery<'_> {
                 continue;
             };
             let span = value.rejected[index].span.clone();
-            let ends = dialect.grammar().call_ends();
-            let at = |spellings: &[Vec<u8>], position: usize| {
-                spellings
-                    .iter()
-                    .filter(|spelling| self.output[position..].starts_with(spelling))
-                    .map(Vec::len)
-                    .max()
-            };
-            // The alternative the attempt opened (its longest opener
-            // spelling), or every alternative when no spelling matches.
-            let opened: Vec<&CallEnd> = {
-                let best = ends
-                    .iter()
-                    .filter_map(|end| at(&end.openers, span.start).map(|length| (length, end)))
-                    .max_by_key(|(length, _)| *length);
-                best.map_or_else(|| ends.iter().collect(), |(_, end)| vec![end])
-            };
-            let markup = Markup {
-                openers: opened.iter().flat_map(|end| end.openers.clone()).collect(),
-                closers: opened.iter().flat_map(|end| end.closers.clone()).collect(),
-                // A repeated opener nests a level, unless the alternative
-                // chains several calls that each open with it.
-                nests: !opened.iter().any(|end| end.chained),
-                // Every literal that ends a call of the dialect, in any
-                // alternative, a section's or a chained call's own; a
-                // single byte (a JSON bracket, a separator) is prose too.
-                call_closers: {
-                    let mut closers: Vec<Vec<u8>> = ends
-                        .iter()
-                        .flat_map(|end| end.call_closers.iter())
-                        .filter(|spelling| spelling.len() > 1)
-                        .cloned()
-                        .collect();
-                    closers.sort();
-                    closers.dedup();
-                    closers
-                },
-                literals: dialect.grammar().call_literals(),
-            };
             // The segments after the attempt, in order.
             let mut boundaries: Vec<(Range<usize>, bool)> = value
                 .calls
@@ -2645,7 +2970,7 @@ impl Recovery<'_> {
                 .filter(|(range, _)| range.start >= span.end && !range.is_empty())
                 .collect();
             boundaries.sort_by_key(|(range, _)| range.start);
-            let end = self.markup_end(&span, &markup, &boundaries, governor)?;
+            let end = rejected_end(self.output, &span, &dialect, &boundaries, governor)?;
             if end <= span.end {
                 continue;
             }
@@ -2656,194 +2981,6 @@ impl Recovery<'_> {
             rejected.raw = self.output[rejected.span.clone()].to_vec();
         }
         Ok(())
-    }
-
-    /// Where the markup of a rejected attempt at `span` ends (see
-    /// [`Self::close_rejections`]); `boundaries` are the segments after it
-    /// in order, each marked whether the scan may pass over it.
-    fn markup_end(
-        &self,
-        span: &Range<usize>,
-        markup: &Markup<'_>,
-        boundaries: &[(Range<usize>, bool)],
-        governor: &mut Governor,
-    ) -> Result<usize, StopReason> {
-        let (openers, closers, nests) = (&markup.openers, &markup.closers, markup.nests);
-        let len = self.output.len();
-        let at = |spellings: &[Vec<u8>], position: usize| {
-            spellings
-                .iter()
-                .filter(|spelling| self.output[position..].starts_with(spelling))
-                .map(Vec::len)
-                .max()
-        };
-        // An alternative whose end literal is a bracket (a JSON object
-        // or array call) nests by that bracket, outside JSON strings;
-        // any other nests by its opener spellings. The scan starts at
-        // the attempt's own start, so the depth at its failure is known.
-        let brackets: Vec<(u8, u8)> = [(b'{', b'}'), (b'[', b']')]
-            .into_iter()
-            .filter(|(_, close)| closers.iter().any(|spelling| spelling == &[*close]))
-            .collect();
-        let mut state = Nesting {
-            depth: 0,
-            quoted: false,
-            escaped: false,
-        };
-        let mut position = span.start;
-        let mut next = boundaries.iter();
-        let mut found = None;
-        'scan: loop {
-            let (limit, boundary) = match next.next() {
-                Some((range, call)) => (range.start, Some((range, *call))),
-                None => (len, None),
-            };
-            while position < limit {
-                governor.charge(Resource::Work, 1)?;
-                let byte = self.output[position];
-                if !brackets.is_empty() {
-                    position += 1;
-                    if state.quoted {
-                        match byte {
-                            _ if state.escaped => state.escaped = false,
-                            b'\\' => state.escaped = true,
-                            b'"' => state.quoted = false,
-                            _ => {}
-                        }
-                    } else if byte == b'"' {
-                        state.quoted = true;
-                    } else if brackets.iter().any(|(open, _)| *open == byte) {
-                        state.depth += 1;
-                    } else if brackets.iter().any(|(_, close)| *close == byte) {
-                        state.depth = state.depth.saturating_sub(1);
-                        if state.depth == 0 && position > span.end {
-                            found = Some(position);
-                            break 'scan;
-                        }
-                    }
-                } else if let Some(length) = at(closers, position) {
-                    state.depth = state.depth.saturating_sub(1);
-                    position += length;
-                    if state.depth == 0 && position > span.end {
-                        found = Some(position.min(limit));
-                        break 'scan;
-                    }
-                } else if let Some(length) = at(openers, position) {
-                    if nests || state.depth == 0 {
-                        state.depth += 1;
-                    }
-                    position += length;
-                } else {
-                    position += 1;
-                }
-            }
-            match boundary {
-                // A call or attempt inside the broken wrapper that does
-                // not reopen its alternative.
-                Some((range, true)) if at(openers, range.start).is_none() => {
-                    position = range.end;
-                }
-                _ => break,
-            }
-        }
-        let Some(mut end) = found else {
-            return self.unclosed_end(span, markup, boundaries, governor);
-        };
-        // Repeated closers right after the end (whitespace between) are
-        // the attempt's stray closers, as after a completed call.
-        if brackets.is_empty() {
-            let limit = boundaries
-                .iter()
-                .map(|(range, _)| range.start)
-                .find(|start| *start >= end)
-                .unwrap_or(len);
-            let mut probe = end;
-            loop {
-                while probe < limit && self.output[probe].is_ascii_whitespace() {
-                    probe += 1;
-                }
-                match at(closers, probe) {
-                    Some(length) if probe + length <= limit => {
-                        probe += length;
-                        end = probe;
-                    }
-                    _ => break,
-                }
-            }
-        }
-        Ok(end)
-    }
-
-    /// Where a rejected attempt at `span` without its alternative's closer
-    /// before the stop ends: at the end of the last literal that ends a
-    /// call of its dialect (a chained call's own closer, another
-    /// alternative's) before the next segment, when there is one, so no
-    /// closer of the attempt is left as content; otherwise where its
-    /// grammar stopped reading, never inside a literal it began. What
-    /// follows is not shown to be its markup and stays content (prose
-    /// after a broken opener is the answer).
-    fn unclosed_end(
-        &self,
-        span: &Range<usize>,
-        markup: &Markup<'_>,
-        boundaries: &[(Range<usize>, bool)],
-        governor: &mut Governor,
-    ) -> Result<usize, StopReason> {
-        let limit = boundaries
-            .iter()
-            .map(|(range, _)| range.start)
-            .find(|start| *start >= span.end)
-            .unwrap_or(self.output.len());
-        let base = self.complete_literal(span, markup.literals, limit, governor)?;
-        let mut last = None;
-        let mut position = base;
-        while position < limit {
-            governor.charge(Resource::Work, 1)?;
-            let length = markup
-                .call_closers
-                .iter()
-                .filter(|spelling| self.output[position..limit].starts_with(spelling))
-                .map(Vec::len)
-                .max();
-            if let Some(length) = length {
-                position += length;
-                last = Some(position);
-            } else {
-                position += 1;
-            }
-        }
-        Ok(last.unwrap_or(base))
-    }
-
-    /// `span`'s end, moved to the end of the longest literal spelling that
-    /// began inside the span and runs on past its end (within `limit`): the
-    /// grammar may stop reading inside a literal (a closer variant is a
-    /// prefix of the canonical spelling), and a rejected span never splits
-    /// one.
-    fn complete_literal(
-        &self,
-        span: &Range<usize>,
-        literals: &[Vec<u8>],
-        limit: usize,
-        governor: &mut Governor,
-    ) -> Result<usize, StopReason> {
-        let mut end = span.end;
-        for spelling in literals {
-            governor.charge(Resource::Work, size(spelling.len()))?;
-            for inside in 1..spelling.len() {
-                let Some(start) = span.end.checked_sub(inside) else {
-                    break;
-                };
-                if start < span.start {
-                    break;
-                }
-                let stop = start + spelling.len();
-                if stop <= limit && self.output[start..].starts_with(spelling) {
-                    end = end.max(stop);
-                }
-            }
-        }
-        Ok(end)
     }
 
     /// Add one segment to a reading.
@@ -2933,14 +3070,20 @@ impl Recovery<'_> {
     /// dialect reads ([`detect_unparsed`]) as rejected attempts with
     /// [`Rejection::UnsupportedDialect`], each recording the
     /// `tool_call.markup.unparsed-dialect` evidence; the bytes stay
-    /// content. The rejected attempts stay ordered by span.
-    fn unparsed(&self, reading: &mut Reading, governor: &mut Governor) -> Result<(), StopReason> {
-        let found = detect_unparsed(
-            self.output,
-            &reading.value.content,
-            &self.request.dialects,
-            governor,
-        )?;
+    /// content. The `owned` ranges (the rest of a literal a rejected
+    /// attempt stopped inside) are not scanned. The rejected attempts stay
+    /// ordered by span.
+    fn unparsed(
+        &self,
+        reading: &mut Reading,
+        owned: &[Range<usize>],
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let mut content = reading.value.content.clone();
+        for range in owned {
+            remove_range(&mut content, range);
+        }
+        let found = detect_unparsed(self.output, &content, &self.request.dialects, governor)?;
         if found.is_empty() {
             return Ok(());
         }

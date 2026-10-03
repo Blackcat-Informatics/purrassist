@@ -95,6 +95,17 @@ pub(crate) struct Program {
     /// completion of the same attempt reads further at no more cost is
     /// dropped (the attempt reads every call it can).
     pub(crate) grouped: bool,
+    /// For a grouped program, the literal instructions after which one call
+    /// ends (the production completes or the next call begins, without
+    /// input): where an attempt that could not read a call resynchronizes
+    /// (see the engine's resynchronization); empty otherwise.
+    pub(crate) call_closers: Vec<u32>,
+    /// Per `insert` instruction's literal, the literals the program reads
+    /// at the same input position instead (the alternatives of the
+    /// insertion: the token written, an optional segment's literal before
+    /// it); the engine never reads a token as omitted where one of them is
+    /// written.
+    pub(crate) insert_alternatives: Vec<(u32, Vec<u32>)>,
 }
 
 impl Program {
@@ -1126,6 +1137,8 @@ fn compile_program(
         }
         effects
     };
+    let call_closers = call_closer_lits(&insts, grouped, governor)?;
+    let insert_alternatives = insert_alternatives(&insts, governor)?;
     Ok(Program {
         insts,
         start,
@@ -1135,6 +1148,8 @@ fn compile_program(
         committed,
         start_closure,
         grouped,
+        call_closers,
+        insert_alternatives,
     })
 }
 
@@ -1504,8 +1519,102 @@ pub(crate) fn compile(
     })
 }
 
+/// For a grouped program, the literal instructions after which one call
+/// ends without input (the production completes, or a `next` begins the
+/// next call); empty for a program without `next`.
+fn call_closer_lits(
+    insts: &[Inst],
+    grouped: bool,
+    governor: &mut Governor,
+) -> Result<Vec<u32>, GrammarError> {
+    if !grouped {
+        return Ok(Vec::new());
+    }
+    charge(governor, size(insts.len()), 0)?;
+    let ending = reach_back(
+        insts,
+        |inst| matches!(inst, Inst::Accept | Inst::Next { .. }),
+        false,
+    );
+    Ok(insts
+        .iter()
+        .enumerate()
+        .filter_map(|(pc, inst)| match *inst {
+            Inst::Lit { next, .. } if ending[next as usize] => Some(index_u32(pc)),
+            _ => None,
+        })
+        .collect())
+}
+
+/// Per literal an `insert` instruction of `insts` inserts, the literals read
+/// at the same input position as the insertion: a backward walk from each
+/// such instruction over the zero-width instructions (not `next`, not
+/// another insertion) and a forward walk over them from every instruction
+/// reached, collecting the literals met.
+fn insert_alternatives(
+    insts: &[Inst],
+    governor: &mut Governor,
+) -> Result<Vec<(u32, Vec<u32>)>, GrammarError> {
+    let count = insts.len();
+    let zero_width = |inst: &Inst| match *inst {
+        Inst::Split(first, second) => vec![first, second],
+        Inst::Open { next, .. } | Inst::Close { next, .. } | Inst::Commit { next } => vec![next],
+        _ => Vec::new(),
+    };
+    let mut before: Vec<Vec<u32>> = vec![Vec::new(); count];
+    for (pc, inst) in insts.iter().enumerate() {
+        for next in zero_width(inst) {
+            before[next as usize].push(index_u32(pc));
+        }
+    }
+    let mut found: Vec<(u32, Vec<u32>)> = Vec::new();
+    for (pc, inst) in insts.iter().enumerate() {
+        let Inst::Insert { lit, .. } = *inst else {
+            continue;
+        };
+        charge(governor, size(count), 0)?;
+        let mut back = vec![false; count];
+        let mut stack = vec![index_u32(pc)];
+        while let Some(at) = stack.pop() {
+            if !core::mem::replace(&mut back[at as usize], true) {
+                stack.extend(before[at as usize].iter().copied());
+            }
+        }
+        let mut seen = vec![false; count];
+        let mut stack: Vec<u32> = (0..count)
+            .filter(|&at| back[at] && at != pc)
+            .map(index_u32)
+            .collect();
+        let mut lits = vec![lit];
+        while let Some(at) = stack.pop() {
+            if core::mem::replace(&mut seen[at as usize], true) {
+                continue;
+            }
+            match insts[at as usize] {
+                Inst::Lit { lit, .. } => {
+                    if !lits.contains(&lit) {
+                        lits.push(lit);
+                    }
+                }
+                ref inst => stack.extend(zero_width(inst)),
+            }
+        }
+        match found.iter_mut().find(|(known, _)| *known == lit) {
+            Some((_, known)) => {
+                for lit in lits {
+                    if !known.contains(&lit) {
+                        known.push(lit);
+                    }
+                }
+            }
+            None => found.push((lit, lits)),
+        }
+    }
+    Ok(found)
+}
+
 /// The instructions `inst` continues at.
-fn successors(inst: &Inst) -> Vec<u32> {
+pub(crate) fn successors(inst: &Inst) -> Vec<u32> {
     match *inst {
         Inst::Lit { next, .. }
         | Inst::Class { next, .. }
@@ -1524,11 +1633,11 @@ fn successors(inst: &Inst) -> Vec<u32> {
 /// Per instruction of `program`, whether an instruction `seed` holds for
 /// is reachable from it without input: one backward walk over the epsilon
 /// instructions (`next` among them only when `through_next`).
-fn reach_back(program: &Program, seed: impl Fn(&Inst) -> bool, through_next: bool) -> Vec<bool> {
-    let count = program.insts.len();
+fn reach_back(insts: &[Inst], seed: impl Fn(&Inst) -> bool, through_next: bool) -> Vec<bool> {
+    let count = insts.len();
     let mut before: Vec<Vec<u32>> = vec![Vec::new(); count];
     let mut stack = Vec::new();
-    for (pc, inst) in program.insts.iter().enumerate() {
+    for (pc, inst) in insts.iter().enumerate() {
         let pc = index_u32(pc);
         if seed(inst) {
             stack.push(pc);
@@ -1623,9 +1732,9 @@ fn call_ends(
     // Whether the production completes from each instruction without
     // input, and whether one call ends there (the production completes or
     // the next call of the attempt begins, a `next`).
-    let completing = reach_back(program, |inst| matches!(inst, Inst::Accept), true);
+    let completing = reach_back(&program.insts, |inst| matches!(inst, Inst::Accept), true);
     let ending = reach_back(
-        program,
+        &program.insts,
         |inst| matches!(inst, Inst::Accept | Inst::Next { .. }),
         false,
     );

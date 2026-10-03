@@ -1,5 +1,5 @@
 {
-  "description": "T2: Mistral v11 calls, each opening with its own [TOOL_CALLS] (good, malformed arguments, good): the first and third calls are recovered and usable. The malformed call is read with an inserted [ARGS] and an empty value cut by the [ARGS] it wrote, so it is unresolved (never usable), and its [ARGS]{...} is left as text: the grammar admits inserting [ARGS] where [ARGS] follows.",
+  "description": "T2/T3: Mistral v11 calls, each opening with its own [TOOL_CALLS] (good, malformed arguments, good): [ARGS] is written, so it is never read as omitted there; the malformed value goes through the json codec's repairs (a guessed missing value), so the middle call is a BestGuess and the first and third calls are Resolved; no markup is left as text.",
   "tools_openai": [
     {
       "type": "function",
@@ -25,12 +25,12 @@
   "input": "Hi [TOOL_CALLS]f[ARGS]{\"a\":\"x\"}[TOOL_CALLS]f[ARGS]{\"a\":\"y\" oops}[TOOL_CALLS]f[ARGS]{\"a\":\"z\"} done",
   "outcome": "best_guess",
   "stopped": "completed",
-  "finish": "unresolved",
+  "finish": "calls",
   "openai_finish_reason": "tool_calls",
   "verdict": "run",
   "usable_calls": {
     "strict": 2,
-    "accepting_guesses": 2
+    "accepting_guesses": 3
   },
   "calls": [
     {
@@ -48,14 +48,20 @@
     },
     {
       "tool": "f",
-      "arguments": null,
+      "arguments": {
+        "a": "y",
+        "oops": null
+      },
       "candidate_dialects": [
         "mistral-v11.v1"
       ],
-      "outcome": "unresolved: arguments_not_object: the arguments are not a JSON object",
+      "outcome": "best_guess",
       "rules": [
-        "tool_call.markup.missing-token",
+        "json.syntax.missing-comma",
+        "json.syntax.bare-key",
+        "json.syntax.missing-colon",
         "json.syntax.missing-value",
+        "tool_call.parameter.pass-through",
         "tool_call.id.dedup"
       ]
     },
@@ -77,14 +83,16 @@
   "embedded": [],
   "content": [
     "Hi ",
-    "[ARGS]{\"a\":\"y\" oops}",
     "done"
   ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.id.dedup",
-    "tool_call.markup.missing-token",
+    "json.syntax.missing-comma",
+    "json.syntax.bare-key",
+    "json.syntax.missing-colon",
     "json.syntax.missing-value",
+    "tool_call.parameter.pass-through",
     "tool_call.id.dedup",
     "tool_call.id.dedup"
   ]

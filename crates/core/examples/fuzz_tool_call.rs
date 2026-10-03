@@ -44,9 +44,9 @@
 //!   the wire `verdict` and usable-call counts match;
 //! - (F4) a rejected attempt runs past where its grammar failed (the
 //!   furthest the recognizer read an attempt of its dialect at its opener)
-//!   only to a literal that ends a call of its dialect, or to complete a
-//!   literal begun before it, so prose after a broken opener stays
-//!   content;
+//!   only to a literal that ends a call of its dialect, to complete a
+//!   literal begun before it, or (T3) to the bracket that balances a JSON
+//!   value it left open, so prose after a broken opener stays content;
 //! - (S3/F6) a rejected attempt keeps its own closing markup: when its
 //!   raw text does not end with a literal that ends a call of its dialect
 //!   (any alternative's, a chained call's own; not a single byte), the
@@ -808,8 +808,37 @@ fn check_rejected_extension(output: &[u8], calls: &ToolCalls, read: &[(Range<usi
                 && end - spelling.len() >= rejected.span.start
                 && output[end - spelling.len()..end] == spelling[..]
         });
+        // T3: or to the bracket that balances a JSON value the attempt left
+        // open: its bytes open more brackets than they close (outside JSON
+        // strings) at every point from where it failed until its last byte,
+        // which balances them.
+        let balanced = {
+            let (mut depth, mut quoted, mut escaped, mut open) = (0_usize, false, false, true);
+            for (offset, &byte) in output[rejected.span.start..end].iter().enumerate() {
+                let at = rejected.span.start + offset;
+                if quoted {
+                    match byte {
+                        _ if escaped => escaped = false,
+                        b'\\' => escaped = true,
+                        b'"' => quoted = false,
+                        _ => {}
+                    }
+                } else {
+                    match byte {
+                        b'"' => quoted = true,
+                        b'{' | b'[' => depth += 1,
+                        b'}' | b']' => depth = depth.saturating_sub(1),
+                        _ => {}
+                    }
+                }
+                if at >= failed && at + 1 < end && depth == 0 {
+                    open = false;
+                }
+            }
+            open && depth == 0 && matches!(output[end - 1], b'}' | b']')
+        };
         assert!(
-            closed || completed,
+            closed || completed || balanced,
             "rejected attempt {:?} runs past where it failed ({failed}) without its closer: {:?}",
             rejected.span,
             String::from_utf8_lossy(&output[failed..end])

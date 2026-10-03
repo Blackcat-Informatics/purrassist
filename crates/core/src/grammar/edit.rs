@@ -241,7 +241,8 @@ pub enum EditOperator {
     MissingWrapperCloseBeforeText,
     /// Read a token the grammar's `insert("...")` names as omitted by the
     /// model and inserted here (the brackets of a Mistral v3 call list
-    /// written without them).
+    /// written without them); never where the token, or markup the grammar
+    /// reads at that position instead, is written.
     MissingToken,
     /// Read a maximal run of bytes inside a call's name, id, parameter name
     /// or argument value that is not well-formed UTF-8 as U+FFFD, one per

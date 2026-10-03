@@ -1,0 +1,137 @@
+{
+  "description": "T3: a fence inside a rejected attempt's markup is not prose: a Hermes call whose fenced JSON body (its ```json line never closed) no repair reads is rejected through its </tool_call>, and the next call, after the unclosed fence line, is Resolved rather than flagged as a fenced example.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "<tool_call>{\"name\": \"f\", \"arguments\": {\"a\": \"x\"}}</tool_call>\n<tool_call>\n```json\n{\"name\": \"f\" oops \"arguments\": {\"a\": \"y\"}}\n</tool_call>\n<tool_call>{\"name\": \"f\", \"arguments\": {\"a\": \"z\"}}</tool_call>",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "tool_calls",
+    "verdict": "run",
+    "usable_calls": {
+      "strict": 2,
+      "accepting_guesses": 2
+    },
+    "calls": [
+      {
+        "tool": "f",
+        "arguments": {
+          "a": "x"
+        },
+        "candidate_dialects": [
+          "hermes.v1"
+        ],
+        "outcome": "resolved",
+        "rules": []
+      },
+      {
+        "tool": "f",
+        "arguments": {
+          "a": "z"
+        },
+        "candidate_dialects": [
+          "hermes.v1"
+        ],
+        "outcome": "resolved",
+        "rules": []
+      }
+    ],
+    "rejected": [
+      {
+        "span": [
+          62,
+          137
+        ],
+        "dialect": "hermes.v1",
+        "candidate_dialects": [
+          "hermes.v1",
+          "qwen3-coder-xml.v1"
+        ],
+        "reason": "Malformed { at: 95 }",
+        "raw": "<tool_call>\n```json\n{\"name\": \"f\" oops \"arguments\": {\"a\": \"y\"}}\n</tool_call>"
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "\n",
+      "\n"
+    ],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 2,
+    "accepting_guesses": 2
+  },
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "x"
+      },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    },
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "z"
+      },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    }
+  ],
+  "rejected": [
+    {
+      "span": [
+        62,
+        137
+      ],
+      "dialect": "hermes.v1",
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "reason": "Malformed { at: 95 }",
+      "raw": "<tool_call>\n```json\n{\"name\": \"f\" oops \"arguments\": {\"a\": \"y\"}}\n</tool_call>"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "\n",
+    "\n"
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

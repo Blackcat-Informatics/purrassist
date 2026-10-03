@@ -144,7 +144,7 @@ test's assertions fails the build by design.
 | Path matching | 1594 | 1279 | 0 | 315 | 80.2% | 0.0% | 0.234% | 2% |
 | Phonetic ambiguity | 1408 | 1089 | 0 | 319 | 77.3% | 0.0% | 0.275% | 5% |
 | JSON recovery | 714 | 630 | 0 | 84 | 88.2% | 0.0% | 0.474% | 2% |
-| Tool-call recovery | 13815 | 9513 | 0 | 4302 | 68.9% | 0.0% | 0.031% | 1% |
+| Tool-call recovery | 14538 | 10097 | 0 | 4441 | 69.5% | 0.0% | 0.030% | 1% |
 
 "Coverage" is the fraction of cases an automatic decision was reached for at
 all (correct + incorrect, over the total); "risk" is the observed error rate
@@ -207,7 +207,7 @@ small oracle exhaustively proves the Unicode tables.
 
 ## Tool-call recovery evaluation
 
-`crates/core/tests/data/evaluation/tool-calls.jsonl` holds 13,815 mutated model
+`crates/core/tests/data/evaluation/tool-calls.jsonl` holds 14,538 mutated model
 turns, each with its `id`, `category` (the rule expected to repair it),
 `dialect` (the request's dialect allow-list), `policy`, `stop`, `input` and
 `truth`. The `tool-call-corpus` example generates it deterministically: it
@@ -293,7 +293,7 @@ any answer to a truth-`Unresolved` case. The test pins the totals above,
 asserts zero incorrect answers overall, per rule and per dialect, at least 20
 cases per rule, and abstention recall of 100%:
 
-Abstention recall: 4203 of 4203 truth-`Unresolved` cases abstained (100.0%).
+Abstention recall: 4342 of 4342 truth-`Unresolved` cases abstained (100.0%).
 
 The 99 other abstentions are coverage gaps, not errors: read-only calls whose
 required arguments were nested one level down (`DropWithLoss` drops the
@@ -334,9 +334,11 @@ unassignable (`UnknownParameter`), so the call abstains.
 | `tool_call.extract.fence` | 96 | 96 | 0 | 0 | 0 |
 | `tool_call.extract.prose` | 160 | 80 | 0 | 80 | 80 |
 | `tool_call.id.dedup` | 64 | 64 | 0 | 0 | 0 |
+| `tool_call.markup.closer-misspelled` | 351 | 351 | 0 | 0 | 0 |
 | `tool_call.markup.closer-variant` | 159 | 159 | 0 | 0 | 0 |
 | `tool_call.markup.closers-only-empty` | 29 | 1 | 0 | 28 | 28 |
 | `tool_call.markup.dangling-opener` | 384 | 384 | 0 | 0 | 0 |
+| `tool_call.markup.group-split` | 160 | 160 | 0 | 0 | 0 |
 | `tool_call.markup.json-body` | 32 | 32 | 0 | 0 | 0 |
 | `tool_call.markup.missing-closers-at-end` | 288 | 288 | 0 | 0 | 0 |
 | `tool_call.markup.missing-function-close` | 128 | 128 | 0 | 0 | 0 |
@@ -356,12 +358,15 @@ unassignable (`UnknownParameter`), so the call abstains.
 | `tool_call.parameter.collect` | 24 | 24 | 0 | 0 | 0 |
 | `tool_call.parameter.drop-unknown` | 384 | 192 | 0 | 192 | 192 |
 | `tool_call.parameter.repeated` | 336 | 0 | 0 | 336 | 336 |
+| `tool_call.parameter.repeated-choice` | 156 | 36 | 0 | 120 | 120 |
 | `tool_call.reasoning.embedded-call` | 384 | 0 | 0 | 384 | 384 |
+| `tool_call.reasoning.marker-cut` | 32 | 32 | 0 | 0 | 0 |
 | `tool_call.reasoning.unclosed` | 384 | 144 | 0 | 240 | 240 |
 | `tool_call.reasoning.unterminated` | 384 | 384 | 0 | 0 | 0 |
 | `tool_call.stop.consumed-closer` | 192 | 192 | 0 | 0 | 0 |
 | `tool_call.truncated` | 768 | 384 | 0 | 384 | 384 |
 | `tool_call.value.enum-normalize` | 168 | 168 | 0 | 0 | 0 |
+| `tool_call.value.invalid-utf8` | 24 | 5 | 0 | 19 | 19 |
 | `tool_call.value.schema-typed` | 24 | 21 | 0 | 3 | 3 |
 | `tool_call.value.trim-nonverbatim` | 25 | 25 | 0 | 0 | 0 |
 | `tool_call.xml.array-item` | 22 | 22 | 0 | 0 | 0 |
@@ -373,37 +378,37 @@ and by dialect allow-list:
 | Dialect | Cases | Correct | Incorrect | Abstained |
 | --- | ---: | ---: | ---: | ---: |
 | `adapter` | 27 | 24 | 0 | 3 |
-| `anthropic` | 1232 | 880 | 0 | 352 |
-| `bare` | 1072 | 720 | 0 | 352 |
-| `deepseek3` | 1360 | 992 | 0 | 368 |
-| `deepseek31` | 1136 | 784 | 0 | 352 |
-| `harmony` | 1328 | 948 | 0 | 380 |
-| `hermes` | 1226 | 829 | 0 | 397 |
-| `kimi` | 1232 | 860 | 0 | 372 |
-| `llama3` | 1040 | 688 | 0 | 352 |
-| `mistral11` | 880 | 548 | 0 | 332 |
-| `mistral3` | 1104 | 752 | 0 | 352 |
+| `anthropic` | 1246 | 883 | 0 | 363 |
+| `bare` | 1086 | 723 | 0 | 363 |
+| `deepseek3` | 1470 | 1091 | 0 | 379 |
+| `deepseek31` | 1246 | 883 | 0 | 363 |
+| `harmony` | 1374 | 983 | 0 | 391 |
+| `hermes` | 1272 | 864 | 0 | 408 |
+| `kimi` | 1342 | 959 | 0 | 383 |
+| `llama3` | 1054 | 691 | 0 | 363 |
+| `mistral11` | 958 | 615 | 0 | 343 |
+| `mistral3` | 1150 | 787 | 0 | 363 |
 | `mixed` | 96 | 96 | 0 | 0 |
-| `openai` | 918 | 583 | 0 | 335 |
-| `qwen` | 1164 | 809 | 0 | 355 |
+| `openai` | 932 | 586 | 0 | 346 |
+| `qwen` | 1285 | 912 | 0 | 373 |
 
 | Allow-list | Cases | Correct | Incorrect | Abstained |
 | --- | ---: | ---: | ---: | ---: |
-| `anthropic-tool-use.v1` | 568 | 408 | 0 | 160 |
-| `anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1` | 7415 | 5075 | 0 | 2340 |
-| `bare-json.v1` | 488 | 328 | 0 | 160 |
-| `deepseek-v3.1.v1` | 520 | 360 | 0 | 160 |
+| `anthropic-tool-use.v1` | 576 | 409 | 0 | 167 |
+| `anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1` | 7781 | 5389 | 0 | 2392 |
+| `bare-json.v1` | 496 | 329 | 0 | 167 |
+| `deepseek-v3.1.v1` | 576 | 409 | 0 | 167 |
 | `deepseek-v3.1.v1,deepseek-v3.v1` | 32 | 32 | 0 | 0 |
-| `deepseek-v3.v1` | 632 | 464 | 0 | 168 |
-| `harmony.v1` | 616 | 444 | 0 | 172 |
-| `hermes.v1` | 580 | 391 | 0 | 189 |
+| `deepseek-v3.v1` | 688 | 513 | 0 | 175 |
+| `harmony.v1` | 640 | 461 | 0 | 179 |
+| `hermes.v1` | 604 | 408 | 0 | 196 |
 | `hermes.v1,qwen3-coder-xml.v1` | 64 | 64 | 0 | 0 |
-| `kimi-k2.v1` | 568 | 396 | 0 | 172 |
-| `llama3-json.v1` | 472 | 312 | 0 | 160 |
-| `mistral-v11.v1` | 392 | 244 | 0 | 148 |
-| `mistral-v3.v1` | 504 | 344 | 0 | 160 |
-| `openai-tool-calls.v1` | 414 | 263 | 0 | 151 |
-| `qwen3-coder-xml.v1` | 550 | 388 | 0 | 162 |
+| `kimi-k2.v1` | 624 | 445 | 0 | 179 |
+| `llama3-json.v1` | 480 | 313 | 0 | 167 |
+| `mistral-v11.v1` | 416 | 261 | 0 | 155 |
+| `mistral-v3.v1` | 528 | 361 | 0 | 167 |
+| `openai-tool-calls.v1` | 422 | 264 | 0 | 158 |
+| `qwen3-coder-xml.v1` | 611 | 439 | 0 | 172 |
 
 Rules no case exercises: `json.syntax.literal-escape` (no witness value
 contains a backslash to unescape). `tool_call.markup.terminal-confusable` is

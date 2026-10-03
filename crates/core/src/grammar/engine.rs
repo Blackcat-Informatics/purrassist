@@ -65,8 +65,8 @@ use crate::pattern::{DerivativeDfa, DfaState};
 use crate::search::Ledger;
 use crate::search::Search;
 use crate::tool_call::{
-    ArgTree, CallSegment, CaptureSpan, Closure, CompiledTool, DialectId, GenerationStop,
-    ProductionKind, RawCall, Rejection, Spanned, ToolSet,
+    ArgTree, ArgumentFault, CallSegment, CaptureSpan, Closure, CompiledTool, DialectId,
+    GenerationStop, ProductionKind, RawCall, Rejection, Spanned, ToolSet,
 };
 use core::cmp::Reverse;
 use core::ops::Range;
@@ -114,6 +114,12 @@ pub(crate) enum Sub {
     /// then the canonical spelling resumes after the pair; the second
     /// index is how many canonical bytes matched before the slip.
     Transposed(u32, u32),
+    /// Resynchronizing after a call the attempt could not read (see
+    /// [`Engine::resync`]): scanning for this call-closer literal; the
+    /// scanner state (bracket depth in the low 16 bits, then whether inside
+    /// a JSON string and after a backslash in one) and how many of the
+    /// literal's bytes matched so far.
+    Resync(u32, u32),
 }
 
 impl Sub {
@@ -126,6 +132,12 @@ impl Sub {
             Self::Json(table, _) => Self::Json(table, node),
             other => other,
         }
+    }
+
+    /// Whether a configuration in this mode resynchronizes after a call it
+    /// could not read (see `Engine::resync`).
+    pub(crate) const fn resyncing(&self) -> bool {
+        matches!(self, Self::Resync(..))
     }
 
     pub(crate) const fn key(&self) -> (u8, u32) {
@@ -141,6 +153,7 @@ impl Sub {
             Self::JsonInner(state, node) => (10 + *state, *node),
             Self::Misspelled(index, _) => (20, *index),
             Self::Transposed(index, _) => (21, *index),
+            Self::Resync(state, matched) => (22, state.wrapping_mul(64).wrapping_add(*matched)),
         }
     }
 }
@@ -205,6 +218,11 @@ pub(crate) enum HistKind {
     /// A `next`: the call that began before ends and the next one begins at
     /// this offset, with the configuration's cost so far.
     Next(usize, u64),
+    /// The call that began at the last `next` (or the attempt's start) could
+    /// not be read: it failed at this offset, and the attempt
+    /// resynchronized at its call closer (see `Engine::resync`). The part
+    /// is a rejected attempt of its own.
+    Skipped(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -406,6 +424,14 @@ pub(crate) struct Step<'a, 's> {
     pub(crate) visited: &'a mut Vec<u64>,
     pub(crate) pending: &'a mut Vec<(u32, u32, u64)>,
     pub(crate) tools: Option<&'s ToolSet>,
+    /// The latest start of any attempt that opened, in any table: a
+    /// resynchronizing configuration gives up at another call's opener.
+    pub(crate) newest_open: usize,
+    /// The skipped calls a resynchronizing configuration has ended, by
+    /// attempt and the offset its call failed at: its siblings scanning for
+    /// a later closer give up (a skipped call ends at its first call
+    /// closer).
+    pub(crate) resynced: &'a mut Vec<(u64, usize)>,
 }
 
 impl<'s> Step<'_, 's> {
@@ -476,6 +502,11 @@ impl<'s> Step<'_, 's> {
         out: &mut Out,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        if self.writes_inserted(&thread, byte) {
+            // The token this reading inserted is written right here: the
+            // reading that reads it as written is the reading.
+            return Ok(());
+        }
         match self.program.insts[thread.pc as usize] {
             Inst::Lit { lit, next } => {
                 self.step_literal(thread, lit, next, byte, stack, out, governor)
@@ -496,6 +527,65 @@ impl<'s> Step<'_, 's> {
                 unreachable!("configurations wait only at terminals")
             }
         }
+    }
+
+    /// Whether `byte` completes, at `thread`'s position, a token written
+    /// where its reading inserted one (`tool_call.markup.missing-token`
+    /// read just before its current terminal, past only zero-width
+    /// captures): the inserted token itself, or, for a terminal that is not
+    /// a literal (a value), a literal the grammar reads at the insertion's
+    /// position instead (an optional segment's token, such as Mistral v11's
+    /// `[CALL_ID]` before `[ARGS]`). A token is never read as omitted where
+    /// the call's markup is written, so that reading ends. Only a terminal
+    /// that began within the longest literal of the position is checked.
+    fn writes_inserted(&self, thread: &Thread, byte: u8) -> bool {
+        let pos = thread.pos;
+        if pos < thread.entry || pos - thread.entry >= 32 {
+            return false;
+        }
+        let nodes = self.arena.nodes.as_slice();
+        let mut node = thread.hist;
+        for _ in 0..8 {
+            let HistNode { prev, kind } = nodes[node as usize];
+            match kind {
+                HistKind::Open(_, at) | HistKind::Close(_, at) | HistKind::Next(at, _)
+                    if at == thread.entry =>
+                {
+                    node = prev;
+                }
+                HistKind::Edit(index) => {
+                    let edit = &self.arena.edits[index as usize];
+                    let start = edit.span.start;
+                    if edit.operator != EditOperator::MissingToken
+                        || !edit.span.is_empty()
+                        || start != thread.entry
+                    {
+                        return false;
+                    }
+                    let spells = |token: &[u8]| {
+                        pos + 1 - start == token.len()
+                            && token[token.len() - 1] == byte
+                            && self.bytes(start..pos) == &token[..token.len() - 1]
+                    };
+                    let token = &edit.replacement;
+                    if spells(token) {
+                        return true;
+                    }
+                    let value = !matches!(self.program.insts[thread.pc as usize], Inst::Lit { .. });
+                    let literals = &self.grammar.literals;
+                    return value
+                        && self
+                            .program
+                            .insert_alternatives
+                            .iter()
+                            .filter(|(lit, _)| &literals[*lit as usize].bytes == token)
+                            .flat_map(|(_, alternatives)| alternatives)
+                            .any(|lit| spells(&literals[*lit as usize].bytes));
+                }
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// One byte of a literal: its canonical spelling, or (after a repair) a
@@ -561,6 +651,11 @@ impl<'s> Step<'_, 's> {
             Sub::Misspelled(..) | Sub::Transposed(..) => {
                 return self.step_misspelled(thread, lit, next, byte, stack, out, governor);
             }
+            Sub::Resync(state, matched) => {
+                return self.step_resync(
+                    thread, lit, next, byte, state, matched, stack, out, governor,
+                );
+            }
             Sub::Class(_) | Sub::Body(..) => unreachable!("literal configurations only"),
         };
         let Some(child) = trie.step(node, byte) else {
@@ -597,6 +692,69 @@ impl<'s> Step<'_, 's> {
             return self.queue(thread, stack);
         }
         self.finish_literal(thread, next, pos + 1, stack, out, governor)
+    }
+
+    /// One byte of a configuration resynchronizing at call-closer literal
+    /// `lit` (see [`Engine::resync`]): outside JSON strings and at bracket
+    /// depth zero, the literal's canonical spelling ends the skipped call
+    /// and the attempt reads on after it. It gives up (silently: the
+    /// attempt's failure stands) at another call's opener.
+    #[allow(clippy::too_many_arguments)]
+    fn step_resync(
+        &mut self,
+        mut thread: Thread,
+        lit: u32,
+        next: u32,
+        byte: u8,
+        state: u32,
+        matched: u32,
+        stack: &mut ScratchVec<Thread>,
+        out: &mut Out,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        if self.newest_open > thread.entry
+            || self
+                .resynced
+                .iter()
+                .any(|&(attempt, failed)| attempt == thread.attempt && failed == thread.entry)
+        {
+            return Ok(());
+        }
+        let canonical = &self.grammar.literals[lit as usize].bytes;
+        let pos = thread.pos;
+        let mut scan = JsonScan::unpack(state);
+        let mut matched = matched as usize;
+        // A closing-bracket closer (a JSON element's own `}`) closes the
+        // bracket the call opened; any other is read at depth zero.
+        let level = !scan.quoted
+            && (scan.depth == 0
+                || (scan.depth == 1
+                    && canonical.len() == 1
+                    && matches!(canonical[0], b'}' | b']')));
+        if level {
+            matched = if canonical[matched] == byte {
+                matched + 1
+            } else {
+                usize::from(canonical[0] == byte)
+            };
+            if matched == canonical.len() {
+                governor.charge(Resource::ScratchBytes, 16)?;
+                self.resynced.push((thread.attempt, thread.entry));
+                thread.entry = pos + 1 - matched;
+                thread.sub = Sub::Lit(0);
+                return self.finish_literal(thread, next, pos + 1, stack, out, governor);
+            }
+        } else {
+            matched = 0;
+        }
+        scan.step(byte);
+        if scan.quoted {
+            matched = 0;
+        }
+        let state = scan.pack();
+        thread.sub = Sub::Resync(state, index_u32(matched));
+        thread.pos = pos + 1;
+        self.queue(thread, stack)
     }
 
     /// One byte of a misspelled closer of literal `lit` after its slip: the
@@ -1150,7 +1308,16 @@ impl<'s> Step<'_, 's> {
                     thread.hist = hist;
                     thread.cost = thread.cost.saturating_add(cost);
                 }
-                Err(fault) => return Self::fail(out, thread, thread.pos, rejection(fault)),
+                Err(Finished::Unread { at }) => {
+                    // An arguments value no repair reads: the attempt fails
+                    // where the value stopped decoding (not at the end of its
+                    // body), so what follows is read as the attempt's markup
+                    // only as far as its closer or bracket shows it is.
+                    return Self::fail(out, thread, at, Rejection::Malformed { at });
+                }
+                Err(Finished::Fault(fault)) => {
+                    return Self::fail(out, thread, thread.pos, rejection(fault));
+                }
             }
         }
         self.closure(thread, next, end, stack, out, governor)
@@ -1165,14 +1332,36 @@ impl<'s> Step<'_, 's> {
         body: Range<usize>,
         how: CodecEnd,
         governor: &mut Governor,
-    ) -> Result<Result<(u32, u64), CodecFault>, StopReason> {
+    ) -> Result<Result<(u32, u64), Finished>, StopReason> {
         let codec = self.arena.take_codec(slot);
         let context = self.context(codec.kind(), hist, governor)?;
         let buffer = self.buffer;
         let bytes = &buffer[body.start - self.base..body.end - self.base];
+        let body_end = body.end;
         match codec.finish(bytes, body, how, context, governor)? {
+            // A JSON value no repair reads is not a call's arguments: the
+            // attempt fails where its decoding stopped (see
+            // `Step::end_body`), a rejected attempt rather than a call.
+            Ok(value)
+                if how != CodecEnd::Truncated
+                    && value.tree.unresolved.iter().any(|fault| {
+                        fault.pointer.is_empty()
+                            && matches!(fault.fault, ArgumentFault::InvalidJson { .. })
+                    }) =>
+            {
+                let at = value
+                    .tree
+                    .unresolved
+                    .iter()
+                    .find_map(|fault| match fault.fault {
+                        ArgumentFault::InvalidJson { at } if fault.pointer.is_empty() => Some(at),
+                        _ => None,
+                    })
+                    .unwrap_or(body_end);
+                Ok(Err(Finished::Unread { at }))
+            }
             Ok(value) => Ok(Ok(self.arena.codec_value(hist, value)?)),
-            Err(fault) => Ok(Err(fault)),
+            Err(fault) => Ok(Err(Finished::Fault(fault))),
         }
     }
 
@@ -1536,7 +1725,7 @@ impl<'s> Step<'_, 's> {
                     governor.charge(Resource::ScratchBytes, edit.estimated_bytes())?;
                     edits.push(edit.clone());
                 }
-                HistKind::Root | HistKind::Pack(_) | HistKind::Next(..) => {}
+                HistKind::Root | HistKind::Pack(_) | HistKind::Next(..) | HistKind::Skipped(_) => {}
             }
         }
         while let Some((kind, start, value)) = open.pop() {
@@ -1717,48 +1906,32 @@ impl<'s> Step<'_, 's> {
                     _ => None,
                 })
                 .collect();
-            let mut calls = Vec::with_capacity(cuts.len() + 1);
-            let mut from = 0;
-            for part in 0..=cuts.len() {
-                let last = part == cuts.len();
-                let start = if part == 0 {
-                    shape.span.start
-                } else {
-                    cuts[part - 1].1
-                };
-                let (to, end) = if last {
-                    (path.len(), shape.span.end)
-                } else {
-                    (cuts[part].0, cuts[part].1)
-                };
-                let before = if part == 0 { 0 } else { cuts[part - 1].2 };
-                let through = if last { shape.cost } else { cuts[part].2 };
-                let part_shape = Shape {
-                    span: start..end,
-                    dialect: shape.dialect,
-                    kind: shape.kind,
-                    dangling: last && shape.dangling,
-                    open_end: if last { shape.open_end } else { end },
-                    cost: through.saturating_sub(before),
-                };
-                match self.reading(&path[from..to], &part_shape, governor)? {
-                    Ok(call) => calls.push(call),
-                    Err(reason) => {
-                        rejection.get_or_insert(reason);
-                        continue 'paths;
-                    }
-                }
-                from = to + 1;
-            }
+            let Some(calls) = self.part_readings(&path, &cuts, shape, &mut rejection, governor)?
+            else {
+                continue 'paths;
+            };
             let boundaries: Vec<(usize, u64)> =
                 cuts.iter().map(|&(_, at, cost)| (at, cost)).collect();
-            let found = groups.iter().position(|(known, _)| *known == boundaries);
-            let index = found.unwrap_or_else(|| {
-                groups.push((boundaries, vec![Vec::new(); calls.len()]));
-                groups.len() - 1
+            let shape_of = |parts: &[PartReadings]| -> Vec<bool> {
+                parts
+                    .iter()
+                    .map(|part| matches!(part, PartReadings::Rejected(..)))
+                    .collect()
+            };
+            let found = groups.iter().position(|(known, parts)| {
+                *known == boundaries && shape_of(parts) == shape_of(&calls)
             });
+            let Some(index) = found else {
+                groups.push((boundaries, calls));
+                continue;
+            };
             let group = &mut groups[index].1;
-            for (readings, call) in group.iter_mut().zip(calls) {
+            for (readings, part) in group.iter_mut().zip(calls) {
+                let (PartReadings::Call(readings), PartReadings::Call(mut call)) = (readings, part)
+                else {
+                    continue;
+                };
+                let call = call.remove(0);
                 if !readings.contains(&call) {
                     // Every reading beyond the first competes.
                     if !readings.is_empty() {
@@ -1782,16 +1955,24 @@ impl<'s> Step<'_, 's> {
                     .map(|(part, readings)| {
                         let before = if part == 0 { 0 } else { boundaries[part - 1].1 };
                         let through = boundaries.get(part).map_or(shape.cost, |&(_, cost)| cost);
-                        let span = readings[0].span.clone();
-                        let weight = self.undeclared(shape.kind, &readings);
-                        (
-                            CallSegment {
-                                span,
-                                readings,
-                                derivations: Vec::new(),
-                            },
-                            through.saturating_sub(before).saturating_add(weight),
-                        )
+                        let cost = through.saturating_sub(before);
+                        match readings {
+                            PartReadings::Rejected(span, reason) => {
+                                (Part::Rejected { span, reason }, cost)
+                            }
+                            PartReadings::Call(readings) => {
+                                let span = readings[0].span.clone();
+                                let weight = self.undeclared(shape.kind, &readings);
+                                (
+                                    Part::Call(CallSegment {
+                                        span,
+                                        readings,
+                                        derivations: Vec::new(),
+                                    }),
+                                    cost.saturating_add(weight),
+                                )
+                            }
+                        }
                     })
                     .collect()
             })
@@ -1800,6 +1981,64 @@ impl<'s> Step<'_, 's> {
 }
 
 impl Step<'_, '_> {
+    /// The readings of each part of history `path` (its `next` cuts at
+    /// `cuts`), or `None` when a call part has no reading (its rejection
+    /// noted in `rejection`).
+    fn part_readings(
+        &self,
+        path: &[HistKind],
+        cuts: &[(usize, usize, u64)],
+        shape: &Shape<'_>,
+        rejection: &mut Option<Rejection>,
+        governor: &mut Governor,
+    ) -> Result<Option<Vec<PartReadings>>, StopReason> {
+        let mut calls: Vec<PartReadings> = Vec::with_capacity(cuts.len() + 1);
+        let mut from = 0;
+        for part in 0..=cuts.len() {
+            let last = part == cuts.len();
+            let start = if part == 0 {
+                shape.span.start
+            } else {
+                cuts[part - 1].1
+            };
+            let (to, end) = if last {
+                (path.len(), shape.span.end)
+            } else {
+                (cuts[part].0, cuts[part].1)
+            };
+            let before = if part == 0 { 0 } else { cuts[part - 1].2 };
+            let through = if last { shape.cost } else { cuts[part].2 };
+            let part_shape = Shape {
+                span: start..end,
+                dialect: shape.dialect,
+                kind: shape.kind,
+                dangling: last && shape.dangling,
+                open_end: if last { shape.open_end } else { end },
+                cost: through.saturating_sub(before),
+            };
+            let skipped = path[from..to].iter().find_map(|step| match *step {
+                HistKind::Skipped(at) => Some(at),
+                _ => None,
+            });
+            if let Some(at) = skipped {
+                calls.push(PartReadings::Rejected(
+                    start..end,
+                    Rejection::Malformed { at },
+                ));
+            } else {
+                match self.reading(&path[from..to], &part_shape, governor)? {
+                    Ok(call) => calls.push(PartReadings::Call(vec![call])),
+                    Err(reason) => {
+                        rejection.get_or_insert(reason);
+                        return Ok(None);
+                    }
+                }
+            }
+            from = to + 1;
+        }
+        Ok(Some(calls))
+    }
+
     /// The selection weight of a call none of whose readings names a
     /// declared tool ([`UNDECLARED_NAME`]), when the tool set is
     /// known; zero for a result, or without a tool set.
@@ -1821,13 +2060,115 @@ impl Step<'_, '_> {
     }
 }
 
-/// One segmentation of a completed attempt: each call's segment, in order,
-/// with the cost it carries.
-pub(crate) type Parts = Vec<(CallSegment, u64)>;
+/// The call-closer literals of `program` the failing configuration at `pc`
+/// could still reach without passing another `next`: where its call can
+/// end (see `Engine::resync`). One `Work` unit per location visited.
+fn resync_targets(
+    program: &Program,
+    pc: u32,
+    governor: &mut Governor,
+) -> Result<Vec<u32>, StopReason> {
+    let mut targets: Vec<u32> = Vec::new();
+    let mut seen = vec![false; program.insts.len()];
+    let mut stack = vec![pc];
+    while let Some(pc) = stack.pop() {
+        if core::mem::replace(&mut seen[pc as usize], true) {
+            continue;
+        }
+        governor.charge(Resource::Work, 1)?;
+        let inst = program.insts[pc as usize];
+        if matches!(inst, Inst::Next { .. }) {
+            continue;
+        }
+        if program.call_closers.contains(&pc) {
+            targets.push(pc);
+            continue;
+        }
+        stack.extend(super::compile::successors(&inst));
+    }
+    Ok(targets)
+}
+
+/// A scan of JSON-shaped bytes: bracket depth outside strings, and whether
+/// inside a string and after a backslash in one.
+#[derive(Clone, Copy, Debug, Default)]
+struct JsonScan {
+    depth: u32,
+    quoted: bool,
+    escaped: bool,
+}
+
+impl JsonScan {
+    fn step(&mut self, byte: u8) {
+        if self.quoted {
+            match byte {
+                _ if self.escaped => self.escaped = false,
+                b'\\' => self.escaped = true,
+                b'"' => self.quoted = false,
+                _ => {}
+            }
+            return;
+        }
+        match byte {
+            b'"' => self.quoted = true,
+            b'{' | b'[' => self.depth = (self.depth + 1).min(0xFFFF),
+            b'}' | b']' => self.depth = self.depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+
+    /// The scan as a [`Sub::Resync`] state: the depth in the low 16 bits,
+    /// then the two flags.
+    const fn pack(self) -> u32 {
+        self.depth
+            | if self.quoted { 0x1_0000 } else { 0 }
+            | if self.escaped { 0x2_0000 } else { 0 }
+    }
+
+    const fn unpack(state: u32) -> Self {
+        Self {
+            depth: state & 0xFFFF,
+            quoted: state & 0x1_0000 != 0,
+            escaped: state & 0x2_0000 != 0,
+        }
+    }
+}
+
+/// How a slot's codec failed to finish (see `Step::finish_codec`).
+pub(crate) enum Finished {
+    /// The codec faulted on its body.
+    Fault(CodecFault),
+    /// A JSON value no repair reads, which stopped decoding at `at`.
+    Unread { at: usize },
+}
+
+/// One part of a completed attempt's segmentation.
+#[derive(Clone, Debug)]
+pub(crate) enum Part {
+    /// A call (or result) the attempt read.
+    Call(CallSegment),
+    /// A call the attempt could not read and resynchronized past
+    /// ([`HistKind::Skipped`]): a rejected attempt of its own.
+    Rejected {
+        span: Range<usize>,
+        reason: Rejection,
+    },
+}
+
+/// One segmentation of a completed attempt: each part, in order, with the
+/// cost it carries.
+pub(crate) type Parts = Vec<(Part, u64)>;
+
+/// The readings of one part while they are collected.
+#[derive(Clone, Debug, PartialEq)]
+enum PartReadings {
+    Call(Vec<RawCall>),
+    Rejected(Range<usize>, Rejection),
+}
 
 /// The readings of one segmentation while they are collected: where each
-/// later call begins (with the cost so far), and each call's readings.
-type Grouped = (Vec<(usize, u64)>, Vec<Vec<RawCall>>);
+/// later call begins (with the cost so far), and each part's readings.
+type Grouped = (Vec<(usize, u64)>, Vec<PartReadings>);
 
 /// Whether dropped text is only a code-fence marker: a run of at least
 /// three backticks or tildes, optionally followed by an info string on the
@@ -1939,6 +2280,11 @@ pub(crate) struct Attempt {
     pub(crate) failure: Option<Rejection>,
     /// Where a rejected span ends.
     pub(crate) end: Option<usize>,
+    /// Whether the attempt's span ends where it failed even when it ends at
+    /// the end of output: it failed in a slot value no repair reads that ran
+    /// to the end of output (see `Step::end_body`), or only configurations
+    /// resynchronizing after its failure (see `Engine::resync`) were left.
+    pub(crate) ends_at_failure: bool,
 }
 
 impl ScratchCharge for Attempt {
@@ -1982,6 +2328,10 @@ pub(crate) enum Event {
         /// [`Salvaged`]); the rejected span then begins where the failing
         /// call does.
         salvage: Option<Salvaged>,
+        /// For a rejected attempt: another dialect's attempt that began at
+        /// the same opener read on past where this one failed and read a
+        /// whole call (see [`Engine::defer`]).
+        outread: bool,
     },
 }
 
@@ -2005,12 +2355,15 @@ pub(crate) struct Boundary {
     at: usize,
     hist: u32,
     cost: u64,
+    /// The failing configuration's location and where it failed.
+    pc: u32,
+    failed: usize,
 }
 
 impl ScratchCharge for Boundary {
     const CHARGE: usize = {
-        assert!(core::mem::size_of::<Self>() <= 32);
-        32
+        assert!(core::mem::size_of::<Self>() <= 48);
+        48
     };
 }
 
@@ -2132,7 +2485,20 @@ pub(crate) struct Engine<'s> {
     pending: Vec<(u32, u32, u64)>,
     tools: Option<&'s ToolSet>,
     pub(crate) events: Vec<Event>,
+    /// The latest start of any attempt that opened (see
+    /// [`Step::newest_open`]).
+    newest_open: usize,
+    /// See [`Step::resynced`]; an entry leaves when its attempt ends.
+    resynced: Vec<(u64, usize)>,
+    /// Ended reports held by [`Self::defer`], with their attempts' start.
+    deferred: Vec<(usize, Event)>,
+    /// The openers where an attempt read a whole call, while a held report
+    /// or a live attempt at them remains (see [`Self::defer`]).
+    whole: Vec<usize>,
 }
+
+/// Scratch bytes charged per held ended report or recorded opener.
+const DEFERRED_BYTES: u64 = 64;
 
 impl<'s> Engine<'s> {
     pub(crate) fn new(
@@ -2182,6 +2548,10 @@ impl<'s> Engine<'s> {
             out: Out::new(governor),
             visited: Vec::new(),
             pending: Vec::new(),
+            newest_open: 0,
+            resynced: Vec::new(),
+            deferred: Vec::new(),
+            whole: Vec::new(),
             tools,
             events: Vec::new(),
         })
@@ -2221,6 +2591,8 @@ impl<'s> Engine<'s> {
                 visited: &mut self.visited,
                 pending: &mut self.pending,
                 tools: self.tools,
+                newest_open: self.newest_open,
+                resynced: &mut self.resynced,
             },
             &mut self.stack,
             &mut self.out,
@@ -2260,6 +2632,7 @@ impl<'s> Engine<'s> {
                 completed: false,
                 failure: None,
                 end: None,
+                ends_at_failure: false,
             })?;
             let thread = Thread {
                 pc: program.start,
@@ -2344,11 +2717,14 @@ impl<'s> Engine<'s> {
         )?;
         let records: Vec<Attempt> = self.tables[table].attempts.as_slice().to_vec();
         for record in &records {
+            // A configuration resynchronizing past an earlier failure does
+            // not keep the attempt from being stuck: its repairs are
+            // proposed as if it were not there.
             let touches = |threads: &ScratchVec<Thread>| {
                 threads
                     .as_slice()
                     .iter()
-                    .any(|thread| thread.attempt == record.id)
+                    .any(|thread| thread.attempt == record.id && !thread.sub.resyncing())
             };
             if touches(&live) || touches(&completed) || record.completed {
                 continue;
@@ -2383,6 +2759,11 @@ impl<'s> Engine<'s> {
                     Status::Completed => completed.push(state.thread)?,
                     Status::Failed | Status::Respelled | Status::Stuck => {}
                 }
+            }
+            // The attempt also resynchronizes past the failing call; a
+            // repair that reads it costs less and wins where it completes.
+            if eof.is_none() {
+                self.resync(table, record, until, &mut live, governor)?;
             }
         }
         self.hold_failures(table, earlier, &failed, &live)?;
@@ -2456,6 +2837,7 @@ impl<'s> Engine<'s> {
                 && matches!(failure.thread.sub, Sub::Lit(_))
                 && live.as_slice().iter().any(|thread| {
                     thread.attempt == failure.thread.attempt
+                        && !thread.sub.resyncing()
                         && (trailing || thread.entry <= failure.thread.entry)
                 })
         };
@@ -2525,6 +2907,7 @@ impl<'s> Engine<'s> {
                 && !record.opened
             {
                 record.opened = true;
+                self.newest_open = self.newest_open.max(record.start);
                 self.events.push(Event::Opened {
                     attempt,
                     start: record.start,
@@ -2561,6 +2944,11 @@ impl<'s> Engine<'s> {
             .expect("attempt is live");
         record.failure = Some(first.reason);
         record.end = Some(end);
+        // A slot configuration that failed before its own position failed
+        // in its value (`Step::end_body`), not at a token it was reading.
+        record.ends_at_failure =
+            matches!(program.insts[first.thread.pc as usize], Inst::Slot { .. })
+                && first.at < first.thread.pos;
     }
 
     /// For a grouped program, record where the failing configurations of
@@ -2593,6 +2981,8 @@ impl<'s> Engine<'s> {
                             at,
                             hist: prev,
                             cost,
+                            pc: failure.thread.pc,
+                            failed: failure.at,
                         };
                         let better = best.is_none_or(|known| {
                             (Reverse(candidate.at), candidate.cost, candidate.hist)
@@ -2623,6 +3013,120 @@ impl<'s> Engine<'s> {
             boundaries.push(best)?;
         }
         Ok(())
+    }
+
+    /// Resynchronize stuck `record`, an attempt of a grouped program that
+    /// read whole calls before the one it could not read (its recorded
+    /// [`Boundary`]): a configuration per call-closer literal reachable
+    /// from the failing location (without passing another `next`) scans on
+    /// from `until` for that literal outside JSON strings at the call's
+    /// bracket depth, then reads on after it, so later calls of the
+    /// attempt are read; the skipped call becomes a rejected part
+    /// ([`HistKind::Skipped`]) costing [`REJECT`](super::cost::REJECT). It
+    /// gives up at another call's opener, and the attempt then ends as
+    /// before (`tool_call.markup.group-split`).
+    fn resync(
+        &mut self,
+        table: usize,
+        record: &Attempt,
+        until: usize,
+        live: &mut ScratchVec<Thread>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let program = self.tables[table].program;
+        if program.call_closers.is_empty() {
+            return Ok(());
+        }
+        let Some(boundary) = self.tables[table]
+            .boundaries
+            .as_slice()
+            .iter()
+            .find(|known| known.attempt == record.id)
+            .copied()
+        else {
+            return Ok(());
+        };
+        // Once per failure: a resynchronization already under way from it
+        // (or already ended at its closer) is not started again.
+        if boundary.at < self.base
+            || boundary.at >= until
+            || live.as_slice().iter().any(|thread| {
+                thread.attempt == record.id
+                    && thread.sub.resyncing()
+                    && thread.entry == boundary.failed
+            })
+            || self
+                .resynced
+                .iter()
+                .any(|&(attempt, failed)| attempt == record.id && failed == boundary.failed)
+        {
+            return Ok(());
+        }
+        let targets = resync_targets(program, boundary.pc, governor)?;
+        if targets.is_empty() {
+            return Ok(());
+        }
+        // The scanner state after the call's bytes read so far.
+        governor.charge(Resource::Work, size(until - boundary.at))?;
+        let mut scan = JsonScan::default();
+        for &byte in &self.buffer.as_slice()[boundary.at - self.base..until - self.base] {
+            scan.step(byte);
+        }
+        let state = scan.pack();
+        if let Some(stuck) = self.tables[table]
+            .attempts
+            .as_mut_slice()
+            .iter_mut()
+            .find(|other| other.id == record.id)
+        {
+            stuck.ends_at_failure = true;
+        }
+        // The calls before the failing one were read whole: the last of them
+        // records the split (`tool_call.markup.group-split`), as when the
+        // attempt ends there.
+        let split = EditOperator::GroupSplit.rule().cost;
+        let edited = self.arena.edit(
+            boundary.hist,
+            MarkupEdit {
+                operator: EditOperator::GroupSplit,
+                span: boundary.at..boundary.at,
+                original: Vec::new(),
+                replacement: Vec::new(),
+            },
+            governor,
+        )?;
+        let next = self.arena.push(
+            edited,
+            HistKind::Next(boundary.at, boundary.cost.saturating_add(split)),
+        )?;
+        let hist = self.arena.push(next, HistKind::Skipped(boundary.failed))?;
+        let cost = boundary
+            .cost
+            .saturating_add(split)
+            .saturating_add(super::cost::REJECT);
+        for pc in targets {
+            live.push(Thread {
+                pc,
+                sub: Sub::Resync(state, 0),
+                attempt: record.id,
+                start: record.start,
+                entry: boundary.failed,
+                pos: until,
+                cost,
+                hist,
+                opened: true,
+                stall: 0,
+                reach: until,
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Drop the resynchronization records of `attempt`, which ended.
+    fn forget_resync(&mut self, attempt: u64, governor: &mut Governor) -> Result<(), StopReason> {
+        let before = self.resynced.len();
+        self.resynced.retain(|&(owner, _)| owner != attempt);
+        governor.release_scratch(size(before - self.resynced.len()).saturating_mul(16))
     }
 
     /// Take the boundary recorded for `attempt`, if any.
@@ -2673,7 +3177,7 @@ impl<'s> Engine<'s> {
         };
         let rule = EditOperator::GroupSplit.rule();
         for parts in &mut segmentations {
-            if let Some((segment, cost)) = parts.last_mut() {
+            if let Some((Part::Call(segment), cost)) = parts.last_mut() {
                 *cost = cost.saturating_add(rule.cost);
                 for reading in &mut segment.readings {
                     reading.edits.push(MarkupEdit {
@@ -2710,6 +3214,7 @@ impl<'s> Engine<'s> {
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         let mut index = 0;
+        let mut retired = false;
         while index < self.tables[table].attempts.len() {
             let record = self.tables[table].attempts.as_slice()[index];
             if live
@@ -2725,17 +3230,23 @@ impl<'s> Engine<'s> {
                 continue;
             }
             self.release(table, record.id, governor)?;
+            self.forget_resync(record.id, governor)?;
             if record.opened {
                 // A rejected span ends before the token that could not be
                 // consumed; a completed attempt's last report comes after
                 // all of its completions.
+                // At the end of output a value no repair reads ends its
+                // span where it stopped decoding, as mid-input.
+                let malformed = record.ends_at_failure;
                 let end = match (eof, record.completed) {
+                    (Some(_), false) if malformed => record.end.unwrap_or(at),
                     (Some(_), _) => at,
                     (None, true) => at + 1,
                     (None, false) => record.end.unwrap_or(at),
                 };
                 let salvage = self.salvage(table, &record, end, governor)?;
-                self.events.push(Event::Ended {
+                let whole = record.completed || salvage.is_some();
+                let ended = Event::Ended {
                     table: index_u32(table),
                     attempt: record.id,
                     start: record.start,
@@ -2744,19 +3255,113 @@ impl<'s> Engine<'s> {
                     reason: match (eof, record.failure) {
                         (_, Some(reason @ Rejection::InvalidUtf8 { .. }))
                         | (None, Some(reason)) => reason,
+                        (Some(_), Some(reason @ Rejection::Malformed { .. }))
+                            if !record.completed && record.ends_at_failure =>
+                        {
+                            reason
+                        }
                         (Some(_), _) => Rejection::Unterminated,
                         (None, None) => Rejection::Overlapped { at },
                     },
                     salvage,
-                });
+                    outread: false,
+                };
+                self.defer(table, &record, whole, ended, governor)?;
             } else {
                 self.take_boundary(table, record.id);
             }
             let attempts = self.tables[table].attempts.as_mut_slice();
             attempts.copy_within(index + 1.., index);
             self.tables[table].attempts.pop();
+            retired = true;
+        }
+        // Only an attempt that ended can release a held report.
+        if retired {
+            self.release_deferred(governor)?;
         }
         Ok(())
+    }
+
+    /// Report the end of `record` (of `table`), `whole` when it read a whole
+    /// call (completed, or recovered calls before the one it failed in). A
+    /// rejected attempt with no whole call, while another table's attempt
+    /// that began at the same opener still reads on, is held: when every
+    /// attempt at that opener has ended, it is reported, `outread` when one
+    /// of them read a whole call. The turn layer then records it but does
+    /// not offer it as a reading of the opener: the bytes after the opener
+    /// are the other dialect's markup (body evidence), and a reading that
+    /// rejected the opener here and read those bytes as other calls would
+    /// rest on strictly less grammar evidence. Held reports hold the turn
+    /// layer ([`Self::held_floor`]).
+    fn defer(
+        &mut self,
+        table: usize,
+        record: &Attempt,
+        whole: bool,
+        ended: Event,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        if whole && !self.whole.contains(&record.start) {
+            governor.charge(Resource::ScratchBytes, DEFERRED_BYTES)?;
+            self.whole.push(record.start);
+        }
+        let reads_on = !whole
+            && self.tables.iter().enumerate().any(|(other, entry)| {
+                other != table
+                    && entry
+                        .attempts
+                        .as_slice()
+                        .iter()
+                        .any(|live| live.opened && live.start == record.start)
+            });
+        if reads_on {
+            governor.charge(Resource::ScratchBytes, DEFERRED_BYTES)?;
+            self.deferred.push((record.start, ended));
+        } else {
+            self.events.push(ended);
+        }
+        Ok(())
+    }
+
+    /// Report every held end (see [`Self::defer`]) whose opener no attempt
+    /// reads on from any more.
+    fn release_deferred(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
+        if self.deferred.is_empty() && self.whole.is_empty() {
+            return Ok(());
+        }
+        governor.charge(
+            Resource::Work,
+            size(self.deferred.len() + self.whole.len()).saturating_mul(size(self.tables.len())),
+        )?;
+        let reading = |tables: &[Table<'_>], start: usize| {
+            tables.iter().any(|entry| {
+                entry
+                    .attempts
+                    .as_slice()
+                    .iter()
+                    .any(|live| live.opened && live.start == start)
+            })
+        };
+        let mut index = 0;
+        while index < self.deferred.len() {
+            let start = self.deferred[index].0;
+            if reading(&self.tables, start) {
+                index += 1;
+                continue;
+            }
+            let (_, mut ended) = self.deferred.remove(index);
+            if let Event::Ended { outread, .. } = &mut ended {
+                *outread = self.whole.contains(&start);
+            }
+            self.events.push(ended);
+            governor.release_scratch(DEFERRED_BYTES)?;
+        }
+        let before = self.whole.len();
+        let (tables, deferred) = (&self.tables, &self.deferred);
+        self.whole.retain(|&start| {
+            reading(tables, start) || deferred.iter().any(|(held, _)| *held == start)
+        });
+        governor.release_scratch(size(before - self.whole.len()).saturating_mul(DEFERRED_BYTES))
     }
 
     /// Report the held completions of `attempt`, a grouped program's, that
@@ -3068,7 +3673,8 @@ impl<'s> Engine<'s> {
             .flat_map(|table| table.attempts.as_slice().iter())
             .filter(|record| !record.opened)
             .map(|record| record.start);
-        trails.chain(held).chain(uncommitted).min()
+        let deferred = self.deferred.iter().map(|(_, ended)| ended.at());
+        trails.chain(held).chain(uncommitted).chain(deferred).min()
     }
 
     /// Record every inserted wrapper closer ending `thread`'s history as
@@ -3254,7 +3860,10 @@ impl<'s> Engine<'s> {
                         let (costs, arguments) = match &event {
                             Event::Completed { parts, .. } => (
                                 parts.iter().map(|(_, cost)| *cost).collect(),
-                                parts.last().is_some_and(|(segment, _)| {
+                                parts.last().is_some_and(|(part, _)| {
+                                    let Part::Call(segment) = part else {
+                                        return false;
+                                    };
                                     segment.readings.iter().any(|reading| {
                                         reading.captures.iter().any(|capture| {
                                             matches!(
@@ -3405,7 +4014,8 @@ impl<'s> Engine<'s> {
             table.trails.retain(|trail| trail.thread.attempt != attempt);
             table.held.retain(|entry| entry.attempt != attempt);
         }
-        Ok(())
+        self.forget_resync(attempt, governor)?;
+        self.release_deferred(governor)
     }
 
     /// End of input: complete, cut off, or reject every open attempt.
@@ -3442,7 +4052,8 @@ impl<'s> Engine<'s> {
             self.tables[table].failures.clear();
             self.tables[table].trails.clear();
         }
-        Ok(())
+        // Every attempt has ended: every held report is due.
+        self.release_deferred(governor)
     }
 
     /// Report the completions of whole calls found at a length stop (see
@@ -3523,6 +4134,7 @@ impl<'s> Engine<'s> {
                 }
             }
             self.release(table, record.id, governor)?;
+            self.forget_resync(record.id, governor)?;
             self.take_boundary(table, record.id);
             if record.opened {
                 // The cut-off reading may itself be rejected (a capture that
@@ -3534,6 +4146,12 @@ impl<'s> Engine<'s> {
                     .find(|live| live.id == record.id)
                     .copied()
                     .expect("the attempt is live until it ends");
+                // A completed or cut-off reading read a whole call: a
+                // rejection held at its opener is outread (see `defer`).
+                if live.completed && !self.whole.contains(&record.start) {
+                    governor.charge(Resource::ScratchBytes, DEFERRED_BYTES)?;
+                    self.whole.push(record.start);
+                }
                 self.events.push(Event::Ended {
                     table: index_u32(table),
                     attempt: record.id,
@@ -3546,6 +4164,7 @@ impl<'s> Engine<'s> {
                     },
                     // A length stop keeps the cut-off reading instead.
                     salvage: None,
+                    outread: false,
                 });
             }
         }

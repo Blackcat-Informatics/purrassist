@@ -1,5 +1,5 @@
 {
-  "description": "T2: the same Mistral v3 list cut by a length stop after its malformed element: as with a truncated last call, the first call stays usable and (pinned) the malformed element is the rejected attempt; under the default allow-list the bare [TOOL_CALLS] is rejected as a Mistral v11 attempt and the first element is read as a bare JSON call.",
+  "description": "T2/T3: the same Mistral v3 list cut by a length stop inside its third element: the first call stays usable (group-split), the malformed element is a rejected part, and the cut element is a truncated call; under the default allow-list the Mistral v11 rejection at the shared opener is outread, so the reading is the same.",
   "tools_openai": [
     {
       "type": "function",
@@ -24,53 +24,7 @@
   },
   "stop": "length",
   "input": "Hi [TOOL_CALLS] [{\"name\": \"f\", \"arguments\": {\"a\": \"x\"}}, {\"name\": \"f\" oops, \"arguments\": {\"a\": \"y\"}}, {\"name\": \"f\", \"argum",
-  "default_expect": {
-    "outcome": "resolved",
-    "stopped": "completed",
-    "finish": "unresolved",
-    "openai_finish_reason": "length",
-    "verdict": "run",
-    "usable_calls": {
-      "strict": 1,
-      "accepting_guesses": 1
-    },
-    "calls": [
-      {
-        "tool": "f",
-        "arguments": {
-          "a": "x"
-        },
-        "candidate_dialects": [
-          "bare-json.v1"
-        ],
-        "outcome": "resolved",
-        "rules": []
-      }
-    ],
-    "rejected": [
-      {
-        "span": [
-          3,
-          16
-        ],
-        "dialect": "mistral-v11.v1",
-        "candidate_dialects": [
-          "mistral-v11.v1"
-        ],
-        "reason": "Malformed { at: 16 }",
-        "raw": "[TOOL_CALLS] "
-      }
-    ],
-    "embedded": [],
-    "content": [
-      "Hi ",
-      "[",
-      ", {\"name\": \"f\" oops, \"arguments\": {\"a\": \"y\"}}, {\"name\": \"f\", \"argum"
-    ],
-    "failed_validations": [],
-    "ledger_rules": []
-  },
-  "outcome": "resolved",
+  "outcome": "best_guess",
   "stopped": "completed",
   "finish": "unresolved",
   "openai_finish_reason": "length",
@@ -93,30 +47,43 @@
         "tool_call.markup.group-split",
         "tool_call.id.dedup"
       ]
+    },
+    {
+      "tool": "f",
+      "arguments": {},
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "outcome": "unresolved: truncated: the call was cut off by a length stop",
+      "rules": [
+        "tool_call.truncated",
+        "tool_call.id.dedup"
+      ]
     }
   ],
   "rejected": [
     {
       "span": [
         57,
-        100
+        102
       ],
       "dialect": "mistral-v3.v1",
       "candidate_dialects": [
         "mistral-v3.v1"
       ],
       "reason": "Malformed { at: 70 }",
-      "raw": "{\"name\": \"f\" oops, \"arguments\": {\"a\": \"y\"}}"
+      "raw": "{\"name\": \"f\" oops, \"arguments\": {\"a\": \"y\"}}, "
     }
   ],
   "embedded": [],
   "content": [
-    "Hi ",
-    ", {\"name\": \"f\", \"argum"
+    "Hi "
   ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.group-split",
+    "tool_call.id.dedup",
+    "tool_call.truncated",
     "tool_call.id.dedup"
   ]
 }

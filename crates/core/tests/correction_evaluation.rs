@@ -524,7 +524,18 @@ fn tool_call_corpus_tally() -> ToolCallEvaluation {
     for case in &cases {
         let request = tool_call_corpus::request(case);
         let set = tool_call_corpus::tools_for(case, &tools, &adapter);
-        let result = set.recover(text_field(case, "input").as_bytes(), &request);
+        // A case whose output is not well-formed UTF-8 carries its exact
+        // bytes as `input_hex`.
+        let bytes: Vec<u8> = optional_text(case, "input_hex").map_or_else(
+            || text_field(case, "input").as_bytes().to_vec(),
+            |hex| {
+                (0..hex.len())
+                    .step_by(2)
+                    .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).expect("hex input"))
+                    .collect()
+            },
+        );
+        let result = set.recover(&bytes, &request);
         let answer: Option<Vec<(String, Node)>> = match &result.outcome {
             Outcome::Resolved(calls) | Outcome::BestGuess(calls) => {
                 let usable = calls.usable_accepting_guesses();
@@ -647,9 +658,9 @@ fn evaluate(name: &str, tally: Tally, total_cases: usize, limit: f64) {
 }
 
 /// The tool-call corpus tallies `docs/MATCHING-QUALITY.md` quotes.
-const TOOL_CALL_CASES: usize = 13815;
-const TOOL_CALL_CORRECT: u64 = 9513;
-const TOOL_CALL_ABSTAINED: u64 = 4302;
+const TOOL_CALL_CASES: usize = 14538;
+const TOOL_CALL_CORRECT: u64 = 10097;
+const TOOL_CALL_ABSTAINED: u64 = 4441;
 
 // ---------------------------------------------------------------------
 // Documented numbers: `docs/MATCHING-QUALITY.md`'s evaluation table quotes

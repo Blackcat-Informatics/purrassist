@@ -42,7 +42,12 @@ fn run_with(declarations: &str, arguments: &[&str], stdin: &[u8]) -> (Output, Pa
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(stdin).unwrap();
+    // A child that exits before reading its input closes the pipe; its
+    // status and stderr (asserted by the caller) say why, so a broken pipe
+    // here is not itself the failure.
+    if let Err(error) = child.stdin.take().unwrap().write_all(stdin) {
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "{error}");
+    }
     (child.wait_with_output().unwrap(), tools)
 }
 

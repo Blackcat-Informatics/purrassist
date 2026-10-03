@@ -153,6 +153,10 @@ is reported as certain.
      (Kimi-K2's `<|tool_call_end|>`, DeepSeek's `<｜tool▁call▁end｜>`) or
      another alternative's (`</function>` after a broken `<tool_call>`).
 
+  Without such a literal, an attempt that left a JSON value open (its
+  bytes open more brackets than they close, outside strings) runs to the
+  bracket that balances it.
+
   Otherwise the span ends at step 2 and everything after it stays content
   (`Sure, I could call <function=f but actually no tool is needed. The
   answer is 42.` keeps `<function=f` as the attempt and the answer as
@@ -191,20 +195,58 @@ is reported as certain.
   the call the grammar could not read is recovered in its own right
   (`tool_call.markup.group-split`, recorded on the last of them at the
   boundary; a markup repair, single reading, so it does not demote and is
-  admitted under `Structural`), and the rejected attempt begins at the
-  failing call's own opener and runs to its call closer (or the section
-  closer). Later calls are recovered where the grammar resynchronizes: at
-  the next per-call opener (`<|tool_call_begin|>`, `<｜tool▁call▁begin｜>`,
-  `[TOOL_CALLS]`). A Mistral v3 list element has no opener of its own, so
-  the elements after a malformed one are not resynchronized by Mistral v3
-  (under the default allow-list, bare JSON reads a well-formed element as a
-  call). The same holds under a length stop. *Proved by* the goldens
-  `kimi_group_good_bad_good`, `kimi_sectionless_group_good_bad_good`,
+  admitted under `Structural`). The attempt then *resynchronizes*: beside
+  the repairs the failure proposes (which cost less and win where they
+  read the call), it scans on for a literal that ends a call of its
+  alternative (the call's own closer, a list separator or closer, the
+  section closer), outside JSON strings and at the call's bracket depth, and
+  reads on after it, so later calls of the same attempt are read too, and
+  the malformed call is a rejected part of the attempt, from its own start
+  to that literal. The scan gives up at another call's opener (that call is
+  then read on its own) or the end of output; the attempt then ends at its
+  failure, the calls before it recovered and the rejection running from
+  the failing call's start as far as its markup is shown to run. A
+  malformed first call (no call read whole before it) is a rejected
+  attempt as before. The same holds under a length stop. *Proved by* the
+  goldens `kimi_group_good_bad_good`,
+  `kimi_sectionless_group_good_bad_good`,
   `kimi_chained_rejected_attempt_runs_to_section_closer`,
-  `deepseek3_group_good_bad_good`, `deepseek31_group_good_bad_good`,
-  `mistral3_group_good_bad_good`, `mistral3_group_good_bad_good_length_stop`
-  and `mistral11_group_good_bad_good`, each also under the default
-  allow-list.
+  `kimi_group_split_without_resync`, `deepseek3_group_good_bad_good`,
+  `deepseek31_group_good_bad_good`, `mistral3_group_good_bad_good`,
+  `mistral3_group_good_bad_good_length_stop` and
+  `mistral11_group_good_bad_good`, each also under the default allow-list,
+  and the `tool_call.markup.group-split` rows of the correction evaluation.
+- **Body evidence decides a shared opener.** When dialects share an opener
+  (`[TOOL_CALLS]` for Mistral v3 and v11, `<tool_call>` for Hermes and
+  Qwen3-Coder XML) and one dialect's attempt fails at the body's first
+  bytes while another's reads on and reads a whole call there, the failed
+  attempt's rejection is recorded (it names the dialect among the opener's
+  candidates) but is not a reading of the opener: a reading that rejected
+  the opener there and read the bytes after it as other calls (Mistral v3
+  list elements as bare JSON) would rest on strictly less grammar evidence
+  than the attempt that read the list. The engine holds such a rejection
+  until every attempt at the opener has ended. When the attempt that read
+  further reads no whole call either, both rejections stay readings (an
+  inner well-formed object inside a broken wrapper is still recovered).
+  *Proved by* the `mistral3_group_good_bad_good` golden under the default
+  allow-list and
+  `tool_call_recover::rejected_wrapper_covers_the_call_recovered_inside_it`.
+- **A written token is never read as omitted.** A token a grammar may read
+  as omitted (`insert("...")`, recorded as `tool_call.markup.missing-token`)
+  is never inserted where it is written: Mistral v11's `[ARGS]` after a
+  name. Nor is it inserted before a value where the grammar reads other
+  written markup at that position instead (v11's `[CALL_ID]`, the optional
+  segment before `[ARGS]`): the value would read nothing, and the markup
+  would be left as text. A malformed arguments value after a written `[ARGS]` goes through
+  the json codec's repairs; a JSON arguments value no repair reads makes
+  the attempt a rejected attempt (in every dialect), failing where the
+  value stopped decoding, and its markup runs to its closer, the next
+  opener, or the bracket that balances the value it opened, never into the
+  text after it. *Proved by* the goldens `mistral11_args_written_repairable`,
+  `mistral11_args_written_unreadable`,
+  `mistral11_args_written_unreadable_between_calls`,
+  `mistral11_call_id_written_args_cut` and
+  `mistral11_group_good_bad_good`, each also under the default allow-list.
 - **A misspelled closer still closes its call.** A closer token one edit
   away from exactly one closer of the grammar (one byte inserted, deleted or
   substituted, or two adjacent bytes swapped, between the closer's
@@ -255,7 +297,7 @@ is reported as certain.
   five built-in dialects outside the allow-list, and negatives), the CLI
   test `tool_calls_cli::unparsed_markup_is_reported_via_cli`, and the host
   test `tool_call_tools::unparsed_markup_over_mcp`.
-- **Measured.** The 13,815-case correction evaluation records zero incorrect
+- **Measured.** The 14,538-case correction evaluation records zero incorrect
   automatic answers overall, per rule, and per dialect, and abstains on every
   case whose only correct answer is abstention
   (`correction_evaluation::tool_call_recovery_evaluation_has_zero_incorrect_corrections`;

@@ -13,7 +13,10 @@
 //! fence or prose around the arguments, stringified arguments, a cut-off
 //! output, a misspelled name or key, a case-changed enumeration value, a
 //! whitespace-padded typed value, a JSON syntax slip in the arguments or in
-//! a JSON call envelope, ...). The case's
+//! a JSON call envelope, a misspelled closer, a byte of a value that is not
+//! well-formed UTF-8, a repeated typed parameter with an invalid value, a
+//! call running into a reasoning marker, a malformed call between two calls
+//! of one attempt, ...). The case's
 //! `category` is the rule expected to repair it, and its `truth` is the
 //! original call(s) when the mutation preserved what the caller needs, or
 //! `"Unresolved"` when the only correct answer is abstention:
@@ -225,6 +228,7 @@ fn adapter_cases(cases: &mut Vec<Case>) {
         ] {
             cases.push(Case {
                 tool_set: Some("adapter"),
+                invalid: None,
                 id: format!("adapter/search_index/{label}/{category}/{variant}"),
                 category: category.to_owned(),
                 dialect: dialect.to_owned(),
@@ -398,9 +402,24 @@ pub struct Case {
     /// `Some("adapter")` for [`adapter_tools`] (written to the record only
     /// then, so every other record is unchanged).
     pub tool_set: Option<&'static str>,
+    /// For a case whose output is not well-formed UTF-8: the offset of the
+    /// one ASCII byte of `input` the output holds as `0xFF` instead. The
+    /// record then carries `input` with U+FFFD there and the exact bytes as
+    /// `input_hex` (written only then, so every other record is unchanged).
+    pub invalid: Option<usize>,
 }
 
 impl Case {
+    /// The model output's exact bytes.
+    #[must_use]
+    pub fn bytes(&self) -> Vec<u8> {
+        let mut bytes = self.input.clone().into_bytes();
+        if let Some(at) = self.invalid {
+            bytes[at] = 0xFF;
+        }
+        bytes
+    }
+
     /// The case as a JSON record (members in a fixed order).
     #[must_use]
     pub fn record(&self) -> Node {
@@ -420,17 +439,25 @@ impl Case {
                 ))
             },
         );
+        let input = String::from_utf8_lossy(&self.bytes()).into_owned();
         let mut members = vec![
             ("id", string(&self.id)),
             ("category", string(&self.category)),
             ("dialect", string(&self.dialect)),
             ("policy", string(self.policy.code())),
             ("stop", self.stop.node()),
-            ("input", string(&self.input)),
+            ("input", string(&input)),
             ("truth", truth),
         ];
         if let Some(tool_set) = self.tool_set {
             members.push(("tool_set", string(tool_set)));
+        }
+        if self.invalid.is_some() {
+            let mut hex = String::new();
+            for byte in self.bytes() {
+                write!(hex, "{byte:02x}").expect("writing to a String is infallible");
+            }
+            members.push(("input_hex", string(&hex)));
         }
         object(members)
     }
@@ -900,6 +927,11 @@ struct Mutant {
     stop: Ending,
     /// Requires a dialect allow-list with reasoning markers.
     reasoning: bool,
+    /// The call a correct answer recovers, when the mutation changes it (a
+    /// value read with U+FFFD); `None` for the base call.
+    call: Option<Call>,
+    /// See [`Case::invalid`].
+    invalid: Option<usize>,
 }
 
 fn mutant(category: &'static str, variant: impl Into<String>, text: String, need: Need) -> Mutant {
@@ -910,6 +942,8 @@ fn mutant(category: &'static str, variant: impl Into<String>, text: String, need
         need,
         stop: Ending::Stop,
         reasoning: false,
+        call: None,
+        invalid: None,
     }
 }
 
@@ -1341,7 +1375,172 @@ fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
     ) {
         envelope_mutations(base, &mut out);
     }
+    closer_misspelled_mutations(base, &mut out);
+    invalid_value_mutations(base, &mut out);
+    repeated_choice_mutations(base, xml, &mut out);
+    if base.dialect == DialectId::MistralV11 {
+        marker_cut_mutations(base, &mut out);
+    }
     out
+}
+
+// ---------------------------------------------------------------------
+// Later rules of issue #3: misspelled closers, invalid UTF-8 in a value,
+// a repeated parameter chosen on evidence, a call cut at a reasoning
+// marker, and a malformed call between two calls of one attempt.
+// ---------------------------------------------------------------------
+
+/// The closer spellings of `base`'s witness a misspelling mutates: every
+/// multi-byte literal ending a call of its dialect that the witness writes,
+/// and Qwen3-Coder XML's `</parameter>`.
+fn misspellable(base: &Base) -> Vec<String> {
+    let mut spellings: Vec<String> = base
+        .dialect
+        .grammar()
+        .call_ends()
+        .iter()
+        .flat_map(|end| end.call_closers.iter())
+        .filter(|spelling| spelling.len() > 1)
+        .filter_map(|spelling| String::from_utf8(spelling.clone()).ok())
+        .filter(|spelling| base.text.contains(spelling.as_str()))
+        .collect();
+    if base.dialect == DialectId::Qwen3CoderXml && base.text.contains("</parameter>") {
+        spellings.push("</parameter>".to_owned());
+    }
+    spellings.sort();
+    spellings.dedup();
+    spellings
+}
+
+/// `spelling` with one slip: its second-to-last ASCII letter or digit
+/// deleted (`</function>` as `</functin>`).
+fn misspell(spelling: &str) -> Option<String> {
+    let letters: Vec<usize> = spelling
+        .char_indices()
+        .filter(|(_, character)| character.is_ascii_alphanumeric())
+        .map(|(at, _)| at)
+        .collect();
+    let at = *letters.get(letters.len().checked_sub(2)?)?;
+    let mut slipped = spelling.to_owned();
+    slipped.remove(at);
+    Some(slipped)
+}
+
+/// `tool_call.markup.closer-misspelled`: the last occurrence of each closer
+/// the witness writes, with one slip.
+fn closer_misspelled_mutations(base: &Base, out: &mut Vec<Mutant>) {
+    for spelling in misspellable(base) {
+        let (Some(at), Some(slipped)) = (base.text.rfind(&spelling), misspell(&spelling)) else {
+            continue;
+        };
+        let variant: String = spelling
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect();
+        out.push(mutant(
+            "tool_call.markup.closer-misspelled",
+            variant,
+            format!(
+                "{}{slipped}{}",
+                &base.text[..at],
+                &base.text[at + spelling.len()..]
+            ),
+            Need::Exact,
+        ));
+    }
+}
+
+/// `tool_call.value.invalid-utf8`: the first byte of a string value the
+/// witness writes once, as plain ASCII, replaced by `0xFF`; the value is
+/// read with U+FFFD for it, a data loss.
+fn invalid_value_mutations(base: &Base, out: &mut Vec<Mutant>) {
+    let members = base.members();
+    let Some((index, value)) = members.iter().enumerate().find_map(|(index, member)| {
+        let Value::String(value) = &member.value.value else {
+            return None;
+        };
+        // An unconstrained string: the value read with U+FFFD is the
+        // value, with no enumeration or pattern to correct it toward.
+        (matches!(base.declared(&member.key).shape, ValueShape::String(None))
+            && value.len() >= 2
+            && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
+            && base.text.matches(value.as_str()).count() == 1)
+            .then(|| (index, value.clone()))
+    }) else {
+        return;
+    };
+    let at = base
+        .text
+        .find(value.as_str())
+        .expect("the value is written");
+    let mut arguments = members.to_vec();
+    arguments[index].value = string(&format!("\u{FFFD}{}", &value[1..]));
+    let mut slipped = mutant(
+        "tool_call.value.invalid-utf8",
+        members[index].key.clone(),
+        base.text.clone(),
+        Need::DataLoss,
+    );
+    slipped.invalid = Some(at);
+    slipped.call = Some(Call {
+        name: base.call.name.clone(),
+        arguments: Node::new(Value::Object(arguments)),
+    });
+    out.push(slipped);
+}
+
+/// `tool_call.parameter.repeated-choice`: a typed parameter written a
+/// second time with a value its type rejects; the reading that keeps the
+/// valid occurrence is chosen on evidence, a guess.
+fn repeated_choice_mutations(base: &Base, xml: bool, out: &mut Vec<Mutant>) {
+    let typed = base.members_where(|declared, _| {
+        matches!(
+            declared.shape,
+            ValueShape::Integer | ValueShape::Number | ValueShape::Boolean
+        )
+    });
+    let Some(&index) = typed.first() else {
+        return;
+    };
+    let key = base.members()[index].key.clone();
+    out.push(mutant(
+        "tool_call.parameter.repeated-choice",
+        key.clone(),
+        add_member(
+            base,
+            &key,
+            if xml {
+                "not-a-value"
+            } else {
+                "\"not-a-value\""
+            },
+        ),
+        Need::Guess,
+    ));
+}
+
+/// `tool_call.reasoning.marker-cut`: a Mistral v11 call with no `[ARGS]`
+/// running into a reasoning block's closing `[/THINK]` (cut there, so never
+/// usable) before the witness call.
+fn marker_cut_mutations(base: &Base, out: &mut Vec<Mutant>) {
+    let mut cut = mutant(
+        "tool_call.reasoning.marker-cut",
+        "name-only",
+        format!(
+            "[THINK]Plan: [TOOL_CALLS]{}[/THINK]{}",
+            base.call.name, base.text
+        ),
+        Need::Exact,
+    );
+    cut.reasoning = true;
+    out.push(cut);
+}
+
+/// `{name}` in `text` with ` oops` written after its first occurrence: a
+/// call whose name runs into prose, which no grammar reads.
+fn break_name(text: &str, name: &str) -> Option<String> {
+    let at = text.find(name)? + name.len();
+    Some(format!("{} oops{}", &text[..at], &text[at..]))
 }
 
 /// The JSON envelope slips: the call object around the arguments carries
@@ -2420,6 +2619,18 @@ fn section_pair(first: &Base, second: &Base, out: &mut Vec<Mutant>) {
             Need::Exact,
         ));
     }
+    // A malformed call between the two calls of the section: both calls
+    // are recovered and only the malformed one is rejected.
+    if let Some(end) = tail.find(call_end)
+        && let Some(bad) = break_name(&tail[..end + call_end.len()], &second.call.name)
+    {
+        out.push(mutant(
+            "tool_call.markup.group-split",
+            "middle",
+            format!("{head}{sep}{bad}{sep}{tail}"),
+            Need::Exact,
+        ));
+    }
 }
 
 /// Mutations of a two-call turn in one dialect (`first` then `second`).
@@ -2451,6 +2662,34 @@ fn pair_mutations(first: &Base, second: &Base) -> Vec<Mutant> {
                 "tool_call.markup.missing-token",
                 "second-token",
                 format!("{}\n{}", first.text, rest.trim_start()),
+                Need::Exact,
+            ));
+        }
+        if let (Some((head, first_inside, tail)), Some((_, second_inside, _))) =
+            (mistral_array(first), mistral_array(second))
+            && let Some(bad) = break_name(second_inside.trim(), &second.call.name)
+        {
+            // A malformed element between the two calls of one list.
+            out.push(mutant(
+                "tool_call.markup.group-split",
+                "middle",
+                format!(
+                    "{head}[{}, {bad}, {}]{tail}",
+                    first_inside.trim(),
+                    second_inside.trim()
+                ),
+                Need::Exact,
+            ));
+        }
+        if first.dialect == DialectId::MistralV11 {
+            // A call whose arguments no repair reads between two calls.
+            out.push(mutant(
+                "tool_call.markup.group-split",
+                "unread-arguments",
+                format!(
+                    "{}\n[TOOL_CALLS]{}[ARGS]{{\"x\": ::: }}\n{}",
+                    first.text, second.call.name, second.text
+                ),
                 Need::Exact,
             ));
         }
@@ -2542,9 +2781,11 @@ fn single_cases(
             *count += 1;
         }
         let single = base.seed.is_multiple_of(2) && !mutant.reasoning;
-        let truth = answerable(mutant.need, base.effects, policy).then(|| vec![base.call.clone()]);
+        let call = mutant.call.clone().unwrap_or_else(|| base.call.clone());
+        let truth = answerable(mutant.need, base.effects, policy).then(|| vec![call]);
         cases.push(Case {
             tool_set: None,
+            invalid: mutant.invalid,
             id: format!(
                 "{}/{}/s{}/{}/{}",
                 base.label(),
@@ -2587,6 +2828,7 @@ fn deepseek_mixed_cases(bases: &[Base], cases: &mut Vec<Case>) {
         };
         cases.push(Case {
             tool_set: None,
+            invalid: None,
             id: format!(
                 "mixed/{}:{}+{}:{}/s{}+s{}/canonical/mixed",
                 first.label(),
@@ -2642,6 +2884,7 @@ pub fn generate() -> Vec<Case> {
             for mutant in pair_mutations(first, second) {
                 cases.push(Case {
                     tool_set: None,
+                    invalid: None,
                     id: format!(
                         "{}/{}+{}/s{}+s{}/{}/{}",
                         first.label(),
@@ -2689,6 +2932,7 @@ pub fn generate() -> Vec<Case> {
         ] {
             cases.push(Case {
                 tool_set: None,
+                invalid: None,
                 id: format!(
                     "mixed/{}:{}+{}:{}/s{}+s{}/{category}/{variant}",
                     first.label(),

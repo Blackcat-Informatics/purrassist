@@ -1,5 +1,5 @@
 {
-  "description": "T2: in an attempt reading several calls, a Mistral v3 [TOOL_CALLS] list whose second element is malformed: under the pinned allow-list the first call is recovered (tool_call.markup.group-split) and the malformed element is the rejected attempt. A list element has no opener of its own, so Mistral v3 cannot resynchronize at the third element: it is reported as bare-JSON call markup no allowed dialect reads. Under the default allow-list the least-cost reading rejects the bare [TOOL_CALLS] as a Mistral v11 attempt and reads both well-formed elements as bare JSON calls, so both are recovered there too; the malformed element is left as text.",
+  "description": "T2/T3: a Mistral v3 [TOOL_CALLS] list whose second element is malformed: the attempt resynchronizes at the separator after the malformed element (outside strings, at the list's depth), so both well-formed elements are recovered as mistral-v3.v1 calls (tool_call.markup.group-split on the first) and the malformed element is a rejected part. Under the default allow-list the same reading is the only one: the Mistral v11 attempt at the shared [TOOL_CALLS] fails at the body's first byte while the Mistral v3 attempt reads a whole call there, so its rejection is recorded but is not a reading of the opener (body evidence).",
   "tools_openai": [
     {
       "type": "function",
@@ -23,72 +23,14 @@
     "f": "read_only"
   },
   "input": "Hi [TOOL_CALLS] [{\"name\": \"f\", \"arguments\": {\"a\": \"x\"}}, {\"name\": \"f\" oops, \"arguments\": {\"a\": \"y\"}}, {\"name\": \"f\", \"arguments\": {\"a\": \"z\"}}] done",
-  "default_expect": {
-    "outcome": "resolved",
-    "stopped": "completed",
-    "finish": "unresolved",
-    "openai_finish_reason": "tool_calls",
-    "verdict": "run",
-    "usable_calls": {
-      "strict": 2,
-      "accepting_guesses": 2
-    },
-    "calls": [
-      {
-        "tool": "f",
-        "arguments": {
-          "a": "x"
-        },
-        "candidate_dialects": [
-          "bare-json.v1"
-        ],
-        "outcome": "resolved",
-        "rules": []
-      },
-      {
-        "tool": "f",
-        "arguments": {
-          "a": "z"
-        },
-        "candidate_dialects": [
-          "bare-json.v1"
-        ],
-        "outcome": "resolved",
-        "rules": []
-      }
-    ],
-    "rejected": [
-      {
-        "span": [
-          3,
-          16
-        ],
-        "dialect": "mistral-v11.v1",
-        "candidate_dialects": [
-          "mistral-v11.v1"
-        ],
-        "reason": "Malformed { at: 16 }",
-        "raw": "[TOOL_CALLS] "
-      }
-    ],
-    "embedded": [],
-    "content": [
-      "Hi ",
-      "[",
-      ", {\"name\": \"f\" oops, \"arguments\": {\"a\": \"y\"}}, ",
-      "] done"
-    ],
-    "failed_validations": [],
-    "ledger_rules": []
-  },
   "outcome": "resolved",
   "stopped": "completed",
   "finish": "unresolved",
   "openai_finish_reason": "tool_calls",
   "verdict": "run",
   "usable_calls": {
-    "strict": 1,
-    "accepting_guesses": 1
+    "strict": 2,
+    "accepting_guesses": 2
   },
   "calls": [
     {
@@ -104,41 +46,44 @@
         "tool_call.markup.group-split",
         "tool_call.id.dedup"
       ]
+    },
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "z"
+      },
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.id.dedup"
+      ]
     }
   ],
   "rejected": [
     {
       "span": [
         57,
-        100
+        102
       ],
       "dialect": "mistral-v3.v1",
       "candidate_dialects": [
         "mistral-v3.v1"
       ],
       "reason": "Malformed { at: 70 }",
-      "raw": "{\"name\": \"f\" oops, \"arguments\": {\"a\": \"y\"}}"
-    },
-    {
-      "span": [
-        102,
-        140
-      ],
-      "dialect": "bare-json.v1",
-      "candidate_dialects": [],
-      "reason": "UnsupportedDialect { family: BareJson }",
-      "raw": "{\"name\": \"f\", \"arguments\": {\"a\": \"z\"}}"
+      "raw": "{\"name\": \"f\" oops, \"arguments\": {\"a\": \"y\"}}, "
     }
   ],
   "embedded": [],
   "content": [
     "Hi ",
-    ", {\"name\": \"f\", \"arguments\": {\"a\": \"z\"}}] done"
+    " done"
   ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.group-split",
     "tool_call.id.dedup",
-    "tool_call.markup.unparsed-dialect"
+    "tool_call.id.dedup"
   ]
 }
