@@ -1771,7 +1771,11 @@ impl<'a> Resolver<'a> {
                 });
             }
             let mut validations = Vec::new();
+            let mut arguments = arguments;
             if blocker.is_none() {
+                let (typed, ledger) = self.schema_typed(raw, tool, arguments, governor)?;
+                arguments = typed;
+                repairs.extend(ledger);
                 let report = tool.schema().validate_with(&arguments, governor)?;
                 let validation = report.to_validation();
                 governor.charge(
@@ -1795,6 +1799,95 @@ impl<'a> Resolver<'a> {
             readings.push(reading);
         }
         Ok(readings)
+    }
+
+    /// Type the XML text inside a parameter whose schema the typed model
+    /// does not express ([`ValueShape::Unmodeled`]: `anyOf`, `oneOf`,
+    /// `$ref`, a type array, ...) by the tool's exact schema itself: each
+    /// verbatim string is also read as the JSON value it spells (a number
+    /// keeping its exact spelling, a boolean, `null`, an array or object
+    /// written inline), and the exact validator chooses. The verbatim string
+    /// is kept wherever it validates (a string branch keeps the text, as a
+    /// declared string does), the JSON reading is taken where it removes
+    /// the violations at or around that value, and the verbatim text stays
+    /// where neither validates (its `schema_validation` diagnosis
+    /// unchanged). Each decision is recorded as
+    /// `tool_call.value.schema-typed`, a definition-grounded single reading
+    /// like `tool_call.value.decode-typed` for a declared type, so not a
+    /// guess. `$ref` (and `$defs`/`definitions`) are resolved by the
+    /// governed validator against the whole schema, so a recursive `$ref`
+    /// never loops. The values are decided in batched rounds (a handful of
+    /// validations whatever their number), each validation charged to the
+    /// governor: exhaustion is an explicit `BudgetExceeded`, never a quiet
+    /// verbatim fallback.
+    fn schema_typed(
+        &self,
+        raw: &RawCall,
+        tool: &CompiledTool,
+        mut arguments: Node,
+        governor: &mut Governor,
+    ) -> Result<(Node, CallLedger), StopReason> {
+        let mut ledger = CallLedger::default();
+        if !holds_unmodeled(&tool.argument_shape().arguments) {
+            return Ok((arguments, ledger));
+        }
+        let mut sites = Vec::new();
+        schema_sites(
+            &tool.argument_shape().arguments,
+            &arguments,
+            "",
+            "",
+            raw,
+            &mut sites,
+            governor,
+        )?;
+        if sites.is_empty() {
+            return Ok((arguments, ledger));
+        }
+        let rule = rules::resolution_rule("tool_call.value.schema-typed");
+        let Some((typed, accepted, both)) =
+            schema_rounds(tool, &sites, arguments.clone(), governor)?
+        else {
+            return Ok((arguments, ledger));
+        };
+        arguments = typed;
+        for (index, site) in sites.iter().enumerate() {
+            if !accepted[index] && !both[index] {
+                continue;
+            }
+            let keywords: Vec<String> = tool
+                .unmodeled_keywords()
+                .iter()
+                .filter(|(pointer, _)| *pointer == site.schema)
+                .map(|(_, keyword)| format!("`{keyword}`"))
+                .collect();
+            let keywords = if keywords.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", keywords.join(", "))
+            };
+            let reading = site.reading.to_json();
+            let kind = json_kind(&site.reading.value);
+            let explanation = if accepted[index] {
+                format!(
+                    "read XML text `{}` as the JSON {kind} `{reading}`: the exact schema at `{}`{keywords} admits it and not the verbatim string",
+                    site.text, site.schema
+                )
+            } else {
+                format!(
+                    "kept XML text `{}` verbatim: the exact schema at `{}`{keywords} admits both the string and the JSON {kind} `{reading}`, and a string branch keeps the verbatim text as a declared string does",
+                    site.text, site.schema
+                )
+            };
+            let evidence = self.evidence(
+                rule.id,
+                explanation,
+                Some(site.raw.clone()),
+                destination(raw, &site.pointer),
+            );
+            ledger.record(rule, evidence, String::new(), String::new(), governor)?;
+        }
+        Ok((arguments, ledger))
     }
 
     /// Every reading of an object scope's members against `shape`.
@@ -2899,6 +2992,355 @@ fn normalized(text: &str) -> String {
 }
 
 /// Shift every span of `node` (parsed from text at `offset`) by `offset`.
+/// One XML-text string inside an unmodeled value, with its JSON reading.
+struct SchemaSite {
+    /// The value's pointer in the arguments.
+    pointer: String,
+    /// The pointer of the unmodeled parameter holding it.
+    root: String,
+    /// The schema pointer of that parameter.
+    schema: String,
+    /// The verbatim text.
+    text: String,
+    /// The JSON value the text spells (not a string).
+    reading: Node,
+    /// The text's source range.
+    raw: Range<usize>,
+}
+
+/// Collect every XML-text string inside the unmodeled values of an object
+/// scope, walking the modeled scopes of `shape` down to them.
+fn schema_sites(
+    shape: &ObjectShape,
+    node: &Node,
+    pointer: &str,
+    schema: &str,
+    raw: &RawCall,
+    out: &mut Vec<SchemaSite>,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    governor.charge(Resource::Work, 1)?;
+    let Value::Object(members) = &node.value else {
+        return Ok(());
+    };
+    for member in members {
+        let Some(parameter) = shape.parameter(&member.key) else {
+            continue;
+        };
+        let here = format!("{pointer}/{}", pointer_segment(&member.key));
+        let here_schema = format!("{schema}/properties/{}", pointer_segment(&member.key));
+        let value_shape = match &parameter.value {
+            ValueShape::Array(inner) => inner.as_ref(),
+            other => other,
+        };
+        let mut visit = |node: &Node, at: &str, at_schema: &str| match value_shape {
+            ValueShape::Unmodeled => {
+                let root = (at, at_schema);
+                unmodeled_sites(node, at, root, raw, out, governor)
+            }
+            ValueShape::Object(inner) => {
+                schema_sites(inner, node, at, at_schema, raw, out, governor)
+            }
+            _ => Ok(()),
+        };
+        if matches!(parameter.value, ValueShape::Array(_)) || parameter.repeatable {
+            if let Value::Array(items) = &member.value.value {
+                let items_schema = format!("{here_schema}/items");
+                for (index, element) in items.iter().enumerate() {
+                    visit(element, &format!("{here}/{index}"), &items_schema)?;
+                }
+            }
+        } else {
+            visit(&member.value, &here, &here_schema)?;
+        }
+    }
+    Ok(())
+}
+
+/// Collect every XML-text string inside an unmodeled value (`root` is the
+/// value's pointer and schema pointer), with the JSON value it spells.
+fn unmodeled_sites(
+    node: &Node,
+    pointer: &str,
+    root: (&str, &str),
+    raw: &RawCall,
+    out: &mut Vec<SchemaSite>,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    governor.charge(Resource::Work, 1)?;
+    match &node.value {
+        Value::String(text) => {
+            let Some(leaf) = raw.arguments.leaves.iter().find(|leaf| {
+                leaf.origin == ArgOrigin::XmlText && node.span.as_ref() == Some(&leaf.raw)
+            }) else {
+                return Ok(());
+            };
+            let mut reading = match crate::json::parse_with(text, governor) {
+                Ok(reading) => reading,
+                Err(crate::json::ParseFailure::Resource(reason)) => return Err(reason),
+                Err(crate::json::ParseFailure::Syntax(_)) => return Ok(()),
+            };
+            if matches!(reading.value, Value::String(_)) {
+                return Ok(());
+            }
+            rebase(&mut reading, leaf.raw.start);
+            governor.charge(
+                Resource::ScratchBytes,
+                reading
+                    .estimated_bytes()
+                    .saturating_add(size(text.len() + pointer.len() + root.1.len())),
+            )?;
+            out.push(SchemaSite {
+                pointer: pointer.to_owned(),
+                root: root.0.to_owned(),
+                schema: root.1.to_owned(),
+                text: text.clone(),
+                reading,
+                raw: leaf.raw.clone(),
+            });
+        }
+        Value::Object(members) => {
+            for member in members {
+                let here = format!("{pointer}/{}", pointer_segment(&member.key));
+                unmodeled_sites(&member.value, &here, root, raw, out, governor)?;
+            }
+        }
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                unmodeled_sites(
+                    item,
+                    &format!("{pointer}/{index}"),
+                    root,
+                    raw,
+                    out,
+                    governor,
+                )?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// The schema-typing rounds of [`Resolver::schema_typed`] over `sites`:
+/// the arguments with the accepted JSON readings, and per site whether its
+/// JSON reading was taken and whether the schema admits both readings.
+/// `None` when the validator cannot evaluate the schema.
+#[allow(clippy::type_complexity)]
+fn schema_rounds(
+    tool: &CompiledTool,
+    sites: &[SchemaSite],
+    mut arguments: Node,
+    governor: &mut Governor,
+) -> Result<Option<(Node, Vec<bool>, Vec<bool>)>, StopReason> {
+    // A schema the validator cannot evaluate (a `$ref` recurring without
+    // instance progress) types nothing: the verbatim text stays, and the
+    // arguments' own validation reports the schema as before.
+    let validate = |instance: &Node, governor: &mut Governor| match tool
+        .schema()
+        .validate_with(instance, governor)
+    {
+        Ok(report) => Ok(Some(report)),
+        Err(StopReason::InvalidInput(_)) => Ok(None),
+        Err(reason) => Err(reason),
+    };
+    let Some(mut report) = validate(&arguments, governor)? else {
+        return Ok(None);
+    };
+    let flip = |base: &Node, indices: &[usize], governor: &mut Governor| {
+        let mut candidate = base.clone();
+        governor.charge(Resource::ScratchBytes, candidate.estimated_bytes())?;
+        for &index in indices {
+            let site = &sites[index];
+            replace_at(&mut candidate, &site.pointer, site.reading.clone());
+        }
+        Ok::<_, StopReason>(candidate)
+    };
+    // Rounds: flip every value the violations implicate at once and keep
+    // the flips that reduced their own violations; when a round keeps
+    // none (values interacting through a shared ancestor, an `anyOf`
+    // over an object), try them one at a time. Every validation is
+    // charged; exhaustion is the request's explicit `BudgetExceeded`.
+    let mut accepted = vec![false; sites.len()];
+    loop {
+        let counts = related_counts(&report.violations, sites, governor)?;
+        let implicated: Vec<usize> = (0..sites.len())
+            .filter(|&index| !accepted[index] && counts[index] > 0)
+            .collect();
+        if implicated.is_empty() {
+            break;
+        }
+        let candidate = flip(&arguments, &implicated, governor)?;
+        let Some(tried) = validate(&candidate, governor)? else {
+            break;
+        };
+        let after = related_counts(&tried.violations, sites, governor)?;
+        let better: Vec<usize> = implicated
+            .iter()
+            .copied()
+            .filter(|&index| after[index] < counts[index])
+            .collect();
+        if better.len() == implicated.len() {
+            arguments = candidate;
+            report = tried;
+            for &index in &better {
+                accepted[index] = true;
+            }
+            continue;
+        }
+        if !better.is_empty() {
+            let next = flip(&arguments, &better, governor)?;
+            if let Some(next_report) = validate(&next, governor)?
+                && next_report.violations.len() < report.violations.len()
+            {
+                arguments = next;
+                report = next_report;
+                for &index in &better {
+                    accepted[index] = true;
+                }
+                continue;
+            }
+        }
+        let mut progressed = false;
+        for &index in &implicated {
+            let counts = related_counts(&report.violations, sites, governor)?;
+            if counts[index] == 0 {
+                continue;
+            }
+            let next = flip(&arguments, &[index], governor)?;
+            let Some(next_report) = validate(&next, governor)? else {
+                continue;
+            };
+            let after = related_counts(&next_report.violations, sites, governor)?;
+            if after[index] < counts[index]
+                && next_report.violations.len() < report.violations.len()
+            {
+                arguments = next;
+                report = next_report;
+                accepted[index] = true;
+                progressed = true;
+            }
+        }
+        if !progressed {
+            break;
+        }
+    }
+    // The values whose verbatim string validates: whether the schema
+    // also admits their JSON reading (recorded as kept), in one batch.
+    let counts = related_counts(&report.violations, sites, governor)?;
+    let quiet: Vec<usize> = (0..sites.len())
+        .filter(|&index| !accepted[index] && counts[index] == 0)
+        .collect();
+    let mut both = vec![false; sites.len()];
+    if !quiet.is_empty() {
+        let candidate = flip(&arguments, &quiet, governor)?;
+        if let Some(tried) = validate(&candidate, governor)? {
+            let after = related_counts(&tried.violations, sites, governor)?;
+            for &index in &quiet {
+                both[index] = after[index] == 0;
+            }
+        }
+    }
+    Ok(Some((arguments, accepted, both)))
+}
+
+/// Per site, how many of `violations` concern it: a violation at the
+/// site's value or below it, or at an ancestor inside the site's unmodeled
+/// parameter (an `anyOf` over the whole value). An index of the site
+/// pointers makes it linear in the violations and the sites they reach.
+fn related_counts(
+    violations: &[crate::schema::Violation],
+    sites: &[SchemaSite],
+    governor: &mut Governor,
+) -> Result<Vec<usize>, StopReason> {
+    let index: BTreeMap<&str, usize> = sites
+        .iter()
+        .enumerate()
+        .map(|(position, site)| (site.pointer.as_str(), position))
+        .collect();
+    let mut counts = vec![0; sites.len()];
+    for violation in violations {
+        governor.charge(Resource::Work, 1)?;
+        let path = violation.instance_path.as_str();
+        let mut prefix = path;
+        loop {
+            if let Some(&position) = index.get(prefix) {
+                counts[position] += 1;
+                break;
+            }
+            match prefix.rfind('/') {
+                Some(cut) => prefix = &prefix[..cut],
+                None => break,
+            }
+        }
+        let below = format!("{path}/");
+        for (pointer, &position) in index.range(below.as_str()..) {
+            if !pointer.starts_with(&below) {
+                break;
+            }
+            governor.charge(Resource::Work, 1)?;
+            if path.starts_with(sites[position].root.as_str()) {
+                counts[position] += 1;
+            }
+        }
+    }
+    Ok(counts)
+}
+
+/// Whether a scope holds an unmodeled parameter, at any depth: a walk of
+/// the compiled shape (charged when the tool was compiled).
+fn holds_unmodeled(shape: &ObjectShape) -> bool {
+    fn value(shape: &ValueShape) -> bool {
+        match shape {
+            ValueShape::Unmodeled => true,
+            ValueShape::Array(item) => value(item),
+            ValueShape::Object(inner) => holds_unmodeled(inner),
+            _ => false,
+        }
+    }
+    shape
+        .parameters
+        .iter()
+        .any(|parameter| value(&parameter.value))
+}
+
+/// Replace the value at `pointer` in `node`; whether it was found.
+fn replace_at(node: &mut Node, pointer: &str, value: Node) -> bool {
+    let mut current = node;
+    for segment in pointer.split('/').skip(1) {
+        let segment = segment.replace("~1", "/").replace("~0", "~");
+        current = match &mut current.value {
+            Value::Object(members) => {
+                match members.iter_mut().find(|member| member.key == segment) {
+                    Some(member) => &mut member.value,
+                    None => return false,
+                }
+            }
+            Value::Array(items) => {
+                match segment.parse::<usize>().ok().and_then(|i| items.get_mut(i)) {
+                    Some(item) => item,
+                    None => return false,
+                }
+            }
+            _ => return false,
+        };
+    }
+    *current = value;
+    true
+}
+
+/// The JSON type name of a value.
+const fn json_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
 fn rebase(node: &mut Node, offset: usize) {
     node.span = node
         .span

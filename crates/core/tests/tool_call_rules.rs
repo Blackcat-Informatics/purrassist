@@ -1804,6 +1804,7 @@ fn repair_classification_matches_documentation() {
         "tool_call.parameter.pass-through",
         "tool_call.parameter.collect",
         "tool_call.value.decode-typed",
+        "tool_call.value.schema-typed",
         // Records.
         "tool_call.reasoning.unterminated",
         "tool_call.truncated",

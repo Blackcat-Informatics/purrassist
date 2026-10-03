@@ -41,7 +41,12 @@ const CLOSER_VARIANT: &[u8] = b"</parameters>";
 ///   newline on each side is consumed and recorded as a
 ///   `tool_call.xml.framing-newline` edit (a non-guess, single-reading
 ///   markup loss); nothing else about the text changes (`123` and `true`
-///   stay strings). Its leaf has origin [`ArgOrigin::XmlText`].
+///   stay strings). Its leaf has origin [`ArgOrigin::XmlText`]. Resolution
+///   types an unmodeled parameter's text by the tool's exact schema
+///   (`tool_call.value.schema-typed`); an unmodeled parameter whose value
+///   begins with a `<parameter=` opener holds nested parameters, read as an
+///   untyped object (`tool_call.markup.nested-parameter`) whose members
+///   resolution types the same way.
 /// - An enumeration value is read the same way, then trimmed of any
 ///   whitespace left around it (a non-verbatim type), recorded as
 ///   `tool_call.value.trim-nonverbatim`.
@@ -482,14 +487,23 @@ impl<'t> Reader<'_, 't, '_> {
             scope.parameter(canonical).map(|parameter| &parameter.value)
         });
         let from = opener.end;
-        if let Some(ValueShape::Object(inner)) = declared {
+        // An object parameter's nested elements are its members, typed by
+        // its declared shape; an unmodeled parameter's (`$ref`, `anyOf`,
+        // ...) are members of an untyped object, typed later by the tool's
+        // exact schema (`tool_call.value.schema-typed`).
+        let nested = match declared {
+            Some(ValueShape::Object(inner)) => Some(Some(inner)),
+            Some(ValueShape::Unmodeled) => Some(None),
+            _ => None,
+        };
+        if let Some(inner) = nested {
             let next = self.skip_space(from)?;
             if self.body[next..].starts_with(OPENER) {
                 self.governor
                     .charge(Resource::Depth, size(self.frames.len()))?;
                 self.record(EditOperator::NestedParameter, opener.start..from, b"")?;
                 self.frames.push(Frame {
-                    scope: Some(inner),
+                    scope: inner,
                     tree: ArgTree::value(Node {
                         value: Value::Object(Vec::new()),
                         span: Some(self.absolute(from..from)),

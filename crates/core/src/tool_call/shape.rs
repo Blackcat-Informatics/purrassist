@@ -181,7 +181,12 @@ pub enum ValueShape {
     ///
     /// The value is validated only by the tool's exact source schema; repair
     /// treats it structurally, as an opaque JSON value of any type, and never
-    /// guesses a narrower shape for it.
+    /// guesses a narrower shape for it. XML text (Qwen3-Coder) under it is
+    /// typed by that exact schema: the JSON value the text spells is taken
+    /// where the schema admits it and not the verbatim string, and the
+    /// verbatim string is kept wherever it validates
+    /// (`tool_call.value.schema-typed`, grounded in the definition, not a
+    /// guess).
     ///
     /// ```
     /// use purrassist_core::{Budget, tool_call::{ToolSet, ValueShape}};

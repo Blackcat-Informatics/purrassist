@@ -139,7 +139,7 @@
 //! working set to the same governor before allocating it.
 //! [`ToolRecoveryRequest::sized`] sizes a budget for an output: its length
 //! and its call openers.
-use super::adapter::consulted_by_repair;
+use super::adapter::{consulted_by_repair, reshaping};
 use super::emit::{self, Emission, EmitTarget};
 use super::recognizer::{edit_entries, escaped};
 use super::resolve::loss_kind;
@@ -1057,11 +1057,16 @@ pub struct ToolChoiceCheck {
 
 /// One unmodeled keyword of an adapter tool's schema on a call's path.
 ///
-/// `used` is whether repair consulted it: `$ref`, `anyOf` and the other
-/// keywords that make a value opaque to repair, `$schema`, Draft-07
-/// `dependencies`, `unevaluatedProperties`, and `patternProperties`. Every
-/// other unmodeled keyword (`format`, `minLength`, `x-*`, ...) is ignored
-/// by repair and enforced only by validation against the exact schema.
+/// `used` is whether repair consulted it. A keyword that makes a value
+/// unmodeled (`$ref`, `anyOf`, `oneOf`, ..., and an unmodeled `type` such as
+/// a type array) is used when the exact schema typed XML text under it
+/// (`tool_call.value.schema-typed`: the JSON reading taken, or the verbatim
+/// string kept where both validate); JSON arguments, already typed, never
+/// consult it. `$schema`, Draft-07 `dependencies`,
+/// `unevaluatedProperties`, and `patternProperties` decide how repair
+/// treats their scope and are always used. Every other unmodeled keyword
+/// (`format`, `minLength`, `x-*`, ...) is ignored by repair and enforced
+/// only by validation against the exact schema.
 ///
 /// ```
 /// use purrassist_core::tool_call::KeywordUse;
@@ -1530,6 +1535,14 @@ fn provenance_node(node: &ProvenanceNode) -> Node {
         ProvenanceNode::Validation(index, _) => ("validation", format!("validation:{index}")),
     };
     object([("kind", string(kind)), ("rule", string(rule))])
+}
+
+/// The schema pointer a `tool_call.value.schema-typed` explanation names
+/// (the backquoted pointer after "the exact schema at").
+fn typed_schema(explanation: &str) -> Option<&str> {
+    let start = explanation.find("the exact schema at `")? + "the exact schema at `".len();
+    let length = explanation[start..].find('`')?;
+    Some(&explanation[start..start + length])
 }
 
 /// `reason`, made precise: an attempt that failed at a byte beginning a
@@ -2758,7 +2771,23 @@ impl Recovery<'_> {
             if !on_path(pointer, &call.arguments, governor)? {
                 continue;
             }
-            let used = consulted_by_repair(keyword);
+            // A reshaping keyword (`$ref`, `anyOf`, ...) or an unmodeled
+            // `type` (a type array) is used when the exact schema typed a
+            // value under it (`schema-typed` names the parameter's schema
+            // pointer); the other consulted keywords decide how repair
+            // treats their scope.
+            let used = if reshaping(keyword) || keyword == "type" {
+                call.repairs.evidence.iter().any(|evidence| {
+                    evidence.rule == "tool_call.value.schema-typed"
+                        && typed_schema(&evidence.explanation).is_some_and(|typed| {
+                            pointer == typed
+                                || pointer.starts_with(&format!("{typed}/"))
+                                || typed.starts_with(&format!("{pointer}/"))
+                        })
+                })
+            } else {
+                consulted_by_repair(keyword)
+            };
             let validation = Validation {
                 validator: TOOL_CALL_VALIDATOR.into(),
                 constraint: format!("keyword {pointer}/{}", pointer_segment(keyword)),

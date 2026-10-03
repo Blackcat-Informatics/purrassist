@@ -163,6 +163,85 @@ pub fn tools() -> ToolSet {
     ToolSet::compile(definitions, Budget::default()).expect("the corpus tool set compiles")
 }
 
+/// The adapter tool set (`tool_set: "adapter"` records): an `OpenAI`
+/// declaration whose parameters use the schema forms pydantic and MCP
+/// servers emit and the typed model does not express (`Optional[...]` as
+/// `anyOf` with `null`, a `$ref` to `$defs`, a `oneOf` of constants, a type
+/// array), typed in Qwen3-Coder XML by the exact schema itself
+/// (`tool_call.value.schema-typed`).
+#[must_use]
+pub fn adapter_tools() -> ToolSet {
+    ToolSet::from_openai(
+        r##"[{"type":"function","function":{"name":"search_index","description":"Search the index","parameters":{"type":"object","properties":{"query":{"type":"string"},"limit":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null},"since":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null},"opts":{"$ref":"#/$defs/Opts"},"mode":{"oneOf":[{"const":"fast"},{"const":"safe"}]},"ids":{"type":["array","null"],"items":{"type":"integer"}}},"required":["query"],"$defs":{"Opts":{"type":"object","properties":{"depth":{"type":"integer"},"label":{"type":"string"}},"required":["depth"]}}}}}]"##,
+        Budget::default(),
+    )
+    .expect("the adapter tool set compiles")
+}
+
+/// The tool set a record is recovered against (see [`Case::tool_set`]).
+#[must_use]
+pub fn tools_for<'t>(record: &Node, tools: &'t ToolSet, adapter: &'t ToolSet) -> &'t ToolSet {
+    if record.get("tool_set").and_then(Node::as_str) == Some("adapter") {
+        adapter
+    } else {
+        tools
+    }
+}
+
+/// The adapter cases: Qwen3-Coder XML calls to [`adapter_tools`] whose
+/// unmodeled parameters the exact schema types, alone and under every
+/// built-in dialect, a Hermes JSON control, and text no reading validates
+/// (abstain).
+fn adapter_cases(cases: &mut Vec<Case>) {
+    let qwen = |body: &str| {
+        format!("<tool_call>\n<function=search_index>\n{body}</function>\n</tool_call>")
+    };
+    let parameter =
+        |name: &str, value: &str| format!("<parameter={name}>\n{value}\n</parameter>\n");
+    let query = parameter("query", "cats");
+    let entries: Vec<(&str, &str, String, Option<&str>)> = vec![
+        ("optional-int", "tool_call.value.schema-typed", qwen(&(query.clone() + &parameter("limit", "5"))), Some(r#"{"query":"cats","limit":5}"#)),
+        ("optional-int-null", "tool_call.value.schema-typed", qwen(&(query.clone() + &parameter("limit", "null"))), Some(r#"{"query":"cats","limit":null}"#)),
+        ("optional-str-numeric", "tool_call.value.schema-typed", qwen(&(query.clone() + &parameter("since", "2024"))), Some(r#"{"query":"cats","since":"2024"}"#)),
+        ("ref-object-inline", "tool_call.value.schema-typed", qwen(&(query.clone() + &parameter("opts", r#"{"depth": 2, "label": "x"}"#))), Some(r#"{"query":"cats","opts":{"depth":2,"label":"x"}}"#)),
+        ("ref-object-nested", "tool_call.value.schema-typed", qwen(&(query.clone() + "<parameter=opts>\n" + &parameter("depth", "3") + &parameter("label", "10") + "</parameter>\n")), Some(r#"{"query":"cats","opts":{"depth":3,"label":"10"}}"#)),
+        ("oneof-const", "tool_call.value.schema-typed", qwen(&(query.clone() + &parameter("mode", "safe"))), Some(r#"{"query":"cats","mode":"safe"}"#)),
+        ("type-array", "tool_call.value.schema-typed", qwen(&(query.clone() + &parameter("ids", "[1, 2]"))), Some(r#"{"query":"cats","ids":[1,2]}"#)),
+        ("unmatched", "tool_call.value.schema-typed", qwen(&(query + &parameter("limit", "many"))), None),
+        ("json-control", "canonical", r#"<tool_call>{"name": "search_index", "arguments": {"query": "cats", "limit": 5}}</tool_call>"#.to_owned(), Some(r#"{"query":"cats","limit":5}"#)),
+    ];
+    for (variant, category, input, truth) in entries {
+        let single = if category == "canonical" {
+            "hermes.v1"
+        } else {
+            "qwen3-coder-xml.v1"
+        };
+        // Schema typing is a non-guess single reading: admitted under
+        // `Structural` too.
+        for (label, dialect, policy) in [
+            ("qwen", single, Policy::PerTool),
+            ("all", ALL_DIALECTS, Policy::PerTool),
+            ("structural", single, Policy::Structural),
+        ] {
+            cases.push(Case {
+                tool_set: Some("adapter"),
+                id: format!("adapter/search_index/{label}/{category}/{variant}"),
+                category: category.to_owned(),
+                dialect: dialect.to_owned(),
+                policy,
+                stop: Ending::Stop,
+                input: input.clone(),
+                truth: truth.map(|arguments| {
+                    vec![Call {
+                        name: "search_index".to_owned(),
+                        arguments: json::parse(arguments).expect("truth arguments"),
+                    }]
+                }),
+            });
+        }
+    }
+}
+
 /// A first-party xorshift64 generator (Marsaglia 2003), for the few choices
 /// a mutation makes beyond the witness seed.
 struct XorShift(u64);
@@ -315,6 +394,10 @@ pub struct Case {
     pub input: String,
     /// The calls a correct answer recovers, in order; `None` to abstain.
     pub truth: Option<Vec<Call>>,
+    /// The tool set the case is recovered against: `None` for [`tools`],
+    /// `Some("adapter")` for [`adapter_tools`] (written to the record only
+    /// then, so every other record is unchanged).
+    pub tool_set: Option<&'static str>,
 }
 
 impl Case {
@@ -337,7 +420,7 @@ impl Case {
                 ))
             },
         );
-        object(vec![
+        let mut members = vec![
             ("id", string(&self.id)),
             ("category", string(&self.category)),
             ("dialect", string(&self.dialect)),
@@ -345,7 +428,11 @@ impl Case {
             ("stop", self.stop.node()),
             ("input", string(&self.input)),
             ("truth", truth),
-        ])
+        ];
+        if let Some(tool_set) = self.tool_set {
+            members.push(("tool_set", string(tool_set)));
+        }
+        object(members)
     }
 }
 
@@ -2457,6 +2544,7 @@ fn single_cases(
         let single = base.seed.is_multiple_of(2) && !mutant.reasoning;
         let truth = answerable(mutant.need, base.effects, policy).then(|| vec![base.call.clone()]);
         cases.push(Case {
+            tool_set: None,
             id: format!(
                 "{}/{}/s{}/{}/{}",
                 base.label(),
@@ -2498,6 +2586,7 @@ fn deepseek_mixed_cases(bases: &[Base], cases: &mut Vec<Case>) {
             (*second, *first)
         };
         cases.push(Case {
+            tool_set: None,
             id: format!(
                 "mixed/{}:{}+{}:{}/s{}+s{}/canonical/mixed",
                 first.label(),
@@ -2552,6 +2641,7 @@ pub fn generate() -> Vec<Case> {
             let second = &chunk[(index + usize::try_from(SEEDS).unwrap_or(1) + 1) % chunk.len()];
             for mutant in pair_mutations(first, second) {
                 cases.push(Case {
+                    tool_set: None,
                     id: format!(
                         "{}/{}+{}/s{}+s{}/{}/{}",
                         first.label(),
@@ -2598,6 +2688,7 @@ pub fn generate() -> Vec<Case> {
             ("tool_call.markup.stray-closer", "mixed", stray),
         ] {
             cases.push(Case {
+                tool_set: None,
                 id: format!(
                     "mixed/{}:{}+{}:{}/s{}+s{}/{category}/{variant}",
                     first.label(),
@@ -2617,6 +2708,7 @@ pub fn generate() -> Vec<Case> {
         }
     }
     deepseek_mixed_cases(&bases, &mut cases);
+    adapter_cases(&mut cases);
     let identities: BTreeSet<&str> = cases.iter().map(|case| case.id.as_str()).collect();
     assert_eq!(identities.len(), cases.len(), "case identities are unique");
     cases

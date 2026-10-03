@@ -76,7 +76,8 @@
 //!   `tool_call.value.trim-nonverbatim`, `tool_call.xml.framing-newline`,
 //!   `tool_call.arguments.decode-string`, `tool_call.name.alias`,
 //!   `tool_call.parameter.alias`, `tool_call.parameter.pass-through`,
-//!   `tool_call.parameter.collect`, `tool_call.value.decode-typed`;
+//!   `tool_call.parameter.collect`, `tool_call.value.decode-typed`,
+//!   `tool_call.value.schema-typed`;
 //! - records: `tool_call.reasoning.unterminated`, `tool_call.truncated`,
 //!   `tool_call.markup.dangling-opener`, `tool_call.id.dedup`,
 //!   `tool_call.input.invalid-utf8`, `tool_call.value.invalid-utf8`,
@@ -117,6 +118,7 @@
 //! | `tool_call.id.dedup` | 0 | no | single | syntax | none | a missing or duplicate source call id renumbered (recorded by the recovery operation's id policy) |
 //! | `tool_call.input.invalid-utf8` | 0 | no | single | syntax | data | a maximal run of bytes that are not well-formed UTF-8 (recorded by the recovery operation; the bytes stay retained) |
 //! | `tool_call.markup.unparsed-dialect` | 0 | no | single | syntax | none | call markup of a family no allowed dialect reads (not built in yet, or a built-in dialect the allow-list leaves out), reported as a rejected attempt by the recovery operation; the bytes stay content |
+//! | `tool_call.value.schema-typed` | 0 | no | single | definition | none | XML text of a parameter whose schema the typed model does not express (`anyOf`, `oneOf`, `$ref`, a type array, ...) read as the JSON value it spells because the tool's exact schema admits that reading and not the verbatim string, or kept verbatim where the schema admits both (a string branch keeps the text, as a declared string does) |
 //!
 //! [`DISABLED`] lists the schema-recovery rules tool calls never apply:
 //! inventing a required value, stringifying a scalar, and decoding a JSON
@@ -277,7 +279,7 @@ const fn resolution(
 /// costs more than the farthest near-miss name (`tool_call.name.match`).
 pub const NAME_FROM_ARGUMENTS_COST: u64 = 8;
 
-const RESOLUTION: [Rule; 19] = [
+const RESOLUTION: [Rule; 20] = [
     resolution(
         "tool_call.name.alias",
         0,
@@ -403,6 +405,13 @@ const RESOLUTION: [Rule; 19] = [
         0,
         false,
         Grounding::Syntax,
+        None,
+    ),
+    resolution(
+        "tool_call.value.schema-typed",
+        0,
+        false,
+        Grounding::Definition,
         None,
     ),
 ];

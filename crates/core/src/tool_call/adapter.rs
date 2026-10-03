@@ -62,7 +62,9 @@
 //! object-form `items`, string `pattern`, `default`, `description`, and
 //! boolean `additionalProperties`. A parameter becomes
 //! [`super::ValueShape::Unmodeled`] — validated only by the exact schema and
-//! treated by repair as an opaque JSON value — when its schema is a boolean
+//! treated by repair as an opaque JSON value, except that XML text under it
+//! (Qwen3-Coder) is typed by the exact schema itself
+//! (`tool_call.value.schema-typed`) — when its schema is a boolean
 //! schema, uses any of `anyOf`, `oneOf`, `allOf`, `not`, `if`, `then`,
 //! `else`, `$ref`, `$dynamicRef`, `const`, `prefixItems`, or
 //! `dependentSchemas`, has an `enum` that is not a non-empty list of distinct
@@ -153,6 +155,13 @@ const RESHAPING: [&str; 12] = [
     "prefixItems",
     "then",
 ];
+
+/// Whether `keyword` makes a value unmodeled ([`RESHAPING`]): such a value
+/// is typed by the exact schema itself (`tool_call.value.schema-typed`), so
+/// the keyword is used exactly when that typing decided one of its values.
+pub(super) fn reshaping(keyword: &str) -> bool {
+    RESHAPING.contains(&keyword)
+}
 
 /// Whether the typed projection repair works from depends on `keyword`
 /// when it is listed as unmodeled: a [`RESHAPING`] keyword, Draft-07

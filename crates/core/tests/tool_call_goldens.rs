@@ -3407,3 +3407,92 @@ fn reasoning_never_swallows_calls() {
     assert_eq!(calls.calls.len(), 2);
     assert_eq!(calls.reasoning.len(), 0);
 }
+
+/// S2: Qwen3-Coder XML text of a parameter whose schema the typed model does
+/// not express (pydantic `Optional[...]`'s `anyOf`, `$ref`, `oneOf`, a type
+/// array) is typed by the tool's exact schema: the JSON reading the text
+/// spells is taken where the schema admits it and not the verbatim string
+/// (`tool_call.value.schema-typed`, definition-grounded and not a guess, so
+/// the call is `Resolved` even on a mutating tool), a string branch keeps
+/// the verbatim text, and with no validating reading the text stays
+/// verbatim with its `schema_validation` diagnosis. The keyword that drove
+/// the typing is reported `used`. The adapter still renders each
+/// declaration back byte for byte.
+#[test]
+fn unmodeled_schemas_type_xml_text() {
+    for (name, arguments, used) in [
+        (
+            "schema_typed_optional_int",
+            r#"{"q":"cats","limit":5}"#,
+            Some("anyOf"),
+        ),
+        (
+            "schema_typed_optional_int_null",
+            r#"{"limit":null}"#,
+            Some("anyOf"),
+        ),
+        (
+            "schema_typed_optional_str_numeric",
+            r#"{"zip":"12345"}"#,
+            None,
+        ),
+        (
+            "schema_typed_string_or_integer_keeps_string",
+            r#"{"id":"12345"}"#,
+            Some("anyOf"),
+        ),
+        ("schema_typed_ref_scalar", r#"{"n":7}"#, Some("$ref")),
+        (
+            "schema_typed_ref_object_inline",
+            r#"{"opts":{"depth":2,"label":"x"}}"#,
+            Some("$ref"),
+        ),
+        (
+            "schema_typed_ref_object_nested",
+            r#"{"opts":{"depth":2,"label":"42"}}"#,
+            Some("$ref"),
+        ),
+        ("schema_typed_oneof_enum", r#"{"mode":"fast"}"#, None),
+        (
+            "schema_typed_recursive_ref",
+            r#"{"t":{"v":1,"kids":[{"v":2,"kids":[]}]}}"#,
+            Some("$ref"),
+        ),
+        ("schema_typed_type_array", r#"{"x":3}"#, Some("type")),
+    ] {
+        let (golden, result) = golden(name);
+        let call = the_call(&result);
+        assert_eq!(call.outcome, CallOutcome::Resolved, "{name}");
+        assert_eq!(call.arguments.to_json(), arguments, "{name}");
+        assert!(!has_guess(call), "{name}");
+        let typed = rules_of(call).contains(&"tool_call.value.schema-typed");
+        assert_eq!(typed, used.is_some(), "{name}");
+        if let Some(keyword) = used {
+            assert!(
+                call.keywords
+                    .iter()
+                    .any(|use_| use_.keyword == keyword && use_.used),
+                "{name}: {:#?}",
+                call.keywords
+            );
+        }
+        let source = openai_text(&golden.node).expect("tools_openai text");
+        let declarations = parse(&source).expect("tools json");
+        let span = items(&declarations)[0].span.clone().expect("span");
+        let rendered = golden
+            .tools
+            .render_declaration("search", DeclarationForm::OpenAi)
+            .expect("rendered");
+        assert_eq!(rendered.as_bytes(), &source.as_bytes()[span], "{name}");
+    }
+    let (_, result) = golden("schema_typed_unmatched_keeps_verbatim");
+    let call = the_call(&result);
+    assert_eq!(call.arguments.to_json(), r#"{"limit":"abc"}"#);
+    assert_eq!(
+        call.outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::SchemaValidation
+        }
+    );
+    assert!(call.keywords.iter().all(|use_| !use_.used));
+}

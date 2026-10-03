@@ -1,0 +1,88 @@
+{
+  "description": "S2: a recursive $ref (a tree whose kids are trees): the governed validator resolves the recursion, and the inline JSON is read as the tree.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "search",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "t": {
+              "$ref": "#/$defs/Tree"
+            }
+          },
+          "$defs": {
+            "Tree": {
+              "type": "object",
+              "properties": {
+                "v": {
+                  "type": "integer"
+                },
+                "kids": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/Tree"
+                  }
+                }
+              },
+              "required": [
+                "v"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "search": "read_only"
+  },
+  "stop": "stop",
+  "input": "<tool_call>\n<function=search>\n<parameter=t>\n{\"v\": 1, \"kids\": [{\"v\": 2, \"kids\": []}]}\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "search",
+      "arguments": {
+        "t": {
+          "v": 1,
+          "kids": [
+            {
+              "v": 2,
+              "kids": []
+            }
+          ]
+        }
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.value.schema-typed"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.value.schema-typed"
+  ]
+}

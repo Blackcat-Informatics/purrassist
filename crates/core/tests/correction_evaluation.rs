@@ -511,6 +511,7 @@ fn tool_call_truth(case: &Node) -> Option<Vec<(String, Node)>> {
 fn tool_call_corpus_tally() -> ToolCallEvaluation {
     let cases = read_corpus(TOOL_CALLS);
     let tools = tool_call_corpus::tools();
+    let adapter = tool_call_corpus::adapter_tools();
     let mut evaluation = ToolCallEvaluation {
         tally: Tally::default(),
         total: cases.len(),
@@ -522,7 +523,8 @@ fn tool_call_corpus_tally() -> ToolCallEvaluation {
     };
     for case in &cases {
         let request = tool_call_corpus::request(case);
-        let result = tools.recover(text_field(case, "input").as_bytes(), &request);
+        let set = tool_call_corpus::tools_for(case, &tools, &adapter);
+        let result = set.recover(text_field(case, "input").as_bytes(), &request);
         let answer: Option<Vec<(String, Node)>> = match &result.outcome {
             Outcome::Resolved(calls) | Outcome::BestGuess(calls) => {
                 let usable = calls.usable_accepting_guesses();
@@ -645,9 +647,9 @@ fn evaluate(name: &str, tally: Tally, total_cases: usize, limit: f64) {
 }
 
 /// The tool-call corpus tallies `docs/MATCHING-QUALITY.md` quotes.
-const TOOL_CALL_CASES: usize = 13788;
-const TOOL_CALL_CORRECT: u64 = 9489;
-const TOOL_CALL_ABSTAINED: u64 = 4299;
+const TOOL_CALL_CASES: usize = 13815;
+const TOOL_CALL_CORRECT: u64 = 9513;
+const TOOL_CALL_ABSTAINED: u64 = 4302;
 
 // ---------------------------------------------------------------------
 // Documented numbers: `docs/MATCHING-QUALITY.md`'s evaluation table quotes

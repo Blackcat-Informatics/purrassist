@@ -1386,12 +1386,34 @@ fn anyof_ref_enforced_on_recovered_call() {
             );
             assert_ne!(schema.diagnostics.len(), 0);
         }
-        // The keyword is reported, and repair consulted it.
+        // The keyword is reported; JSON arguments arrive typed, so no
+        // repair consulted it: it is enforced by validation alone.
         assert!(
             call.keywords
                 .iter()
-                .any(|keyword| keyword.keyword == "anyOf" && keyword.used),
+                .any(|keyword| keyword.keyword == "anyOf" && !keyword.used),
             "{:#?}",
+            call.keywords
+        );
+    }
+    // In Qwen3-Coder XML the value is text: the exact schema types it
+    // (`tool_call.value.schema-typed`), and the keyword drove that typing.
+    for (text, expected, used) in [("3", "3", true), ("fast", "\"fast\"", false)] {
+        let output = format!(
+            "<tool_call>\n<function=set_mode>\n<parameter=mode>\n{text}\n</parameter>\n</function>\n</tool_call>"
+        );
+        let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+        let call = &value(&result).calls[0];
+        assert_eq!(call.outcome, CallOutcome::Resolved, "{text}");
+        assert_eq!(
+            call.arguments.get("mode").map(Node::to_json).as_deref(),
+            Some(expected)
+        );
+        assert!(
+            call.keywords
+                .iter()
+                .any(|keyword| keyword.keyword == "anyOf" && keyword.used == used),
+            "{text}: {:#?}",
             call.keywords
         );
     }

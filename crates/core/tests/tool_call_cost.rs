@@ -743,3 +743,84 @@ fn unparsed_markup_scan_is_linear() {
         );
     }
 }
+
+/// S2: schema typing of unmodeled parameters has no count cap and stays
+/// governed. A Qwen3-Coder XML call with 300 pydantic `Optional[int]`
+/// parameters resolves fully at `Standard` under `ToolRecoveryRequest::sized`
+/// (the values are decided in batched rounds, a handful of validations
+/// whatever their number); the same call under a budget too small for it
+/// is the explicit `BudgetExceeded`, never a quiet verbatim fallback; and
+/// values that interact through a shared ancestor (an `anyOf` over a `$ref`
+/// object written as nested parameters) are still typed.
+#[test]
+fn schema_typing_is_uncapped_and_governed() {
+    let count = 300;
+    let properties: Vec<String> = (0..count)
+        .map(|index| format!(r#""p{index}":{{"anyOf":[{{"type":"integer"}},{{"type":"null"}}]}}"#))
+        .collect();
+    let declaration = format!(
+        r#"[{{"type":"function","function":{{"name":"wide","parameters":{{"type":"object","properties":{{{}}}}}}}}}]"#,
+        properties.join(",")
+    );
+    let tools = ToolSet::from_openai(&declaration, Budget::default()).expect("adapter tools");
+    let mut body = String::new();
+    for index in 0..count {
+        write!(body, "<parameter=p{index}>\n{index}\n</parameter>\n").expect("write");
+    }
+    let output = format!("<tool_call>\n<function=wide>\n{body}</function>\n</tool_call>");
+    let request = ToolRecoveryRequest::sized(Effort::Standard, output.as_bytes());
+    let result = tools.recover(output.as_bytes(), &request);
+    let Outcome::Resolved(calls) = &result.outcome else {
+        panic!("{:?} {:?}", result.outcome, result.receipt.stopped)
+    };
+    let call = &calls.calls[0];
+    assert_eq!(call.outcome, CallOutcome::Resolved);
+    for index in 0..count {
+        assert_eq!(
+            call.arguments.get(&format!("p{index}")).map(Node::to_json),
+            Some(index.to_string())
+        );
+    }
+    let typed = call
+        .repairs
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.rule == "tool_call.value.schema-typed")
+        .count();
+    assert_eq!(typed, count);
+
+    // Starved: explicit exhaustion, never a quiet verbatim call.
+    let work = result.receipt.usage.work;
+    let starved = tools.recover(
+        output.as_bytes(),
+        &request.clone().budget(Budget {
+            work: work * 9 / 10,
+            ..request.budget
+        }),
+    );
+    assert_eq!(starved.outcome, Outcome::Unresolved);
+    assert!(
+        matches!(starved.receipt.stopped, StopReason::BudgetExceeded(_)),
+        "{:?}",
+        starved.receipt.stopped
+    );
+
+    // Interacting values: an `anyOf` over a `$ref` object, nested, whose
+    // integer member must be typed and whose numeric-looking string member
+    // must not (flipping both fails the shared `anyOf`).
+    let tools = ToolSet::from_openai(
+        r##"[{"type":"function","function":{"name":"view","parameters":{"type":"object","properties":{"opts":{"anyOf":[{"$ref":"#/$defs/O"},{"type":"null"}]}},"$defs":{"O":{"type":"object","properties":{"depth":{"type":"integer"},"label":{"type":"string"}},"required":["depth","label"]}}}}}]"##,
+        Budget::default(),
+    )
+    .expect("adapter tools");
+    let output = "<tool_call>\n<function=view>\n<parameter=opts>\n<parameter=depth>\n2\n</parameter>\n<parameter=label>\n42\n</parameter>\n</parameter>\n</function>\n</tool_call>";
+    let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+    let Outcome::Resolved(calls) = &result.outcome else {
+        panic!("{:?}", result.outcome)
+    };
+    assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
+    assert_eq!(
+        calls.calls[0].arguments.to_json(),
+        r#"{"opts":{"depth":2,"label":"42"}}"#
+    );
+}

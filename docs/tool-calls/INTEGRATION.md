@@ -141,7 +141,7 @@ is reported as certain.
   five built-in dialects outside the allow-list, and negatives), the CLI
   test `tool_calls_cli::unparsed_markup_is_reported_via_cli`, and the host
   test `tool_call_tools::unparsed_markup_over_mcp`.
-- **Measured.** The 13,788-case correction evaluation records zero incorrect
+- **Measured.** The 13,815-case correction evaluation records zero incorrect
   automatic answers overall, per rule, and per dialect, and abstains on every
   case whose only correct answer is abstention
   (`correction_evaluation::tool_call_recovery_evaluation_has_zero_incorrect_corrections`;
@@ -240,6 +240,37 @@ declarations the model was shown and lose nothing.
   (`ToolCall::keywords`, with whether repair consulted it) and enforced by
   validation against the exact schema. A malformed declaration is a hard
   error; no declaration is skipped.
+- **Schema-typed text.** A parameter whose schema the typed model does not
+  express (pydantic `Optional[int]`'s `anyOf` with `null`, a `$ref` to
+  `$defs` or Draft-07 `definitions`, `oneOf`, a type array) arrives in
+  Qwen3-Coder XML as text, which the exact schema types itself: each
+  verbatim string is also read as the JSON value it spells (a number with
+  its exact spelling, a boolean, `null`, an array or object written inline,
+  and nested `<parameter=...>` elements read as an object's members), and
+  the exact validator chooses. The verbatim string is kept wherever it
+  validates, so `12345` under `anyOf[string, integer]` or `Optional[str]`
+  stays a string as for a declared string; the JSON reading is taken where
+  it removes the schema's violations at that value (`5` under
+  `Optional[int]` is `5`); with no validating reading the text stays
+  verbatim with its `schema_validation` diagnosis. Each decision is the
+  definition-grounded, non-guess `tool_call.value.schema-typed` (like
+  `tool_call.value.decode-typed` for a declared type), so the call is
+  `Resolved` under `Structural` and on a mutating tool, and the keyword that
+  drove it is reported `used`. `$ref` recursion is resolved by the governed
+  validator (a reference recurring without progress is the schema's
+  existing invalid-input outcome). There is no cap on how many values are
+  typed: they are decided in batched rounds (every value the violations
+  implicate is tried at once, and only values interacting through a shared
+  ancestor are tried one at a time), so a call costs a handful of
+  validations whatever its size, each charged to the request's governor;
+  running out is the request's explicit `BudgetExceeded`, never a quiet
+  verbatim fallback. JSON arguments arrive typed and are never retyped. *Proved by* `tool_call_goldens::unmodeled_schemas_type_xml_text`
+  (`Optional[int]`, `Optional[str]` with numeric text, `anyOf[string,
+  integer]`, `$ref` scalar, `$ref` object inline and as nested parameters,
+  `oneOf` constants, a recursive `$ref`, a type array, an unmatched value,
+  and each declaration rendered back byte for byte),
+  `tool_call_recover::anyof_ref_enforced_on_recovered_call`, and the
+  correction corpus's adapter cases.
 - **Which bytes.** The adapters read exactly the text they are given, and
   the render-back (`ToolDeclaration::text`, `parameters_text`) and the
   schema digest (each call's schema validation `constraint`, which binds

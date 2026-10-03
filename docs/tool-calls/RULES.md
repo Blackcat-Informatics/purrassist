@@ -105,6 +105,7 @@ the code.
 | `tool_call.id.dedup` | 0 | no | single | syntax | none | `Structural`, `Tolerant` | applied | resolution | A missing or duplicate source call id renumbered under `IdPolicy::Source`. |
 | `tool_call.input.invalid-utf8` | 0 | no | single | syntax | data | `Structural`, `Tolerant` | applied | resolution | A maximal run of bytes that are not well-formed UTF-8; the bytes stay retained. |
 | `tool_call.markup.unparsed-dialect` | 0 | no | single | syntax | none | `Structural`, `Tolerant` | applied | resolution | Call markup of a family no allowed dialect reads (not built in yet, or a built-in dialect the allow-list leaves out), reported as a rejected attempt; the bytes stay content. |
+| `tool_call.value.schema-typed` | 0 | no | single | definition | none | `Structural`, `Tolerant` | applied | resolution | XML text of a parameter whose schema the typed model does not express (`anyOf`, `oneOf`, `$ref`, a type array) read as the JSON value it spells because the tool's exact schema admits that reading and not the verbatim string, or kept verbatim where the schema admits both (a string branch keeps the text, as a declared string does). |
 
 ## Disabled rules
 
