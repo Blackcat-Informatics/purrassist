@@ -18,7 +18,7 @@ use purrassist_core::{
     text::{self, Normalization},
     tool_call::{
         DialectId, DialectSet, Effects, Emission, EmitTarget, ObjectSpec, Param, ToolDefinition,
-        ToolRecoveryRequest, ToolSet,
+        ToolRecoveryRequest, ToolSet, Verdict,
     },
     wire::{WireValue, array, integer, object, string},
 };
@@ -135,7 +135,27 @@ fn tool_call_transcript() -> Node {
             let Some(Emission::OpenAiToolCalls(emitted)) = &calls.emitted else {
                 panic!("{} {kind}: no OpenAI emission", case.dialect.id())
             };
+            // The emission prints exactly the calls that may run; the verdict
+            // and the OpenAI finish_reason agree with it on every target.
+            assert_eq!(
+                emitted.calls.len(),
+                calls.emitted_calls().len(),
+                "{} {kind}",
+                case.dialect.id()
+            );
             assert_eq!(emitted.calls.len(), usable, "{} {kind}", case.dialect.id());
+            assert_eq!(
+                calls.verdict(),
+                Verdict::Run,
+                "{} {kind}",
+                case.dialect.id()
+            );
+            assert_eq!(
+                calls.openai_finish_reason(),
+                "tool_calls",
+                "{} {kind}",
+                case.dialect.id()
+            );
             let array = emitted.output.to_json();
             let digest = Digest::of(array.as_bytes()).to_string();
             assert_eq!(digest, pinned, "{} {kind}: {array}", case.dialect.id());

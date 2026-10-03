@@ -547,11 +547,37 @@ TOOL_CALL_NEGATIVES = [
     b'[TOOL_RESULTS] {"content": "x", "call_id": "a1B2c3D4e"}[/TOOL_RESULTS]',
 ]
 
+# Exact probe inputs (header included) kept as seeds: inputs that once
+# failed an invariant, and the exit-gate states the invariants must keep
+# guarding (a usable call beside a failed tool choice, a guess on a mutating
+# tool, envelope syntax slips, bare Qwen3-Coder elements, invalid UTF-8
+# inside a call).
+TOOL_CALL_REGRESSIONS = [
+    # A forced read_file choice violated beside a read_file call: the call
+    # is skipped as tool_choice_failed (fuzz-tool-call-u8m4d7hy, F7).
+    b'\xe6#Let me check both.\n[{"name": "get_weather", "arguments": {"city": "Oslo"}}, {"name": "read_file", "arguments": {"path": "notes.txt", "limit": 10}}]\nAnd Bergen:\n{"arguments": {"city": "Bergen", "unit": "celsius"}, "name": "get_weather"}',
+    # Forced read_file, Resolved read_file beside an extra call.
+    b'\xc0\x52<tool_call>{"name": "read_file", "arguments": {"path": "a"}}</tool_call>\n'
+    b'<tool_call>{"name": "current_time", "arguments": {}}</tool_call>',
+    # A guess on a mutating tool: invalid UTF-8 in write_file's argument.
+    b'\x00\x52<tool_call>{"name": "write_file", "arguments": {"path": "a", "content": "x\xffy"}}</tool_call>',
+    # The same under a length stop, and a near-miss mutating name under Tolerant.
+    b'\x04\x52<tool_call>{"name": "write_file", "arguments": {"path": "a", "content": "x\xffy"}}</tool_call>',
+    b'\x02\x52<tool_call>{"name": "write_fil", "arguments": {"path": "a", "content": "x"}}</tool_call>',
+    # JSON envelope slips (Round B): single quotes, bare keys, a trailing
+    # comma and a comment.
+    b"\x00\x52<tool_call>{'name': 'read_file', 'arguments': {'path': 'a'},}</tool_call>",
+    b'\x00\x52{/* c */ name: "read_file", arguments: {"path": "a"}}',
+    # A bare Qwen3-Coder element (Round A), and invalid UTF-8 in a tool name.
+    b'\x00\x52<function=read_file>\n<parameter=path>\na\n</parameter>\n</function>',
+    b'\x00\x52<tool_call>\n<function=read_fil\xe9>\n<parameter=path>\na\n</parameter>\n</function>\n</tool_call>',
+]
+
 TOOL_CALL_SEEDS = [
     _tool_call_seed(index, turn)
     for index, turn in enumerate(
         _tool_call_conformance_markup() + TOOL_CALL_WITNESSES + TOOL_CALL_REPAIRS + TOOL_CALL_NEGATIVES)
-]
+] + TOOL_CALL_REGRESSIONS
 TOOL_CALL_TOKENS = [
     b'<tool_call>', b'</tool_call>', b'<function=', b'</function>', b'<parameter=',
     b'</parameter>', b'</parameters>', b'<think>', b'</think>', b'{"name":',

@@ -27,9 +27,20 @@
 //!   turn records no guess;
 //! - (A13) a `Resolved` call carries no guess and no data loss, so no guessed
 //!   call on a mutating tool is `Resolved`; `usable()` holds only `Resolved`
-//!   calls; `usable_accepting_guesses()` never holds a guess on a tool that
-//!   is not read-only; a call embedded in reasoning is never `Resolved` and
-//!   never usable;
+//!   calls that name a tool; `usable_accepting_guesses()` never holds a guess
+//!   on a tool that is not read-only; a call embedded in reasoning is never
+//!   `Resolved` and never usable;
+//! - (F5, F7) the verdict, finish, emission and `finish_reason` agree:
+//!   `emitted_calls()` is `usable_accepting_guesses()` when the tool-choice
+//!   check passed and empty otherwise; the verdict is `Run` exactly when it
+//!   is not empty, and the CLI exit code is 0 exactly for `Run` and
+//!   `NoCalls`; the `OpenAI` array holds exactly the emitted calls; a finish
+//!   with calls implies `Run`, a `Run` turn finishing otherwise is
+//!   `Unresolved` beside a rejected, unresolved or ambiguous attempt, and a
+//!   failed tool choice finishes `Unresolved` with `NothingUsable`;
+//!   `finish_reason` is `"length"` exactly for the truncated finishes and
+//!   otherwise `"tool_calls"` exactly when the `OpenAI` array holds a call;
+//!   the wire `verdict` and usable-call counts match;
 //! - every call, rejected-attempt, content, and reasoning range lies within
 //!   the output, never splits a well-formed UTF-8 character, and slices back
 //!   to the retained source (a rejected attempt's raw bytes are exactly its
@@ -44,7 +55,9 @@
 //!   recovery again gives the same bytes when the printed calls were the
 //!   turn's first calls (ids number calls by index), and is otherwise a
 //!   fixed point from its first recovery on; a `Resolved` call is skipped
-//!   only as unrepresentable;
+//!   only as unrepresentable, or as `ToolChoiceFailed` when the turn failed
+//!   its tool-choice check (and a call is skipped as `ToolChoiceFailed`
+//!   only then, and only when it would otherwise run);
 //! - pushing the turn to a [`Recognizer`] in one chunk, split in two at the
 //!   seeded position, or in seeded fixed-size chunks gives an equal
 //!   recognized turn (or the same error) and equal governor usage;
@@ -54,11 +67,12 @@ use core::ops::Range;
 use purrassist_core::contract::Usage;
 use purrassist_core::digest::Digest;
 use purrassist_core::tool_call::{
-    AmbiguityPolicy, CallOutcome, DialectId, DialectSet, Effects, GenerationStop, IdPolicy,
+    AmbiguityPolicy, CallOutcome, DialectId, DialectSet, Effects, Finish, GenerationStop, IdPolicy,
     ObjectSpec, Param, PolicySelection, ReasoningPolicy, RecognizedTurn, Recognizer, Rejection,
     RepairPolicy, SkipReason, Skipped, ToolCalls, ToolChoice, ToolDefinition, ToolRecoveryRequest,
-    ToolSet, emit,
+    ToolSet, Verdict, emit,
 };
+use purrassist_core::wire::WireValue;
 use purrassist_core::{AssistResult, Budget, Effort, Governor, Outcome, StopReason, json};
 use std::io::{self, Read};
 
@@ -274,6 +288,7 @@ fn check_calls(output: &[u8], calls: &ToolCalls) {
     }
     for call in calls.usable() {
         assert_eq!(call.outcome, CallOutcome::Resolved, "usable(): {call:?}");
+        assert!(call.tool.is_some(), "usable() names no tool: {call:?}");
     }
     for call in calls.usable_accepting_guesses() {
         assert!(
@@ -283,6 +298,7 @@ fn check_calls(output: &[u8], calls: &ToolCalls) {
             "usable_accepting_guesses() holds {call:?}"
         );
     }
+    check_verdict(calls);
     check_rejected(output, calls);
     for range in &calls.content {
         check_range(output, range, "content");
@@ -317,6 +333,84 @@ fn check_calls(output: &[u8], calls: &ToolCalls) {
     check_disjoint(ranges);
 }
 
+/// F5/F7: the verdict, the finish, the emission and `finish_reason` of one
+/// recovered value never contradict each other, and the wire value states
+/// the same verdict and counts.
+fn check_verdict(calls: &ToolCalls) {
+    let emitted = calls.emitted_calls();
+    let usable = calls.usable_accepting_guesses();
+    if calls.tool_choice.passed {
+        assert_eq!(emitted, usable, "emitted_calls() is not the usable calls");
+    } else {
+        assert!(emitted.is_empty(), "a failed tool choice emits calls");
+    }
+    let verdict = calls.verdict();
+    assert_eq!(verdict == Verdict::Run, !emitted.is_empty(), "{verdict:?}");
+    let code = verdict.exit_code();
+    assert_eq!(
+        code == 0,
+        matches!(verdict, Verdict::Run | Verdict::NoCalls),
+        "{verdict:?}"
+    );
+    let with_calls = matches!(calls.finish, Finish::Calls | Finish::TruncatedWithCalls);
+    let truncated = matches!(calls.finish, Finish::Truncated | Finish::TruncatedWithCalls);
+    if with_calls {
+        assert_eq!(verdict, Verdict::Run, "finish {:?}", calls.finish);
+    } else if verdict == Verdict::Run {
+        let wrong = !calls.rejected.is_empty()
+            || calls.calls.iter().any(|call| {
+                matches!(
+                    call.outcome,
+                    CallOutcome::Unresolved { .. } | CallOutcome::Ambiguous
+                )
+            });
+        assert!(
+            calls.finish == Finish::Unresolved && wrong,
+            "a Run turn finishes {:?} with nothing wrong",
+            calls.finish
+        );
+    }
+    if !calls.tool_choice.passed {
+        assert_eq!(calls.finish, Finish::Unresolved);
+        assert_eq!(verdict, Verdict::NothingUsable);
+    }
+    let array = emit::openai_tool_calls(
+        calls,
+        &IdPolicy::Prefix {
+            prefix: "c".into(),
+            start: 0,
+        },
+    )
+    .expect("OpenAI emission");
+    assert_eq!(array.calls.len(), emitted.len(), "the OpenAI array");
+    let reason = calls.openai_finish_reason();
+    assert_eq!(reason == "length", truncated, "finish_reason {reason}");
+    assert_eq!(
+        reason == "tool_calls",
+        !truncated && !array.calls.is_empty(),
+        "finish_reason {reason}"
+    );
+    let wire = calls.to_node();
+    assert_eq!(
+        wire.get("verdict").and_then(json::Node::as_str),
+        Some(verdict.code())
+    );
+    assert_eq!(
+        wire.get("usable_calls").map(json::Node::to_json),
+        Some(calls.usable().len().to_string())
+    );
+    assert_eq!(
+        wire.get("usable_calls_accepting_guesses")
+            .map(json::Node::to_json),
+        Some(usable.len().to_string())
+    );
+    assert_eq!(
+        wire.get("openai_finish_reason")
+            .and_then(json::Node::as_str),
+        Some(reason)
+    );
+}
+
 fn single(outcome: Outcome<ToolCalls>, context: &str) -> ToolCalls {
     match outcome {
         Outcome::Resolved(calls) | Outcome::BestGuess(calls) => calls,
@@ -344,7 +438,12 @@ fn check_reemission(tools: &ToolSet, calls: &ToolCalls) {
                     .iter()
                     .find(|call| call.index == *index)
                     .expect("a skipped call is a call of the turn");
-                if original.outcome == CallOutcome::Resolved {
+                if matches!(reason, SkipReason::ToolChoiceFailed) {
+                    assert!(
+                        !calls.tool_choice.passed && original.is_usable_accepting_guesses(),
+                        "skipped as ToolChoiceFailed: {original:?}"
+                    );
+                } else if original.outcome == CallOutcome::Resolved {
                     assert!(
                         matches!(reason, SkipReason::Unrepresentable { .. }),
                         "a Resolved call was skipped: {reason:?}"
@@ -442,6 +541,16 @@ fn check_result(
     };
     if !values.is_empty() {
         assert_eq!(receipt.stopped, StopReason::Completed);
+    }
+    // The CLI exit code is the selected reading's verdict, 3 for an
+    // ambiguous operation and 4 for an unresolved one.
+    let code = purrassist_core::tool_call::exit_code(&result.outcome);
+    match &result.outcome {
+        Outcome::Resolved(calls) | Outcome::BestGuess(calls) => {
+            assert_eq!(code, calls.verdict().exit_code());
+        }
+        Outcome::Ambiguous(_) => assert_eq!(code, 3),
+        Outcome::Unresolved => assert_eq!(code, 4),
     }
     for calls in values {
         check_calls(output, calls);
