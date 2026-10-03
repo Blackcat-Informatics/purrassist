@@ -42,9 +42,9 @@ A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
   tokens is insignificant.
 - Identifiers match `[A-Za-z_][A-Za-z0-9_-]*`. Productions and closer classes
   share one namespace. The keywords `grammar`, `optional-id`,
-  `declaration-content`, `reasoning`, `confusable`, `closer`, `layout`,
-  `until`, `slot`, `commit`, `next`, and `insert` cannot name a production or
-  a closer.
+  `declaration-content`, `json-envelope`, `reasoning`, `confusable`,
+  `closer`, `layout`, `until`, `slot`, `commit`, `next`, and `insert` cannot
+  name a production or a closer.
 - String literals are double-quoted byte strings with the escapes `\\`, `\"`,
   `\n`, `\r`, `\t`, `\xHH` (one byte), and `\u{HEX}` (one Unicode scalar
   value, encoded as UTF-8). Every literal, delimiter, spelling, and marker is
@@ -62,6 +62,7 @@ A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 | `closer NAME = "S1" \| "S2" ...;` | A closer class: `S1` is canonical, the rest are variant spellings. One spelling is allowed. |
 | `optional-id;` | The call's `id:` capture reads an id a model may add, but the format does not provide for one: a call without an id is numbered without a `tool_call.id.dedup` inference, and printing writes no id (`CompiledGrammar::call_carries_ids` is false). The built-in Hermes and Llama 3 JSON dialects declare it. A second statement is `DuplicateName`. |
 | `declaration-content;` | A call whose source begins with its JSON object (`{`, no opener token before it) and whose arguments as written have the shape of a tool declaration's parameters schema (an object whose `"type"` is `"object"` and whose `"properties"` is an object) is content, not a call, unless the named tool is declared and resolves those arguments with no guess and no loss (`CallOutcome::Resolved`): a JSON Schema or tool declaration pasted as an answer is not a call to the tool it describes (`CompiledGrammar::declaration_content`). The built-in Llama 3 JSON and bare JSON dialects declare it; after Llama 3's `<\|python_tag\|>` the object is always a call. A second statement is `DuplicateName`. |
+| `json-envelope;` | The call's envelope is JSON, and its literals tolerate the JSON syntax slips the `json` codec repairs inside arguments, under the same rule ids, costs and policy admission (`CompiledGrammar::json_envelope`): a single-quoted spelling of a literal holding `"`, and raw control characters before a string's closing `"` or right after its opening `"`, deleted (`json.syntax.string`); a member key without its quotes (`json.syntax.bare-key`; a key is a literal followed by a `:` literal, optional class runs between, and a literal also used otherwise gets its own key copy); a missing `:` or `,` literal, inserted, and a colonless spelling of a literal spanning `"key": "value"` (`json.syntax.missing-colon`, `json.syntax.missing-comma`); a `,` before a closing `}` or `]` literal (`json.syntax.trailing-comma`); and a `/* */` or `//` comment before a literal, or at a token boundary inside one, with the whitespace around it (`json.syntax.comment`). Each is a non-guess single-reading repair, so it changes a call's outcome exactly as the same slip inside its arguments does: never a demotion to `BestGuess`, on a `Mutating` tool too. Literal case (`True`, `None`) is the codec's alone: an envelope's literals are keys and fixed strings, never literal values. The spellings add trie nodes, and so configurations, to `configuration_bound`. Before a `commit` the repairs only let an attempt reach its commit point: a repaired object that never reaches it stays content. The built-in Hermes, Llama 3 JSON, Mistral v3, Anthropic, `OpenAI` and bare JSON dialects declare it; Mistral v11, DeepSeek, Kimi-K2 and Harmony carry no JSON envelope (only their arguments are JSON, read by the codec). A second statement is `DuplicateName`. |
 | `layout NAME "TEXT";` | Printing only: the class production `NAME` prints as `TEXT` wherever it occurs uncaptured, optional occurrences included. Recognition is unchanged. |
 | `NAME = EXPR;` | A production. |
 
@@ -211,7 +212,8 @@ call = "{" ws? "\"name\"" ws? ":" ws? "\"" name:tool-name "\"" ws? "," ws?
   reported and its bytes stay content. A length or other stop before the
   commit point leaves the bytes as content too. Repairs are limited as
   before an opener completes (closer insertion and stray-closer deletion
-  need an opened attempt).
+  need an opened attempt); a `json-envelope` grammar's JSON syntax repairs
+  apply, and only carry the attempt toward its commit point.
 - After it commits, the attempt is a call attempt like any other: repaired,
   rejected, or truncated, from its opener's start.
 - Reports at or after the start of an uncommitted attempt (other dialects'

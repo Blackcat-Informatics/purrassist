@@ -12,7 +12,8 @@
 //! closer, a closer variant, a stray closer, a dropped `</parameter>`, a
 //! fence or prose around the arguments, stringified arguments, a cut-off
 //! output, a misspelled name or key, a case-changed enumeration value, a
-//! whitespace-padded typed value, a JSON syntax slip, ...). The case's
+//! whitespace-padded typed value, a JSON syntax slip in the arguments or in
+//! a JSON call envelope, ...). The case's
 //! `category` is the rule expected to repair it, and its `truth` is the
 //! original call(s) when the mutation preserved what the caller needs, or
 //! `"Unresolved"` when the only correct answer is abstention:
@@ -1242,7 +1243,132 @@ fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
     if base.dialect == DialectId::BareJson {
         bare_mutations(base, &mut out);
     }
+    if matches!(
+        base.dialect,
+        DialectId::Hermes
+            | DialectId::Llama3Json
+            | DialectId::MistralV3
+            | DialectId::AnthropicToolUse
+            | DialectId::OpenAiToolCalls
+            | DialectId::BareJson
+    ) {
+        envelope_mutations(base, &mut out);
+    }
     out
+}
+
+/// The JSON envelope slips: the call object around the arguments carries
+/// the JSON syntax slip the json codec repairs inside arguments, under the
+/// same rule (a `json-envelope` grammar).
+const ENVELOPE_SLIPS: [(&str, &str); 8] = [
+    ("json.syntax.trailing-comma", "envelope"),
+    ("json.syntax.string", "envelope-single-quotes"),
+    ("json.syntax.bare-key", "envelope"),
+    ("json.syntax.missing-comma", "envelope"),
+    ("json.syntax.missing-colon", "envelope"),
+    ("json.syntax.comment", "envelope"),
+    ("json.syntax.string", "envelope-control-close"),
+    ("json.syntax.string", "envelope-control-open"),
+];
+
+/// The byte offset of the first `byte` of `text` outside a JSON string.
+fn outside_strings(text: &str, byte: u8) -> Option<usize> {
+    let mut quoted = false;
+    for (at, &current) in text.as_bytes().iter().enumerate() {
+        match current {
+            b'"' => quoted = !quoted,
+            _ if current == byte && !quoted => return Some(at),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// `text` with the quotes of every `"key":` member key removed.
+fn unquote_keys(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('"') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('"') else {
+            out.push_str(&rest[open..]);
+            return out;
+        };
+        let word = &after[..close];
+        let tail = &after[close + 1..];
+        let key = !word.is_empty()
+            && word.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            && tail.trim_start().starts_with(':');
+        if key {
+            out.push_str(word);
+        } else {
+            out.push_str(&rest[open..=open + close + 1]);
+        }
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Two of [`ENVELOPE_SLIPS`] in the call envelope of a JSON-envelope
+/// witness, chosen by tool and seed so each dialect meets every slip: the
+/// arguments text is untouched. Each is a non-guess single-reading repair
+/// (`Need::Exact`).
+fn envelope_mutations(base: &Base, out: &mut Vec<Mutant>) {
+    let split = base.split();
+    let arguments = base.arguments_text();
+    let (prefix, suffix) = (split.prefix.as_str(), split.suffix.as_str());
+    let name = json::quote(&base.call.name);
+    // Apply `edit` to the prefix, or else to the suffix.
+    let either = |edit: &dyn Fn(&str) -> Option<String>| {
+        edit(prefix)
+            .map(|edited| format!("{edited}{arguments}{suffix}"))
+            .or_else(|| edit(suffix).map(|edited| format!("{prefix}{arguments}{edited}")))
+    };
+    let first = usize::try_from(base.seed).unwrap_or(0) + 4 * base.tool;
+    for index in [first % 8, (first + 4) % 8] {
+        let (category, variant) = ENVELOPE_SLIPS[index];
+        let text = match index {
+            0 => suffix
+                .rfind('}')
+                .map(|at| format!("{prefix}{arguments}{},{}", &suffix[..at], &suffix[at..])),
+            1 => Some(format!(
+                "{}{arguments}{}",
+                prefix.replace('"', "'"),
+                suffix.replace('"', "'")
+            )),
+            2 => Some(format!(
+                "{}{arguments}{}",
+                unquote_keys(prefix),
+                unquote_keys(suffix)
+            )),
+            3 => either(&|part: &str| {
+                outside_strings(part, b',').map(|at| format!("{} {}", &part[..at], &part[at + 1..]))
+            }),
+            4 => either(&|part: &str| {
+                outside_strings(part, b':').map(|at| format!("{}{}", &part[..at], &part[at + 1..]))
+            }),
+            5 => prefix.find('{').map(|at| {
+                format!(
+                    "{}/* the call */ {}{arguments}{suffix}",
+                    &prefix[..=at],
+                    &prefix[at + 1..]
+                )
+            }),
+            6 => either(&|part: &str| {
+                part.contains(&name)
+                    .then(|| part.replacen(&name, &format!("\"{}\t\"", base.call.name), 1))
+            }),
+            _ => either(&|part: &str| {
+                part.contains(&name)
+                    .then(|| part.replacen(&name, &format!("\"\n{}\"", base.call.name), 1))
+            }),
+        };
+        if let Some(text) = text {
+            out.push(mutant(category, variant, text, Need::Exact));
+        }
+    }
 }
 
 /// The closer of a DeepSeek-V3.1 or V3 tool-calls section.

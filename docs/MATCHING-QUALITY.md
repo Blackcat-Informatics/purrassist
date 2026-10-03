@@ -144,7 +144,7 @@ test's assertions fails the build by design.
 | Path matching | 1594 | 1279 | 0 | 315 | 80.2% | 0.0% | 0.234% | 2% |
 | Phonetic ambiguity | 1408 | 1089 | 0 | 319 | 77.3% | 0.0% | 0.275% | 5% |
 | JSON recovery | 714 | 630 | 0 | 84 | 88.2% | 0.0% | 0.474% | 2% |
-| Tool-call recovery | 13404 | 9105 | 0 | 4299 | 67.9% | 0.0% | 0.033% | 1% |
+| Tool-call recovery | 13788 | 9489 | 0 | 4299 | 68.8% | 0.0% | 0.032% | 1% |
 
 "Coverage" is the fraction of cases an automatic decision was reached for at
 all (correct + incorrect, over the total); "risk" is the observed error rate
@@ -207,7 +207,7 @@ small oracle exhaustively proves the Unicode tables.
 
 ## Tool-call recovery evaluation
 
-`crates/core/tests/data/evaluation/tool-calls.jsonl` holds 13,404 mutated model
+`crates/core/tests/data/evaluation/tool-calls.jsonl` holds 13,788 mutated model
 turns, each with its `id`, `category` (the rule expected to repair it),
 `dialect` (the request's dialect allow-list), `policy`, `stop`, `input` and
 `truth`. The `tool-call-corpus` example generates it deterministically: it
@@ -253,7 +253,15 @@ message rather than read as text after it); bare JSON cases write the call
 object among prose, as the first element of an array beside a data object,
 with `"arguments"` before `"name"`, with a trailing id, and in a `` ```json ``
 fence (the `tool_call.context.fenced-example` guess), and since a bare object
-is a call only once complete it has no closer mutations. Turns
+is a call only once complete it has no closer mutations. For the six
+JSON-envelope dialects (Hermes, Llama 3 JSON, Mistral v3, Anthropic,
+`OpenAI`, bare JSON), `envelope` cases put one JSON syntax slip in the call
+object around the arguments, two slips per witness rotating by tool and
+seed so each dialect meets every one: a trailing comma before the closing
+brace, single quotes, bare keys, a missing comma or colon, a comment after
+the opening brace, and a raw tab before or newline after the name's quotes,
+under the `json.syntax.*` rule the same slip records inside arguments (a
+single reading, so `Exact` truth). Turns
 of two calls (one dialect, two bare JSON calls in one array, Qwen3-Coder XML
 mixed with Hermes, and a DeepSeek-V3.1 section with a DeepSeek-V3 section)
 cover the multi-call rules. `truth` is the original call or calls
@@ -301,16 +309,16 @@ unassignable (`UnknownParameter`), so the call abstains.
 | `json.key.match` | 372 | 144 | 0 | 228 | 228 |
 | `json.key.relocate` | 308 | 0 | 0 | 308 | 209 |
 | `json.required.invent` | 336 | 0 | 0 | 336 | 336 |
-| `json.syntax.bare-key` | 341 | 341 | 0 | 0 | 0 |
+| `json.syntax.bare-key` | 389 | 389 | 0 | 0 | 0 |
 | `json.syntax.bare-string` | 187 | 66 | 0 | 121 | 121 |
 | `json.syntax.close-container` | 24 | 24 | 0 | 0 | 0 |
-| `json.syntax.comment` | 341 | 341 | 0 | 0 | 0 |
+| `json.syntax.comment` | 389 | 389 | 0 | 0 | 0 |
 | `json.syntax.literal-case` | 77 | 77 | 0 | 0 | 0 |
-| `json.syntax.missing-colon` | 341 | 341 | 0 | 0 | 0 |
-| `json.syntax.missing-comma` | 286 | 286 | 0 | 0 | 0 |
+| `json.syntax.missing-colon` | 389 | 389 | 0 | 0 | 0 |
+| `json.syntax.missing-comma` | 334 | 334 | 0 | 0 | 0 |
 | `json.syntax.missing-value` | 198 | 0 | 0 | 198 | 198 |
-| `json.syntax.string` | 297 | 297 | 0 | 0 | 0 |
-| `json.syntax.trailing-comma` | 341 | 341 | 0 | 0 | 0 |
+| `json.syntax.string` | 441 | 441 | 0 | 0 | 0 |
+| `json.syntax.trailing-comma` | 389 | 389 | 0 | 0 | 0 |
 | `json.syntax.unterminated-string` | 24 | 12 | 0 | 12 | 12 |
 | `json.type.decode-string` | 66 | 0 | 0 | 66 | 66 |
 | `json.type.stringify-scalar` | 176 | 0 | 0 | 176 | 176 |
@@ -356,36 +364,36 @@ and by dialect allow-list:
 
 | Dialect | Cases | Correct | Incorrect | Abstained |
 | --- | ---: | ---: | ---: | ---: |
-| `anthropic` | 1168 | 816 | 0 | 352 |
-| `bare` | 1008 | 656 | 0 | 352 |
+| `anthropic` | 1232 | 880 | 0 | 352 |
+| `bare` | 1072 | 720 | 0 | 352 |
 | `deepseek3` | 1360 | 992 | 0 | 368 |
 | `deepseek31` | 1136 | 784 | 0 | 352 |
 | `harmony` | 1328 | 948 | 0 | 380 |
-| `hermes` | 1162 | 765 | 0 | 397 |
+| `hermes` | 1226 | 829 | 0 | 397 |
 | `kimi` | 1232 | 860 | 0 | 372 |
-| `llama3` | 976 | 624 | 0 | 352 |
+| `llama3` | 1040 | 688 | 0 | 352 |
 | `mistral11` | 880 | 548 | 0 | 332 |
-| `mistral3` | 1040 | 688 | 0 | 352 |
+| `mistral3` | 1104 | 752 | 0 | 352 |
 | `mixed` | 96 | 96 | 0 | 0 |
-| `openai` | 854 | 519 | 0 | 335 |
+| `openai` | 918 | 583 | 0 | 335 |
 | `qwen` | 1164 | 809 | 0 | 355 |
 
 | Allow-list | Cases | Correct | Incorrect | Abstained |
 | --- | ---: | ---: | ---: | ---: |
-| `anthropic-tool-use.v1` | 536 | 376 | 0 | 160 |
-| `anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1` | 7214 | 4875 | 0 | 2339 |
-| `bare-json.v1` | 456 | 296 | 0 | 160 |
+| `anthropic-tool-use.v1` | 568 | 408 | 0 | 160 |
+| `anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1` | 7406 | 5067 | 0 | 2339 |
+| `bare-json.v1` | 488 | 328 | 0 | 160 |
 | `deepseek-v3.1.v1` | 520 | 360 | 0 | 160 |
 | `deepseek-v3.1.v1,deepseek-v3.v1` | 32 | 32 | 0 | 0 |
 | `deepseek-v3.v1` | 632 | 464 | 0 | 168 |
 | `harmony.v1` | 616 | 444 | 0 | 172 |
-| `hermes.v1` | 546 | 357 | 0 | 189 |
+| `hermes.v1` | 578 | 389 | 0 | 189 |
 | `hermes.v1,qwen3-coder-xml.v1` | 64 | 64 | 0 | 0 |
 | `kimi-k2.v1` | 568 | 396 | 0 | 172 |
-| `llama3-json.v1` | 440 | 280 | 0 | 160 |
+| `llama3-json.v1` | 472 | 312 | 0 | 160 |
 | `mistral-v11.v1` | 392 | 244 | 0 | 148 |
-| `mistral-v3.v1` | 472 | 312 | 0 | 160 |
-| `openai-tool-calls.v1` | 382 | 231 | 0 | 151 |
+| `mistral-v3.v1` | 504 | 344 | 0 | 160 |
+| `openai-tool-calls.v1` | 414 | 263 | 0 | 151 |
 | `qwen3-coder-xml.v1` | 534 | 374 | 0 | 160 |
 
 Rules no case exercises: `json.syntax.literal-escape` (no witness value

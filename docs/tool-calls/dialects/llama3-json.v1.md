@@ -76,6 +76,16 @@ place of `"parameters"`.
   (stringified arguments) is decoded and flagged
   (`tool_call.arguments.decode-string`). When `"name"` comes first, the codec
   knows the declared tool.
+- The call's JSON envelope (`json-envelope;`) tolerates the JSON syntax
+  slips the `json` codec repairs inside arguments, under the same rules: a
+  trailing comma (`json.syntax.trailing-comma`), single quotes as in a
+  Python-repr dict (`json.syntax.string`), bare keys
+  (`json.syntax.bare-key`), a missing comma or colon
+  (`json.syntax.missing-comma`, `json.syntax.missing-colon`), a comment
+  (`json.syntax.comment`), and raw control characters beside the quotes of
+  the name string (deleted, `json.syntax.string`). Each is a non-guess
+  repair: the call keeps the outcome it would have with the slip inside its
+  arguments. See [GRAMMAR.md](../GRAMMAR.md) and the `envelope_*` goldens.
 - `<|python_tag|>` before the object, optionally followed by whitespace. After
   the tag the `"arguments"` key is read like `"parameters"`.
 - Several calls: each object is its own call, wherever it occurs. What

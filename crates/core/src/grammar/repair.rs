@@ -28,10 +28,11 @@
 // `unreachable_pub`) wins, as in `pattern::derive`.
 #![allow(clippy::redundant_pub_crate)]
 use super::automaton::ROOT;
+use super::compile::{JsonSpelling, LiteralTables};
 use super::cost::{K_ERR, K_THREAD};
 use super::edit::{EditOperator, MarkupEdit};
-use super::engine::{Failure, Out, Step, Sub, Thread, extend_digest};
-use super::{Inst, Program};
+use super::engine::{Failure, HistKind, Out, Step, Sub, Thread, extend_digest};
+use super::{CompiledGrammar, Inst, Literal, Program};
 use crate::contract::{Evidence, Governor, Resource, ScratchVec, StopReason};
 use crate::digest::Digest;
 use crate::search::{Acceptance, Change, Proposals, SearchState};
@@ -81,11 +82,6 @@ impl<'a, 's> RepairState<'a, 's> {
         opened: bool,
     ) -> Option<Self> {
         let thread = failure.thread;
-        let Inst::Lit { lit, .. } = step.program.insts[thread.pc as usize] else {
-            return None;
-        };
-        let literal = &step.grammar.literals[lit as usize];
-        let tables = &step.grammar.literal_tables[lit as usize];
         let make = |thread: Thread, status: Status| Self {
             thread,
             status,
@@ -93,6 +89,29 @@ impl<'a, 's> RepairState<'a, 's> {
             depth: 0,
             marker: PhantomData,
         };
+        let Inst::Lit { lit, .. } = step.program.insts[thread.pc as usize] else {
+            // A raw control character opening a string of a JSON envelope
+            // (`"\tread_file"`): the string's class run dies at it before
+            // reading anything. Deleted below, as the json codec requotes
+            // a raw control character inside an argument string.
+            let opening = eof.is_none()
+                && step.grammar.json_envelope
+                && matches!(step.program.insts[thread.pc as usize], Inst::Class { .. })
+                && thread.entry == failure.at
+                && step.byte(failure.at) < 0x20
+                && opens_string(step, failure.at);
+            return opening.then(|| {
+                make(
+                    Thread {
+                        pos: failure.at,
+                        ..thread
+                    },
+                    Status::Failed,
+                )
+            });
+        };
+        let literal = &step.grammar.literals[lit as usize];
+        let tables = &step.grammar.literal_tables[lit as usize];
         if let Some(stop) = eof {
             let Sub::Lit(node) = thread.sub else {
                 return None;
@@ -107,8 +126,17 @@ impl<'a, 's> RepairState<'a, 's> {
         }
         let pending = step.bytes(thread.entry..failure.at + 1);
         let respelled = (!tables.variants.trie.is_empty() && tables.variants.trie.admits(pending))
-            || (!tables.confusables.trie.is_empty() && tables.confusables.trie.admits(pending));
+            || (!tables.confusables.trie.is_empty() && tables.confusables.trie.admits(pending))
+            || tables
+                .json
+                .iter()
+                .any(|json| !json.trie.is_empty() && json.trie.admits(pending));
+        // JSON envelope repairs apply whether or not the attempt opened:
+        // the envelope's own syntax, never text around it.
+        let json = step.grammar.json_envelope
+            && (json_punctuation(&literal.bytes).is_some() || json_skip(&literal.bytes, pending));
         let applies = respelled
+            || json
             || (!failure.respell
                 && opened
                 && (literal.closer.is_some() || step.grammar.stray.admits(pending)));
@@ -122,7 +150,26 @@ impl<'a, 's> RepairState<'a, 's> {
         } else {
             Status::Failed
         };
-        applies.then(|| make(rewound, status))
+        if applies {
+            return Some(make(rewound, status));
+        }
+        // A comment (and the whitespace around it) inside a literal that
+        // spans several JSON tokens, at a token boundary of it: read on
+        // from the failure (`Sub::JsonInner`), not from the literal's start.
+        let inner = step.grammar.json_envelope
+            && matches!(thread.sub, Sub::Lit(node) if node > 0
+                && matches!(literal.bytes[node as usize - 1], b'{' | b'[' | b',' | b':' | b' ' | b'\t' | b'\r' | b'\n'))
+            && matches!(step.byte(failure.at), b'/' | b' ' | b'\t' | b'\r' | b'\n');
+        inner.then(|| {
+            make(
+                Thread {
+                    pos: failure.at,
+                    entry: failure.at,
+                    ..thread
+                },
+                status,
+            )
+        })
     }
 
     fn successor(&self, thread: Thread, status: Status, operator: EditOperator) -> Self {
@@ -178,6 +225,68 @@ impl<'a, 's> RepairState<'a, 's> {
         Ok(())
     }
 
+    /// Read this configuration's literal on in sub-mode `sub`, recorded
+    /// as `operator`, and propose every outcome.
+    fn respell(
+        &self,
+        context: &mut RepairContext<'a, 's>,
+        proposals: &mut Proposals<'_, Self>,
+        sub: Sub,
+        operator: EditOperator,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let mut seeds = ScratchVec::new(governor);
+        seeds.push(Thread { sub, ..self.thread })?;
+        self.replay(context, proposals, &mut seeds, operator, governor)
+    }
+
+    /// Delete the raw control character at this class configuration's
+    /// position, right after a JSON envelope string's opening quote, and
+    /// read the class run on from the next byte. The string's captures
+    /// opened at the deleted byte open after it: the edit precedes them,
+    /// and the name read is the name without the control character.
+    fn delete_opening_control(
+        &self,
+        context: &mut RepairContext<'a, 's>,
+        proposals: &mut Proposals<'_, Self>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let at = self.thread.pos;
+        let edit = MarkupEdit {
+            operator: EditOperator::JsonString,
+            span: at..at + 1,
+            original: context.step.bytes(at..at + 1).to_vec(),
+            replacement: Vec::new(),
+        };
+        let arena = &mut *context.step.arena;
+        let mut hist = self.thread.hist;
+        let mut reopened = Vec::new();
+        while let HistKind::Open(kind, start) = arena.nodes.as_slice()[hist as usize].kind
+            && start == at
+        {
+            reopened.push(kind);
+            hist = arena.nodes.as_slice()[hist as usize].prev;
+        }
+        hist = arena.edit(hist, edit, governor)?;
+        for kind in reopened.into_iter().rev() {
+            hist = arena.push(hist, HistKind::Open(kind, at + 1))?;
+        }
+        let mut seeds = ScratchVec::new(governor);
+        seeds.push(Thread {
+            hist,
+            pos: at + 1,
+            entry: at + 1,
+            ..self.thread
+        })?;
+        self.replay(
+            context,
+            proposals,
+            &mut seeds,
+            EditOperator::JsonString,
+            governor,
+        )
+    }
+
     /// Insert `replacement` (the expected literal, or its missing suffix)
     /// at this configuration's position, continue at `next`, and propose
     /// every outcome. With `complete == false` an insertion that completes
@@ -223,6 +332,97 @@ impl<'a, 's> RepairState<'a, 's> {
             )?;
         }
         self.replay(context, proposals, &mut seeds, operator, governor)
+    }
+}
+
+/// The respelling modes of a failed literal configuration whose pending
+/// bytes are `pending`: each whether it applies, its sub-mode, and its
+/// operator.
+fn respellings(
+    grammar: &CompiledGrammar,
+    literal: &Literal,
+    tables: &LiteralTables,
+    pending: &[u8],
+    respell: bool,
+    opened: bool,
+) -> [(bool, Sub, EditOperator); 7] {
+    let json = |table: usize| {
+        (
+            !tables.json[table].trie.is_empty() && tables.json[table].trie.admits(pending),
+            Sub::Json(JsonSpelling::ALL[table] as u8, ROOT),
+            JsonSpelling::ALL[table].operator(),
+        )
+    };
+    [
+        (
+            !respell && opened && grammar.stray.admits(pending),
+            Sub::Skip(ROOT),
+            EditOperator::DeleteStrayCloser,
+        ),
+        (
+            !tables.variants.trie.is_empty() && tables.variants.trie.admits(pending),
+            Sub::Variant(ROOT),
+            EditOperator::CloserVariant,
+        ),
+        (
+            !tables.confusables.trie.is_empty() && tables.confusables.trie.admits(pending),
+            Sub::Confusable(ROOT),
+            EditOperator::TerminalConfusable,
+        ),
+        json(0),
+        json(1),
+        json(2),
+        (
+            grammar.json_envelope && json_skip(&literal.bytes, pending),
+            Sub::JsonSkip(0),
+            json_skip_operator(pending),
+        ),
+    ]
+}
+
+/// The JSON insertion repair for a missing separator literal: `,`
+/// (`json.syntax.missing-comma`) or `:` (`json.syntax.missing-colon`).
+const fn json_punctuation(literal: &[u8]) -> Option<EditOperator> {
+    match literal {
+        b"," => Some(EditOperator::JsonMissingComma),
+        b":" => Some(EditOperator::JsonMissingColon),
+        _ => None,
+    }
+}
+
+/// Whether a JSON deletion can apply before `literal` to `pending`: a
+/// trailing comma before a closing `}` or `]`, a comment, or raw control
+/// characters before a string's closing `"`.
+fn json_skip(literal: &[u8], pending: &[u8]) -> bool {
+    match pending.first() {
+        Some(b',') => matches!(literal.first(), Some(b'}' | b']')),
+        Some(b'/') => true,
+        Some(0..=0x1F) => literal == b"\"",
+        _ => false,
+    }
+}
+
+/// Whether the bytes before `at` are a `"` followed only by raw control
+/// characters (each deleted by an earlier repair).
+const fn opens_string(step: &Step<'_, '_>, at: usize) -> bool {
+    let mut pos = at;
+    while pos > step.base {
+        pos -= 1;
+        match step.byte(pos) {
+            b'"' => return true,
+            0..=0x1F => {}
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// The operator of the JSON deletion `json_skip` admits for `pending`.
+const fn json_skip_operator(pending: &[u8]) -> EditOperator {
+    match pending.first() {
+        Some(b',') => EditOperator::JsonTrailingComma,
+        Some(b'/') => EditOperator::JsonComment,
+        _ => EditOperator::JsonString,
     }
 }
 
@@ -325,8 +525,27 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
             return Ok(());
         }
         let Inst::Lit { lit, next } = program.insts[self.thread.pc as usize] else {
+            // Only `seed`'s raw control character opening a JSON envelope
+            // string reaches a class run.
+            if self.status == Status::Failed {
+                self.delete_opening_control(context, proposals, governor)?;
+            }
             return Ok(());
         };
+        if let Sub::Lit(node) = self.thread.sub
+            && node > 0
+            && matches!(self.status, Status::Failed | Status::Respelled)
+        {
+            // `seed`'s comment inside a literal.
+            let inner = Sub::JsonInner(0, node);
+            return self.respell(
+                context,
+                proposals,
+                inner,
+                EditOperator::JsonComment,
+                governor,
+            );
+        }
         let grammar = context.step.grammar;
         let literal = &grammar.literals[lit as usize];
         let tables = &grammar.literal_tables[lit as usize];
@@ -334,25 +553,18 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
         match self.status {
             Status::Failed | Status::Respelled => {
                 let respell = self.status == Status::Respelled;
-                let pending = context.step.bytes(at..context.until);
-                let modes = [
-                    (
-                        !respell && context.opened && grammar.stray.admits(pending),
-                        Sub::Skip(ROOT),
-                        EditOperator::DeleteStrayCloser,
-                    ),
-                    (
-                        !tables.variants.trie.is_empty() && tables.variants.trie.admits(pending),
-                        Sub::Variant(ROOT),
-                        EditOperator::CloserVariant,
-                    ),
-                    (
-                        !tables.confusables.trie.is_empty()
-                            && tables.confusables.trie.admits(pending),
-                        Sub::Confusable(ROOT),
-                        EditOperator::TerminalConfusable,
-                    ),
-                ];
+                // Owned: the insertions below borrow the context mutably.
+                let pending = &context.step.bytes(at..context.until).to_vec()[..];
+                let modes = respellings(grammar, literal, tables, pending, respell, context.opened);
+                // A missing JSON `,` or `:` of the envelope, inserted.
+                if let Some(operator) =
+                    json_punctuation(&literal.bytes).filter(|_| grammar.json_envelope)
+                {
+                    let separator = literal.bytes.clone();
+                    self.insert(
+                        context, proposals, operator, separator, next, true, governor,
+                    )?;
+                }
                 if !respell && context.opened && literal.closer.is_some() {
                     let replacement = literal.bytes.clone();
                     // A closer missing mid-message: the wrapper's when it
@@ -381,9 +593,7 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
                 }
                 for (applies, sub, operator) in modes {
                     if applies {
-                        let mut seeds = ScratchVec::new(governor);
-                        seeds.push(Thread { sub, ..self.thread })?;
-                        self.replay(context, proposals, &mut seeds, operator, governor)?;
+                        self.respell(context, proposals, sub, operator, governor)?;
                     }
                 }
             }

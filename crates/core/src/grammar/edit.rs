@@ -77,7 +77,11 @@
 //! ids, except that an *unterminated* string, which the JSON engine records
 //! as a guessed `json.syntax.string`, is its own rule
 //! `json.syntax.unterminated-string`: it has its own cost and guess flag, and
-//! one id names one rule). *Repair* marks the operators that change call
+//! one id names one rule). The grammar engine records the same JSON
+//! syntax operators for the same slips in the JSON call envelope of a
+//! `json-envelope` grammar
+//! ([`CompiledGrammar::json_envelope`](super::CompiledGrammar::json_envelope)).
+//! *Repair* marks the operators that change call
 //! markup and so make a call
 //! [`Closure::Repaired`](crate::tool_call::Closure::Repaired); the others
 //! record how bytes were read.

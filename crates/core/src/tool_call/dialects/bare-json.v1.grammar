@@ -45,6 +45,13 @@
 # sources and for what is deliberately not accepted.
 grammar "bare-json.v1";
 
+# The call's JSON envelope tolerates the JSON syntax slips the json codec
+# repairs inside arguments, recorded under the same json.syntax.* rules
+# (`json-envelope`): single quotes, bare keys, a missing `:` or `,`, a
+# trailing comma, a comment, a raw control character beside the name's
+# quotes.
+json-envelope;
+
 optional-id;
 declaration-content;
 

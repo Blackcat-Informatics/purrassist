@@ -625,7 +625,9 @@ call has no content to scan.
 Each dialect `d` of the request's allow-list keeps at most `B_d`
 configurations live per input byte, where `B_d` is
 `CompiledGrammar::configuration_bound()` (one per program location plus one
-per byte position of each literal spelling); `K_d = K_THREAD·B_d` is its
+per byte position of each literal spelling: canonical, closer variant,
+confusable and, in a `json-envelope` grammar, the single-quoted, bare-key and
+colonless JSON spellings of its envelope literals); `K_d = K_THREAD·B_d` is its
 per-byte term. The published bound is
 
 ```text
@@ -700,21 +702,21 @@ every value below to equal the code's.
 
 | Built-in dialect | `B_d` | `K_d` per byte |
 | --- | ---: | ---: |
-| `anthropic-tool-use.v1` | 2133 | 2133 |
-| `bare-json.v1` | 190 | 190 |
+| `anthropic-tool-use.v1` | 3391 | 3391 |
+| `bare-json.v1` | 378 | 378 |
 | `deepseek-v3.1.v1` | 2945 | 2945 |
 | `deepseek-v3.v1` | 4793 | 4793 |
 | `harmony.v1` | 3890 | 3890 |
-| `hermes.v1` | 1015 | 1015 |
+| `hermes.v1` | 1137 | 1137 |
 | `kimi-k2.v1` | 2436 | 2436 |
-| `llama3-json.v1` | 562 | 562 |
+| `llama3-json.v1` | 986 | 986 |
 | `mistral-v11.v1` | 136 | 136 |
-| `mistral-v3.v1` | 1266 | 1266 |
-| `openai-tool-calls.v1` | 2151 | 2151 |
+| `mistral-v3.v1` | 2228 | 2228 |
+| `openai-tool-calls.v1` | 6665 | 6665 |
 | `qwen3-coder-xml.v1` | 696 | 696 |
 
 The default request allows all twelve, so its bound is
-`(2 + 1 + 22213)·n + 8·E = 22216·n + 8·E`.
+`(2 + 1 + 29681)·n + 8·E = 29684·n + 8·E`.
 
 ### Budgets for large outputs and busy turns
 

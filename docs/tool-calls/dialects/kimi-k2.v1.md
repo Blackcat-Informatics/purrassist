@@ -73,6 +73,10 @@ between `<think>` and `</think>` before the answer.
   separated by the DSL's `next`
   ([GRAMMAR.md](../GRAMMAR.md#several-calls-in-one-attempt)). Whitespace
   between the tokens and around the id is markup.
+- The call markup around the arguments is special tokens and text, not a
+  JSON envelope, so the grammar does not declare `json-envelope;`: the JSON
+  syntax repairs (`json.syntax.*`) apply inside the JSON arguments, read by
+  the `json` codec. See [GRAMMAR.md](../GRAMMAR.md).
 - The id is a *composite id* ([GRAMMAR.md](../GRAMMAR.md#captures)): the
   whole `functions.NAME:IDX` is the call's model id, kept as its source id
   under the default id policy, and the `NAME` inside it is the tool name.

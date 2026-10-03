@@ -122,6 +122,35 @@ impl Program {
 pub(crate) struct LiteralTables {
     pub(crate) variants: Spellings,
     pub(crate) confusables: Spellings,
+    /// In a `json-envelope` grammar, the JSON-syntax spellings of the
+    /// literal, one table per repair ([`JsonSpelling`]); empty otherwise.
+    pub(crate) json: [Spellings; 3],
+}
+
+/// The JSON-syntax spellings a `json-envelope` grammar reads for a literal,
+/// each recorded under the `json.syntax.*` rule the JSON codec records for
+/// the same slip inside arguments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum JsonSpelling {
+    /// Single quotes for double quotes, or a raw control character beside
+    /// a lone quote (`json.syntax.string`).
+    String = 0,
+    /// A member key without its quotes (`json.syntax.bare-key`).
+    BareKey = 1,
+    /// The literal's `:` separators left out (`json.syntax.missing-colon`).
+    MissingColon = 2,
+}
+
+impl JsonSpelling {
+    pub(crate) const ALL: [Self; 3] = [Self::String, Self::BareKey, Self::MissingColon];
+
+    pub(crate) const fn operator(self) -> super::edit::EditOperator {
+        match self {
+            Self::String => super::edit::EditOperator::JsonString,
+            Self::BareKey => super::edit::EditOperator::JsonBareKey,
+            Self::MissingColon => super::edit::EditOperator::JsonMissingColon,
+        }
+    }
 }
 
 /// A list of spellings and the trie recognizing them (labelled by index).
@@ -759,10 +788,74 @@ fn confusable_spellings(
     Ok(spellings)
 }
 
+/// The JSON-syntax spellings of `bytes` (see [`JsonSpelling`]): every `"`
+/// as `'` (and, for a lone `"`, a raw control character before or after
+/// it); every `"KEY"` that is a member key (followed by `:` in the literal,
+/// or, when `key_at_end`, ending it) without its quotes; and every `:`
+/// outside quotes left out.
+fn json_spellings(bytes: &[u8], key_at_end: bool) -> [Vec<Vec<u8>>; 3] {
+    let mut string = Vec::new();
+    if bytes.contains(&b'"') {
+        string.push(
+            bytes
+                .iter()
+                .map(|&b| if b == b'"' { b'\'' } else { b })
+                .collect(),
+        );
+    }
+    // Quoted words and colons outside quotes.
+    let mut bare = Vec::with_capacity(bytes.len());
+    let mut keys = 0;
+    let mut colonless = Vec::with_capacity(bytes.len());
+    let mut colons = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'"' {
+            let close = bytes[index + 1..].iter().position(|&b| b == b'"');
+            if let Some(length) = close {
+                let word = &bytes[index + 1..index + 1 + length];
+                let after = index + 2 + length;
+                let colon_follows = bytes[after..]
+                    .iter()
+                    .find(|b| **b != b' ')
+                    .is_some_and(|b| *b == b':');
+                let is_key = !word.is_empty()
+                    && word.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_')
+                    && (colon_follows || (after == bytes.len() && key_at_end));
+                if is_key {
+                    bare.extend_from_slice(word);
+                    keys += 1;
+                } else {
+                    bare.extend_from_slice(&bytes[index..after]);
+                }
+                colonless.extend_from_slice(&bytes[index..after]);
+                index = after;
+                continue;
+            }
+        }
+        if byte == b':' && bytes.len() > 1 {
+            colons += 1;
+        } else {
+            colonless.push(byte);
+        }
+        bare.push(byte);
+        index += 1;
+    }
+    let bare = if keys > 0 { vec![bare] } else { Vec::new() };
+    let colonless = if colons > 0 && !colonless.is_empty() {
+        vec![colonless]
+    } else {
+        Vec::new()
+    };
+    [string, bare, colonless]
+}
+
 fn literal_tables(
     literal: &Literal,
     closers: &[CloserClass],
     confusables: &[(Vec<u8>, Vec<u8>)],
+    json: Option<bool>,
     governor: &mut Governor,
 ) -> Result<LiteralTables, GrammarError> {
     let mut variants: Vec<Vec<u8>> = Vec::new();
@@ -777,10 +870,149 @@ fn literal_tables(
         .into_iter()
         .filter(|spelling| !variants.contains(spelling))
         .collect();
+    let mut json_tables = [Vec::new(), Vec::new(), Vec::new()];
+    if let Some(key_at_end) = json {
+        let mut seen: Vec<Vec<u8>> = variants.iter().chain(&spellings).cloned().collect();
+        seen.push(literal.bytes.clone());
+        for (table, generated) in json_tables
+            .iter_mut()
+            .zip(json_spellings(&literal.bytes, key_at_end))
+        {
+            for spelling in generated {
+                if !seen.contains(&spelling) {
+                    seen.push(spelling.clone());
+                    table.push(spelling);
+                }
+            }
+        }
+    }
+    let [string, bare, colon] = json_tables;
     Ok(LiteralTables {
         variants: Spellings::build(variants, governor)?,
         confusables: Spellings::build(spellings, governor)?,
+        json: [
+            Spellings::build(string, governor)?,
+            Spellings::build(bare, governor)?,
+            Spellings::build(colon, governor)?,
+        ],
     })
+}
+
+/// Each literal's key flag, and per program the key uses `(pc, copy)` to
+/// point at a literal's key copy (see `split_keys`).
+type KeySplit = (Vec<bool>, Renames);
+
+/// Per program, the `Lit` instructions (`pc`) to point at another literal.
+type Renames = Vec<Vec<(u32, u32)>>;
+
+/// The literal tables of a `json-envelope` grammar, JSON spellings
+/// included, over `literals` with their key copies (see `split_keys`), and
+/// the key uses to point at the copies.
+fn json_tables(
+    programs: &[Program],
+    literals: &mut Vec<Literal>,
+    closers: &[CloserClass],
+    confusables: &[(Vec<u8>, Vec<u8>)],
+    governor: &mut Governor,
+) -> Result<(Vec<LiteralTables>, Renames), GrammarError> {
+    let (keys, renames) = split_keys(programs, literals, governor)?;
+    charge(governor, size(literals.len()), 0)?;
+    let tables = literals
+        .iter()
+        .zip(&keys)
+        .map(|(literal, &key)| literal_tables(literal, closers, confusables, Some(key), governor))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((tables, renames))
+}
+
+/// Each `Lit` use of each program, `(pc, literal, key)`: whether the use
+/// is followed by a literal beginning with `:` (optional class runs, such
+/// as whitespace, between), as a member key is.
+fn key_uses(programs: &[Program], literals: &[Literal]) -> Vec<Vec<(u32, u32, bool)>> {
+    programs
+        .iter()
+        .map(|program| {
+            let mut uses = Vec::new();
+            for (pc, inst) in program.insts.iter().enumerate() {
+                let Inst::Lit { lit, next } = *inst else {
+                    continue;
+                };
+                let mut colon = true;
+                let mut any = false;
+                let mut seen = vec![false; program.insts.len()];
+                let mut stack = vec![next];
+                while let Some(pc) = stack.pop() {
+                    if core::mem::replace(&mut seen[pc as usize], true) {
+                        continue;
+                    }
+                    match program.insts[pc as usize] {
+                        Inst::Split(first, second) => stack.extend([first, second]),
+                        Inst::Open { next, .. }
+                        | Inst::Close { next, .. }
+                        | Inst::Commit { next }
+                        | Inst::Next { next }
+                        | Inst::Insert { next, .. }
+                        | Inst::Class { next, .. } => stack.push(next),
+                        Inst::Lit { lit, .. } => {
+                            any = true;
+                            colon &= literals[lit as usize].bytes.first() == Some(&b':');
+                        }
+                        Inst::Until { .. } | Inst::Slot { .. } | Inst::Accept => colon = false,
+                    }
+                }
+                uses.push((index_u32(pc), lit, any && colon));
+            }
+            uses
+        })
+        .collect()
+}
+
+/// The member-key literals of a `json-envelope` grammar: a literal every
+/// use of which is a key is one, and a literal used both as a key and
+/// otherwise (`"function"`, the key of `OpenAI`'s function object and the
+/// value of its `type`) gets a copy, appended to `literals`, for its key
+/// uses. Returns each literal's key flag and, per program, the key uses
+/// (`pc`, copy) to point at the copies.
+fn split_keys(
+    programs: &[Program],
+    literals: &mut Vec<Literal>,
+    governor: &mut Governor,
+) -> Result<KeySplit, GrammarError> {
+    let uses = key_uses(programs, literals);
+    let mut counts = vec![(0_u32, 0_u32); literals.len()];
+    for &(_, lit, key) in uses.iter().flatten() {
+        let count = &mut counts[lit as usize];
+        count.0 += 1;
+        count.1 += u32::from(key);
+    }
+    let mut keys: Vec<bool> = counts
+        .iter()
+        .map(|&(all, keyed)| all > 0 && all == keyed)
+        .collect();
+    let mut copies: Vec<Option<u32>> = vec![None; literals.len()];
+    let mut per_program = Vec::with_capacity(uses.len());
+    for program in &uses {
+        let mut moved = Vec::new();
+        for &(pc, lit, key) in program {
+            let (all, keyed) = counts[lit as usize];
+            if !key || keyed == all {
+                continue;
+            }
+            let copy = if let Some(copy) = copies[lit as usize] {
+                copy
+            } else {
+                charge(governor, 1, size(literals[lit as usize].bytes.len()))?;
+                literals.push(literals[lit as usize].clone());
+                keys.push(true);
+                let copy = index_u32(literals.len() - 1);
+                copies[lit as usize] = Some(copy);
+                copy
+            };
+            moved.push((pc, copy));
+        }
+        per_program.push(moved);
+    }
+    Ok((keys, per_program))
 }
 
 fn compile_program(
@@ -789,6 +1021,7 @@ fn compile_program(
     root: ProductionId,
     offset: usize,
     tables: &Tables<'_>,
+    renames: &[(u32, u32)],
     governor: &mut Governor,
 ) -> Result<Program, GrammarError> {
     let mut emitter = Emitter {
@@ -799,7 +1032,14 @@ fn compile_program(
     };
     let accept = emitter.push(Inst::Accept)?;
     let start = emitter.emit(&productions[root.index()].expr, accept)?;
-    let insts = emitter.insts;
+    let mut insts = emitter.insts;
+    // Emission does not depend on the tables, so a use found at `pc` by an
+    // earlier compile of the same productions is at `pc` again.
+    for &(pc, copy) in renames {
+        if let Inst::Lit { lit, .. } = &mut insts[pc as usize] {
+            *lit = copy;
+        }
+    }
     let invalid = || GrammarError::InvalidOpener {
         offset,
         production: productions[root.index()].name.clone(),
@@ -818,6 +1058,7 @@ fn compile_program(
             .trie
             .first_bytes()
             .chain(repairs.confusables.trie.first_bytes())
+            .chain(repairs.json.iter().flat_map(|json| json.trie.first_bytes()))
         {
             mark(byte);
         }
@@ -883,7 +1124,9 @@ fn compile_program(
 
 impl LiteralTables {
     fn trie_nodes(&self) -> usize {
-        self.variants.bytes() + self.confusables.bytes()
+        self.variants.bytes()
+            + self.confusables.bytes()
+            + self.json.iter().map(Spellings::bytes).sum::<usize>()
     }
 }
 
@@ -891,6 +1134,45 @@ struct Tables<'a> {
     literals: &'a [Literal],
     repairs: &'a [LiteralTables],
     stray_nodes: usize,
+}
+
+/// What the `call` and `result` programs are compiled from, over literal
+/// tables that a `json-envelope` grammar rebuilds once.
+struct Programs<'p> {
+    productions: &'p [Production],
+    closer_ids: &'p [u32],
+    offsets: &'p [usize],
+    stray_nodes: usize,
+    roots: [ProductionId; 2],
+}
+
+impl Programs<'_> {
+    fn compile(
+        &self,
+        literals: &[Literal],
+        repairs: &[LiteralTables],
+        renames: &[Vec<(u32, u32)>],
+        governor: &mut Governor,
+    ) -> Result<[Program; 2], GrammarError> {
+        let tables = Tables {
+            literals,
+            repairs,
+            stray_nodes: self.stray_nodes,
+        };
+        let mut program = |index: usize| {
+            let root = self.roots[index];
+            compile_program(
+                self.productions,
+                self.closer_ids,
+                root,
+                self.offsets[root.index()],
+                &tables,
+                renames.get(index).map_or(&[][..], Vec::as_slice),
+                governor,
+            )
+        };
+        Ok([program(0)?, program(1)?])
+    }
 }
 
 /// The non-production statements of a document, and its production bodies
@@ -902,6 +1184,7 @@ struct Declared<'d> {
     layouts: Vec<(&'d str, &'d [u8], usize)>,
     optional_id: bool,
     declaration_content: bool,
+    json_envelope: bool,
 }
 
 fn declare<'d>(
@@ -915,6 +1198,7 @@ fn declare<'d>(
         layouts: Vec::new(),
         optional_id: false,
         declaration_content: false,
+        json_envelope: false,
     };
     let duplicate = |offset: usize, name: &str| GrammarError::DuplicateName {
         offset,
@@ -940,6 +1224,12 @@ fn declare<'d>(
                     return Err(duplicate(*at, "declaration-content"));
                 }
                 declared.declaration_content = true;
+            }
+            Statement::JsonEnvelope { at } => {
+                if declared.json_envelope {
+                    return Err(duplicate(*at, "json-envelope"));
+                }
+                declared.json_envelope = true;
             }
             Statement::Layout { name, text, at } => {
                 declared.layouts.push((name.as_str(), text.as_slice(), *at));
@@ -1057,11 +1347,14 @@ fn longest_literal(
     literals
         .iter()
         .map(|literal| &literal.bytes)
-        .chain(
-            repairs
+        .chain(repairs.iter().flat_map(|tables| {
+            tables
+                .variants
+                .list
                 .iter()
-                .flat_map(|tables| tables.variants.list.iter().chain(&tables.confusables.list)),
-        )
+                .chain(&tables.confusables.list)
+                .chain(tables.json.iter().flat_map(|json| &json.list))
+        }))
         .chain(&stray.list)
         .map(Vec::len)
         .chain(delimiters.iter().map(|set| set.matcher.longest()))
@@ -1096,6 +1389,7 @@ pub(crate) fn compile(
         layouts: declared_layouts,
         optional_id,
         declaration_content,
+        json_envelope,
     } = declare(&mut builder, &document.statements)?;
     let mut productions = Vec::with_capacity(bodies.len());
     for (name, expr) in bodies {
@@ -1130,28 +1424,35 @@ pub(crate) fn compile(
         governor,
     )?;
     let closer_ids = closer_literals(&mut literals, &closers, governor)?;
-    let literal_tables = literals
+    let mut literal_tables = literals
         .iter()
-        .map(|literal| self::literal_tables(literal, &closers, &confusables, governor))
+        .map(|literal| self::literal_tables(literal, &closers, &confusables, None, governor))
         .collect::<Result<Vec<_>, _>>()?;
     let stray = stray_spellings(&closers, governor)?;
     let delimiters = delimiter_sets(sets, &confusables, governor)?;
-    let tables = Tables {
-        literals: &literals,
-        repairs: &literal_tables,
+    let source = Programs {
+        productions: &productions,
+        closer_ids: &closer_ids,
+        offsets: &production_offsets,
         stray_nodes: stray.bytes(),
+        roots: [call, result],
     };
-    let mut program = |root: ProductionId| {
-        compile_program(
-            &productions,
-            &closer_ids,
-            root,
-            production_offsets[root.index()],
-            &tables,
-            governor,
-        )
-    };
-    let programs = [program(call)?, program(result)?];
+    let compile_programs =
+        |literals: &[Literal],
+         tables: &[LiteralTables],
+         renames: &[Vec<(u32, u32)>],
+         governor: &mut Governor| { source.compile(literals, tables, renames, governor) };
+    let mut programs = compile_programs(&literals, &literal_tables, &[], governor)?;
+    if json_envelope {
+        // The JSON spellings need to know which literals are member keys,
+        // which the compiled programs tell; the programs are then compiled
+        // again over the extended tables, key uses of a literal also used
+        // otherwise pointing at its key copy.
+        let renames;
+        (literal_tables, renames) =
+            json_tables(&programs, &mut literals, &closers, &confusables, governor)?;
+        programs = compile_programs(&literals, &literal_tables, &renames, governor)?;
+    }
     let longest = longest_literal(&literals, &literal_tables, &stray, &delimiters, &reasoning);
     // An `optional-id` grammar reads a call id where a model adds one, but
     // its markup does not provide for one.
@@ -1169,6 +1470,7 @@ pub(crate) fn compile(
         call,
         call_ids,
         declaration_content,
+        json_envelope,
         result,
         declaration,
         reasoning,

@@ -71,6 +71,10 @@ returns as a message from the tool to the assistant,
     `analysis` or `final`.
 
   Each message is its own call; several calls are several messages.
+- The call markup around the arguments is special tokens and text, not a
+  JSON envelope, so the grammar does not declare `json-envelope;`: the JSON
+  syntax repairs (`json.syntax.*`) apply inside the JSON arguments, read by
+  the `json` codec. See [GRAMMAR.md](../GRAMMAR.md).
 - Commit point: a message becomes a call attempt only at its recipient (in
   the role-section layout, at the `<|channel|>` after it). A message without
   a recipient never opens one:

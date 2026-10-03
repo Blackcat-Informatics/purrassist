@@ -130,7 +130,13 @@ free text as an argument, or invents a value.
   `tool_call.context.fenced-example` from the context tracker.
 - The `xml-params`, `json`, and stringified-arguments rows are recorded by
   argument codecs; the `json.syntax.*` rows are the tolerant JSON parser's
-  repairs inside an argument value.
+  repairs inside an argument value. In a `json-envelope` grammar (Hermes,
+  Llama 3 JSON, Mistral v3, Anthropic, `OpenAI`, bare JSON) the grammar
+  engine records the same rules for the same slips in the call's JSON
+  envelope: a trailing comma, single quotes, bare keys, a missing comma or
+  colon, a comment, and raw control characters beside the quotes of an
+  envelope string (deleted, under `json.syntax.string`); see
+  [GRAMMAR.md](GRAMMAR.md).
 - `resolution` rows are applied by `resolve_forest` against the tool set,
   except `tool_call.id.dedup` (recorded by the id policy) and
   `tool_call.input.invalid-utf8` (recorded by the recovery operation's

@@ -53,6 +53,7 @@
 use super::codec::{
     CodecContext, CodecEnd, CodecFault, CodecKind, CodecState, CodecStep, CodecValue,
 };
+use super::compile::JsonSpelling;
 use super::cost::{K_CAPTURE, K_CODEC, K_THREAD, STRAY_CLOSER_GAP, UNDECLARED_NAME};
 use super::edit::{EditOperator, MarkupEdit};
 use super::repair::{RepairContext, RepairState, Status};
@@ -83,6 +84,20 @@ pub(crate) enum Sub {
     Confusable(u32),
     /// Deleting a stray closer before returning to this literal; the node.
     Skip(u32),
+    /// Matching a JSON-syntax spelling of a `json-envelope` grammar; the
+    /// table ([`JsonSpelling`](super::compile::JsonSpelling) as `u8`) and
+    /// the trie node.
+    Json(u8, u32),
+    /// Deleting a trailing comma or a comment before this literal in a
+    /// `json-envelope` grammar; the scanner state (see
+    /// [`Step::step_json_skip`]).
+    JsonSkip(u32),
+    /// Deleting a comment inside this literal, at a JSON token boundary of
+    /// it, in a `json-envelope` grammar; the scanner state and the
+    /// canonical bytes matched before the comment (see
+    /// [`Step::step_json_inner`]). The configuration's `entry` is where the
+    /// comment began.
+    JsonInner(u8, u32),
     /// Inside a class run.
     Class(DfaState),
     /// Inside an `until`/`slot` body: matcher state and, for a slot, the
@@ -97,6 +112,7 @@ impl Sub {
             Self::Variant(_) => Self::Variant(node),
             Self::Confusable(_) => Self::Confusable(node),
             Self::Skip(_) => Self::Skip(node),
+            Self::Json(table, _) => Self::Json(table, node),
             other => other,
         }
     }
@@ -109,6 +125,9 @@ impl Sub {
             Self::Skip(node) => (3, *node),
             Self::Class(_) => (4, 0),
             Self::Body(..) => (5, 0),
+            Self::Json(table, node) => (6 + *table, *node),
+            Self::JsonSkip(state) => (9, *state),
+            Self::JsonInner(state, node) => (10 + *state, *node),
         }
     }
 }
@@ -502,6 +521,18 @@ impl<'s> Step<'_, 's> {
                 node,
             ),
             Sub::Skip(node) => (&grammar.stray, EditOperator::DeleteStrayCloser, node),
+            Sub::Json(table, node) => (
+                &tables.json[table as usize].trie,
+                JsonSpelling::ALL[table as usize].operator(),
+                node,
+            ),
+            Sub::JsonSkip(state) => {
+                return self.step_json_skip(thread, lit, next, byte, state, stack, out, governor);
+            }
+            Sub::JsonInner(state, node) => {
+                return self
+                    .step_json_inner(thread, lit, next, byte, state, node, stack, out, governor);
+            }
             Sub::Class(_) | Sub::Body(..) => unreachable!("literal configurations only"),
         };
         let Some(child) = trie.step(node, byte) else {
@@ -538,6 +569,132 @@ impl<'s> Step<'_, 's> {
             return self.queue(thread, stack);
         }
         self.finish_literal(thread, next, pos + 1, stack, out, governor)
+    }
+
+    /// One byte of a JSON-syntax deletion before literal `lit` (a
+    /// `json-envelope` grammar): a trailing `,` before the literal's `}` or
+    /// `]`, a `/* ... */` or `// ...` comment, each with the whitespace
+    /// after it, or a run of raw control characters before a closing `"`.
+    /// States: 0 the first byte; 1 whitespace after the comma; 2 after
+    /// `/`; 3 inside a block comment; 4 after its `*`; 5 inside a line
+    /// comment; 6 whitespace after a comment; 7 inside the control run. At
+    /// the first other byte the deletion is recorded
+    /// (`json.syntax.trailing-comma`, `json.syntax.comment` or
+    /// `json.syntax.string`) and the literal is read from that byte.
+    #[allow(clippy::too_many_arguments)]
+    fn step_json_skip(
+        &mut self,
+        mut thread: Thread,
+        lit: u32,
+        next: u32,
+        byte: u8,
+        state: u32,
+        stack: &mut ScratchVec<Thread>,
+        out: &mut Out,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let pos = thread.pos;
+        let bytes = &self.grammar.literals[lit as usize].bytes;
+        let closing = matches!(bytes.first(), Some(b'}' | b']'));
+        let quote = bytes.as_slice() == b"\"";
+        let next_state = match (state, byte) {
+            (0, b',') if closing => Some(1),
+            (0 | 7, 0..=0x1F) if quote => Some(7),
+            (0 | 6, b'/') => Some(2),
+            (1 | 6, b' ' | b'\t' | b'\r' | b'\n') => Some(state),
+            (3 | 4, b'*') => Some(4),
+            (4, b'/') | (5, b'\n') => Some(6),
+            (2, b'*') | (3 | 4, _) => Some(3),
+            (2, b'/') | (5, _) => Some(5),
+            _ => None,
+        };
+        if let Some(state) = next_state {
+            thread.sub = Sub::JsonSkip(state);
+            thread.pos = pos + 1;
+            return self.queue(thread, stack);
+        }
+        let operator = match state {
+            1 => EditOperator::JsonTrailingComma,
+            6 => EditOperator::JsonComment,
+            7 => EditOperator::JsonString,
+            _ => return Self::fail(out, thread, pos, Rejection::Malformed { at: pos }),
+        };
+        let edit = MarkupEdit {
+            operator,
+            span: thread.entry..pos,
+            original: self.bytes(thread.entry..pos).to_vec(),
+            replacement: Vec::new(),
+        };
+        thread.hist = self.arena.edit(thread.hist, edit, governor)?;
+        thread.sub = Sub::Lit(0);
+        thread.entry = pos;
+        self.step_literal(thread, lit, next, byte, stack, out, governor)
+    }
+
+    /// One byte of a comment deleted inside literal `lit` (a `json-envelope`
+    /// grammar), after its first `node` canonical bytes, which end at a
+    /// JSON token boundary (`OpenAI`'s `{"type": "function"` opener spelling
+    /// spans several JSON tokens). States: 0 the first byte; 1 whitespace
+    /// before the comment; 2 after `/`; 3 inside a block comment; 4 after
+    /// its `*`; 5 inside a line comment; 6 whitespace after a comment. At
+    /// the first other byte after a comment, the comment and the whitespace
+    /// around it stand for the literal's whitespace at that point (JSON
+    /// whitespace is insignificant between tokens): the deletion is
+    /// recorded (`json.syntax.comment`, the literal's whitespace as its
+    /// replacement) and the literal is read on from its next non-space
+    /// byte.
+    #[allow(clippy::too_many_arguments)]
+    fn step_json_inner(
+        &mut self,
+        mut thread: Thread,
+        lit: u32,
+        next: u32,
+        byte: u8,
+        state: u8,
+        node: u32,
+        stack: &mut ScratchVec<Thread>,
+        out: &mut Out,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let pos = thread.pos;
+        let space = matches!(byte, b' ' | b'\t' | b'\r' | b'\n');
+        let next_state = match (state, byte) {
+            (0 | 1 | 6, b'/') => Some(2),
+            (0 | 1, _) if space => Some(1),
+            (6, _) if space => Some(6),
+            (3 | 4, b'*') => Some(4),
+            (4, b'/') | (5, b'\n') => Some(6),
+            (2, b'*') | (3 | 4, _) => Some(3),
+            (2, b'/') | (5, _) => Some(5),
+            _ => None,
+        };
+        if let Some(state) = next_state {
+            thread.sub = Sub::JsonInner(state, node);
+            thread.pos = pos + 1;
+            return self.queue(thread, stack);
+        }
+        if state != 6 {
+            return Self::fail(out, thread, pos, Rejection::Malformed { at: pos });
+        }
+        let canonical = &self.grammar.literals[lit as usize].bytes;
+        let resume = canonical[node as usize..]
+            .iter()
+            .position(|b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
+            .map_or(canonical.len(), |skipped| node as usize + skipped);
+        let edit = MarkupEdit {
+            operator: EditOperator::JsonComment,
+            span: thread.entry..pos,
+            original: self.bytes(thread.entry..pos).to_vec(),
+            replacement: canonical[node as usize..resume].to_vec(),
+        };
+        thread.hist = self.arena.edit(thread.hist, edit, governor)?;
+        if resume == canonical.len() {
+            // The literal ended in the whitespace the comment stood for:
+            // its continuation reads this byte.
+            return self.finish_literal(thread, next, pos, stack, out, governor);
+        }
+        thread.sub = Sub::Lit(index_u32(resume));
+        self.step_literal(thread, lit, next, byte, stack, out, governor)
     }
 
     /// One byte of a maximal class run.
@@ -1894,18 +2051,44 @@ impl<'s> Engine<'s> {
         let grammar = self.grammars[self.tables[table].grammar].grammar;
         let program = self.tables[table].program;
         let sibling = |failure: &Failure| {
-            // Only a literal with a respelling can be repaired later.
+            // Only a literal with a respelling (or, in a `json-envelope`
+            // grammar, a JSON separator insertion or deletion) can be
+            // repaired later.
             let respellable = match program.insts[failure.thread.pc as usize] {
                 Inst::Lit { lit, .. } => {
                     let tables = &grammar.literal_tables[lit as usize];
-                    !tables.variants.trie.is_empty() || !tables.confusables.trie.is_empty()
+                    let bytes = &grammar.literals[lit as usize].bytes;
+                    !tables.variants.trie.is_empty()
+                        || !tables.confusables.trie.is_empty()
+                        || tables.json.iter().any(|json| !json.trie.is_empty())
+                        || (grammar.json_envelope
+                            && (matches!(bytes.first(), Some(b'}' | b']'))
+                                || bytes.as_slice() == b","
+                                || bytes.as_slice() == b":"))
                 }
                 _ => false,
             };
+            // A JSON closer that met a `,` (a trailing comma, or the
+            // separator before an optional member a sibling took) is held
+            // while any configuration of its attempt lives: the sibling
+            // has moved past the comma by the time the attempt runs out.
+            let trailing = grammar.json_envelope
+                && matches!(failure.thread.sub, Sub::Lit(0))
+                && matches!(
+                    program.insts[failure.thread.pc as usize],
+                    Inst::Lit { lit, .. }
+                        if matches!(grammar.literals[lit as usize].bytes.first(), Some(b'}' | b']'))
+                )
+                && failure
+                    .at
+                    .checked_sub(self.base)
+                    .and_then(|at| self.buffer.as_slice().get(at))
+                    == Some(&b',');
             respellable
                 && matches!(failure.thread.sub, Sub::Lit(_))
                 && live.as_slice().iter().any(|thread| {
-                    thread.attempt == failure.thread.attempt && thread.entry <= failure.thread.entry
+                    thread.attempt == failure.thread.attempt
+                        && (trailing || thread.entry <= failure.thread.entry)
                 })
         };
         let mut write = 0;

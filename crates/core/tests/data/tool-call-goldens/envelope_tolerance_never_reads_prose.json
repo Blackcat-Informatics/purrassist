@@ -1,0 +1,38 @@
+{
+  "description": "F3: envelope tolerance applies to call-shaped objects only: records with a name and other members, single-quoted, bare-keyed, commented, with a trailing or missing comma, and a record naming a declared tool without arguments, stay content under every built-in dialect, with nothing rejected: a repair never stands in for a call's evidence.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "follow": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "effects": {
+    "read_file": "read_only"
+  },
+  "stop": "stop",
+  "input": "Data: {name: 'Ada', born: 1815,} and {'title': 'x', 'tags': [1, 2,]}. Config {/* defaults */ \"debug\": true, 'level': 3} and a record {'name': 'read_file' 'note': 'x'}.",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "content_only",
+  "calls": [],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

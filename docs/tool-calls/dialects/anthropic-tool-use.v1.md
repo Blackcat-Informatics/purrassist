@@ -57,6 +57,16 @@ decoded object is validated like any arguments.
   tokens. `ID` is captured as the call's model id (kept as its source id).
   The optional `caller` and `toolset_name` members are read after the four
   and are not part of the call.
+- The call's JSON envelope (`json-envelope;`) tolerates the JSON syntax
+  slips the `json` codec repairs inside arguments, under the same rules: a
+  trailing comma (`json.syntax.trailing-comma`), single quotes as in a
+  Python-repr dict (`json.syntax.string`), bare keys
+  (`json.syntax.bare-key`), a missing comma or colon
+  (`json.syntax.missing-comma`, `json.syntax.missing-colon`), a comment
+  (`json.syntax.comment`), and raw control characters beside the quotes of
+  the name string (deleted, `json.syntax.string`). Each is a non-guess
+  repair: the call keeps the outcome it would have with the slip inside its
+  arguments. See [GRAMMAR.md](../GRAMMAR.md) and the `envelope_*` goldens.
 - Where blocks are read: standalone, in a bare `content` array, in an
   assistant message `{"role": "assistant", "content": [...]}`, and in a
   whole response object. Each block is one call, in source order; the

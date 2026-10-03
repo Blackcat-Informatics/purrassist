@@ -74,6 +74,10 @@ the separate [`deepseek-v3.v1`](deepseek-v3.v1.md) dialect.
   - the last call's span holds the section closer.
 
   Whitespace between the tokens and around the name is markup.
+- The call markup around the arguments is special tokens and text, not a
+  JSON envelope, so the grammar does not declare `json-envelope;`: the JSON
+  syntax repairs (`json.syntax.*`) apply inside the JSON arguments, read by
+  the `json` codec. See [GRAMMAR.md](../GRAMMAR.md).
 - The arguments value is read by the self-delimiting `json` codec: exact
   number spellings, member order and duplicates kept; stringified arguments
   decoded and flagged (`tool_call.arguments.decode-string`); the codec knows

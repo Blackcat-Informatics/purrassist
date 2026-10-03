@@ -358,6 +358,20 @@ fn invalid_grammar_is_typed_error() {
             }),
         ),
         (
+            format!("grammar \"g\"; json-envelope; json-envelope; call = \"<c>\";{TAIL}"),
+            Box::new(move |text| GrammarError::DuplicateName {
+                offset: text.rfind("json-envelope").expect("second statement"),
+                name: "json-envelope".into(),
+            }),
+        ),
+        (
+            format!("grammar \"g\"; call = \"<c>\" json-envelope;{TAIL}"),
+            Box::new(move |text| GrammarError::ReservedName {
+                offset: text.rfind("json-envelope").expect("keyword"),
+                name: "json-envelope".into(),
+            }),
+        ),
+        (
             format!("grammar \"g\"; until = \"<c>\"; call = \"<c>\";{TAIL}"),
             Box::new(move |text| GrammarError::ReservedName {
                 offset: at(text, "until"),
@@ -1800,4 +1814,116 @@ fn length_stop_after_a_complete_trailing_value() {
         result = \"<r>\"; declaration = \"<d>\";"]);
     let turn = recognize(&closed, br#"<c>f:{"a":1}"#, GenerationStop::Length);
     assert_eq!(one_call(&turn).closure, Closure::Dangling);
+}
+
+/// A call envelope in JSON for `json-envelope` tests: `"call"` is both a
+/// member key and the `"kind"` value, so its key uses get their own copy.
+const ENVELOPE: &str = r#"grammar "envelope"; json-envelope;
+ws = /[ \t\r\n]+/;
+call = "<c>" ws? "{" ws? "\"kind\"" ws? ":" ws? "\"call\"" ws? "," ws?
+       "\"name\"" ws? ":" ws? "\"" name:/[a-z]+/ "\"" ws? "," ws?
+       "\"call\"" ws? ":" ws? arguments:slot(json, "\x00") ws? "}" ws? "</c>";
+result = "<r>"; declaration = "<d>";"#;
+
+/// `json-envelope`: the envelope's literals take the JSON syntax slips the
+/// `json` codec repairs, each as a non-guess edit with its exact span,
+/// original and replacement; a literal used as a key and as a value takes
+/// the bare spelling as a key only; without the statement the same slips
+/// reject the attempt; and the spellings add configurations to the bound.
+#[test]
+fn json_envelope_reads_json_syntax_slips() {
+    let envelope = set(&[ENVELOPE]);
+    let read = |input: &str| {
+        let turn = recognize(&envelope, input.as_bytes(), GenerationStop::Stop);
+        let call = one_call(&turn).clone();
+        assert_eq!(
+            call.name.as_ref().map(|name| name.value.as_str()),
+            Some("f"),
+            "{input}"
+        );
+        assert_eq!(call.arguments.root.to_json(), r#"{"a":1}"#, "{input}");
+        assert!(
+            call.edits.iter().all(|edit| !edit.operator.rule().guess),
+            "{input}"
+        );
+        call
+    };
+    let call = read(r#"<c>{"kind": "call", "name": "f", "call": {"a": 1},}</c>"#);
+    assert_eq!(operators(&call), [EditOperator::JsonTrailingComma]);
+    let edit = edit_of(&call, EditOperator::JsonTrailingComma);
+    assert_eq!(
+        (edit.original.as_slice(), edit.replacement.as_slice()),
+        (&b","[..], &b""[..])
+    );
+    let call = read(r#"<c>{kind: "call", name: "f", call: {"a": 1}}</c>"#);
+    assert_eq!(operators(&call), [EditOperator::JsonBareKey; 3]);
+    let call = read(r#"<c>{'kind': 'call', 'name': 'f', 'call': {"a": 1}}</c>"#);
+    assert!(
+        operators(&call)
+            .iter()
+            .all(|op| *op == EditOperator::JsonString)
+    );
+    let call = read(r#"<c>{"kind" "call", "name": "f" "call": {"a": 1}}</c>"#);
+    assert_eq!(
+        operators(&call),
+        [
+            EditOperator::JsonMissingColon,
+            EditOperator::JsonMissingComma
+        ]
+    );
+    let edit = edit_of(&call, EditOperator::JsonMissingColon);
+    assert_eq!(
+        (edit.span.len(), edit.replacement.as_slice()),
+        (0, &b":"[..])
+    );
+    let call = read(
+        r#"<c>{/* one */ "kind": "call", // two
+"name": "f", "call": {"a": 1}}</c>"#,
+    );
+    assert_eq!(operators(&call), [EditOperator::JsonComment; 2]);
+    assert_eq!(
+        edit_of(&call, EditOperator::JsonComment).original,
+        b"/* one */ "
+    );
+    let call = read("<c>{\"kind\": \"call\", \"name\": \"\tf\n\", \"call\": {\"a\": 1}}</c>");
+    assert_eq!(operators(&call), [EditOperator::JsonString; 2]);
+    // The name is `f` alone: the tab after its opening quote is deleted.
+    assert_eq!(
+        call.name.as_ref().map(|name| name.span.clone()),
+        Some(30..31)
+    );
+
+    // `"call"` as the `"kind"` value has no bare spelling: a bare value is
+    // not a key slip, and the attempt is rejected.
+    let turn = recognize(
+        &envelope,
+        br#"<c>{"kind": call, "name": "f", "call": {"a": 1}}</c>"#,
+        GenerationStop::Stop,
+    );
+    assert_eq!(calls(&turn).len(), 0);
+    assert!(
+        turn.selected()
+            .iter()
+            .any(|segment| matches!(segment, Segment::Rejected { .. })),
+        "{:#?}",
+        turn.pieces()
+    );
+
+    // Opt-in: the same grammar without the statement rejects the slips.
+    let strict_text = ENVELOPE.replace(" json-envelope;", "");
+    let strict = set(&[strict_text.as_str()]);
+    for input in [
+        r#"<c>{"kind": "call", "name": "f", "call": {"a": 1},}</c>"#,
+        r#"<c>{kind: "call", name: "f", call: {"a": 1}}</c>"#,
+    ] {
+        let turn = recognize(&strict, input.as_bytes(), GenerationStop::Stop);
+        assert_eq!(calls(&turn).len(), 0, "{input}");
+    }
+    let mut governor = Governor::new(Budget::default());
+    let bound = |text: &str, governor: &mut Governor| {
+        Grammar::compile_governed(text, governor)
+            .expect("grammar compiles")
+            .configuration_bound()
+    };
+    assert!(bound(ENVELOPE, &mut governor) > bound(&strict_text, &mut governor));
 }

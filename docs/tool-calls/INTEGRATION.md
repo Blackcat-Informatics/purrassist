@@ -59,6 +59,26 @@ is reported as certain.
   `tool_call_rules::repeated_scalar_reports_both_readings`,
   `tool_call_goldens::repeated_scalar_choice_is_labelled`, and
   `tool_call_rules::per_call_alternatives_exposed`.
+- **Envelope repairs keep parity with argument repairs.** The JSON call
+  envelope of Hermes, Llama 3 JSON, Mistral v3, Anthropic, `OpenAI` and bare
+  JSON (`json-envelope` grammars) tolerates the JSON syntax slips the `json`
+  codec repairs inside arguments: a trailing comma, single quotes (a
+  Python-repr dict), bare keys, a missing comma or colon, a comment, and raw
+  control characters beside the quotes of the name string. Each is recorded
+  under the same `json.syntax.*` rule, cost and policy admission as the
+  same slip inside arguments, and like it is a non-guess single-reading
+  repair: it never demotes a call, on a `Mutating` tool either, and the
+  name read is the declared name itself (a control character is deleted and
+  kept in the edit's original bytes, never matched as a near-miss name).
+  Literal case (`True`, `None`) only occurs in argument values. The
+  tolerance never makes a call of prose: an object without a call's members
+  stays content, with no rejected attempt. Mistral v11, DeepSeek, Kimi-K2 and
+  Harmony have no JSON envelope. *Proved by*
+  `tool_call_goldens::envelope_json_syntax_is_tolerated` (every slip on all
+  six dialects, a Python-repr dict, the prose negative, and the
+  mutating-tool parity of the same slip in the envelope and in the
+  arguments) and the correction corpus's `envelope` mutations (384 cases,
+  0 incorrect; [MATCHING-QUALITY.md](../MATCHING-QUALITY.md)).
 - **Ambiguity is evidence, never a dialect-label tie.** Dialects that share
   an opener (Qwen3-Coder XML and Hermes both open with `<tool_call>`) each
   attempt a call there. A complete call is read by the dialect its body
@@ -121,7 +141,7 @@ is reported as certain.
   five built-in dialects outside the allow-list, and negatives), the CLI
   test `tool_calls_cli::unparsed_markup_is_reported_via_cli`, and the host
   test `tool_call_tools::unparsed_markup_over_mcp`.
-- **Measured.** The 13,404-case correction evaluation records zero incorrect
+- **Measured.** The 13,788-case correction evaluation records zero incorrect
   automatic answers overall, per rule, and per dialect, and abstains on every
   case whose only correct answer is abstention
   (`correction_evaluation::tool_call_recovery_evaluation_has_zero_incorrect_corrections`;

@@ -32,6 +32,16 @@ repository.
 - `call`: `<tool_call>`, optional whitespace, one JSON object holding a
   `"name"` member and an `"arguments"` member in either order, optional
   whitespace, `</tool_call>`. JSON whitespace is allowed between tokens.
+- The call's JSON envelope (`json-envelope;`) tolerates the JSON syntax
+  slips the `json` codec repairs inside arguments, under the same rules: a
+  trailing comma (`json.syntax.trailing-comma`), single quotes as in a
+  Python-repr dict (`json.syntax.string`), bare keys
+  (`json.syntax.bare-key`), a missing comma or colon
+  (`json.syntax.missing-comma`, `json.syntax.missing-colon`), a comment
+  (`json.syntax.comment`), and raw control characters beside the quotes of
+  the name string (deleted, `json.syntax.string`). Each is a non-guess
+  repair: the call keeps the outcome it would have with the slip inside its
+  arguments. See [GRAMMAR.md](../GRAMMAR.md) and the `envelope_*` goldens.
 - Before those members, a provider type marker (`"type": "function"` or
   `"type": "tool_use"`, which carries no call data) and an `"id"` member may
   appear, in that order. The id is kept as the call's source id. Hermes

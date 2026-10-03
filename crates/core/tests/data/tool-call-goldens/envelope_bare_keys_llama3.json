@@ -1,0 +1,59 @@
+{
+  "description": "F3 envelope tolerance (llama3-json.v1): unquoted member keys in the envelope. The json-envelope grammar reads it as the JSON codec reads the same slip inside arguments, recording json.syntax.bare-key (a non-guess syntax repair, no demotion): the read-only call is Resolved, as it would be with the slip only inside its arguments.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "follow": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "llama3-json.v1"
+  ],
+  "effects": {
+    "read_file": "read_only"
+  },
+  "stop": "stop",
+  "input": "<|python_tag|>{name: \"read_file\", parameters: {\"path\": \"a\"}}",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "a"
+      },
+      "candidate_dialects": [
+        "llama3-json.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "json.syntax.bare-key",
+        "json.syntax.bare-key"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "json.syntax.bare-key",
+    "json.syntax.bare-key"
+  ]
+}

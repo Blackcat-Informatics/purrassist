@@ -34,6 +34,16 @@ first-party.
   operation's id policy assigns its id) and `"type"` may be missing, but
   when present it is `"function"`. `"name"` and `"arguments"` come in either
   order inside `"function"`. `ID` is captured (`id:`).
+- The call's JSON envelope (`json-envelope;`) tolerates the JSON syntax
+  slips the `json` codec repairs inside arguments, under the same rules: a
+  trailing comma (`json.syntax.trailing-comma`), single quotes as in a
+  Python-repr dict (`json.syntax.string`), bare keys
+  (`json.syntax.bare-key`), a missing comma or colon
+  (`json.syntax.missing-comma`, `json.syntax.missing-colon`), a comment
+  (`json.syntax.comment`), and raw control characters beside the quotes of
+  the name string (deleted, `json.syntax.string`). Each is a non-guess
+  repair: the call keeps the outcome it would have with the slip inside its
+  arguments. See [GRAMMAR.md](../GRAMMAR.md) and the `envelope_*` goldens.
 - `ARGS` is read by the self-delimiting `json` codec. The canonical form, a
   string of JSON, is decoded and flagged (`arguments_were_stringified`,
   `tool_call.arguments.decode-string`); spans inside it map back through the

@@ -654,6 +654,7 @@ pub struct CompiledGrammar {
     pub(crate) call: ProductionId,
     pub(crate) call_ids: bool,
     pub(crate) declaration_content: bool,
+    pub(crate) json_envelope: bool,
     pub(crate) result: ProductionId,
     pub(crate) declaration: ProductionId,
     pub(crate) reasoning: Vec<(Vec<u8>, Vec<u8>)>,
@@ -738,6 +739,42 @@ impl CompiledGrammar {
     #[must_use]
     pub const fn declaration_content(&self) -> bool {
         self.declaration_content
+    }
+
+    /// Whether the grammar declares `json-envelope;`: its call markup is a
+    /// JSON envelope, which the repair search reads with the JSON syntax
+    /// slips the `json` codec repairs inside arguments, each recorded under
+    /// the same `json.syntax.*` rule: single quotes, or raw control
+    /// characters beside a string's quotes, deleted (`json.syntax.string`),
+    /// a member key without quotes (`json.syntax.bare-key`), a missing `:`
+    /// (`json.syntax.missing-colon`) or `,` (`json.syntax.missing-comma`),
+    /// a trailing comma before `}` or `]` (`json.syntax.trailing-comma`),
+    /// and a comment (`json.syntax.comment`). Each is a non-guess
+    /// single-reading repair, so a call keeps the outcome it would have
+    /// with the same slip inside its arguments.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::{
+    ///     CallOutcome, DialectId, ToolDefinition, ToolRecoveryRequest, ToolSet,
+    /// };
+    /// use purrassist_core::{Budget, Outcome};
+    /// assert!(DialectId::Hermes.grammar().json_envelope());
+    /// assert!(!DialectId::Qwen3CoderXml.grammar().json_envelope());
+    ///
+    /// // A Python-repr envelope with a trailing comma is still a call.
+    /// let tools = ToolSet::compile([ToolDefinition::new("ls")], Budget::default()).unwrap();
+    /// let output = b"<tool_call>{'name': 'ls', 'arguments': {},}</tool_call>";
+    /// let result = tools.recover(output, &ToolRecoveryRequest::default());
+    /// let Outcome::Resolved(calls) = &result.outcome else { panic!() };
+    /// let call = &calls.calls[0];
+    /// assert_eq!(call.outcome, CallOutcome::Resolved);
+    /// let rules: Vec<&str> = call.repairs.evidence.iter().map(|e| e.rule.as_str()).collect();
+    /// assert!(rules.contains(&"json.syntax.string"));
+    /// assert!(rules.contains(&"json.syntax.trailing-comma"));
+    /// ```
+    #[must_use]
+    pub const fn json_envelope(&self) -> bool {
+        self.json_envelope
     }
 
     /// The `result` production.
@@ -957,7 +994,8 @@ impl CompiledGrammar {
 
     /// How many byte offsets of `output` begin a spelling of one of the
     /// `call` production's opener literals: the canonical spelling, a
-    /// declared closer variant, or a confusable spelling. Every call this
+    /// declared closer variant, a confusable spelling, or (with
+    /// `json-envelope`) a JSON syntax spelling. Every call this
     /// grammar can read, and every attempt it can reject, starts at one of
     /// them, so the count bounds the calls and call attempts of the output
     /// (an opener cut off by the end of the output is not counted).
@@ -991,6 +1029,7 @@ impl CompiledGrammar {
                         .list
                         .iter()
                         .chain(&tables.confusables.list)
+                        .chain(tables.json.iter().flat_map(|json| &json.list))
                         .any(|spelling| rest.starts_with(spelling))
             })
         };

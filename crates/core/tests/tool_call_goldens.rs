@@ -2955,3 +2955,87 @@ fn bare_function_markup_is_attempted_or_reported() {
         );
     }
 }
+
+/// F3 envelope tolerance: every JSON-envelope dialect (Hermes, bare JSON,
+/// Mistral v3, Anthropic, Llama 3 JSON, `OpenAI`) reads a call whose
+/// envelope carries one JSON syntax slip (a trailing comma, single quotes,
+/// bare keys, a missing comma or colon, a comment, a raw control character
+/// beside the name's quotes) under the `json.syntax.*` rule the json codec
+/// records for the same slip inside arguments. The repair is a non-guess
+/// single reading with no data loss, so the call is `Resolved` exactly as
+/// with the slip inside its arguments, on a `Mutating` tool too (demotion
+/// parity). The name read is the declared name itself, never a near miss.
+/// JSON-like prose stays content: no call and no rejected attempt.
+#[test]
+fn envelope_json_syntax_is_tolerated() {
+    let classes = [
+        ("trailing_comma", "json.syntax.trailing-comma"),
+        ("single_quotes", "json.syntax.string"),
+        ("bare_keys", "json.syntax.bare-key"),
+        ("missing_comma", "json.syntax.missing-comma"),
+        ("missing_colon", "json.syntax.missing-colon"),
+        ("comment", "json.syntax.comment"),
+        ("control_char_in_name", "json.syntax.string"),
+        ("control_char_opening_name", "json.syntax.string"),
+    ];
+    let dialects = [
+        ("hermes", DialectId::Hermes),
+        ("bare_json", DialectId::BareJson),
+        ("mistral_v3", DialectId::MistralV3),
+        ("anthropic", DialectId::AnthropicToolUse),
+        ("llama3", DialectId::Llama3Json),
+        ("openai", DialectId::OpenAiToolCalls),
+    ];
+    for (class, rule) in classes {
+        for (label, dialect) in &dialects {
+            let name = format!("envelope_{class}_{label}");
+            let (_, result) = golden(&name);
+            assert!(matches!(result.outcome, Outcome::Resolved(_)), "{name}");
+            assert!(reading(&result).rejected.is_empty(), "{name}");
+            let call = the_call(&result);
+            assert_eq!(call.tool.as_deref(), Some("read_file"), "{name}");
+            assert_eq!(call.arguments.to_json(), r#"{"path":"a"}"#, "{name}");
+            assert_eq!(call.outcome, CallOutcome::Resolved, "{name}");
+            assert_eq!(
+                call.candidate_dialects,
+                core::slice::from_ref(dialect),
+                "{name}"
+            );
+            let rules = rules_of(call);
+            assert!(rules.contains(&rule), "{name}: {rules:?}");
+            assert!(
+                !rules.contains(&"tool_call.name.match"),
+                "{name}: {rules:?}"
+            );
+            assert!(!has_guess(call) && !has_data_loss(call), "{name}");
+        }
+    }
+    let (_, result) = golden("envelope_python_repr_dict_hermes");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved);
+    assert_eq!(call.arguments.to_json(), r#"{"path":"a","follow":true}"#);
+    let (golden, result) = golden("envelope_tolerance_never_reads_prose");
+    let calls = reading(&result);
+    assert_eq!(calls.finish, Finish::ContentOnly);
+    assert_eq!((calls.calls.len(), calls.rejected.len()), (0, 0));
+    let covered: usize = calls.content.iter().map(ExactSizeIterator::len).sum();
+    assert_eq!(covered, golden.input.len());
+
+    // Parity on a mutating tool: the same slip in the envelope and in the
+    // arguments both leave the call `Resolved`.
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("write_file").param("path", Param::string().required())],
+        Budget::default(),
+    )
+    .unwrap();
+    for input in [
+        "<tool_call>{name: \"write_file\", arguments: {\"path\": \"a\"}}</tool_call>",
+        "<tool_call>{\"name\": \"write_file\", \"arguments\": {path: \"a\"}}</tool_call>",
+        "<tool_call>{'name': 'write_file', 'arguments': {\"path\": \"a\"},}</tool_call>",
+        "<tool_call>{\"name\": \"write_file\", \"arguments\": {'path': 'a',}}</tool_call>",
+    ] {
+        let result = tools.recover(input.as_bytes(), &ToolRecoveryRequest::default());
+        assert!(matches!(result.outcome, Outcome::Resolved(_)), "{input}");
+        assert_eq!(the_call(&result).outcome, CallOutcome::Resolved, "{input}");
+    }
+}
