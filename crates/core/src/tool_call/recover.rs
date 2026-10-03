@@ -155,6 +155,7 @@ use crate::contract::{
     Loss, Outcome, Receipt, Resource, SourceSpan, StopReason, Validation, invalid_input,
 };
 use crate::digest::Digest;
+use crate::grammar::CallEnd;
 use crate::grammar::cost::{
     RECOVER_OPENER_CANDIDATE_DIVISOR, RECOVER_SCRATCH_PER_BYTE, RECOVER_WORK_PER_BYTE,
 };
@@ -1124,9 +1125,34 @@ pub struct KeywordUse {
 /// assert_eq!(calls.rejected.len(), 1);
 /// assert_eq!(calls.rejected[0].candidate_dialects, [DialectId::Hermes, DialectId::Qwen3CoderXml]);
 /// ```
+///
+/// A malformed call keeps its whole markup, closers included, and the
+/// prose after it stays content:
+///
+/// ```
+/// use purrassist_core::tool_call::{DialectId, DialectSet, Param, ToolDefinition, ToolRecoveryRequest, ToolSet};
+/// use purrassist_core::{Budget, Governor, Outcome};
+/// let tools = ToolSet::compile([ToolDefinition::new("f").param("a", Param::string())], Budget::default()).unwrap();
+/// let call = "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\nthat is all</function>\n</tool_call>";
+/// let output = format!("{call} done");
+/// let dialects = DialectSet::new([DialectId::Qwen3CoderXml], &mut Governor::new(Budget::default())).unwrap();
+/// let request = ToolRecoveryRequest::default().dialects(dialects);
+/// let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = tools.recover(output.as_bytes(), &request).outcome else { unreachable!() };
+/// assert_eq!(calls.rejected[0].text(), Some(call));
+/// assert_eq!(calls.content, [call.len()..output.len()]);
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RejectedCall {
-    /// The attempt's source range.
+    /// The attempt's source range: the whole call markup it began. An
+    /// attempt a parser made runs from its opener to the end literal of the
+    /// `call` alternative it opened (nesting by that alternative's opener,
+    /// or by bracket for a JSON call) and any repeated closers right after
+    /// it, or, without one, to the next call reopening that alternative, a
+    /// reasoning block, reported unparsed markup, or the end of output; a
+    /// call or attempt inside the broken wrapper is kept, and this range
+    /// covers it. Content never holds these bytes. Unparsed markup
+    /// ([`Rejection::UnsupportedDialect`]) covers only the detected markup,
+    /// whose bytes also stay content.
     pub span: Range<usize>,
     /// The dialect whose opener started the attempt reported: of the
     /// dialects that attempted a call at this opener, the one whose grammar
@@ -1142,7 +1168,7 @@ pub struct RejectedCall {
     /// empty for unparsed markup ([`Rejection::UnsupportedDialect`]),
     /// which no allowed dialect attempted.
     pub candidate_dialects: Vec<DialectId>,
-    /// The attempt's exact bytes.
+    /// The attempt's exact bytes: `output[span]`, closing markup included.
     pub raw: Vec<u8>,
     /// Why it was rejected.
     pub reason: Rejection,
@@ -1543,6 +1569,31 @@ fn typed_schema(explanation: &str) -> Option<&str> {
     let start = explanation.find("the exact schema at `")? + "the exact schema at `".len();
     let length = explanation[start..].find('`')?;
     Some(&explanation[start..start + length])
+}
+
+/// The nesting state of a rejected attempt's markup scan.
+struct Nesting {
+    depth: usize,
+    quoted: bool,
+    escaped: bool,
+}
+
+/// Remove `cut` from the sorted, disjoint `ranges`.
+fn remove_range(ranges: &mut Vec<Range<usize>>, cut: &Range<usize>) {
+    let mut kept = Vec::with_capacity(ranges.len() + 1);
+    for range in ranges.drain(..) {
+        if range.end <= cut.start || range.start >= cut.end {
+            kept.push(range);
+            continue;
+        }
+        if range.start < cut.start {
+            kept.push(range.start..cut.start);
+        }
+        if range.end > cut.end {
+            kept.push(cut.end..range.end);
+        }
+    }
+    *ranges = kept;
 }
 
 /// `reason`, made precise: an attempt that failed at a byte beginning a
@@ -2423,6 +2474,8 @@ impl Recovery<'_> {
             }
         }
         self.unparsed(&mut reading, governor)?;
+        // After unparsed markup is reported: its reports are boundaries.
+        self.close_rejections(&mut reading.value, governor)?;
         reading.value.next_id_start = self.ids(&mut reading.value.calls, governor)?;
         self.tool_choice(&mut reading.value, forced);
         let check = &reading.value.tool_choice;
@@ -2451,6 +2504,219 @@ impl Recovery<'_> {
         reading.value.emitted =
             emit::emission(self.tools, &reading.value, &self.request.emit, governor)?;
         Ok(reading)
+    }
+
+    /// Extend every rejected attempt over its own markup: a rejected
+    /// attempt ends where its grammar failed, but the call markup it began
+    /// runs on to the end literal of the alternative it opened (its wrapper
+    /// or section closer, any declared spelling, at nesting depth one:
+    /// another opener of the same alternative opens a level), so its raw
+    /// text is the whole call and no closing markup is left as content.
+    /// The search reads the content after the attempt; a call or rejected
+    /// attempt inside the broken wrapper (a bare JSON object recovered from
+    /// it, an inner element's own failure) is kept and passed over, so the
+    /// rejection's span covers it, and the search stops at a reasoning
+    /// block, reported unparsed markup (whose bytes stay content under its
+    /// own report), or a call or attempt opening the same alternative again
+    /// (a sibling). Without an end
+    /// literal before such a boundary, the attempt runs to the first call
+    /// it passed, the boundary, or the end of output.
+    fn close_rejections(
+        &self,
+        value: &mut ToolCalls,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        for index in 0..value.rejected.len() {
+            // Unparsed markup (no allowed dialect read it) stays content.
+            if matches!(
+                value.rejected[index].reason,
+                Rejection::UnsupportedDialect { .. }
+            ) {
+                continue;
+            }
+            let Some(dialect) = value.rejected[index].dialect.clone() else {
+                continue;
+            };
+            let span = value.rejected[index].span.clone();
+            let ends = dialect.grammar().call_ends();
+            let at = |spellings: &[Vec<u8>], position: usize| {
+                spellings
+                    .iter()
+                    .filter(|spelling| self.output[position..].starts_with(spelling))
+                    .map(Vec::len)
+                    .max()
+            };
+            // The alternative the attempt opened (its longest opener
+            // spelling), or every alternative when no spelling matches.
+            let opened: Vec<&CallEnd> = {
+                let best = ends
+                    .iter()
+                    .filter_map(|end| at(&end.0, span.start).map(|length| (length, end)))
+                    .max_by_key(|(length, _)| *length);
+                best.map_or_else(|| ends.iter().collect(), |(_, end)| vec![end])
+            };
+            let openers: Vec<Vec<u8>> = opened.iter().flat_map(|end| end.0.clone()).collect();
+            let closers: Vec<Vec<u8>> = opened.iter().flat_map(|end| end.1.clone()).collect();
+            if closers.is_empty() {
+                continue;
+            }
+            // The segments after the attempt, in order.
+            let mut boundaries: Vec<(Range<usize>, bool)> = value
+                .calls
+                .iter()
+                .map(|call| (call.span.clone(), true))
+                .chain(value.reasoning.iter().map(|range| (range.clone(), false)))
+                .chain(
+                    value
+                        .rejected
+                        .iter()
+                        .enumerate()
+                        .filter(|(other, _)| *other != index)
+                        .map(|(_, rejected)| {
+                            // An inner attempt is passed over like an inner
+                            // call; reported unparsed markup stays content
+                            // and bounds the scan.
+                            let inner =
+                                !matches!(rejected.reason, Rejection::UnsupportedDialect { .. });
+                            (rejected.span.clone(), inner)
+                        }),
+                )
+                .filter(|(range, _)| range.start >= span.end && !range.is_empty())
+                .collect();
+            boundaries.sort_by_key(|(range, _)| range.start);
+            let end = self.markup_end(&span, &openers, &closers, &boundaries, governor)?;
+            if end <= span.end {
+                continue;
+            }
+            governor.charge(Resource::ScratchBytes, size(end - span.end))?;
+            remove_range(&mut value.content, &(span.end..end));
+            let rejected = &mut value.rejected[index];
+            rejected.span.end = end;
+            rejected.raw = self.output[rejected.span.clone()].to_vec();
+        }
+        Ok(())
+    }
+
+    /// Where the markup of a rejected attempt at `span`, of the alternative
+    /// with `openers` and `closers`, ends (see [`Self::close_rejections`]);
+    /// `boundaries` are the segments after it in order, each marked whether
+    /// the scan may pass over it.
+    fn markup_end(
+        &self,
+        span: &Range<usize>,
+        openers: &[Vec<u8>],
+        closers: &[Vec<u8>],
+        boundaries: &[(Range<usize>, bool)],
+        governor: &mut Governor,
+    ) -> Result<usize, StopReason> {
+        let len = self.output.len();
+        let at = |spellings: &[Vec<u8>], position: usize| {
+            spellings
+                .iter()
+                .filter(|spelling| self.output[position..].starts_with(spelling))
+                .map(Vec::len)
+                .max()
+        };
+        // An alternative whose end literal is a bracket (a JSON object
+        // or array call) nests by that bracket, outside JSON strings;
+        // any other nests by its opener spellings. The scan starts at
+        // the attempt's own start, so the depth at its failure is known.
+        let brackets: Vec<(u8, u8)> = [(b'{', b'}'), (b'[', b']')]
+            .into_iter()
+            .filter(|(_, close)| closers.iter().any(|spelling| spelling == &[*close]))
+            .collect();
+        let mut state = Nesting {
+            depth: 0,
+            quoted: false,
+            escaped: false,
+        };
+        let mut position = span.start;
+        let mut passed: Option<usize> = None;
+        let mut next = boundaries.iter();
+        let mut found = None;
+        'scan: loop {
+            let (limit, boundary) = match next.next() {
+                Some((range, call)) => (range.start, Some((range, *call))),
+                None => (len, None),
+            };
+            while position < limit {
+                governor.charge(Resource::Work, 1)?;
+                let byte = self.output[position];
+                if !brackets.is_empty() {
+                    position += 1;
+                    if state.quoted {
+                        match byte {
+                            _ if state.escaped => state.escaped = false,
+                            b'\\' => state.escaped = true,
+                            b'"' => state.quoted = false,
+                            _ => {}
+                        }
+                    } else if byte == b'"' {
+                        state.quoted = true;
+                    } else if brackets.iter().any(|(open, _)| *open == byte) {
+                        state.depth += 1;
+                    } else if brackets.iter().any(|(_, close)| *close == byte) {
+                        state.depth = state.depth.saturating_sub(1);
+                        if state.depth == 0 && position > span.end {
+                            found = Some(position);
+                            break 'scan;
+                        }
+                    }
+                } else if let Some(length) = at(closers, position) {
+                    state.depth = state.depth.saturating_sub(1);
+                    position += length;
+                    if state.depth == 0 && position > span.end {
+                        found = Some(position.min(limit));
+                        break 'scan;
+                    }
+                } else if let Some(length) = at(openers, position) {
+                    state.depth += 1;
+                    position += length;
+                } else {
+                    position += 1;
+                }
+            }
+            match boundary {
+                // A call or attempt inside the broken wrapper that does
+                // not reopen its alternative.
+                Some((range, true)) if at(openers, range.start).is_none() => {
+                    passed.get_or_insert(range.start);
+                    position = range.end;
+                }
+                Some((range, _)) => {
+                    position = range.start;
+                    break;
+                }
+                None => {
+                    position = len;
+                    break;
+                }
+            }
+        }
+        let mut end = found.unwrap_or_else(|| passed.unwrap_or(position));
+        // Repeated closers right after the end (whitespace between) are
+        // the attempt's stray closers, as after a completed call.
+        if found.is_some() && brackets.is_empty() {
+            let limit = boundaries
+                .iter()
+                .map(|(range, _)| range.start)
+                .find(|start| *start >= end)
+                .unwrap_or(len);
+            let mut probe = end;
+            loop {
+                while probe < limit && self.output[probe].is_ascii_whitespace() {
+                    probe += 1;
+                }
+                match at(closers, probe) {
+                    Some(length) if probe + length <= limit => {
+                        probe += length;
+                        end = probe;
+                    }
+                    _ => break,
+                }
+            }
+        }
+        Ok(end)
     }
 
     /// Add one segment to a reading.

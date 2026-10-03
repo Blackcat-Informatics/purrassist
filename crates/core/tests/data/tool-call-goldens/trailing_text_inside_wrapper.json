@@ -38,7 +38,7 @@
       {
         "span": [
           0,
-          66
+          90
         ],
         "dialect": "qwen3-coder-xml.v1",
         "candidate_dialects": [
@@ -46,7 +46,7 @@
           "qwen3-coder-xml.v1"
         ],
         "reason": "Malformed { at: 66 }",
-        "raw": "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\n</function>\n"
+        "raw": "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\n</function>\nthat is all\n</tool_call>"
       }
     ],
     "embedded": [],
@@ -67,14 +67,14 @@
     {
       "span": [
         0,
-        66
+        90
       ],
       "dialect": "qwen3-coder-xml.v1",
       "candidate_dialects": [
         "qwen3-coder-xml.v1"
       ],
       "reason": "Malformed { at: 66 }",
-      "raw": "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\n</function>\n"
+      "raw": "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\n</function>\nthat is all\n</tool_call>"
     }
   ],
   "embedded": [],

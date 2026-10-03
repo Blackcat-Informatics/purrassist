@@ -49,7 +49,9 @@ streaming recognition, and `purrassist-derive`.
   (`json`, `json-args`, `xml-params`, `raw`) read argument bodies with their own recorded
   repairs.
 - **Factorized ambiguity.** The turn is a least-cost segmentation into
-  content, reasoning, calls, tool results, and rejected attempts. When the
+  content, reasoning, calls, tool results, and rejected attempts (each
+  covering its whole call markup, closers included, so content never holds
+  a wrapper token). When the
   recognizer knows the tool set, a call none of whose readings names a
   declared tool (exactly or by alias) weighs `UNDECLARED_NAME` (4, one
   guessed edit) more in this selection, so between competing readings of

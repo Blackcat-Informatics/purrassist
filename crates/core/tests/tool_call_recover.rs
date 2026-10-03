@@ -1901,13 +1901,48 @@ fn rejected_span_never_splits_a_character_a_class_cannot_consume() {
         };
         assert_eq!(calls.rejected.len(), 1, "{input:?}");
         let rejected = &calls.rejected[0];
-        assert_eq!(rejected.span, 0..at, "{input:?}");
+        // The attempt fails on a character boundary, and its raw text is
+        // the whole call markup it began (no closer: to the end of output).
         assert_eq!(rejected.reason, Rejection::Malformed { at }, "{input:?}");
-        assert!(input.is_char_boundary(rejected.span.end), "{input:?}");
-        assert_eq!(rejected.text(), Some(&input[..at]));
-        assert_eq!(calls.content.len(), 1, "{input:?}");
-        assert_eq!(calls.content[0], at..input.len(), "{input:?}");
+        assert!(input.is_char_boundary(at), "{input:?}");
+        assert_eq!(rejected.span, 0..input.len(), "{input:?}");
+        assert_eq!(rejected.text(), Some(input));
+        assert_eq!(calls.content.len(), 0, "{input:?}");
     }
+}
+
+/// S3: a call recovered inside a broken wrapper is kept, and the wrapper's
+/// rejected attempt covers it: its raw text is the whole wrapper, closer
+/// included, and no wrapper token is left as content, in every reading.
+#[test]
+fn rejected_wrapper_covers_the_call_recovered_inside_it() {
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("f")
+            .effects(Effects::ReadOnly)
+            .param("a", Param::string())],
+        Budget::default(),
+    )
+    .expect("tools");
+    let input = "<tool_call>{\"name\": \"f\", \"arguments\": {\"a\": \"b\"}} junk junk</tool_call>";
+    let result = tools.recover(input.as_bytes(), &ToolRecoveryRequest::default());
+    let readings: Vec<&ToolCalls> = match &result.outcome {
+        Outcome::Resolved(calls) | Outcome::BestGuess(calls) => vec![calls],
+        Outcome::Ambiguous(alternatives) => alternatives.iter().collect(),
+        Outcome::Unresolved => panic!("unexpected outcome {:?}", result.outcome),
+    };
+    let mut inner = 0;
+    for calls in readings {
+        assert_eq!(calls.rejected.len(), 1, "{calls:?}");
+        let rejected = &calls.rejected[0];
+        assert_eq!(rejected.span, 0..input.len());
+        assert_eq!(rejected.text(), Some(input));
+        assert!(calls.content.is_empty(), "{calls:?}");
+        for call in &calls.calls {
+            assert_eq!(call.span, 11..49);
+            inner += 1;
+        }
+    }
+    assert_eq!(inner, 1, "the bare JSON reading keeps its call");
 }
 
 /// G1: under the default allow-list the body is the evidence that ranks

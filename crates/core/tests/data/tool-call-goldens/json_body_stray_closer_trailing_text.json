@@ -38,7 +38,7 @@
       {
         "span": [
           0,
-          97
+          111
         ],
         "dialect": "qwen3-coder-xml.v1",
         "candidate_dialects": [
@@ -46,7 +46,7 @@
           "qwen3-coder-xml.v1"
         ],
         "reason": "Malformed { at: 63 }",
-        "raw": "<tool_call>\n<function=read_file>\n{\"path\": \"a.rs\"}\n</parameter>\nand then I will read it\n</function"
+        "raw": "<tool_call>\n<function=read_file>\n{\"path\": \"a.rs\"}\n</parameter>\nand then I will read it\n</function>\n</tool_call>"
       }
     ],
     "embedded": [],
@@ -67,14 +67,14 @@
     {
       "span": [
         0,
-        97
+        111
       ],
       "dialect": "qwen3-coder-xml.v1",
       "candidate_dialects": [
         "qwen3-coder-xml.v1"
       ],
       "reason": "Malformed { at: 63 }",
-      "raw": "<tool_call>\n<function=read_file>\n{\"path\": \"a.rs\"}\n</parameter>\nand then I will read it\n</function"
+      "raw": "<tool_call>\n<function=read_file>\n{\"path\": \"a.rs\"}\n</parameter>\nand then I will read it\n</function>\n</tool_call>"
     }
   ],
   "embedded": [],

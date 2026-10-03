@@ -55,7 +55,7 @@
       {
         "span": [
           73,
-          106
+          123
         ],
         "dialect": "hermes.v1",
         "candidate_dialects": [
@@ -63,7 +63,7 @@
           "qwen3-coder-xml.v1"
         ],
         "reason": "Malformed { at: 106 }",
-        "raw": "<tool_call>{\"name\": \"read_file\", "
+        "raw": "<tool_call>{\"name\": \"read_file\", oops}</tool_call>"
       }
     ],
     "embedded": [],
@@ -102,14 +102,14 @@
     {
       "span": [
         73,
-        106
+        123
       ],
       "dialect": "hermes.v1",
       "candidate_dialects": [
         "hermes.v1"
       ],
       "reason": "Malformed { at: 106 }",
-      "raw": "<tool_call>{\"name\": \"read_file\", "
+      "raw": "<tool_call>{\"name\": \"read_file\", oops}</tool_call>"
     }
   ],
   "embedded": [],

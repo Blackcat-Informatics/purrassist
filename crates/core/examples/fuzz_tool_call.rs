@@ -42,6 +42,9 @@
 //!   (whatever the finish) and otherwise `"tool_calls"` exactly when the
 //!   `OpenAI` array holds a call;
 //!   the wire `verdict` and usable-call counts match;
+//! - (S3) a rejected attempt keeps its own closing markup: when its raw
+//!   text does not end with a closer of its dialect (one that is not a bare
+//!   bracket), the content after it up to the next segment holds none;
 //! - every call, rejected-attempt, content, and reasoning range lies within
 //!   the output, never splits a well-formed UTF-8 character, and slices back
 //!   to the retained source (a rejected attempt's raw bytes are exactly its
@@ -264,6 +267,62 @@ fn check_rejected(output: &[u8], calls: &ToolCalls) {
     }
 }
 
+/// S3: a rejected attempt keeps its own closing markup. For an attempt a
+/// parser made whose dialect ends calls with a distinctive closer (not a
+/// bare bracket, which prose also writes), when its raw text does not end
+/// with one of its dialect's closer spellings, the content after it, up to
+/// the next call, reasoning block or other attempt, holds none: the closer
+/// would have ended the attempt.
+fn check_rejected_markup(output: &[u8], calls: &ToolCalls) {
+    for rejected in &calls.rejected {
+        if matches!(rejected.reason, Rejection::UnsupportedDialect { .. }) {
+            continue;
+        }
+        let Some(dialect) = &rejected.dialect else {
+            continue;
+        };
+        let closers: Vec<&Vec<u8>> = dialect
+            .grammar()
+            .call_ends()
+            .iter()
+            .flat_map(|(_, closers)| closers)
+            .collect();
+        if closers.is_empty() || closers.iter().any(|closer| closer.len() == 1) {
+            continue;
+        }
+        if closers.iter().any(|closer| rejected.raw.ends_with(closer)) {
+            continue;
+        }
+        let end = rejected.span.end;
+        let next = calls
+            .calls
+            .iter()
+            .map(|call| call.span.start)
+            .chain(calls.reasoning.iter().map(|range| range.start))
+            .chain(calls.rejected.iter().map(|other| other.span.start))
+            .filter(|start| *start >= end && *start > rejected.span.start)
+            .min()
+            .unwrap_or(output.len());
+        for range in &calls.content {
+            let start = range.start.max(end);
+            let stop = range.end.min(next);
+            if start >= stop {
+                continue;
+            }
+            let text = &output[start..stop];
+            for closer in &closers {
+                assert!(
+                    !text
+                        .windows(closer.len())
+                        .any(|window| window == closer.as_slice()),
+                    "content {start}..{stop} after a rejected attempt holds its closer {:?}",
+                    String::from_utf8_lossy(closer)
+                );
+            }
+        }
+    }
+}
+
 /// Every structural and A13 invariant of one recovered value.
 fn check_calls(output: &[u8], calls: &ToolCalls) {
     for call in calls.calls.iter().chain(&calls.embedded) {
@@ -306,6 +365,7 @@ fn check_calls(output: &[u8], calls: &ToolCalls) {
     }
     check_verdict(calls);
     check_rejected(output, calls);
+    check_rejected_markup(output, calls);
     for range in &calls.content {
         check_range(output, range, "content");
     }

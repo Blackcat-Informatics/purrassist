@@ -1397,12 +1397,12 @@ fn shared_opener_rejections_collapse_under_the_default_allow_list() {
         (
             "trailing_text_inside_wrapper",
             DialectId::Qwen3CoderXml,
-            0..66,
+            0..90,
         ),
         (
             "json_body_stray_closer_trailing_text",
             DialectId::Qwen3CoderXml,
-            0..97,
+            0..111,
         ),
     ] {
         let golden = load(&goldens_dir().join(format!("{name}.json")));

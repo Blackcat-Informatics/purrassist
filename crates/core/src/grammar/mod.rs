@@ -634,6 +634,11 @@ pub(crate) struct Production {
     pub(crate) expr: Expr,
 }
 
+/// One opener alternative of a grammar's `call` production: the spellings
+/// of its opener literal, then the spellings of the literals that can end
+/// it (see [`CompiledGrammar::call_ends`]).
+pub type CallEnd = (Vec<Vec<u8>>, Vec<Vec<u8>>);
+
 /// A compiled, invertible dialect grammar.
 ///
 /// Holds the productions as written ([`Expr`]), the terminal tables they
@@ -660,6 +665,8 @@ pub struct CompiledGrammar {
     pub(crate) reasoning: Vec<(Vec<u8>, Vec<u8>)>,
     /// Per `reasoning` pair, whether it is declared `explicit`.
     pub(crate) explicit_reasoning: Vec<bool>,
+    /// See [`Self::call_ends`].
+    pub(crate) call_ends: Vec<CallEnd>,
     pub(crate) programs: [Program; 2],
     pub(crate) stray: automaton::Trie,
     pub(crate) longest: usize,
@@ -1013,6 +1020,26 @@ impl CompiledGrammar {
     #[must_use]
     pub fn configuration_bound(&self) -> u64 {
         self.programs.iter().map(|program| program.bound).sum()
+    }
+
+    /// Per opener alternative of the `call` production, the spellings of its
+    /// opener and of the literals that can end it (a literal from which the
+    /// production completes without further input: the wrapper or section
+    /// closer, the final brace of a bare object), each with its declared
+    /// closer variants and confusable spellings, computed when the grammar
+    /// is compiled. A rejected attempt's markup runs to its alternative's
+    /// end literal (see [`ToolSet::recover`](crate::tool_call::ToolSet::recover)).
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::DialectId;
+    /// let ends = DialectId::Hermes.grammar().call_ends();
+    /// let (openers, closers) = &ends[0];
+    /// assert!(openers.contains(&b"<tool_call>".to_vec()));
+    /// assert!(closers.contains(&b"</tool_call>".to_vec()));
+    /// ```
+    #[must_use]
+    pub fn call_ends(&self) -> &[CallEnd] {
+        &self.call_ends
     }
 
     /// How many byte offsets of `output` begin a spelling of one of the

@@ -20,8 +20,9 @@ use super::codec::CodecKind;
 use super::cost::K_COMPILE;
 use super::syntax::{Document, PExpr, Statement};
 use super::{
-    CaptureKind, ClassId, ClassTerminal, CloserClass, CloserId, CompiledGrammar, DelimiterSet,
-    DelimiterSetId, Expr, GrammarError, Literal, LiteralId, Production, ProductionId, index_u32,
+    CallEnd, CaptureKind, ClassId, ClassTerminal, CloserClass, CloserId, CompiledGrammar,
+    DelimiterSet, DelimiterSetId, Expr, GrammarError, Literal, LiteralId, Production, ProductionId,
+    index_u32,
 };
 use crate::contract::saturating_size as size;
 use crate::contract::{Governor, Resource, ScratchCharge, StopReason};
@@ -1471,6 +1472,7 @@ pub(crate) fn compile(
         programs = compile_programs(&literals, &literal_tables, &renames, governor)?;
     }
     let longest = longest_literal(&literals, &literal_tables, &stray, &delimiters, &reasoning);
+    let call_ends = call_ends(&programs[0], &literals, &literal_tables, governor)?;
     // An `optional-id` grammar reads a call id where a model adds one, but
     // its markup does not provide for one.
     let call_ids = !optional_id && captures(&productions, call, CaptureKind::Id);
@@ -1492,11 +1494,116 @@ pub(crate) fn compile(
         declaration,
         reasoning,
         explicit_reasoning,
+        call_ends,
         programs,
         stray: stray.trie,
         longest,
         layouts,
     })
+}
+
+/// Per opener alternative of the `call` production, the spellings of its
+/// opener and of the literals that can end it (a literal from which the
+/// production completes without further input: the wrapper or section
+/// closer, the final brace of a bare object), each with its declared
+/// closer variants and confusable spellings. A rejected attempt's markup
+/// runs to its alternative's end literal (see
+/// `ToolSet::recover`).
+fn call_ends(
+    program: &Program,
+    literals: &[Literal],
+    tables: &[LiteralTables],
+    governor: &mut Governor,
+) -> Result<Vec<CallEnd>, GrammarError> {
+    // One walk of the call program per opener alternative, and one
+    // backward walk for completion.
+    charge(
+        governor,
+        size(program.openers.len())
+            .saturating_add(1)
+            .saturating_mul(size(program.insts.len())),
+        size(program.insts.len()).saturating_mul(16),
+    )?;
+    let spellings = |lit: u32| {
+        let tables = &tables[lit as usize];
+        core::iter::once(literals[lit as usize].bytes.clone())
+            .chain(tables.variants.list.iter().cloned())
+            .chain(tables.confusables.list.iter().cloned())
+            .collect::<Vec<_>>()
+    };
+    let next_of = |inst: &Inst| -> Vec<u32> {
+        match *inst {
+            Inst::Lit { next, .. }
+            | Inst::Class { next, .. }
+            | Inst::Until { next, .. }
+            | Inst::Slot { next, .. }
+            | Inst::Open { next, .. }
+            | Inst::Close { next, .. }
+            | Inst::Commit { next }
+            | Inst::Next { next }
+            | Inst::Insert { next, .. } => vec![next],
+            Inst::Split(first, second) => vec![first, second],
+            Inst::Accept => Vec::new(),
+        }
+    };
+    // Whether the production completes from each instruction without
+    // input: one backward walk from `Accept` over the epsilon instructions.
+    let count = program.insts.len();
+    let mut before: Vec<Vec<u32>> = vec![Vec::new(); count];
+    let mut stack = Vec::new();
+    for (pc, inst) in program.insts.iter().enumerate() {
+        let pc = index_u32(pc);
+        match *inst {
+            Inst::Accept => stack.push(pc),
+            Inst::Split(first, second) => {
+                before[first as usize].push(pc);
+                before[second as usize].push(pc);
+            }
+            Inst::Open { next, .. }
+            | Inst::Close { next, .. }
+            | Inst::Commit { next }
+            | Inst::Next { next }
+            | Inst::Insert { next, .. } => before[next as usize].push(pc),
+            _ => {}
+        }
+    }
+    let mut completing = vec![false; count];
+    while let Some(pc) = stack.pop() {
+        if !core::mem::replace(&mut completing[pc as usize], true) {
+            stack.extend(before[pc as usize].iter().copied());
+        }
+    }
+    let completes = |pc: u32| completing[pc as usize];
+    Ok(program
+        .openers
+        .iter()
+        .filter_map(|&opener| {
+            let Inst::Lit { lit, .. } = program.insts[opener as usize] else {
+                return None;
+            };
+            let mut seen = vec![false; program.insts.len()];
+            let mut stack = vec![opener];
+            let mut ends: Vec<Vec<u8>> = Vec::new();
+            while let Some(pc) = stack.pop() {
+                if core::mem::replace(&mut seen[pc as usize], true) {
+                    continue;
+                }
+                let inst = &program.insts[pc as usize];
+                if let Inst::Lit { lit, next } = *inst
+                    && pc != opener
+                    && completes(next)
+                {
+                    for spelling in spellings(lit) {
+                        if !ends.contains(&spelling) {
+                            ends.push(spelling);
+                        }
+                    }
+                }
+                stack.extend(next_of(inst));
+            }
+            Some((spellings(lit), ends))
+        })
+        .collect())
 }
 
 /// Each production's printing layout: the text a `layout` statement gives

@@ -45,26 +45,26 @@
     {
       "span": [
         33,
-        157
+        192
       ],
       "dialect": "anthropic-tool-use.v1",
       "candidate_dialects": [
         "anthropic-tool-use.v1"
       ],
       "reason": "Malformed { at: 157 }",
-      "raw": "{\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"get_weather\",\"input\":{}}}"
+      "raw": "{\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"get_weather\",\"input\":{}}}\n\nevent: content_block_delta\ndata: "
     },
     {
       "span": [
         192,
-        306
+        307
       ],
       "dialect": "anthropic-tool-use.v1",
       "candidate_dialects": [
         "anthropic-tool-use.v1"
       ],
       "reason": "Malformed { at: 306 }",
-      "raw": "{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"city\\\": \\\"Oslo\\\"}\"}}"
+      "raw": "{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"city\\\": \\\"Oslo\\\"}\"}}\n"
     }
   ],
   "embedded": [],

@@ -7,8 +7,9 @@
 //!
 //! The malformed cases (an unterminated opener, an empty name, text between
 //! parameters, a nested `<function=`, trailing text inside the wrapper,
-//! positional text) are rejected attempts whose raw span and reason are
-//! kept; a hallucinated tool is a per-call `Unresolved` call. Either way the
+//! positional text) are rejected attempts whose reason is kept and whose
+//! raw span is the whole call markup, closers included, so no content range
+//! holds call markup; a hallucinated tool is a per-call `Unresolved` call. Either way the
 //! turn finishes `Unresolved` and neither `usable()` nor
 //! `usable_accepting_guesses()` holds a call. Only a call written inside
 //! fenced code or quoted prose may instead be a guess-flagged reading
@@ -101,6 +102,28 @@ fn assert_never_usable(input: &str, calls: &ToolCalls) {
     }
 }
 
+/// No content range holds call markup: a rejected attempt keeps its whole
+/// markup, closers included, as its raw text.
+fn assert_no_markup_in_content(input: &str, calls: &ToolCalls) {
+    for range in &calls.content {
+        let text = &input[range.clone()];
+        for token in [
+            "<tool_call>",
+            "</tool_call>",
+            "<function=",
+            "</function>",
+            "<parameter=",
+            "</parameter>",
+            "</parameters>",
+        ] {
+            assert!(
+                !text.contains(token),
+                "{input:?}: content {text:?} holds {token}"
+            );
+        }
+    }
+}
+
 /// A malformed case: the attempt is rejected with `expected` (span and
 /// reason), no call is recognized, the turn is `Unresolved`, and nothing
 /// is usable even accepting guesses, under both profiles.
@@ -108,6 +131,7 @@ fn assert_rejected(input: &str, expected: &[(Range<usize>, Rejection)]) {
     for effects in PROFILES {
         let calls = recover(input, effects);
         assert_never_usable(input, &calls);
+        assert_no_markup_in_content(input, &calls);
         assert_eq!(rejected(&calls), expected, "{effects:?} {input:?}");
         assert_eq!(calls.calls.len(), 0, "{effects:?} {input:?}");
         assert_eq!(calls.finish, Finish::Unresolved, "{effects:?} {input:?}");
@@ -124,31 +148,51 @@ fn unterminated_opener() {
 #[test]
 fn empty_function_name() {
     let input = "<tool_call><function=>x</function></tool_call>";
-    assert_rejected(input, &[(0..21, Rejection::Malformed { at: 21 })]);
+    assert_rejected(input, &[(0..46, Rejection::Malformed { at: 21 })]);
 }
 
 #[test]
 fn text_between_parameters() {
     let input = "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\nsome text\n<parameter=b>\ny\n</parameter>\n</function>\n</tool_call>";
-    assert_rejected(input, &[(0..103, Rejection::Malformed { at: 54 })]);
+    assert_rejected(input, &[(0..117, Rejection::Malformed { at: 54 })]);
 }
 
 #[test]
 fn nested_function_inside_function() {
     let input = "<tool_call>\n<function=f>\n<function=g>\n<parameter=a>\nx\n</parameter>\n</function>\n</function>\n</tool_call>";
-    assert_rejected(input, &[(0..77, Rejection::Malformed { at: 25 })]);
+    assert_rejected(input, &[(0..103, Rejection::Malformed { at: 25 })]);
 }
 
 #[test]
 fn trailing_text_inside_wrapper() {
     let input = "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\n</function>\nthat is all\n</tool_call>";
-    assert_rejected(input, &[(0..66, Rejection::Malformed { at: 66 })]);
+    assert_rejected(input, &[(0..90, Rejection::Malformed { at: 66 })]);
+}
+
+/// Repeated closers after a rejected attempt's end literal are its stray
+/// closers: recorded in its raw text, not left as content; the prose after
+/// them stays content.
+#[test]
+fn stray_closers_after_rejected_attempt() {
+    let input = "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\nthat is all</function>\n</tool_call>\n</tool_call> tail";
+    let tail = input.len() - " tail".len();
+    for effects in PROFILES {
+        let calls = recover(input, effects);
+        assert_never_usable(input, &calls);
+        assert_no_markup_in_content(input, &calls);
+        assert_eq!(
+            rejected(&calls),
+            [(0..tail, Rejection::Malformed { at: 54 })],
+            "{effects:?}"
+        );
+        assert_eq!(calls.content, vec![tail..input.len()], "{effects:?}");
+    }
 }
 
 #[test]
 fn positional_text_in_function_body() {
     let input = "<tool_call>\n<function=f>\nhello\n</function>\n</tool_call>";
-    assert_rejected(input, &[(0..41, Rejection::Malformed { at: 25 })]);
+    assert_rejected(input, &[(0..55, Rejection::Malformed { at: 25 })]);
 }
 
 #[test]
@@ -235,13 +279,16 @@ fn quoted_block_quote_lines_are_malformed() {
     // A call quoted line by line carries the quote markers inside its
     // markup: it is not a call at all. The `<tool_call>` attempt fails at
     // the quote marker, and so does the bare `<function=f>` element after
-    // it: two rejected attempts, never silent content.
+    // it: two rejected attempts, never silent content. The inner element's
+    // markup runs to its `</function>`; the wrapper's runs over it to the
+    // quoted `</tool_call>`, so its raw text holds the whole call and no
+    // closer is left as content.
     let input = "> <tool_call>\n> <function=f>\n> <parameter=a>\n> x\n> </parameter>\n> </function>\n> </tool_call>\n";
     assert_rejected(
         input,
         &[
-            (2..14, Rejection::Malformed { at: 14 }),
-            (16..76, Rejection::Malformed { at: 29 }),
+            (2..92, Rejection::Malformed { at: 14 }),
+            (16..77, Rejection::Malformed { at: 29 }),
         ],
     );
 }
@@ -289,19 +336,19 @@ fn unwrapped_negative_corpus_is_rejected() {
         ("<function=f", vec![(0..11, Rejection::Unterminated)]),
         (
             "<function=>x</function>",
-            vec![(0..10, Rejection::Malformed { at: 10 })],
+            vec![(0..23, Rejection::Malformed { at: 10 })],
         ),
         (
             "<function=f>\n<parameter=a>\nx\n</parameter>\nsome text\n<parameter=b>\ny\n</parameter>\n</function>",
-            vec![(0..91, Rejection::Malformed { at: 42 })],
+            vec![(0..92, Rejection::Malformed { at: 42 })],
         ),
         (
             "<function=f>\n<function=g>\n<parameter=a>\nx\n</parameter>\n</function>\n</function>",
-            vec![(0..65, Rejection::Malformed { at: 13 })],
+            vec![(0..78, Rejection::Malformed { at: 13 })],
         ),
         (
             "<function=f>\nhello\n</function>",
-            vec![(0..29, Rejection::Malformed { at: 13 })],
+            vec![(0..30, Rejection::Malformed { at: 13 })],
         ),
     ] {
         assert_rejected(input, &expected);

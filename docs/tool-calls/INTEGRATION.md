@@ -121,6 +121,29 @@ is reported as certain.
   `tool_call_recover::usable_never_yields_mutating_guess`,
   `tool_call_roundtrip::mutating_guess_never_emitted`, and
   `tool_call_goldens::no_mutating_guess_resolved_over_goldens`.
+- **A rejected attempt keeps its whole call markup.** A parser's rejected
+  attempt runs from its opener to the end literal of the `call` alternative
+  it opened (the wrapper or section closer in any declared or confusable
+  spelling, at nesting depth one: another opener of that alternative opens
+  a level; a JSON object or array call nests by its brackets outside
+  strings), plus any repeated closers right after it. Without such a closer
+  it runs to the next call opening the same alternative, a reasoning block,
+  reported unparsed markup, or the end of output. Its `span` and `raw` are
+  that whole markup, and content excludes it, so no wrapper token is left
+  as assistant text. A call or attempt inside the broken wrapper (a bare
+  JSON object read from its body, an inner element's own failure) is kept,
+  and the wrapper's rejected span covers it. Unparsed markup
+  (`unsupported_dialect`) is not extended: its bytes stay content. The end
+  literals are derived per grammar when it is compiled
+  (`CompiledGrammar::call_ends`). *Proved by* the negative corpus
+  (`tool_call_negative`, wrapped and unwrapped, each asserting that content
+  holds no call markup, and
+  `tool_call_negative::stray_closers_after_rejected_attempt`),
+  `tool_call_recover::rejected_wrapper_covers_the_call_recovered_inside_it`,
+  `tool_call_recover::rejected_span_never_splits_a_character_a_class_cannot_consume`,
+  the rejected spans recorded in the goldens, and the `fuzz-tool-call`
+  invariant that content after a rejected attempt holds no closer of its
+  dialect.
 - **Call markup is never silent content.** Call markup that no dialect of
   the allow-list reads (a family not built in yet: Pythonic call lists,
   Gemma 3 `` ```tool_code `` blocks, GLM-4.5 `<arg_key>` calls, and the

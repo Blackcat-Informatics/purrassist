@@ -151,7 +151,10 @@ targets' mutation tokens so mutation can create or move field boundaries).
   reasoning range lies within the output, never splits a well-formed UTF-8
   character, and slices back to the retained source (a rejected attempt's
   raw bytes are exactly its range); content, reasoning, and call ranges
-  never overlap. Every `Resolved` call printed in its own dialect
+  never overlap. (S3) A rejected attempt keeps its own closing markup: when
+  a parser's attempt does not end with a closer of its dialect (a closer
+  other than a bare bracket, which prose also writes), the content after it,
+  up to the next call, reasoning block, or attempt, holds no such closer. Every `Resolved` call printed in its own dialect
   (`emit::emit`) recovers to the same tool with `Node::equivalent`
   arguments and `Resolved`, and the printed text is stable (a fixed point
   from its first recovery; a `Resolved` call is skipped only as
