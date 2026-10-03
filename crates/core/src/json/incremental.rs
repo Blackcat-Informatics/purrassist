@@ -273,6 +273,9 @@ pub struct IncrementalRecovery {
     opening: bool,
     /// The container whose trailing whitespace/comments are being read.
     settling: Option<usize>,
+    /// U+FFFD characters fed by [`Self::feed_replacement`] in place of
+    /// malformed source bytes: each one's offset and source width.
+    replaced: Vec<(usize, usize)>,
 }
 
 /// A partially decoded UTF-8 scalar.
@@ -569,6 +572,7 @@ impl IncrementalRecovery {
             orphans: None,
             opening: false,
             settling: None,
+            replaced: Vec::new(),
         }
     }
 
@@ -630,6 +634,36 @@ impl IncrementalRecovery {
             return Err(reason.clone());
         }
         let result = self.consume_chunk(bytes, governor);
+        if let Err(reason) = &result {
+            self.failed = Some(reason.clone());
+        }
+        result
+    }
+
+    /// Consume one U+FFFD standing for the `width` source bytes at the next
+    /// offset, which are not well-formed UTF-8: offsets after it stay
+    /// exact. The caller records the replacement. Errors as
+    /// [`feed`](Self::feed).
+    pub(crate) fn feed_replacement(
+        &mut self,
+        width: usize,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        if let Some(reason) = &self.failed {
+            return Err(reason.clone());
+        }
+        debug_assert_eq!(self.utf8.need, 0, "a replacement falls between characters");
+        let result = (|| {
+            self.begin(governor)?;
+            let at = self.base + self.fed;
+            self.fed += width;
+            if matches!(self.mode, Mode::Done) {
+                return Ok(());
+            }
+            governor.charge(Resource::ScratchBytes, 16)?;
+            self.replaced.push((at, width));
+            self.offer(Some(char::REPLACEMENT_CHARACTER), at, governor)
+        })();
         if let Err(reason) = &result {
             self.failed = Some(reason.clone());
         }
@@ -841,12 +875,20 @@ impl IncrementalRecovery {
         at: usize,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let end = at + character.len_utf8();
+        let width = if character == char::REPLACEMENT_CHARACTER {
+            self.replaced
+                .iter()
+                .find(|&&(start, _)| start == at)
+                .map_or_else(|| character.len_utf8(), |&(_, width)| width)
+        } else {
+            character.len_utf8()
+        };
+        let end = at + width;
         let admitted = size(end - self.base);
         if admitted > governor.limits().input_bytes {
             governor.charge(Resource::InputBytes, admitted)?;
         }
-        governor.charge(Resource::Work, size(character.len_utf8()))?;
+        governor.charge(Resource::Work, size(width))?;
         if matches!(character, '[' | ']' | '{' | '}') {
             if let (false, Some(orphans), '[' | '{') = (self.opening, &mut self.orphans, character)
             {

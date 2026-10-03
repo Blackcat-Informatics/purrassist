@@ -4,7 +4,7 @@
 //! The `xml-params` codec: `<parameter=NAME>value</parameter>` sequences.
 use super::json::{Decoded, JsonCodec, tree as json_tree};
 use super::{
-    Codec, CodecContext, CodecEnd, CodecFault, CodecKind, CodecStep, CodecValue, edit, value,
+    Codec, CodecContext, CodecEnd, CodecFault, CodecKind, CodecValue, edit, lossy, uncut, value,
 };
 use crate::contract::saturating_size as size;
 use crate::contract::{Governor, Resource, StopReason};
@@ -59,10 +59,13 @@ const CLOSER_VARIANT: &[u8] = b"</parameters>";
 ///   other value is one item of the array, read by the item type and
 ///   recorded as `tool_call.xml.array-item`, so repeated elements collect
 ///   into one array when the call is resolved.
-/// - Malformed UTF-8 inside a value leaves that parameter unresolved
-///   ([`ArgumentFault::InvalidUtf8InArgument`], raw span kept); JSON that
-///   cannot be recovered, or text after the JSON value, leaves it unresolved
-///   with [`ArgumentFault::InvalidJson`].
+/// - Bytes inside a value or a parameter name that are not well-formed
+///   UTF-8 are read as U+FFFD, one per maximal malformed subpart, each run
+///   recorded as `tool_call.value.invalid-utf8` (a data loss keeping the
+///   original bytes and offsets): the parameter keeps its decodable
+///   content and the call is at most a best guess. JSON that cannot be
+///   recovered, or text after the JSON value, leaves the parameter
+///   unresolved with [`ArgumentFault::InvalidJson`].
 /// - Repeated parameters are all recorded, in order, as duplicate members
 ///   (resolution decides what a repeat means for the declared type).
 ///
@@ -157,15 +160,6 @@ impl Codec for XmlParamsCodec {
 
     fn begin(at: usize, _governor: &mut Governor) -> Result<Self, StopReason> {
         Ok(Self { start: at })
-    }
-
-    fn feed(
-        &mut self,
-        _byte: u8,
-        _at: usize,
-        _governor: &mut Governor,
-    ) -> Result<CodecStep, StopReason> {
-        Ok(CodecStep::Consumed)
     }
 
     fn finish(
@@ -271,6 +265,19 @@ impl<'t> Reader<'_, 't, '_> {
         Ok(())
     }
 
+    /// Record `tool_call.value.invalid-utf8` edits, each in source order
+    /// among the edits recorded so far.
+    fn adopt(&mut self, invalid: Vec<MarkupEdit>) {
+        for edit in invalid {
+            let at = self
+                .edits
+                .iter()
+                .position(|other| other.span.start > edit.span.start)
+                .unwrap_or(self.edits.len());
+            self.edits.insert(at, edit);
+        }
+    }
+
     fn charge(&mut self, units: usize) -> Result<(), StopReason> {
         self.governor
             .charge(Resource::Work, size(units).saturating_mul(K_CODEC))
@@ -342,13 +349,16 @@ impl<'t> Reader<'_, 't, '_> {
         if length == 0 || self.body.get(to) != Some(&b'>') {
             return Ok(None);
         }
-        let Ok(name) = core::str::from_utf8(&self.body[from..to]) else {
-            return Ok(None);
+        // A name that is not well-formed UTF-8 is read with U+FFFD; the
+        // edits are recorded when the opener is read as a parameter.
+        let name = match core::str::from_utf8(&self.body[from..to]) {
+            Ok(name) => name.to_owned(),
+            Err(_) => String::from_utf8_lossy(&self.body[from..to]).into_owned(),
         };
         Ok(Some(Opener {
             start: at,
             name: Spanned {
-                value: name.to_owned(),
+                value: name,
                 span: self.absolute(from..to),
             },
             end: to + 1,
@@ -452,6 +462,11 @@ impl<'t> Reader<'_, 't, '_> {
 
     /// Read one parameter from its opener; the offset after it.
     fn parameter(&mut self, opener: Opener) -> Result<Result<usize, CodecFault>, StopReason> {
+        let name = opener.name.span.start - self.base..opener.name.span.end - self.base;
+        if core::str::from_utf8(&self.body[name.clone()]).is_err() {
+            let (_, invalid) = lossy(&self.body[name], opener.name.span.start, self.governor)?;
+            self.adopt(invalid);
+        }
         let owner = self.owner(&opener.name.value)?;
         while self.frames.len() - 1 > owner {
             self.record(
@@ -626,23 +641,14 @@ impl<'t> Reader<'_, 't, '_> {
             }
         }
         self.charge(end - start)?;
-        let text = match core::str::from_utf8(&self.body[start..end]) {
-            Ok(text) => text,
-            Err(error) if cut && error.error_len().is_none() => {
-                end = start + error.valid_up_to();
-                core::str::from_utf8(&self.body[start..end]).expect("the valid prefix")
-            }
-            Err(error) => {
-                let at = self.base + start + error.valid_up_to();
-                return Ok(Ok(ArgTree::unresolved(
-                    ArgumentFault::InvalidUtf8InArgument { at },
-                    self.absolute(from..stop),
-                )));
-            }
-        };
+        if cut {
+            end = start + uncut(&self.body[start..end]);
+        }
+        let (text, invalid) = lossy(&self.body[start..end], self.base + start, self.governor)?;
+        self.adopt(invalid);
         let raw = self.absolute(start..end);
         let mut tree = ArgTree::value(Node {
-            value: Value::String(text.to_owned()),
+            value: Value::String(text),
             span: Some(raw.clone()),
         });
         tree.leaves.push(ArgLeaf {
@@ -673,8 +679,9 @@ impl<'t> Reader<'_, 't, '_> {
             CodecEnd::Delimited
         };
         let raw = self.absolute(from..stop);
-        let (decoded, trailing) =
+        let (decoded, trailing, invalid) =
             JsonCodec::scan(&self.body[from..stop], raw.start, end, self.governor)?;
+        self.adopt(invalid);
         let fault = match (decoded, trailing) {
             (
                 Decoded::Value {
@@ -731,12 +738,13 @@ impl<'t> Reader<'_, 't, '_> {
         first: usize,
         span: Range<usize>,
     ) -> Result<Result<ArgTree, CodecFault>, StopReason> {
-        let (decoded, trailing) = JsonCodec::scan(
+        let (decoded, trailing, invalid) = JsonCodec::scan(
             &self.body[first..],
             self.base + first,
             self.end,
             self.governor,
         )?;
+        self.adopt(invalid);
         let value_end = trailing.map_or(self.body.len(), |stop| stop - self.base);
         self.record(EditOperator::JsonBody, first..value_end, b"")?;
         let tree = match decoded {

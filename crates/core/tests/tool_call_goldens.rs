@@ -3039,3 +3039,107 @@ fn envelope_json_syntax_is_tolerated() {
         assert_eq!(the_call(&result).outcome, CallOutcome::Resolved, "{input}");
     }
 }
+
+/// F4: bytes that are not well-formed UTF-8 inside a call's argument keep
+/// the call, in every dialect and codec (Hermes, Kimi-K2 and `OpenAI`
+/// stringified arguments through `json`, Qwen3-Coder XML through
+/// `xml-params`, Harmony's python body through `raw`). Each maximal
+/// malformed subpart is read as U+FFFD and each run recorded as a
+/// `tool_call.value.invalid-utf8` data loss whose evidence span is the
+/// run's exact bytes and whose original retains them, so the call is at
+/// most `BestGuess`, usable on a read-only tool and never on a `Mutating`
+/// one. A malformed byte in a tool name is a rejected attempt with reason
+/// `invalid_utf8` at its offset (no built-in name grammar admits it); one
+/// in a parameter name is read with U+FFFD and the parameter-name rules
+/// decide.
+#[test]
+fn invalid_utf8_in_arguments_keeps_the_call() {
+    for name in [
+        "invalid_utf8_argument_hermes",
+        "invalid_utf8_argument_kimi",
+        "invalid_utf8_argument_openai_stringified",
+        "invalid_utf8_argument_qwen_xml",
+    ] {
+        let (golden, result) = golden(name);
+        let at = golden
+            .input
+            .iter()
+            .position(|&byte| byte == 0xE9)
+            .expect("the byte");
+        assert!(matches!(result.outcome, Outcome::BestGuess(_)), "{name}");
+        let call = the_call(&result);
+        assert_eq!(call.tool.as_deref(), Some("read_file"), "{name}");
+        assert_eq!(call.outcome, CallOutcome::BestGuess, "{name}");
+        assert_eq!(
+            call.arguments.to_json(),
+            "{\"path\":\"caf\u{FFFD}.txt\"}",
+            "{name}"
+        );
+        assert_eq!(
+            loss_kinds(call, "tool_call.value.invalid-utf8"),
+            [LossKind::Data],
+            "{name}"
+        );
+        let loss = call
+            .repairs
+            .losses
+            .iter()
+            .find(|loss| loss.loss.evidence.rule == "tool_call.value.invalid-utf8")
+            .expect("the loss");
+        let span = loss.loss.evidence.span.as_ref().expect("a span");
+        assert_eq!(span.bytes, at..at + 1, "{name}");
+        assert_eq!(loss.loss.original, "\\xE9", "{name}");
+        assert!(!has_guess(call), "{name}");
+        assert_eq!(
+            reading(&result).usable_accepting_guesses().len(),
+            1,
+            "{name}"
+        );
+    }
+    // The raw codec keeps the body too.
+    let (_, result) = golden("invalid_utf8_argument_raw_harmony_python");
+    let call = the_call(&result);
+    assert_eq!(call.arguments.to_json(), "\"print(\\\"caf\u{FFFD}\\\")\"");
+    assert!(rules_of(call).contains(&"tool_call.value.invalid-utf8"));
+    // One U+FFFD per maximal malformed subpart, one loss per run.
+    let (_, result) = golden("invalid_utf8_argument_runs_and_cut");
+    let call = the_call(&result);
+    assert_eq!(
+        call.arguments.to_json(),
+        "{\"path\":\"a\u{FFFD}\u{FFFD}b\u{FFFD}\u{FFFD}\u{FFFD}c\u{FFFD}\"}"
+    );
+    assert_eq!(loss_kinds(call, "tool_call.value.invalid-utf8").len(), 3);
+    // The Mutating guard: kept and itemized, never usable.
+    let (_, result) = golden("invalid_utf8_argument_mutating_guard");
+    let calls = reading(&result);
+    assert_eq!(calls.calls.len(), 1);
+    assert_eq!(calls.calls[0].outcome, CallOutcome::BestGuess);
+    assert!(has_data_loss(&calls.calls[0]));
+    assert!(calls.usable().is_empty() && calls.usable_accepting_guesses().is_empty());
+    // A malformed byte in a tool name: a rejected attempt, never dropped.
+    for name in [
+        "invalid_utf8_in_tool_name_hermes",
+        "invalid_utf8_in_tool_name_qwen_xml",
+    ] {
+        let (golden, result) = golden(name);
+        let calls = reading(&result);
+        assert!(calls.calls.is_empty(), "{name}");
+        assert_eq!(calls.rejected.len(), 1, "{name}");
+        let at = golden
+            .input
+            .iter()
+            .position(|&byte| byte == 0xE9)
+            .expect("the byte");
+        assert!(
+            matches!(calls.rejected[0].reason, purrassist_core::tool_call::Rejection::InvalidUtf8 { at: offset } if offset == at),
+            "{name}: {:?}",
+            calls.rejected[0].reason
+        );
+    }
+    // A malformed byte in a parameter name: read with U+FFFD, then the
+    // parameter-name rules.
+    let (_, result) = golden("invalid_utf8_in_parameter_name_qwen_xml");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::BestGuess);
+    assert!(rules_of(call).contains(&"tool_call.value.invalid-utf8"));
+}

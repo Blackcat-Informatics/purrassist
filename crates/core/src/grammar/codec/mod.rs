@@ -39,6 +39,18 @@
 //! without type information; such a call is later resolved against its tool
 //! (or found to name none).
 //!
+//! # Malformed UTF-8
+//!
+//! Every built-in codec reads bytes that are not well-formed UTF-8 as
+//! U+FFFD, one per maximal malformed subpart (the substitution the Unicode
+//! Standard recommends), and records each run as a
+//! [`EditOperator::InvalidUtf8Value`] edit (`tool_call.value.invalid-utf8`)
+//! whose span and original bytes are exact: never a silent replacement. It
+//! is a data loss, so the call is kept with its decodable content and is
+//! at most a best guess, never run on a `Mutating` tool. Offsets after the
+//! replacement are unchanged. A final character cut off by a length stop
+//! is dropped instead (the value is truncated, not malformed).
+//!
 //! # Determinism
 //!
 //! Codec state advances one byte at a time and every charge depends only on
@@ -70,7 +82,7 @@ pub use raw::RawCodec;
 pub use xml::XmlParamsCodec;
 
 use super::edit::{EditOperator, MarkupEdit};
-use crate::contract::{Governor, Resource, StopReason};
+use crate::contract::{Governor, Resource, StopReason, saturating_size};
 use crate::tool_call::{ArgTree, ArgumentShape};
 use core::ops::Range;
 
@@ -174,8 +186,10 @@ pub enum CodecStep {
 /// [`ArgTree::unresolved`](crate::tool_call::ArgTree::unresolved)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CodecFault {
-    /// The body is not well-formed UTF-8 (the `raw` codec); `at` is the
-    /// absolute offset of the first byte of the malformed sequence.
+    /// The body is not well-formed UTF-8; `at` is the absolute offset of
+    /// the first byte of the malformed sequence. No built-in codec
+    /// produces it: they read malformed bytes as U+FFFD and record
+    /// `tool_call.value.invalid-utf8`, a data loss that keeps the call.
     InvalidUtf8 {
         /// Absolute offset of the malformed sequence.
         at: usize,
@@ -240,6 +254,9 @@ pub trait Codec: Sized {
 
     /// Offer the next body byte, at absolute offset `at`.
     ///
+    /// The default consumes every byte: a codec that reads its whole body
+    /// in [`Self::finish`] (`raw`, `xml-params`) keeps it.
+    ///
     /// # Errors
     /// Returns the governor's exhaustion or cancellation reason.
     fn feed(
@@ -247,7 +264,10 @@ pub trait Codec: Sized {
         byte: u8,
         at: usize,
         governor: &mut Governor,
-    ) -> Result<CodecStep, StopReason>;
+    ) -> Result<CodecStep, StopReason> {
+        let _ = (byte, at, governor);
+        Ok(CodecStep::Consumed)
+    }
 
     /// Build the value of the whole `body`, whose absolute range is `span`,
     /// charging exactly the value's [`ArgTree::estimated_bytes`] and each
@@ -348,16 +368,6 @@ impl Utf8Check {
             Some(self.sequence)
         }
     }
-
-    /// How many of `len` checked bytes form complete characters, given how
-    /// the input ended: a cut-off final character is dropped under a length
-    /// stop and malformed otherwise (`Err` with its offset).
-    pub(crate) const fn complete(&self, len: usize, end: CodecEnd) -> Result<usize, usize> {
-        match self.malformed(end) {
-            Some(at) => Err(at),
-            None => Ok(len - self.pending as usize),
-        }
-    }
 }
 
 /// A charged edit of absolute `span` within a body starting at `base`.
@@ -377,6 +387,77 @@ fn edit(
     };
     governor.charge(Resource::ScratchBytes, edit.estimated_bytes())?;
     Ok(edit)
+}
+
+/// `bytes`, which start at absolute offset `base`, decoded as UTF-8 with
+/// each maximal malformed subpart read as U+FFFD (the substitution of
+/// maximal subparts the Unicode Standard recommends, as
+/// `String::from_utf8_lossy` does), and one
+/// [`EditOperator::InvalidUtf8Value`] edit per run of malformed bytes: its
+/// span and original bytes are exact, its replacement the U+FFFDs read.
+/// Callers charge the bytes as they read them; well-formed bytes cost
+/// nothing more, and a malformed body charges one more `Work` unit per
+/// byte (the substitution pass) and the edits' retained size.
+pub(crate) fn lossy(
+    bytes: &[u8],
+    base: usize,
+    governor: &mut Governor,
+) -> Result<(String, Vec<MarkupEdit>), StopReason> {
+    if let Ok(text) = core::str::from_utf8(bytes) {
+        return Ok((text.to_owned(), Vec::new()));
+    }
+    governor.charge(Resource::Work, saturating_size(bytes.len()))?;
+    let mut text = String::with_capacity(bytes.len());
+    let mut edits: Vec<MarkupEdit> = Vec::new();
+    let mut at = base;
+    for chunk in bytes.utf8_chunks() {
+        text.push_str(chunk.valid());
+        at += chunk.valid().len();
+        let invalid = chunk.invalid();
+        if invalid.is_empty() {
+            continue;
+        }
+        text.push(char::REPLACEMENT_CHARACTER);
+        let end = at + invalid.len();
+        match edits.last_mut() {
+            // Adjacent malformed subparts are one run.
+            Some(last) if chunk.valid().is_empty() && last.span.end == at => {
+                last.span.end = end;
+                last.original.extend_from_slice(invalid);
+                last.replacement.extend_from_slice("\u{FFFD}".as_bytes());
+            }
+            _ => edits.push(MarkupEdit {
+                operator: EditOperator::InvalidUtf8Value,
+                span: at..end,
+                original: invalid.to_vec(),
+                replacement: "\u{FFFD}".as_bytes().to_vec(),
+            }),
+        }
+        at = end;
+    }
+    for edit in &edits {
+        governor.charge(Resource::ScratchBytes, edit.estimated_bytes())?;
+    }
+    Ok((text, edits))
+}
+
+/// The length of `body` without a final multi-byte character a length
+/// stop cut off (its leading bytes are not malformed, only incomplete).
+pub(crate) fn uncut(body: &[u8]) -> usize {
+    let from = body.len().saturating_sub(3);
+    for start in (from..body.len()).rev() {
+        match body[start] {
+            0xC0..=0xFF => {
+                return match core::str::from_utf8(&body[start..]) {
+                    Err(error) if error.error_len().is_none() => start,
+                    _ => body.len(),
+                };
+            }
+            0x80..=0xBF => {}
+            _ => break,
+        }
+    }
+    body.len()
 }
 
 /// Charge a finished tree's [`ArgTree::estimated_bytes`] and return it as

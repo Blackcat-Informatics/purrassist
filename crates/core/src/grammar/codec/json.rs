@@ -43,13 +43,14 @@ use core::ops::Range;
 /// [`ArgumentFault::StringifiedArgumentsInvalidJson`], keeping the string's
 /// span.
 ///
-/// Bytes that are not well-formed UTF-8, and JSON the parser cannot
-/// recover, leave the arguments unresolved
-/// ([`ArgumentFault::InvalidUtf8InArgument`], [`ArgumentFault::InvalidJson`])
-/// with the whole body as their raw span. Malformed UTF-8 does not stop the
-/// parse (each malformed byte is read as `?` only to find where the value
-/// ends, so the call stays recognized); after unrecoverable JSON the body
-/// runs to the slot's delimiter. The codec never faults. With a [`CodecContext::shape`], the
+/// Bytes that are not well-formed UTF-8 are read as U+FFFD, one per
+/// maximal malformed subpart, wherever they occur (offsets after them stay
+/// exact), and each run is recorded as a `tool_call.value.invalid-utf8`
+/// edit with its exact span and original bytes: a data loss, so the value
+/// keeps its decodable content and the call is at most a best guess. JSON
+/// the parser cannot recover leaves the arguments unresolved
+/// ([`ArgumentFault::InvalidJson`]) with the whole body as their raw span;
+/// the body then runs to the slot's delimiter. The codec never faults. With a [`CodecContext::shape`], the
 /// tree carries the tool's canonical name ([`ArgTree::tool`]) for
 /// definition-grounded resolution.
 ///
@@ -98,7 +99,14 @@ pub struct JsonCodec {
     stalled: bool,
     /// What is still checked of the value's leading bytes.
     lead: Lead,
+    /// Runs of malformed UTF-8 read as U+FFFD: each run's absolute range
+    /// and how many U+FFFD (maximal malformed subparts) it was read as.
+    invalid: Vec<InvalidRun>,
 }
+
+/// A run of malformed UTF-8: its absolute range and how many U+FFFD
+/// (maximal malformed subparts) it was read as.
+type InvalidRun = (Range<usize>, usize);
 
 /// The leading-byte check of the `json-args` codec ([`CodecKind::JsonArgs`]):
 /// the value must be an object, or a string that is empty or begins with
@@ -179,6 +187,7 @@ impl Codec for JsonCodec {
             fault: None,
             stalled: false,
             lead: Lead::Any,
+            invalid: Vec::new(),
         })
     }
 
@@ -204,55 +213,35 @@ impl Codec for JsonCodec {
                 return Ok(CodecStep::Fault(CodecFault::Malformed { at }));
             }
         }
-        // The bytes handed to the parser in this step: a malformed sequence
-        // is replaced, byte for byte, by `?`, so the parser can still find
-        // where the value ends (offsets are unchanged); the value itself is
-        // then unresolved.
-        let mut chunk = [0_u8; 8];
-        let mut width = 0;
+        // A malformed sequence is read as one U+FFFD (the parser keeps
+        // its source width, so offsets are unchanged) and recorded; the
+        // byte that revealed it is then checked afresh.
         if let Some(bad) = self.utf8.step(byte, at) {
-            self.fault
-                .get_or_insert(ArgumentFault::InvalidUtf8InArgument { at: bad });
-            width = usize::from(core::mem::take(&mut self.held_len));
-            chunk[..width].fill(b'?');
             self.utf8 = Utf8Check::new();
+            let held = usize::from(core::mem::take(&mut self.held_len));
+            if held > 0
+                && let Some(step) = self.replace(bad, held, governor)?
+            {
+                return Ok(step);
+            }
             if self.utf8.step(byte, at).is_some() {
                 self.utf8 = Utf8Check::new();
-                chunk[width] = b'?';
-                width += 1;
-            } else {
-                self.held[0] = byte;
-                self.held_len = 1;
+                return Ok(self
+                    .replace(at, 1, governor)?
+                    .unwrap_or(CodecStep::Consumed));
             }
-        } else {
-            self.held[usize::from(self.held_len)] = byte;
-            self.held_len += 1;
         }
-        if self.utf8.at_boundary() {
-            let held = usize::from(core::mem::take(&mut self.held_len));
-            chunk[width..width + held].copy_from_slice(&self.held[..held]);
-            width += held;
-        }
-        if width == 0 {
+        self.held[usize::from(self.held_len)] = byte;
+        self.held_len += 1;
+        if !self.utf8.at_boundary() {
             return Ok(CodecStep::Consumed);
         }
-        match self.parser.feed(&chunk[..width], governor) {
-            Ok(()) => {}
-            Err(StopReason::InvalidInput(_)) => {
-                self.fault
-                    .get_or_insert(ArgumentFault::InvalidJson { at: at + 1 - width });
-                self.stalled = true;
-                return Ok(CodecStep::Consumed);
-            }
-            Err(reason) => return Err(reason),
-        }
-        Ok(if self.parser.is_done() {
-            CodecStep::Complete {
-                end: self.parser.position(),
-            }
-        } else {
-            CodecStep::Consumed
-        })
+        let held = usize::from(core::mem::take(&mut self.held_len));
+        let chunk = self.held;
+        let fed = self.parser.feed(&chunk[..held], governor);
+        Ok(self
+            .settle(fed, at + 1 - held)?
+            .unwrap_or(CodecStep::Consumed))
     }
 
     fn finish(
@@ -263,8 +252,9 @@ impl Codec for JsonCodec {
         context: CodecContext<'_>,
         governor: &mut Governor,
     ) -> Result<Result<CodecValue, CodecFault>, StopReason> {
-        let (mut tree, edits) = match self.decode(end, governor)? {
-            Decoded::Fault(fault) => (ArgTree::unresolved(fault, span), Vec::new()),
+        let (decoded, invalid) = self.decode(end, governor)?;
+        let (mut tree, mut edits) = match decoded {
+            Decoded::Fault(fault) => (ArgTree::unresolved(fault, span.clone()), Vec::new()),
             Decoded::Value { node, edits, .. } => {
                 if matches!(node.value, Value::String(_)) {
                     stringified(node, edits, body, span.start, governor)?
@@ -273,12 +263,61 @@ impl Codec for JsonCodec {
                 }
             }
         };
+        if !invalid.is_empty() {
+            edits.extend(invalid_edits(&invalid, body, span.start, governor)?);
+            edits.sort_by_key(|edit| (edit.span.start, edit.span.end));
+        }
         tree.tool = context.shape.map(|shape| shape.tool.clone());
         value(tree, edits, governor)
     }
 }
 
 impl JsonCodec {
+    /// Feed one U+FFFD for the `width` malformed bytes at `at` and record
+    /// the run; the step to report when the value ended or stalled.
+    fn replace(
+        &mut self,
+        at: usize,
+        width: usize,
+        governor: &mut Governor,
+    ) -> Result<Option<CodecStep>, StopReason> {
+        match self.invalid.last_mut() {
+            Some((run, count)) if run.end == at => {
+                run.end = at + width;
+                *count += 1;
+            }
+            _ => {
+                governor.charge(Resource::ScratchBytes, 32)?;
+                self.invalid.push((at..at + width, 1));
+            }
+        }
+        let fed = self.parser.feed_replacement(width, governor);
+        self.settle(fed, at)
+    }
+
+    /// The step after feeding the parser bytes from `from`: a stall on
+    /// unrecoverable syntax (later bytes are only consumed), the value's
+    /// completion, or `None` to go on.
+    fn settle(
+        &mut self,
+        fed: Result<(), StopReason>,
+        from: usize,
+    ) -> Result<Option<CodecStep>, StopReason> {
+        match fed {
+            Ok(()) => {}
+            Err(StopReason::InvalidInput(_)) => {
+                self.fault
+                    .get_or_insert(ArgumentFault::InvalidJson { at: from });
+                self.stalled = true;
+                return Ok(Some(CodecStep::Consumed));
+            }
+            Err(reason) => return Err(reason),
+        }
+        Ok(self.parser.is_done().then(|| CodecStep::Complete {
+            end: self.parser.position(),
+        }))
+    }
+
     /// Where the value fed so far ends, when it is already one complete
     /// JSON value (only whitespace may follow it) that well-formed UTF-8
     /// spelled: the end of input then ends it with no recovery edit.
@@ -296,12 +335,27 @@ impl JsonCodec {
 
     /// The decoded value, applying end-of-input repairs for an input that
     /// ended as `end` says.
-    fn decode(self, end: CodecEnd, governor: &mut Governor) -> Result<Decoded, StopReason> {
+    ///
+    /// Also returns the malformed UTF-8 runs read as U+FFFD (a final
+    /// character cut off by a length stop is dropped, not replaced).
+    fn decode(
+        mut self,
+        end: CodecEnd,
+        governor: &mut Governor,
+    ) -> Result<(Decoded, Vec<InvalidRun>), StopReason> {
+        if !self.stalled
+            && let Some(at) = self.utf8.malformed(end)
+        {
+            let held = usize::from(core::mem::take(&mut self.held_len));
+            self.replace(at, held, governor)?;
+        }
+        let invalid = core::mem::take(&mut self.invalid);
+        Ok((self.decode_value(governor)?, invalid))
+    }
+
+    fn decode_value(self, governor: &mut Governor) -> Result<Decoded, StopReason> {
         if let Some(fault) = self.fault {
             return Ok(Decoded::Fault(fault));
-        }
-        if let Some(at) = self.utf8.malformed(end) {
-            return Ok(Decoded::Fault(ArgumentFault::InvalidUtf8InArgument { at }));
         }
         let before = self.parser.edit_count();
         let stop = self.parser.position();
@@ -325,21 +379,59 @@ impl JsonCodec {
 
     /// Decode `bytes`, which start at absolute offset `at`, as one JSON
     /// value; the second result is where the value completed, when bytes
-    /// remain after it (its trailing whitespace and comments included).
+    /// remain after it (its trailing whitespace and comments included), and
+    /// the third the value's malformed UTF-8 runs, read as U+FFFD, as
+    /// `tool_call.value.invalid-utf8` edits.
     pub(super) fn scan(
         bytes: &[u8],
         at: usize,
         end: CodecEnd,
         governor: &mut Governor,
-    ) -> Result<(Decoded, Option<usize>), StopReason> {
+    ) -> Result<(Decoded, Option<usize>, Vec<MarkupEdit>), StopReason> {
         let mut codec = Self::begin(at, governor)?;
+        let mut stop = None;
         for (index, &byte) in bytes.iter().enumerate() {
-            if let CodecStep::Complete { end: stop } = codec.feed(byte, at + index, governor)? {
-                return Ok((codec.decode(CodecEnd::Delimited, governor)?, Some(stop)));
+            if let CodecStep::Complete { end: done } = codec.feed(byte, at + index, governor)? {
+                stop = Some(done);
+                break;
             }
         }
-        Ok((codec.decode(end, governor)?, None))
+        let end = if stop.is_some() {
+            CodecEnd::Delimited
+        } else {
+            end
+        };
+        let (decoded, invalid) = codec.decode(end, governor)?;
+        let edits = invalid_edits(&invalid, bytes, at, governor)?;
+        Ok((decoded, stop, edits))
     }
+}
+
+/// Malformed UTF-8 runs (absolute ranges, each with how many U+FFFD it was
+/// read as) as `tool_call.value.invalid-utf8` edits over `body`, which
+/// starts at `base`. A run past the body (after the value ended) is not
+/// part of the value.
+fn invalid_edits(
+    runs: &[InvalidRun],
+    body: &[u8],
+    base: usize,
+    governor: &mut Governor,
+) -> Result<Vec<MarkupEdit>, StopReason> {
+    let mut edits = Vec::with_capacity(runs.len());
+    for (run, count) in runs {
+        if run.end > base + body.len() {
+            continue;
+        }
+        edits.push(edit(
+            EditOperator::InvalidUtf8Value,
+            run.clone(),
+            body,
+            base,
+            "\u{FFFD}".repeat(*count).into_bytes(),
+            governor,
+        )?);
+    }
+    Ok(edits)
 }
 
 /// The argument tree of a decoded JSON value whose spans are absolute in
@@ -449,7 +541,9 @@ fn stringified(
         &text,
         governor,
     )?;
-    let (decoded, trailing) = JsonCodec::scan(text.as_bytes(), 0, CodecEnd::Delimited, governor)?;
+    // The decoded text is a `String`: it holds no malformed UTF-8.
+    let (decoded, trailing, _) =
+        JsonCodec::scan(text.as_bytes(), 0, CodecEnd::Delimited, governor)?;
     let mut tree = match decoded {
         Decoded::Value {
             mut node,
@@ -667,8 +761,8 @@ impl EscapeMap {
 
 #[cfg(test)]
 mod tests {
-    use super::{Codec, CodecContext, CodecEnd, CodecStep, JsonCodec};
-    use crate::tool_call::{ArgOrigin, ArgumentFault};
+    use super::{Codec, CodecContext, CodecEnd, CodecStep, EditOperator, JsonCodec};
+    use crate::tool_call::ArgOrigin;
     use crate::{Budget, Governor};
 
     fn decode(source: &[u8]) -> super::CodecValue {
@@ -743,11 +837,23 @@ mod tests {
     }
 
     #[test]
-    fn malformed_utf8_is_unresolved_not_a_fault() {
-        let value = decode(b"{\"a\":\"\xFF\"}");
+    fn malformed_utf8_is_replaced_and_recorded() {
+        let value = decode(b"{\"a\":\"\xFF\xC3(\", \"b\": 1}");
         assert_eq!(
-            value.tree.unresolved[0].fault,
-            ArgumentFault::InvalidUtf8InArgument { at: 6 }
+            value.tree.root.to_json(),
+            "{\"a\":\"\u{FFFD}\u{FFFD}(\",\"b\":1}"
         );
+        assert_eq!(value.tree.unresolved.len(), 0);
+        let edits: Vec<_> = value
+            .edits
+            .iter()
+            .map(|edit| (edit.operator, edit.span.clone(), edit.original.clone()))
+            .collect();
+        assert_eq!(
+            edits,
+            [(EditOperator::InvalidUtf8Value, 6..8, b"\xFF\xC3".to_vec())]
+        );
+        // Offsets after the replacement are exact.
+        assert_eq!(value.tree.leaves[1].raw, 17..18);
     }
 }

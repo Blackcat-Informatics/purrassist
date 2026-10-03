@@ -1570,6 +1570,9 @@ fn explain(edit: &MarkupEdit) -> String {
         EditOperator::MissingToken => {
             format!("read the omitted token `{replacement}` as inserted here")
         }
+        EditOperator::InvalidUtf8Value => format!(
+            "read bytes `{original}`, which are not well-formed UTF-8, as `{replacement}` (U+FFFD per malformed sequence); the original bytes are retained in this edit and in the receipt's source"
+        ),
         EditOperator::MissingWrapperCloseBeforeText => format!(
             "inserted the call's missing final closer `{replacement}` before text that no closer follows; the text may instead be inside a wrapper that never closes"
         ),

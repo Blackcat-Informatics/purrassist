@@ -559,9 +559,28 @@ fn repeated_parameter_recorded() {
     }
 }
 
+/// Malformed UTF-8 inside an argument keeps the call in every codec: each
+/// maximal malformed subpart is read as U+FFFD and each run recorded as a
+/// `tool_call.value.invalid-utf8` edit (a data loss) with its exact span
+/// and original bytes; the value keeps its decodable content and spans
+/// after it are unchanged.
 #[test]
-fn invalid_utf8_in_argument_unresolved() {
-    // An XML string parameter: that parameter is unresolved, the rest decoded.
+fn invalid_utf8_in_argument_is_replaced_and_recorded() {
+    let invalid = |call: &RawCall| -> Vec<(core::ops::Range<usize>, Vec<u8>, Vec<u8>)> {
+        call.edits
+            .iter()
+            .filter(|edit| edit.operator == EditOperator::InvalidUtf8Value)
+            .map(|edit| {
+                (
+                    edit.span.clone(),
+                    edit.original.clone(),
+                    edit.replacement.clone(),
+                )
+            })
+            .collect()
+    };
+    let fffd = |count: usize| "\u{FFFD}".repeat(count).into_bytes();
+    // An XML string parameter.
     let mut input = b"<tool_call><function=write><parameter=path>\na".to_vec();
     let bad = input.len();
     input.extend_from_slice(
@@ -569,43 +588,55 @@ fn invalid_utf8_in_argument_unresolved() {
     );
     let (turn, _) = recognize(&set(QWEN), &input);
     let call = one_call(&turn);
-    assert_eq!(call.arguments.root.to_json(), r#"{"content":"ok"}"#);
-    let unresolved = &call.arguments.unresolved[0];
-    assert_eq!(unresolved.pointer, "/path");
     assert_eq!(
-        unresolved.fault,
-        ArgumentFault::InvalidUtf8InArgument { at: bad }
+        call.arguments.root.to_json(),
+        "{\"path\":\"a\u{FFFD}b\",\"content\":\"ok\"}"
     );
-    assert_eq!(&input[unresolved.raw.clone()], b"\na\xFFb\n");
-    // A typed XML parameter.
+    assert_eq!(call.arguments.unresolved.len(), 0);
+    assert_eq!(invalid(call), [(bad..bad + 1, b"\xFF".to_vec(), fffd(1))]);
+    let raws: Vec<&[u8]> = call
+        .arguments
+        .leaves
+        .iter()
+        .map(|leaf| &input[leaf.raw.clone()])
+        .collect();
+    assert_eq!(raws, [&b"a\xFFb"[..], b"ok"]);
+    // A typed XML parameter, cut inside a character before its closer.
     let input = b"<tool_call><function=write><parameter=options>{\"mode\": \"\xC3\"}</parameter></function></tool_call>";
     let (turn, _) = recognize(&set(QWEN), input);
     let call = one_call(&turn);
-    assert_eq!(call.arguments.unresolved[0].pointer, "/options");
-    assert!(matches!(
-        call.arguments.unresolved[0].fault,
-        ArgumentFault::InvalidUtf8InArgument { .. }
-    ));
-    // A JSON arguments value: the whole arguments are unresolved, the call
-    // is still recognized (its end found through the malformed bytes), and
-    // the raw span is kept.
+    assert_eq!(
+        call.arguments.root.to_json(),
+        "{\"options\":{\"mode\":\"\u{FFFD}\"}}"
+    );
+    let at = input
+        .iter()
+        .position(|&byte| byte == 0xC3)
+        .expect("bad byte");
+    assert_eq!(invalid(call), [(at..at + 1, b"\xC3".to_vec(), fffd(1))]);
+    // A JSON arguments value: two malformed subparts, one run; the leaf
+    // spans stay exact.
     let input =
-        b"<tool_call>{\"name\": \"write\", \"arguments\": {\"path\": \"\xFF\xFE\"}}</tool_call>";
+        b"<tool_call>{\"name\": \"write\", \"arguments\": {\"path\": \"\xFF\xFE\", \"content\": \"ok\"}}</tool_call>";
     let (turn, _) = recognize(&set(HERMES), input);
     let call = one_call(&turn);
     assert_eq!(call.name.as_ref().expect("name").value, "write");
-    let unresolved = &call.arguments.unresolved[0];
-    assert_eq!(unresolved.pointer, "");
+    assert_eq!(
+        call.arguments.root.to_json(),
+        "{\"path\":\"\u{FFFD}\u{FFFD}\",\"content\":\"ok\"}"
+    );
     let at = input
         .iter()
         .position(|&byte| byte == 0xFF)
         .expect("bad byte");
-    assert_eq!(
-        unresolved.fault,
-        ArgumentFault::InvalidUtf8InArgument { at }
-    );
-    // The raw span is the whole slot body, from the `:` to the closing `}`.
-    assert_eq!(&input[unresolved.raw.clone()], b" {\"path\": \"\xFF\xFE\"}");
+    assert_eq!(invalid(call), [(at..at + 2, b"\xFF\xFE".to_vec(), fffd(2))]);
+    let raws: Vec<&[u8]> = call
+        .arguments
+        .leaves
+        .iter()
+        .map(|leaf| &input[leaf.raw.clone()])
+        .collect();
+    assert_eq!(raws, [&b"\"\xFF\xFE\""[..], b"\"ok\""]);
 }
 
 #[test]

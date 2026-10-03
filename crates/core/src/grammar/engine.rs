@@ -1164,20 +1164,24 @@ impl<'s> Step<'_, 's> {
         Ok(readings)
     }
 
+    /// The text of a name, id or parameter-name capture: bytes that are
+    /// not well-formed UTF-8 are read as U+FFFD, each run recorded as a
+    /// `tool_call.value.invalid-utf8` edit (pushed onto `edits`).
     fn text(
         &self,
         span: Range<usize>,
+        edits: &mut Vec<MarkupEdit>,
         governor: &mut Governor,
-    ) -> Result<Result<String, Rejection>, StopReason> {
+    ) -> Result<String, StopReason> {
         governor.charge(Resource::Work, size(span.len()).saturating_mul(K_CAPTURE))?;
         governor.charge(Resource::ScratchBytes, size(span.len()).saturating_add(24))?;
         let bytes = self.bytes(span.clone());
-        Ok(match core::str::from_utf8(bytes) {
-            Ok(text) => Ok(text.to_owned()),
-            Err(error) => Err(Rejection::InvalidUtf8 {
-                at: span.start + error.valid_up_to(),
-            }),
-        })
+        if let Ok(text) = core::str::from_utf8(bytes) {
+            return Ok(text.to_owned());
+        }
+        let (text, invalid) = super::codec::lossy(bytes, span.start, governor)?;
+        edits.extend(invalid);
+        Ok(text)
     }
 
     /// The captures (each with its codec value) and edits of a forward
@@ -1242,16 +1246,14 @@ impl<'s> Step<'_, 's> {
             name: None,
             id: None,
             arguments: None,
+            invalid: Vec::new(),
         };
         let mut parameters: Vec<(Spanned<String>, ArgTree)> = Vec::new();
         let mut pending_name: Option<Spanned<String>> = None;
         for (capture, value) in captures {
             match capture.kind {
                 CaptureKind::Name | CaptureKind::Id | CaptureKind::ParamName => {
-                    let text = match self.text(capture.span.clone(), governor)? {
-                        Ok(text) => text,
-                        Err(rejection) => return Ok(Err(rejection)),
-                    };
+                    let text = self.text(capture.span.clone(), &mut fields.invalid, governor)?;
                     let spanned = Spanned {
                         value: text,
                         span: capture.span.clone(),
@@ -1301,11 +1303,19 @@ impl<'s> Step<'_, 's> {
     ) -> Result<Result<RawCall, Rejection>, StopReason> {
         let span = shape.span.clone();
         let (captures, mut edits) = self.trace(path, shape.open_end, governor)?;
-        let fields = match self.fields(&captures, governor)? {
+        let mut fields = match self.fields(&captures, governor)? {
             Ok(fields) => fields,
             Err(rejection) => return Ok(Err(rejection)),
         };
         let mut cost = shape.cost;
+        for edit in core::mem::take(&mut fields.invalid) {
+            cost = cost.saturating_add(edit.operator.rule().cost);
+            let at = edits
+                .iter()
+                .position(|other| other.span.start > edit.span.start)
+                .unwrap_or(edits.len());
+            edits.insert(at, edit);
+        }
         for (capture, _) in &captures {
             if capture.kind != CaptureKind::Dropped || capture.span.is_empty() {
                 continue;
@@ -1532,6 +1542,9 @@ struct Fields {
     name: Option<Spanned<String>>,
     id: Option<Spanned<String>>,
     arguments: Option<ArgTree>,
+    /// `tool_call.value.invalid-utf8` edits of the name, id and parameter
+    /// names.
+    invalid: Vec<MarkupEdit>,
 }
 
 /// What every reading of one completion shares.

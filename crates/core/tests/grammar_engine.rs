@@ -1196,20 +1196,25 @@ fn length_vs_stop_partial_call_distinguished() {
     let input = "<tool><call=f><arg=a>caf\u{e9}".as_bytes();
     let turn = recognize(&mini, &input[..input.len() - 1], GenerationStop::Length);
     assert_eq!(one_call(&turn).arguments.root.to_json(), r#"{"a":"caf"}"#);
-    // Malformed UTF-8 in an argument rejects the call, keeping its span.
+    // Malformed UTF-8 in an argument keeps the call: the byte is read as
+    // U+FFFD and recorded as a data loss with its exact span and bytes.
     let turn = recognize(
         &mini,
         b"<tool><call=f><arg=a>\xFF</arg></call></tool>",
         GenerationStop::Stop,
     );
-    assert_eq!(turn.calls().len(), 0, "no call segment");
-    assert!(matches!(
-        turn.selected()[0],
-        Segment::Rejected {
-            reason: Rejection::InvalidUtf8 { at: 21 },
-            ..
-        }
-    ));
+    let call = one_call(&turn);
+    assert_eq!(call.arguments.root.to_json(), "{\"a\":\"\u{FFFD}\"}");
+    let edit = edit_of(call, EditOperator::InvalidUtf8Value);
+    assert_eq!(
+        (
+            edit.span.clone(),
+            edit.original.as_slice(),
+            edit.replacement.as_slice()
+        ),
+        (21..22, &b"\xFF"[..], "\u{FFFD}".as_bytes())
+    );
+    assert_eq!(edit.operator.rule().loss, Some(LossKind::Data));
 }
 
 /// Repairs the error search explores and discards, and dialect attempts
@@ -1384,12 +1389,16 @@ fn length_stop_inside_a_class_character() {
         call = "<c " name:until(">") ">";
         result = "<r>" content:until("</r>") "</r>";
         declaration = "<d>";"#]);
+    // A name capture that admits a malformed byte reads it as U+FFFD, a
+    // recorded data loss; name resolution then decides.
     let turn = recognize(&until, b"<c f\xFF", GenerationStop::Length);
-    assert_eq!(turn.calls().len(), 0, "no call segment");
-    assert!(matches!(
-        turn.selected()[0],
-        Segment::Rejected { span, reason: Rejection::InvalidUtf8 { at: 4 }, .. } if *span == (0..5)
-    ));
+    let call = one_call(&turn);
+    assert_eq!(call.name.as_ref().expect("name").value, "f\u{FFFD}");
+    let edit = edit_of(call, EditOperator::InvalidUtf8Value);
+    assert_eq!(
+        (edit.span.clone(), edit.original.as_slice()),
+        (4..5, &b"\xFF"[..])
+    );
 }
 
 /// A dialect whose calls open at a bare `{` and commit only after `=>`.

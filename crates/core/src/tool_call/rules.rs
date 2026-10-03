@@ -79,7 +79,8 @@
 //!   `tool_call.parameter.collect`, `tool_call.value.decode-typed`;
 //! - records: `tool_call.reasoning.unterminated`, `tool_call.truncated`,
 //!   `tool_call.markup.dangling-opener`, `tool_call.id.dedup`,
-//!   `tool_call.input.invalid-utf8`, `tool_call.markup.unparsed-dialect`;
+//!   `tool_call.input.invalid-utf8`, `tool_call.value.invalid-utf8`,
+//!   `tool_call.markup.unparsed-dialect`;
 //! - repairs: every other rule, including every markup insertion, deletion
 //!   and variant reading, `tool_call.stop.consumed-closer`, every
 //!   `json.syntax.*` repair, `tool_call.extract.*`, the guesses

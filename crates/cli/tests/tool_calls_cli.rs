@@ -245,6 +245,68 @@ fn invalid_utf8_input_recorded() {
     fs::remove_file(tools).unwrap();
 }
 
+/// F4: invalid UTF-8 inside an argument keeps the call. Read-only and
+/// `Tolerant`, the call is a usable best guess (exit 0) whose argument
+/// holds U+FFFD, with the `tool_call.value.invalid-utf8` data loss itemized
+/// at the byte's exact offset and the byte retained; a `Mutating` tool's
+/// call is kept but never usable (exit 4).
+#[test]
+fn invalid_utf8_in_an_argument_keeps_the_call() {
+    let read = r#"[{"type":"function","function":{"name":"read_file","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}}]"#;
+    let turn = b"<tool_call>{\"name\": \"read_file\", \"arguments\": {\"path\":\"caf\xe9.txt\"}}</tool_call>";
+    let at = turn.iter().position(|&byte| byte == 0xE9).unwrap();
+    let (output, tools) = run_with(
+        read,
+        &["--policy", "tolerant", "--effects", "read_file=read-only"],
+        turn,
+    );
+    let node = result(&output);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        node.get("status").and_then(Node::as_str),
+        Some("best_guess")
+    );
+    let call = node.pointer("/value/calls/0").expect("the call");
+    assert_eq!(
+        call.pointer("/arguments/path").and_then(Node::as_str),
+        Some("caf\u{FFFD}.txt")
+    );
+    assert_eq!(
+        call.pointer("/outcome/status").and_then(Node::as_str),
+        Some("best_guess")
+    );
+    let Value::Array(losses) = &call.pointer("/repairs/losses").unwrap().value else {
+        panic!("losses")
+    };
+    let loss = losses
+        .iter()
+        .find(|loss| {
+            loss.pointer("/evidence/rule").and_then(Node::as_str)
+                == Some("tool_call.value.invalid-utf8")
+        })
+        .expect("the invalid-utf8 loss");
+    assert_eq!(loss.get("kind").and_then(Node::as_str), Some("data"));
+    let start = loss.pointer("/evidence/span/start").map(Node::to_json);
+    assert_eq!(start, Some(at.to_string()));
+    fs::remove_file(tools).unwrap();
+
+    let write = r#"[{"type":"function","function":{"name":"write_file","parameters":{"type":"object","properties":{"content":{"type":"string"}},"required":["content"]}}}]"#;
+    let turn = b"<tool_call>{\"name\": \"write_file\", \"arguments\": {\"content\":\"caf\xe9\"}}</tool_call>";
+    let (output, tools) = run_with(
+        write,
+        &["--policy", "tolerant", "--effects", "write_file=mutating"],
+        turn,
+    );
+    let node = result(&output);
+    assert_eq!(output.status.code(), Some(4));
+    assert_eq!(
+        node.pointer("/value/calls/0/arguments/content")
+            .and_then(Node::as_str),
+        Some("caf\u{FFFD}")
+    );
+    fs::remove_file(tools).unwrap();
+}
+
 #[test]
 fn repeated_option_rejected() {
     for repeated in [

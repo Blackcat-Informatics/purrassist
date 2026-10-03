@@ -428,8 +428,45 @@ A `markup` loss (closers, framing newlines, fence markers, a closers-only
 body) is itemized and never demotes a call. A `data` loss (a dropped unknown
 parameter, a dropped repeated occurrence, dropped prose inside a call,
 truncation, a dangling opener, an unterminated reasoning block, invalid
-UTF-8) makes the call at most `BestGuess`, which a `Mutating` tool never
-runs. Each loss on the wire carries its `kind`.
+UTF-8 inside the call) makes the call at most `BestGuess`, which a
+`Mutating` tool never runs. Each loss on the wire carries its `kind`.
+
+### Invalid UTF-8
+
+The output's bytes are retained exactly, and every maximal run of bytes
+that are not well-formed UTF-8 is a `tool_call.input.invalid-utf8` data loss
+of the turn. Where the bytes fall decides what else happens:
+
+- **Outside every call** (content): the bytes stay content. A call
+  elsewhere in the turn keeps its own outcome; the operation is at most a
+  best guess.
+- **Inside an argument value, an id, or a parameter name**, in every
+  dialect and codec (`json`, `json-args`, `xml-params`, `raw`): the call is
+  kept. Each maximal malformed subpart is read as U+FFFD (the Unicode
+  Standard's substitution of maximal subparts), and each run is recorded on
+  the call as `tool_call.value.invalid-utf8`: a data loss whose evidence span
+  is the run's exact byte range and whose original retains the bytes
+  (`\xE9` on the wire). The value keeps everything else it decodes, and
+  offsets after the run are unchanged. Hermes
+  `{"path": "caf\xE9.txt"}` reads as `{"path": "caf\u{FFFD}.txt"}`. The
+  call is `BestGuess`, never `Resolved`. A read-only tool's call is usable
+  when guesses are accepted, and a `Mutating` tool's call is never usable.
+  This is never a silent replacement.
+- **Inside a tool name**: every built-in name grammar is an ASCII identifier
+  (the providers' own name rule), so no name can hold the bytes and no
+  declared tool could match them. The attempt is a rejected attempt with
+  reason `invalid_utf8` at the first malformed byte's offset, its bytes
+  retained, never a crash or a silently dropped call. A custom grammar whose
+  name capture admits such bytes reads them as U+FFFD (recorded as above),
+  and name resolution then decides: no exact match is possible, so only a
+  near-miss match under `Tolerant` (a guess) can name a tool.
+
+*Proved by* `tool_call_goldens::invalid_utf8_in_arguments_keeps_the_call`
+(Hermes, Kimi-K2 and `OpenAI` stringified arguments through `json`,
+Qwen3-Coder XML through `xml-params`, Harmony's python body through `raw`,
+several runs, the `Mutating` guard, tool and parameter names),
+`grammar_codecs::invalid_utf8_in_argument_is_replaced_and_recorded`, and
+the codecs' unit tests.
 
 ## Surfaces
 

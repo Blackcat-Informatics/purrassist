@@ -3,45 +3,33 @@
 
 //! The `raw` codec: a verbatim body as one string.
 use super::{
-    Codec, CodecContext, CodecEnd, CodecFault, CodecKind, CodecStep, CodecValue, Utf8Check, value,
+    Codec, CodecContext, CodecEnd, CodecFault, CodecKind, CodecValue, lossy, uncut, value,
 };
 use crate::contract::{Governor, StopReason};
 use crate::json::{Node, Value};
 use crate::tool_call::{ArgLeaf, ArgOrigin, ArgTree};
 use core::ops::Range;
 
-/// The `raw` codec: the verbatim body as one string, validated as UTF-8
-/// incrementally (one comparison per byte).
+/// The `raw` codec: the verbatim body as one string.
 ///
 /// A body cut off by a length stop in the middle of a multi-byte character
-/// keeps its complete characters; any other malformed sequence is a
-/// [`CodecFault::InvalidUtf8`], which rejects the call attempt. It records
-/// no edits and ignores its [`CodecContext`].
+/// keeps its complete characters. Bytes that are not well-formed UTF-8 are
+/// read as U+FFFD, one per maximal malformed subpart, each run recorded as
+/// a `tool_call.value.invalid-utf8` edit (a data loss keeping the original
+/// bytes and offsets), so the call is kept, at most a best guess. The codec
+/// never faults and ignores its [`CodecContext`].
 ///
 /// See the [module documentation](super) for an example.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RawCodec {
-    utf8: Utf8Check,
+    _body: (),
 }
 
 impl Codec for RawCodec {
     const KIND: CodecKind = CodecKind::Raw;
 
     fn begin(_at: usize, _governor: &mut Governor) -> Result<Self, StopReason> {
-        Ok(Self {
-            utf8: Utf8Check::new(),
-        })
-    }
-
-    fn feed(
-        &mut self,
-        byte: u8,
-        at: usize,
-        _governor: &mut Governor,
-    ) -> Result<CodecStep, StopReason> {
-        Ok(self.utf8.step(byte, at).map_or(CodecStep::Consumed, |at| {
-            CodecStep::Fault(CodecFault::InvalidUtf8 { at })
-        }))
+        Ok(Self { _body: () })
     }
 
     fn finish(
@@ -52,15 +40,14 @@ impl Codec for RawCodec {
         _context: CodecContext<'_>,
         governor: &mut Governor,
     ) -> Result<Result<CodecValue, CodecFault>, StopReason> {
-        let keep = match self.utf8.complete(body.len(), end) {
-            Ok(keep) => keep,
-            Err(at) => return Ok(Err(CodecFault::InvalidUtf8 { at })),
+        let keep = if end == CodecEnd::Truncated {
+            uncut(body)
+        } else {
+            body.len()
         };
-        let Ok(text) = core::str::from_utf8(&body[..keep]) else {
-            return Ok(Err(CodecFault::InvalidUtf8 { at: span.start }));
-        };
+        let (text, edits) = lossy(&body[..keep], span.start, governor)?;
         let mut tree = ArgTree::value(Node {
-            value: Value::String(text.to_owned()),
+            value: Value::String(text),
             span: Some(span.clone()),
         });
         tree.leaves.push(ArgLeaf {
@@ -68,13 +55,14 @@ impl Codec for RawCodec {
             origin: ArgOrigin::Raw,
             raw: span,
         });
-        value(tree, Vec::new(), governor)
+        value(tree, edits, governor)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Codec, CodecContext, CodecEnd, CodecFault, CodecStep, RawCodec};
+    use super::{Codec, CodecContext, CodecEnd, CodecFault, RawCodec};
+    use crate::grammar::codec::CodecStep;
     use crate::{Budget, Governor};
 
     fn run(body: &[u8], end: CodecEnd) -> Result<String, CodecFault> {
@@ -118,21 +106,52 @@ mod tests {
     }
 
     #[test]
-    fn raw_validates_utf8_incrementally() {
+    fn raw_reads_invalid_utf8_as_replacement() {
         assert_eq!(run("a€b".as_bytes(), CodecEnd::Delimited), Ok("a€b".into()));
-        assert_eq!(
-            run(b"a\xFFb", CodecEnd::Delimited),
-            Err(CodecFault::InvalidUtf8 { at: 1 })
-        );
+        assert_eq!(run(b"a\xFFb", CodecEnd::Delimited), Ok("a\u{FFFD}b".into()));
+        // A surrogate encoding: three maximal malformed subparts.
         assert_eq!(
             run(b"a\xED\xA0\x80", CodecEnd::Delimited),
-            Err(CodecFault::InvalidUtf8 { at: 1 })
+            Ok("a\u{FFFD}\u{FFFD}\u{FFFD}".into())
         );
         let cut = &"a€".as_bytes()[..3];
         assert_eq!(run(cut, CodecEnd::Truncated), Ok("a".into()));
+        assert_eq!(run(cut, CodecEnd::EndOfInput), Ok("a\u{FFFD}".into()));
+        // One edit per run, exact span and original bytes.
+        let mut governor = Governor::new(Budget::default());
+        let body = b"x\xE9\xFFy\xC3";
+        let value = RawCodec::begin(5, &mut governor)
+            .unwrap()
+            .finish(
+                body,
+                5..10,
+                CodecEnd::Delimited,
+                CodecContext::default(),
+                &mut governor,
+            )
+            .unwrap()
+            .unwrap();
+        let edits: Vec<_> = value
+            .edits
+            .iter()
+            .map(|edit| {
+                (
+                    edit.span.clone(),
+                    edit.original.clone(),
+                    edit.replacement.clone(),
+                )
+            })
+            .collect();
         assert_eq!(
-            run(cut, CodecEnd::EndOfInput),
-            Err(CodecFault::InvalidUtf8 { at: 1 })
+            edits,
+            [
+                (
+                    6..8,
+                    b"\xE9\xFF".to_vec(),
+                    "\u{FFFD}\u{FFFD}".as_bytes().to_vec()
+                ),
+                (9..10, b"\xC3".to_vec(), "\u{FFFD}".as_bytes().to_vec()),
+            ]
         );
     }
 }

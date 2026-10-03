@@ -523,10 +523,12 @@ impl fmt::Display for UnresolvedReason {
                 write!(formatter, "rule `{rule}` is not admitted under {policy:?}")
             }
             Self::InvalidArgument { pointer, fault } => {
-                write!(
-                    formatter,
-                    "argument `{pointer}` cannot be decoded: {fault:?}"
-                )
+                if pointer.is_empty() {
+                    formatter.write_str("the arguments value")?;
+                } else {
+                    write!(formatter, "argument `{pointer}`")?;
+                }
+                write!(formatter, " cannot be decoded: {fault}")
             }
             Self::ArgumentsNotObject => formatter.write_str("the arguments are not a JSON object"),
             Self::UnknownParameter { pointer } => {

@@ -228,9 +228,11 @@ argument data: closers, framing newlines, fence markers, a closers-only body.
 It is itemized and never demotes a call. A `data` loss discards bytes that may
 carry data: a dropped unknown parameter, a dropped repeated occurrence,
 dropped prose inside a call, truncation, a dangling opener, an unterminated
-reasoning block, bytes that are not UTF-8. It makes the call that records it
-at most `BestGuess`. Text outside every call is never dropped: it stays
-content.
+reasoning block, bytes that are not UTF-8 (inside a call they are read as
+U+FFFD and recorded as `tool_call.value.invalid-utf8`, with the original
+bytes kept; see [INTEGRATION.md](INTEGRATION.md#invalid-utf-8)). It makes the
+call that records it at most `BestGuess`. Text outside every call is never
+dropped: it stays content.
 
 ### Usability and emission
 

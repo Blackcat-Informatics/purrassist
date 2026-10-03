@@ -1,0 +1,55 @@
+{
+  "description": "F4: The raw codec (Harmony's built-in python tool body): a byte that is not UTF-8 is read as U+FFFD and recorded as tool_call.value.invalid-utf8, so the body is kept; the call names no declared tool.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "harmony.v1"
+  ],
+  "effects": {
+    "read_file": "read_only"
+  },
+  "stop": "stop",
+  "input": {
+    "hex": "3c7c73746172747c3e617373697374616e743c7c6368616e6e656c7c3e616e616c7973697320746f3d707974686f6e3c7c6d6573736167657c3e7072696e742822636166e922293c7c63616c6c7c3e"
+  },
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "calls": [
+    {
+      "tool": null,
+      "arguments": "print(\"caf�\")",
+      "candidate_dialects": [
+        "harmony.v1"
+      ],
+      "outcome": "unresolved: unknown_tool: no declared tool matches `python`",
+      "rules": [
+        "tool_call.value.invalid-utf8"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.input.invalid-utf8",
+    "tool_call.value.invalid-utf8"
+  ]
+}

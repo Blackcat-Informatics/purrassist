@@ -60,7 +60,10 @@ pub enum ArgOrigin {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ArgumentFault {
     /// `InvalidUtf8InArgument`: the value's bytes are not well-formed UTF-8;
-    /// `at` is the absolute offset of the first malformed sequence.
+    /// `at` is the absolute offset of the first malformed sequence. The
+    /// built-in codecs no longer produce it (they read malformed bytes as
+    /// U+FFFD and record `tool_call.value.invalid-utf8`, a data loss); it
+    /// remains for custom codecs and stable wire values.
     InvalidUtf8InArgument {
         /// Absolute offset of the malformed sequence.
         at: usize,
@@ -76,6 +79,30 @@ pub enum ArgumentFault {
     /// whose content is not one JSON object (unrecoverable syntax, text after
     /// the value, or a non-object value).
     StringifiedArgumentsInvalidJson,
+}
+
+impl core::fmt::Display for ArgumentFault {
+    /// A human-readable statement of the fault, with its absolute offset.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::ArgumentFault;
+    /// assert_eq!(
+    ///     ArgumentFault::InvalidJson { at: 7 }.to_string(),
+    ///     "JSON that cannot be recovered at byte 7"
+    /// );
+    /// ```
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::InvalidUtf8InArgument { at } => {
+                write!(formatter, "bytes at {at} are not well-formed UTF-8")
+            }
+            Self::InvalidJson { at } => {
+                write!(formatter, "JSON that cannot be recovered at byte {at}")
+            }
+            Self::StringifiedArgumentsInvalidJson => formatter
+                .write_str("the stringified arguments do not hold one recoverable JSON object"),
+        }
+    }
 }
 
 /// One argument value that could not be decoded.
@@ -430,7 +457,11 @@ pub enum Rejection {
         /// the first byte of the well-formed character it belongs to.
         at: usize,
     },
-    /// Captured text or a slot body is not well-formed UTF-8.
+    /// The attempt failed at a byte beginning a sequence that is not
+    /// well-formed UTF-8 where its grammar admits none (a tool name: every
+    /// built-in name grammar is an ASCII identifier), or a custom codec
+    /// faulted on one. Bytes inside an argument value, an id or a parameter
+    /// name are read as U+FFFD instead (`tool_call.value.invalid-utf8`).
     InvalidUtf8 {
         /// Absolute offset of the malformed sequence.
         at: usize,

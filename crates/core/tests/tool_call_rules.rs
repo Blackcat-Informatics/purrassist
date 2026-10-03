@@ -314,6 +314,7 @@ fn every_rule_declares_loss_kind() {
         [
             "tool_call.reasoning.unterminated",
             "tool_call.extract.prose",
+            "tool_call.value.invalid-utf8",
             "tool_call.parameter.drop-unknown",
             "tool_call.parameter.repeated",
             "tool_call.truncated",
@@ -1809,6 +1810,7 @@ fn repair_classification_matches_documentation() {
         "tool_call.markup.dangling-opener",
         "tool_call.id.dedup",
         "tool_call.input.invalid-utf8",
+        "tool_call.value.invalid-utf8",
         "tool_call.markup.unparsed-dialect",
     ];
     let mut actual = not_repairs.clone();

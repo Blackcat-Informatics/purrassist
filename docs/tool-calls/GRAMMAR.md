@@ -295,10 +295,17 @@ block. Under `ReasoningPolicy::AsContent` the markers are plain content.
 
 | Codec | Value |
 | --- | --- |
-| `raw` | The verbatim body as one UTF-8 string leaf. Malformed UTF-8 rejects the attempt, except a character cut off by a length stop. It records no edits. A `raw` value is always a string: a parameter declared as an integer, number, boolean, array, or object read through `raw` fails validation (`UnresolvedReason::SchemaValidation`), because no rule coerces a string into a typed value. |
+| `raw` | The verbatim body as one UTF-8 string leaf. Bytes that are not well-formed UTF-8 are read as U+FFFD, each run recorded as `tool_call.value.invalid-utf8` (a data loss); a character cut off by a length stop is dropped. It records no other edits. A `raw` value is always a string: a parameter declared as an integer, number, boolean, array, or object read through `raw` fails validation (`UnresolvedReason::SchemaValidation`), because no rule coerces a string into a typed value. |
 | `json` | One JSON value read by the push-based tolerant JSON parser: exact number spellings, each repair recorded with its `json.syntax.*` rule. Self-delimiting. A whole arguments value that is a JSON string holding JSON is decoded as stringified arguments and flagged (`tool_call.arguments.decode-string`). Under a length stop, a value that is already complete at the cut (only whitespace after it) ends there, as at a delimiter, when the production completes from the slot with no further input: a call that ends with its arguments value is then complete, not cut off. |
 | `json-args` | The `json` codec for an arguments value: the value must be an object, or a string that is empty or whose text begins with `{` after spaces (stringified arguments). Any other value (a number, an array, `null`, prose in a string) faults at its first byte, rejecting a committed attempt and leaving an uncommitted one as content, so a grammar whose only call evidence is the object itself (`bare-json.v1`) never reads `{"name": "pi", "arguments": 3}` as a call. |
 | `xml-params` | A sequence of `<parameter=NAME>value</parameter>` elements, typed by the declared tool the call names: verbatim strings with one framing newline consumed on each side, typed values parsed as JSON, nested parameter elements for object parameters, a whole-JSON body, and the `</parameters>` variant. See [the Qwen3-Coder XML dialect](dialects/qwen3-coder-xml.v1.md) for every reading. |
+
+Every codec reads bytes that are not well-formed UTF-8 as U+FFFD, one per
+maximal malformed subpart, and records each run as
+`tool_call.value.invalid-utf8`, a data loss whose edit keeps the original
+bytes and offsets; the call is kept and is at most `BestGuess` (see
+[INTEGRATION.md](INTEGRATION.md#invalid-utf-8)). A name, id or
+parameter-name capture whose class admits such bytes is read the same way.
 
 A codec may depend on the call's tool. When the recognizer is given the tool
 set and the grammar captured the call's `name:` before the slot, the codec

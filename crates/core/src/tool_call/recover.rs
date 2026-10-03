@@ -1326,6 +1326,26 @@ fn provenance_node(node: &ProvenanceNode) -> Node {
     object([("kind", string(kind)), ("rule", string(rule))])
 }
 
+/// `reason`, made precise: an attempt that failed at a byte beginning a
+/// malformed UTF-8 sequence (a tool name holding such bytes, which no
+/// built-in name grammar admits) failed because of it.
+fn precise(reason: Rejection, output: &[u8]) -> Rejection {
+    let Rejection::Malformed { at } = reason else {
+        return reason;
+    };
+    let rest = output.get(at..).unwrap_or_default();
+    let head = &rest[..rest.len().min(4)];
+    match core::str::from_utf8(head) {
+        Err(error)
+            if error.valid_up_to() == 0
+                && (error.error_len().is_some() || head.len() == rest.len()) =>
+        {
+            Rejection::InvalidUtf8 { at }
+        }
+        _ => reason,
+    }
+}
+
 fn rejection_node(reason: Rejection) -> Node {
     let (code, at) = match reason {
         Rejection::Malformed { at } => ("malformed", Some(at)),
@@ -2274,7 +2294,7 @@ impl Recovery<'_> {
                     dialect: Some(dialect.clone()),
                     candidate_dialects: vec![dialect.clone()],
                     raw: self.output[span.clone()].to_vec(),
-                    reason: *reason,
+                    reason: precise(*reason, self.output),
                     repairs: repairs.clone(),
                 });
                 reading.parts.push(Part::Rejected(index));

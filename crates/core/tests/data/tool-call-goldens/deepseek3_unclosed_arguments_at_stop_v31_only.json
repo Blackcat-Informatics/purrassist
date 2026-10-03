@@ -68,7 +68,7 @@
       "candidate_dialects": [
         "deepseek-v3.1.v1"
       ],
-      "outcome": "unresolved: invalid_argument: argument `` cannot be decoded: StringifiedArgumentsInvalidJson",
+      "outcome": "unresolved: invalid_argument: the arguments value cannot be decoded: the stringified arguments do not hold one recoverable JSON object",
       "rules": [
         "json.syntax.bare-string",
         "tool_call.arguments.decode-string",

@@ -257,7 +257,10 @@ pub fn validate_json(args: &Node) -> Result<Node, String> {
 ///
 /// `output` need not be UTF-8: each invalid run is recorded as a
 /// `tool_call.input.invalid-utf8` loss and the receipt retains the exact
-/// bytes. The budget is the effort preset sized for the output's length
+/// bytes; a run inside a call's argument, id or parameter name is also
+/// read as U+FFFD and recorded on the call as a
+/// `tool_call.value.invalid-utf8` data loss (the call is kept, at most a
+/// best guess). The budget is the effort preset sized for the output's length
 /// (`ToolRecoveryRequest::sized`), and one governor is charged for
 /// declaration compilation, the dialect allow-list, and recovery.
 ///

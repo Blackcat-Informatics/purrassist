@@ -1,0 +1,63 @@
+{
+  "description": "F4: Invalid UTF-8 in a Qwen3-Coder XML parameter name: read with U+FFFD and recorded as tool_call.value.invalid-utf8 (a data loss); the name is not declared, so the parameter-name rules decide (here the near-miss json.key.match to the declared path, a guess): a BestGuess call, never a crash or a silent drop.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "read_file": "read_only"
+  },
+  "stop": "stop",
+  "input": {
+    "hex": "3c746f6f6c5f63616c6c3e0a3c66756e6374696f6e3d726561645f66696c653e0a3c706172616d657465723d7061e9683e0a612e7478740a3c2f706172616d657465723e0a3c2f66756e6374696f6e3e0a3c2f746f6f6c5f63616c6c3e"
+  },
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "a.txt"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.value.invalid-utf8",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "json.key.match"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.input.invalid-utf8",
+    "tool_call.value.invalid-utf8",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "json.key.match"
+  ]
+}
