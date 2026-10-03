@@ -152,6 +152,9 @@ is reported as certain.
      that ends a call of its dialect: a chained call's own closer
      (Kimi-K2's `<|tool_call_end|>`, DeepSeek's `<｜tool▁call▁end｜>`) or
      another alternative's (`</function>` after a broken `<tool_call>`).
+     Either literal may be written with one slip, as a call's closer may
+     (`</tool_cal>` ends a broken `<tool_call>` attempt as it would end a
+     call, when it misspells no other closer of the dialect).
 
   Without such a literal, an attempt that left a JSON value open (its
   bytes open more brackets than they close, outside strings) runs to the
@@ -180,7 +183,8 @@ is reported as certain.
   `kimi_call_closer_ends_rejected_attempt`,
   `deepseek31_call_closer_ends_rejected_attempt`,
   `deepseek3_call_closer_ends_rejected_attempt`,
-  `kimi_sectionless_rejected_call_before_sibling` and
+  `kimi_sectionless_rejected_call_before_sibling`,
+  `hermes_rejected_attempt_misspelled_closer` and
   `rejected_span_completes_literal_bare`, `_newlines` and `_wrapped`, and
   four `fuzz-tool-call` invariants: content after a rejected attempt that
   does not end with a literal ending a call of its dialect holds none; an
@@ -191,31 +195,53 @@ is reported as certain.
 - **A malformed call does not discard the calls around it.** In an attempt
   that reads several calls (a production with `next`: a Kimi-K2 or DeepSeek
   v3/v3.1 section, a section-less chain of Kimi-K2 or DeepSeek calls, a
-  Mistral v3 list, chained Mistral v11 calls), every call read whole before
-  the call the grammar could not read is recovered in its own right
-  (`tool_call.markup.group-split`, recorded on the last of them at the
-  boundary; a markup repair, single reading, so it does not demote and is
-  admitted under `Structural`). The attempt then *resynchronizes*: beside
-  the repairs the failure proposes (which cost less and win where they
-  read the call), it scans on for a literal that ends a call of its
-  alternative (the call's own closer, a list separator or closer, the
-  section closer), outside JSON strings and at the call's bracket depth, and
-  reads on after it, so later calls of the same attempt are read too, and
-  the malformed call is a rejected part of the attempt, from its own start
-  to that literal. The scan gives up at another call's opener (that call is
-  then read on its own) or the end of output; the attempt then ends at its
-  failure, the calls before it recovered and the rejection running from
-  the failing call's start as far as its markup is shown to run. A
-  malformed first call (no call read whole before it) is a rejected
-  attempt as before. The same holds under a length stop. *Proved by* the
-  goldens `kimi_group_good_bad_good`,
+  Mistral v3 list, chained Mistral v11 calls), a call the grammar could not
+  read never costs the calls around it, whichever call of the attempt it
+  is. The attempt *resynchronizes* past it: beside the repairs the failure
+  proposes (which cost less and win where they read the call), it scans on
+  for a literal that ends a call of its alternative (the call's own closer,
+  a list separator or closer, the section closer; a multi-byte special
+  token wherever it is written, a JSON element's `}` outside strings at the
+  call's bracket depth) or for the next call's opener (a multi-byte opener,
+  or a JSON element's `{` where the failing element's member was due, so an
+  element left open ends there), and reads on, so later calls of the same
+  attempt are read and the malformed call is a rejected part of the
+  attempt. The split is recorded as `tool_call.markup.group-split` (a markup
+  repair, single reading, so it does not demote and is admitted under
+  `Structural`): on the last call read before the malformed one, at the
+  boundary, or, when the malformed call is the attempt's first, on the
+  first call read after it, which then also carries any token read as
+  omitted at the attempt's start (a section opener the model left out),
+  since that token opens every call of the attempt. A malformed first
+  call's rejected part runs from the attempt's start (the group opener
+  included, as a first call's span always does). The scan gives up at
+  another attempt's opener (other than the next call's opener it reads)
+  and at the end of output; the attempt then ends at its failure, the
+  calls before it recovered. An attempt that read no call at all (every call malformed) is
+  one rejected attempt over all the markup it read, never one rejection
+  per call nor overlapping rejections. Mistral v11 calls each carry their
+  own `[TOOL_CALLS]` opener and no wrapper, so a malformed v11 call is its
+  own rejected attempt and the calls after it are read by their own
+  attempts, needing no repair. The same holds under a length stop.
+  *Proved by* the goldens `kimi_group_good_bad_good`,
   `kimi_sectionless_group_good_bad_good`,
   `kimi_chained_rejected_attempt_runs_to_section_closer`,
   `kimi_group_split_without_resync`, `deepseek3_group_good_bad_good`,
   `deepseek31_group_good_bad_good`, `mistral3_group_good_bad_good`,
-  `mistral3_group_good_bad_good_length_stop` and
-  `mistral11_group_good_bad_good`, each also under the default allow-list,
-  and the `tool_call.markup.group-split` rows of the correction evaluation.
+  `mistral3_group_good_bad_good_length_stop`,
+  `mistral11_group_good_bad_good`, the `*_group_bad_good_good`,
+  `*_group_bad_good_bad_good`, `*_group_bad_bad_good` and `*_group_all_bad`
+  goldens of every dialect with `next` (Mistral v3, Kimi-K2 with and
+  without a section, DeepSeek v3 and v3.1, Mistral v11),
+  `kimi_sectionless_rejected_call_before_sibling`,
+  `kimi_group_bad_call_without_closer`,
+  `kimi_group_bad_first_call_without_closer`,
+  `kimi_group_bad_call_unbalanced_json`,
+  `mistral3_group_bad_element_without_closer` and
+  `deepseek31_unclosed_section_then_section`, each also under the default
+  allow-list, and the `tool_call.markup.group-split` rows of the correction
+  evaluation (`middle`, `first`, `middle-unclosed`, `unread-arguments` and
+  `unread-arguments-first` variants).
 - **Body evidence decides a shared opener.** When dialects share an opener
   (`[TOOL_CALLS]` for Mistral v3 and v11, `<tool_call>` for Hermes and
   Qwen3-Coder XML) and one dialect's attempt fails at the body's first
@@ -228,8 +254,18 @@ is reported as certain.
   until every attempt at the opener has ended. When the attempt that read
   further reads no whole call either, both rejections stay readings (an
   inner well-formed object inside a broken wrapper is still recovered).
-  *Proved by* the `mistral3_group_good_bad_good` golden under the default
-  allow-list and
+  The same holds when the attempt that read further ends after the
+  rejected one (it resynchronized past a malformed first call). The
+  rejected dialect stays among the opener's candidate dialects: it did
+  attempt the opener. Among rejected attempts that read equally far, the
+  one whose dialect's opener is written in its canonical spelling names the
+  attempt (a DeepSeek attempt that read Kimi-K2's `<|tool_call_begin|>`
+  through a confusable spelling does not). *Proved by* the
+  `mistral3_group_good_bad_good` and `mistral3_group_bad_good_good` goldens
+  under the default allow-list,
+  `kimi_sectionless_rejected_call_before_sibling`,
+  `kimi_sectionless_group_all_bad`,
+  `kimi_sectionless_bad_call_canonical_attribution` and
   `tool_call_recover::rejected_wrapper_covers_the_call_recovered_inside_it`.
 - **A written token is never read as omitted.** A token a grammar may read
   as omitted (`insert("...")`, recorded as `tool_call.markup.missing-token`)
@@ -266,14 +302,57 @@ is reported as certain.
   `kimi_call_closer_misspelled`, `deepseek31_closer_misspelled` and
   `deepseek31_closer_misspelled_ambiguous` (not admitted), each also under
   the default allow-list, and the unit tests of `grammar::misspelling`.
+- **A misspelled token still reads as its token.** The opener-side mirror
+  of a misspelled closer: a markup token other than a closer (spelled with
+  a leading `<` or `[`), read after the call's attempt opened, one edit away
+  from exactly one literal of the grammar (the next call's opener in a
+  group, `<|tool_call_begn|>`; an argument separator,
+  `<|tool_call_argument_begn|>`, `<｜tool▁sp｜>`; `[TOOL_CALS]` chaining a
+  Mistral v11 call; `<functon=` inside `<tool_call>`; Qwen3-Coder XML's
+  `<paramter=`, read by the `xml-params` codec) is read as that literal
+  (`tool_call.markup.token-misspelled`, the original bytes recorded; a
+  markup repair, single reading, so it does not demote). A token another
+  literal of the grammar may spell exactly (a section opener where a call
+  opener was due) is never a misspelling. An attempt's own opener is never
+  respelled: it is the only evidence that markup begins at all. In a
+  grammar with `commit` (Harmony), a header token is respelled anywhere
+  after the opener, since the attempt is a call only once it reaches its
+  commit. *Proved by* the goldens `kimi_call_opener_misspelled`,
+  `kimi_argument_separator_misspelled`, `mistral11_call_opener_misspelled`,
+  `qwen_function_opener_misspelled` and `qwen_parameter_opener_misspelled`,
+  each also under the default allow-list, and the
+  `tool_call.markup.token-misspelled` rows of the correction evaluation.
 - **Reasoning markers are never call content.** The bytes of a reasoning
-  block's closing marker belong to the block: a call found inside the block
-  that ran into the marker is cut at it (`tool_call.reasoning.marker-cut`, a
-  data loss): a name, id or capture reaching into the marker is dropped, and
-  arguments read from it are unresolved, so the call is never usable (a
-  Mistral v11 call with no `[ARGS]` that read `[/THINK]` as its arguments).
-  *Proved by* the `reasoning_marker_not_call_arguments` and
+  block's markers belong to the block: a call found inside the block that
+  ran into its closing marker is cut at it, and so is a call outside
+  reasoning that read an opening marker as markup (inside a capture or its
+  arguments, not as the data of a string value it read: a JSON string or a
+  verbatim parameter may hold `<think>`) (`tool_call.reasoning.marker-cut`,
+  a data loss): a name, id or capture reaching into the marker is dropped,
+  and arguments read from it are unresolved, so the call is never usable (a
+  Mistral v11 call with no `[ARGS]` that read `[/THINK]` or `[THINK]` as its
+  arguments). A rejected attempt that ran over an opening marker ends at
+  it, and the block the marker opens is recognized (up to its closing
+  marker, even one the attempt read over). A reasoning block is never text
+  inside a call's wrapper: a complete call followed by a block reads with
+  its wrapper closer inserted before the block
+  (`tool_call.markup.missing-wrapper-close`, the only reading, as before
+  another call's opener), and a closer the call or attempt left written
+  right after the block is its markup, never content: on a call, recorded
+  as a stray closer (`tool_call.markup.stray-closer`); for a rejected
+  attempt, or a call begun inside the block (the block holds its opener
+  unclosed), reported as a rejected attempt of the dialect over the closer
+  alone. A closer after a block that holds no unclosed opener stays content.
+  *Proved by* `hermes_closer_after_cut_reasoning`,
+  `hermes_rejected_attempt_closer_after_reasoning`,
+  `hermes_closer_after_reasoning_block` and
+  `hermes_reasoning_mentions_closer_stays_content`, and the
+  `reasoning_marker_not_call_arguments` and
   `embedded_calls_once_in_span_order` goldens,
+  `mistral11_call_cut_at_opening_marker`,
+  `mistral11_rejected_attempt_cut_at_opening_marker`,
+  `hermes_rejected_attempt_cut_at_opening_marker` and
+  `mistral11_marker_inside_string_not_cut`,
   `tool_call_recover::calls_an_attempt_reads_inside_a_closed_block_stay_embedded`,
   and the `fuzz-tool-call` invariant that no call, embedded call or
   rejected attempt holds bytes of a reasoning range's opener or closer.
@@ -297,7 +376,7 @@ is reported as certain.
   five built-in dialects outside the allow-list, and negatives), the CLI
   test `tool_calls_cli::unparsed_markup_is_reported_via_cli`, and the host
   test `tool_call_tools::unparsed_markup_over_mcp`.
-- **Measured.** The 14,538-case correction evaluation records zero incorrect
+- **Measured.** The 15,246-case correction evaluation records zero incorrect
   automatic answers overall, per rule, and per dialect, and abstains on every
   case whose only correct answer is abstention
   (`correction_evaluation::tool_call_recovery_evaluation_has_zero_incorrect_corrections`;

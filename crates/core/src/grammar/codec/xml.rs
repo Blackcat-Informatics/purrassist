@@ -193,6 +193,9 @@ struct Opener {
     start: usize,
     name: Spanned<String>,
     end: usize,
+    /// The width of a misspelled `<parameter=` read as it
+    /// (`tool_call.markup.token-misspelled`).
+    respelled: Option<usize>,
 }
 
 /// What ended a parameter value.
@@ -374,12 +377,41 @@ impl<'t> Reader<'_, 't, '_> {
     }
 
     /// The opener at `at`: `<parameter=` and a non-empty UTF-8 name free of
-    /// whitespace and angle brackets, then `>`.
+    /// whitespace and angle brackets, then `>`. A token within one edit of
+    /// `<parameter=` that keeps its shape and misspells no closer
+    /// (`<paramter=`) is read as it, recorded as
+    /// `tool_call.markup.token-misspelled` (the opener-side mirror of a
+    /// misspelled `</parameter>`).
     fn opener(&mut self, at: usize) -> Result<Option<Opener>, StopReason> {
-        if !self.body[at..].starts_with(OPENER) {
-            return Ok(None);
-        }
-        let from = at + OPENER.len();
+        let rest = &self.body[at..];
+        let (width, respelled) = if rest.starts_with(OPENER) {
+            (OPENER.len(), None)
+        } else {
+            if !rest.starts_with(b"<") || rest.starts_with(b"</") {
+                return Ok(None);
+            }
+            let Some(end) = rest
+                .iter()
+                .take(OPENER.len() + 1)
+                .position(|&byte| byte == b'=')
+            else {
+                return Ok(None);
+            };
+            let token = &rest[..=end];
+            let classes = [
+                vec![OPENER.to_vec()],
+                vec![CLOSER.to_vec(), CLOSER_VARIANT.to_vec()],
+            ];
+            if crate::grammar::misspelling::misspelled_class(
+                token,
+                classes.iter().map(Vec::as_slice),
+            ) != Some(0)
+            {
+                return Ok(None);
+            }
+            (token.len(), Some(token.len()))
+        };
+        let from = at + width;
         let length = self.body[from..]
             .iter()
             .take_while(|&&byte| byte != b'>' && byte != b'<' && !byte.is_ascii_whitespace())
@@ -402,6 +434,7 @@ impl<'t> Reader<'_, 't, '_> {
                 span: self.absolute(from..to),
             },
             end: to + 1,
+            respelled,
         }))
     }
 
@@ -500,6 +533,13 @@ impl<'t> Reader<'_, 't, '_> {
 
     /// Read one parameter from its opener; the offset after it.
     fn parameter(&mut self, opener: Opener) -> Result<Result<usize, CodecFault>, StopReason> {
+        if let Some(width) = opener.respelled {
+            self.record(
+                EditOperator::TokenMisspelled,
+                opener.start..opener.start + width,
+                OPENER,
+            )?;
+        }
         let name = opener.name.span.start - self.base..opener.name.span.end - self.base;
         if core::str::from_utf8(&self.body[name.clone()]).is_err() {
             let (_, invalid) = lossy(&self.body[name], opener.name.span.start, self.governor)?;

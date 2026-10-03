@@ -730,9 +730,9 @@ fn deterministic_pinned_digest() {
 }
 
 const PINNED_DIGEST: &str =
-    "sha256:18ccf8c5cfcacad1fde80f62a81ddd3b3db64ed5f396f56c17be906d5fb3ce44";
+    "sha256:320970064af2a7708ea2207513f65e98b2e442750c535facd8c660da82f04893";
 const PINNED_PREFIX_DIGEST: &str =
-    "sha256:6f20f11fc1c8434e57f8bcddd66bdf765b9cfb4ada89ebe3db60ddd480b2e50f";
+    "sha256:14835eca57d1270768f469144b6bdcdd4b0688c148276cac96e47688cb425d79";
 const PINNED_AMBIGUOUS_DIGEST: &str =
     "sha256:8e6ada7bb7e46728089a9c5788e2fb91743b1bff437419419906d7d4c5e193cd";
 const PINNED_PREFIX_AMBIGUOUS_DIGEST: &str =
@@ -2255,4 +2255,38 @@ fn different_calls_from_two_dialects_are_distinguished_by_dialect() {
     assert_eq!(attested.len(), 2, "{:#?}", result.receipt.validations);
     assert!(attested[0].starts_with("dialect=tail.v1"), "{attested:?}");
     assert!(attested[1].starts_with("dialect=whole.v1"), "{attested:?}");
+}
+
+/// T4: a resynchronization that gave up (another attempt opened after the
+/// failure) is never started again from the same failure: the attempt's
+/// failure stands. Restarting it at every byte would rescan the skipped
+/// call each time, quadratic work that exhausts the turn's sized budget.
+#[test]
+fn resync_that_gave_up_is_not_restarted() {
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("f")
+            .effects(Effects::ReadOnly)
+            .param("a", Param::string())],
+        Budget::default(),
+    )
+    .expect("tools");
+    let input = format!(
+        "<|tool_calls_section_begin|><|tool_call_begin|>functions.f:0 oops <tool_call>{}</tool_call> {}",
+        "{\"name\": \"f\", \"arguments\": {\"a\": \"x\"}}",
+        "lorem ipsum dolor sit amet ".repeat(150)
+    );
+    let result = tools.recover(
+        input.as_bytes(),
+        &ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes()),
+    );
+    let Outcome::Resolved(calls) = &result.outcome else {
+        panic!("unexpected outcome {:?}", result.outcome);
+    };
+    assert_eq!(calls.calls.len(), 1, "{calls:?}");
+    assert_eq!(calls.rejected.len(), 1, "{calls:?}");
+    assert!(
+        result.receipt.usage.work < 200_000,
+        "work {}",
+        result.receipt.usage.work
+    );
 }

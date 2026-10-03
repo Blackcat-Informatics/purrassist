@@ -159,10 +159,12 @@ targets' mutation tokens so mutation can create or move field boundaries).
   attempt, holds no such literal. (F4) A rejected attempt runs past where
   its grammar failed (the furthest the recognizer read an attempt of its
   dialect at that opener, in any reading) only to such a literal, to
-  complete a literal it began, or (T3) to the bracket that balances a JSON
+  complete a literal it began, (T3) to the bracket that balances a JSON
   value it left open (its bytes stay unbalanced, outside JSON strings, from
-  the failure to that bracket), so bytes after a closer-less attempt stay
-  content. (F7) A rejected span never ends inside a literal it began. (F8)
+  the failure to that bracket), or (T4) to such a closing literal written
+  with one slip (one byte inserted, deleted or substituted, or two adjacent
+  bytes swapped, its delimiters kept), so bytes after a closer-less attempt
+  stay content. (F7) A rejected span never ends inside a literal it began. (F8)
   A malformed attempt's `at` lies inside its span, at its end, or past it
   only inside a literal the failing reading began and matched in part (at
   most the longest literal spelling past the end). (F5) Every embedded

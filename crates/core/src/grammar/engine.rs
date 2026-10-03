@@ -431,7 +431,7 @@ pub(crate) struct Step<'a, 's> {
     /// attempt and the offset its call failed at: its siblings scanning for
     /// a later closer give up (a skipped call ends at its first call
     /// closer).
-    pub(crate) resynced: &'a mut Vec<(u64, usize)>,
+    pub(crate) resynced: &'a mut Vec<(u64, usize, usize)>,
 }
 
 impl<'s> Step<'_, 's> {
@@ -588,6 +588,23 @@ impl<'s> Step<'_, 's> {
         false
     }
 
+    /// Whether a misspelling of `canonical`, a literal other than a closer,
+    /// is read where `thread` expects it (`tool_call.markup.token-misspelled`,
+    /// the opener-side mirror of a misspelled closer): a markup token (its
+    /// spelling begins with `<` or `[`) read after the attempt opened, so
+    /// its position is already call markup, as a closer's is (for a grammar
+    /// with `commit`, anywhere after its opener: such an attempt is a call
+    /// only once it reaches the commit, so a respelled header token, as in
+    /// a Harmony message, makes no call of a message that is none). An
+    /// attempt's own opener is never respelled: it is the only evidence
+    /// that markup begins at all.
+    fn respellable_token(&self, thread: &Thread, canonical: &[u8]) -> bool {
+        (thread.opened || self.program.deferred())
+            && canonical.len() > 1
+            && matches!(canonical[0], b'<' | b'[')
+            && !self.program.openers.contains(&thread.pc)
+    }
+
     /// One byte of a literal: its canonical spelling, or (after a repair) a
     /// variant, confusable, or stray-closer spelling.
     #[allow(clippy::too_many_arguments)]
@@ -608,7 +625,9 @@ impl<'s> Step<'_, 's> {
         let (trie, operator, node) = match thread.sub {
             Sub::Lit(depth) => {
                 if canonical[depth as usize] != byte {
-                    if grammar.literals[lit as usize].closer.is_some() {
+                    if grammar.literals[lit as usize].closer.is_some()
+                        || self.respellable_token(&thread, canonical)
+                    {
                         self.misspell(
                             thread,
                             lit,
@@ -694,11 +713,14 @@ impl<'s> Step<'_, 's> {
         self.finish_literal(thread, next, pos + 1, stack, out, governor)
     }
 
-    /// One byte of a configuration resynchronizing at call-closer literal
-    /// `lit` (see [`Engine::resync`]): outside JSON strings and at bracket
-    /// depth zero, the literal's canonical spelling ends the skipped call
-    /// and the attempt reads on after it. It gives up (silently: the
-    /// attempt's failure stands) at another call's opener.
+    /// One byte of a configuration resynchronizing at literal `lit` (see
+    /// [`Engine::resync`]): a call closer ends the skipped call and the
+    /// attempt reads on after it; the next call's opener ends the skipped
+    /// call where the opener begins, and the attempt reads that call. A
+    /// single-byte closer (a JSON element's `}`) is read outside JSON
+    /// strings at the call's bracket level; a multi-byte literal wherever it
+    /// is written. It gives up (silently: the attempt's failure stands) at
+    /// another attempt's opener.
     #[allow(clippy::too_many_arguments)]
     fn step_resync(
         &mut self,
@@ -712,25 +734,41 @@ impl<'s> Step<'_, 's> {
         out: &mut Out,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        if self.newest_open > thread.entry
+        let canonical = &self.grammar.literals[lit as usize].bytes;
+        let pos = thread.pos;
+        let mut matched = matched as usize;
+        // Another call's opener ends the search, unless it is the opener
+        // this configuration is reading (where the next call begins).
+        let opener = self.program.call_openers.contains(&thread.pc);
+        let newest = self.newest_open;
+        let reading_it = opener && matched > 0 && newest == pos - matched;
+        // Another attempt opened after the skipped call failed.
+        let later = newest > thread.entry;
+        if (later && !reading_it)
             || self
                 .resynced
                 .iter()
-                .any(|&(attempt, failed)| attempt == thread.attempt && failed == thread.entry)
+                .any(|&(attempt, failed, _)| attempt == thread.attempt && failed == thread.entry)
         {
             return Ok(());
         }
-        let canonical = &self.grammar.literals[lit as usize].bytes;
-        let pos = thread.pos;
         let mut scan = JsonScan::unpack(state);
-        let mut matched = matched as usize;
         // A closing-bracket closer (a JSON element's own `}`) closes the
-        // bracket the call opened; any other is read at depth zero.
-        let level = !scan.quoted
-            && (scan.depth == 0
-                || (scan.depth == 1
-                    && canonical.len() == 1
-                    && matches!(canonical[0], b'}' | b']')));
+        // bracket the call opened, outside JSON strings; a multi-byte
+        // literal (a special token) is read wherever it is written, as the
+        // rejected call's markup scan reads it.
+        let multi = canonical.len() > 1;
+        let level = multi
+            || (!scan.quoted
+                && if opener {
+                    // A single-byte opener (a JSON element's `{`) inside the
+                    // skipped element, at its member level where no value is
+                    // due: no member begins with it, so the element was left
+                    // open and the next one begins.
+                    scan.depth == 1 && !scan.colon
+                } else {
+                    scan.depth == 0 || (scan.depth == 1 && matches!(canonical[0], b'}' | b']'))
+                });
         if level {
             matched = if canonical[matched] == byte {
                 matched + 1
@@ -738,17 +776,27 @@ impl<'s> Step<'_, 's> {
                 usize::from(canonical[0] == byte)
             };
             if matched == canonical.len() {
-                governor.charge(Resource::ScratchBytes, 16)?;
-                self.resynced.push((thread.attempt, thread.entry));
-                thread.entry = pos + 1 - matched;
+                governor.charge(Resource::ScratchBytes, 24)?;
+                let at = pos + 1 - matched;
+                // The skipped call's markup runs to its closer's end, or to
+                // where the next call's opener begins.
+                let read = if opener { at } else { pos + 1 };
+                self.resynced.push((thread.attempt, thread.entry, read));
+                thread.entry = at;
                 thread.sub = Sub::Lit(0);
+                if opener {
+                    // The skipped call ends where the next one begins.
+                    thread.hist = self
+                        .arena
+                        .push(thread.hist, HistKind::Next(at, thread.cost))?;
+                }
                 return self.finish_literal(thread, next, pos + 1, stack, out, governor);
             }
         } else {
             matched = 0;
         }
         scan.step(byte);
-        if scan.quoted {
+        if scan.quoted && !multi {
             matched = 0;
         }
         let state = scan.pack();
@@ -820,6 +868,17 @@ impl<'s> Step<'_, 's> {
         // is read by its own repair, never as a misspelling.
         let pending = self.bytes(thread.entry..thread.pos + 1);
         if tables.variants.trie.admits(pending) || tables.confusables.trie.admits(pending) {
+            return Ok(());
+        }
+        // Nor is a token another literal of the grammar may still spell
+        // exactly (a section opener where a call opener was due): that
+        // literal reads it, or the reading fails as written.
+        if self
+            .grammar
+            .literals
+            .iter()
+            .any(|other| other.bytes.starts_with(pending))
+        {
             return Ok(());
         }
         let slip = index_u32(depth);
@@ -908,10 +967,33 @@ impl<'s> Step<'_, 's> {
     ) -> Result<(), StopReason> {
         let grammar = self.grammar;
         let literal = &grammar.literals[lit as usize];
-        let Some(class) = literal.closer else {
-            return Ok(());
-        };
         let token = self.bytes(thread.entry..end);
+        let Some(class) = literal.closer else {
+            // A token other than a closer: it must misspell this literal and
+            // no other literal of the grammar.
+            governor.charge(
+                Resource::Work,
+                size(token.len()).saturating_mul(size(grammar.literals.len())),
+            )?;
+            let found = super::misspelling::misspelled_class(
+                token,
+                grammar
+                    .literals
+                    .iter()
+                    .map(|other| core::slice::from_ref(&other.bytes)),
+            );
+            if found != Some(lit as usize) {
+                return Self::unspell(out, thread, slip);
+            }
+            let edit = MarkupEdit {
+                operator: EditOperator::TokenMisspelled,
+                span: thread.entry..end,
+                original: token.to_vec(),
+                replacement: literal.bytes.clone(),
+            };
+            thread.hist = self.arena.edit(thread.hist, edit, governor)?;
+            return self.finish_literal(thread, next, end, stack, out, governor);
+        };
         governor.charge(
             Resource::Work,
             size(token.len()).saturating_mul(size(grammar.closers.len())),
@@ -1941,14 +2023,26 @@ impl<'s> Step<'_, 's> {
                 }
             }
         }
+        // A segmentation that read no call is no reading of the attempt: it
+        // is rejected whole, as one attempt.
+        groups.retain(|(_, parts)| {
+            parts
+                .iter()
+                .any(|part| matches!(part, PartReadings::Call(..)))
+        });
         if groups.is_empty() {
             return Ok(Err(
                 rejection.unwrap_or(Rejection::Malformed { at: shape.span.end })
             ));
         }
-        Ok(Ok(groups
+        let mut leads: Vec<Vec<MarkupEdit>> = Vec::with_capacity(groups.len());
+        let mut segmentations: Vec<Parts> = groups
             .into_iter()
-            .map(|(boundaries, calls)| {
+            .map(|(boundaries, mut calls)| {
+                leads.push(match calls.first_mut() {
+                    Some(PartReadings::Rejected(_, _, lead)) => core::mem::take(lead),
+                    _ => Vec::new(),
+                });
                 calls
                     .into_iter()
                     .enumerate()
@@ -1957,7 +2051,7 @@ impl<'s> Step<'_, 's> {
                         let through = boundaries.get(part).map_or(shape.cost, |&(_, cost)| cost);
                         let cost = through.saturating_sub(before);
                         match readings {
-                            PartReadings::Rejected(span, reason) => {
+                            PartReadings::Rejected(span, reason, _) => {
                                 (Part::Rejected { span, reason }, cost)
                             }
                             PartReadings::Call(readings) => {
@@ -1976,7 +2070,55 @@ impl<'s> Step<'_, 's> {
                     })
                     .collect()
             })
-            .collect()))
+            .collect();
+        for (parts, lead) in segmentations.iter_mut().zip(leads) {
+            lead_split(parts, &lead);
+        }
+        Ok(Ok(segmentations))
+    }
+}
+
+/// When `parts` begins with rejected parts (the attempt's first call could
+/// not be read and it resynchronized past it), the first call read after
+/// them records the split (`tool_call.markup.group-split`) at its start, as
+/// the last call before a later skipped call does at its end, and the
+/// tokens `lead` read as omitted at the attempt's start (which the first
+/// call carries when it is read); their cost moves to it from the rejected
+/// part before it.
+fn lead_split(parts: &mut Parts, lead: &[MarkupEdit]) {
+    let Some(first) = parts
+        .iter()
+        .position(|(part, _)| matches!(part, Part::Call(..)))
+    else {
+        return;
+    };
+    if first == 0 {
+        return;
+    }
+    let moved = lead
+        .iter()
+        .map(|edit| edit.operator.rule().cost)
+        .fold(EditOperator::GroupSplit.rule().cost, u64::saturating_add);
+    parts[first - 1].1 = parts[first - 1].1.saturating_sub(moved);
+    let (Part::Call(segment), cost) = &mut parts[first] else {
+        return;
+    };
+    *cost = cost.saturating_add(moved);
+    let at = segment.span.start;
+    for reading in &mut segment.readings {
+        let mut edits = lead.to_vec();
+        edits.push(MarkupEdit {
+            operator: EditOperator::GroupSplit,
+            span: at..at,
+            original: Vec::new(),
+            replacement: Vec::new(),
+        });
+        edits.append(&mut reading.edits);
+        reading.edits = edits;
+        reading.cost = reading.cost.saturating_add(moved);
+        if reading.closure == Closure::Closed {
+            reading.closure = Closure::Repaired;
+        }
     }
 }
 
@@ -2021,9 +2163,28 @@ impl Step<'_, '_> {
                 _ => None,
             });
             if let Some(at) = skipped {
+                // A token inserted where the attempt began (a section or
+                // list opener the model left out) opens every call of the
+                // attempt, not the skipped one alone.
+                let mut lead = Vec::new();
+                if part == 0 {
+                    for step in &path[from..to] {
+                        let HistKind::Edit(index) = *step else {
+                            continue;
+                        };
+                        let edit = &self.arena.edits[index as usize];
+                        if edit.operator == EditOperator::MissingToken
+                            && edit.span == (start..start)
+                        {
+                            governor.charge(Resource::ScratchBytes, edit.estimated_bytes())?;
+                            lead.push(edit.clone());
+                        }
+                    }
+                }
                 calls.push(PartReadings::Rejected(
                     start..end,
                     Rejection::Malformed { at },
+                    lead,
                 ));
             } else {
                 match self.reading(&path[from..to], &part_shape, governor)? {
@@ -2061,29 +2222,60 @@ impl Step<'_, '_> {
 }
 
 /// The call-closer literals of `program` the failing configuration at `pc`
-/// could still reach without passing another `next`: where its call can
-/// end (see `Engine::resync`). One `Work` unit per location visited.
+/// could still reach without passing a `next` (where its call can end),
+/// and the opener literals (multi-byte, or a JSON element's `{`) of the
+/// call after each `next` it reaches (where the next call begins, should
+/// its call have no closer):
+/// see `Engine::resync`. One `Work` unit per location visited.
 fn resync_targets(
     program: &Program,
+    grammar: &CompiledGrammar,
     pc: u32,
     governor: &mut Governor,
 ) -> Result<Vec<u32>, StopReason> {
     let mut targets: Vec<u32> = Vec::new();
     let mut seen = vec![false; program.insts.len()];
     let mut stack = vec![pc];
+    let opener = |pc: u32| match program.insts[pc as usize] {
+        Inst::Lit { lit, .. } => {
+            let bytes = grammar.literals[lit as usize].bytes.as_slice();
+            program.call_openers.contains(&pc) && (bytes.len() > 1 || bytes == b"{")
+        }
+        _ => false,
+    };
     while let Some(pc) = stack.pop() {
         if core::mem::replace(&mut seen[pc as usize], true) {
             continue;
         }
         governor.charge(Resource::Work, 1)?;
         let inst = program.insts[pc as usize];
-        if matches!(inst, Inst::Next { .. }) {
+        if let Inst::Next { next } = inst {
+            // The next call's openers, reached without input.
+            let mut inner = vec![next];
+            while let Some(at) = inner.pop() {
+                if core::mem::replace(&mut seen[at as usize], true) {
+                    continue;
+                }
+                governor.charge(Resource::Work, 1)?;
+                match program.insts[at as usize] {
+                    Inst::Lit { .. } => {
+                        if opener(at) && !targets.contains(&at) {
+                            targets.push(at);
+                        }
+                    }
+                    Inst::Split(first, second) => inner.extend([first, second]),
+                    Inst::Open { next, .. } | Inst::Close { next, .. } | Inst::Commit { next } => {
+                        inner.push(next);
+                    }
+                    _ => {}
+                }
+            }
             continue;
         }
         if program.call_closers.contains(&pc) {
             targets.push(pc);
-            continue;
         }
+        // Past a closer too: the next call begins after it.
         stack.extend(super::compile::successors(&inst));
     }
     Ok(targets)
@@ -2096,6 +2288,9 @@ struct JsonScan {
     depth: u32,
     quoted: bool,
     escaped: bool,
+    /// Whether the last byte outside strings and whitespace was a `:` (a
+    /// value comes next).
+    colon: bool,
 }
 
 impl JsonScan {
@@ -2109,6 +2304,10 @@ impl JsonScan {
             }
             return;
         }
+        if byte.is_ascii_whitespace() {
+            return;
+        }
+        self.colon = byte == b':';
         match byte {
             b'"' => self.quoted = true,
             b'{' | b'[' => self.depth = (self.depth + 1).min(0xFFFF),
@@ -2118,11 +2317,12 @@ impl JsonScan {
     }
 
     /// The scan as a [`Sub::Resync`] state: the depth in the low 16 bits,
-    /// then the two flags.
+    /// then the three flags.
     const fn pack(self) -> u32 {
         self.depth
             | if self.quoted { 0x1_0000 } else { 0 }
             | if self.escaped { 0x2_0000 } else { 0 }
+            | if self.colon { 0x4_0000 } else { 0 }
     }
 
     const fn unpack(state: u32) -> Self {
@@ -2130,6 +2330,7 @@ impl JsonScan {
             depth: state & 0xFFFF,
             quoted: state & 0x1_0000 != 0,
             escaped: state & 0x2_0000 != 0,
+            colon: state & 0x4_0000 != 0,
         }
     }
 }
@@ -2163,7 +2364,10 @@ pub(crate) type Parts = Vec<(Part, u64)>;
 #[derive(Clone, Debug, PartialEq)]
 enum PartReadings {
     Call(Vec<RawCall>),
-    Rejected(Range<usize>, Rejection),
+    /// A skipped call: its span, why it was rejected, and (for the
+    /// attempt's first call) the tokens read as omitted at the attempt's
+    /// start, which belong to the calls the attempt went on to read.
+    Rejected(Range<usize>, Rejection, Vec<MarkupEdit>),
 }
 
 /// The readings of one segmentation while they are collected: where each
@@ -2280,11 +2484,30 @@ pub(crate) struct Attempt {
     pub(crate) failure: Option<Rejection>,
     /// Where a rejected span ends.
     pub(crate) end: Option<usize>,
-    /// Whether the attempt's span ends where it failed even when it ends at
-    /// the end of output: it failed in a slot value no repair reads that ran
-    /// to the end of output (see `Step::end_body`), or only configurations
-    /// resynchronizing after its failure (see `Engine::resync`) were left.
-    pub(crate) ends_at_failure: bool,
+    /// Where the attempt's span ends when it ends rejected at the end of
+    /// output (see [`FailureEnd`]).
+    pub(crate) failure_end: FailureEnd,
+}
+
+/// Where a rejected attempt's span ends at the end of output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FailureEnd {
+    /// At the end of output.
+    Stop,
+    /// Where it failed: it failed in a slot value no repair reads that ran
+    /// to the end of output (see `Step::end_body`).
+    Failure,
+    /// Where it failed: it resynchronized past a call it could not read
+    /// (see `Engine::resync`), so its first failure stands for the attempt
+    /// (a later call's failure is that call's own).
+    Resynced,
+}
+
+impl FailureEnd {
+    /// Whether the span ends where the attempt failed.
+    const fn at_failure(self) -> bool {
+        !matches!(self, Self::Stop)
+    }
 }
 
 impl ScratchCharge for Attempt {
@@ -2355,9 +2578,11 @@ pub(crate) struct Boundary {
     at: usize,
     hist: u32,
     cost: u64,
-    /// The failing configuration's location and where it failed.
+    /// The failing configuration's location, where it failed, and where
+    /// its terminal began.
     pc: u32,
     failed: usize,
+    entry: usize,
 }
 
 impl ScratchCharge for Boundary {
@@ -2489,7 +2714,11 @@ pub(crate) struct Engine<'s> {
     /// [`Step::newest_open`]).
     newest_open: usize,
     /// See [`Step::resynced`]; an entry leaves when its attempt ends.
-    resynced: Vec<(u64, usize)>,
+    resynced: Vec<(u64, usize, usize)>,
+    /// The failures each attempt resynchronized from (see
+    /// [`Self::resync`]), so a resynchronization that gave up is not
+    /// started again; an entry leaves when its attempt ends.
+    spawned: Vec<(u64, usize)>,
     /// Ended reports held by [`Self::defer`], with their attempts' start.
     deferred: Vec<(usize, Event)>,
     /// The openers where an attempt read a whole call, while a held report
@@ -2550,6 +2779,7 @@ impl<'s> Engine<'s> {
             pending: Vec::new(),
             newest_open: 0,
             resynced: Vec::new(),
+            spawned: Vec::new(),
             deferred: Vec::new(),
             whole: Vec::new(),
             tools,
@@ -2632,7 +2862,7 @@ impl<'s> Engine<'s> {
                 completed: false,
                 failure: None,
                 end: None,
-                ends_at_failure: false,
+                failure_end: FailureEnd::Stop,
             })?;
             let thread = Thread {
                 pc: program.start,
@@ -2942,13 +3172,25 @@ impl<'s> Engine<'s> {
             .iter_mut()
             .find(|other| other.id == attempt)
             .expect("attempt is live");
+        if record.failure_end == FailureEnd::Resynced {
+            if record.failure.is_some() {
+                return;
+            }
+        } else {
+            // A slot configuration that failed before its own position
+            // failed in its value (`Step::end_body`), not at a token it was
+            // reading.
+            record.failure_end =
+                if matches!(program.insts[first.thread.pc as usize], Inst::Slot { .. })
+                    && first.at < first.thread.pos
+                {
+                    FailureEnd::Failure
+                } else {
+                    FailureEnd::Stop
+                };
+        }
         record.failure = Some(first.reason);
         record.end = Some(end);
-        // A slot configuration that failed before its own position failed
-        // in its value (`Step::end_body`), not at a token it was reading.
-        record.ends_at_failure =
-            matches!(program.insts[first.thread.pc as usize], Inst::Slot { .. })
-                && first.at < first.thread.pos;
     }
 
     /// For a grouped program, record where the failing configurations of
@@ -2967,22 +3209,42 @@ impl<'s> Engine<'s> {
         if !self.tables[table].program.grouped {
             return Ok(());
         }
+        // A first call is only a call of an attempt that read its opener.
+        let opened = self.tables[table]
+            .attempts
+            .as_slice()
+            .iter()
+            .any(|record| record.id == attempt && record.opened);
         let mut best: Option<Boundary> = None;
         for failure in failures.iter().filter(|failure| !failure.respell) {
             let mut node = failure.thread.hist;
             loop {
                 governor.charge(Resource::Work, 1)?;
                 let HistNode { prev, kind } = self.arena.nodes.as_slice()[node as usize];
-                match kind {
+                let boundary = match kind {
+                    HistKind::Next(at, cost) => Some((at, prev, cost)),
+                    // The attempt's first call: it began at the attempt's
+                    // start, and the failing configuration's history and
+                    // cost stand for what was read before it.
+                    HistKind::Root if opened => Some((
+                        failure.thread.start,
+                        failure.thread.hist,
+                        failure.thread.cost,
+                    )),
                     HistKind::Root => break,
-                    HistKind::Next(at, cost) => {
+                    _ => None,
+                };
+                match boundary {
+                    None => node = prev,
+                    Some((at, hist, cost)) => {
                         let candidate = Boundary {
                             attempt,
                             at,
-                            hist: prev,
+                            hist,
                             cost,
                             pc: failure.thread.pc,
                             failed: failure.at,
+                            entry: failure.thread.entry,
                         };
                         let better = best.is_none_or(|known| {
                             (Reverse(candidate.at), candidate.cost, candidate.hist)
@@ -2993,7 +3255,6 @@ impl<'s> Engine<'s> {
                         }
                         break;
                     }
-                    _ => node = prev,
                 }
             }
         }
@@ -3008,23 +3269,38 @@ impl<'s> Engine<'s> {
             .iter_mut()
             .find(|known| known.attempt == attempt)
         {
-            *known = best;
+            let first = failures
+                .iter()
+                .any(|failure| !failure.respell && failure.thread.start == best.at);
+            if !first {
+                *known = best;
+            } else if best.at == known.at {
+                // The first call failed again (a repair carried it on): what
+                // was read before it stands; where it failed moves on.
+                known.pc = best.pc;
+                known.failed = best.failed;
+                known.entry = best.entry;
+            }
         } else {
             boundaries.push(best)?;
         }
         Ok(())
     }
 
-    /// Resynchronize stuck `record`, an attempt of a grouped program that
-    /// read whole calls before the one it could not read (its recorded
-    /// [`Boundary`]): a configuration per call-closer literal reachable
-    /// from the failing location (without passing another `next`) scans on
-    /// from `until` for that literal outside JSON strings at the call's
-    /// bracket depth, then reads on after it, so later calls of the
-    /// attempt are read; the skipped call becomes a rejected part
-    /// ([`HistKind::Skipped`]) costing [`REJECT`](super::cost::REJECT). It
-    /// gives up at another call's opener, and the attempt then ends as
-    /// before (`tool_call.markup.group-split`).
+    /// Resynchronize stuck `record`, an attempt of a grouped program, past
+    /// the call it could not read (its recorded [`Boundary`]: the `next`
+    /// the call began at, or the attempt's start for its first call): a
+    /// configuration per target literal (see `resync_targets`: a call
+    /// closer, or the next call's opener) scans on from `until` for that
+    /// literal (a single-byte one at the call's bracket level outside JSON
+    /// strings, a multi-byte one wherever it is written), then reads on
+    /// from it, so later calls of the attempt are read; the skipped call
+    /// becomes a rejected part ([`HistKind::Skipped`]) costing
+    /// [`REJECT`](super::cost::REJECT), and the split
+    /// (`tool_call.markup.group-split`) is recorded on the last call before
+    /// it, or for a first call on the first call after it (see
+    /// `lead_split`). It gives up at another attempt's opener, and the
+    /// attempt then ends as before.
     fn resync(
         &mut self,
         table: usize,
@@ -3056,50 +3332,60 @@ impl<'s> Engine<'s> {
                     && thread.entry == boundary.failed
             })
             || self
-                .resynced
+                .spawned
                 .iter()
                 .any(|&(attempt, failed)| attempt == record.id && failed == boundary.failed)
         {
             return Ok(());
         }
-        let targets = resync_targets(program, boundary.pc, governor)?;
+        governor.charge(Resource::ScratchBytes, 24)?;
+        self.spawned.push((record.id, boundary.failed));
+        let grammar = self.grammars[self.tables[table].grammar].grammar;
+        let targets = resync_targets(program, grammar, boundary.pc, governor)?;
         if targets.is_empty() {
             return Ok(());
         }
-        // The scanner state after the call's bytes read so far.
-        governor.charge(Resource::Work, size(until - boundary.at))?;
-        let mut scan = JsonScan::default();
-        for &byte in &self.buffer.as_slice()[boundary.at - self.base..until - self.base] {
-            scan.step(byte);
-        }
-        let state = scan.pack();
+        let first = boundary.at == record.start;
+        let Some(state) = self.resync_state(
+            &boundary, first, &targets, grammar, program, until, governor,
+        )?
+        else {
+            return Ok(());
+        };
         if let Some(stuck) = self.tables[table]
             .attempts
             .as_mut_slice()
             .iter_mut()
             .find(|other| other.id == record.id)
         {
-            stuck.ends_at_failure = true;
+            stuck.failure_end = FailureEnd::Resynced;
         }
         // The calls before the failing one were read whole: the last of them
         // records the split (`tool_call.markup.group-split`), as when the
-        // attempt ends there.
+        // attempt ends there. A failing first call has none before it: the
+        // first call read after it records the split (see
+        // `Step::segment`).
         let split = EditOperator::GroupSplit.rule().cost;
-        let edited = self.arena.edit(
-            boundary.hist,
-            MarkupEdit {
-                operator: EditOperator::GroupSplit,
-                span: boundary.at..boundary.at,
-                original: Vec::new(),
-                replacement: Vec::new(),
-            },
-            governor,
-        )?;
-        let next = self.arena.push(
-            edited,
-            HistKind::Next(boundary.at, boundary.cost.saturating_add(split)),
-        )?;
-        let hist = self.arena.push(next, HistKind::Skipped(boundary.failed))?;
+        let hist = if first {
+            self.arena
+                .push(boundary.hist, HistKind::Skipped(boundary.failed))?
+        } else {
+            let edited = self.arena.edit(
+                boundary.hist,
+                MarkupEdit {
+                    operator: EditOperator::GroupSplit,
+                    span: boundary.at..boundary.at,
+                    original: Vec::new(),
+                    replacement: Vec::new(),
+                },
+                governor,
+            )?;
+            let next = self.arena.push(
+                edited,
+                HistKind::Next(boundary.at, boundary.cost.saturating_add(split)),
+            )?;
+            self.arena.push(next, HistKind::Skipped(boundary.failed))?
+        };
         let cost = boundary
             .cost
             .saturating_add(split)
@@ -3122,11 +3408,63 @@ impl<'s> Engine<'s> {
         Ok(())
     }
 
+    /// The scanner state a resynchronization of the call at `boundary`
+    /// starts from at `until` (see [`Self::resync`]), or `None` when a
+    /// first call opened no bracket its closer could close.
+    #[allow(clippy::too_many_arguments)]
+    fn resync_state(
+        &self,
+        boundary: &Boundary,
+        first: bool,
+        targets: &[u32],
+        grammar: &CompiledGrammar,
+        program: &Program,
+        until: usize,
+        governor: &mut Governor,
+    ) -> Result<Option<u32>, StopReason> {
+        // The scanner state after the call's bytes read so far, its depth
+        // counted from the call's own level. A later call begins at its
+        // boundary; the first begins inside the attempt's opener, at the
+        // depth where the failing terminal began, less the bracket a
+        // bracket-closed call (a JSON element) opened.
+        governor.charge(Resource::Work, size(until - boundary.at))?;
+        let mut scan = JsonScan::default();
+        let mut level = 0;
+        for (offset, &byte) in self.buffer.as_slice()[boundary.at - self.base..until - self.base]
+            .iter()
+            .enumerate()
+        {
+            if first && boundary.at + offset == boundary.entry {
+                level = scan.depth;
+            }
+            scan.step(byte);
+        }
+        if first {
+            let bracketed = targets.iter().any(|&pc| {
+                let Inst::Lit { lit, .. } = program.insts[pc as usize] else {
+                    return false;
+                };
+                matches!(grammar.literals[lit as usize].bytes.as_slice(), b"}" | b"]")
+            });
+            if bracketed {
+                if level == 0 {
+                    return Ok(None);
+                }
+                level -= 1;
+            }
+            scan.depth = scan.depth.saturating_sub(level);
+        }
+        Ok(Some(scan.pack()))
+    }
+
     /// Drop the resynchronization records of `attempt`, which ended.
     fn forget_resync(&mut self, attempt: u64, governor: &mut Governor) -> Result<(), StopReason> {
-        let before = self.resynced.len();
-        self.resynced.retain(|&(owner, _)| owner != attempt);
-        governor.release_scratch(size(before - self.resynced.len()).saturating_mul(16))
+        let before = self.resynced.len() + self.spawned.len();
+        self.resynced.retain(|&(owner, _, _)| owner != attempt);
+        self.spawned.retain(|&(owner, _)| owner != attempt);
+        governor.release_scratch(
+            size(before - self.resynced.len() - self.spawned.len()).saturating_mul(24),
+        )
     }
 
     /// Take the boundary recorded for `attempt`, if any.
@@ -3230,6 +3568,19 @@ impl<'s> Engine<'s> {
                 continue;
             }
             self.release(table, record.id, governor)?;
+            // How far the attempt read the calls it skipped, when it skipped
+            // more than one: an attempt that ends rejected whole read their
+            // markup too (one skipped call's markup is its own rejection's,
+            // run on to its closer as any rejected attempt's is).
+            let skips = self
+                .resynced
+                .iter()
+                .filter(|&&(owner, _, _)| owner == record.id);
+            let skipped = if skips.clone().count() > 1 {
+                skips.map(|&(_, _, read)| read).max()
+            } else {
+                None
+            };
             self.forget_resync(record.id, governor)?;
             if record.opened {
                 // A rejected span ends before the token that could not be
@@ -3237,12 +3588,16 @@ impl<'s> Engine<'s> {
                 // all of its completions.
                 // At the end of output a value no repair reads ends its
                 // span where it stopped decoding, as mid-input.
-                let malformed = record.ends_at_failure;
+                let malformed = record.failure_end.at_failure();
                 let end = match (eof, record.completed) {
                     (Some(_), false) if malformed => record.end.unwrap_or(at),
                     (Some(_), _) => at,
                     (None, true) => at + 1,
                     (None, false) => record.end.unwrap_or(at),
+                };
+                let end = match skipped {
+                    Some(read) if !record.completed => end.max(read),
+                    _ => end,
                 };
                 let salvage = self.salvage(table, &record, end, governor)?;
                 let whole = record.completed || salvage.is_some();
@@ -3256,7 +3611,7 @@ impl<'s> Engine<'s> {
                         (_, Some(reason @ Rejection::InvalidUtf8 { .. }))
                         | (None, Some(reason)) => reason,
                         (Some(_), Some(reason @ Rejection::Malformed { .. }))
-                            if !record.completed && record.ends_at_failure =>
+                            if !record.completed && record.failure_end.at_failure() =>
                         {
                             reason
                         }
@@ -3318,6 +3673,13 @@ impl<'s> Engine<'s> {
             governor.charge(Resource::ScratchBytes, DEFERRED_BYTES)?;
             self.deferred.push((record.start, ended));
         } else {
+            // Another attempt at the opener may have read a whole call and
+            // ended first (this one read on, resynchronizing): the same
+            // body evidence stands.
+            let mut ended = ended;
+            if let Event::Ended { outread, .. } = &mut ended {
+                *outread = !whole && self.whole.contains(&record.start);
+            }
             self.events.push(ended);
         }
         Ok(())
@@ -3606,7 +3968,14 @@ impl<'s> Engine<'s> {
             .iter()
             .flat_map(|class| class.spellings.iter().map(Vec::as_slice))
             .collect();
-        let compared = size(openers.len() + closers.len()).saturating_mul(K_THREAD);
+        // A reasoning block's opening marker: the block's bytes belong to
+        // the block, never to the wrapper (see `Recognizer::ended`).
+        let markers: Vec<&[u8]> = grammar
+            .reasoning
+            .iter()
+            .map(|(open, _)| open.as_slice())
+            .collect();
+        let compared = size(openers.len() + closers.len() + markers.len()).saturating_mul(K_THREAD);
         let Some(mut scan) = trail.scan else {
             return Ok(Verdict::Report);
         };
@@ -3619,7 +3988,14 @@ impl<'s> Engine<'s> {
                 scan.text = Some(at);
             }
             let read = &self.buffer.as_slice()[trail.thread.pos - self.base..trail.at - self.base];
-            if let Some(opener) = openers.iter().find(|opener| read.ends_with(opener)) {
+            if let Some(opener) = openers
+                .iter()
+                .chain(&markers)
+                .find(|opener| read.ends_with(opener))
+            {
+                // Another call, or a reasoning block, after the call: the
+                // inserted closer is the only reading when only whitespace
+                // came between, and text before it is a guess as before.
                 let start = trail.at - opener.len();
                 return Ok(if scan.text.is_some_and(|text| text < start) {
                     Verdict::Guess

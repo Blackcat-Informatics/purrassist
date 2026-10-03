@@ -1722,7 +1722,9 @@ impl MarkupScan<'_> {
                             break 'scan;
                         }
                     }
-                } else if let Some(length) = at(closers, position) {
+                } else if let Some(length) = at(closers, position)
+                    .or_else(|| self.misspelled(closers, markup, position, limit))
+                {
                     state.depth = state.depth.saturating_sub(1);
                     position += length;
                     if state.depth == 0 && position > span.end {
@@ -1763,7 +1765,8 @@ impl MarkupScan<'_> {
                 while probe < limit && self.output[probe].is_ascii_whitespace() {
                     probe += 1;
                 }
-                match at(closers, probe) {
+                match at(closers, probe).or_else(|| self.misspelled(closers, markup, probe, limit))
+                {
                     Some(length) if probe + length <= limit => {
                         probe += length;
                         end = probe;
@@ -1773,6 +1776,52 @@ impl MarkupScan<'_> {
             }
         }
         Ok(end)
+    }
+
+    /// The length of a token at `position` (before `limit`) that misspells
+    /// one of `spellings` and no other closer of the dialect (one edit, as
+    /// `tool_call.markup.closer-misspelled` reads a closer of a call): a
+    /// rejected attempt's markup ends at its misspelled closer as a call's
+    /// does.
+    fn misspelled(
+        &self,
+        spellings: &[Vec<u8>],
+        markup: &Markup<'_>,
+        position: usize,
+        limit: usize,
+    ) -> Option<usize> {
+        let rest = &self.output[position..limit.min(self.output.len())];
+        let classes: Vec<&[Vec<u8>]> = markup
+            .closers
+            .iter()
+            .chain(&markup.call_closers)
+            .map(core::slice::from_ref)
+            .collect();
+        let classes = &classes;
+        spellings
+            .iter()
+            .filter(|spelling| spelling.len() > 1 && rest.first() == spelling.first())
+            .flat_map(|spelling| {
+                (spelling.len().saturating_sub(1)..=spelling.len() + 1)
+                    .filter(|&length| length <= rest.len())
+                    .filter(move |&length| {
+                        let token = &rest[..length];
+                        crate::grammar::misspelling::misspells(token, spelling)
+                            && classes
+                                .iter()
+                                .filter(|class| {
+                                    class.iter().any(|other| {
+                                        other.as_slice() == token
+                                            || crate::grammar::misspelling::misspells(token, other)
+                                    })
+                                })
+                                .map(|class| class[0].as_slice())
+                                .collect::<Vec<_>>()
+                                .windows(2)
+                                .all(|pair| pair[0] == pair[1])
+                    })
+            })
+            .max()
     }
 
     /// Where a rejected attempt at `span` without its alternative's closer
@@ -1805,7 +1854,8 @@ impl MarkupScan<'_> {
                 .iter()
                 .filter(|spelling| self.output[position..limit].starts_with(spelling))
                 .map(Vec::len)
-                .max();
+                .max()
+                .or_else(|| self.misspelled(&markup.call_closers, markup, position, limit));
             if let Some(length) = length {
                 position += length;
                 last = Some(position);
@@ -2351,16 +2401,22 @@ impl<'t> Fold<'t> {
         Ok(())
     }
 
-    /// The body evidence of the segmentation's rejected attempts: how many
-    /// bytes their dialects read before failing (see [`Reading::body_evidence`]).
-    fn body_evidence(segments: &[ResolvedSegment]) -> usize {
-        segments
-            .iter()
-            .map(|segment| match segment {
-                ResolvedSegment::Rejected { span, reason, .. } => reach_of(span, *reason),
-                _ => 0,
-            })
-            .sum()
+    /// The body evidence of the segmentation's rejected attempts over
+    /// `output` (see [`Reading::body_evidence`]).
+    fn body_evidence(segments: &[ResolvedSegment], output: &[u8]) -> BodyEvidence {
+        evidence(segments.iter().filter_map(|segment| match segment {
+            ResolvedSegment::Rejected {
+                span,
+                reason,
+                dialect,
+                ..
+            } => Some((
+                reach_of(span, *reason),
+                dialect,
+                output.get(span.clone()).unwrap_or_default(),
+            )),
+            _ => None,
+        }))
     }
 }
 
@@ -2442,9 +2498,16 @@ impl Reading {
     }
 
     /// The body evidence of the reading's rejected attempts: how many bytes
-    /// their dialects read before failing.
-    fn body_evidence(&self) -> usize {
-        self.value.rejected.iter().map(reach).sum()
+    /// their dialects read before failing; on a tie, how many of them begin
+    /// with their dialect's canonical opener spelling (an opener read
+    /// through a confusable spelling is weaker evidence of the dialect).
+    fn body_evidence(&self) -> BodyEvidence {
+        evidence(self.value.rejected.iter().filter_map(|rejected| {
+            rejected
+                .dialect
+                .as_ref()
+                .map(|dialect| (reach(rejected), dialect, rejected.raw.as_slice()))
+        }))
     }
 
     fn ambiguous_calls(&self) -> impl Iterator<Item = usize> + '_ {
@@ -2718,7 +2781,7 @@ impl Recovery<'_> {
         let mut choices: Vec<Vec<Fold<'_>>> = Vec::new();
         for piece in &turn.pieces {
             if let ResolvedPiece::Choice(choice) = piece {
-                choices.push(fold_options(&choice.readings, governor)?);
+                choices.push(fold_options(&choice.readings, self.output, governor)?);
             }
         }
         if !choices.is_empty() {
@@ -2826,6 +2889,7 @@ impl Recovery<'_> {
         self.unparsed(&mut reading, &owned, governor)?;
         // After unparsed markup is reported: its reports are boundaries.
         self.close_rejections(&mut reading.value, governor)?;
+        self.closers_after_cut(&mut reading, governor)?;
         reading.value.next_id_start = self.ids(&mut reading.value.calls, governor)?;
         self.tool_choice(&mut reading.value, forced);
         let check = &reading.value.tool_choice;
@@ -3127,7 +3191,293 @@ impl Recovery<'_> {
             });
             reading.parts.push(Part::Rejected(index));
         }
-        // Keep the rejected attempts in span order.
+        sort_rejected(reading);
+        Ok(())
+    }
+
+    /// The closers a call's or attempt's markup left after a reasoning block
+    /// it ran into, so none is left as content: see
+    /// [`Self::closers_of_rejected`], [`Self::closers_of_calls`] and
+    /// [`Self::closers_after_blocks`]. Each found closer of an attempt is
+    /// reported as a rejected attempt of its dialect over the closer alone
+    /// (the block's bytes stay reasoning).
+    fn closers_after_cut(
+        &self,
+        reading: &mut Reading,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let mut found = self.closers_of_rejected(reading, governor)?;
+        self.closers_of_calls(reading, governor)?;
+        self.closers_after_blocks(reading, &mut found, governor)?;
+        for (span, dialect, candidates) in found {
+            governor.charge(
+                Resource::ScratchBytes,
+                size(span.len()).saturating_add(ENTRY_BYTES),
+            )?;
+            remove_range(&mut reading.value.content, &span);
+            let index = reading.value.rejected.len();
+            reading.value.rejected.push(RejectedCall {
+                raw: self.output[span.clone()].to_vec(),
+                reason: Rejection::Malformed { at: span.start },
+                span,
+                dialect: Some(dialect),
+                candidate_dialects: candidates,
+                repairs: CallLedger::default(),
+            });
+            reading.parts.push(Part::Rejected(index));
+        }
+        sort_rejected(reading);
+        Ok(())
+    }
+
+    /// The first byte after `block` and the whitespace after it.
+    const fn after(&self, block: &Range<usize>) -> usize {
+        let mut at = block.end;
+        while at < self.output.len() && self.output[at].is_ascii_whitespace() {
+            at += 1;
+        }
+        at
+    }
+
+    /// The length of one of `closers` (multi-byte, exactly or with one
+    /// slip, as [`MarkupScan`] reads them) written at `at`.
+    fn closer_at(&self, closers: &[Vec<u8>], at: usize) -> Option<usize> {
+        let markup = Markup {
+            openers: Vec::new(),
+            closers: closers.to_vec(),
+            nests: false,
+            call_closers: Vec::new(),
+            literals: &[],
+        };
+        closers
+            .iter()
+            .filter(|closer| closer.len() > 1 && self.output[at..].starts_with(closer))
+            .map(Vec::len)
+            .max()
+            .or_else(|| {
+                MarkupScan {
+                    output: self.output,
+                }
+                .misspelled(closers, &markup, at, self.output.len())
+            })
+    }
+
+    /// The closers of the alternatives of `dialect` whose opener begins
+    /// `raw`.
+    fn closers_opened(dialect: &DialectId, raw: &[u8]) -> Vec<Vec<u8>> {
+        dialect
+            .grammar()
+            .call_ends()
+            .iter()
+            .filter(|end| end.openers.iter().any(|opener| raw.starts_with(opener)))
+            .flat_map(|end| end.closers.iter().cloned())
+            .filter(|closer| closer.len() > 1)
+            .collect()
+    }
+
+    /// Whether `span` lies in one content range of `reading`.
+    fn in_content(reading: &Reading, span: &Range<usize>) -> bool {
+        reading
+            .value
+            .content
+            .iter()
+            .any(|range| range.start <= span.start && span.end <= range.end)
+    }
+
+    /// The first reasoning block at or after `from` with no content but
+    /// whitespace before it.
+    fn next_block<'r>(&self, reading: &'r Reading, from: usize) -> Option<&'r Range<usize>> {
+        let block = reading
+            .value
+            .reasoning
+            .iter()
+            .filter(|range| range.start >= from)
+            .min_by_key(|range| range.start)?;
+        let prose = reading.value.content.iter().any(|span| {
+            let (start, end) = (span.start.max(from), span.end.min(block.start));
+            start < end && !self.output[start..end].iter().all(u8::is_ascii_whitespace)
+        });
+        (!prose).then_some(block)
+    }
+
+    /// A rejected attempt whose markup ran into a reasoning block (cut at
+    /// its opening marker, see `Recognizer::ended`, or a broken wrapper
+    /// whose inner call ends there) with no closer of its own may have its
+    /// closer written right after the block: that closer is the attempt's
+    /// markup.
+    fn closers_of_rejected(
+        &self,
+        reading: &Reading,
+        governor: &mut Governor,
+    ) -> Result<Vec<StrayCloser>, StopReason> {
+        let mut found = Vec::new();
+        for rejected in &reading.value.rejected {
+            let (Some(dialect), Rejection::Malformed { .. } | Rejection::Unterminated) =
+                (&rejected.dialect, rejected.reason)
+            else {
+                continue;
+            };
+            let Some(block) = self.next_block(reading, rejected.span.end) else {
+                continue;
+            };
+            governor.charge(Resource::Work, 1)?;
+            let closers = Self::closers_opened(dialect, &rejected.raw);
+            if closers.iter().any(|closer| rejected.raw.ends_with(closer)) {
+                continue;
+            }
+            let at = self.after(block);
+            if let Some(length) = self.closer_at(&closers, at)
+                && Self::in_content(reading, &(at..at + length))
+            {
+                found.push((
+                    at..at + length,
+                    dialect.clone(),
+                    rejected.candidate_dialects.clone(),
+                ));
+            }
+        }
+        Ok(found)
+    }
+
+    /// A call read with its wrapper closer inserted before a reasoning
+    /// block (the block is no wrapper text), whose closer is written right
+    /// after the block: the call's own closer, moved past the block,
+    /// recorded on the call as a stray closer
+    /// (`tool_call.markup.stray-closer`) and no longer content.
+    fn closers_of_calls(
+        &self,
+        reading: &mut Reading,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let Some(rule) = rules::rule("tool_call.markup.stray-closer") else {
+            return Ok(());
+        };
+        for index in 0..reading.value.calls.len() {
+            let call = &reading.value.calls[index];
+            let inserted = call.repairs.evidence.iter().any(|evidence| {
+                evidence.rule == "tool_call.markup.missing-wrapper-close"
+                    || evidence.rule == "tool_call.markup.missing-wrapper-close.before-text"
+            });
+            let Some(block) = self
+                .next_block(reading, call.span.end)
+                .filter(|block| inserted && block.start >= call.span.end)
+            else {
+                continue;
+            };
+            if !self.output[call.span.end..block.start]
+                .iter()
+                .all(u8::is_ascii_whitespace)
+            {
+                continue;
+            }
+            governor.charge(Resource::Work, 1)?;
+            let at = self.after(block);
+            let closers = Self::closers_opened(&call.dialect, &self.output[call.span.clone()]);
+            let Some(length) = self.closer_at(&closers, at) else {
+                continue;
+            };
+            let stray = at..at + length;
+            if !Self::in_content(reading, &stray) {
+                continue;
+            }
+            let evidence = Evidence {
+                rule: rule.id.into(),
+                explanation: format!(
+                    "the call's closer `{}` is written after the reasoning block at bytes {}..{}; the block is no part of the call, so the closer was read as inserted before it and this one as stray",
+                    escaped(&self.output[stray.clone()]),
+                    block.start,
+                    block.end
+                ),
+                span: Some(SourceSpan {
+                    source: self.source,
+                    bytes: stray.clone(),
+                }),
+                destination: format!("/turn/{}..{}", call.span.start, call.span.end),
+            };
+            let original = escaped(&self.output[stray.clone()]);
+            governor.charge(Resource::ScratchBytes, size(stray.len()))?;
+            remove_range(&mut reading.value.content, &stray);
+            reading.value.calls[index].repairs.record(
+                rule,
+                evidence,
+                original,
+                String::new(),
+                governor,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The mirror inside reasoning: a block holding a call opener with no
+    /// closer of its alternative after it, whose closer is written right
+    /// after the block (a call begun inside the block that ran into its
+    /// closing marker), named by every allowed dialect with such an
+    /// opener.
+    fn closers_after_blocks(
+        &self,
+        reading: &Reading,
+        found: &mut Vec<StrayCloser>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        for block in &reading.value.reasoning {
+            let at = self.after(block);
+            let inside = &self.output[block.clone()];
+            let mut dialects: Vec<(DialectId, usize)> = Vec::new();
+            for dialect in self.request.dialects.dialects() {
+                for end in dialect.grammar().call_ends() {
+                    governor.charge(Resource::Work, size(inside.len()))?;
+                    let open = end
+                        .openers
+                        .iter()
+                        .filter(|opener| opener.len() > 1)
+                        .any(|opener| {
+                            inside
+                                .windows(opener.len())
+                                .rposition(|window| window == opener.as_slice())
+                                .is_some_and(|last| {
+                                    !end.closers.iter().filter(|closer| !closer.is_empty()).any(
+                                        |closer| {
+                                            inside[last..]
+                                                .windows(closer.len())
+                                                .any(|window| window == closer.as_slice())
+                                        },
+                                    )
+                                })
+                        });
+                    if let Some(length) = open.then(|| self.closer_at(&end.closers, at)).flatten() {
+                        dialects.push((dialect.clone(), length));
+                    }
+                }
+            }
+            let Some(length) = dialects.iter().map(|(_, length)| *length).max() else {
+                continue;
+            };
+            let span = at..at + length;
+            if !Self::in_content(reading, &span) || found.iter().any(|(known, _, _)| *known == span)
+            {
+                continue;
+            }
+            let mut candidates: Vec<DialectId> = dialects
+                .into_iter()
+                .filter(|(_, read)| *read == length)
+                .map(|(dialect, _)| dialect)
+                .collect();
+            candidates.sort_by(|left, right| left.id().cmp(right.id()));
+            candidates.dedup();
+            found.push((span, candidates[0].clone(), candidates));
+        }
+        Ok(())
+    }
+}
+
+/// A closer found after a reasoning block (see
+/// [`Recovery::closers_after_cut`]): its span, the dialect it is reported
+/// under, and every dialect it may close.
+type StrayCloser = (Range<usize>, DialectId, Vec<DialectId>);
+
+/// Keep `reading`'s rejected attempts in span order, its parts following.
+fn sort_rejected(reading: &mut Reading) {
+    {
         let rejected = core::mem::take(&mut reading.value.rejected);
         let mut order: Vec<usize> = (0..rejected.len()).collect();
         order.sort_by_key(|&index| (rejected[index].span.start, rejected[index].span.end));
@@ -3142,9 +3492,10 @@ impl Recovery<'_> {
                 *index = moved[*index];
             }
         }
-        Ok(())
     }
+}
 
+impl Recovery<'_> {
     /// The ledger of a reasoning block's edits.
     fn reasoning_ledger(
         &self,
@@ -3641,10 +3992,11 @@ pub(crate) fn assign_ids(
 /// The options of one contested span with equivalent segmentations
 /// ([`equivalent_options`]) folded together, in the order of their kept
 /// segmentations. The kept segmentation of a group is its member with the
-/// most body evidence, the earliest on a tie: the member [`merge`] keeps
+/// most body evidence (see [`Reading::body_evidence`]), the earliest on a tie: the member [`merge`] keeps
 /// among whole readings that differ only in this span.
 fn fold_options<'t>(
     options: &'t [Vec<ResolvedSegment>],
+    output: &[u8],
     governor: &mut Governor,
 ) -> Result<Vec<Fold<'t>>, StopReason> {
     // Each group: its member indices, in option order.
@@ -3667,7 +4019,9 @@ fn fold_options<'t>(
     for members in &groups {
         let mut kept = members[0];
         for &member in &members[1..] {
-            if Fold::body_evidence(&options[member]) > Fold::body_evidence(&options[kept]) {
+            if Fold::body_evidence(&options[member], output)
+                > Fold::body_evidence(&options[kept], output)
+            {
                 kept = member;
             }
         }
@@ -3741,6 +4095,27 @@ fn apply_folds(
 /// span when the output stopped inside it.
 const fn reach(rejected: &RejectedCall) -> usize {
     reach_of(&rejected.span, rejected.reason)
+}
+
+/// The body evidence of a reading's rejected attempts (see
+/// [`Reading::body_evidence`]), compared greatest first: bytes read, then
+/// openers read in their canonical spelling.
+type BodyEvidence = (usize, usize);
+
+/// The [`BodyEvidence`] of rejected attempts given as (reach, dialect, bytes).
+fn evidence<'a>(rejected: impl Iterator<Item = (usize, &'a DialectId, &'a [u8])>) -> BodyEvidence {
+    let (mut reach, mut canonical) = (0, 0);
+    for (bytes_read, dialect, bytes) in rejected {
+        reach += bytes_read;
+        if dialect.grammar().call_ends().iter().any(|end| {
+            end.openers
+                .first()
+                .is_some_and(|opener| bytes.starts_with(opener))
+        }) {
+            canonical += 1;
+        }
+    }
+    (reach, canonical)
 }
 
 /// [`reach`] of an attempt over `span` rejected for `reason`.
@@ -3848,7 +4223,8 @@ fn same_calls(readings: Vec<Reading>, governor: &mut Governor) -> Result<Vec<Rea
 
 /// Each group of `readings` (indices, best first) as one reading: the
 /// member whose rejected attempts' dialects read the most bytes before
-/// failing (the body evidence), the earliest on a tie, with every rejected
+/// failing (the body evidence, then canonical openers; see
+/// [`Reading::body_evidence`]), the earliest on a tie, with every rejected
 /// attempt's [`RejectedCall::candidate_dialects`] extended to the dialects
 /// that attempted a call at the same opener in any member, and every
 /// call's (and embedded call's) [`ToolCall::candidate_dialects`] extended
@@ -3863,7 +4239,7 @@ fn merge(
     for group in groups {
         let mut best = group[0];
         for &member in &group[1..] {
-            let evidence = |at: usize| slots[at].as_ref().map_or(0, Reading::body_evidence);
+            let evidence = |at: usize| slots[at].as_ref().map(Reading::body_evidence);
             if evidence(member) > evidence(best) {
                 best = member;
             }

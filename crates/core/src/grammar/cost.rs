@@ -139,6 +139,10 @@ pub const GROUP_SPLIT: u64 = INSERT_CLOSER;
 /// missing closer.
 pub const CLOSER_MISSPELLED: u64 = 2;
 
+/// Cost of reading a misspelled markup token other than a closer
+/// (`tool_call.markup.token-misspelled`): as for a misspelled closer.
+pub const TOKEN_MISSPELLED: u64 = CLOSER_MISSPELLED;
+
 /// Cost of deleting a stray closer (it discards input bytes).
 pub const DELETE_STRAY_CLOSER: u64 = 3;
 

@@ -46,8 +46,10 @@ streaming recognition, and `purrassist-derive`.
   applies weighted edit operators: insert a missing closer, delete a stray
   one, accept a declared variant or confusable spelling. A closer token one
   edit away from exactly one closer of the grammar is read as that closer
-  (`tool_call.markup.closer-misspelled`), and an attempt reading several
-  calls that fails in one of them keeps the calls it read whole before it
+  (`tool_call.markup.closer-misspelled`), as is any other markup token
+  inside an opened attempt (`tool_call.markup.token-misspelled`), and an
+  attempt reading several calls that fails in one of them, its first
+  included, resynchronizes past it and keeps every call it reads whole
   (`tool_call.markup.group-split`). The least-cost
   repairs are kept and every applied operator is itemized. Argument codecs
   (`json`, `json-args`, `xml-params`, `raw`) read argument bodies with their own recorded
@@ -396,6 +398,6 @@ are in [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound).
 - [dialects/](dialects/): public sources, accepted forms, printing, and
   deliberate exclusions of each built-in dialect.
 - [MATCHING-QUALITY.md](../MATCHING-QUALITY.md#tool-call-recovery-evaluation):
-  the 14,538-case correction evaluation, per rule and per dialect.
+  the 15,246-case correction evaluation, per rule and per dialect.
 - [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound): the cost
   bound, budgets for large outputs, and throughput.

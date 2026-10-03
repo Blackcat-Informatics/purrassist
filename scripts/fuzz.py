@@ -649,6 +649,39 @@ TOOL_CALL_REGRESSIONS = [
     # markup after it: the attempt owns the literal before unparsed markup
     # is scanned, so the report never starts inside it.
     b'\x00R<tool_call>{"id":"call_305c487f",\t"name":\t\t"delete_pa"id":th"\t\t,"arguments"\t:"{\\"path\\":[\\"beta gamma \\\\n  block\\\\n\\",\\"\\\\n  block\\\\n\\"]}"}\t< to=functions./tool_call>\n<tool_call>{\t\t"type":"function"\t,\t\t"id":\t"call_07be3ff1","name"\t:\t"read_file"\t\t,\t\t"arguments":"{\\"path\\":\\"\\\\n  block\\\\n alpha\\",\\"limit\\":-209}"\t\t}\t\t</tool_call>',
+    # T4: bad-first groups (every dialect with `next`), all-bad, a bad call
+    # without its closer or with unbalanced JSON, a section left open before
+    # another, misspelled in-group tokens, and opening reasoning markers
+    # that cut a call or a rejected attempt.
+    b'\x00RHi [TOOL_CALLS] [{"name": "f" oops, "arguments": {"a": "x"}}, {"name": "f", "arguments": {"a": "y"}}, {"name": "f", "arguments": {"a": "z"}}] done',
+    b'\x00RHi <|tool_calls_section_begin|><|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{"a":"x"}<|tool_call_end|><|tool_call_begin|>functions.f:1<|tool_call_argument_begin|>{"a":"y"}<|tool_call_end|><|tool_call_begin|>functions.f:2<|tool_call_argument_begin|>{"a":"z"}<|tool_call_end|><|tool_calls_section_end|> done',
+    b'\x00R<|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{"a":"x"}<|tool_call_end|><|tool_call_begin|>functions.f:1<|tool_call_argument_begin|>{"a":"y"}<|tool_call_end|><|tool_call_begin|>functions.f:2<|tool_call_argument_begin|>{"a":"z"}<|tool_call_end|><|tool_calls_section_end|> done',
+    'Hi <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>f oops\n```json\n{"a":"x"}\n```<｜tool▁call▁end｜>\n<｜tool▁call▁begin｜>function<｜tool▁sep｜>f\n```json\n{"a":"y"}\n```<｜tool▁call▁end｜>\n<｜tool▁call▁begin｜>function<｜tool▁sep｜>f\n```json\n{"a":"z"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜> done'.encode().join([b'\x00\x52', b'']),
+    'Hi <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>f oops<｜tool▁sep｜>{"a":"x"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>f<｜tool▁sep｜>{"a":"y"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>f oops<｜tool▁sep｜>{"a":"z"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>f<｜tool▁sep｜>{"a":"w"}<｜tool▁call▁end｜><｜tool▁calls▁end｜> done'.encode().join([b'\x00\x52', b'']),
+    b'\x00RHi [TOOL_CALLS]f[ARGS]{"a": ::: }[TOOL_CALLS]f[ARGS]{"a": ::: }[TOOL_CALLS]f[ARGS]{"a":"z"} done',
+    b'\x00R<|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{"a":"x"}<|tool_call_end|><|tool_call_begin|>functions.f:1 oops<|tool_call_argument_begin|>{"a":"y"}<|tool_call_end|><|tool_call_begin|>functions.f:2 oops<|tool_call_argument_begin|>{"a":"z"}<|tool_call_end|><|tool_calls_section_end|> done',
+    b'\x00RHi <|tool_calls_section_begin|><|tool_call_begin|>functions.f:0<|tool_call_argument_begin|>{"a":"x"}<|tool_call_end|><|tool_call_begin|>functions.f:1 oops<|tool_call_begin|>functions.f:2<|tool_call_argument_begin|>{"a":"z"}<|tool_call_end|><|tool_calls_section_end|> done',
+    b'\x00RHi <|tool_calls_section_begin|><|tool_call_begin|>functions.f:0<|tool_call_argument_begin|>{"a":"x"}<|tool_call_end|><|tool_call_begin|>functions.f:1<|tool_call_argument_begin|>{"a": ::: <|tool_call_end|><|tool_call_begin|>functions.f:2<|tool_call_argument_begin|>{"a":"z"}<|tool_call_end|><|tool_calls_section_end|> done',
+    b'\x00RHi [TOOL_CALLS] [{"name": "f", "arguments": {"a": "x"}}, {"name": "f" oops, {"name": "f", "arguments": {"a": "z"}}] done',
+    '<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>\tf\t<｜tool▁sep｜>{"a":"x"}\t<｜tool▁call▁end｜>\t\t\n<｜tool▁calls▁begin｜>\t<｜tool▁call▁begin｜>\tf\t<｜tool▁sep｜>{"a":"y"}\t<｜tool▁call▁end｜><｜tool▁calls▁end｜>'.encode().join([b'\x00\x52', b'']),
+    b'\x00RHi <|tool_calls_section_begin|><|tool_call_begin|>functions.f:0<|tool_call_argument_begin|>{"a":"x"}<|tool_call_end|><|tool_call_begn|>functions.f:1<|tool_call_argument_begin|>{"a":"y"}<|tool_call_end|><|tool_calls_section_end|> done',
+    b'\x00R<tool_call>\n<function=read_file>\n<paramter=path>\na\n</parameter>\n</function>\n</tool_call> done',
+    b'\x00R[TOOL_CALLS]read_file[THINK]thinking[/THINK]Answer.',
+    b'\x00R[TOOL_CALLS]read_file[ARGS]{"path":"a"[THINK]thinking[/THINK]Answer.',
+    b'\x00RHi <tool_call>{"name": "read_file", "arguments": {"path": "a<think>hmm</think> answer',
+    # T4: closers written after a reasoning block a call ran into, a
+    # rejected attempt's misspelled closer, and more misspelled tokens.
+    b'\x04RHi [TOOL_CALLS] [{"name": "f" oops, "arguments": {"a": "x"}}, {"name": "f", "arguments": {"a": "y"}}, {"name": "f", "argum',
+    b'\x00RHi <tool_call>{"name": "f" oops "arguments": {"a": "x"}}</tool_cal> The answer.',
+    b'\x00RHi <tool_call>{"name": "f", "arguments": {"a": "x"}}<think>hmm</think></tool_call> done',
+    b'\x00R<think>x <tool_call>{"name": "f", "arguments": {"a": "x"}}</think></tool_call> done',
+    b'\x00R<think>talking about </tool_call> tags</think></tool_call> done',
+    b'\x00RHi [TOOL_CALLS]f[ARGS]{"a":"x"}[TOOL_CALS]f[ARGS]{"a":"y"} done',
+    b'\x00R<tool_call>\n<functon=read_file>\n<parameter=path>\na\n</parameter>\n</function>\n</tool_call> done',
+    b'\x00RHi <|tool_calls_section_begin|><|tool_call_begin|>functions.f:0<|tool_call_argument_begn|>{"a":"x"}<|tool_call_end|><|tool_calls_section_end|> done',
+    b'\x00RHi <tool_call>{"name": "f" oops, "arguments": {"a": "x"}}<think>hmm</think></tool_call> done',
+    b'\x00R<|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{"a":"x"}<|tool_call_end|><|tool_calls_section_end|> done',
+    b'\x00R[TOOL_CALLS]read_file[ARGS]{"path":"[THINK]"}[THINK]x[/THINK]Answer.',
     # An attempt reading several calls begins inside a starts_open block
     # and ends after its closer: the calls it read inside stay embedded.
     b'\x5b\x9c[TOOL_CALLS]t[TOOL_CALLS]S[/THINK][TOOL_CALLS]g',

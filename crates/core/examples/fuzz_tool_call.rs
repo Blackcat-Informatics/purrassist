@@ -45,8 +45,10 @@
 //! - (F4) a rejected attempt runs past where its grammar failed (the
 //!   furthest the recognizer read an attempt of its dialect at its opener)
 //!   only to a literal that ends a call of its dialect, to complete a
-//!   literal begun before it, or (T3) to the bracket that balances a JSON
-//!   value it left open, so prose after a broken opener stays content;
+//!   literal begun before it, (T3) to the bracket that balances a JSON
+//!   value it left open, or (T4) to such a closing literal written with one
+//!   slip (keeping its delimiters), so prose after a broken opener stays
+//!   content;
 //! - (S3/F6) a rejected attempt keeps its own closing markup: when its
 //!   raw text does not end with a literal that ends a call of its dialect
 //!   (any alternative's, a chained call's own; not a single byte), the
@@ -837,12 +839,65 @@ fn check_rejected_extension(output: &[u8], calls: &ToolCalls, read: &[(Range<usi
             }
             open && depth == 0 && matches!(output[end - 1], b'}' | b']')
         };
+        // T4: or to a closer of its dialect written with one slip (one
+        // byte inserted, deleted or substituted, or two adjacent bytes
+        // swapped, keeping the closer's delimiters), which ends a rejected
+        // attempt's markup as it ends a call's.
+        let misspelled = grammar
+            .call_ends()
+            .iter()
+            .flat_map(|ends| &ends.call_closers)
+            .filter(|closer| closer.len() > 1)
+            .any(|closer| {
+                (closer.len().saturating_sub(1)..=closer.len() + 1).any(|length| {
+                    length <= rejected.raw.len()
+                        && slipped(&rejected.raw[rejected.raw.len() - length..], closer)
+                })
+            });
         assert!(
-            closed || completed || balanced,
+            closed || completed || balanced || misspelled,
             "rejected attempt {:?} runs past where it failed ({failed}) without its closer: {:?}",
             rejected.span,
             String::from_utf8_lossy(&output[failed..end])
         );
+    }
+}
+
+/// Whether `token` is `closer` written with one slip: not `closer` itself,
+/// the same leading and trailing runs of non-alphanumeric bytes, and inner
+/// bytes one insertion, deletion, substitution or adjacent swap apart.
+fn slipped(token: &[u8], closer: &[u8]) -> bool {
+    let lead = closer
+        .iter()
+        .take_while(|byte| !byte.is_ascii_alphanumeric())
+        .count();
+    let trail = closer[lead..]
+        .iter()
+        .rev()
+        .take_while(|byte| !byte.is_ascii_alphanumeric())
+        .count();
+    if token == closer
+        || token.len() < lead + trail
+        || token[..lead] != closer[..lead]
+        || !token.ends_with(&closer[closer.len() - trail..])
+    {
+        return false;
+    }
+    let (a, b) = (
+        &token[lead..token.len() - trail],
+        &closer[lead..closer.len() - trail],
+    );
+    let prefix = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    let (a, b) = (&a[prefix..], &b[prefix..]);
+    match (a.len(), b.len()) {
+        (x, y) if x == y => {
+            !a.is_empty()
+                && (a[1..] == b[1..]
+                    || (a.len() >= 2 && a[0] == b[1] && a[1] == b[0] && a[2..] == b[2..]))
+        }
+        (x, y) if x + 1 == y => a == &b[1..],
+        (x, y) if y + 1 == x => &a[1..] == b,
+        _ => false,
     }
 }
 

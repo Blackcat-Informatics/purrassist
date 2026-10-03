@@ -1376,6 +1376,7 @@ fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
         envelope_mutations(base, &mut out);
     }
     closer_misspelled_mutations(base, &mut out);
+    token_misspelled_mutations(base, &mut out);
     invalid_value_mutations(base, &mut out);
     repeated_choice_mutations(base, xml, &mut out);
     if base.dialect == DialectId::MistralV11 {
@@ -1444,6 +1445,65 @@ fn closer_misspelled_mutations(base: &Base, out: &mut Vec<Mutant>) {
                 "{}{slipped}{}",
                 &base.text[..at],
                 &base.text[at + spelling.len()..]
+            ),
+            Need::Exact,
+        ));
+    }
+}
+
+/// `tool_call.markup.token-misspelled`: the last occurrence of each markup
+/// token other than a closer the witness writes after its attempt's opener
+/// (a `<` or `[` spelled literal of its dialect's `call` production: an
+/// argument separator, `<function=`, `<parameter=`, `[ARGS]`), with one
+/// slip. The attempt's own opener (the witness's first bytes) is never
+/// mutated: it is the only evidence that markup begins.
+fn token_misspelled_mutations(base: &Base, out: &mut Vec<Mutant>) {
+    let closers: Vec<Vec<u8>> = base
+        .dialect
+        .grammar()
+        .call_ends()
+        .iter()
+        .flat_map(|end| end.call_closers.iter().cloned())
+        .collect();
+    let mut tokens: Vec<String> = base
+        .dialect
+        .grammar()
+        .call_literals()
+        .iter()
+        .filter(|spelling| {
+            spelling.len() > 1 && matches!(spelling[0], b'<' | b'[') && !closers.contains(spelling)
+        })
+        .filter_map(|spelling| String::from_utf8(spelling.clone()).ok())
+        .collect();
+    if base.dialect == DialectId::Qwen3CoderXml {
+        tokens.push("<parameter=".to_owned());
+    }
+    tokens.sort();
+    tokens.dedup();
+    for token in tokens {
+        let Some(at) = base.text.rfind(&token) else {
+            continue;
+        };
+        // Not the attempt's opener, nor a part of a longer token written there.
+        if base.text[..at].trim().is_empty()
+            || base.text[..at].ends_with('<')
+            || closers
+                .iter()
+                .any(|closer| base.text.as_bytes()[at..].starts_with(closer))
+        {
+            continue;
+        }
+        let Some(slipped) = misspell(&token) else {
+            continue;
+        };
+        let variant: String = token.chars().filter(char::is_ascii_alphanumeric).collect();
+        out.push(mutant(
+            "tool_call.markup.token-misspelled",
+            variant,
+            format!(
+                "{}{slipped}{}",
+                &base.text[..at],
+                &base.text[at + token.len()..]
             ),
             Need::Exact,
         ));
@@ -1534,6 +1594,19 @@ fn marker_cut_mutations(base: &Base, out: &mut Vec<Mutant>) {
     );
     cut.reasoning = true;
     out.push(cut);
+    // The mirror: a call outside reasoning that runs into a block's opening
+    // `[THINK]` is cut there; the block holds the marker and its text.
+    let mut opener = mutant(
+        "tool_call.reasoning.marker-cut",
+        "opening-marker",
+        format!(
+            "[TOOL_CALLS]{}[THINK]Plan.[/THINK]{}",
+            base.call.name, base.text
+        ),
+        Need::Exact,
+    );
+    opener.reasoning = true;
+    out.push(opener);
 }
 
 /// `{name}` in `text` with ` oops` written after its first occurrence: a
@@ -2630,6 +2703,70 @@ fn section_pair(first: &Base, second: &Base, out: &mut Vec<Mutant>) {
             format!("{head}{sep}{bad}{sep}{tail}"),
             Need::Exact,
         ));
+        // The same malformed call first: the attempt resynchronizes past it
+        // as past a later one.
+        if let Some(rest) = head.strip_prefix(begin) {
+            out.push(mutant(
+                "tool_call.markup.group-split",
+                "first",
+                format!("{begin}{bad}{sep}{}{sep}{tail}", rest.trim_start()),
+                Need::Exact,
+            ));
+        }
+        // Without its closer: the next call's opener ends it.
+        if let Some(open) = bad.strip_suffix(call_end) {
+            out.push(mutant(
+                "tool_call.markup.group-split",
+                "middle-unclosed",
+                format!("{head}{sep}{open}{sep}{tail}"),
+                Need::Exact,
+            ));
+        }
+    }
+}
+
+/// The `tool_call.markup.group-split` mutations of a Mistral v3 list of
+/// two calls: a malformed element between them, first, and left open.
+fn mistral_list_pair(first: &Base, second: &Base, out: &mut Vec<Mutant>) {
+    if let (Some((head, first_inside, tail)), Some((_, second_inside, _))) =
+        (mistral_array(first), mistral_array(second))
+        && let Some(bad) = break_name(second_inside.trim(), &second.call.name)
+    {
+        // A malformed element between the two calls of one list.
+        out.push(mutant(
+            "tool_call.markup.group-split",
+            "middle",
+            format!(
+                "{head}[{}, {bad}, {}]{tail}",
+                first_inside.trim(),
+                second_inside.trim()
+            ),
+            Need::Exact,
+        ));
+        // The same malformed element first.
+        out.push(mutant(
+            "tool_call.markup.group-split",
+            "first",
+            format!(
+                "{head}[{bad}, {}, {}]{tail}",
+                first_inside.trim(),
+                second_inside.trim()
+            ),
+            Need::Exact,
+        ));
+        // Left open (no `}`): the next element's `{` ends it.
+        if let Some(open) = bad.strip_suffix('}') {
+            out.push(mutant(
+                "tool_call.markup.group-split",
+                "middle-unclosed",
+                format!(
+                    "{head}[{}, {open}, {}]{tail}",
+                    first_inside.trim(),
+                    second_inside.trim()
+                ),
+                Need::Exact,
+            ));
+        }
     }
 }
 
@@ -2665,22 +2802,7 @@ fn pair_mutations(first: &Base, second: &Base) -> Vec<Mutant> {
                 Need::Exact,
             ));
         }
-        if let (Some((head, first_inside, tail)), Some((_, second_inside, _))) =
-            (mistral_array(first), mistral_array(second))
-            && let Some(bad) = break_name(second_inside.trim(), &second.call.name)
-        {
-            // A malformed element between the two calls of one list.
-            out.push(mutant(
-                "tool_call.markup.group-split",
-                "middle",
-                format!(
-                    "{head}[{}, {bad}, {}]{tail}",
-                    first_inside.trim(),
-                    second_inside.trim()
-                ),
-                Need::Exact,
-            ));
-        }
+        mistral_list_pair(first, second, &mut out);
         if first.dialect == DialectId::MistralV11 {
             // A call whose arguments no repair reads between two calls.
             out.push(mutant(
@@ -2689,6 +2811,16 @@ fn pair_mutations(first: &Base, second: &Base) -> Vec<Mutant> {
                 format!(
                     "{}\n[TOOL_CALLS]{}[ARGS]{{\"x\": ::: }}\n{}",
                     first.text, second.call.name, second.text
+                ),
+                Need::Exact,
+            ));
+            // The same call first.
+            out.push(mutant(
+                "tool_call.markup.group-split",
+                "unread-arguments-first",
+                format!(
+                    "[TOOL_CALLS]{}[ARGS]{{\"x\": ::: }}\n{}\n{}",
+                    first.call.name, first.text, second.text
                 ),
                 Need::Exact,
             ));

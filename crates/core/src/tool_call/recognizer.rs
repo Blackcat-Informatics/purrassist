@@ -74,8 +74,8 @@
 use super::context::ContextTracker;
 use super::dialect::{DialectId, DialectSet};
 use super::ir::{
-    ArgTree, ArgumentFault, CallSegment, Choice, Closure, Piece, ProductionKind, RawCall,
-    ReasoningClosure, ReasoningSegment, Segment,
+    ArgOrigin, ArgTree, ArgumentFault, CallSegment, Choice, Closure, Piece, ProductionKind,
+    RawCall, ReasoningClosure, ReasoningSegment, Rejection, Segment,
 };
 use super::toolset::ToolSet;
 use crate::contract::saturating_size as size;
@@ -289,6 +289,12 @@ struct Turn {
     /// Keyed by block start; each entry's scratch is covered by its stored
     /// segment's charge.
     blocks: BTreeMap<usize, Vec<(usize, Option<usize>, u32)>>,
+    /// The opening reasoning markers found (start, marker pair) and the
+    /// closing ones (start, end, pair), while an attempt that may end
+    /// rejected across them, or read over them, is live (see
+    /// [`Recognizer::ended`]).
+    blocked: Vec<(usize, u32)>,
+    blocked_close: Vec<(usize, usize, u32)>,
 }
 
 impl Turn {
@@ -811,6 +817,8 @@ impl<'s> Recognizer<'s> {
             interps: BTreeMap::new(),
             last_kill: None,
             blocks: BTreeMap::new(),
+            blocked: Vec::new(),
+            blocked_close: Vec::new(),
         };
         Ok(Self {
             set,
@@ -888,11 +896,21 @@ impl<'s> Recognizer<'s> {
         {
             self.marker = matcher.step(self.marker, byte);
             if let Some((literal, length)) = matcher.found(self.marker) {
+                let (start, pair, open) = (at + 1 - length as usize, literal / 2, literal % 2 == 0);
+                // Every marker, as it is found: an attempt reading over it
+                // may end rejected across it before its report is applied
+                // (see `Self::ended`).
+                governor.charge(Resource::ScratchBytes, BLOCKED_BYTES)?;
+                if open {
+                    self.turn.blocked.push((start, pair));
+                } else {
+                    self.turn.blocked_close.push((start, at + 1, pair));
+                }
                 let marker = Pending::Marker {
-                    start: at + 1 - length as usize,
+                    start,
                     end: at + 1,
-                    pair: literal / 2,
-                    open: literal % 2 == 0,
+                    pair,
+                    open,
                 };
                 self.queue(marker, governor)?;
             }
@@ -1194,8 +1212,23 @@ impl<'s> Recognizer<'s> {
             drop(parts);
             return governor.release_scratch(charged);
         };
+        // An opening reasoning marker a call read over as markup, not as
+        // the data of a string value, cuts it (see `marker_cut`).
+        let cut = self.marker_cut(&parts);
         let mut stored = Vec::with_capacity(parts.len());
-        for (segment, cost) in parts {
+        let mut cut_part = None;
+        for (index, (segment, cost)) in parts.into_iter().enumerate() {
+            if let Some((part, marker, _)) = cut
+                && part == index
+                && let Segment::Call(call) | Segment::Result(call) = &segment
+                && let Some(trimmed) = cut_at_marker(call, Some(marker))
+            {
+                let trimmed = match segment {
+                    Segment::Result(_) => Segment::Result(trimmed),
+                    _ => Segment::Call(trimmed),
+                };
+                cut_part = Some((self.turn.store(trimmed, governor)?, cost, marker));
+            }
             let end = segment.span().end;
             stored.push((self.turn.store(segment, governor)?, cost, end));
         }
@@ -1203,11 +1236,36 @@ impl<'s> Recognizer<'s> {
             match interp {
                 Interp::Top(base) => {
                     let mut chain = base;
-                    for &(index, cost, end) in &stored {
+                    let (kept, open) = match (cut, cut_part) {
+                        (Some((part, marker, pair)), Some(trimmed)) => {
+                            (&stored[..part], Some((trimmed, marker, pair)))
+                        }
+                        (Some((part, marker, pair)), None) => {
+                            (&stored[..part], Some(((u32::MAX, 0, marker), marker, pair)))
+                        }
+                        _ => (&stored[..], None),
+                    };
+                    for &(index, cost, end) in kept {
                         let (cost, hist) = self.turn.append(chain, index, cost, end, governor)?;
                         chain = Base { cost, hist };
                     }
-                    frame.candidates.push((chain.cost, chain.hist));
+                    let Some(((index, cost, end), marker, pair)) = open else {
+                        frame.candidates.push((chain.cost, chain.hist));
+                        continue;
+                    };
+                    if index != u32::MAX {
+                        let (cost, hist) = self.turn.append(chain, index, cost, end, governor)?;
+                        chain = Base { cost, hist };
+                    }
+                    let think = Think {
+                        cost: chain.cost,
+                        hist: chain.hist,
+                        start: marker,
+                        pair: Some(pair),
+                        promoted: None,
+                        embedded: Vec::new(),
+                    };
+                    self.offer_think(frame, think, governor)?;
                 }
                 Interp::Embedded(think_start) => {
                     if let Some(think) = self.turn.think.as_mut()
@@ -1238,7 +1296,29 @@ impl<'s> Recognizer<'s> {
         salvage: Option<Salvaged>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let Some((_, interps)) = self.turn.interps.remove(&ended.attempt) else {
+        let removed = self.turn.interps.remove(&ended.attempt);
+        // An opening reasoning marker the attempt read over cuts it: the
+        // marker's bytes belong to the block, which opens where the
+        // rejected attempt now ends (as a block's closing marker cuts a
+        // call inside it).
+        let cut = self
+            .turn
+            .blocked
+            .iter()
+            .copied()
+            .filter(|&(marker, _)| ended.start < marker && marker < ended.at)
+            .min();
+        // The block's own closing marker, when it came before the end.
+        let close = cut.and_then(|(marker, pair)| {
+            self.turn
+                .blocked_close
+                .iter()
+                .copied()
+                .filter(|&(start, end, closer)| closer == pair && start > marker && end <= ended.at)
+                .min()
+        });
+        self.prune_blocked(governor)?;
+        let Some((_, interps)) = removed else {
             if let Some(salvage) = salvage {
                 governor.release_scratch(salvage.charged)?;
             }
@@ -1270,6 +1350,19 @@ impl<'s> Recognizer<'s> {
                 governor,
             );
         }
+        if let Some((marker, pair)) = cut
+            && !outread
+        {
+            return self.cut_rejected(
+                frame,
+                &ended,
+                &interps,
+                dialect,
+                (marker, pair),
+                close,
+                governor,
+            );
+        }
         let segment = Segment::Rejected {
             span: ended.start..ended.at,
             dialect,
@@ -1285,6 +1378,176 @@ impl<'s> Recognizer<'s> {
                     .candidates
                     .push(self.turn.append(base, index, REJECT, ended.at, governor)?);
             }
+        }
+        Ok(())
+    }
+
+    /// The first part of a completed attempt that read over an opening
+    /// reasoning marker (seen outside reasoning while it was reading) as
+    /// data it should not hold: the marker lies inside a capture or the
+    /// arguments the part read (not in markup its grammar spells, as a
+    /// Harmony header's channel is), but not inside the raw bytes of a
+    /// string value (a JSON string, a verbatim parameter): the part, the
+    /// marker's start and its pair. The marker's
+    /// bytes belong to the block it opens, as a block's closing marker cuts
+    /// a call inside the block (`tool_call.reasoning.marker-cut`).
+    fn marker_cut(&self, parts: &[(Segment, u64)]) -> Option<(usize, usize, u32)> {
+        if self.turn.blocked.is_empty() {
+            return None;
+        }
+        for (index, (segment, _)) in parts.iter().enumerate() {
+            let (Segment::Call(call) | Segment::Result(call)) = segment else {
+                continue;
+            };
+            let found = self
+                .turn
+                .blocked
+                .iter()
+                .copied()
+                .filter(|&(marker, _)| call.span.start < marker && marker < call.span.end)
+                .filter(|&(marker, _)| {
+                    // Read as data: inside a capture or the arguments' bytes
+                    // (not markup its grammar spells, which is the call's),
+                    // and not inside a string value.
+                    let in_data = |reading: &RawCall| {
+                        reading.captures.iter().any(|capture| {
+                            capture.span.start <= marker && marker < capture.span.end
+                        }) || reading
+                            .arguments
+                            .root
+                            .span
+                            .as_ref()
+                            .is_some_and(|span| span.start <= marker && marker < span.end)
+                    };
+                    call.readings.iter().any(in_data)
+                        && !call.readings.iter().all(|reading| {
+                            reading.arguments.leaves.iter().any(|leaf| {
+                                leaf.raw.start <= marker
+                                    && marker < leaf.raw.end
+                                    && match leaf.origin {
+                                        ArgOrigin::Raw | ArgOrigin::XmlText => true,
+                                        ArgOrigin::Json | ArgOrigin::StringifiedJson => matches!(
+                                            reading
+                                                .arguments
+                                                .root
+                                                .pointer(&leaf.pointer)
+                                                .map(|node| &node.value),
+                                            Some(crate::json::Value::String(_))
+                                        ),
+                                    }
+                            })
+                        })
+                })
+                .min();
+            if let Some((marker, pair)) = found {
+                return Some((index, marker, pair));
+            }
+        }
+        None
+    }
+
+    /// The rejected attempt `ended`, which ran over the opening reasoning
+    /// marker `opener` (its start and pair), cut at it on every
+    /// interpretation: the block it opens follows, closed at `close` (the
+    /// block's closing marker's start and end) when that came before the
+    /// attempt's end, else left open (see [`Self::ended`]).
+    #[allow(clippy::too_many_arguments)]
+    fn cut_rejected(
+        &mut self,
+        frame: &mut Frame,
+        ended: &Ended,
+        interps: &[Interp],
+        dialect: DialectId,
+        opener: (usize, u32),
+        close: Option<(usize, usize, u32)>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let (marker, pair) = opener;
+        let reason = match ended.reason {
+            Rejection::Malformed { at } => Rejection::Malformed { at: at.min(marker) },
+            Rejection::InvalidUtf8 { at } => Rejection::InvalidUtf8 { at: at.min(marker) },
+            Rejection::Overlapped { at } => Rejection::Overlapped { at: at.min(marker) },
+            other => other,
+        };
+        let segment = Segment::Rejected {
+            span: ended.start..marker,
+            dialect,
+            reason,
+        };
+        let index = self.turn.store(segment, governor)?;
+        for &interp in interps {
+            if let Interp::Top(base) = interp {
+                let (cost, hist) = self.turn.append(base, index, REJECT, marker, governor)?;
+                let think = Think {
+                    cost,
+                    hist,
+                    start: marker,
+                    pair: Some(pair),
+                    promoted: None,
+                    embedded: Vec::new(),
+                };
+                match close {
+                    Some((start, end, _)) => {
+                        let segment = self.turn.reasoning(
+                            &think,
+                            end,
+                            Some(start),
+                            ReasoningClosure::Closed,
+                            Vec::new(),
+                            governor,
+                        )?;
+                        let (cost, mut hist) =
+                            self.turn
+                                .append(Base { cost, hist }, segment, 0, end, governor)?;
+                        if end < ended.at {
+                            hist =
+                                self.turn
+                                    .push(hist, ended.at, TurnKind::Content(end), governor)?;
+                        }
+                        frame.candidates.push((cost, hist));
+                    }
+                    None => self.offer_think(frame, think, governor)?,
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Drop the blocked reasoning markers no live attempt began before.
+    fn prune_blocked(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
+        let earliest = self.turn.interps.values().map(|(start, _)| *start).min();
+        let before = self.turn.blocked.len() + self.turn.blocked_close.len();
+        let live = |marker: usize| earliest.is_some_and(|start| start < marker);
+        self.turn.blocked.retain(|&(marker, _)| live(marker));
+        self.turn
+            .blocked_close
+            .retain(|&(marker, _, _)| live(marker));
+        let after = self.turn.blocked.len() + self.turn.blocked_close.len();
+        governor.release_scratch(size(before - after).saturating_mul(BLOCKED_BYTES))
+    }
+
+    /// Offer `think`, a block opened where a rejected attempt was cut, as
+    /// the open block: the cheaper one stays, and an equally cheap one at
+    /// the same start is packed with it.
+    fn offer_think(
+        &mut self,
+        frame: &mut Frame,
+        think: Think,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let current = frame.think.clone().or_else(|| self.turn.think.clone());
+        match current {
+            Some(existing) if existing.cost < think.cost => {}
+            Some(existing) if existing.cost == think.cost && existing.start == think.start => {
+                let hist = self.turn.push(
+                    existing.hist,
+                    think.start,
+                    TurnKind::Pack(think.hist),
+                    governor,
+                )?;
+                frame.think = Some(Think { hist, ..existing });
+            }
+            _ => frame.think = Some(think),
         }
         Ok(())
     }
@@ -1963,14 +2226,17 @@ pub(super) fn escaped(bytes: &[u8]) -> String {
 fn explain_recovery(edit: &MarkupEdit, original: &str, replacement: &str) -> String {
     match edit.operator {
         EditOperator::GroupSplit => format!(
-            "ended the attempt reading several calls at byte {} before the call it could not read; the calls read whole before it are recovered, and the failing call is a rejected attempt of its own",
+            "split the attempt reading several calls at byte {}, beside a call it could not read; the calls it read whole are recovered, and the failing call is a rejected attempt of its own",
             edit.span.start
         ),
         EditOperator::CloserMisspelled => format!(
             "read misspelled closer `{original}` as `{replacement}`, the only closer of the grammar within edit distance one"
         ),
+        EditOperator::TokenMisspelled => format!(
+            "read misspelled token `{original}` as `{replacement}`, the only token of the grammar within edit distance one"
+        ),
         _ => format!(
-            "cut the call at the reasoning block's closing marker at byte {}: the marker belongs to the block, so what the call read from bytes {}..{} is dropped",
+            "cut the call at the reasoning block's marker at byte {}: the marker belongs to the block, so what the call read from bytes {}..{} is dropped",
             edit.span.start, edit.span.start, edit.span.end
         ),
     }
@@ -2055,6 +2321,7 @@ fn explain(edit: &MarkupEdit) -> String {
         }
         EditOperator::GroupSplit
         | EditOperator::CloserMisspelled
+        | EditOperator::TokenMisspelled
         | EditOperator::ReasoningMarkerCut => explain_recovery(edit, &original, &replacement),
         EditOperator::ContextFencedExample => {
             "call recognized inside fenced code, an inline code span or a block quote; it may be an example rather than a call".into()
@@ -2190,6 +2457,9 @@ pub struct RecognizedTurn {
 
 /// Scratch bytes charged per recorded rejected attempt.
 const ATTEMPT_BYTES: u64 = 32;
+
+/// Scratch bytes per blocked opening reasoning marker.
+const BLOCKED_BYTES: u64 = 16;
 
 impl PartialEq for RecognizedTurn {
     fn eq(&self, other: &Self) -> bool {

@@ -100,6 +100,11 @@ pub(crate) struct Program {
     /// input): where an attempt that could not read a call resynchronizes
     /// (see the engine's resynchronization); empty otherwise.
     pub(crate) call_closers: Vec<u32>,
+    /// For a grouped program, the literal instructions a call after a
+    /// `next` begins with (reached from the `next` without input): where an
+    /// attempt resynchronizes at the next call when the call it could not
+    /// read has no closer; empty otherwise.
+    pub(crate) call_openers: Vec<u32>,
     /// Per `insert` instruction's literal, the literals the program reads
     /// at the same input position instead (the alternatives of the
     /// insertion: the token written, an optional segment's literal before
@@ -1138,6 +1143,7 @@ fn compile_program(
         effects
     };
     let call_closers = call_closer_lits(&insts, grouped, governor)?;
+    let call_openers = call_opener_lits(&insts, governor)?;
     let insert_alternatives = insert_alternatives(&insts, governor)?;
     Ok(Program {
         insts,
@@ -1149,6 +1155,7 @@ fn compile_program(
         start_closure,
         grouped,
         call_closers,
+        call_openers,
         insert_alternatives,
     })
 }
@@ -1517,6 +1524,39 @@ pub(crate) fn compile(
         longest,
         layouts,
     })
+}
+
+/// The literal instructions a call after a `next` of `insts` begins with:
+/// those reached from each `next` over zero-width instructions (not an
+/// insertion).
+fn call_opener_lits(insts: &[Inst], governor: &mut Governor) -> Result<Vec<u32>, GrammarError> {
+    let mut openers: Vec<u32> = Vec::new();
+    for inst in insts {
+        let Inst::Next { next } = *inst else {
+            continue;
+        };
+        charge(governor, size(insts.len()), 0)?;
+        let mut seen = vec![false; insts.len()];
+        let mut stack = vec![next];
+        while let Some(pc) = stack.pop() {
+            if core::mem::replace(&mut seen[pc as usize], true) {
+                continue;
+            }
+            match insts[pc as usize] {
+                Inst::Lit { .. } => {
+                    if !openers.contains(&pc) {
+                        openers.push(pc);
+                    }
+                }
+                Inst::Split(first, second) => stack.extend([first, second]),
+                Inst::Open { next, .. } | Inst::Close { next, .. } | Inst::Commit { next } => {
+                    stack.push(next);
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(openers)
 }
 
 /// For a grouped program, the literal instructions after which one call

@@ -53,6 +53,7 @@
 //! | [`GroupSplit`](EditOperator::GroupSplit) | `tool_call.markup.group-split` | 2 | no | single | syntax | none | yes |
 //! | [`CloserMisspelled`](EditOperator::CloserMisspelled) | `tool_call.markup.closer-misspelled` | 2 | no | single | syntax | markup | yes |
 //! | [`ReasoningMarkerCut`](EditOperator::ReasoningMarkerCut) | `tool_call.reasoning.marker-cut` | 0 | no | single | syntax | data | no |
+//! | [`TokenMisspelled`](EditOperator::TokenMisspelled) | `tool_call.markup.token-misspelled` | 2 | no | single | syntax | markup | yes |
 //!
 //! The first seven operators are the engine's markup repairs: a missing
 //! closer inserted mid-message is a *function* close when more of the
@@ -79,8 +80,15 @@
 //! token within edit distance one of exactly one closer of the grammar as
 //! that closer (a markup repair of its own, distinct from the declared
 //! confusable spellings of `tool_call.markup.terminal-confusable`); and
-//! `tool_call.reasoning.marker-cut` cuts a call found inside a reasoning
-//! block at the block's closing marker, whose bytes belong to the block.
+//! `tool_call.reasoning.marker-cut` cuts a call at a reasoning block's
+//! marker, whose bytes belong to the block: a call found inside the block
+//! at its closing marker, and a call outside reasoning at an opening marker
+//! it read over as markup. `tool_call.markup.token-misspelled` (appended
+//! last) is the opener-side mirror of `closer-misspelled`: a markup token
+//! other than a closer (a tag- or special-token-shaped literal a call reads
+//! after its attempt opened, such as the next call's opener in a group, or
+//! a `<parameter=` opener) within edit distance one of exactly one literal
+//! of the grammar is read as that literal.
 //! Closers inserted at the
 //! end of output under a non-length stop are
 //! `tool_call.markup.missing-closers-at-end`, usable only when the call is
@@ -110,7 +118,7 @@
 //! assert_eq!(stray.id, "tool_call.markup.stray-closer");
 //! assert_eq!(stray.loss, Some(LossKind::Markup));
 //! assert!(!stray.guess && stray.repair);
-//! assert_eq!(OPERATORS.len(), 41);
+//! assert_eq!(OPERATORS.len(), 42);
 //! let framing = EditOperator::FramingNewline.rule();
 //! assert_eq!((framing.loss, framing.repair), (Some(LossKind::Markup), false));
 //! ```
@@ -249,19 +257,29 @@ pub enum EditOperator {
     /// maximal malformed subpart: a data loss whose edit keeps the original
     /// bytes and their exact offsets.
     InvalidUtf8Value,
-    /// End an attempt reading several calls (a production with `next`)
-    /// before the call it could not read: the calls read whole before it
-    /// are recovered in their own right, and the failing call and what
-    /// follows it are a rejected attempt.
+    /// Split an attempt reading several calls (a production with `next`)
+    /// at a call it could not read, its first included: the calls it read
+    /// whole are recovered in their own right, and the failing call is a
+    /// rejected attempt of its own (the attempt resynchronizes past it, or
+    /// ends there).
     GroupSplit,
     /// Read a closer token within edit distance one of exactly one closer
     /// of the grammar (one byte inserted, deleted or substituted, or two
     /// adjacent bytes swapped, inside its delimiters) as that closer.
     CloserMisspelled,
-    /// Cut a call found inside a reasoning block at the block's closing
-    /// marker: the marker's bytes belong to the reasoning block, never to
-    /// the call, so what the call read from them is dropped.
+    /// Cut a call at a reasoning block's marker (inside the block, at its
+    /// closing marker; outside reasoning, at an opening marker the call
+    /// read over as markup): the marker's bytes belong to the reasoning
+    /// block, never to the call, so what the call read from them is
+    /// dropped.
     ReasoningMarkerCut,
+    /// Read a markup token other than a closer, after the call's attempt
+    /// opened (the next call's opener in a group, a `<parameter=` opener),
+    /// within edit distance one of exactly one literal of the grammar (one
+    /// byte inserted, deleted or substituted, or two adjacent bytes
+    /// swapped, inside its delimiters) as that literal: the opener-side
+    /// mirror of [`Self::CloserMisspelled`].
+    TokenMisspelled,
 }
 
 /// Static metadata of one [`EditOperator`].
@@ -353,7 +371,7 @@ const fn guessed_repair(operator: EditOperator, id: &'static str, cost: u64) -> 
 }
 
 /// The number of [`EditOperator`]s.
-pub const OPERATOR_COUNT: usize = 41;
+pub const OPERATOR_COUNT: usize = 42;
 
 /// Every grammar edit operator, in [`EditOperator`] order, as a constant
 /// table (the tool-call rule registry is built from it at compile time).
@@ -628,6 +646,13 @@ pub(crate) const OPERATOR_TABLE: [OperatorRule; OPERATOR_COUNT] = [
         0,
         false,
         Some(LossKind::Data),
+    ),
+    repair(
+        EditOperator::TokenMisspelled,
+        "tool_call.markup.token-misspelled",
+        cost::TOKEN_MISSPELLED,
+        Grounding::Syntax,
+        Some(LossKind::Markup),
     ),
 ];
 

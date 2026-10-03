@@ -144,7 +144,7 @@ test's assertions fails the build by design.
 | Path matching | 1594 | 1279 | 0 | 315 | 80.2% | 0.0% | 0.234% | 2% |
 | Phonetic ambiguity | 1408 | 1089 | 0 | 319 | 77.3% | 0.0% | 0.275% | 5% |
 | JSON recovery | 714 | 630 | 0 | 84 | 88.2% | 0.0% | 0.474% | 2% |
-| Tool-call recovery | 14538 | 10097 | 0 | 4441 | 69.5% | 0.0% | 0.030% | 1% |
+| Tool-call recovery | 15246 | 10805 | 0 | 4441 | 70.9% | 0.0% | 0.028% | 1% |
 
 "Coverage" is the fraction of cases an automatic decision was reached for at
 all (correct + incorrect, over the total); "risk" is the observed error rate
@@ -207,7 +207,7 @@ small oracle exhaustively proves the Unicode tables.
 
 ## Tool-call recovery evaluation
 
-`crates/core/tests/data/evaluation/tool-calls.jsonl` holds 14,538 mutated model
+`crates/core/tests/data/evaluation/tool-calls.jsonl` holds 15,246 mutated model
 turns, each with its `id`, `category` (the rule expected to repair it),
 `dialect` (the request's dialect allow-list), `policy`, `stop`, `input` and
 `truth`. The `tool-call-corpus` example generates it deterministically: it
@@ -271,7 +271,16 @@ under the `json.syntax.*` rule the same slip records inside arguments (a
 single reading, so `Exact` truth). Turns
 of two calls (one dialect, two bare JSON calls in one array, Qwen3-Coder XML
 mixed with Hermes, and a DeepSeek-V3.1 section with a DeepSeek-V3 section)
-cover the multi-call rules. `truth` is the original call or calls
+cover the multi-call rules: `tool_call.markup.group-split` cases put a
+malformed call before, between or (left without its closer) between the
+two calls of a Kimi-K2 or DeepSeek section or a Mistral v3 list, and a
+Mistral v11 call no JSON repair reads before or between two v11 calls.
+`tool_call.markup.closer-misspelled` and `tool_call.markup.token-misspelled`
+cases write one slip in a closer or in another markup token the witness
+writes after its opener (an argument separator, `<function=`,
+`<parameter=`, `[ARGS]`, a Harmony header token);
+`tool_call.reasoning.marker-cut` cases run a Mistral v11 call with no
+`[ARGS]` into a reasoning block's closing or opening marker. `truth` is the original call or calls
 when the mutation leaves what the caller needs, and `Unresolved` when the
 only correct answer is abstention: the information is destroyed or
 genuinely ambiguous (a hallucinated tool name, a missing required argument,
@@ -338,7 +347,7 @@ unassignable (`UnknownParameter`), so the call abstains.
 | `tool_call.markup.closer-variant` | 159 | 159 | 0 | 0 | 0 |
 | `tool_call.markup.closers-only-empty` | 29 | 1 | 0 | 28 | 28 |
 | `tool_call.markup.dangling-opener` | 384 | 384 | 0 | 0 | 0 |
-| `tool_call.markup.group-split` | 160 | 160 | 0 | 0 | 0 |
+| `tool_call.markup.group-split` | 448 | 448 | 0 | 0 | 0 |
 | `tool_call.markup.json-body` | 32 | 32 | 0 | 0 | 0 |
 | `tool_call.markup.missing-closers-at-end` | 288 | 288 | 0 | 0 | 0 |
 | `tool_call.markup.missing-function-close` | 128 | 128 | 0 | 0 | 0 |
@@ -350,6 +359,7 @@ unassignable (`UnknownParameter`), so the call abstains.
 | `tool_call.markup.parameter-closed-by-element` | 31 | 31 | 0 | 0 | 0 |
 | `tool_call.markup.stray-closer` | 699 | 671 | 0 | 28 | 28 |
 | `tool_call.markup.terminal-confusable` | 192 | 192 | 0 | 0 | 0 |
+| `tool_call.markup.token-misspelled` | 388 | 388 | 0 | 0 | 0 |
 | `tool_call.markup.undeclared-parameter-boundary` | 26 | 0 | 0 | 26 | 26 |
 | `tool_call.name.alias` | 96 | 96 | 0 | 0 | 0 |
 | `tool_call.name.from-arguments` | 64 | 24 | 0 | 40 | 40 |
@@ -360,7 +370,7 @@ unassignable (`UnknownParameter`), so the call abstains.
 | `tool_call.parameter.repeated` | 336 | 0 | 0 | 336 | 336 |
 | `tool_call.parameter.repeated-choice` | 156 | 36 | 0 | 120 | 120 |
 | `tool_call.reasoning.embedded-call` | 384 | 0 | 0 | 384 | 384 |
-| `tool_call.reasoning.marker-cut` | 32 | 32 | 0 | 0 | 0 |
+| `tool_call.reasoning.marker-cut` | 64 | 64 | 0 | 0 | 0 |
 | `tool_call.reasoning.unclosed` | 384 | 144 | 0 | 240 | 240 |
 | `tool_call.reasoning.unterminated` | 384 | 384 | 0 | 0 | 0 |
 | `tool_call.stop.consumed-closer` | 192 | 192 | 0 | 0 | 0 |
@@ -380,35 +390,35 @@ and by dialect allow-list:
 | `adapter` | 27 | 24 | 0 | 3 |
 | `anthropic` | 1246 | 883 | 0 | 363 |
 | `bare` | 1086 | 723 | 0 | 363 |
-| `deepseek3` | 1470 | 1091 | 0 | 379 |
-| `deepseek31` | 1246 | 883 | 0 | 363 |
-| `harmony` | 1374 | 983 | 0 | 391 |
+| `deepseek3` | 1598 | 1219 | 0 | 379 |
+| `deepseek31` | 1374 | 1011 | 0 | 363 |
+| `harmony` | 1443 | 1052 | 0 | 391 |
 | `hermes` | 1272 | 864 | 0 | 408 |
-| `kimi` | 1342 | 959 | 0 | 383 |
+| `kimi` | 1470 | 1087 | 0 | 383 |
 | `llama3` | 1054 | 691 | 0 | 363 |
-| `mistral11` | 958 | 615 | 0 | 343 |
-| `mistral3` | 1150 | 787 | 0 | 363 |
+| `mistral11` | 1086 | 743 | 0 | 343 |
+| `mistral3` | 1214 | 851 | 0 | 363 |
 | `mixed` | 96 | 96 | 0 | 0 |
 | `openai` | 932 | 586 | 0 | 346 |
-| `qwen` | 1285 | 912 | 0 | 373 |
+| `qwen` | 1348 | 975 | 0 | 373 |
 
 | Allow-list | Cases | Correct | Incorrect | Abstained |
 | --- | ---: | ---: | ---: | ---: |
 | `anthropic-tool-use.v1` | 576 | 409 | 0 | 167 |
-| `anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1` | 7781 | 5389 | 0 | 2392 |
+| `anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1` | 8151 | 5759 | 0 | 2392 |
 | `bare-json.v1` | 496 | 329 | 0 | 167 |
-| `deepseek-v3.1.v1` | 576 | 409 | 0 | 167 |
+| `deepseek-v3.1.v1` | 640 | 473 | 0 | 167 |
 | `deepseek-v3.1.v1,deepseek-v3.v1` | 32 | 32 | 0 | 0 |
-| `deepseek-v3.v1` | 688 | 513 | 0 | 175 |
-| `harmony.v1` | 640 | 461 | 0 | 179 |
+| `deepseek-v3.v1` | 752 | 577 | 0 | 175 |
+| `harmony.v1` | 675 | 496 | 0 | 179 |
 | `hermes.v1` | 604 | 408 | 0 | 196 |
 | `hermes.v1,qwen3-coder-xml.v1` | 64 | 64 | 0 | 0 |
-| `kimi-k2.v1` | 624 | 445 | 0 | 179 |
+| `kimi-k2.v1` | 688 | 509 | 0 | 179 |
 | `llama3-json.v1` | 480 | 313 | 0 | 167 |
-| `mistral-v11.v1` | 416 | 261 | 0 | 155 |
-| `mistral-v3.v1` | 528 | 361 | 0 | 167 |
+| `mistral-v11.v1` | 464 | 309 | 0 | 155 |
+| `mistral-v3.v1` | 560 | 393 | 0 | 167 |
 | `openai-tool-calls.v1` | 422 | 264 | 0 | 158 |
-| `qwen3-coder-xml.v1` | 611 | 439 | 0 | 172 |
+| `qwen3-coder-xml.v1` | 642 | 470 | 0 | 172 |
 
 Rules no case exercises: `json.syntax.literal-escape` (no witness value
 contains a backslash to unescape). `tool_call.markup.terminal-confusable` is

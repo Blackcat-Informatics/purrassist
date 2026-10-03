@@ -1,0 +1,151 @@
+{
+  "description": "T4: Mistral v11 calls each carry their own [TOOL_CALLS] opener and no wrapper or closer, so a bad call (first, an arguments value no JSON repair reads) is its own rejected attempt and the good calls after it are recovered as mistral-v11 by their own attempts, needing no repair (no group is split), exactly as for a bad call after a good one; nothing is content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v11.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "Hi [TOOL_CALLS]f[ARGS]{\"a\": ::: }[TOOL_CALLS]f[ARGS]{\"a\":\"y\"}[TOOL_CALLS]f[ARGS]{\"a\":\"z\"} done",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "tool_calls",
+    "verdict": "run",
+    "usable_calls": {
+      "strict": 2,
+      "accepting_guesses": 2
+    },
+    "calls": [
+      {
+        "tool": "f",
+        "arguments": {
+          "a": "y"
+        },
+        "candidate_dialects": [
+          "mistral-v11.v1"
+        ],
+        "outcome": "resolved",
+        "rules": [
+          "tool_call.id.dedup"
+        ]
+      },
+      {
+        "tool": "f",
+        "arguments": {
+          "a": "z"
+        },
+        "candidate_dialects": [
+          "mistral-v11.v1"
+        ],
+        "outcome": "resolved",
+        "rules": [
+          "tool_call.id.dedup"
+        ]
+      }
+    ],
+    "rejected": [
+      {
+        "span": [
+          3,
+          33
+        ],
+        "dialect": "mistral-v11.v1",
+        "candidate_dialects": [
+          "mistral-v11.v1",
+          "mistral-v3.v1"
+        ],
+        "reason": "Malformed { at: 28 }",
+        "raw": "[TOOL_CALLS]f[ARGS]{\"a\": ::: }"
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "Hi ",
+      "done"
+    ],
+    "failed_validations": [],
+    "ledger_rules": [
+      "tool_call.id.dedup",
+      "tool_call.id.dedup"
+    ]
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 2,
+    "accepting_guesses": 2
+  },
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "y"
+      },
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.id.dedup"
+      ]
+    },
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "z"
+      },
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.id.dedup"
+      ]
+    }
+  ],
+  "rejected": [
+    {
+      "span": [
+        3,
+        33
+      ],
+      "dialect": "mistral-v11.v1",
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "reason": "Malformed { at: 28 }",
+      "raw": "[TOOL_CALLS]f[ARGS]{\"a\": ::: }"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Hi ",
+    "done"
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.id.dedup",
+    "tool_call.id.dedup"
+  ]
+}

@@ -308,6 +308,7 @@ fn every_rule_declares_loss_kind() {
             "json.syntax.string",
             "json.syntax.trailing-comma",
             "tool_call.markup.closer-misspelled",
+            "tool_call.markup.token-misspelled",
         ]
     );
     assert_eq!(
