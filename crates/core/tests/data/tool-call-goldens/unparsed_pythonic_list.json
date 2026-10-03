@@ -51,6 +51,9 @@
     }
   ],
   "embedded": [],
+  "content": [
+    "[get_weather(city=\"Paris\"), get_weather(city=\"Oslo\", unit=\"celsius\")]"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.unparsed-dialect"

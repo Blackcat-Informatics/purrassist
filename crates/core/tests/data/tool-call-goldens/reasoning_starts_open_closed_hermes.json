@@ -51,6 +51,9 @@
       ]
     }
   ],
+  "content": [
+    "Answer."
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.reasoning.embedded-call"

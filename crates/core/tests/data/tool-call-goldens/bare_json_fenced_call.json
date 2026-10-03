@@ -75,6 +75,10 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "Calling the tool:\n```json\n",
+    "\n```\n"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.context.fenced-example"

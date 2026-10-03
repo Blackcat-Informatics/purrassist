@@ -152,9 +152,15 @@ targets' mutation tokens so mutation can create or move field boundaries).
   character, and slices back to the retained source (a rejected attempt's
   raw bytes are exactly its range); content, reasoning, and call ranges
   never overlap. (S3) A rejected attempt keeps its own closing markup: when
-  a parser's attempt does not end with a closer of its dialect (a closer
-  other than a bare bracket, which prose also writes), the content after it,
-  up to the next call, reasoning block, or attempt, holds no such closer. Every `Resolved` call printed in its own dialect
+  a parser's attempt does not end with a closer of the `call` alternative
+  it opened (a closer other than a bare bracket, which prose also writes;
+  an inner element's closer, `</function>` inside `<tool_call>`, is not
+  one), the content after it,
+  up to the next call, reasoning block, or attempt, holds no such closer.
+  (F4) A rejected attempt runs past where its grammar failed (the furthest
+  the recognizer read an attempt of its dialect at that opener, in any
+  reading) only to a closer of its dialect, so bytes after a closer-less
+  attempt stay content. Every `Resolved` call printed in its own dialect
   (`emit::emit`) recovers to the same tool with `Node::equivalent`
   arguments and `Resolved`, and the printed text is stable (a fixed point
   from its first recovery; a `Resolved` call is skipped only as

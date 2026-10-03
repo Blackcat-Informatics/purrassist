@@ -59,6 +59,9 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "\nThe reply will look like {\"city\": \"Paris\", \"temp\": 21}."
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.missing-token",

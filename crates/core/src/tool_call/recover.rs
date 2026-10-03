@@ -1147,10 +1147,12 @@ pub struct RejectedCall {
     /// attempt a parser made runs from its opener to the end literal of the
     /// `call` alternative it opened (nesting by that alternative's opener,
     /// or by bracket for a JSON call) and any repeated closers right after
-    /// it, or, without one, to the next call reopening that alternative, a
-    /// reasoning block, reported unparsed markup, or the end of output; a
-    /// call or attempt inside the broken wrapper is kept, and this range
-    /// covers it. Content never holds these bytes. Unparsed markup
+    /// it, found before the next call reopening that alternative, a
+    /// reasoning block, or reported unparsed markup; a call or attempt
+    /// inside the broken wrapper is kept, and this range covers it. Without
+    /// such a closer the range is what the grammar read, from the opener to
+    /// where it failed, and the bytes after it stay content. Content never
+    /// holds these bytes. Unparsed markup
     /// ([`Rejection::UnsupportedDialect`]) covers only the detected markup,
     /// whose bytes also stay content.
     pub span: Range<usize>,
@@ -2510,7 +2512,8 @@ impl Recovery<'_> {
     /// attempt ends where its grammar failed, but the call markup it began
     /// runs on to the end literal of the alternative it opened (its wrapper
     /// or section closer, any declared spelling, at nesting depth one:
-    /// another opener of the same alternative opens a level), so its raw
+    /// another opener of the same alternative opens a level, unless the
+    /// alternative chains calls that each open with it), so its raw
     /// text is the whole call and no closing markup is left as content.
     /// The search reads the content after the attempt; a call or rejected
     /// attempt inside the broken wrapper (a bare JSON object recovered from
@@ -2518,9 +2521,11 @@ impl Recovery<'_> {
     /// rejection's span covers it, and the search stops at a reasoning
     /// block, reported unparsed markup (whose bytes stay content under its
     /// own report), or a call or attempt opening the same alternative again
-    /// (a sibling). Without an end
-    /// literal before such a boundary, the attempt runs to the first call
-    /// it passed, the boundary, or the end of output.
+    /// (a sibling). Repeated closers right after the end literal are
+    /// absorbed as stray closers. Without an end literal before such a
+    /// boundary the attempt is not extended: it keeps the span its grammar
+    /// read, and everything after it stays content, since nothing shows it
+    /// is markup (a broken opener followed by the answer in prose).
     fn close_rejections(
         &self,
         value: &mut ToolCalls,
@@ -2551,12 +2556,15 @@ impl Recovery<'_> {
             let opened: Vec<&CallEnd> = {
                 let best = ends
                     .iter()
-                    .filter_map(|end| at(&end.0, span.start).map(|length| (length, end)))
+                    .filter_map(|end| at(&end.openers, span.start).map(|length| (length, end)))
                     .max_by_key(|(length, _)| *length);
                 best.map_or_else(|| ends.iter().collect(), |(_, end)| vec![end])
             };
-            let openers: Vec<Vec<u8>> = opened.iter().flat_map(|end| end.0.clone()).collect();
-            let closers: Vec<Vec<u8>> = opened.iter().flat_map(|end| end.1.clone()).collect();
+            let openers: Vec<Vec<u8>> = opened.iter().flat_map(|end| end.openers.clone()).collect();
+            let closers: Vec<Vec<u8>> = opened.iter().flat_map(|end| end.closers.clone()).collect();
+            // A repeated opener nests a level, unless the alternative
+            // chains several calls that each open with it.
+            let nests = !opened.iter().any(|end| end.chained);
             if closers.is_empty() {
                 continue;
             }
@@ -2584,7 +2592,7 @@ impl Recovery<'_> {
                 .filter(|(range, _)| range.start >= span.end && !range.is_empty())
                 .collect();
             boundaries.sort_by_key(|(range, _)| range.start);
-            let end = self.markup_end(&span, &openers, &closers, &boundaries, governor)?;
+            let end = self.markup_end(&span, &openers, nests, &closers, &boundaries, governor)?;
             if end <= span.end {
                 continue;
             }
@@ -2598,13 +2606,15 @@ impl Recovery<'_> {
     }
 
     /// Where the markup of a rejected attempt at `span`, of the alternative
-    /// with `openers` and `closers`, ends (see [`Self::close_rejections`]);
+    /// with `openers` (nesting a level each when `nests`) and `closers`,
+    /// ends (see [`Self::close_rejections`]);
     /// `boundaries` are the segments after it in order, each marked whether
     /// the scan may pass over it.
     fn markup_end(
         &self,
         span: &Range<usize>,
         openers: &[Vec<u8>],
+        nests: bool,
         closers: &[Vec<u8>],
         boundaries: &[(Range<usize>, bool)],
         governor: &mut Governor,
@@ -2631,7 +2641,6 @@ impl Recovery<'_> {
             escaped: false,
         };
         let mut position = span.start;
-        let mut passed: Option<usize> = None;
         let mut next = boundaries.iter();
         let mut found = None;
         'scan: loop {
@@ -2670,7 +2679,9 @@ impl Recovery<'_> {
                         break 'scan;
                     }
                 } else if let Some(length) = at(openers, position) {
-                    state.depth += 1;
+                    if nests || state.depth == 0 {
+                        state.depth += 1;
+                    }
                     position += length;
                 } else {
                     position += 1;
@@ -2680,23 +2691,20 @@ impl Recovery<'_> {
                 // A call or attempt inside the broken wrapper that does
                 // not reopen its alternative.
                 Some((range, true)) if at(openers, range.start).is_none() => {
-                    passed.get_or_insert(range.start);
                     position = range.end;
                 }
-                Some((range, _)) => {
-                    position = range.start;
-                    break;
-                }
-                None => {
-                    position = len;
-                    break;
-                }
+                _ => break,
             }
         }
-        let mut end = found.unwrap_or_else(|| passed.unwrap_or(position));
+        // Without its closer before the stop, the attempt keeps the span
+        // its grammar read: what follows is not shown to be its markup, so
+        // it stays content (prose after a broken opener is the answer).
+        let Some(mut end) = found else {
+            return Ok(span.end);
+        };
         // Repeated closers right after the end (whitespace between) are
         // the attempt's stray closers, as after a completed call.
-        if found.is_some() && brackets.is_empty() {
+        if brackets.is_empty() {
             let limit = boundaries
                 .iter()
                 .map(|(range, _)| range.start)

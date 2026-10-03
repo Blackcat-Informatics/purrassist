@@ -55,6 +55,9 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "{\"role\":\"assistant\",\"content\":["
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

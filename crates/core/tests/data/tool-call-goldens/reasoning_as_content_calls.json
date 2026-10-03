@@ -62,6 +62,10 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "<think>plan ",
+    "</think>\n"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.id.dedup"

@@ -48,6 +48,9 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "<|channel|>commentary<|message|>I will check the weather.<|end|>"
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

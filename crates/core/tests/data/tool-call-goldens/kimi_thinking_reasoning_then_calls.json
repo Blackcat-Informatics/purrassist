@@ -83,6 +83,9 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "Checking both."
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

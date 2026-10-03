@@ -57,6 +57,9 @@
   "calls": [],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "Declarations:\n{\"name\": \"get_weather\", \"description\": \"Current weather\", \"parameters\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}}, \"required\": [\"city\"]}}\nand its schema alone: {\"type\": \"object\", \"properties\": {\"path\": {\"type\": \"string\"}}, \"required\": [\"path\"]}"
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

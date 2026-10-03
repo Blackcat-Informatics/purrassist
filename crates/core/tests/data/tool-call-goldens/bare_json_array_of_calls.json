@@ -83,6 +83,11 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "[",
+    ", ",
+    ", {\"name\": \"summary\", \"count\": 2}]"
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

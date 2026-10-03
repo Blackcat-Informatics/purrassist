@@ -52,6 +52,11 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "{\"id\":\"msg_01\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-x\",\"content\":[",
+    "EqQB\"},",
+    "],\"stop_reason\":\"tool_use\",\"stop_sequence\":null}"
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

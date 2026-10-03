@@ -55,6 +55,7 @@
     ],
     "rejected": [],
     "embedded": [],
+    "content": [],
     "failed_validations": [],
     "ledger_rules": [
       "json.syntax.unterminated-string",
@@ -91,6 +92,9 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "```json\n{\"path\": \"src/ma"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "json.syntax.bare-string",

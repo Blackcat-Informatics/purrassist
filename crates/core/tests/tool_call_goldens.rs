@@ -8,7 +8,7 @@
 //! optional custom `grammar`, and the request (`dialects`, `policy`,
 //! `effects`, `stop`, `tool_choice`, `effort`, `reasoning`, `ids`,
 //! `ambiguity`). The outcome, finish, usability verdict and usable-call
-//! counts, calls, rejected attempts, calls
+//! counts, calls, rejected attempts, the content (each range as text), calls
 //! embedded in reasoning, failed validations and the recorded rule ids are
 //! captured from an actual run rather than
 //! hand-transcribed.
@@ -67,6 +67,7 @@ const CAPTURED: &[&str] = &[
     "calls",
     "rejected",
     "embedded",
+    "content",
     "readings",
     "failed_validations",
     "ledger_rules",
@@ -540,7 +541,7 @@ fn rejected_nodes(calls: &ToolCalls) -> Node {
     ))
 }
 
-fn reading_fields(calls: &ToolCalls) -> Vec<Member> {
+fn reading_fields(output: &[u8], calls: &ToolCalls) -> Vec<Member> {
     let mut fields = vec![
         member("finish", string(calls.finish.code())),
         member("openai_finish_reason", string(calls.openai_finish_reason())),
@@ -563,6 +564,24 @@ fn reading_fields(calls: &ToolCalls) -> Vec<Member> {
         member(
             "embedded",
             Node::new(Value::Array(calls.embedded.iter().map(call_node).collect())),
+        ),
+        // The assistant content, each range as text (bytes when not UTF-8),
+        // so a golden pins what stays prose beside its calls and attempts.
+        member(
+            "content",
+            Node::new(Value::Array(
+                calls
+                    .content
+                    .iter()
+                    .map(|range| {
+                        let bytes = &output[range.clone()];
+                        string(
+                            std::str::from_utf8(bytes)
+                                .map_or_else(|_| format!("{bytes:?}"), str::to_owned),
+                        )
+                    })
+                    .collect(),
+            )),
         ),
     ];
     // An emission, when the golden requests one: the calls it prints and
@@ -639,21 +658,21 @@ fn failed_validations(result: &AssistResult<ToolCalls>) -> Vec<String> {
         .collect()
 }
 
-fn captured_fields(result: &AssistResult<ToolCalls>) -> Vec<Member> {
+fn captured_fields(output: &[u8], result: &AssistResult<ToolCalls>) -> Vec<Member> {
     let mut fields = vec![
         member("outcome", string(outcome_kind(&result.outcome))),
         member("stopped", string(result.receipt.stopped.to_string())),
     ];
     match &result.outcome {
         Outcome::Resolved(calls) | Outcome::BestGuess(calls) => {
-            fields.extend(reading_fields(calls));
+            fields.extend(reading_fields(output, calls));
         }
         Outcome::Ambiguous(readings) => fields.push(member(
             "readings",
             Node::new(Value::Array(
                 readings
                     .iter()
-                    .map(|calls| object(reading_fields(calls)))
+                    .map(|calls| object(reading_fields(output, calls)))
                     .collect(),
             )),
         )),
@@ -672,6 +691,7 @@ fn captured_fields(result: &AssistResult<ToolCalls>) -> Vec<Member> {
 /// kept as `default_expect` only when they differ from the pinned run's.
 fn reblessed(
     golden: &Node,
+    output: &[u8],
     result: &AssistResult<ToolCalls>,
     default: Option<&AssistResult<ToolCalls>>,
 ) -> Node {
@@ -680,9 +700,9 @@ fn reblessed(
         .filter(|member| !CAPTURED.contains(&member.key.as_str()) && member.key != DEFAULT_EXPECT)
         .cloned()
         .collect();
-    let pinned = object(captured_fields(result));
+    let pinned = object(captured_fields(output, result));
     if let Some(default) = default {
-        let default = object(captured_fields(default));
+        let default = object(captured_fields(output, default));
         if !default.equivalent(&pinned) {
             kept.push(member(DEFAULT_EXPECT, default));
         }
@@ -802,7 +822,12 @@ fn tool_call_goldens_match_captured_runs() {
         if bless {
             std::fs::write(
                 path,
-                pretty(&reblessed(&golden.node, result, default.as_ref())),
+                pretty(&reblessed(
+                    &golden.node,
+                    &golden.input,
+                    result,
+                    default.as_ref(),
+                )),
             )
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
             continue;
@@ -814,12 +839,12 @@ fn tool_call_goldens_match_captured_runs() {
             ));
             continue;
         }
-        let actual = object(captured_fields(result));
+        let actual = object(captured_fields(&golden.input, result));
         failures.extend(mismatches(path, "pinned", &golden.node, &actual));
         match (&default, golden.node.get(DEFAULT_EXPECT)) {
             (Some(default), Some(expected)) => {
-                let actual = object(captured_fields(default));
-                if actual.equivalent(&object(captured_fields(result))) {
+                let actual = object(captured_fields(&golden.input, default));
+                if actual.equivalent(&object(captured_fields(&golden.input, result))) {
                     failures.push(format!(
                         "{}: `{DEFAULT_EXPECT}` restates the pinned result; drop it",
                         path.display()
@@ -828,7 +853,7 @@ fn tool_call_goldens_match_captured_runs() {
                 failures.extend(mismatches(path, "default allow-list", expected, &actual));
             }
             (Some(default), None) => {
-                let actual = object(captured_fields(default));
+                let actual = object(captured_fields(&golden.input, default));
                 failures.extend(mismatches(
                     path,
                     "default allow-list",

@@ -58,6 +58,7 @@
     ],
     "rejected": [],
     "embedded": [],
+    "content": [],
     "failed_validations": [],
     "ledger_rules": [
       "tool_call.id.dedup"
@@ -86,6 +87,9 @@
     }
   ],
   "embedded": [],
+  "content": [
+    "[TOOL_CALLS] [{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Paris\"}}]"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.unparsed-dialect"

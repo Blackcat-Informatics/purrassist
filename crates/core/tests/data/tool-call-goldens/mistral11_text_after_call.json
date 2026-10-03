@@ -57,6 +57,9 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "Done. It will look like {\"temp\": 21}."
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.id.dedup"

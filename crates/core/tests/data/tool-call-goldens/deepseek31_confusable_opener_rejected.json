@@ -46,7 +46,7 @@
       {
         "span": [
           6,
-          40
+          27
         ],
         "dialect": "deepseek-v3.1.v1",
         "candidate_dialects": [
@@ -54,10 +54,14 @@
           "deepseek-v3.v1"
         ],
         "reason": "Malformed { at: 27 }",
-        "raw": "<|tool calls begin|> then nothing."
+        "raw": "<|tool calls begin|> "
       }
     ],
     "embedded": [],
+    "content": [
+      "Here: ",
+      "then nothing."
+    ],
     "failed_validations": [],
     "ledger_rules": []
   },
@@ -75,17 +79,21 @@
     {
       "span": [
         6,
-        40
+        27
       ],
       "dialect": "deepseek-v3.1.v1",
       "candidate_dialects": [
         "deepseek-v3.1.v1"
       ],
       "reason": "Malformed { at: 27 }",
-      "raw": "<|tool calls begin|> then nothing."
+      "raw": "<|tool calls begin|> "
     }
   ],
   "embedded": [],
+  "content": [
+    "Here: ",
+    "then nothing."
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

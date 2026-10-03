@@ -80,6 +80,11 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Checking.\"},",
+    ",",
+    "]}"
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

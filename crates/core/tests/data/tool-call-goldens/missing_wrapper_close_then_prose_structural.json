@@ -48,6 +48,9 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "Done."
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.xml.framing-newline",

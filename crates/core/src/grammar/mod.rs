@@ -634,10 +634,20 @@ pub(crate) struct Production {
     pub(crate) expr: Expr,
 }
 
-/// One opener alternative of a grammar's `call` production: the spellings
-/// of its opener literal, then the spellings of the literals that can end
-/// it (see [`CompiledGrammar::call_ends`]).
-pub type CallEnd = (Vec<Vec<u8>>, Vec<Vec<u8>>);
+/// One opener alternative of a grammar's `call` production (see
+/// [`CompiledGrammar::call_ends`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CallEnd {
+    /// The spellings of its opener literal.
+    pub openers: Vec<Vec<u8>>,
+    /// The spellings of the literals that can end it.
+    pub closers: Vec<Vec<u8>>,
+    /// Whether its opener literal recurs inside one call (an attempt that
+    /// reads several calls chained with no separator, each opening with
+    /// it, as Kimi-K2's `<|tool_call_begin|>` elements): a repeated opener
+    /// then continues the attempt rather than nesting a level.
+    pub chained: bool,
+}
 
 /// A compiled, invertible dialect grammar.
 ///
@@ -1027,15 +1037,20 @@ impl CompiledGrammar {
     /// production completes without further input: the wrapper or section
     /// closer, the final brace of a bare object), each with its declared
     /// closer variants and confusable spellings, computed when the grammar
-    /// is compiled. A rejected attempt's markup runs to its alternative's
-    /// end literal (see [`ToolSet::recover`](crate::tool_call::ToolSet::recover)).
+    /// is compiled, and whether its opener recurs inside one call. A
+    /// rejected attempt's markup runs to its alternative's end literal (see
+    /// [`ToolSet::recover`](crate::tool_call::ToolSet::recover)).
     ///
     /// ```
     /// use purrassist_core::tool_call::DialectId;
     /// let ends = DialectId::Hermes.grammar().call_ends();
-    /// let (openers, closers) = &ends[0];
-    /// assert!(openers.contains(&b"<tool_call>".to_vec()));
-    /// assert!(closers.contains(&b"</tool_call>".to_vec()));
+    /// assert!(ends[0].openers.contains(&b"<tool_call>".to_vec()));
+    /// assert!(ends[0].closers.contains(&b"</tool_call>".to_vec()));
+    /// assert!(!ends[0].chained);
+    /// // A section-less Kimi-K2 attempt chains its calls.
+    /// let kimi = DialectId::KimiK2.grammar().call_ends();
+    /// let bare = kimi.iter().find(|end| end.openers.contains(&b"<|tool_call_begin|>".to_vec())).unwrap();
+    /// assert!(bare.chained);
     /// ```
     #[must_use]
     pub fn call_ends(&self) -> &[CallEnd] {

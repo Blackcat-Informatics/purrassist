@@ -43,6 +43,9 @@
   "calls": [],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "Here is the record: {\"name\": \"Ada\", \"age\": 36} and a nested one {\"user\": {\"name\": \"Bob\", \"tags\": [\"x\"]}}."
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

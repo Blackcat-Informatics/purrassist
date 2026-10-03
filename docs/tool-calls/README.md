@@ -51,7 +51,8 @@ streaming recognition, and `purrassist-derive`.
 - **Factorized ambiguity.** The turn is a least-cost segmentation into
   content, reasoning, calls, tool results, and rejected attempts (each
   covering its whole call markup, closers included, so content never holds
-  a wrapper token). When the
+  a wrapper token; without its closer an attempt keeps only what its
+  grammar read, so prose after a broken opener stays content). When the
   recognizer knows the tool set, a call none of whose readings names a
   declared tool (exactly or by alias) weighs `UNDECLARED_NAME` (4, one
   guessed edit) more in this selection, so between competing readings of

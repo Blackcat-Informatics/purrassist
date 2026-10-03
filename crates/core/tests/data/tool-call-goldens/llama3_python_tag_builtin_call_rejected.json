@@ -45,17 +45,20 @@
     {
       "span": [
         0,
-        57
+        14
       ],
       "dialect": "llama3-json.v1",
       "candidate_dialects": [
         "llama3-json.v1"
       ],
       "reason": "Malformed { at: 14 }",
-      "raw": "<|python_tag|>brave_search.call(query=\"weather in Paris\")"
+      "raw": "<|python_tag|>"
     }
   ],
   "embedded": [],
+  "content": [
+    "brave_search.call(query=\"weather in Paris\")"
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

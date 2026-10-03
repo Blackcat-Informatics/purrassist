@@ -515,7 +515,8 @@ covers the whole call markup: compiling the grammar derives, per alternative
 of `call`, the literals that end it with their declared and confusable
 spellings (here `<｜end｜>`, its variant `<｜end_call｜>`, and the ASCII-bar
 `<|end|>`; `CompiledGrammar::call_ends`), and the attempt runs to the
-matching one, so no closer is left as content.
+matching one, so no closer is left as content. Without one it keeps only
+what the grammar read, and the text after it stays content.
 
 The `grammar_doc_example_compiles` test in
 `crates/core/tests/tool_call_rules.rs` reads the three blocks above from this

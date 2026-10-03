@@ -65,6 +65,9 @@
       }
     ],
     "embedded": [],
+    "content": [
+      "\n"
+    ],
     "failed_validations": [],
     "ledger_rules": [
       "tool_call.xml.framing-newline",
@@ -112,6 +115,9 @@
     }
   ],
   "embedded": [],
+  "content": [
+    "\n"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.xml.framing-newline",

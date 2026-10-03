@@ -60,6 +60,9 @@
   "calls": [],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "Here is the declaration: {\"name\": \"get_weather\", \"parameters\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}}, \"required\": [\"city\"]}}"
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

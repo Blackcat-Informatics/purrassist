@@ -40,6 +40,9 @@
   "calls": [],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "{\"name\":\"get_weather\",\"input\":{\"city\":\"Oslo\"}}"
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

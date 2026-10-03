@@ -64,6 +64,9 @@
     }
   ],
   "embedded": [],
+  "content": [
+    "<arg_key>city</arg_key>\n<arg_value>Paris</arg_value>\n</tool_call>"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.unparsed-dialect"

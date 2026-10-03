@@ -57,6 +57,9 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "Calling now."
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.missing-token"

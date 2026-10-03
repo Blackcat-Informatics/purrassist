@@ -50,6 +50,7 @@
       }
     ],
     "embedded": [],
+    "content": [],
     "failed_validations": [],
     "ledger_rules": []
   },
@@ -78,6 +79,7 @@
     }
   ],
   "embedded": [],
+  "content": [],
   "failed_validations": [],
   "ledger_rules": []
 }

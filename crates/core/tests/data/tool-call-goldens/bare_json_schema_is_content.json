@@ -60,6 +60,9 @@
   "calls": [],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "The tool takes this schema: {\"name\": \"get_weather\", \"arguments\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}}, \"required\": [\"city\"]}}"
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

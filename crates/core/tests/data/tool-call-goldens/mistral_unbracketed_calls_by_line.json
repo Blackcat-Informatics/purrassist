@@ -89,6 +89,9 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "\nChecking both now."
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.missing-token",

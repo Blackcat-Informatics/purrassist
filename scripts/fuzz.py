@@ -587,6 +587,22 @@ TOOL_CALL_REGRESSIONS = [
     b'\x00\x52<tool_call>\n<function=read_file>\n<function=read_file>\n</function>\n</tool_call>',
     b'\x00\x52<tool_call>\n<function=read_file>\nhi</function>\n</tool_call>\n</tool_call> tail',
     b'\x04\x52<tool_call>{"name": "read_file", "arguments": {"path": "a"}} junk junk</tool_call>',
+    # F4: without its closer a rejected attempt keeps only what its grammar
+    # read; the prose after a broken opener stays content.
+    b'\x00\x52Sure, I could call <function=read_file but actually no tool is needed. The answer is 42.',
+    # A wrapper broken at its tool name whose own closer is cut before the
+    # next wrapper opens: it keeps only what it read, and the inner
+    # `</function>` left as content is not a closer of the wrapper.
+    b'\x00R<tool_call>\n<function=read_fil\xe9>\n<parameter=path>\na\n</parameter>\n</function>\n</tooR<tool_call>\n<function=read_fil\xe9>\n<parameter=path>\na\n</parameter>\n</funcfunctiontion>\n</tool_call>',
+    # A section-less Kimi-K2 attempt chaining calls, broken in its second:
+    # a repeated <|tool_call_begin|> continues it, so it runs to the
+    # section closer rather than leaving it as content.
+    b'\x00\x52Let me check. <|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{"path": "a"}<|tool_call_end|>'
+    b'<|tool_call_begin|>functions.read_file:1 oops<|tool_call_argument_begin|>{"path": "b"}<|tool_call_end|><|tool_calls_section_end|> done',
+    # An attempt reading several calls begins inside a starts_open block
+    # and ends after its closer: the calls it read inside stay embedded.
+    b'\x5b\x9c[TOOL_CALLS]t[TOOL_CALLS]S[/THINK][TOOL_CALLS]g',
+    b'\x00\x52<function=read_file<oops. Now the real one: <tool_call>\n<function=read_file>\n<parameter=path>\na\n</parameter>\n</function>\n</tool_call> bye',
 ]
 
 TOOL_CALL_SEEDS = [

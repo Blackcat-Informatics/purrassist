@@ -51,6 +51,9 @@
     }
   ],
   "embedded": [],
+  "content": [
+    "functionget_weather\n```json\n{\"city\": \"Paris\"}\n```"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.unparsed-dialect"

@@ -41,6 +41,9 @@
   "calls": [],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "The answer is coming"
+  ],
   "emitted": {
     "calls": 0,
     "skipped": []

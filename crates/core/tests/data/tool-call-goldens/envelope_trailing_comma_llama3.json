@@ -56,6 +56,7 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [],
   "failed_validations": [],
   "ledger_rules": [
     "json.syntax.trailing-comma"

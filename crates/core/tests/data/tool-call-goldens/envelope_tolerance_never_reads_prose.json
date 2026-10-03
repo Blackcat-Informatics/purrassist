@@ -39,6 +39,9 @@
   "calls": [],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "Data: {name: 'Ada', born: 1815,} and {'title': 'x', 'tags': [1, 2,]}. Config {/* defaults */ \"debug\": true, 'level': 3} and a record {'name': 'read_file' 'note': 'x'}."
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

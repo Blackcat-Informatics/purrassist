@@ -73,6 +73,10 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "Let me check the weather.\n",
+    "\nI will report back."
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

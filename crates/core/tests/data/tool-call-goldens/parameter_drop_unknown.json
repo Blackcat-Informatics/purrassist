@@ -42,6 +42,7 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.parameter.drop-unknown"

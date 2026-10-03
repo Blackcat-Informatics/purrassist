@@ -29,6 +29,7 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [],
   "failed_validations": [
     "sha256:5fdea17657d1ef9a398c2475c666561616c67c865ed354dd78f9705dfb1a00f1",
     "keyword /$defs",

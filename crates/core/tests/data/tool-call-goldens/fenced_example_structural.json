@@ -51,6 +51,10 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "For example:\n```xml\n",
+    "\n```\n"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.context.fenced-example",

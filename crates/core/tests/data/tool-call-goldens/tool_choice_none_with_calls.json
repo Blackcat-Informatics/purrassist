@@ -48,6 +48,7 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [],
   "failed_validations": [
     "tool_choice=none"
   ],

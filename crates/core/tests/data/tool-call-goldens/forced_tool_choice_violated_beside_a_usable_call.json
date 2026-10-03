@@ -89,6 +89,9 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "\n"
+  ],
   "emitted": {
     "calls": 0,
     "skipped": [

@@ -51,6 +51,9 @@
     }
   ],
   "embedded": [],
+  "content": [
+    "get_weather{\"city\": \"Paris\"}"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.unparsed-dialect"

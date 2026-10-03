@@ -1306,6 +1306,49 @@ fn tool_choice_from_openai_and_anthropic_json() {
     }
 }
 
+/// Fuzz regression (`scripts/fuzz.py --target tool-call`): an attempt that
+/// reads several calls (Mistral v11 `[TOOL_CALLS]` elements) can begin
+/// inside a reasoning block and end after its closer. The calls it read
+/// inside the block were dropped: they completed only when the attempt
+/// ended, after the block's segment was stored. Each is now offered as an
+/// embedded call of the block it ends inside, as when the attempt ends in
+/// the block, and the call after the closer is still a call.
+#[test]
+fn calls_an_attempt_reads_inside_a_closed_block_stay_embedded() {
+    let tools = compile([
+        ToolDefinition::new("t").effects(Effects::ReadOnly),
+        ToolDefinition::new("s").effects(Effects::ReadOnly),
+        ToolDefinition::new("g").effects(Effects::ReadOnly),
+    ]);
+    for (output, after) in [
+        ("[TOOL_CALLS]t[TOOL_CALLS]s[/THINK]", None),
+        (
+            "[TOOL_CALLS]t[TOOL_CALLS]s[/THINK][TOOL_CALLS]g",
+            Some(34..47),
+        ),
+    ] {
+        let result = tools.recover(
+            output.as_bytes(),
+            &request(DialectId::MistralV11)
+                .reasoning(ReasoningPolicy::Separate { starts_open: true }),
+        );
+        let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = &result.outcome else {
+            panic!("{output:?}: {:#?}", result.outcome)
+        };
+        assert_eq!(calls.reasoning, vec![0..34], "{output:?}");
+        let mut embedded: Vec<_> = calls
+            .embedded
+            .iter()
+            .map(|call| call.span.clone())
+            .collect();
+        embedded.sort_by_key(|span| (span.start, span.end));
+        embedded.dedup();
+        assert_eq!(embedded, [0..13, 13..34], "{output:?}");
+        let spans: Vec<_> = calls.calls.iter().map(|call| call.span.clone()).collect();
+        assert_eq!(spans, after.into_iter().collect::<Vec<_>>(), "{output:?}");
+    }
+}
+
 #[test]
 fn starts_open_reasoning_separated() {
     let tools = compile([ToolDefinition::new("f").effects(Effects::ReadOnly)]);
@@ -1875,7 +1918,9 @@ fn held_reports_are_charged_and_exhaust_explicitly() {
 /// dies on a multi-byte character fails at that character's lead byte, so a
 /// rejected span never splits a well-formed UTF-8 character. Before the fix
 /// the name class consumed `0xC3` and failed on `0xA9`, ending the rejected
-/// span between the two bytes of `é`.
+/// span between the two bytes of `é`. Without its closing brace the
+/// attempt keeps the span its grammar read and the rest stays content (F4);
+/// with it, the attempt runs to that brace and no markup is content (S3).
 #[test]
 fn rejected_span_never_splits_a_character_a_class_cannot_consume() {
     let tools = ToolSet::compile(
@@ -1885,14 +1930,16 @@ fn rejected_span_never_splits_a_character_a_class_cannot_consume() {
         Budget::default(),
     )
     .expect("tools");
-    for (input, at) in [
+    for (input, at, closed) in [
         (
             "{\"id\":\"a\",\"type\":\"function\",\"function\":{\"name\"\u{e9}",
             46,
+            false,
         ),
         (
             "{\"id\":\"a\",\"type\":\"function\",\"function\":{\"name\": \"get_weathe\u{e9}r\"}}",
             59,
+            true,
         ),
     ] {
         let result = tools.recover(input.as_bytes(), &ToolRecoveryRequest::default());
@@ -1901,13 +1948,17 @@ fn rejected_span_never_splits_a_character_a_class_cannot_consume() {
         };
         assert_eq!(calls.rejected.len(), 1, "{input:?}");
         let rejected = &calls.rejected[0];
-        // The attempt fails on a character boundary, and its raw text is
-        // the whole call markup it began (no closer: to the end of output).
         assert_eq!(rejected.reason, Rejection::Malformed { at }, "{input:?}");
         assert!(input.is_char_boundary(at), "{input:?}");
-        assert_eq!(rejected.span, 0..input.len(), "{input:?}");
-        assert_eq!(rejected.text(), Some(input));
-        assert_eq!(calls.content.len(), 0, "{input:?}");
+        let end = if closed { input.len() } else { at };
+        assert_eq!(rejected.span, 0..end, "{input:?}");
+        assert_eq!(rejected.text(), Some(&input[..end]));
+        if closed {
+            assert_eq!(calls.content.len(), 0, "{input:?}");
+        } else {
+            assert_eq!(calls.content.len(), 1, "{input:?}");
+            assert_eq!(calls.content[0], at..input.len(), "{input:?}");
+        }
     }
 }
 

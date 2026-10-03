@@ -60,6 +60,9 @@
   "calls": [],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "Result: {\"name\": \"Ada Lovelace\", \"born\": 1815}. Also {\"arguments\": {\"city\": \"Oslo\"}}, {\"name\": \"pi\", \"arguments\": 3} and {\"name\": \"Ada\", \"arguments\": \"she argued\"}."
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

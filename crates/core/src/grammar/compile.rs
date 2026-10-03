@@ -1584,11 +1584,21 @@ fn call_ends(
             let mut seen = vec![false; program.insts.len()];
             let mut stack = vec![opener];
             let mut ends: Vec<Vec<u8>> = Vec::new();
+            let mut chained = false;
             while let Some(pc) = stack.pop() {
                 if core::mem::replace(&mut seen[pc as usize], true) {
+                    if pc == opener {
+                        chained = true;
+                    }
                     continue;
                 }
                 let inst = &program.insts[pc as usize];
+                if let Inst::Lit { lit: again, .. } = *inst
+                    && pc != opener
+                    && again == lit
+                {
+                    chained = true;
+                }
                 if let Inst::Lit { lit, next } = *inst
                     && pc != opener
                     && completes(next)
@@ -1601,7 +1611,11 @@ fn call_ends(
                 }
                 stack.extend(next_of(inst));
             }
-            Some((spellings(lit), ends))
+            Some(CallEnd {
+                openers: spellings(lit),
+                closers: ends,
+                chained,
+            })
         })
         .collect())
 }

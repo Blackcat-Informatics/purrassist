@@ -33,6 +33,9 @@
   "calls": [],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "<|start|>assistant<|channel|>final<|message|>2 + 2 = 4.<|return|>"
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

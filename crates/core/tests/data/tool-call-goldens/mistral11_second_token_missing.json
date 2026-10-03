@@ -88,6 +88,9 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "Checking both now."
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.id.dedup",

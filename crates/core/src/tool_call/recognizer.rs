@@ -279,6 +279,14 @@ struct Turn {
     interps: BTreeMap<u64, Vec<Interp>>,
     /// The base of the last opener start that ended a content run.
     last_kill: Option<(usize, Base)>,
+    /// Every stored reasoning segment: its end and store index, by its
+    /// block's start. A call an attempt began inside the block may complete
+    /// after the segment is stored (an attempt holding several calls ends
+    /// after its last one); its parts that end inside the block are added
+    /// to the segment then.
+    /// Keyed by block start; each entry's scratch is covered by its stored
+    /// segment's charge.
+    blocks: BTreeMap<usize, Vec<(usize, u32)>>,
 }
 
 impl Turn {
@@ -442,7 +450,7 @@ impl Turn {
                     && segment.span.end <= outer.end
             })
         });
-        self.store(
+        let index = self.store(
             Segment::Reasoning(ReasoningSegment {
                 span: think.start..end,
                 closure,
@@ -450,7 +458,75 @@ impl Turn {
                 edits,
             }),
             governor,
-        )
+        )?;
+        self.blocks
+            .entry(think.start)
+            .or_default()
+            .push((end, index));
+        Ok(index)
+    }
+
+    /// Add the call or result stored at `part`, which an attempt begun in
+    /// the reasoning block starting at `start` completed after some of the
+    /// block's segments were stored, to each of them it ends inside, as
+    /// [`Self::reasoning`] would have, had it completed before.
+    fn embed_late(
+        &mut self,
+        start: usize,
+        part: u32,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let (Segment::Call(call) | Segment::Result(call)) = &self.store[part as usize] else {
+            return Ok(());
+        };
+        let blocks: Vec<u32> = self
+            .blocks
+            .get(&start)
+            .into_iter()
+            .flatten()
+            .filter(|(end, _)| call.span.end <= *end)
+            .map(|&(_, index)| index)
+            .collect();
+        if blocks.is_empty() {
+            return Ok(());
+        }
+        let call = call.clone();
+        for index in blocks {
+            governor.charge(Resource::Work, 1)?;
+            let Segment::Reasoning(reasoning) = &mut self.store[index as usize] else {
+                continue;
+            };
+            governor.charge(Resource::Work, size(reasoning.embedded.len()))?;
+            // A call another embedded call contains is part of that call.
+            if reasoning.embedded.iter().any(|outer| {
+                outer.span != call.span
+                    && outer.span.start <= call.span.start
+                    && call.span.end <= outer.span.end
+            }) {
+                continue;
+            }
+            let before = segment_bytes(&self.store[index as usize]);
+            let Segment::Reasoning(reasoning) = &mut self.store[index as usize] else {
+                continue;
+            };
+            reasoning.embedded.retain(|inner| {
+                inner.span == call.span
+                    || !(call.span.start <= inner.span.start && inner.span.end <= call.span.end)
+            });
+            let mut segment = call.clone();
+            for reading in &mut segment.readings {
+                reading.edits.push(MarkupEdit {
+                    operator: EditOperator::ReasoningEmbeddedCall,
+                    span: segment.span.clone(),
+                    original: Vec::new(),
+                    replacement: Vec::new(),
+                });
+            }
+            reasoning.embedded.push(segment);
+            let after = segment_bytes(&self.store[index as usize]);
+            governor.charge(Resource::ScratchBytes, after.saturating_sub(before))?;
+        }
+        Ok(())
     }
 }
 
@@ -624,6 +700,7 @@ impl<'s> Recognizer<'s> {
             }),
             interps: BTreeMap::new(),
             last_kill: None,
+            blocks: BTreeMap::new(),
         };
         Ok(Self {
             set,
@@ -1039,6 +1116,11 @@ impl<'s> Recognizer<'s> {
                         think
                             .embedded
                             .extend(stored.iter().map(|&(index, _, _)| index));
+                    }
+                    // Segments of the block stored before the attempt
+                    // ended (the block closed while it read on).
+                    for &(index, _, _) in &stored {
+                        self.turn.embed_late(think_start, index, governor)?;
                     }
                 }
             }

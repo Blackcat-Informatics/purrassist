@@ -60,6 +60,9 @@
   "calls": [],
   "rejected": [],
   "embedded": [],
+  "content": [
+    "{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Oslo\"}, \"description\": \"weather lookup\"}"
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

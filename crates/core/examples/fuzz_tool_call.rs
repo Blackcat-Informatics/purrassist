@@ -42,9 +42,14 @@
 //!   (whatever the finish) and otherwise `"tool_calls"` exactly when the
 //!   `OpenAI` array holds a call;
 //!   the wire `verdict` and usable-call counts match;
+//! - (F4) a rejected attempt runs past where its grammar failed (the
+//!   furthest the recognizer read an attempt of its dialect at its opener)
+//!   only to a closer of its dialect, so prose after a broken opener stays
+//!   content;
 //! - (S3) a rejected attempt keeps its own closing markup: when its raw
-//!   text does not end with a closer of its dialect (one that is not a bare
-//!   bracket), the content after it up to the next segment holds none;
+//!   text does not end with a closer of the alternative it opened (one that
+//!   is not a bare bracket), the content after it up to the next segment
+//!   holds none;
 //! - every call, rejected-attempt, content, and reasoning range lies within
 //!   the output, never splits a well-formed UTF-8 character, and slices back
 //!   to the retained source (a rejected attempt's raw bytes are exactly its
@@ -75,11 +80,12 @@
 use core::ops::Range;
 use purrassist_core::contract::Usage;
 use purrassist_core::digest::Digest;
+use purrassist_core::grammar::CallEnd;
 use purrassist_core::tool_call::{
     AmbiguityPolicy, CallOutcome, DialectId, DialectSet, Effects, Finish, GenerationStop, IdPolicy,
-    ObjectSpec, Param, PolicySelection, ReasoningPolicy, RecognizedTurn, Recognizer, Rejection,
-    RepairPolicy, SkipReason, Skipped, ToolCalls, ToolChoice, ToolDefinition, ToolRecoveryRequest,
-    ToolSet, Verdict, emit,
+    ObjectSpec, Param, Piece, PolicySelection, ReasoningPolicy, RecognizedTurn, Recognizer,
+    Rejection, RepairPolicy, Segment, SkipReason, Skipped, ToolCalls, ToolChoice, ToolDefinition,
+    ToolRecoveryRequest, ToolSet, Verdict, emit,
 };
 use purrassist_core::wire::WireValue;
 use purrassist_core::{AssistResult, Budget, Effort, Governor, Outcome, StopReason, json};
@@ -268,11 +274,11 @@ fn check_rejected(output: &[u8], calls: &ToolCalls) {
 }
 
 /// S3: a rejected attempt keeps its own closing markup. For an attempt a
-/// parser made whose dialect ends calls with a distinctive closer (not a
-/// bare bracket, which prose also writes), when its raw text does not end
-/// with one of its dialect's closer spellings, the content after it, up to
-/// the next call, reasoning block or other attempt, holds none: the closer
-/// would have ended the attempt.
+/// parser made whose opened alternative ends with a distinctive closer
+/// (not a bare bracket, which prose also writes), when its raw text does
+/// not end with one of that alternative's closer spellings, the content
+/// after it, up to the next call, reasoning block or other attempt, holds
+/// none: the closer would have ended the attempt.
 fn check_rejected_markup(output: &[u8], calls: &ToolCalls) {
     for rejected in &calls.rejected {
         if matches!(rejected.reason, Rejection::UnsupportedDialect { .. }) {
@@ -281,11 +287,23 @@ fn check_rejected_markup(output: &[u8], calls: &ToolCalls) {
         let Some(dialect) = &rejected.dialect else {
             continue;
         };
-        let closers: Vec<&Vec<u8>> = dialect
-            .grammar()
-            .call_ends()
+        // The closers of the alternative the attempt opened (its longest
+        // opener spelling), or of every alternative when none matches: an
+        // inner element's closer (`</function>` inside a broken
+        // `<tool_call>`) does not end the attempt.
+        let ends = dialect.grammar().call_ends();
+        let opener = |end: &CallEnd| {
+            end.openers
+                .iter()
+                .filter(|spelling| rejected.raw.starts_with(spelling))
+                .map(Vec::len)
+                .max()
+        };
+        let longest = ends.iter().filter_map(opener).max();
+        let closers: Vec<&Vec<u8>> = ends
             .iter()
-            .flat_map(|(_, closers)| closers)
+            .filter(|end| longest.is_none() || opener(end) == longest)
+            .flat_map(|end| &end.closers)
             .collect();
         if closers.is_empty() || closers.iter().any(|closer| closer.len() == 1) {
             continue;
@@ -630,7 +648,13 @@ fn check_result(
         Outcome::Ambiguous(_) => assert_eq!(code, 3),
         Outcome::Unresolved => assert_eq!(code, 4),
     }
+    let read = if values.is_empty() {
+        Vec::new()
+    } else {
+        read_spans(tools, output, request)
+    };
     for calls in values {
+        check_rejected_extension(output, calls, &read);
         assert_eq!(
             calls.length_stop,
             request.stop.is_truncation(),
@@ -638,6 +662,71 @@ fn check_result(
         );
         check_calls(output, calls);
         check_reemission(tools, calls);
+    }
+}
+
+/// Every rejected attempt the recognizer read, in any reading of the
+/// turn: its start, dialect, and where its grammar failed.
+fn read_spans(
+    tools: &ToolSet,
+    output: &[u8],
+    request: &ToolRecoveryRequest,
+) -> Vec<(Range<usize>, DialectId)> {
+    let Ok(turn) = recognize(tools, request, &[output]).0 else {
+        return Vec::new();
+    };
+    let mut spans = Vec::new();
+    for piece in turn.pieces() {
+        let segments: Vec<&Segment> = match piece {
+            Piece::Segment(segment) => vec![segment],
+            Piece::Choice(choice) => choice.readings.iter().flatten().collect(),
+        };
+        for segment in segments {
+            if let Segment::Rejected { span, dialect, .. } = segment {
+                spans.push((span.clone(), dialect.clone()));
+            }
+        }
+    }
+    spans
+}
+
+/// F4: recovery never moves bytes that are not shown to be call markup
+/// from content into a rejected attempt. A parser's rejected attempt may
+/// run past where its grammar failed (the furthest the recognizer read an
+/// attempt of its dialect at its opener) only to a closer of its dialect:
+/// its raw text then ends with one. Otherwise the bytes after the failure
+/// point are not the attempt's and stay content.
+fn check_rejected_extension(output: &[u8], calls: &ToolCalls, read: &[(Range<usize>, DialectId)]) {
+    for rejected in &calls.rejected {
+        if matches!(rejected.reason, Rejection::UnsupportedDialect { .. }) {
+            continue;
+        }
+        let Some(dialect) = &rejected.dialect else {
+            continue;
+        };
+        let Some(failed) = read
+            .iter()
+            .filter(|(span, read)| span.start == rejected.span.start && read == dialect)
+            .map(|(span, _)| span.end)
+            .max()
+        else {
+            continue;
+        };
+        if rejected.span.end <= failed {
+            continue;
+        }
+        let closed = dialect
+            .grammar()
+            .call_ends()
+            .iter()
+            .flat_map(|end| &end.closers)
+            .any(|closer| rejected.raw.ends_with(closer));
+        assert!(
+            closed,
+            "rejected attempt {:?} runs past where it failed ({failed}) without its closer: {:?}",
+            rejected.span,
+            String::from_utf8_lossy(&output[failed..rejected.span.end])
+        );
     }
 }
 

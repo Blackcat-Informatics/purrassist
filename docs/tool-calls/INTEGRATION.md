@@ -121,29 +121,42 @@ is reported as certain.
   `tool_call_recover::usable_never_yields_mutating_guess`,
   `tool_call_roundtrip::mutating_guess_never_emitted`, and
   `tool_call_goldens::no_mutating_guess_resolved_over_goldens`.
-- **A rejected attempt keeps its whole call markup.** A parser's rejected
-  attempt runs from its opener to the end literal of the `call` alternative
-  it opened (the wrapper or section closer in any declared or confusable
-  spelling, at nesting depth one: another opener of that alternative opens
-  a level; a JSON object or array call nests by its brackets outside
-  strings), plus any repeated closers right after it. Without such a closer
-  it runs to the next call opening the same alternative, a reasoning block,
-  reported unparsed markup, or the end of output. Its `span` and `raw` are
-  that whole markup, and content excludes it, so no wrapper token is left
-  as assistant text. A call or attempt inside the broken wrapper (a bare
-  JSON object read from its body, an inner element's own failure) is kept,
-  and the wrapper's rejected span covers it. Unparsed markup
-  (`unsupported_dialect`) is not extended: its bytes stay content. The end
-  literals are derived per grammar when it is compiled
-  (`CompiledGrammar::call_ends`). *Proved by* the negative corpus
+- **A rejected attempt keeps its whole call markup, and only markup.** A
+  parser's rejected attempt runs from its opener to the end literal of the
+  `call` alternative it opened (the wrapper or section closer in any
+  declared or confusable spelling, at nesting depth one: another opener of
+  that alternative opens a level, unless the alternative chains several
+  calls that each open with it, as a section-less Kimi-K2 attempt does; a
+  JSON object or array call nests by its brackets outside strings) when
+  that closer comes before the next call
+  opening the same alternative, a reasoning block, or reported unparsed
+  markup, plus any repeated closers right after it. Its `span` and `raw`
+  are then that whole markup and content excludes it, so no wrapper token
+  is left as assistant text. A call or attempt inside the broken wrapper (a
+  bare JSON object read from its body, an inner element's own failure) is
+  kept, and the wrapper's rejected span covers it. Without such a closer
+  the attempt is not extended: its span is what its grammar read, from the
+  opener to where it failed, and everything after it stays content
+  (`Sure, I could call <function=f but actually no tool is needed. The
+  answer is 42.` keeps `<function=f` as the attempt and the answer as
+  content). Unparsed markup (`unsupported_dialect`) is not extended: its
+  bytes stay content. The end literals are derived per grammar when it is
+  compiled (`CompiledGrammar::call_ends`). *Proved by* the negative corpus
   (`tool_call_negative`, wrapped and unwrapped, each asserting that content
   holds no call markup, and
   `tool_call_negative::stray_closers_after_rejected_attempt`),
   `tool_call_recover::rejected_wrapper_covers_the_call_recovered_inside_it`,
-  `tool_call_recover::rejected_span_never_splits_a_character_a_class_cannot_consume`,
-  the rejected spans recorded in the goldens, and the `fuzz-tool-call`
-  invariant that content after a rejected attempt holds no closer of its
-  dialect.
+  `tool_call_recover::rejected_span_never_splits_a_character_a_class_cannot_consume`
+  (with and without the closing brace), the goldens (which record each
+  reading's content beside its rejected spans), among them
+  `rejected_opener_then_prose_stays_content`,
+  `rejected_opener_then_prose_then_call`,
+  `rejected_attempt_with_closer_covers_its_markup`,
+  `rejected_attempt_stray_closers_absorbed` and
+  `kimi_chained_rejected_attempt_runs_to_section_closer`, and two `fuzz-tool-call`
+  invariants: content after a rejected attempt holds no closer of its
+  dialect, and an attempt runs past where its grammar failed only to such
+  a closer.
 - **Call markup is never silent content.** Call markup that no dialect of
   the allow-list reads (a family not built in yet: Pythonic call lists,
   Gemma 3 `` ```tool_code `` blocks, GLM-4.5 `<arg_key>` calls, and the
@@ -440,11 +453,15 @@ also contain): under the default allow-list a call inside the block is never
 swallowed. Without a closer, the block is closed at the first call opener
 (`tool_call.reasoning.unclosed`, a guess) and the calls are recovered; with
 one, the calls inside are offered as `embedded` alternatives
-(`tool_call.reasoning.embedded-call`). *Proved by*
+(`tool_call.reasoning.embedded-call`), including those an attempt reading
+several calls (Mistral v11 `[TOOL_CALLS]` elements) read inside the block
+before running on past its closer. *Proved by*
 `tool_call_goldens::reasoning_never_swallows_calls` (Hermes, Mistral v3,
 Llama 3, bare JSON, Qwen3-Coder XML and Anthropic calls, unclosed and
 closed, under the default allow-list, plus the `separate` and `as_content`
-modes) and the tool-call fuzz probe's reasoning invariant (a call the turn
+modes),
+`tool_call_recover::calls_an_attempt_reads_inside_a_closed_block_stay_embedded`,
+and the tool-call fuzz probe's reasoning invariant (a call the turn
 recovers with reasoning as content never vanishes under a reasoning mode).
 
 ### Ids across rounds

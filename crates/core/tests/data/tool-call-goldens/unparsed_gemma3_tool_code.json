@@ -51,6 +51,9 @@
     }
   ],
   "embedded": [],
+  "content": [
+    "I will look it up.\n```tool_code\nget_weather(city=\"Paris\")\n```\n"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.unparsed-dialect"

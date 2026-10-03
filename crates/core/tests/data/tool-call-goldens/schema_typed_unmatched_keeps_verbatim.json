@@ -58,6 +58,7 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [],
   "failed_validations": [
     "sha256:094793826c8e88290d34be3fb5662bb1c2d21fe1ba00d0156c2cd040fb987f8b",
     "keyword /properties/limit/anyOf"

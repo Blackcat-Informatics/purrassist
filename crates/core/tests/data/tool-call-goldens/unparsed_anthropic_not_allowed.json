@@ -56,6 +56,7 @@
     ],
     "rejected": [],
     "embedded": [],
+    "content": [],
     "failed_validations": [],
     "ledger_rules": []
   },
@@ -82,6 +83,9 @@
     }
   ],
   "embedded": [],
+  "content": [
+    "{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"get_weather\",\"input\":{\"city\":\"Paris\"}}"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.unparsed-dialect"

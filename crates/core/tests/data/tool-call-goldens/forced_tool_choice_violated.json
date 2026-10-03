@@ -64,6 +64,7 @@
   ],
   "rejected": [],
   "embedded": [],
+  "content": [],
   "failed_validations": [
     "tool_choice=forced:read_file"
   ],
