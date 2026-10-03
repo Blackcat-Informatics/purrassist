@@ -60,6 +60,8 @@ const CAPTURED: &[&str] = &[
     "outcome",
     "stopped",
     "finish",
+    "openai_finish_reason",
+    "emitted",
     "verdict",
     "usable_calls",
     "calls",
@@ -352,6 +354,12 @@ fn request(golden: &Node, path: &Path, input: &[u8], dialects: DialectSet) -> To
             other => panic!("unknown id policy `{other}`"),
         });
     }
+    if let Some(emit) = golden.get("emit").and_then(Node::as_str) {
+        request = request.emit(match emit {
+            "openai" => purrassist_core::tool_call::EmitTarget::OpenAiToolCalls,
+            other => panic!("unknown emit target `{other}`"),
+        });
+    }
     if let Some(ambiguity) = golden.get("ambiguity").and_then(Node::as_str) {
         request = request.ambiguity(match ambiguity {
             "report" => AmbiguityPolicy::Report,
@@ -533,8 +541,9 @@ fn rejected_nodes(calls: &ToolCalls) -> Node {
 }
 
 fn reading_fields(calls: &ToolCalls) -> Vec<Member> {
-    vec![
+    let mut fields = vec![
         member("finish", string(calls.finish.code())),
+        member("openai_finish_reason", string(calls.openai_finish_reason())),
         member("verdict", string(calls.verdict().code())),
         member(
             "usable_calls",
@@ -555,7 +564,38 @@ fn reading_fields(calls: &ToolCalls) -> Vec<Member> {
             "embedded",
             Node::new(Value::Array(calls.embedded.iter().map(call_node).collect())),
         ),
-    ]
+    ];
+    // An emission, when the golden requests one: the calls it prints and
+    // why it skips the rest.
+    if let Some(emission) = &calls.emitted {
+        let (printed, skipped) = match emission {
+            purrassist_core::tool_call::Emission::OpenAiToolCalls(emitted) => {
+                (emitted.calls.len(), &emitted.skipped)
+            }
+            purrassist_core::tool_call::Emission::Dialect { emitted, .. } => {
+                (emitted.calls.len(), &emitted.skipped)
+            }
+        };
+        let skipped: Vec<String> = skipped
+            .iter()
+            .map(|skipped| match skipped {
+                purrassist_core::tool_call::Skipped::Call { index, reason } => {
+                    format!("call {index}: {}", reason.code())
+                }
+                purrassist_core::tool_call::Skipped::Rejected { index, .. } => {
+                    format!("rejected {index}")
+                }
+            })
+            .collect();
+        fields.push(member(
+            "emitted",
+            object(vec![
+                member("calls", integer(printed)),
+                member("skipped", strings(&skipped)),
+            ]),
+        ));
+    }
+    fields
 }
 
 /// Every rule id recorded, in order: the receipt's evidence (the selected
@@ -3231,4 +3271,68 @@ fn verdict_and_exit_code_agree_over_goldens() {
         verdicts.into_iter().collect::<Vec<_>>(),
         ["ambiguous", "no_calls", "nothing_usable", "run"]
     );
+}
+
+/// F7: over every golden, pinned and under the default allow-list, the
+/// finish, the `OpenAI` `finish_reason` and the `OpenAI` emission agree with
+/// the verdict:
+///
+/// - a finish with calls (`calls`, `truncated_with_calls`) implies the
+///   verdict `run`; a `run` turn finishes otherwise only as `unresolved`,
+///   when something else is wrong beside the calls that run (a rejected
+///   attempt, or an unresolved or ambiguous call);
+/// - a failed tool-choice check (even beside calls that would run on their
+///   own) finishes `unresolved`, with the verdict `nothing_usable` and
+///   nothing emitted;
+/// - the `OpenAI` emission holds a call exactly when the verdict is `run`;
+/// - `finish_reason` is `"length"` exactly for the truncated finishes, and
+///   otherwise `"tool_calls"` exactly when the emission holds a call.
+#[test]
+fn finish_and_finish_reason_agree_with_the_verdict() {
+    use purrassist_core::tool_call::{IdPolicy, Verdict, emit};
+    for (golden, result) in all_goldens().into_iter().chain(all_default_runs()) {
+        let name = golden.path.display().to_string();
+        let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = &result.outcome else {
+            continue;
+        };
+        let verdict = calls.verdict();
+        let with_calls = matches!(calls.finish, Finish::Calls | Finish::TruncatedWithCalls);
+        let truncated = matches!(calls.finish, Finish::Truncated | Finish::TruncatedWithCalls);
+        if with_calls {
+            assert_eq!(verdict, Verdict::Run, "{name}");
+        } else if verdict == Verdict::Run {
+            let wrong = !calls.rejected.is_empty()
+                || calls.calls.iter().any(|call| {
+                    matches!(
+                        call.outcome,
+                        CallOutcome::Unresolved { .. } | CallOutcome::Ambiguous
+                    )
+                });
+            assert!(calls.finish == Finish::Unresolved && wrong, "{name}");
+        }
+        if !calls.tool_choice.passed {
+            assert_eq!(calls.finish, Finish::Unresolved, "{name}");
+            assert_eq!(verdict, Verdict::NothingUsable, "{name}");
+        }
+        let emitted = emit::openai_tool_calls(
+            calls,
+            &IdPolicy::Prefix {
+                prefix: "c".into(),
+                start: 0,
+            },
+        )
+        .expect("emission");
+        let Value::Array(array) = &emitted.output.value else {
+            panic!("{name}: an array")
+        };
+        assert_eq!(!array.is_empty(), verdict == Verdict::Run, "{name}");
+        assert_eq!(array.len(), calls.emitted_calls().len(), "{name}");
+        let reason = calls.openai_finish_reason();
+        assert_eq!(reason == "length", truncated, "{name}");
+        assert_eq!(
+            reason == "tool_calls",
+            !truncated && !array.is_empty(),
+            "{name}"
+        );
+    }
 }

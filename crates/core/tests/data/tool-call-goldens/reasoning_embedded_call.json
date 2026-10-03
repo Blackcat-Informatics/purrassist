@@ -29,6 +29,7 @@
   "outcome": "resolved",
   "stopped": "completed",
   "finish": "content_only",
+  "openai_finish_reason": "stop",
   "verdict": "no_calls",
   "usable_calls": {
     "strict": 0,

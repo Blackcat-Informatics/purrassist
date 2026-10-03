@@ -238,16 +238,19 @@ dropped: it stays content.
 
 | Call | `usable()` | `usable_accepting_guesses()` | Emitted |
 | --- | --- | --- | --- |
-| `Resolved` | yes | yes | yes |
-| `BestGuess`, read-only tool | no | yes | yes |
+| `Resolved` | yes | yes | yes, unless the turn fails its tool-choice check (`ToolChoiceFailed`) |
+| `BestGuess`, read-only tool | no | yes | yes, unless the turn fails its tool-choice check (`ToolChoiceFailed`) |
 | `BestGuess`, mutating tool | no | no | no (`GuessOnMutatingTool`) |
 | `Ambiguous` | no | no | no (`Ambiguous`) |
 | `Unresolved` | no | no | no (`Unresolved`, with its reason) |
 
 "Read-only" means the tool's effective effects after request overrides.
 Emission (`ToolRecoveryRequest::emit`, `tool_call::emit`) prints exactly the
-calls `usable_accepting_guesses()` selects, because emitted output carries no
-outcome and a downstream executor may run whatever it holds. Every call or
+calls `ToolCalls::emitted_calls()` selects (those `usable_accepting_guesses()`
+selects, and none when the turn fails its tool-choice check), because
+emitted output carries no outcome and a downstream executor may run whatever
+it holds. The same selection decides `verdict()` (`Run` exactly when it is
+not empty) and `openai_finish_reason()`. Every call or
 rejected attempt that is not printed is listed in `Emitted::skipped`, so
 nothing is dropped silently. Calls written inside closed reasoning blocks
 (`ToolCalls::embedded`) are never selected, never receive an id, and never
@@ -282,13 +285,19 @@ for the status × verdict table.
 
 ## Finish classes
 
-| `Finish` | When | `openai_finish_reason()` |
+| `Finish` | When | `ToolCalls::openai_finish_reason()` |
 | --- | --- | --- |
-| `Calls` | The turn made calls and nothing is wrong with any of them. | `"tool_calls"` |
+| `Calls` | The turn made calls, nothing is wrong with any of them, and at least one may run (usable accepting read-only guesses). | `"tool_calls"` |
 | `ContentOnly` | No call, nothing wrong. | `"stop"` |
-| `TruncatedWithCalls` | A `Length` stop after at least one call that is not cut off. | `"length"` |
-| `Truncated` | A `Length` stop with no call that is not cut off. | `"length"` |
-| `Unresolved` | A rejected attempt (other than one a length stop cut off), including call markup no allowed dialect reads, an `Unresolved` (other than by truncation) or `Ambiguous` call, or a failed tool-choice check. | `"stop"` |
+| `TruncatedWithCalls` | A `Length` stop after at least one call that may run (a cut-off call never may). | `"length"` |
+| `Truncated` | A `Length` stop with no call that may run. | `"length"` |
+| `Unresolved` | A rejected attempt (other than one a length stop cut off), including call markup no allowed dialect reads, an `Unresolved` (other than by truncation) or `Ambiguous` call, a failed tool-choice check (even beside calls that would run), or calls of which none may run (each a guess on a mutating tool). | `"tool_calls"` when the emission still holds a call (a rejected or unresolved attempt beside calls that run), `"stop"` otherwise |
+
+`Calls` and `TruncatedWithCalls` imply the verdict `run`, and
+`finish_reason` is `"tool_calls"` exactly when the `OpenAI` emission holds a
+call (outside a length stop): the finish, `finish_reason`, emission and
+verdict never contradict each other (`Finish::openai_finish_reason` is the
+one mapping).
 
 Call markup that no dialect of the allow-list reads is never silent
 content. A linear detector (`detect_unparsed`) scans the turn's content for
@@ -308,9 +317,9 @@ JSON call, a Qwen3-Coder `<function=NAME>` element without `<tool_call>` is
 a Qwen3-Coder XML call, a Llama 3 object without `<|python_tag|>` is an untagged Llama 3
 call) are recovered, not reported.
 
-`"stop"` for `Finish::Unresolved` hides rejected and unresolved calls: read
-`ToolCalls::finish` and `ToolCalls::rejected`, never only the
-`finish_reason`. Truncation never upgrades malformed output.
+`"stop"` and `"tool_calls"` for `Finish::Unresolved` hide rejected and
+unresolved calls: read `ToolCalls::finish`, `ToolCalls::verdict` and
+`ToolCalls::rejected`, never only the `finish_reason`. Truncation never upgrades malformed output.
 
 ## Termination semantics
 

@@ -34,6 +34,7 @@
   "outcome": "best_guess",
   "stopped": "completed",
   "finish": "truncated",
+  "openai_finish_reason": "length",
   "verdict": "nothing_usable",
   "usable_calls": {
     "strict": 0,

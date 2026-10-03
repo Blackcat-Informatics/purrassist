@@ -184,7 +184,7 @@ fn length_vs_stop_truncation() {
     let result = tools.recover(partial.as_bytes(), &length);
     let calls = value(&result);
     assert_eq!(calls.finish, Finish::Truncated);
-    assert_eq!(calls.finish.openai_finish_reason(), "length");
+    assert_eq!(calls.openai_finish_reason(), "length");
     assert_eq!(
         calls.calls[0].outcome,
         CallOutcome::Unresolved {
@@ -210,7 +210,14 @@ fn length_vs_stop_truncation() {
         let result = tools.recover(text.as_bytes(), &request(DialectId::Hermes));
         let calls = value(&result);
         assert_eq!(calls.finish, Finish::Unresolved, "{text}");
-        assert_eq!(calls.finish.openai_finish_reason(), "stop");
+        // `finish_reason` names the emitted calls: the complete call
+        // beside the rejected attempt is emitted.
+        let reason = if calls.emitted_calls().is_empty() {
+            "stop"
+        } else {
+            "tool_calls"
+        };
+        assert_eq!(calls.openai_finish_reason(), reason, "{text}");
         assert!(
             calls.calls.iter().all(|call| call.outcome
                 != CallOutcome::Unresolved {

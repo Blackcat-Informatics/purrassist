@@ -26,7 +26,8 @@
   "input": "<|start|>assistant<|channel|>commentary to=functions.get_weather <|constrain|>json<|message|>{\"location\":\"San Francisco\"} as requested<|call|>",
   "outcome": "best_guess",
   "stopped": "completed",
-  "finish": "calls",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
   "verdict": "nothing_usable",
   "usable_calls": {
     "strict": 0,

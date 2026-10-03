@@ -1,0 +1,104 @@
+{
+  "description": "F7: a usable read-only call beside a guess on a Mutating tool: one call may run, so the finish is calls, the verdict run, the OpenAI emission prints the read-only call (the mutating guess skipped as guess_on_mutating_tool), and the finish_reason is tool_calls.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "effects": {
+    "write_file": "mutating",
+    "read_file": "read_only"
+  },
+  "stop": "stop",
+  "emit": "openai",
+  "input": {
+    "hex": "3c746f6f6c5f63616c6c3e7b226e616d65223a22726561645f66696c65222c22617267756d656e7473223a7b2270617468223a2261227d7d3c2f746f6f6c5f63616c6c3e0a3c746f6f6c5f63616c6c3e7b226e616d65223a2277726974655f66696c65222c22617267756d656e7473223a7b2270617468223a2261222c22636f6e74656e74223a2278ff79227d7d3c2f746f6f6c5f63616c6c3e"
+  },
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "a"
+      },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    },
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "a",
+        "content": "x�y"
+      },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.value.invalid-utf8"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "emitted": {
+    "calls": 1,
+    "skipped": [
+      "call 1: guess_on_mutating_tool"
+    ]
+  },
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.input.invalid-utf8",
+    "tool_call.value.invalid-utf8"
+  ]
+}

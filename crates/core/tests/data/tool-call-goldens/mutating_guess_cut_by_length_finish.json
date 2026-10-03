@@ -1,0 +1,75 @@
+{
+  "description": "F7: under a length stop, a turn whose only call is a guess on a Mutating tool finishes truncated (not truncated_with_calls): no call may run; finish_reason length.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "effects": {
+    "write_file": "mutating"
+  },
+  "stop": "length",
+  "emit": "openai",
+  "input": {
+    "hex": "3c746f6f6c5f63616c6c3e7b226e616d65223a2277726974655f66696c65222c22617267756d656e7473223a7b2270617468223a2261222c22636f6e74656e74223a2278ff79227d7d3c2f746f6f6c5f63616c6c3e0a4d6f72652074657874"
+  },
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "truncated",
+  "openai_finish_reason": "length",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "a",
+        "content": "x�y"
+      },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.value.invalid-utf8"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "emitted": {
+    "calls": 0,
+    "skipped": [
+      "call 0: guess_on_mutating_tool"
+    ]
+  },
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.input.invalid-utf8",
+    "tool_call.value.invalid-utf8"
+  ]
+}

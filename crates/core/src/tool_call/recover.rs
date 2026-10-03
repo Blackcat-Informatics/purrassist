@@ -848,21 +848,33 @@ impl ToolRecoveryRequest {
 
 /// How a turn finished (D10).
 ///
-/// - `Calls`: the turn made calls and nothing is wrong with any of them.
+/// - `Calls`: the turn made calls, nothing is wrong with any of them, and
+///   at least one may run (usable accepting read-only guesses, the rule
+///   [`ToolCalls::verdict`] and the emitters use).
 /// - `ContentOnly`: no call, nothing wrong.
 /// - `TruncatedWithCalls` / `Truncated`: a [`GenerationStop::Length`] stop
-///   (never a clean finish), with or without a call that is not itself
-///   cut off.
+///   (never a clean finish), with or without a call that may run (a call
+///   the stop cut off never may).
 /// - `Unresolved`: something is wrong, whatever the stop: a rejected call
 ///   attempt (other than one a length stop cut off), a call that is
-///   `Unresolved` (other than by truncation) or `Ambiguous`, or a failed
-///   tool choice check. Truncation never upgrades malformed output.
+///   `Unresolved` (other than by truncation) or `Ambiguous`, a failed tool
+///   choice check (even beside calls that would run: the turn breaks the
+///   request's contract), or, under any other stop, calls of which none
+///   may run (each a guess on a mutating tool). Truncation never upgrades
+///   malformed output.
+///
+/// So `Calls` and `TruncatedWithCalls` imply [`Verdict::Run`]; the converse
+/// fails only where something else is wrong beside the calls that run (a
+/// rejected or unresolved attempt), which finishes `Unresolved`.
 ///
 /// ```
 /// use purrassist_core::tool_call::Finish;
-/// assert_eq!(Finish::TruncatedWithCalls.openai_finish_reason(), "length");
-/// assert_eq!(Finish::Calls.openai_finish_reason(), "tool_calls");
-/// assert_eq!(Finish::Unresolved.openai_finish_reason(), "stop");
+/// assert_eq!(Finish::TruncatedWithCalls.openai_finish_reason(true), "length");
+/// assert_eq!(Finish::Calls.openai_finish_reason(true), "tool_calls");
+/// // A rejected attempt beside a call that runs: the emitted message holds
+/// // the call, so its finish_reason says so.
+/// assert_eq!(Finish::Unresolved.openai_finish_reason(true), "tool_calls");
+/// assert_eq!(Finish::Unresolved.openai_finish_reason(false), "stop");
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Finish {
@@ -879,19 +891,26 @@ pub enum Finish {
 }
 
 impl Finish {
-    /// The `OpenAI` `finish_reason` (D15): `"length"` for the truncated
-    /// finishes, `"tool_calls"` for `Calls`, and `"stop"` otherwise.
+    /// The `OpenAI` `finish_reason` (D15) of a turn that finished as
+    /// `self`, where `emits_calls` says whether its `OpenAI` emission
+    /// prints at least one call (a call usable accepting read-only
+    /// guesses): `"length"` for the truncated finishes (the cut is what the
+    /// format reports, with or without calls), otherwise `"tool_calls"`
+    /// exactly when the emitted message holds a call, and `"stop"`. The one
+    /// mapping: [`ToolCalls::openai_finish_reason`] (the wire
+    /// `openai_finish_reason`) applies it to the turn's own emission.
     ///
-    /// `"stop"` hides rejected and unresolved calls: callers must read
-    /// [`ToolCalls::finish`] and [`ToolCalls::rejected`], never only this.
+    /// `"stop"` and `"tool_calls"` hide rejected and unresolved calls:
+    /// callers must read [`ToolCalls::finish`], [`ToolCalls::verdict`] and
+    /// [`ToolCalls::rejected`], never only this.
     ///
     /// See [`Finish`] for an example.
     #[must_use]
-    pub const fn openai_finish_reason(self) -> &'static str {
+    pub const fn openai_finish_reason(self, emits_calls: bool) -> &'static str {
         match self {
             Self::TruncatedWithCalls | Self::Truncated => "length",
-            Self::Calls => "tool_calls",
-            Self::ContentOnly | Self::Unresolved => "stop",
+            Self::Calls | Self::ContentOnly | Self::Unresolved if emits_calls => "tool_calls",
+            Self::Calls | Self::ContentOnly | Self::Unresolved => "stop",
         }
     }
 
@@ -1219,12 +1238,13 @@ impl ToolCall {
         T::from_node(&self.arguments)
     }
 
-    /// Whether the call may run as is: its outcome is `Resolved`.
+    /// Whether the call may run as is: its outcome is `Resolved` and it
+    /// names a declared tool.
     ///
     /// See [`ToolCall`] for an example.
     #[must_use]
     pub fn is_usable(&self) -> bool {
-        self.outcome == CallOutcome::Resolved
+        self.outcome == CallOutcome::Resolved && self.tool.is_some()
     }
 
     /// Whether the call may run when the caller accepts guesses: `Resolved`,
@@ -1235,7 +1255,9 @@ impl ToolCall {
     #[must_use]
     pub fn is_usable_accepting_guesses(&self) -> bool {
         self.is_usable()
-            || (self.outcome == CallOutcome::BestGuess && self.effects == Some(Effects::ReadOnly))
+            || (self.outcome == CallOutcome::BestGuess
+                && self.effects == Some(Effects::ReadOnly)
+                && self.tool.is_some())
     }
 }
 
@@ -1333,6 +1355,49 @@ impl ToolCalls {
             .collect()
     }
 
+    /// The `OpenAI` `finish_reason` of this turn: [`Finish::openai_finish_reason`]
+    /// of [`Self::finish`], with whether the `OpenAI` emission prints a call
+    /// ([`Self::emitted_calls`] is what every emitter prints). The wire
+    /// `openai_finish_reason`.
+    ///
+    /// See [`Finish`] for the mapping.
+    #[must_use]
+    pub fn openai_finish_reason(&self) -> &'static str {
+        self.finish
+            .openai_finish_reason(!self.emitted_calls().is_empty())
+    }
+
+    /// The calls every emitter prints, and the calls a caller may run:
+    /// [`Self::usable_accepting_guesses`] when the turn passes the
+    /// request's tool-choice check, none when it fails it (a violated tool
+    /// choice is a contract failure, so nothing of the turn runs). The one
+    /// selection [`Self::verdict`] (`Run` exactly when it is not empty),
+    /// [`Self::openai_finish_reason`] and the emitters use.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::{ToolChoice, ToolDefinition, ToolRecoveryRequest, ToolSet};
+    /// use purrassist_core::{Budget, Outcome};
+    /// let tools = ToolSet::compile([ToolDefinition::new("ls"), ToolDefinition::new("cat")], Budget::default()).unwrap();
+    /// let output = br#"<tool_call>{"name": "ls", "arguments": {}}</tool_call>"#;
+    /// let result = tools.recover(output, &ToolRecoveryRequest::default());
+    /// let Outcome::Resolved(calls) = &result.outcome else { panic!() };
+    /// assert_eq!(calls.emitted_calls().len(), 1);
+    /// // Forced to `cat`, the turn fails its tool choice: nothing runs.
+    /// let forced = ToolRecoveryRequest::default().tool_choice(ToolChoice::Forced("cat".into()));
+    /// let result = tools.recover(output, &forced);
+    /// let Outcome::Resolved(calls) = &result.outcome else { panic!() };
+    /// assert!(calls.emitted_calls().is_empty());
+    /// assert_eq!(calls.openai_finish_reason(), "stop");
+    /// ```
+    #[must_use]
+    pub fn emitted_calls(&self) -> Vec<&ToolCall> {
+        if self.tool_choice.passed {
+            self.usable_accepting_guesses()
+        } else {
+            Vec::new()
+        }
+    }
+
     /// What a caller should do with this reading (see [`Verdict`]): the
     /// one usability verdict, from the tool-choice check, the usable calls,
     /// the finish and the calls' outcomes.
@@ -1340,10 +1405,10 @@ impl ToolCalls {
     /// See [`Verdict`] for an example.
     #[must_use]
     pub fn verdict(&self) -> Verdict {
-        if !self.tool_choice.passed {
-            Verdict::NothingUsable
-        } else if self.calls.iter().any(ToolCall::is_usable_accepting_guesses) {
+        if !self.emitted_calls().is_empty() {
             Verdict::Run
+        } else if !self.tool_choice.passed {
+            Verdict::NothingUsable
         } else if self.finish == Finish::ContentOnly {
             Verdict::NoCalls
         } else if self
@@ -1602,10 +1667,7 @@ impl WireValue for ToolCalls {
             ("content", ranges(&self.content)),
             ("reasoning", ranges(&self.reasoning)),
             ("finish", string(self.finish.code())),
-            (
-                "openai_finish_reason",
-                string(self.finish.openai_finish_reason()),
-            ),
+            ("openai_finish_reason", string(self.openai_finish_reason())),
             (
                 "tool_choice",
                 object([
@@ -1672,7 +1734,7 @@ impl ToolSet {
     /// assert_eq!(call.repairs.losses.len(), 1);
     /// assert_eq!(call.repairs.losses[0].kind, LossKind::Markup);
     /// assert_eq!(result.receipt.losses, [call.repairs.losses[0].loss.clone()]);
-    /// assert_eq!((calls.finish, calls.finish.openai_finish_reason()), (Finish::Calls, "tool_calls"));
+    /// assert_eq!((calls.finish, calls.openai_finish_reason()), (Finish::Calls, "tool_calls"));
     /// assert_eq!(calls.usable().len(), 1);
     ///
     /// let strict = ToolSet::compile([ToolDefinition::new("f").param("path", Param::string().required())], Budget::default()).unwrap();
@@ -2737,18 +2799,27 @@ impl Recovery<'_> {
                     CallOutcome::Unresolved { .. } | CallOutcome::Ambiguous
                 )
         });
+        // The finishes with calls need a call that may run (the rule
+        // `verdict` and the emitters use): calls that are all guesses on
+        // mutating tools are a turn with nothing to run.
+        let usable = value
+            .calls
+            .iter()
+            .any(ToolCall::is_usable_accepting_guesses);
         if rejected || broken || !value.tool_choice.passed {
             Finish::Unresolved
         } else if truncation {
-            if value.calls.iter().any(|call| !cut(call)) {
+            if usable {
                 Finish::TruncatedWithCalls
             } else {
                 Finish::Truncated
             }
         } else if value.calls.is_empty() {
             Finish::ContentOnly
-        } else {
+        } else if usable {
             Finish::Calls
+        } else {
+            Finish::Unresolved
         }
     }
 

@@ -52,6 +52,7 @@
   "outcome": "resolved",
   "stopped": "completed",
   "finish": "calls",
+  "openai_finish_reason": "tool_calls",
   "verdict": "run",
   "usable_calls": {
     "strict": 2,

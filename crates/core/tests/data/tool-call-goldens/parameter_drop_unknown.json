@@ -18,7 +18,8 @@
   "input": "<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"a.rs\", \"verbose\": true}}\n</tool_call>",
   "outcome": "best_guess",
   "stopped": "completed",
-  "finish": "calls",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
   "verdict": "nothing_usable",
   "usable_calls": {
     "strict": 0,

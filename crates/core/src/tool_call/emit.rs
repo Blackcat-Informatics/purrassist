@@ -12,9 +12,15 @@
 //!
 //! # Which calls are emitted
 //!
-//! Exactly the calls [`ToolCalls::usable_accepting_guesses`] selects are
-//! emitted: every `Resolved` call, and a `BestGuess` call only on a tool
-//! whose effective effects are [`Effects::ReadOnly`](super::Effects::ReadOnly).
+//! Exactly the calls [`ToolCalls::emitted_calls`] selects are emitted: when
+//! the turn passes the request's tool-choice check, every `Resolved` call
+//! and a `BestGuess` call only on a tool whose effective effects are
+//! [`Effects::ReadOnly`](super::Effects::ReadOnly)
+//! ([`ToolCalls::usable_accepting_guesses`]); when it fails the check,
+//! none ([`SkipReason::ToolChoiceFailed`]). The same selection decides
+//! [`ToolCalls::verdict`] and [`ToolCalls::openai_finish_reason`], so the
+//! emitted `finish_reason` is `"tool_calls"` exactly when the emission
+//! holds a call (unless a length stop cut the turn).
 //! Emitted output (an `OpenAI` `tool_calls` array in particular) carries no
 //! outcome, and a downstream executor may run whatever it holds, so a guess
 //! on a mutating tool is never emitted. Nothing is dropped silently; every
@@ -25,6 +31,9 @@
 //!   `Ambiguous` call ([`SkipReason::Ambiguous`]: it has no single reading
 //!   to print), and a `BestGuess` call on a tool that is not read-only
 //!   ([`SkipReason::GuessOnMutatingTool`]);
+//! - every call of a turn that fails the tool-choice check
+//!   ([`SkipReason::ToolChoiceFailed`] for a call that would otherwise
+//!   run);
 //! - a call the target dialect cannot carry ([`SkipReason::Unrepresentable`]:
 //!   an id or name the dialect's class does not accept, or a value that
 //!   cannot be written without ending its slot early);
@@ -144,10 +153,11 @@ pub(crate) const NO_PARAMETERS: &str = r#"{"type":"object"}"#;
 /// What [`ToolSet::recover`] prints for the recovered calls
 /// ([`ToolCalls::emitted`]).
 ///
-/// Either target emits exactly the calls
-/// [`ToolCalls::usable_accepting_guesses`] selects: a `BestGuess` call on a
-/// tool that is not read-only is skipped
-/// ([`SkipReason::GuessOnMutatingTool`]), never emitted.
+/// Either target emits exactly the calls [`ToolCalls::emitted_calls`]
+/// selects: a `BestGuess` call on a tool that is not read-only is skipped
+/// ([`SkipReason::GuessOnMutatingTool`]), never emitted, and nothing of a
+/// turn that fails the tool-choice check is
+/// ([`SkipReason::ToolChoiceFailed`]).
 ///
 /// ```
 /// use purrassist_core::tool_call::{DialectId, EmitTarget, ToolRecoveryRequest};
@@ -193,11 +203,16 @@ pub enum SkipReason {
         /// What could not be printed.
         detail: String,
     },
+    /// The call would run on its own, but the turn fails the request's
+    /// tool-choice check: nothing of the turn may run
+    /// ([`Verdict::NothingUsable`](super::Verdict::NothingUsable)), so
+    /// nothing is emitted (see [`ToolCalls::emitted_calls`]).
+    ToolChoiceFailed,
 }
 
 impl SkipReason {
     /// The wire code: `unresolved`, `ambiguous`, `guess_on_mutating_tool`,
-    /// or `unrepresentable`.
+    /// `unrepresentable`, or `tool_choice_failed`.
     ///
     /// See [`SkipReason`] for an example.
     #[must_use]
@@ -207,6 +222,7 @@ impl SkipReason {
             Self::Ambiguous => "ambiguous",
             Self::GuessOnMutatingTool => "guess_on_mutating_tool",
             Self::Unrepresentable { .. } => "unrepresentable",
+            Self::ToolChoiceFailed => "tool_choice_failed",
         }
     }
 }
@@ -222,6 +238,9 @@ impl fmt::Display for SkipReason {
                 formatter.write_str("a best guess on a tool that is not read-only")
             }
             Self::Unrepresentable { detail } => write!(formatter, "unrepresentable: {detail}"),
+            Self::ToolChoiceFailed => {
+                formatter.write_str("the turn fails the request's tool-choice check")
+            }
         }
     }
 }
@@ -475,11 +494,11 @@ fn invalid_edit(reason: impl Into<String>) -> EmitError {
 /// Print `calls` as canonical markup of `dialect` under a fresh governor
 /// with the default [`Budget`].
 ///
-/// Emits exactly the calls [`ToolCalls::usable_accepting_guesses`] selects
-/// (every `Resolved` call, and a `BestGuess` call only on a read-only tool);
-/// every other call, a guess on a mutating tool included
-/// ([`SkipReason::GuessOnMutatingTool`]), and every rejected attempt is
-/// listed in [`Emitted::skipped`].
+/// Emits exactly the calls [`ToolCalls::emitted_calls`] selects (every
+/// `Resolved` call, and a `BestGuess` call only on a read-only tool, when
+/// the turn passes the tool-choice check); every other call, a guess on a
+/// mutating tool included ([`SkipReason::GuessOnMutatingTool`]), and every
+/// rejected attempt is listed in [`Emitted::skipped`].
 ///
 /// # Errors
 /// See [`emit_governed`].
@@ -505,11 +524,11 @@ pub fn emit(
 ///
 /// `tools` supplies the argument shapes the `xml-params` codec reads values
 /// by; see the [module documentation](self) for the canonical forms.
-/// Emits exactly the calls [`ToolCalls::usable_accepting_guesses`] selects
-/// (every `Resolved` call, and a `BestGuess` call only on a read-only tool);
-/// every other call, a guess on a mutating tool included
-/// ([`SkipReason::GuessOnMutatingTool`]), and every rejected attempt is
-/// listed in [`Emitted::skipped`].
+/// Emits exactly the calls [`ToolCalls::emitted_calls`] selects (every
+/// `Resolved` call, and a `BestGuess` call only on a read-only tool, when
+/// the turn passes the tool-choice check); every other call, a guess on a
+/// mutating tool included ([`SkipReason::GuessOnMutatingTool`]), and every
+/// rejected attempt is listed in [`Emitted::skipped`].
 ///
 /// # Errors
 /// [`EmitError::InvalidIds`] when `ids` cannot number the calls, and
@@ -546,11 +565,11 @@ pub fn emit_governed(
 /// The `OpenAI` `tool_calls` array of `calls` under a fresh governor with
 /// the default [`Budget`].
 ///
-/// Emits exactly the calls [`ToolCalls::usable_accepting_guesses`] selects
-/// (every `Resolved` call, and a `BestGuess` call only on a read-only tool);
-/// every other call, a guess on a mutating tool included
-/// ([`SkipReason::GuessOnMutatingTool`]), and every rejected attempt is
-/// listed in [`Emitted::skipped`].
+/// Emits exactly the calls [`ToolCalls::emitted_calls`] selects (every
+/// `Resolved` call, and a `BestGuess` call only on a read-only tool, when
+/// the turn passes the tool-choice check); every other call, a guess on a
+/// mutating tool included ([`SkipReason::GuessOnMutatingTool`]), and every
+/// rejected attempt is listed in [`Emitted::skipped`].
 ///
 /// # Errors
 /// See [`openai_tool_calls_governed`].
@@ -567,13 +586,15 @@ pub fn openai_tool_calls(calls: &ToolCalls, ids: &IdPolicy) -> Result<Emitted<No
 /// {"name", "arguments"}}, ...]`, one element per emitted call, with the
 /// id from `ids`, the canonical tool name, and `arguments` the compact JSON
 /// string of the argument tree (exact number spellings). Pair it with
-/// [`Finish::openai_finish_reason`](super::Finish::openai_finish_reason) for
-/// the message's `finish_reason`.
-/// Emits exactly the calls [`ToolCalls::usable_accepting_guesses`] selects
-/// (every `Resolved` call, and a `BestGuess` call only on a read-only tool);
-/// every other call, a guess on a mutating tool included
-/// ([`SkipReason::GuessOnMutatingTool`]), and every rejected attempt is
-/// listed in [`Emitted::skipped`].
+/// [`ToolCalls::openai_finish_reason`] for the message's `finish_reason`:
+/// it is `"tool_calls"` exactly when this array holds a call (unless a
+/// length stop cut the turn, `"length"`), because both select calls with
+/// [`ToolCalls::emitted_calls`].
+/// Emits exactly the calls [`ToolCalls::emitted_calls`] selects (every
+/// `Resolved` call, and a `BestGuess` call only on a read-only tool, when
+/// the turn passes the tool-choice check); every other call, a guess on a
+/// mutating tool included ([`SkipReason::GuessOnMutatingTool`]), and every
+/// rejected attempt is listed in [`Emitted::skipped`].
 ///
 /// # Errors
 /// [`EmitError::InvalidIds`] when `ids` cannot number the calls, and
@@ -646,11 +667,14 @@ fn selection(calls: &ToolCalls) -> (Vec<&ToolCall>, Vec<(usize, Skipped)>) {
     let mut printed = Vec::new();
     let mut skipped = Vec::new();
     for call in &calls.calls {
-        if call.tool.is_some() && call.is_usable_accepting_guesses() {
+        // The one selection rule (`ToolCalls::emitted_calls`):
+        // `openai_finish_reason` and `verdict` use it too.
+        if call.is_usable_accepting_guesses() && calls.tool_choice.passed {
             printed.push(call);
             continue;
         }
         let reason = match &call.outcome {
+            _ if call.is_usable_accepting_guesses() => SkipReason::ToolChoiceFailed,
             CallOutcome::Unresolved { reason } => SkipReason::Unresolved {
                 reason: reason.clone(),
             },

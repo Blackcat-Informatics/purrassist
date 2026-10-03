@@ -281,11 +281,17 @@ declarations the model was shown and lose nothing.
   `tool_call_recover::single_policy_override_applies_to_all`.
 - **The stop reason is an input.** The caller passes `GenerationStop`; only
   `Length` reads an open call as truncation, which the turn reports as
-  `Finish::Truncated` or `TruncatedWithCalls`, `finish_reason` `"length"`.
+  `Finish::TruncatedWithCalls` when a call may run and `Finish::Truncated`
+  otherwise, `finish_reason` `"length"`. Under any other stop the finish is
+  `Calls` only when a call may run; calls of which none may (each a guess
+  on a mutating tool) finish `Unresolved`, and `finish_reason` is
+  `"tool_calls"` exactly when the `OpenAI` emission holds a call
+  ([Reading a result](#reading-a-result-status-finish-and-verdict)).
   *Proved by* `tool_call_recover::length_vs_stop_truncation`,
   `tool_call_recover::unknown_stop_is_conservative`,
   `tool_call_recover::stop_sequence_consumed_closer`, and
-  `tool_call_roundtrip::finish_reason_mapping`.
+  `tool_call_roundtrip::finish_reason_mapping` and
+  `tool_call_goldens::finish_and_finish_reason_agree_with_the_verdict`.
 
 ### C7. `OpenAI` `tool_calls` output shape
 
@@ -323,9 +329,11 @@ inference (see [Ids across rounds](#ids-across-rounds)).
 
 ### Read `finish` and `rejected`, not only `finish_reason`
 
-`Finish::openai_finish_reason()` maps `Finish::Unresolved` to `"stop"`, as
-the `OpenAI` wire format has no better value. `"stop"` therefore hides
-rejected and unresolved calls. Read `ToolCalls::finish` (wire `finish`) and
+`ToolCalls::openai_finish_reason()` (wire `openai_finish_reason`) is
+`"tool_calls"` exactly when the `OpenAI` emission holds a call and the turn
+was not cut by a length stop, so it never contradicts the emitted array, but
+the `OpenAI` wire format has no value for "something else was wrong": both
+`"stop"` and `"tool_calls"` hide rejected and unresolved calls. Read `ToolCalls::finish` (wire `finish`) and
 `ToolCalls::rejected` (wire `rejected`) before deciding that a turn
 completed cleanly, and branch on `verdict` (not `status`) for whether
 anything can run ([Reading a result](#reading-a-result-status-finish-and-verdict)).
@@ -586,22 +594,46 @@ by different fields:
   as is (`Resolved`, `ToolCalls::usable`), and
   `value.usable_calls_accepting_guesses` also counts best guesses on
   read-only tools (`ToolCalls::usable_accepting_guesses`).
-- **`value.finish`** classifies the turn (calls, content, truncation, or
-  something wrong somewhere: it is `unresolved` whenever any attempt was
-  rejected, even beside usable calls). Per-call `outcome` and
-  `value.tool_choice` give the reasons.
+- **`value.finish`** classifies the turn: `calls` or
+  `truncated_with_calls` only when at least one call may run (so they imply
+  `verdict: "run"`), `content_only`, `truncated`, or `unresolved` when
+  something is wrong somewhere: a rejected attempt (even beside calls that
+  run), an unresolved or ambiguous call, a failed tool-choice check, or
+  calls of which none may run (each a guess on a mutating tool). Per-call
+  `outcome` and `value.tool_choice` give the reasons.
+- **`value.openai_finish_reason`** is what an `OpenAI`-compatible relay
+  sends: `"length"` for the truncated finishes, otherwise `"tool_calls"`
+  exactly when the `OpenAI` emission holds a call, and `"stop"`. The
+  emission prints exactly `ToolCalls::emitted_calls`: the calls usable
+  accepting read-only guesses, and none when the tool-choice check failed;
+  so a relay never sends `"tool_calls"` with no tool call, nor `"stop"`
+  beside one.
 
-| `status` | `value.verdict` | Typical `value.finish` | Exit | What the caller should do |
-| --- | --- | --- | --- | --- |
-| `resolved`, `best_guess` | `run` | `calls`, `truncated_with_calls`, `unresolved` (a stray attempt beside usable calls) | 0 | Run the usable calls: `usable_calls` (strict) or, accepting read-only guesses, `usable_calls_accepting_guesses`; report `rejected` |
-| `resolved`, `best_guess` | `no_calls` | `content_only` | 0 | Use the content; nothing to run |
-| `resolved`, `best_guess` | `ambiguous` | `unresolved` | 3 | Choose among the ambiguous call's `alternatives`, or re-ask |
-| `resolved`, `best_guess` | `nothing_usable` | `unresolved`, `truncated`, or any finish when `tool_choice.passed` is false | 4 | Run nothing; re-ask or report the per-call reasons and the tool-choice diagnostics |
-| `ambiguous` | none (`value` is null; each of `alternatives` carries its own `verdict`) | none | 3 | Choose a reading, or re-ask |
-| `unresolved` | none (`value` is null) | none | 4 | Read `receipt.termination`; run nothing |
+A failed tool-choice check is a contract failure of the whole turn: even
+beside a call that would run on its own (the forced tool called, plus an
+extra call), the verdict is `nothing_usable`, the finish `unresolved`, the
+emission empty (the call skipped as `tool_choice_failed`), and
+`finish_reason` `"stop"`. `usable_calls` still counts each call's own
+usability.
+
+| `status` | `value.verdict` | `value.finish` | `openai_finish_reason` | Exit | What the caller should do |
+| --- | --- | --- | --- | --- | --- |
+| `resolved`, `best_guess` | `run` | `calls`, `truncated_with_calls`, or `unresolved` (a rejected or unresolved attempt beside the calls that run) | `"tool_calls"` (`"length"` when truncated) | 0 | Run the usable calls: `usable_calls` (strict) or, accepting read-only guesses, `usable_calls_accepting_guesses` (what the emission prints); report `rejected` |
+| `resolved`, `best_guess` | `no_calls` | `content_only` | `"stop"` | 0 | Use the content; nothing to run |
+| `resolved`, `best_guess` | `ambiguous` | `unresolved` | `"stop"` | 3 | Choose among the ambiguous call's `alternatives`, or re-ask |
+| `resolved`, `best_guess` | `nothing_usable` | `unresolved` (calls that may not run, a failed tool choice, unresolved calls, rejected attempts) or `truncated` | `"stop"` (`"length"` when truncated) | 4 | Run nothing; re-ask or report the per-call reasons and the tool-choice diagnostics |
+| `ambiguous` | none (`value` is null; each of `alternatives` carries its own `verdict`) | none | none | 3 | Choose a reading, or re-ask |
+| `unresolved` | none (`value` is null) | none | none | 4 | Read `receipt.termination`; run nothing |
 
 *Proved by* `tool_call_goldens::verdict_and_exit_code_agree_over_goldens`
 (over every golden, pinned and under the default allow-list: the wire
 `verdict` and counts are `ToolCalls::verdict` and the usable-call counts,
-and the exit code agrees with the rule above, restated independently) and
-the CLI tests above.
+and the exit code agrees with the rule above, restated independently),
+`tool_call_goldens::finish_and_finish_reason_agree_with_the_verdict` (the
+finish, the emission and `finish_reason` agree with the verdict as the
+table states, over every golden), the goldens
+`mutating_guess_invalid_utf8_finish`, `mutating_guess_near_miss_name_finish`,
+`mutating_guess_beside_usable_call_finish`,
+`mutating_guess_cut_by_length_finish` and
+`forced_tool_choice_violated_beside_a_usable_call` (each with an `OpenAI`
+emission), and the CLI tests above.

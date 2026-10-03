@@ -51,7 +51,8 @@
   "input": "Calling the tool:\n```json\n{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Oslo\"}}\n```\n",
   "outcome": "best_guess",
   "stopped": "completed",
-  "finish": "calls",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
   "verdict": "nothing_usable",
   "usable_calls": {
     "strict": 0,

@@ -70,6 +70,7 @@
   "outcome": "best_guess",
   "stopped": "completed",
   "finish": "unresolved",
+  "openai_finish_reason": "stop",
   "verdict": "ambiguous",
   "usable_calls": {
     "strict": 0,

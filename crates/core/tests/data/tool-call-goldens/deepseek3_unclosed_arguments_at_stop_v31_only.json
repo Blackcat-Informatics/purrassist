@@ -28,6 +28,7 @@
     "outcome": "best_guess",
     "stopped": "completed",
     "finish": "unresolved",
+    "openai_finish_reason": "stop",
     "verdict": "nothing_usable",
     "usable_calls": {
       "strict": 0,
@@ -66,6 +67,7 @@
   "outcome": "best_guess",
   "stopped": "completed",
   "finish": "unresolved",
+  "openai_finish_reason": "stop",
   "verdict": "nothing_usable",
   "usable_calls": {
     "strict": 0,

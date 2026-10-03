@@ -346,14 +346,16 @@ fn openai_shape_exact() {
 
 #[test]
 fn finish_reason_mapping() {
-    for (finish, reason) in [
-        (Finish::TruncatedWithCalls, "length"),
-        (Finish::Truncated, "length"),
-        (Finish::Calls, "tool_calls"),
-        (Finish::ContentOnly, "stop"),
-        (Finish::Unresolved, "stop"),
+    for (finish, emits, reason) in [
+        (Finish::TruncatedWithCalls, true, "length"),
+        (Finish::Truncated, false, "length"),
+        (Finish::Calls, true, "tool_calls"),
+        (Finish::ContentOnly, false, "stop"),
+        (Finish::Unresolved, false, "stop"),
+        // A rejected attempt beside a call that runs.
+        (Finish::Unresolved, true, "tool_calls"),
     ] {
-        assert_eq!(finish.openai_finish_reason(), reason, "{finish:?}");
+        assert_eq!(finish.openai_finish_reason(emits), reason, "{finish:?}");
     }
     let tools = payment_tools();
     let finish = |output: &str, stop: GenerationStop| {
@@ -361,7 +363,7 @@ fn finish_reason_mapping() {
             .stop(stop)
             .dialects(set(&[DialectId::Hermes]));
         let calls = value(tools.recover(output.as_bytes(), &request).outcome);
-        (calls.finish, calls.finish.openai_finish_reason())
+        (calls.finish, calls.openai_finish_reason())
     };
     let call = r#"<tool_call>{"name": "pay", "arguments": {"amount": 1}}</tool_call>"#;
     assert_eq!(
@@ -383,10 +385,19 @@ fn finish_reason_mapping() {
         finish("<tool_call>{\"name\": \"pa", GenerationStop::Length),
         (Finish::Truncated, "length")
     );
-    // "stop" also hides a rejected attempt: the finish says Unresolved.
+    // "tool_calls" also hides a rejected attempt beside a call that runs:
+    // the emitted message holds that call, and the finish says Unresolved.
     assert_eq!(
         finish(
             &format!("{call}<tool_call>{{\"name\": \"pay\", oops}}</tool_call>"),
+            GenerationStop::Stop
+        ),
+        (Finish::Unresolved, "tool_calls")
+    );
+    // With nothing to run beside the rejected attempt, "stop".
+    assert_eq!(
+        finish(
+            "<tool_call>{\"name\": \"pay\", oops}</tool_call>",
             GenerationStop::Stop
         ),
         (Finish::Unresolved, "stop")
