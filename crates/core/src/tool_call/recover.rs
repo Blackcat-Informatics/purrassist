@@ -865,16 +865,13 @@ impl ToolRecoveryRequest {
 ///
 /// So `Calls` and `TruncatedWithCalls` imply [`Verdict::Run`]; the converse
 /// fails only where something else is wrong beside the calls that run (a
-/// rejected or unresolved attempt), which finishes `Unresolved`.
+/// rejected or unresolved attempt), which finishes `Unresolved`. The
+/// `OpenAI` `finish_reason` does not depend on the finish
+/// ([`openai_finish_reason`]).
 ///
 /// ```
 /// use purrassist_core::tool_call::Finish;
-/// assert_eq!(Finish::TruncatedWithCalls.openai_finish_reason(true), "length");
-/// assert_eq!(Finish::Calls.openai_finish_reason(true), "tool_calls");
-/// // A rejected attempt beside a call that runs: the emitted message holds
-/// // the call, so its finish_reason says so.
-/// assert_eq!(Finish::Unresolved.openai_finish_reason(true), "tool_calls");
-/// assert_eq!(Finish::Unresolved.openai_finish_reason(false), "stop");
+/// assert_eq!(Finish::TruncatedWithCalls.code(), "truncated_with_calls");
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Finish {
@@ -890,30 +887,41 @@ pub enum Finish {
     Unresolved,
 }
 
-impl Finish {
-    /// The `OpenAI` `finish_reason` (D15) of a turn that finished as
-    /// `self`, where `emits_calls` says whether its `OpenAI` emission
-    /// prints at least one call (a call usable accepting read-only
-    /// guesses): `"length"` for the truncated finishes (the cut is what the
-    /// format reports, with or without calls), otherwise `"tool_calls"`
-    /// exactly when the emitted message holds a call, and `"stop"`. The one
-    /// mapping: [`ToolCalls::openai_finish_reason`] (the wire
-    /// `openai_finish_reason`) applies it to the turn's own emission.
-    ///
-    /// `"stop"` and `"tool_calls"` hide rejected and unresolved calls:
-    /// callers must read [`ToolCalls::finish`], [`ToolCalls::verdict`] and
-    /// [`ToolCalls::rejected`], never only this.
-    ///
-    /// See [`Finish`] for an example.
-    #[must_use]
-    pub const fn openai_finish_reason(self, emits_calls: bool) -> &'static str {
-        match self {
-            Self::TruncatedWithCalls | Self::Truncated => "length",
-            Self::Calls | Self::ContentOnly | Self::Unresolved if emits_calls => "tool_calls",
-            Self::Calls | Self::ContentOnly | Self::Unresolved => "stop",
-        }
+/// The `OpenAI` `finish_reason` (D15) of a turn: the one mapping.
+///
+/// It is `"length"` whenever the caller's stop reason is
+/// [`GenerationStop::Length`] (a length
+/// stop is never reported as a clean finish, whatever the finish: the
+/// usable calls are still emitted), otherwise `"tool_calls"` exactly when
+/// the `OpenAI` emission prints a call (`emits_calls`,
+/// [`ToolCalls::emitted_calls`] not empty), and `"stop"` otherwise.
+/// [`ToolCalls::openai_finish_reason`] (the wire `openai_finish_reason`)
+/// applies it to the turn's own stop and emission.
+///
+/// `"stop"`, `"tool_calls"` and `"length"` all hide rejected and unresolved
+/// calls: callers must read [`ToolCalls::finish`], [`ToolCalls::verdict`]
+/// and [`ToolCalls::rejected`], never only this.
+///
+/// ```
+/// use purrassist_core::tool_call::openai_finish_reason;
+/// // A length stop is reported as such, with or without calls.
+/// assert_eq!(openai_finish_reason(true, true), "length");
+/// assert_eq!(openai_finish_reason(true, false), "length");
+/// assert_eq!(openai_finish_reason(false, true), "tool_calls");
+/// assert_eq!(openai_finish_reason(false, false), "stop");
+/// ```
+#[must_use]
+pub const fn openai_finish_reason(length_stop: bool, emits_calls: bool) -> &'static str {
+    if length_stop {
+        "length"
+    } else if emits_calls {
+        "tool_calls"
+    } else {
+        "stop"
     }
+}
 
+impl Finish {
     /// The wire code: `calls`, `content_only`, `truncated_with_calls`,
     /// `truncated`, or `unresolved`.
     ///
@@ -1319,6 +1327,11 @@ pub struct ToolCalls {
     /// recovery's ids. Not part of the wire form, which names the digest in
     /// its receipt.
     pub turn: Digest,
+    /// Whether the caller's stop reason was [`GenerationStop::Length`]: the
+    /// turn's `OpenAI` `finish_reason` is then `"length"` whatever its
+    /// finish ([`Self::openai_finish_reason`]). Not part of the wire form,
+    /// which states the `finish_reason` itself.
+    pub length_stop: bool,
     /// The calls printed for the request's [`EmitTarget`], with every call
     /// and rejected attempt not printed; `None` for [`EmitTarget::None`].
     /// Ids are the calls' assigned [`ToolCall::id`]s.
@@ -1355,16 +1368,15 @@ impl ToolCalls {
             .collect()
     }
 
-    /// The `OpenAI` `finish_reason` of this turn: [`Finish::openai_finish_reason`]
-    /// of [`Self::finish`], with whether the `OpenAI` emission prints a call
-    /// ([`Self::emitted_calls`] is what every emitter prints). The wire
-    /// `openai_finish_reason`.
+    /// The `OpenAI` `finish_reason` of this turn: [`openai_finish_reason`]
+    /// of whether the stop was a length stop ([`Self::length_stop`]) and
+    /// whether the `OpenAI` emission prints a call ([`Self::emitted_calls`]
+    /// is what every emitter prints). The wire `openai_finish_reason`.
     ///
-    /// See [`Finish`] for the mapping.
+    /// See [`openai_finish_reason`] for the mapping.
     #[must_use]
     pub fn openai_finish_reason(&self) -> &'static str {
-        self.finish
-            .openai_finish_reason(!self.emitted_calls().is_empty())
+        openai_finish_reason(self.length_stop, !self.emitted_calls().is_empty())
     }
 
     /// The calls every emitter prints, and the calls a caller may run:
@@ -2367,6 +2379,7 @@ impl Recovery<'_> {
                 },
                 next_id_start: 0,
                 turn: self.source,
+                length_stop: self.request.stop.is_truncation(),
                 emitted: None,
             },
             facts: Vec::new(),

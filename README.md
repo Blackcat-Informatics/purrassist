@@ -124,7 +124,11 @@ the `recover_tool_calls` MCP tool: per-call outcomes, itemized repairs and
 losses, rejected attempts, the tool-choice check, the turn's finish and its
 `OpenAI` `finish_reason`, an optional `--emit` re-emission (`openai` for the
 `tool_calls` array, or a dialect id), and a receipt. It never executes a call.
-`Finish::Unresolved` maps to the `finish_reason` `"stop"`, so read `finish`
+The `finish_reason` is `"length"` whenever the caller's stop reason is a length stop (whatever the
+finish: a length stop is never reported as a clean finish, and the usable
+calls are still emitted), otherwise `"tool_calls"` exactly when the `OpenAI`
+emission holds a call, and `"stop"` otherwise;
+neither says whether anything else went wrong, so read `finish`, `verdict`
 and `rejected` as well. The command exits 0 when at least one call is usable (`usable_accepting_guesses`) and the
 tool-choice check passed, even if other attempts in the turn were rejected or
 are unparsed call markup (the JSON itemizes them, so a script keyed on the

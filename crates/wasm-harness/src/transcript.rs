@@ -150,6 +150,8 @@ fn tool_call_transcript() -> Node {
                 "{} {kind}",
                 case.dialect.id()
             );
+            // Not a length stop, so `finish_reason` names the emitted calls.
+            assert!(!calls.length_stop, "{} {kind}", case.dialect.id());
             assert_eq!(
                 calls.openai_finish_reason(),
                 "tool_calls",

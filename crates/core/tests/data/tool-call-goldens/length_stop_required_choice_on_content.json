@@ -1,0 +1,52 @@
+{
+  "description": "F8: a length stop is never reported as a clean finish. Plain content under tool_choice required and a length stop fails the tool choice (finish unresolved, verdict nothing_usable, nothing emitted), and the OpenAI finish_reason is length, not stop: a relay never hides the budget cut.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "effects": {
+    "read_file": "read_only"
+  },
+  "stop": "length",
+  "emit": "openai",
+  "tool_choice": "required",
+  "input": "The answer is coming",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "length",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [],
+  "embedded": [],
+  "emitted": {
+    "calls": 0,
+    "skipped": []
+  },
+  "failed_validations": [
+    "tool_choice=required"
+  ],
+  "ledger_rules": []
+}

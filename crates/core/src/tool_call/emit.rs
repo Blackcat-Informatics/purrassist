@@ -20,7 +20,7 @@
 //! none ([`SkipReason::ToolChoiceFailed`]). The same selection decides
 //! [`ToolCalls::verdict`] and [`ToolCalls::openai_finish_reason`], so the
 //! emitted `finish_reason` is `"tool_calls"` exactly when the emission
-//! holds a call (unless a length stop cut the turn).
+//! holds a call, except under a length stop, which is always `"length"`.
 //! Emitted output (an `OpenAI` `tool_calls` array in particular) carries no
 //! outcome, and a downstream executor may run whatever it holds, so a guess
 //! on a mutating tool is never emitted. Nothing is dropped silently; every
@@ -587,9 +587,9 @@ pub fn openai_tool_calls(calls: &ToolCalls, ids: &IdPolicy) -> Result<Emitted<No
 /// id from `ids`, the canonical tool name, and `arguments` the compact JSON
 /// string of the argument tree (exact number spellings). Pair it with
 /// [`ToolCalls::openai_finish_reason`] for the message's `finish_reason`:
-/// it is `"tool_calls"` exactly when this array holds a call (unless a
-/// length stop cut the turn, `"length"`), because both select calls with
-/// [`ToolCalls::emitted_calls`].
+/// under a length stop it is `"length"` (the array still holds the calls
+/// that may run), otherwise `"tool_calls"` exactly when this array holds a
+/// call, because both select calls with [`ToolCalls::emitted_calls`].
 /// Emits exactly the calls [`ToolCalls::emitted_calls`] selects (every
 /// `Resolved` call, and a `BestGuess` call only on a read-only tool, when
 /// the turn passes the tool-choice check); every other call, a guess on a

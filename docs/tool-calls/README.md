@@ -291,13 +291,16 @@ for the status × verdict table.
 | `ContentOnly` | No call, nothing wrong. | `"stop"` |
 | `TruncatedWithCalls` | A `Length` stop after at least one call that may run (a cut-off call never may). | `"length"` |
 | `Truncated` | A `Length` stop with no call that may run. | `"length"` |
-| `Unresolved` | A rejected attempt (other than one a length stop cut off), including call markup no allowed dialect reads, an `Unresolved` (other than by truncation) or `Ambiguous` call, a failed tool-choice check (even beside calls that would run), or calls of which none may run (each a guess on a mutating tool). | `"tool_calls"` when the emission still holds a call (a rejected or unresolved attempt beside calls that run), `"stop"` otherwise |
+| `Unresolved` | A rejected attempt (other than one a length stop cut off), including call markup no allowed dialect reads, an `Unresolved` (other than by truncation) or `Ambiguous` call, a failed tool-choice check (even beside calls that would run), or calls of which none may run (each a guess on a mutating tool). | `"length"` under a length stop; otherwise `"tool_calls"` when the emission still holds a call (a rejected or unresolved attempt beside calls that run), `"stop"` otherwise |
 
-`Calls` and `TruncatedWithCalls` imply the verdict `run`, and
-`finish_reason` is `"tool_calls"` exactly when the `OpenAI` emission holds a
-call (outside a length stop): the finish, `finish_reason`, emission and
-verdict never contradict each other (`Finish::openai_finish_reason` is the
-one mapping).
+`Calls` and `TruncatedWithCalls` imply the verdict `run`. The
+`finish_reason` (`tool_call::openai_finish_reason`, the one mapping) is
+`"length"` whenever the caller's stop reason is a length stop (whatever the
+finish: a length stop is never reported as a clean finish, and the usable
+calls are still emitted), otherwise `"tool_calls"` exactly when the `OpenAI`
+emission holds a call, and `"stop"` otherwise: the finish, `finish_reason`, emission and verdict never
+contradict each other, and a length stop is never reported as a clean
+finish.
 
 Call markup that no dialect of the allow-list reads is never silent
 content. A linear detector (`detect_unparsed`) scans the turn's content for
@@ -317,9 +320,10 @@ JSON call, a Qwen3-Coder `<function=NAME>` element without `<tool_call>` is
 a Qwen3-Coder XML call, a Llama 3 object without `<|python_tag|>` is an untagged Llama 3
 call) are recovered, not reported.
 
-`"stop"` and `"tool_calls"` for `Finish::Unresolved` hide rejected and
-unresolved calls: read `ToolCalls::finish`, `ToolCalls::verdict` and
-`ToolCalls::rejected`, never only the `finish_reason`. Truncation never upgrades malformed output.
+Every `finish_reason` of `Finish::Unresolved` (`"stop"`, `"tool_calls"`,
+`"length"`) hides rejected and unresolved calls: read `ToolCalls::finish`,
+`ToolCalls::verdict` and `ToolCalls::rejected`, never only the
+`finish_reason`. Truncation never upgrades malformed output.
 
 ## Termination semantics
 
@@ -328,7 +332,7 @@ an open call at the end of output means.
 
 | Stop | An open call at the end of output |
 | --- | --- |
-| `Length` | Truncation: the call is a dangling reading of what was captured, `Unresolved` (`Truncated`) with a `tool_call.truncated` data loss; unless something else is wrong with the turn, the finish is `Truncated` or `TruncatedWithCalls` (`"length"`). A call that ends with a self-delimiting arguments value (Mistral v11's `[ARGS]{...}`, with no closing token after it) is complete when that value is complete at the cut: it is not cut off, so it is read as under a stop, and the finish is `TruncatedWithCalls`. |
+| `Length` | Truncation: the call is a dangling reading of what was captured, `Unresolved` (`Truncated`) with a `tool_call.truncated` data loss; unless something else is wrong with the turn, the finish is `Truncated` or `TruncatedWithCalls`; the `finish_reason` is `"length"` whatever the finish. A call that ends with a self-delimiting arguments value (Mistral v11's `[ARGS]{...}`, with no closing token after it) is complete when that value is complete at the cut: it is not cut off, so it is read as under a stop, and the finish is `TruncatedWithCalls`. |
 | `Stop`, `ToolCalls`, `ContentFilter`, `Unknown` | Malformed: completed only by inserting the missing closers at the end (`tool_call.markup.missing-closers-at-end`) when the call is otherwise complete (its name parsed, no value open, arguments complete, every required parameter present); otherwise a rejected attempt with a `tool_call.markup.dangling-opener` data loss and the finish `Unresolved`. |
 | `StopSequence(bytes)` | Like `Stop`, and when `bytes` equal the closer the call expects next, that closer is reinserted (`tool_call.stop.consumed-closer`). |
 

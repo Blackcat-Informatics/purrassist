@@ -3285,8 +3285,9 @@ fn verdict_and_exit_code_agree_over_goldens() {
 ///   own) finishes `unresolved`, with the verdict `nothing_usable` and
 ///   nothing emitted;
 /// - the `OpenAI` emission holds a call exactly when the verdict is `run`;
-/// - `finish_reason` is `"length"` exactly for the truncated finishes, and
-///   otherwise `"tool_calls"` exactly when the emission holds a call.
+/// - `finish_reason` is `"length"` exactly when the stop reason is a
+///   length stop (whatever the finish), and otherwise `"tool_calls"`
+///   exactly when the emission holds a call.
 #[test]
 fn finish_and_finish_reason_agree_with_the_verdict() {
     use purrassist_core::tool_call::{IdPolicy, Verdict, emit};
@@ -3327,11 +3328,18 @@ fn finish_and_finish_reason_agree_with_the_verdict() {
         };
         assert_eq!(!array.is_empty(), verdict == Verdict::Run, "{name}");
         assert_eq!(array.len(), calls.emitted_calls().len(), "{name}");
+        // `"length"` exactly for a length stop (a truncated finish is one),
+        // otherwise `"tool_calls"` exactly when the emission holds a call.
+        let length_stop = golden.request.stop == purrassist_core::tool_call::GenerationStop::Length;
+        assert_eq!(calls.length_stop, length_stop, "{name}");
+        if truncated {
+            assert!(length_stop, "{name}");
+        }
         let reason = calls.openai_finish_reason();
-        assert_eq!(reason == "length", truncated, "{name}");
+        assert_eq!(reason == "length", length_stop, "{name}");
         assert_eq!(
             reason == "tool_calls",
-            !truncated && !array.is_empty(),
+            !length_stop && !array.is_empty(),
             "{name}"
         );
     }

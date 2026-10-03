@@ -14,7 +14,8 @@ use purrassist_core::tool_call::{
     CallEdit, CallOutcome, CompiledTool, DeclarationForm, DialectId, DialectSet, Effects, Emission,
     EmitTarget, Finish, GenerationStop, IdGenerator, IdPolicy, Param, PolicySelection,
     ReasoningPolicy, Recognizer, RepairPolicy, Segment, SkipReason, Skipped, ToolCall, ToolCalls,
-    ToolDefinition, ToolRecoveryRequest, ToolResult, ToolSet, ToolSource, turn_id_prefix,
+    ToolDefinition, ToolRecoveryRequest, ToolResult, ToolSet, ToolSource, openai_finish_reason,
+    turn_id_prefix,
 };
 use purrassist_core::wire::WireValue;
 use purrassist_core::{Budget, Governor, Outcome};
@@ -346,16 +347,19 @@ fn openai_shape_exact() {
 
 #[test]
 fn finish_reason_mapping() {
-    for (finish, emits, reason) in [
-        (Finish::TruncatedWithCalls, true, "length"),
-        (Finish::Truncated, false, "length"),
-        (Finish::Calls, true, "tool_calls"),
-        (Finish::ContentOnly, false, "stop"),
-        (Finish::Unresolved, false, "stop"),
-        // A rejected attempt beside a call that runs.
-        (Finish::Unresolved, true, "tool_calls"),
+    // The one mapping: a length stop is "length" whatever the finish, then
+    // "tool_calls" exactly when the emission holds a call.
+    for (length_stop, emits, reason) in [
+        (true, true, "length"),
+        (true, false, "length"),
+        (false, true, "tool_calls"),
+        (false, false, "stop"),
     ] {
-        assert_eq!(finish.openai_finish_reason(emits), reason, "{finish:?}");
+        assert_eq!(
+            openai_finish_reason(length_stop, emits),
+            reason,
+            "{length_stop} {emits}"
+        );
     }
     let tools = payment_tools();
     let finish = |output: &str, stop: GenerationStop| {
@@ -401,6 +405,22 @@ fn finish_reason_mapping() {
             GenerationStop::Stop
         ),
         (Finish::Unresolved, "stop")
+    );
+    // A length stop is never reported as a clean finish: the same turns
+    // under a length stop are "length", the usable call still emitted.
+    assert_eq!(
+        finish(
+            &format!("{call}<tool_call>{{\"name\": \"pay\", oops}}</tool_call>"),
+            GenerationStop::Length
+        ),
+        (Finish::Unresolved, "length")
+    );
+    assert_eq!(
+        finish(
+            "<tool_call>{\"name\": \"pay\", oops}</tool_call>",
+            GenerationStop::Length
+        ),
+        (Finish::Unresolved, "length")
     );
 }
 

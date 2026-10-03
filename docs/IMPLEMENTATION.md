@@ -49,7 +49,7 @@ computational engines remain wasmable.
   is resolved against its tool with a per-call outcome, itemized repairs,
   markup/data losses, ranked alternatives, and caller-chosen ids. Effects
   select conservative policies: a guess on a mutating tool is never resolved,
-  usable, or emitted. The model's stop reason is an input, truncation maps to
+  usable, or emitted. The model's stop reason is an input, a length stop is always
   `finish_reason` `"length"`, and recovered calls print in any dialect or as
   the `OpenAI` `tool_calls` array. Recovery is deterministic, governed by a
   published linear cost bound, and exposed through Rust, CLI

@@ -38,8 +38,9 @@
 //!   with calls implies `Run`, a `Run` turn finishing otherwise is
 //!   `Unresolved` beside a rejected, unresolved or ambiguous attempt, and a
 //!   failed tool choice finishes `Unresolved` with `NothingUsable`;
-//!   `finish_reason` is `"length"` exactly for the truncated finishes and
-//!   otherwise `"tool_calls"` exactly when the `OpenAI` array holds a call;
+//!   `finish_reason` is `"length"` exactly when the stop is a length stop
+//!   (whatever the finish) and otherwise `"tool_calls"` exactly when the
+//!   `OpenAI` array holds a call;
 //!   the wire `verdict` and usable-call counts match;
 //! - every call, rejected-attempt, content, and reasoning range lies within
 //!   the output, never splits a well-formed UTF-8 character, and slices back
@@ -383,11 +384,23 @@ fn check_verdict(calls: &ToolCalls) {
     )
     .expect("OpenAI emission");
     assert_eq!(array.calls.len(), emitted.len(), "the OpenAI array");
+    // `"length"` exactly for a length stop (a truncated finish is one),
+    // otherwise `"tool_calls"` exactly when the array holds a call.
+    if truncated {
+        assert!(
+            calls.length_stop,
+            "a truncated finish without a length stop"
+        );
+    }
     let reason = calls.openai_finish_reason();
-    assert_eq!(reason == "length", truncated, "finish_reason {reason}");
+    assert_eq!(
+        reason == "length",
+        calls.length_stop,
+        "finish_reason {reason}"
+    );
     assert_eq!(
         reason == "tool_calls",
-        !truncated && !array.calls.is_empty(),
+        !calls.length_stop && !array.calls.is_empty(),
         "finish_reason {reason}"
     );
     let wire = calls.to_node();
@@ -553,6 +566,11 @@ fn check_result(
         Outcome::Unresolved => assert_eq!(code, 4),
     }
     for calls in values {
+        assert_eq!(
+            calls.length_stop,
+            request.stop.is_truncation(),
+            "length_stop is the request's stop"
+        );
         check_calls(output, calls);
         check_reemission(tools, calls);
     }

@@ -206,17 +206,12 @@ fn length_vs_stop_truncation() {
     let result = tools.recover(b"Hello", &length);
     assert_eq!(value(&result).finish, Finish::Truncated);
     // The same text under a natural stop is malformed, never truncated.
-    for text in [partial.to_owned(), both] {
+    // `finish_reason` names the emitted calls: nothing for the cut call
+    // alone, the complete call beside the rejected attempt.
+    for (text, reason) in [(partial.to_owned(), "stop"), (both, "tool_calls")] {
         let result = tools.recover(text.as_bytes(), &request(DialectId::Hermes));
         let calls = value(&result);
         assert_eq!(calls.finish, Finish::Unresolved, "{text}");
-        // `finish_reason` names the emitted calls: the complete call
-        // beside the rejected attempt is emitted.
-        let reason = if calls.emitted_calls().is_empty() {
-            "stop"
-        } else {
-            "tool_calls"
-        };
         assert_eq!(calls.openai_finish_reason(), reason, "{text}");
         assert!(
             calls.calls.iter().all(|call| call.outcome
