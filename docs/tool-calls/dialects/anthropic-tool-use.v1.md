@@ -82,7 +82,10 @@ decoded object is validated like any arguments.
 - Reasoning: `thinking` and `redacted_thinking` blocks, spelled compactly or
   with one space after each colon and comma, are reasoning (the grammar
   declares one marker pair per spelling): from the block's start to its
-  `signature` member, or to the end of its `data`.
+  `signature` member, or to the end of its `data`. The pairs are `explicit`:
+  a thinking block exists only after its own opener, so its closer (`"}`,
+  `", "signature": "`, JSON a call's arguments also contain) never ends a
+  reasoning block the turn starts in (`--reasoning separate-open`).
 - `ARGS` is read by the self-delimiting `json` codec: exact number
   spellings, member order and duplicates kept; a stringified object is
   decoded and flagged.

@@ -44,8 +44,13 @@
 //! `tool_call.reasoning.unclosed` (so later calls depend on that guess);
 //! without an opener it runs to the end of output with a data loss
 //! (`tool_call.reasoning.unterminated`). With `starts_open`, the turn begins
-//! inside a reasoning block. Under [`ReasoningPolicy::AsContent`] markers are
-//! plain content.
+//! inside a reasoning block. A block opened in the output ends at its own
+//! pair's closer; a block the turn starts in ends at the first closer of a
+//! pair that is not `explicit`
+//! ([`CompiledGrammar::reasoning_explicit`](crate::grammar::CompiledGrammar::reasoning_explicit)):
+//! an explicit pair's closer, such as Anthropic's `"}`, is ordinary JSON
+//! inside a call and never ends it. Under [`ReasoningPolicy::AsContent`]
+//! markers are plain content.
 //!
 //! # End of output
 //!
@@ -1053,7 +1058,20 @@ impl<'s> Recognizer<'s> {
         let Some(think) = self.turn.think.clone() else {
             return Ok(());
         };
-        if think.pair.is_some_and(|open| open != pair) || think.start > start {
+        // An opened block ends at its own pair's closer; a block the turn
+        // starts in (no opener) at the closer of a pair a prompt template
+        // can open, never at an `explicit` pair's (Anthropic's `"}` is also
+        // ordinary JSON inside a call).
+        let closes = match think.pair {
+            Some(open) => open == pair,
+            None => !self
+                .set
+                .explicit
+                .get(pair as usize)
+                .copied()
+                .unwrap_or(false),
+        };
+        if !closes || think.start > start {
             return Ok(());
         }
         let segment =

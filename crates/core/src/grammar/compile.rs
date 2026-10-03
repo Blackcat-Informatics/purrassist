@@ -198,6 +198,21 @@ fn charge(governor: &mut Governor, work: u64, scratch: u64) -> Result<(), Gramma
     Ok(())
 }
 
+impl<'g> Builder<'g> {
+    /// An empty builder charging `governor`.
+    const fn new(governor: &'g mut Governor) -> Self {
+        Self {
+            governor,
+            literals: Vec::new(),
+            closers: Vec::new(),
+            classes: Vec::new(),
+            delimiter_sets: Vec::new(),
+            names: Vec::new(),
+            production_offsets: Vec::new(),
+        }
+    }
+}
+
 impl Builder<'_> {
     fn intern_literal(
         &mut self,
@@ -1179,6 +1194,8 @@ impl Programs<'_> {
 /// in order (registered in the builder's namespace).
 struct Declared<'d> {
     reasoning: Vec<(Vec<u8>, Vec<u8>)>,
+    /// Per `reasoning` pair, whether it is declared `explicit`.
+    explicit_reasoning: Vec<bool>,
     confusables: Vec<(Vec<u8>, Vec<u8>)>,
     bodies: Vec<(String, &'d PExpr)>,
     layouts: Vec<(&'d str, &'d [u8], usize)>,
@@ -1193,6 +1210,7 @@ fn declare<'d>(
 ) -> Result<Declared<'d>, GrammarError> {
     let mut declared = Declared {
         reasoning: Vec::new(),
+        explicit_reasoning: Vec::new(),
         confusables: Vec::new(),
         bodies: Vec::new(),
         layouts: Vec::new(),
@@ -1206,12 +1224,18 @@ fn declare<'d>(
     };
     for statement in statements {
         match statement {
-            Statement::Reasoning { open, close, at } => {
+            Statement::Reasoning {
+                open,
+                close,
+                explicit,
+                at,
+            } => {
                 let pair = (open.clone(), close.clone());
                 if declared.reasoning.contains(&pair) {
                     return Err(duplicate(*at, "reasoning"));
                 }
                 declared.reasoning.push(pair);
+                declared.explicit_reasoning.push(*explicit);
             }
             Statement::OptionalId { at } => {
                 if declared.optional_id {
@@ -1373,17 +1397,10 @@ pub(crate) fn compile(
     digest: Digest,
     governor: &mut Governor,
 ) -> Result<CompiledGrammar, GrammarError> {
-    let mut builder = Builder {
-        governor,
-        literals: Vec::new(),
-        closers: Vec::new(),
-        classes: Vec::new(),
-        delimiter_sets: Vec::new(),
-        names: Vec::new(),
-        production_offsets: Vec::new(),
-    };
+    let mut builder = Builder::new(governor);
     let Declared {
         reasoning,
+        explicit_reasoning,
         confusables,
         bodies,
         layouts: declared_layouts,
@@ -1474,6 +1491,7 @@ pub(crate) fn compile(
         result,
         declaration,
         reasoning,
+        explicit_reasoning,
         programs,
         stray: stray.trie,
         longest,

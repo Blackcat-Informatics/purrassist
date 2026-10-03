@@ -22,7 +22,7 @@
 //! | Statement | Meaning |
 //! | --- | --- |
 //! | `grammar "ID";` | Header; `ID` matches `[A-Za-z0-9._-]+`. |
-//! | `reasoning "OPEN" "CLOSE";` | Reasoning-block markers for this dialect (one statement per marker pair). |
+//! | `reasoning "OPEN" "CLOSE";` | Reasoning-block markers for this dialect (one statement per marker pair); a trailing `explicit` marks a block that exists only after its opener, whose closer never ends a block the turn starts in. |
 //! | `confusable "CANONICAL" "VARIANT";` | `VARIANT` is a confusable spelling of `CANONICAL` inside any literal. |
 //! | `closer NAME = "S1" \| "S2" ...;` | A closer class: `S1` is canonical, the rest are variant spellings. |
 //! | `layout NAME "TEXT";` | Printing only: the class production `NAME` is printed as `TEXT` (a member of the class) wherever it occurs uncaptured, optional occurrences included. Recognition is unchanged. |
@@ -658,6 +658,8 @@ pub struct CompiledGrammar {
     pub(crate) result: ProductionId,
     pub(crate) declaration: ProductionId,
     pub(crate) reasoning: Vec<(Vec<u8>, Vec<u8>)>,
+    /// Per `reasoning` pair, whether it is declared `explicit`.
+    pub(crate) explicit_reasoning: Vec<bool>,
     pub(crate) programs: [Program; 2],
     pub(crate) stray: automaton::Trie,
     pub(crate) longest: usize,
@@ -971,6 +973,27 @@ impl CompiledGrammar {
     #[must_use]
     pub fn reasoning_markers(&self) -> &[(Vec<u8>, Vec<u8>)] {
         &self.reasoning
+    }
+
+    /// Per [`Self::reasoning_markers`] pair, whether it is declared
+    /// `explicit` (`reasoning "OPEN" "CLOSE" explicit;`): its block exists
+    /// only after its own opener in the output, never opened by a prompt
+    /// template, so its closer never ends a block the turn starts in
+    /// ([`ReasoningPolicy::Separate`](crate::tool_call::ReasoningPolicy::Separate)
+    /// with `starts_open`). Anthropic's thinking content blocks are
+    /// explicit: their closers (`"}`, `", "signature": "`) are ordinary JSON
+    /// that a call's arguments also contain.
+    ///
+    /// ```
+    /// # use purrassist_core::grammar::Grammar;
+    /// # use purrassist_core::{Budget, Governor};
+    /// let text = "grammar \"g\"; reasoning \"<think>\" \"</think>\"; reasoning \"{\\\"t\\\":\\\"\" \"\\\"}\" explicit; call = \"<c>\"; result = \"<r>\"; declaration = \"<d>\";";
+    /// let grammar = Grammar::compile_governed(text, &mut Governor::new(Budget::default())).unwrap();
+    /// assert_eq!(grammar.reasoning_explicit(), [false, true]);
+    /// ```
+    #[must_use]
+    pub fn reasoning_explicit(&self) -> &[bool] {
+        &self.explicit_reasoning
     }
 
     /// The maximum number of simultaneously live recognizer configurations

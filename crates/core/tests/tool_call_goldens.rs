@@ -3344,3 +3344,66 @@ fn finish_and_finish_reason_agree_with_the_verdict() {
         );
     }
 }
+
+/// S1: a reasoning block never swallows calls, under the default allow-list
+/// and every reasoning mode. A block the turn starts in (`starts_open`)
+/// with no closer is closed at the first call opener
+/// (`tool_call.reasoning.unclosed`) and the call recovered, for a call of
+/// every JSON-bodied and XML dialect: another dialect's `explicit` closer
+/// (Anthropic's `"}`, ordinary JSON inside the call) never ends it. A block
+/// with a closer ends exactly after the closer, the call inside offered as
+/// an embedded alternative and the text after it content.
+#[test]
+fn reasoning_never_swallows_calls() {
+    // One range, as a vector.
+    let only = |range: core::ops::Range<usize>| core::iter::once(range).collect::<Vec<_>>();
+    for dialect in [
+        "hermes",
+        "mistral_v3",
+        "llama3",
+        "bare_json",
+        "qwen_xml",
+        "anthropic",
+    ] {
+        let name = format!("reasoning_starts_open_unclosed_{dialect}");
+        let (_, result) = golden(&name);
+        let calls = reading(&result);
+        assert_eq!(calls.calls.len(), 1, "{name}");
+        assert!(
+            rules_of(&calls.calls[0]).contains(&"tool_call.reasoning.unclosed"),
+            "{name}"
+        );
+        let opener = "Let me look. ".len();
+        assert_eq!(calls.reasoning, only(0..opener), "{name}");
+        assert_eq!(calls.calls[0].span.start, opener, "{name}");
+
+        let name = format!("reasoning_starts_open_closed_{dialect}");
+        let (fixture, result) = golden(&name);
+        let calls = reading(&result);
+        assert!(calls.calls.is_empty(), "{name}");
+        assert_eq!(calls.embedded.len(), 1, "{name}");
+        let end = fixture.input.len() - "Answer.".len();
+        assert_eq!(calls.reasoning, only(0..end), "{name}: ends after </think>");
+        assert_eq!(calls.content, only(end..fixture.input.len()), "{name}");
+    }
+    let (_, result) = golden("reasoning_starts_open_swallow_repro");
+    let calls = reading(&result);
+    assert_eq!(
+        (calls.calls.len(), calls.reasoning.clone()),
+        (1, only(0..13))
+    );
+    let (fixture, result) = golden("reasoning_starts_open_think_closer_repro");
+    let calls = reading(&result);
+    let end = fixture.input.len() - "done".len();
+    assert_eq!(calls.reasoning, only(0..end));
+    assert_eq!(calls.embedded.len(), 1);
+    let (_, result) = golden("reasoning_separate_closed_block_calls");
+    let calls = reading(&result);
+    assert_eq!((calls.calls.len(), calls.embedded.len()), (1, 4));
+    let (_, result) = golden("reasoning_separate_unclosed_block_calls");
+    assert_eq!(reading(&result).calls.len(), 2);
+    let (_, result) = golden("reasoning_as_content_calls");
+    let calls = reading(&result);
+    assert_eq!(calls.calls.len(), 2);
+    assert_eq!(calls.reasoning.len(), 0);
+}

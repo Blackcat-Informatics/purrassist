@@ -62,6 +62,11 @@
 //! - pushing the turn to a [`Recognizer`] in one chunk, split in two at the
 //!   seeded position, or in seeded fixed-size chunks gives an equal
 //!   recognized turn (or the same error) and equal governor usage;
+//! - (S1) a reasoning mode never makes call markup vanish: every call the
+//!   request recovers with reasoning as content overlaps a call, an
+//!   embedded call or a rejected attempt under the requested mode, unless
+//!   its bytes hold a marker of a non-`explicit` pair or an `explicit`
+//!   opener precedes its end;
 //! - under a budget too small for the output, recovery is `Unresolved` with
 //!   `StopReason::BudgetExceeded`, empty ledgers, and no alternatives.
 use core::ops::Range;
@@ -643,6 +648,81 @@ fn check_exhaustion(tools: &ToolSet, output: &[u8], request: &ToolRecoveryReques
     }
 }
 
+/// S1: a reasoning mode never makes call markup vanish. Every call the
+/// same request recovers with reasoning markers as plain content
+/// ([`ReasoningPolicy::AsContent`]) overlaps a call, an embedded call or a
+/// rejected attempt of the recovery under the requested mode, unless its
+/// bytes hold a marker of a pair a prompt template can open (a marker
+/// inside a call is a marker), or an `explicit` pair's opener comes before
+/// its end (that block may end inside the call at its JSON-like closer).
+fn check_reasoning_keeps_calls(
+    tools: &ToolSet,
+    output: &[u8],
+    request: &ToolRecoveryRequest,
+    result: &AssistResult<ToolCalls>,
+) {
+    if request.reasoning == ReasoningPolicy::AsContent {
+        return;
+    }
+    let (Outcome::Resolved(separate) | Outcome::BestGuess(separate)) = &result.outcome else {
+        return;
+    };
+    let plain = tools.recover(
+        output,
+        &request.clone().reasoning(ReasoningPolicy::AsContent),
+    );
+    let (Outcome::Resolved(plain) | Outcome::BestGuess(plain)) = &plain.outcome else {
+        return;
+    };
+    // Markers that may legitimately change how a call's bytes read: any
+    // marker of a pair a prompt template can open, inside the call; and an
+    // `explicit` pair's opener anywhere before the call ends (such a block
+    // may end inside the call at its JSON-like closer).
+    let mut free: Vec<&[u8]> = Vec::new();
+    let mut explicit_openers: Vec<&[u8]> = Vec::new();
+    for dialect in request.dialects.dialects() {
+        let grammar = dialect.grammar();
+        for ((open, close), explicit) in grammar
+            .reasoning_markers()
+            .iter()
+            .zip(grammar.reasoning_explicit())
+        {
+            if *explicit {
+                explicit_openers.push(open);
+            } else {
+                free.extend([open.as_slice(), close.as_slice()]);
+            }
+        }
+    }
+    let contains =
+        |bytes: &[u8], marker: &[u8]| bytes.windows(marker.len()).any(|window| window == marker);
+    let holds_marker = |range: &Range<usize>| {
+        free.iter()
+            .any(|marker| contains(&output[range.clone()], marker))
+            || explicit_openers
+                .iter()
+                .any(|marker| contains(&output[..range.end], marker))
+    };
+    let overlaps = |a: &Range<usize>, b: &Range<usize>| a.start < b.end && b.start < a.end;
+    for call in &plain.calls {
+        if call.span.is_empty() || holds_marker(&call.span) {
+            continue;
+        }
+        let kept = separate
+            .calls
+            .iter()
+            .chain(&separate.embedded)
+            .map(|other| &other.span)
+            .chain(separate.rejected.iter().map(|rejected| &rejected.span))
+            .any(|span| overlaps(span, &call.span));
+        assert!(
+            kept,
+            "{:?} swallowed the call at {:?}: reasoning {:?}, content {:?}",
+            request.reasoning, call.span, separate.reasoning, separate.content
+        );
+    }
+}
+
 fn main() {
     let mut bytes = Vec::new();
     io::stdin().take(4097).read_to_end(&mut bytes).unwrap();
@@ -654,6 +734,7 @@ fn main() {
     let request = request(control, split, output);
     let result = tools.recover(output, &request);
     check_result(&tools, output, &request, &result);
+    check_reasoning_keeps_calls(&tools, output, &request, &result);
     check_chunking(&tools, output, &request, split >> 3);
     check_exhaustion(&tools, output, &request);
     println!("ok");

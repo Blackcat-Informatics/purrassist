@@ -57,7 +57,7 @@ A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 | Statement | Meaning |
 | --- | --- |
 | `grammar "ID";` | The header, and the first statement. `ID` matches `[A-Za-z0-9._-]+`; by convention it is versioned (`name.v1`). |
-| `reasoning "OPEN" "CLOSE";` | One pair of the dialect's reasoning-block markers. Several statements declare several spellings of a block (repeating a pair is `DuplicateName`). |
+| `reasoning "OPEN" "CLOSE";` | One pair of the dialect's reasoning-block markers. Several statements declare several spellings of a block (repeating a pair is `DuplicateName`). A trailing `explicit` (`reasoning "OPEN" "CLOSE" explicit;`) declares a block that exists only after its own opener in the output, never opened by a prompt template: its closer never ends a block the turn starts in (`starts_open`). Declare it when the closer is text a call may also contain (Anthropic's thinking blocks close with `"}` or `", "signature": "`, ordinary JSON); `CompiledGrammar::reasoning_explicit`. |
 | `confusable "CANONICAL" "VARIANT";` | `VARIANT` is a confusable spelling of `CANONICAL` inside any literal. |
 | `closer NAME = "S1" \| "S2" ...;` | A closer class: `S1` is canonical, the rest are variant spellings. One spelling is allowed. |
 | `optional-id;` | The call's `id:` capture reads an id a model may add, but the format does not provide for one: a call without an id is numbered without a `tool_call.id.dedup` inference, and printing writes no id (`CompiledGrammar::call_carries_ids` is false). The built-in Hermes and Llama 3 JSON dialects declare it. A second statement is `DuplicateName`. |
@@ -289,7 +289,11 @@ A `DialectSet` combines the markers of all its dialects. Under
 blocks; a call inside a closed block stays reasoning text and is offered only
 as a guess-flagged alternative; an unclosed block containing a call opener is
 closed at the opener by a guess; `starts_open: true` begins the turn inside a
-block. Under `ReasoningPolicy::AsContent` the markers are plain content.
+block, which ends at the first closer of a pair that is not `explicit` (a
+block opened in the output ends only at its own pair's closer) or, with no
+such closer, is closed at the first call opener by the same guess. A pair the
+set's dialects all declare `explicit` never ends a block the turn starts in.
+Under `ReasoningPolicy::AsContent` the markers are plain content.
 
 ## Argument codecs
 

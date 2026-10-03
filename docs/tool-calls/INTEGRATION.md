@@ -378,7 +378,20 @@ Some chat templates place the opening `<think>` marker in the prompt, so the
 output begins inside a reasoning block. Use
 `ReasoningPolicy::Separate { starts_open: true }` (MCP
 `"reasoning": "separate-open"`, CLI `--reasoning separate-open`); otherwise
-the reasoning text before `</think>` is read as content.
+the reasoning text before `</think>` is read as content. The block ends
+exactly after its closer (`</think>`, `[/THINK]`, Harmony's `<|end|>`),
+never at a closer of a block that only exists after its own opener
+(Anthropic's thinking blocks, which close with `"}`, JSON a call's arguments
+also contain): under the default allow-list a call inside the block is never
+swallowed. Without a closer, the block is closed at the first call opener
+(`tool_call.reasoning.unclosed`, a guess) and the calls are recovered; with
+one, the calls inside are offered as `embedded` alternatives
+(`tool_call.reasoning.embedded-call`). *Proved by*
+`tool_call_goldens::reasoning_never_swallows_calls` (Hermes, Mistral v3,
+Llama 3, bare JSON, Qwen3-Coder XML and Anthropic calls, unclosed and
+closed, under the default allow-list, plus the `separate` and `as_content`
+modes) and the tool-call fuzz probe's reasoning invariant (a call the turn
+recovers with reasoning as content never vanishes under a reasoning mode).
 
 ### Ids across rounds
 

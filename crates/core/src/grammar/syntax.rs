@@ -61,6 +61,9 @@ pub(crate) enum Statement {
     Reasoning {
         open: Vec<u8>,
         close: Vec<u8>,
+        /// `explicit`: the block exists only after its opener in the output
+        /// (a prompt template never opens it).
+        explicit: bool,
         at: usize,
     },
     Confusable {
@@ -379,7 +382,16 @@ impl Parser<'_, '_> {
             "reasoning" => {
                 let (open, _) = self.string()?;
                 let (close, _) = self.string()?;
-                Statement::Reasoning { open, close, at }
+                let explicit = self.token == Token::Ident("explicit".into());
+                if explicit {
+                    self.advance()?;
+                }
+                Statement::Reasoning {
+                    open,
+                    close,
+                    explicit,
+                    at,
+                }
             }
             "confusable" => {
                 let (canonical, _) = self.string()?;

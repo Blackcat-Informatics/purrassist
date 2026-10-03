@@ -35,10 +35,14 @@ grammar "anthropic-tool-use.v1";
 # quotes.
 json-envelope;
 
-reasoning "{\"type\":\"thinking\",\"thinking\":\"" "\",\"signature\":\"";
-reasoning "{\"type\": \"thinking\", \"thinking\": \"" "\", \"signature\": \"";
-reasoning "{\"type\":\"redacted_thinking\",\"data\":\"" "\"}";
-reasoning "{\"type\": \"redacted_thinking\", \"data\": \"" "\"}";
+# Thinking blocks are content blocks: one exists only after its opener in
+# the output, never opened by a prompt template (`explicit`), so its closer,
+# ordinary JSON a call's arguments also contain, never ends a block the turn
+# starts in.
+reasoning "{\"type\":\"thinking\",\"thinking\":\"" "\",\"signature\":\"" explicit;
+reasoning "{\"type\": \"thinking\", \"thinking\": \"" "\", \"signature\": \"" explicit;
+reasoning "{\"type\":\"redacted_thinking\",\"data\":\"" "\"}" explicit;
+reasoning "{\"type\": \"redacted_thinking\", \"data\": \"" "\"}" explicit;
 
 # Keys some producers write for the block's arguments.
 confusable "\"input\"" "\"arguments\"";

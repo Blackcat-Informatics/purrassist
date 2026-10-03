@@ -571,6 +571,14 @@ TOOL_CALL_REGRESSIONS = [
     # A bare Qwen3-Coder element (Round A), and invalid UTF-8 in a tool name.
     b'\x00\x52<function=read_file>\n<parameter=path>\na\n</parameter>\n</function>',
     b'\x00\x52<tool_call>\n<function=read_fil\xe9>\n<parameter=path>\na\n</parameter>\n</function>\n</tool_call>',
+    # S1: a turn that starts inside a reasoning block (control bits 4-5 = 1)
+    # must not let Anthropic's explicit closer `"}` inside a call's JSON end
+    # the block and swallow the call; nor end it inside the call before its
+    # own `</think>`.
+    b'\x10\x52Let me look. <tool_call>{"name":"read_file","arguments":{"path":"x"}}</tool_call>',
+    b'\x10\x52<think>hmm {"name":"read_file","arguments":{"path":"x"}}</think>done',
+    b'\x10\x52hmm [TOOL_CALLS] [{"name": "read_file", "arguments": {"path": "x"}}] done</think>'
+    b'<|python_tag|>{"name": "read_file", "parameters": {"path": "y"}}',
 ]
 
 TOOL_CALL_SEEDS = [

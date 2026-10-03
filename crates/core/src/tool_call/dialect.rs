@@ -408,6 +408,9 @@ impl From<StopReason> for DialectSetError {
 pub struct DialectSet {
     pub(crate) dialects: Vec<DialectId>,
     pub(crate) markers: Vec<(Vec<u8>, Vec<u8>)>,
+    /// Per marker pair, whether every dialect declaring it declares it
+    /// `explicit` (see [`CompiledGrammar::reasoning_explicit`](crate::grammar::CompiledGrammar::reasoning_explicit)).
+    pub(crate) explicit: Vec<bool>,
     pub(crate) marker_matcher: Option<Matcher>,
     pub(crate) lookbehind: usize,
 }
@@ -468,6 +471,21 @@ impl DialectSet {
             .collect();
         markers.sort();
         markers.dedup();
+        // A pair any dialect declares without `explicit` may close a block
+        // the turn starts in.
+        let explicit: Vec<bool> = markers
+            .iter()
+            .map(|pair| {
+                dialects.iter().all(|dialect| {
+                    let grammar = dialect.grammar();
+                    grammar
+                        .reasoning
+                        .iter()
+                        .zip(&grammar.explicit_reasoning)
+                        .all(|(declared, explicit)| declared != pair || *explicit)
+                })
+            })
+            .collect();
         let marker_matcher = if markers.is_empty() {
             None
         } else {
@@ -500,6 +518,7 @@ impl DialectSet {
         Ok(Self {
             dialects,
             markers,
+            explicit,
             marker_matcher,
             lookbehind,
         })
