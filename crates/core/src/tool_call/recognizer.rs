@@ -67,7 +67,7 @@
 //! fence lines outside every recognized call and tool result, so a fence
 //! inside an argument value never affects other calls.
 use super::context::ContextTracker;
-use super::dialect::DialectSet;
+use super::dialect::{DialectId, DialectSet};
 use super::ir::{
     CallSegment, Choice, Piece, ProductionKind, RawCall, ReasoningClosure, ReasoningSegment,
     Segment,
@@ -419,6 +419,24 @@ impl Turn {
             }
             embedded.push(segment);
         }
+        // A call another embedded call contains (the bare function element
+        // inside a wrapped Qwen3-Coder XML call, say) is part of that call,
+        // as it would be outside reasoning.
+        governor.charge(
+            Resource::Work,
+            size(embedded.len()).saturating_mul(size(embedded.len())),
+        )?;
+        let spans: Vec<Range<usize>> = embedded
+            .iter()
+            .map(|segment| segment.span.clone())
+            .collect();
+        embedded.retain(|segment| {
+            !spans.iter().any(|outer| {
+                *outer != segment.span
+                    && outer.start <= segment.span.start
+                    && segment.span.end <= outer.end
+            })
+        });
         self.store(
             Segment::Reasoning(ReasoningSegment {
                 span: think.start..end,
@@ -895,7 +913,13 @@ impl<'s> Recognizer<'s> {
                 interps.push(Interp::Top(base));
             }
         }
-        if !interps.is_empty() {
+        if interps.is_empty() {
+            // No reading of the turn can take this attempt: it opened
+            // inside another attempt's committed span. Its completion or
+            // rejection would be dropped unread, so the engine stops
+            // reading it.
+            self.engine.abandon(attempt, governor)?;
+        } else {
             self.turn.interps.insert(attempt, interps);
         }
         Ok(())
@@ -1125,6 +1149,21 @@ impl<'s> Recognizer<'s> {
         let Builder { forest, .. } = builder;
         let unused = self.turn.unused_bytes(last, governor)?;
         governor.release_scratch(unused)?;
+        // Every dialect whose attempt at an offset was rejected, in any
+        // segmentation (a costlier one included).
+        let mut attempted: Vec<(usize, DialectId)> = Vec::new();
+        for segment in &self.turn.store {
+            governor.charge(Resource::Work, 1)?;
+            if let Segment::Rejected { span, dialect, .. } = segment
+                && !attempted
+                    .iter()
+                    .any(|(start, known)| *start == span.start && known == dialect)
+            {
+                governor.charge(Resource::ScratchBytes, ATTEMPT_BYTES)?;
+                attempted.push((span.start, dialect.clone()));
+            }
+        }
+        attempted.sort();
         Ok(RecognizedTurn {
             source,
             len: end,
@@ -1133,6 +1172,7 @@ impl<'s> Recognizer<'s> {
             pieces,
             forest,
             cost: top.cost,
+            attempted,
         })
     }
 }
@@ -1720,7 +1760,11 @@ pub struct RecognizedTurn {
     pieces: Vec<Piece>,
     forest: Forest,
     cost: u64,
+    attempted: Vec<(usize, DialectId)>,
 }
+
+/// Scratch bytes charged per recorded rejected attempt.
+const ATTEMPT_BYTES: u64 = 32;
 
 impl PartialEq for RecognizedTurn {
     fn eq(&self, other: &Self) -> bool {
@@ -1730,6 +1774,7 @@ impl PartialEq for RecognizedTurn {
             && self.policy == other.policy
             && self.pieces == other.pieces
             && self.cost == other.cost
+            && self.attempted == other.attempted
             && self.forest.nodes() == other.forest.nodes()
     }
 }
@@ -1799,6 +1844,34 @@ impl RecognizedTurn {
     #[must_use]
     pub const fn cost(&self) -> u64 {
         self.cost
+    }
+
+    /// Every `(offset, dialect)` whose attempt starting at that offset was
+    /// rejected in some segmentation of the turn, a costlier one included,
+    /// in order. Recovery names these dialects in a reported rejected
+    /// attempt's `candidate_dialects`: a dialect that attempted the opener
+    /// is named even when another segmentation explains the bytes more
+    /// cheaply.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::{DialectId, DialectSet, GenerationStop, ReasoningPolicy, Recognizer};
+    /// use purrassist_core::{Budget, Governor};
+    /// let mut governor = Governor::new(Budget::default());
+    /// let set = DialectSet::new([DialectId::Hermes, DialectId::Qwen3CoderXml], &mut governor).unwrap();
+    /// let mut recognizer = Recognizer::new(&set, ReasoningPolicy::default(), &mut governor)?;
+    /// recognizer.push(b"<tool_call>\n<function=f>\n<parameter=p>\nx", &mut governor)?;
+    /// let turn = recognizer.finish(GenerationStop::Stop, &mut governor)?;
+    /// // Both dialects attempted `<tool_call>`; after Hermes's rejection the
+    /// // bare `<function=f>` element is a Qwen3-Coder XML attempt of its own.
+    /// assert_eq!(
+    ///     turn.rejected_attempts(),
+    ///     [(0, DialectId::Hermes), (0, DialectId::Qwen3CoderXml), (12, DialectId::Qwen3CoderXml)].as_slice()
+    /// );
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    #[must_use]
+    pub fn rejected_attempts(&self) -> &[(usize, DialectId)] {
+        &self.attempted
     }
 
     /// The selected (best-ranked) reading: every shared segment plus the

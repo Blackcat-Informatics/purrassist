@@ -2823,10 +2823,6 @@ fn unparsed_markup_is_reported() {
             MarkupFamily::DeepSeekV3Stripped,
         ),
         (
-            "unparsed_qwen_stripped",
-            MarkupFamily::Qwen3CoderXmlStripped,
-        ),
-        (
             "unparsed_name_arguments_stripped",
             MarkupFamily::NameArgumentsStripped,
         ),
@@ -2913,4 +2909,49 @@ fn repeated_scalar_choice_is_labelled() {
     let call = the_call(&result);
     assert!(rules_of(call).contains(&"tool_call.parameter.collect"));
     assert!(!rules_of(call).contains(&"tool_call.parameter.repeated-choice"));
+}
+
+/// A bare `<function=` element is Qwen3-Coder XML markup whether or not it
+/// is complete: with the dialect allowed it is a call attempt (read or
+/// rejected), and with the dialect left out of the allow-list both `text
+/// <function=f>` and `<function=f` are reported as `qwen3-coder-xml.v1`.
+#[test]
+fn bare_function_markup_is_attempted_or_reported() {
+    use purrassist_core::tool_call::{MarkupFamily, detect_unparsed};
+    let mut governor = Governor::new(Budget::default());
+    let hermes = DialectSet::new([DialectId::Hermes], &mut governor).unwrap();
+    for input in ["text <function=f>", "<function=f"] {
+        let whole = 0..input.len();
+        let found = detect_unparsed(
+            input.as_bytes(),
+            core::slice::from_ref(&whole),
+            &hermes,
+            &mut governor,
+        )
+        .unwrap();
+        assert_eq!(found.len(), 1, "{input:?}");
+        assert_eq!(found[0].family, MarkupFamily::Qwen3CoderXml, "{input:?}");
+        // Allowed, it is the dialect's own attempt, never content.
+        let tools = ToolSet::compile([ToolDefinition::new("f")], Budget::default()).unwrap();
+        let result = tools.recover(input.as_bytes(), &ToolRecoveryRequest::default());
+        let calls = reading(&result);
+        assert!(
+            !calls.calls.is_empty() || !calls.rejected.is_empty(),
+            "{input:?}: {calls:#?}"
+        );
+        assert!(
+            calls
+                .calls
+                .iter()
+                .map(|call| &call.dialect)
+                .chain(
+                    calls
+                        .rejected
+                        .iter()
+                        .filter_map(|rejected| rejected.dialect.as_ref())
+                )
+                .all(|dialect| *dialect == DialectId::Qwen3CoderXml),
+            "{input:?}"
+        );
+    }
 }

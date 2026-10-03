@@ -220,7 +220,7 @@ pub const UNDECLARED_NAME: u64 = 4;
 /// bytes ([`K_CAPTURE`]), the argument codec's scan ([`K_CODEC`]) and the
 /// JSON recovery parser's units, and the per-byte resolution and
 /// digest work. On the fast path (string arguments with no repair) that is
-/// 10 to 23 units per byte for the built-in dialects' arguments, and 26 for
+/// 10 to 17 units per byte for the built-in dialects' arguments, and 26 for
 /// `OpenAI` stringified arguments (which the bare JSON dialect also reads and
 /// decodes), over the built-in dialect set (see `docs/RESOURCES.md`); this
 /// constant leaves headroom above them. Repair
@@ -234,7 +234,7 @@ pub const RECOVER_WORK_PER_BYTE: u64 = 32;
 ///
 /// It covers the retained source, the recognizer's capture and codec
 /// buffers, the argument value tree, and the recovered call's copy of it:
-/// 7 to 12 bytes per byte on the fast path for the built-in dialects'
+/// 8 to 12 bytes per byte on the fast path for the built-in dialects'
 /// arguments, and 45 for `OpenAI` stringified arguments, whose escaped
 /// string is also decoded, recorded as the decoding's replacement, and
 /// parsed again (see `docs/RESOURCES.md`).

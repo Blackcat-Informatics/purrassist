@@ -1,0 +1,74 @@
+{
+  "description": "A well-formed bare function element (the <tool_call> special tokens stripped by a detokenizer), then a second one: two Resolved Qwen3-Coder XML calls, each recording its inserted wrapper tokens; the newline between them is content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "<function=read_file>\n<parameter=path>\na.rs\n</parameter>\n</function>\n<function=read_file>\n<parameter=path>\nb.rs\n</parameter>\n</function>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "a.rs"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.missing-token",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.markup.missing-token"
+      ]
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "b.rs"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.missing-token",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.markup.missing-token"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.missing-token",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.missing-token",
+    "tool_call.markup.missing-token",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.missing-token"
+  ]
+}

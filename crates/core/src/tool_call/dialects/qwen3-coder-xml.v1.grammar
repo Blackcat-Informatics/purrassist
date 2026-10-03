@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 #
 # Qwen3-Coder XML tool calls: a <tool_call> wrapper around one
-# <function=NAME> element whose body holds <parameter=NAME> elements. The
+# <function=NAME> element whose body holds <parameter=NAME> elements, or the
+# bare element when the wrapper tokens were stripped. The
 # body is read by the xml-params codec (verbatim string values, typed values
 # parsed as JSON, nested parameters, a whole-JSON body, the </parameters>
 # closer variant), typed by the declared tool the name refers to. Several
@@ -22,9 +23,17 @@ ws = /[ \t\r\n]+/;
 # layout (<tool_call>\n<function=NAME>\n...\n</function>\n</tool_call>).
 layout ws "\n";
 
-call = "<tool_call>" ws? "<function=" name:tool-name ">"
-       arguments:slot(xml-params, "</function>", "</functions>", "</tool_call>", "</tool_calls>")
-       function-end ws? call-end;
+function = "<function=" name:tool-name ">"
+           arguments:slot(xml-params, "</function>", "</functions>", "</tool_call>", "</tool_calls>")
+           function-end;
+
+# The <tool_call> and </tool_call> wrapper tokens are special tokens that
+# detokenizers commonly strip: a bare <function=NAME> element is a call
+# whose missing wrapper tokens are read as inserted
+# (tool_call.markup.missing-token, a markup repair). Each bare element is
+# its own call.
+call = "<tool_call>" ws? function ws? call-end
+     | insert("<tool_call>") function (ws? call-end | insert("</tool_call>"));
 
 # A tool result as the chat template renders a tool message.
 result = "<tool_response>" content:until("</tool_response>") "</tool_response>";

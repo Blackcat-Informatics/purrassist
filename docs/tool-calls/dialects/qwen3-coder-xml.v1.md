@@ -25,6 +25,16 @@ first-party; no chat-template text is copied into this repository.
   by the `xml-params` codec, `</function>`, optional whitespace,
   `</tool_call>`. Each call has its own wrapper; calls follow one another
   with any content (usually a newline) between them.
+- The bare `<function=NAME>...</function>` element, without the wrapper:
+  `<tool_call>` and `</tool_call>` are special tokens that detokenizers
+  commonly strip, so the missing wrapper tokens are read as inserted, each
+  recorded as `tool_call.markup.missing-token` (a markup repair: a call that
+  needs nothing else is `Resolved`). A `</tool_call>` after the bare element
+  is read as its closer. Each bare element is its own call, and the attempt
+  opens at `<function=`: an element that does not parse (no `>`, an empty
+  name, text between parameters, a nested `<function=`) is a rejected
+  attempt, never silent content. Inside a wrapper the wrapped reading
+  covers the element.
 - The body (the `xml-params` codec, typed by the declared tool `NAME`):
   `<parameter=P>` elements. A string, enumeration or unmodeled parameter is
   verbatim text with exactly one framing newline consumed on each side

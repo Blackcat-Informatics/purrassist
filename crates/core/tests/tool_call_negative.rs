@@ -233,9 +233,17 @@ fn quoted_block_quote_line() {
 #[test]
 fn quoted_block_quote_lines_are_malformed() {
     // A call quoted line by line carries the quote markers inside its
-    // markup: it is not a call at all.
+    // markup: it is not a call at all. The `<tool_call>` attempt fails at
+    // the quote marker, and so does the bare `<function=f>` element after
+    // it: two rejected attempts, never silent content.
     let input = "> <tool_call>\n> <function=f>\n> <parameter=a>\n> x\n> </parameter>\n> </function>\n> </tool_call>\n";
-    assert_rejected(input, &[(2..14, Rejection::Malformed { at: 14 })]);
+    assert_rejected(
+        input,
+        &[
+            (2..14, Rejection::Malformed { at: 14 }),
+            (16..76, Rejection::Malformed { at: 29 }),
+        ],
+    );
 }
 
 /// JSON objects in prose, schemas, code, and objects with a `"name"` or a
@@ -268,5 +276,34 @@ fn json_content_without_call_evidence_is_content() {
                 assert_eq!(calls.content, vec![0..input.len()], "{input:?}");
             }
         }
+    }
+}
+
+/// The negative corpus as issue #3 writes it, without the `<tool_call>`
+/// wrapper (whose special tokens detokenizers commonly strip): a bare
+/// `<function=` element is a call attempt, so each malformed one is a
+/// rejected attempt, never silent content.
+#[test]
+fn unwrapped_negative_corpus_is_rejected() {
+    for (input, expected) in [
+        ("<function=f", vec![(0..11, Rejection::Unterminated)]),
+        (
+            "<function=>x</function>",
+            vec![(0..10, Rejection::Malformed { at: 10 })],
+        ),
+        (
+            "<function=f>\n<parameter=a>\nx\n</parameter>\nsome text\n<parameter=b>\ny\n</parameter>\n</function>",
+            vec![(0..91, Rejection::Malformed { at: 42 })],
+        ),
+        (
+            "<function=f>\n<function=g>\n<parameter=a>\nx\n</parameter>\n</function>\n</function>",
+            vec![(0..65, Rejection::Malformed { at: 13 })],
+        ),
+        (
+            "<function=f>\nhello\n</function>",
+            vec![(0..29, Rejection::Malformed { at: 13 })],
+        ),
+    ] {
+        assert_rejected(input, &expected);
     }
 }

@@ -18,11 +18,11 @@
 //!   built-in dialects whose special tokens a detokenizer removed and which
 //!   no built-in grammar reads (Kimi-K2 `functions.NAME:IDX{...}`, Harmony
 //!   `to=functions.NAME` without its tokens, DeepSeek-V3 `functionNAME` with
-//!   a fenced JSON block, Qwen3-Coder `<function=NAME>` without
-//!   `<tool_call>`, and DeepSeek-V3.1 / Mistral v11 `NAME{...}` at the start
-//!   of a line); the other stripped renderings (Mistral v3 arrays, Llama 3
-//!   objects without `<|python_tag|>`, Hermes objects without their tags)
-//!   are read by `bare-json.v1` and `llama3-json.v1`;
+//!   a fenced JSON block, and DeepSeek-V3.1 / Mistral v11 `NAME{...}` at the
+//!   start of a line); the other stripped renderings (Mistral v3 arrays,
+//!   Llama 3 objects without `<|python_tag|>`, Hermes objects without their
+//!   tags, Qwen3-Coder `<function=NAME>` elements without `<tool_call>`) are
+//!   read by `bare-json.v1`, `llama3-json.v1` and `qwen3-coder-xml.v1`;
 //! - built-in dialects that are not in the allow-list (`[TOOL_CALLS]` under
 //!   a Hermes-only request, for example).
 //!
@@ -111,9 +111,6 @@ pub enum MarkupFamily {
     /// `deepseek-v3-stripped.v1` (not built in): `functionNAME` followed by
     /// a `` ```json `` block, a DeepSeek-V3 call with its tokens removed.
     DeepSeekV3Stripped,
-    /// `qwen3-coder-xml-stripped.v1` (not built in): a Qwen3-Coder
-    /// `<function=NAME>` call without its `<tool_call>` token.
-    Qwen3CoderXmlStripped,
     /// `name-arguments-stripped.v1` (not built in): `NAME{...}` at the start
     /// of a line, a DeepSeek-V3.1 or Mistral v11 call with its special
     /// tokens removed.
@@ -146,7 +143,6 @@ impl MarkupFamily {
             Self::KimiK2Stripped => "kimi-k2-stripped.v1",
             Self::HarmonyStripped => "harmony-stripped.v1",
             Self::DeepSeekV3Stripped => "deepseek-v3-stripped.v1",
-            Self::Qwen3CoderXmlStripped => "qwen3-coder-xml-stripped.v1",
             Self::NameArgumentsStripped => "name-arguments-stripped.v1",
         }
     }
@@ -176,7 +172,6 @@ impl MarkupFamily {
             | Self::KimiK2Stripped
             | Self::HarmonyStripped
             | Self::DeepSeekV3Stripped
-            | Self::Qwen3CoderXmlStripped
             | Self::NameArgumentsStripped => return None,
         })
     }
@@ -195,7 +190,6 @@ impl MarkupFamily {
                 | Self::KimiK2Stripped
                 | Self::HarmonyStripped
                 | Self::DeepSeekV3Stripped
-                | Self::Qwen3CoderXmlStripped
                 | Self::NameArgumentsStripped
         )
     }
@@ -474,16 +468,6 @@ impl Scan<'_> {
         pos
     }
 
-    /// Whether a `<tool_call>` precedes `at` within [`WINDOW`] bytes of the
-    /// output (inside or outside the content range).
-    fn wrapped(&mut self, at: usize) -> bool {
-        let floor = at.saturating_sub(WINDOW);
-        (floor..at).rev().any(|pos| {
-            self.read += 1;
-            self.bytes[pos..].starts_with(b"<tool_call>")
-        })
-    }
-
     /// Whether one of Harmony's message tokens is within
     /// [`TOKEN_WINDOW`] bytes of `at`.
     fn harmony_tokens(&mut self, at: usize) -> bool {
@@ -578,21 +562,15 @@ impl Scan<'_> {
             ));
         }
         if self.lit(at, b"<function=") {
-            self.ident(at + b"<function=".len())
-                .filter(|&end| self.byte(end) == Some(b'>'))?;
-            // Read by Qwen3-Coder XML only inside `<tool_call>`. After a
-            // `<tool_call>` (which an allowed Qwen3-Coder XML attempted and
-            // rejected, a quoted call for example) it is that attempt's
-            // markup; without one, and with the dialect allowed, it is the
-            // stripped form.
-            let wrapped = self.wrapped(at);
-            let family = if self.reported(MarkupFamily::Qwen3CoderXml) {
-                MarkupFamily::Qwen3CoderXml
-            } else if wrapped {
+            // A Qwen3-Coder XML function element, wrapped or bare (its
+            // `<tool_call>` stripped): an allowed Qwen3-Coder XML attempts
+            // every one, so it is reported only when the dialect is not
+            // allowed, `>` or not.
+            self.ident(at + b"<function=".len())?;
+            if !self.reported(MarkupFamily::Qwen3CoderXml) {
                 return None;
-            } else {
-                MarkupFamily::Qwen3CoderXmlStripped
-            };
+            }
+            let family = MarkupFamily::Qwen3CoderXml;
             let mut end = self.through(at, b"</function>");
             let after = self.ws(end);
             if self.lit(after, b"</tool_call>") {

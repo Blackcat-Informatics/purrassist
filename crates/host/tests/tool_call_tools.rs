@@ -151,7 +151,7 @@ fn busy_turn_resolves_every_call_by_default() {
         actual
             .pointer("/receipt/budget/candidates")
             .map(Node::to_json),
-        Some((128 + 16 * 256).to_string())
+        Some((128 + 16 * 320).to_string())
     );
     std::fs::remove_dir_all(root).unwrap();
 }

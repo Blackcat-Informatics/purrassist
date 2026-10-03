@@ -2674,6 +2674,46 @@ impl<'s> Engine<'s> {
         Ok(())
     }
 
+    /// Drop attempt `attempt` of every table: its configurations, trails,
+    /// held completions and failures, and its record, with no event. The
+    /// turn level abandons an attempt that opened where no reading of the
+    /// turn can take it (inside another attempt's committed span): its
+    /// completion or rejection would be dropped unread, so reading it to
+    /// its end is wasted work. One `Work` unit per entry examined.
+    pub(crate) fn abandon(
+        &mut self,
+        attempt: u64,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        fn keep<T: Copy + ScratchCharge>(entries: &mut ScratchVec<T>, kept: impl Fn(&T) -> bool) {
+            let mut write = 0;
+            for read in 0..entries.len() {
+                let entry = entries.as_slice()[read];
+                if kept(&entry) {
+                    entries.as_mut_slice()[write] = entry;
+                    write += 1;
+                }
+            }
+            while entries.len() > write {
+                entries.pop();
+            }
+        }
+        for table in &mut self.tables {
+            governor.charge(
+                Resource::Work,
+                size(table.threads.len() + table.attempts.len() + table.trails.len()),
+            )?;
+            keep(&mut table.threads, |thread| thread.attempt != attempt);
+            keep(&mut table.attempts, |record| record.id != attempt);
+            keep(&mut table.failures, |failure| {
+                failure.thread.attempt != attempt
+            });
+            table.trails.retain(|trail| trail.thread.attempt != attempt);
+            table.held.retain(|entry| entry.attempt != attempt);
+        }
+        Ok(())
+    }
+
     /// End of input: complete, cut off, or reject every open attempt.
     pub(crate) fn finish(
         &mut self,

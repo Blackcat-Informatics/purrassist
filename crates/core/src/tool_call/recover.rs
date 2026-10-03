@@ -1977,8 +1977,15 @@ impl Recovery<'_> {
         recognizer.push(self.output, governor)?;
         let turn = recognizer.finish(self.request.stop.clone(), governor)?;
         let resolved = resolve_forest(self.tools, &turn, &self.policies, governor)?;
+        let attempted = turn.rejected_attempts().to_vec();
         drop(turn);
-        let readings = self.readings(&resolved, &encoding, forced.as_deref(), governor)?;
+        let readings = self.readings(
+            &resolved,
+            &encoding,
+            &attempted,
+            forced.as_deref(),
+            governor,
+        )?;
         drop(resolved);
         self.conclude(readings, governor)
     }
@@ -2053,6 +2060,7 @@ impl Recovery<'_> {
         &self,
         turn: &ResolvedTurn,
         encoding: &CallLedger,
+        attempted: &[(usize, DialectId)],
         forced: Option<&str>,
         governor: &mut Governor,
     ) -> Result<Vec<Reading>, StopReason> {
@@ -2087,7 +2095,8 @@ impl Recovery<'_> {
                     }
                 }
             }
-            let mut reading = self.reading(&segments, turn.cost, encoding, forced, governor)?;
+            let mut reading =
+                self.reading(&segments, turn.cost, encoding, attempted, forced, governor)?;
             apply_folds(&mut reading, &folds, governor)?;
             readings.push(reading);
             let mut position = 0;
@@ -2111,6 +2120,7 @@ impl Recovery<'_> {
         segments: &[&ResolvedSegment],
         cost: u64,
         encoding: &CallLedger,
+        attempted: &[(usize, DialectId)],
         forced: Option<&str>,
         governor: &mut Governor,
     ) -> Result<Reading, StopReason> {
@@ -2141,6 +2151,23 @@ impl Recovery<'_> {
         };
         for segment in segments {
             self.segment(&mut reading, segment, governor)?;
+        }
+        // Name every dialect that attempted a reported attempt's opener,
+        // in any segmentation.
+        for (start, dialect) in attempted {
+            governor.charge(Resource::Work, 1)?;
+            if reading
+                .attempts
+                .get(start)
+                .is_some_and(|known| !known.contains(dialect))
+            {
+                governor.charge(Resource::ScratchBytes, ENTRY_BYTES)?;
+                reading
+                    .attempts
+                    .entry(*start)
+                    .or_default()
+                    .insert(dialect.clone());
+            }
         }
         self.unparsed(&mut reading, governor)?;
         reading.value.next_id_start = self.ids(&mut reading.value.calls, governor)?;

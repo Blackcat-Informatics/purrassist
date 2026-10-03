@@ -500,7 +500,8 @@ fn busy_turn(calls: usize) -> String {
 /// every call needs a markup repair, with a contested stray opener after
 /// each, exhausts the fixed `Effort::Standard` preset explicitly, and is
 /// recovered with every call `Resolved` under `ToolRecoveryRequest::sized`:
-/// `⌈128 / 8⌉ = 16` candidates for each of its 256 openers (64 calls and 64
+/// `⌈128 / 8⌉ = 16` candidates for each of its 320 openers (64 calls, each
+/// opened at `<tool_call>` by two dialects and at `<function=` by one, and 64
 /// stray lines, each opened by two dialects). Competing segmentations of
 /// the stray lines that recover the same calls are folded per span, so the
 /// readings charged grow with the calls instead of doubling per call.
@@ -520,9 +521,9 @@ fn busy_turn_resolves_every_call_under_sized() {
     assert!(preset.receipt.evidence.is_empty() && preset.receipt.alternatives.is_empty());
 
     let openers = DialectSet::built_in().call_openers(output.as_bytes());
-    assert_eq!(openers, 256);
+    assert_eq!(openers, 320);
     let request = ToolRecoveryRequest::sized(Effort::Standard, output.as_bytes());
-    assert_eq!(request.budget.candidates, 128 + 16 * 256);
+    assert_eq!(request.budget.candidates, 128 + 16 * 320);
     let result = tools.recover(output.as_bytes(), &request);
     let Outcome::BestGuess(calls) = &result.outcome else {
         panic!("{:?}", result.receipt.stopped)
@@ -597,8 +598,11 @@ fn per_call_competition_scales_with_calls() {
 }
 
 /// The sized budget stays finite: a crafted call whose readings multiply
-/// (16 parameters each written twice: 2^16 readings) exhausts `Candidates`
-/// explicitly at every effort, with no value and no ledger.
+/// (16 parameters each written twice: 2^16 readings) exhausts explicitly at
+/// every effort, with no value and no ledger: `Candidates`, except at
+/// `Maximum`, whose larger per-opener candidate share (the call's
+/// `<tool_call>` and `<function=` openers) lets the readings outgrow
+/// `ScratchBytes` first.
 #[test]
 fn crafted_reading_explosion_exhausts_explicitly() {
     let mut definition = ToolDefinition::new("f").effects(Effects::ReadOnly);
@@ -621,12 +625,19 @@ fn crafted_reading_explosion_exhausts_explicitly() {
         let request = ToolRecoveryRequest::sized(effort, output.as_bytes());
         let result = tools.recover(output.as_bytes(), &request);
         assert_eq!(result.outcome, Outcome::Unresolved, "{effort:?}");
+        let exhausted = if effort == Effort::Maximum {
+            Resource::ScratchBytes
+        } else {
+            Resource::Candidates
+        };
         assert_eq!(
             result.receipt.stopped,
-            StopReason::BudgetExceeded(Resource::Candidates),
+            StopReason::BudgetExceeded(exhausted),
             "{effort:?}"
         );
-        assert_eq!(result.receipt.usage.candidates, request.budget.candidates);
+        if exhausted == Resource::Candidates {
+            assert_eq!(result.receipt.usage.candidates, request.budget.candidates);
+        }
         assert!(result.receipt.evidence.is_empty() && result.receipt.losses.is_empty());
         assert_eq!(result.receipt.alternatives.len(), 0);
         assert_eq!(
@@ -641,7 +652,10 @@ fn crafted_reading_explosion_exhausts_explicitly() {
 fn sized_budget_follows_the_published_formula() {
     let output = busy_turn(3);
     let openers = DialectSet::built_in().call_openers(output.as_bytes());
-    assert_eq!(openers, 12);
+    // Per call: `<tool_call>` (Qwen3-Coder XML and Hermes) and
+    // `<function=` (a bare Qwen3-Coder XML element); per stray line:
+    // `<tool_call>` twice.
+    assert_eq!(openers, 15);
     for effort in [
         Effort::Exact,
         Effort::Quick,

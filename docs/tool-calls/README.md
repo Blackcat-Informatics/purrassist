@@ -15,7 +15,7 @@ Twelve dialects are built in:
 
 | Dialect | Shape | Reference |
 | --- | --- | --- |
-| `qwen3-coder-xml.v1` | `<tool_call><function=NAME><parameter=P>VALUE</parameter></function></tool_call>` | [dialect](dialects/qwen3-coder-xml.v1.md) |
+| `qwen3-coder-xml.v1` | `<tool_call><function=NAME><parameter=P>VALUE</parameter></function></tool_call>`, or the bare `<function=NAME>` element | [dialect](dialects/qwen3-coder-xml.v1.md) |
 | `hermes.v1` | `<tool_call>{"name": NAME, "arguments": {...}}</tool_call>` | [dialect](dialects/hermes.v1.md) |
 | `openai-tool-calls.v1` | `tool_calls` elements `{"id": ID, "type": "function", "function": {...}}` as text | [dialect](dialects/openai-tool-calls.v1.md) |
 | `llama3-json.v1` | `{"name": NAME, "parameters": {...}}`, optionally after `<\|python_tag\|>` | [dialect](dialects/llama3-json.v1.md) |
@@ -284,15 +284,15 @@ parses yet (`pythonic.v1` call lists `[f(a=1)]` at the start of the turn or
 a line or after `<|python_start|>`, `gemma3-tool-code.v1` `` ```tool_code ``
 blocks, `glm-4.5.v1` `<arg_key>`/`<arg_value>` calls, and the stripped
 renderings `kimi-k2-stripped.v1`, `harmony-stripped.v1`,
-`deepseek-v3-stripped.v1`, `qwen3-coder-xml-stripped.v1` and
-`name-arguments-stripped.v1`), and for the built-in dialects the
+`deepseek-v3-stripped.v1` and `name-arguments-stripped.v1`), and for the built-in dialects the
 allow-list leaves out. Each hit is a `RejectedCall` with
 `Rejection::UnsupportedDialect { family }` (its `dialect` is the family's
 built-in dialect, or `None`; it has no `candidate_dialects`), recorded as
 `tool_call.markup.unparsed-dialect` evidence; its bytes stay content, and
 the finish is `Unresolved`. Stripped renderings that a built-in grammar
 reads (a Mistral v3 array or a Hermes object without its tokens is a bare
-JSON call, a Llama 3 object without `<|python_tag|>` is an untagged Llama 3
+JSON call, a Qwen3-Coder `<function=NAME>` element without `<tool_call>` is
+a Qwen3-Coder XML call, a Llama 3 object without `<|python_tag|>` is an untagged Llama 3
 call) are recovered, not reported.
 
 `"stop"` for `Finish::Unresolved` hides rejected and unresolved calls: read
