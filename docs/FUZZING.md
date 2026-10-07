@@ -887,9 +887,10 @@ independent checks.
 
 The lightweight runner tests (`scripts/test-fuzz.py`) run in `make check`
 via `make hygiene`, including coverage-region admission and differential normalization tests;
-`scripts/test-fuzz-feedback.py`, also run by hygiene, proves that the retained corpus
-grows from new coverage on the real `patch` target end to end. `make fuzz`
-runs this feedback test before the campaigns. The feedback test reads the
+`scripts/test-fuzz-feedback.py` proves that the retained corpus grows from new
+coverage on the real `patch` target end to end. `make fuzz` (the CI `fuzz`
+job) runs this feedback test before the campaigns, and release qualification
+runs it too. The feedback test reads the
 pinned nightly channel from `rust-toolchain.toml` and sets the child process
 `RUSTUP_TOOLCHAIN` explicitly; a stable parent gate therefore uses the same
 registered LLVM coverage tooling, with no skips or alternate coverage path; the instrumented campaigns are a separate qualification

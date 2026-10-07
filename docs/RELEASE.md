@@ -112,7 +112,8 @@ on checkout.
   `local-registry`-format directory instead of the real registry, which is
   how `scripts/test-verify-published.py` exercises it fully offline
   (including a negative case: a tampered `.crate` in the local registry must
-  make the archive-diff step fail). That test is wired into `make hygiene`.
+  make the archive-diff step fail). That test runs in the `native` job of
+  `verify.yml` on every pull request, and in release qualification.
 - `scripts/data/verify-published/{mcp-requests,mcp-responses,call-request,
   call-response}` are committed transcript fixtures: fixed CLI/MCP requests
   and the exact stdout `purrassist` produced for them, compared byte-for-byte
@@ -135,8 +136,8 @@ on checkout.
   committing it. `scripts/test-verify-published.py`'s
   `CommittedFixtureFreshnessTests` is the check-mode counterpart: it builds
   the real current workspace CLI and replays the committed fixtures against
-  it, failing `make hygiene` if they differ, so a stale fixture can never be
-  committed silently.
+  it, failing the pull request's `native` CI job if they differ, so a stale
+  fixture can never be merged silently.
 
   `root-files.json` seeds a disposable verification root. The default MCP
   transcript reads the file, applies a journaled replacement, conditionally
