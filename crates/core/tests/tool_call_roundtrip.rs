@@ -1188,3 +1188,68 @@ fn layout_statements_are_checked() {
         Err(GrammarError::DuplicateName { .. })
     ));
 }
+
+/// Stage-3 pass 5 (F18): a value holding closer text (a `</parameter>`
+/// inside a string, on a line of its own, at its end, in an array item, or
+/// a call's closers) is printed to Qwen3-Coder XML in a form that reads
+/// back as the same call: the call is never skipped as unrepresentable when
+/// its printing round-trips, and the printing is verified by reading it
+/// back (a parameter element when the value holds the closer inline, a
+/// whole JSON body with `<` escaped otherwise).
+#[test]
+fn values_holding_closer_text_roundtrip_to_qwen() {
+    let tools = ToolSet::compile(
+        [
+            ToolDefinition::new("write_file")
+                .effects(Effects::Mutating)
+                .param("path", Param::string().required())
+                .param("content", Param::string().required()),
+            ToolDefinition::new("tag")
+                .effects(Effects::Mutating)
+                .param("tags", Param::array(Param::string())),
+        ],
+        Budget::default(),
+    )
+    .expect("tools");
+    for arguments in [
+        r#"{"name": "write_file", "arguments": {"path": "a", "content": "x </parameter> y"}}"#,
+        r#"{"name": "write_file", "arguments": {"path": "a", "content": "x\n</parameter>\ny"}}"#,
+        r#"{"name": "write_file", "arguments": {"path": "a", "content": "x\n</parameter>"}}"#,
+        r#"{"name": "write_file", "arguments": {"path": "a", "content": "End </function></tool_call> now"}}"#,
+        r#"{"name": "tag", "arguments": {"tags": ["x</parameter>y", "z"]}}"#,
+    ] {
+        let source = format!("<tool_call>{arguments}</tool_call>");
+        let first = recover_in(&tools, source.as_bytes(), &DialectId::Hermes);
+        let printed = emit::emit(
+            &tools,
+            &first,
+            &DialectId::Qwen3CoderXml,
+            &IdPolicy::default(),
+        )
+        .expect("printed");
+        assert!(
+            printed.skipped.is_empty(),
+            "{arguments}: {:?}",
+            printed.skipped
+        );
+        let second = recover_in(&tools, &printed.output, &DialectId::Qwen3CoderXml);
+        let context = format!("{arguments}: {}", String::from_utf8_lossy(&printed.output));
+        assert!(second.rejected.is_empty(), "{context}");
+        let ([before], [after]) = (&first.calls[..], &second.calls[..]) else {
+            panic!("{context}")
+        };
+        assert_eq!(after.tool, before.tool, "{context}");
+        assert_eq!(
+            after.outcome,
+            CallOutcome::Resolved,
+            "{context}: {after:#?}"
+        );
+        assert!(
+            after.arguments.equivalent(&before.arguments),
+            "{context}: {} != {}",
+            after.arguments.to_json(),
+            before.arguments.to_json()
+        );
+        assert!(after.repairs.inferences.is_empty(), "{context}");
+    }
+}

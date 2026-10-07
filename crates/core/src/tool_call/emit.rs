@@ -982,8 +982,13 @@ fn parameter_body(members: &[Member], shape: &ObjectShape, risky: &[&[u8]]) -> (
     (body, Node::new(Value::Object(expected)))
 }
 
-/// Whether the `xml-params` codec reads `body` under `shape` as `expected`,
-/// resolved, with no edit but `allowed`.
+/// Whether the `xml-params` codec reads `body` under `shape` back as
+/// `expected`, resolved, with no edit but `allowed` and those that only
+/// record how the printed text spells the same value: closer text a string
+/// value holds (`tool_call.value.closer-in-value`, a value written with
+/// `</parameter>` inside it) and a JSON string escape (`json.syntax.string`,
+/// as `\u003c`). The body is printed only when it reads back as the call
+/// (a round trip); otherwise the call is skipped as unrepresentable.
 fn reads_back(
     body: &str,
     expected: &Node,
@@ -996,7 +1001,12 @@ fn reads_back(
     for (at, &byte) in bytes.iter().enumerate() {
         codec.feed(byte, at, governor)?;
     }
-    let context = CodecContext { shape: Some(shape) };
+    let grammar = DialectId::Qwen3CoderXml.grammar();
+    let context = CodecContext {
+        shape: Some(shape),
+        openers: &grammar.call_markup[0],
+        closers: &grammar.call_markup[1],
+    };
     Ok(
         match codec.finish(
             bytes,
@@ -1008,7 +1018,13 @@ fn reads_back(
             Ok(value) => {
                 value.tree.is_resolved()
                     && value.tree.root.equivalent(expected)
-                    && value.edits.iter().all(|edit| edit.operator == allowed)
+                    && value.edits.iter().all(|edit| {
+                        edit.operator == allowed
+                            || matches!(
+                                edit.operator,
+                                EditOperator::CloserInValue | EditOperator::JsonString
+                            )
+                    })
             }
             Err(_) => false,
         },

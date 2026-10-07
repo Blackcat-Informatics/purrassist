@@ -76,6 +76,14 @@ use core::ops::Range;
 /// the reading that ended there (see `Step::step_body`).
 const PAST_REPAIRED: u32 = 1 << 31;
 
+/// Set beside [`PAST_REPAIRED`] once such a body read text (anything but
+/// whitespace, outside any delimiter) after the delimiter it read on past:
+/// a verbatim value holding closers followed only by closers and whitespace
+/// holds no value text, only stray markup (issue #3 §3: "repeated or stray
+/// closers are all one class"), so it never ends there (see
+/// `Step::end_early`).
+const TEXTED: u32 = 1 << 30;
+
 /// The root of every call history.
 pub(crate) const ROOT: u32 = 0;
 
@@ -1322,7 +1330,8 @@ impl<'s> Step<'_, 's> {
         let Sub::Body(raw, codec) = thread.sub else {
             unreachable!("body configurations only")
         };
-        let (state, mut past) = (raw & !PAST_REPAIRED, raw & PAST_REPAIRED != 0);
+        let (state, mut past) = (raw & !(PAST_REPAIRED | TEXTED), raw & PAST_REPAIRED != 0);
+        let mut texted = raw & TEXTED != 0;
         let pos = thread.pos;
         self.misspelled_delimiter(thread, set, next, byte, stack, out, governor)?;
         let matcher = &self.grammar.delimiters[set as usize].matcher;
@@ -1333,6 +1342,22 @@ impl<'s> Step<'_, 's> {
             Some((_, length)) => pos + 1 - length as usize,
             None => pos + 1 - matcher.depth(stepped) as usize,
         };
+        // The bytes no delimiter can hold any more (not those of a
+        // delimiter just found): text, unless whitespace.
+        let text_from = if matcher.found(state).is_some() {
+            pos
+        } else {
+            released
+        };
+        if past && !texted && text_from < to {
+            texted = self
+                .bytes(text_from..to)
+                .iter()
+                .any(|byte| !byte.is_ascii_whitespace());
+            if texted {
+                thread.sub = Sub::Body(raw | TEXTED, codec);
+            }
+        }
         let mut end = None;
         if let Some(slot) = codec {
             match self.feed(slot, released..to, governor)? {
@@ -1359,7 +1384,12 @@ impl<'s> Step<'_, 's> {
             }
         }
         let Some(end) = end else {
-            thread.sub = Sub::Body(stepped | if past { PAST_REPAIRED } else { 0 }, codec);
+            let flags = match (past, texted) {
+                (true, true) => PAST_REPAIRED | TEXTED,
+                (true, false) => PAST_REPAIRED,
+                _ => 0,
+            };
+            thread.sub = Sub::Body(stepped | flags, codec);
             thread.pos = pos + 1;
             return self.queue(thread, stack);
         };
@@ -1542,7 +1572,7 @@ impl<'s> Step<'_, 's> {
     /// declared delimiter.
     /// Whether a body read on past a closer (`thread`), ending at `end`,
     /// would end inside a call it holds: another attempt of the table opened
-    /// inside it and has not completed. A value holding call markup holds
+    /// inside it and has not completed (or closed a call awaiting its trail). A value holding call markup holds
     /// whole calls, as a value documenting the format does (the reading
     /// that holds a call whose closers come before the value's end competes
     /// with the calls read apart); two calls in a row are never one call
@@ -1558,6 +1588,7 @@ impl<'s> Step<'_, 's> {
             record.id != thread.attempt
                 && record.opened
                 && !record.completed
+                && record.closed.is_none()
                 && record.start > thread.entry
                 && record.start < end
         }))
@@ -1675,6 +1706,15 @@ impl<'s> Step<'_, 's> {
         };
         let past = thread.beside();
         if past && self.opens_call(&thread, end, governor)? {
+            return Ok(());
+        }
+        // A verbatim body that read on past a closer and since read only
+        // closers and whitespace holds no value text (see [`TEXTED`]).
+        if let Sub::Body(raw, _) = thread.sub
+            && raw & PAST_REPAIRED != 0
+            && raw & TEXTED == 0
+            && self.verbatim(&thread)
+        {
             return Ok(());
         }
         if past
@@ -1845,8 +1885,16 @@ impl<'s> Step<'_, 's> {
         hist: u32,
         governor: &mut Governor,
     ) -> Result<CodecContext<'s>, StopReason> {
-        let Some(tools) = self.tools.filter(|_| kind.uses_context()) else {
+        if !kind.uses_context() {
             return Ok(CodecContext::default());
+        }
+        let markup = CodecContext {
+            shape: None,
+            openers: &self.grammar.call_markup[0],
+            closers: &self.grammar.call_markup[1],
+        };
+        let Some(tools) = self.tools else {
+            return Ok(markup);
         };
         let nodes = self.arena.nodes.as_slice();
         let (mut node, mut close, mut name) = (hist, None, None);
@@ -1868,14 +1916,14 @@ impl<'s> Step<'_, 's> {
             node = prev;
         }
         let Some(name) = name else {
-            return Ok(CodecContext::default());
+            return Ok(markup);
         };
         governor.charge(Resource::Work, size(name.len()).saturating_mul(K_CODEC))?;
         let shape = core::str::from_utf8(self.bytes(name))
             .ok()
             .and_then(|name| tools.lookup_exact(name))
             .map(CompiledTool::argument_shape);
-        Ok(CodecContext { shape })
+        Ok(CodecContext { shape, ..markup })
     }
 
     fn finish_literal(
@@ -2951,6 +2999,10 @@ pub(crate) struct Attempt {
     /// Should none of those complete, the attempt ends rejected as it would
     /// have there, not as cut off by the end of output.
     pub(crate) stuck: bool,
+    /// Where a completion of it that waits on its trail (stray closers
+    /// after it, an inserted wrapper closer) ends: it closed a call there,
+    /// which a value holding it holds whole (see `Step::opens_call`).
+    pub(crate) closed: Option<usize>,
 }
 
 /// Where a rejected attempt's span ends at the end of output.
@@ -3358,6 +3410,7 @@ impl<'s> Engine<'s> {
                 end: None,
                 failure_end: FailureEnd::Stop,
                 stuck: false,
+                closed: None,
             })?;
             let thread = Thread {
                 pc: program.start,
@@ -4623,6 +4676,14 @@ impl<'s> Engine<'s> {
             if eof.is_some() && group.pos >= self.fed {
                 self.emit(table, group, dangling, governor)?;
             } else {
+                if let Some(record) = self.tables[table]
+                    .attempts
+                    .as_mut_slice()
+                    .iter_mut()
+                    .find(|record| record.id == group.attempt && !group.beside())
+                {
+                    record.closed = Some(group.pos);
+                }
                 self.tables[table].trails.push(Trail {
                     thread: group,
                     node: ROOT,

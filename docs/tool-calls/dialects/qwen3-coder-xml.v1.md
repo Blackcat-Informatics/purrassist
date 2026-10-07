@@ -83,13 +83,19 @@ edit but the framing newlines.
   JSON, not as nested parameter elements (both read to the same tree; inline
   JSON is the single canonical choice). A repeatable parameter is one element
   per item.
-- The body is checked by decoding it with the codec under the tool's shape.
-  When that does not give back the same tree with framing newlines as the
-  only edits (for example an unmodeled parameter holding a non-string, or a
-  value containing `</parameter>`), the body is instead one whole JSON object
-  (`tool_call.markup.json-body`), which reads independently of the shape.
-  JSON text that would contain parameter markup or a call closer writes
-  every `<` as `\u003c`.
+- The body is checked by decoding it with the codec under the tool's shape
+  (a round trip). When that gives back the same tree, resolved, with no
+  edit but its framing newlines, closer text a value holds inline
+  (`tool_call.value.closer-in-value`, a value like `x </parameter> y`) and
+  JSON string escapes (`json.syntax.string`), it is printed. Otherwise (for
+  example an unmodeled parameter holding a non-string, or a value with a
+  `</parameter>` on a line of its own or at its end, which reads back as
+  the value ending there) the body is instead one whole JSON object
+  (`tool_call.markup.json-body`), which reads independently of the shape,
+  printed only when it too reads back as the call; a call neither reads
+  back as is skipped as `unrepresentable`. JSON text that would contain
+  parameter markup or a call closer writes every `<` as `\u003c`. *Proved
+  by* `tool_call_roundtrip::values_holding_closer_text_roundtrip_to_qwen`.
 - `result`: `<tool_response>CONTENT</tool_response>`, content verbatim (a
   content containing `</tool_response>` cannot be printed). The tool message
   carries no call id.
@@ -133,9 +139,11 @@ conformance anchors, which hold canonical markup only.
 
 ## Closer text inside a value
 
-A parameter value can legitimately contain the exact text of a closer: a
-`write_file` whose content includes `<parameter>v</parameter>`, or
-documentation that mentions `</function></tool_call>`. Such a value has two
+A parameter value can legitimately contain the exact text of a closer inside
+its content: a `write_file` whose content includes
+`<parameter>v</parameter>`, or documentation that mentions
+`</function></tool_call>`. For such text the maintainer's decision on
+issue #3 applies ("Pick by evidence, else ambiguous"): the value has two
 readings, and recovery picks between them by evidence
 (`tool_call.value.closer-in-value`):
 
@@ -146,15 +154,43 @@ readings, and recovery picks between them by evidence
 Both are read, and compared by the existing cost machinery (the repairs each
 needs, with their rule costs): when only one reading parses the rest of the
 call without repairs the other does not need, it wins and the call stays
-`Resolved` (reading A typically leaves `v</parameter></function></tool_call>`
-behind, which needs stray-closer deletions, leaves text between parameters,
-or closes the value by its element). When both parse cleanly, as for a value
-that ends exactly like a real closer sequence, the call is `Ambiguous` and
-reports both values (never usable on a mutating tool). A value read as B
-records `tool_call.value.closer-in-value`, spanning from the first closer it
-holds to where it ends (naming both places the value could end); it is not a
-guess, since it is chosen only when the other reading needs more repair, and
-equally clean readings are reported side by side.
+`Resolved`. When both parse cleanly (closers mentioned inline and the call
+then left unclosed), the call is `Ambiguous` and reports both values (never
+usable on a mutating tool). A value read as B records
+`tool_call.value.closer-in-value`, spanning from the first closer it holds
+to where it ends; it is not a guess, since it is chosen only when the other
+reading needs more repair, and equally clean readings are reported side by
+side.
+
+The decision covers closer text inside real value content; it does not
+override issue #3 §3 ("`</parameter>`, `</parameters>`, and repeated or
+stray closers are all one class"), its negative corpus ("text between
+parameters" and "trailing text inside the wrapper" are rejected or stay
+unresolved), or its hard limit ("Never accept trailing free text as an
+argument"). Reading B is offered only where the closers it holds sit inside
+the value's text:
+
+- **Stray closers.** Closers followed by nothing but closers and whitespace
+  up to where the value would end (`a.py\n</parameter>\n</parameter>`,
+  `</parameter></parameters>`, a value followed by
+  `</parameter>\n</function>\n</tool_call>` and the real closers) hold no
+  value text: they are stray closers (`tool_call.markup.stray-closer`) and
+  reading B is not offered. Closers left after a call once its value
+  ended, `</parameter>` included, are that call's stray closers, recorded
+  and never assistant text.
+- **Where a value ends.** In a value framed by newlines (`<parameter=P>`
+  then a newline: the layout the template writes), a closer on a line of
+  its own is where a value ends: text after it is text between parameters
+  (or trailing text inside the wrapper), never read into the value, and the
+  call is rejected (`a.py\n</parameter>\nI will now write the
+  file.\n</parameter>`). A closer within a line (`Use </parameter> here`)
+  is text the value holds. In a value not framed by newlines a closer is a
+  plausible end wherever it sits, so text after a closer is never read into
+  it either (rejected rather than read with prose in the value).
+- **Whole calls.** A value holding call markup holds whole calls (next
+  section).
+- **Misspellings.** A misspelled closer inside a value (`</paramete>`) is
+  text of it: no repair reads it as a closer (T5/F9).
 
 Where the closers are:
 
@@ -164,21 +200,21 @@ Where the closers are:
 - the call's own closers (`</function>`, `</tool_call>` and their declared
   variants `</functions>`, `</tool_calls>`), which end the arguments slot:
   the engine reads the slot on past each one beside the reading that ends
-  there.
+  there, and a reading that since read only closers and whitespace never
+  ends there.
 
-What a value never holds: a declared parameter's opener (it always ends a
-value); a misspelled declared opener after a closer (between parameters it
-begins that parameter, `tool_call.markup.token-misspelled`); text after a
-closer up to the next opener or the end of the body (text between
-parameters is malformed, so the value reads text only up to a later
-closer); a call it would end inside (see below); an opening reasoning marker
-(a call is cut there, `tool_call.reasoning.marker-cut`); and, for a string
-with a declared pattern, a value the pattern rejects (the value then ends at
-its first closer). Typed values (parsed as JSON) and enumerations end at
-their first closer.
+What a value never holds besides: a declared parameter's opener outside a
+call it holds (it always ends a value); a misspelled declared opener after a
+closer (between parameters it begins that parameter,
+`tool_call.markup.token-misspelled`); an opening reasoning marker (a call is
+cut there, `tool_call.reasoning.marker-cut`); and, for a string with a
+declared pattern, a value the pattern rejects (the value then ends at its
+first closer). Typed values (parsed as JSON) and enumerations end at their
+first closer.
 
 Under `Effort::Exact` the rule applies too (it is parsing, not a repair): a
-canonical call whose value holds closer text resolves.
+canonical call whose value holds closer text resolves, and a doubled closer
+is a stray closer, a repair `Effort::Exact` refuses.
 
 Reading B is bounded and linear: in the codec it is one pass over the
 value; in the engine the reading that holds the call's closers forks one
@@ -189,61 +225,50 @@ the readings that complete it only the latest is read (a reading of the
 same span already costing more than one reported is dropped unread). Under
 `ToolRecoveryRequest::sized` (33 `Work` units per byte with the `Standard`
 preset at 1 MiB), a 1 MiB `write_file` content holding 1,000 closers
-recovers in 17.6 units per byte for `</parameter>`, 21.6 for `</function>`,
+recovers in 17.6 units per byte for `</parameter>`, 21.7 for `</function>`,
 12.5 for `</function></tool_call>` and 18.3 for
-`</parameter></function></tool_call>` (`Ambiguous`, both values), against
-17.0 for the same value with no closer; a 1 MiB value ending in a closer
-sequence is `Ambiguous` in 28.0 (`tool_call_cost::closer_text_in_values_is_linear`
-proves the scaling).
+`</parameter></function></tool_call>` (inline in the text; `Ambiguous`, both
+values), against 17.0 for the same value with no closer; a 1 MiB value
+followed by a closer sequence on its own lines resolves (stray closers) in
+23.0 (`tool_call_cost::closer_text_in_values_is_linear` proves the scaling).
 
 ## Call markup inside a value
 
 A value may also hold a whole call's markup, as a `write_file` content
 documenting the format does (`Use <function=g><parameter=x>1</parameter></function>
-to call g`). The same evidence rule decides: (A) the calls read apart (the
-value ends inside the documented call, which is then read as a call of its
-own) against (B) the value holding the markup and ending at the closer that
-completes the outer call. A value holding call markup holds whole calls: a
-reading whose value would end inside a call another attempt opened in it
-(its closers are the outer call's own, as for two calls in a row) is no
-reading, so two consecutive calls are never read as one call holding the
-other. Otherwise:
-
-- when only one reading is clean, it wins: documentation whose calls end
-  the value only with a repair (a wrapper closer inserted before text,
-  stray closers, a call naming a tool the set does not declare) is one
-  call with the full content, and no call is read from it;
-- when both are clean, as for a value holding the call's own closers and
-  then a whole call of a declared tool, the turn is `Ambiguous` with both
-  readings (one call with the full content, or the calls read apart),
-  nothing is usable, and the separate calls are never read silently.
-
-A documented call wrapped in `<tool_call>` and followed by more text is
-`Ambiguous` too: the reading that ends the value at the documented call's
-`</parameter>` and is closed by its `</function></tool_call>` leaves the
-text and the real closers as content, needing no repair (never usable;
-`qwen_value_holds_wrapped_call_then_text`).
+to call g`). The markup of a call the value holds is that call's own: its
+parameter openers (even a name the outer tool declares) and its closers are
+text of the value, so no reading ends the value inside it, and the value
+holds it whole: one call with the full content, and no call is read from
+the value. A reading whose value would end inside a call another attempt
+opened in it (its closers are the outer call's own, as for two calls in a
+row) is no reading, so two consecutive calls are never read as one call
+holding the other; and a value followed by its closers on their own lines
+and then a whole call ends at its first closer (the call after it is read
+apart, the closers after that are stray).
 
 Measured at 1 MiB under `ToolRecoveryRequest::sized` (33 units per byte):
 a `write_file` content holding 1,000 documented calls recovers as one call
 with the full content in 23.2 units per byte when they are written inline
-(`<function=g>...</function>`; 26.7 for 4,000), and is `Ambiguous` in 32.9
-when each is wrapped in `<tool_call>` and followed by text (a value holding
-2,000 or more wrapped calls in 1 MiB exhausts the sized budget, an explicit
-`BudgetExceeded(Work)`); a value holding its closers and then 1,000 whole
-calls is `Ambiguous` in 30.7.
+(`<function=g>...</function>`; 26.8 for 4,000), and in 27.0 when each is
+wrapped in `<tool_call>` (30.9 for 2,000; a value holding 4,000 wrapped
+calls in 1 MiB exhausts the sized budget, an explicit
+`BudgetExceeded(Work)`).
 
 The reading is bounded: the value of the call just before another call's
-opener reads on over that one call (so a value holding its closers and
-then a whole call is weighed), the value of the earliest call read as
+opener reads on over that one call, the value of the earliest call read as
 written only with a repair reads on over every call after it (so a README
 documenting several calls is one call), and every other value stops at the
-next call's opener; a reading never forks while a call it holds is open.
+next call's opener; a reading never forks while a call it holds is open (a
+call it holds closes at its closer, even while that call's trail still
+weighs the stray closers after it).
 *Proved by* the goldens `qwen_value_holds_call_markup`,
 `qwen_value_holds_several_documented_calls`,
+`qwen_value_holds_several_wrapped_documented_calls`,
+`qwen_value_holds_wrapped_call_then_text`,
+`qwen_value_documents_call_with_declared_parameter`,
 `qwen_value_holds_closers_then_whole_call`,
-`qwen_value_holds_closers_then_undeclared_call`,
-`qwen_value_holds_wrapped_call_then_text` and
+`qwen_value_holds_closers_then_undeclared_call` and
 `qwen_consecutive_calls_of_different_tools`, and the `call-markup`,
 `wrapped-call-markup` and `closers-then-call` rows of the correction
 evaluation.

@@ -81,6 +81,11 @@ pub use json::JsonCodec;
 pub use raw::RawCodec;
 pub use xml::XmlParamsCodec;
 
+/// The `xml-params` codec's canonical parameter closer.
+pub(crate) const XML_CLOSER: &[u8] = b"</parameter>";
+/// The variant closer spelling read as [`XML_CLOSER`].
+pub(crate) const XML_CLOSER_VARIANT: &[u8] = b"</parameters>";
+
 use super::edit::{EditOperator, MarkupEdit};
 use crate::contract::{Governor, Resource, StopReason, saturating_size};
 use crate::tool_call::{ArgTree, ArgumentShape};
@@ -221,14 +226,25 @@ pub enum CodecEnd {
 /// use purrassist_core::grammar::codec::CodecContext;
 /// use purrassist_core::{Budget, tool_call::{Param, ToolDefinition, ToolSet}};
 /// let tools = ToolSet::compile([ToolDefinition::new("read").param("path", Param::string())], Budget::default()).unwrap();
-/// let context = CodecContext { shape: tools.argument_shape("read") };
+/// let context = CodecContext { shape: tools.argument_shape("read"), ..CodecContext::default() };
 /// assert_eq!(context.shape.unwrap().tool, "read");
 /// assert!(CodecContext::default().shape.is_none());
+/// assert!(CodecContext::default().openers.is_empty());
 /// ```
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CodecContext<'t> {
     /// The argument shape of the declared tool the call names, when known.
     pub shape: Option<&'t ArgumentShape>,
+    /// Every spelling of a call opener of the dialect the body belongs to
+    /// (Qwen3-Coder XML: `<tool_call>`, `<function=`): a value holding call
+    /// markup holds whole calls, whose own markup is not the value's (see
+    /// `XmlParamsCodec`). Empty when unknown.
+    pub openers: &'t [Vec<u8>],
+    /// Every spelling of a literal ending a call of that dialect
+    /// (`</function>`, `</tool_call>` and their variants), as the value may
+    /// hold them: closer text a value holds is weighed against the markup
+    /// it would otherwise be (see `XmlParamsCodec`). Empty when unknown.
+    pub closers: &'t [Vec<u8>],
 }
 
 /// A decoded slot body: the value and the edits recorded while reading it,

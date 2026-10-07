@@ -156,7 +156,11 @@ targets' mutation tokens so mutation can create or move field boundaries).
   its dialect (any alternative's closer or a chained call's own, such as
   Kimi-K2's `<|tool_call_end|>`, or (T4) one written with one slip; a
   single byte, which prose also writes, is not one), the content after it, up to the next call, reasoning block, or
-  attempt, holds no such literal. (F4) A rejected attempt runs past where
+  attempt, holds no such literal. (F16) No call body is content: the bytes
+  after a rejected attempt, up to the next call, reasoning block, or
+  attempt, hold no call member (`"name"`, then `:`) before any prose (a
+  word followed by `|` or `｜`, the tail of a cut special token, is no
+  prose). (F4) A rejected attempt runs past where
   its grammar failed (the furthest the recognizer read an attempt of its
   dialect at that opener, in any reading, and (T5) no further than the
   failure its reason reports) only to such a literal (a
@@ -169,7 +173,9 @@ targets' mutation tokens so mutation can create or move field boundaries).
   opened there counts, brackets pair by kind, so a stray `}` never
   closes a list's `[`, and a call or attempt the markup covers is markup,
   never prose), to an opening reasoning marker that cut a literal of its
-  dialect it had begun (T6: `</functio<think>`), over the maximal
+  dialect it had begun (T6: `</functio<think>`), over the call body it
+  began (F16: a call member past the failure and no prose; a word followed
+  by `|` or `｜` is a token fragment, not prose), over the maximal
   ill-formed UTF-8 subpart an `invalid_utf8` attempt failed on (T6),
   under a length stop to the end of output when no closer of its dialect
   follows the failure (T6: the stop reads an open call as truncation), to

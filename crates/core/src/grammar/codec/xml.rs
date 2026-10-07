@@ -19,10 +19,7 @@ use core::ops::Range;
 
 /// The parameter opener prefix; the name runs to the next `>`.
 const OPENER: &[u8] = b"<parameter=";
-/// The canonical parameter closer.
-const CLOSER: &[u8] = b"</parameter>";
-/// The variant closer spelling read as [`CLOSER`].
-const CLOSER_VARIANT: &[u8] = b"</parameters>";
+use super::{XML_CLOSER as CLOSER, XML_CLOSER_VARIANT as CLOSER_VARIANT};
 
 /// The `xml-params` codec: a function body of
 /// `<parameter=NAME>value</parameter>` elements (the Qwen3-Coder XML
@@ -161,7 +158,7 @@ const CLOSER_VARIANT: &[u8] = b"</parameters>";
 ///     [ToolDefinition::new("edit").param("path", Param::string()).param("line", Param::integer())],
 ///     Budget::default(),
 /// ).unwrap();
-/// let context = CodecContext { shape: tools.argument_shape("edit") };
+/// let context = CodecContext { shape: tools.argument_shape("edit"), ..CodecContext::default() };
 /// let mut governor = Governor::new(Budget::default());
 /// let body = b"<parameter=path>\nsrc/a.rs\n</parameter><parameter=line>\n12<parameter=path>b";
 /// let codec = XmlParamsCodec::begin(0, &mut governor)?;
@@ -209,6 +206,8 @@ impl Codec for XmlParamsCodec {
             end,
             frames: Vec::new(),
             edits: Vec::new(),
+            openers: context.openers,
+            closers: context.closers,
             governor,
         };
         reader.run(span, context)
@@ -275,7 +274,75 @@ struct Reader<'b, 't, 'g> {
     end: CodecEnd,
     frames: Vec<Frame<'t>>,
     edits: Vec<MarkupEdit>,
+    /// The dialect's call openers and closers (see `CodecContext`).
+    openers: &'t [Vec<u8>],
+    closers: &'t [Vec<u8>],
     governor: &'g mut Governor,
+}
+
+/// What a verbatim value read on past its first closer would hold (see
+/// `Reader::terminator`): the closers it holds outside any call it holds
+/// whole, and the text after them. Offsets are into the body.
+struct Held {
+    /// Whether the value is framed by newlines (`<parameter=P>` then `\n`):
+    /// the layout the template writes, where a value ends at a closer on a
+    /// line of its own.
+    framed: bool,
+    /// The first closer (a parameter or a call closer) it holds.
+    first: Option<usize>,
+    /// The first text (not whitespace, not a closer) after `first`.
+    text: Option<usize>,
+    /// Whether a closer it holds sits where a value ends: on a line of its
+    /// own in a framed value, anywhere in an unframed one.
+    ended: bool,
+    /// The first text after such a closer.
+    trailing: Option<usize>,
+}
+
+impl Held {
+    /// A closer at `at` outside any call the value holds.
+    fn closer(&mut self, body: &[u8], at: usize) {
+        self.first.get_or_insert(at);
+        if !self.framed || (at > 0 && body[at - 1] == b'\n') {
+            self.ended = true;
+        }
+    }
+
+    /// The bytes `range`, outside any call the value holds and not a
+    /// closer: text, unless only whitespace.
+    fn text(&mut self, body: &[u8], range: Range<usize>) {
+        let start = range.start;
+        let Some(offset) = body[range]
+            .iter()
+            .position(|byte| !byte.is_ascii_whitespace())
+        else {
+            return;
+        };
+        self.mark(start + offset);
+    }
+
+    /// Text (or a call the value holds) at `at`.
+    fn mark(&mut self, at: usize) {
+        if self.first.is_some() {
+            self.text.get_or_insert(at);
+            if self.ended {
+                self.trailing.get_or_insert(at);
+            }
+        }
+    }
+
+    /// Whether the value may end at `stop`, holding what comes before it:
+    /// closer text inside real value content only. Closers followed by
+    /// nothing but closers and whitespace are stray markup (issue #3 §3:
+    /// "repeated or stray closers are all one class"), and text after a
+    /// closer where a value ends is text between parameters (the negative
+    /// corpus), never read into the value.
+    fn admits(&self, stop: usize) -> bool {
+        if self.first.is_none_or(|first| first >= stop) {
+            return true;
+        }
+        self.text.is_some_and(|text| text < stop) && self.trailing.is_none_or(|text| text >= stop)
+    }
 }
 
 impl<'t> Reader<'_, 't, '_> {
@@ -374,6 +441,55 @@ impl<'t> Reader<'_, 't, '_> {
         let spellings = [CLOSER.to_vec(), CLOSER_VARIANT.to_vec()];
         (crate::grammar::misspelling::misspelled_class(token, [spellings.as_slice()]) == Some(0))
             .then_some((token.len(), Spelling::Misspelled))
+    }
+
+    /// Read the call markup at `at` inside a call the value holds (`nested`
+    /// deep): its parameters and closers are its own, text of the value.
+    /// Where the scan goes on.
+    fn nested_markup(&mut self, at: usize, nested: &mut usize) -> Result<usize, StopReason> {
+        Ok(if let Some(width) = self.markup(self.closers, at)? {
+            *nested -= 1;
+            at + width
+        } else if let Some(width) = self.markup(self.openers, at)? {
+            *nested += 1;
+            at + width
+        } else {
+            at + 1
+        })
+    }
+
+    /// Read a call's markup at `at` outside any call the value holds: a
+    /// call closer the value holds (read on past it), or the opener of a
+    /// call it holds whole. Where the scan goes on, or `None` for no call
+    /// markup there.
+    fn call_markup(
+        &mut self,
+        at: usize,
+        nested: &mut usize,
+        held: &mut Held,
+    ) -> Result<Option<usize>, StopReason> {
+        if let Some(width) = self.markup(self.closers, at)? {
+            held.closer(self.body, at);
+            return Ok(Some(at + width));
+        }
+        if let Some(width) = self.markup(self.openers, at)? {
+            held.mark(at);
+            *nested += 1;
+            return Ok(Some(at + width));
+        }
+        Ok(None)
+    }
+
+    /// The width of the longest of `spellings` at `at`, charging one `Work`
+    /// unit per spelling compared.
+    fn markup(&mut self, spellings: &[Vec<u8>], at: usize) -> Result<Option<usize>, StopReason> {
+        self.charge(spellings.len())?;
+        let rest = &self.body[at..];
+        Ok(spellings
+            .iter()
+            .filter(|spelling| rest.starts_with(spelling))
+            .map(Vec::len)
+            .max())
     }
 
     /// Record the respelling of a closer read at `at..at + width`, if any.
@@ -741,9 +857,23 @@ impl<'t> Reader<'_, 't, '_> {
         let mut ends: Vec<Candidate> = Vec::new();
         // Whether a canonical closer came first (the value may have ended).
         let mut between = false;
+        // What a reading holding closer text would hold, and the depth of
+        // the calls the value holds whole (their markup is theirs).
+        let mut held = Held {
+            framed: self.body.get(from) == Some(&b'\n'),
+            first: None,
+            text: None,
+            ended: false,
+            trailing: None,
+        };
+        let mut nested = 0_usize;
+        let mut gap = from;
         let last = loop {
             let Some(offset) = self.body[at..].iter().position(|&byte| byte == b'<') else {
                 at = self.body.len();
+                if nested == 0 {
+                    held.text(self.body, gap..at);
+                }
                 break Candidate {
                     at,
                     terminator: Terminator::End,
@@ -753,12 +883,28 @@ impl<'t> Reader<'_, 't, '_> {
                 };
             };
             at += offset;
+            if verbatim && nested == 0 {
+                held.text(self.body, gap..at);
+            }
+            gap = at;
+            if verbatim && nested > 0 {
+                at = self.nested_markup(at, &mut nested)?;
+                gap = at;
+                continue;
+            }
             if let Some((width, spelling)) = self.closer(at) {
                 if !verbatim && spelling == Spelling::Canonical {
                     self.charge(at - from)?;
                     return Ok((at, Terminator::Closer(width, spelling), None));
                 }
                 between |= spelling == Spelling::Canonical;
+                // A misspelled closer held by the value is text of it (no
+                // repair reads it as one: T5/F9); exact spellings are markup.
+                if spelling == Spelling::Misspelled {
+                    held.mark(at);
+                } else {
+                    held.closer(self.body, at);
+                }
                 ends.push(Candidate {
                     at,
                     terminator: Terminator::Closer(width, spelling),
@@ -766,6 +912,7 @@ impl<'t> Reader<'_, 't, '_> {
                     respelled: false,
                     text: false,
                 });
+                gap = at + width;
             } else if let Some(opener) = self.opener(at)? {
                 let text = !self.boundary(&opener.name.value)?;
                 let candidate = Candidate {
@@ -787,11 +934,15 @@ impl<'t> Reader<'_, 't, '_> {
                 if verbatim || !candidate.text {
                     ends.push(candidate);
                 }
+            } else if verbatim && let Some(to) = self.call_markup(at, &mut nested, &mut held)? {
+                at = to;
+                gap = at;
+                continue;
             }
             at += 1;
         };
         self.charge(last.at - from)?;
-        if verbatim && let Some(index) = self.cheapest(&ends, &last)? {
+        if verbatim && let Some(index) = self.cheapest(&ends, &last, &held)? {
             let chosen = ends.get(index).unwrap_or(&last);
             let inner = ends[..index]
                 .iter()
@@ -888,6 +1039,7 @@ impl<'t> Reader<'_, 't, '_> {
         &mut self,
         ends: &[Candidate],
         last: &Candidate,
+        held: &Held,
     ) -> Result<Option<usize>, StopReason> {
         let nested = self.frames.len() - 1;
         self.charge(ends.len().saturating_mul(nested.max(1)))?;
@@ -929,7 +1081,9 @@ impl<'t> Reader<'_, 't, '_> {
         };
         let mut best: Option<(u64, usize)> = None;
         let mut consider = |reading: Option<u64>, index: usize| {
+            let stop = ends.get(index).map_or(last.at, |candidate| candidate.at);
             if let Some(reading) = reading
+                && held.admits(stop)
                 && best.is_none_or(|(least, _)| reading <= least)
             {
                 best = Some((reading, index));

@@ -1,5 +1,5 @@
 {
-  "description": "T6: as qwen_value_holds_closers_then_whole_call, but the held call names a tool the set does not declare (`g`). Read apart, the second call names no declared tool, which the other reading does not need: the one call holding it wins, with the full content.",
+  "description": "T6b (corrected in stage-3 pass 5): a content value followed by the call's closers on their own lines, a whole call of an undeclared tool, and the real closers. The value ends at its first closer (on a line of its own: where a value ends; issue #3: \"Never accept trailing free text as an argument\"), the next call names no declared tool (unresolved, never usable), and the closers after it are stray (issue #3 §3).",
   "tools_openai": [
     {
       "type": "function",
@@ -68,7 +68,7 @@
   "input": "<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nx\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=g>\n<parameter=x>\n1\n</parameter>\n</function>\n</tool_call>\n</parameter>\n</function>\n</tool_call>",
   "outcome": "resolved",
   "stopped": "completed",
-  "finish": "calls",
+  "finish": "unresolved",
   "openai_finish_reason": "tool_calls",
   "verdict": "run",
   "usable_calls": {
@@ -80,32 +80,52 @@
       "tool": "write_file",
       "arguments": {
         "path": "a.md",
-        "content": "x\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=g>\n<parameter=x>\n1\n</parameter>\n</function>\n</tool_call>"
+        "content": "x"
       },
       "candidate_dialects": [
         "qwen3-coder-xml.v1"
       ],
       "outcome": "resolved",
       "rules": [
-        "tool_call.value.closer-in-value",
         "tool_call.xml.framing-newline",
         "tool_call.xml.framing-newline",
         "tool_call.xml.framing-newline",
-        "tool_call.value.closer-in-value",
         "tool_call.xml.framing-newline"
+      ]
+    },
+    {
+      "tool": null,
+      "arguments": {
+        "x": "1"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "unresolved: unknown_tool: no declared tool matches `g`",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.markup.stray-closer",
+        "tool_call.markup.stray-closer",
+        "tool_call.markup.stray-closer"
       ]
     }
   ],
   "rejected": [],
   "embedded": [],
-  "content": [],
+  "content": [
+    "\n"
+  ],
   "failed_validations": [],
   "ledger_rules": [
-    "tool_call.value.closer-in-value",
     "tool_call.xml.framing-newline",
     "tool_call.xml.framing-newline",
     "tool_call.xml.framing-newline",
-    "tool_call.value.closer-in-value",
-    "tool_call.xml.framing-newline"
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.stray-closer",
+    "tool_call.markup.stray-closer",
+    "tool_call.markup.stray-closer"
   ]
 }

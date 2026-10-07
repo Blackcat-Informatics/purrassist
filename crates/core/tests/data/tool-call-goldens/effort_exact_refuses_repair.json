@@ -1,5 +1,5 @@
 {
-  "description": "Under Effort::Exact a call that needs a repair (a stray closer: `</function>` written twice) is Unresolved naming the rule (repair not permitted); no repaired value is reported. (T6: a doubled `</parameter>` is no repair but closer text the value holds, `tool_call.value.closer-in-value`; see qwen_doubled_parameter_closer_is_value_text.)",
+  "description": "Under Effort::Exact a call that needs a repair (a stray closer) is Unresolved naming the rule (repair not permitted); no repaired value is reported.",
   "tools_openai": [
     {
       "type": "function",
@@ -20,7 +20,7 @@
     "qwen3-coder-xml.v1"
   ],
   "effort": "exact",
-  "input": "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\n</function>\n</function>\n</tool_call>",
+  "input": "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\n</parameter>\n</function>\n</tool_call>",
   "outcome": "resolved",
   "stopped": "completed",
   "finish": "unresolved",

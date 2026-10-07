@@ -153,7 +153,16 @@ is reported as certain.
      opened, with none open, closes a structure around the attempt and
      ends the scan, and past
      where its grammar stopped, prose, as defined below, ends it too, so a
-     bracket after it closes nothing the attempt read) when that closer
+     bracket after it closes nothing the attempt read; stage-3 pass 5,
+     F16: the tail of a cut special token, a word followed by `|` or `｜`
+     (`t_begin|>`), is markup, not prose, and a call's member past the
+     failure (`"name"`, then `:`) is the attempt's call body: outside any
+     bracket its object's `{` was lost and the scan closes it by its `}`,
+     and a body left open runs to its last JSON byte before prose, or to
+     the next segment or the end of output that cuts it; a call body right
+     after an attempt that ends unclosed (whitespace between) is covered
+     the same way, so no call body is left as assistant text) when that
+     closer
      comes before the next call opening the same alternative, a
      reasoning block, or reported unparsed markup, plus any repeated
      closers right after it. A call or attempt inside the broken wrapper (a
@@ -383,73 +392,109 @@ is reported as certain.
   rows of the correction evaluation.
 - **Closer text inside a value is weighed by evidence.** A verbatim value
   (an `xml-params` string, unmodeled or undeclared value; a `raw` body such
-  as Harmony's Python code) may hold the exact text of a closer: a
-  `write_file` content with `<parameter>v</parameter>`, or one that mentions
-  `</function></tool_call>`. Every closer that can end it is a place it may
-  end: reading A ends it at the first, reading B holds it and ends at the
-  closer that actually completes the call. Both are read and compared by
-  the existing cost machinery (the rule costs of the repairs each needs):
-  the reading that parses the rest of the call without repairs the other
-  does not need wins and stays `Resolved` (A typically leaves stray
-  closers, text between parameters, or a value closed by its element); when
-  both parse cleanly (a value ending exactly like a real closer sequence;
-  Python code holding `<|call|>`) the call is `Ambiguous` with both values,
-  never usable on a mutating tool. Reading B records
+  as Harmony's Python code) may hold the exact text of a closer inside its
+  real content: a `write_file` content with `<parameter>v</parameter>`, or
+  one that mentions `</function></tool_call>`. For such text the
+  maintainer's decision on issue #3 applies ("Pick by evidence, else
+  ambiguous"): reading A ends the value at the first closer, reading B
+  holds it and ends at the closer that actually completes the call, and the
+  two are compared by the existing cost machinery (the rule costs of the
+  repairs each needs). The reading that parses the rest of the call without
+  repairs the other does not need wins and stays `Resolved`; when both
+  parse cleanly (closers mentioned inline and the call then left unclosed;
+  Python code holding `<|call|>` in a string) the call is `Ambiguous` with
+  both values, never usable on a mutating tool. Reading B records
   `tool_call.value.closer-in-value` (no repair and no guess: it is chosen
   only over a reading that needs more repair), spanning from the first
-  closer it holds to where it ends. Inside a function body the
-  `xml-params` codec weighs every `</parameter>` before the next declared
-  parameter in one pass over the value; for the call's own closers
-  (`</function>`, `</tool_call>`, `<|call|>` and their declared variants)
-  the engine reads the arguments slot on past each closer beside the
-  reading that ends there. A value never holds a declared parameter's
-  opener, a misspelled one after a closer, text after a closer up to an
-  opener or the end of the body, a call it would end inside (two calls in
-  a row are never one call holding the other), or an opening reasoning
-  marker;
-  a string's declared pattern must admit it; typed values and enumerations
-  end at their first closer. The extra reading is bounded and linear: the
-  readings that end at later closers are read only if they complete the
-  call, and only the last of them is reported, so a 1 MiB value holding
-  1,000 closers recovers in linear work under `ToolRecoveryRequest::sized`.
-  A value may hold whole calls' markup too, as a value documenting the
-  format does: the calls read apart compete with the one call holding
-  them by the same evidence, so documentation whose calls end the value
-  only with a repair is one call with the full content, and when both
-  readings are clean (the value holds its own closers and then a whole
-  call of a declared tool) the turn is `Ambiguous` and nothing is usable;
-  a documented wrapped call followed by text is `Ambiguous` as well (see
-  the Qwen dialect document's "Call markup inside a value").
-  A JSON value is self-delimiting: closer text inside its strings was
-  never a closer, its reading past that text is the reading as written,
-  and a rejected call reports where that reading stopped, as before.
+  closer it holds to where it ends.
+
+  The decision covers closer text inside real value content only; it does
+  not override issue #3 §3 ("`</parameter>`, `</parameters>`, and repeated
+  or stray closers are all one class"), its negative corpus ("text between
+  parameters" and "trailing text inside the wrapper" must be rejected or
+  stay unresolved), or its hard limit ("Never accept trailing free text as
+  an argument"). So reading B is offered only where the closers it holds
+  sit inside the value's text:
+
+  - closers followed by nothing but closers and whitespace up to where the
+    value would end hold no value text: they are stray closers, read as
+    markup (`tool_call.markup.stray-closer`), and reading B is not offered
+    (`a.py\n</parameter>\n</parameter>`, `</parameter></parameters>`,
+    `<|call|><|call|>`);
+  - in a value framed by newlines (`<parameter=P>` then a newline, the
+    layout the template writes) a closer on a line of its own is where a
+    value ends, and text after it is text between parameters (or trailing
+    text inside the wrapper), never read into the value: the call is
+    rejected (`a.py\n</parameter>\nI will now write the file.\n</parameter>`);
+    a closer within a line of the value (`Use </parameter> here`) is text
+    the value holds. In a value not framed by newlines either reading is a
+    plausible end, so text after a closer it would hold is never read into
+    it (the call is rejected rather than read with prose in its value);
+  - a value holding call markup holds whole calls: the markup of a call the
+    value holds (`<function=g>...</function>`, wrapped or not) is that
+    call's own, so its parameter openers (even a name the outer tool
+    declares) and closers are text of the value, and no reading ends the
+    value inside it; a reading whose value would end inside a call another
+    attempt opened (two calls in a row) is no reading, so consecutive calls
+    are never read as one;
+  - a misspelled closer the value holds is text (T5/F9: no repair reads it
+    as one).
+
+  Closers left after a call once the value has ended (`</parameter>` and
+  the call's own closers, after `</tool_call>`) are that call's stray
+  closers, recorded and never assistant text, so the reading that leaves
+  them costs their repair. Inside a function body the `xml-params` codec
+  weighs every `</parameter>` before the next declared parameter in one
+  pass over the value; for the call's own closers (`</function>`,
+  `</tool_call>`, `<|call|>` and their declared variants) the engine reads
+  the arguments slot on past each closer beside the reading that ends
+  there. A value never holds a declared parameter's opener outside a call
+  it holds, a misspelled one after a closer, or an opening reasoning
+  marker; a string's declared pattern must admit it; typed values and
+  enumerations end at their first closer. The extra reading is bounded and
+  linear: the readings that end at later closers are read only if they
+  complete the call, and only the last of them is reported, so a 1 MiB
+  value holding 1,000 closers recovers in linear work under
+  `ToolRecoveryRequest::sized`. A JSON value is self-delimiting: closer
+  text inside its strings was never a closer, its reading past that text is
+  the reading as written, and a rejected call reports where that reading
+  stopped, as before.
   *Proved by* the goldens `qwen_value_holds_parameter_element`,
   `qwen_value_holds_call_closers`, `qwen_value_holds_call_closers_then_text`,
   `qwen_value_holds_call_closers_at_end`,
   `qwen_value_holds_call_closers_then_long_text`,
   `qwen_value_never_runs_past_reasoning_marker`,
-  `qwen_value_ends_with_closing_sequence`,
   `qwen_value_holds_call_closers_unclosed`, `qwen_value_then_next_parameter`,
   `qwen_value_holds_wrapper_closers_adversary`,
   `qwen_value_holds_function_closers_adversary`,
-  `qwen_doubled_parameter_closer_is_value_text`,
-  `qwen_value_holds_text_between_closers`,
   `qwen_value_closer_then_misspelled_opener`,
   `qwen_value_closer_text_rejected_by_pattern`,
-  `qwen_consecutive_calls_of_different_tools`,
   `qwen_bare_function_value_holds_function_closer`,
   `harmony_python_code_holds_call_closer`,
   `hermes_rejection_fails_past_closer_text_in_json_string`,
   `qwen_value_holds_call_markup`,
   `qwen_value_holds_several_documented_calls`,
+  `qwen_value_holds_wrapped_call_then_text`,
+  `qwen_value_documents_call_with_declared_parameter`,
+  `qwen_consecutive_calls_of_different_tools`; for the scope,
+  `effort_exact_refuses_repair`,
+  `qwen_doubled_closer_after_value_is_stray`,
+  `qwen_doubled_closer_variant_after_value_is_stray`,
+  `harmony_doubled_call_closer_is_stray`,
+  `qwen_value_ends_with_closing_sequence`,
   `qwen_value_holds_closers_then_whole_call`,
-  `qwen_value_holds_closers_then_undeclared_call` and
-  `qwen_value_holds_wrapped_call_then_text` (each also under the default
-  allow-list), `tool_call_goldens::qwen_closer_text_held_by_evidence`,
-  `tool_call_goldens::qwen_closing_sequence_in_value_is_ambiguous`,
-  `tool_call_recover::doubled_parameter_closer_is_value_text`,
+  `qwen_value_holds_closers_then_undeclared_call`,
+  `qwen_value_holds_text_between_closers`,
+  `qwen_prose_after_value_closer_is_rejected` and
+  `qwen_prose_after_last_value_closer_is_rejected` (each also under the
+  default allow-list), `tool_call_goldens::qwen_closer_text_held_by_evidence`,
+  `tool_call_goldens::qwen_inline_call_closers_unclosed_are_ambiguous`,
+  `tool_call_goldens::qwen_closing_sequence_after_value_is_stray`,
+  `tool_call_recover::exact_effort_never_repairs`,
   `tool_call_cost::closer_text_in_values_is_linear`, and the
-  `tool_call.value.closer-in-value` rows of the correction evaluation.
+  `tool_call.value.closer-in-value` and `tool_call.markup.stray-closer`
+  (`parameter`, `text-between`, `trailing-text`, `closing-sequence`,
+  `closers-then-call`) rows of the correction evaluation.
 - **A misspelled token still reads as its token.** The opener-side mirror
   of a misspelled closer: a markup token other than a closer (spelled with
   a leading `<` or `[`), the attempt's own opener included, one edit away

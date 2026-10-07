@@ -717,10 +717,10 @@ every value below to equal the code's.
 | `mistral-v11.v1` | 136 | 136 |
 | `mistral-v3.v1` | 2228 | 2228 |
 | `openai-tool-calls.v1` | 6665 | 6665 |
-| `qwen3-coder-xml.v1` | 696 | 696 |
+| `qwen3-coder-xml.v1` | 971 | 971 |
 
 The default request allows all twelve, so its bound is
-`(2 + 1 + 29681)·n + 8·E = 29684·n + 8·E`.
+`(2 + 1 + 29956)·n + 8·E = 29959·n + 8·E`.
 
 ### Budgets for large outputs and busy turns
 

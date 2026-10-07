@@ -61,6 +61,10 @@
 //!   its bytes open from its start, brackets paired by kind), or (T4) to such a closing literal written with one
 //!   slip (keeping its delimiters), so prose after a broken opener stays
 //!   content;
+//! - (F16) no call body is content: the bytes after a rejected attempt
+//!   hold no call member (`"name"`, then `:`) before any prose (a token
+//!   fragment such as `t_begin|>` is no prose), and an attempt may run over
+//!   the call body it began (a call member past the failure, no prose);
 //! - (S3/F6) a rejected attempt keeps its own closing markup: when its
 //!   raw text does not end with a literal that ends a call of its dialect
 //!   (any alternative's, a chained call's own, or one with one slip; not
@@ -313,6 +317,61 @@ fn dialect_closers(dialect: &DialectId) -> Vec<Vec<u8>> {
     closers
 }
 
+/// F16: whether the bytes of a rejected attempt from `start` (failed at
+/// `failed`) to `end` hold, past the failure, a call's member (`"name"`,
+/// then `:`) and no prose: the body of the call object the attempt began
+/// (its opening brace lost to a cut special token, or left open), which is
+/// the attempt's markup.
+fn call_body(output: &[u8], start: usize, failed: usize, end: usize) -> bool {
+    let after = &output[failed.min(end)..end];
+    (0..after.len()).any(|at| member_at(&after[at..]))
+        && !prose(&output[start..end], failed.clamp(start, end) - start, &[])
+}
+
+/// Whether `bytes` begin with a call's member: `"name"`, then `:`.
+fn member_at(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"\"name\"")
+        && bytes[6..]
+            .iter()
+            .find(|byte| !byte.is_ascii_whitespace())
+            .is_some_and(|byte| *byte == b':')
+}
+
+/// F16: a call body is never content. The bytes after a rejected attempt,
+/// up to the next call, reasoning block or other attempt, hold no call
+/// member (`"name"`, then `:`) before any prose: the body of a call object
+/// the attempt began (its opening brace lost to a cut special token, as in
+/// `<|python_tag|>t_begin|>"name": ...}`) is the attempt's markup, which its
+/// rejection covers (issue #3: "Never accept trailing free text as an
+/// argument" has its mirror in no call markup left as assistant text).
+fn check_no_call_body(output: &[u8], calls: &ToolCalls) {
+    for rejected in &calls.rejected {
+        if matches!(rejected.reason, Rejection::UnsupportedDialect { .. }) {
+            continue;
+        }
+        let end = rejected.span.end;
+        let next = calls
+            .calls
+            .iter()
+            .map(|call| call.span.start)
+            .chain(calls.reasoning.iter().map(|range| range.start))
+            .chain(calls.rejected.iter().map(|other| other.span.start))
+            .filter(|start| *start >= end && *start > rejected.span.start)
+            .min()
+            .unwrap_or(output.len());
+        let after = &output[end..next];
+        let member = (0..after.len()).find(|&at| member_at(&after[at..]));
+        if let Some(at) = member {
+            assert!(
+                prose(&after[..at], 0, &[]),
+                "a call body after rejected attempt {:?} is content: {:?}",
+                rejected.span,
+                String::from_utf8_lossy(after)
+            );
+        }
+    }
+}
+
 /// S3/F6: a rejected attempt keeps its own closing markup. For an attempt
 /// a parser made, when its raw text does not end with a literal that ends
 /// a call of its dialect ([`dialect_closers`], or one written with one
@@ -482,6 +541,7 @@ fn check_calls(output: &[u8], calls: &ToolCalls) {
             .collect::<Vec<_>>()
     );
     check_rejected_markup(output, calls);
+    check_no_call_body(output, calls);
     check_rejected_literals(output, calls);
     check_rejected_at(calls);
     for range in &calls.content {
@@ -908,8 +968,12 @@ fn check_rejected_extension(output: &[u8], calls: &ToolCalls, read: &[(Range<usi
                     .windows(closer.len())
                     .any(|window| window == &closer[..])
             });
+        // F16: or over the call body it began (a call's member past the
+        // failure, no prose): its markup, however it ends.
+        let body = call_body(output, rejected.span.start, failed, end);
         assert!(
             closed
+                || body
                 || completed
                 || balanced
                 || misspelled
@@ -1091,7 +1155,11 @@ fn prose(bytes: &[u8], from: usize, nested: &[Range<usize>]) -> bool {
             let after = bytes[at + word..limit]
                 .iter()
                 .find(|byte| !matches!(byte, b' ' | b'\t'));
+            // The tail of a special token (`t_begin|>`) is markup.
+            let rest = &bytes[at + word..limit];
+            let fragment = rest.starts_with(b"|") || rest.starts_with("｜".as_bytes());
             if !matches!(&bytes[at..at + word], b"true" | b"false" | b"null")
+                && !fragment
                 && !matches!(after, None | Some(b',' | b':' | b'}' | b']' | b'"'))
             {
                 return true;

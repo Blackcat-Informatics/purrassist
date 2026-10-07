@@ -1633,25 +1633,26 @@ fn closer_text(base: &Base, index: usize, variant: &str, text: String, value: &s
 ///   so the value holds them;
 /// - `variant-closers`: `<tool_calls>`, `</tool_calls>`, `<functions>` and
 ///   `</functions>` (declared closer variants) inside the value;
-/// - `closing-sequence`: the value of the last member ends with exactly the
-///   closers of a call (`</parameter>`, `</function>`, `</tool_call>`), so
-///   the call ending there and the one holding them are equally clean: the
-///   call is ambiguous and a correct answer abstains;
 /// - `call-markup`: a whole call's markup written inside the value, as a
 ///   value documenting the format does (`<function=example>...</function>`):
-///   ending the value inside it leaves the call's own closers and text to
-///   repair, so the value holds it, and no call is read from it;
+///   its closers are the held call's own, so the value holds it, and no call
+///   is read from it;
 /// - `wrapped-call-markup`: the same call wrapped in `<tool_call>`, then
-///   text: the call that ends the value at the documented call's
-///   `</parameter>` and is closed by its closers (leaving the text and the
-///   real closers as content) is as clean as the one holding it, so the
-///   call is ambiguous and a correct answer abstains;
-/// - `closers-then-call`: the last member's value holds the call's own
-///   closers and then a whole call of a tool the tool set does not declare:
-///   read apart, the second call names no declared tool, so the one call
-///   holding it wins (with a declared tool both readings are clean and the
-///   turn is ambiguous: the `qwen_value_holds_closers_then_whole_call`
-///   golden).
+///   text: likewise (the reading that ends the value inside the held call
+///   leaves its closers as stray markup to repair, so the value holds it;
+///   the maintainer's decision on issue #3: "If only one reading lets the
+///   rest of the call parse cleanly, it wins");
+/// - `closing-sequence` (`tool_call.markup.stray-closer`): the value of the
+///   last member is followed by exactly the closers of a call
+///   (`</parameter>`, `</function>`, `</tool_call>`), each on its own line:
+///   the value ends at the first, and the others are stray closers (issue
+///   #3 §3: "repeated or stray closers are all one class"), so the truth is
+///   the value as written;
+/// - `closers-then-call` (`tool_call.markup.stray-closer`): those closers,
+///   then a whole call of a tool the set does not declare: the value ends at
+///   its first closer (issue #3: "Never accept trailing free text as an
+///   argument"), the call after it names no declared tool, and the closers
+///   after that are stray, so the truth is the value as written.
 fn closer_in_value_mutations(base: &Base, out: &mut Vec<Mutant>) {
     if base.dialect != DialectId::Qwen3CoderXml || base.form != Form::Xml {
         return;
@@ -1698,29 +1699,29 @@ fn closer_in_value_mutations(base: &Base, out: &mut Vec<Mutant>) {
         &held,
     ));
     let held = format!("{value} <tool_call>\n{documented}\n</tool_call> end");
-    out.push(mutant(
-        "tool_call.value.closer-in-value",
+    out.push(closer_text(
+        base,
+        index,
         "wrapped-call-markup",
         replace_value(base, index, &held),
-        Need::Never,
+        &held,
     ));
     if index + 1 == members.len() {
         let held = format!("{value}\n</parameter>\n</function>\n</tool_call>");
         out.push(mutant(
-            "tool_call.value.closer-in-value",
+            "tool_call.markup.stray-closer",
             "closing-sequence",
             replace_value(base, index, &held),
-            Need::Never,
+            Need::Exact,
         ));
         let held = format!(
             "{value}\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n{documented}\n</tool_call>"
         );
-        out.push(closer_text(
-            base,
-            index,
+        out.push(mutant(
+            "tool_call.markup.stray-closer",
             "closers-then-call",
             replace_value(base, index, &held),
-            &held,
+            Need::Exact,
         ));
     }
 }
@@ -2468,55 +2469,44 @@ fn xml_mutations(base: &Base, random: &mut XorShift, out: &mut Vec<Mutant>) {
         let mut body = xml_body(&elements);
         let closer = nth_parameter_close(&body, index);
         body.insert_str(closer, "</parameter>\n");
-        // T6: after a string value, a doubled `</parameter>` is closer text
-        // the value holds (ending it at the first closer would delete the
-        // second as stray, a repair; ending it at the second needs none),
-        // unless the declared pattern rejects that value. After a typed
-        // value it is a stray closer.
-        let held = format!("{}\n</parameter>", elements[index].1);
-        if holds_closer_text(&base.declared(&members[index].key).shape, &held) {
-            out.push(closer_text(
-                base,
-                index,
-                "doubled-closer",
-                base.with_arguments(&body),
-                &held,
-            ));
-        } else {
-            out.push(mutant(
-                "tool_call.markup.stray-closer",
-                "parameter",
-                base.with_arguments(&body),
-                Need::Exact,
-            ));
-        }
-        // T6: text between a string value's closer and a second closer is
-        // text of the value, which ends at the second closer (ending it at
-        // the first leaves text between parameters, which no repair reads),
-        // unless the declared pattern rejects that value: then no reading
-        // reads the call.
+        out.push(mutant(
+            "tool_call.markup.stray-closer",
+            "parameter",
+            base.with_arguments(&body),
+            Need::Exact,
+        ));
+        // Text between a string value's closer and a second closer: the
+        // value may end at either, so its boundary is ambiguous.
         let strings = base.members_where(|declared, _| is_string_shape(&declared.shape));
         if let Some(&index) = strings.first() {
             let mut body = xml_body(&elements);
             let closer = nth_parameter_close(&body, index) + "</parameter>\n".len();
             body.insert_str(closer, "more text\n</parameter>\n");
-            let held = format!("{}\n</parameter>\nmore text", elements[index].1);
-            if holds_closer_text(&base.declared(&members[index].key).shape, &held) {
-                out.push(closer_text(
-                    base,
-                    index,
-                    "text-between",
-                    base.with_arguments(&body),
-                    &held,
-                ));
-            } else {
-                out.push(mutant(
-                    "tool_call.value.closer-in-value",
-                    "text-between-rejected",
-                    base.with_arguments(&body),
-                    Need::Never,
-                ));
-            }
+            out.push(mutant(
+                "tool_call.markup.stray-closer",
+                "text-between",
+                base.with_arguments(&body),
+                Need::Never,
+            ));
+        }
+        // Stage-3 pass 5 (F14): prose between the last string value's
+        // closer and a second closer before the call's closer is trailing
+        // text inside the wrapper, never read into the value (issue #3's
+        // negative corpus: "trailing text inside the wrapper" must be
+        // rejected or stay unresolved; "Never accept trailing free text as
+        // an argument"): abstain.
+        if let Some(&index) = strings.last()
+            && index + 1 == elements.len()
+        {
+            let mut body = xml_body(&elements);
+            let closer = nth_parameter_close(&body, index) + "</parameter>\n".len();
+            body.insert_str(closer, "Done, the file is written.\n</parameter>\n");
+            out.push(mutant(
+                "tool_call.markup.stray-closer",
+                "trailing-text",
+                base.with_arguments(&body),
+                Need::Never,
+            ));
         }
         // The last element loses its closer: the function closer ends it.
         let mut open = elements.clone();

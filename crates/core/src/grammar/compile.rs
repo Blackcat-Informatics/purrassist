@@ -1349,15 +1349,65 @@ fn closer_literals(
 /// recognizes.
 fn stray_spellings(
     closers: &[CloserClass],
+    productions: &[Production],
     governor: &mut Governor,
 ) -> Result<Spellings, GrammarError> {
+    // An `xml-params` body's own closers (`</parameter>`, `</parameters>`)
+    // left after a call are the call's stray closers too (issue #3 §3:
+    // "repeated or stray closers are all one class").
+    let codec: &[&[u8]] = if productions
+        .iter()
+        .any(|production| xml_params(&production.expr))
+    {
+        &[super::codec::XML_CLOSER, super::codec::XML_CLOSER_VARIANT]
+    } else {
+        &[]
+    };
     let mut list: Vec<Vec<u8>> = Vec::new();
-    for spelling in closers.iter().flat_map(|closer| &closer.spellings) {
-        if !list.contains(spelling) {
-            list.push(spelling.clone());
+    for spelling in closers
+        .iter()
+        .flat_map(|closer| closer.spellings.iter().map(Vec::as_slice))
+        .chain(codec.iter().copied())
+    {
+        if !list.iter().any(|listed| listed == spelling) {
+            list.push(spelling.to_vec());
         }
     }
     Spellings::build(list, governor)
+}
+
+/// Every spelling of a call opener and of a literal ending a call, any
+/// alternative's (see `CodecContext::openers`), charged.
+fn call_markup(
+    call_ends: &[CallEnd],
+    governor: &mut Governor,
+) -> Result<[Vec<Vec<u8>>; 2], GrammarError> {
+    let spelled: usize = call_ends
+        .iter()
+        .flat_map(|end| end.openers.iter().chain(&end.call_closers))
+        .map(|spelling| spelling.len() + 24)
+        .sum();
+    charge(governor, size(spelled), size(spelled))?;
+    let mut markup: [Vec<Vec<u8>>; 2] = [Vec::new(), Vec::new()];
+    for end in call_ends {
+        markup[0].extend(end.openers.iter().cloned());
+        markup[1].extend(end.call_closers.iter().cloned());
+    }
+    for spellings in &mut markup {
+        spellings.sort();
+        spellings.dedup();
+    }
+    Ok(markup)
+}
+
+/// Whether `expr` holds an `xml-params` slot.
+fn xml_params(expr: &Expr) -> bool {
+    match expr {
+        Expr::Slot { codec, .. } => *codec == CodecKind::XmlParams,
+        Expr::Capture { inner, .. } | Expr::Repeat { inner, .. } => xml_params(inner),
+        Expr::Sequence(items) | Expr::Choice(items) => items.iter().any(xml_params),
+        _ => false,
+    }
 }
 
 /// Each delimiter set's matcher, over its literals and their confusable
@@ -1468,7 +1518,7 @@ pub(crate) fn compile(
         .iter()
         .map(|literal| self::literal_tables(literal, &closers, &confusables, None, governor))
         .collect::<Result<Vec<_>, _>>()?;
-    let stray = stray_spellings(&closers, governor)?;
+    let stray = stray_spellings(&closers, &productions, governor)?;
     let delimiters = delimiter_sets(sets, &confusables, governor)?;
     let source = Programs {
         productions: &productions,
@@ -1517,6 +1567,7 @@ pub(crate) fn compile(
         declaration,
         reasoning,
         explicit_reasoning,
+        call_markup: call_markup(&call_ends, governor)?,
         call_ends,
         call_literals,
         programs,

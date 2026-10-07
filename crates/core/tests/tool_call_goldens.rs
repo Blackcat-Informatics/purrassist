@@ -1642,38 +1642,64 @@ fn qwen_closer_text_held_by_evidence() {
     }
 }
 
-/// T6: a value ending with exactly the closers of a call reads two equally
-/// clean calls, so the turn is `Ambiguous` with both values: no single value
-/// to run, on a mutating tool or any other.
+/// T6: a value holding a call's closers inline (`End with
+/// </function></tool_call>`) and then left unclosed reads two equally clean
+/// calls, so the turn is `Ambiguous` with both values: no single value to
+/// run, on a mutating tool or any other.
 #[test]
-fn qwen_closing_sequence_in_value_is_ambiguous() {
-    for (name, values) in [
-        (
-            "qwen_value_ends_with_closing_sequence",
-            ["x", "x\n</parameter>\n</function>\n</tool_call>"],
-        ),
-        (
-            "qwen_value_holds_call_closers_unclosed",
-            ["End with ", "End with </function></tool_call> then stop."],
-        ),
-    ] {
-        let (_, result) = golden(name);
-        let Outcome::Ambiguous(alternatives) = &result.outcome else {
-            panic!("{name}: {:?}", result.outcome)
-        };
-        let mut contents: Vec<&str> = alternatives
-            .iter()
-            .map(|calls| {
-                calls.calls[0]
-                    .arguments
-                    .get("content")
-                    .and_then(Node::as_str)
-                    .expect("a content value")
-            })
-            .collect();
-        contents.sort_unstable();
-        assert_eq!(contents, values, "{name}");
-    }
+fn qwen_inline_call_closers_unclosed_are_ambiguous() {
+    let (_, result) = golden("qwen_value_holds_call_closers_unclosed");
+    let Outcome::Ambiguous(alternatives) = &result.outcome else {
+        panic!("{:?}", result.outcome)
+    };
+    let mut contents: Vec<&str> = alternatives
+        .iter()
+        .map(|calls| {
+            calls.calls[0]
+                .arguments
+                .get("content")
+                .and_then(Node::as_str)
+                .expect("a content value")
+        })
+        .collect();
+    contents.sort_unstable();
+    assert_eq!(
+        contents,
+        ["End with ", "End with </function></tool_call> then stop."]
+    );
+}
+
+/// A value followed by a call's closers on their own lines, then the real
+/// closers: the value ends at its first closer and the closers after the
+/// call are stray (issue #3 §3: "repeated or stray closers are all one
+/// class"), never closer text the value holds.
+#[test]
+fn qwen_closing_sequence_after_value_is_stray() {
+    let (_, result) = golden("qwen_value_ends_with_closing_sequence");
+    let calls = reading(&result);
+    let [call] = &calls.calls[..] else {
+        panic!("{calls:#?}")
+    };
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.get("content").and_then(Node::as_str),
+        Some("x")
+    );
+    let rules: Vec<&str> = call
+        .repairs
+        .evidence
+        .iter()
+        .map(|evidence| evidence.rule.as_str())
+        .collect();
+    assert!(
+        rules.contains(&"tool_call.markup.stray-closer"),
+        "{rules:?}"
+    );
+    assert!(
+        !rules.contains(&"tool_call.value.closer-in-value"),
+        "{rules:?}"
+    );
+    assert!(calls.content.is_empty(), "{:?}", calls.content);
 }
 
 #[test]

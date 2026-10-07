@@ -685,6 +685,9 @@ pub struct CompiledGrammar {
     pub(crate) call_ends: Vec<CallEnd>,
     /// See [`Self::call_literals`].
     pub(crate) call_literals: Vec<Vec<u8>>,
+    /// Every spelling of a call opener, then of a literal ending a call,
+    /// of any alternative (see `CodecContext::openers`).
+    pub(crate) call_markup: [Vec<Vec<u8>>; 2],
     pub(crate) programs: [Program; 2],
     pub(crate) stray: automaton::Trie,
     pub(crate) longest: usize,

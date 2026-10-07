@@ -545,7 +545,7 @@ fn per_call_repairs_itemized() {
             .param("path", Param::string().required()),
     ]);
     let output = format!(
-        "{}\n<tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n</parameter>\n</function>\n</function>\n</tool_call>",
+        "{}\n<tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n</parameter>\n</parameter>\n</function>\n</tool_call>",
         hermes("read_fiel", r#"{"path": "a.rs"}"#)
     );
     let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
@@ -730,9 +730,9 @@ fn deterministic_pinned_digest() {
 }
 
 const PINNED_DIGEST: &str =
-    "sha256:db9549db20b729c610cf36113bfc2a50a561e3d41c7f859aa55391731364ebff";
+    "sha256:6794f25233d4bc89e9292939c2ac1625fadff94ec3398acda14f7165360f27e8";
 const PINNED_PREFIX_DIGEST: &str =
-    "sha256:9dac0d1d5de4862bdcd9247c569bdbf3aef5bfbc9f8e3091ff36f2b7de2b5090";
+    "sha256:d026f22fd1ca7f12967f53acf8c8a29133456baebb014a697b96ba69906a48e5";
 const PINNED_AMBIGUOUS_DIGEST: &str =
     "sha256:f67bed0cc0ff12375d632ad3318dd8e2643f4031329b2a6a51f8f3ae5e35e6ef";
 const PINNED_PREFIX_AMBIGUOUS_DIGEST: &str =
@@ -1720,31 +1720,6 @@ fn exact_effort_all_dialects_qwen_resolves() {
     }
 }
 
-/// A `</parameter>` written twice is the exact closer text a value may hold:
-/// the reading that ends the value at the first closer must delete the
-/// second as stray (a repair), and the reading that ends it at the second
-/// needs none, so the value holds the first (`tool_call.value.closer-in-value`,
-/// no guess), at every effort and under `Effort::Exact` (no repair is made).
-#[test]
-fn doubled_parameter_closer_is_value_text() {
-    let tools = compile([ToolDefinition::new("list_dir")
-        .effects(Effects::ReadOnly)
-        .param("path", Param::string().required())]);
-    let output = "<tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n</parameter>\n</parameter>\n</function>\n</tool_call>";
-    for effort in [Effort::Exact, Effort::Quick, Effort::Standard] {
-        let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::new(effort));
-        let calls = value(&result);
-        let [call] = &calls.calls[..] else {
-            panic!("{effort:?}: {calls:#?}")
-        };
-        assert_eq!(call.outcome, CallOutcome::Resolved, "{effort:?}: {call:#?}");
-        assert_eq!(call.arguments.to_json(), r#"{"path":"src\n</parameter>"}"#);
-        assert!(rules(call).contains(&"tool_call.value.closer-in-value"));
-        assert!(!rules(call).contains(&"tool_call.markup.stray-closer"));
-        assert!(call.repairs.inferences.is_empty(), "{call:#?}");
-    }
-}
-
 #[test]
 fn exact_effort_never_repairs() {
     let tools = compile([
@@ -1756,12 +1731,9 @@ fn exact_effort_never_repairs() {
             .param("path", Param::string().required())
             .param("depth", Param::integer()),
     ]);
-    // A doubled `</function>` is a stray closer; a doubled `</parameter>`
-    // is closer text the value holds (`tool_call.value.closer-in-value`,
-    // no repair: see `doubled_parameter_closer_is_value_text`).
     let cases = [
         (
-            "<tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n</parameter>\n</function>\n</function>\n</tool_call>".to_owned(),
+            "<tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n</parameter>\n</parameter>\n</function>\n</tool_call>".to_owned(),
             "tool_call.markup.stray-closer",
             DialectId::Qwen3CoderXml,
         ),

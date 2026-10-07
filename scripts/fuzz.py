@@ -835,6 +835,15 @@ TOOL_CALL_REGRESSIONS = [
     # begin with `_`, so `_dir` followed by `[` is prose and the attempt never
     # runs over it to the bracket (a campaign failure).
     b'\xe6#[TOOL<|python_tag|>_dir[ARGS]{"path": "."}\nDone.',
+    # F16: a cut special token, then a Llama 3 call body left open before
+    # prose: the rejection covers the body to its last JSON byte.
+    b'\x00RSure. <|python_tag|>t_begin|>"name": "get_weather", "arguments": {"city": "Oslo"<think>wait</think> Done.',
+    # F16: the same body cut by the end of output.
+    b'\x00RSure. <|python_tag|>t_begin|>"name": "get_weather", "arguments": {"city": "Oslo"',
+    # F16: an attempt rejected at a misspelled opener, then a call body cut
+    # by a reasoning marker: the body is the attempt's markup, never
+    # content (a campaign failure).
+    b'\x00R<tool_cal>{"name": "f", "arguments": {"a":{"name": "f", "arguments": {"[THINK]a": "x"}}</tool_call>',
 ]
 
 TOOL_CALL_SEEDS = [

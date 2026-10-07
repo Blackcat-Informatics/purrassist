@@ -144,7 +144,7 @@ test's assertions fails the build by design.
 | Path matching | 1594 | 1279 | 0 | 315 | 80.2% | 0.0% | 0.234% | 2% |
 | Phonetic ambiguity | 1408 | 1089 | 0 | 319 | 77.3% | 0.0% | 0.275% | 5% |
 | JSON recovery | 714 | 630 | 0 | 84 | 88.2% | 0.0% | 0.474% | 2% |
-| Tool-call recovery | 16336 | 11236 | 0 | 5100 | 68.8% | 0.0% | 0.027% | 1% |
+| Tool-call recovery | 16340 | 11243 | 0 | 5097 | 68.8% | 0.0% | 0.027% | 1% |
 
 "Coverage" is the fraction of cases an automatic decision was reached for at
 all (correct + incorrect, over the total); "risk" is the observed error rate
@@ -207,7 +207,7 @@ small oracle exhaustively proves the Unicode tables.
 
 ## Tool-call recovery evaluation
 
-`crates/core/tests/data/evaluation/tool-calls.jsonl` holds 16,336 mutated model
+`crates/core/tests/data/evaluation/tool-calls.jsonl` holds 16,340 mutated model
 turns, each with its `id`, `category` (the rule expected to repair it),
 `dialect` (the request's dialect allow-list), `policy`, `stop`, `input` and
 `truth`. The `tool-call-corpus` example generates it deterministically: it
@@ -282,20 +282,24 @@ writes after its opener (an argument separator, `<function=`,
 `tool_call.reasoning.marker-cut` cases run a Mistral v11 call with no
 `[ARGS]` into a reasoning block's closing or opening marker.
 `tool_call.value.closer-in-value` cases write closer text inside the first
-unconstrained string value of a Qwen3-Coder XML call (`<parameter>v</parameter>`;
-`</function></tool_call>`; the declared variants `<tool_calls>`,
-`</tool_calls>`, `<functions>`, `</functions>`), a `</parameter>` written
-twice after a string value, and text between a string value's closer and a
-second closer: the reading that holds the closer text needs no repair the
-other reading needs, so the truth is the value holding it (unless the
-parameter's declared pattern rejects that value: then a doubled closer is a
-stray closer and text between closers abstains); a value that ends exactly
-like a call's closers is `Ambiguous` (abstain). Call markup inside such a
-value: a whole documented call (`<function=example>...</function>`) is held
-by the value (truth: the value holding it, no call read from it); the same
-call wrapped in `<tool_call>` and followed by text is `Ambiguous` (abstain);
-and the last value holding the call's closers and then a whole call of an
-undeclared tool is one call holding it (truth: the value holding it). `truth` is the original call or calls
+unconstrained string value of a Qwen3-Coder XML call, within its text
+(`<parameter>v</parameter>`; `</function></tool_call>`; the declared
+variants `<tool_calls>`, `</tool_calls>`, `<functions>`, `</functions>`):
+the reading that holds the closer text needs no repair the other reading
+needs, so the truth is the value holding it (the maintainer's decision on
+issue #3). Call markup inside such a value: a whole documented call
+(`<function=example>...</function>`), bare or wrapped in `<tool_call>` and
+followed by text, is held by the value (truth: the value holding it, no
+call read from it). `tool_call.markup.stray-closer` cases keep their
+72f34f7 truths: a `</parameter>` written twice after a value is a stray
+closer (truth: the value as written; issue #3 §3), and text between a
+string value's closer and a second closer abstains (issue #3's negative
+corpus: "text between parameters"); likewise prose after the last value's
+closer before a second closer abstains (`trailing-text`: "trailing text
+inside the wrapper"), and the last value followed by the call's closers on
+their own lines, alone (`closing-sequence`) or then a whole call of an
+undeclared tool (`closers-then-call`), keeps the value as written with the
+closers after the call stray (issue #3 §3). `truth` is the original call or calls
 when the mutation leaves what the caller needs, and `Unresolved` when the
 only correct answer is abstention: the information is destroyed or
 genuinely ambiguous (a hallucinated tool name, a missing required argument,
@@ -318,7 +322,7 @@ any answer to a truth-`Unresolved` case. The test pins the totals above,
 asserts zero incorrect answers overall, per rule and per dialect, at least 20
 cases per rule, and abstention recall of 100%:
 
-Abstention recall: 5001 of 5001 truth-`Unresolved` cases abstained (100.0%).
+Abstention recall: 4998 of 4998 truth-`Unresolved` cases abstained (100.0%).
 
 The 99 other abstentions are coverage gaps, not errors: read-only calls whose
 required arguments were nested one level down (`DropWithLoss` drops the
@@ -373,7 +377,7 @@ unassignable (`UnknownParameter`), so the call abstains.
 | `tool_call.markup.missing-wrapper-close.before-text` | 256 | 96 | 0 | 160 | 160 |
 | `tool_call.markup.nested-parameter` | 24 | 24 | 0 | 0 | 0 |
 | `tool_call.markup.parameter-closed-by-element` | 31 | 31 | 0 | 0 | 0 |
-| `tool_call.markup.stray-closer` | 663 | 663 | 0 | 0 | 0 |
+| `tool_call.markup.stray-closer` | 709 | 677 | 0 | 32 | 32 |
 | `tool_call.markup.terminal-confusable` | 192 | 192 | 0 | 0 | 0 |
 | `tool_call.markup.token-misspelled` | 660 | 660 | 0 | 0 | 0 |
 | `tool_call.markup.undeclared-parameter-boundary` | 26 | 0 | 0 | 26 | 26 |
@@ -391,7 +395,7 @@ unassignable (`UnknownParameter`), so the call abstains.
 | `tool_call.reasoning.unterminated` | 384 | 384 | 0 | 0 | 0 |
 | `tool_call.stop.consumed-closer` | 192 | 192 | 0 | 0 | 0 |
 | `tool_call.truncated` | 768 | 384 | 0 | 384 | 384 |
-| `tool_call.value.closer-in-value` | 122 | 87 | 0 | 35 | 35 |
+| `tool_call.value.closer-in-value` | 80 | 80 | 0 | 0 | 0 |
 | `tool_call.value.enum-normalize` | 168 | 168 | 0 | 0 | 0 |
 | `tool_call.value.invalid-utf8` | 24 | 5 | 0 | 19 | 19 |
 | `tool_call.value.schema-typed` | 24 | 21 | 0 | 3 | 3 |
@@ -417,12 +421,12 @@ and by dialect allow-list:
 | `mistral3` | 1308 | 883 | 0 | 425 |
 | `mixed` | 96 | 96 | 0 | 0 |
 | `openai` | 964 | 586 | 0 | 378 |
-| `qwen` | 1482 | 1102 | 0 | 380 |
+| `qwen` | 1486 | 1109 | 0 | 377 |
 
 | Allow-list | Cases | Correct | Incorrect | Abstained |
 | --- | ---: | ---: | ---: | ---: |
 | `anthropic-tool-use.v1` | 606 | 409 | 0 | 197 |
-| `anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1` | 8721 | 5973 | 0 | 2748 |
+| `anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1` | 8723 | 5977 | 0 | 2746 |
 | `bare-json.v1` | 526 | 329 | 0 | 197 |
 | `deepseek-v3.1.v1` | 694 | 497 | 0 | 197 |
 | `deepseek-v3.1.v1,deepseek-v3.v1` | 32 | 32 | 0 | 0 |
@@ -435,7 +439,7 @@ and by dialect allow-list:
 | `mistral-v11.v1` | 510 | 325 | 0 | 185 |
 | `mistral-v3.v1` | 606 | 409 | 0 | 197 |
 | `openai-tool-calls.v1` | 422 | 264 | 0 | 158 |
-| `qwen3-coder-xml.v1` | 708 | 533 | 0 | 175 |
+| `qwen3-coder-xml.v1` | 710 | 536 | 0 | 174 |
 
 Rules no case exercises: `json.syntax.literal-escape` (no witness value
 contains a backslash to unescape). `tool_call.markup.terminal-confusable` is

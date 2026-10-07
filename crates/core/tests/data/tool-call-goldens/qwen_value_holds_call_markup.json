@@ -91,7 +91,6 @@
         "tool_call.xml.framing-newline",
         "tool_call.xml.framing-newline",
         "tool_call.xml.framing-newline",
-        "tool_call.value.closer-in-value",
         "tool_call.xml.framing-newline"
       ]
     }
@@ -105,7 +104,6 @@
     "tool_call.xml.framing-newline",
     "tool_call.xml.framing-newline",
     "tool_call.xml.framing-newline",
-    "tool_call.value.closer-in-value",
     "tool_call.xml.framing-newline"
   ]
 }

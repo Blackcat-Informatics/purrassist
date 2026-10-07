@@ -1705,14 +1705,18 @@ impl MarkupScan<'_> {
         // An alternative whose end literal is a bracket (a JSON object
         // or array call) nests by that bracket, outside JSON strings;
         // any other nests by its opener spellings, brackets paired by kind
-        // (`open`, `state.depth` of them). The scan starts at the
-        // attempt's own start, so the depth at its failure is known.
+        // (see `Scan`). The walk starts at the attempt's own start, so the
+        // depth at its failure is known.
         let brackets: Vec<(u8, u8)> = [(b'{', b'}'), (b'[', b']')]
             .into_iter()
             .filter(|(_, close)| closers.iter().any(|spelling| spelling == &[*close]))
             .collect();
-        let mut state = Nesting::default();
-        let mut open = Brackets::new(governor);
+        let mut walk = Scan {
+            state: Nesting::default(),
+            open: Brackets::new(governor),
+            body: false,
+            json_end: span.end,
+        };
         let mut position = span.start;
         let mut next = boundaries.iter();
         let mut found = None;
@@ -1723,65 +1727,33 @@ impl MarkupScan<'_> {
             };
             while position < limit {
                 governor.charge(Resource::Work, 1)?;
-                let byte = self.output[position];
                 if !brackets.is_empty() {
-                    // Past where the grammar stopped, prose (a bare word
-                    // followed by another word or sentence punctuation,
-                    // outside a string) is no JSON structure: a bracket
-                    // after it closes nothing the attempt read
-                    // (`<|python_tag|>t_begin|>"name": ... {...}`), and the
-                    // attempt ends as one left unclosed.
-                    if !state.quoted
-                        && position >= span.end
-                        && (byte.is_ascii_alphabetic() || byte == b'_')
-                        && (position == 0 || !is_word_byte(self.output[position - 1]))
-                    {
-                        let (word, prose) = self.bare_word(position, limit);
-                        governor.charge(Resource::Work, size(word))?;
-                        if prose {
-                            break 'scan;
-                        }
+                    match self.bracket_step(
+                        &mut walk,
+                        &mut position,
+                        span,
+                        &brackets,
+                        limit,
+                        governor,
+                    )? {
+                        Flow::Next => continue,
+                        Flow::Found(end) => found = Some(end),
+                        Flow::Stop => {}
                     }
-                    position += 1;
-                    if state.quoted {
-                        match byte {
-                            _ if state.escaped => state.escaped = false,
-                            b'\\' => state.escaped = true,
-                            b'"' => state.quoted = false,
-                            _ => {}
-                        }
-                    } else if byte == b'"' {
-                        state.quoted = true;
-                    } else if brackets.iter().any(|(opener, _)| *opener == byte) {
-                        state.depth = open.push(byte)?;
-                    } else if let Some(&(kind, _)) =
-                        brackets.iter().find(|(_, close)| *close == byte)
-                    {
-                        // A bracket closing nothing the scan opened closes
-                        // a structure around the attempt (it began inside
-                        // one, or inside a string): the attempt's markup
-                        // ends before it, unclosed.
-                        if state.depth == 0 {
-                            break 'scan;
-                        }
-                        state.depth = open.close(kind, governor)?;
-                        if state.depth == 0 && position > span.end {
-                            found = Some(position);
-                            break 'scan;
-                        }
-                    }
-                } else if let Some(length) = at(closers, position)
+                    break 'scan;
+                }
+                if let Some(length) = at(closers, position)
                     .or_else(|| self.misspelled(closers, markup, position, limit))
                 {
-                    state.depth = state.depth.saturating_sub(1);
+                    walk.state.depth = walk.state.depth.saturating_sub(1);
                     position += length;
-                    if state.depth == 0 && position > span.end {
+                    if walk.state.depth == 0 && position > span.end {
                         found = Some(position.min(limit));
                         break 'scan;
                     }
                 } else if let Some(length) = at(openers, position) {
-                    if nests || state.depth == 0 {
-                        state.depth += 1;
+                    if nests || walk.state.depth == 0 {
+                        walk.state.depth += 1;
                     }
                     position += length;
                 } else {
@@ -1797,17 +1769,31 @@ impl MarkupScan<'_> {
                     // call holds the array's `]`), no later bracket closes
                     // the attempt, which ends unclosed.
                     if !brackets.is_empty()
-                        && self.closes(&mut state, &mut open, &brackets, range, governor)?
+                        && self.closes(
+                            &mut walk.state,
+                            &mut walk.open,
+                            &brackets,
+                            range,
+                            governor,
+                        )?
                     {
                         break 'scan;
                     }
                     position = range.end;
                 }
+                // A call body the attempt left open runs to where the next
+                // segment (or the output's end) cuts it: its markup, no
+                // prose.
+                _ if walk.body && walk.state.depth > 0 => {
+                    found = Some(limit);
+                    break;
+                }
                 _ => break,
             }
         }
-        let Some(end) = found else {
-            return self.unclosed_end(span, read, markup, boundaries, governor);
+        let Some(end) = found.filter(|end| *end > span.end) else {
+            let end = self.unclosed_end(span, read, markup, boundaries, governor)?;
+            return self.call_body_end(end, boundaries, governor);
         };
         // Repeated closers right after the end (whitespace between) are
         // the attempt's stray closers, as after a completed call.
@@ -1816,6 +1802,153 @@ impl MarkupScan<'_> {
         } else {
             end
         })
+    }
+
+    /// `end`, moved past a call body right after it (whitespace between): a
+    /// JSON object holding a call's member (`"name"`, then `:`), or holding
+    /// none but followed by more members of the object it sits in
+    /// (`{...}, "name": ...}`, an object whose string a slip broke), which is
+    /// the rejected attempt's markup (F16: a call body is never content):
+    /// to the bracket closing it, to its last JSON byte before prose, or to
+    /// where the next segment (`boundaries`) or the output's end cuts it.
+    /// `Work` per byte read.
+    fn call_body_end(
+        &self,
+        end: usize,
+        boundaries: &[(Range<usize>, bool)],
+        governor: &mut Governor,
+    ) -> Result<usize, StopReason> {
+        let limit = boundaries
+            .iter()
+            .map(|(range, _)| range.start)
+            .find(|start| *start >= end)
+            .unwrap_or(self.output.len());
+        let from = end
+            + self.output[end..limit]
+                .iter()
+                .take_while(|byte| byte.is_ascii_whitespace())
+                .count();
+        if self.output.get(from) != Some(&b'{') {
+            return Ok(end);
+        }
+        let brackets = [(b'{', b'}'), (b'[', b']')];
+        let mut walk = Scan {
+            state: Nesting::default(),
+            open: Brackets::new(governor),
+            body: false,
+            json_end: from,
+        };
+        let (start, mut position) = (from..from, from);
+        while position < limit {
+            governor.charge(Resource::Work, 1)?;
+            match self.bracket_step(&mut walk, &mut position, &start, &brackets, limit, governor)? {
+                Flow::Next => {}
+                Flow::Found(at) if walk.body => return Ok(at),
+                // An object holding no call's member, then more members
+                // (`, "name": ...`): the body of the object it sits in.
+                Flow::Found(at)
+                    if self.output[at..limit]
+                        .iter()
+                        .find(|byte| !byte.is_ascii_whitespace())
+                        == Some(&b',') => {}
+                Flow::Found(_) | Flow::Stop => return Ok(end),
+            }
+        }
+        Ok(if walk.body && walk.state.depth > 0 {
+            limit
+        } else {
+            end
+        })
+    }
+
+    /// Read the byte at `position` of a JSON-object attempt's markup (see
+    /// [`Self::markup_end`]), outside strings by its `brackets`, paired by
+    /// kind: on to the next byte, the attempt's end (the bracket closing
+    /// what it opened, or the end of the call body it left open where prose
+    /// begins), or no end (prose, or a bracket closing a structure around
+    /// it).
+    fn bracket_step(
+        &self,
+        walk: &mut Scan,
+        position: &mut usize,
+        span: &Range<usize>,
+        brackets: &[(u8, u8)],
+        limit: usize,
+        governor: &mut Governor,
+    ) -> Result<Flow, StopReason> {
+        let at = *position;
+        let byte = self.output[at];
+        // Past where the grammar stopped, prose (a bare word followed by
+        // another word or sentence punctuation, outside a string) is no
+        // JSON structure: a bracket after it closes nothing the attempt
+        // read, and the attempt ends as one left unclosed, or, when it
+        // left a call body open (`<|python_tag|>t_begin|>"name": ...`),
+        // after that body's last JSON byte.
+        if !walk.state.quoted
+            && at >= span.end
+            && (byte.is_ascii_alphabetic() || byte == b'_')
+            && (at == 0 || !is_word_byte(self.output[at - 1]))
+        {
+            let (word, prose) = self.bare_word(at, limit);
+            governor.charge(Resource::Work, size(word))?;
+            if prose {
+                return Ok(if walk.body && walk.state.depth > 0 {
+                    Flow::Found(walk.json_end)
+                } else {
+                    Flow::Stop
+                });
+            }
+        }
+        *position += 1;
+        if walk.state.quoted {
+            match byte {
+                _ if walk.state.escaped => walk.state.escaped = false,
+                b'\\' => walk.state.escaped = true,
+                b'"' => {
+                    walk.state.quoted = false;
+                    walk.json_end = *position;
+                }
+                _ => {}
+            }
+            return Ok(Flow::Next);
+        }
+        if matches!(
+            byte,
+            b'{' | b'}' | b'[' | b']' | b':' | b',' | b'-' | b'+' | b'.'
+        ) || byte.is_ascii_alphanumeric()
+        {
+            walk.json_end = *position;
+        }
+        if byte == b'"' {
+            walk.state.quoted = true;
+            // Past the failure, a call's member: the attempt's call body.
+            // Outside any bracket, its object's `{` was lost (a cut special
+            // token before it), and the walk closes it by its `}`.
+            if *position > span.end
+                && brackets.iter().any(|(opener, _)| *opener == b'{')
+                && self.call_member(at)
+            {
+                governor.charge(Resource::Work, 8)?;
+                walk.body = true;
+                if walk.state.depth == 0 {
+                    walk.state.depth = walk.open.push(b'{')?;
+                }
+            }
+        } else if brackets.iter().any(|(opener, _)| *opener == byte) {
+            walk.state.depth = walk.open.push(byte)?;
+        } else if let Some(&(kind, _)) = brackets.iter().find(|(_, close)| *close == byte) {
+            // A bracket closing nothing the walk opened closes a structure
+            // around the attempt (it began inside one, or inside a string):
+            // the attempt's markup ends before it, unclosed.
+            if walk.state.depth == 0 {
+                return Ok(Flow::Stop);
+            }
+            walk.state.depth = walk.open.close(kind, governor)?;
+            if walk.state.depth == 0 && *position > span.end {
+                return Ok(Flow::Found(*position));
+            }
+        }
+        Ok(Flow::Next)
     }
 
     /// Whether the bytes of `range` (a call inside a rejected attempt's
@@ -2063,8 +2196,27 @@ impl MarkupScan<'_> {
             &self.output[position..position + word],
             b"true" | b"false" | b"null"
         );
-        let prose = !literal && !matches!(after, None | Some(b',' | b':' | b'}' | b']' | b'"'));
+        // The tail of a special token (`t_begin|>` of a cut
+        // `<|tool_call_begin|>`, a DeepSeek `｜`) is markup, not prose.
+        let rest = &self.output[position + word..limit];
+        let fragment = rest.starts_with(b"|") || rest.starts_with("｜".as_bytes());
+        let prose = !literal
+            && !fragment
+            && !matches!(after, None | Some(b',' | b':' | b'}' | b']' | b'"'));
         (word, prose)
+    }
+
+    /// Whether a JSON member naming a call (`"name"`, then `:`) begins at
+    /// `at`: a call object's body, which the scan reads as markup of the
+    /// attempt even when its opening `{` was lost (a cut special token
+    /// before it).
+    fn call_member(&self, at: usize) -> bool {
+        let rest = &self.output[at..];
+        rest.starts_with(b"\"name\"")
+            && rest[6..]
+                .iter()
+                .find(|byte| !byte.is_ascii_whitespace())
+                .is_some_and(|byte| *byte == b':')
     }
 
     /// `span`'s end, moved to the end of the longest literal spelling that
@@ -2117,6 +2269,27 @@ struct Markup<'g> {
 /// Whether `byte` continues a bare word (an ASCII letter, digit or `_`).
 const fn is_word_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+/// Where a JSON-object attempt's markup scan stands (see
+/// `MarkupScan::markup_end`): its nesting, the brackets it opened by kind,
+/// whether it read a call's member past the failure (the attempt's call
+/// body), and where the last byte JSON reads ends.
+struct Scan {
+    state: Nesting,
+    open: Brackets,
+    body: bool,
+    json_end: usize,
+}
+
+/// What one byte of a markup scan decides (see `MarkupScan::bracket_step`).
+enum Flow {
+    /// Read on.
+    Next,
+    /// The attempt's markup ends here.
+    Found(usize),
+    /// The scan stops with no end found.
+    Stop,
 }
 
 /// The open brackets of a rejected attempt's markup scan by kind (`{` or

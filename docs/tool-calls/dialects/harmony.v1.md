@@ -97,6 +97,9 @@ returns as a message from the tool to the assistant,
     way, so when the rest parses cleanly both readings are reported (the
     call is `Ambiguous`); see
     [Closer text inside a value](qwen3-coder-xml.v1.md#closer-text-inside-a-value).
+    Code followed only by closers and whitespace holds no code text there:
+    `print(1)<|call|><|call|>` is the code `print(1)` and a stray closer
+    (issue #3 §3; `harmony_doubled_call_closer_is_stray`).
     A `<|start|>` (the next message) always ends the code.
   - any other bare `NAME`: read as `functions.NAME`, the namespace recorded
     as inserted (`tool_call.markup.missing-token`).
