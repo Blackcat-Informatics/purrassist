@@ -44,6 +44,7 @@ fn constants() -> Vec<(&'static str, u64)> {
         ("CLOSER_MISSPELLED", cost::CLOSER_MISSPELLED),
         ("TOKEN_MISSPELLED", cost::TOKEN_MISSPELLED),
         ("CLOSER_IN_VALUE", cost::CLOSER_IN_VALUE),
+        ("TEXT_AFTER_CLOSER", cost::TEXT_AFTER_CLOSER),
         ("DELETE_STRAY_CLOSER", cost::DELETE_STRAY_CLOSER),
         ("REASONING_UNCLOSED", cost::REASONING_UNCLOSED),
         ("REJECT", cost::REJECT),
@@ -150,12 +151,16 @@ fn argument_work_bound() {
 /// T6: closer text inside a value costs work linear in the output. A
 /// Qwen3-Coder XML value holding one closer per 256 bytes (`</parameter>`,
 /// the call's `</function>`, a `</function></tool_call>` pair, or a whole
-/// `</parameter></function></tool_call>` sequence) recovers under
-/// `ToolRecoveryRequest::sized` with the whole value (the reading that holds
-/// the closers), or, for the whole sequence, `Ambiguous` between the two
-/// equally clean readings; from 32 KiB (128 closers) to 256 KiB (1,024
-/// closers) the work ratio is within 1.05x of the byte ratio, so no reading
-/// is read once per closer, and the work per byte stays within
+/// `</parameter></function></tool_call>` sequence), each followed by text,
+/// recovers under `ToolRecoveryRequest::sized` as `Ambiguous`: every such
+/// closer is unpaired and followed by text, so the reading that holds the
+/// text (the whole value) and the one that ends the value at the first
+/// closer tie (maintainer: "Newlines have zero meaning here"; issue #3:
+/// "Never accept trailing free text as an argument"). The call is
+/// `Ambiguous` with both values, or, for the whole sequence, the turn is
+/// `Ambiguous` too. From 32 KiB (128 closers) to 256 KiB (1,024 closers)
+/// the work ratio is within 1.05x of the byte ratio, so no reading is read
+/// once per closer, and the work per byte stays within
 /// `RECOVER_WORK_PER_BYTE` per reading reported.
 #[test]
 fn closer_text_in_values_is_linear() {
@@ -175,33 +180,30 @@ fn closer_text_in_values_is_linear() {
                 input.as_bytes(),
                 &ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes()),
             );
-            match (
-                &result.outcome,
-                token.starts_with("</parameter></function>"),
-            ) {
-                (Outcome::Resolved(calls), false) => {
-                    let call = &calls.calls[0];
-                    assert_eq!(call.outcome, CallOutcome::Resolved, "{token} {size}");
-                    assert_eq!(
-                        call.arguments.get("content").and_then(Node::as_str),
-                        Some(content.as_str()),
-                        "{token} {size}"
-                    );
-                }
-                (Outcome::Ambiguous(alternatives), true) => {
-                    assert_eq!(alternatives.len(), 2, "{token} {size}");
-                }
-                (other, _) => panic!("{token} {size}: {other:?} {:?}", result.receipt.stopped),
-            }
+            let first = &content[..content.find(token).expect("a closer")];
+            let calls = match &result.outcome {
+                Outcome::BestGuess(calls) => vec![calls],
+                Outcome::Ambiguous(alternatives) => alternatives.iter().collect(),
+                other => panic!("{token} {size}: {other:?} {:?}", result.receipt.stopped),
+            };
+            // The call holding the closers is Ambiguous between the whole
+            // value and the value ending at its first closer.
+            let held = calls
+                .iter()
+                .flat_map(|calls| &calls.calls)
+                .find(|call| call.outcome == CallOutcome::Ambiguous)
+                .unwrap_or_else(|| panic!("{token} {size}: no Ambiguous call"));
+            let mut values: Vec<&str> = core::iter::once(&held.arguments)
+                .chain(held.alternatives.iter().map(|reading| &reading.arguments))
+                .filter_map(|arguments| arguments.get("content").and_then(Node::as_str))
+                .collect();
+            values.sort_unstable();
+            assert_eq!(values, [first, content.as_str()], "{token} {size}");
             let work = result.receipt.usage.work;
             println!("{token} {} bytes: work {work}", input.len());
             // A value read once costs no more per byte than the sized
             // budget grants; one reported twice (Ambiguous), twice that.
-            let readings = if token.starts_with("</parameter></function>") {
-                2
-            } else {
-                1
-            };
+            let readings = 2;
             assert!(
                 work <= readings * cost::RECOVER_WORK_PER_BYTE * input.len() as u64,
                 "{token} {size}: work {work} exceeds {readings} x RECOVER_WORK_PER_BYTE per byte"

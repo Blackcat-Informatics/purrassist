@@ -248,13 +248,42 @@ pub struct CodecContext<'t> {
 }
 
 /// A decoded slot body: the value and the edits recorded while reading it,
-/// in source order.
+/// in source order, and the body's other reading when it has two equally
+/// cheap ones.
+///
+/// `alternative` is set only by the `xml-params` codec, for a body holding
+/// a value with text after an unpaired closer (see [`XmlParamsCodec`]): the
+/// reading that holds the text, and the alternative that ends the value at
+/// that closer and drops the text. The engine records both readings of the
+/// body side by side (their edits cost the same), so the call is
+/// `Ambiguous`; an alternative never has an alternative of its own.
+///
+/// ```
+/// use purrassist_core::grammar::codec::{Codec, CodecContext, CodecEnd, XmlParamsCodec};
+/// use purrassist_core::{Budget, Governor};
+/// let mut governor = Governor::new(Budget::default());
+/// let body = b"<parameter=a>\nrm -rf build</parameter> Then I set b.\n</parameter>";
+/// let value = XmlParamsCodec::begin(0, &mut governor)?
+///     .finish(body, 0..body.len(), CodecEnd::Delimited, CodecContext::default(), &mut governor)?
+///     .unwrap();
+/// assert_eq!(value.tree.root.to_json(), r#"{"a":"rm -rf build</parameter> Then I set b."}"#);
+/// let other = value.alternative.as_deref().unwrap();
+/// assert_eq!(other.tree.root.to_json(), r#"{"a":"rm -rf build"}"#);
+/// assert!(other.alternative.is_none());
+/// let cost = |edits: &[purrassist_core::grammar::edit::MarkupEdit]| -> u64 {
+///     edits.iter().map(|edit| edit.rule().cost).sum()
+/// };
+/// assert_eq!(cost(&value.edits), cost(&other.edits));
+/// # Ok::<(), purrassist_core::StopReason>(())
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodecValue {
     /// The value.
     pub tree: ArgTree,
     /// Every edit the codec recorded, in source order.
     pub edits: Vec<MarkupEdit>,
+    /// The body's other, equally cheap reading, if it has one.
+    pub alternative: Option<Box<Self>>,
 }
 
 /// One argument codec: a push-based sub-machine over a slot body.
@@ -484,7 +513,11 @@ fn value(
     governor: &mut Governor,
 ) -> Result<Result<CodecValue, CodecFault>, StopReason> {
     governor.charge(Resource::ScratchBytes, tree.estimated_bytes())?;
-    Ok(Ok(CodecValue { tree, edits }))
+    Ok(Ok(CodecValue {
+        tree,
+        edits,
+        alternative: None,
+    }))
 }
 
 /// The live state of one codec slot: one variant per [`CodecKind`].

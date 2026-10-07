@@ -1,0 +1,114 @@
+{
+  "description": "Maintainer decision (adversary pass 6, F14/F19): \"Newlines have zero meaning here.\" F19: a value's closers written inline (`x</parameter></function></tool_call>`), then the next call, then stray closers. The closers that complete the call are followed by another call's opener, so it is two calls, never one call holding the other: `write_file{content: x}` and `set{a: rm}`, both Resolved, the trailing closers the second call's stray closers (as at 72f34f7, and as qwen_value_holds_closers_then_whole_call with each closer on its own line).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "set",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            },
+            "b": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "a"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "write_file": "mutating",
+    "set": "mutating"
+  },
+  "input": "<tool_call>\n<function=write_file>\n<parameter=path>\na.py\n</parameter>\n<parameter=content>\nx</parameter></function></tool_call>\n<tool_call>\n<function=set>\n<parameter=a>\nrm\n</parameter>\n</function>\n</tool_call>\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 2,
+    "accepting_guesses": 2
+  },
+  "calls": [
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "a.py",
+        "content": "x"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline"
+      ]
+    },
+    {
+      "tool": "set",
+      "arguments": {
+        "a": "rm"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.markup.stray-closer",
+        "tool_call.markup.stray-closer",
+        "tool_call.markup.stray-closer"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [
+    "\n"
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.stray-closer",
+    "tool_call.markup.stray-closer",
+    "tool_call.markup.stray-closer"
+  ]
+}

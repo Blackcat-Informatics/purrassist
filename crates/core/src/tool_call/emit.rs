@@ -987,8 +987,10 @@ fn parameter_body(members: &[Member], shape: &ObjectShape, risky: &[&[u8]]) -> (
 /// record how the printed text spells the same value: closer text a string
 /// value holds (`tool_call.value.closer-in-value`, a value written with
 /// `</parameter>` inside it) and a JSON string escape (`json.syntax.string`,
-/// as `\u003c`). The body is printed only when it reads back as the call
-/// (a round trip); otherwise the call is skipped as unrepresentable.
+/// as `\u003c`), and with no second reading (a value holding text after
+/// an unpaired closer reads back `Ambiguous`). The body is printed only
+/// when it reads back as the call (a round trip); otherwise the call is
+/// skipped as unrepresentable.
 fn reads_back(
     body: &str,
     expected: &Node,
@@ -1017,6 +1019,7 @@ fn reads_back(
         )? {
             Ok(value) => {
                 value.tree.is_resolved()
+                    && value.alternative.is_none()
                     && value.tree.root.equivalent(expected)
                     && value.edits.iter().all(|edit| {
                         edit.operator == allowed

@@ -1,5 +1,5 @@
 {
-  "description": "T6 (corrected in stage-3 pass 5): text between a value's closer, on a line of its own, and a second closer. The first closer ends the value (where the template ends a value in a newline-framed body), so the text is text between parameters, which issue #3's negative corpus requires be rejected; no reading reads it into the value, and the attempt is rejected.",
+  "description": "T6 (corrected in stage-3 pass 5 and in pass 6 for F14), Re-blessed for adversary pass 6 (F14/F19), maintainer: \"Newlines have zero meaning here.\" Text between a value's closer and a second closer. Wherever the closer sits on its line, it is unpaired and text follows it, so the reading holding the text (`tool_call.value.text-after-closer`) and the reading ending the value at the first closer and dropping the text as text between parameters (`tool_call.markup.text-between-parameters`) tie: the mutating call is Ambiguous between `x` and `x\\n</parameter>\\nmore text`, never usable. It was rejected before.",
   "tools_openai": [
     {
       "type": "function",
@@ -30,63 +30,46 @@
     "write_file": "mutating"
   },
   "input": "<tool_call>\n<function=write_file>\n<parameter=content>\nx\n</parameter>\nmore text\n</parameter>\n<parameter=path>\na.md\n</parameter>\n</function>\n</tool_call>",
-  "default_expect": {
-    "outcome": "resolved",
-    "stopped": "completed",
-    "finish": "unresolved",
-    "openai_finish_reason": "stop",
-    "verdict": "nothing_usable",
-    "usable_calls": {
-      "strict": 0,
-      "accepting_guesses": 0
-    },
-    "calls": [],
-    "rejected": [
-      {
-        "span": [
-          0,
-          151
-        ],
-        "dialect": "qwen3-coder-xml.v1",
-        "candidate_dialects": [
-          "hermes.v1",
-          "qwen3-coder-xml.v1"
-        ],
-        "reason": "Malformed { at: 69 }",
-        "raw": "<tool_call>\n<function=write_file>\n<parameter=content>\nx\n</parameter>\nmore text\n</parameter>\n<parameter=path>\na.md\n</parameter>\n</function>\n</tool_call>"
-      }
-    ],
-    "embedded": [],
-    "content": [],
-    "failed_validations": [],
-    "ledger_rules": []
-  },
-  "outcome": "resolved",
+  "outcome": "best_guess",
   "stopped": "completed",
   "finish": "unresolved",
   "openai_finish_reason": "stop",
-  "verdict": "nothing_usable",
+  "verdict": "ambiguous",
   "usable_calls": {
     "strict": 0,
     "accepting_guesses": 0
   },
-  "calls": [],
-  "rejected": [
+  "calls": [
     {
-      "span": [
-        0,
-        151
-      ],
-      "dialect": "qwen3-coder-xml.v1",
+      "tool": "write_file",
+      "arguments": {
+        "content": "x\n</parameter>\nmore text",
+        "path": "a.md"
+      },
       "candidate_dialects": [
         "qwen3-coder-xml.v1"
       ],
-      "reason": "Malformed { at: 69 }",
-      "raw": "<tool_call>\n<function=write_file>\n<parameter=content>\nx\n</parameter>\nmore text\n</parameter>\n<parameter=path>\na.md\n</parameter>\n</function>\n</tool_call>"
+      "outcome": "ambiguous",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.value.closer-in-value",
+        "tool_call.value.text-after-closer",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline"
+      ]
     }
   ],
+  "rejected": [],
   "embedded": [],
   "content": [],
   "failed_validations": [],
-  "ledger_rules": []
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.value.closer-in-value",
+    "tool_call.value.text-after-closer",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline"
+  ]
 }

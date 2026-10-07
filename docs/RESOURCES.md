@@ -688,6 +688,7 @@ every value below to equal the code's.
 | `CLOSER_MISSPELLED` | 2 | Repair cost: a closer token one edit away from exactly one closer |
 | `TOKEN_MISSPELLED` | 2 | Repair cost: a markup token other than a closer one edit away from exactly one literal of the grammar |
 | `CLOSER_IN_VALUE` | 0 | Reading a closer's exact spelling inside a verbatim value as text (no repair) |
+| `TEXT_AFTER_CLOSER` | 0 | Each of the two readings of a verbatim value holding text after an unpaired closer (holding the text, or ending the value at the closer and dropping it): equal, so the call is ambiguous |
 | `DELETE_STRAY_CLOSER` | 3 | Repair cost: a stray closer |
 | `REASONING_UNCLOSED` | 4 | Repair cost: a reasoning block closed at a call opener |
 | `REJECT` | 16 | Cost of rejecting an unrepairable call attempt |

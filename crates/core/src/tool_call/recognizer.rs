@@ -2232,6 +2232,12 @@ pub(super) fn escaped(bytes: &[u8]) -> String {
 /// cut at a reasoning marker.
 fn explain_recovery(edit: &MarkupEdit, original: &str, replacement: &str) -> String {
     match edit.operator {
+        EditOperator::ExtractProse => {
+            format!("dropped prose `{original}` inside the call's markup")
+        }
+        EditOperator::ExtractFence => {
+            format!("dropped code-fence marker `{original}` inside the call's markup")
+        }
         EditOperator::GroupSplit => format!(
             "split the attempt reading several calls at byte {}, beside a call it could not read; the calls it read whole are recovered, and the failing call is a rejected attempt of its own",
             edit.span.start
@@ -2241,6 +2247,14 @@ fn explain_recovery(edit: &MarkupEdit, original: &str, replacement: &str) -> Str
         ),
         EditOperator::TokenMisspelled => format!(
             "read misspelled token `{original}` as `{replacement}`, the only token of the grammar within edit distance one"
+        ),
+        EditOperator::TextAfterCloser => format!(
+            "read the text after the unpaired closer at byte {} as text of the value, which ends at byte {}; the reading that ends the value at that closer and drops the text is as cheap, so the call is ambiguous",
+            edit.span.start, edit.span.end
+        ),
+        EditOperator::TextBetweenParameters => format!(
+            "ended the value at the unpaired closer at byte {} and dropped `{original}` as text between parameters; the reading that holds the text as value text is as cheap, so the call is ambiguous",
+            edit.span.start
         ),
         EditOperator::CloserInValue => format!(
             "read the closer spelling at byte {} as text of the value, which ends at byte {}: the reading that ends the value at byte {} was weighed against this one by the repairs each needs; when it needs no more, it is reported beside this one",
@@ -2324,16 +2338,14 @@ fn explain(edit: &MarkupEdit) -> String {
         EditOperator::StringifiedArguments => {
             format!("decoded stringified arguments `{original}` as JSON `{replacement}`")
         }
-        EditOperator::ExtractProse => {
-            format!("dropped prose `{original}` inside the call's markup")
-        }
-        EditOperator::ExtractFence => {
-            format!("dropped code-fence marker `{original}` inside the call's markup")
-        }
-        EditOperator::GroupSplit
+        EditOperator::ExtractProse
+        | EditOperator::ExtractFence
+        | EditOperator::GroupSplit
         | EditOperator::CloserMisspelled
         | EditOperator::TokenMisspelled
         | EditOperator::CloserInValue
+        | EditOperator::TextAfterCloser
+        | EditOperator::TextBetweenParameters
         | EditOperator::ReasoningMarkerCut => explain_recovery(edit, &original, &replacement),
         EditOperator::ContextFencedExample => {
             "call recognized inside fenced code, an inline code span or a block quote; it may be an example rather than a call".into()

@@ -1,5 +1,5 @@
 {
-  "description": "T6: a content value holding `</function></tool_call>` text whose own `</parameter>` is missing too: both the call that ends at the first `</function>` and the call whose value holds the closers close the value by its element (one repair each), so they are equally cheap and the call is Ambiguous with both values, never usable on a mutating tool.",
+  "description": "T6, Re-blessed for adversary pass 6 (F14/F19), maintainer: \"Newlines have zero meaning here.\" A content value holding `</function></tool_call>` text whose own `</parameter>` is missing too: both the call that ends at the first `</function>` and the call reading on past the closers close the value by its element (one repair each), so the turn is Ambiguous, and the call reading on past the closers is itself Ambiguous (its value holds text after unpaired closers: `End with </function></tool_call> then stop.` or `End with `); never usable on a mutating tool.",
   "tools_openai": [
     {
       "type": "function",
@@ -34,30 +34,30 @@
   "stopped": "completed",
   "readings": [
     {
-      "finish": "calls",
-      "openai_finish_reason": "tool_calls",
-      "verdict": "run",
+      "finish": "unresolved",
+      "openai_finish_reason": "stop",
+      "verdict": "ambiguous",
       "usable_calls": {
-        "strict": 1,
-        "accepting_guesses": 1
+        "strict": 0,
+        "accepting_guesses": 0
       },
       "calls": [
         {
           "tool": "write_file",
           "arguments": {
             "path": "a.md",
-            "content": "End with </function></tool_call> then stop."
+            "content": "End with "
           },
           "candidate_dialects": [
             "qwen3-coder-xml.v1"
           ],
-          "outcome": "resolved",
+          "outcome": "ambiguous",
           "rules": [
             "tool_call.value.closer-in-value",
             "tool_call.xml.framing-newline",
             "tool_call.xml.framing-newline",
             "tool_call.xml.framing-newline",
-            "tool_call.xml.framing-newline",
+            "tool_call.markup.text-between-parameters",
             "tool_call.markup.parameter-closed-by-element"
           ]
         }
@@ -106,7 +106,7 @@
     "tool_call.xml.framing-newline",
     "tool_call.xml.framing-newline",
     "tool_call.xml.framing-newline",
-    "tool_call.xml.framing-newline",
+    "tool_call.markup.text-between-parameters",
     "tool_call.markup.parameter-closed-by-element",
     "tool_call.xml.framing-newline",
     "tool_call.xml.framing-newline",

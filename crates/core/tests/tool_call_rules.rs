@@ -318,6 +318,7 @@ fn every_rule_declares_loss_kind() {
             "tool_call.extract.prose",
             "tool_call.value.invalid-utf8",
             "tool_call.reasoning.marker-cut",
+            "tool_call.markup.text-between-parameters",
             "tool_call.parameter.drop-unknown",
             "tool_call.parameter.repeated",
             "tool_call.truncated",

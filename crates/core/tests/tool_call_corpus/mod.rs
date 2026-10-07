@@ -1628,9 +1628,15 @@ fn closer_text(base: &Base, index: usize, variant: &str, text: String, value: &s
 /// - `codec-closer`: `<parameter>v</parameter>` written inside the value;
 ///   ending it at that `</parameter>` leaves text between parameters, so the
 ///   value holds it;
-/// - `call-closers`: `</function></tool_call>` written inside the value;
-///   ending the arguments there closes the value by its element (a repair),
-///   so the value holds them;
+/// - `call-closers`: `</function></tool_call>` written inside the value,
+///   then text (` end`): the closers are unpaired (no element of theirs is
+///   opened in the value and no call is held), so the reading holding the
+///   text and the reading ending the value at `</function>` (the text
+///   dropped as text between parameters) tie and the call is `Ambiguous`:
+///   abstain (truth changed in adversary pass 6, F14, by the maintainer's
+///   decision "Newlines have zero meaning here." with the rule that text
+///   after an unpaired closer is `Ambiguous`, never read into the value
+///   alone; issue #3: "Never accept trailing free text as an argument");
 /// - `variant-closers`: `<tool_calls>`, `</tool_calls>`, `<functions>` and
 ///   `</functions>` (declared closer variants) inside the value;
 /// - `call-markup`: a whole call's markup written inside the value, as a
@@ -1652,7 +1658,11 @@ fn closer_text(base: &Base, index: usize, variant: &str, text: String, value: &s
 ///   then a whole call of a tool the set does not declare: the value ends at
 ///   its first closer (issue #3: "Never accept trailing free text as an
 ///   argument"), the call after it names no declared tool, and the closers
-///   after that are stray, so the truth is the value as written.
+///   after that are stray, so the truth is the value as written;
+/// - `inline-closers-then-call` (`tool_call.markup.stray-closer`, adversary
+///   pass 6, F19): the same with the closers written inline after the value
+///   (`v</parameter></function></tool_call>`): newlines have zero meaning,
+///   so it reads as `closers-then-call` does, the same truth.
 fn closer_in_value_mutations(base: &Base, out: &mut Vec<Mutant>) {
     if base.dialect != DialectId::Qwen3CoderXml || base.form != Form::Xml {
         return;
@@ -1667,14 +1677,20 @@ fn closer_in_value_mutations(base: &Base, out: &mut Vec<Mutant>) {
     }) else {
         return;
     };
+    // Adversary pass 6 (F14), maintainer: "Newlines have zero meaning
+    // here." `</function></tool_call>` closes nothing the value opened and
+    // text follows it, so the call is Ambiguous between the value holding
+    // the text and the value ending at `</function>`: abstain.
+    out.push(mutant(
+        "tool_call.value.closer-in-value",
+        "call-closers",
+        replace_value(base, index, &format!("{value} </function></tool_call> end")),
+        Need::Never,
+    ));
     for (variant, held) in [
         (
             "codec-closer",
             format!("{value} <parameter>v</parameter> end"),
-        ),
-        (
-            "call-closers",
-            format!("{value} </function></tool_call> end"),
         ),
         (
             "variant-closers",
@@ -1720,6 +1736,15 @@ fn closer_in_value_mutations(base: &Base, out: &mut Vec<Mutant>) {
         out.push(mutant(
             "tool_call.markup.stray-closer",
             "closers-then-call",
+            replace_value(base, index, &held),
+            Need::Exact,
+        ));
+        let held = format!(
+            "{value}</parameter></function></tool_call>\n<tool_call>\n{documented}\n</tool_call>"
+        );
+        out.push(mutant(
+            "tool_call.markup.stray-closer",
+            "inline-closers-then-call",
             replace_value(base, index, &held),
             Need::Exact,
         ));
@@ -2508,6 +2533,44 @@ fn xml_mutations(base: &Base, random: &mut XorShift, out: &mut Vec<Mutant>) {
                 Need::Never,
             ));
         }
+        // Adversary pass 6 (F14), maintainer: "Newlines have zero meaning
+        // here." The `text-between` and `trailing-text` shapes with the
+        // value's closer on the value's own line or indented: the closer
+        // is unpaired and text follows it, so the reading holding the text
+        // (`tool_call.value.text-after-closer`) and the reading ending the
+        // value at that closer and dropping the text (`tool_call.markup.
+        // text-between-parameters`) tie and the call is Ambiguous: abstain,
+        // as for the closer on a line of its own.
+        let last = strings
+            .last()
+            .copied()
+            .filter(|&index| index + 1 == elements.len());
+        for (variant, index, text) in [
+            ("same-line", strings.first().copied(), "more text"),
+            ("indented", strings.first().copied(), "more text"),
+            ("trailing-same-line", last, "Done, the file is written."),
+            ("trailing-indented", last, "Done, the file is written."),
+        ] {
+            let Some(index) = index else {
+                continue;
+            };
+            let mut body = xml_body(&elements);
+            let closer = nth_parameter_close(&body, index);
+            let after = closer + "</parameter>".len();
+            if variant.ends_with("same-line") {
+                body.insert_str(after, &format!(" {text}\n</parameter>"));
+                body.remove(closer - 1);
+            } else {
+                body.insert_str(after + 1, &format!("{text}\n</parameter>\n"));
+                body.insert_str(closer, "  ");
+            }
+            out.push(mutant(
+                "tool_call.value.text-after-closer",
+                variant,
+                base.with_arguments(&body),
+                Need::Never,
+            ));
+        }
         // The last element loses its closer: the function closer ends it.
         let mut open = elements.clone();
         let last = open.len() - 1;
@@ -3042,6 +3105,32 @@ fn mistral_list_pair(first: &Base, second: &Base, out: &mut Vec<Mutant>) {
     }
 }
 
+/// Adversary pass 6 (F19): the first call's closers written inline after
+/// its last value, then the second call, then stray closers: two calls,
+/// never one call holding the other (as at 72f34f7), whatever the layout
+/// ("Newlines have zero meaning here").
+fn inline_closers_pair(first: &Base, second: &Base, out: &mut Vec<Mutant>) {
+    let closers = "</parameter></function></tool_call>";
+    if first.dialect == DialectId::Qwen3CoderXml
+        && let Some(at) = first.text.rfind("</parameter>")
+        && let Some(head) = first.text[..at].strip_suffix('\n')
+        && first.text[at..]
+            .chars()
+            .filter(|character| !character.is_ascii_whitespace())
+            .eq(closers.chars())
+    {
+        out.push(mutant(
+            "tool_call.markup.stray-closer",
+            "inline-closers-then-call",
+            format!(
+                "{head}{closers}\n{}\n</parameter>\n</function>\n</tool_call>",
+                second.text
+            ),
+            Need::Exact,
+        ));
+    }
+}
+
 /// Mutations of a two-call turn in one dialect (`first` then `second`).
 fn pair_mutations(first: &Base, second: &Base) -> Vec<Mutant> {
     let joined = format!("{}\n{}", first.text, second.text);
@@ -3075,6 +3164,7 @@ fn pair_mutations(first: &Base, second: &Base) -> Vec<Mutant> {
             ));
         }
         mistral_list_pair(first, second, &mut out);
+        inline_closers_pair(first, second, &mut out);
         if first.dialect == DialectId::MistralV11 {
             // A call whose arguments no repair reads between two calls.
             out.push(mutant(

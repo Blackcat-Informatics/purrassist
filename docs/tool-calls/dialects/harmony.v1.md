@@ -95,7 +95,9 @@ returns as a message from the tool to the assistant,
     holding it, up to the closer that completes the call
     (`tool_call.value.closer-in-value`). A raw body needs no repair either
     way, so when the rest parses cleanly both readings are reported (the
-    call is `Ambiguous`); see
+    call is `Ambiguous`), wherever the closer sits on its line
+    (`print(1)<|call|> more<|call|>` and `print(1)<|call|>\nmore\n<|call|>`
+    read alike); see
     [Closer text inside a value](qwen3-coder-xml.v1.md#closer-text-inside-a-value).
     Code followed only by closers and whitespace holds no code text there:
     `print(1)<|call|><|call|>` is the code `print(1)` and a stray closer

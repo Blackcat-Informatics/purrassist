@@ -55,6 +55,8 @@
 //! | [`ReasoningMarkerCut`](EditOperator::ReasoningMarkerCut) | `tool_call.reasoning.marker-cut` | 0 | no | single | syntax | data | no |
 //! | [`TokenMisspelled`](EditOperator::TokenMisspelled) | `tool_call.markup.token-misspelled` | 2 | no | single | syntax | markup | yes |
 //! | [`CloserInValue`](EditOperator::CloserInValue) | `tool_call.value.closer-in-value` | 0 | no | single | syntax | none | no |
+//! | [`TextAfterCloser`](EditOperator::TextAfterCloser) | `tool_call.value.text-after-closer` | 0 | yes | multiple | syntax | none | no |
+//! | [`TextBetweenParameters`](EditOperator::TextBetweenParameters) | `tool_call.markup.text-between-parameters` | 0 | yes | multiple | syntax | data | no |
 //!
 //! The first seven operators are the engine's markup repairs: a missing
 //! closer inserted mid-message is a *function* close when more of the
@@ -97,7 +99,16 @@
 //! because the reading ending the value at a later closer needs no more
 //! repair: every closer that can end such a value is weighed by the cost
 //! of the repairs each reading needs, and equally cheap readings of
-//! different calls are reported side by side.
+//! different calls are reported side by side. The last two (appended
+//! after it) are the two readings of a verbatim value holding *text* after
+//! an unpaired closer (one that closes no markup opened in the value and
+//! no call the value holds), wherever the closer sits on its line:
+//! `tool_call.value.text-after-closer` marks the reading that holds the
+//! text, and `tool_call.markup.text-between-parameters` the reading that
+//! ends the value at that closer and drops the text after it as text
+//! between parameters (a data loss). Both are guesses and cost the same, so
+//! the two readings tie and the call is `Ambiguous`: trailing free text is
+//! never accepted as an argument, and never silently dropped either.
 //! Closers inserted at the
 //! end of output under a non-length stop are
 //! `tool_call.markup.missing-closers-at-end`, usable only when the call is
@@ -127,7 +138,7 @@
 //! assert_eq!(stray.id, "tool_call.markup.stray-closer");
 //! assert_eq!(stray.loss, Some(LossKind::Markup));
 //! assert!(!stray.guess && stray.repair);
-//! assert_eq!(OPERATORS.len(), 43);
+//! assert_eq!(OPERATORS.len(), 45);
 //! let framing = EditOperator::FramingNewline.rule();
 //! assert_eq!((framing.loss, framing.repair), (Some(LossKind::Markup), false));
 //! ```
@@ -296,6 +307,18 @@ pub enum EditOperator {
     /// needs no more repair than the one ending it at this closer. The
     /// edit spans from the first such closer to where the value ends.
     CloserInValue,
+    /// Read the text a verbatim value holds after an unpaired closer (a
+    /// closer that closes no markup opened in the value and no call the
+    /// value holds) as text of the value, up to a later closer: one of two
+    /// equally cheap readings, beside
+    /// [`Self::TextBetweenParameters`], so the call is ambiguous. The edit
+    /// spans from that closer to where the value ends.
+    TextAfterCloser,
+    /// End a verbatim value at an unpaired closer it would otherwise hold
+    /// before text, and drop the bytes from that closer to the closer that
+    /// ends it in the competing [`Self::TextAfterCloser`] reading, as text
+    /// between parameters: a data loss, one of two equally cheap readings.
+    TextBetweenParameters,
 }
 
 /// Static metadata of one [`EditOperator`].
@@ -387,7 +410,7 @@ const fn guessed_repair(operator: EditOperator, id: &'static str, cost: u64) -> 
 }
 
 /// The number of [`EditOperator`]s.
-pub const OPERATOR_COUNT: usize = 43;
+pub const OPERATOR_COUNT: usize = 45;
 
 /// Every grammar edit operator, in [`EditOperator`] order, as a constant
 /// table (the tool-call rule registry is built from it at compile time).
@@ -676,6 +699,20 @@ pub(crate) const OPERATOR_TABLE: [OperatorRule; OPERATOR_COUNT] = [
         cost::CLOSER_IN_VALUE,
         false,
         None,
+    ),
+    note(
+        EditOperator::TextAfterCloser,
+        "tool_call.value.text-after-closer",
+        cost::TEXT_AFTER_CLOSER,
+        true,
+        None,
+    ),
+    note(
+        EditOperator::TextBetweenParameters,
+        "tool_call.markup.text-between-parameters",
+        cost::TEXT_AFTER_CLOSER,
+        true,
+        Some(LossKind::Data),
     ),
 ];
 

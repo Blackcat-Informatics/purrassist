@@ -730,9 +730,9 @@ fn deterministic_pinned_digest() {
 }
 
 const PINNED_DIGEST: &str =
-    "sha256:6794f25233d4bc89e9292939c2ac1625fadff94ec3398acda14f7165360f27e8";
+    "sha256:639146bae6bc8954ddc3e166111582a66265079051873cbcd831def4fbf0ba32";
 const PINNED_PREFIX_DIGEST: &str =
-    "sha256:d026f22fd1ca7f12967f53acf8c8a29133456baebb014a697b96ba69906a48e5";
+    "sha256:d47024fe69e05a442cf6e47c86a0bab7929229fc3fa02c8e3a640f8936dd998a";
 const PINNED_AMBIGUOUS_DIGEST: &str =
     "sha256:f67bed0cc0ff12375d632ad3318dd8e2643f4031329b2a6a51f8f3ae5e35e6ef";
 const PINNED_PREFIX_AMBIGUOUS_DIGEST: &str =

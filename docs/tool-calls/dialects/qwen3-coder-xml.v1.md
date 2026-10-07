@@ -85,12 +85,13 @@ edit but the framing newlines.
   per item.
 - The body is checked by decoding it with the codec under the tool's shape
   (a round trip). When that gives back the same tree, resolved, with no
-  edit but its framing newlines, closer text a value holds inline
-  (`tool_call.value.closer-in-value`, a value like `x </parameter> y`) and
-  JSON string escapes (`json.syntax.string`), it is printed. Otherwise (for
-  example an unmodeled parameter holding a non-string, or a value with a
-  `</parameter>` on a line of its own or at its end, which reads back as
-  the value ending there) the body is instead one whole JSON object
+  edit but its framing newlines, closer text a value holds as paired markup
+  (`tool_call.value.closer-in-value`, a value like `x <parameter>v</parameter>
+  y`) and JSON string escapes (`json.syntax.string`), it is printed.
+  Otherwise (for example an unmodeled parameter holding a non-string, a
+  value with an unpaired `</parameter>` followed by text, which reads back
+  as `Ambiguous`, wherever the closer sits on its line, or one ending in a
+  `</parameter>`, which reads back as the value ending there) the body is instead one whole JSON object
   (`tool_call.markup.json-body`), which reads independently of the shape,
   printed only when it too reads back as the call; a call neither reads
   back as is skipped as `unrepresentable`. JSON text that would contain
@@ -156,7 +157,8 @@ needs, with their rule costs): when only one reading parses the rest of the
 call without repairs the other does not need, it wins and the call stays
 `Resolved`. When both parse cleanly (closers mentioned inline and the call
 then left unclosed), the call is `Ambiguous` and reports both values (never
-usable on a mutating tool). A value read as B records
+usable on a mutating tool); and a value holding text after an unpaired
+closer is always `Ambiguous` (below). A value read as B records
 `tool_call.value.closer-in-value`, spanning from the first closer it holds
 to where it ends; it is not a guess, since it is chosen only when the other
 reading needs more repair, and equally clean readings are reported side by
@@ -172,21 +174,36 @@ the value's text:
 
 - **Stray closers.** Closers followed by nothing but closers and whitespace
   up to where the value would end (`a.py\n</parameter>\n</parameter>`,
+  `a.py</parameter></parameter>`,
   `</parameter></parameters>`, a value followed by
   `</parameter>\n</function>\n</tool_call>` and the real closers) hold no
   value text: they are stray closers (`tool_call.markup.stray-closer`) and
   reading B is not offered. Closers left after a call once its value
   ended, `</parameter>` included, are that call's stray closers, recorded
   and never assistant text.
-- **Where a value ends.** In a value framed by newlines (`<parameter=P>`
-  then a newline: the layout the template writes), a closer on a line of
-  its own is where a value ends: text after it is text between parameters
-  (or trailing text inside the wrapper), never read into the value, and the
-  call is rejected (`a.py\n</parameter>\nI will now write the
-  file.\n</parameter>`). A closer within a line (`Use </parameter> here`)
-  is text the value holds. In a value not framed by newlines a closer is a
-  plausible end wherever it sits, so text after a closer is never read into
-  it either (rejected rather than read with prose in the value).
+- **Layout carries no meaning.** Where a closer sits on its line (after a
+  newline, mid-line, indented), and whether the value is framed by
+  newlines, never decides how it is read (maintainer, adversary pass 6:
+  "Newlines have zero meaning here"). Trimming one framing newline on each
+  side of a value is value normalization, not closer semantics.
+- **Paired markup.** A closer that closes an element the value opened
+  (`<parameter>v</parameter>`, `<tool_calls>…</tool_calls>`,
+  `<functions>f</functions>`, by tag name) is text of the value.
+- **Text after an unpaired closer.** An unpaired closer (a `</parameter>`,
+  `</parameters>` or a closer of the call, closing no element the value
+  opened and no call it holds) followed by text before the closer that
+  would end the value has two equally cheap readings: the value holding the
+  text (`tool_call.value.text-after-closer`), or the value ending at that
+  closer with the text dropped as text between parameters
+  (`tool_call.markup.text-between-parameters`, a data loss). Both are
+  guesses and they tie, so the call is `Ambiguous` with both values, never
+  usable on a mutating tool: `a.py</parameter> I will now write the
+  file.\n</parameter>`, `a.py\n</parameter>\nI will now write the
+  file.\n</parameter>`, an indented ` </parameter>` and `End with
+  </function></tool_call> then stop.\n</parameter>` all read alike (issue
+  #3: "Never accept trailing free text as an argument"). When a string's
+  declared pattern rejects either value, neither is a reading: the value
+  ends at its first closer and the text after it makes the call malformed.
 - **Whole calls.** A value holding call markup holds whole calls (next
   section).
 - **Misspellings.** A misspelled closer inside a value (`</paramete>`) is
@@ -224,11 +241,12 @@ nothing more, and only the last fork's failure is ever repaired), and of
 the readings that complete it only the latest is read (a reading of the
 same span already costing more than one reported is dropped unread). Under
 `ToolRecoveryRequest::sized` (33 `Work` units per byte with the `Standard`
-preset at 1 MiB), a 1 MiB `write_file` content holding 1,000 closers
-recovers in 17.6 units per byte for `</parameter>`, 21.7 for `</function>`,
-12.5 for `</function></tool_call>` and 18.3 for
-`</parameter></function></tool_call>` (inline in the text; `Ambiguous`, both
-values), against 17.0 for the same value with no closer; a 1 MiB value
+preset at 1 MiB), a 1 MiB `write_file` content holding 1,000 closers, each
+followed by text (so `Ambiguous`, both values, the codec reading the body
+once per reading), recovers in 22.6 units per byte for `</parameter>`, 26.7
+for `</function>`, 16.5 for `</function></tool_call>` and 30.4 for
+`</parameter></function></tool_call>`, against 17.0 for the same value with
+no closer; a 1 MiB value
 followed by a closer sequence on its own lines resolves (stray closers) in
 23.0 (`tool_call_cost::closer_text_in_values_is_linear` proves the scaling).
 
@@ -243,9 +261,12 @@ holds it whole: one call with the full content, and no call is read from
 the value. A reading whose value would end inside a call another attempt
 opened in it (its closers are the outer call's own, as for two calls in a
 row) is no reading, so two consecutive calls are never read as one call
-holding the other; and a value followed by its closers on their own lines
-and then a whole call ends at its first closer (the call after it is read
-apart, the closers after that are stray).
+holding the other; and a value followed by its closers and then a whole
+call, whether the closers are on their own lines or written inline
+(`x</parameter></function></tool_call>\n<tool_call>...`), ends at its
+first closer (the call after it is read apart, the closers after that are
+stray): a call opener after an unpaired closer always begins the next
+call.
 
 Measured at 1 MiB under `ToolRecoveryRequest::sized` (33 units per byte):
 a `write_file` content holding 1,000 documented calls recovers as one call

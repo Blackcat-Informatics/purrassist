@@ -1,5 +1,5 @@
 {
-  "description": "T6: as qwen_value_holds_call_closers_then_text, with the output ending after the call's `</function>`: the reading that holds the closers inserts the missing `</tool_call>` at the end of output (`tool_call.markup.missing-closers-at-end`), as cheap as the reading that closes the value at the first `</function>` by its element: Ambiguous with both values.",
+  "description": "T6, Re-blessed for adversary pass 6 (F14/F19), maintainer: \"Newlines have zero meaning here.\" As qwen_value_holds_call_closers_then_text, with the output ending after the call's `</function>`: the turn is Ambiguous between the call closed at the first `</function>` by its element and the call reading on past the closers (with `tool_call.markup.missing-closers-at-end`), and that call is itself Ambiguous, since its value holds text after unpaired closers (`x </function></tool_call> y` or `x `).",
   "tools_openai": [
     {
       "type": "function",
@@ -34,30 +34,30 @@
   "stopped": "completed",
   "readings": [
     {
-      "finish": "calls",
-      "openai_finish_reason": "tool_calls",
-      "verdict": "run",
+      "finish": "unresolved",
+      "openai_finish_reason": "stop",
+      "verdict": "ambiguous",
       "usable_calls": {
-        "strict": 1,
-        "accepting_guesses": 1
+        "strict": 0,
+        "accepting_guesses": 0
       },
       "calls": [
         {
           "tool": "write_file",
           "arguments": {
             "path": "a.md",
-            "content": "x </function></tool_call> y"
+            "content": "x "
           },
           "candidate_dialects": [
             "qwen3-coder-xml.v1"
           ],
-          "outcome": "resolved",
+          "outcome": "ambiguous",
           "rules": [
             "tool_call.value.closer-in-value",
             "tool_call.xml.framing-newline",
             "tool_call.xml.framing-newline",
             "tool_call.xml.framing-newline",
-            "tool_call.xml.framing-newline",
+            "tool_call.markup.text-between-parameters",
             "tool_call.markup.missing-closers-at-end"
           ]
         }
@@ -106,7 +106,7 @@
     "tool_call.xml.framing-newline",
     "tool_call.xml.framing-newline",
     "tool_call.xml.framing-newline",
-    "tool_call.xml.framing-newline",
+    "tool_call.markup.text-between-parameters",
     "tool_call.markup.missing-closers-at-end",
     "tool_call.xml.framing-newline",
     "tool_call.xml.framing-newline",

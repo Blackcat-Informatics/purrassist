@@ -1593,15 +1593,19 @@ fn effort_exact_refuses_repair() {
     assert_eq!(reading(&result).usable().len(), 0);
 }
 
-/// T6: closer text a Qwen3-Coder XML value holds. When only the reading
-/// that holds it parses cleanly, the call is `Resolved` with the full value
-/// and records `tool_call.value.closer-in-value`, a non-guess evidence entry
-/// whose span names both places the value could end: from the first closer
-/// the value holds (where the other reading ends it) to where it ends.
+/// T6: closer text a Qwen3-Coder XML value holds as paired markup
+/// (`<parameter>v</parameter>`: the closer closes an element the value
+/// opened). Only the reading that holds it parses cleanly, so the call is
+/// `Resolved` with the full value, whatever the layout ("Newlines have zero
+/// meaning here"), and records `tool_call.value.closer-in-value`, a
+/// non-guess evidence entry whose span names both places the value could
+/// end: from the first closer the value holds (where the other reading ends
+/// it) to where it ends. (An unpaired closer followed by text, such as
+/// `</function></tool_call> then stop.`, is `Ambiguous` instead: see
+/// `qwen_text_after_unpaired_closer_is_ambiguous`.)
 #[test]
 fn qwen_closer_text_held_by_evidence() {
-    // The content, the closer it holds, and the closer that ends the value
-    // (codec level: a `</parameter>`; call level: the arguments' end).
+    // The content, the closer it holds, and the closer that ends the value.
     for (name, content, held, ending) in [
         (
             "qwen_value_holds_parameter_element",
@@ -1610,10 +1614,10 @@ fn qwen_closer_text_held_by_evidence() {
             "\n</parameter>\n</function>",
         ),
         (
-            "qwen_value_holds_call_closers",
-            "End with </function></tool_call> then stop.",
-            "</function></tool_call> then",
-            "</function>\n</tool_call>",
+            "qwen_unframed_value_holds_parameter_element",
+            "x <parameter>v</parameter> y",
+            "</parameter> y",
+            "</parameter>\n</function>",
         ),
     ] {
         let (golden, result) = golden(name);
@@ -1645,7 +1649,9 @@ fn qwen_closer_text_held_by_evidence() {
 /// T6: a value holding a call's closers inline (`End with
 /// </function></tool_call>`) and then left unclosed reads two equally clean
 /// calls, so the turn is `Ambiguous` with both values: no single value to
-/// run, on a mutating tool or any other.
+/// run, on a mutating tool or any other. The call reading on past the
+/// closers is itself `Ambiguous` (its value holds text after unpaired
+/// closers), with both values.
 #[test]
 fn qwen_inline_call_closers_unclosed_are_ambiguous() {
     let (_, result) = golden("qwen_value_holds_call_closers_unclosed");
@@ -1654,19 +1660,221 @@ fn qwen_inline_call_closers_unclosed_are_ambiguous() {
     };
     let mut contents: Vec<&str> = alternatives
         .iter()
-        .map(|calls| {
-            calls.calls[0]
-                .arguments
+        .flat_map(|calls| {
+            let call = &calls.calls[0];
+            core::iter::once(&call.arguments)
+                .chain(call.alternatives.iter().map(|reading| &reading.arguments))
+        })
+        .map(|arguments| {
+            arguments
                 .get("content")
                 .and_then(Node::as_str)
                 .expect("a content value")
         })
         .collect();
     contents.sort_unstable();
+    contents.dedup();
     assert_eq!(
         contents,
         ["End with ", "End with </function></tool_call> then stop."]
     );
+    for calls in alternatives {
+        let call = &calls.calls[0];
+        let holds = core::iter::once(&call.arguments)
+            .chain(call.alternatives.iter().map(|reading| &reading.arguments))
+            .any(|arguments| {
+                arguments
+                    .get("content")
+                    .and_then(Node::as_str)
+                    .is_some_and(|content| content.contains("then stop"))
+            });
+        if holds {
+            assert_eq!(call.outcome, CallOutcome::Ambiguous, "{call:#?}");
+        }
+    }
+}
+
+/// Adversary pass 6 (F14), maintainer: "Newlines have zero meaning here."
+/// A verbatim value holding an unpaired closer (one closing no element the
+/// value opened and no call it holds) followed by text before the closer
+/// that ends it is `Ambiguous` between the reading holding the text
+/// (`tool_call.value.text-after-closer`) and the reading ending the value
+/// at that closer and dropping the text as text between parameters
+/// (`tool_call.markup.text-between-parameters`), wherever the closer sits on
+/// its line (mid-line, on a line of its own, indented, in a value not
+/// framed by newlines) and whether it is a parameter or a call closer.
+/// Never usable on the mutating tool (issue #3: "Never accept trailing free
+/// text as an argument").
+#[test]
+fn qwen_text_after_unpaired_closer_is_ambiguous() {
+    // The golden, the parameter, the value holding the text, and the value
+    // ending at the first unpaired closer.
+    for (name, parameter, held, first) in [
+        (
+            "qwen_same_line_closer_then_text_is_ambiguous",
+            "a",
+            "rm -rf build</parameter> Then I set b.",
+            "rm -rf build",
+        ),
+        (
+            "qwen_unframed_closer_then_text_is_ambiguous",
+            "a",
+            "rm -rf build</parameter> Then I set b.",
+            "rm -rf build",
+        ),
+        (
+            "qwen_same_line_closer_then_prose_is_ambiguous",
+            "path",
+            "a.py</parameter>\nI will now write the file.",
+            "a.py",
+        ),
+        (
+            "qwen_prose_after_value_closer_is_ambiguous",
+            "path",
+            "a.py\n</parameter>\nI will now write the file.",
+            "a.py",
+        ),
+        (
+            "qwen_indented_closer_then_text_is_ambiguous",
+            "content",
+            "print(1)\n </parameter>\nDone, that is the file.",
+            "print(1)\n ",
+        ),
+        (
+            "qwen_prose_after_last_value_closer_is_ambiguous",
+            "content",
+            "x\n</parameter>\nDone, the file is written.",
+            "x",
+        ),
+        (
+            "qwen_value_holds_text_between_closers",
+            "content",
+            "x\n</parameter>\nmore text",
+            "x",
+        ),
+        (
+            "qwen_value_holds_call_closers",
+            "content",
+            "End with </function></tool_call> then stop.",
+            "End with ",
+        ),
+        (
+            "qwen_bare_function_value_holds_function_closer",
+            "content",
+            "see </function> here",
+            "see ",
+        ),
+    ] {
+        let (_, result) = golden(name);
+        let call = the_call(&result);
+        assert_eq!(call.outcome, CallOutcome::Ambiguous, "{name}: {call:#?}");
+        assert!(reading(&result).usable().is_empty(), "{name}");
+        assert!(
+            reading(&result).usable_accepting_guesses().is_empty(),
+            "{name}"
+        );
+        let mut readings: Vec<(&str, Vec<&str>)> =
+            core::iter::once((&call.arguments, &call.repairs))
+                .chain(
+                    call.alternatives
+                        .iter()
+                        .map(|reading| (&reading.arguments, &reading.repairs)),
+                )
+                .map(|(arguments, repairs)| {
+                    let value = arguments
+                        .get(parameter)
+                        .and_then(Node::as_str)
+                        .expect("the parameter");
+                    let rules = repairs
+                        .evidence
+                        .iter()
+                        .map(|evidence| evidence.rule.as_str())
+                        .filter(|rule| {
+                            rule.starts_with("tool_call.value.text")
+                                || rule.ends_with("text-between-parameters")
+                        })
+                        .collect();
+                    (value, rules)
+                })
+                .collect();
+        readings.sort_unstable();
+        let mut expected = vec![
+            (held, vec!["tool_call.value.text-after-closer"]),
+            (first, vec!["tool_call.markup.text-between-parameters"]),
+        ];
+        expected.sort_unstable();
+        assert_eq!(readings, expected, "{name}");
+    }
+}
+
+/// Adversary pass 6 (F19): the closers that complete a call written inline
+/// after its value (`x</parameter></function></tool_call>`), then another
+/// call's opener: two calls, never one call holding the other, both
+/// `Resolved` (as at 72f34f7); the closers after the second call are its
+/// stray closers.
+#[test]
+fn qwen_inline_closers_then_next_call_are_two_calls() {
+    let (_, result) = golden("qwen_inline_closers_then_next_call_are_two_calls");
+    let calls = reading(&result);
+    let [first, second] = &calls.calls[..] else {
+        panic!("{calls:#?}")
+    };
+    assert_eq!(first.tool.as_deref(), Some("write_file"));
+    assert_eq!(
+        first.arguments.to_json(),
+        r#"{"path":"a.py","content":"x"}"#
+    );
+    assert_eq!(second.tool.as_deref(), Some("set"));
+    assert_eq!(second.arguments.to_json(), r#"{"a":"rm"}"#);
+    for call in [first, second] {
+        assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+        assert!(call.alternatives.is_empty(), "{call:#?}");
+    }
+    let strays = second
+        .repairs
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.rule == "tool_call.markup.stray-closer")
+        .count();
+    assert_eq!(strays, 3, "{second:#?}");
+    assert_eq!(calls.usable().len(), 2);
+}
+
+/// Adversary pass 6 (F13 layout): a doubled `</parameter>` followed only by
+/// whitespace before the next parameter is a stray closer whatever the
+/// layout: `a.py</parameter></parameter>` and an indented second closer
+/// read as `a.py\n</parameter>\n</parameter>` does, the value `a.py`,
+/// `Resolved`.
+#[test]
+fn qwen_doubled_closer_is_stray_in_any_layout() {
+    for name in [
+        "qwen_doubled_closer_after_value_is_stray",
+        "qwen_same_line_doubled_closer_is_stray",
+        "qwen_indented_doubled_closer_is_stray",
+    ] {
+        let (_, result) = golden(name);
+        let call = the_call(&result);
+        assert_eq!(call.outcome, CallOutcome::Resolved, "{name}: {call:#?}");
+        assert_eq!(
+            call.arguments.get("path").and_then(Node::as_str),
+            Some("a.py"),
+            "{name}"
+        );
+        let rules: Vec<&str> = call
+            .repairs
+            .evidence
+            .iter()
+            .map(|evidence| evidence.rule.as_str())
+            .collect();
+        assert!(
+            rules.contains(&"tool_call.markup.stray-closer"),
+            "{name}: {rules:?}"
+        );
+        assert!(
+            !rules.contains(&"tool_call.value.closer-in-value"),
+            "{name}: {rules:?}"
+        );
+    }
 }
 
 /// A value followed by a call's closers on their own lines, then the real

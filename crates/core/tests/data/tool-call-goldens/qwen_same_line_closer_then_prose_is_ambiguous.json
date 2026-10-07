@@ -1,0 +1,75 @@
+{
+  "description": "Maintainer decision (adversary pass 6, F14/F19): \"Newlines have zero meaning here.\" F14: `a.py</parameter>` (the closer on the value's line), prose on the next line, a second `</parameter>`, then the next parameter. As with the closer on a line of its own (qwen_prose_after_value_closer_is_ambiguous), the mutating `write_file` call is Ambiguous between a path holding the prose and the path `a.py` with the prose dropped as text between parameters.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "write_file": "mutating"
+  },
+  "input": "<tool_call>\n<function=write_file>\n<parameter=path>\na.py</parameter>\nI will now write the file.\n</parameter>\n<parameter=content>\nprint(1)\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "ambiguous",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "a.py</parameter>\nI will now write the file.",
+        "content": "print(1)"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "ambiguous",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.value.closer-in-value",
+        "tool_call.value.text-after-closer",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.value.closer-in-value",
+    "tool_call.value.text-after-closer",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline"
+  ]
+}

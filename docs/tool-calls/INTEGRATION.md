@@ -394,7 +394,7 @@ is reported as certain.
   (an `xml-params` string, unmodeled or undeclared value; a `raw` body such
   as Harmony's Python code) may hold the exact text of a closer inside its
   real content: a `write_file` content with `<parameter>v</parameter>`, or
-  one that mentions `</function></tool_call>`. For such text the
+  one that documents a call (`<function=g>...</function>`). For such text the
   maintainer's decision on issue #3 applies ("Pick by evidence, else
   ambiguous"): reading A ends the value at the first closer, reading B
   holds it and ends at the closer that actually completes the call, and the
@@ -421,22 +421,36 @@ is reported as certain.
     markup (`tool_call.markup.stray-closer`), and reading B is not offered
     (`a.py\n</parameter>\n</parameter>`, `</parameter></parameters>`,
     `<|call|><|call|>`);
-  - in a value framed by newlines (`<parameter=P>` then a newline, the
-    layout the template writes) a closer on a line of its own is where a
-    value ends, and text after it is text between parameters (or trailing
-    text inside the wrapper), never read into the value: the call is
-    rejected (`a.py\n</parameter>\nI will now write the file.\n</parameter>`);
-    a closer within a line of the value (`Use </parameter> here`) is text
-    the value holds. In a value not framed by newlines either reading is a
-    plausible end, so text after a closer it would hold is never read into
-    it (the call is rejected rather than read with prose in its value);
+  - where a closer sits on its line carries no meaning (maintainer, adversary
+    pass 6: "Newlines have zero meaning here"): a closer after a newline,
+    mid-line or indented, in a value framed by newlines or not, is read the
+    same way. A closer that closes an element the value opened
+    (`<parameter>v</parameter>`, `<tool_calls>…</tool_calls>`,
+    `<functions>f</functions>`) is paired markup, text of the value. An
+    *unpaired* closer (a `</parameter>` or a closer of the call that closes
+    no element the value opened and no call it holds) followed by text
+    before the closer that would end the value is never read into the value
+    alone: the reading holding the text (`tool_call.value.text-after-closer`)
+    and the reading ending the value at that closer and dropping the text as
+    text between parameters (`tool_call.markup.text-between-parameters`, a
+    data loss) cost the same, so the call is `Ambiguous` with both values,
+    never usable on a mutating tool (`a.py</parameter> I will now write the
+    file.\n</parameter>`, `a.py\n</parameter>\nI will now write the
+    file.\n</parameter>`, `print(1)\n </parameter>\nDone.\n</parameter>`,
+    `End with </function></tool_call> then stop.\n</parameter>` all read
+    alike). Both readings are guesses. When a string's declared pattern
+    rejects either value, neither is a reading: the value ends at its first
+    closer and the text after it makes the call malformed (rejected);
   - a value holding call markup holds whole calls: the markup of a call the
     value holds (`<function=g>...</function>`, wrapped or not) is that
     call's own, so its parameter openers (even a name the outer tool
     declares) and closers are text of the value, and no reading ends the
     value inside it; a reading whose value would end inside a call another
-    attempt opened (two calls in a row) is no reading, so consecutive calls
-    are never read as one;
+    attempt opened (two calls in a row) is no reading, and neither is one
+    holding a call opener after an unpaired closer (the closers that
+    complete one call, then the next call's opener, whatever whitespace or
+    none between: `x</parameter></function></tool_call>\n<tool_call>...`),
+    so consecutive calls are never read as one;
   - a misspelled closer the value holds is text (T5/F9: no repair reads it
     as one).
 
@@ -485,16 +499,28 @@ is reported as certain.
   `qwen_value_holds_closers_then_whole_call`,
   `qwen_value_holds_closers_then_undeclared_call`,
   `qwen_value_holds_text_between_closers`,
-  `qwen_prose_after_value_closer_is_rejected` and
-  `qwen_prose_after_last_value_closer_is_rejected` (each also under the
-  default allow-list), `tool_call_goldens::qwen_closer_text_held_by_evidence`,
+  `qwen_prose_after_value_closer_is_ambiguous`,
+  `qwen_prose_after_last_value_closer_is_ambiguous`,
+  `qwen_same_line_closer_then_text_is_ambiguous`,
+  `qwen_same_line_closer_then_prose_is_ambiguous`,
+  `qwen_indented_closer_then_text_is_ambiguous`,
+  `qwen_unframed_closer_then_text_is_ambiguous`,
+  `qwen_unframed_value_holds_parameter_element`,
+  `qwen_inline_closers_then_next_call_are_two_calls`,
+  `qwen_same_line_doubled_closer_is_stray` and
+  `qwen_indented_doubled_closer_is_stray` (each also under the default
+  allow-list), `tool_call_goldens::qwen_closer_text_held_by_evidence`,
+  `tool_call_goldens::qwen_text_after_unpaired_closer_is_ambiguous`,
+  `tool_call_goldens::qwen_inline_closers_then_next_call_are_two_calls`,
+  `tool_call_goldens::qwen_doubled_closer_is_stray_in_any_layout`,
   `tool_call_goldens::qwen_inline_call_closers_unclosed_are_ambiguous`,
   `tool_call_goldens::qwen_closing_sequence_after_value_is_stray`,
   `tool_call_recover::exact_effort_never_repairs`,
   `tool_call_cost::closer_text_in_values_is_linear`, and the
-  `tool_call.value.closer-in-value` and `tool_call.markup.stray-closer`
-  (`parameter`, `text-between`, `trailing-text`, `closing-sequence`,
-  `closers-then-call`) rows of the correction evaluation.
+  `tool_call.value.closer-in-value`, `tool_call.value.text-after-closer`
+  and `tool_call.markup.stray-closer` (`parameter`, `text-between`,
+  `trailing-text`, `closing-sequence`, `closers-then-call`,
+  `inline-closers-then-call`) rows of the correction evaluation.
 - **A misspelled token still reads as its token.** The opener-side mirror
   of a misspelled closer: a markup token other than a closer (spelled with
   a leading `<` or `[`), the attempt's own opener included, one edit away
@@ -575,7 +601,7 @@ is reported as certain.
   five built-in dialects outside the allow-list, and negatives), the CLI
   test `tool_calls_cli::unparsed_markup_is_reported_via_cli`, and the host
   test `tool_call_tools::unparsed_markup_over_mcp`.
-- **Measured.** The 16,250-case correction evaluation records zero incorrect
+- **Measured.** The 16,438-case correction evaluation records zero incorrect
   automatic answers overall, per rule, and per dialect, and abstains on every
   case whose only correct answer is abstention
   (`correction_evaluation::tool_call_recovery_evaluation_has_zero_incorrect_corrections`;

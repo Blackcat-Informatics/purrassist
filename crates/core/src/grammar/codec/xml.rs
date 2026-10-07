@@ -121,10 +121,62 @@ use super::{XML_CLOSER as CLOSER, XML_CLOSER_VARIANT as CLOSER_VARIANT};
 /// parameter's opener always ends the region the value may run to, and so
 /// does a misspelled one after a canonical closer (between parameters it is
 /// a parameter boundary); text after a closer is read into the value only up
-/// to a later closer, never up to an opener or the end of the body. A string
-/// whose declared pattern rejects the value holding closer text ends at its
-/// first closer. Typed values (parsed as JSON) and enumerations end at their
-/// first closer.
+/// to a later closer, never up to an opener or the end of the body. Typed
+/// values (parsed as JSON) and enumerations end at their first closer.
+///
+/// Where a closer sits on its line (after a newline, mid-line, indented)
+/// and whether the value is framed by newlines never decide how it is read
+/// (the maintainer: "Newlines have zero meaning here"). What follows the
+/// closers a value would hold decides:
+///
+/// - a closer that closes an element the value opened (`<parameter>` ...
+///   `</parameter>`, `<tool_calls>` ... `</tool_calls>`, by tag name) is
+///   paired markup, text of the value;
+/// - unpaired closers followed only by closers and whitespace are stray
+///   markup, never held (`a.py</parameter></parameter>` reads as
+///   `a.py\n</parameter>\n</parameter>`);
+/// - a call opener after an unpaired closer is the next call: no reading
+///   holds it (two calls in a row are never one call holding the other);
+/// - text after an unpaired closer, before the closer the value would end
+///   at, gives the body two readings that cost the same: the value holding
+///   the text (recorded as `tool_call.value.text-after-closer`) and, as the
+///   value's [`CodecValue::alternative`], the value ending at that closer
+///   with the bytes up to the holding reading's end dropped as text between
+///   parameters (`tool_call.markup.text-between-parameters`, a data loss).
+///   Both are guesses, so the call is `Ambiguous`, never usable on a
+///   mutating tool. When the declared pattern of a string rejects either
+///   value, neither is a reading: the value ends at its first closer (and
+///   the text after it makes the call malformed).
+///
+/// ```
+/// use purrassist_core::grammar::codec::{Codec, CodecContext, CodecEnd, XmlParamsCodec};
+/// use purrassist_core::{Budget, Governor};
+/// let read = |body: &[u8]| {
+///     let mut governor = Governor::new(Budget::default());
+///     XmlParamsCodec::begin(0, &mut governor)
+///         .unwrap()
+///         .finish(body, 0..body.len(), CodecEnd::Delimited, CodecContext::default(), &mut governor)
+///         .unwrap()
+///         .unwrap()
+/// };
+/// // The same text after a closer, mid-line or on a line of its own.
+/// for body in [
+///     &b"<parameter=a>\nx</parameter> more\n</parameter>"[..],
+///     &b"<parameter=a>\nx\n</parameter>\nmore\n</parameter>"[..],
+/// ] {
+///     let value = read(body);
+///     assert!(value.tree.root.to_json().contains("more"));
+///     let other = value.alternative.expect("the other reading");
+///     assert_eq!(other.tree.root.to_json(), r#"{"a":"x"}"#);
+/// }
+/// // Stray closers, and paired markup, in any layout: one reading.
+/// let stray = read(b"<parameter=a>\na.py</parameter></parameter>");
+/// assert_eq!(stray.tree.root.to_json(), r#"{"a":"a.py"}"#);
+/// assert!(stray.alternative.is_none());
+/// let paired = read(b"<parameter=a>x <parameter>v</parameter> y</parameter>");
+/// assert_eq!(paired.tree.root.to_json(), r#"{"a":"x <parameter>v</parameter> y"}"#);
+/// assert!(paired.alternative.is_none());
+/// ```
 ///
 /// A `</parameter>` outside any value closes the innermost nested object,
 /// or, at the top level, is a stray closer deleted as
@@ -200,17 +252,20 @@ impl Codec for XmlParamsCodec {
         governor: &mut Governor,
     ) -> Result<Result<CodecValue, CodecFault>, StopReason> {
         debug_assert_eq!(self.start, span.start);
-        let reader = Reader {
-            body,
-            base: span.start,
-            end,
-            frames: Vec::new(),
-            edits: Vec::new(),
-            openers: context.openers,
-            closers: context.closers,
-            governor,
+        let base = span.start;
+        let (result, forked) = Reader::new(body, base, end, context, Mode::Hold, governor)
+            .run(span.clone(), context)?;
+        let Ok(mut value) = result else {
+            return Ok(result);
         };
-        reader.run(span, context)
+        if forked {
+            // The other reading: every value that held text after an
+            // unpaired closer ends at that closer instead.
+            let (other, _) = Reader::new(body, base, end, context, Mode::EndFirst, governor)
+                .run(span, context)?;
+            value.alternative = other.ok().map(Box::new);
+        }
+        Ok(Ok(value))
     }
 }
 
@@ -259,6 +314,29 @@ struct Candidate {
     text: bool,
 }
 
+/// Where a value ends (see `Reader::terminator`): the offset into the
+/// body, what ends it there, the first exact closer spelling it holds as
+/// text (if any), and, when it holds text after an unpaired closer, that
+/// closer's offset (the value has a second reading ending there).
+struct Ending {
+    stop: usize,
+    terminator: Terminator,
+    inner: Option<usize>,
+    fork: Option<usize>,
+}
+
+impl Ending {
+    /// A value ending at `stop`, holding no closer.
+    const fn at(stop: usize, terminator: Terminator) -> Self {
+        Self {
+            stop,
+            terminator,
+            inner: None,
+            fork: None,
+        }
+    }
+}
+
 /// One object scope being read: the top-level arguments or a nested object
 /// parameter.
 struct Frame<'t> {
@@ -277,39 +355,68 @@ struct Reader<'b, 't, 'g> {
     /// The dialect's call openers and closers (see `CodecContext`).
     openers: &'t [Vec<u8>],
     closers: &'t [Vec<u8>],
+    /// Which reading of a value holding text after an unpaired closer this
+    /// pass reads (see [`Mode`]).
+    mode: Mode,
+    /// Whether some value of this pass held text after an unpaired closer
+    /// (the body has a second reading).
+    forked: bool,
     governor: &'g mut Governor,
 }
 
-/// What a verbatim value read on past its first closer would hold (see
-/// `Reader::terminator`): the closers it holds outside any call it holds
-/// whole, and the text after them. Offsets are into the body.
+/// Which of the two readings of a value holding text after an unpaired
+/// closer a pass reads (see `Reader::terminator`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Hold the text (`tool_call.value.text-after-closer`).
+    Hold,
+    /// End the value at the closer and drop the text
+    /// (`tool_call.markup.text-between-parameters`).
+    EndFirst,
+}
+
+/// Whether a verbatim value may end at a place, holding what comes before
+/// it (see `Held::admits`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Hold {
+    /// It holds no unpaired closer, or holds one followed by nothing but
+    /// value text it reads cleanly.
+    Clean,
+    /// It holds text after an unpaired closer: one of two readings.
+    Forked,
+    /// It holds unpaired closers followed only by closers and whitespace
+    /// (stray markup), or a whole call after one (the next call): no
+    /// reading.
+    Never,
+}
+
+/// What a verbatim value read on past its first unpaired closer would
+/// hold (see `Reader::terminator`): the first closer it holds that closes
+/// no markup opened in the value and lies outside any call it holds whole,
+/// and what comes after it. Where the closer sits on its line (after a
+/// newline, mid-line, indented) carries no meaning. Offsets are into the
+/// body.
 struct Held {
-    /// Whether the value is framed by newlines (`<parameter=P>` then `\n`):
-    /// the layout the template writes, where a value ends at a closer on a
-    /// line of its own.
-    framed: bool,
-    /// The first closer (a parameter or a call closer) it holds.
+    /// The first unpaired closer (a parameter or a call closer) it holds.
     first: Option<usize>,
-    /// The first text (not whitespace, not a closer) after `first`.
+    /// The first text (not whitespace, not an unpaired closer) after `first`.
     text: Option<usize>,
-    /// Whether a closer it holds sits where a value ends: on a line of its
-    /// own in a framed value, anywhere in an unframed one.
-    ended: bool,
-    /// The first text after such a closer.
-    trailing: Option<usize>,
+    /// The first call it holds whole after `first`.
+    call: Option<usize>,
+    /// For each closer tag name (see `Reader::tag`), how many elements of
+    /// that name the value opened and has not closed: a closer of the same
+    /// name closes one (it is paired markup, text of the value).
+    open: Vec<usize>,
 }
 
 impl Held {
-    /// A closer at `at` outside any call the value holds.
-    fn closer(&mut self, body: &[u8], at: usize) {
+    /// An unpaired closer at `at` outside any call the value holds.
+    fn closer(&mut self, at: usize) {
         self.first.get_or_insert(at);
-        if !self.framed || (at > 0 && body[at - 1] == b'\n') {
-            self.ended = true;
-        }
     }
 
-    /// The bytes `range`, outside any call the value holds and not a
-    /// closer: text, unless only whitespace.
+    /// The bytes `range`, outside any call the value holds and not an
+    /// unpaired closer: text, unless only whitespace.
     fn text(&mut self, body: &[u8], range: Range<usize>) {
         let start = range.start;
         let Some(offset) = body[range]
@@ -321,36 +428,77 @@ impl Held {
         self.mark(start + offset);
     }
 
-    /// Text (or a call the value holds) at `at`.
+    /// Text at `at`.
     fn mark(&mut self, at: usize) {
         if self.first.is_some() {
             self.text.get_or_insert(at);
-            if self.ended {
-                self.trailing.get_or_insert(at);
-            }
         }
     }
 
-    /// Whether the value may end at `stop`, holding what comes before it:
-    /// closer text inside real value content only. Closers followed by
-    /// nothing but closers and whitespace are stray markup (issue #3 §3:
-    /// "repeated or stray closers are all one class"), and text after a
-    /// closer where a value ends is text between parameters (the negative
-    /// corpus), never read into the value.
-    fn admits(&self, stop: usize) -> bool {
-        if self.first.is_none_or(|first| first >= stop) {
-            return true;
+    /// The opener of a call the value holds whole, at `at`.
+    fn call(&mut self, at: usize) {
+        if self.first.is_some() {
+            self.call.get_or_insert(at);
         }
-        self.text.is_some_and(|text| text < stop) && self.trailing.is_none_or(|text| text >= stop)
+    }
+
+    /// Whether the value may end at `stop`, holding what comes before it.
+    /// Closers followed by nothing but closers and whitespace are stray
+    /// markup (issue #3 §3: "repeated or stray closers are all one
+    /// class"); a call after an unpaired closer is the next call (two calls
+    /// in a row are never one call holding the other); text after an
+    /// unpaired closer is either text of the value or text between
+    /// parameters, and nothing in the layout tells which ("Newlines have
+    /// zero meaning here"), so that reading is one of two.
+    fn admits(&self, stop: usize) -> Hold {
+        if self.first.is_none_or(|first| first >= stop) {
+            return Hold::Clean;
+        }
+        if self.call.is_some_and(|call| call < stop) {
+            return Hold::Never;
+        }
+        if self.text.is_some_and(|text| text < stop) {
+            Hold::Forked
+        } else {
+            Hold::Never
+        }
+    }
+}
+
+impl<'b, 't, 'g> Reader<'b, 't, 'g> {
+    /// A pass over `body` (starting at absolute offset `base`) reading
+    /// `mode`'s reading of a value holding text after an unpaired closer.
+    const fn new(
+        body: &'b [u8],
+        base: usize,
+        end: CodecEnd,
+        context: CodecContext<'t>,
+        mode: Mode,
+        governor: &'g mut Governor,
+    ) -> Self {
+        Self {
+            body,
+            base,
+            end,
+            frames: Vec::new(),
+            edits: Vec::new(),
+            openers: context.openers,
+            closers: context.closers,
+            mode,
+            forked: false,
+            governor,
+        }
     }
 }
 
 impl<'t> Reader<'_, 't, '_> {
+    /// Read the body; the value, and whether a value held text after an
+    /// unpaired closer (the body has another reading).
     fn run(
         mut self,
         span: Range<usize>,
         context: CodecContext<'t>,
-    ) -> Result<Result<CodecValue, CodecFault>, StopReason> {
+    ) -> Result<(Result<CodecValue, CodecFault>, bool), StopReason> {
         let tool = context.shape.map(|shape| shape.tool.clone());
         let first = self.skip_space(0)?;
         let result = if self.body.get(first) == Some(&b'{') {
@@ -362,10 +510,10 @@ impl<'t> Reader<'_, 't, '_> {
         };
         let mut tree = match result {
             Ok(tree) => tree,
-            Err(fault) => return Ok(Err(fault)),
+            Err(fault) => return Ok((Err(fault), self.forked)),
         };
         tree.tool = tool;
-        value(tree, self.edits, self.governor)
+        Ok((value(tree, self.edits, self.governor)?, self.forked))
     }
 
     const fn absolute(&self, range: Range<usize>) -> Range<usize> {
@@ -469,15 +617,78 @@ impl<'t> Reader<'_, 't, '_> {
         held: &mut Held,
     ) -> Result<Option<usize>, StopReason> {
         if let Some(width) = self.markup(self.closers, at)? {
-            held.closer(self.body, at);
+            if self.paired(at, held)? {
+                held.mark(at);
+            } else {
+                held.closer(at);
+            }
             return Ok(Some(at + width));
         }
         if let Some(width) = self.markup(self.openers, at)? {
-            held.mark(at);
+            held.call(at);
             *nested += 1;
             return Ok(Some(at + width));
         }
         Ok(None)
+    }
+
+    /// The closer tag names (`parameter`, `parameters`, and the call
+    /// closers' names: `function`, `tool_call`, ...): each spelling of the
+    /// form `</NAME>`, in a fixed order.
+    fn tags(&self) -> impl Iterator<Item = &[u8]> {
+        [CLOSER, CLOSER_VARIANT]
+            .into_iter()
+            .chain(self.closers.iter().map(Vec::as_slice))
+            .filter_map(|spelling| spelling.strip_prefix(b"</")?.strip_suffix(b">"))
+    }
+
+    /// The index (into [`Self::tags`]) of the closer tag name an element
+    /// opened at `at` carries (`<NAME>`, `<NAME ...>`, `<NAME=...>`), if
+    /// any. Charges one `Work` unit per name compared.
+    fn tag(&mut self, at: usize) -> Result<Option<usize>, StopReason> {
+        let names = 2 + self.closers.len();
+        self.charge(names)?;
+        let rest = &self.body[at + 1..];
+        Ok(self.tags().position(|name| {
+            rest.starts_with(name)
+                && matches!(
+                    rest.get(name.len()),
+                    Some(b'>' | b'=' | b' ' | b'\t' | b'\r' | b'\n')
+                )
+        }))
+    }
+
+    /// Record an element opened at `at` in the value, if it carries a
+    /// closer tag name.
+    fn open_tag(&mut self, at: usize, held: &mut Held) -> Result<(), StopReason> {
+        if let Some(index) = self.tag(at)? {
+            if held.open.len() <= index {
+                held.open.resize(index + 1, 0);
+            }
+            held.open[index] += 1;
+        }
+        Ok(())
+    }
+
+    /// Whether the closer at `at` closes an element the value opened (it
+    /// is paired markup, `<parameter>v</parameter>`, text of the value);
+    /// if so, that element is closed.
+    fn paired(&mut self, at: usize, held: &mut Held) -> Result<bool, StopReason> {
+        let names = 2 + self.closers.len();
+        self.charge(names)?;
+        let rest = &self.body[at..];
+        let Some(index) = self.tags().position(|name| {
+            rest.get(2..2 + name.len()) == Some(name) && rest.get(2 + name.len()) == Some(&b'>')
+        }) else {
+            return Ok(false);
+        };
+        Ok(match held.open.get_mut(index) {
+            Some(open) if *open > 0 => {
+                *open -= 1;
+                true
+            }
+            _ => false,
+        })
     }
 
     /// The width of the longest of `spellings` at `at`, charging one `Work`
@@ -744,19 +955,24 @@ impl<'t> Reader<'_, 't, '_> {
         }
         let first = self.skip_space(from)?;
         let verbatim = verbatim(declared, self.body[first..].starts_with(b"["));
-        let (mut stop, mut terminator, mut inner) = self.terminator(from, verbatim)?;
-        if inner.is_some() && !self.admits(declared, from, stop, terminator)? {
-            // The declared pattern rejects the value holding closer text:
-            // that is no reading of the parameter, so it ends at its first
-            // closer.
-            (stop, terminator, inner) = self.terminator(from, false)?;
-        }
-        let tree = match self.value(declared, from, stop, terminator)? {
+        let (ending, dropped) = self.reading(declared, from, verbatim)?;
+        let Ending {
+            stop,
+            terminator,
+            inner,
+            fork,
+        } = ending;
+        let tree = match self.value(declared, from, dropped.unwrap_or(stop), terminator)? {
             Ok(tree) => tree,
             Err(fault) => return Ok(Err(fault)),
         };
         if let Some(inner) = inner {
-            self.closer_text(inner..stop)?;
+            self.closer_text(EditOperator::CloserInValue, inner..dropped.unwrap_or(stop))?;
+        }
+        if let Some(first) = dropped {
+            self.record(EditOperator::TextBetweenParameters, first..stop, b"")?;
+        } else if let Some(first) = fork {
+            self.closer_text(EditOperator::TextAfterCloser, first..stop)?;
         }
         self.frames
             .last_mut()
@@ -787,6 +1003,50 @@ impl<'t> Reader<'_, 't, '_> {
                 stop
             }
         }))
+    }
+
+    /// Where the value of a parameter declared as `declared` starting at
+    /// `from` ends in this pass (see [`Self::terminator`]), and, when this
+    /// pass ends a value holding text after an unpaired closer at that
+    /// closer, the closer's offset (the bytes from it to the end are
+    /// dropped). A value holding such text has two readings that tie: this
+    /// pass holds the text ([`Mode::Hold`]) or ends the value at that closer
+    /// and drops the text up to the closer that ends the holding reading
+    /// ([`Mode::EndFirst`]). When the declared pattern rejects the value
+    /// holding closer text, or the value ending at that closer, that is no
+    /// reading of the parameter: it ends at its first closer (and text left
+    /// after it makes the call malformed), so neither reading is ever
+    /// picked alone.
+    fn reading(
+        &mut self,
+        declared: Option<&ValueShape>,
+        from: usize,
+        verbatim: bool,
+    ) -> Result<(Ending, Option<usize>), StopReason> {
+        let mut ending = self.terminator(from, verbatim)?;
+        if ending.inner.is_none() && ending.fork.is_none() {
+            return Ok((ending, None));
+        }
+        let rejected = !self.admits(declared, from, ending.stop, ending.terminator)?
+            || match ending.fork {
+                Some(first) => !self.admits(declared, from, first, ending.terminator)?,
+                None => false,
+            };
+        if rejected {
+            return Ok((self.terminator(from, false)?, None));
+        }
+        let Some(first) = ending.fork else {
+            return Ok((ending, None));
+        };
+        if self.mode == Mode::Hold {
+            self.forked = true;
+            return Ok((ending, None));
+        }
+        // Ending at that closer, the value holds only the paired closers
+        // before it.
+        ending.inner = ending.inner.filter(|&inner| inner < first);
+        ending.fork = None;
+        Ok((ending, Some(first)))
     }
 
     /// The value of a parameter declared as `declared` (`None` when the
@@ -848,11 +1108,7 @@ impl<'t> Reader<'_, 't, '_> {
     /// reading wins, the earliest among equals (so a value whose first
     /// closer needs nothing more ends there, as before); when every reading
     /// is malformed, the value ends as a typed one would.
-    fn terminator(
-        &mut self,
-        from: usize,
-        verbatim: bool,
-    ) -> Result<(usize, Terminator, Option<usize>), StopReason> {
+    fn terminator(&mut self, from: usize, verbatim: bool) -> Result<Ending, StopReason> {
         let mut at = from;
         let mut ends: Vec<Candidate> = Vec::new();
         // Whether a canonical closer came first (the value may have ended).
@@ -860,11 +1116,10 @@ impl<'t> Reader<'_, 't, '_> {
         // What a reading holding closer text would hold, and the depth of
         // the calls the value holds whole (their markup is theirs).
         let mut held = Held {
-            framed: self.body.get(from) == Some(&b'\n'),
             first: None,
             text: None,
-            ended: false,
-            trailing: None,
+            call: None,
+            open: Vec::new(),
         };
         let mut nested = 0_usize;
         let mut gap = from;
@@ -895,15 +1150,16 @@ impl<'t> Reader<'_, 't, '_> {
             if let Some((width, spelling)) = self.closer(at) {
                 if !verbatim && spelling == Spelling::Canonical {
                     self.charge(at - from)?;
-                    return Ok((at, Terminator::Closer(width, spelling), None));
+                    return Ok(Ending::at(at, Terminator::Closer(width, spelling)));
                 }
                 between |= spelling == Spelling::Canonical;
                 // A misspelled closer held by the value is text of it (no
-                // repair reads it as one: T5/F9); exact spellings are markup.
-                if spelling == Spelling::Misspelled {
+                // repair reads it as one: T5/F9), and so is one closing an
+                // element the value opened; other exact spellings are markup.
+                if spelling == Spelling::Misspelled || (verbatim && self.paired(at, &mut held)?) {
                     held.mark(at);
                 } else {
-                    held.closer(self.body, at);
+                    held.closer(at);
                 }
                 ends.push(Candidate {
                     at,
@@ -931,6 +1187,9 @@ impl<'t> Reader<'_, 't, '_> {
                 }
                 // An opener of an undeclared parameter is text of the value
                 // (no end of it), but after a closer it begins a parameter.
+                if verbatim && candidate.text {
+                    self.open_tag(at, &mut held)?;
+                }
                 if verbatim || !candidate.text {
                     ends.push(candidate);
                 }
@@ -938,12 +1197,27 @@ impl<'t> Reader<'_, 't, '_> {
                 at = to;
                 gap = at;
                 continue;
+            } else if verbatim {
+                self.open_tag(at, &mut held)?;
             }
             at += 1;
         };
         self.charge(last.at - from)?;
-        if verbatim && let Some(index) = self.cheapest(&ends, &last, &held)? {
-            let chosen = ends.get(index).unwrap_or(&last);
+        self.select(&ends, &last, &held, verbatim)
+    }
+
+    /// The place a value ends among the places it may (`ends`, then
+    /// `last`; see [`Self::terminator`]), given what a reading holding
+    /// closer text would hold (`held`).
+    fn select(
+        &mut self,
+        ends: &[Candidate],
+        last: &Candidate,
+        held: &Held,
+        verbatim: bool,
+    ) -> Result<Ending, StopReason> {
+        if verbatim && let Some(index) = self.cheapest(ends, last, held)? {
+            let chosen = ends.get(index).unwrap_or(last);
             let inner = ends[..index]
                 .iter()
                 .find(|candidate| {
@@ -953,7 +1227,15 @@ impl<'t> Reader<'_, 't, '_> {
                     )
                 })
                 .map(|candidate| candidate.at);
-            return Ok((chosen.at, chosen.terminator, inner));
+            let fork = (held.admits(chosen.at) == Hold::Forked)
+                .then_some(held.first)
+                .flatten();
+            return Ok(Ending {
+                stop: chosen.at,
+                terminator: chosen.terminator,
+                inner,
+                fork,
+            });
         }
         // A typed value, or a verbatim one every reading of which is
         // malformed: the first canonical closer, else the first repaired
@@ -964,8 +1246,8 @@ impl<'t> Reader<'_, 't, '_> {
                 candidate.terminator == Terminator::Closer(CLOSER.len(), Spelling::Canonical)
             })
             .or_else(|| ends.iter().find(|candidate| !candidate.text))
-            .unwrap_or(&last);
-        Ok((chosen.at, chosen.terminator, None))
+            .unwrap_or(last);
+        Ok(Ending::at(chosen.at, chosen.terminator))
     }
 
     /// Whether the string value `from..stop`, ended by `terminator`, is one
@@ -998,10 +1280,14 @@ impl<'t> Reader<'_, 't, '_> {
     /// from its first exact closer to where the value ends (`range`): a
     /// reading ending the value at that closer was weighed. In source order
     /// among the value's own edits (its framing newlines), the last recorded.
-    fn closer_text(&mut self, range: Range<usize>) -> Result<(), StopReason> {
+    fn closer_text(
+        &mut self,
+        operator: EditOperator,
+        range: Range<usize>,
+    ) -> Result<(), StopReason> {
         let span = self.absolute(range);
         let edit = edit(
-            EditOperator::CloserInValue,
+            operator,
             span,
             self.body,
             self.base,
@@ -1083,7 +1369,7 @@ impl<'t> Reader<'_, 't, '_> {
         let mut consider = |reading: Option<u64>, index: usize| {
             let stop = ends.get(index).map_or(last.at, |candidate| candidate.at);
             if let Some(reading) = reading
-                && held.admits(stop)
+                && held.admits(stop) != Hold::Never
                 && best.is_none_or(|(least, _)| reading <= least)
             {
                 best = Some((reading, index));

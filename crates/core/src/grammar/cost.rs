@@ -152,6 +152,17 @@ pub const TOKEN_MISSPELLED: u64 = CLOSER_MISSPELLED;
 /// reported side by side.
 pub const CLOSER_IN_VALUE: u64 = 0;
 
+/// Cost of each of the two readings of a value holding text after an
+/// unpaired closer: none.
+///
+/// The readings hold the text (`tool_call.value.text-after-closer`) or end
+/// the value at the closer and drop the text as text between parameters
+/// (`tool_call.markup.text-between-parameters`). The same for both, and the
+/// readings otherwise record the same edits, so they tie and the call is
+/// ambiguous: no layout (a newline before the closer, its indentation) is
+/// evidence for either.
+pub const TEXT_AFTER_CLOSER: u64 = 0;
+
 /// Cost of deleting a stray closer (it discards input bytes).
 pub const DELETE_STRAY_CLOSER: u64 = 3;
 

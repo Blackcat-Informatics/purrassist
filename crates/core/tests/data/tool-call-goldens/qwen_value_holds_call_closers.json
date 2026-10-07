@@ -1,5 +1,5 @@
 {
-  "description": "T6: a write_file content holding `</function></tool_call>` text. Ending the arguments at that `</function>` closes the value by its element (tool_call.markup.parameter-closed-by-element, a repair) and leaves the rest as content; the reading that ends it at the closers that complete the call needs no repair, so it wins: Resolved with the full content (tool_call.value.closer-in-value). It was cut at the first `</function>` and Resolved on a mutating tool before.",
+  "description": "T6, Re-blessed for adversary pass 6 (F14/F19), maintainer: \"Newlines have zero meaning here.\" A write_file content holding `</function></tool_call>` text followed by ` then stop.`: those closers are unpaired (no element of theirs opened in the value, no call held) and text follows them, so the reading holding the text and the reading ending the value at `</function>` (the rest dropped as text between parameters) tie: Ambiguous between `End with </function></tool_call> then stop.` and `End with `, never usable on the mutating tool. It was Resolved with the full content before (and, before that, cut at the first `</function>` and Resolved).",
   "tools_openai": [
     {
       "type": "function",
@@ -30,32 +30,32 @@
     "write_file": "mutating"
   },
   "input": "<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nEnd with </function></tool_call> then stop.\n</parameter>\n</function>\n</tool_call>",
-  "outcome": "resolved",
+  "outcome": "best_guess",
   "stopped": "completed",
-  "finish": "calls",
-  "openai_finish_reason": "tool_calls",
-  "verdict": "run",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "ambiguous",
   "usable_calls": {
-    "strict": 1,
-    "accepting_guesses": 1
+    "strict": 0,
+    "accepting_guesses": 0
   },
   "calls": [
     {
       "tool": "write_file",
       "arguments": {
         "path": "a.md",
-        "content": "End with </function></tool_call> then stop."
+        "content": "End with "
       },
       "candidate_dialects": [
         "qwen3-coder-xml.v1"
       ],
-      "outcome": "resolved",
+      "outcome": "ambiguous",
       "rules": [
         "tool_call.value.closer-in-value",
         "tool_call.xml.framing-newline",
         "tool_call.xml.framing-newline",
         "tool_call.xml.framing-newline",
-        "tool_call.xml.framing-newline"
+        "tool_call.markup.text-between-parameters"
       ]
     }
   ],
@@ -68,6 +68,6 @@
     "tool_call.xml.framing-newline",
     "tool_call.xml.framing-newline",
     "tool_call.xml.framing-newline",
-    "tool_call.xml.framing-newline"
+    "tool_call.markup.text-between-parameters"
   ]
 }

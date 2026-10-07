@@ -91,7 +91,9 @@
 //!   `tool_call.name.match`, `tool_call.name.from-arguments`,
 //!   `json.key.match`, `json.key.relocate`, `tool_call.parameter.repeated`,
 //!   `tool_call.parameter.repeated-choice`,
-//!   `json.enum.match`, `tool_call.markup.undeclared-parameter-boundary`),
+//!   `json.enum.match`, `tool_call.markup.undeclared-parameter-boundary`,
+//!   `tool_call.value.text-after-closer`,
+//!   `tool_call.markup.text-between-parameters`),
 //!   `tool_call.value.enum-normalize`, and
 //!   `tool_call.parameter.drop-unknown`.
 //!

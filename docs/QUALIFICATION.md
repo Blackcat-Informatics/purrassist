@@ -26,7 +26,7 @@ and merge sequence in [RELEASE.md](RELEASE.md).
 | Shared Rust/CLI/MCP surface | host tests and CLI `protocol` | Single registry; every tool has CLI/MCP equivalence fixtures and schema-checked output |
 | Tool-call grammars and dialects | `grammar_engine`, `grammar_codecs`, `tool_call_dialects`, `tool_call_negative` | DSL compilation and errors; linear fast path; split-invariant push recognition; `commit` points (no rejection before call-shaped evidence); `next` (several calls in one attempt); `insert` (an omitted token read as inserted); `optional-id`, `declaration-content` and `json-envelope` statements (the JSON envelope syntax slips on all six JSON-envelope dialects); factorized ambiguity; `raw`/`json`/`json-args`/`xml-params` codecs; canonical anchor fixtures for `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`, `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1` and `bare-json.v1`, all twelve in one mixed turn; deliberate rejections; unparsed call markup reported |
 | Tool-call resolution and recovery | `tool_definitions`, `tool_adapters`, `tool_call_rules`, `tool_call_goldens`, `tool_call_recover`, `tool_call_roundtrip` | Typed definitions; byte-exact `OpenAI`/MCP/Anthropic render-back including Draft-07 MCP schemas; registry admission, costs and loss kinds; `RULES.md`/`GRAMMAR.md` checked against the code; one captured golden per rule; mutating-guess guards; `Exact` effort; stop-reason semantics; pinned order-independent result digest; print/recognize round trips for every dialect pair; `OpenAI` `tool_calls` shape |
-| Tool-call cost and quality | `tool_call_cost`, `tool_call_scale`, `correction_evaluation` | Published linear work bound and constants; 1 MiB arguments and 64-call busy turns under `ToolRecoveryRequest::sized`; 16,340 mutated turns with zero incorrect automatic answers and 100% abstention recall |
+| Tool-call cost and quality | `tool_call_cost`, `tool_call_scale`, `correction_evaluation` | Published linear work bound and constants; 1 MiB arguments and 64-call busy turns under `ToolRecoveryRequest::sized`; 16,438 mutated turns with zero incorrect automatic answers and 100% abstention recall |
 | Tool-call surfaces | host `tool_call_tools`, CLI `tool_calls_cli` and `protocol` | `recover_tool_calls` MCP tool and `recover-tool-calls` command equal direct core recovery; raw-byte input with invalid UTF-8 recorded; exit codes |
 | Independent syntax | `make syntax-oracles` | 15 positive/negative Python, Rust, JavaScript/JSX, TypeScript/TSX compiler probes |
 | Correction quality | `correction_evaluation`, `matching_oracle` | Four provenance-bound corpora, risk/coverage sweeps, exact distance and path oracles |
@@ -108,7 +108,7 @@ stop is truncation, and every other stop treats an open call as malformed.
 Emission prints only the calls `usable_accepting_guesses` selects and lists
 every other call and attempt as skipped. The integrator guarantees and the
 test proving each are mapped in
-[tool-calls/INTEGRATION.md](tool-calls/INTEGRATION.md); the 16,340-case
+[tool-calls/INTEGRATION.md](tool-calls/INTEGRATION.md); the 16,438-case
 evaluation is a deterministic generated corpus, so its zero-incorrect result
 establishes behavior on those cases rather than a production error rate.
 Twelve dialects ship (`qwen3-coder-xml.v1`, `hermes.v1`,

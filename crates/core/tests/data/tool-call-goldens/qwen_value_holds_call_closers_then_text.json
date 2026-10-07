@@ -1,5 +1,5 @@
 {
-  "description": "T6: a content value holding `</function></tool_call>` text whose call's own `</tool_call>` is missing before trailing text. The call that ends at the first `</function>` closes the value by its element (a repair); the call whose value holds the closers needs its wrapper closer inserted before the text (`tool_call.markup.missing-wrapper-close.before-text`, a guess). Both cost one repair, so the call is Ambiguous with both values (the guessed reading is not admitted under Structural); the reading that holds the closers is found by repairing its last fork once the value reading on past closers ends.",
+  "description": "T6, Re-blessed for adversary pass 6 (F14/F19), maintainer: \"Newlines have zero meaning here.\" A content value holding `</function></tool_call>` text whose call's own `</tool_call>` is missing before trailing text. The call that ends at the first `</function>` closes the value by its element (a repair); the call whose value holds the closers needs its wrapper closer inserted before the text (`tool_call.markup.missing-wrapper-close.before-text`, a guess). Both cost one repair, so the turn is Ambiguous; the call reading on past the closers is itself Ambiguous, since its value holds text after unpaired closers.",
   "tools_openai": [
     {
       "type": "function",
@@ -36,7 +36,7 @@
     {
       "finish": "unresolved",
       "openai_finish_reason": "stop",
-      "verdict": "nothing_usable",
+      "verdict": "ambiguous",
       "usable_calls": {
         "strict": 0,
         "accepting_guesses": 0
@@ -51,12 +51,13 @@
           "candidate_dialects": [
             "qwen3-coder-xml.v1"
           ],
-          "outcome": "unresolved: rule_not_admitted: rule `tool_call.markup.missing-wrapper-close.before-text` is not admitted under Structural",
+          "outcome": "ambiguous",
           "rules": [
             "tool_call.value.closer-in-value",
             "tool_call.xml.framing-newline",
             "tool_call.xml.framing-newline",
             "tool_call.xml.framing-newline",
+            "tool_call.value.text-after-closer",
             "tool_call.xml.framing-newline",
             "tool_call.markup.missing-wrapper-close.before-text"
           ]
@@ -108,6 +109,7 @@
     "tool_call.xml.framing-newline",
     "tool_call.xml.framing-newline",
     "tool_call.xml.framing-newline",
+    "tool_call.value.text-after-closer",
     "tool_call.xml.framing-newline",
     "tool_call.markup.missing-wrapper-close.before-text",
     "tool_call.xml.framing-newline",

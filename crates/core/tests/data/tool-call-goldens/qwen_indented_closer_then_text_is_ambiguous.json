@@ -1,0 +1,71 @@
+{
+  "description": "Maintainer decision (adversary pass 6, F14/F19): \"Newlines have zero meaning here.\" F14: the value's closer indented by one space, prose on the next line, then a second `</parameter>`. Indentation carries no meaning: the mutating `write_file` call is Ambiguous between a content holding the prose and the content ending at the indented closer (its indentation is value text, the template's framing being one newline), with the prose dropped as text between parameters.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "write_file": "mutating"
+  },
+  "input": "<tool_call>\n<function=write_file>\n<parameter=path>\na.py\n</parameter>\n<parameter=content>\nprint(1)\n </parameter>\nDone, that is the file.\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "ambiguous",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "a.py",
+        "content": "print(1)\n "
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "ambiguous",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.markup.text-between-parameters"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.text-between-parameters"
+  ]
+}
