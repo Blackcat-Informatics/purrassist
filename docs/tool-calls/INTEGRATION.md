@@ -159,9 +159,16 @@ is reported as certain.
      failure (`"name"`, then `:`) is the attempt's call body: outside any
      bracket its object's `{` was lost and the scan closes it by its `}`,
      and a body left open runs to its last JSON byte before prose, or to
-     the next segment or the end of output that cuts it; a call body right
-     after an attempt that ends unclosed (whitespace between) is covered
-     the same way, so no call body is left as assistant text) when that
+     the next segment or the end of output that cuts it; a call body after
+     the attempt's markup, however that markup ends, is covered the same
+     way when only markup debris comes between (whitespace, separators, the
+     `:` of a member key the attempt completed, as the `"function"` key a
+     cut `OpenAI` arguments string runs into, stray punctuation such as the
+     `>` of a cut tag, or JSON text holding no call's member; never prose,
+     read with strings opening and closing where the markup ended), and a
+     member's spelling begins a body wherever it is written, since a slip
+     that broke a string before it leaves no telling which quote opens a
+     string, so no call body is left as assistant text) when that
      closer
      comes before the next call opening the same alternative, a
      reasoning block, or reported unparsed markup, plus any repeated
@@ -218,6 +225,10 @@ is reported as certain.
   `hermes_rejected_attempt_misspelled_closer`,
   `llama3_rejection_stops_before_prose`,
   `llama3_rejection_stops_at_enclosing_bracket`,
+  `openai_rejection_covers_call_body_after_completed_key`,
+  `hermes_rejection_covers_call_body_after_stray_byte`,
+  `mistral3_rejection_covers_call_body_after_its_bracket`,
+  `llama3_rejection_covers_call_member_after_broken_string`,
   `mistral3_group_bad_good_good_then_bracket`,
   `mistral3_group_bad_good_good_then_array`,
   `anthropic_rejection_shares_opener_closers`,

@@ -174,8 +174,11 @@ targets' mutation tokens so mutation can create or move field boundaries).
   closes a list's `[`, and a call or attempt the markup covers is markup,
   never prose), to an opening reasoning marker that cut a literal of its
   dialect it had begun (T6: `</functio<think>`), over the call body it
-  began (F16: a call member past the failure and no prose; a word followed
-  by `|` or `｜` is a token fragment, not prose), over the maximal
+  began (F16: a call member past the failure and no prose, the bytes from
+  the failure to the member and the body from the member each read with
+  strings opening and closing there, as F16 reads content, never with the
+  quotes counted from the attempt's start, which a broken string flips; a
+  word followed by `|` or `｜` is a token fragment, not prose), over the maximal
   ill-formed UTF-8 subpart an `invalid_utf8` attempt failed on (T6),
   under a length stop to the end of output when no closer of its dialect
   follows the failure (T6: the stop reads an open call as truncation), to

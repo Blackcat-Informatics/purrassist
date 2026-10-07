@@ -64,7 +64,8 @@
 //! - (F16) no call body is content: the bytes after a rejected attempt
 //!   hold no call member (`"name"`, then `:`) before any prose (a token
 //!   fragment such as `t_begin|>` is no prose), and an attempt may run over
-//!   the call body it began (a call member past the failure, no prose);
+//!   the call body it began (a call member past the failure, no prose,
+//!   read fresh from the failure and from the member as F16 reads it);
 //! - (S3/F6) a rejected attempt keeps its own closing markup: when its
 //!   raw text does not end with a literal that ends a call of its dialect
 //!   (any alternative's, a chained call's own, or one with one slip; not
@@ -322,10 +323,23 @@ fn dialect_closers(dialect: &DialectId) -> Vec<Vec<u8>> {
 /// then `:`) and no prose: the body of the call object the attempt began
 /// (its opening brace lost to a cut special token, or left open), which is
 /// the attempt's markup.
+///
+/// Prose is judged exactly as `check_no_call_body` and the library judge it
+/// (INTEGRATION.md, stage-3 pass 5, F16: "a call body after the attempt's
+/// markup ... is covered the same way when only markup debris comes between
+/// (... never prose, read with strings opening and closing where the markup
+/// ended), and a member's spelling begins a body wherever it is written"):
+/// the bytes from the failure to the first member, and the body from that
+/// member on, are each read fresh. Reading them with the quotes counted from
+/// the attempt's start instead reads the same bytes differently after a
+/// broken string (`"id": "m4N8: {"path": "notes.txt"` makes `notes.txt` a
+/// word), so this clause and F16 could admit no span at all; the fresh
+/// reading is the one the F16 text states.
 fn call_body(output: &[u8], start: usize, failed: usize, end: usize) -> bool {
-    let after = &output[failed.min(end)..end];
-    (0..after.len()).any(|at| member_at(&after[at..]))
-        && !prose(&output[start..end], failed.clamp(start, end) - start, &[])
+    let after = &output[failed.clamp(start, end)..end];
+    (0..after.len())
+        .find(|&at| member_at(&after[at..]))
+        .is_some_and(|member| !prose(&after[..member], 0, &[]) && !prose(&after[member..], 0, &[]))
 }
 
 /// Whether `bytes` begin with a call's member: `"name"`, then `:`.

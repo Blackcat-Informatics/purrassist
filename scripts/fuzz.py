@@ -844,6 +844,26 @@ TOOL_CALL_REGRESSIONS = [
     # by a reasoning marker: the body is the attempt's markup, never
     # content (a campaign failure).
     b'\x00R<tool_cal>{"name": "f", "arguments": {"a":{"name": "f", "arguments": {"[THINK]a": "x"}}</tool_call>',
+    # F16: an OpenAI call whose arguments string runs into the next call's
+    # `"function"` key: the attempt completes that key, and the object after
+    # its `:` is the call body the key began, never content (a campaign
+    # failure; the golden openai_rejection_covers_call_body_after_completed_key).
+    b'\x05\x91[\n  {\n    "id": "call_a1",\n    "type": "function",\n    "function": {\n      "name": "write_file",\n      "arguments": "{\\"path\\": \\"src/main.rs\\", \\"content\\": \\"fn main() {\\\\n    println!(\\\\\\"hi\\\\\\");\\\\n\\\\n\\\\tlet  x = 1;  \\\\n}\\\\n\\", \\"mode\\": \\"create\\", \\"ratio\\": 2.50[TOOL_CALLS], \\"count\\": 1e3, \\"tags\\": [], \\"options\\": {\\"backup\\": false, \\"retries\\": 0, \\"owner\\": {\\"name\\": \\"ops\\"  "function": {\n      "name": "list_dir",\n      "arguments":"write_file",\n      "arguments": "{\\"path\\": \\"src/main.rs\\", \\"content\\": \\"fn main() {\\\\n    println!(\\\\\\"hi\\\\\\");\\\\n\\\\n\\\\tlet  x = 1;  \\\\n}\\\\n\\", \\"mode\\": \\"create\\", \\"ratio\\": 2.50[TOOL_CALLS], \\"count\\": 1e3, \\"tags\\": [], \\"options\\": {\\"backup\\": false, \\"retries\\": 0, \\"owner\\": {\\"name\\": \\"ops\\"  "function": {\n      "name": "list_dir",\n      "arguments": "{\\"path\\": \\"src\\"}"\n    }\n  }\n]',
+    # F16: a Hermes attempt failing at a stray `>`, then a call body: the
+    # debris is no prose, so the body is the attempt's markup, never content
+    # (a campaign failure; the golden
+    # hermes_rejection_covers_call_body_after_stray_byte).
+    b'[\x05\x91<tool_call>{"name": "launch_rockets", >{"name": "launch_rockets", "<|return|>]',
+    # F16: a bracketless Mistral v3 list whose first object fails, then a
+    # call body after that object's closing bracket: the body is the
+    # attempt's markup, never content (a campaign failure; the golden
+    # mistral3_rejection_covers_call_body_after_its_bracket).
+    b'\x00R[TOOL_CALLS] {"name": <|end|>, "arguments": {"path": "src"}}, {"name": "read_file", "ar\x00gu',
+    # F16: a Llama 3 object failing at a name value that lost its opening
+    # quote, then a call member the flipped quotes read as text: a member's
+    # spelling begins a call body wherever it is written (a campaign
+    # failure; the golden llama3_rejection_covers_call_member_after_broken_string).
+    b'[\xe6#Let me check both.\n{"name": "get_weather", "parameters": {"city": "Oslo"}}; {"name": "read_file", "parameters": {"path": "notes.txt", "limit": 10}}\n{"parameters": {"city": "Bergen", "unit": "celsius"}, "name": rgen", "unit": "celsius"}, "name": "get_weather"}ius"}, "name": "get_weather"}]',
 ]
 
 TOOL_CALL_SEEDS = [
