@@ -33,7 +33,13 @@ JSON compilation/recovery, Markdown, paths, embeddings, and intent resolution
 already accept caller-owned governors. The same access is available for
 `matching::rank_governed`, `edits::locate_governed`,
 `edits::locate_fuzzy_governed`, `edits::plan_unified_governed`,
-`EditPlan::apply_governed`, and `syntax::apply_checked_governed`.
+`EditPlan::apply_governed`, and `syntax::apply_checked_governed`. Tool calls
+follow the same contract: `ToolSet::compile_governed`,
+`ToolSet::from_openai_governed`, `ToolSet::from_mcp_governed`,
+`ToolSet::from_anthropic_governed`, `DialectSet::new`, the `Recognizer`,
+`resolve_forest`, and `ToolSet::recover_governed`, whose cancelled or
+exhausted result is `Unresolved` with the reason in its receipt, the output's
+digest, and no partial value.
 `helpers::Pending` also retains the preparation governor's cancellation token
 and cumulative budget when `complete` resumes response extraction and recovery.
 Convenience methods delegate to these engines. Governed receipts describe the

@@ -1,0 +1,91 @@
+{
+  "description": "T1/F7: the nested <function= element inside a <tool_call> wrapper: the rejected attempt runs to the wrapper's </tool_call>, never ending inside a literal, and only the prose around it is content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "pre <tool_call><function=f><function=f><parameter=a>1</parameter></function></tool_call> post",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          4,
+          88
+        ],
+        "dialect": "qwen3-coder-xml.v1",
+        "candidate_dialects": [
+          "hermes.v1",
+          "qwen3-coder-xml.v1"
+        ],
+        "reason": "Malformed { at: 27 }",
+        "raw": "<tool_call><function=f><function=f><parameter=a>1</parameter></function></tool_call>"
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "pre ",
+      " post"
+    ],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        4,
+        88
+      ],
+      "dialect": "qwen3-coder-xml.v1",
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "reason": "Malformed { at: 27 }",
+      "raw": "<tool_call><function=f><function=f><parameter=a>1</parameter></function></tool_call>"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "pre ",
+    " post"
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

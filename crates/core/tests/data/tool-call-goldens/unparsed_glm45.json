@@ -1,0 +1,74 @@
+{
+  "description": "A GLM-4.5 call under every built-in dialect: Hermes and Qwen3-Coder XML attempt and reject its <tool_call> opener, and the <arg_key>/<arg_value> body that no allowed dialect reads is reported as glm-4.5.v1; nothing is reported twice.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "<tool_call>get_weather\n<arg_key>city</arg_key>\n<arg_value>Paris</arg_value>\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        0,
+        23
+      ],
+      "dialect": "hermes.v1",
+      "candidate_dialects": [
+        "hermes.v1",
+        "qwen3-coder-xml.v1"
+      ],
+      "reason": "Malformed { at: 24 }",
+      "raw": "<tool_call>get_weather\n"
+    },
+    {
+      "span": [
+        23,
+        88
+      ],
+      "dialect": null,
+      "candidate_dialects": [],
+      "reason": "UnsupportedDialect { family: Glm45 }",
+      "raw": "<arg_key>city</arg_key>\n<arg_value>Paris</arg_value>\n</tool_call>"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "<arg_key>city</arg_key>\n<arg_value>Paris</arg_value>\n</tool_call>"
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.unparsed-dialect"
+  ]
+}

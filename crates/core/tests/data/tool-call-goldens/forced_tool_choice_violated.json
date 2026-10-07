@@ -1,0 +1,72 @@
+{
+  "description": "A3e: tool_choice forces read_file but the model called write_file: the tool_choice=forced:read_file validation fails and the call is Unresolved.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "tool_choice": {
+    "type": "function",
+    "function": {
+      "name": "read_file"
+    }
+  },
+  "input": "<tool_call>\n{\"name\": \"write_file\", \"arguments\": {\"path\": \"a.rs\"}}\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "a.rs"
+      },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "outcome": "unresolved: tool_choice_forced: the request's tool choice forces tool `read_file`",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [
+    "tool_choice=forced:read_file"
+  ],
+  "ledger_rules": []
+}

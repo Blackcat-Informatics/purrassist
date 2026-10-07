@@ -1,0 +1,48 @@
+{
+  "description": "An object with name and input but neither \"type\": \"tool_use\" nor a toolu_ id, read with every built-in dialect allowed: no dialect has evidence that it is a call, so it stays content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "{\"name\":\"get_weather\",\"input\":{\"city\":\"Oslo\"}}",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "content_only",
+  "openai_finish_reason": "stop",
+  "verdict": "no_calls",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [],
+  "embedded": [],
+  "content": [
+    "{\"name\":\"get_weather\",\"input\":{\"city\":\"Oslo\"}}"
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

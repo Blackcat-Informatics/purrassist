@@ -1,0 +1,61 @@
+{
+  "description": "A Kimi-K2 call whose special tokens a detokenizer removed, functions.NAME:IDX followed by its arguments (kimi-k2-stripped.v1): no built-in grammar reads it, so it is reported.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "functions.get_weather:0{\"city\": \"Paris\"}",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        0,
+        40
+      ],
+      "dialect": null,
+      "candidate_dialects": [],
+      "reason": "UnsupportedDialect { family: KimiK2Stripped }",
+      "raw": "functions.get_weather:0{\"city\": \"Paris\"}"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "functions.get_weather:0{\"city\": \"Paris\"}"
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.unparsed-dialect"
+  ]
+}

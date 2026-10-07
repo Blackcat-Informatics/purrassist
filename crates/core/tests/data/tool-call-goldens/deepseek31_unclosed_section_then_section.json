@@ -1,0 +1,68 @@
+{
+  "description": "T4 guard: a DeepSeek V3.1 section left unclosed before a second section: the second section's opener is a literal of the grammar, so it is never read as a misspelled call opener (tool_call.markup.token-misspelled), and the first section's attempt completes with its section closer read as inserted before it (the repair that reads the call wins over resynchronizing); the second section is its own attempt.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "deepseek-v3.1.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>\tf\t<｜tool▁sep｜>{\"a\":\"x\"}\t<｜tool▁call▁end｜>\t\t\n<｜tool▁calls▁begin｜>\t<｜tool▁call▁begin｜>\tf\t<｜tool▁sep｜>{\"a\":\"y\"}\t<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 2,
+    "accepting_guesses": 2
+  },
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "x"
+      },
+      "candidate_dialects": [
+        "deepseek-v3.1.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.missing-wrapper-close"
+      ]
+    },
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "y"
+      },
+      "candidate_dialects": [
+        "deepseek-v3.1.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.missing-wrapper-close"
+  ]
+}

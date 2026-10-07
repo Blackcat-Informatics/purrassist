@@ -153,7 +153,7 @@ fn helper_ledger_admission_is_atomic_and_never_yields_partial_success() {
     assert_eq!(result.receipt.evidence, Vec::new());
     assert_eq!(result.receipt.inferences, Vec::new());
     assert_eq!(result.receipt.usage.evidence_entries, 1);
-    assert_eq!(result.receipt.sources[0].text, "42");
+    assert_eq!(result.receipt.sources[0].text(), Some("42"));
 }
 #[test]
 fn helpers_are_disabled_by_default_and_refusals_are_not_reinterpreted() {

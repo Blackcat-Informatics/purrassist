@@ -1,0 +1,57 @@
+{
+  "description": "The unwrapped closers-only body when f requires path: nothing may be invented, so the call is Unresolved (missing required), not usable.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "<function=f></parameters></parameters></function>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {},
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "unresolved: missing_required: required parameter `/path` is missing",
+      "rules": [
+        "tool_call.markup.missing-token",
+        "tool_call.markup.closers-only-empty",
+        "tool_call.markup.missing-token"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.missing-token",
+    "tool_call.markup.closers-only-empty",
+    "tool_call.markup.missing-token"
+  ]
+}

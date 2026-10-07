@@ -1,0 +1,60 @@
+{
+  "description": "T5/F11, corrected in stage-3 pass 5 (F16): a rejected JSON-object attempt (Llama 3) runs on by its brackets only over bytes JSON reads. After `<|python_tag|>` comes `t_begin|>`, the tail of a cut special token (`<|tool_call_begin|>`): markup, not prose. The call body after it (`\"name\": ..., \"arguments\": {...}}`) is the attempt's call object whose opening brace was lost, so the rejection covers it to its closing `}`; only `Sure. ` and ` Done.` stay content (no call body, and no lone `}`, is left as assistant text).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "llama3-json.v1"
+  ],
+  "effects": {
+    "get_weather": "read_only"
+  },
+  "input": "Sure. <|python_tag|>t_begin|>\"name\": \"get_weather\", \"arguments\": {\"city\": \"Oslo\"}} Done.",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        6,
+        82
+      ],
+      "dialect": "llama3-json.v1",
+      "candidate_dialects": [
+        "llama3-json.v1"
+      ],
+      "reason": "Malformed { at: 20 }",
+      "raw": "<|python_tag|>t_begin|>\"name\": \"get_weather\", \"arguments\": {\"city\": \"Oslo\"}}"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Sure. ",
+    " Done."
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

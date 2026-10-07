@@ -1,0 +1,85 @@
+{
+  "description": "A3h: the same JSON body and stray closer followed by free text inside the function: trailing text is never an argument, so the attempt is rejected (raw span kept) and nothing is usable.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "input": "<tool_call>\n<function=read_file>\n{\"path\": \"a.rs\"}\n</parameter>\nand then I will read it\n</function>\n</tool_call>",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          0,
+          111
+        ],
+        "dialect": "qwen3-coder-xml.v1",
+        "candidate_dialects": [
+          "hermes.v1",
+          "qwen3-coder-xml.v1"
+        ],
+        "reason": "Malformed { at: 63 }",
+        "raw": "<tool_call>\n<function=read_file>\n{\"path\": \"a.rs\"}\n</parameter>\nand then I will read it\n</function>\n</tool_call>"
+      }
+    ],
+    "embedded": [],
+    "content": [],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        0,
+        111
+      ],
+      "dialect": "qwen3-coder-xml.v1",
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "reason": "Malformed { at: 63 }",
+      "raw": "<tool_call>\n<function=read_file>\n{\"path\": \"a.rs\"}\n</parameter>\nand then I will read it\n</function>\n</tool_call>"
+    }
+  ],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

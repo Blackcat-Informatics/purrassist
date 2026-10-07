@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 """Deterministic source-region coverage-guided qualification (LLVM, pinned
 in vendor/tooling.json's `llvm-coverage` entry),
-generalized across eight `purrassist-core` targets, with differential probes
+generalized across nine `purrassist-core` targets, with differential probes
 against Node's `RegExp` (`pattern`) and `cmark-gfm` (`markdown`).
 
 Replaces the single-purpose `scripts/fuzz-json.py`; see `docs/FUZZING.md`.
@@ -180,6 +180,716 @@ PATCH_TOKENS = [
     b'a', b'b', b' ', b'\n', b'-', RS, 'é'.encode(), b'\xff',
 ]
 
+# `tool-call` input is raw bytes: byte 0 selects the request knobs (repair
+# policy, generation stop, reasoning policy, tool choice), byte 1 the effort,
+# the ambiguity policy, and the chunking split seed; the rest is one model
+# turn (see `crates/core/examples/fuzz_tool_call.rs`). Seeds pair each turn
+# with a header so the fixed seeds already span the request space.
+TOOL_CALL_HEADERS = [
+    b'\x00\x52',  # per tool, stop, separate reasoning, auto; standard effort
+    b'\x05\x91',  # all structural, length stop; quick effort
+    b'\x4a\x5e',  # all tolerant, tool_calls stop, tool choice none; reject ambiguity
+    b'\x9c\xf0',  # unknown stop, reasoning open at start, required; exact effort
+    b'\xe6\x23',  # all tolerant, length stop, reasoning as content, forced read_file; deep effort
+]
+
+
+def _tool_call_seed(index, turn):
+    return TOOL_CALL_HEADERS[index % len(TOOL_CALL_HEADERS)] + turn
+
+
+def _tool_call_conformance_markup():
+    """The canonical markup of every built-in dialect's conformance fixture,
+    read in sorted path order from
+    `crates/core/tests/data/tool-calls/conformance/<dialect>/*.json`."""
+    directory = ROOT / 'crates/core/tests/data/tool-calls/conformance'
+    return [json.loads(path.read_text())['markup'].encode()
+            for path in sorted(directory.glob('*/*.json'))]
+
+
+# Well-formed calls printed by `purrassist_core::grammar::witness::generate`
+# for every built-in dialect over the probe's own tool shapes, with the
+# listed witness seeds (`JsonArguments::Object` for seeds 0-1,
+# `Stringified` for seeds 2-3), embedded verbatim.
+TOOL_CALL_WITNESSES = [
+    # anthropic-tool-use.v1: read_file (seed 0)
+    "{\"type\":\t\t\"tool_use\"\t,\t\"input\"\t:{\"path\":\"tab\\tseparated \\n  block\\n\"},\"name\"\t:\"read_file\"\t\t,\"id\":\"call_0f4d3872\"\t\t}".encode(),
+    # anthropic-tool-use.v1: get_weather, list_dir (seed 1)
+    "{\t\"type\":\t\"tool_use\",\"name\"\t:\t\t\"get_weather\",\"id\"\t\t:\t\"call_864a7135\"\t,\"input\":{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"}\t\t}\n{\"type\":\t\"tool_use\",\t\"id\":\t\t\"call_77ba0574\"\t,\"input\"\t:{\"path\":\"tab\\tseparated trailing  \"},\"name\":\t\t\"list_dir\"\t}".encode(),
+    # anthropic-tool-use.v1: write_file (seed 2)
+    "{\t\t\"type\":\"tool_use\",\"id\"\t\t:\t\"call_22bb690f\",\t\t\"name\"\t:\t\t\"write_file\",\t\"input\":\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"\t}".encode(),
+    # anthropic-tool-use.v1: delete_path, read_file (seed 3)
+    "{\"type\":\"tool_use\"\t,\t\"id\":\t\t\"call_e8c2cf2d\",\"input\"\t\t:\t\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"\t,\"name\"\t:\t\t\"delete_path\"\t\t}\n{\"type\":\"tool_use\"\t,\t\"input\":\t\"{\\\"path\\\":\\\"alpha tab\\\\tseparated\\\"}\"\t,\t\t\"name\":\"read_file\"\t\t,\t\t\"id\"\t\t:\"call_91b9c038\"\t\t}".encode(),
+    # bare-json.v1: read_file (seed 0)
+    "{\t\"name\"\t\t:\t\"read_file\"\t,\t\"arguments\"\t\t:{\"path\":\"tab\\tseparated \\n  block\\n\"},\t\"id\":\"call_f5407269\"\t\t}".encode(),
+    # bare-json.v1: get_weather, list_dir (seed 1)
+    "{\"arguments\":{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"}\t,\"name\":\"get_weather\"\t,\t\t\"id\":\"call_5c2a449c\"\t\t}\n{\t\"id\":\"call_5a072c6d\",\t\t\"arguments\"\t\t:{\"path\":\"\\n  block\\n trailing  \"},\t\"name\":\t\"list_dir\"}".encode(),
+    # bare-json.v1: write_file (seed 2)
+    "{\t\t\"arguments\":\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\",\"name\":\t\t\"write_file\"\t,\t\"id\"\t\t:\"call_861af7d1\"\t}".encode(),
+    # bare-json.v1: delete_path, read_file (seed 3)
+    "{\"id\":\"call_d7d47acc\"\t,\t\"name\":\t\t\"delete_path\"\t\t,\"arguments\"\t:\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"\t}\n{\"name\"\t:\"read_file\",\t\"arguments\"\t\t:\"{\\\"path\\\":\\\"\\\\n  block\\\\n alpha\\\",\\\"limit\\\":-209}\"\t,\t\"id\":\"call_d72aeb2f\"\t}".encode(),
+    # deepseek-v3.1.v1: read_file (seed 0)
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>\t\tread_file\t\t<｜tool▁sep｜>{\"path\":\"tab\\tseparated \\n  block\\n\"}\t<｜tool▁call▁end｜>\t<｜tool▁calls▁end｜>".encode(),
+    # deepseek-v3.1.v1: get_weather, list_dir (seed 1)
+    "<｜tool▁calls▁begin｜>\t<｜tool▁call▁begin｜>get_weather<｜tool▁sep｜>{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"}\t<｜tool▁call▁end｜><｜tool▁call▁begin｜>\tlist_dir\t\t<｜tool▁sep｜>{\"path\":\"alpha\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    # deepseek-v3.1.v1: write_file (seed 2)
+    "<｜tool▁calls▁begin｜>\t\t<｜tool▁call▁begin｜>\t\twrite_file<｜tool▁sep｜>\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    # deepseek-v3.1.v1: delete_path, read_file (seed 3)
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>delete_path<｜tool▁sep｜>\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"<｜tool▁call▁end｜>\t<｜tool▁call▁begin｜>\t\tread_file\t\t<｜tool▁sep｜>\"{\\\"path\\\":\\\"tab\\\\tseparated   indented\\\"}\"<｜tool▁call▁end｜>\t<｜tool▁calls▁end｜>".encode(),
+    # deepseek-v3.v1: read_file (seed 0)
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>\t\tfunction<｜tool▁sep｜>\tread_file\t\t```json\t{\"path\":\"tab\\tseparated \\n  block\\n\"}```<｜tool▁call▁end｜>\t<｜tool▁calls▁end｜>".encode(),
+    # deepseek-v3.v1: get_weather, list_dir (seed 1)
+    "<｜tool▁calls▁begin｜>\t<｜tool▁call▁begin｜>function\t<｜tool▁sep｜>get_weather```json\t{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"}```<｜tool▁call▁end｜><｜tool▁call▁begin｜>function\t<｜tool▁sep｜>\tlist_dir```json{\"path\":\"trailing  \"}```\t\t<｜tool▁call▁end｜>\t<｜tool▁calls▁end｜>".encode(),
+    # deepseek-v3.v1: write_file (seed 2)
+    "<｜tool▁calls▁begin｜>\t\t<｜tool▁call▁begin｜>\t\tfunction<｜tool▁sep｜>write_file\t\t```json\t\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"```\t\t<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    # deepseek-v3.v1: delete_path, read_file (seed 3)
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>\tdelete_path```json\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"\t\t```\t\t<｜tool▁call▁end｜><｜tool▁call▁begin｜>\t\tfunction\t<｜tool▁sep｜>read_file```json\t\"{\\\"path\\\":\\\"beta gamma tab\\\\tseparated\\\",\\\"limit\\\":-604}\"```\t<｜tool▁call▁end｜>\t\t<｜tool▁calls▁end｜>".encode(),
+    # harmony.v1: read_file (seed 0)
+    "<|start|>assistant\t\t<|channel|>\tcommentary\t\tto=functions.read_file<|constrain|>json<|message|>\t{\"path\":\"tab\\tseparated \\n  block\\n\"}<|call|>".encode(),
+    # harmony.v1: get_weather, list_dir (seed 1)
+    "<|start|>\tassistantto=functions.get_weather<|channel|>analysis\t\t<|message|>{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"}<|call|>\n<|start|>assistant\tto=functions.list_dir<|channel|>commentary\t\tjson\t\t<|message|>\t{\"path\":\"tab\\tseparated\"}<|call|>".encode(),
+    # harmony.v1: write_file (seed 2)
+    "<|start|>\t\tassistant\t\t<|channel|>commentary\t\tto=functions.write_file\t\tjson<|message|>\t\t\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"<|call|>".encode(),
+    # harmony.v1: delete_path, read_file (seed 3)
+    "<|start|>assistant<|channel|>\tanalysisto=functions.delete_path\tjson<|message|>\t\t\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"<|call|>\n<|start|>assistant\t<|channel|>\t\tfinalto=functions.read_file\t<|constrain|>\t\tjson<|message|>\t\"{\\\"path\\\":\\\"beta gamma tab\\\\tseparated\\\",\\\"limit\\\":-604}\"\t<|call|>".encode(),
+    # hermes.v1: read_file (seed 0)
+    "<tool_call>\t{\t\t\"type\":\t\"tool_use\"\t\t,\t\"id\":\"call_5a4485ac\"\t,\"name\"\t\t:\"read_file\",\"arguments\":{\"path\":\"tab\\tseparated \\n  block\\n\"}\t\t}</tool_call>".encode(),
+    # hermes.v1: get_weather, list_dir (seed 1)
+    "<tool_call>{\t\"id\":\t\"call_4baa5dc0\",\"arguments\"\t\t:{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"},\"name\":\"get_weather\"\t\t}\t</tool_call>\n<tool_call>{\"id\"\t\t:\t\t\"call_5e4be0f5\"\t\t,\"name\"\t:\"list_dir\"\t,\"arguments\":{\"path\":\"line one\\nline two \\n  block\\n\"}\t\t}</tool_call>".encode(),
+    # hermes.v1: write_file (seed 2)
+    "<tool_call>\t\t{\t\"id\":\"call_e5ceef8e\",\t\t\"arguments\"\t\t:\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\",\t\t\"name\":\t\"write_file\"\t\t}</tool_call>".encode(),
+    # hermes.v1: delete_path, read_file (seed 3)
+    "<tool_call>{\"id\":\"call_305c487f\",\t\"name\":\t\t\"delete_path\"\t\t,\"arguments\"\t:\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"}\t</tool_call>\n<tool_call>{\t\t\"type\":\"function\"\t,\t\t\"id\":\t\"call_07be3ff1\",\"name\"\t:\t\"read_file\"\t\t,\t\t\"arguments\":\"{\\\"path\\\":\\\"\\\\n  block\\\\n alpha\\\",\\\"limit\\\":-209}\"\t\t}\t\t</tool_call>".encode(),
+    # kimi-k2.v1: read_file (seed 0)
+    "<|tool_calls_section_begin|><|tool_call_begin|>\t\tfunctions.read_file:0<|tool_call_argument_begin|>\t{\"path\":\"tab\\tseparated \\n  block\\n\"}\t<|tool_call_end|>\t\t<|tool_calls_section_end|>".encode(),
+    # kimi-k2.v1: get_weather, list_dir (seed 1)
+    "<|tool_calls_section_begin|>\t<|tool_call_begin|>functions.get_weather:0<|tool_call_argument_begin|>{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"}<|tool_call_end|>\t<|tool_call_begin|>functions.list_dir:1\t<|tool_call_argument_begin|>\t\t{\"path\":\"src/lib.rs alpha\"}\t\t<|tool_call_end|><|tool_calls_section_end|>".encode(),
+    # kimi-k2.v1: write_file (seed 2)
+    "<|tool_calls_section_begin|>\t\t<|tool_call_begin|>\t\tfunctions.write_file:0<|tool_call_argument_begin|>\t\t\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"\t<|tool_call_end|>\t<|tool_calls_section_end|>".encode(),
+    # kimi-k2.v1: delete_path, read_file (seed 3)
+    "<|tool_calls_section_begin|><|tool_call_begin|>functions.delete_path:0<|tool_call_argument_begin|>\t\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"<|tool_call_end|><|tool_call_begin|>functions.read_file:1\t<|tool_call_argument_begin|>\t\"{\\\"path\\\":\\\"alpha trailing  \\\"}\"<|tool_call_end|>\t<|tool_calls_section_end|>".encode(),
+    # llama3-json.v1: read_file (seed 0)
+    "<|python_tag|>{\t\t\"type\":\t\"function\"\t,\t\"name\":\"read_file\"\t,\"parameters\"\t\t:{\"path\":\"tab\\tseparated \\n  block\\n\"},\"id\":\t\t\"call_4963bab0\"\t}".encode(),
+    # llama3-json.v1: get_weather, list_dir (seed 1)
+    "{\t\"id\"\t:\"call_90d7a28a\",\t\"parameters\":{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"},\"name\"\t\t:\t\"get_weather\"\t\t}\n{\t\t\"type\":\t\"function\",\"id\"\t:\"call_9fc66081\",\"name\"\t\t:\"list_dir\"\t,\"parameters\"\t:\t\t{\"path\":\"  indented tab\\tseparated\"}}".encode(),
+    # llama3-json.v1: write_file (seed 2)
+    "<|python_tag|>\t\t{\t\t\"id\":\"call_0fccd72d\",\t\"parameters\"\t\t:\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"\t,\t\t\"name\":\t\"write_file\"}".encode(),
+    # llama3-json.v1: delete_path, read_file (seed 3)
+    "{\"id\":\t\"call_93349fc3\",\"name\"\t\t:\t\t\"delete_path\",\t\"parameters\":\t\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"\t}\n<|python_tag|>{\t\"id\"\t:\t\t\"call_03bb1010\"\t,\t\"name\":\t\"read_file\"\t,\t\t\"arguments\":\"{\\\"path\\\":\\\"beta gamma\\\",\\\"limit\\\":557}\"\t\t}".encode(),
+    # mistral-v11.v1: read_file (seed 0)
+    b"[TOOL_CALLS]\tread_file\t\t[CALL_ID]\t\tcall_3cb13d09[ARGS]{\"path\":\"tab\\tseparated \\n  block\\n\"}",
+    # mistral-v11.v1: get_weather, list_dir (seed 1)
+    b"[TOOL_CALLS]get_weather\t[CALL_ID]call_74616796\t[ARGS]{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"}[TOOL_CALLS]\t\tlist_dir[CALL_ID]call_5c2a449c\t\t[ARGS]{\"path\":\"line one\\nline two\"}",
+    # mistral-v11.v1: write_file (seed 2)
+    b"[TOOL_CALLS]\t\twrite_file\t[CALL_ID]call_dcc507e4[ARGS]\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"",
+    # mistral-v11.v1: delete_path, read_file (seed 3)
+    b"[TOOL_CALLS]delete_path[CALL_ID]call_a2036b72[ARGS]\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"[TOOL_CALLS]read_file\t\t[CALL_ID]call_979d2193\t\t[ARGS]\"{\\\"path\\\":\\\"tab\\\\tseparated   indented\\\"}\"",
+    # mistral-v3.v1: read_file (seed 0)
+    b"[TOOL_CALLS]\t[{\t\t\"id\":\t\"call_00cc4d19\"\t,\"name\":\t\"read_file\",\"parameters\"\t\t:{\"path\":\"tab\\tseparated \\n  block\\n\"}}]",
+    # mistral-v3.v1: get_weather, list_dir (seed 1)
+    b"[TOOL_CALLS][\t{\"id\":\"call_90d7a28a\",\t\"arguments\":{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"},\t\t\"name\"\t:\t\t\"get_weather\"\t\t},{\"id\"\t\t:\"call_607e2c86\"\t,\"arguments\":{\"path\":\"tab\\tseparated \\n  block\\n\"}\t\t,\"name\"\t:\"list_dir\"\t}\t\t]",
+    # mistral-v3.v1: write_file (seed 2)
+    b"[TOOL_CALLS]\t\t[\t\t{\"name\":\t\t\"write_file\"\t,\t\"parameters\"\t:\t\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"\t\t,\"id\"\t:\"call_b3ac305a\"\t}]",
+    # mistral-v3.v1: delete_path, read_file (seed 3)
+    b"[TOOL_CALLS][{\"arguments\"\t:\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\",\t\t\"name\"\t\t:\"delete_path\"\t,\"id\"\t:\t\"call_de98af50\"\t}\t\t,\t\t{\t\"id\":\"call_49f77a23\"\t,\"name\":\t\"read_file\"\t,\t\t\"parameters\":\"{\\\"path\\\":\\\"alpha tab\\\\tseparated\\\"}\"\t\t}\t\t]",
+    # openai-tool-calls.v1: read_file (seed 0)
+    b"{\"type\": \"function\",\t\t\"function\"\t:\t{\t\"arguments\":{\"path\":\"tab\\tseparated \\n  block\\n\"},\"name\"\t:\"read_file\"}\t\t,\"id\":\"call_0f4d3872\"\t\t}",
+    # openai-tool-calls.v1: get_weather, list_dir (seed 1)
+    b"{\n          \"type\":\"function\",\"function\"\t:{\"name\"\t:\t\t\"get_weather\",\"arguments\":{\"city\":\"\\n  block\\n src/lib.rs\",\"unit\":\"fahrenheit\"}\t\t}\t,\t\t\"id\"\t\t:\"call_c90789ba\"\t\t}\n{\n    \"type\": \"function\",\t\"id\":\t\"call_18e9685e\",\t\t\"function\":\t{\"arguments\"\t:{\"path\":\"tab\\tseparated trailing  \"},\"name\":\"list_dir\"\t\t}\t}",
+    # openai-tool-calls.v1: write_file (seed 2)
+    b"{\n\t\t\t\t\"type\":\"function\"\t\t,\"function\":{\"arguments\":\"{\\\"path\\\":\\\"  indented\\\",\\\"content\\\":\\\"tab\\\\tseparated beta gamma\\\",\\\"mode\\\":\\\"create\\\",\\\"ratio\\\":39.32,\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"\t,\t\"name\"\t\t:\"write_file\"\t}\t\t,\"id\"\t:\"call_b3ac305a\"\t}",
+    # openai-tool-calls.v1: delete_path, read_file (seed 3)
+    b"{\n      \"type\": \"function\",\"id\"\t:\t\"call_618293ea\",\t\t\"function\"\t\t:{\t\"name\"\t:\t\"delete_path\",\t\"arguments\"\t\t:\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"\t\t}\t}\n{\n\t\t\t\t\"type\": \"function\"\t,\"function\":{\t\"arguments\":\"{\\\"path\\\":\\\"alpha\\\",\\\"limit\\\":-32}\"\t\t,\t\t\"name\":\t\t\"read_file\"\t\t}\t\t,\"id\":\t\t\"call_e427bb79\"\t\t}",
+    # qwen3-coder-xml.v1: read_file (seed 0)
+    b"<tool_call>\t<function=read_file>\n<parameter=path>\ntab\tseparated \n  block\n\n</parameter>\n</function>\t\t</tool_call>",
+    # qwen3-coder-xml.v1: get_weather, list_dir (seed 1)
+    b"<tool_call><function=get_weather>\n<parameter=city>\n\n  block\n src/lib.rs\n</parameter>\n<parameter=unit>\nfahrenheit\n</parameter>\n</function>\t</tool_call>\n<tool_call>\t<function=list_dir>\n<parameter=path>\nsrc/lib.rs\n</parameter>\n</function></tool_call>",
+    # qwen3-coder-xml.v1: write_file (seed 2)
+    b"<tool_call>\t\t<function=write_file>\n<parameter=path>\n  indented\n</parameter>\n<parameter=content>\ntab\tseparated beta gamma\n</parameter>\n<parameter=mode>\ncreate\n</parameter>\n<parameter=ratio>\n39.32\n</parameter>\n<parameter=count>\n-415\n</parameter>\n<parameter=options>\n{\"backup\":false}\n</parameter>\n</function>\t</tool_call>",
+    # qwen3-coder-xml.v1: delete_path, read_file (seed 3)
+    b"<tool_call><function=delete_path>\n<parameter=path>\nbeta gamma \n  block\n\n</parameter>\n<parameter=path>\n\n  block\n\n</parameter>\n</function></tool_call>\n<tool_call>\t<function=read_file>\n<parameter=path>\n  indented\n</parameter>\n</function>\t</tool_call>",
+]
+
+# The repair cases of issue #3, phrased against the probe's tool set.
+TOOL_CALL_REPAIRS = [
+    # The motivating case: a body of stray plural closers, no required
+    # parameter (resolves to `{}`) and a required one (never invented).
+    b'<tool_call>\n<function=current_time>\n</parameters>\n</parameters>\n</function>\n</tool_call>',
+    b'<tool_call><function=list_dir></parameters></parameters></function></tool_call>',
+    # Missing `</parameter>`, `</function>`, and `</tool_call>`.
+    b'<tool_call>\n<function=read_file>\n<parameter=path>\nsrc/a.rs\n<parameter=limit>\n5\n</function>\n</tool_call>',
+    b'<tool_call>\n<function=read_file>\n<parameter=path>\nsrc/a.rs\n</parameter>\n</tool_call>',
+    b'<tool_call>\n<function=read_file>\n<parameter=path>\nsrc/a.rs\n</parameter>\n</function>',
+    # A whole JSON body followed by one stray closer.
+    b'<tool_call>\n<function=read_file>\n{"path": "a.rs", "limit": 2}\n</parameter>\n</function>\n</tool_call>',
+    # Nested parameters, depth-matched, with an inline JSON object.
+    b'<tool_call>\n<function=write_file>\n<parameter=path>\nx\n</parameter>\n<parameter=content>\ny\n</parameter>\n'
+    b'<parameter=options>\n<parameter=owner>\n<parameter=name>\nci\n</parameter>\n</parameter>\n'
+    b'<parameter=retries>\n3\n</parameter>\n</parameter>\n</function>\n</tool_call>',
+    # Fenced and prose-wrapped calls; a Hermes body with a preamble.
+    b'Sure, calling it now:\n```json\n{"name": "get_weather", "arguments": {"city": "Lima"}}\n```\nDone.',
+    b'<tool_call>Here you go: {"name": "read_file", "arguments": {"path": "notes.txt"}}</tool_call>',
+    # Stringified arguments, valid and invalid.
+    b'<tool_call>{"name": "read_file", "arguments": "{\\"path\\": \\"a.rs\\", \\"limit\\": 3}"}</tool_call>',
+    b'<tool_call>{"name": "read_file", "arguments": "{\\"path\\": \\"a.rs\\", \\"limit\\": }"}</tool_call>',
+    # A dangling trailing opener after a complete call.
+    b'<tool_call>{"name": "list_dir", "arguments": {"path": "."}}</tool_call>\n<tool_call>{"name": "rea',
+    b'<tool_call>\n<function=read_file>\n<parameter=path>\nsrc/a.rs\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=wri',
+    # Name resolution: near miss, alias, hallucination.
+    b'<tool_call>{"name": "read_fiel", "arguments": {"path": "a.rs"}}</tool_call>',
+    b'<tool_call>{"name": "rm", "arguments": {"path": "build"}}</tool_call>',
+    b'<tool_call>{"name": "write_fiel", "arguments": {"path": "a", "content": "b"}}</tool_call>',
+    b'<tool_call>{"name": "launch_rockets", "arguments": {}}</tool_call>',
+    # Parameter names: explicit alias and typo.
+    b'<tool_call>\n<function=read_file>\n<parameter=file>\na.rs\n</parameter>\n</function>\n</tool_call>',
+    b'<tool_call>\n<function=read_file>\n<parameter=pth>\na.rs\n</parameter>\n</function>\n</tool_call>',
+    # Schema-guided typing: strings stay strings, exact numbers, enums.
+    b'<tool_call>\n<function=read_file>\n<parameter=path>\n12345\n</parameter>\n<parameter=limit>\n007\n</parameter>\n</function>\n</tool_call>',
+    b'<tool_call>{"name": "get_weather", "arguments": {"city": "true", "unit": " Fahrenheit "}}</tool_call>',
+    b'<tool_call>{"name": "write_file", "arguments": {"path": "a", "content": "b", "mode": "Overwrite", "ratio": "1.50", "count": 2.0}}</tool_call>',
+    # Repeated parameters: a scalar (never last-wins) and a repeatable one.
+    b'<tool_call>\n<function=read_file>\n<parameter=path>\na\n</parameter>\n<parameter=path>\nb\n</parameter>\n</function>\n</tool_call>',
+    b'<tool_call>\n<function=delete_path>\n<parameter=path>\na\n</parameter>\n<parameter=path>\nb\n</parameter>\n</function>\n</tool_call>',
+    # Reasoning: closed with an embedded call, unclosed, closed at a call opener.
+    b'<think>maybe <tool_call>{"name": "list_dir", "arguments": {"path": "."}}</tool_call></think>No call needed.',
+    b'<think>planning the edit\n<tool_call>{"name": "read_file", "arguments": {"path": "a.rs"}}</tool_call>',
+    b'plan</think>\n<tool_call>{"name": "read_file", "arguments": {"path": "a.rs"}}</tool_call>',
+    # Mixed dialects in one message, and invalid UTF-8 in content and arguments.
+    b'<tool_call>{"name": "get_weather", "arguments": {"city": "Oslo"}}</tool_call>\n'
+    b'<tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n</parameter>\n</function>\n</tool_call>',
+    b'Reading \xff\xfe now.\n<tool_call>{"name": "read_file", "arguments": {"path": "a.rs"}}</tool_call>',
+    b'<tool_call>\n<function=write_file>\n<parameter=path>\na\xc3\n</parameter>\n<parameter=content>\n\xe2\x82\n</parameter>\n</function>\n</tool_call>',
+    # Llama 3 JSON: a missing final brace at the end and before the next
+    # call, a repeated brace, stringified parameters, arguments cut before
+    # an end-of-message token, a call after the tag with the `arguments`
+    # key, a built-in Python-syntax call after the tag, and a Hermes
+    # wrapper around a Llama 3 object.
+    b'{"name": "get_weather", "parameters": {"city": "Paris", "unit": "celsius"}',
+    b'{"name": "read_file", "parameters": {"path": "a.rs"}\n{"name": "list_dir", "parameters": {"path": "."}}',
+    b'{"name": "list_dir", "parameters": {"path": "."}}}',
+    b'{"name": "read_file", "parameters": "{\\"path\\": \\"a.rs\\"}"}; {"name": "current_time", "parameters": {}}',
+    b'<|python_tag|>{"name": "read_file", "parameters": {"path": "a.rs"<|eom_id|>',
+    b'<|python_tag|>{"name": "get_weather", "arguments": {"city": "Lima"}}<|eom_id|>',
+    b'<|python_tag|>brave_search.call(query="weather")<|eom_id|>',
+    b'<tool_call>\n{"name": "read_file", "parameters": {"path": "a.rs"}}\n</tool_call>',
+    # Mistral v3: a missing closing bracket at the end and before the next
+    # array, a truncated last object, a bare object, a repeated bracket,
+    # duplicate model ids, the "parameters" key, and stringified arguments.
+    b'[TOOL_CALLS] [{"name": "read_file", "arguments": {"path": "a.rs"}, "id": "a1B2c3D4e"}, {"name": "list_dir", "arguments": {"path": "."}}',
+    b'[TOOL_CALLS] [{"name": "read_file", "arguments": {"path": "a.rs"}}\n[TOOL_CALLS] [{"name": "current_time", "arguments": {}}]',
+    b'[TOOL_CALLS] [{"name": "get_weather", "arguments": {"city": "Oslo"}}, {"name": "read_file", "arguments": {"path": "src/ma',
+    b'[TOOL_CALLS] {"name": "list_dir", "arguments": {"path": "src"}}',
+    b'[TOOL_CALLS] {"name": "list_dir", "arguments": {"path": "src"}}, {"name": "read_file", "arguments": {"path": "a.rs"}}',
+    b'[TOOL_CALLS] {"name": "list_dir", "arguments": {"path": "src"}}\n{"name": "current_time", "arguments": {}}\nDone.',
+    b'[TOOL_CALLS] {"name": "list_dir", "arguments": {"path": "src"}}\nLike {"path": "src", "depth": 1}.',
+    b'[TOOL_CALLS] {"name": "list_dir", "arguments": {"path": "src"}}, {"name": "read_file", "argu',
+    b'[TOOL_CALLS][{"name": "list_dir", "arguments": {"path": "."}, "id": "Zz9Yy8Xx7"}]]</s>',
+    b'[TOOL_CALLS] [{"name": "read_file", "arguments": {"path": "a"}, "id": "same12345"}, {"name": "read_file", "arguments": {"path": "b"}, "id": "same12345"}]',
+    b'[TOOL_CALLS] [{"name": "get_weather", "parameters": {"city": "Lima"}}]',
+    b'[TOOL_CALLS] [{"name": "read_file", "arguments": "{\\"path\\": \\"a.rs\\"}"}]',
+    # Mistral v11: a missing [ARGS], whitespace around the name, truncated
+    # and unclosed arguments, a second call without its [TOOL_CALLS], call
+    # ids, prose after a call, reasoning, and a v3 array beside a v11 call.
+    b'[TOOL_CALLS]read_file{"path": "a.rs"}',
+    b'[TOOL_CALLS] list_dir \n[ARGS] {"path": "."}',
+    b'[TOOL_CALLS]read_file[ARGS]{"path": "src/ma',
+    b'[TOOL_CALLS]read_file[ARGS]{"path": "a.rs"',
+    b'[TOOL_CALLS]read_file[ARGS]{"path": "a.rs"}\nlist_dir[ARGS]{"path": "."}\nDone.',
+    b'[TOOL_CALLS]read_file[CALL_ID]a1B2c3D4e[ARGS]{"path": "a"}[TOOL_CALLS]current_time[CALL_ID]a1B2c3D4e[ARGS]{}</s>',
+    b'[TOOL_CALLS]read_file[ARGS]{"path": "a.rs"}\nDone. Like {"x": 1}',
+    b'[THINK]plan the read[/THINK]Reading.[TOOL_CALLS]read_file[ARGS]{"path": "a.rs"}',
+    b'[TOOL_CALLS] [{"name": "list_dir", "arguments": {"path": "."}}]\n[TOOL_CALLS]read_file[ARGS]{"path": "b"}',
+    b'[TOOL_RESULTS]a1B2c3D4e[TOOL_CONTENT]ok[/TOOL_RESULTS]',
+    # DeepSeek-V3.1: missing section and call closers, truncated arguments,
+    # reasoning before the section, ASCII and space renderings of the
+    # tokens, an omitted section opener, prose after the section, and a
+    # tool output.
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"a.rs\"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>list_dir<｜tool▁sep｜>{\"path\": \".\"}<｜tool▁call▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"a.rs\"}<｜tool▁call▁begin｜>list_dir<｜tool▁sep｜>{\"path\": \".\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"src/ma".encode(),
+    "<think>plan the read</think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"a.rs\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<|tool_calls_begin|><|tool_call_begin|>read_file<|tool_sep|>{\"path\": \"a.rs\"}<|tool_call_end|><|tool_calls_end|>".encode(),
+    "<|tool calls begin|><|tool call begin|>list_dir<|tool sep|>{\"path\": \".\"}<|tool call end|><|tool calls end|>".encode(),
+    "Now: <｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"a.rs\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"a.rs\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>\nDone.".encode(),
+    "<｜tool▁output▁begin｜>ok<｜tool▁output▁end｜>".encode(),
+    # DeepSeek-V3 / R1: a missing, bare, repeated or foreign-language fence
+    # line, a missing or other type, R1 reasoning, a missing call closer
+    # between calls, truncated fenced arguments, a fence inside a string
+    # value, and a V3.1 section and a V3 section in one turn.
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file\n{\"path\": \"a.rs\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file\n```\n{\"path\": \"a.rs\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file\n```json\n{\"path\": \"a.rs\"}\n<｜tool▁call▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file\n```json\n```json\n{\"path\": \"a.rs\"}\n```\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file```javascript{\"path\": \"a.rs\"}```<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>tool<｜tool▁sep｜>read_file\n```json\n{\"path\": \"a.rs\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜><｜tool▁sep｜>read_file\n```json\n{\"path\": \"a.rs\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<think>\nplan the read\n</think>\n\n<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file\n```json\n{\"path\": \"a.rs\"}\n```\n<｜tool▁call▁begin｜>function<｜tool▁sep｜>list_dir\n```json\n{\"path\": \".\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file\n```json\n{\"path\": \"src/ma".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>write_file\n```json\n{\"path\": \"R.md\", \"content\": \"```sh\\nls\\n```\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"a\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>\n<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>list_dir\n```json\n{\"path\": \".\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>".encode(),
+    # Kimi-K2: missing section and call closers, an omitted section opener,
+    # the singular section tokens, ids without `:IDX` or the `functions.`
+    # prefix, a dotted name, a colon in the name, duplicate ids, Thinking
+    # reasoning, truncated arguments, and a tool message.
+    b'<|tool_calls_section_begin|><|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{"path": "a.rs"}<|tool_call_end|><|tool_call_begin|>functions.list_dir:1<|tool_call_argument_begin|>{"path": "."}<|tool_call_end|>',
+    b'<|tool_calls_section_begin|><|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{"path": "a.rs"}<|tool_call_begin|>functions.list_dir:1<|tool_call_argument_begin|>{"path": "."}<|tool_call_end|><|tool_calls_section_end|>',
+    b'Now: <|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{"path": "a.rs"}<|tool_call_end|><|tool_calls_section_end|>',
+    b'<|tool_call_section_begin|><|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{"path": "a.rs"}<|tool_call_end|><|tool_call_section_end|>',
+    b'<|tool_calls_section_begin|><|tool_call_begin|>functions.read_file<|tool_call_argument_begin|>{"path": "a.rs"}<|tool_call_end|><|tool_call_begin|>list_dir:1<|tool_call_argument_begin|>{"path": "."}<|tool_call_end|><|tool_calls_section_end|>',
+    b'<|tool_calls_section_begin|><|tool_call_begin|>functions.mcp.read_file:0<|tool_call_argument_begin|>{"path": "a"}<|tool_call_end|><|tool_call_begin|>functions.ns:read_file:1<|tool_call_argument_begin|>{"path": "b"}<|tool_call_end|><|tool_calls_section_end|>',
+    b'<|tool_calls_section_begin|><|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{"path": "a"}<|tool_call_end|><|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{"path": "b"}<|tool_call_end|><|tool_calls_section_end|>',
+    b'<think>plan the read</think>Reading.<|tool_calls_section_begin|><|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{"path": "src/ma',
+    b'<|im_system|>tool<|im_middle|>## Return of functions.read_file:0\nok<|im_end|>',
+    # A colon-namespaced name, and calls naming no tool (a Kimi-K2 bare call
+    # counter, a Hermes object without "name") read by their arguments.
+    b'<|tool_calls_section_begin|><|tool_call_begin|>functions.mcp:read_file:0<|tool_call_argument_begin|>{"path": "a"}<|tool_call_end|><|tool_calls_section_end|>',
+    b'<|tool_calls_section_begin|><|tool_call_begin|>3<|tool_call_argument_begin|>{"city": "Oslo"}<|tool_call_end|><|tool_call_begin|>4<|tool_call_argument_begin|>{"path": "a"}<|tool_call_end|><|tool_calls_section_end|>',
+    b'<tool_call>\n{"arguments": {"path": "a.rs", "limit": 5}}\n</tool_call>',
+    # Anthropic tool_use blocks: in a message with a text block, in a whole
+    # response with a thinking block, reordered, without a type but with a
+    # toolu_ id, with "arguments" for "input", stringified input, cut off,
+    # without the closing brace, and streaming events.
+    b'{"role":"assistant","content":[{"type":"text","text":"ok"},{"type":"tool_use","id":"toolu_01","name":"read_file","input":{"path":"a.rs"}}]}',
+    b'{"id":"msg_01","type":"message","role":"assistant","content":[{"type":"thinking","thinking":"plan","signature":"x"},{"type":"tool_use","id":"toolu_01","name":"list_dir","input":{"path":"."}}],"stop_reason":"tool_use"}',
+    b'{"name":"read_file","input":{"path":"a"},"id":"toolu_01","type":"tool_use"}',
+    b'{"id":"toolu_01","name":"read_file","input":{"path":"a"}}',
+    b'{"type":"tool_use","id":"toolu_01","name":"read_file","arguments":{"path":"a"}}',
+    b'{"type":"tool_use","id":"toolu_01","name":"read_file","input":"{\\"path\\":\\"a\\"}"}',
+    b'{"type":"tool_use","id":"toolu_01","name":"read_file","input":{"path":"src/ma',
+    b'{"type":"tool_use","id":"toolu_01","name":"read_file","input":{"path":"a"}',
+    b'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01","name":"read_file","input":{}}}\n',
+    b'{"type":"tool_result","tool_use_id":"toolu_01","content":"ok"}',
+    # A Llama 3 JSON object with an id member first or last, and an
+    # Anthropic-shaped object inside a Hermes wrapper.
+    b'{"id": "call_7", "name": "read_file", "parameters": {"path": "a"}}',
+    b'{"name": "read_file", "parameters": {"path": "a"}, "id": "toolu_01"}',
+    b'<tool_call>{"type":"tool_use","id":"toolu_01","name":"read_file","input":{"path":"a"}}</tool_call>',
+    # Harmony: analysis then a call, the renderer layout, no start prefix, a
+    # preamble, <|end|> for <|call|>, a missing end, <|channel>, a recipient
+    # without functions., after <|message|>, trailing text, cut-off
+    # arguments, built-in browser and python recipients, a tool message.
+    b'<|channel|>analysis<|message|>plan<|end|><|start|>assistant<|channel|>commentary to=functions.read_file <|constrain|>json<|message|>{"path":"a"}<|call|>',
+    b'<|start|>assistant to=functions.read_file<|channel|>commentary <|constrain|>json<|message|>{"path":"a"}<|call|>',
+    b' to=functions.list_dir<|channel|>commentary json<|message|>{"path":"."}<|call|>',
+    b'<|channel|>commentary<|message|>Checking.<|end|><|start|>assistant<|channel|>commentary to=functions.read_file<|message|>{"path":"a"}<|end|>',
+    b'<|channel>commentary to=read_file <|constrain|>json<|message|>{"path":"a"}',
+    b'<|channel|>commentary<|message|>to=functions.read_file {"path":"a"} thanks<|call|>',
+    b'<|channel|>commentary to=functions.read_file <|constrain|>json<|message|>{"path":"src/ma',
+    b'<|start|>assistant<|channel|>analysis to=browser.search <|constrain|>json<|message|>{"query":"x"}<|call|><|start|>assistant<|channel|>analysis to=python<|message|>print(1)<|call|>',
+    b'<|start|>functions.read_file to=assistant<|channel|>commentary<|message|>ok<|end|>',
+    # Bare JSON: a call alone, in prose, in a fence, in an array, arguments
+    # first with a trailing id, stringified arguments, a call object nested
+    # in another's arguments, a bare tool result.
+    b'{"name": "read_file", "arguments": {"path": "a"}}',
+    b'Reading it.\n{"name": "read_file", "arguments": {"path": "a"}}\nDone.',
+    b'Example:\n```json\n{"name": "list_dir", "arguments": {"path": "."}}\n```\n',
+    b'[{"name": "read_file", "arguments": {"path": "a"}}, {"name": "list_dir", "arguments": {"path": "b"}}]',
+    b'{"arguments": {"path": "a"}, "name": "read_file", "id": "call_9"}',
+    b'{"name": "read_file", "arguments": "{\\"path\\": \\"a\\"}"}',
+    b'{"name": "write_file", "arguments": {"path": "a", "content": "{\\"name\\": \\"rm\\", \\"arguments\\": {}}"}}',
+    b'{"tool_call_id": "call_9", "content": "ok"}',
+    # Unparsed markup (reported, never silent content): Pythonic lists, a
+    # Gemma 3 tool_code block, a GLM-4.5 call, stripped renderings, and
+    # call markup of a built-in dialect outside the allow-list.
+    b'[read_file(path="a"), list_dir(path=".")]',
+    b'Checking.\n[read_file(path="a")]',
+    b'<|python_start|>[read_file(path="a")]<|python_end|>',
+    b'```tool_code\nread_file(path="a")\n```',
+    b'<tool_call>read_file\n<arg_key>path</arg_key>\n<arg_value>a</arg_value>\n</tool_call>',
+    b'functions.read_file:0{"path": "a"}',
+    b'commentary to=functions.read_file json{"path": "a"}',
+    b'functionread_file\n```json\n{"path": "a"}\n```',
+    b'<function=read_file>\n<parameter=path>\na\n</parameter>\n</function>',
+    b'read_file{"path": "a"}',
+]
+
+# Inputs that hold no recoverable call.
+TOOL_CALL_NEGATIVES = [
+    b'',
+    b'Just prose, no call.',
+    b'<tool_call>',
+    b'</tool_call></function></parameter>',
+    b'<tool_call></tool_call>',
+    b'<tool_call>{"name": 5, "arguments": []}</tool_call>',
+    b'<tool_call>\n<function=>\n</function>\n</tool_call>',
+    b'<parameter=path>\na.rs\n</parameter>',
+    b'{"role": "assistant", "content": "hi", "tool_calls": []}',
+    b'[' * 64 + b'{"name": "read_file"' + b']' * 64,
+    b'\xff\xfe\xfd',
+    b'<think></think><think>',
+    # JSON content that is not call-shaped stays content.
+    b'Record: {"name": "Ada", "age": 36} and {"user": {"name": "Bob"}}',
+    b'{"name": "read_file"' + b'{' * 64,
+    b'[TOOL_CALLS]',
+    b'[TOOL_CALLS]read_file',
+    b'[TOOL_CALLS]read_file[CALL_ID][ARGS][ARGS]',
+    b'[THINK][TOOL_CALLS][/THINK]',
+    "<｜tool▁calls▁begin｜>".encode(),
+    "<|tool calls begin|> nothing".encode(),
+    "<｜tool▁call▁begin｜>read_file<｜tool▁sep｜>".encode(),
+    "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>\n```json\n```".encode(),
+    b'<|tool_calls_section_begin|>',
+    b'<|tool_call_begin|>functions.:0<|tool_call_argument_begin|>',
+    b'{"name":"read_file","input":{"path":"a"}}',
+    b'{"type":"tool_use"}',
+    b'<|start|>assistant<|channel|>final<|message|>Done.<|return|>',
+    b'<|channel|>commentary to=<|message|>',
+    b'{"name": "read_file", "arguments": 3} {"name": "Ada", "arguments": "she argued"}',
+    b'{"arguments": {"path": "a"}} {"name": "read_file", "arguments": {"path": "a"}, "mode": 1}',
+    b'{"name": "read_file", "arguments": {"type": "object", "properties": {"path": {"type": "string"}}}}',
+    b'{"name": "read_file", "description": "Read", "parameters": {"type": "object", "properties": {}}}',
+    b'{"name": "read_file", "arguments": {"path": "a"',
+    b'f(x) = 2x, see [1]; [a(b)] is math and `g(a=1)` inline code',
+    b'```python\nprint(x)\n```',
+    "```json\n{\"path\": \"a.rs\"}\n```".encode(),
+    b'[TOOL_CALLS] [' + b'{"name": "read_file", "arguments": ' * 16 + b']',
+    b'[TOOL_RESULTS] {"content": "x", "call_id": "a1B2c3D4e"}[/TOOL_RESULTS]',
+]
+
+# Exact probe inputs (header included) kept as seeds: inputs that once
+# failed an invariant, and the exit-gate states the invariants must keep
+# guarding (a usable call beside a failed tool choice, a guess on a mutating
+# tool, envelope syntax slips, bare Qwen3-Coder elements, invalid UTF-8
+# inside a call).
+TOOL_CALL_REGRESSIONS = [
+    # A forced read_file choice violated beside a read_file call: the call
+    # is skipped as tool_choice_failed (fuzz-tool-call-u8m4d7hy, F7).
+    b'\xe6#Let me check both.\n[{"name": "get_weather", "arguments": {"city": "Oslo"}}, {"name": "read_file", "arguments": {"path": "notes.txt", "limit": 10}}]\nAnd Bergen:\n{"arguments": {"city": "Bergen", "unit": "celsius"}, "name": "get_weather"}',
+    # Forced read_file, Resolved read_file beside an extra call.
+    b'\xc0\x52<tool_call>{"name": "read_file", "arguments": {"path": "a"}}</tool_call>\n'
+    b'<tool_call>{"name": "current_time", "arguments": {}}</tool_call>',
+    # A guess on a mutating tool: invalid UTF-8 in write_file's argument.
+    b'\x00\x52<tool_call>{"name": "write_file", "arguments": {"path": "a", "content": "x\xffy"}}</tool_call>',
+    # The same under a length stop, and a near-miss mutating name under Tolerant.
+    b'\x04\x52<tool_call>{"name": "write_file", "arguments": {"path": "a", "content": "x\xffy"}}</tool_call>',
+    b'\x02\x52<tool_call>{"name": "write_fil", "arguments": {"path": "a", "content": "x"}}</tool_call>',
+    # JSON envelope slips (Round B): single quotes, bare keys, a trailing
+    # comma and a comment.
+    b"\x00\x52<tool_call>{'name': 'read_file', 'arguments': {'path': 'a'},}</tool_call>",
+    b'\x00\x52{/* c */ name: "read_file", arguments: {"path": "a"}}',
+    # A bare Qwen3-Coder element (Round A), and invalid UTF-8 in a tool name.
+    b'\x00\x52<function=read_file>\n<parameter=path>\na\n</parameter>\n</function>',
+    b'\x00\x52<tool_call>\n<function=read_fil\xe9>\n<parameter=path>\na\n</parameter>\n</function>\n</tool_call>',
+    # S1: a turn that starts inside a reasoning block (control bits 4-5 = 1)
+    # must not let Anthropic's explicit closer `"}` inside a call's JSON end
+    # the block and swallow the call; nor end it inside the call before its
+    # own `</think>`.
+    b'\x10\x52Let me look. <tool_call>{"name":"read_file","arguments":{"path":"x"}}</tool_call>',
+    b'\x10\x52<think>hmm {"name":"read_file","arguments":{"path":"x"}}</think>done',
+    b'\x10\x52hmm [TOOL_CALLS] [{"name": "read_file", "arguments": {"path": "x"}}] done</think>'
+    b'<|python_tag|>{"name": "read_file", "parameters": {"path": "y"}}',
+    # S3: a rejected attempt keeps its own closing markup (trailing text in
+    # the wrapper, an empty name, a nested function, stray closers after it,
+    # and a broken wrapper around a bare JSON call under a length stop).
+    b'\x00\x52<tool_call>\n<function=read_file>\n<parameter=path>\na\n</parameter>\nand more</function>\n</tool_call>',
+    b'\x00\x52<function=>x</function> after',
+    b'\x00\x52<tool_call>\n<function=read_file>\n<function=read_file>\n</function>\n</tool_call>',
+    b'\x00\x52<tool_call>\n<function=read_file>\nhi</function>\n</tool_call>\n</tool_call> tail',
+    b'\x04\x52<tool_call>{"name": "read_file", "arguments": {"path": "a"}} junk junk</tool_call>',
+    # F4: without its closer a rejected attempt keeps only what its grammar
+    # read; the prose after a broken opener stays content.
+    b'\x00\x52Sure, I could call <function=read_file but actually no tool is needed. The answer is 42.',
+    # A wrapper broken at its tool name whose own closer is cut before the
+    # next wrapper opens: it keeps only what it read, and the inner
+    # `</function>` left as content is not a closer of the wrapper.
+    b'\x00R<tool_call>\n<function=read_fil\xe9>\n<parameter=path>\na\n</parameter>\n</function>\n</tooR<tool_call>\n<function=read_fil\xe9>\n<parameter=path>\na\n</parameter>\n</funcfunctiontion>\n</tool_call>',
+    # A section-less Kimi-K2 attempt chaining calls, broken in its second:
+    # a repeated <|tool_call_begin|> continues it, so it runs to the
+    # section closer rather than leaving it as content.
+    b'\x00\x52Let me check. <|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{"path": "a"}<|tool_call_end|>'
+    b'<|tool_call_begin|>functions.read_file:1 oops<|tool_call_argument_begin|>{"path": "b"}<|tool_call_end|><|tool_calls_section_end|> done',
+    # T1/F5: two attempts read the same call inside a starts_open block; it
+    # is embedded once, in span order.
+    b'\x10\x52[TOOL_CALLS]read_file{"path":"a"}[TOOL_CALLS]current_time{}[/THINK]Answer.',
+    # T1/F6: a call's own closer (Kimi-K2 <|tool_call_end|>, DeepSeek
+    # <｜tool▁call▁end｜>) ends a rejected attempt with no section closer;
+    # the prose after it stays content.
+    b'\x00\x52Hi <|tool_calls_section_begin|><|tool_call_begin|>functions.read_file:0 oops<|tool_call_argument_begin|>{"path":"a"}<|tool_call_end|> The answer is 42.',
+    'Hi <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file oops\n```json\n{"path":"a"}\n```<｜tool▁call▁end｜> The answer is 42.'.encode().join([b'\x00\x52', b'']),
+    b'\x00\x52<|tool_call_begin|>functions.read_file:0 oops<|tool_call_argument_begin|>{"path":"a"}<|tool_call_end|><|tool_call_begin|>functions.read_file:1<|tool_call_argument_begin|>{"path":"b"}<|tool_call_end|> done',
+    # T1/F7: a rejected span never ends inside a literal (`</function` of
+    # `</function>`), bare, with newlines, and wrapped.
+    b'\x00\x52pre <function=read_file><function=read_file><parameter=path>1</parameter></function> post',
+    b'\x00\x52pre <function=read_file>\n<function=read_file>\n<parameter=path>\n1\n</parameter>\n</function> post',
+    b'\x00\x52pre <tool_call><function=read_file><function=read_file><parameter=path>1</parameter></function></tool_call> post',
+    # T1/F8: a reading matches `{` through a deleted stray `/` before it
+    # fails, so `at` lies one byte past the span, inside that literal.
+    b'\xe6#[THINK][TOOL_CALLS][/TH"[/TH"id"',
+    # T2: a malformed call in the middle of an attempt reading several
+    # calls; the calls before it are recovered (group-split), the third
+    # where the grammar resynchronizes.
+    b'\x00\x52Hi <|tool_calls_section_begin|><|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{"path":"a"}<|tool_call_end|>'
+    b'<|tool_call_begin|>functions.read_file:1 oops<|tool_call_argument_begin|>{"path":"b"}<|tool_call_end|>'
+    b'<|tool_call_begin|>functions.read_file:2<|tool_call_argument_begin|>{"path":"c"}<|tool_call_end|><|tool_calls_section_end|> done',
+    'Hi <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{"path":"a"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>read_file oops<｜tool▁sep｜>{"path":"b"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{"path":"c"}<｜tool▁call▁end｜><｜tool▁calls▁end｜> done'.encode().join([b'\x00\x52', b'']),
+    b'\x00\x52Hi [TOOL_CALLS] [{"name": "read_file", "arguments": {"path": "a"}}, {"name": "read_file" oops, "arguments": {"path": "b"}}, {"name": "read_file", "arguments": {"path": "c"}}] done',
+    b'\x04\x52Hi [TOOL_CALLS] [{"name": "read_file", "arguments": {"path": "a"}}, {"name": "read_file" oops, "arguments": {"path": "b"}}, {"name": "read_file", "argum',
+    # T2: misspelled closers read as the one closer they misspell, and a
+    # token one edit from two closers left alone.
+    b'\x00\x52<tool_call>\n<function=read_file>\n<parameter=path>\na\n</paramete>\n</functio>\n</tool_call> The answer.',
+    b'\x00\x52<tool_call>{"name": "read_file", "arguments": {"path": "a"}}</tool_cal> The answer.',
+    'Hi <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{"path":"a"}<｜tool▁callz▁end｜><｜tool▁calls▁end｜> The answer.'.encode().join([b'\x00\x52', b'']),
+    # T2: a reasoning marker is never read as a call's arguments.
+    b'\x10\x52[TOOL_CALLS]read_file[TOOL_CALLS]current_time[/THINK]Answer.',
+    # T3: a resynchronizing Mistral v3 list (the v11 rejection at the shared
+    # opener outread), written [ARGS] never inserted, an unreadable JSON
+    # value rejected to its balancing bracket, fences inside rejected markup.
+    b'\x00\x52Hi [TOOL_CALLS] [{"name": "read_file", "arguments": {"path": "a"}}, {"name": "read_file" oops, "arguments": {"path": "b"}}, {"name": "read_file", "arguments": {"path": "c"}}] done',
+    b'\x00\x52Hi [TOOL_CALLS]read_file[ARGS]{"path":"a",} The answer.',
+    b'\x00\x52Hi [TOOL_CALLS]read_file[ARGS]{"path": ::: } The answer.',
+    b'\x00\x52<tool_call>{"name": "read_file", "arguments": {"path": "a"}}</tool_call>\n<tool_call>\n```json\n{"name": "read_file" oops "arguments": {"path": "b"}}\n```\n</tool_call>\n<tool_call>{"name": "read_file", "arguments": {"path": "c"}}</tool_call>',
+    b'\x00\x52<tool_call>{"name": "read_file", "arguments": {"path": "a"}}</tool_call>\n<tool_call>\n```json\n{"name": "read_file" oops "arguments": {"path": "b"}}\n</tool_call>\n<tool_call>{"name": "read_file", "arguments": {"path": "c"}}</tool_call>',
+    # Mistral v11 [CALL_ID] written where [ARGS] could be read as omitted.
+    b'\x00\x52[TOOL_CALLS]read_file[CALL_ID]call_1[ARGS]{"path":{"a":',
+    # An OpenAI object whose name string is cut: its rejection runs to the
+    # bracket balancing the value it opened (the F4 oracle admits it).
+    b'\x05\x91[\n  {\n    "id": "call_a1",\n    "type": "function",\n    "function": {\n      "name": "write_fi  "arguments": "{\\"path\\": \\"src\\"}"\n    }\n  }\n]',
+    # A Hermes attempt stops inside the key literal `"id"` with Harmony
+    # markup after it: the attempt owns the literal before unparsed markup
+    # is scanned, so the report never starts inside it.
+    b'\x00R<tool_call>{"id":"call_305c487f",\t"name":\t\t"delete_pa"id":th"\t\t,"arguments"\t:"{\\"path\\":[\\"beta gamma \\\\n  block\\\\n\\",\\"\\\\n  block\\\\n\\"]}"}\t< to=functions./tool_call>\n<tool_call>{\t\t"type":"function"\t,\t\t"id":\t"call_07be3ff1","name"\t:\t"read_file"\t\t,\t\t"arguments":"{\\"path\\":\\"\\\\n  block\\\\n alpha\\",\\"limit\\":-209}"\t\t}\t\t</tool_call>',
+    # T4: bad-first groups (every dialect with `next`), all-bad, a bad call
+    # without its closer or with unbalanced JSON, a section left open before
+    # another, misspelled in-group tokens, and opening reasoning markers
+    # that cut a call or a rejected attempt.
+    b'\x00RHi [TOOL_CALLS] [{"name": "f" oops, "arguments": {"a": "x"}}, {"name": "f", "arguments": {"a": "y"}}, {"name": "f", "arguments": {"a": "z"}}] done',
+    b'\x00RHi <|tool_calls_section_begin|><|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{"a":"x"}<|tool_call_end|><|tool_call_begin|>functions.f:1<|tool_call_argument_begin|>{"a":"y"}<|tool_call_end|><|tool_call_begin|>functions.f:2<|tool_call_argument_begin|>{"a":"z"}<|tool_call_end|><|tool_calls_section_end|> done',
+    b'\x00R<|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{"a":"x"}<|tool_call_end|><|tool_call_begin|>functions.f:1<|tool_call_argument_begin|>{"a":"y"}<|tool_call_end|><|tool_call_begin|>functions.f:2<|tool_call_argument_begin|>{"a":"z"}<|tool_call_end|><|tool_calls_section_end|> done',
+    'Hi <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>f oops\n```json\n{"a":"x"}\n```<｜tool▁call▁end｜>\n<｜tool▁call▁begin｜>function<｜tool▁sep｜>f\n```json\n{"a":"y"}\n```<｜tool▁call▁end｜>\n<｜tool▁call▁begin｜>function<｜tool▁sep｜>f\n```json\n{"a":"z"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜> done'.encode().join([b'\x00\x52', b'']),
+    'Hi <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>f oops<｜tool▁sep｜>{"a":"x"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>f<｜tool▁sep｜>{"a":"y"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>f oops<｜tool▁sep｜>{"a":"z"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>f<｜tool▁sep｜>{"a":"w"}<｜tool▁call▁end｜><｜tool▁calls▁end｜> done'.encode().join([b'\x00\x52', b'']),
+    b'\x00RHi [TOOL_CALLS]f[ARGS]{"a": ::: }[TOOL_CALLS]f[ARGS]{"a": ::: }[TOOL_CALLS]f[ARGS]{"a":"z"} done',
+    b'\x00R<|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{"a":"x"}<|tool_call_end|><|tool_call_begin|>functions.f:1 oops<|tool_call_argument_begin|>{"a":"y"}<|tool_call_end|><|tool_call_begin|>functions.f:2 oops<|tool_call_argument_begin|>{"a":"z"}<|tool_call_end|><|tool_calls_section_end|> done',
+    b'\x00RHi <|tool_calls_section_begin|><|tool_call_begin|>functions.f:0<|tool_call_argument_begin|>{"a":"x"}<|tool_call_end|><|tool_call_begin|>functions.f:1 oops<|tool_call_begin|>functions.f:2<|tool_call_argument_begin|>{"a":"z"}<|tool_call_end|><|tool_calls_section_end|> done',
+    b'\x00RHi <|tool_calls_section_begin|><|tool_call_begin|>functions.f:0<|tool_call_argument_begin|>{"a":"x"}<|tool_call_end|><|tool_call_begin|>functions.f:1<|tool_call_argument_begin|>{"a": ::: <|tool_call_end|><|tool_call_begin|>functions.f:2<|tool_call_argument_begin|>{"a":"z"}<|tool_call_end|><|tool_calls_section_end|> done',
+    b'\x00RHi [TOOL_CALLS] [{"name": "f", "arguments": {"a": "x"}}, {"name": "f" oops, {"name": "f", "arguments": {"a": "z"}}] done',
+    '<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>\tf\t<｜tool▁sep｜>{"a":"x"}\t<｜tool▁call▁end｜>\t\t\n<｜tool▁calls▁begin｜>\t<｜tool▁call▁begin｜>\tf\t<｜tool▁sep｜>{"a":"y"}\t<｜tool▁call▁end｜><｜tool▁calls▁end｜>'.encode().join([b'\x00\x52', b'']),
+    b'\x00RHi <|tool_calls_section_begin|><|tool_call_begin|>functions.f:0<|tool_call_argument_begin|>{"a":"x"}<|tool_call_end|><|tool_call_begn|>functions.f:1<|tool_call_argument_begin|>{"a":"y"}<|tool_call_end|><|tool_calls_section_end|> done',
+    b'\x00R<tool_call>\n<function=read_file>\n<paramter=path>\na\n</parameter>\n</function>\n</tool_call> done',
+    b'\x00R[TOOL_CALLS]read_file[THINK]thinking[/THINK]Answer.',
+    b'\x00R[TOOL_CALLS]read_file[ARGS]{"path":"a"[THINK]thinking[/THINK]Answer.',
+    b'\x00RHi <tool_call>{"name": "read_file", "arguments": {"path": "a<think>hmm</think> answer',
+    # T4: closers written after a reasoning block a call ran into, a
+    # rejected attempt's misspelled closer, and more misspelled tokens.
+    b'\x04RHi [TOOL_CALLS] [{"name": "f" oops, "arguments": {"a": "x"}}, {"name": "f", "arguments": {"a": "y"}}, {"name": "f", "argum',
+    b'\x00RHi <tool_call>{"name": "f" oops "arguments": {"a": "x"}}</tool_cal> The answer.',
+    b'\x00RHi <tool_call>{"name": "f", "arguments": {"a": "x"}}<think>hmm</think></tool_call> done',
+    b'\x00R<think>x <tool_call>{"name": "f", "arguments": {"a": "x"}}</think></tool_call> done',
+    b'\x00R<think>talking about </tool_call> tags</think></tool_call> done',
+    b'\x00RHi [TOOL_CALLS]f[ARGS]{"a":"x"}[TOOL_CALS]f[ARGS]{"a":"y"} done',
+    b'\x00R<tool_call>\n<functon=read_file>\n<parameter=path>\na\n</parameter>\n</function>\n</tool_call> done',
+    b'\x00RHi <|tool_calls_section_begin|><|tool_call_begin|>functions.f:0<|tool_call_argument_begn|>{"a":"x"}<|tool_call_end|><|tool_calls_section_end|> done',
+    b'\x00RHi <tool_call>{"name": "f" oops, "arguments": {"a": "x"}}<think>hmm</think></tool_call> done',
+    b'\x00R<|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{"a":"x"}<|tool_call_end|><|tool_calls_section_end|> done',
+    b'\x00R[TOOL_CALLS]read_file[ARGS]{"path":"[THINK]"}[THINK]x[/THINK]Answer.',
+    # T5: canonical values holding near-closer text (a repair never
+    # overrides a reading that needs none), prose after unclosed arguments
+    # and stray words (no invented keys), rejections that stop before prose,
+    # misspelled first openers, string-aware Kimi resynchronization.
+    b'\x00R<tool_call>\n<function=write_file>\n<parameter=path>\nx.xml\n</parameter>\n<parameter=content>\n<Parameter name="a">1</Parameter>\n</parameter>\n</function>\n</tool_call>',
+    b'\x00R<tool_call>\n<function=write_file>\n<parameter=path>\nx.xml\n</parameter>\n<parameter=content>\n<paramete>1</paramete>\n<parameter_>2</parameter_>\n</parameter>\n</function>\n</tool_call>',
+    b'\x00R<tool_call>\n<function=write_file>\n<parameter=path>\nx.xml\n</parameter>\n<parameter=content>\nWrap in <tool_calls> and </tool_calls> blocks.\n</parameter>\n</function>\n</tool_call>',
+    b'\x00R<tool_call>{"name":"write_file","arguments":{"path":"a","content":"x </tool_call> and </tool_cal> y"}}</tool_call>',
+    b'\x00R<|tool_calls_section_begin|><|tool_call_begin|>functions.write_file:0<|tool_call_argument_begin|>{"path":"a","content":"x <|tool_call_end|> and <|tool_call_ed|> y"}<|tool_call_end|><|tool_calls_section_end|>',
+    b'\x00RChecking. [TOOL_CALLS]read_file[ARGS]{"path":"a.txt" oops. Sorry, my answer is 42 (see {1,2} set).',
+    b'\x00RChecking. [TOOL_CALLS] [{"name":"read_file","arguments":{"path":"a.txt" oops. Sorry, my answer is 42 (see {1,2} set).',
+    b'\x00R<tool_call>{"name": "f", "arguments": {"a": "y" oops}}</tool_call>',
+    b'\x00R[TOOL_CALLS] [{"name": "read_file" oops. Sorry, I cannot call tools here. Options were {a, b}, final answer: 42.',
+    b'\x00R[TOOL_CALLS]read_file[ARGS]{"path":"x" oops. Sorry, my answer: use a mapping like m[k] = v} and done.',
+    b'\x00R[TOOL_CALL]f[ARGS]{"a":"x"}',
+    b'\x00R<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begn\xef\xbd\x9c>f<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>{"a":"x"}<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c>',
+    b'\x00R<tool_cal>{"name": "f", "arguments": {"a": "x"}}</tool_call>',
+    b'\x00RThe tool_call field, the TOOL_CALLS header and <tool_calling> docs say: call tools with care.',
+    b'\x00R<|tool_calls_section_begin|><|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{"a":"x<|tool_call_end|><|tool_call_begin|>functions.g:1<|tool_call_argument_begin|>{}<|tool_call_end|>"}<|tool_call_end|><|tool_calls_section_end|>',
+    b'\x00R<tool_call>\n<function=f>\n<parameter=a>\n1\n</parameter>\n</functions> bye',
+    b'\x00R<tool_call>\n<function=f>\n<parameter=a>\n1\n</parameter>\n</functions>',
+    b'\x04R<tool_call>\n<function=f>\n<parameter=a>\n1\n</parameter>\n</functions>',
+    b'\x00R[TOOL_CALLS]f[ARGS]{a: "x"}',
+    # An Anthropic attempt at `{`, the opener a tool_use block and a
+    # streaming event share: it ends at the block's `}` as well as the
+    # event's NUL (a campaign failure; the golden
+    # anthropic_rejection_shares_opener_closers).
+    b'\x05\x91{"type":"tool_result","tool_use_id":"toolu_0functionontent":"ok"\x00}',
+    # A Mistral v3 group whose bad first element's bracket scan passes over
+    # the calls read after it: the last one closes the array, so the stray
+    # `]` after the text closes nothing of the attempt (a campaign failure;
+    # the golden mistral3_group_bad_good_good_then_bracket).
+    b'[[\x00RHi [TOOL_CALLS] [{"name": "f" oops, "arguments": {"a": "x"}}, {"name": "f", "arguments": {"a": "y"}}, {"name": "f", "arguments": {"a": "z"}}] done]]',
+    # A Llama 3 attempt inside a JSON string: a bracket closing nothing it
+    # opened closes the structure around it and ends no part of it (a
+    # campaign failure; the golden llama3_rejection_stops_at_enclosing_bracket).
+    b'[\xe6#{\t\t"type":"tool_use","id"<|tool_call_argument_begin|>\t\t:\t"call_22bb690f",\t\t"name"\t:\t\t"write_file",\t"input":"{\\"pat<|python_tag|>\\"ratio\\":39.32,\\"count\\":-415,\\"options\\":{\\"backup\\":false}}"\t}]',
+    # A DeepSeek v3.1 attempt read on past its failure to the section
+    # closer: brackets are balanced only over the bytes its grammar read to
+    # where it stopped, so the `]` after the closer stays content (a
+    # campaign failure; the golden deepseek31_rejection_balances_only_read_brackets).
+    b'[[\x9c\xf0<\xef\xbd\x9ctool\xe2\x96\x81calls\xe2\x96\x81begin\xef\xbd\x9c><\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begin\xef\xbd\x9c>delete_path<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>"{\\"pat\x9c\xf0<\xef\xbd\x9ctool\xe2\x96\x81calls\xe2\x96\x81begin\xef\xbd\x9c><\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begin\xef\xbd\x9c>delete_path<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>"{\\"path\\":[\\"beta gamma \\\\n  block\\\\n\\""parameters":call\xe2\x96\x81begin\xef\xbd\x9c>\t\tread_file\t\t<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>"{\\"path\\":\\"tab\\\\tseparated   indented\\"}"<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c>\t<\xef\xbd\x9ctool\xe2\x96\x81calls\xe2\x96\x81end\xef\xbd\x9c>]]',
+    # A Llama 3 attempt stopped by prose after its opener: its bracket scan
+    # ends at the prose, so the JSON after it is no part of the rejection
+    # (a campaign failure; the golden llama3_rejection_stops_before_prose).
+    b'[\x05\x91{<<|python_tag|>t_begin|>"name": "get_weather", "arguments": {"city": "Oslo", "unit": "celsius"}}]',
+    # A Llama 3 attempt whose markup runs over a JSON object opened after its
+    # failure (no prose between): F4 admits the extension.
+    b'\x00RHi <tool_cal</tool_call>l<|python_tag|>>{"name": "f" oops, "arguments": {"a": "x"}}<think>hmm</think></tool_cal></tool_call> done',
+    # An attempt reading several calls begins inside a starts_open block
+    # and ends after its closer: the calls it read inside stay embedded.
+    b'\x5b\x9c[TOOL_CALLS]t[TOOL_CALLS]S[/THINK][TOOL_CALLS]g',
+    b'\x00\x52<function=read_file<oops. Now the real one: <tool_call>\n<function=read_file>\n<parameter=path>\na\n</parameter>\n</function>\n</tool_call> bye',
+    # T6: closer text a value holds: `<parameter>v</parameter>` (the codec weighs every closer).
+    b'\\x00R<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nx <parameter>v</parameter> y\n</parameter>\n</function>\n</tool_call>',
+    # T6: the call's closers inside a value (the engine reads on past each closer).
+    b'\\x00R<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nEnd with </function></tool_call> then stop.\n</parameter>\n</function>\n</tool_call>',
+    # T6: a value ending exactly like a call's closers: Ambiguous.
+    b'\\x00R<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nx\n</parameter>\n</function>\n</tool_call>\n</parameter>\n</function>\n</tool_call>',
+    # T6: closer text and a missing `</tool_call>` before text: the stalled fork's repair.
+    b'\\x00R<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nx </function></tool_call> y\n</parameter>\n</function>\nDone.',
+    # T6: closer text and a missing `</tool_call>` at the end.
+    b'\\x00R<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nx </function></tool_call> y\n</parameter>\n</function>',
+    # T6: a doubled `</parameter>` and text between closers.
+    b'\\x00R<tool_call>\n<function=write_file>\n<parameter=content>\nx\n</parameter>\nmore text\n</parameter>\n</parameter>\n<parameter=path>\na.md\n</parameter>\n</function>\n</tool_call>',
+    # T6: two calls of different tools: a value never runs past another call's opener.
+    b'\\x00R<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nx\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=read_file>\n<parameter=path>\nb.md\n</parameter>\n</function>\n</tool_call>',
+    # T6: a bare function whose value holds `</function>`.
+    b'\\x00R<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nsee </function> here\n</parameter>\n</function>',
+    # T6: a reasoning block then stray closers: a value never runs past its marker.
+    b'\\x00R<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nx\n</parameter>\n</function>\n</tool_call>\n<think>plan</think>\n</parameter>\n</function>\n</tool_call>',
+    # T6: Harmony Python code holding `<|call|>`.
+    b'\\x00R<|start|>assistant<|channel|>analysis to=python<|message|>print("<|call|>")\nprint(1)<|call|>',
+    # A Kimi-K2 attempt that skipped several calls runs to where the next
+    # call's opener begins, that call itself rejected (a campaign failure).
+    b'\x00R<|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{"a":"x"}<|tool_call_end|><|tool_call_begin|>functions.f:1<|tool_call_argument_begin|>{"a":"y"}<|tool_call_end|><|tool_call_begin|>functi<|channeall_end|><|tool_call_begin|>functions.f:1<|tool_call_argument_begin|>{"a":"y"}<|tool_call_end|><|tool_call_begin|>functi<|channel|>one',
+    # The last part of a split Mistral v3 list runs to the list's `]`,
+    # which closes the `[` its attempt opened before the part (a campaign
+    # failure).
+    b'\xe6#[TOOL_CALLS][\t{"id":"call_90d7a28a",\t"arguments":{"city":"\\n  block\\n src/lib.rs","unit":"fahrenheit"},\t\t"name"\t:\t\t"get_weather"\t\t},{"id"\t\t:"call_607e2c86"\t,"argum<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c>\\tseparated \\n  block\\n"}\t\t,"name"\t:"list_dir"\t}\t\t]',
+    # A split Mistral v3 list whose parts write stray `}`s: a `}` never
+    # closes the list's `[`, so the last part ends at the `]` that does
+    # (a campaign failure).
+    b'[\xe6#[TOOL_CALLS][\t{"id":"call_90d7a28a",\t"arguments":{"city":"\\n  block\\n src/lib.rs","unit":"fahrenheit"},\t\t"name"\t:\t\t"get_weather"\t\t},{"id"\t\t:"call_607e2c86"\t,"argum<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c>\\tseparated \\n  block\\n"}\t\t,"name"\t:"list_t"},\t\t"name"\t:\t\t"get_weather"\t\t},{"id"\t\t:"call_607e2c86"\t,"argum<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c>\\tseparated \\n  block\\n"}\t\t,"name"\t:"list_dir"\t}\t\t]]',
+    # A rejected Mistral v3 list part followed by a stray `}`: brackets
+    # pair by kind, so the stray `}` never ends the markup and the part
+    # runs to the list's `]` (a campaign failure).
+    b'[\xe6#[TOOL_CALLS][\t{"id":"call_90d71.50ated \\n  block\\n"}\t\t,"name"\t:"list_t"},\t\t"name"\t:\t\t"get_weathe<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c>\x96ed \\n  block\\n"}\t\t,"name"\t:"list_dir"\t}\t\t]]',
+    # A rejected Llama 3 attempt whose markup covers a Kimi-K2 attempt
+    # written inside a broken key (`"in<|tool_calls_section_begin|>put"`):
+    # the nested attempt is markup, so the word before it is no prose and
+    # the markup runs to the bracket that closes it (a campaign failure).
+    b'[\xe6#{\t\t"type":"tool_use","id"<|tool_call_argument_begin|>\t\t:\t"call_22bb690f",\t\t"name"\t:\t\t"write_file",\t"input":"{\\"pat<|python_tag|>\\"ratio\\":39.32,\\"count\\":-415,\t\t:\t"call_22bb690f",\t\t"name"\t:\t\t"write_file",\t"in<|tool_calls_section_begin|>put":"{\\"pat<|python_tag|>\\"ratio\\":39.32,\\"count\\":-415,\\"options\\":{\\"backup\\":false}}"\t}]',
+    # A rejected Qwen attempt whose `</function>` closer an opening
+    # `<think>` cuts (`</functio<think>`): it ends at the marker (a
+    # campaign failure).
+    b'\x00R<function=read_file>\n<parameter=path>\na\n</parameter>\n</functio<think>ameter>\n</function>',
+    # A rejected DeepSeek attempt failing on invalid UTF-8 (`\xe2\x82_`):
+    # its span covers the maximal ill-formed subpart it failed on (a
+    # campaign failure).
+    b'[[\x00RHi <\xef\xbd\x9ctool\xe2\x96\x81calls\xe2\x96\x81begin\xef\xbd\x9c><\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begin\xef\xbd\x9c>read_file<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>{"path":"a"}<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c><\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begin\xef\xbd\x9c>read\xe2\x82_file oops<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c<|tool_call_begin|>ead_file<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>{"path":"c"}<\xef\xbd\x9ct\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begin\xef\xbd\x9c>read_file oops<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c<|tool_call_begin|>ead_file<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>{"path":"c"}<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c><\xef\xbd\x9ctool\xe2\x96\x81calls\xe2\x96\x81end\xef\xbd\x9c> done]]',
+    # Under a length stop, a Kimi-K2 section's skipped last call the output
+    # cut off runs to the end of output: an open call is truncation (a
+    # campaign failure).
+    b'\xe6#<|tool_calls_section_begin|><|tool_call_begin|>functions.rtions.read_file<|tool_call_argument_begin|>{"path": "a.rs"}<|tool_call_end|><|tool_call_begin|>lnd|><|tool_calls_secnd|>',
+    # A rejected Mistral v11 call failing inside a JSON string: the rest of
+    # the string is text, never prose, so its markup runs to the bracket
+    # that balances its arguments (a campaign failure).
+    b'\x00R[TOOL_CALLS]get_weather\t[CALL_ID]call_74616796\t[ARGS]{"city":"\\n  block\\n src/lib.rs","unit":"fahrenheit"}[TOOL_CALLS]\t\tlist_dir[CALL_ID]call_5c2a449c\t\t[ARGS]{"path":<|tool_call_end|>"line one\\nline two"}',
+    # T6: a rejected Hermes call whose JSON strings hold `</tool_call>`
+    # text: a JSON value is self-delimiting, so where it failed is where
+    # its reading as written stopped, and its markup runs to its own closer
+    # (a campaign failure).
+    b'\x00R<tool_call>{"name":"write_file","arguments":{"path":"a","content":"x </tool_call> and </tool_cal> y":{"path":"a","content":"x </tool_call> and </tool_cal> y"t":""arguments":x </tool_call> and </tool_cal> y"}}</tool_call>',
+    # A rejected Hermes attempt ending at a closer written with one slip
+    # (`</tool_cal>`), an exact closer later in prose: the slipped closer is
+    # the attempt's own (T4), so the later one stays content.
+    b'\x00R<tool_call>{"name": oops</tool_cal> and then </tool_call>',
+    # A rejected Mistral v11 call closing an array with `}`: the `}` balances
+    # the object (brackets pair by kind), so the attempt runs to it (T3).
+    b'\x00RHi [TOOL_CALLS]f[ARGS]{"a": [1, 2} done.',
+    # The same in a DeepSeek V3.1 call, whose closers are no single bracket.
+    b'\x00RHi <\xef\xbd\x9ctool\xe2\x96\x81calls\xe2\x96\x81begin\xef\xbd\x9c><\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begin\xef\xbd\x9c>f<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>{"a": [1, 2} done.',
+    # A stray `]` after a Mistral v11 call's arguments balances nothing (brackets
+    # pair by kind): the rejected attempt never runs over it (T3).
+    b'\x00RHi [TOOL_CALLS]f[ARGS]{"a": [1, 2]] done.',
+    # The same in a DeepSeek V3.1 call.
+    b'\x00RHi <\xef\xbd\x9ctool\xe2\x96\x81calls\xe2\x96\x81begin\xef\xbd\x9c><\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begin\xef\xbd\x9c>f<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>{"a": [1, 2]] done.',
+    # A `{` inside a JSON string of a rejected Mistral v11 call opens nothing:
+    # the attempt runs to the `}` that balances its object, never past it.
+    b'\x00RHi [TOOL_CALLS]f[ARGS]{"a": "{", 1 2} rest} more.',
+    # A rejected Mistral v11 call failing inside a JSON string, then prose:
+    # strings open and close from the attempt's start, so the prose is seen.
+    b'\x00R[TOOL_CALLS]get_weather\t[CALL_ID]call_74616796\t[ARGS]{"city":"\\n  block\\n src/lib.rs","unit":"fahrenheit"}[TOOL_CALLS]\t\tlist_dir[CALL_ID]call_5c2a449c\t\t[ARGS]{"path":<|tool_call_end|>"line one\\nline two" oops. Sorry, wrong} done.',
+    # A rejected Hermes attempt, prose, then a reasoning block: the attempt
+    # never runs over the prose to the marker.
+    b'\x00R<tool_call>{"name": oops} more prose here <think>t</think> done',
+    # A rejected Hermes attempt whose exact closer follows junk: the closer is
+    # its markup, never content.
+    b'\x00R<tool_call>{"name": "read_file" oops, "a": 1} junk</tool_call> done',
+    # Under a length stop, a rejected Hermes attempt that its closer closed
+    # never runs on to the end of output (only an open call is truncated).
+    b'\x04R<tool_call>{"name": oops}</tool_call> trailing words here',
+    # T6: a Qwen value holding its closers then a whole call of a declared
+    # tool: one call holding it and two calls apart are both clean.
+    b'\x00R<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nx\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=list_dir>\n<parameter=dir>\nsrc\n</parameter>\n</function>\n</tool_call>\n</parameter>\n</function>\n</tool_call>',
+    # T6: a README documenting a declared read-only tool three times inside a
+    # write_file value: one call, never three.
+    b'\x00R<tool_call>\n<function=write_file>\n<parameter=path>\nREADME.md\n</parameter>\n<parameter=content>\nTo list a directory:\n<function=list_dir>\n<parameter=dir>\nsrc\n</parameter>\n</function>\nor the tests:\n<function=list_dir>\n<parameter=dir>\ntests\n</parameter>\n</function>\nor the docs:\n<function=list_dir>\n<parameter=dir>\ndocs\n</parameter>\n</function>\nThat is all.\n</parameter>\n</function>\n</tool_call>',
+    # A rejected Llama 3 attempt followed by `_dir[ARGS]{...}`: a word may
+    # begin with `_`, so `_dir` followed by `[` is prose and the attempt never
+    # runs over it to the bracket (a campaign failure).
+    b'\xe6#[TOOL<|python_tag|>_dir[ARGS]{"path": "."}\nDone.',
+    # F16: a cut special token, then a Llama 3 call body left open before
+    # prose: the rejection covers the body to its last JSON byte.
+    b'\x00RSure. <|python_tag|>t_begin|>"name": "get_weather", "arguments": {"city": "Oslo"<think>wait</think> Done.',
+    # F16: the same body cut by the end of output.
+    b'\x00RSure. <|python_tag|>t_begin|>"name": "get_weather", "arguments": {"city": "Oslo"',
+    # F16: an attempt rejected at a misspelled opener, then a call body cut
+    # by a reasoning marker: the body is the attempt's markup, never
+    # content (a campaign failure).
+    b'\x00R<tool_cal>{"name": "f", "arguments": {"a":{"name": "f", "arguments": {"[THINK]a": "x"}}</tool_call>',
+    # F16: an OpenAI call whose arguments string runs into the next call's
+    # `"function"` key: the attempt completes that key, and the object after
+    # its `:` is the call body the key began, never content (a campaign
+    # failure; the golden openai_rejection_covers_call_body_after_completed_key).
+    b'\x05\x91[\n  {\n    "id": "call_a1",\n    "type": "function",\n    "function": {\n      "name": "write_file",\n      "arguments": "{\\"path\\": \\"src/main.rs\\", \\"content\\": \\"fn main() {\\\\n    println!(\\\\\\"hi\\\\\\");\\\\n\\\\n\\\\tlet  x = 1;  \\\\n}\\\\n\\", \\"mode\\": \\"create\\", \\"ratio\\": 2.50[TOOL_CALLS], \\"count\\": 1e3, \\"tags\\": [], \\"options\\": {\\"backup\\": false, \\"retries\\": 0, \\"owner\\": {\\"name\\": \\"ops\\"  "function": {\n      "name": "list_dir",\n      "arguments":"write_file",\n      "arguments": "{\\"path\\": \\"src/main.rs\\", \\"content\\": \\"fn main() {\\\\n    println!(\\\\\\"hi\\\\\\");\\\\n\\\\n\\\\tlet  x = 1;  \\\\n}\\\\n\\", \\"mode\\": \\"create\\", \\"ratio\\": 2.50[TOOL_CALLS], \\"count\\": 1e3, \\"tags\\": [], \\"options\\": {\\"backup\\": false, \\"retries\\": 0, \\"owner\\": {\\"name\\": \\"ops\\"  "function": {\n      "name": "list_dir",\n      "arguments": "{\\"path\\": \\"src\\"}"\n    }\n  }\n]',
+    # F16: a Hermes attempt failing at a stray `>`, then a call body: the
+    # debris is no prose, so the body is the attempt's markup, never content
+    # (a campaign failure; the golden
+    # hermes_rejection_covers_call_body_after_stray_byte).
+    b'[\x05\x91<tool_call>{"name": "launch_rockets", >{"name": "launch_rockets", "<|return|>]',
+    # F16: a bracketless Mistral v3 list whose first object fails, then a
+    # call body after that object's closing bracket: the body is the
+    # attempt's markup, never content (a campaign failure; the golden
+    # mistral3_rejection_covers_call_body_after_its_bracket).
+    b'\x00R[TOOL_CALLS] {"name": <|end|>, "arguments": {"path": "src"}}, {"name": "read_file", "ar\x00gu',
+    # F16: a Llama 3 object failing at a name value that lost its opening
+    # quote, then a call member the flipped quotes read as text: a member's
+    # spelling begins a call body wherever it is written (a campaign
+    # failure; the golden llama3_rejection_covers_call_member_after_broken_string).
+    b'[\xe6#Let me check both.\n{"name": "get_weather", "parameters": {"city": "Oslo"}}; {"name": "read_file", "parameters": {"path": "notes.txt", "limit": 10}}\n{"parameters": {"city": "Bergen", "unit": "celsius"}, "name": rgen", "unit": "celsius"}, "name": "get_weather"}ius"}, "name": "get_weather"}]',
+]
+
+TOOL_CALL_SEEDS = [
+    _tool_call_seed(index, turn)
+    for index, turn in enumerate(
+        _tool_call_conformance_markup() + TOOL_CALL_WITNESSES + TOOL_CALL_REPAIRS + TOOL_CALL_NEGATIVES)
+] + TOOL_CALL_REGRESSIONS
+TOOL_CALL_TOKENS = [
+    b'<tool_call>', b'</tool_call>', b'<function=', b'</function>', b'<parameter=',
+    b'</parameter>', b'</parameters>', b'<think>', b'</think>', b'{"name":',
+    b'"arguments":', b'"tool_calls"', b'"function"', b'"id"', b'"type"', b'```',
+    b'```json\n', b'"parameters":', b'<|python_tag|>', b'<|eom_id|>', b'<|eot_id|>',
+    b'; ', b'[TOOL_CALLS]', b'[TOOL_RESULTS]', b'[ARGS]', b'[CALL_ID]', b'[TOOL_CONTENT]',
+    b'[THINK]', b'[/THINK]', "<｜tool▁calls▁begin｜>".encode(), "<｜tool▁call▁begin｜>".encode(),
+    "<｜tool▁sep｜>".encode(), "<｜tool▁call▁end｜>".encode(), "<｜tool▁calls▁end｜>".encode(),
+    b'function', b'```javascript', "<｜tool▁outputs▁begin｜>".encode(),
+    b'<|tool_calls_section_begin|>', b'<|tool_call_begin|>', b'<|tool_call_argument_begin|>',
+    b'<|tool_call_end|>', b'<|tool_calls_section_end|>', b'functions.', b':0',
+    b'{"type":"tool_use",', b'"input":', b'"toolu_01"', b'"type":"thinking"', b'"content":[',
+    b'<|start|>', b'<|channel|>', b'<|message|>', b'<|call|>', b'<|end|>', b'<|return|>',
+    b'<|constrain|>', b' to=functions.', b'analysis', b'commentary',
+    b'<|tool_calls_begin|>', b'"id":', b'</s>', b'read_file', b'write_file', b'current_time', b'path', b'\n', b'\t',
+    b'"', b'\\', b'{', b'}', b'[', b']', b':', b',', b'>', b'<', b'null', b'1.50',
+    b'\x00', b'\x04', b'\x80', 'é'.encode(), b'\xff', b'\xe2\x82',
+]
+
 TARGETS = {
     'json': {'seeds': JSON_SEEDS, 'tokens': JSON_TOKENS, 'differential': None},
     'markdown': {'seeds': MARKDOWN_SEEDS, 'tokens': MARKDOWN_TOKENS, 'differential': 'markdown'},
@@ -189,7 +899,21 @@ TARGETS = {
     'fuzzy': {'seeds': FUZZY_SEEDS, 'tokens': FUZZY_TOKENS, 'differential': None},
     'matching': {'seeds': MATCHING_SEEDS, 'tokens': MATCHING_TOKENS, 'differential': None},
     'patch': {'seeds': PATCH_SEEDS, 'tokens': PATCH_TOKENS, 'differential': None},
+    'tool-call': {'seeds': TOOL_CALL_SEEDS, 'tokens': TOOL_CALL_TOKENS, 'differential': None,
+                  'input': 'bytes'},
 }
+
+
+def harness_source(target):
+    """The probe source of `target` (`fuzz-<target>` builds `fuzz_<target>.rs`,
+    with `-` spelled `_`)."""
+    return ROOT / f'crates/core/examples/fuzz_{target.replace("-", "_")}.rs'
+
+
+def admits_bytes(target):
+    """Whether `target`'s probe takes raw bytes (always completing with `ok`)
+    instead of rejecting invalid UTF-8 with `invalid-utf8`."""
+    return TARGETS[target].get('input', 'utf8') == 'bytes'
 
 
 class Random:
@@ -1378,7 +2102,7 @@ def input_identity(target):
         digest.update(str(path.relative_to(ROOT)).encode() + b'\0' + hashlib.sha256(path.read_bytes()).digest())
     return {
         'engine_source_sha256': digest.hexdigest(),
-        'harness_source_sha256': hashlib.sha256((ROOT / f'crates/core/examples/fuzz_{target}.rs').read_bytes()).hexdigest(),
+        'harness_source_sha256': hashlib.sha256(harness_source(target).read_bytes()).hexdigest(),
         'runner_source_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
     }
 
@@ -1491,6 +2215,11 @@ def probe(binary, data, directory, timeout, target, oracle, tool_paths, counts=N
         invalid = False
     except UnicodeDecodeError:
         invalid = True
+    if invalid and admits_bytes(target):
+        # A byte-input probe recovers the bytes; nothing was rejected.
+        invalid = False
+        if counts is not None:
+            counts['non_utf8_admitted'] = counts.get('non_utf8_admitted', 0) + 1
     if result.stderr:
         raise ValueError('probe reported a diagnostic on stderr')
     lines = result.stdout.split(b'\n')
@@ -1570,7 +2299,7 @@ def main():
               'nonignored_file_tree_sha256': source_digest(),
               'build': build_identity, 'seed': args.seed, 'requested_mutations': args.iterations,
               'timeout_seconds': args.timeout, 'maximum_input_bytes': 4096,
-              'executions': 0, 'invalid_utf8': 0, 'differential_checks': 0, 'differential_mismatches': 0,
+              'executions': 0, 'invalid_utf8': 0, 'non_utf8_admitted': 0, 'differential_checks': 0, 'differential_mismatches': 0,
               'crashes': 0, 'reference_rejections': 0, 'reference_timeouts': 0,
               'resource_non_results': 0, 'resource_non_result_reasons': {}, 'resource_non_result_cases': [],
               'reference_profile_exclusions': 0, 'tasklist_projection_checks': 0,

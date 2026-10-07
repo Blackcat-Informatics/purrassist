@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://purrassist.dev/schema/receipt.schema.json",
   "title": "PurRAssist receipt",
-  "description": "Wire shape of `purrassist_core::contract::Receipt::to_node()`. Versioned by `receipt.version` (see `purrassist_core::contract::RECEIPT_VERSION` for the history of each version). This schema describes version 2, including its unreleased `ambiguity` annotation addition.",
+  "description": "Wire shape of `purrassist_core::contract::Receipt::to_node()`. Versioned by `receipt.version` (see `purrassist_core::contract::RECEIPT_VERSION` for the history of each version). This schema describes version 3: version 2 (including its `ambiguity` annotation) plus byte-exact `sources`, each carrying exactly one of `text` (valid UTF-8) or `bytes_hex` (lowercase hexadecimal of bytes that are not valid UTF-8).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -24,7 +24,7 @@
   "properties": {
     "version": {
       "type": "integer",
-      "minimum": 2
+      "minimum": 3
     },
     "source": { "$ref": "#/$defs/digest" },
     "sources": {
@@ -71,10 +71,12 @@
     "sourceDocument": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["digest", "text"],
+      "required": ["digest"],
+      "oneOf": [{ "required": ["text"] }, { "required": ["bytes_hex"] }],
       "properties": {
         "digest": { "$ref": "#/$defs/digest" },
-        "text": { "type": "string" }
+        "text": { "type": "string" },
+        "bytes_hex": { "type": "string", "pattern": "^(?:[0-9a-f]{2})*$" }
       }
     },
     "span": {

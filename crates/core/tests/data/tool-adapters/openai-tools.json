@@ -1,0 +1,30 @@
+[
+	{ "type" : "function",
+	  "function": {
+	    "strict":true,
+	    "parameters": {
+	      "type":"object",
+	      "required": [ "path", "mode" ],
+	      "properties": {
+	        "path": {"type": "string", "description": "File \u0041 path with \/ slash", "pattern": "^[^\\u0000]+$", "format": "uri-reference"},
+	        "mode": {"enum": ["r","w"], "type":"string" , "default":"r"},
+	        "ratio": {"type": "number", "minimum": -0, "maximum": 1e2, "default": 1.0},
+	        "target": {"anyOf": [{"type":"string"},{"type":"integer"}]},
+	        "ref": {"$ref": "#/$defs/point"},
+	        "options": {
+	          "type": "object",
+	          "x-vendor": {"hint": true},
+	          "properties": {"depth": {"type":"integer","default": 3}},
+	          "additionalProperties": false
+	        }
+	      },
+	      "$defs": {"point": {"type":"object","properties":{"x":{"type":"number"}}}},
+	      "additionalProperties": false
+	    },
+	    "name":"read_file",
+	    "description": "Read \u0041 file"
+	  }
+	},
+  {"type":"function","function":{"name":"list_dir","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}},
+    {"function":{"description":"Ping the host","name":"ping"},"type":"function"}
+]

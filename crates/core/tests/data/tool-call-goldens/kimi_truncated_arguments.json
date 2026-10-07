@@ -1,0 +1,69 @@
+{
+  "description": "A Kimi-K2 call cut off by a length stop inside its arguments: kept as a truncated call, Unresolved (Truncated), never usable; the finish is truncated.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "kimi-k2.v1"
+  ],
+  "stop": "length",
+  "input": "<|tool_calls_section_begin|><|tool_call_begin|>functions.get_weather:0<|tool_call_argument_begin|>{\"city\": \"San Fr",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "truncated",
+  "openai_finish_reason": "length",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "city": "San Fr"
+      },
+      "candidate_dialects": [
+        "kimi-k2.v1"
+      ],
+      "outcome": "unresolved: truncated: the call was cut off by a length stop",
+      "rules": [
+        "json.syntax.unterminated-string",
+        "json.syntax.close-container",
+        "tool_call.truncated"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "json.syntax.unterminated-string",
+    "json.syntax.close-container",
+    "tool_call.truncated"
+  ]
+}

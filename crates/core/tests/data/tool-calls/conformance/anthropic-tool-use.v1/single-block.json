@@ -1,0 +1,38 @@
+{
+  "description": "One tool_use content block as the Messages API returns it: type, id, name and input, compact.",
+  "markup": "{\"type\":\"tool_use\",\"id\":\"toolu_01A09q90qw90lq917835lq9\",\"name\":\"get_weather\",\"input\":{\"city\":\"San Francisco\",\"unit\":\"fahrenheit\"}}",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "get_weather",
+      "id": "toolu_01A09q90qw90lq917835lq9",
+      "arguments": {"city":"San Francisco","unit":"fahrenheit"}
+    }
+  ]
+}

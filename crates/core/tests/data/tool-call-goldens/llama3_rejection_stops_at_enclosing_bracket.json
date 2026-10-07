@@ -1,0 +1,57 @@
+{
+  "description": "T5/F11 (a campaign failure): a rejected JSON-object attempt (Llama 3, inside a JSON string here) nests by its brackets from its own start; a bracket closing nothing it opened closes a structure around it, so its markup ends before that bracket, unclosed. The `}` closing the outer object is not taken as the attempt's end (it was 19..80, taking `\"} ` of the surrounding text), and the text stays content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "llama3-json.v1"
+  ],
+  "effects": {
+    "read_file": "read_only"
+  },
+  "input": "Example: {\"text\": \"<|python_tag|>\\\"name\\\": \\\"read_file\\\", \\\"note\\\": {\\\"a\\\": 2}\"} done.",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        19,
+        33
+      ],
+      "dialect": "llama3-json.v1",
+      "candidate_dialects": [
+        "llama3-json.v1"
+      ],
+      "reason": "Malformed { at: 33 }",
+      "raw": "<|python_tag|>"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Example: {\"text\": \"",
+    "\\\"name\\\": \\\"read_file\\\", \\\"note\\\": {\\\"a\\\": 2}\"} done."
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

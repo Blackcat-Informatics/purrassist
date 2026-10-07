@@ -1,0 +1,99 @@
+{
+  "description": "A bare, pretty-printed tool_calls array; stringified arguments with a multi-line string with significant whitespace, exact number spellings, and nested objects.",
+  "markup": "[\n  {\n    \"id\": \"call_a1\",\n    \"type\": \"function\",\n    \"function\": {\n      \"name\": \"write_file\",\n      \"arguments\": \"{\\\"path\\\": \\\"src/main.rs\\\", \\\"content\\\": \\\"fn main() {\\\\n    println!(\\\\\\\"hi\\\\\\\");\\\\n\\\\n\\\\tlet  x = 1;  \\\\n}\\\\n\\\", \\\"mode\\\": \\\"create\\\", \\\"ratio\\\": 2.50, \\\"count\\\": 1e3, \\\"tags\\\": [], \\\"options\\\": {\\\"backup\\\": false, \\\"retries\\\": 0, \\\"owner\\\": {\\\"name\\\": \\\"ops\\\", \\\"uid\\\": -7}}}\"\n    }\n  },\n  {\n    \"id\": \"call_a2\",\n    \"type\": \"function\",\n    \"function\": {\n      \"name\": \"list_dir\",\n      \"arguments\": \"{\\\"path\\\": \\\"src\\\"}\"\n    }\n  }\n]",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "description": "Write a file.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "create",
+                "overwrite"
+              ]
+            },
+            "ratio": {
+              "type": "number"
+            },
+            "count": {
+              "type": "integer"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "options": {
+              "type": "object",
+              "properties": {
+                "backup": {
+                  "type": "boolean"
+                },
+                "retries": {
+                  "type": "integer"
+                },
+                "owner": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "uid": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_dir",
+        "description": "List a directory.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "write_file",
+      "arguments": {"path": "src/main.rs", "content": "fn main() {\n    println!(\"hi\");\n\n\tlet  x = 1;  \n}\n", "mode": "create", "ratio": 2.50, "count": 1e3, "tags": [], "options": {"backup": false, "retries": 0, "owner": {"name": "ops", "uid": -7}}},
+      "id": "call_a1"
+    },
+    {
+      "name": "list_dir",
+      "arguments": {"path": "src"},
+      "id": "call_a2"
+    }
+  ]
+}

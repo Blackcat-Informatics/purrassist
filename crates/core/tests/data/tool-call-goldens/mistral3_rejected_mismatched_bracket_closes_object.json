@@ -1,0 +1,91 @@
+{
+  "description": "T6: a rejected Mistral v3 list whose broken call closes an argument's `[` with `}`: the `}` pairs with the object's `{`, closing the `[` a slip left open, so the rejected markup runs to the list's own `]` (a single bracket depth read the `}` as closing the `[`, and the markup leaked into prose before).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v3.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "Hi [TOOL_CALLS] [{\"name\": \"f\" oops, \"arguments\": {\"a\": [\"x\"}}] done",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          3,
+          62
+        ],
+        "dialect": "mistral-v3.v1",
+        "candidate_dialects": [
+          "mistral-v11.v1",
+          "mistral-v3.v1"
+        ],
+        "reason": "Malformed { at: 30 }",
+        "raw": "[TOOL_CALLS] [{\"name\": \"f\" oops, \"arguments\": {\"a\": [\"x\"}}]"
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "Hi ",
+      " done"
+    ],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        3,
+        62
+      ],
+      "dialect": "mistral-v3.v1",
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "reason": "Malformed { at: 30 }",
+      "raw": "[TOOL_CALLS] [{\"name\": \"f\" oops, \"arguments\": {\"a\": [\"x\"}}]"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Hi ",
+    " done"
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

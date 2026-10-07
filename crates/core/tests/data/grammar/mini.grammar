@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# Test-only bootstrap dialect for the grammar engine, shaped like an
+# XML-parameter tool-call dialect (a wrapper around a function element). It
+# exercises literal, class, until and closer-class terminals, a raw codec
+# slot, every call capture, reasoning markers, and a confusable spelling.
+grammar "mini.v1";
+
+reasoning "<think>" "</think>";
+confusable "｜" "|";
+
+closer tool-end = "</tool>" | "</tools>";
+closer call-end = "</call>" | "</calls>";
+closer arg-end = "</arg>" | "</args>";
+
+ident = /[A-Za-z_][A-Za-z0-9_.:-]*/;
+
+param = "<arg=" param-name:ident ">"
+        param-value:slot(raw, "</arg>", "</args>", "<arg=", "</call>", "</calls>")
+        arg-end;
+
+call = "<tool>" "<call=" name:ident (" id=" id:ident)? ">" param* call-end tool-end;
+
+result = "<｜result｜>" content:until("<｜/result｜>") "<｜/result｜>";
+
+declaration = "<tool name=\"" name:ident "\"/>";

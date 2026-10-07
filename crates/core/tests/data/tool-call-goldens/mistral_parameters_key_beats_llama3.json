@@ -1,0 +1,62 @@
+{
+  "description": "A Mistral v3 array whose object uses the Llama 3 \"parameters\" key, with Llama 3 JSON also allowed: the [TOOL_CALLS] token is the evidence, so the Mistral reading is the only one (its candidate dialects name Mistral alone); the Llama 3 object inside it is part of the Mistral call, never a second or competing call.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "llama3-json.v1",
+    "mistral-v3.v1"
+  ],
+  "stop": "stop",
+  "input": "[TOOL_CALLS] [{\"name\": \"get_weather\", \"parameters\": {\"city\": \"Paris\"}, \"id\": \"a1B2c3D4e\"}]",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "city": "Paris"
+      },
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

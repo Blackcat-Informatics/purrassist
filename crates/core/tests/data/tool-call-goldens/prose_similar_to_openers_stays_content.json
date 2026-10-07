@@ -1,0 +1,43 @@
+{
+  "description": "T5/F12 guard: prose that names markup without being one slip from a delimited opener (words without delimiters, `<tool_calling>` two edits away) stays content, under the default allow-list too.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "The tool_call field, the TOOL_CALLS header and <tool_calling> docs say: call tools with care.",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "content_only",
+  "openai_finish_reason": "stop",
+  "verdict": "no_calls",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [],
+  "embedded": [],
+  "content": [
+    "The tool_call field, the TOOL_CALLS header and <tool_calling> docs say: call tools with care."
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

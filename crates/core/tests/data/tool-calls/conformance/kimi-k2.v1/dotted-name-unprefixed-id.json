@@ -1,0 +1,54 @@
+{
+  "description": "Two calls whose ids carry a namespaced tool name with dots (functions.mcp.search:0) and an id without the functions. prefix (read_file:1), as the public parsers accept: the name is everything between the prefix and the colon.",
+  "markup": "<|tool_calls_section_begin|><|tool_call_begin|>functions.mcp.search:0<|tool_call_argument_begin|>{\"query\": \"kimi\"}<|tool_call_end|><|tool_call_begin|>read_file:1<|tool_call_argument_begin|>{\"path\": \"notes.txt\"}<|tool_call_end|><|tool_calls_section_end|>",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "mcp.search",
+        "description": "Search the index.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "description": "Read a text file.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "mcp.search",
+      "id": "functions.mcp.search:0",
+      "arguments": {"query": "kimi"}
+    },
+    {
+      "name": "read_file",
+      "id": "read_file:1",
+      "arguments": {"path": "notes.txt"}
+    }
+  ]
+}

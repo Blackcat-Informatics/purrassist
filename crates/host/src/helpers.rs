@@ -179,7 +179,7 @@ impl Pending {
         // preparation; moving it into the receipt requires no second copy.
         receipt.sources.push(purrassist::contract::SourceDocument {
             digest: receipt.source,
-            text: self.original,
+            bytes: self.original.into_bytes(),
         });
         let prepared = (|| {
             governor.check()?;

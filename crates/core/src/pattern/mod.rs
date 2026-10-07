@@ -30,6 +30,8 @@ mod parse;
 mod storage;
 mod unicode;
 
+pub use derive::{DerivativeDfa, DfaState};
+
 use crate::contract::{
     Budget, Evidence, Governor, Resource, ScratchCharge, ScratchVec, StopReason,
 };
@@ -70,6 +72,27 @@ pub struct Pattern {
     captures: usize,
     engine: Engine,
     compiled: Option<derive::Compiled>,
+}
+
+/// A derivative-engine pattern's compiled automaton, detached from the
+/// pattern's syntax tree by [`Pattern::into_automaton`].
+#[derive(Clone, Debug)]
+pub struct ByteAutomaton {
+    compiled: derive::Compiled,
+}
+
+impl ByteAutomaton {
+    /// A resumable byte-level automaton over this pattern, with exactly
+    /// [`Pattern::byte_dfa`]'s semantics and resource contract.
+    ///
+    /// # Errors
+    /// Returns `BudgetExceeded` or `Cancelled` when the governor cannot admit
+    /// the automaton's working copy of the compiled term arena.
+    ///
+    /// See [`Pattern::into_automaton`] for an example.
+    pub fn dfa(&self, governor: &mut Governor) -> Result<DerivativeDfa<'_>, StopReason> {
+        DerivativeDfa::new(&self.compiled, governor)
+    }
 }
 
 /// Which engine [`Pattern::is_match`]/[`Pattern::generate`] use for this
@@ -249,11 +272,79 @@ impl Pattern {
     /// assert_eq!(pattern.is_match("Hello", &mut governor), Ok(false));
     /// ```
     pub fn is_match(&self, text: &str, governor: &mut Governor) -> Result<bool, StopReason> {
-        let chars = match_chars(text, governor)?;
         match &self.compiled {
-            Some(compiled) => derive::is_match(compiled, chars.as_slice(), governor),
-            None => backtrack::is_match(&self.ast, self.captures, chars.as_slice(), governor),
+            Some(compiled) => {
+                governor.charge(
+                    Resource::InputBytes,
+                    u64::try_from(text.len()).unwrap_or(u64::MAX),
+                )?;
+                derive::is_match(compiled, text, governor)
+            }
+            None => self.is_match_backtracking(text, governor),
         }
+    }
+
+    /// A resumable byte-level automaton for this pattern, or `None` when the
+    /// pattern uses [`Engine::Backtrack`] (backreferences and lookaround are
+    /// not finite-state over this engine).
+    ///
+    /// The automaton has exactly [`Pattern::is_match`]'s unanchored search
+    /// semantics, which is itself implemented by stepping it; see
+    /// [`DerivativeDfa`] for the state and resource contract.
+    ///
+    /// # Errors
+    /// Returns `BudgetExceeded` or `Cancelled` when the governor cannot admit
+    /// the automaton's working copy of the compiled term arena (`Work` and
+    /// `ScratchBytes` proportional to the compiled pattern).
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, pattern::Pattern};
+    /// let mut governor = Governor::new(Budget::default());
+    /// let digits = Pattern::compile(r"^\d+$").unwrap();
+    /// let mut dfa = digits.byte_dfa(&mut governor)?.expect("derivative pattern");
+    /// let mut state = dfa.start();
+    /// for &byte in b"2026" {
+    ///     state = dfa.step(state, byte, &mut governor)?;
+    /// }
+    /// assert!(dfa.accepting(state, &mut governor)?);
+    /// assert!(Pattern::compile(r"(a)\1").unwrap().byte_dfa(&mut governor)?.is_none());
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    pub fn byte_dfa(
+        &self,
+        governor: &mut Governor,
+    ) -> Result<Option<DerivativeDfa<'_>>, StopReason> {
+        self.compiled
+            .as_ref()
+            .map(|compiled| DerivativeDfa::new(compiled, governor))
+            .transpose()
+    }
+
+    /// Detach this pattern's derivative automaton from its syntax tree;
+    /// `None` when the pattern uses [`Engine::Backtrack`], which has no
+    /// finite automaton.
+    ///
+    /// The automaton owns only the compiled, read-only term arena and class
+    /// tables (already charged by [`Pattern::compile_governed`] and retained
+    /// as-is, with no copy), so unlike [`Pattern`] it is `Send + Sync` and
+    /// can live in shared, compiled artifacts.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, pattern::Pattern};
+    /// let mut governor = Governor::new(Budget::default());
+    /// let automaton = Pattern::compile(r"^[a-z]+$").unwrap().into_automaton().unwrap();
+    /// let mut dfa = automaton.dfa(&mut governor)?;
+    /// let mut state = dfa.start();
+    /// for &byte in b"abc" {
+    ///     state = dfa.step(state, byte, &mut governor)?;
+    /// }
+    /// assert!(dfa.accepting(state, &mut governor)?);
+    /// assert!(Pattern::compile(r"(a)\1").unwrap().into_automaton().is_none());
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    #[must_use]
+    pub fn into_automaton(self) -> Option<ByteAutomaton> {
+        self.compiled.map(|compiled| ByteAutomaton { compiled })
     }
 
     /// Which engine this pattern uses; see the module documentation.

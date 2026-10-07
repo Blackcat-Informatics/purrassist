@@ -1,0 +1,90 @@
+{
+  "description": "Stage-3 pass 5 (F16): after `<|python_tag|>`, the tail of a cut special token (`t_begin|>`) and a call body left open (`\"name\": ..., \"arguments\": {\"city\": \"Oslo\"`) before a reasoning-like tag and prose. The call body is the attempt's markup: the rejection covers it to its last JSON byte, and only the text around it stays content (no call body is left as assistant text).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "llama3-json.v1"
+  ],
+  "input": "Sure. <|python_tag|>t_begin|>\"name\": \"get_weather\", \"arguments\": {\"city\": \"Oslo\"<think>wait</think> Done.",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          6,
+          80
+        ],
+        "dialect": "llama3-json.v1",
+        "candidate_dialects": [
+          "llama3-json.v1"
+        ],
+        "reason": "Malformed { at: 20 }",
+        "raw": "<|python_tag|>t_begin|>\"name\": \"get_weather\", \"arguments\": {\"city\": \"Oslo\""
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "Sure. ",
+      " Done."
+    ],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        6,
+        80
+      ],
+      "dialect": "llama3-json.v1",
+      "candidate_dialects": [
+        "llama3-json.v1"
+      ],
+      "reason": "Malformed { at: 20 }",
+      "raw": "<|python_tag|>t_begin|>\"name\": \"get_weather\", \"arguments\": {\"city\": \"Oslo\""
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Sure. ",
+    "<think>wait</think> Done."
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

@@ -23,6 +23,8 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install nightly-2026-09-14 --profile minimal --component clippy,rustfmt,llvm-tools
       - run: make check
+      - name: Replay committed CLI/MCP transcripts against the built CLI
+        run: python3 scripts/test-verify-published.py
       - if: runner.os == 'Linux'
         name: Install pinned Node for independent syntax oracles
         run: python3 scripts/install-qualification-tool.py node >> "$GITHUB_PATH"
@@ -65,9 +67,21 @@ jobs:
       - name: Install pinned Node for WASM execution
         run: python3 scripts/install-qualification-tool.py node >> "$GITHUB_PATH"
       - run: make wasm-test
-  qualification:
-    # Independent oracles, bounded campaigns, archive audits, and fresh
-    # resource measurements for this exact branch head.
+  corpus:
+    # Vendored conformance corpora, generated evaluation corpora, exhaustive
+    # oracles and 1 MiB scale runs (`test = false` suites; not in make check).
+    runs-on: ubuntu-24.04
+    env:
+      RUSTUP_TOOLCHAIN: nightly-2026-09-14
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install nightly-2026-09-14 --profile minimal
+      - run: make corpus
+  fuzz:
+    # Coverage-guided and differential fuzzing, with the corpus-feedback
+    # self-test; not in make check.
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -79,7 +93,22 @@ jobs:
       # llvm-tools provides the llvm-cov/llvm-profdata build of this exact
       # nightly's own LLVM revision, which scripts/fuzz.py resolves via
       # `rustc --print sysroot` (see vendor/tooling.json's llvm-coverage entry).
-      - run: rustup toolchain install nightly-2026-09-14 --profile minimal --component llvm-tools --target wasm32-wasip1,wasm32-unknown-unknown
+      - run: rustup toolchain install nightly-2026-09-14 --profile minimal --component llvm-tools
+      - name: Coverage-guided and differential fuzzing (smoke counts)
+        # Deterministic default: all nine targets, 1,000 mutations each.
+        run: make fuzz
+  qualification:
+    # Independent oracles, archive audits, and fresh resource measurements
+    # for this exact branch head.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      RUSTUP_TOOLCHAIN: nightly-2026-09-14
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install nightly-2026-09-14 --profile minimal --target wasm32-wasip1,wasm32-unknown-unknown
       - name: Install pinned Node for independent oracles
         run: python3 scripts/install-qualification-tool.py node >> "$GITHUB_PATH"
       - name: Install pinned Valgrind for resource measurement
@@ -94,9 +123,6 @@ jobs:
         run: python3 scripts/measure-resources.py --portable-runtime --check-tools
       - name: Independent syntax oracles
         run: make syntax-oracles
-      - name: Coverage-guided and differential fuzzing (smoke counts)
-        # Deterministic default: all eight targets, 1,000 mutations each.
-        run: make fuzz
       - name: Package crate archives and notices
         run: make package
       - name: Measure resources

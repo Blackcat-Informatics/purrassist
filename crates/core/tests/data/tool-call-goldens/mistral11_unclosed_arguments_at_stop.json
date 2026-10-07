@@ -1,0 +1,67 @@
+{
+  "description": "A Mistral v11 call whose arguments object is left open at the end of output under a stop: the container is closed (json.syntax.close-container, a non-guessed JSON repair) and the call is Resolved.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v11.v1"
+  ],
+  "stop": "stop",
+  "input": "[TOOL_CALLS]get_weather[ARGS]{\"city\": \"Paris\"",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "city": "Paris"
+      },
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "json.syntax.close-container",
+        "tool_call.id.dedup"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "json.syntax.close-container",
+    "tool_call.id.dedup"
+  ]
+}

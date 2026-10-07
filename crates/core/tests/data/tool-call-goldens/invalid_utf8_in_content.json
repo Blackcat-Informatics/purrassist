@@ -1,0 +1,64 @@
+{
+  "description": "Bytes that are not UTF-8 in the content before a call are recorded as a tool_call.input.invalid-utf8 data loss and retained verbatim; the call itself is Resolved and the operation is a BestGuess.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "input": {
+    "hex": "6e6f746520fffe207468656e203c746f6f6c5f63616c6c3e0a3c66756e6374696f6e3d726561645f66696c653e0a3c706172616d657465723d706174683e0a612e72730a3c2f706172616d657465723e0a3c2f66756e6374696f6e3e0a3c2f746f6f6c5f63616c6c3e"
+  },
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "a.rs"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [
+    "[110, 111, 116, 101, 32, 255, 254, 32, 116, 104, 101, 110, 32]"
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.input.invalid-utf8",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline"
+  ]
+}

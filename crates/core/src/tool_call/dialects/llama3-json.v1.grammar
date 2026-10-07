@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# Llama 3.x JSON tool calls: one JSON object per call,
+#   {"name": NAME, "parameters": {...}}
+# written as the whole assistant turn or among other text, optionally after
+# the <|python_tag|> special token, optionally with a leading
+# "type": "function" member; after the tag the "arguments" key is accepted
+# in place of "parameters". Several calls follow one another, separated by "; ", a
+# newline, or nothing; the separators are content. The arguments value is
+# read by the self-delimiting json codec (exact number spellings; stringified
+# arguments are decoded and flagged).
+#
+# The plain object has no distinctive opener, so an attempt commits only on
+# call-shaped evidence: the "parameters" key after a "name" member, or the
+# "name" key after a "parameters" member. JSON content without that
+# evidence never opens a call attempt and stays content. After
+# <|python_tag|> the attempt commits at once: whatever follows the tag is a
+# call, or a rejected attempt. The object's closing brace is a closer class,
+# so a missing final brace is inserted and a repeated one is absorbed. An
+# "id" member, which some fine-tunes add first or last, is read as the
+# call's source id (`optional-id`: a call without one omits nothing).
+# Without the tag, a {"name": ..., "parameters": ...} object is also the
+# shape of a pasted tool declaration: when the parameters value has a JSON
+# Schema's shape ("type": "object" and a "properties" object) and the
+# declared tool does not resolve it as written, the object is content, not
+# a call (`declaration-content`); after the tag it is always a call.
+# First-party grammar; see docs/tool-calls/dialects/llama3-json.v1.md for the
+# public sources and for what is deliberately not accepted.
+grammar "llama3-json.v1";
+
+# The call's JSON envelope tolerates the JSON syntax slips the json codec
+# repairs inside arguments, recorded under the same json.syntax.* rules
+# (`json-envelope`): single quotes, bare keys, a missing `:` or `,`, a
+# trailing comma, a comment, a raw control character beside the name's
+# quotes.
+json-envelope;
+
+optional-id;
+declaration-content;
+
+closer call-end = "}";
+
+tool-name = /[A-Za-z0-9_.:-]+/;
+ws = /[ \t\r\n]+/;
+# The single spaces of the chat template's call layout
+# ({"name": "NAME", "parameters": ...}); printed as one space.
+sp = ws;
+layout sp " ";
+json-string = /"([^"\\\x00-\x1F]|\\["\\\/bfnrt]|\\u[0-9A-Fa-f]{4})*"/;
+
+# The arguments value ends where its JSON value does; an end-of-message
+# token or a following <|python_tag|> ends a value cut short.
+args-value = arguments:slot(json, "<|eom_id|>", "<|eot_id|>", "<|python_tag|>");
+type-member = "\"type\"" ws? ":" ws? "\"function\"" ws? "," ws?;
+name-member = "\"name\"" ws? ":" sp? "\"" name:tool-name "\"";
+call-id = /[A-Za-z0-9_.:-]+/;
+id-member = "\"id\"" ws? ":" ws? "\"" id:call-id "\"";
+lead-id = id-member ws? "," ws?;
+tail-id = ws? "," ws? id-member;
+
+# Without the tag, the "parameters" key is the call-shaped evidence: the
+# attempt commits after it (or, when the arguments come first, at the
+# "name" key after them). "arguments" is not read here, so the
+# {"name": ..., "arguments": ...} objects inside Hermes and OpenAI calls are
+# never read a second time.
+object-body = name-member ws? "," sp? "\"parameters\"" commit ws? ":" sp? args-value
+            | "\"parameters\"" ws? ":" ws? args-value ws? "," ws? "\"name\"" commit
+              ws? ":" ws? "\"" name:tool-name "\"";
+# An id member, if any, comes first or last (one of the two).
+object = "{" ws? type-member? (lead-id object-body | object-body tail-id?) ws? call-end;
+
+args-key = "\"parameters\"" | "\"arguments\"";
+tagged-body = name-member ws? "," sp? args-key ws? ":" sp? args-value
+            | args-key ws? ":" ws? args-value ws? "," ws? name-member;
+tagged-object = "{" ws? type-member? (lead-id tagged-body | tagged-body tail-id?) ws? call-end;
+
+call = object | "<|python_tag|>" commit ws? tagged-object;
+
+# A tool result as the chat template renders an ipython (tool) message.
+result = "<|start_header_id|>ipython<|end_header_id|>\n\n" content:until("<|eot_id|>") "<|eot_id|>";
+
+# One function signature of the prompt's tool list (the template prints
+# each one with four-space indentation; the printer writes it compact, like
+# the Hermes entry, with the exact parameters schema text).
+declaration = "{" ws? "\"type\"" ws? ":" ws? "\"function\"" ws? "," ws?
+              "\"function\"" ws? ":" ws? "{" ws?
+              "\"name\"" ws? ":" ws? "\"" name:tool-name "\""
+              (ws? "," ws? "\"description\"" ws? ":" ws? content:json-string)?
+              (ws? "," ws? "\"parameters\"" ws? ":" arguments:slot(json, "\x00"))?
+              ws? "}" ws? "}";

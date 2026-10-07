@@ -12,8 +12,10 @@ fixtures retain the Unicode-3.0 license. UTS #39 confusables data (Unicode
 generated into a first-party skeleton lookup table by
 `scripts/generate-unicode.py`, with its source URL and SHA-256 pinned in
 `vendor/unicode/manifest.json` alongside the other Unicode Character Database
-inputs; no confusables detection library is linked. Official JSON Schema meta-schemas use
-the upstream BSD license; the full upstream license is retained beside them.
+inputs; no confusables detection library is linked. Official JSON Schema meta-schemas
+(Draft 2020-12 and Draft-07, the latter from the json-schema-spec `draft-07`
+branch, byte-identical to the published `http://json-schema.org/draft-07/schema`)
+use the upstream BSD license; the full upstream license is retained beside them.
 The JSON Schema Test Suite retains its MIT license. The WHATWG named-character
 table is incorporated as BSD-3-Clause source data; its original JSON fixture is
 CC-BY-4.0. The full upstream notice is packaged beside the generated table.
@@ -233,6 +235,40 @@ allocators under `#![allow(unsafe_code)]`, confined to their bench files. They
 measure requested allocation rather than add a production allocator or dependency.
 The existing allocation-oracle test has the same isolated exception. Their unsafe
 blocks document the standard allocator delegation and counter invariants.
+
+## Network-free, dependency-free core
+
+`purrassist-core` links into environments that forbid network crates, ambient
+I/O, and nondeterminism. `scripts/check-repository.py` (run by `make hygiene`)
+enforces this with checks whose logic is unit-tested against synthetic metadata
+and sources by `scripts/test-repository-audit.py`:
+
+- **Empty core closure.** From `cargo metadata --locked --all-features`, the
+  resolved closure of `purrassist-core` over normal, build, and dev edges for all
+  targets must be empty. A failure names each package and its path from the core.
+- **Network denylist.** Independently, the normal and build closure of every
+  publishable workspace crate must not contain networking, TLS, HTTP, or async
+  runtime packages (`hyper*`, `reqwest`, `h2`, `h3*`, `http`, `http-body*`,
+  `tokio*`, `mio`, `async-std`, `async-io`, `smol`, `socket2`, `rustls*`,
+  `native-tls`, `openssl*`, `ureq`, `curl*`, `isahc`, `surf`, `quinn*`, `tonic`,
+  `axum`, `actix*`, `warp`). A failure names the crate, the matched package, and
+  the dependency path.
+- **Ambient-access scan.** Code tokens (comments and doc comments are skipped,
+  string contents are not) in `crates/core/src/**/*.rs`, including generated data,
+  must not use `std::net`, `TcpStream`, `TcpListener`, `UdpSocket`,
+  `ToSocketAddrs`, `std::process`, `std::fs`, `std::env`, `SystemTime`, `Instant`,
+  `RandomState`, `HashMap`, `HashSet`, `DefaultHasher`, `std::thread`, `stdin(`,
+  `stdout(`, or `stderr(`; grouped imports such as `use std::{fs}` are also caught.
+  There is no `#[cfg(test)]` exemption. Failures report `file:line`.
+- **Inventory baseline.** Every third-party package must be registered in
+  `vendor/dependencies.json` and must appear in the pinned
+  `scripts/data/dependency-baseline.json` list of `name@version` entries. Any new
+  package fails the audit. `purrassist-core` must also declare no
+  `[dev-dependencies]` or `[build-dependencies]`, including target-specific ones.
+
+No dependency may be added without explicit maintainer approval. Once approved,
+register it in `vendor/dependencies.json` and update the baseline in the same
+change.
 
 ## Structural helper census
 

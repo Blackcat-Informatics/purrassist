@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# Qwen3-Coder XML tool calls: a <tool_call> wrapper around one
+# <function=NAME> element whose body holds <parameter=NAME> elements, or the
+# bare element when the wrapper tokens were stripped. The
+# body is read by the xml-params codec (verbatim string values, typed values
+# parsed as JSON, nested parameters, a whole-JSON body, the </parameters>
+# closer variant), typed by the declared tool the name refers to. Several
+# calls follow one another, each in its own wrapper. First-party grammar;
+# see docs/tool-calls/dialects/qwen3-coder-xml.v1.md for the public sources
+# describing the format and for what is deliberately not accepted.
+grammar "qwen3-coder-xml.v1";
+
+reasoning "<think>" "</think>";
+
+closer function-end = "</function>" | "</functions>";
+closer call-end = "</tool_call>" | "</tool_calls>";
+
+tool-name = /[A-Za-z0-9_.:-]+/;
+ws = /[ \t\r\n]+/;
+# Printing: whitespace between tags is one newline, the chat template's
+# layout (<tool_call>\n<function=NAME>\n...\n</function>\n</tool_call>).
+layout ws "\n";
+
+function = "<function=" name:tool-name ">"
+           arguments:slot(xml-params, "</function>", "</functions>", "</tool_call>", "</tool_calls>")
+           function-end;
+
+# The <tool_call> and </tool_call> wrapper tokens are special tokens that
+# detokenizers commonly strip: a bare <function=NAME> element is a call
+# whose missing wrapper tokens are read as inserted
+# (tool_call.markup.missing-token, a markup repair). Each bare element is
+# its own call.
+call = "<tool_call>" ws? function ws? call-end
+     | insert("<tool_call>") function (ws? call-end | insert("</tool_call>"));
+
+# A tool result as the chat template renders a tool message.
+result = "<tool_response>" content:until("</tool_response>") "</tool_response>";
+
+# One entry of the system prompt's tool list. The parameters block is kept
+# verbatim (the raw codec): the printer writes the tool's exact parameters
+# schema text there.
+declaration = "<function>" ws? "<name>" name:tool-name "</name>" ws?
+              ("<description>" content:until("</description>") "</description>" ws?)?
+              "<parameters>" arguments:slot(raw, "</parameters>") "</parameters>" ws?
+              "</function>";

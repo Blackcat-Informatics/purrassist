@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# Mistral v11+ tool calls (Mistral Small 3.2, Devstral, Magistral, and the
+# other v11 and v13 tokenizer models): each call is the [TOOL_CALLS]
+# special token, the function name, an optional [CALL_ID] segment holding
+# the model's call id (v11 tokenizers; v13 dropped it), the [ARGS] token,
+# and the arguments as one JSON value:
+#   [TOOL_CALLS]NAME[CALL_ID]ID[ARGS]{...}
+#   [TOOL_CALLS]NAME[ARGS]{...}
+# Several calls follow one another, each with its own [TOOL_CALLS]. A call
+# whose [TOOL_CALLS] the model left out right after another call (a name
+# and [ARGS]) continues that call's attempt (`next`), with the omitted
+# token recorded as inserted (tool_call.markup.missing-token); so is an
+# omitted [ARGS] between a [TOOL_CALLS] name and its arguments. Whitespace around the name, the id and the
+# tokens is read and kept out of the values. The arguments value is read by
+# the self-delimiting json codec (exact number spellings; stringified
+# arguments are decoded and flagged). [THINK] ... [/THINK] is reasoning
+# (Magistral). First-party grammar; see
+# docs/tool-calls/dialects/mistral-v11.v1.md for the public sources and for
+# what is deliberately not accepted.
+grammar "mistral-v11.v1";
+
+reasoning "[THINK]" "[/THINK]";
+
+tool-name = /[A-Za-z0-9_.:-]+/;
+call-id = /[A-Za-z0-9_.:-]+/;
+ws = /[ \t\r\n]+/;
+json-string = /"([^"\\\x00-\x1F]|\\["\\\/bfnrt]|\\u[0-9A-Fa-f]{4})*"/;
+
+named = ws? name:tool-name ws? ("[CALL_ID]" ws? id:call-id ws?)?;
+# The arguments value ends where its JSON value does; the next call's
+# token, a stray [ARGS] or [CALL_ID], or the end-of-sequence token ends a
+# value cut short.
+args = arguments:slot(json, "[TOOL_CALLS]", "[ARGS]", "[CALL_ID]", "</s>");
+
+# After [TOOL_CALLS] the name is evidence enough: an omitted [ARGS] is
+# read as inserted. A call whose [TOOL_CALLS] is omitted needs its [ARGS]:
+# a name followed by [ARGS] is call-shaped, anything else after a call is
+# content.
+call = "[TOOL_CALLS]" named ("[ARGS]" | insert("[ARGS]")) args
+       (ws? next ("[TOOL_CALLS]" named ("[ARGS]" | insert("[ARGS]")) args
+                 | insert("[TOOL_CALLS]") named "[ARGS]" args))*;
+
+# A tool result: the v11 form names the call it answers before
+# [TOOL_CONTENT]; the v13 form holds only the content.
+result = "[TOOL_RESULTS]" (id:call-id "[TOOL_CONTENT]")?
+         content:until("[/TOOL_RESULTS]", "[TOOL_CONTENT]") "[/TOOL_RESULTS]";
+
+# One entry of the [AVAILABLE_TOOLS] list, printed compact like the Hermes
+# entry, with the exact parameters schema text.
+declaration = "{" ws? "\"type\"" ws? ":" ws? "\"function\"" ws? "," ws?
+              "\"function\"" ws? ":" ws? "{" ws?
+              "\"name\"" ws? ":" ws? "\"" name:tool-name "\""
+              (ws? "," ws? "\"description\"" ws? ":" ws? content:json-string)?
+              (ws? "," ws? "\"parameters\"" ws? ":" arguments:slot(json, "\x00"))?
+              ws? "}" ws? "}";

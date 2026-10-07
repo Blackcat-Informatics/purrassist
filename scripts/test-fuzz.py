@@ -146,6 +146,42 @@ class Coverage(unittest.TestCase):
             for seed in config['seeds']:
                 self.assertLessEqual(len(seed), 4096, f'{target}: a committed seed exceeds 4096 bytes')
 
+    def test_every_target_has_a_registered_harness_source(self):
+        manifest = (FUZZ.ROOT / 'crates/core/Cargo.toml').read_text()
+        for target in FUZZ.TARGETS:
+            self.assertTrue(FUZZ.harness_source(target).is_file(), f'{target}: no probe source')
+            self.assertIn(f'name = "fuzz-{target}"', manifest, f'{target}: no [[example]] entry')
+        self.assertEqual(FUZZ.harness_source('tool-call').name, 'fuzz_tool_call.rs')
+
+    def test_tool_call_seeds_cover_every_conformance_fixture_and_raw_bytes(self):
+        markup = FUZZ._tool_call_conformance_markup()
+        self.assertEqual(len(markup), len(list((FUZZ.ROOT / 'crates/core/tests/data/tool-calls/conformance').glob('*/*.json'))))
+        turns = [seed[2:] for seed in FUZZ.TARGETS['tool-call']['seeds']]
+        for fixture in markup:
+            self.assertIn(fixture, turns)
+        self.assertTrue(any(b'\xff' in turn for turn in turns))
+        self.assertTrue(FUZZ.admits_bytes('tool-call'))
+        self.assertFalse(any(FUZZ.admits_bytes(target) for target in FUZZ.TARGETS if target != 'tool-call'))
+
+    def test_byte_input_probe_completes_with_ok_on_invalid_utf8(self):
+        document = Coverage().document()
+        results = [subprocess.CompletedProcess([], 0, b'ok\n', b''),
+                   subprocess.CompletedProcess([], 0, b'', b''),
+                   subprocess.CompletedProcess([], 0, json.dumps(document).encode(), b'')]
+        counts = {}
+        tools = {'llvm-profdata': Path('profdata'), 'llvm-cov': Path('cov')}
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(FUZZ.subprocess, 'run', side_effect=results):
+                regions, invalid, checks = FUZZ.probe(
+                    Path('probe'), b'\x00\x00\xff', Path(directory), 1, 'tool-call', {}, tools, counts)
+        self.assertFalse(invalid)
+        self.assertEqual((len(regions), checks, counts['non_utf8_admitted']), (1, 0, 1))
+        for output in (b'invalid-utf8\n', b'ok\n{"kind":"pattern"}\n'):
+            with tempfile.TemporaryDirectory() as directory:
+                with patch.object(FUZZ.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, output, b'')):
+                    with self.assertRaises(ValueError):
+                        FUZZ.probe(Path('probe'), b'\x00\x00\xff', Path(directory), 1, 'tool-call', {}, tools)
+
 
 class DifferentialNormalization(unittest.TestCase):
     """One test per differential probe's comparison normalization (both

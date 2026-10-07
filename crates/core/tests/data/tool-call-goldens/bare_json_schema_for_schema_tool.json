@@ -1,0 +1,109 @@
+{
+  "description": "A declared tool whose own arguments are a type and a properties object: the declaration-shaped arguments resolve against its schema as written, so the counter-evidence is outweighed and the call stands.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "define_type",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string"
+            },
+            "properties": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "properties"
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "bare-json.v1"
+  ],
+  "stop": "stop",
+  "input": "{\"name\": \"define_type\", \"arguments\": {\"type\": \"object\", \"properties\": {\"id\": {\"type\": \"integer\"}}}}",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "define_type",
+      "arguments": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          }
+        }
+      },
+      "candidate_dialects": [
+        "bare-json.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.parameter.pass-through"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.parameter.pass-through"
+  ]
+}

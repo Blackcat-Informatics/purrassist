@@ -1,7 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Witness generation for Draft 2020-12 JSON Schema.
+//! Witness generation for Draft 2020-12 and Draft-07 JSON Schema.
+//!
+//! Draft-07 needs no separate algebra: tuple-form `items` + `additionalItems`
+//! canonicalize to the same facets as `prefixItems` + `items`, and
+//! `dependencies` to the `dependentRequired`/`dependentSchemas` facets by
+//! entry form; a Draft-07 `$ref` hides its siblings from every stage, exactly
+//! as the evaluator ignores them.
 //!
 //! Implements the Attouche, Baazizi, Colazzo, Ghelli, Sartiani pipeline
 //! ("Witness Generation for JSON Schema", VLDB 2022): canonicalize

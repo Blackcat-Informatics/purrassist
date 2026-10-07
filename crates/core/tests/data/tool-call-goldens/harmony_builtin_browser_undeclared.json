@@ -1,0 +1,54 @@
+{
+  "description": "A built-in browser recipient (to=browser.open) no declared tool matches: a call to an unknown tool, Unresolved, never silent content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "location"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "harmony.v1"
+  ],
+  "stop": "stop",
+  "input": "<|start|>assistant<|channel|>analysis to=browser.open <|constrain|>json<|message|>{\"id\":1}<|call|>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": null,
+      "arguments": {
+        "id": 1
+      },
+      "candidate_dialects": [
+        "harmony.v1"
+      ],
+      "outcome": "unresolved: unknown_tool: no declared tool matches `browser.open`",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

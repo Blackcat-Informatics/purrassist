@@ -1,0 +1,173 @@
+{
+  "description": "T4: bad, good, bad, good in one deepseek-v3.1.v1 group: both bad calls are rejected parts of their own, both good calls are recovered as deepseek-v3.1.v1 (the first good call records the split on both sides), and no markup is content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "deepseek-v3.1.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "Hi <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>f oops<｜tool▁sep｜>{\"a\":\"x\"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>f<｜tool▁sep｜>{\"a\":\"y\"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>f oops<｜tool▁sep｜>{\"a\":\"z\"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>f<｜tool▁sep｜>{\"a\":\"w\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜> done",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "tool_calls",
+    "verdict": "run",
+    "usable_calls": {
+      "strict": 2,
+      "accepting_guesses": 2
+    },
+    "calls": [
+      {
+        "tool": "f",
+        "arguments": {
+          "a": "y"
+        },
+        "candidate_dialects": [
+          "deepseek-v3.1.v1"
+        ],
+        "outcome": "resolved",
+        "rules": [
+          "tool_call.markup.group-split",
+          "tool_call.markup.group-split"
+        ]
+      },
+      {
+        "tool": "f",
+        "arguments": {
+          "a": "w"
+        },
+        "candidate_dialects": [
+          "deepseek-v3.1.v1"
+        ],
+        "outcome": "resolved",
+        "rules": []
+      }
+    ],
+    "rejected": [
+      {
+        "span": [
+          3,
+          116
+        ],
+        "dialect": "deepseek-v3.1.v1",
+        "candidate_dialects": [
+          "deepseek-v3.1.v1",
+          "deepseek-v3.v1"
+        ],
+        "reason": "Malformed { at: 60 }",
+        "raw": "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>f oops<｜tool▁sep｜>{\"a\":\"x\"}<｜tool▁call▁end｜>"
+      },
+      {
+        "span": [
+          196,
+          281
+        ],
+        "dialect": "deepseek-v3.1.v1",
+        "candidate_dialects": [
+          "deepseek-v3.1.v1"
+        ],
+        "reason": "Malformed { at: 225 }",
+        "raw": "<｜tool▁call▁begin｜>f oops<｜tool▁sep｜>{\"a\":\"z\"}<｜tool▁call▁end｜>"
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "Hi ",
+      " done"
+    ],
+    "failed_validations": [],
+    "ledger_rules": [
+      "tool_call.markup.group-split",
+      "tool_call.markup.group-split"
+    ]
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 2,
+    "accepting_guesses": 2
+  },
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "y"
+      },
+      "candidate_dialects": [
+        "deepseek-v3.1.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.group-split",
+        "tool_call.markup.group-split"
+      ]
+    },
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "w"
+      },
+      "candidate_dialects": [
+        "deepseek-v3.1.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    }
+  ],
+  "rejected": [
+    {
+      "span": [
+        3,
+        116
+      ],
+      "dialect": "deepseek-v3.1.v1",
+      "candidate_dialects": [
+        "deepseek-v3.1.v1"
+      ],
+      "reason": "Malformed { at: 60 }",
+      "raw": "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>f oops<｜tool▁sep｜>{\"a\":\"x\"}<｜tool▁call▁end｜>"
+    },
+    {
+      "span": [
+        196,
+        281
+      ],
+      "dialect": "deepseek-v3.1.v1",
+      "candidate_dialects": [
+        "deepseek-v3.1.v1"
+      ],
+      "reason": "Malformed { at: 225 }",
+      "raw": "<｜tool▁call▁begin｜>f oops<｜tool▁sep｜>{\"a\":\"z\"}<｜tool▁call▁end｜>"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Hi ",
+    " done"
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.group-split",
+    "tool_call.markup.group-split"
+  ]
+}

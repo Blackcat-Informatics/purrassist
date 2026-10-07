@@ -1,0 +1,91 @@
+{
+  "description": "Stage-3 pass 5 (F14), Re-blessed for adversary pass 6 (F14/F19), maintainer: \"Newlines have zero meaning here.\" Prose between the last value's closer and a second closer before the call's closer. Where the closer sits on its line carries no meaning, so this reads exactly as the closer mid-line: the reading holding the prose (`tool_call.value.text-after-closer`) and the reading ending the value at the first closer and dropping the prose (`tool_call.markup.text-between-parameters`) tie, and the mutating call is Ambiguous between `x` and the content holding the prose, never usable (issue #3: \"Never accept trailing free text as an argument\"). It was rejected before.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "write_file": "mutating",
+    "read_file": "read_only"
+  },
+  "input": "<tool_call>\n<function=write_file>\n<parameter=path>\na.py\n</parameter>\n<parameter=content>\nx\n</parameter>\nDone, the file is written.\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "ambiguous",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "a.py",
+        "content": "x"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "ambiguous",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.markup.text-between-parameters"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.text-between-parameters"
+  ]
+}

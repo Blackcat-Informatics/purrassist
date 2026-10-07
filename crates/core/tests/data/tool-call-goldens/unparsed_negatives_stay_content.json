@@ -1,0 +1,48 @@
+{
+  "description": "Text that is not call markup is never reported: prose with parentheses, math, a function applied to positional arguments in brackets, inline code with a keyword argument, and a Python code block: the turn is content_only with nothing rejected.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "The area is f(x) = 2x (see [1]); [a(b)] and [x + f(y)] are math, `sum(a=1)` is inline code.\n```python\nprint(x)\nresult = [run(cmd=\"ls\")]\n```\n",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "content_only",
+  "openai_finish_reason": "stop",
+  "verdict": "no_calls",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [],
+  "embedded": [],
+  "content": [
+    "The area is f(x) = 2x (see [1]); [a(b)] and [x + f(y)] are math, `sum(a=1)` is inline code.\n```python\nprint(x)\nresult = [run(cmd=\"ls\")]\n```\n"
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

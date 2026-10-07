@@ -1,0 +1,58 @@
+{
+  "description": "One unwrapped call object as the whole turn, the shape of the function object in an OpenAI tool_calls element written without its envelope: {\"name\": NAME, \"arguments\": {...}}.",
+  "markup": "{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Oslo\", \"unit\": \"celsius\"}}",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "description": "Read a text file.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "get_weather",
+      "arguments": {"city": "Oslo", "unit": "celsius"}
+    }
+  ]
+}

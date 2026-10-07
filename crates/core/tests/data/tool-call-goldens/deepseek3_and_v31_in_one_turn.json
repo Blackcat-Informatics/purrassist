@@ -1,0 +1,88 @@
+{
+  "description": "A turn holding a DeepSeek-V3 section and a DeepSeek-V3.1 section, read with every built-in dialect allowed: each section resolves as its own dialect alone (the V3 body is malformed V3.1 arguments, and the V3.1 body has no name after <｜tool▁sep｜> for V3).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>get_weather\n```json\n{\"city\": \"Oslo\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>\nAnd the file:\n<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>{\"path\": \"a.rs\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 2,
+    "accepting_guesses": 2
+  },
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "city": "Oslo"
+      },
+      "candidate_dialects": [
+        "deepseek-v3.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "a.rs"
+      },
+      "candidate_dialects": [
+        "deepseek-v3.1.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [
+    "\nAnd the file:\n"
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

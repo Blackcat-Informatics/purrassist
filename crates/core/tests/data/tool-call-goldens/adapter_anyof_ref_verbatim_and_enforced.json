@@ -1,0 +1,40 @@
+{
+  "description": "A3c: an OpenAI declaration using $defs, $ref and anyOf (kept as exact text) renders back byte for byte, and a call whose value matches no anyOf branch fails schema validation against the exact schema: per-call Unresolved.",
+  "tools_openai": "[{\"type\": \"function\", \"function\": {\"name\": \"pick\",  \"description\": \"Pick a mode.\",\n  \"parameters\": {\"type\": \"object\", \"$defs\": {\"mode\": {\"enum\": [\"fast\", \"slow\"]}},\n    \"properties\": {\"choice\": {\"anyOf\": [{\"$ref\": \"#/$defs/mode\"}, {\"type\": \"integer\", \"minimum\": 0}]}},\n    \"required\": [\"choice\"], \"x-vendor\": true}}}]",
+  "dialects": [
+    "hermes.v1"
+  ],
+  "input": "<tool_call>\n{\"name\": \"pick\", \"arguments\": {\"choice\": \"medium\"}}\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "pick",
+      "arguments": {
+        "choice": "medium"
+      },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "outcome": "unresolved: schema_validation: the arguments fail the tool's schema",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [
+    "sha256:5fdea17657d1ef9a398c2475c666561616c67c865ed354dd78f9705dfb1a00f1",
+    "keyword /$defs",
+    "keyword /x-vendor",
+    "keyword /properties/choice/anyOf"
+  ],
+  "ledger_rules": []
+}

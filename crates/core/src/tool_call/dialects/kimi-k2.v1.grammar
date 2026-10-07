@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# Kimi-K2 tool calls (Kimi-K2-Instruct, K2-Instruct-0905, K2-Thinking): one
+# tool-calls section holding one or more calls, chained with no separator,
+#   <|tool_calls_section_begin|><|tool_call_begin|>functions.NAME:IDX<|tool_call_argument_begin|>ARGS<|tool_call_end|>...<|tool_calls_section_end|>
+# where ARGS is the arguments as JSON. `functions.NAME:IDX` is the call's
+# id (a composite id: the whole span is the model's id, NAME inside it is
+# the tool name); the `functions.` prefix may be left out (`NAME:IDX`), and
+# NAME may hold dots (`functions.mcp.search:0` names `mcp.search`). The name
+# ends at the id's final `:IDX`, so it may hold colons (`functions.ns:tool:0`
+# names `ns:tool`). An id that is a bare call counter (`3`) is the call's id
+# with no name: the resolver may read the tool from the arguments
+# (tool_call.name.from-arguments, a guess). Each call of a section is its
+# own call (`next`). Repairs, each recorded:
+# - an id without `:IDX` is read with the name only, and the call carries no
+#   model id (the id policy numbers it, a tool_call.id.dedup inference);
+# - a section whose <|tool_calls_section_begin|> was left out is read with
+#   the token inserted (tool_call.markup.missing-token);
+# - the singular spellings <|tool_call_section_begin|> and
+#   <|tool_call_section_end|> are read through a declared confusable
+#   (tool_call.markup.terminal-confusable);
+# - the call and section closers are closer classes, so a missing one is
+#   inserted (at the next call, or at the end of output) and a repeated one
+#   is absorbed.
+# Whitespace between the tokens and around the id is markup. The arguments
+# value is read by the self-delimiting json codec (exact number spellings;
+# stringified arguments are decoded and flagged). <think> ... </think> is
+# reasoning (Kimi-K2-Thinking). First-party grammar; see
+# docs/tool-calls/dialects/kimi-k2.v1.md for the public sources and for what
+# is deliberately not accepted.
+grammar "kimi-k2.v1";
+
+reasoning "<think>" "</think>";
+
+# The singular section-token spelling some parsers also accept.
+confusable "calls_section" "call_section";
+
+closer call-end = "<|tool_call_end|>";
+closer section-end = "<|tool_calls_section_end|>";
+
+# A whole tool name, as the tool set allows it (colons included); a name
+# read from an id is everything between the optional `functions.` prefix
+# and the id's final `:IDX`.
+tool-name = /[A-Za-z0-9_.:-]+/;
+# One colon-free part of a name read from an id.
+name-part = /[A-Za-z0-9_.-]+/;
+# The first part of a name with no `functions.` prefix: any part that does
+# not itself begin with `functions.` (so a prefixed id has one reading).
+bare-part = /f(?:u(?:n(?:c(?:t(?:i(?:o(?:n(?:s(?:[A-Za-z0-9_-][A-Za-z0-9_.-]*)?|[A-Za-rt-z0-9_.-][A-Za-z0-9_.-]*)?|[A-Za-mo-z0-9_.-][A-Za-z0-9_.-]*)?|[A-Za-np-z0-9_.-][A-Za-z0-9_.-]*)?|[A-Za-hj-z0-9_.-][A-Za-z0-9_.-]*)?|[A-Za-su-z0-9_.-][A-Za-z0-9_.-]*)?|[A-Zabd-z0-9_.-][A-Za-z0-9_.-]*)?|[A-Za-mo-z0-9_.-][A-Za-z0-9_.-]*)?|[A-Za-tv-z0-9_.-][A-Za-z0-9_.-]*)?|[A-Za-eg-z0-9_.-][A-Za-z0-9_.-]*/;
+# A name read from an id without its `:IDX`: it does not end in `:` and
+# digits (so `functions.x:0` has one reading).
+plain-name = /[A-Za-z0-9_.:-]*[A-Za-z_.-][0-9]*|[0-9]+/;
+# The same with no `functions.` prefix: a colon-free name that does not
+# begin with `functions.` and is not all digits (a bare call counter).
+bare-word = /f(?:u(?:n(?:c(?:t(?:i(?:o(?:n(?:s(?:[A-Za-z0-9_-][A-Za-z0-9_.-]*)?|[A-Za-rt-z0-9_.-][A-Za-z0-9_.-]*)?|[A-Za-mo-z0-9_.-][A-Za-z0-9_.-]*)?|[A-Za-np-z0-9_.-][A-Za-z0-9_.-]*)?|[A-Za-hj-z0-9_.-][A-Za-z0-9_.-]*)?|[A-Za-su-z0-9_.-][A-Za-z0-9_.-]*)?|[A-Zabd-z0-9_.-][A-Za-z0-9_.-]*)?|[A-Za-mo-z0-9_.-][A-Za-z0-9_.-]*)?|[A-Za-tv-z0-9_.-][A-Za-z0-9_.-]*)?|[A-Za-eg-z_.-][A-Za-z0-9_.-]*|[0-9]+[A-Za-z_.-][A-Za-z0-9_.-]*/;
+call-index = /[0-9]+/;
+result-id = /[A-Za-z0-9_.:-]+/;
+ws = /[ \t\r\n]+/;
+json-string = /"([^"\\\x00-\x1F]|\\["\\\/bfnrt]|\\u[0-9A-Fa-f]{4})*"/;
+
+# The composite id functions.NAME:IDX, its name everything up to the final
+# `:IDX`. The first alternative reads no id (its name run takes the `:IDX`
+# too); it is how the id prints: functions.NAME:IDX, IDX the call's
+# position among the printed calls.
+indexed = "functions." (name:tool-name | name:(name-part (":" name-part)*)) ":" call-index
+        | name:(bare-part (":" name-part)*) ":" call-index;
+# An id without its `:IDX`: the name alone.
+unindexed = "functions." name:plain-name
+          | name:bare-word;
+
+invocation = "<|tool_call_begin|>" ws? (id:indexed | unindexed | id:call-index) ws?
+             "<|tool_call_argument_begin|>" ws?
+             arguments:slot(json, "<|tool_call_end|>", "<|tool_calls_section_end|>", "<|tool_call_begin|>")
+             ws? call-end;
+calls = invocation (ws? next invocation)* ws? section-end;
+
+call = "<|tool_calls_section_begin|>" ws? calls
+     | insert("<|tool_calls_section_begin|>") calls;
+
+# A tool result as the template renders a tool message.
+result = "<|im_system|>tool<|im_middle|>## Return of " id:result-id "\n"
+         content:until("<|im_end|>") "<|im_end|>";
+
+# One element of the tool_declare message's tools array (compact JSON).
+declaration = "{" ws? "\"type\"" ws? ":" ws? "\"function\"" ws? "," ws?
+              "\"function\"" ws? ":" ws? "{" ws?
+              "\"name\"" ws? ":" ws? "\"" name:result-id "\""
+              (ws? "," ws? "\"description\"" ws? ":" ws? content:json-string)?
+              (ws? "," ws? "\"parameters\"" ws? ":" arguments:slot(json, "\x00"))?
+              ws? "}" ws? "}";

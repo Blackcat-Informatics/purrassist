@@ -1,0 +1,78 @@
+{
+  "description": "Streaming events of a tool_use block (SSE content_block_start and input_json_delta, out of scope here) are never read as calls nor left silently as content: each event is a rejected attempt spanning its line, so the nested block with its empty input is not a call.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "anthropic-tool-use.v1"
+  ],
+  "stop": "stop",
+  "input": "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"get_weather\",\"input\":{}}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"city\\\": \\\"Oslo\\\"}\"}}\n",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        33,
+        157
+      ],
+      "dialect": "anthropic-tool-use.v1",
+      "candidate_dialects": [
+        "anthropic-tool-use.v1"
+      ],
+      "reason": "Malformed { at: 157 }",
+      "raw": "{\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"get_weather\",\"input\":{}}}"
+    },
+    {
+      "span": [
+        192,
+        306
+      ],
+      "dialect": "anthropic-tool-use.v1",
+      "candidate_dialects": [
+        "anthropic-tool-use.v1"
+      ],
+      "reason": "Malformed { at: 306 }",
+      "raw": "{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"city\\\": \\\"Oslo\\\"}\"}}"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "event: content_block_start\ndata: ",
+    "\n\nevent: content_block_delta\ndata: ",
+    "\n"
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

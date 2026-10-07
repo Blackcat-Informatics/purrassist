@@ -1,0 +1,91 @@
+{
+  "description": "T4: every call of a mistral-v3.v1 group is bad: the attempt read no call, so it is one rejected attempt over its whole markup (no rejected part per call, no overlapping rejections) and nothing is content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v3.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "Hi [TOOL_CALLS] [{\"name\": \"f\" oops, \"arguments\": {\"a\": \"x\"}}, {\"name\": \"f\" oops, \"arguments\": {\"a\": \"y\"}}, {\"name\": \"f\" oops, \"arguments\": {\"a\": \"z\"}}] done",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          3,
+          151
+        ],
+        "dialect": "mistral-v3.v1",
+        "candidate_dialects": [
+          "mistral-v11.v1",
+          "mistral-v3.v1"
+        ],
+        "reason": "Malformed { at: 30 }",
+        "raw": "[TOOL_CALLS] [{\"name\": \"f\" oops, \"arguments\": {\"a\": \"x\"}}, {\"name\": \"f\" oops, \"arguments\": {\"a\": \"y\"}}, {\"name\": \"f\" oops, \"arguments\": {\"a\": \"z\"}}]"
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "Hi ",
+      " done"
+    ],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        3,
+        151
+      ],
+      "dialect": "mistral-v3.v1",
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "reason": "Malformed { at: 30 }",
+      "raw": "[TOOL_CALLS] [{\"name\": \"f\" oops, \"arguments\": {\"a\": \"x\"}}, {\"name\": \"f\" oops, \"arguments\": {\"a\": \"y\"}}, {\"name\": \"f\" oops, \"arguments\": {\"a\": \"z\"}}]"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Hi ",
+    " done"
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

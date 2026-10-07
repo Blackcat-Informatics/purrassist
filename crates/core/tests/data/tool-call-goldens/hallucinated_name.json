@@ -1,0 +1,53 @@
+{
+  "description": "A3b: a Hermes call naming a tool nobody declared is Unresolved (unknown tool) under the default Structural policy of a Mutating adapter tool.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "input": "<tool_call>\n{\"name\": \"send_email\", \"arguments\": {\"to\": \"someone\"}}\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": null,
+      "arguments": {
+        "to": "someone"
+      },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "outcome": "unresolved: unknown_tool: no declared tool matches `send_email`",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

@@ -1,0 +1,67 @@
+{
+  "description": "A call naming no declared tool, with an unclosed value followed by another <parameter= opener: the boundary is a guess (tool_call.markup.undeclared-parameter-boundary); the call is Unresolved as an unknown tool.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            },
+            "b": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "policy": "tolerant",
+  "input": "<tool_call>\n<function=zz>\n<parameter=a>\nx\n<parameter=b>\ny\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": null,
+      "arguments": {
+        "a": "x",
+        "b": "y"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "unresolved: unknown_tool: no declared tool matches `zz`",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.markup.undeclared-parameter-boundary",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.undeclared-parameter-boundary",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline"
+  ]
+}

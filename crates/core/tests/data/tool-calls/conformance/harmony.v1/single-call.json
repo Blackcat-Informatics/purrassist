@@ -1,0 +1,37 @@
+{
+  "description": "A gpt-oss turn as the Harmony format documents it: an analysis message (reasoning), then an assistant commentary message addressed to functions.NAME with the json content type, ending with <|call|>. The model output starts inside the first message (the prompt ends with <|start|>assistant).",
+  "markup": "<|channel|>analysis<|message|>Need the weather in San Francisco.<|end|><|start|>assistant<|channel|>commentary to=functions.get_weather <|constrain|>json<|message|>{\"city\":\"San Francisco\",\"unit\":\"fahrenheit\"}<|call|>",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "get_weather",
+      "arguments": {"city":"San Francisco","unit":"fahrenheit"}
+    }
+  ]
+}

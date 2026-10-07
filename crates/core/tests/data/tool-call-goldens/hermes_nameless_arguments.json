@@ -1,0 +1,83 @@
+{
+  "description": "A Hermes call object with an arguments member and no name: the wrapper makes it a call that names no tool, and its arguments fit only read_file, so it is read as read_file (tool_call.name.from-arguments), a BestGuess.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "stop": "stop",
+  "input": "<tool_call>\n{\"arguments\": {\"path\": \"a.rs\"}}\n</tool_call>",
+  "policy": "tolerant",
+  "effects": {
+    "get_weather": "read_only",
+    "read_file": "read_only"
+  },
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "a.rs"
+      },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.name.from-arguments"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.name.from-arguments"
+  ]
+}

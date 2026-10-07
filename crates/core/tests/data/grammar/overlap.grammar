@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# Test-only dialect sharing mini.v1's call wrapper: a call both dialects
+# recognize over the same span is an overlapping-dialect choice.
+grammar "overlap.v1";
+
+ident = /[A-Za-z_][A-Za-z0-9_.:-]*/;
+
+call = "<tool><call=" name:ident ">" arguments:slot(raw, "</call>") "</call></tool>";
+
+result = "<result>" content:until("</result>") "</result>";
+
+declaration = "<fn " name:ident ">";

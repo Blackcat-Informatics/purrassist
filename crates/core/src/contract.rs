@@ -72,7 +72,8 @@ impl CancellationToken {
 /// # History
 /// - `1`: initial wire shape (see `docs/schema/receipt.schema.json` history
 ///   for the exact JSON Schema of each version, and
-///   `crates/core/tests/data/receipts/` for one golden fixture per version).
+///   `crates/core/tests/data/receipts/` for the golden fixture of the
+///   current version).
 /// - `2`: `usage` gained `total_scratch_charged` (the monotone cumulative
 ///   scratch counter, distinct from the existing high-water
 ///   `peak_scratch_bytes`; see [`Usage::total_scratch_charged`]).
@@ -90,7 +91,14 @@ impl CancellationToken {
 ///   alternatives carries a top-level `ambiguity` object (`derivations`,
 ///   `valid`, `distinguishing`); see `crate::wire` and
 ///   `docs/schema/receipt.schema.json`.
-pub const RECEIPT_VERSION: u32 = 2;
+/// - `3`: retained `sources` keep exact original bytes, including invalid
+///   UTF-8 ([`SourceDocument::bytes`]). Each wire `sources[]` entry carries
+///   `digest` and exactly one of `text` (the bytes are valid UTF-8, encoded
+///   as a JSON string) or `bytes_hex` (they are not, encoded as lowercase
+///   hexadecimal). Every other field is unchanged from version `2`, so a
+///   receipt whose sources are all valid UTF-8 differs from its version `2`
+///   form only in `version`.
+pub const RECEIPT_VERSION: u32 = 3;
 
 /// Increasing recovery effort; all presets remain finite.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -540,6 +548,7 @@ macro_rules! scratch_charge {
 // compiled for wasm32.
 scratch_charge!((), 0);
 scratch_charge!(bool, 1);
+scratch_charge!(u8, 1);
 scratch_charge!(u32, 4);
 scratch_charge!(u64, 8);
 scratch_charge!(usize, 8);
@@ -550,6 +559,8 @@ scratch_charge!(crate::json::Member, 104);
 scratch_charge!(crate::provenance::NodeId, 4);
 scratch_charge!(crate::pattern::derive::Term, 32); // largest variant: `Repeat(u32, u64, u64, bool)`.
 scratch_charge!(crate::provenance::ProvenanceNode, 160);
+scratch_charge!(crate::schema::Violation, 96); // four `String`s.
+scratch_charge!(Validation, 80); // two `String`s, a `bool`, and a `Vec<String>`.
 
 /// Round `bytes` up to the next 8-byte word, the same rounding an
 /// 8-byte-aligned struct field's own size implicitly gets.
@@ -690,6 +701,32 @@ impl<T: ScratchCharge> ScratchVec<T> {
         Ok(())
     }
 
+    /// Move every element of `other` to the end of this vector, growing
+    /// (and charging) this vector first if needed. `other` is left empty;
+    /// its capacity stays charged until it is dropped.
+    ///
+    /// # Errors
+    /// Returns `BudgetExceeded(ScratchBytes)` before any allocation; both
+    /// vectors are then unchanged.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, ScratchVec};
+    /// let governor = Governor::new(Budget::default());
+    /// let mut left: ScratchVec<u32> = ScratchVec::new(&governor);
+    /// let mut right: ScratchVec<u32> = ScratchVec::new(&governor);
+    /// left.push(1).unwrap();
+    /// right.extend([2, 3]).unwrap();
+    /// left.append(&mut right).unwrap();
+    /// assert_eq!((left.as_slice(), right.as_slice()), (&[1, 2, 3][..], &[][..]));
+    /// ```
+    pub fn append(&mut self, other: &mut Self) -> Result<(), StopReason> {
+        if self.inner.capacity() - self.inner.len() < other.inner.len() {
+            self.reserve(other.inner.len())?;
+        }
+        self.inner.append(&mut other.inner);
+        Ok(())
+    }
+
     /// Number of elements.
     #[must_use]
     pub const fn len(&self) -> usize {
@@ -706,6 +743,56 @@ impl<T: ScratchCharge> ScratchVec<T> {
     #[must_use]
     pub fn as_slice(&self) -> &[T] {
         &self.inner
+    }
+
+    /// Mutably borrow the elements. Never allocates.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, ScratchVec};
+    /// let governor = Governor::new(Budget::default());
+    /// let mut values: ScratchVec<u32> = ScratchVec::new(&governor);
+    /// values.extend([1, 2]).unwrap();
+    /// values.as_mut_slice()[0] = 5;
+    /// assert_eq!(values.as_slice(), &[5, 2]);
+    /// ```
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        &mut self.inner
+    }
+
+    /// Remove and return the last element. The capacity (and its charge) is
+    /// kept for reuse and released exactly once, on drop.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, ScratchVec};
+    /// let governor = Governor::new(Budget::default());
+    /// let mut values: ScratchVec<u32> = ScratchVec::new(&governor);
+    /// values.extend([1, 2]).unwrap();
+    /// let charged = governor.usage().total_scratch_charged;
+    /// assert_eq!(values.pop(), Some(2));
+    /// values.push(3).unwrap(); // reuses capacity: no new charge.
+    /// assert_eq!(values.as_slice(), &[1, 3]);
+    /// assert_eq!(governor.usage().total_scratch_charged, charged);
+    /// ```
+    pub fn pop(&mut self) -> Option<T> {
+        self.inner.pop()
+    }
+
+    /// Remove every element, keeping the allocated (and charged) capacity
+    /// for reuse; the charge is still released exactly once, on drop.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, ScratchVec};
+    /// let governor = Governor::new(Budget::default());
+    /// let mut bytes: ScratchVec<u8> = ScratchVec::new(&governor);
+    /// bytes.extend(*b"key").unwrap();
+    /// let charged = governor.usage().total_scratch_charged;
+    /// bytes.clear();
+    /// bytes.extend(*b"abc").unwrap(); // reuses capacity: no new charge.
+    /// assert_eq!(bytes.as_slice(), b"abc");
+    /// assert_eq!(governor.usage().total_scratch_charged, charged);
+    /// ```
+    pub fn clear(&mut self) {
+        self.inner.clear();
     }
 
     /// Take ownership of a plain `Vec<T>`, permanently retaining the charge
@@ -1197,12 +1284,44 @@ pub struct Validation {
 }
 
 /// Exact source retained so transformation evidence can be replayed and inspected.
+///
+/// The retained bytes are kept verbatim, including invalid UTF-8, so a
+/// receipt never silently substitutes or drops undecodable input. On the
+/// wire (receipt version 3 and later) a document carries `text` when its
+/// bytes are valid UTF-8 and lowercase `bytes_hex` otherwise, never both.
+///
+/// ```
+/// use purrassist_core::{contract::SourceDocument, digest::Digest};
+/// let utf8 = SourceDocument { digest: Digest::of(b"tea"), bytes: b"tea".to_vec() };
+/// assert_eq!(utf8.text(), Some("tea"));
+/// let binary = SourceDocument { digest: Digest::of(&[0xff]), bytes: vec![0xff] };
+/// assert_eq!(binary.text(), None);
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceDocument {
-    /// Identity of these exact UTF-8 bytes.
+    /// Identity of these exact bytes.
     pub digest: Digest,
-    /// Complete source before recovery, including whitespace and malformed syntax.
-    pub text: String,
+    /// Complete source before recovery, including whitespace, malformed
+    /// syntax, and invalid UTF-8 sequences.
+    pub bytes: Vec<u8>,
+}
+
+impl SourceDocument {
+    /// The retained source as text, or `None` when its bytes are not valid
+    /// UTF-8. `None` never means the source is absent or empty; read
+    /// [`Self::bytes`] for the exact retained input in every case.
+    ///
+    /// ```
+    /// use purrassist_core::{contract::SourceDocument, digest::Digest};
+    /// let empty = SourceDocument { digest: Digest::of(b""), bytes: Vec::new() };
+    /// assert_eq!(empty.text(), Some(""));
+    /// let truncated = SourceDocument { digest: Digest::of(&[0xe2, 0x82]), bytes: vec![0xe2, 0x82] };
+    /// assert_eq!(truncated.text(), None);
+    /// ```
+    #[must_use]
+    pub fn text(&self) -> Option<&str> {
+        core::str::from_utf8(&self.bytes).ok()
+    }
 }
 
 /// Evidence belonging to one competing recovery or semantic interpretation.
@@ -1294,7 +1413,17 @@ impl Receipt {
         }
     }
 
-    /// Retain exact input bytes under the operation's shared resource bounds.
+    /// Retain exact input text under the operation's shared resource bounds.
+    ///
+    /// Equivalent to [`Self::retain_source_bytes`] over `source.as_bytes()`,
+    /// with identical charges.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Effort, Governor, Receipt};
+    /// let mut receipt = Receipt::new(b"tea", "example.v1", Effort::Standard, Budget::default());
+    /// receipt.retain_source("tea", &mut Governor::new(Budget::default())).unwrap();
+    /// assert_eq!(receipt.sources[0].text(), Some("tea"));
+    /// ```
     ///
     /// # Errors
     /// Returns exhaustion before copying the source. Rejected oversized input is
@@ -1304,13 +1433,39 @@ impl Receipt {
         source: &str,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        self.retain_source_bytes(source.as_bytes(), governor)
+    }
+
+    /// Retain exact input bytes, including invalid UTF-8, under the
+    /// operation's shared resource bounds.
+    ///
+    /// Charges `source.len()` input bytes, `source.len()` work units, and
+    /// `source.len() + 128` scratch bytes, in that order, before copying.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Effort, Governor, Receipt};
+    /// let mut receipt = Receipt::new(&[0xff, b'{'], "example.v1", Effort::Standard, Budget::default());
+    /// receipt.retain_source_bytes(&[0xff, b'{'], &mut Governor::new(Budget::default())).unwrap();
+    /// assert_eq!(receipt.sources[0].bytes, [0xff, b'{']);
+    /// assert_eq!(receipt.sources[0].text(), None);
+    /// ```
+    ///
+    /// # Errors
+    /// Returns exhaustion before copying the source; nothing is retained then.
+    /// Rejected oversized input is identified by the receipt digest but must
+    /// remain owned by the caller.
+    pub fn retain_source_bytes(
+        &mut self,
+        source: &[u8],
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
         let length = u64::try_from(source.len()).unwrap_or(u64::MAX);
         governor.charge(Resource::InputBytes, length)?;
         governor.charge(Resource::Work, length)?;
         governor.charge(Resource::ScratchBytes, length.saturating_add(128))?;
         self.sources.push(SourceDocument {
-            digest: Digest::of(source.as_bytes()),
-            text: source.into(),
+            digest: Digest::of(source),
+            bytes: source.to_vec(),
         });
         Ok(())
     }
@@ -1341,6 +1496,33 @@ pub enum Outcome<T> {
     Ambiguous(Vec<T>),
     /// No acceptable answer was obtained within the operation's contract.
     Unresolved,
+}
+
+impl<T> Outcome<T> {
+    /// Convert every carried value while preserving the epistemic status.
+    ///
+    /// `Ambiguous` maps each alternative in order, so position `i` still
+    /// names the same alternative as `Receipt::alternatives[i]`. `Unresolved`
+    /// stays `Unresolved` without calling `f`. This conversion cannot fail;
+    /// fallible conversions should map into `Result` values and inspect them.
+    ///
+    /// ```
+    /// use purrassist_core::Outcome;
+    /// assert_eq!(Outcome::BestGuess(2).map(|n| n * 10), Outcome::BestGuess(20));
+    /// assert_eq!(
+    ///     Outcome::Ambiguous(vec![1, 2]).map(|n| n.to_string()),
+    ///     Outcome::Ambiguous(vec!["1".to_string(), "2".to_string()])
+    /// );
+    /// assert_eq!(Outcome::<u8>::Unresolved.map(u32::from), Outcome::Unresolved);
+    /// ```
+    pub fn map<U>(self, mut f: impl FnMut(T) -> U) -> Outcome<U> {
+        match self {
+            Self::Resolved(value) => Outcome::Resolved(f(value)),
+            Self::BestGuess(value) => Outcome::BestGuess(f(value)),
+            Self::Ambiguous(values) => Outcome::Ambiguous(values.into_iter().map(f).collect()),
+            Self::Unresolved => Outcome::Unresolved,
+        }
+    }
 }
 
 /// The answer together with its evidence; receipts also accompany failures.

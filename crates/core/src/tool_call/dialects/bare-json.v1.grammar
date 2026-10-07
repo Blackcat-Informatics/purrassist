@@ -1,0 +1,89 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# Bare JSON tool calls: an unwrapped call object
+#   {"name": NAME, "arguments": ARGS}
+# with no tag, token or envelope around it, written as the whole turn,
+# among prose, inside a markdown code fence, or as an element of a JSON
+# array of calls. The array brackets, the separators between elements, the
+# fence lines and any prose are content. ARGS must be a JSON object or a
+# JSON string (a stringified object is decoded and flagged); the json-args
+# codec faults on any other value, so {"name": "pi", "arguments": 3} is not
+# a call, and a string must hold stringified arguments (empty, or text
+# beginning with `{`), so {"name": "Ada", "arguments": "she argued"} is not
+# a call either. An "id" member, first or last, is read as the call's source id
+# (`optional-id`: a call without one omits nothing).
+#
+# This grammar covers exactly what no other built-in dialect reads:
+# - only the "arguments" key: {"name", "parameters"} objects are
+#   llama3-json.v1's, and a "parameters" value is also the shape of a pasted
+#   tool declaration, which must stay content;
+# - no "type" member: {"type": "function", ...} objects are
+#   openai-tool-calls.v1's (or llama3-json.v1's), {"type": "tool_use", ...}
+#   blocks are anthropic-tool-use.v1's;
+# - a leading "id" beginning `toolu_` is Anthropic evidence: a tool_use
+#   block that lost its type and wrote "arguments" for "input" after such
+#   an id is anthropic-tool-use.v1's (the key is its declared confusable),
+#   so it is not read here; a trailing id, which Anthropic evidence cannot
+#   precede, may have any spelling;
+# - the {"function": {...}} objects of openai-tool-calls.v1 have a
+#   "function" member and no "name" member at their top level.
+# Objects inside another dialect's wrapper (<tool_call>, [TOOL_CALLS],
+# <|python_tag|>, an OpenAI "function" member) are read by that dialect,
+# whose reading covers the wrapper and so wins on evidence.
+#
+# The object has no distinctive opener, so the attempt commits only when the
+# object is complete: a name string and an object or string arguments value
+# and nothing else, closed by its brace. Any other JSON object (data with
+# other members, a nameless {"arguments": ...}, an object cut short) never
+# becomes a call attempt and stays content, byte for byte. A complete object
+# whose arguments have a tool declaration's parameters shape ("type":
+# "object" and a "properties" object) is content too, unless the declared
+# tool resolves them as written (`declaration-content`): a JSON Schema
+# pasted as an answer is not a call to the tool it describes. First-party
+# grammar; see docs/tool-calls/dialects/bare-json.v1.md for the public
+# sources and for what is deliberately not accepted.
+grammar "bare-json.v1";
+
+# The call's JSON envelope tolerates the JSON syntax slips the json codec
+# repairs inside arguments, recorded under the same json.syntax.* rules
+# (`json-envelope`): single quotes, bare keys, a missing `:` or `,`, a
+# trailing comma, a comment, a raw control character beside the name's
+# quotes.
+json-envelope;
+
+optional-id;
+declaration-content;
+
+tool-name = /[A-Za-z0-9_.:-]+/;
+ws = /[ \t\r\n]+/;
+sep = ws? "," ws?;
+
+call-id = /[A-Za-z0-9_.:-]+/;
+# Any id that does not begin `toolu_` (Anthropic's id prefix).
+lead-call-id = /t(o(o(l(u([A-Za-z0-9.:-][A-Za-z0-9_.:-]*)?|[A-Za-tv-z0-9_.:-][A-Za-z0-9_.:-]*)?|[A-Za-km-z0-9_.:-][A-Za-z0-9_.:-]*)?|[A-Za-np-z0-9_.:-][A-Za-z0-9_.:-]*)?|[A-Za-np-z0-9_.:-][A-Za-z0-9_.:-]*)?|[A-Za-su-z0-9_.:-][A-Za-z0-9_.:-]*/;
+
+# The arguments value ends where its JSON value does: NUL cannot occur in
+# JSON text, so the delimiter never cuts a value short.
+name-member = "\"name\"" ws? ":" ws? "\"" name:tool-name "\"";
+arguments-member = "\"arguments\"" ws? ":" ws? arguments:slot(json-args, "\x00");
+id-member = "\"id\"" ws? ":" ws? "\"" id:call-id "\"";
+lead-id-member = "\"id\"" ws? ":" ws? "\"" id:lead-call-id "\"";
+body = name-member sep arguments-member | arguments-member sep name-member;
+
+# The id member, if any, comes first or last (one of the two).
+call = "{" ws? (lead-id-member sep body | body (sep id-member)?) ws? "}" commit;
+
+# A tool result as a bare JSON object; like a call, it is a result only
+# once complete, so other JSON objects stay content.
+result = "{" ws? "\"tool_call_id\"" ws? ":" ws? "\"" id:call-id "\"" sep
+         "\"content\"" ws? ":" ws? content:json-string ws? "}" commit;
+
+json-string = /"([^"\\\x00-\x1F]|\\["\\\/bfnrt]|\\u[0-9A-Fa-f]{4})*"/;
+
+# One tool declaration as a bare function object, as written in prompts
+# that list tools without the OpenAI {"type": "function"} envelope.
+declaration = "{" ws? "\"name\"" ws? ":" ws? "\"" name:tool-name "\""
+              (sep "\"description\"" ws? ":" ws? content:json-string)?
+              (sep "\"parameters\"" ws? ":" ws? arguments:slot(json, "\x00"))?
+              ws? "}";

@@ -38,7 +38,7 @@ use std::fmt::Write as _;
 use std::sync::Mutex;
 
 use purrassist_core::{
-    Budget, CancellationToken, Governor, Outcome, ScratchMeter, StopReason,
+    Budget, CancellationToken, Effort, Governor, Outcome, ScratchMeter, StopReason,
     contract::Resource,
     edits,
     embeddings::{Embedding, EmbeddingIndex, EmbeddingPolicy},
@@ -49,6 +49,7 @@ use purrassist_core::{
     paths::PathIndex,
     pattern::{GenerateOptions, GenerateOutcome, Pattern, PatternCompileError},
     schema::{Schema, recovery::RecoveryRequest},
+    tool_call::{Effects, Param, ToolDefinition, ToolRecoveryRequest, ToolSet},
 };
 
 /// The "at least 16x larger" scale pair every workload is measured at.
@@ -390,9 +391,13 @@ fn oracle_json_recover_syntax() {
         (bytes, charged, size(input.len()))
     }
     let _guard = exclusive();
+    // The same fixed full-recovery overhead (receipt, search, validation
+    // log) as `oracle_recover`, hence the same `K`. Syntax recovery itself
+    // charges its output by logical length; it no longer pre-charges a
+    // per-input-byte allowance that used to absorb this overhead.
     assert_scaled(
         "json_recover_syntax",
-        2048,
+        8192,
         [run(SCALES[0]), run(SCALES[1])],
     );
 }
@@ -855,6 +860,173 @@ fn oracle_intent() {
     }
     let _guard = exclusive();
     assert_scaled("intent", 2048, [run(SCALES[0]), run(SCALES[1])]);
+}
+
+#[test]
+fn oracle_tool_call_recover() {
+    // A reasoning block and prose, then `n` Qwen3-Coder XML calls
+    // alternating with `n` Hermes calls, recovered over every built-in
+    // dialect.
+    fn output(n: usize) -> String {
+        let mut text = String::from("<think>plan</think>Reading the files.\n");
+        for i in 0..n {
+            let _ = write!(
+                text,
+                "<tool_call>\n<function=read_file>\n<parameter=path>\nsrc/file{i}.rs\n</parameter>\n<parameter=limit>\n{i}\n</parameter>\n</function>\n</tool_call>\n\
+                 <tool_call>\n{{\"name\": \"search\", \"arguments\": {{\"query\": \"item {i}\", \"mode\": \"regex\"}}}}\n</tool_call>\n"
+            );
+        }
+        text
+    }
+    let tools = ToolSet::compile(
+        [
+            ToolDefinition::new("read_file")
+                .effects(Effects::ReadOnly)
+                .param("path", Param::string().required())
+                .param("limit", Param::integer()),
+            ToolDefinition::new("search")
+                .effects(Effects::ReadOnly)
+                .param("query", Param::string().required())
+                .param("mode", Param::enumeration(&["literal", "regex"])),
+        ],
+        Budget::default(),
+    )
+    .expect("tools");
+    let run = |n: usize| -> (u64, u64, u64) {
+        let input = output(n);
+        let request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
+        let (charged, bytes) = measure(|| {
+            let result = tools.recover(input.as_bytes(), &request);
+            let Outcome::Resolved(calls) = &result.outcome else {
+                panic!("{:?}", result.receipt.stopped)
+            };
+            assert_eq!(calls.usable().len(), 2 * n);
+            result.receipt.usage.total_scratch_charged
+        });
+        (bytes, charged, size(input.len()))
+    };
+    let _guard = exclusive();
+    assert_scaled("tool_call_recover", 4096, [run(SCALES[0]), run(SCALES[1])]);
+}
+
+/// Tool-call argument validation charges its whole working set to the
+/// recovery's governor (C4): for generated and declared (`$ref`, `anyOf`)
+/// tool schemas, valid and invalid arguments, every byte the allocator
+/// grants during `validate_with` is admitted by a charge first, and the
+/// allocator's peak and total never exceed the charged peak and total. A
+/// scratch limit one byte below the measured working set therefore
+/// exhausts explicitly instead of validating on uncharged memory.
+#[test]
+fn oracle_tool_call_validation_charges_its_working_set() {
+    let _guard = exclusive();
+    let generated = ToolSet::compile(
+        [ToolDefinition::new("write_file")
+            .effects(Effects::ReadOnly)
+            .param("path", Param::string().required())
+            .param("content", Param::string().required())
+            .param("mode", Param::enumeration(&["fast", "slow"]))
+            .param("count", Param::integer())],
+        Budget::default(),
+    )
+    .expect("tools");
+    let declared = ToolSet::from_openai(
+        r##"[{"type":"function","function":{"name":"edit","parameters":{"type":"object",
+            "$defs":{"path":{"type":"string","minLength":1}},
+            "properties":{"path":{"$ref":"#/$defs/path"},
+                          "target":{"anyOf":[{"type":"integer"},{"type":"object","properties":{"line":{"type":"integer"}},"required":["line"]}]},
+                          "tags":{"type":"array","items":{"$ref":"#/$defs/path"}}},
+            "required":["path"],"additionalProperties":false}}}]"##,
+        Budget::default(),
+    )
+    .expect("declarations");
+    let cases = [
+        (
+            &generated,
+            "write_file",
+            r#"{"path":"a.txt","content":"hello"}"#,
+            true,
+        ),
+        (
+            &generated,
+            "write_file",
+            r#"{"path":"a","content":"b","mode":"fast","count":3}"#,
+            true,
+        ),
+        (&generated, "write_file", r#"{"path":"a.txt"}"#, false),
+        (
+            &declared,
+            "edit",
+            r#"{"path":"src/lib.rs","target":{"line":4},"tags":["x","y"]}"#,
+            true,
+        ),
+        (
+            &declared,
+            "edit",
+            r#"{"path":"","target":"top","extra":1}"#,
+            false,
+        ),
+    ];
+    for (tools, name, arguments, valid) in cases {
+        assert_validation_charged(tools.tool(name).expect("tool").schema(), arguments, valid);
+    }
+}
+
+/// One case of [`oracle_tool_call_validation_charges_its_working_set`].
+#[track_caller]
+fn assert_validation_charged(schema: &Schema, arguments: &str, valid: bool) {
+    let instance = json::parse(arguments).expect("arguments");
+    let mut governor = Governor::new(Budget::default());
+    let (report, measured) = measured_pattern_operation(&mut governor, None, |governor| {
+        schema.validate_with(&instance, governor)
+    });
+    let report = report.expect("validation completes");
+    assert_eq!(report.valid, valid, "{arguments}");
+    let usage = governor.usage();
+    eprintln!(
+        "validate {arguments}: allocator_peak={}, allocator_total={}, charged_peak={}, charged_total={}",
+        measured.peak, measured.total, usage.peak_scratch_bytes, usage.total_scratch_charged
+    );
+    assert_eq!(
+        measured.unadmitted, 0,
+        "{arguments}: allocation preceded admission"
+    );
+    assert!(!measured.unmatched_free, "{arguments}");
+    assert!(
+        measured.peak <= usage.peak_scratch_bytes,
+        "{arguments}: allocator peak {} over charged peak {}",
+        measured.peak,
+        usage.peak_scratch_bytes
+    );
+    assert!(
+        measured.total <= usage.total_scratch_charged,
+        "{arguments}: allocator total {} over charged total {}",
+        measured.total,
+        usage.total_scratch_charged
+    );
+    // The measured working set, less one byte, is an explicit stop.
+    let mut starved = Governor::new(Budget {
+        scratch_bytes: measured.peak - 1,
+        ..Budget::default()
+    });
+    assert_eq!(
+        schema
+            .validate_with(&instance, &mut starved)
+            .map(|report| report.valid),
+        Err(StopReason::BudgetExceeded(Resource::ScratchBytes)),
+        "{arguments}"
+    );
+    // The charged peak is enough.
+    let mut exact = Governor::new(Budget {
+        scratch_bytes: usage.peak_scratch_bytes,
+        ..Budget::default()
+    });
+    assert_eq!(
+        schema
+            .validate_with(&instance, &mut exact)
+            .map(|report| report.valid),
+        Ok(valid),
+        "{arguments}"
+    );
 }
 
 fn generation_budget() -> Budget {

@@ -16,6 +16,7 @@ use purrassist_core::{
     paths::PathIndex,
     provenance::{Derivation, Forest},
     schema::{Schema, recovery::RecoveryRequest},
+    wire::WireValue,
 };
 use std::{collections::BTreeMap, path::Path};
 

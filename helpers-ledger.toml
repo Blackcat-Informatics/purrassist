@@ -13,7 +13,7 @@ reason = "Distinct exact integer input domains: u64 and target-sized usize. Each
 
 [[distinct]]
 kind = "shim"
-members = ["purrassist_core::json::parser::ParseFailure::from", "purrassist_core::pattern::PatternCompileError::from", "purrassist_core::schema::build::CompilationError::from"]
+members = ["purrassist_core::grammar::GrammarError::from", "purrassist_core::grammar::print::PrintError::from", "purrassist_core::json::parser::ParseFailure::from", "purrassist_core::pattern::PatternCompileError::from", "purrassist_core::schema::build::CompilationError::from", "purrassist_core::tool_call::dialect::DialectSetError::from", "purrassist_core::tool_call::emit::EmitError::from"]
 criterion = "a"
 anchor = "purrassist_core::json::parser::ParseFailure"
-reason = "Distinct public nominal error types for JSON parsing, pattern compilation and schema compilation. Each From<StopReason> preserves the exact reason in its own Resource variant; merging the variants would change the public result contract."
+reason = "Distinct public nominal error types for JSON parsing, pattern compilation, schema compilation, grammar compilation, grammar production printing (shared by witness generation), tool-call emission and dialect-set compilation. Each From<StopReason> preserves the exact reason in its own Resource variant; merging the variants would change the public result contract."

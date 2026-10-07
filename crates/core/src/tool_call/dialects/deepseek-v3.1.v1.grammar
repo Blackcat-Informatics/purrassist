@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# DeepSeek-V3.1 tool calls (DeepSeek-V3.1, V3.1-Terminus, V3.2-Exp): one
+# tool-calls section holding one or more calls, chained with no separator,
+#   <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>NAME<｜tool▁sep｜>ARGS<｜tool▁call▁end｜>...<｜tool▁calls▁end｜>
+# where ARGS is the arguments as JSON. The special tokens are spelled with
+# the fullwidth vertical line (U+FF5C) and the lower one-eighth block
+# (U+2581). Each call of a section is its own call (`next`). A detokenizer
+# that renders the tokens with an ASCII `|`, or `_` or a space for the
+# block, is read through the
+# declared confusables (tool_call.markup.terminal-confusable, a markup
+# repair). A section whose <｜tool▁calls▁begin｜> was left out, starting
+# directly at <｜tool▁call▁begin｜>, is read with the token recorded as
+# inserted (tool_call.markup.missing-token). The call and section closers
+# are closer classes, so a missing one is inserted (at the next call, or at
+# the end of output) and a repeated one is absorbed. Whitespace between the
+# tokens and around the name is markup. The arguments value is read by the
+# self-delimiting json codec (exact number spellings; stringified arguments
+# are decoded and flagged). <think> ... </think> is reasoning. First-party
+# grammar; see docs/tool-calls/dialects/deepseek-v3.1.v1.md for the public
+# sources and for what is deliberately not accepted.
+grammar "deepseek-v3.1.v1";
+
+reasoning "<think>" "</think>";
+
+# Detokenizers that do not keep the special tokens' own spellings: an ASCII
+# vertical line, and the word-boundary block as an underscore or a space.
+confusable "｜" "|";
+confusable "▁" "_";
+confusable "▁" " ";
+
+closer call-end = "<｜tool▁call▁end｜>";
+closer section-end = "<｜tool▁calls▁end｜>";
+
+tool-name = /[A-Za-z0-9_.:-]+/;
+ws = /[ \t\r\n]+/;
+
+# The arguments value ends where its JSON value does; the call's own
+# closer, the section's closer, or the next call's opener ends a value cut
+# short.
+invocation = "<｜tool▁call▁begin｜>" ws? name:tool-name ws? "<｜tool▁sep｜>"
+             arguments:slot(json, "<｜tool▁call▁end｜>", "<｜tool▁calls▁end｜>", "<｜tool▁call▁begin｜>")
+             ws? call-end;
+calls = invocation (ws? next invocation)* ws? section-end;
+
+call = "<｜tool▁calls▁begin｜>" ws? calls
+     | insert("<｜tool▁calls▁begin｜>") calls;
+
+# A tool result as the template renders a tool message.
+result = "<｜tool▁output▁begin｜>" content:until("<｜tool▁output▁end｜>") "<｜tool▁output▁end｜>";
+
+# One entry of the system prompt's `## Tools` list: a heading with the
+# name, the description, and the parameters schema as JSON (printed as
+# `{"type":"object"}` for a tool declared without one, as the template
+# always prints a schema).
+declaration = "### " name:tool-name "\n"
+              ("Description: " content:until("\n\nParameters: ") "\n\n")?
+              "Parameters: " arguments:slot(json, "\x00");

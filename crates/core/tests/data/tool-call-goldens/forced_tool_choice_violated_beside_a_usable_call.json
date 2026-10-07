@@ -1,0 +1,106 @@
+{
+  "description": "F7: a forced tool choice violated beside a call that would run on its own (the forced read_file call is Resolved, the extra list_dir call violates the choice): the turn breaks the request's contract, so nothing of it runs. The verdict is nothing_usable, the finish unresolved, the OpenAI emission empty (read_file skipped as tool_choice_failed) and the finish_reason stop.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_dir",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "effects": {
+    "read_file": "read_only",
+    "list_dir": "read_only"
+  },
+  "stop": "stop",
+  "tool_choice": {
+    "type": "function",
+    "function": {
+      "name": "read_file"
+    }
+  },
+  "emit": "openai",
+  "input": {
+    "hex": "3c746f6f6c5f63616c6c3e7b226e616d65223a22726561645f66696c65222c22617267756d656e7473223a7b2270617468223a2261227d7d3c2f746f6f6c5f63616c6c3e0a3c746f6f6c5f63616c6c3e7b226e616d65223a226c6973745f646972222c22617267756d656e7473223a7b2270617468223a22737263227d7d3c2f746f6f6c5f63616c6c3e"
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "a"
+      },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    },
+    {
+      "tool": "list_dir",
+      "arguments": {
+        "path": "src"
+      },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "outcome": "unresolved: tool_choice_forced: the request's tool choice forces tool `read_file`",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [
+    "\n"
+  ],
+  "emitted": {
+    "calls": 0,
+    "skipped": [
+      "call 0: tool_choice_failed",
+      "call 1: unresolved"
+    ]
+  },
+  "failed_validations": [
+    "tool_choice=forced:read_file"
+  ],
+  "ledger_rules": []
+}

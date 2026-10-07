@@ -1,0 +1,85 @@
+{
+  "description": "A call naming no tool whose arguments fit only the mutating write_file, under Tolerant: the inference is a guess, so the call is a BestGuess that is never usable or emitted for a mutating tool.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "kimi-k2.v1"
+  ],
+  "stop": "stop",
+  "input": "<|tool_calls_section_begin|><|tool_call_begin|>3<|tool_call_argument_begin|>{\"path\": \"a.rs\", \"content\": \"x\"}<|tool_call_end|><|tool_calls_section_end|>",
+  "policy": "tolerant",
+  "effects": {
+    "write_file": "mutating",
+    "read_file": "read_only"
+  },
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "a.rs",
+        "content": "x"
+      },
+      "candidate_dialects": [
+        "kimi-k2.v1"
+      ],
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.name.from-arguments"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.name.from-arguments"
+  ]
+}

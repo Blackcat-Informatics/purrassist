@@ -1,0 +1,92 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# OpenAI Harmony tool calls (gpt-oss-20b, gpt-oss-120b). A call is one
+# assistant message with a recipient:
+#   <|start|>assistant<|channel|>commentary to=functions.NAME <|constrain|>json<|message|>ARGS<|call|>
+# where the recipient may instead come before the channel
+# (<|start|>assistant to=functions.NAME<|channel|>commentary ...), the
+# content type (<|constrain|>json, or json) may be left out, and the
+# <|start|>assistant prefix is often absent at the start of model output
+# (the prompt ends with it). ARGS is read by the self-delimiting json codec.
+# A message without a recipient is no call: the analysis channel is
+# reasoning (declared markers), and final and commentary messages are
+# content. A message becomes a call attempt only at its recipient (`commit`).
+# Recipients:
+# - functions.NAME: a function call;
+# - a dotted built-in recipient (browser.search, browser.open, ...): read
+#   as the tool of that name, with JSON arguments;
+# - python: the built-in Python tool, its body the code (raw text);
+# - any other bare NAME: read as functions.NAME with the namespace recorded
+#   as inserted (tool_call.markup.missing-token).
+# Repairs, each recorded:
+# - the call's end is a closer class: <|end|> or <|return|> for <|call|> is
+#   a variant (tool_call.markup.closer-variant), and a missing one is
+#   inserted at the end of output (tool_call.markup.missing-closers-at-end);
+# - <|channel> and <channel|> are confusable spellings of <|channel|>
+#   (tool_call.markup.terminal-confusable);
+# - text after the JSON arguments, before the end token, is dropped
+#   (tool_call.extract.prose, a data loss);
+# - a recipient written after <|message|> is read, the early <|message|>
+#   dropped (tool_call.extract.prose, a data loss: the body might have been
+#   a preamble).
+# Each message is its own call. First-party grammar; see
+# docs/tool-calls/dialects/harmony.v1.md for the public sources and for what
+# is deliberately not accepted.
+grammar "harmony.v1";
+
+reasoning "<|channel|>analysis<|message|>" "<|end|>";
+
+confusable "<|channel|>" "<|channel>";
+confusable "<|channel|>" "<channel|>";
+
+closer call-end = "<|call|>" | "<|end|>" | "<|return|>";
+
+tool-name = /[A-Za-z0-9_.:-]+/;
+# A recipient with a namespace other than functions (browser.search).
+dotted-name = /(?:f(?:u(?:n(?:c(?:t(?:i(?:o(?:n(?:s[A-Za-z0-9_-]+|[A-Za-rt-z0-9_-][A-Za-z0-9_-]*)?|[A-Za-mo-z0-9_-][A-Za-z0-9_-]*)?|[A-Za-np-z0-9_-][A-Za-z0-9_-]*)?|[A-Za-hj-z0-9_-][A-Za-z0-9_-]*)?|[A-Za-su-z0-9_-][A-Za-z0-9_-]*)?|[A-Zabd-z0-9_-][A-Za-z0-9_-]*)?|[A-Za-mo-z0-9_-][A-Za-z0-9_-]*)?|[A-Za-tv-z0-9_-][A-Za-z0-9_-]*)?|[A-Za-eg-z0-9_-][A-Za-z0-9_-]*)\.[A-Za-z0-9_.:-]+/;
+# A bare recipient other than python: a function that lost its namespace.
+plain-name = /p(?:y(?:t(?:h(?:o(?:n[A-Za-z0-9_-]+|[A-Za-mo-z0-9_-][A-Za-z0-9_-]*)?|[A-Za-np-z0-9_-][A-Za-z0-9_-]*)?|[A-Za-gi-z0-9_-][A-Za-z0-9_-]*)?|[A-Za-su-z0-9_-][A-Za-z0-9_-]*)?|[A-Za-xz0-9_-][A-Za-z0-9_-]*)?|[A-Za-oq-z0-9_-][A-Za-z0-9_-]*/;
+python-name = /python/;
+ws = /[ \t\r\n]+/;
+# Printing: the one space before a recipient and before the content type.
+sp = /[ \t]+/;
+layout sp " ";
+channel-name = "commentary" | "analysis" | "final";
+trailing = /[^<\s][^<]*/;
+
+json-recipient = "to=" ("functions." name:tool-name
+                       | name:dotted-name
+                       | insert("functions.") name:plain-name);
+python-recipient = "to=" name:python-name;
+# The content type, printed as " <|constrain|>json"; a bare `json` needs
+# the space before it; it may be left out.
+content-type = sp? "<|constrain|>" ws? "json" ws?
+             | sp "json" ws?
+             | ws?;
+json-body = ws? arguments:slot(json, "<|call|>", "<|end|>", "<|return|>", "<|start|>")
+            (ws? dropped:trailing)? ws? call-end;
+python-body = arguments:slot(raw, "<|call|>", "<|end|>", "<|return|>", "<|start|>") call-end;
+
+# The recipient in the channel section (the documented layout), or in the
+# role section (the renderer's), or (malformed) after <|message|>.
+json-message = "<|channel|>" ws? channel-name sp? json-recipient commit content-type "<|message|>" json-body
+             | json-recipient ws? "<|channel|>" commit ws? channel-name content-type "<|message|>" json-body
+             | "<|channel|>" ws? channel-name ws? dropped:"<|message|>" ws? json-recipient commit content-type json-body;
+python-message = "<|channel|>" ws? channel-name sp? python-recipient commit ws? "<|message|>" python-body
+               | python-recipient ws? "<|channel|>" commit ws? channel-name ws? "<|message|>" python-body;
+
+call = "<|start|>" ws? "assistant" ws? (json-message | python-message)
+     | json-message
+     | python-message;
+
+# A tool message: the tool's output, addressed to the assistant.
+result = "<|start|>functions." name:tool-name " to=assistant<|channel|>commentary<|message|>"
+         content:until("<|end|>") "<|end|>";
+
+# One function of the developer message's "# Tools" section: the TypeScript
+# declaration's comment and type line, with the parameters schema written as
+# the exact JSON text (the renderer's TypeScript expansion of the schema is
+# not reproduced).
+declaration = ("// " content:until("\ntype ") "\n")?
+              "type " name:tool-name " = (" ("_: " arguments:slot(json, "\x00"))? ") => any;";

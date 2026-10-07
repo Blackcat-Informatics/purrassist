@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# Mistral v3 tool calls (Mistral 7B Instruct v0.3, Mistral Nemo, and the
+# other v3-tokenizer models): the [TOOL_CALLS] special token, then a JSON
+# array of call objects,
+#   [TOOL_CALLS] [{"name": NAME, "arguments": {...}, "id": ID}, ...]
+# Each array element is one call: `next` separates the calls of one
+# [TOOL_CALLS] array, so the first call's span holds the token and the
+# opening bracket, each later call's span starts at its element, and the
+# last call's span holds the closing bracket. "name" and "arguments" (or
+# "parameters") come in either order; the model's 9-character "id" may come first or last and is
+# captured as the call's source id. The arguments value is read by the
+# self-delimiting json codec (exact number spellings; stringified arguments
+# are decoded and flagged). Objects after the token without the array
+# brackets are read as the same calls, the brackets recorded as inserted. The element's closing brace and
+# the array's closing bracket are closer classes, so a missing one is
+# inserted and a repeated one is absorbed. Text before the token is content.
+# First-party grammar; see docs/tool-calls/dialects/mistral-v3.v1.md for the
+# public sources and for what is deliberately not accepted.
+grammar "mistral-v3.v1";
+
+# The call's JSON envelope tolerates the JSON syntax slips the json codec
+# repairs inside arguments, recorded under the same json.syntax.* rules
+# (`json-envelope`): single quotes, bare keys, a missing `:` or `,`, a
+# trailing comma, a comment, a raw control character beside the name's
+# quotes.
+json-envelope;
+
+closer object-end = "}";
+closer array-end = "]";
+
+tool-name = /[A-Za-z0-9_.:-]+/;
+call-id = /[A-Za-z0-9_.:-]+/;
+ws = /[ \t\r\n]+/;
+# The single spaces of the chat template's layout
+# ([TOOL_CALLS] [{"name": "NAME", "arguments": ..., "id": "ID"}]); printed
+# as one space.
+sp = ws;
+layout sp " ";
+json-string = /"([^"\\\x00-\x1F]|\\["\\\/bfnrt]|\\u[0-9A-Fa-f]{4})*"/;
+
+sep = ws? "," sp?;
+name-member = "\"name\"" ws? ":" sp? "\"" name:tool-name "\"";
+# The arguments value ends where its JSON value does; a following
+# [TOOL_CALLS] token or the end-of-sequence token ends a value cut short.
+# "parameters" (the Llama 3 spelling) is read like "arguments": the
+# [TOOL_CALLS] token already shows the object is a call.
+arguments-member = ("\"arguments\"" | "\"parameters\"") ws? ":" sp?
+                   arguments:slot(json, "[TOOL_CALLS]", "</s>");
+id-member = "\"id\"" ws? ":" sp? "\"" id:call-id "\"";
+
+core = name-member sep arguments-member | arguments-member sep name-member;
+element = "{" ws? (core (sep id-member)? | id-member sep core) ws? object-end;
+elements = element (sep next element)*;
+
+# Without the array brackets the objects are read as the array they stand
+# for: each omitted bracket is recorded as inserted
+# (tool_call.markup.missing-token), objects may be separated by a comma or
+# only by whitespace, and the list runs through the last call-shaped
+# object (a grouped attempt reads every call it can; text after the last
+# call is content).
+bare-sep = ws? "," sp? | ws;
+call = "[TOOL_CALLS]" sp? ("[" ws? elements ws? array-end
+                          | insert("[") element (bare-sep next element)* insert("]"));
+
+# A tool result as the template renders a tool message: the content as a
+# JSON string and the call id it answers.
+result = "[TOOL_RESULTS]" sp? "{" ws? "\"content\"" ws? ":" sp? content:json-string sep
+         "\"call_id\"" ws? ":" sp? "\"" id:call-id "\"" ws? "}" ws? "[/TOOL_RESULTS]";
+
+# One entry of the [AVAILABLE_TOOLS] list, printed compact like the Hermes
+# entry, with the exact parameters schema text.
+declaration = "{" ws? "\"type\"" ws? ":" ws? "\"function\"" ws? "," ws?
+              "\"function\"" ws? ":" ws? "{" ws?
+              "\"name\"" ws? ":" ws? "\"" name:tool-name "\""
+              (ws? "," ws? "\"description\"" ws? ":" ws? content:json-string)?
+              (ws? "," ws? "\"parameters\"" ws? ":" arguments:slot(json, "\x00"))?
+              ws? "}" ws? "}";

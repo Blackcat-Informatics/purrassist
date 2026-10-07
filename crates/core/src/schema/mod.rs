@@ -9,6 +9,7 @@ pub use build::CompilationError;
 mod compile;
 mod evaluate;
 mod format;
+mod layout;
 pub mod recovery;
 mod uri;
 mod vocabulary;
@@ -17,10 +18,14 @@ use crate::json::{Node, Value};
 use crate::{Budget, Governor, StopReason};
 use core::fmt;
 use std::collections::{BTreeMap, BTreeSet};
+pub use vocabulary::Dialect;
 use vocabulary::{Keywords, Vocabularies};
 
-/// Supported schema dialect URI.
+/// Default schema dialect URI: Draft 2020-12, used by a root without `$schema`.
 pub const DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
+
+/// Draft-07 dialect URI (selected by `$schema` with or without the empty `#` fragment).
+pub const DRAFT_07: &str = "http://json-schema.org/draft-07/schema";
 
 /// A compiled schema plus caller-supplied external resources. Compilation does no I/O.
 #[derive(Clone, Debug)]
@@ -41,6 +46,11 @@ struct Index {
     /// declaring schema resource's own keywords this engine does not
     /// otherwise recognize.
     unsupported: BTreeMap<String, BTreeSet<String>>,
+    /// Dialect inherited by the root of a separately supplied document that
+    /// does not declare `$schema`: the dialect of the location whose
+    /// reference first loaded it, recorded only when that is Draft-07 (absent
+    /// documents default to Draft 2020-12).
+    document_dialects: BTreeMap<usize, Vocabularies>,
 }
 #[derive(Clone, Debug)]
 struct Location {
@@ -105,6 +115,8 @@ pub struct Violation {
 pub struct ValidationReport {
     /// Identity of the root, supplied resources, and validator dialect profile.
     pub schema: Digest,
+    /// Dialect of the root schema resource, which names the validator.
+    pub dialect: Dialect,
     /// Whether all evaluated assertions passed.
     pub valid: bool,
     /// Every collected failed constraint.
@@ -122,11 +134,81 @@ pub struct ValidationReport {
     pub pattern_evidence: Vec<crate::contract::Evidence>,
 }
 
+impl ValidationReport {
+    /// The receipt record of this whole-instance validation.
+    ///
+    /// The record names the root dialect's validator ([`Dialect::validator`]:
+    /// `purrassist.schema.draft2020-12.v1` or `purrassist.schema.draft-07.v1`), uses this report's schema digest as
+    /// its constraint, copies [`Self::valid`], and carries one diagnostic
+    /// `"{instance_path}: {message} ({schema_path})"` per violation in
+    /// report order. [`Self::format_evidence`] entries are separate
+    /// validation records and are not folded in; callers that publish them
+    /// append them after this record. Conversion is infallible and charges
+    /// nothing: callers retaining the result in a receipt account for its
+    /// bytes themselves.
+    ///
+    /// ```
+    /// use purrassist_core::{json, schema::Schema};
+    /// let schema = Schema::compile(r#"{"type":"integer"}"#).unwrap();
+    /// let report = schema.validate(&json::parse(r#""x""#).unwrap()).unwrap();
+    /// let validation = report.to_validation();
+    /// assert_eq!(validation.validator, "purrassist.schema.draft2020-12.v1");
+    /// assert!(!validation.passed);
+    /// assert_eq!(validation.constraint, schema.digest().to_string());
+    /// assert_eq!(validation.diagnostics.len(), 1);
+    /// assert!(validation.diagnostics[0].starts_with(": "));
+    ///
+    /// let draft07 = Schema::compile(
+    ///     r#"{"$schema":"http://json-schema.org/draft-07/schema#","type":"integer"}"#,
+    /// ).unwrap();
+    /// let report = draft07.validate(&json::parse("1").unwrap()).unwrap();
+    /// assert_eq!(report.to_validation().validator, "purrassist.schema.draft-07.v1");
+    /// ```
+    #[must_use]
+    pub fn to_validation(&self) -> crate::contract::Validation {
+        crate::contract::Validation {
+            validator: self.dialect.validator().into(),
+            constraint: self.schema.to_string(),
+            passed: self.valid,
+            diagnostics: self
+                .violations
+                .iter()
+                .map(|violation| {
+                    format!(
+                        "{}: {} ({})",
+                        violation.instance_path, violation.message, violation.schema_path
+                    )
+                })
+                .collect(),
+        }
+    }
+}
+
 impl Schema {
-    /// Compile Draft 2020-12 with no external resources.
+    /// Compile with no external resources.
+    ///
+    /// The root's `$schema` selects the [`Dialect`]: absent or
+    /// `https://json-schema.org/draft/2020-12/schema` is Draft 2020-12;
+    /// `http://json-schema.org/draft-07/schema#` (with or without the `#`)
+    /// is Draft-07. The official meta-schemas of both dialects are built in.
+    ///
+    /// ```
+    /// use purrassist_core::{json, schema::Schema};
+    /// // Draft-07 `$ref` overrides its sibling `type`; Draft 2020-12 applies both.
+    /// let source = |dialect: &str| format!(
+    ///     r##"{{"$schema":"{dialect}","definitions":{{"n":{{"type":"number"}}}},"$ref":"#/definitions/n","type":"integer"}}"##,
+    /// );
+    /// let half = json::parse("1.5")?;
+    /// let draft07 = Schema::compile(&source("http://json-schema.org/draft-07/schema#"))?;
+    /// assert!(draft07.validate(&half)?.valid);
+    /// let draft2020 = Schema::compile(&source("https://json-schema.org/draft/2020-12/schema"))?;
+    /// assert!(!draft2020.validate(&half)?.valid);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     ///
     /// # Errors
-    /// Rejects invalid schemas, unsupported required vocabularies, and unresolved references.
+    /// Rejects invalid schemas, unsupported required vocabularies, dialects
+    /// that are neither built in nor supplied, and unresolved references.
     pub fn compile(source: &str) -> Result<Self, SchemaError> {
         Self::with_resources(source, &BTreeMap::new())
     }
@@ -203,6 +285,20 @@ impl Schema {
         self.body(self.root)
     }
 
+    /// Dialect of the root schema resource; it names the validator in
+    /// [`ValidationReport::to_validation`]. Embedded resources may declare
+    /// another dialect with their own `$schema` and are evaluated under it.
+    ///
+    /// ```
+    /// use purrassist_core::schema::{Dialect, Schema};
+    /// let schema = Schema::compile(r#"{"$schema":"http://json-schema.org/draft-07/schema"}"#).unwrap();
+    /// assert_eq!(schema.dialect(), Dialect::Draft07);
+    /// ```
+    #[must_use]
+    pub fn dialect(&self) -> Dialect {
+        self.index.locations[self.root].vocabularies.dialect
+    }
+
     /// Identity of this complete schema configuration.
     ///
     /// Binds exact root bytes and every supplied resource URI and byte buffer,
@@ -239,8 +335,34 @@ impl Schema {
 
     /// Validate with caller-controlled limits shared with a recovery operation.
     ///
+    /// The whole working set is charged to `governor` before it is
+    /// allocated: `Work` per schema location visited, `Depth` per nesting
+    /// level, and `ScratchBytes` for the evaluation's collections (at
+    /// portable element sizes), the member names and pattern keys they hold,
+    /// every transient child key and instance path, and each held
+    /// applicator branch, released when the evaluation drops them. The
+    /// report's violations and format evidence are retained output and keep
+    /// their charge.
+    ///
     /// # Errors
-    /// Governor failure is distinct from an instance failing its schema.
+    /// Governor failure is distinct from an instance failing its schema:
+    /// exhaustion or cancellation is an `Err` naming the stop, never a
+    /// report.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, StopReason, contract::Resource, json, schema::Schema};
+    /// let schema = Schema::compile(r#"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#).unwrap();
+    /// let instance = json::parse(r#"{"path":"a.txt"}"#).unwrap();
+    /// let mut governor = Governor::new(Budget::default());
+    /// assert!(schema.validate_with(&instance, &mut governor).unwrap().valid);
+    /// let working_set = governor.usage().peak_scratch_bytes;
+    /// assert!(working_set > 0);
+    /// let mut starved = Governor::new(Budget { scratch_bytes: working_set - 1, ..Budget::default() });
+    /// assert_eq!(
+    ///     schema.validate_with(&instance, &mut starved).map(|report| report.valid),
+    ///     Err(StopReason::BudgetExceeded(Resource::ScratchBytes))
+    /// );
+    /// ```
     pub fn validate_with(
         &self,
         instance: &Node,
@@ -249,6 +371,7 @@ impl Schema {
         let result = evaluate::run(self, self.root, instance, governor)?;
         Ok(ValidationReport {
             schema: self.digest,
+            dialect: self.dialect(),
             valid: result.violations.is_empty(),
             violations: result.violations,
             format_evidence: result.format_evidence,
@@ -384,10 +507,18 @@ fn pointer_token(token: &str) -> Option<String> {
     }
     Some(output)
 }
-fn bundle_digest(source: &str, resources: &BTreeMap<String, String>) -> Digest {
+/// Identity of a compiled bundle. The prefix names the built-in dialect data
+/// the bundle can observe: the Draft 2020-12 meta-schemas always, and the
+/// Draft-07 meta-schema (with the dialect's rules) only when the root is
+/// Draft-07 or the built-in Draft-07 meta-schema was loaded, so every bundle
+/// that compiled before Draft-07 support keeps its exact identity.
+fn bundle_digest(source: &str, resources: &BTreeMap<String, String>, draft07: bool) -> Digest {
     let mut identity =
         b"purrassist.schema.bundle.v1\0draft2020-12.601a66c8b0f25246bf0e1fb488c5b5f030a79b72\0"
             .to_vec();
+    if draft07 {
+        identity.extend_from_slice(b"draft-07.20a3fee852db88519dcb3bb329b7a872ebad8953\0");
+    }
     identity.extend_from_slice(Digest::of(source.as_bytes()).as_bytes());
     for (uri, document) in resources {
         // Fixed-width hashes make the framing unambiguous, even for arbitrary URIs.

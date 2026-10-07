@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# Test-only, deliberately ambiguous dialect: a lone word in a call is either
+# the tool name or the call id, so every call has two equal-cost readings.
+grammar "ambiguous.v1";
+
+word = /[a-z]+/;
+
+call = "<c>" (name:word | id:word) "</c>";
+
+result = "<r>" content:until("</r>") "</r>";
+
+declaration = "<d>" name:word "</d>";

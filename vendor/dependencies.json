@@ -47,9 +47,10 @@
     },
     {
       "name": "JSON Schema meta-schemas",
-      "version": "2020-12",
+      "version": "2020-12 (json-schema-spec 601a66c8b0f25246bf0e1fb488c5b5f030a79b72); draft-07 (json-schema-spec draft-07 branch 20a3fee852db88519dcb3bb329b7a872ebad8953)",
       "license": "BSD-3-Clause",
-      "manifest": "crates/core/src/schema/metaschemas/manifest.json"
+      "manifest": "crates/core/src/schema/metaschemas/manifest.json",
+      "justification": "Official dialect meta-schemas embedded verbatim so `$ref`s to them resolve without I/O; data only, no third-party executable code."
     },
     {
       "name": "WHATWG HTML named character references",
@@ -111,7 +112,7 @@
       "manifest": "crates/core/tests/data/test262/manifest.json"
     },
     {
-      "name": "Correction-evaluation corpora (string selection, path matching, phonetic ambiguity, JSON recovery)",
+      "name": "Correction-evaluation corpora (string selection, path matching, phonetic ambiguity, JSON recovery, tool-call recovery)",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
       "manifest": "crates/core/tests/data/evaluation/manifest.json"
     }

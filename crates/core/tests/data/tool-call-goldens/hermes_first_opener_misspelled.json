@@ -1,0 +1,57 @@
+{
+  "description": "T5/F12: `<tool_cal>` is read as Hermes's `<tool_call>` (token-misspelled), so the call is Hermes's and no `<tool_cal></tool_call>` markup is left as content around a bare JSON reading.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "<tool_cal>{\"name\": \"f\", \"arguments\": {\"a\": \"x\"}}</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "x"
+      },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.token-misspelled"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.token-misspelled"
+  ]
+}

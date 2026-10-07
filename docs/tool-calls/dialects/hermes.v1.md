@@ -1,0 +1,130 @@
+<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. -->
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
+# `hermes.v1`
+
+Grammar: [`crates/core/src/tool_call/dialects/hermes.v1.grammar`](../../../crates/core/src/tool_call/dialects/hermes.v1.grammar),
+built in as `DialectId::Hermes`. The grammar and its fixtures are
+first-party; no chat-template or model-card text is copied into this
+repository.
+
+## Public sources
+
+- Hermes 2 Pro model card:
+  <https://huggingface.co/NousResearch/Hermes-2-Pro-Llama-3-8B/blob/f798274b30e7d2d4797c369edcc0cc7473b6e6f2/README.md>
+  (revision `f798274b30e7d2d4797c369edcc0cc7473b6e6f2`, 2024-09-14): a call
+  is a JSON object inside `<tool_call>` tags, the published example lists
+  `"arguments"` before `"name"`, and tool output returns inside
+  `<tool_response>` tags.
+- Hermes function-calling reference code, `schema.py`:
+  <https://github.com/NousResearch/Hermes-Function-Calling/blob/ea3c4723e4cefdac760d483ccac6c8a428c95ab8/schema.py>
+  (commit `ea3c4723e4cefdac760d483ccac6c8a428c95ab8`, 2025-12-22): the call
+  object has exactly two fields, `arguments` (an object) and `name`; a tool
+  signature is `{"type": "function", "function": {name, description,
+  parameters}}`.
+- Qwen3 chat template (a Hermes-style template) in `tokenizer_config.json`:
+  <https://huggingface.co/Qwen/Qwen3-8B/blob/b968826d9c46dd6066d109eabc6255188de91218/tokenizer_config.json>
+  (revision `b968826d9c46dd6066d109eabc6255188de91218`, 2025-07-26): the same
+  call object with `"name"` first, arguments that may already be a string,
+  and `<think>`/`</think>` reasoning.
+
+## What the grammar accepts
+
+- `call`: `<tool_call>`, optional whitespace, one JSON object holding a
+  `"name"` member and an `"arguments"` member in either order, optional
+  whitespace, `</tool_call>`. JSON whitespace is allowed between tokens.
+- The call's JSON envelope (`json-envelope;`) tolerates the JSON syntax
+  slips the `json` codec repairs inside arguments, under the same rules: a
+  trailing comma (`json.syntax.trailing-comma`), single quotes as in a
+  Python-repr dict (`json.syntax.string`), bare keys
+  (`json.syntax.bare-key`), a missing comma or colon
+  (`json.syntax.missing-comma`, `json.syntax.missing-colon`), a comment
+  (`json.syntax.comment`), and raw control characters beside the quotes of
+  the name string (deleted, `json.syntax.string`). Each is a non-guess
+  repair: the call keeps the outcome it would have with the slip inside its
+  arguments. See [GRAMMAR.md](../GRAMMAR.md) and the `envelope_*` goldens.
+- Before those members, a provider type marker (`"type": "function"` or
+  `"type": "tool_use"`, which carries no call data) and an `"id"` member may
+  appear, in that order. The id is kept as the call's source id. Hermes
+  markup does not provide for ids (`optional-id;`), so a call without one is
+  numbered without an inference, and printing writes none.
+- An `"input"` key (an Anthropic `tool_use` block written inside the
+  wrapper) is read as `"arguments"` through a declared confusable
+  (`tool_call.markup.terminal-confusable`).
+- An object with an `"arguments"` member and no `"name"` is a call that
+  names no tool: the wrapper is the evidence that it is a call. The resolver
+  reads the tool from the arguments (`tool_call.name.from-arguments`, a
+  guess; see [RULES.md](../RULES.md)): one fitting declared tool makes it a
+  `BestGuess`, several `Ambiguous`, none `Unresolved`. (Llama 3 JSON does not
+  get this reading: an object with only a `"parameters"` member has no
+  wrapper or token to show it is a call rather than data such as a schema.)
+- The arguments value is read by the self-delimiting `json` codec: exact
+  number spellings, member order and duplicates kept. A JSON string holding
+  JSON (stringified arguments) is decoded and flagged
+  (`arguments_were_stringified`, `tool_call.arguments.decode-string`). When
+  `"name"` comes first, the codec knows the declared tool.
+- Text before a call (a preamble) and between calls is content.
+- Inside the wrapper, text before the JSON object (a preamble such as
+  `Sure:` or a code-fence opener such as ```` ```json ````) and a code-fence
+  closer after it are dropped (`dropped:` captures): a fence marker is a
+  markup loss (`tool_call.extract.fence`), any other dropped text a data loss
+  (`tool_call.extract.prose`) that keeps the call at most a best guess. Other
+  text after the object is never dropped, so trailing prose is not
+  swallowed into a call.
+- The `<tool_call>` opener is shared with [Qwen3-Coder XML](qwen3-coder-xml.v1.md). With both
+  dialects allowed (the default), each attempts a call there and the body
+  decides: a JSON object body is read by this dialect, and the other dialect's attempt
+  is rejected at the body's first byte. An attempt neither dialect reads
+  (dangling, cut off, or malformed) is one rejected attempt in the dialect
+  that read furthest, with both dialects in its `candidate_dialects`; see
+  [the README](../README.md#design).
+- `result`: `<tool_response>CONTENT</tool_response>`.
+- `declaration`: one tool signature object
+  `{"type": "function", "function": {"name": ..., "description": ...,
+  "parameters": {...}}}` (description and parameters optional), the shape of
+  one entry of the system prompt's tool list.
+- Reasoning: `<think>` ... `</think>`.
+
+## Printing (canonical form)
+
+The printer (`tool_call::emit`) runs the same productions forward with
+canonical choices: the first alternative carrying the most values (so
+`"name"` before `"arguments"`). The whitespace between the wrapper tags and
+the JSON object is the `nl` production, which the grammar gives the printing
+layout `"\n"` (`layout nl "\n";`), the template's wrapper layout; every other
+optional whitespace is omitted, so the object itself is compact JSON (the
+template's `json.dumps` spacing inside the object is not reproduced: the
+arguments are printed with their exact recovered spellings).
+
+- `call`: `<tool_call>\n{"name":"NAME","arguments":ARGS}\n</tool_call>`, where
+  `ARGS` is the compact JSON object of the argument tree with exact number
+  spellings and member order; several calls are separated by one newline.
+  JSON text that would contain `</tool_call>` writes every `<` as `\u003c`.
+- `result`: `<tool_response>CONTENT</tool_response>`, content verbatim; the
+  tool response carries no call id.
+- `declaration`: `{"type":"function","function":{"name":"NAME","description":"DESC","parameters":SCHEMA}}`
+  with `SCHEMA` the tool's exact parameters schema text, verbatim
+  (description and parameters omitted when the tool has none).
+
+## The `"parameters"` key
+
+Not accepted. The Hermes call schema (`FunctionCall` in `schema.py`) has
+only `arguments` and `name`, and both the model card and the Qwen3 template
+emit `"arguments"`. A `"parameters"` key belongs to other JSON call formats;
+a call spelled with it is not a Hermes call and is rejected by this grammar
+rather than reinterpreted.
+
+## Known variants handled by closer classes
+
+- `</tool_calls>` is read as `</tool_call>` (closer-class variant).
+- Repeated or missing closers: the engine's weighted repair search may
+  delete a stray closer spelling or insert a missing closer, keeping the
+  least-cost reading (repairs, covered by the repair goldens rather than the
+  conformance anchors).
+
+## Deliberately not accepted
+
+- Members other than `name` and `arguments` in the call object, except a
+  leading provider type marker and id (above).
+- Several call objects, or a JSON array of calls, inside one wrapper.
+- A call object without the `<tool_call>` wrapper.
+- Streaming deltas (no `delta` production).

@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# Hermes JSON tool calls: a <tool_call> wrapper around one JSON object with
+# a "name" member and an "arguments" member, in either order, optionally
+# after a provider type marker and an id (kept as the call's source id;
+# `optional-id`: a call without one omits nothing). An Anthropic-shaped
+# object ("input" for "arguments") is read with the key recorded as a
+# confusable spelling. An object
+# with an "arguments" member alone is a call that names no tool (the
+# resolver may read the tool from its arguments,
+# tool_call.name.from-arguments, a guess). The arguments
+# value is read by the self-delimiting json codec (exact number spellings;
+# stringified arguments are decoded and flagged). Text before a call is
+# content. Inside the wrapper, text before the JSON object (a preamble or a
+# code-fence opener such as ```json) and a code-fence closer after it are
+# dropped: a fence marker is a markup loss (tool_call.extract.fence), any
+# other dropped text a data loss (tool_call.extract.prose). Text after the
+# object that is not a fence marker is never dropped, so trailing prose is
+# not swallowed into a call. First-party grammar; see
+# docs/tool-calls/dialects/hermes.v1.md for the public sources and for why a
+# "parameters" key is not accepted.
+grammar "hermes.v1";
+
+# The call's JSON envelope tolerates the JSON syntax slips the json codec
+# repairs inside arguments, recorded under the same json.syntax.* rules
+# (`json-envelope`): single quotes, bare keys, a missing `:` or `,`, a
+# trailing comma, a comment, a raw control character beside the name's
+# quotes.
+json-envelope;
+
+optional-id;
+
+# An Anthropic-shaped object inside the wrapper writes its arguments as
+# "input": read as "arguments" (tool_call.markup.terminal-confusable).
+confusable "\"arguments\"" "\"input\"";
+
+reasoning "<think>" "</think>";
+
+closer call-end = "</tool_call>" | "</tool_calls>";
+
+tool-name = /[A-Za-z0-9_.:-]+/;
+ws = /[ \t\r\n]+/;
+# Whitespace between the wrapper tags and the JSON object; printed as one
+# newline, the chat template's layout (<tool_call>\n{...}\n</tool_call>).
+nl = ws;
+layout nl "\n";
+json-string = /"([^"\\\x00-\x1F]|\\["\\\/bfnrt]|\\u[0-9A-Fa-f]{4})*"/;
+# Text before the JSON object: it starts with neither whitespace nor `{`
+# (so canonical markup never holds any) and runs to the object's `{`.
+preamble = /[^{<\s][^{<]*/;
+# A code-fence marker (no info string: it closes a fence).
+fence = /`{3,}|~{3,}/;
+
+name-member = "\"name\"" ws? ":" ws? "\"" name:tool-name "\"";
+arguments-member = "\"arguments\"" ws? ":"
+                   arguments:slot(json, "</tool_call>", "</tool_calls>");
+
+# Members some producers write before the call's own: a provider type
+# marker ("function", "tool_use"), which carries no call data, and the
+# call's id (kept as its source id).
+type-member = "\"type\"" ws? ":" ws? ("\"function\"" | "\"tool_use\"") ws? "," ws?;
+call-id = /[A-Za-z0-9_.:-]+/;
+id-member = "\"id\"" ws? ":" ws? "\"" id:call-id "\"" ws? "," ws?;
+
+call = "<tool_call>" nl? (dropped:preamble)? "{" ws? type-member? id-member?
+       (name-member ws? "," ws? arguments-member | arguments-member ws? "," ws? name-member
+        | arguments-member)
+       ws? "}" nl? (dropped:fence ws?)? call-end;
+
+result = "<tool_response>" content:until("</tool_response>") "</tool_response>";
+
+# One function signature of the system prompt's <tools> list.
+declaration = "{" ws? "\"type\"" ws? ":" ws? "\"function\"" ws? "," ws?
+              "\"function\"" ws? ":" ws? "{" ws?
+              "\"name\"" ws? ":" ws? "\"" name:tool-name "\""
+              (ws? "," ws? "\"description\"" ws? ":" ws? content:json-string)?
+              (ws? "," ws? "\"parameters\"" ws? ":" arguments:slot(json, "</tools>"))?
+              ws? "}" ws? "}";

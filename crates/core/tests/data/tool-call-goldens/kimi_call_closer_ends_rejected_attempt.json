@@ -1,0 +1,57 @@
+{
+  "description": "T1/F6: a Kimi-K2 section whose call is broken after its name and has no section closer: the attempt runs to the call's own <|tool_call_end|> (a literal that ends a call of the dialect), so no call token is content, and the answer after it stays content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "kimi-k2.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "Hi <|tool_calls_section_begin|><|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{\"a\":\"x\"}<|tool_call_end|> The answer is 42.",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        3,
+        122
+      ],
+      "dialect": "kimi-k2.v1",
+      "candidate_dialects": [
+        "kimi-k2.v1"
+      ],
+      "reason": "Malformed { at: 64 }",
+      "raw": "<|tool_calls_section_begin|><|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{\"a\":\"x\"}<|tool_call_end|>"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Hi ",
+    " The answer is 42."
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

@@ -181,7 +181,7 @@ fn clone_reservation(node: &ProvenanceNode) -> u64 {
 /// One candidate answer: an output identity, a search cost comparable only
 /// within the same operation, and the (deduplicated, insertion-ordered) set
 /// of forest nodes this answer depends on.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Derivation {
     output: Digest,
     cost: u64,
@@ -219,6 +219,30 @@ impl Derivation {
     #[must_use]
     pub const fn cost(&self) -> u64 {
         self.cost
+    }
+    /// The forest nodes this derivation depends on, in first-seen order.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, contract::Evidence, digest::Digest};
+    /// use purrassist_core::provenance::{Derivation, Forest};
+    /// let mut governor = Governor::new(Budget::default());
+    /// let mut forest = Forest::new(&governor);
+    /// let evidence = Evidence {
+    ///     rule: "demo".into(),
+    ///     explanation: String::new(),
+    ///     span: None,
+    ///     destination: String::new(),
+    /// };
+    /// let node = forest.evidence(&mut governor, evidence)?;
+    /// let mut derivation = Derivation::new(Digest::of(b"x"), 1);
+    /// derivation.push(node);
+    /// derivation.push(node);
+    /// assert_eq!(derivation.nodes(), [node]);
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    #[must_use]
+    pub fn nodes(&self) -> &[NodeId] {
+        &self.order
     }
 }
 
@@ -344,6 +368,27 @@ impl Forest {
         self.nodes.push(node)?;
         self.index.insert(key, id)?;
         Ok(id)
+    }
+    /// Every interned node, in interning order ([`NodeId`] order).
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, contract::Evidence, provenance::{Forest, ProvenanceNode}};
+    /// let mut governor = Governor::new(Budget::default());
+    /// let mut forest = Forest::new(&governor);
+    /// assert!(forest.nodes().is_empty());
+    /// let evidence = Evidence {
+    ///     rule: "demo".into(),
+    ///     explanation: String::new(),
+    ///     span: None,
+    ///     destination: String::new(),
+    /// };
+    /// forest.evidence(&mut governor, evidence.clone())?;
+    /// assert_eq!(forest.nodes(), [ProvenanceNode::Evidence(evidence)]);
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    #[must_use]
+    pub fn nodes(&self) -> &[ProvenanceNode] {
+        self.nodes.as_slice()
     }
     /// Borrow the content of one previously interned node.
     #[must_use]

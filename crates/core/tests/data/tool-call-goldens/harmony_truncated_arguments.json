@@ -1,0 +1,62 @@
+{
+  "description": "A call cut off by a length stop inside its arguments: kept as a truncated call, Unresolved (Truncated).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "location"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "harmony.v1"
+  ],
+  "stop": "length",
+  "input": "<|start|>assistant<|channel|>commentary to=functions.get_weather <|constrain|>json<|message|>{\"location\":\"San Fr",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "truncated",
+  "openai_finish_reason": "length",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "location": "San Fr"
+      },
+      "candidate_dialects": [
+        "harmony.v1"
+      ],
+      "outcome": "unresolved: truncated: the call was cut off by a length stop",
+      "rules": [
+        "json.syntax.unterminated-string",
+        "json.syntax.close-container",
+        "tool_call.truncated"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "json.syntax.unterminated-string",
+    "json.syntax.close-container",
+    "tool_call.truncated"
+  ]
+}

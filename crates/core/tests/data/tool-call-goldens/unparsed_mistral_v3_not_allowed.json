@@ -1,0 +1,97 @@
+{
+  "description": "Mistral v3 [TOOL_CALLS] markup under a Hermes-only allow-list: reported as mistral-v3.v1, built in but not in the allow-list; the default allow-list reads the call.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "stop": "stop",
+  "input": "[TOOL_CALLS] [{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Paris\"}}]",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "calls",
+    "openai_finish_reason": "tool_calls",
+    "verdict": "run",
+    "usable_calls": {
+      "strict": 1,
+      "accepting_guesses": 1
+    },
+    "calls": [
+      {
+        "tool": "get_weather",
+        "arguments": {
+          "city": "Paris"
+        },
+        "candidate_dialects": [
+          "mistral-v3.v1"
+        ],
+        "outcome": "resolved",
+        "rules": [
+          "tool_call.id.dedup"
+        ]
+      }
+    ],
+    "rejected": [],
+    "embedded": [],
+    "content": [],
+    "failed_validations": [],
+    "ledger_rules": [
+      "tool_call.id.dedup"
+    ]
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        0,
+        70
+      ],
+      "dialect": "mistral-v3.v1",
+      "candidate_dialects": [],
+      "reason": "UnsupportedDialect { family: MistralV3 }",
+      "raw": "[TOOL_CALLS] [{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Paris\"}}]"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "[TOOL_CALLS] [{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Paris\"}}]"
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.unparsed-dialect"
+  ]
+}

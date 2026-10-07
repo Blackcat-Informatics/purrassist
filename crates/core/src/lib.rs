@@ -6,11 +6,13 @@
 
 pub mod contract;
 pub mod digest;
+pub mod grammar;
 pub mod json;
 pub mod matching;
 pub mod pattern;
 pub mod schema;
 pub mod text;
+pub mod tool_call;
 
 pub use contract::{
     AssistResult, Budget, CancellationToken, Effort, Governor, Outcome, RECEIPT_VERSION, Receipt,
@@ -29,5 +31,9 @@ pub mod edits;
 pub mod patch;
 
 pub mod provenance;
+
+pub(crate) mod scan;
+
+pub(crate) mod search;
 
 pub mod markdown;

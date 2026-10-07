@@ -701,7 +701,14 @@ def main():
         },
         "outputs": outputs,
     }
-    (HERE / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    # Corpora generated outside this script (the Rust tool-call corpus
+    # generator) keep their registered entries.
+    manifest_path = HERE / "manifest.json"
+    if manifest_path.exists():
+        previous = json.loads(manifest_path.read_text())
+        if "generators" in previous:
+            manifest["generators"] = previous["generators"]
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
 
 
 if __name__ == "__main__":

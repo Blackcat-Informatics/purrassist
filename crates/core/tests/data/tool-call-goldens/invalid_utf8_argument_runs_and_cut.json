@@ -1,0 +1,70 @@
+{
+  "description": "F4: Several malformed runs in one argument: each maximal malformed subpart is one U+FFFD (two adjacent bytes, a surrogate encoding of three subparts, a lead byte cut before the closing quote), each run one tool_call.value.invalid-utf8 edit with its exact span and original bytes.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "effects": {
+    "read_file": "read_only"
+  },
+  "stop": "stop",
+  "input": {
+    "hex": "3c746f6f6c5f63616c6c3e7b226e616d65223a2022726561645f66696c65222c2022617267756d656e7473223a207b2270617468223a202261fffe62eda08063c3227d7d3c2f746f6f6c5f63616c6c3e"
+  },
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "a��b���c�"
+      },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.value.invalid-utf8",
+        "tool_call.value.invalid-utf8",
+        "tool_call.value.invalid-utf8"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.input.invalid-utf8",
+    "tool_call.input.invalid-utf8",
+    "tool_call.input.invalid-utf8",
+    "tool_call.value.invalid-utf8",
+    "tool_call.value.invalid-utf8",
+    "tool_call.value.invalid-utf8"
+  ]
+}

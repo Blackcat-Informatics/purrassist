@@ -1241,7 +1241,7 @@ fn json_recovery_retains_input_and_covers_dropped_bytes() {
                 .receipt
                 .sources
                 .iter()
-                .any(|document| document.text == corrupted),
+                .any(|document| document.bytes == corrupted.as_bytes()),
             "{label}: the exact original (corrupted) input must be retained verbatim in the receipt"
         );
         match result.outcome {

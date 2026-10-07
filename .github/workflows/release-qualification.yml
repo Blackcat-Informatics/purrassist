@@ -41,5 +41,11 @@ jobs:
           fi
       - name: Verify workspace
         run: make check
+      - name: Verify corpus suites
+        run: make corpus
+      - name: Verify coverage-feedback corpus growth
+        run: python3 scripts/test-fuzz-feedback.py
+      - name: Verify the published-crate verifier
+        run: python3 scripts/test-verify-published.py
       - name: Verify crate archives and notices
         run: make package

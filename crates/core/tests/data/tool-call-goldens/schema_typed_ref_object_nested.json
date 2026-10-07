@@ -1,0 +1,87 @@
+{
+  "description": "S2: a $ref to an object definition, written as nested parameters: the codec reads them as an untyped object (tool_call.markup.nested-parameter) and the exact schema types each member: depth the integer 2, label the string 42 (its string branch keeps the text).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "search",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "opts": {
+              "$ref": "#/$defs/Opts"
+            }
+          },
+          "$defs": {
+            "Opts": {
+              "type": "object",
+              "properties": {
+                "depth": {
+                  "type": "integer"
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "depth"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "search": "read_only"
+  },
+  "stop": "stop",
+  "input": "<tool_call>\n<function=search>\n<parameter=opts>\n<parameter=depth>\n2\n</parameter>\n<parameter=label>\n42\n</parameter>\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "search",
+      "arguments": {
+        "opts": {
+          "depth": 2,
+          "label": "42"
+        }
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.nested-parameter",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.value.schema-typed"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.nested-parameter",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.value.schema-typed"
+  ]
+}

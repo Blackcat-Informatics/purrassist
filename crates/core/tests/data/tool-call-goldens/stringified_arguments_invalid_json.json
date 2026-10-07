@@ -1,0 +1,55 @@
+{
+  "description": "A3n: stringified arguments whose content is not one recoverable JSON object: the call is Unresolved (invalid argument) and its raw text stays retained.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "input": "<tool_call>\n{\"name\": \"read_file\", \"arguments\": \"path=a.rs\"}\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {},
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "outcome": "unresolved: invalid_argument: the arguments value cannot be decoded: the stringified arguments do not hold one recoverable JSON object",
+      "rules": [
+        "tool_call.arguments.decode-string"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.arguments.decode-string"
+  ]
+}

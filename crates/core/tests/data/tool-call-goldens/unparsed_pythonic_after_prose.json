@@ -1,0 +1,61 @@
+{
+  "description": "A Pythonic call list on its own line after prose: reported as pythonic.v1; the prose and the list stay content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "Let me check both cities.\n[get_weather(city=\"Paris\")]",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        26,
+        53
+      ],
+      "dialect": null,
+      "candidate_dialects": [],
+      "reason": "UnsupportedDialect { family: Pythonic }",
+      "raw": "[get_weather(city=\"Paris\")]"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Let me check both cities.\n[get_weather(city=\"Paris\")]"
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.unparsed-dialect"
+  ]
+}

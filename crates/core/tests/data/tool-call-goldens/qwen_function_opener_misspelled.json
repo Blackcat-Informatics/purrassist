@@ -1,0 +1,66 @@
+{
+  "description": "T4: inside an opened <tool_call> wrapper, <functon= is one edit from exactly one literal of the grammar and is read as <function= (tool_call.markup.token-misspelled), the mirror of a misspelled </function>.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "read_file": "read_only"
+  },
+  "input": "<tool_call>\n<functon=read_file>\n<parameter=path>\na\n</parameter>\n</function>\n</tool_call> done",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "a"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.token-misspelled",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [
+    " done"
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.token-misspelled",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline"
+  ]
+}

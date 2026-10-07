@@ -1,0 +1,69 @@
+{
+  "description": "F4: The Mutating guard: invalid UTF-8 in an argument is a data loss, so a call on a Mutating tool is never usable, whatever the policy; the bytes are still read as U+FFFD and recorded.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "effects": {
+    "write_file": "mutating"
+  },
+  "stop": "stop",
+  "input": {
+    "hex": "3c746f6f6c5f63616c6c3e7b226e616d65223a202277726974655f66696c65222c2022617267756d656e7473223a207b2270617468223a2022612e747874222c2022636f6e74656e74223a2022636166e9227d7d3c2f746f6f6c5f63616c6c3e"
+  },
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "a.txt",
+        "content": "caf�"
+      },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.value.invalid-utf8"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.input.invalid-utf8",
+    "tool_call.value.invalid-utf8"
+  ]
+}

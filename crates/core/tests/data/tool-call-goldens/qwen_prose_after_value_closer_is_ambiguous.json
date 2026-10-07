@@ -1,0 +1,91 @@
+{
+  "description": "Stage-3 pass 5 (F14), Re-blessed for adversary pass 6 (F14/F19), maintainer: \"Newlines have zero meaning here.\" Prose between a path value's closer and a second closer, then the next parameter. Layout-independent: as with the closer on the value's own line (qwen_same_line_closer_then_prose_is_ambiguous), the reading holding the prose and the reading ending the value at the first closer and dropping the prose as text between parameters tie, so the mutating call is Ambiguous between the path `a.py` and the path holding the prose, never usable. It was rejected before.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "write_file": "mutating",
+    "read_file": "read_only"
+  },
+  "input": "<tool_call>\n<function=write_file>\n<parameter=path>\na.py\n</parameter>\nI will now write the file.\n</parameter>\n<parameter=content>\nx\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "ambiguous",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "a.py",
+        "content": "x"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "ambiguous",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.markup.text-between-parameters",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.text-between-parameters",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline"
+  ]
+}

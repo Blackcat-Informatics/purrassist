@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Frozen official meta-schemas; their BSD license is retained beside the data.
 pub(super) fn resource(uri: &str) -> Option<&'static str> {
+    if uri == super::DRAFT_07 {
+        return Some(include_str!("metaschemas/draft-07-schema.json"));
+    }
     Some(
         match uri.strip_prefix("https://json-schema.org/draft/2020-12/")? {
             "schema" => include_str!("metaschemas/schema.json"),

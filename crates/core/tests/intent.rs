@@ -107,7 +107,7 @@ fn shared_governor_retains_source_and_preserves_cancellation() {
     let mut governor = Governor::new(Budget::default());
     let result = domain.resolve_governed("hot tea", &concepts, &mut governor);
     assert!(matches!(result.outcome, Outcome::Resolved(_)));
-    assert_eq!(result.receipt.sources[0].text, "hot tea");
+    assert_eq!(result.receipt.sources[0].text(), Some("hot tea"));
     assert_eq!(result.receipt.usage, governor.usage());
     governor.cancel();
     let result = domain.resolve_governed("hot tea", &concepts, &mut governor);
@@ -150,7 +150,7 @@ fn conflicting_rules_have_separate_output_bound_ledgers() {
     // recognizes that shared evidence and its derived "drink" inference as
     // depended on by *every* alternative and promotes them once to the
     // top-level, selected-result ledgers rather than duplicating them into
-    // both alternatives (crates/core/src/contract.rs `RECEIPT_VERSION` 2).
+    // both alternatives (crates/core/src/contract.rs `RECEIPT_VERSION` 2 and later).
     // Only the temperature rule, which differs between the two
     // interpretations, remains alternative-specific below.
     assert_eq!(result.receipt.evidence.len(), 1);

@@ -1,9 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-//! Incorrect-automatic-correction evaluation over four first-party corpora
+//! Incorrect-automatic-correction evaluation over five first-party corpora
 //! (`crates/core/tests/data/evaluation/`, provenance in that directory's
 //! `README.md`): string selection, path matching, English phonetic
-//! ambiguity, and JSON Schema recovery. For each corpus this asserts **zero**
+//! ambiguity, JSON Schema recovery, and tool-call recovery (a mutation
+//! corpus generated from grammar witnesses by the `tool-call-corpus`
+//! example, whose generator this file shares and reruns to prove the
+//! committed corpus current). For each corpus this asserts **zero**
 //! incorrect automatic `Resolved`/`BestGuess` corrections, computes
 //! risk-coverage (precision vs. abstention), and computes the exact
 //! Clopper-Pearson 95% upper confidence bound on the incorrect-correction
@@ -12,13 +15,18 @@
 //! limit in `docs/MATCHING-QUALITY.md`, and asserts the exact tallies that
 //! document quotes. A mismatch between this file and that document is a
 //! build failure by design: see the acceptance note in each test.
+#[path = "tool_call_corpus/mod.rs"]
+mod tool_call_corpus;
+
 use purrassist_core::{
     Budget, Effort, Governor, Outcome,
+    digest::Digest,
     json::{self, Node, Value},
     matching::{self, Candidate, MatchRequest, SelectionPolicy},
     paths::PathIndex,
     schema::{Schema, recovery::RecoveryRequest},
 };
+use std::collections::BTreeMap;
 use std::path::Path;
 
 // ---------------------------------------------------------------------
@@ -211,12 +219,31 @@ fn clopper_pearson_upper_matches_the_closed_form_for_zero_incorrect() {
 
 const DOCUMENTATION: &str = include_str!("../../../docs/MATCHING-QUALITY.md");
 
-fn read_corpus(name: &str) -> Vec<Node> {
+fn corpus_text(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/data/evaluation")
         .join(name);
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()))
+}
+
+/// The cases of a corpus: a JSON array, or one JSON record per line for a
+/// `.jsonl` corpus.
+fn read_corpus(name: &str) -> Vec<Node> {
+    let text = corpus_text(name);
+    if Path::new(name)
+        .extension()
+        .is_some_and(|extension| extension == "jsonl")
+    {
+        return text
+            .lines()
+            .enumerate()
+            .map(|(line, record)| {
+                json::parse(record)
+                    .unwrap_or_else(|error| panic!("parsing {name}:{}: {error}", line + 1))
+            })
+            .collect();
+    }
     let root = json::parse(&text).unwrap_or_else(|error| panic!("parsing {name}: {error}"));
     match root.value {
         Value::Array(items) => items,
@@ -308,6 +335,11 @@ impl Tally {
         } else {
             self.incorrect += 1;
         }
+    }
+    const fn add(&mut self, other: Self) {
+        self.correct += other.correct;
+        self.incorrect += other.incorrect;
+        self.abstained += other.abstained;
     }
 }
 
@@ -427,6 +459,153 @@ fn json_recovery_corpus_tally() -> (Tally, usize) {
     (tally, cases.len())
 }
 
+/// The tool-call mutation corpus (JSON Lines; see `tool_call_corpus`).
+const TOOL_CALLS: &str = "tool-calls.jsonl";
+
+/// The tool-call corpus evaluated: the overall tally, per category, per
+/// printed dialect and per dialect allow-list, and the abstention recall
+/// over truth-`Unresolved` cases.
+struct ToolCallEvaluation {
+    tally: Tally,
+    total: usize,
+    categories: BTreeMap<String, (Tally, u64)>,
+    dialects: BTreeMap<String, Tally>,
+    printed: BTreeMap<String, Tally>,
+    unresolved_truth: u64,
+    unresolved_abstained: u64,
+}
+
+/// The calls a correct answer recovers (canonical name and arguments, in
+/// order), or `None` when the case must abstain.
+fn tool_call_truth(case: &Node) -> Option<Vec<(String, Node)>> {
+    let truth = field(case, "truth");
+    if truth.as_str() == Some(tool_call_corpus::UNRESOLVED) {
+        return None;
+    }
+    let Value::Array(calls) = &truth.value else {
+        panic!("truth is `Unresolved` or an array of calls: {truth:?}")
+    };
+    Some(
+        calls
+            .iter()
+            .map(|call| {
+                (
+                    text_field(call, "name").to_owned(),
+                    field(call, "arguments").clone(),
+                )
+            })
+            .collect(),
+    )
+}
+
+/// Every case recovered under its request and scored. The answer is the
+/// calls the caller may run when it accepts guesses
+/// ([`ToolCalls::usable_accepting_guesses`]): `Resolved` calls and `BestGuess`
+/// calls on read-only tools. A `BestGuess` on a mutating tool, an
+/// `Ambiguous` or `Unresolved` call or turn, and a turn with no usable call
+/// are abstentions. An answer is correct when its calls equal the truth
+/// (tool, [`Node::equivalent`] arguments, order); any other answer,
+/// including any answer to a truth-`Unresolved` case, is incorrect.
+///
+/// [`ToolCalls::usable_accepting_guesses`]: purrassist_core::tool_call::ToolCalls::usable_accepting_guesses
+fn tool_call_corpus_tally() -> ToolCallEvaluation {
+    let cases = read_corpus(TOOL_CALLS);
+    let tools = tool_call_corpus::tools();
+    let adapter = tool_call_corpus::adapter_tools();
+    let mut evaluation = ToolCallEvaluation {
+        tally: Tally::default(),
+        total: cases.len(),
+        categories: BTreeMap::new(),
+        dialects: BTreeMap::new(),
+        printed: BTreeMap::new(),
+        unresolved_truth: 0,
+        unresolved_abstained: 0,
+    };
+    for case in &cases {
+        let request = tool_call_corpus::request(case);
+        let set = tool_call_corpus::tools_for(case, &tools, &adapter);
+        // A case whose output is not well-formed UTF-8 carries its exact
+        // bytes as `input_hex`.
+        let bytes: Vec<u8> = optional_text(case, "input_hex").map_or_else(
+            || text_field(case, "input").as_bytes().to_vec(),
+            |hex| {
+                (0..hex.len())
+                    .step_by(2)
+                    .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).expect("hex input"))
+                    .collect()
+            },
+        );
+        let result = set.recover(&bytes, &request);
+        let answer: Option<Vec<(String, Node)>> = match &result.outcome {
+            Outcome::Resolved(calls) | Outcome::BestGuess(calls) => {
+                let usable = calls.usable_accepting_guesses();
+                (!usable.is_empty()).then(|| {
+                    usable
+                        .iter()
+                        .map(|call| {
+                            (
+                                call.tool.clone().expect("a usable call names its tool"),
+                                call.arguments.clone(),
+                            )
+                        })
+                        .collect()
+                })
+            }
+            Outcome::Ambiguous(_) | Outcome::Unresolved => None,
+        };
+        let truth = tool_call_truth(case);
+        let mut tally = Tally::default();
+        match (&answer, &truth) {
+            (None, _) => tally.abstained += 1,
+            (Some(answer), Some(truth)) => tally.record(
+                answer.len() == truth.len()
+                    && answer
+                        .iter()
+                        .zip(truth)
+                        .all(|((tool, arguments), (name, expected))| {
+                            tool == name && arguments.equivalent(expected)
+                        }),
+            ),
+            (Some(_), None) => tally.record(false),
+        }
+        if tally.incorrect > 0 {
+            eprintln!(
+                "incorrect: {} answered {:?}",
+                text_field(case, "id"),
+                answer.as_ref().map(|calls| calls
+                    .iter()
+                    .map(|(tool, arguments)| format!("{tool} {}", arguments.to_json()))
+                    .collect::<Vec<_>>())
+            );
+        }
+        if truth.is_none() {
+            evaluation.unresolved_truth += 1;
+            evaluation.unresolved_abstained += tally.abstained;
+        }
+        evaluation.tally.add(tally);
+        let category = evaluation
+            .categories
+            .entry(text_field(case, "category").to_owned())
+            .or_default();
+        category.0.add(tally);
+        category.1 += u64::from(truth.is_none());
+        evaluation
+            .dialects
+            .entry(text_field(case, "dialect").to_owned())
+            .or_default()
+            .add(tally);
+        // The dialect the case's calls are printed in: its identity's
+        // first segment (`qwen`, `hermes`, `openai`, or `mixed`).
+        let id = text_field(case, "id");
+        evaluation
+            .printed
+            .entry(id[..id.find('/').expect("a dialect segment")].to_owned())
+            .or_default()
+            .add(tally);
+    }
+    evaluation
+}
+
 /// One corpus's full evaluation: zero incorrect corrections, the risk
 /// (`1 - precision` among automatic decisions), the coverage (the fraction
 /// of cases an automatic decision was reached for at all), and the exact
@@ -477,6 +656,11 @@ fn evaluate(name: &str, tally: Tally, total_cases: usize, limit: f64) {
         "{name}: Clopper-Pearson 95% upper bound {bound:.6} exceeds the documented limit {limit:.6}"
     );
 }
+
+/// The tool-call corpus tallies `docs/MATCHING-QUALITY.md` quotes.
+const TOOL_CALL_CASES: usize = 16438;
+const TOOL_CALL_CORRECT: u64 = 11261;
+const TOOL_CALL_ABSTAINED: u64 = 5177;
 
 // ---------------------------------------------------------------------
 // Documented numbers: `docs/MATCHING-QUALITY.md`'s evaluation table quotes
@@ -556,6 +740,128 @@ fn json_recovery_evaluation_has_zero_incorrect_corrections() {
     evaluate("JSON recovery", tally, total, 0.02);
 }
 
+/// Every category of the tool-call corpus has at least this many cases.
+const MINIMUM_CATEGORY_CASES: u64 = 20;
+
+#[test]
+#[allow(clippy::cast_precision_loss)] // corpus-sized counts, far below f64's exact-integer range
+fn tool_call_recovery_evaluation_has_zero_incorrect_corrections() {
+    let evaluation = tool_call_corpus_tally();
+    let (tally, total) = (evaluation.tally, evaluation.total);
+    // Abstention recall: the fraction of cases whose only correct answer is
+    // abstention that abstained.
+    let recall = format!(
+        "Abstention recall: {} of {} truth-`Unresolved` cases abstained ({:.1}%).",
+        evaluation.unresolved_abstained,
+        evaluation.unresolved_truth,
+        evaluation.unresolved_abstained as f64 * 100.0 / evaluation.unresolved_truth as f64
+    );
+    let categories: Vec<(String, Tally, String)> = evaluation
+        .categories
+        .iter()
+        .map(|(category, (tally, unresolved))| {
+            let row = format!(
+                "| `{category}` | {} | {} | {} | {} | {unresolved} |",
+                tally.total(),
+                tally.correct,
+                tally.incorrect,
+                tally.abstained
+            );
+            (category.clone(), *tally, row)
+        })
+        .collect();
+    let dialects: Vec<(String, Tally, String)> = evaluation
+        .printed
+        .iter()
+        .chain(&evaluation.dialects)
+        .map(|(dialect, tally)| {
+            let row = format!(
+                "| `{dialect}` | {} | {} | {} | {} |",
+                tally.total(),
+                tally.correct,
+                tally.incorrect,
+                tally.abstained
+            );
+            (dialect.clone(), *tally, row)
+        })
+        .collect();
+    // Print everything before asserting, so one run shows every number.
+    eprintln!("{recall}");
+    for (_, _, row) in categories.iter().chain(&dialects) {
+        eprintln!("{row}");
+    }
+    for (name, tally, _) in categories.iter().chain(&dialects) {
+        assert_eq!(tally.incorrect, 0, "{name}: incorrect correction(s)");
+    }
+    assert_eq!(
+        total, TOOL_CALL_CASES,
+        "docs/MATCHING-QUALITY.md quotes this case count"
+    );
+    assert_eq!(
+        tally.correct, TOOL_CALL_CORRECT,
+        "docs/MATCHING-QUALITY.md quotes this correct count"
+    );
+    assert_eq!(
+        tally.abstained, TOOL_CALL_ABSTAINED,
+        "docs/MATCHING-QUALITY.md quotes this abstained count"
+    );
+    evaluate("Tool-call recovery", tally, total, 0.01);
+    assert!(evaluation.unresolved_truth > 0);
+    assert_eq!(
+        evaluation.unresolved_abstained, evaluation.unresolved_truth,
+        "abstention recall must be 100%"
+    );
+    assert!(
+        DOCUMENTATION.lines().any(|line| line == recall),
+        "documented abstention recall differs: {recall}"
+    );
+    for (category, tally, row) in &categories {
+        assert!(
+            tally.total() >= MINIMUM_CATEGORY_CASES,
+            "{category}: only {} cases",
+            tally.total()
+        );
+        assert!(
+            DOCUMENTATION.lines().any(|line| line == row),
+            "documented per-rule evaluation differs: {row}"
+        );
+    }
+    for (_, _, row) in &dialects {
+        assert!(
+            DOCUMENTATION.lines().any(|line| line == row),
+            "documented per-dialect evaluation differs: {row}"
+        );
+    }
+}
+
+/// The committed tool-call corpus is exactly what its generator produces
+/// now, and `manifest.json` registers its digest and census.
+#[test]
+fn corpus_regenerates_identically() {
+    let cases = tool_call_corpus::generate();
+    let generated = tool_call_corpus::render(&cases);
+    let committed = corpus_text(TOOL_CALLS);
+    assert!(
+        generated == committed,
+        "tests/data/evaluation/{TOOL_CALLS} is stale: run `cargo run -p purrassist-core --example tool-call-corpus`"
+    );
+    let manifest = json::parse(&corpus_text("manifest.json")).expect("manifest");
+    let entry = manifest
+        .get("generators")
+        .and_then(|generators| generators.get(TOOL_CALLS))
+        .expect("the manifest registers the tool-call corpus");
+    let digest = Digest::of(committed.as_bytes()).to_string();
+    assert_eq!(
+        Some(digest.trim_start_matches("sha256:")),
+        entry.get("sha256").and_then(Node::as_str)
+    );
+    assert_eq!(number_field(entry, "cases") as usize, cases.len());
+    assert_eq!(
+        number_field(entry, "distinct_requests") as usize,
+        tool_call_corpus::distinct_requests(&cases)
+    );
+}
+
 #[test]
 fn corpora_have_unique_identities_and_at_least_500_distinct_requests() {
     for corpus in [
@@ -563,6 +869,7 @@ fn corpora_have_unique_identities_and_at_least_500_distinct_requests() {
         "paths.json",
         "phonetic.json",
         "json_recovery.json",
+        TOOL_CALLS,
     ] {
         let cases = read_corpus(corpus);
         let identities: std::collections::BTreeSet<_> =

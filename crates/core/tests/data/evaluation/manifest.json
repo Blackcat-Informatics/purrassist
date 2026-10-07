@@ -1,6 +1,6 @@
 {
   "generator": "crates/core/tests/data/evaluation/generate.py",
-  "generator_sha256": "62f50cc56d019bc37d8089024049ce6454216ab7d84c5737d38172ac9be163ab",
+  "generator_sha256": "ab84808e6672570124763e5d41e6df943fea886d7cbac95fb9ea910dffd23113",
   "inputs": {
     "confusables": "crates/core/tests/data/unicode/confusables.txt",
     "confusables_sha256": "091c7f82fc39ef208faf8f94d29c244de99254675e09de163160c810d13ef22a"
@@ -25,6 +25,18 @@
       "cases": 714,
       "distinct_queries": 686,
       "sha256": "7e55ae5b9141f9cb2524a1876946d0d7cd3d7327014e70042dc5392b4ea58148"
+    }
+  },
+  "generators": {
+    "tool-calls.jsonl": {
+      "command": "cargo run --locked -p purrassist-core --example tool-call-corpus",
+      "sources": {
+        "crates/core/examples/tool_call_corpus.rs": "a7cdb96dad9531b305987dd7a7d29c4f96d573ccc84d3475dae421d0ea9d2d29",
+        "crates/core/tests/tool_call_corpus/mod.rs": "e6d8a5d62537ce102977230ceed17592c1748fe3da968f0de35ee13376b3b45a"
+      },
+      "cases": 16438,
+      "distinct_requests": 16438,
+      "sha256": "30b7d7ac15a0bfc44a96108dd74596f0fc4adf63d3e90b1eb63b9d54a9059896"
     }
   }
 }

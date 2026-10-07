@@ -1,0 +1,97 @@
+{
+  "description": "T5/F10: prose after an unclosed arguments object is never read as arguments: a bare word with no `:` after it is no key (no parameter name is invented from positional text, no free text accepted as an argument), so the value is unreadable and the attempt is rejected where the word begins; the prose stays content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v11.v1"
+  ],
+  "effects": {
+    "read_file": "read_only"
+  },
+  "input": "Checking. [TOOL_CALLS]read_file[ARGS]{\"path\":\"a.txt\" oops. Sorry, my answer is 42 (see {1,2} set).",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          10,
+          53
+        ],
+        "dialect": "mistral-v11.v1",
+        "candidate_dialects": [
+          "mistral-v11.v1",
+          "mistral-v3.v1"
+        ],
+        "reason": "Malformed { at: 53 }",
+        "raw": "[TOOL_CALLS]read_file[ARGS]{\"path\":\"a.txt\" "
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "Checking. ",
+      "oops. Sorry, my answer is 42 (see {1,2} set)."
+    ],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        10,
+        53
+      ],
+      "dialect": "mistral-v11.v1",
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "reason": "Malformed { at: 53 }",
+      "raw": "[TOOL_CALLS]read_file[ARGS]{\"path\":\"a.txt\" "
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Checking. ",
+    "oops. Sorry, my answer is 42 (see {1,2} set)."
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

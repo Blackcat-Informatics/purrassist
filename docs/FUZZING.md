@@ -3,14 +3,15 @@
 # Coverage-guided and differential qualification
 
 `scripts/fuzz.py --target <name>` generalizes the original single-purpose
-JSON runner (`scripts/fuzz-json.py`, now removed) across eight
+JSON runner (`scripts/fuzz-json.py`, now removed) across nine
 `purrassist-core` targets: `json`, `markdown`, `schema`, `pattern`,
-`unified`, `fuzzy`, `matching`, `patch`. Each target is a process-isolated
-Rust example (`crates/core/examples/fuzz_<target>.rs`, registered as
-`[[example]] name = "fuzz-<target>"` in `crates/core/Cargo.toml`) that reads
-bounded stdin (at most 4,096 bytes), asserts the target's invariants, and
-completes its protocol (`ok` or `invalid-utf8`, optionally followed by
-newline-delimited JSON differential records) or panics.
+`unified`, `fuzzy`, `matching`, `patch`, `tool-call`. Each target is a
+process-isolated Rust example (`crates/core/examples/fuzz_<target>.rs`, with
+`-` spelled `_`, registered as `[[example]] name = "fuzz-<target>"` in
+`crates/core/Cargo.toml`) that reads bounded stdin (at most 4,096 bytes),
+asserts the target's invariants, and completes its protocol (`ok` or
+`invalid-utf8`, optionally followed by newline-delimited JSON differential
+records) or panics.
 
 Run with Rust `nightly-2026-09-14` and its bundled `llvm-tools` component
 (`rustup component add llvm-tools`). `scripts/fuzz.py` resolves `llvm-cov`
@@ -46,8 +47,11 @@ skipping.
 
 ## Targets, invariants, and seed provenance
 
-Every probe rejects invalid UTF-8 explicitly before entering the core (the
-report counts those executions separately). Resource exhaustion
+Every probe except `tool-call` rejects invalid UTF-8 explicitly before
+entering the core (the report counts those executions in `invalid_utf8`).
+Tool-call recovery accepts arbitrary bytes and records each invalid UTF-8
+run as a loss, so the `tool-call` probe admits them and always completes
+with `ok`; the report counts those executions in `non_utf8_admitted`. Resource exhaustion
 (`StopReason::BudgetExceeded`/`Cancelled`) is a declared non-result, not a
 successful comparison. The Markdown probe emits exactly one HTML or closed
 resource-stop record, with the original source, parse/render/neutral-render
@@ -121,6 +125,136 @@ targets' mutation tokens so mutation can create or move field boundaries).
   (headings, lists, block quotes, fenced code, tables, reference links, GFM
   strikethrough/autolink/tasklist/tagfilter, setext headings, hard breaks).
   **Differential**: `cmark-gfm` — see below.
+- **`tool-call`**: one model turn as raw bytes, recovered
+  (`ToolSet::recover`, the `tool_call.recover.v1` operation) against a fixed
+  first-party tool set over every built-in dialect. The tool set has
+  read-only tools (`read_file` with a parameter alias, `list_dir`,
+  `get_weather` with an enumeration, `current_time` with no required
+  parameter) and mutating tools (`write_file` with string, enumeration,
+  number, integer, array, and nested object parameters; `delete_path` with
+  a tool alias and a repeatable parameter). Byte 0 is a control byte
+  selecting the repair policy (per tool, all `Structural`, all `Tolerant`),
+  the generation stop (`Stop`, `Length`, `ToolCalls`, `Unknown`), the
+  reasoning policy (separate, starting open, as content), and the tool
+  choice (`auto`, `none`, `required`, forced `read_file`); byte 1 selects
+  the effort (`Exact`, `Quick`, `Standard`, `Deep`), the ambiguity policy,
+  and a split seed; the rest is the turn. Invariants:
+  recovery never panics, names the output's digest, and stays within its
+  budget; a value outcome completed and `Unresolved` did not; an
+  `Ambiguous` outcome's readings match the receipt's alternative ledger;
+  a `Resolved` turn records no guess. (A13) A `Resolved` call records no
+  guess inference and no data loss, so no guessed call on a mutating tool
+  is `Resolved`; `usable()` holds only `Resolved` calls;
+  `usable_accepting_guesses()` never holds a guess on a tool that is not
+  read-only; a call embedded in reasoning is never `Resolved` and lies
+  inside a reasoning range. Every call, rejected-attempt, content, and
+  reasoning range lies within the output, never splits a well-formed UTF-8
+  character, and slices back to the retained source (a rejected attempt's
+  raw bytes are exactly its range); content, reasoning, and call ranges
+  never overlap. (S3/F6) A rejected attempt keeps its own closing markup:
+  when a parser's attempt does not end with a literal that ends a call of
+  its dialect (any alternative's closer or a chained call's own, such as
+  Kimi-K2's `<|tool_call_end|>`, or (T4) one written with one slip; a
+  single byte, which prose also writes, is not one), the content after it, up to the next call, reasoning block, or
+  attempt, holds no such literal. (F16) No call body is content: the bytes
+  after a rejected attempt, up to the next call, reasoning block, or
+  attempt, hold no call member (`"name"`, then `:`) before any prose (a
+  word followed by `|` or `｜`, the tail of a cut special token, is no
+  prose). (F4) A rejected attempt runs past where
+  its grammar failed (the furthest the recognizer read an attempt of its
+  dialect at that opener, in any reading, and (T5) no further than the
+  failure its reason reports) only to such a literal (a
+  single-byte one, a JSON bracket or separator that prose writes too, only
+  as structure the grammar read (T5): after trailing whitespace, a
+  separator and brackets closing what the attempt did not open, its markup
+  ends by closing a bracket that opened before the failure, or after it
+  with no prose between; T6: the markup of the calls and parts of a split
+  attempt right before the part is read with it, so a bracket the attempt
+  opened there counts, brackets pair by kind, so a stray `}` never
+  closes a list's `[`, and a call or attempt the markup covers is markup,
+  never prose), to an opening reasoning marker that cut a literal of its
+  dialect it had begun (T6: `</functio<think>`), over the call body it
+  began (F16: a call member past the failure and no prose, the bytes from
+  the failure to the member and the body from the member each read with
+  strings opening and closing there, as F16 reads content, never with the
+  quotes counted from the attempt's start, which a broken string flips; a
+  word followed by `|` or `｜` is a token fragment, not prose), over the maximal
+  ill-formed UTF-8 subpart an `invalid_utf8` attempt failed on (T6),
+  under a length stop to the end of output when no closer of its dialect
+  follows the failure (T6: the stop reads an open call as truncation), to
+  the next
+  call of its attempt (T5: a skipped call left
+  without its closer; T6: whether that next call is read or rejected, an
+  attempt of its dialect begins there), to
+  complete a literal it began, (T3) to the bracket that balances a JSON
+  value it left open (its bytes stay unbalanced, outside JSON strings and
+  with brackets paired by kind (T6), from
+  the failure to that bracket, with no prose between: a bare word followed
+  by another word or sentence punctuation, outside the strings the
+  attempt's bytes open from its start, so a failure inside a string reads
+  the rest of it as text (T6)), or (T4) to such a closing literal written
+  with one slip (one byte inserted, deleted or substituted, or two adjacent
+  bytes swapped, its delimiters kept), so bytes after a closer-less attempt
+  stay content. (F7) A rejected span never ends inside a literal it began. (F8)
+  A malformed attempt's `at` lies inside its span, at its end, or past it
+  only inside a literal the failing reading began and matched in part (at
+  most the longest literal spelling past the end). (F5) Every embedded
+  call is offered once, in span order. (T2) No call, embedded call or
+  rejected attempt holds bytes of a reasoning range's opener or closer
+  marker in the same reading. Every `Resolved` call printed in its own dialect
+  (`emit::emit`) recovers to the same tool with `Node::equivalent`
+  arguments and `Resolved`, and the printed text is stable (a fixed point
+  from its first recovery; a `Resolved` call is skipped only as
+  unrepresentable). Pushing the turn to a `Recognizer` whole, split in two
+  at the seeded position, or in seeded fixed-size chunks yields an equal
+  recognized turn (or the same error) and equal governor usage. Under a
+  budget too small for the output, recovery is `Unresolved` with
+  `StopReason::BudgetExceeded`, empty ledgers, and no alternatives. Seeds
+  are the canonical markup of every conformance fixture under
+  `crates/core/tests/data/tool-calls/conformance/` (read at seed-build time),
+  embedded `grammar::witness::generate` outputs for every built-in dialect
+  over the probe's tool shapes, the repair cases of issue #3 (stray plural
+  closers, missing `</parameter>`/`</function>`/`</tool_call>`, a whole JSON
+  body with a stray closer, nested parameters, fenced and prose-wrapped
+  calls, stringified arguments, dangling openers, near-miss, alias, and
+  hallucinated names, parameter aliases and typos, schema-guided typing,
+  repeated parameters, reasoning blocks, mixed dialects, invalid UTF-8),
+  Llama 3 JSON repairs (a missing or repeated final brace, stringified
+  parameters, arguments cut before `<|eom_id|>`, the `arguments` key after
+  `<|python_tag|>`, a built-in Python-syntax call after the tag, a Llama 3
+  object inside a Hermes wrapper), Mistral v3 repairs (a missing closing
+  bracket at the end and before the next array, a truncated last object,
+  unbracketed objects (one, two by comma or by line, one followed by a plain
+  JSON object in prose, two cut off), a repeated bracket, duplicate model ids, the `parameters`
+  key, stringified arguments), Mistral v11 repairs (a missing `[ARGS]`,
+  whitespace around the name, truncated and unclosed arguments, a second
+  call without its `[TOOL_CALLS]`, duplicate `[CALL_ID]` ids, prose after a
+  call, `[THINK]` reasoning, a v3 array beside a v11 call), DeepSeek-V3.1
+  repairs (missing section and call closers, truncated arguments, `<think>`
+  before the section, ASCII and space renderings of the special tokens, an
+  omitted section opener, prose after the section), DeepSeek-V3 repairs (a
+  missing, bare, repeated or foreign-language fence line, a missing or other
+  type, R1 `<think>` reasoning, a missing call closer between calls,
+  truncated fenced arguments, a fence inside a string value, a V3.1 section
+  beside a V3 section), Kimi-K2 repairs (missing section and call closers,
+  an omitted section opener, the singular section tokens, ids without
+  `:IDX` or the `functions.` prefix, a dotted name, a colon in the name,
+  duplicate ids, Thinking reasoning, truncated arguments, a tool message),
+  Anthropic `tool_use` repairs (a block in a message and in a response with
+  a thinking block, reordered members, a block without its type, an
+  `"arguments"` key, stringified and cut-off input, a missing closing brace,
+  a streaming event, a tool result), Harmony repairs (analysis then a call,
+  the renderer layout, no start prefix, a preamble, `<|end|>` for
+  `<|call|>`, a missing end, `<|channel>`, a recipient without `functions.`
+  or after `<|message|>`, trailing text, cut-off arguments, built-in browser
+  and python recipients, a tool message), bare JSON calls (alone, in prose,
+  in a fence, in an array, arguments first, a trailing id, stringified
+  arguments, a call object nested in another's arguments), and negative
+  cases (including JSON content that is not call-shaped, records with a
+  name, nameless and non-object arguments, a pasted declaration and a JSON
+  Schema as arguments, a bare `[TOOL_CALLS]`, and nested unterminated call
+  objects); the header bytes cycle through five
+  fixed request configurations.
 
 ## Differential probes
 
@@ -587,6 +721,13 @@ regressions in `crates/core/tests/pattern.rs` and
 - Inline HTML declarations require uppercase ASCII names followed by ASCII
   whitespace. Lowercase declarations and uppercase names without separating
   whitespace are escaped; block HTML retains its separate declaration rule.
+- (`tool-call`) A dialect class run that dies inside a multi-byte
+  character now fails at that character's lead byte. Grammar classes read
+  whole code points, so the run consumed the lead byte and failed on a
+  continuation byte; the rejected attempt's span then ended between the two
+  bytes of `é` in `{"id":"a","type":"function","function":{"name"é`.
+  Regression: `rejected_span_never_splits_a_character_a_class_cannot_consume`
+  in `crates/core/tests/tool_call_recover.rs`.
 
 ### Bounded HTML grammar diagnostics
 
@@ -656,7 +797,7 @@ Exact discovery counts are tied to compiler, flags, and source mapping; they
 are not comparable coverage percentages across toolchain versions.
 
 **Smoke** (`verify.yml` on pull requests, main-branch pushes, and manual
-runs): `make fuzz` runs the corpus-feedback test once and all eight targets
+runs): `make fuzz` runs the corpus-feedback test once and all nine targets
 with the runner's default 1,000 mutations each. `TARGET` and `FUZZ_ARGS`
 apply only to a selected-target invocation. **Qualification** (this task, evidence committed
 under `docs/qualification/`): 10,000 iterations per target, matching both
@@ -679,7 +820,7 @@ fields are never reconstructed retrospectively. New Markdown reports
 add guarded engine/harness/runner hashes and a private executable snapshot.
 The full local gate and hosted smoke campaigns on the exact final commit
 provide separate final-integration evidence; hosted smoke must execute
-1,000 mutations for each of all eight targets.
+1,000 mutations for each of all nine targets.
 
 ### Recorded 10,000-mutation baselines
 
@@ -749,9 +890,10 @@ independent checks.
 
 The lightweight runner tests (`scripts/test-fuzz.py`) run in `make check`
 via `make hygiene`, including coverage-region admission and differential normalization tests;
-`scripts/test-fuzz-feedback.py`, also run by hygiene, proves that the retained corpus
-grows from new coverage on the real `patch` target end to end. `make fuzz`
-runs this feedback test before the campaigns. The feedback test reads the
+`scripts/test-fuzz-feedback.py` proves that the retained corpus grows from new
+coverage on the real `patch` target end to end. `make fuzz` (the CI `fuzz`
+job) runs this feedback test before the campaigns, and release qualification
+runs it too. The feedback test reads the
 pinned nightly channel from `rust-toolchain.toml` and sets the child process
 `RUSTUP_TOOLCHAIN` explicitly; a stable parent gate therefore uses the same
 registered LLVM coverage tooling, with no skips or alternate coverage path; the instrumented campaigns are a separate qualification

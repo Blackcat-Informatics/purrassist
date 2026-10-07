@@ -62,6 +62,21 @@ Current surfaces include:
 - Python, Rust, JavaScript/JSX, TypeScript/TSX grammar inspection and validated
   punctuation repairs. Grammar acceptance does not prove program correctness.
 - Journaled single-file replacement and conditional undo for coordinated writers.
+- Tool-call recovery from raw model output: weighted, invertible dialect
+  grammars with best-first markup repair, resolution against typed tools or
+  lossless `OpenAI`/MCP/Anthropic declarations (Draft 2020-12 or Draft-07
+  schemas), per-call outcomes with itemized repairs, conservative guards for
+  mutating tools, and re-emission as any dialect or the `OpenAI` `tool_calls`
+  array. Call markup of a dialect that is not built in yet, or not in the
+  request's allow-list, is reported as a rejected attempt
+  (`unsupported_dialect`), never silent content. Twelve dialects ship: `qwen3-coder-xml.v1`, `hermes.v1`,
+  `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`,
+  `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`,
+  `anthropic-tool-use.v1`, `harmony.v1`, and `bare-json.v1`; callers add
+  their own with the grammar DSL. Still tracked in issue #4: the
+  `pythonic.v1`, `gemma3-tool-code.v1` and `glm-4.5.v1` dialects, the
+  `*-stripped` variants, streaming recognition, and `purrassist-derive`. See
+  [tool-call recovery](docs/tool-calls/README.md).
 - CLI, stdio MCP, and resumable helper request/response adapters. No model is
   required, loaded, or contacted by default.
 
@@ -74,6 +89,7 @@ cargo run -p purrassist-cli -- call match_strings --root . < examples/match-stri
 cargo run -p purrassist-cli -- call resolve_string --root . < examples/resolve-string.json
 cargo run -p purrassist-cli -- decode --schema examples/temperature.schema.json \
   --input examples/temperature.input.txt
+cargo run -p purrassist-cli -- recover-tool-calls --tools tools.json --emit openai turn.txt
 cargo run -p purrassist-cli -- mcp --root /path/to/workspace
 ```
 
@@ -100,6 +116,32 @@ exposes the same witness-generation algebra: given `schema` and optional
 the generated `witness` value or non-empty `refutation` evidence, and a
 receipt; a governor hard stop while generating is reported as `exhausted`
 with `budget_exceeded` in the receipt's termination, never as `unsatisfiable`.
+
+`recover-tool-calls` reads one model turn as raw bytes from a file or stdin
+and recovers its tool calls against the declarations in `--tools`
+(`--tools-format openai`, `mcp`, or `anthropic`). It prints the same result as
+the `recover_tool_calls` MCP tool: per-call outcomes, itemized repairs and
+losses, rejected attempts, the tool-choice check, the turn's finish and its
+`OpenAI` `finish_reason`, an optional `--emit` re-emission (`openai` for the
+`tool_calls` array, or a dialect id), and a receipt. It never executes a call.
+The `finish_reason` is `"length"` whenever the caller's stop reason is a length stop (whatever the
+finish: a length stop is never reported as a clean finish, and the usable
+calls are still emitted), otherwise `"tool_calls"` exactly when the `OpenAI`
+emission holds a call, and `"stop"` otherwise;
+neither says whether anything else went wrong, so read `finish`, `verdict`
+and `rejected` as well. The command exits 0 when at least one call is usable (`usable_accepting_guesses`) and the
+tool-choice check passed, even if other attempts in the turn were rejected or
+are unparsed call markup (the JSON itemizes them, so a script keyed on the
+exit code never discards good calls because of one stray opener), and for
+clean content (finish `content_only`). It exits 3 when nothing is usable and
+the operation or a call is ambiguous, and 4 when nothing is usable (unresolved
+calls, only rejected or unparsed call markup, a `truncated` turn, only guesses
+that may not be used, such as a mutating tool's, or an `Unresolved` operation:
+an exhausted budget, invalid input) or the tool-choice check failed, even with
+usable calls: a violated tool choice is a contract failure the caller must
+see. Invocation errors exit 1. The printed JSON is the same whatever the exit
+code; the code only summarizes it. The [integration guide](docs/tool-calls/INTEGRATION.md)
+lists every option, the integrator guarantees, and the evidence for each.
 
 `prepare_helper`/`complete_helper` expose optional external-model helper
 proposals (see [helpers](docs/HELPERS.md)) as a two-call tool pair: the first
@@ -297,16 +339,31 @@ make check       # formatting, attribution/dependencies, lint, optimized tests, 
 make wasm-test   # compare native/WASI recovery, matching, embeddings, Markdown, and grammars
 make syntax-oracles  # compare fixed syntax probes to independent compilers
 make benchmark  # recovery quality assertions and latency baseline
-make fuzz       # eight coverage-guided targets and independent pattern/Markdown oracles
+make fuzz       # nine coverage-guided targets and independent pattern/Markdown oracles
 make resources  # allocations, heap/RSS, latency, artifact size, and uncached build cost
 make package    # Cargo verification and registered source/license archive audit
 ```
+
+JSON Schema validation implements two dialects, selected by `$schema`: Draft
+2020-12 (the default) and Draft-07 (`http://json-schema.org/draft-07/schema#`,
+with or without the `#`, as MCP servers commonly declare). Draft-07 support
+covers tuple `items` with `additionalItems`, `definitions`, both forms of
+`dependencies`, `$ref` overriding its siblings, `$id` base-URI changes and
+plain-name `#anchor` identifiers, and annotation-only `format`; Draft-07
+validations report validator `purrassist.schema.draft-07.v1`. Draft 2019-09,
+draft-06, and earlier dialects are rejected at compilation. Witness generation,
+schema-guided recovery, and the tool-declaration adapters follow whichever of
+the two dialects applies.
 
 The checked-in main Draft 2020-12 corpus contains 1,301 tests, with another 121
 selected optional cases exercised, plus the complete vendored `optional/format/`
 corpus (878 cases across every 2020-12 format, including RFC 5892/5893 IDNA2008
 contextual and Bidi rules) run under a dialect declaring the format-assertion
-vocabulary; Unicode 17
+vocabulary. All 929 required Draft-07 cases pass; of 911 Draft-07 `optional/`
+cases (formats judged by their annotation results), 905 pass, and the 6 that
+do not are listed by group with reasons: content assertion (annotation-only by
+design) and a Draft 2019-09 cross-draft reference (not an implemented dialect).
+Unicode 17
 normalization contains 20,034 cases. These suites, regression tests, fixed helper
 transcripts, and bounded mutation probes run locally. Full release qualification
 requires the exact-commit gates and registry acceptance described in the

@@ -1,0 +1,57 @@
+{
+  "description": "T5/F11 (a campaign failure): an Anthropic `tool_use` block and a streaming event share the opener `{`, so a rejected attempt opening with it ends at either one's closer: the block's `}` (it nests by braces), not only the event's NUL terminator. The rejection runs to the `}` closing the block (it used to end at the NUL, leaving a lone `}` as content).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "anthropic-tool-use.v1"
+  ],
+  "effects": {
+    "read_file": "read_only"
+  },
+  "input": "Result: {\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"read_file\",\"input\" oops, \"path\":\"a\"\u0000} done.",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        8,
+        88
+      ],
+      "dialect": "anthropic-tool-use.v1",
+      "candidate_dialects": [
+        "anthropic-tool-use.v1"
+      ],
+      "reason": "Malformed { at: 77 }",
+      "raw": "{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"read_file\",\"input\" oops, \"path\":\"a\"\u0000}"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Result: ",
+    " done."
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

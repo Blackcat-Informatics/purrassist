@@ -2,26 +2,89 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Ordered, source-addressed JSON with exact decimal values.
+pub mod incremental;
 mod number;
 mod parser;
-mod repair;
 use crate::contract::saturating_size as size;
+use crate::contract::{Governor, Resource, ScratchCharge, StopReason};
 use core::fmt::Write;
 use core::ops::Range;
-pub use number::{Number, NumberError};
+pub use incremental::recover_syntax;
+pub(crate) use incremental::{Region, recover_region};
+pub use number::{IntegerReading, Number, NumberError};
 pub use parser::{ParseError, ParseFailure, parse, parse_with};
-#[derive(Clone, Debug)]
-pub(crate) struct SyntaxEdit {
+
+/// One source edit made by tolerant syntax recovery
+/// ([`incremental::IncrementalRecovery`]).
+///
+/// `span` is a half-open byte range of the original input (absolute, even
+/// when the input was supplied in several chunks); an empty span is an
+/// insertion at that offset. `replacement` is the JSON text that stands in
+/// for the span, and `guessed` marks an invented value (a missing value, an
+/// unterminated string, a bare token read as a string, or an escape that had
+/// to be kept literally) rather than a purely syntactic correction.
+///
+/// ```
+/// use purrassist_core::{Budget, Governor, json::incremental::IncrementalRecovery};
+/// let mut governor = Governor::new(Budget::default());
+/// let mut parser = IncrementalRecovery::new(&governor);
+/// parser.feed(b"{a: 1", &mut governor).unwrap();
+/// let (_, _, edits) = parser.finish(&mut governor).unwrap();
+/// assert_eq!(edits[0].rule, "json.syntax.bare-key");
+/// assert_eq!(edits[0].span, 1..2);
+/// assert_eq!(edits[0].replacement, "\"a\"");
+/// assert!(!edits[0].guessed);
+/// assert_eq!(edits[1].rule, "json.syntax.close-container");
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SyntaxEdit {
+    /// Stable rule identifier, such as `json.syntax.missing-comma`.
     pub rule: &'static str,
-    pub span: core::ops::Range<usize>,
+    /// Original byte range replaced (empty for an insertion).
+    pub span: Range<usize>,
+    /// Replacement JSON text.
     pub replacement: String,
+    /// Whether the replacement invents content rather than correcting syntax.
     pub guessed: bool,
 }
-pub(crate) fn recover_syntax(
-    input: &str,
-    governor: &mut crate::Governor,
-) -> Result<(Node, usize, Vec<SyntaxEdit>), crate::StopReason> {
-    repair::recover(input, governor)
+
+/// Make room for one more element by doubling, charging the added capacity
+/// (at `T`'s portable [`ScratchCharge::CHARGE`]) before reserving it. Growth
+/// depends only on the logical length, never on the target or on chunking.
+fn reserve_one<T: ScratchCharge>(
+    values: &mut Vec<T>,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    if values.len() == values.capacity() {
+        let capacity = values.capacity().saturating_mul(2).max(4);
+        governor.charge(
+            Resource::ScratchBytes,
+            size((capacity - values.capacity()).saturating_mul(T::CHARGE)),
+        )?;
+        values
+            .try_reserve_exact(capacity - values.len())
+            .map_err(|_| StopReason::BudgetExceeded(Resource::ScratchBytes))?;
+    }
+    Ok(())
+}
+
+/// Append one scalar, charging doubled capacity before growing `output`.
+fn push_char(
+    output: &mut String,
+    character: char,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    if output.len() + character.len_utf8() > output.capacity() {
+        let capacity = (output.capacity().saturating_mul(2))
+            .max(output.len() + character.len_utf8())
+            .max(8);
+        governor.charge(Resource::ScratchBytes, size(capacity - output.capacity()))?;
+        output
+            .try_reserve_exact(capacity - output.len())
+            .map_err(|_| StopReason::BudgetExceeded(Resource::ScratchBytes))?;
+    }
+    output.push(character);
+    Ok(())
 }
 
 /// A JSON value occurrence with an optional original byte span.
@@ -96,35 +159,44 @@ impl Node {
     /// Resolve an RFC 6901 JSON Pointer. Ambiguous duplicate members fail lookup.
     #[must_use]
     pub fn pointer(&self, pointer: &str) -> Option<&Self> {
-        if pointer.is_empty() {
-            return Some(self);
-        }
         let mut current = self;
-        for part in pointer.strip_prefix('/')?.split('/') {
-            let mut key = String::new();
-            let mut chars = part.chars();
-            while let Some(character) = chars.next() {
-                key.push(if character == '~' {
-                    match chars.next()? {
-                        '0' => '~',
-                        '1' => '/',
-                        _ => return None,
-                    }
-                } else {
-                    character
-                });
-            }
+        for token in pointer_tokens(pointer)? {
+            let token = token?;
             current = match &current.value {
-                Value::Object(_) => current.get(&key)?,
-                Value::Array(items) => {
-                    if key.is_empty()
-                        || !key.bytes().all(|b| b.is_ascii_digit())
-                        || (key.len() > 1 && key.starts_with('0'))
-                    {
+                Value::Object(_) => current.get(&token)?,
+                Value::Array(items) => items.get(array_index(&token)?)?,
+                _ => return None,
+            };
+        }
+        Some(current)
+    }
+
+    /// Resolve an RFC 6901 JSON Pointer for mutation, with the lookup rules
+    /// of [`Node::pointer`] (ambiguous duplicate members fail).
+    ///
+    /// ```
+    /// use purrassist_core::json::{self, Node, Value};
+    /// let mut node = json::parse(r#"{"a":[1,{"b/c":2}],"d":1,"d":2}"#).unwrap();
+    /// *node.pointer_mut("/a/1/b~1c").unwrap() = Node::new(Value::Bool(true));
+    /// assert_eq!(node.to_json(), r#"{"a":[1,{"b/c":true}],"d":1,"d":2}"#);
+    /// assert!(node.pointer_mut("/d").is_none());
+    /// assert!(node.pointer_mut("/a/2").is_none());
+    /// ```
+    #[must_use]
+    pub fn pointer_mut(&mut self, pointer: &str) -> Option<&mut Self> {
+        let mut current = self;
+        for token in pointer_tokens(pointer)? {
+            let token = token?;
+            current = match &mut current.value {
+                Value::Object(members) => {
+                    let mut matches = members.iter_mut().filter(|member| member.key == token);
+                    let first = matches.next()?;
+                    if matches.next().is_some() {
                         return None;
                     }
-                    items.get(key.parse::<usize>().ok()?)?
+                    &mut first.value
                 }
+                Value::Array(items) => items.get_mut(array_index(&token)?)?,
                 _ => return None,
             };
         }
@@ -217,7 +289,7 @@ impl Node {
         total
     }
 
-    fn write_json(&self, output: &mut String) {
+    pub(crate) fn write_json(&self, output: &mut String) {
         match &self.value {
             Value::Null => output.push_str("null"),
             Value::Bool(value) => output.push_str(if *value { "true" } else { "false" }),
@@ -276,6 +348,48 @@ fn quote_into(input: &str, output: &mut String) {
         }
     }
     output.push('"');
+}
+
+/// The decoded reference tokens of an RFC 6901 pointer (`None` when it is
+/// neither empty nor starts with `/`; a token is `None` when it holds an
+/// invalid `~` escape).
+fn pointer_tokens(pointer: &str) -> Option<impl Iterator<Item = Option<String>> + '_> {
+    let rest = if pointer.is_empty() {
+        None
+    } else {
+        Some(pointer.strip_prefix('/')?)
+    };
+    Some(
+        rest.into_iter()
+            .flat_map(|rest| rest.split('/'))
+            .map(|part| {
+                let mut key = String::new();
+                let mut chars = part.chars();
+                while let Some(character) = chars.next() {
+                    key.push(if character == '~' {
+                        match chars.next()? {
+                            '0' => '~',
+                            '1' => '/',
+                            _ => return None,
+                        }
+                    } else {
+                        character
+                    });
+                }
+                Some(key)
+            }),
+    )
+}
+
+/// An RFC 6901 array index token: decimal digits without a leading zero.
+fn array_index(token: &str) -> Option<usize> {
+    if token.is_empty()
+        || !token.bytes().all(|byte| byte.is_ascii_digit())
+        || (token.len() > 1 && token.starts_with('0'))
+    {
+        return None;
+    }
+    token.parse().ok()
 }
 
 /// Escape a single JSON Pointer segment.

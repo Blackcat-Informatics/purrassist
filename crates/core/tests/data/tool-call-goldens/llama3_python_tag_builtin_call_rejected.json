@@ -1,0 +1,64 @@
+{
+  "description": "A Llama 3 built-in tool call (Python call syntax after <|python_tag|>) is not a JSON call: the tag commits the attempt, which is rejected at the first byte after it rather than read as content or reinterpreted, and the finish is unresolved.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "llama3-json.v1"
+  ],
+  "stop": "stop",
+  "input": "<|python_tag|>brave_search.call(query=\"weather in Paris\")",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        0,
+        14
+      ],
+      "dialect": "llama3-json.v1",
+      "candidate_dialects": [
+        "llama3-json.v1"
+      ],
+      "reason": "Malformed { at: 14 }",
+      "raw": "<|python_tag|>"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "brave_search.call(query=\"weather in Paris\")"
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

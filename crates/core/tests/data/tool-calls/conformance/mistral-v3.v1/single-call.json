@@ -1,0 +1,38 @@
+{
+  "description": "One call as the Mistral 7B Instruct v0.3 template renders it: [TOOL_CALLS], a space, and a one-element array whose object holds \"name\", \"arguments\" and the 9-character \"id\" (captured as the call's source id), then the end-of-sequence token (content).",
+  "markup": "[TOOL_CALLS] [{\"name\": \"get_weather\", \"arguments\": {\"city\": \"San Francisco\", \"unit\": \"fahrenheit\"}, \"id\": \"a1B2c3D4e\"}]</s>",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "get_weather",
+      "arguments": {"city": "San Francisco", "unit": "fahrenheit"},
+      "id": "a1B2c3D4e"
+    }
+  ]
+}

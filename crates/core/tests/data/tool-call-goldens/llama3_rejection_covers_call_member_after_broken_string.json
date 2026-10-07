@@ -1,0 +1,64 @@
+{
+  "description": "Stage-3 pass 5 (F16, a campaign failure: fuzz-tool-call seed 13): a Llama 3 object fails at a name value that lost its opening quote (`rgen\"`, at 53). The quote it lost flips which quotes open strings after the failure, so the call member written later (`\"name\": \"get_weather\"`) reads as text from the failure on; a member's spelling begins a call body wherever it is written, so the rejection covers the broken object to the `}` closing that body (10..102), and only the prose ` Done.` stays content (it was 10..53, leaving the call body as assistant text).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "effects": {
+    "get_weather": "read_only"
+  },
+  "input": "Checking.\n{\"parameters\": {\"city\": \"Bergen\"}, \"name\": rgen\", \"unit\": \"celsius\"}, \"name\": \"get_weather\"} Done.",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        10,
+        102
+      ],
+      "dialect": "llama3-json.v1",
+      "candidate_dialects": [
+        "llama3-json.v1"
+      ],
+      "reason": "Malformed { at: 53 }",
+      "raw": "{\"parameters\": {\"city\": \"Bergen\"}, \"name\": rgen\", \"unit\": \"celsius\"}, \"name\": \"get_weather\"}"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Checking.\n",
+    " Done."
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

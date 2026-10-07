@@ -1,0 +1,101 @@
+{
+  "description": "A call naming no tool whose arguments ({\"path\"}) fit two declared tools (read_file and list_dir): the call is Ambiguous with each candidate as an alternative, never usable.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_dir",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "kimi-k2.v1"
+  ],
+  "stop": "stop",
+  "input": "<|tool_calls_section_begin|><|tool_call_begin|>3<|tool_call_argument_begin|>{\"path\": \"a.rs\"}<|tool_call_end|><|tool_calls_section_end|>",
+  "policy": "tolerant",
+  "effects": {
+    "get_weather": "read_only",
+    "read_file": "read_only",
+    "list_dir": "read_only"
+  },
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "ambiguous",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "a.rs"
+      },
+      "candidate_dialects": [
+        "kimi-k2.v1"
+      ],
+      "outcome": "ambiguous",
+      "rules": [
+        "tool_call.name.from-arguments"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.name.from-arguments"
+  ]
+}

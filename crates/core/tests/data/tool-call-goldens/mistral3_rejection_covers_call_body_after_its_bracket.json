@@ -1,0 +1,57 @@
+{
+  "description": "Stage-3 pass 5 (F16, a campaign failure: fuzz-tool-call seed 11): a bracketless Mistral v3 list whose first object fails at its name (`oops`, at 32) ends at the bracket closing that object, and the second object, a call body cut inside a key (`{\"name\": \"read_file\", \"argu`), follows after only a separator. A call body after a rejected attempt's closed markup is its markup too: the rejection covers it to where the output cuts it (10..94), and no call body is left as assistant text (it was 10..65, leaving `, {\"name\": \"read_file\", \"argu` as content).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "effects": {
+    "read_file": "read_only"
+  },
+  "input": "Checking. [TOOL_CALLS] {\"name\": oops, \"arguments\": {\"path\": \"a\"}}, {\"name\": \"read_file\", \"argu",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        10,
+        94
+      ],
+      "dialect": "mistral-v3.v1",
+      "candidate_dialects": [
+        "mistral-v11.v1",
+        "mistral-v3.v1"
+      ],
+      "reason": "Malformed { at: 32 }",
+      "raw": "[TOOL_CALLS] {\"name\": oops, \"arguments\": {\"path\": \"a\"}}, {\"name\": \"read_file\", \"argu"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Checking. "
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

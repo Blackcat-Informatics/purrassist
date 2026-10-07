@@ -82,8 +82,9 @@ which `Pattern::compile` now delegates to with a default governor), repeated
 `Pattern::is_match` searches (including the backtracking search's own
 per-iteration state clones in `repeat`), the lexical-Jaccard token sets
 `matching.rs` computes for both strings at `Standard` effort and above, the
-malformed-token replacements JSON syntax repair re-encodes per repair
-(`json/repair.rs`), the lease/release sites in `matching.rs` and
+output JSON syntax recovery builds (`json/incremental.rs`: strings, arrays,
+members and edits charged by logical length as they grow, with no up-front
+per-input-byte allowance), the lease/release sites in `matching.rs` and
 `edits/fuzzy.rs`, Markdown's rendered-HTML output buffer
 (`markdown/render.rs`, via `ScratchString::reserve`/`into_string`), and helper
 request preparation (`crates/host/src/helpers.rs::Pending::prepare`, which now
@@ -97,6 +98,90 @@ explicitly retained past the call, e.g. `ScratchString::into_string`),
 matching `Receipt::retain_source`: the new collection types release when the
 memory they charged for is genuinely transient scratch this crate's own call
 stack controls, not memory a caller may go on holding indefinitely.
+
+Schema recovery runs on the generic best-first engine in `search.rs`. Each
+queued candidate charges `Work` for its deduplication key, one `Candidates`
+unit, and `key_len * 32 + 256` scratch bytes. (The grammar engine's repair of
+a stuck tool-call dialect attempt uses `Search::uncounted`, whose queue
+charges no `Candidates`: there, only readings that survive to compete for
+selection are counted; see `purrassist_core::grammar::cost`.) Popping the candidate releases
+the queue-entry share; the retained deduplication key's share (`key_len + 64`,
+once per distinct key) and the reused, `ScratchVec`-charged key buffer are
+released when the search is dropped, as are entries still queued when the
+first accepted cost is exhausted. A queued entry made stale by a cheaper
+duplicate is skipped when popped, without validation or expansion. The search
+order is the total key `(cost, tie, serial)`, where the state-supplied tie key
+makes equal-cost order independent of proposal emission order; schema recovery
+uses the unit tie key, so its order remains `(cost, serial)`.
+`Search::seed_with` admits a seed by its key and precomputed cost before its
+state and ledger are built: a duplicate at no lower cost charges only its
+key's `Work`, and its ledger (evidence, loss copies, guesses) is never built
+or charged.
+
+## Incremental JSON recovery and linear extraction
+
+`json::incremental::IncrementalRecovery` is the only tolerant JSON parser;
+`json::recover_syntax` is its single-chunk wrapper. It is push-based, keeps
+open containers on an explicit stack, and suspends anywhere: inside strings,
+escapes, `\u` surrogate pairs, bare tokens, comments, the two-character
+`//`, `/*` and `*/` delimiters, and multi-byte UTF-8 sequences. Lookahead
+characters are held unconsumed until the next character decides them, and
+end-of-input repairs happen only in `finish`. Each consumed byte charges one
+`Work` unit and each value one more; output storage is charged by logical
+length as it grows. Every charge is therefore a function of the byte
+sequence alone. `crates/core/tests/json_incremental.rs` checks that every
+single split point, and 64 seeded multi-split chunkings per input under two
+seeds, reproduce the batch node, spans, consumed length, edits and complete
+governor `Usage` over all recovery-golden inputs and fixtures, the JSON
+Schema suite's instance data (inputs up to 2,048 bytes) and suspension-heavy
+malformed inputs. The same file measures `Work` at 64 KiB, 256 KiB and 1 MiB
+for one large string value, wide and deep nesting, and repaired relaxed
+syntax; every work ratio is within 0.01% of its byte ratio (the test allows
+5%). For example, a 1,048,572-byte document holding one string costs
+1,048,574 Work.
+
+When strict parsing fails, schema recovery offers the value at offset 0 and
+every bracketed value as a candidate, each priced with the `json.extract`
+loss `5 + 10 × brackets` for each non-blank discarded side. Candidate
+discovery is linear. `scan::Tracker` (a string- and escape-aware, push-based
+tracker of maximal `{…}`/`[…]` regions) finds the next opener outside earlier
+parses, one tracked recovery parse reads each region, and every container
+nested in it becomes a candidate as a subtree, with the consumed end and
+edits its standalone recovery would have, without a re-parse. An opener a
+region parse consumed as text (inside a string, comment or bare token) gets
+one parse of its own unless an earlier such parse covered it; an opener
+nested in text that such a parse itself consumed as text is not offered
+again. Earlier recovery attempted a full parse from every bracket, which was
+quadratic in the number of brackets and charged permanent scratch per
+attempt.
+
+`schema::recovery::EXTRACT_WORK_PER_BYTE` (48) bounds discovery `Work` at
+`48 × n` for an `n`-byte input whose candidates are not nested in one another
+(its Rustdoc derives at most `39n`), and at `48 × (n + s)` in general, where
+`s` sums the source spans of nested candidates and is at most `n` times the
+nesting depth. The extraction test recovers, within that bound and without
+exhausting any budget:
+
+| Input | Bytes | Whole-recovery Work | Budget |
+| --- | ---: | ---: | --- |
+| Prose with 100,000 `{` (empty placeholders) | 200,047 | 800,141 | `Effort::Standard` |
+| A JSON string holding 100,000 `{` | 100,050 | 500,150 | `Effort::Standard` |
+| A 1 MiB tool-call argument in prose | 1,048,592 | 5,204,027 | Deep, scratch raised to 1 GiB |
+
+The 1 MiB case raises only the scratch limit: its recovered tree, candidate
+copy and search key storage exceed the presets' 64 MiB. Recovery goldens and
+a differential comparison against the previous implementation (goldens with
+and without guesses, the JSON Schema suite's instances, and curated prose
+with brackets) produce identical outcomes and ledgers; only usage changes.
+
+Derivative pattern matching (`Pattern::is_match` for
+`pattern.engine.derivative-v1`) steps the resumable byte-level automaton
+`pattern::DerivativeDfa` over the text's UTF-8 bytes. It charges one `Work`
+unit per byte plus the lazily built transition and nullability caches'
+`Work` and `ScratchBytes`, and no longer buffers the text as scalars;
+backtracking matching still admits its scalar buffer. A partially decoded
+character is an explicit `DfaState` value, so charges depend only on the
+byte sequence, not on how a caller splits it.
 
 ## Measured-allocation oracle
 
@@ -137,10 +222,64 @@ the committed test asserts:
   repetitions and alternatives. Its capture vectors, exploration stack and
   results now each own their admitted storage through shared scratch
   containers; their leases remain live until the actual allocations drop.
-- `json/repair.rs`'s syntax recovery re-encodes every repaired bare/malformed
+- The former JSON syntax repair re-encoded every repaired bare/malformed
   token's replacement through `Node::to_json`, one allocation per repaired
-  token, against a flat, too-small per-input-byte precharge; the precharge
-  is now sized against a per-token cost, not a per-byte guess.
+  token, against a flat, too-small per-input-byte precharge. Its successor,
+  `json/incremental.rs`, charges each replacement (at its worst-case quoted
+  length) and every output container and string as it grows, so no
+  per-input-byte precharge remains. The `json_recover_syntax` workload runs a
+  whole recovery, so its `K` now covers the same fixed receipt, search and
+  validation-log overhead as `recover`, which the old precharge used to
+  absorb.
+
+The `tool_call_recover` row, added with the tool-call cost bound, found
+tool-call recovery allocating more per call than it charged (about 0.7 KiB
+per call on its workload, and up to 22 KiB per call for a Hermes call with
+16 arguments). Resolution copied every argument value into each partial
+reading of a call and again for every later parameter (quadratic in the
+parameter count), serialized each reading's arguments into an uncharged
+buffer to digest it, and kept its readings, drafts, slots and alternatives
+in uncharged containers; the recognizer copied its attempt and failure
+lists each step, and merged configurations with a stable sort whose merge
+buffer was uncharged. Resolution now moves values instead of copying them,
+streams the digests, and charges its structures at portable sizes asserted
+against `size_of`; the recognizer leases its per-step copies and merges in
+place. The recovered calls, outcomes and receipts are unchanged apart from
+the scratch usage they report.
+
+Schema validation of each call's arguments (`Schema::validate_with`, which
+resolution runs on the recovery's governor) also allocated about 1 to
+1.5 KiB per call that it did not charge: the evaluator kept its recursion
+set, member names, evaluated properties and items, and exercised patterns in
+`BTreeSet`s whose nodes (several hundred bytes each on a 64-bit target)
+were never charged, cloned base URIs into its scope stack, held applicator branches in
+growing vectors, and formatted child keys and instance paths uncharged.
+Measured on a generated two-string-parameter tool schema, validating
+`{"path":"a.txt","content":"hello"}` allocated 1,131 bytes (peak live 1,006)
+against 170 charged (peak 112), so a scratch limit between them validated on
+uncharged memory. The `tool_call_recover` row's slack hid the gap: other
+charges of the same recovery exceed its allocation by far more. The
+evaluator (`schema/evaluate.rs`) now keeps those collections in
+`ScratchVec`/`ScratchMap` at portable element charges, charges the strings
+they hold while held, leases each child key, instance path, reference
+resolution and held branch evaluation before building it (keys at their
+exact lengths), and charges each violation message by its allocated
+capacity. The same input now allocates 374 bytes (peak live 318) against
+515 charged (peak 412).
+`allocation_oracle::oracle_tool_call_validation_charges_its_working_set` is
+a zero-slack control over generated and declared (`$ref`, `anyOf`) tool
+schemas with valid and invalid arguments: every allocation is admitted by a
+charge first, the allocator's peak and total never exceed the charged peak
+and total, a scratch limit one byte below the measured allocator peak
+returns `BudgetExceeded(ScratchBytes)`, and the charged peak suffices:
+
+| Arguments | Allocator peak | Allocator total | Charged peak | Charged total |
+| --- | ---: | ---: | ---: | ---: |
+| `{"path":"a.txt","content":"hello"}` | 318 | 374 | 412 | 515 |
+| `{"path":"a","content":"b","mode":"fast","count":3}` | 389 | 526 | 449 | 716 |
+| `{"path":"a.txt"}` (missing `content`) | 750 | 777 | 862 | 935 |
+| Declared schema, valid `$ref`, `anyOf` and array arguments | 1,453 | 2,799 | 1,661 | 4,097 |
+| Declared schema, three violations | 2,684 | 4,700 | 3,084 | 5,675 |
 
 `K` is fixed test slack for observed residual allocation at the two tested
 scales, including per-call overhead (`Parser`/`Renderer` construction, digest
@@ -169,7 +308,7 @@ not the operation's own.
 | `recover` | One malformed key, 2 valid padding properties | 32 padding properties | 8,192 |
 | `recover_composed_ambiguous` | Duplicate-key array, 2 elements | 32 elements | 4,096 |
 | `json_parse` | Object, 2 extra key/value pairs | 32 pairs | 1,024 |
-| `json_recover_syntax` | Unquoted/single-quoted object, 2 extra keys | 32 extra keys | 2,048 |
+| `json_recover_syntax` | Unquoted/single-quoted object, 2 extra keys | 32 extra keys | 8,192 |
 | `pattern_compile` | `^[A-Za-z]{2}$`-shaped pattern | 32 repeated atoms | 2,048 |
 | `pattern_match` | `identifier_` doubled against `^[A-Za-z_]+$` | repeated 32x | 8,192 |
 | `markdown_render` | Heading, 2-item list, 2-row table, 2 references | 32 of each | 4,096 |
@@ -186,6 +325,7 @@ not the operation's own.
 | `edits_unified` | One hunk, 2 padding lines before it | 32 padding lines | 2,048 |
 | `embeddings` | 2 non-matching candidates plus an exact one | 32 candidates | 2,048 |
 | `intent` | 2 unrelated rules plus a matching one | 32 rules | 2,048 |
+| `tool_call_recover` | Reasoning and prose, then 2 Qwen3-Coder XML calls alternating with 2 Hermes calls | 32 of each | 4,096 |
 
 These `K` values, the workloads at both scales, and the inequality above are
 asserted by `allocation_oracle.rs` itself; a regression that undercounts real
@@ -218,7 +358,7 @@ and predicate cuts own admitted capacities; the syntax estimate is leased and
 released on a failed compilation. Controls cover the formerly undercharged
 128-branch arena under a 140,000-byte budget, exact scratch and Work boundaries,
 and cancellation at initial, intermediate and final allocation checkpoints.
-The complete allocator oracle contains 30 controls.
+The complete allocator oracle contains 32 controls.
 
 The controls also require exact charged-peak budgets to succeed and one byte
 less to return typed scratch exhaustion, low Work to return typed exhaustion,
@@ -454,6 +594,317 @@ Full detail is in the committed report. Each row measures 200 samples in its own
 | tsx | 185,994 | 196,384 | 545 | 25 | 53,032 | 2,288 | 4,378,624 |
 
 C and Rust peak values are measured separately and must not be added as a simultaneous peak.
+
+## Tool-call recovery cost bound
+
+`ToolSet::recover` charges every step of `tool_call.recover.v1` to one
+governor, with the named constants of `purrassist_core::grammar::cost`.
+Recovering `n` output bytes charges exactly
+
+```text
+recover     = 2·n (retaining the output, the encoding scan) + recognition + resolution
+recognition = K_LEX·n + K_THREAD·(configuration steps) + K_EVENT·(segment events)
+            + K_CAPTURE·(captured bytes and history nodes materialized)
+            + K_ERR·(error configurations explored)
+            + K_CODEC·(codec scan bytes, name lookups and tree nodes)
+            + (JSON recovery units) + (class-automaton units) + (search key bytes)
+resolution  = one unit per member, option, alternative and validation step,
+              plus the recovered value, ids, checks and ledger entries
+            + (unparsed-markup scan: one unit per content byte read)
+```
+
+The unparsed-markup scan (`tool_call::detect_unparsed`) reads each reading's
+content once and, at each anchor, a bounded window (256 bytes, 64 for
+Harmony's message tokens); after a hit it resumes at the hit's end.
+`tool_call_cost::unparsed_markup_scan_is_linear` measures it on 64 KiB and
+1 MiB of prose (2.9 units per byte) and of inputs dense with each family's
+anchor (at most 29.5 units per byte, for `to=functions.` on every line),
+linear within 1.05x and under 32 units per byte. A turn that is a single
+call has no content to scan.
+
+Each dialect `d` of the request's allow-list keeps at most `B_d`
+configurations live per input byte, where `B_d` is
+`CompiledGrammar::configuration_bound()` (one per program location plus one
+per byte position of each literal spelling: canonical, closer variant,
+confusable and, in a `json-envelope` grammar, the single-quoted, bare-key and
+colonless JSON spellings of its envelope literals); `K_d = K_THREAD·B_d` is its
+per-byte term. The published bound is
+
+```text
+work ≤ (2 + K_LEX + Σ_d K_d)·n + K_ERR·E,   K_d = K_THREAD·B_d
+```
+
+where `E` is the number of error configurations the repair search explores,
+capped by the effort's `Work` budget (explicit `BudgetExceeded` beyond it).
+The configuration term is an upper bound per byte: on the fast path only a
+handful of the `B_d` configurations are live at any byte, and the remaining
+linear terms (segment events, captured bytes, codec scans, JSON recovery
+units, resolution) are each a small constant per byte: whole recoveries
+measure 10 to 26 units per byte in total (the throughput table below), far
+inside the slack of any built-in `K_d`.
+`crates/core/tests/tool_call_scale.rs` (`make corpus`) checks the bound on
+64 KiB and 1 MiB Qwen3-Coder XML, Hermes, Llama 3 JSON, Mistral v3, Mistral v11,
+DeepSeek-V3.1, DeepSeek-V3, Kimi-K2, Anthropic, Harmony and bare JSON
+string arguments
+(`E = 0`: no repair is recorded) and that the 64 KiB to 1 MiB work ratio is
+within 1.05x of the byte ratio; `crates/core/tests/tool_call_cost.rs` (`make
+check`) runs the same checks from 64 KiB to 256 KiB, and checks that pushing the same output in chunks of 1, 16 and 4096 bytes
+charges identical usage, and that adding a dialect to the allow-list adds
+at most its `K_d` per byte (measured, adding the dialects one at a time in
+the order Qwen3-Coder XML, Hermes, `OpenAI`, Llama 3 JSON, Mistral v3,
+Mistral v11, DeepSeek-V3.1, DeepSeek-V3, Kimi-K2, Anthropic, Harmony, bare
+JSON: each dialect adds 5 to 8 units per byte on an argument in its own
+format, the configurations of the call it now reads, and 0 on the others',
+except that adding Hermes adds 6 on a Qwen3-Coder XML argument (after
+Hermes rejects the shared `<tool_call>`, the bare `<function=>` element is a
+second Qwen3-Coder XML reading kept alive until the wrapped call ends),
+adding bare JSON adds 7 on a Hermes or Mistral v3 argument (whose call
+object it also reads until the wrapper's call covers it), and adding Mistral
+v3 or DeepSeek-V3.1 adds 1 on a Mistral v11 or Kimi-K2 argument and
+DeepSeek-V3.1 5 on a DeepSeek-V3 argument, which share tokens). These are checks of the published inequality on those
+inputs, not a proof for every input; the effort budgets bound everything
+else.
+
+`resources_doc_matches_cost_constants` parses this section and requires
+every value below to equal the code's.
+
+| Constant | Value | Meaning |
+| --- | ---: | --- |
+| `K_LEX` | 1 | `Work` per input byte for the lexical layer |
+| `K_THREAD` | 1 | `Work` per configuration step |
+| `K_EVENT` | 1 | `Work` per segment event |
+| `K_CAPTURE` | 1 | `Work` per captured byte or history node materialized |
+| `K_ERR` | 8 | `Work` per error configuration the repair search explores |
+| `K_COMPILE` | 1 | `Work` per grammar source byte and compiled table entry |
+| `K_PRINT` | 1 | `Work` per expression visited and byte printed by the printer |
+| `K_WITNESS` | 1 | `Work` per value a witness generates |
+| `K_CODEC` | 1 | `Work` per byte, lookup or node an argument codec visits |
+| `JSON_CODEC_STATE` | 1024 | `ScratchBytes` for one `json` codec slot's state |
+| `CLOSER_VARIANT` | 1 | Repair cost: a declared closer variant |
+| `TERMINAL_CONFUSABLE` | 1 | Repair cost: a confusable spelling of a literal |
+| `CONSUMED_CLOSER` | 1 | Repair cost: a closer the stop sequence consumed |
+| `INSERT_CLOSER` | 2 | Repair cost: a missing closer |
+| `GROUP_SPLIT` | 2 | Repair cost: an attempt reading several calls ended before the call it could not read |
+| `CLOSER_MISSPELLED` | 2 | Repair cost: a closer token one edit away from exactly one closer |
+| `TOKEN_MISSPELLED` | 2 | Repair cost: a markup token other than a closer one edit away from exactly one literal of the grammar |
+| `CLOSER_IN_VALUE` | 0 | Reading a closer's exact spelling inside a verbatim value as text (no repair) |
+| `TEXT_AFTER_CLOSER` | 0 | Each of the two readings of a verbatim value holding text after an unpaired closer (holding the text, or ending the value at the closer and dropping it): equal, so the call is ambiguous |
+| `DELETE_STRAY_CLOSER` | 3 | Repair cost: a stray closer |
+| `REASONING_UNCLOSED` | 4 | Repair cost: a reasoning block closed at a call opener |
+| `REJECT` | 16 | Cost of rejecting an unrepairable call attempt |
+| `MISSING_PARAMETER_CLOSE` | 2 | Repair cost: a value ended at a declared parameter's opener |
+| `FRAMING_NEWLINE` | 0 | Reading one XML framing newline |
+| `STRINGIFIED_ARGUMENTS` | 0 | Decoding stringified arguments |
+| `JSON_REPAIR` | 1 | One non-guessed JSON recovery edit in a value |
+| `JSON_GUESS` | 4 | One guessed JSON recovery edit in a value |
+| `STRAY_CLOSER_GAP` | 32 | Longest whitespace run before an absorbed stray closer |
+| `QUEUED_REPORT` | 96 | `ScratchBytes` per queued recognizer report |
+| `EXTRACT_PROSE` | 2 | Repair cost: prose dropped inside a call |
+| `EXTRACT_FENCE` | 1 | Repair cost: a fence marker dropped inside a call |
+| `UNDECLARED_NAME` | 4 | Selection weight of a call whose name denotes no declared tool |
+| `RECOVER_WORK_PER_BYTE` | 32 | `Work` per output byte `ToolRecoveryRequest::sized` adds |
+| `RECOVER_SCRATCH_PER_BYTE` | 48 | `ScratchBytes` per output byte `ToolRecoveryRequest::sized` adds |
+| `RECOVER_OPENER_CANDIDATE_DIVISOR` | 8 | `ToolRecoveryRequest::sized` adds `⌈preset.candidates / 8⌉` `Candidates` per call opener |
+
+| Built-in dialect | `B_d` | `K_d` per byte |
+| --- | ---: | ---: |
+| `anthropic-tool-use.v1` | 3391 | 3391 |
+| `bare-json.v1` | 378 | 378 |
+| `deepseek-v3.1.v1` | 2945 | 2945 |
+| `deepseek-v3.v1` | 4793 | 4793 |
+| `harmony.v1` | 3890 | 3890 |
+| `hermes.v1` | 1137 | 1137 |
+| `kimi-k2.v1` | 2436 | 2436 |
+| `llama3-json.v1` | 986 | 986 |
+| `mistral-v11.v1` | 136 | 136 |
+| `mistral-v3.v1` | 2228 | 2228 |
+| `openai-tool-calls.v1` | 6665 | 6665 |
+| `qwen3-coder-xml.v1` | 971 | 971 |
+
+The default request allows all twelve, so its bound is
+`(2 + 1 + 29956)·n + 8·E = 29959·n + 8·E`.
+
+### Budgets for large outputs and busy turns
+
+Fixed effort presets are sized for ordinary turns, so a large output or a
+turn with many calls needs a budget that grows with it.
+`ToolRecoveryRequest::sized(effort, output)` (built-in dialects) and
+`ToolRecoveryRequest::sized_for(effort, output, dialects)` derive one in two
+phases. First a linear, allocation-free pre-scan counts the output's call
+openers `m` (`DialectSet::call_openers`: each byte offset where a dialect's
+`call` production can open, counted once per such dialect, so the
+`<tool_call>` that Qwen3-Coder XML and Hermes share counts twice, and
+Qwen3-Coder XML counts every `<function=` too, since a bare function element
+is a call; Llama 3 JSON, Anthropic `tool_use` and bare JSON, whose attempts
+open at `{` and commit only on call-shaped evidence, each count every `{`). Then
+`ToolRecoveryRequest::sized_budget(effort, n, m)` sizes the budget from the
+preset, the output length `n`, and the constants above:
+
+```text
+work          = preset.work          + RECOVER_WORK_PER_BYTE    · n   (32 per byte)
+scratch_bytes = preset.scratch_bytes + RECOVER_SCRATCH_PER_BYTE · n   (48 per byte)
+input_bytes   = max(preset.input_bytes, n)
+candidates    = preset.candidates
+              + ⌈preset.candidates / RECOVER_OPENER_CANDIDATE_DIVISOR⌉ · m
+```
+
+The candidate term is the effort's multiplier per opener: 1 at `Exact`, 2 at
+`Quick`, 16 at `Standard`, 128 at `Deep`, and 1,024 at `Maximum`. Competing
+readings are charged per call attempt (a second dialect's attempt at a
+shared opener, a call's second reading, each further segmentation of a
+contested span), so a fixed preset that suits an ordinary turn exhausts on
+a busy one; the opener term grows with the calls and keeps every limit
+finite and linear in `n` (`m ≤ n`). Recovery folds the segmentations of a
+contested span that recover the same calls before it enumerates
+whole-message readings, so such spans add readings instead of multiplying
+them. The derivation is saturating and deterministic; every other limit is
+the preset's, so repair search stays bounded by the effort, and readings
+that genuinely multiply (a call with many repeated parameters) still exhaust
+as `BudgetExceeded(Candidates)`.
+
+`tool_call_cost::busy_turn_resolves_every_call_under_sized` recovers 64
+Qwen3-Coder XML calls, each needing the
+`tool_call.markup.missing-parameter-close` repair and each followed by a
+stray `<tool_call>` that both dialects contest (`m = 320`: two openers at
+each `<tool_call>` and one at each `<function=`): the unmodified
+`Effort::Standard` preset (128 candidates) exhausts explicitly, and
+`sized(Effort::Standard, output)` (128 + 16 · 320 = 5,248 candidates)
+recovers every call `Resolved`, charging 129 candidates.
+`tool_call_cost::per_call_competition_scales_with_calls` does the same for
+64 read-only calls that each have a near-miss name and a repeated parameter
+(192 candidates), and
+`tool_call_cost::crafted_reading_explosion_exhausts_explicitly` requires a
+call with 16 doubled parameters (2^16 readings) to exhaust explicitly at
+every effort: `Candidates`, or at `Maximum`, whose larger per-opener
+candidate share lets the readings outgrow it first, `ScratchBytes`. The host and CLI tests
+`tool_call_tools::busy_turn_resolves_every_call_by_default` and
+`tool_calls_cli::busy_turn_resolves_every_call_by_default` recover the same
+64-call turn through the MCP tool and the CLI with no effort option.
+
+`tool_call_scale::one_mib_argument_fits_published_budget` recovers a 1 MiB
+string argument in each built-in dialect's shape and checks that the call is
+`Resolved` under `sized(effort, output)` for every effort from `Quick` to
+`Maximum` (and, for Qwen3-Coder XML, Hermes, Llama 3 JSON, Mistral v3,
+Mistral v11, DeepSeek-V3.1, DeepSeek-V3, Kimi-K2, Anthropic `tool_use`,
+Harmony and bare JSON, under the unmodified `Effort::Maximum` preset), with
+identical charges in every case, peak scratch at most 16 bytes per input
+byte for those eleven, and
+at most `RECOVER_SCRATCH_PER_BYTE` for `OpenAI` stringified arguments, whose
+escaped string is also decoded, recorded as the decoding's replacement and
+parsed again. The charges include the call's schema validation (see
+"Measured-allocation oracle"):
+
+| Input | Bytes | Work | Work per byte | Peak scratch | Scratch per byte |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Qwen3-Coder XML `<parameter>` string | 1,048,663 | 17,831,002 | 17.00 | 11,644,176 | 11.10 |
+| Hermes JSON string argument | 1,048,648 | 17,833,269 | 17.01 | 11,649,509 | 11.11 |
+| Llama 3 JSON string argument | 1,048,624 | 12,588,743 | 12.01 | 8,397,746 | 8.01 |
+| Mistral v3 JSON string argument | 1,048,657 | 17,833,607 | 17.01 | 11,647,317 | 11.11 |
+| Mistral v11 JSON string argument | 1,048,632 | 10,490,105 | 10.00 | 8,399,489 | 8.01 |
+| DeepSeek-V3.1 JSON string argument | 1,048,720 | 10,493,971 | 10.01 | 8,397,978 | 8.01 |
+| DeepSeek-V3 fenced JSON string argument | 1,048,741 | 14,692,492 | 14.01 | 8,399,375 | 8.01 |
+| Kimi-K2 JSON string argument | 1,048,726 | 10,508,318 | 10.02 | 8,398,198 | 8.01 |
+| Anthropic `tool_use` JSON string argument | 1,048,649 | 12,588,649 | 12.00 | 8,398,045 | 8.01 |
+| Harmony JSON string argument | 1,048,686 | 12,599,510 | 12.01 | 8,397,816 | 8.01 |
+| Bare JSON string argument | 1,048,623 | 12,588,732 | 12.01 | 8,397,745 | 8.01 |
+| `OpenAI` stringified string argument | 1,048,679 | 27,273,065 | 26.01 | 47,200,607 | 45.01 |
+
+`OpenAI` stringified arguments are decoded and parsed again, and an element
+that starts with `"id"` becomes a call attempt only at its `"type":
+"function"` or `"function"` member (`commit`, so an Anthropic message's
+leading `"id"` stays content); a program with commit points checks each live
+configuration for them, about 2 work per byte. The element's function object
+`{"name": ..., "arguments": "..."}` is also a bare JSON call, so the
+`bare-json.v1` dialect reads and decodes the same stringified arguments
+until the element's call covers it (9 of the 26 work per byte); in the same
+way it reads the call object inside a Hermes `<tool_call>` or a Mistral v3
+array (7 of their 17). The recognizer releases the scratch of a reading it
+drops unread (an attempt that began inside another attempt's committed
+span) as soon as it drops it, and the engine's history arena is released
+when the recognizer finishes, so such a second reading adds little to the
+peak.
+An attempt that opens inside another attempt's committed span, where no
+reading of the turn can take it (a Harmony message's second opener at its
+`<|channel|>`, a DeepSeek-V3.1 attempt inside a DeepSeek-V3 section), is
+abandoned as soon as the turn level sees it open, so it is not read to the
+end. A wrapped Qwen3-Coder XML call is read twice: under the default
+allow-list Hermes also attempts the `<tool_call>` and rejects it at the
+`<function=` body, and in that segmentation the bare function element is a
+call attempt of its own, kept until the wrapped call ends (6 of its 17 work
+per byte). All use the
+default request (all twelve built-in dialects); charging schema
+validation's working set left these measurements unchanged, because
+validating one string argument peaks below the recognizer's buffers. The
+constants leave headroom over these fast-path measurements; inputs that need repair
+search spend from the preset part of the budget, and exhaustion is reported
+as `BudgetExceeded` naming the resource.
+
+## Tool-call recovery throughput (illustrative)
+
+`crates/core/benches/tool_calls.rs` (`cargo bench -p purrassist-core --bench
+tool_calls`; `-- --list` lists its workloads, `-- NAME` runs one) recovers a
+write call with a 1 KiB, 64 KiB or 1 MiB string argument as Qwen3-Coder XML,
+Hermes, `OpenAI` stringified arguments, Llama 3 JSON, Mistral v3, Mistral
+v11, DeepSeek-V3.1, DeepSeek-V3, Kimi-K2, Anthropic `tool_use`, Harmony,
+bare JSON, and a Qwen3-Coder XML call followed by a Hermes call under a Qwen3-Coder + Hermes allow-list, each under
+`ToolRecoveryRequest::sized_for(Effort::Standard, output, dialects)`, and feeds a 64 KiB
+Qwen3-Coder XML output to a `Recognizer` in chunks of 1, 16 and 4096 bytes,
+asserting identical charged usage for every chunking. Work and peak scratch
+per byte are functions of the input alone; the wall-clock columns are
+**illustrative only**: one run on one machine, not a qualification
+threshold. This bench is deliberately not one of the pinned
+`LATENCY_CASES`/`RECOVERY_CASES`/`PROFILING_CASES` sets of
+`scripts/check-resource-limits.py`, so no committed report or limit depends
+on its timings.
+
+Recorded on Linux 7.2.7-1-cachyos x86_64 (AMD RYZEN AI MAX+ 395 w/ Radeon
+8060S, 32 hardware threads), `rustc 1.100.0-nightly (4b6d04e70 2026-09-13)`,
+commit `dd95ec8` with this change applied:
+
+| Workload | Bytes | Samples | Median ms | MiB/s | Work/byte | Peak scratch/byte |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `qwen_xml_1kib` | 1111 | 200 | 0.537 | 1.97 | 21.98 | 108.94 |
+| `qwen_xml_64kib` | 65623 | 30 | 25.895 | 2.42 | 18.83 | 12.66 |
+| `qwen_xml_1mib` | 1048663 | 7 | 405.965 | 2.46 | 18.78 | 11.10 |
+| `hermes_1kib` | 1096 | 200 | 0.800 | 1.31 | 24.35 | 125.31 |
+| `hermes_64kib` | 65608 | 30 | 41.839 | 1.50 | 18.87 | 12.74 |
+| `hermes_1mib` | 1048648 | 7 | 670.350 | 1.49 | 18.78 | 11.11 |
+| `openai_stringified_1kib` | 1127 | 200 | 0.933 | 1.15 | 34.17 | 126.54 |
+| `openai_stringified_64kib` | 65639 | 30 | 49.424 | 1.27 | 27.89 | 45.15 |
+| `openai_stringified_1mib` | 1048679 | 7 | 782.243 | 1.28 | 27.78 | 45.01 |
+| `llama3_json_1kib` | 1072 | 200 | 0.508 | 2.01 | 18.58 | 118.48 |
+| `llama3_json_64kib` | 65584 | 30 | 26.325 | 2.38 | 13.86 | 8.57 |
+| `llama3_json_1mib` | 1048624 | 7 | 421.964 | 2.37 | 13.78 | 8.01 |
+| `mistral_v3_1kib` | 1105 | 200 | 0.805 | 1.31 | 24.46 | 122.59 |
+| `mistral_v3_64kib` | 65617 | 30 | 42.170 | 1.48 | 18.87 | 12.71 |
+| `mistral_v3_1mib` | 1048657 | 7 | 674.341 | 1.48 | 18.78 | 11.11 |
+| `mistral_v11_1kib` | 1080 | 200 | 0.472 | 2.18 | 15.17 | 119.08 |
+| `mistral_v11_64kib` | 65592 | 30 | 24.684 | 2.53 | 11.83 | 8.61 |
+| `mistral_v11_1mib` | 1048632 | 7 | 394.859 | 2.53 | 11.78 | 8.01 |
+| `deepseek_v31_1kib` | 1168 | 200 | 0.603 | 1.85 | 17.34 | 113.30 |
+| `deepseek_v31_64kib` | 65680 | 30 | 25.166 | 2.49 | 11.88 | 8.66 |
+| `deepseek_v31_1mib` | 1048720 | 7 | 389.356 | 2.57 | 11.78 | 8.01 |
+| `deepseek_v3_1kib` | 1189 | 200 | 0.911 | 1.24 | 24.02 | 139.46 |
+| `deepseek_v3_64kib` | 65701 | 30 | 40.588 | 1.54 | 15.93 | 9.16 |
+| `deepseek_v3_1mib` | 1048741 | 7 | 643.825 | 1.55 | 15.79 | 8.01 |
+| `kimi_k2_1kib` | 1174 | 200 | 0.731 | 1.53 | 29.47 | 134.66 |
+| `kimi_k2_64kib` | 65686 | 30 | 24.533 | 2.55 | 12.09 | 9.03 |
+| `kimi_k2_1mib` | 1048726 | 7 | 382.674 | 2.61 | 11.80 | 8.01 |
+| `anthropic_tool_use_1kib` | 1097 | 200 | 0.493 | 2.12 | 18.07 | 110.87 |
+| `anthropic_tool_use_64kib` | 65609 | 30 | 25.379 | 2.47 | 13.85 | 8.49 |
+| `anthropic_tool_use_1mib` | 1048649 | 7 | 431.944 | 2.32 | 13.78 | 8.01 |
+| `harmony_1kib` | 1134 | 200 | 0.656 | 1.65 | 27.06 | 134.43 |
+| `harmony_64kib` | 65646 | 30 | 25.628 | 2.44 | 14.01 | 8.96 |
+| `harmony_1mib` | 1048686 | 7 | 399.391 | 2.50 | 13.79 | 8.01 |
+| `bare_json_1kib` | 1071 | 200 | 0.514 | 1.99 | 18.59 | 117.99 |
+| `bare_json_64kib` | 65583 | 30 | 27.293 | 2.29 | 13.86 | 8.57 |
+| `bare_json_1mib` | 1048623 | 7 | 431.933 | 2.32 | 13.78 | 8.01 |
+| `mixed_qwen_hermes_1kib` | 1184 | 200 | 0.396 | 2.85 | 15.34 | 36.97 |
+| `mixed_qwen_hermes_64kib` | 65696 | 30 | 18.475 | 3.39 | 13.53 | 9.02 |
+| `mixed_qwen_hermes_1mib` | 1048736 | 7 | 293.477 | 3.41 | 13.50 | 8.53 |
+| `push_chunk_1` | 65623 | 30 | 15.026 | 4.16 | 8.01 | 5.21 |
+| `push_chunk_16` | 65623 | 30 | 14.716 | 4.25 | 8.01 | 5.21 |
+| `push_chunk_4096` | 65623 | 30 | 14.713 | 4.25 | 8.01 | 5.21 |
 
 ## Resource limits
 

@@ -1,0 +1,57 @@
+{
+  "description": "T1/F7: a bare <function= element nesting another: the attempt is rejected and its span never ends inside a literal: it runs through the > of </function> (the grammar stopped after the prefix </function), so content is only the prose around it.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "pre <function=f><function=f><parameter=a>1</parameter></function> post",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        4,
+        65
+      ],
+      "dialect": "qwen3-coder-xml.v1",
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "reason": "Malformed { at: 16 }",
+      "raw": "<function=f><function=f><parameter=a>1</parameter></function>"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "pre ",
+    " post"
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

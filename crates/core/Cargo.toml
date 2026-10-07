@@ -53,6 +53,57 @@ path = "examples/fuzz_matching.rs"
 name = "fuzz-patch"
 path = "examples/fuzz_patch.rs"
 
+[[example]]
+name = "fuzz-tool-call"
+path = "examples/fuzz_tool_call.rs"
+
+[[example]]
+name = "tool-call-corpus"
+path = "examples/tool_call_corpus.rs"
+
+# Corpus suites: vendored conformance corpora, generated evaluation corpora,
+# exhaustive oracles and 1 MiB scale runs. `make corpus` (the CI `corpus`
+# job) runs them; `test = false` keeps them out of `cargo test` and `make check`.
+[[test]]
+name = "correction_evaluation"
+path = "tests/correction_evaluation.rs"
+test = false
+
+[[test]]
+name = "corruption_oracle"
+path = "tests/corruption_oracle.rs"
+test = false
+
+[[test]]
+name = "markdown_corpus"
+path = "tests/markdown_corpus.rs"
+test = false
+
+[[test]]
+name = "matching_oracle"
+path = "tests/matching_oracle.rs"
+test = false
+
+[[test]]
+name = "pattern_corpus"
+path = "tests/pattern_corpus.rs"
+test = false
+
+[[test]]
+name = "schema_conformance"
+path = "tests/schema_conformance.rs"
+test = false
+
+[[test]]
+name = "tool_call_scale"
+path = "tests/tool_call_scale.rs"
+test = false
+
+[[test]]
+name = "unicode_conformance"
+path = "tests/unicode_conformance.rs"
+test = false
+
 [[bench]]
 name = "recovery"
 harness = false
@@ -63,4 +114,8 @@ harness = false
 
 [[bench]]
 name = "latency"
+harness = false
+
+[[bench]]
+name = "tool_calls"
 harness = false

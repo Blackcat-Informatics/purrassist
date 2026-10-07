@@ -1,0 +1,38 @@
+{
+  "description": "A whole Messages API response (id, type message, role, model, content, stop_reason tool_use, usage) whose content holds a thinking block (reasoning) and a tool_use block.",
+  "markup": "{\"id\":\"msg_01Aq9w938a90dw8q\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-x\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"I should look up the weather.\",\"signature\":\"EqQBCgIYAhIM\"},{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"get_weather\",\"input\":{\"city\":\"Oslo\"}}],\"stop_reason\":\"tool_use\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":12,\"output_tokens\":34}}",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "get_weather",
+      "id": "toolu_01",
+      "arguments": {"city":"Oslo"}
+    }
+  ]
+}

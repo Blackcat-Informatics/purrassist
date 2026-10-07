@@ -31,7 +31,7 @@ use crate::text::{
 use crate::{
     digest::Digest,
     json::Node,
-    wire::{array, integer, object, string},
+    wire::{WireValue, array, integer, object, string},
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -78,19 +78,19 @@ pub struct RankedMatch {
     /// Evidence from exact, lexical, distance, phonetic, and alias comparisons.
     pub signals: Vec<Signal>,
 }
-impl RankedMatch {
+impl WireValue for RankedMatch {
     /// Serialize the selected identity and its signals. These exact JSON bytes
-    /// identify an alternative in the receipt.
+    /// identify an alternative in the receipt. Encoding is infallible.
     ///
     /// ```
     /// use purrassist_core::{Outcome, matching::{self, Candidate, MatchRequest, SelectionPolicy}};
+    /// use purrassist_core::wire::WireValue;
     /// let result = matching::resolve("tea", &[Candidate::new("tea-id", "tea")],
     ///     &MatchRequest::default(), SelectionPolicy::default());
     /// let Outcome::Resolved(answer) = result.outcome else { panic!("expected exact match") };
     /// assert_eq!(answer.to_node().pointer("/id").unwrap().as_str(), Some("tea-id"));
     /// ```
-    #[must_use]
-    pub fn to_node(&self) -> Node {
+    fn to_node(&self) -> Node {
         object([
             ("id", string(&self.candidate.id)),
             ("text", string(&self.candidate.text)),

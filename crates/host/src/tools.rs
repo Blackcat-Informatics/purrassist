@@ -10,6 +10,7 @@ mod intent;
 mod markdown;
 mod paths;
 mod registry;
+mod tool_calls;
 mod validate;
 mod witness;
 
@@ -23,7 +24,7 @@ use purrassist::{
     json::{Node, Value},
     matching::{self, Candidate, MatchRequest, SelectionPolicy as StringSelectionPolicy},
     syntax::{self, Language},
-    wire::{array, object, string},
+    wire::{WireValue, array, object, string},
 };
 use std::path::Path;
 
@@ -235,6 +236,61 @@ pub fn validate_json(args: &Node) -> Result<Node, String> {
     validate::call(args, None)
 }
 
+/// Recover the tool calls of one model turn from raw output bytes.
+///
+/// This is the exact operation the `recover_tool_calls` tool exposes, shared
+/// by the CLI `purrassist recover-tool-calls` command so every surface builds
+/// the same request.
+///
+/// `options` is the tool's argument object without `output` (an `output`
+/// member, if present, is ignored in favour of `output`): `tools` (required:
+/// the declarations, as JSON), `tools_format` (`openai`, the default, `mcp`,
+/// or `anthropic`), `dialects` (built-in dialect ids; default every
+/// built-in), `stop` (`stop`, `length`, `tool_calls`, `content_filter`,
+/// `unknown`, or `{"stop_sequence": STRING}`), `tool_choice` (an `OpenAI`
+/// form: a string or `{"type":"function",..}`; or an Anthropic object form),
+/// `policy` (`per-tool`, `structural`, `tolerant`), `effects` (tool name to
+/// `read-only` or `mutating`), `reasoning` (`separate`, `separate-open`,
+/// `content`), `ambiguity` (`report`, `reject`), `ids` (`"source"` or
+/// `{"prefix": STRING, "start": INTEGER}`), `emit` (`none`, `openai`, or a
+/// dialect id), and `effort`.
+///
+/// `output` need not be UTF-8: each invalid run is recorded as a
+/// `tool_call.input.invalid-utf8` loss and the receipt retains the exact
+/// bytes; a run inside a call's argument, id or parameter name is also
+/// read as U+FFFD and recorded on the call as a
+/// `tool_call.value.invalid-utf8` data loss (the call is kept, at most a
+/// best guess). The budget is the effort preset sized for the output's length
+/// (`ToolRecoveryRequest::sized`), and one governor is charged for
+/// declaration compilation, the dialect allow-list, and recovery.
+///
+/// ```
+/// use purrassist::{Outcome, json};
+/// let options = json::parse(
+///     r#"{"tools":[{"type":"function","function":{"name":"ls","parameters":{"type":"object"}}}]}"#,
+/// )?;
+/// let output = b"<tool_call>{\"name\": \"ls\", \"arguments\": {}}</tool_call>";
+/// let result = purrassist_host::tools::recover_tool_calls(output, &options)?;
+/// let Outcome::Resolved(calls) = result.outcome else { panic!("resolved") };
+/// assert_eq!(calls.calls[0].tool.as_deref(), Some("ls"));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
+/// # Errors
+/// Returns a message for options that are malformed (an unknown member, an
+/// unknown enumeration value, a malformed `tool_choice`, an unknown or
+/// repeated dialect) and for declarations that are not valid (not strict
+/// JSON, an invalid definition, a name collision). Exhaustion and
+/// cancellation are never errors: they are an `Unresolved` result whose
+/// receipt records the stop, as are request errors core recovery itself
+/// reports (an effects override or forced choice naming an undeclared tool).
+pub fn recover_tool_calls(
+    output: &[u8],
+    options: &Node,
+) -> Result<AssistResult<purrassist::tool_call::ToolCalls>, String> {
+    tool_calls::recover(output, options, None)
+}
+
 fn governor(budget: Budget, cancellation: Option<&CancellationToken>) -> Governor {
     cancellation.map_or_else(
         || Governor::new(budget),
@@ -419,17 +475,6 @@ fn resolve_string(args: &Node, cancellation: Option<&CancellationToken>) -> Resu
                 receipt,
             }
         }
-    };
-    let result = AssistResult {
-        outcome: match result.outcome {
-            Outcome::Resolved(value) => Outcome::Resolved(value.to_node()),
-            Outcome::BestGuess(value) => Outcome::BestGuess(value.to_node()),
-            Outcome::Ambiguous(values) => {
-                Outcome::Ambiguous(values.iter().map(matching::RankedMatch::to_node).collect())
-            }
-            Outcome::Unresolved => Outcome::Unresolved,
-        },
-        receipt: result.receipt,
     };
     Ok(result.to_node())
 }

@@ -1,0 +1,75 @@
+{
+  "description": "Stringified OpenAI arguments whose inner string is unterminated: the string is closed (json.syntax.unterminated-string, a guess) on a read-only tool.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "n": {
+              "type": "integer"
+            },
+            "flag": {
+              "type": "boolean"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "openai-tool-calls.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "{\"type\": \"function\", \"function\": {\"name\": \"f\", \"arguments\": \"{\\\"path\\\": \\\"a.rs}\"}}",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "path": "a.rs}"
+      },
+      "candidate_dialects": [
+        "openai-tool-calls.v1"
+      ],
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.arguments.decode-string",
+        "json.syntax.unterminated-string",
+        "json.syntax.close-container",
+        "tool_call.id.dedup"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.arguments.decode-string",
+    "json.syntax.unterminated-string",
+    "json.syntax.close-container",
+    "tool_call.id.dedup"
+  ]
+}

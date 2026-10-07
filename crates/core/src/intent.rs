@@ -84,7 +84,7 @@ impl Domain {
     /// let mut governor = Governor::new(Budget::default());
     /// let result = Domain::default().resolve_governed("unknown", &[], &mut governor);
     /// assert_eq!(result.outcome, Outcome::Unresolved);
-    /// assert_eq!(result.receipt.sources[0].text, "unknown");
+    /// assert_eq!(result.receipt.sources[0].text(), Some("unknown"));
     /// ```
     #[must_use]
     pub fn resolve_governed(
