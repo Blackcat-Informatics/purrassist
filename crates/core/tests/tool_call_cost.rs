@@ -45,6 +45,7 @@ fn constants() -> Vec<(&'static str, u64)> {
         ("GROUP_SPLIT", cost::GROUP_SPLIT),
         ("CLOSER_MISSPELLED", cost::CLOSER_MISSPELLED),
         ("TOKEN_MISSPELLED", cost::TOKEN_MISSPELLED),
+        ("CLOSER_IN_VALUE", cost::CLOSER_IN_VALUE),
         ("DELETE_STRAY_CLOSER", cost::DELETE_STRAY_CLOSER),
         ("REASONING_UNCLOSED", cost::REASONING_UNCLOSED),
         ("REJECT", cost::REJECT),
@@ -301,6 +302,77 @@ fn one_mib_argument_work_bound() {
         assert!(
             work_ratio * 100 <= byte_ratio * 105 && byte_ratio * 100 <= work_ratio * 105,
             "{label}: 64 KiB -> 1 MiB work ratio is not within 1.05x of the byte ratio"
+        );
+    }
+}
+
+/// T6: closer text inside a value costs work linear in the output. A
+/// Qwen3-Coder XML value holding one closer per 256 bytes (`</parameter>`,
+/// the call's `</function>`, a `</function></tool_call>` pair, or a whole
+/// `</parameter></function></tool_call>` sequence) recovers under
+/// `ToolRecoveryRequest::sized` with the whole value (the reading that holds
+/// the closers), or, for the whole sequence, `Ambiguous` between the two
+/// equally clean readings; from 32 KiB (128 closers) to 256 KiB (1,024
+/// closers) the work ratio is within 1.05x of the byte ratio, so no reading
+/// is read once per closer, and the work per byte stays within
+/// `RECOVER_WORK_PER_BYTE` per reading reported.
+#[test]
+fn closer_text_in_values_is_linear() {
+    let tools = tools();
+    for token in [
+        "</parameter>",
+        "</function>",
+        "</function></tool_call>",
+        "</parameter></function></tool_call>",
+    ] {
+        let mut measured = Vec::new();
+        for size in [1 << 15, 1 << 18] {
+            let segment = format!("{}{token}", "a".repeat(256 - token.len()));
+            let content = format!("{}z", segment.repeat(size / 256));
+            let input = qwen(&content);
+            let result = tools.recover(
+                input.as_bytes(),
+                &ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes()),
+            );
+            match (
+                &result.outcome,
+                token.starts_with("</parameter></function>"),
+            ) {
+                (Outcome::Resolved(calls), false) => {
+                    let call = &calls.calls[0];
+                    assert_eq!(call.outcome, CallOutcome::Resolved, "{token} {size}");
+                    assert_eq!(
+                        call.arguments.get("content").and_then(Node::as_str),
+                        Some(content.as_str()),
+                        "{token} {size}"
+                    );
+                }
+                (Outcome::Ambiguous(alternatives), true) => {
+                    assert_eq!(alternatives.len(), 2, "{token} {size}");
+                }
+                (other, _) => panic!("{token} {size}: {other:?} {:?}", result.receipt.stopped),
+            }
+            let work = result.receipt.usage.work;
+            println!("{token} {} bytes: work {work}", input.len());
+            // A value read once costs no more per byte than the sized
+            // budget grants; one reported twice (Ambiguous), twice that.
+            let readings = if token.starts_with("</parameter></function>") {
+                2
+            } else {
+                1
+            };
+            assert!(
+                work <= readings * cost::RECOVER_WORK_PER_BYTE * input.len() as u64,
+                "{token} {size}: work {work} exceeds {readings} x RECOVER_WORK_PER_BYTE per byte"
+            );
+            measured.push((input.len() as u128, u128::from(work)));
+        }
+        let ((small_bytes, small_work), (large_bytes, large_work)) = (measured[0], measured[1]);
+        let work_ratio = large_work * small_bytes;
+        let byte_ratio = small_work * large_bytes;
+        assert!(
+            work_ratio * 100 <= byte_ratio * 105 && byte_ratio * 100 <= work_ratio * 105,
+            "{token}: 32 KiB -> 256 KiB work ratio is not within 1.05x of the byte ratio"
         );
     }
 }
@@ -580,9 +652,24 @@ fn per_call_competition_scales_with_calls() {
         output.as_bytes(),
         &ToolRecoveryRequest::new(Effort::Standard),
     );
+    assert!(
+        matches!(preset.receipt.stopped, StopReason::BudgetExceeded(_)),
+        "{:?}",
+        preset.receipt.stopped
+    );
+    // The readings are charged per call: with the preset's candidates
+    // alone limiting it (its work budget lifted), the preset runs out of
+    // candidates, not of anything else.
+    let mut candidates_only = ToolRecoveryRequest::new(Effort::Standard);
+    candidates_only.budget.work = u64::MAX / 4;
+    let limited = tools.recover(output.as_bytes(), &candidates_only);
     assert_eq!(
-        preset.receipt.stopped,
+        limited.receipt.stopped,
         StopReason::BudgetExceeded(Resource::Candidates)
+    );
+    assert_eq!(
+        limited.receipt.usage.candidates,
+        candidates_only.budget.candidates
     );
     let result = tools.recover(
         output.as_bytes(),

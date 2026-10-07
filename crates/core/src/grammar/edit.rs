@@ -54,6 +54,7 @@
 //! | [`CloserMisspelled`](EditOperator::CloserMisspelled) | `tool_call.markup.closer-misspelled` | 2 | no | single | syntax | markup | yes |
 //! | [`ReasoningMarkerCut`](EditOperator::ReasoningMarkerCut) | `tool_call.reasoning.marker-cut` | 0 | no | single | syntax | data | no |
 //! | [`TokenMisspelled`](EditOperator::TokenMisspelled) | `tool_call.markup.token-misspelled` | 2 | no | single | syntax | markup | yes |
+//! | [`CloserInValue`](EditOperator::CloserInValue) | `tool_call.value.closer-in-value` | 0 | no | single | syntax | none | no |
 //!
 //! The first seven operators are the engine's markup repairs: a missing
 //! closer inserted mid-message is a *function* close when more of the
@@ -90,6 +91,13 @@
 //! `<parameter=` opener) within edit distance one of exactly one literal of
 //! the grammar is read as that literal. Every misspelling is a fallback:
 //! it never overrides a reading of the same bytes that needs no repair.
+//! `tool_call.value.closer-in-value` (appended last) records that a
+//! verbatim value (an `xml-params` string value, a `raw` body) holds the
+//! exact spelling of a closer that could have ended it, read as text
+//! because the reading ending the value at a later closer needs no more
+//! repair: every closer that can end such a value is weighed by the cost
+//! of the repairs each reading needs, and equally cheap readings of
+//! different calls are reported side by side.
 //! Closers inserted at the
 //! end of output under a non-length stop are
 //! `tool_call.markup.missing-closers-at-end`, usable only when the call is
@@ -119,7 +127,7 @@
 //! assert_eq!(stray.id, "tool_call.markup.stray-closer");
 //! assert_eq!(stray.loss, Some(LossKind::Markup));
 //! assert!(!stray.guess && stray.repair);
-//! assert_eq!(OPERATORS.len(), 42);
+//! assert_eq!(OPERATORS.len(), 43);
 //! let framing = EditOperator::FramingNewline.rule();
 //! assert_eq!((framing.loss, framing.repair), (Some(LossKind::Markup), false));
 //! ```
@@ -282,6 +290,12 @@ pub enum EditOperator {
     /// exactly, as that literal: the opener-side mirror of
     /// [`Self::CloserMisspelled`], a fallback only.
     TokenMisspelled,
+    /// Read the exact spelling of a closer inside a verbatim value (an
+    /// `xml-params` string value, a `raw` body) as text of the value: the
+    /// reading that ends the value at a later closer (or at its boundary)
+    /// needs no more repair than the one ending it at this closer. The
+    /// edit spans from the first such closer to where the value ends.
+    CloserInValue,
 }
 
 /// Static metadata of one [`EditOperator`].
@@ -373,7 +387,7 @@ const fn guessed_repair(operator: EditOperator, id: &'static str, cost: u64) -> 
 }
 
 /// The number of [`EditOperator`]s.
-pub const OPERATOR_COUNT: usize = 42;
+pub const OPERATOR_COUNT: usize = 43;
 
 /// Every grammar edit operator, in [`EditOperator`] order, as a constant
 /// table (the tool-call rule registry is built from it at compile time).
@@ -655,6 +669,13 @@ pub(crate) const OPERATOR_TABLE: [OperatorRule; OPERATOR_COUNT] = [
         cost::TOKEN_MISSPELLED,
         Grounding::Syntax,
         Some(LossKind::Markup),
+    ),
+    note(
+        EditOperator::CloserInValue,
+        "tool_call.value.closer-in-value",
+        cost::CLOSER_IN_VALUE,
+        false,
+        None,
     ),
 ];
 

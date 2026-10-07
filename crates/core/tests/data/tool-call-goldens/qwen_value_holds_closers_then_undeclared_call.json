@@ -1,0 +1,111 @@
+{
+  "description": "T6: as qwen_value_holds_closers_then_whole_call, but the held call names a tool the set does not declare (`g`). Read apart, the second call names no declared tool, which the other reading does not need: the one call holding it wins, with the full content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_dir",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "dir": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "dir"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "write_file": "mutating",
+    "read_file": "read_only",
+    "list_dir": "read_only"
+  },
+  "input": "<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nx\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=g>\n<parameter=x>\n1\n</parameter>\n</function>\n</tool_call>\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "a.md",
+        "content": "x\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=g>\n<parameter=x>\n1\n</parameter>\n</function>\n</tool_call>"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.value.closer-in-value",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.value.closer-in-value",
+        "tool_call.xml.framing-newline"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.value.closer-in-value",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.value.closer-in-value",
+    "tool_call.xml.framing-newline"
+  ]
+}

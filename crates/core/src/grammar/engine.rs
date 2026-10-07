@@ -192,6 +192,15 @@ pub(crate) struct Thread {
     pub(crate) opened: bool,
     pub(crate) stall: u32,
     pub(crate) reach: usize,
+    /// Whether the configuration descends from a body that read on past a
+    /// delimiter (see [`PAST_REPAIRED`]): a reading beside the one ending
+    /// there (see [`Self::beside`]).
+    pub(crate) past: bool,
+    /// For a reading that ended a body beside another without finishing
+    /// its codec yet (see `Step::end_early`): the deferred body's index
+    /// plus one, else zero. Its value is read, and its cost added, when the
+    /// reading completes or begins another slot.
+    pub(crate) pending: u32,
 }
 
 impl ScratchCharge for Thread {
@@ -202,10 +211,31 @@ impl ScratchCharge for Thread {
 }
 
 impl Thread {
-    /// The merge key: program location, terminal mode, and literal node.
-    pub(crate) const fn key(&self) -> (u32, u8, u32) {
+    /// Whether the configuration reads on beside a reading that ended at a
+    /// delimiter: a body that read past one, or a configuration descending
+    /// from it (see [`Self::past`]).
+    pub(crate) const fn beside(&self) -> bool {
+        self.past || matches!(self.sub, Sub::Body(state, _) if state & PAST_REPAIRED != 0)
+    }
+
+    /// Whether the configuration reads on only beside a fallback (see
+    /// [`Sub::speculative`]), or beside a reading that ended at a delimiter
+    /// ([`Self::beside`]): it does not keep its attempt from being stuck,
+    /// so the repairs of the readings as written that failed are proposed.
+    pub(crate) const fn speculative(&self) -> bool {
+        self.beside() || self.sub.speculative()
+    }
+
+    /// The merge key: program location, terminal mode, literal node, the
+    /// deferred body a reading carries (its cost is not known yet), and for
+    /// a reading beside another its attempt (one more than its id; zero
+    /// otherwise): a value read on past a closer or another call's opener
+    /// is a reading of its own attempt alone, never one of a later attempt
+    /// reading the same bytes as markup.
+    pub(crate) const fn key(&self) -> (u32, u8, u32, u32, u64) {
         let (mode, node) = self.sub.key();
-        (self.pc, mode, node)
+        let beside = if self.beside() { self.attempt + 1 } else { 0 };
+        (self.pc, mode, node, self.pending, beside)
     }
 
     /// The precedence among configurations sharing a key: the earliest
@@ -241,6 +271,9 @@ pub(crate) enum HistKind {
     /// resynchronized at its call closer (see `Engine::resync`). The part
     /// is a rejected attempt of its own.
     Skipped(usize),
+    /// No step: the history continues at `prev`. A deferred body's value
+    /// (see `Step::end_early`) stands here; once read, `prev` is the value.
+    Link,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -265,6 +298,9 @@ pub(crate) struct Arena {
     /// Live codec states, out of line so a configuration stays `Copy`
     /// whatever state a codec keeps; each body configuration owns its slot.
     codecs: Vec<Option<CodecState>>,
+    /// Bodies ended beside another reading whose codec has not finished
+    /// yet (see `Step::end_early`).
+    pub(crate) deferred: ScratchVec<Deferred>,
     /// The scratch charged for `values`, `edits` and `codecs`, released by
     /// [`Self::reset`] or, for what is still held, when the arena drops.
     charged: u64,
@@ -294,6 +330,7 @@ impl Arena {
             values: Vec::new(),
             edits: Vec::new(),
             codecs: Vec::new(),
+            deferred: ScratchVec::new(governor),
             charged: 0,
             meter: governor.scratch_meter(),
         })
@@ -379,8 +416,44 @@ impl Arena {
         self.values.clear();
         self.edits.clear();
         self.codecs.clear();
+        self.deferred.clear();
         governor.release_scratch(core::mem::take(&mut self.charged))
     }
+}
+
+/// A body a reading ended beside another (a fork of a body that read on
+/// past a closer; see `Step::end_early`) without finishing its codec: it
+/// is finished only if the reading completes or begins another slot, so a
+/// reading that dies at the bytes after the closer costs nothing more.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Deferred {
+    /// The [`HistKind::Link`] node standing for the value.
+    node: u32,
+    /// The codec's arena slot, its delimiter set, and the body.
+    slot: u32,
+    set: u32,
+    entry: usize,
+    end: usize,
+    /// Whether the value was read yet, and how.
+    outcome: Reading,
+}
+
+/// How a deferred body's value was read (see [`Deferred`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reading {
+    /// Not yet.
+    Pending,
+    /// Read; its edits add this cost.
+    Read(u64),
+    /// No repair reads it: the reading is dropped.
+    Unread,
+}
+
+impl ScratchCharge for Deferred {
+    const CHARGE: usize = {
+        assert!(core::mem::size_of::<Self>() <= 64);
+        64
+    };
 }
 
 /// A configuration that could not consume the byte at `at`.
@@ -434,6 +507,9 @@ impl Out {
 pub(crate) struct Step<'a, 's> {
     pub(crate) grammar: &'s CompiledGrammar,
     pub(crate) program: &'s Program,
+    /// What the program reads (a call's verbatim argument body may hold
+    /// closer text; see `Step::repaired_delimiter`).
+    pub(crate) kind: ProductionKind,
     pub(crate) dfas: &'a mut [DerivativeDfa<'s>],
     pub(crate) arena: &'a mut Arena,
     pub(crate) buffer: &'a [u8],
@@ -454,6 +530,8 @@ pub(crate) struct Step<'a, 's> {
     /// a JSON string of the call it skips: text of the string, never a
     /// reason to give up (see `step_resync`).
     pub(crate) quoted_openers: &'a mut Vec<(u64, usize)>,
+    /// The table's live attempts (see `Step::opens_call`).
+    pub(crate) attempts: &'a [Attempt],
 }
 
 impl<'s> Step<'_, 's> {
@@ -1285,6 +1363,7 @@ impl<'s> Step<'_, 's> {
             thread.pos = pos + 1;
             return self.queue(thread, stack);
         };
+        thread.hist = self.closer_in_value(&thread, set, end, governor)?;
         self.end_body(
             thread,
             codec,
@@ -1386,12 +1465,28 @@ impl<'s> Step<'_, 's> {
     }
 
     /// Whether the delimiter `index` of set `set` that `thread`'s body
-    /// found ends it only by a repair, so the body also reads on past it
-    /// (see `Step::step_body`): a self-delimiting (`json`) value not yet
-    /// complete, or, for a body read when it finishes (`raw`,
-    /// `xml-params`, or none), a confusable spelling or a declared closer
-    /// variant (not its class's canonical spelling).
+    /// found may be text of the body rather than its end, so the body also
+    /// reads on past it (see `Step::step_body`): a closer delimiter (any
+    /// spelling of a closer class, or a confusable one) of a call's verbatim
+    /// argument body (`raw`, `xml-params`), whose text may hold the exact
+    /// spelling of a closer (`tool_call.value.closer-in-value`:
+    /// the reading ending there and the one reading on are weighed by the
+    /// repairs each needs); in a self-delimiting (`json`) value, one written
+    /// inside a string not yet complete; otherwise a confusable spelling or
+    /// a declared closer variant (not its class's canonical spelling).
     fn repaired_delimiter(&self, thread: &Thread, set: u32, index: u32) -> bool {
+        if self.verbatim(thread) {
+            // Closer text: a closer spelling (or a confusable one). A
+            // delimiter that opens markup (the next parameter's opener)
+            // ends the body: a value never holds it.
+            let declared = &self.grammar.delimiters[set as usize].declared;
+            return declared.get(index as usize).is_none_or(|spelling| {
+                self.grammar
+                    .closers
+                    .iter()
+                    .any(|closer| closer.spellings.contains(spelling))
+            });
+        }
         if let Inst::Slot { codec, .. } = self.program.insts[thread.pc as usize]
             && !matches!(codec, CodecKind::Raw | CodecKind::XmlParams)
         {
@@ -1412,6 +1507,146 @@ impl<'s> Step<'_, 's> {
         };
         self.grammar.closers.iter().any(|closer| {
             closer.spellings.first() != Some(spelling) && closer.spellings.contains(spelling)
+        })
+    }
+
+    /// Whether `thread` reads a call's verbatim argument body: a `raw` or
+    /// `xml-params` slot of a call production.
+    fn verbatim(&self, thread: &Thread) -> bool {
+        verbatim_slot(self.program, self.kind, thread)
+    }
+
+    /// For a verbatim argument body that read on past a delimiter (see
+    /// `Step::repaired_delimiter`) and ends at `end`: the history recording
+    /// the closer text it holds (`tool_call.value.closer-in-value`), from
+    /// its first exact closer spelling (a declared delimiter) to `end`.
+    /// Charges one `Work` unit per body byte scanned.
+    fn closer_in_value(
+        &mut self,
+        thread: &Thread,
+        set: u32,
+        end: usize,
+        governor: &mut Governor,
+    ) -> Result<u32, StopReason> {
+        let Sub::Body(raw, _) = thread.sub else {
+            return Ok(thread.hist);
+        };
+        if raw & PAST_REPAIRED == 0 || !self.verbatim(thread) {
+            return Ok(thread.hist);
+        }
+        self.closer_note(thread.hist, thread.entry, set, end, governor)
+    }
+
+    /// `hist` with the closer text the body `entry..end` of delimiter set
+    /// `set` holds recorded (see [`Self::closer_in_value`]), if it holds a
+    /// declared delimiter.
+    /// Whether a body read on past a closer (`thread`), ending at `end`,
+    /// would end inside a call it holds: another attempt of the table opened
+    /// inside it and has not completed. A value holding call markup holds
+    /// whole calls, as a value documenting the format does (the reading
+    /// that holds a call whose closers come before the value's end competes
+    /// with the calls read apart); two calls in a row are never one call
+    /// whose value ends inside the second. `Work` per live attempt.
+    fn opens_call(
+        &self,
+        thread: &Thread,
+        end: usize,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        governor.charge(Resource::Work, size(self.attempts.len()))?;
+        Ok(self.attempts.iter().any(|record| {
+            record.id != thread.attempt
+                && record.opened
+                && !record.completed
+                && record.start > thread.entry
+                && record.start < end
+        }))
+    }
+
+    fn closer_note(
+        &mut self,
+        hist: u32,
+        entry: usize,
+        set: u32,
+        end: usize,
+        governor: &mut Governor,
+    ) -> Result<u32, StopReason> {
+        let delimiters = &self.grammar.delimiters[set as usize];
+        let mut state = super::automaton::ROOT;
+        let mut first = None;
+        for at in entry..end {
+            state = delimiters.matcher.step(state, self.byte(at));
+            if let Some((index, length)) = delimiters.matcher.found(state)
+                && (index as usize) < delimiters.declared.len()
+            {
+                first = Some(at + 1 - length as usize);
+                break;
+            }
+        }
+        governor.charge(
+            Resource::Work,
+            size(first.map_or(end, |first| first + 1) - entry),
+        )?;
+        let Some(first) = first else {
+            return Ok(hist);
+        };
+        let edit = MarkupEdit {
+            operator: EditOperator::CloserInValue,
+            span: first..end,
+            original: self.bytes(first..end).to_vec(),
+            replacement: Vec::new(),
+        };
+        self.arena.edit(hist, edit, governor)
+    }
+
+    /// The cost a configuration's deferred body (`pending`, zero for none)
+    /// adds once read, or `None` when no repair reads its value.
+    fn settle_pending(
+        &mut self,
+        pending: u32,
+        governor: &mut Governor,
+    ) -> Result<Option<u64>, StopReason> {
+        if pending == 0 {
+            return Ok(Some(0));
+        }
+        self.resolve(pending, governor)
+    }
+
+    /// Finish the deferred body `pending` (an index plus one; see
+    /// [`Deferred`]) once: record the closer text it holds and its value
+    /// after the history it ended on, link its node there, and return the
+    /// cost its edits add, or `None` when no repair reads the value.
+    fn resolve(
+        &mut self,
+        pending: u32,
+        governor: &mut Governor,
+    ) -> Result<Option<u64>, StopReason> {
+        let index = pending as usize - 1;
+        let deferred = self.arena.deferred.as_slice()[index];
+        match deferred.outcome {
+            Reading::Read(cost) => return Ok(Some(cost)),
+            Reading::Unread => return Ok(None),
+            Reading::Pending => {}
+        }
+        let prev = self.arena.nodes.as_slice()[deferred.node as usize].prev;
+        let hist = self.closer_note(prev, deferred.entry, deferred.set, deferred.end, governor)?;
+        let outcome = match self.finish_codec(
+            deferred.slot,
+            hist,
+            deferred.entry..deferred.end,
+            CodecEnd::Delimited,
+            governor,
+        )? {
+            Ok((top, cost)) => {
+                self.arena.nodes.as_mut_slice()[deferred.node as usize].prev = top;
+                Reading::Read(cost)
+            }
+            Err(_) => Reading::Unread,
+        };
+        self.arena.deferred.as_mut_slice()[index].outcome = outcome;
+        Ok(match outcome {
+            Reading::Read(cost) => Some(cost),
+            _ => None,
         })
     }
 
@@ -1438,8 +1673,45 @@ impl<'s> Step<'_, 's> {
             ),
             None => None,
         };
+        let past = thread.beside();
+        if past && self.opens_call(&thread, end, governor)? {
+            return Ok(());
+        }
+        if past
+            && !self.program.grouped
+            && let (Some(slot), Inst::Slot { set, .. }) =
+                (codec, self.program.insts[thread.pc as usize])
+        {
+            // A fork of a body that read on past a closer: its value is read
+            // only if the reading completes (most die at the bytes after
+            // the closer), so a value holding many closers is read once per
+            // reading that completes, not once per closer.
+            let node = self.arena.push(thread.hist, HistKind::Link)?;
+            self.arena.deferred.push(Deferred {
+                node,
+                slot,
+                set,
+                entry: thread.entry,
+                end,
+                outcome: Reading::Pending,
+            })?;
+            let fork = Thread {
+                sub: Sub::Body(0, codec),
+                hist: node,
+                past: true,
+                pending: index_u32(self.arena.deferred.len()),
+                ..thread
+            };
+            return self.closure(fork, next, end, stack, out, governor);
+        }
+        let hist = match self.program.insts[thread.pc as usize] {
+            Inst::Slot { set, .. } => self.closer_in_value(&thread, set, end, governor)?,
+            _ => thread.hist,
+        };
         let fork = Thread {
             sub: Sub::Body(0, codec),
+            hist,
+            past,
             ..thread
         };
         self.end_body(
@@ -1488,6 +1760,19 @@ impl<'s> Step<'_, 's> {
         out: &mut Out,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        // A verbatim value read on past a closer: what follows reads beside
+        // the reading that ended there. A JSON value is self-delimiting, so
+        // a closer inside it was never one: its reading is as written.
+        if let Sub::Body(raw, _) = thread.sub
+            && raw & PAST_REPAIRED != 0
+            && self.verbatim(&thread)
+        {
+            // Never inside a call it holds (see `Self::opens_call`).
+            if self.opens_call(&thread, end, governor)? {
+                return Ok(());
+            }
+            thread.past = true;
+        }
         if let Some(slot) = codec {
             match self.finish_codec(slot, thread.hist, thread.entry..end, how, governor)? {
                 Ok((hist, cost)) => {
@@ -1670,6 +1955,9 @@ impl<'s> Step<'_, 's> {
                     self.pending.push((next, node, cost));
                     continue;
                 }
+                // A deferred body's value is read when the completion is
+                // reported (see `Engine::emit`): one the bytes after it
+                // reject never reads it.
                 Inst::Accept => {
                     out.completed.push(Thread {
                         pc,
@@ -1684,10 +1972,25 @@ impl<'s> Step<'_, 's> {
                 Inst::Class { class, .. } => Sub::Class(self.dfas[class as usize].start()),
                 Inst::Until { .. } => Sub::Body(super::automaton::ROOT, None),
                 Inst::Slot { codec, .. } => {
+                    // A deferred body's value is read before the next one.
+                    let Some(added) = self.settle_pending(thread.pending, governor)? else {
+                        continue;
+                    };
                     let slot = self
                         .arena
                         .begin_codec(codec.begin(at, governor)?, governor)?;
-                    Sub::Body(super::automaton::ROOT, Some(slot))
+                    let next = Thread {
+                        pc,
+                        sub: Sub::Body(super::automaton::ROOT, Some(slot)),
+                        entry: at,
+                        pos: at,
+                        hist,
+                        cost: cost.saturating_add(added),
+                        pending: 0,
+                        ..thread
+                    };
+                    self.queue(next, stack)?;
+                    continue;
                 }
             };
             let next = Thread {
@@ -1736,6 +2039,14 @@ impl<'s> Step<'_, 's> {
                     };
                     return self.closure(thread, next, boundary, stack, out, governor);
                 }
+                Ok(())
+            }
+            // A body that read on past a closer beside the reading that
+            // ended there reads no call at the end of output: the value it
+            // holds is never ended by a closer that completes the call.
+            (Inst::Until { .. } | Inst::Slot { .. }, Sub::Body(raw, _))
+                if raw & PAST_REPAIRED != 0 =>
+            {
                 Ok(())
             }
             (Inst::Until { set, next } | Inst::Slot { set, next, .. }, Sub::Body(raw, codec)) => {
@@ -1787,6 +2098,21 @@ impl<'s> Step<'_, 's> {
             // call of its own (a cut-off reading needs no repair, so it
             // would override that reading).
             return Ok(None);
+        }
+        if thread.pending != 0 {
+            // A reading that ended a body beside another: its value is read
+            // first.
+            let Some(added) = self.resolve(thread.pending, governor)? else {
+                return Ok(None);
+            };
+            let thread = Thread {
+                cost: thread.cost.saturating_add(added),
+                pending: 0,
+                ..thread
+            };
+            return Ok(self
+                .cut_thread(thread, stack, out, governor)?
+                .map(|(hist, more)| (hist, more.saturating_add(added))));
         }
         let (Inst::Slot { set, next, .. }, Sub::Body(state, Some(slot))) =
             (self.program.insts[thread.pc as usize], thread.sub)
@@ -1921,7 +2247,11 @@ impl<'s> Step<'_, 's> {
                     governor.charge(Resource::ScratchBytes, edit.estimated_bytes())?;
                     edits.push(edit.clone());
                 }
-                HistKind::Root | HistKind::Pack(_) | HistKind::Next(..) | HistKind::Skipped(_) => {}
+                HistKind::Root
+                | HistKind::Pack(_)
+                | HistKind::Next(..)
+                | HistKind::Skipped(_)
+                | HistKind::Link => {}
             }
         }
         while let Some((kind, start, value)) = open.pop() {
@@ -2542,6 +2872,17 @@ pub(crate) fn merge(
     arena: &mut Arena,
     governor: &mut Governor,
 ) -> Result<(), StopReason> {
+    merge_noting(threads, arena, governor, |_| {})
+}
+
+/// [`merge`], calling `note` on every configuration kept, in the same
+/// charged pass.
+pub(crate) fn merge_noting(
+    threads: &mut ScratchVec<Thread>,
+    arena: &mut Arena,
+    governor: &mut Governor,
+    mut note: impl FnMut(&Thread),
+) -> Result<(), StopReason> {
     governor.charge(Resource::Work, size(threads.len()).saturating_mul(K_THREAD))?;
     let slice = threads.as_mut_slice();
     // In place: configurations equal in key, rank and history are equal
@@ -2579,6 +2920,9 @@ pub(crate) fn merge(
     while threads.len() > write {
         threads.pop();
     }
+    for thread in threads.as_slice() {
+        note(thread);
+    }
     Ok(())
 }
 
@@ -2601,6 +2945,12 @@ pub(crate) struct Attempt {
     /// Where the attempt's span ends when it ends rejected at the end of
     /// output (see [`FailureEnd`]).
     pub(crate) failure_end: FailureEnd,
+    /// Whether `failure` was noted before the end of output: every reading
+    /// of the attempt as written ran out there, and only readings beside
+    /// one that ended at a delimiter (see [`Thread::beside`]) kept it live.
+    /// Should none of those complete, the attempt ends rejected as it would
+    /// have there, not as cut off by the end of output.
+    pub(crate) stuck: bool,
 }
 
 /// Where a rejected attempt's span ends at the end of output.
@@ -2724,6 +3074,23 @@ struct Table<'s> {
     /// Completions of a grouped program's live attempts (see
     /// `Program::grouped`), released when the attempt ends.
     held: Vec<Held>,
+    /// Completions of readings beside another (a body that read on past a
+    /// closer; see [`Thread::beside`]) of live attempts, by attempt, oldest
+    /// first: when the attempt ends, the newest whose value is read is
+    /// reported (see `Engine::release_past`).
+    past: Vec<Thread>,
+    /// The completions as written reported for live attempts: attempt, end
+    /// and cost. A held completion beside another reading of the same span
+    /// that already costs more (its value not read yet: reading it only
+    /// adds) can never be chosen, so it is dropped unread (see
+    /// `Engine::release_past`).
+    written: Vec<(u64, usize, u64)>,
+    /// The newest failure of a reading beside another of each live attempt
+    /// of a program without `next`, repaired once the attempt's body that
+    /// reads on past closers is gone (see `Engine::settle`): of the readings
+    /// that end the value at successive closers only the last can be
+    /// reported, so only the last one's failure is worth a repair search.
+    stalled: ScratchVec<Failure>,
     /// Literal failures of live attempts kept as repair seeds while a
     /// configuration of the same attempt that began its terminal at or
     /// before the failed literal's start is still live (see `settle`).
@@ -2842,6 +3209,10 @@ pub(crate) struct Engine<'s> {
     whole: Vec<usize>,
 }
 
+/// Scratch bytes charged per completion as written recorded (see
+/// [`Table::written`]).
+const WRITTEN_BYTES: u64 = 24;
+
 /// Scratch bytes charged per held ended report or recorded opener.
 const DEFERRED_BYTES: u64 = 64;
 
@@ -2876,6 +3247,9 @@ impl<'s> Engine<'s> {
                     attempts: ScratchVec::new(governor),
                     trails: Vec::new(),
                     held: Vec::new(),
+                    past: Vec::new(),
+                    written: Vec::new(),
+                    stalled: ScratchVec::new(governor),
                     failures: ScratchVec::new(governor),
                     boundaries: ScratchVec::new(governor),
                 });
@@ -2930,6 +3304,7 @@ impl<'s> Engine<'s> {
             Step {
                 grammar: runtime.grammar,
                 program: self.tables[table].program,
+                kind: self.tables[table].kind,
                 dfas: &mut runtime.dfas,
                 arena: &mut self.arena,
                 buffer: self.buffer.as_slice(),
@@ -2941,6 +3316,7 @@ impl<'s> Engine<'s> {
                 newest_open: self.newest_open,
                 resynced: &mut self.resynced,
                 quoted_openers: &mut self.quoted_openers,
+                attempts: self.tables[table].attempts.as_slice(),
             },
             &mut self.stack,
             &mut self.out,
@@ -2981,6 +3357,7 @@ impl<'s> Engine<'s> {
                 failure: None,
                 end: None,
                 failure_end: FailureEnd::Stop,
+                stuck: false,
             })?;
             let thread = Thread {
                 pc: program.start,
@@ -2994,6 +3371,8 @@ impl<'s> Engine<'s> {
                 opened: false,
                 stall: 0,
                 reach: at,
+                past: false,
+                pending: 0,
             };
             if program.start_closure {
                 // Zero-width instructions with effects (an `insert`) lie
@@ -3005,9 +3384,13 @@ impl<'s> Engine<'s> {
                 }
             }
         }
+        // An attempt whose configurations were stopped outside a step (see
+        // `Self::stop_past_at`) is still settled: its held repair and its
+        // end are due.
         if spawned.is_none()
             && self.tables[table].threads.is_empty()
             && self.tables[table].trails.is_empty()
+            && self.tables[table].attempts.is_empty()
         {
             return Ok(());
         }
@@ -3040,7 +3423,8 @@ impl<'s> Engine<'s> {
         let mut live = core::mem::replace(&mut self.out.live, ScratchVec::new(governor));
         merge(&mut live, &mut self.arena, governor)?;
         let mut completed = core::mem::replace(&mut self.out.completed, ScratchVec::new(governor));
-        let failed = core::mem::replace(&mut self.out.failed, ScratchVec::new(governor));
+        let mut failed = core::mem::replace(&mut self.out.failed, ScratchVec::new(governor));
+        self.stall(table, &mut failed, governor)?;
         // A literal that failed while a sibling configuration of its
         // attempt, begun at the same place or earlier, lived on (the
         // canonical `<|tool_call_begin|>` beside a variant spelling of a
@@ -3057,7 +3441,9 @@ impl<'s> Engine<'s> {
                 .chain(failed.as_slice().iter().map(|failure| &failure.thread)),
             governor,
         )?;
-        self.open(table, governor)?;
+        let opened = self.open(table, governor)?;
+        let keep = self.last_written(table, opened, governor)?;
+        Self::stop_past(&mut live, opened, &keep, governor)?;
         // Repairs for attempts left with nothing.
         let _records = governor.lease_scratch(
             size(self.tables[table].attempts.len())
@@ -3065,14 +3451,15 @@ impl<'s> Engine<'s> {
         )?;
         let records: Vec<Attempt> = self.tables[table].attempts.as_slice().to_vec();
         for record in &records {
-            // A configuration resynchronizing past an earlier failure does
-            // not keep the attempt from being stuck: its repairs are
-            // proposed as if it were not there.
+            // A configuration resynchronizing past an earlier failure, or
+            // reading beside one that ended at a delimiter, does not keep
+            // the attempt from being stuck: its repairs are proposed as if
+            // it were not there.
             let touches = |threads: &ScratchVec<Thread>| {
                 threads
                     .as_slice()
                     .iter()
-                    .any(|thread| thread.attempt == record.id && !thread.sub.speculative())
+                    .any(|thread| thread.attempt == record.id && !thread.speculative())
             };
             if touches(&live) || touches(&completed) || record.completed {
                 continue;
@@ -3098,7 +3485,7 @@ impl<'s> Engine<'s> {
                 .copied()
                 .chain(held)
                 .collect();
-            self.note_failure(table, record.id, &failures);
+            self.note_failure(table, record.id, &failures, eof.is_none());
             self.note_boundary(table, record.id, &failures, governor)?;
             let until = if eof.is_some() { at } else { at + 1 };
             for state in self.repair(table, record, &failures, until, eof, governor)? {
@@ -3115,7 +3502,8 @@ impl<'s> Engine<'s> {
             }
         }
         self.hold_failures(table, earlier, &failed, &live)?;
-        merge(&mut live, &mut self.arena, governor)?;
+        self.merge_settled(table, at, eof, &mut live, &mut completed, governor)?;
+        self.unstick(table, &live, governor)?;
         // A repair may carry an attempt past its commit, and a completion
         // always commits its attempt.
         if self.tables[table].program.deferred() {
@@ -3124,11 +3512,211 @@ impl<'s> Engine<'s> {
                 live.as_slice().iter().chain(completed.as_slice()),
                 governor,
             )?;
-            self.open(table, governor)?;
+            let opened = self.open(table, governor)?;
+            let keep = self.last_written(table, opened, governor)?;
+            Self::stop_past(&mut live, opened, &keep, governor)?;
         }
         self.complete(table, &mut completed, eof, governor)?;
         self.retire(table, &live, at, eof, governor)?;
         self.tables[table].threads = live;
+        Ok(())
+    }
+
+    /// Merge `live`, then repair the stalled failures its merge shows are
+    /// final (see [`Self::repair_stalled`]), merging again if any were.
+    fn merge_settled(
+        &mut self,
+        table: usize,
+        at: usize,
+        eof: Option<&GenerationStop>,
+        live: &mut ScratchVec<Thread>,
+        completed: &mut ScratchVec<Thread>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        // The attempts whose body reads on past closers, noted in the merge.
+        let mut reading: Vec<u64> = Vec::new();
+        merge_noting(live, &mut self.arena, governor, |thread| {
+            if matches!(thread.sub, Sub::Body(state, _) if state & PAST_REPAIRED != 0) {
+                reading.push(thread.attempt);
+            }
+        })?;
+        if self.repair_stalled(table, at, eof, &reading, live, completed, governor)? {
+            merge(live, &mut self.arena, governor)?;
+        }
+        Ok(())
+    }
+
+    /// Move the failures of readings beside another of a verbatim value
+    /// out of `failed` into [`Table::stalled`], keeping each attempt's
+    /// newest, for a program without `next` (a grouped program repairs them
+    /// as they come). One `Work` unit per failure.
+    fn stall(
+        &mut self,
+        table: usize,
+        failed: &mut ScratchVec<Failure>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let (program, kind) = (self.tables[table].program, self.tables[table].kind);
+        if program.grouped
+            || !failed
+                .as_slice()
+                .iter()
+                .any(|failure| failure.thread.beside())
+        {
+            return Ok(());
+        }
+        governor.charge(
+            Resource::Work,
+            size(failed.len() + self.tables[table].stalled.len()),
+        )?;
+        let slice = failed.as_mut_slice();
+        let mut write = 0;
+        for read in 0..slice.len() {
+            let failure = slice[read];
+            // A verbatim value's reading beside another (a JSON value's
+            // failure is noted as written, see `Step::end_body`).
+            let waits = failure.thread.past
+                || (failure.thread.beside() && verbatim_slot(program, kind, &failure.thread));
+            if !waits {
+                slice[write] = failure;
+                write += 1;
+                continue;
+            }
+            let stalled = &mut self.tables[table].stalled;
+            match stalled
+                .as_slice()
+                .iter()
+                .position(|held| held.thread.attempt == failure.thread.attempt)
+            {
+                Some(index) => {
+                    if stalled.as_slice()[index].at <= failure.at {
+                        stalled.as_mut_slice()[index] = failure;
+                    }
+                }
+                None => stalled.push(failure)?,
+            }
+        }
+        while failed.len() > write {
+            failed.pop();
+        }
+        Ok(())
+    }
+
+    /// Repair the stalled failure (see [`Table::stalled`]) of every attempt
+    /// of `table` whose body reading on past closers is gone (stopped at
+    /// another call's opener or a reasoning marker, failed, or ended with
+    /// the output): its last reading beside another is final. It is
+    /// repaired as the mid-output failure it was; at the end of output the
+    /// repaired configurations then take their end-of-input transitions.
+    #[allow(clippy::too_many_arguments)]
+    fn repair_stalled(
+        &mut self,
+        table: usize,
+        at: usize,
+        eof: Option<&GenerationStop>,
+        reading: &[u64],
+        live: &mut ScratchVec<Thread>,
+        completed: &mut ScratchVec<Thread>,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        if self.tables[table].stalled.is_empty() {
+            return Ok(false);
+        }
+        // One unit per stalled failure examined: `reading` was noted in the
+        // merge pass, which charged its configurations.
+        governor.charge(Resource::Work, size(self.tables[table].stalled.len()))?;
+        let mut repaired = false;
+        let mut index = 0;
+        while index < self.tables[table].stalled.len() {
+            let failure = self.tables[table].stalled.as_slice()[index];
+            if eof.is_none() && reading.contains(&failure.thread.attempt) {
+                index += 1;
+                continue;
+            }
+            let stalled = self.tables[table].stalled.as_mut_slice();
+            stalled.copy_within(index + 1.., index);
+            self.tables[table].stalled.pop();
+            // A reading that already completed at or past the failing
+            // configuration (beside another, or as written) is the one the
+            // repair would make, or holds less: the failing one holds only
+            // closer text more, which needs a repair besides (no repair is
+            // proposed for an attempt that completed).
+            let attempt = failure.thread.attempt;
+            let entry = failure.thread.entry;
+            if self.tables[table]
+                .past
+                .iter()
+                .any(|held| held.attempt == attempt && held.pos >= entry)
+                || self.tables[table]
+                    .written
+                    .iter()
+                    .any(|&(owner, end, _)| owner == attempt && end >= entry)
+            {
+                continue;
+            }
+            repaired = true;
+            let Some(record) = self.tables[table]
+                .attempts
+                .as_slice()
+                .iter()
+                .find(|record| record.id == failure.thread.attempt)
+                .copied()
+            else {
+                continue;
+            };
+            let until = if eof.is_some() { at } else { at + 1 };
+            // A failure at the end of output is repaired as one; any other
+            // as the mid-output failure it was.
+            let at_end = eof.filter(|_| failure.at >= self.fed);
+            let mut ending = ScratchVec::new(governor);
+            for state in self.repair(table, &record, &[failure], until, at_end, governor)? {
+                match state.status {
+                    Status::Live if eof.is_some() => ending.push(state.thread)?,
+                    Status::Live => live.push(state.thread)?,
+                    Status::Completed => completed.push(state.thread)?,
+                    Status::Failed | Status::Respelled | Status::Stuck => {}
+                }
+            }
+            if !ending.is_empty() {
+                // The output has ended: they take their end-of-input
+                // transitions now.
+                self.out.clear();
+                let (mut step, _, out) = self.split(table);
+                step.advance(&mut ending, at, true, out, governor)?;
+                for thread in self.out.completed.as_slice() {
+                    completed.push(*thread)?;
+                }
+                self.out.clear();
+            }
+        }
+        Ok(repaired)
+    }
+
+    /// Clear [`Attempt::stuck`] for every attempt of `table` a repair or a
+    /// resynchronization carries on (a configuration of `live` read as
+    /// written): it is no longer kept live only beside a reading that ended
+    /// at a delimiter. One `Work` unit per configuration examined.
+    fn unstick(
+        &mut self,
+        table: usize,
+        live: &ScratchVec<Thread>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let attempts = self.tables[table].attempts.as_mut_slice();
+        if !attempts.iter().any(|record| record.stuck) {
+            return Ok(());
+        }
+        governor.charge(Resource::Work, size(live.len()))?;
+        for record in attempts {
+            if record.stuck
+                && live
+                    .as_slice()
+                    .iter()
+                    .any(|thread| thread.attempt == record.id && !thread.beside())
+            {
+                record.stuck = false;
+            }
+        }
         Ok(())
     }
 
@@ -3185,7 +3773,7 @@ impl<'s> Engine<'s> {
                 && matches!(failure.thread.sub, Sub::Lit(_))
                 && live.as_slice().iter().any(|thread| {
                     thread.attempt == failure.thread.attempt
-                        && !thread.sub.speculative()
+                        && !thread.speculative()
                         && (trailing || thread.entry <= failure.thread.entry)
                 })
         };
@@ -3242,13 +3830,14 @@ impl<'s> Engine<'s> {
     }
 
     /// Report every attempt that finished its opener in this step.
-    fn open(&mut self, table: usize, governor: &mut Governor) -> Result<(), StopReason> {
+    fn open(&mut self, table: usize, governor: &mut Governor) -> Result<Option<usize>, StopReason> {
         let _opened = governor.lease_scratch(
             size(self.out.opened.len())
                 .saturating_mul(size(<(u64, usize) as ScratchCharge>::CHARGE)),
         )?;
         let mut opened: Vec<(u64, usize)> = self.out.opened.as_slice().to_vec();
         opened.sort_unstable();
+        let mut latest = None;
         for (attempt, position) in opened {
             let attempts = self.tables[table].attempts.as_mut_slice();
             if let Some(record) = attempts.iter_mut().find(|record| record.id == attempt)
@@ -3256,6 +3845,7 @@ impl<'s> Engine<'s> {
             {
                 record.opened = true;
                 self.newest_open = self.newest_open.max(record.start);
+                latest = latest.max(Some(record.start));
                 self.events.push(Event::Opened {
                     attempt,
                     start: record.start,
@@ -3263,11 +3853,88 @@ impl<'s> Engine<'s> {
                 });
             }
         }
+        Ok(latest)
+    }
+
+    /// The attempts of `table` whose completion as written ends last (the
+    /// call just before an opener at `opened`; none without one). `Work`
+    /// per completion examined.
+    fn last_written(
+        &self,
+        table: usize,
+        opened: Option<usize>,
+        governor: &mut Governor,
+    ) -> Result<Vec<u64>, StopReason> {
+        if opened.is_none() {
+            return Ok(Vec::new());
+        }
+        let written = &self.tables[table].written;
+        governor.charge(Resource::Work, size(written.len()).saturating_mul(2))?;
+        let latest = written.iter().map(|&(_, end, _)| end).max();
+        let mut keep: Vec<u64> = written
+            .iter()
+            .filter(|&&(_, end, _)| Some(end) == latest)
+            .map(|&(attempt, _, _)| attempt)
+            .collect();
+        // The earliest attempt read as written only with a repair: its
+        // value may hold every call after it (a value documenting the
+        // format with several calls), the clean reading.
+        let repaired = written
+            .iter()
+            .map(|&(attempt, _, _)| attempt)
+            .filter(|&attempt| {
+                written
+                    .iter()
+                    .filter(|&&(owner, _, _)| owner == attempt)
+                    .all(|&(_, _, cost)| cost > 0)
+            })
+            .min();
+        if let Some(attempt) = repaired
+            && !keep.contains(&attempt)
+        {
+            keep.push(attempt);
+        }
+        Ok(keep)
+    }
+
+    /// Drop every body of `live` that read on past a closer (see
+    /// [`PAST_REPAIRED`]) of an attempt begun before `start`, where another
+    /// attempt of the table opened, but those of the attempts in `keep`,
+    /// whose completions as written end last (the call just before the
+    /// opener, see `Self::last_written`): such a value may hold its own
+    /// closers and the call that opens here, whole (see `Step::opens_call`),
+    /// competing with the two calls read apart. Any other value never runs
+    /// on into a later call, so each value reads on over at most the one
+    /// call after it. One `Work` unit per configuration examined.
+    fn stop_past(
+        live: &mut ScratchVec<Thread>,
+        start: Option<usize>,
+        keep: &[u64],
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let Some(start) = start else {
+            return Ok(());
+        };
+        governor.charge(Resource::Work, size(live.len()))?;
+        let slice = live.as_mut_slice();
+        let mut write = 0;
+        for read in 0..slice.len() {
+            let thread = slice[read];
+            let past = matches!(thread.sub, Sub::Body(state, _) if state & PAST_REPAIRED != 0);
+            if past && thread.start < start && !keep.contains(&thread.attempt) {
+                continue;
+            }
+            slice[write] = thread;
+            write += 1;
+        }
+        while live.len() > write {
+            live.pop();
+        }
         Ok(())
     }
 
     /// Record why (and where) an attempt left with no configuration failed.
-    fn note_failure(&mut self, table: usize, attempt: u64, failures: &[Failure]) {
+    fn note_failure(&mut self, table: usize, attempt: u64, failures: &[Failure], midway: bool) {
         // Where the attempt failed is where its own configurations ran out,
         // not where an earlier sibling's literal did (a respelling seed).
         let current = || failures.iter().filter(|failure| !failure.respell);
@@ -3309,6 +3976,7 @@ impl<'s> Engine<'s> {
         }
         record.failure = Some(first.reason);
         record.end = Some(end);
+        record.stuck = midway;
     }
 
     /// For a grouped program, record where the failing configurations of
@@ -3521,6 +4189,8 @@ impl<'s> Engine<'s> {
                 opened: true,
                 stall: 0,
                 reach: until,
+                past: false,
+                pending: 0,
             })?;
         }
         Ok(())
@@ -3689,6 +4359,10 @@ impl<'s> Engine<'s> {
                 index += 1;
                 continue;
             }
+            // Its reading beside another, held until now, may complete it.
+            self.release_past(table, record.id, governor)?;
+            self.forget_written(table, record.id, governor)?;
+            let record = self.tables[table].attempts.as_slice()[index];
             self.release(table, record.id, governor)?;
             // How far the attempt read the calls it skipped, when it skipped
             // more than one: an attempt that ends rejected whole read their
@@ -3710,7 +4384,7 @@ impl<'s> Engine<'s> {
                 // all of its completions.
                 // At the end of output a value no repair reads ends its
                 // span where it stopped decoding, as mid-input.
-                let malformed = record.failure_end.at_failure();
+                let malformed = record.failure_end.at_failure() || record.stuck;
                 let end = match (eof, record.completed) {
                     (Some(_), false) if malformed => record.end.unwrap_or(at),
                     (Some(_), _) => at,
@@ -3737,6 +4411,7 @@ impl<'s> Engine<'s> {
                         {
                             reason
                         }
+                        (Some(_), Some(reason)) if !record.completed && record.stuck => reason,
                         (Some(_), _) => Rejection::Unterminated,
                         (None, None) => Rejection::Overlapped { at },
                     },
@@ -3762,7 +4437,8 @@ impl<'s> Engine<'s> {
     /// Report the end of `record` (of `table`), `whole` when it read a whole
     /// call (completed, or recovered calls before the one it failed in). A
     /// rejected attempt with no whole call, while another table's attempt
-    /// that began at the same opener still reads on, is held: when every
+    /// that began at the same opener still reads on (it has completed no
+    /// call yet: one that has ends whole, see `Self::complete`), is held: when every
     /// attempt at that opener has ended, it is reported, `outread` when one
     /// of them read a whole call. The turn layer then records it but does
     /// not offer it as a reading of the opener: the bytes after the opener
@@ -3782,15 +4458,14 @@ impl<'s> Engine<'s> {
             governor.charge(Resource::ScratchBytes, DEFERRED_BYTES)?;
             self.whole.push(record.start);
         }
-        let reads_on = !whole
-            && self.tables.iter().enumerate().any(|(other, entry)| {
-                other != table
-                    && entry
-                        .attempts
-                        .as_slice()
-                        .iter()
-                        .any(|live| live.opened && live.start == record.start)
-            });
+        let reads_on =
+            !whole
+                && self.tables.iter().enumerate().any(|(other, entry)| {
+                    other != table
+                        && entry.attempts.as_slice().iter().any(|live| {
+                            live.opened && !live.completed && live.start == record.start
+                        })
+                });
         if reads_on {
             governor.charge(Resource::ScratchBytes, DEFERRED_BYTES)?;
             self.deferred.push((record.start, ended));
@@ -3823,7 +4498,7 @@ impl<'s> Engine<'s> {
                     .attempts
                     .as_slice()
                     .iter()
-                    .any(|live| live.opened && live.start == start)
+                    .any(|live| live.opened && !live.completed && live.start == start)
             })
         };
         let mut index = 0;
@@ -3921,12 +4596,19 @@ impl<'s> Engine<'s> {
     ) -> Result<(), StopReason> {
         let slice = completed.as_mut_slice();
         slice.sort_by(|a, b| {
-            (a.attempt, a.pos, a.cost, a.hist).cmp(&(b.attempt, b.pos, b.cost, b.hist))
+            (a.attempt, a.pos, a.pending, a.cost, a.hist)
+                .cmp(&(b.attempt, b.pos, b.pending, b.cost, b.hist))
         });
         let mut groups: Vec<Thread> = Vec::new();
+        // Completions whose deferred values differ (their costs are not
+        // known yet) are never grouped.
         for thread in completed.as_slice() {
             match groups.last_mut() {
-                Some(last) if last.attempt == thread.attempt && last.pos == thread.pos => {
+                Some(last)
+                    if last.attempt == thread.attempt
+                        && last.pos == thread.pos
+                        && last.pending == thread.pending =>
+                {
                     if last.cost == thread.cost {
                         last.hist = self.arena.pack(last.hist, thread.hist)?;
                     }
@@ -3936,7 +4618,9 @@ impl<'s> Engine<'s> {
         }
         let dangling = matches!(eof, Some(GenerationStop::Length));
         for group in groups {
-            if eof.is_some() {
+            // A completion before the end of output (a stalled failure's
+            // repair) is decided by the bytes after it, as mid-output.
+            if eof.is_some() && group.pos >= self.fed {
                 self.emit(table, group, dangling, governor)?;
             } else {
                 self.tables[table].trails.push(Trail {
@@ -4308,6 +4992,154 @@ impl<'s> Engine<'s> {
         dangling: bool,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        if thread.beside() && !dangling && !self.tables[table].program.grouped {
+            // A reading beside another (its value holds closer text): held
+            // until its attempt ends, when only the newest is reported (the
+            // call ends at the last closer that completes it).
+            governor.charge(
+                Resource::ScratchBytes,
+                size(<Thread as ScratchCharge>::CHARGE),
+            )?;
+            self.tables[table].past.push(thread);
+            return Ok(());
+        }
+        self.report(table, thread, dangling, governor)
+    }
+
+    /// Report the held completions beside another reading of `attempt`
+    /// (see [`Table::past`]) that end latest and whose value is read: the
+    /// reading that ends the call at the last closer completing it. At that
+    /// end, the least costly ones are reported (equally cheap ones side by
+    /// side); a completion whose cost before its value is read (a lower
+    /// bound) already exceeds the least found, or a completion as written
+    /// of the same span, is dropped unread, as are the older ones and any
+    /// whose value no repair reads (so a value holding many closers is read
+    /// once or twice, not once per closer). `Work` per held completion and
+    /// completion as written compared.
+    fn release_past(
+        &mut self,
+        table: usize,
+        attempt: u64,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        if !self.tables[table]
+            .past
+            .iter()
+            .any(|thread| thread.attempt == attempt)
+        {
+            return Ok(());
+        }
+        let (mine, rest): (Vec<Thread>, Vec<Thread>) =
+            core::mem::take(&mut self.tables[table].past)
+                .into_iter()
+                .partition(|thread| thread.attempt == attempt);
+        // The partition reads every held completion; each of
+        // the attempt's is compared with its completions as written.
+        governor.charge(
+            Resource::Work,
+            size(mine.len() + rest.len()).saturating_add(
+                size(mine.len()).saturating_mul(size(self.tables[table].written.len()).max(1)),
+            ),
+        )?;
+        self.tables[table].past = rest;
+        governor.release_scratch(
+            size(mine.len()).saturating_mul(size(<Thread as ScratchCharge>::CHARGE)),
+        )?;
+        // The latest end first; within one end, the least cost before the
+        // value is read first (reading a value only adds cost).
+        let mut mine = mine;
+        mine.sort_by_key(|thread| (Reverse(thread.pos), thread.cost));
+        let mut index = 0;
+        while index < mine.len() {
+            let end = mine[index].pos;
+            let group = mine[index..]
+                .iter()
+                .take_while(|thread| thread.pos == end)
+                .count();
+            // The same span already reported as written at less cost.
+            let written = self.tables[table]
+                .written
+                .iter()
+                .filter(|&&(owner, at, _)| owner == attempt && at == end)
+                .map(|&(_, _, cost)| cost)
+                .min();
+            let mut best: Option<u64> = None;
+            let mut chosen: Vec<Thread> = Vec::new();
+            for &candidate in &mine[index..index + group] {
+                let bound = written.into_iter().chain(best).min();
+                if bound.is_some_and(|bound| candidate.cost > bound) {
+                    continue;
+                }
+                let mut thread = candidate;
+                if thread.pending != 0 {
+                    let (mut step, _, _) = self.split(table);
+                    let Some(added) = step.resolve(thread.pending, governor)? else {
+                        continue;
+                    };
+                    thread.cost = thread.cost.saturating_add(added);
+                    thread.pending = 0;
+                }
+                if written.is_some_and(|written| thread.cost > written) {
+                    continue;
+                }
+                match best {
+                    Some(least) if thread.cost > least => {}
+                    Some(least) if thread.cost == least => chosen.push(thread),
+                    _ => {
+                        best = Some(thread.cost);
+                        chosen.clear();
+                        chosen.push(thread);
+                    }
+                }
+            }
+            if !chosen.is_empty() {
+                for thread in chosen {
+                    self.report(table, thread, false, governor)?;
+                }
+                return Ok(());
+            }
+            index += group;
+        }
+        Ok(())
+    }
+
+    /// Drop the completions as written recorded for `attempt` (see
+    /// [`Table::written`]), which has ended.
+    fn forget_written(
+        &mut self,
+        table: usize,
+        attempt: u64,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let written = &mut self.tables[table].written;
+        let before = written.len();
+        written.retain(|&(owner, _, _)| owner != attempt);
+        governor.release_scratch(size(before - written.len()).saturating_mul(WRITTEN_BYTES))
+    }
+
+    fn report(
+        &mut self,
+        table: usize,
+        mut thread: Thread,
+        dangling: bool,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        if !thread.beside() && !self.tables[table].program.grouped {
+            governor.charge(Resource::ScratchBytes, WRITTEN_BYTES)?;
+            self.tables[table]
+                .written
+                .push((thread.attempt, thread.pos, thread.cost));
+        }
+        if thread.pending != 0 {
+            // A deferred body's value is read now: a value no repair reads
+            // leaves no completion (this reading beside another is dropped).
+            let (mut step, _, _) = self.split(table);
+            let Some(added) = step.resolve(thread.pending, governor)? else {
+                return Ok(());
+            };
+            thread.cost = thread.cost.saturating_add(added);
+            thread.pending = 0;
+        }
         let kind = self.tables[table].kind;
         let dialect = self.grammars[self.tables[table].grammar].dialect.clone();
         let (step, _, _) = self.split(table);
@@ -4343,6 +5175,12 @@ impl<'s> Engine<'s> {
         match segmentations {
             Ok(segmentations) => {
                 record.completed = true;
+                // It ends whole: a held report at its opener is outread now,
+                // and no longer waits for it (see `Self::defer`).
+                if !self.whole.contains(&record.start) {
+                    governor.charge(Resource::ScratchBytes, DEFERRED_BYTES)?;
+                    self.whole.push(record.start);
+                }
                 let grouped = self.tables[table].program.grouped;
                 let charged = if segmentations.len() == 1 { charged } else { 0 };
                 for parts in segmentations {
@@ -4474,6 +5312,22 @@ impl<'s> Engine<'s> {
         Ok(())
     }
 
+    /// Stop every body that read on past a closer (see [`PAST_REPAIRED`]) of
+    /// an attempt begun before `start`, where a reasoning block opens: a
+    /// call is cut at the block's marker (`tool_call.reasoning.marker-cut`),
+    /// so a value read on past it is never read. One `Work` unit per
+    /// configuration examined.
+    pub(crate) fn stop_past_at(
+        &mut self,
+        start: usize,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        for table in &mut self.tables {
+            Self::stop_past(&mut table.threads, Some(start), &[], governor)?;
+        }
+        Ok(())
+    }
+
     /// Drop attempt `attempt` of every table: its configurations, trails,
     /// held completions and failures, and its record, with no event. The
     /// turn level abandons an attempt that opened where no reading of the
@@ -4509,8 +5363,25 @@ impl<'s> Engine<'s> {
                 failure.thread.attempt != attempt
             });
             keep(&mut table.boundaries, |known| known.attempt != attempt);
+            keep(&mut table.stalled, |failure| {
+                failure.thread.attempt != attempt
+            });
             table.trails.retain(|trail| trail.thread.attempt != attempt);
             table.held.retain(|entry| entry.attempt != attempt);
+            let dropped = table
+                .past
+                .iter()
+                .filter(|thread| thread.attempt == attempt)
+                .count();
+            table.past.retain(|thread| thread.attempt != attempt);
+            governor.release_scratch(
+                size(dropped).saturating_mul(size(<Thread as ScratchCharge>::CHARGE)),
+            )?;
+            let written = table.written.len();
+            table.written.retain(|&(owner, _, _)| owner != attempt);
+            governor.release_scratch(
+                size(written - table.written.len()).saturating_mul(WRITTEN_BYTES),
+            )?;
         }
         self.forget_resync(attempt, governor)?;
         self.release_deferred(governor)
@@ -4548,6 +5419,9 @@ impl<'s> Engine<'s> {
             self.tables[table].threads.clear();
             self.tables[table].attempts.clear();
             self.tables[table].failures.clear();
+            self.tables[table].stalled.clear();
+            let written = core::mem::take(&mut self.tables[table].written);
+            governor.release_scratch(size(written.len()).saturating_mul(WRITTEN_BYTES))?;
             self.tables[table].trails.clear();
         }
         // Every attempt has ended: every held report is due.
@@ -4564,11 +5438,15 @@ impl<'s> Engine<'s> {
         governor: &mut Governor,
     ) -> Result<bool, StopReason> {
         let slice = completed.as_mut_slice();
-        slice.sort_by_key(|thread| (thread.pos, thread.cost, thread.hist));
+        slice.sort_by_key(|thread| (thread.pos, thread.pending, thread.cost, thread.hist));
         let mut groups: Vec<Thread> = Vec::new();
         for thread in completed.as_slice() {
             match groups.last_mut() {
-                Some(last) if last.pos == thread.pos && last.cost == thread.cost => {
+                Some(last)
+                    if last.pos == thread.pos
+                        && last.pending == thread.pending
+                        && last.cost == thread.cost =>
+                {
                     last.hist = self.arena.pack(last.hist, thread.hist)?;
                 }
                 _ => groups.push(*thread),
@@ -4588,6 +5466,15 @@ impl<'s> Engine<'s> {
         let threads: Vec<Thread> = self.tables[table].threads.as_slice().to_vec();
         let grouped = self.tables[table].program.grouped;
         for record in records {
+            // Its reading beside another, held until now, may complete it.
+            self.release_past(table, record.id, governor)?;
+            let record = self.tables[table]
+                .attempts
+                .as_slice()
+                .iter()
+                .find(|live| live.id == record.id)
+                .copied()
+                .unwrap_or(record);
             // A grouped attempt that completed a call may still be writing
             // the next one: its cut-off reading competes too.
             if record.opened && (!record.completed || grouped) {
@@ -4619,6 +5506,7 @@ impl<'s> Engine<'s> {
                 // A call whose arguments value was complete at the cut is
                 // whole: the stop cut the output after it, not the call.
                 let completed = self.whole_calls(table, &mut whole.completed, governor)?;
+                self.release_past(table, record.id, governor)?;
                 if let Some(thread) = best.filter(|_| grouped || !completed) {
                     self.emit(
                         table,
@@ -4631,6 +5519,7 @@ impl<'s> Engine<'s> {
                     )?;
                 }
             }
+            self.forget_written(table, record.id, governor)?;
             self.release(table, record.id, governor)?;
             self.forget_resync(record.id, governor)?;
             self.take_boundary(table, record.id);
@@ -4668,6 +5557,19 @@ impl<'s> Engine<'s> {
         }
         Ok(())
     }
+}
+
+/// Whether `thread` reads a call's verbatim argument body: a `raw` or
+/// `xml-params` slot of a call production (`kind`) of `program`.
+fn verbatim_slot(program: &Program, kind: ProductionKind, thread: &Thread) -> bool {
+    kind == ProductionKind::Call
+        && matches!(
+            program.insts[thread.pc as usize],
+            Inst::Slot {
+                codec: CodecKind::Raw | CodecKind::XmlParams,
+                ..
+            }
+        )
 }
 
 /// The digest of a reading's edit sequence after one more edit.

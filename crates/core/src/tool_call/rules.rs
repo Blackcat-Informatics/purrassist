@@ -77,7 +77,7 @@
 //!   `tool_call.arguments.decode-string`, `tool_call.name.alias`,
 //!   `tool_call.parameter.alias`, `tool_call.parameter.pass-through`,
 //!   `tool_call.parameter.collect`, `tool_call.value.decode-typed`,
-//!   `tool_call.value.schema-typed`;
+//!   `tool_call.value.schema-typed`, `tool_call.value.closer-in-value`;
 //! - records: `tool_call.reasoning.unterminated`, `tool_call.truncated`,
 //!   `tool_call.markup.dangling-opener`, `tool_call.id.dedup`,
 //!   `tool_call.input.invalid-utf8`, `tool_call.value.invalid-utf8`,

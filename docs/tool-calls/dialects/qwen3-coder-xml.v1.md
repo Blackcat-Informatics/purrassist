@@ -43,6 +43,8 @@ first-party; no chat-template text is copied into this repository.
   as JSON with their exact spellings. An object parameter may hold nested
   `<parameter=...>` elements instead of inline JSON; both give the same
   tree. A body that is one whole JSON object is accepted as the arguments.
+  A string value may hold closer text (see
+  [Closer text inside a value](#closer-text-inside-a-value)).
 - The `<tool_call>` opener is shared with [Hermes](hermes.v1.md). With both
   dialects allowed (the default), each attempts a call there and the body
   decides: a `<function=` body is read by this dialect, and the other dialect's attempt
@@ -118,8 +120,9 @@ edit but the framing newlines.
   otherwise complete), keeping the least-cost reading. A closer spelling
   immediately after a complete call (`</function></function>`,
   `</tool_call></tool_call>`) is absorbed into that call as a stray closer,
-  never left as content. A stray `</parameter>` between parameters is
-  deleted by the codec, a body of only closers is no arguments
+  never left as content. A stray `</parameter>` between parameters (after a
+  typed value, or one a string value cannot hold) is deleted by the codec,
+  a body of only closers is no arguments
   (`tool_call.markup.closers-only-empty`), a declared parameter's opener ends
   an unclosed value (`tool_call.markup.missing-parameter-close`), and the
   end of the function element ends one
@@ -128,15 +131,133 @@ edit but the framing newlines.
 These are repairs and are covered by the repair goldens, not by the
 conformance anchors, which hold canonical markup only.
 
+## Closer text inside a value
+
+A parameter value can legitimately contain the exact text of a closer: a
+`write_file` whose content includes `<parameter>v</parameter>`, or
+documentation that mentions `</function></tool_call>`. Such a value has two
+readings, and recovery picks between them by evidence
+(`tool_call.value.closer-in-value`):
+
+- (A) the value ends at the first closer, as the markup would end it;
+- (B) the value holds that closer as text and ends at the closer that
+  actually completes the call.
+
+Both are read, and compared by the existing cost machinery (the repairs each
+needs, with their rule costs): when only one reading parses the rest of the
+call without repairs the other does not need, it wins and the call stays
+`Resolved` (reading A typically leaves `v</parameter></function></tool_call>`
+behind, which needs stray-closer deletions, leaves text between parameters,
+or closes the value by its element). When both parse cleanly, as for a value
+that ends exactly like a real closer sequence, the call is `Ambiguous` and
+reports both values (never usable on a mutating tool). A value read as B
+records `tool_call.value.closer-in-value`, spanning from the first closer it
+holds to where it ends (naming both places the value could end); it is not a
+guess, since it is chosen only when the other reading needs more repair, and
+equally clean readings are reported side by side.
+
+Where the closers are:
+
+- inside the function body, `</parameter>` (and `</parameters>`): the
+  `xml-params` codec weighs every closer before the next declared parameter
+  as a place the value may end, in one pass over the value;
+- the call's own closers (`</function>`, `</tool_call>` and their declared
+  variants `</functions>`, `</tool_calls>`), which end the arguments slot:
+  the engine reads the slot on past each one beside the reading that ends
+  there.
+
+What a value never holds: a declared parameter's opener (it always ends a
+value); a misspelled declared opener after a closer (between parameters it
+begins that parameter, `tool_call.markup.token-misspelled`); text after a
+closer up to the next opener or the end of the body (text between
+parameters is malformed, so the value reads text only up to a later
+closer); a call it would end inside (see below); an opening reasoning marker
+(a call is cut there, `tool_call.reasoning.marker-cut`); and, for a string
+with a declared pattern, a value the pattern rejects (the value then ends at
+its first closer). Typed values (parsed as JSON) and enumerations end at
+their first closer.
+
+Under `Effort::Exact` the rule applies too (it is parsing, not a repair): a
+canonical call whose value holds closer text resolves.
+
+Reading B is bounded and linear: in the codec it is one pass over the
+value; in the engine the reading that holds the call's closers forks one
+reading per closer it passes, whose value is read only if that reading
+completes the call (a fork that dies at the bytes after its closer costs
+nothing more, and only the last fork's failure is ever repaired), and of
+the readings that complete it only the latest is read (a reading of the
+same span already costing more than one reported is dropped unread). Under
+`ToolRecoveryRequest::sized` (33 `Work` units per byte with the `Standard`
+preset at 1 MiB), a 1 MiB `write_file` content holding 1,000 closers
+recovers in 17.6 units per byte for `</parameter>`, 21.6 for `</function>`,
+12.5 for `</function></tool_call>` and 18.3 for
+`</parameter></function></tool_call>` (`Ambiguous`, both values), against
+17.0 for the same value with no closer; a 1 MiB value ending in a closer
+sequence is `Ambiguous` in 28.0 (`tool_call_cost::closer_text_in_values_is_linear`
+proves the scaling).
+
+## Call markup inside a value
+
+A value may also hold a whole call's markup, as a `write_file` content
+documenting the format does (`Use <function=g><parameter=x>1</parameter></function>
+to call g`). The same evidence rule decides: (A) the calls read apart (the
+value ends inside the documented call, which is then read as a call of its
+own) against (B) the value holding the markup and ending at the closer that
+completes the outer call. A value holding call markup holds whole calls: a
+reading whose value would end inside a call another attempt opened in it
+(its closers are the outer call's own, as for two calls in a row) is no
+reading, so two consecutive calls are never read as one call holding the
+other. Otherwise:
+
+- when only one reading is clean, it wins: documentation whose calls end
+  the value only with a repair (a wrapper closer inserted before text,
+  stray closers, a call naming a tool the set does not declare) is one
+  call with the full content, and no call is read from it;
+- when both are clean, as for a value holding the call's own closers and
+  then a whole call of a declared tool, the turn is `Ambiguous` with both
+  readings (one call with the full content, or the calls read apart),
+  nothing is usable, and the separate calls are never read silently.
+
+A documented call wrapped in `<tool_call>` and followed by more text is
+`Ambiguous` too: the reading that ends the value at the documented call's
+`</parameter>` and is closed by its `</function></tool_call>` leaves the
+text and the real closers as content, needing no repair (never usable;
+`qwen_value_holds_wrapped_call_then_text`).
+
+Measured at 1 MiB under `ToolRecoveryRequest::sized` (33 units per byte):
+a `write_file` content holding 1,000 documented calls recovers as one call
+with the full content in 23.2 units per byte when they are written inline
+(`<function=g>...</function>`; 26.7 for 4,000), and is `Ambiguous` in 32.9
+when each is wrapped in `<tool_call>` and followed by text (a value holding
+2,000 or more wrapped calls in 1 MiB exhausts the sized budget, an explicit
+`BudgetExceeded(Work)`); a value holding its closers and then 1,000 whole
+calls is `Ambiguous` in 30.7.
+
+The reading is bounded: the value of the call just before another call's
+opener reads on over that one call (so a value holding its closers and
+then a whole call is weighed), the value of the earliest call read as
+written only with a repair reads on over every call after it (so a README
+documenting several calls is one call), and every other value stops at the
+next call's opener; a reading never forks while a call it holds is open.
+*Proved by* the goldens `qwen_value_holds_call_markup`,
+`qwen_value_holds_several_documented_calls`,
+`qwen_value_holds_closers_then_whole_call`,
+`qwen_value_holds_closers_then_undeclared_call`,
+`qwen_value_holds_wrapped_call_then_text` and
+`qwen_consecutive_calls_of_different_tools`, and the `call-markup`,
+`wrapped-call-markup` and `closers-then-call` rows of the correction
+evaluation.
+
 ## Deliberately not accepted
 
 - Several `<function=...>` elements inside one `<tool_call>` wrapper: the
   template always wraps each call separately.
 - Attributes or quoting in the opener (`<function name="x">`,
   `<parameter name="p">`): these belong to other XML dialects.
-- Text between parameters other than whitespace, text after a whole-JSON
-  body, and text between `</function>` and a later closer such as
-  `</tool_call>` (the call is malformed).
+- Text between parameters other than whitespace (unless a later closer
+  ends the value that holds it), text after a whole-JSON body, and text
+  between `</function>` and a later closer such as `</tool_call>` (the call
+  is malformed).
 - Python-style literals in typed values (`True`, `None`) are not canonical;
   the JSON codec's literal-case repair applies and is recorded.
 - Streaming deltas (no `delta` production).

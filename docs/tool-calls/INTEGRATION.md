@@ -145,8 +145,13 @@ is reported as certain.
      alternative opens a level, unless the alternative chains several calls
      that each open with it, as a section-less Kimi-K2 attempt does; a JSON
      object or array call nests by its brackets outside strings, and only
-     over bytes JSON reads: a bracket closing nothing the scan opened
-     closes a structure around the attempt and ends the scan, and past
+     over bytes JSON reads: brackets pair by kind (T6), so a `}` closes
+     the innermost open `{` and any bracket a slip left open inside it,
+     and a `}` or `]` with none of its kind open is a slip inside the
+     markup that closes nothing (a stray `}` in a Mistral list never ends
+     the list's markup before its `]`); a bracket closing nothing the scan
+     opened, with none open, closes a structure around the attempt and
+     ends the scan, and past
      where its grammar stopped, prose, as defined below, ends it too, so a
      bracket after it closes nothing the attempt read) when that closer
      comes before the next call opening the same alternative, a
@@ -169,8 +174,11 @@ is reported as certain.
   bytes up to where its grammar stopped reading open more brackets than
   they close, outside strings; bytes a resync read on past the failure are
   not parsed as JSON and open nothing) runs to the bracket that balances
-  it, unless prose comes first: a bare word (not
-  `true`, `false` or `null`) outside a string followed by another word or
+  it, brackets paired by kind as in step 3 (T6: in `{"a": [1, 2} done.`
+  the `}` balances the object, closing the `[` a slip left open, and is
+  the attempt's, not content), unless prose comes first: a bare word
+  (beginning at a letter or `_` that no letter, digit or `_` precedes, as
+  `_dir`; not `true`, `false` or `null`) outside a string followed by another word or
   sentence punctuation rather than JSON punctuation is no JSON structure,
   and the attempt then ends where its grammar stopped reading.
 
@@ -204,7 +212,9 @@ is reported as certain.
   `mistral3_group_bad_good_good_then_bracket`,
   `mistral3_group_bad_good_good_then_array`,
   `anthropic_rejection_shares_opener_closers`,
-  `deepseek31_rejection_balances_only_read_brackets` and
+  `deepseek31_rejection_balances_only_read_brackets`,
+  `mistral3_rejected_stray_brace_in_list`,
+  `mistral3_rejected_mismatched_bracket_closes_object` and
   `rejected_span_completes_literal_bare`, `_newlines` and `_wrapped`, and
   four `fuzz-tool-call` invariants: content after a rejected attempt that
   does not end with a literal ending a call of its dialect holds none; an
@@ -350,11 +360,12 @@ is reported as certain.
   near a closer (`<Parameter name="a">1</Parameter>`, `</parameterx>`,
   `</paramete>`, the declared variants `</functions>` and `</tool_calls>`,
   or a closer written inside a JSON string) is the value's text: an
-  `xml-params` value runs to its canonical `</parameter>` (a variant or
+  `xml-params` value runs to a canonical `</parameter>` (a variant or
   misspelled closer, or a misspelled `<parameter=`, ends it only when no
   canonical closer comes before the next parameter opener or the body's
-  end), a body delimited by a closer variant or confusable spelling also
-  reads on past it, and a delimiter written inside a string of a JSON value
+  end; which canonical closer is weighed by the next rule), a body
+  delimited by a closer variant or confusable spelling also reads on past
+  it, and a delimiter written inside a string of a JSON value
   not yet complete ends the value only as a fallback (the value ending by
   itself needs no repair). So canonical input is `Resolved` with its whole
   value, under `Effort::Exact` too. *Proved by*
@@ -370,6 +381,75 @@ is reported as certain.
   `hermes_value_holds_wrapper_closer`, `kimi_value_holds_call_closer` and
   `deepseek31_value_holds_call_closer`, and the `canonical` `near-closer`
   rows of the correction evaluation.
+- **Closer text inside a value is weighed by evidence.** A verbatim value
+  (an `xml-params` string, unmodeled or undeclared value; a `raw` body such
+  as Harmony's Python code) may hold the exact text of a closer: a
+  `write_file` content with `<parameter>v</parameter>`, or one that mentions
+  `</function></tool_call>`. Every closer that can end it is a place it may
+  end: reading A ends it at the first, reading B holds it and ends at the
+  closer that actually completes the call. Both are read and compared by
+  the existing cost machinery (the rule costs of the repairs each needs):
+  the reading that parses the rest of the call without repairs the other
+  does not need wins and stays `Resolved` (A typically leaves stray
+  closers, text between parameters, or a value closed by its element); when
+  both parse cleanly (a value ending exactly like a real closer sequence;
+  Python code holding `<|call|>`) the call is `Ambiguous` with both values,
+  never usable on a mutating tool. Reading B records
+  `tool_call.value.closer-in-value` (no repair and no guess: it is chosen
+  only over a reading that needs more repair), spanning from the first
+  closer it holds to where it ends. Inside a function body the
+  `xml-params` codec weighs every `</parameter>` before the next declared
+  parameter in one pass over the value; for the call's own closers
+  (`</function>`, `</tool_call>`, `<|call|>` and their declared variants)
+  the engine reads the arguments slot on past each closer beside the
+  reading that ends there. A value never holds a declared parameter's
+  opener, a misspelled one after a closer, text after a closer up to an
+  opener or the end of the body, a call it would end inside (two calls in
+  a row are never one call holding the other), or an opening reasoning
+  marker;
+  a string's declared pattern must admit it; typed values and enumerations
+  end at their first closer. The extra reading is bounded and linear: the
+  readings that end at later closers are read only if they complete the
+  call, and only the last of them is reported, so a 1 MiB value holding
+  1,000 closers recovers in linear work under `ToolRecoveryRequest::sized`.
+  A value may hold whole calls' markup too, as a value documenting the
+  format does: the calls read apart compete with the one call holding
+  them by the same evidence, so documentation whose calls end the value
+  only with a repair is one call with the full content, and when both
+  readings are clean (the value holds its own closers and then a whole
+  call of a declared tool) the turn is `Ambiguous` and nothing is usable;
+  a documented wrapped call followed by text is `Ambiguous` as well (see
+  the Qwen dialect document's "Call markup inside a value").
+  A JSON value is self-delimiting: closer text inside its strings was
+  never a closer, its reading past that text is the reading as written,
+  and a rejected call reports where that reading stopped, as before.
+  *Proved by* the goldens `qwen_value_holds_parameter_element`,
+  `qwen_value_holds_call_closers`, `qwen_value_holds_call_closers_then_text`,
+  `qwen_value_holds_call_closers_at_end`,
+  `qwen_value_holds_call_closers_then_long_text`,
+  `qwen_value_never_runs_past_reasoning_marker`,
+  `qwen_value_ends_with_closing_sequence`,
+  `qwen_value_holds_call_closers_unclosed`, `qwen_value_then_next_parameter`,
+  `qwen_value_holds_wrapper_closers_adversary`,
+  `qwen_value_holds_function_closers_adversary`,
+  `qwen_doubled_parameter_closer_is_value_text`,
+  `qwen_value_holds_text_between_closers`,
+  `qwen_value_closer_then_misspelled_opener`,
+  `qwen_value_closer_text_rejected_by_pattern`,
+  `qwen_consecutive_calls_of_different_tools`,
+  `qwen_bare_function_value_holds_function_closer`,
+  `harmony_python_code_holds_call_closer`,
+  `hermes_rejection_fails_past_closer_text_in_json_string`,
+  `qwen_value_holds_call_markup`,
+  `qwen_value_holds_several_documented_calls`,
+  `qwen_value_holds_closers_then_whole_call`,
+  `qwen_value_holds_closers_then_undeclared_call` and
+  `qwen_value_holds_wrapped_call_then_text` (each also under the default
+  allow-list), `tool_call_goldens::qwen_closer_text_held_by_evidence`,
+  `tool_call_goldens::qwen_closing_sequence_in_value_is_ambiguous`,
+  `tool_call_recover::doubled_parameter_closer_is_value_text`,
+  `tool_call_cost::closer_text_in_values_is_linear`, and the
+  `tool_call.value.closer-in-value` rows of the correction evaluation.
 - **A misspelled token still reads as its token.** The opener-side mirror
   of a misspelled closer: a markup token other than a closer (spelled with
   a leading `<` or `[`), the attempt's own opener included, one edit away

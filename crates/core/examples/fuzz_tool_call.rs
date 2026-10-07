@@ -46,15 +46,25 @@
 //!   furthest the recognizer read an attempt of its dialect at its opener)
 //!   and (T5) no further than the failure its reason reports, only to a
 //!   literal that ends a call of its dialect (T5: a single-byte one only
-//!   closing a bracket that opened before the failure), to the next call
-//!   of its attempt, to complete a
+//!   closing a bracket that opened before the failure, T6: in the markup
+//!   of the calls and parts of its split attempt right before it too,
+//!   brackets paired by kind, a call or attempt it covers never prose),
+//!   (T6) to an opening reasoning marker that cut a literal of its dialect
+//!   it had begun, over the maximal ill-formed UTF-8 subpart an
+//!   `InvalidUtf8` attempt failed on, (T6) under a length stop to the end
+//!   of output when no closer of its dialect follows the failure (an open
+//!   call is truncation), to the next call
+//!   of its attempt (T6: read or rejected; an attempt of its dialect
+//!   begins there), to complete a
 //!   literal begun before it, (T3) to the bracket that balances a JSON
-//!   value it left open with no prose between, or (T4) to such a closing literal written with one
+//!   value it left open with no prose between (T6: outside the strings
+//!   its bytes open from its start, brackets paired by kind), or (T4) to such a closing literal written with one
 //!   slip (keeping its delimiters), so prose after a broken opener stays
 //!   content;
 //! - (S3/F6) a rejected attempt keeps its own closing markup: when its
 //!   raw text does not end with a literal that ends a call of its dialect
-//!   (any alternative's, a chained call's own; not a single byte), the
+//!   (any alternative's, a chained call's own, or one with one slip; not
+//!   a single byte), the
 //!   content after it up to the next segment holds none;
 //! - (F7) a rejected span never ends inside a literal it began;
 //! - (F5) every embedded call is offered once, in span order;
@@ -305,7 +315,8 @@ fn dialect_closers(dialect: &DialectId) -> Vec<Vec<u8>> {
 
 /// S3/F6: a rejected attempt keeps its own closing markup. For an attempt
 /// a parser made, when its raw text does not end with a literal that ends
-/// a call of its dialect ([`dialect_closers`]), the content after it, up to
+/// a call of its dialect ([`dialect_closers`], or one written with one
+/// slip, which ends it as the closer does), the content after it, up to
 /// the next call, reasoning block or other attempt, holds none: that
 /// closer belongs to the attempt.
 fn check_rejected_markup(output: &[u8], calls: &ToolCalls) {
@@ -317,7 +328,12 @@ fn check_rejected_markup(output: &[u8], calls: &ToolCalls) {
             continue;
         };
         let closers = dialect_closers(dialect);
-        if closers.iter().any(|closer| rejected.raw.ends_with(closer)) {
+        // (T4) A closer written with one slip ends the attempt as the
+        // closer does (see `ends_with_slip`).
+        if closers
+            .iter()
+            .any(|closer| rejected.raw.ends_with(closer) || ends_with_slip(&rejected.raw, closer))
+        {
             continue;
         }
         let end = rejected.span.end;
@@ -812,6 +828,12 @@ fn check_rejected_extension(output: &[u8], calls: &ToolCalls, read: &[(Range<usi
             continue;
         }
         let grammar = dialect.grammar();
+        // T6: the markup a part of a split attempt continues (the calls and
+        // rejected parts of its dialect right before it, back to back) is
+        // read from where that run begins: a bracket it opened (a Mistral
+        // list's `[`) is structure the attempt framed.
+        let chain = chain_start(calls, dialect, rejected.span.start);
+        let nested = nested_segments(calls, failed, end, chain);
         // A single-byte closer (a JSON bracket or separator, which prose
         // writes too) counts only as structure the attempt framed itself:
         // its markup ends by closing every bracket it opened (see
@@ -825,7 +847,7 @@ fn check_rejected_extension(output: &[u8], calls: &ToolCalls, read: &[(Range<usi
                 if closer.len() > 1 {
                     trimmed.ends_with(closer)
                 } else {
-                    structural_end(&rejected.raw, failed - rejected.span.start)
+                    structural_end(&output[chain..end], failed - chain, &nested)
                 }
             });
         let completed = grammar.call_literals().iter().any(|spelling| {
@@ -838,33 +860,7 @@ fn check_rejected_extension(output: &[u8], calls: &ToolCalls, read: &[(Range<usi
         // open: its bytes open more brackets than they close (outside JSON
         // strings) at every point from where it failed until its last byte,
         // which balances them, with no prose between (prose is no JSON).
-        let balanced = {
-            let (mut depth, mut quoted, mut escaped, mut open) = (0_usize, false, false, true);
-            for (offset, &byte) in output[rejected.span.start..end].iter().enumerate() {
-                let at = rejected.span.start + offset;
-                if quoted {
-                    match byte {
-                        _ if escaped => escaped = false,
-                        b'\\' => escaped = true,
-                        b'"' => quoted = false,
-                        _ => {}
-                    }
-                } else {
-                    match byte {
-                        b'"' => quoted = true,
-                        b'{' | b'[' => depth += 1,
-                        b'}' | b']' => depth = depth.saturating_sub(1),
-                        _ => {}
-                    }
-                }
-                if at >= failed && at + 1 < end && depth == 0 {
-                    open = false;
-                }
-            }
-            open && depth == 0
-                && matches!(output[end - 1], b'}' | b']')
-                && !prose(&output[failed.min(end)..end])
-        };
+        let balanced = balanced_end(output, rejected.span.start, failed, end);
         // T4: or to a closer of its dialect written with one slip (one
         // byte inserted, deleted or substituted, or two adjacent bytes
         // swapped, keeping the closer's delimiters), which ends a rejected
@@ -874,20 +870,53 @@ fn check_rejected_extension(output: &[u8], calls: &ToolCalls, read: &[(Range<usi
             .iter()
             .flat_map(|ends| &ends.call_closers)
             .filter(|closer| closer.len() > 1)
-            .any(|closer| {
-                (closer.len().saturating_sub(1)..=closer.len() + 1).any(|length| {
-                    length <= rejected.raw.len()
-                        && slipped(&rejected.raw[rejected.raw.len() - length..], closer)
-                })
-            });
+            .any(|closer| ends_with_slip(&rejected.raw, closer));
         // T4/T5: or to the next call of its attempt (a skipped call left
-        // without its closer runs to where the next call's opener begins).
+        // without its closer runs to where the next call's opener begins),
+        // read or rejected: an attempt begins only at an opener of its
+        // dialect, so either shows that opener begins exactly there.
         let next_call = calls
             .calls
             .iter()
-            .any(|call| call.span.start == end && &call.dialect == dialect);
+            .any(|call| call.span.start == end && &call.dialect == dialect)
+            || calls
+                .rejected
+                .iter()
+                .any(|other| other.span.start == end && other.dialect.as_ref() == Some(dialect));
+        // T6: or to an opening reasoning marker that cut a literal of its
+        // dialect the attempt had begun (see `cut_by_marker`).
+        let cut = cut_by_marker(
+            output,
+            calls,
+            dialect.grammar().call_literals(),
+            rejected.span.start,
+            failed,
+            end,
+        );
+        // T6: or over the invalid UTF-8 it failed on: the maximal ill-formed
+        // subpart at its reported failure (`InvalidUtf8`).
+        let invalid = matches!(rejected.reason, Rejection::InvalidUtf8 { at } if at == failed)
+            && invalid_subpart(&output[failed..]).is_some_and(|length| failed + length == end);
+        // T6: or, under a length stop, to the end of output when the
+        // attempt was still open at the cut (no closer of its dialect after
+        // where it failed): the stop reads an open call as truncation, so
+        // the bytes up to the cut are the attempt's.
+        let truncated = calls.length_stop
+            && end == output.len()
+            && !dialect_closers(dialect).iter().any(|closer| {
+                output[failed..end]
+                    .windows(closer.len())
+                    .any(|window| window == &closer[..])
+            });
         assert!(
-            closed || completed || balanced || misspelled || next_call,
+            closed
+                || completed
+                || balanced
+                || misspelled
+                || next_call
+                || cut
+                || invalid
+                || truncated,
             "rejected attempt {:?} runs past where it failed ({failed}) without its closer: {:?}",
             rejected.span,
             String::from_utf8_lossy(&output[failed..end])
@@ -895,14 +924,143 @@ fn check_rejected_extension(output: &[u8], calls: &ToolCalls, read: &[(Range<usi
     }
 }
 
-/// Whether `bytes` hold prose outside JSON strings: a bare word (not
-/// `true`, `false` or `null`) followed by neither JSON punctuation
+/// The length of the maximal ill-formed UTF-8 subpart `bytes` begin with
+/// (the rest of `bytes` when they end inside a truncated sequence), or
+/// `None` when they begin with valid UTF-8.
+fn invalid_subpart(bytes: &[u8]) -> Option<usize> {
+    let error = core::str::from_utf8(bytes).err()?;
+    (error.valid_up_to() == 0).then(|| error.error_len().unwrap_or(bytes.len()))
+}
+
+/// Where the run of `dialect`'s calls and rejected parts that ends at
+/// `start`, back to back, begins (`start` when none ends there).
+fn chain_start(calls: &ToolCalls, dialect: &DialectId, start: usize) -> usize {
+    let mut chain = start;
+    while let Some(earlier) = calls
+        .calls
+        .iter()
+        .filter(|call| &call.dialect == dialect)
+        .map(|call| &call.span)
+        .chain(
+            calls
+                .rejected
+                .iter()
+                .filter(|other| other.dialect.as_ref() == Some(dialect))
+                .map(|other| &other.span),
+        )
+        .find(|span| span.end == chain && span.start < chain)
+        .map(|span| span.start)
+    {
+        chain = earlier;
+    }
+    chain
+}
+
+/// T3: whether the bytes of a rejected attempt from `start` (failed at
+/// `failed`) to `end` open more brackets than they close (outside JSON
+/// strings, paired by kind: a `}` closes the innermost open `{` and any
+/// bracket opened inside it, never a `[` alone) at every point from the
+/// failure until the last byte, which balances them, with no prose
+/// between.
+fn balanced_end(output: &[u8], start: usize, failed: usize, end: usize) -> bool {
+    // The open brackets by kind, innermost last: a closer closes the
+    // innermost open bracket of its kind (and any opened inside it); with
+    // none of its kind open it closes nothing.
+    let mut open: Vec<u8> = Vec::new();
+    let (mut quoted, mut escaped, mut unbalanced) = (false, false, true);
+    for (offset, &byte) in output[start..end].iter().enumerate() {
+        let at = start + offset;
+        if quoted {
+            match byte {
+                _ if escaped => escaped = false,
+                b'\\' => escaped = true,
+                b'"' => quoted = false,
+                _ => {}
+            }
+        } else {
+            match byte {
+                b'"' => quoted = true,
+                b'{' | b'[' => open.push(byte),
+                b'}' | b']' => {
+                    let kind = if byte == b'}' { b'{' } else { b'[' };
+                    if let Some(index) = open.iter().rposition(|&opener| opener == kind) {
+                        open.truncate(index);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if at >= failed && at + 1 < end && open.is_empty() {
+            unbalanced = false;
+        }
+    }
+    unbalanced
+        && open.is_empty()
+        && matches!(output[end - 1], b'}' | b']')
+        && !prose(&output[start..end], failed.clamp(start, end) - start, &[])
+}
+
+/// Whether a rejected attempt from `start` that failed at `failed` and ends
+/// at `end` ran into an opening reasoning marker that cut a literal of its
+/// dialect (`literals`) it had begun at or before where it failed: a
+/// reasoning block begins at `end`, and the bytes from the literal's start
+/// to `end` are a proper prefix of it (`</functio` before `<think>`). A
+/// rejected attempt that ran over an opening marker ends at it.
+fn cut_by_marker(
+    output: &[u8],
+    calls: &ToolCalls,
+    literals: &[Vec<u8>],
+    start: usize,
+    failed: usize,
+    end: usize,
+) -> bool {
+    calls.reasoning.iter().any(|block| block.start == end)
+        && literals.iter().any(|spelling| {
+            (1..spelling.len()).any(|length| {
+                end >= length
+                    && end - length >= start
+                    && end - length <= failed
+                    && spelling.starts_with(&output[end - length..end])
+            })
+        })
+}
+
+/// The calls and attempts (any dialect) a rejected attempt's markup covers
+/// between where its grammar failed and `end`, relative to `chain`:
+/// segments the markup passes over, never read as prose (see
+/// `structural_end`).
+fn nested_segments(
+    calls: &ToolCalls,
+    failed: usize,
+    end: usize,
+    chain: usize,
+) -> Vec<Range<usize>> {
+    calls
+        .calls
+        .iter()
+        .map(|call| &call.span)
+        .chain(calls.rejected.iter().map(|other| &other.span))
+        .filter(|span| span.start >= failed && span.end <= end && span.start < span.end)
+        .map(|span| span.start - chain..span.end - chain)
+        .collect()
+}
+
+/// Whether `bytes` hold prose outside JSON strings: a bare word (beginning
+/// at a letter or `_` that no letter, digit or `_` precedes; not `true`,
+/// `false` or `null`) followed by neither JSON punctuation
 /// (`,` `:` `}` `]` `"`, after spaces) nor the end, i.e. by another word or
-/// sentence punctuation.
-fn prose(bytes: &[u8]) -> bool {
+/// sentence punctuation, at or after `from`: strings open and close from
+/// the start of `bytes` (where the attempt's scan starts), so a failure
+/// inside a JSON string reads the rest of the string as text, never as
+/// words. `nested` (offsets into `bytes`, in any order) are
+/// calls and attempts a rejected attempt's markup covers (T6): markup, not
+/// prose, so a word right before one is followed by no prose, and no word
+/// inside one is read (strings still open and close across it).
+fn prose(bytes: &[u8], from: usize, nested: &[Range<usize>]) -> bool {
     let (mut quoted, mut escaped, mut at) = (false, false, 0);
     while at < bytes.len() {
         let byte = bytes[at];
+        let inside = at < from || nested.iter().any(|span| span.contains(&at));
         if quoted {
             match byte {
                 _ if escaped => escaped = false,
@@ -915,12 +1073,22 @@ fn prose(bytes: &[u8]) -> bool {
         }
         if byte == b'"' {
             quoted = true;
-        } else if byte.is_ascii_alphabetic() {
-            let word = bytes[at..]
+        } else if (byte.is_ascii_alphabetic() || byte == b'_')
+            && !inside
+            && (at == 0 || !(bytes[at - 1].is_ascii_alphanumeric() || bytes[at - 1] == b'_'))
+        {
+            // A word ends where a nested segment begins.
+            let limit = nested
+                .iter()
+                .map(|span| span.start)
+                .filter(|start| *start > at)
+                .min()
+                .unwrap_or(bytes.len());
+            let word = bytes[at..limit]
                 .iter()
                 .take_while(|byte| byte.is_ascii_alphanumeric() || **byte == b'_')
                 .count();
-            let after = bytes[at + word..]
+            let after = bytes[at + word..limit]
                 .iter()
                 .find(|byte| !matches!(byte, b' ' | b'\t'));
             if !matches!(&bytes[at..at + word], b"true" | b"false" | b"null")
@@ -939,15 +1107,20 @@ fn prose(bytes: &[u8]) -> bool {
 /// Whether `raw` ends with JSON structure its grammar read (outside
 /// strings): after trailing whitespace, a separator `,` and closing
 /// brackets that close what `raw` did not open (an enclosing list), its
-/// last byte is a `}` or `]` closing a bracket that opened before `failed`
+/// last byte is a `}` or `]` closing a bracket of its kind (brackets pair
+/// by kind) that opened before `failed`
 /// (an offset into `raw`, where the grammar stopped reading), or after it
 /// with no prose from the failure to the close: a bracket prose opened
 /// after the failure (`oops. Sorry ... {a, b}`) frames nothing the
-/// attempt read.
-fn structural_end(raw: &[u8], failed: usize) -> bool {
+/// attempt read. `nested` (offsets into `raw`) are the calls and attempts
+/// the markup covers, never prose (see `prose`).
+fn structural_end(raw: &[u8], failed: usize, nested: &[Range<usize>]) -> bool {
     let (mut quoted, mut escaped) = (false, false);
-    let mut open: Vec<usize> = Vec::new();
-    // For each byte, the offset of the bracket it closes (outside strings).
+    let mut open: Vec<(usize, u8)> = Vec::new();
+    // For each byte, the offset of the bracket it closes (outside strings):
+    // the nearest open bracket of its kind (closing any opened inside it),
+    // or none `raw` opened (`Some(None)`) when no bracket of its kind is
+    // open, so a stray `}` never stands for the `]` of a list.
     let mut closes: Vec<Option<Option<usize>>> = Vec::with_capacity(raw.len());
     for (offset, &byte) in raw.iter().enumerate() {
         if quoted {
@@ -962,9 +1135,18 @@ fn structural_end(raw: &[u8], failed: usize) -> bool {
         }
         match byte {
             b'"' => quoted = true,
-            b'{' | b'[' => open.push(offset),
+            b'{' | b'[' => open.push((offset, byte)),
             b'}' | b']' => {
-                closes.push(Some(open.pop()));
+                let kind = if byte == b'}' { b'{' } else { b'[' };
+                let pair = open
+                    .iter()
+                    .rposition(|&(_, opener)| opener == kind)
+                    .map(|index| {
+                        let opened = open[index].0;
+                        open.truncate(index);
+                        opened
+                    });
+                closes.push(Some(pair));
                 continue;
             }
             _ => {}
@@ -983,9 +1165,20 @@ fn structural_end(raw: &[u8], failed: usize) -> bool {
     }
     // The bracket opened before the failure, or after it with no prose
     // from the failure to its close (a JSON value after stray bytes).
+    let inside: Vec<Range<usize>> = nested
+        .iter()
+        .filter(|span| span.end <= at)
+        .cloned()
+        .collect();
     at > 0
         && matches!(closes[at - 1], Some(Some(opened))
-            if opened < failed || !prose(&raw[failed.min(at)..at]))
+            if opened < failed || !prose(&raw[..at], failed.min(at), &inside))
+}
+
+/// Whether `raw` ends with `closer` written with one slip (see `slipped`).
+fn ends_with_slip(raw: &[u8], closer: &[u8]) -> bool {
+    (closer.len().saturating_sub(1)..=closer.len() + 1)
+        .any(|length| length <= raw.len() && slipped(&raw[raw.len() - length..], closer))
 }
 
 /// Whether `token` is `closer` written with one slip: not `closer` itself,

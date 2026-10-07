@@ -143,6 +143,15 @@ pub const CLOSER_MISSPELLED: u64 = 2;
 /// (`tool_call.markup.token-misspelled`): as for a misspelled closer.
 pub const TOKEN_MISSPELLED: u64 = CLOSER_MISSPELLED;
 
+/// Cost of reading a closer's exact spelling inside a verbatim value as text
+/// (`tool_call.value.closer-in-value`): none.
+///
+/// It is no repair: the readings that end the value at each closer are
+/// compared by the repairs they need, so a reading that ends the value at
+/// the first closer and needs nothing more ties with it, and the two are
+/// reported side by side.
+pub const CLOSER_IN_VALUE: u64 = 0;
+
 /// Cost of deleting a stray closer (it discards input bytes).
 pub const DELETE_STRAY_CLOSER: u64 = 3;
 

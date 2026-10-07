@@ -735,6 +735,106 @@ TOOL_CALL_REGRESSIONS = [
     # and ends after its closer: the calls it read inside stay embedded.
     b'\x5b\x9c[TOOL_CALLS]t[TOOL_CALLS]S[/THINK][TOOL_CALLS]g',
     b'\x00\x52<function=read_file<oops. Now the real one: <tool_call>\n<function=read_file>\n<parameter=path>\na\n</parameter>\n</function>\n</tool_call> bye',
+    # T6: closer text a value holds: `<parameter>v</parameter>` (the codec weighs every closer).
+    b'\\x00R<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nx <parameter>v</parameter> y\n</parameter>\n</function>\n</tool_call>',
+    # T6: the call's closers inside a value (the engine reads on past each closer).
+    b'\\x00R<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nEnd with </function></tool_call> then stop.\n</parameter>\n</function>\n</tool_call>',
+    # T6: a value ending exactly like a call's closers: Ambiguous.
+    b'\\x00R<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nx\n</parameter>\n</function>\n</tool_call>\n</parameter>\n</function>\n</tool_call>',
+    # T6: closer text and a missing `</tool_call>` before text: the stalled fork's repair.
+    b'\\x00R<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nx </function></tool_call> y\n</parameter>\n</function>\nDone.',
+    # T6: closer text and a missing `</tool_call>` at the end.
+    b'\\x00R<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nx </function></tool_call> y\n</parameter>\n</function>',
+    # T6: a doubled `</parameter>` and text between closers.
+    b'\\x00R<tool_call>\n<function=write_file>\n<parameter=content>\nx\n</parameter>\nmore text\n</parameter>\n</parameter>\n<parameter=path>\na.md\n</parameter>\n</function>\n</tool_call>',
+    # T6: two calls of different tools: a value never runs past another call's opener.
+    b'\\x00R<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nx\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=read_file>\n<parameter=path>\nb.md\n</parameter>\n</function>\n</tool_call>',
+    # T6: a bare function whose value holds `</function>`.
+    b'\\x00R<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nsee </function> here\n</parameter>\n</function>',
+    # T6: a reasoning block then stray closers: a value never runs past its marker.
+    b'\\x00R<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nx\n</parameter>\n</function>\n</tool_call>\n<think>plan</think>\n</parameter>\n</function>\n</tool_call>',
+    # T6: Harmony Python code holding `<|call|>`.
+    b'\\x00R<|start|>assistant<|channel|>analysis to=python<|message|>print("<|call|>")\nprint(1)<|call|>',
+    # A Kimi-K2 attempt that skipped several calls runs to where the next
+    # call's opener begins, that call itself rejected (a campaign failure).
+    b'\x00R<|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{"a":"x"}<|tool_call_end|><|tool_call_begin|>functions.f:1<|tool_call_argument_begin|>{"a":"y"}<|tool_call_end|><|tool_call_begin|>functi<|channeall_end|><|tool_call_begin|>functions.f:1<|tool_call_argument_begin|>{"a":"y"}<|tool_call_end|><|tool_call_begin|>functi<|channel|>one',
+    # The last part of a split Mistral v3 list runs to the list's `]`,
+    # which closes the `[` its attempt opened before the part (a campaign
+    # failure).
+    b'\xe6#[TOOL_CALLS][\t{"id":"call_90d7a28a",\t"arguments":{"city":"\\n  block\\n src/lib.rs","unit":"fahrenheit"},\t\t"name"\t:\t\t"get_weather"\t\t},{"id"\t\t:"call_607e2c86"\t,"argum<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c>\\tseparated \\n  block\\n"}\t\t,"name"\t:"list_dir"\t}\t\t]',
+    # A split Mistral v3 list whose parts write stray `}`s: a `}` never
+    # closes the list's `[`, so the last part ends at the `]` that does
+    # (a campaign failure).
+    b'[\xe6#[TOOL_CALLS][\t{"id":"call_90d7a28a",\t"arguments":{"city":"\\n  block\\n src/lib.rs","unit":"fahrenheit"},\t\t"name"\t:\t\t"get_weather"\t\t},{"id"\t\t:"call_607e2c86"\t,"argum<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c>\\tseparated \\n  block\\n"}\t\t,"name"\t:"list_t"},\t\t"name"\t:\t\t"get_weather"\t\t},{"id"\t\t:"call_607e2c86"\t,"argum<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c>\\tseparated \\n  block\\n"}\t\t,"name"\t:"list_dir"\t}\t\t]]',
+    # A rejected Mistral v3 list part followed by a stray `}`: brackets
+    # pair by kind, so the stray `}` never ends the markup and the part
+    # runs to the list's `]` (a campaign failure).
+    b'[\xe6#[TOOL_CALLS][\t{"id":"call_90d71.50ated \\n  block\\n"}\t\t,"name"\t:"list_t"},\t\t"name"\t:\t\t"get_weathe<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c>\x96ed \\n  block\\n"}\t\t,"name"\t:"list_dir"\t}\t\t]]',
+    # A rejected Llama 3 attempt whose markup covers a Kimi-K2 attempt
+    # written inside a broken key (`"in<|tool_calls_section_begin|>put"`):
+    # the nested attempt is markup, so the word before it is no prose and
+    # the markup runs to the bracket that closes it (a campaign failure).
+    b'[\xe6#{\t\t"type":"tool_use","id"<|tool_call_argument_begin|>\t\t:\t"call_22bb690f",\t\t"name"\t:\t\t"write_file",\t"input":"{\\"pat<|python_tag|>\\"ratio\\":39.32,\\"count\\":-415,\t\t:\t"call_22bb690f",\t\t"name"\t:\t\t"write_file",\t"in<|tool_calls_section_begin|>put":"{\\"pat<|python_tag|>\\"ratio\\":39.32,\\"count\\":-415,\\"options\\":{\\"backup\\":false}}"\t}]',
+    # A rejected Qwen attempt whose `</function>` closer an opening
+    # `<think>` cuts (`</functio<think>`): it ends at the marker (a
+    # campaign failure).
+    b'\x00R<function=read_file>\n<parameter=path>\na\n</parameter>\n</functio<think>ameter>\n</function>',
+    # A rejected DeepSeek attempt failing on invalid UTF-8 (`\xe2\x82_`):
+    # its span covers the maximal ill-formed subpart it failed on (a
+    # campaign failure).
+    b'[[\x00RHi <\xef\xbd\x9ctool\xe2\x96\x81calls\xe2\x96\x81begin\xef\xbd\x9c><\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begin\xef\xbd\x9c>read_file<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>{"path":"a"}<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c><\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begin\xef\xbd\x9c>read\xe2\x82_file oops<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c<|tool_call_begin|>ead_file<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>{"path":"c"}<\xef\xbd\x9ct\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begin\xef\xbd\x9c>read_file oops<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c<|tool_call_begin|>ead_file<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>{"path":"c"}<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c><\xef\xbd\x9ctool\xe2\x96\x81calls\xe2\x96\x81end\xef\xbd\x9c> done]]',
+    # Under a length stop, a Kimi-K2 section's skipped last call the output
+    # cut off runs to the end of output: an open call is truncation (a
+    # campaign failure).
+    b'\xe6#<|tool_calls_section_begin|><|tool_call_begin|>functions.rtions.read_file<|tool_call_argument_begin|>{"path": "a.rs"}<|tool_call_end|><|tool_call_begin|>lnd|><|tool_calls_secnd|>',
+    # A rejected Mistral v11 call failing inside a JSON string: the rest of
+    # the string is text, never prose, so its markup runs to the bracket
+    # that balances its arguments (a campaign failure).
+    b'\x00R[TOOL_CALLS]get_weather\t[CALL_ID]call_74616796\t[ARGS]{"city":"\\n  block\\n src/lib.rs","unit":"fahrenheit"}[TOOL_CALLS]\t\tlist_dir[CALL_ID]call_5c2a449c\t\t[ARGS]{"path":<|tool_call_end|>"line one\\nline two"}',
+    # T6: a rejected Hermes call whose JSON strings hold `</tool_call>`
+    # text: a JSON value is self-delimiting, so where it failed is where
+    # its reading as written stopped, and its markup runs to its own closer
+    # (a campaign failure).
+    b'\x00R<tool_call>{"name":"write_file","arguments":{"path":"a","content":"x </tool_call> and </tool_cal> y":{"path":"a","content":"x </tool_call> and </tool_cal> y"t":""arguments":x </tool_call> and </tool_cal> y"}}</tool_call>',
+    # A rejected Hermes attempt ending at a closer written with one slip
+    # (`</tool_cal>`), an exact closer later in prose: the slipped closer is
+    # the attempt's own (T4), so the later one stays content.
+    b'\x00R<tool_call>{"name": oops</tool_cal> and then </tool_call>',
+    # A rejected Mistral v11 call closing an array with `}`: the `}` balances
+    # the object (brackets pair by kind), so the attempt runs to it (T3).
+    b'\x00RHi [TOOL_CALLS]f[ARGS]{"a": [1, 2} done.',
+    # The same in a DeepSeek V3.1 call, whose closers are no single bracket.
+    b'\x00RHi <\xef\xbd\x9ctool\xe2\x96\x81calls\xe2\x96\x81begin\xef\xbd\x9c><\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begin\xef\xbd\x9c>f<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>{"a": [1, 2} done.',
+    # A stray `]` after a Mistral v11 call's arguments balances nothing (brackets
+    # pair by kind): the rejected attempt never runs over it (T3).
+    b'\x00RHi [TOOL_CALLS]f[ARGS]{"a": [1, 2]] done.',
+    # The same in a DeepSeek V3.1 call.
+    b'\x00RHi <\xef\xbd\x9ctool\xe2\x96\x81calls\xe2\x96\x81begin\xef\xbd\x9c><\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begin\xef\xbd\x9c>f<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>{"a": [1, 2]] done.',
+    # A `{` inside a JSON string of a rejected Mistral v11 call opens nothing:
+    # the attempt runs to the `}` that balances its object, never past it.
+    b'\x00RHi [TOOL_CALLS]f[ARGS]{"a": "{", 1 2} rest} more.',
+    # A rejected Mistral v11 call failing inside a JSON string, then prose:
+    # strings open and close from the attempt's start, so the prose is seen.
+    b'\x00R[TOOL_CALLS]get_weather\t[CALL_ID]call_74616796\t[ARGS]{"city":"\\n  block\\n src/lib.rs","unit":"fahrenheit"}[TOOL_CALLS]\t\tlist_dir[CALL_ID]call_5c2a449c\t\t[ARGS]{"path":<|tool_call_end|>"line one\\nline two" oops. Sorry, wrong} done.',
+    # A rejected Hermes attempt, prose, then a reasoning block: the attempt
+    # never runs over the prose to the marker.
+    b'\x00R<tool_call>{"name": oops} more prose here <think>t</think> done',
+    # A rejected Hermes attempt whose exact closer follows junk: the closer is
+    # its markup, never content.
+    b'\x00R<tool_call>{"name": "read_file" oops, "a": 1} junk</tool_call> done',
+    # Under a length stop, a rejected Hermes attempt that its closer closed
+    # never runs on to the end of output (only an open call is truncated).
+    b'\x04R<tool_call>{"name": oops}</tool_call> trailing words here',
+    # T6: a Qwen value holding its closers then a whole call of a declared
+    # tool: one call holding it and two calls apart are both clean.
+    b'\x00R<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nx\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=list_dir>\n<parameter=dir>\nsrc\n</parameter>\n</function>\n</tool_call>\n</parameter>\n</function>\n</tool_call>',
+    # T6: a README documenting a declared read-only tool three times inside a
+    # write_file value: one call, never three.
+    b'\x00R<tool_call>\n<function=write_file>\n<parameter=path>\nREADME.md\n</parameter>\n<parameter=content>\nTo list a directory:\n<function=list_dir>\n<parameter=dir>\nsrc\n</parameter>\n</function>\nor the tests:\n<function=list_dir>\n<parameter=dir>\ntests\n</parameter>\n</function>\nor the docs:\n<function=list_dir>\n<parameter=dir>\ndocs\n</parameter>\n</function>\nThat is all.\n</parameter>\n</function>\n</tool_call>',
+    # A rejected Llama 3 attempt followed by `_dir[ARGS]{...}`: a word may
+    # begin with `_`, so `_dir` followed by `[` is prose and the attempt never
+    # runs over it to the bracket (a campaign failure).
+    b'\xe6#[TOOL<|python_tag|>_dir[ARGS]{"path": "."}\nDone.',
 ]
 
 TOOL_CALL_SEEDS = [

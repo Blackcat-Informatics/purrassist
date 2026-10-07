@@ -1,0 +1,107 @@
+{
+  "description": "T6: two consecutive calls to different tools. The second call's parameters are not declared by the first tool, so the first call's value could hold the second call as text; that reading would end the value inside the second call (its closers are the first call's own), which no value does: a value holding call markup holds whole calls. Both calls are read, unchanged.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "write_file": "mutating",
+    "read_file": "read_only"
+  },
+  "input": "<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nx\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=read_file>\n<parameter=file>\nb.md\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 2,
+    "accepting_guesses": 2
+  },
+  "calls": [
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "a.md",
+        "content": "x"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline"
+      ]
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "file": "b.md"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [
+    "\n"
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline"
+  ]
+}

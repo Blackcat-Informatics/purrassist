@@ -1,0 +1,94 @@
+{
+  "description": "T6: a rejected Mistral v11 call whose arguments close an array's `[` with `}`: with no closer literal after it, the attempt runs to the bracket that balances the JSON value it left open, brackets paired by kind, so the `}` balances the object (closing the `[` a slip left open) and is the attempt's markup, not content (a single depth read it as closing the `[`, leaving `}` as content).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v11.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "Hi [TOOL_CALLS]f[ARGS]{\"a\": [1, 2} done.",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          3,
+          34
+        ],
+        "dialect": "mistral-v11.v1",
+        "candidate_dialects": [
+          "mistral-v11.v1",
+          "mistral-v3.v1"
+        ],
+        "reason": "Malformed { at: 33 }",
+        "raw": "[TOOL_CALLS]f[ARGS]{\"a\": [1, 2}"
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "Hi ",
+      " done."
+    ],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        3,
+        34
+      ],
+      "dialect": "mistral-v11.v1",
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "reason": "Malformed { at: 33 }",
+      "raw": "[TOOL_CALLS]f[ARGS]{\"a\": [1, 2}"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Hi ",
+    " done."
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

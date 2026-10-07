@@ -1,0 +1,226 @@
+{
+  "description": "T6: a write_file content holding the call's own closers and then a whole call of a declared tool (`list_dir`), followed by the real closers. Read apart, the two calls are clean (the real closers after the second call are stray, absorbed); the one call holding the second whole is clean too. Both readings are reported: the turn is ambiguous, nothing is usable, and the two calls are never read silently.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_dir",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "dir": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "dir"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "write_file": "mutating",
+    "read_file": "read_only",
+    "list_dir": "read_only"
+  },
+  "input": "<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nx\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=list_dir>\n<parameter=dir>\nsrc\n</parameter>\n</function>\n</tool_call>\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "ambiguous",
+  "stopped": "completed",
+  "readings": [
+    {
+      "finish": "calls",
+      "openai_finish_reason": "tool_calls",
+      "verdict": "run",
+      "usable_calls": {
+        "strict": 2,
+        "accepting_guesses": 2
+      },
+      "calls": [
+        {
+          "tool": "write_file",
+          "arguments": {
+            "path": "a.md",
+            "content": "x"
+          },
+          "candidate_dialects": [
+            "qwen3-coder-xml.v1"
+          ],
+          "outcome": "resolved",
+          "rules": [
+            "tool_call.xml.framing-newline",
+            "tool_call.xml.framing-newline",
+            "tool_call.xml.framing-newline",
+            "tool_call.xml.framing-newline"
+          ]
+        },
+        {
+          "tool": "list_dir",
+          "arguments": {
+            "dir": "src"
+          },
+          "candidate_dialects": [
+            "qwen3-coder-xml.v1"
+          ],
+          "outcome": "resolved",
+          "rules": [
+            "tool_call.xml.framing-newline",
+            "tool_call.xml.framing-newline"
+          ]
+        }
+      ],
+      "rejected": [],
+      "embedded": [],
+      "content": [
+        "\n",
+        "\n</parameter>\n</function>\n</tool_call>"
+      ]
+    },
+    {
+      "finish": "calls",
+      "openai_finish_reason": "tool_calls",
+      "verdict": "run",
+      "usable_calls": {
+        "strict": 1,
+        "accepting_guesses": 1
+      },
+      "calls": [
+        {
+          "tool": "write_file",
+          "arguments": {
+            "path": "a.md",
+            "content": "x\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=list_dir>\n<parameter=dir>\nsrc\n</parameter>\n</function>\n</tool_call>"
+          },
+          "candidate_dialects": [
+            "qwen3-coder-xml.v1"
+          ],
+          "outcome": "resolved",
+          "rules": [
+            "tool_call.value.closer-in-value",
+            "tool_call.xml.framing-newline",
+            "tool_call.xml.framing-newline",
+            "tool_call.xml.framing-newline",
+            "tool_call.value.closer-in-value",
+            "tool_call.xml.framing-newline"
+          ]
+        }
+      ],
+      "rejected": [],
+      "embedded": [],
+      "content": []
+    },
+    {
+      "finish": "calls",
+      "openai_finish_reason": "tool_calls",
+      "verdict": "run",
+      "usable_calls": {
+        "strict": 2,
+        "accepting_guesses": 2
+      },
+      "calls": [
+        {
+          "tool": "write_file",
+          "arguments": {
+            "path": "a.md",
+            "content": "x"
+          },
+          "candidate_dialects": [
+            "qwen3-coder-xml.v1"
+          ],
+          "outcome": "resolved",
+          "rules": [
+            "tool_call.xml.framing-newline",
+            "tool_call.xml.framing-newline",
+            "tool_call.xml.framing-newline",
+            "tool_call.xml.framing-newline"
+          ]
+        },
+        {
+          "tool": "list_dir",
+          "arguments": {
+            "dir": "src\n</parameter>\n</function>\n</tool_call>"
+          },
+          "candidate_dialects": [
+            "qwen3-coder-xml.v1"
+          ],
+          "outcome": "resolved",
+          "rules": [
+            "tool_call.value.closer-in-value",
+            "tool_call.xml.framing-newline",
+            "tool_call.value.closer-in-value",
+            "tool_call.xml.framing-newline"
+          ]
+        }
+      ],
+      "rejected": [],
+      "embedded": [],
+      "content": [
+        "\n"
+      ]
+    }
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.value.closer-in-value",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.value.closer-in-value",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.value.closer-in-value",
+    "tool_call.xml.framing-newline",
+    "tool_call.value.closer-in-value",
+    "tool_call.xml.framing-newline"
+  ]
+}

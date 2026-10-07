@@ -1,0 +1,116 @@
+{
+  "description": "T6: as qwen_value_holds_call_closers_then_text, with the output ending after the call's `</function>`: the reading that holds the closers inserts the missing `</tool_call>` at the end of output (`tool_call.markup.missing-closers-at-end`), as cheap as the reading that closes the value at the first `</function>` by its element: Ambiguous with both values.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "write_file": "mutating"
+  },
+  "input": "<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nx </function></tool_call> y\n</parameter>\n</function>",
+  "outcome": "ambiguous",
+  "stopped": "completed",
+  "readings": [
+    {
+      "finish": "calls",
+      "openai_finish_reason": "tool_calls",
+      "verdict": "run",
+      "usable_calls": {
+        "strict": 1,
+        "accepting_guesses": 1
+      },
+      "calls": [
+        {
+          "tool": "write_file",
+          "arguments": {
+            "path": "a.md",
+            "content": "x </function></tool_call> y"
+          },
+          "candidate_dialects": [
+            "qwen3-coder-xml.v1"
+          ],
+          "outcome": "resolved",
+          "rules": [
+            "tool_call.value.closer-in-value",
+            "tool_call.xml.framing-newline",
+            "tool_call.xml.framing-newline",
+            "tool_call.xml.framing-newline",
+            "tool_call.xml.framing-newline",
+            "tool_call.markup.missing-closers-at-end"
+          ]
+        }
+      ],
+      "rejected": [],
+      "embedded": [],
+      "content": []
+    },
+    {
+      "finish": "calls",
+      "openai_finish_reason": "tool_calls",
+      "verdict": "run",
+      "usable_calls": {
+        "strict": 1,
+        "accepting_guesses": 1
+      },
+      "calls": [
+        {
+          "tool": "write_file",
+          "arguments": {
+            "path": "a.md",
+            "content": "x "
+          },
+          "candidate_dialects": [
+            "qwen3-coder-xml.v1"
+          ],
+          "outcome": "resolved",
+          "rules": [
+            "tool_call.xml.framing-newline",
+            "tool_call.xml.framing-newline",
+            "tool_call.xml.framing-newline",
+            "tool_call.markup.parameter-closed-by-element"
+          ]
+        }
+      ],
+      "rejected": [],
+      "embedded": [],
+      "content": [
+        " y\n</parameter>\n</function>"
+      ]
+    }
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.value.closer-in-value",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.missing-closers-at-end",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.parameter-closed-by-element"
+  ]
+}

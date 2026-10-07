@@ -1,0 +1,73 @@
+{
+  "description": "T6: after a value's `</parameter>`, a misspelled opener of a declared parameter (`<parametr=path>`) begins that parameter (tool_call.markup.token-misspelled): between parameters it is a parameter boundary, so the value never runs on past it to hold it as text.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "write_file": "mutating"
+  },
+  "input": "<tool_call>\n<function=write_file>\n<parameter=content>\nhello\n</parameter>\n<parametr=path>\na.md\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "write_file",
+      "arguments": {
+        "content": "hello",
+        "path": "a.md"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.markup.token-misspelled",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.token-misspelled",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline"
+  ]
+}

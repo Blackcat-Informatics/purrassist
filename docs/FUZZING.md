@@ -154,8 +154,8 @@ targets' mutation tokens so mutation can create or move field boundaries).
   never overlap. (S3/F6) A rejected attempt keeps its own closing markup:
   when a parser's attempt does not end with a literal that ends a call of
   its dialect (any alternative's closer or a chained call's own, such as
-  Kimi-K2's `<|tool_call_end|>`; a single byte, which prose also writes, is
-  not one), the content after it, up to the next call, reasoning block, or
+  Kimi-K2's `<|tool_call_end|>`, or (T4) one written with one slip; a
+  single byte, which prose also writes, is not one), the content after it, up to the next call, reasoning block, or
   attempt, holds no such literal. (F4) A rejected attempt runs past where
   its grammar failed (the furthest the recognizer read an attempt of its
   dialect at that opener, in any reading, and (T5) no further than the
@@ -164,13 +164,26 @@ targets' mutation tokens so mutation can create or move field boundaries).
   as structure the grammar read (T5): after trailing whitespace, a
   separator and brackets closing what the attempt did not open, its markup
   ends by closing a bracket that opened before the failure, or after it
-  with no prose between), to the next
+  with no prose between; T6: the markup of the calls and parts of a split
+  attempt right before the part is read with it, so a bracket the attempt
+  opened there counts, brackets pair by kind, so a stray `}` never
+  closes a list's `[`, and a call or attempt the markup covers is markup,
+  never prose), to an opening reasoning marker that cut a literal of its
+  dialect it had begun (T6: `</functio<think>`), over the maximal
+  ill-formed UTF-8 subpart an `invalid_utf8` attempt failed on (T6),
+  under a length stop to the end of output when no closer of its dialect
+  follows the failure (T6: the stop reads an open call as truncation), to
+  the next
   call of its attempt (T5: a skipped call left
-  without its closer), to
+  without its closer; T6: whether that next call is read or rejected, an
+  attempt of its dialect begins there), to
   complete a literal it began, (T3) to the bracket that balances a JSON
-  value it left open (its bytes stay unbalanced, outside JSON strings, from
+  value it left open (its bytes stay unbalanced, outside JSON strings and
+  with brackets paired by kind (T6), from
   the failure to that bracket, with no prose between: a bare word followed
-  by another word or sentence punctuation), or (T4) to such a closing literal written
+  by another word or sentence punctuation, outside the strings the
+  attempt's bytes open from its start, so a failure inside a string reads
+  the rest of it as text (T6)), or (T4) to such a closing literal written
   with one slip (one byte inserted, deleted or substituted, or two adjacent
   bytes swapped, its delimiters kept), so bytes after a closer-less attempt
   stay content. (F7) A rejected span never ends inside a literal it began. (F8)

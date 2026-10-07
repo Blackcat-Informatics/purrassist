@@ -1378,6 +1378,7 @@ fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
     closer_misspelled_mutations(base, &mut out);
     token_misspelled_mutations(base, &mut out);
     near_closer_mutations(base, &mut out);
+    closer_in_value_mutations(base, &mut out);
     bare_word_mutations(base, &mut out);
     invalid_value_mutations(base, &mut out);
     repeated_choice_mutations(base, xml, &mut out);
@@ -1585,6 +1586,143 @@ fn near_closer_mutations(base: &Base, out: &mut Vec<Mutant>) {
         arguments: Node::new(Value::Object(arguments)),
     });
     out.push(kept);
+}
+
+/// Whether a string value of `shape` may hold closer text as `value`: its
+/// declared pattern, if any, admits it (a value the definition rejects is
+/// no reading of the parameter).
+fn holds_closer_text(shape: &ValueShape, value: &str) -> bool {
+    match shape {
+        ValueShape::String(None) => true,
+        ValueShape::String(Some(constraint)) => constraint
+            .pattern
+            .is_match(value, &mut Governor::new(Budget::default()))
+            .expect("a corpus value matches within the default budget"),
+        _ => false,
+    }
+}
+
+/// A `tool_call.value.closer-in-value` case: `text` holds member `index`'s
+/// string value as `value` (closer text read into it), which a correct
+/// answer recovers.
+fn closer_text(base: &Base, index: usize, variant: &str, text: String, value: &str) -> Mutant {
+    let mut arguments = base.members().to_vec();
+    arguments[index].value = string(value);
+    let mut held = mutant(
+        "tool_call.value.closer-in-value",
+        variant,
+        text,
+        Need::Exact,
+    );
+    held.call = Some(Call {
+        name: base.call.name.clone(),
+        arguments: Node::new(Value::Object(arguments)),
+    });
+    held
+}
+
+/// T6: closer text inside a Qwen3-Coder XML string value (the first
+/// unconstrained string the witness writes). Every closer that can end the
+/// value is weighed by the repairs each reading needs:
+///
+/// - `codec-closer`: `<parameter>v</parameter>` written inside the value;
+///   ending it at that `</parameter>` leaves text between parameters, so the
+///   value holds it;
+/// - `call-closers`: `</function></tool_call>` written inside the value;
+///   ending the arguments there closes the value by its element (a repair),
+///   so the value holds them;
+/// - `variant-closers`: `<tool_calls>`, `</tool_calls>`, `<functions>` and
+///   `</functions>` (declared closer variants) inside the value;
+/// - `closing-sequence`: the value of the last member ends with exactly the
+///   closers of a call (`</parameter>`, `</function>`, `</tool_call>`), so
+///   the call ending there and the one holding them are equally clean: the
+///   call is ambiguous and a correct answer abstains;
+/// - `call-markup`: a whole call's markup written inside the value, as a
+///   value documenting the format does (`<function=example>...</function>`):
+///   ending the value inside it leaves the call's own closers and text to
+///   repair, so the value holds it, and no call is read from it;
+/// - `wrapped-call-markup`: the same call wrapped in `<tool_call>`, then
+///   text: the call that ends the value at the documented call's
+///   `</parameter>` and is closed by its closers (leaving the text and the
+///   real closers as content) is as clean as the one holding it, so the
+///   call is ambiguous and a correct answer abstains;
+/// - `closers-then-call`: the last member's value holds the call's own
+///   closers and then a whole call of a tool the tool set does not declare:
+///   read apart, the second call names no declared tool, so the one call
+///   holding it wins (with a declared tool both readings are clean and the
+///   turn is ambiguous: the `qwen_value_holds_closers_then_whole_call`
+///   golden).
+fn closer_in_value_mutations(base: &Base, out: &mut Vec<Mutant>) {
+    if base.dialect != DialectId::Qwen3CoderXml || base.form != Form::Xml {
+        return;
+    }
+    let members = base.members();
+    let Some((index, value)) = members.iter().enumerate().find_map(|(index, member)| {
+        let Value::String(value) = &member.value.value else {
+            return None;
+        };
+        matches!(base.declared(&member.key).shape, ValueShape::String(None))
+            .then(|| (index, value.clone()))
+    }) else {
+        return;
+    };
+    for (variant, held) in [
+        (
+            "codec-closer",
+            format!("{value} <parameter>v</parameter> end"),
+        ),
+        (
+            "call-closers",
+            format!("{value} </function></tool_call> end"),
+        ),
+        (
+            "variant-closers",
+            format!("{value} <tool_calls> and </tool_calls>, <functions>f</functions> end"),
+        ),
+    ] {
+        out.push(closer_text(
+            base,
+            index,
+            variant,
+            replace_value(base, index, &held),
+            &held,
+        ));
+    }
+    let documented = "<function=example>\n<parameter=example_arg>\n1\n</parameter>\n</function>";
+    let held = format!("{value} {documented} end");
+    out.push(closer_text(
+        base,
+        index,
+        "call-markup",
+        replace_value(base, index, &held),
+        &held,
+    ));
+    let held = format!("{value} <tool_call>\n{documented}\n</tool_call> end");
+    out.push(mutant(
+        "tool_call.value.closer-in-value",
+        "wrapped-call-markup",
+        replace_value(base, index, &held),
+        Need::Never,
+    ));
+    if index + 1 == members.len() {
+        let held = format!("{value}\n</parameter>\n</function>\n</tool_call>");
+        out.push(mutant(
+            "tool_call.value.closer-in-value",
+            "closing-sequence",
+            replace_value(base, index, &held),
+            Need::Never,
+        ));
+        let held = format!(
+            "{value}\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n{documented}\n</tool_call>"
+        );
+        out.push(closer_text(
+            base,
+            index,
+            "closers-then-call",
+            replace_value(base, index, &held),
+            &held,
+        ));
+    }
 }
 
 /// T5/F10: a bare word in an arguments object is never a key unless its `:`
@@ -2330,25 +2468,55 @@ fn xml_mutations(base: &Base, random: &mut XorShift, out: &mut Vec<Mutant>) {
         let mut body = xml_body(&elements);
         let closer = nth_parameter_close(&body, index);
         body.insert_str(closer, "</parameter>\n");
-        out.push(mutant(
-            "tool_call.markup.stray-closer",
-            "parameter",
-            base.with_arguments(&body),
-            Need::Exact,
-        ));
-        // Text between a string value's closer and a second closer: the
-        // value may end at either, so its boundary is ambiguous.
+        // T6: after a string value, a doubled `</parameter>` is closer text
+        // the value holds (ending it at the first closer would delete the
+        // second as stray, a repair; ending it at the second needs none),
+        // unless the declared pattern rejects that value. After a typed
+        // value it is a stray closer.
+        let held = format!("{}\n</parameter>", elements[index].1);
+        if holds_closer_text(&base.declared(&members[index].key).shape, &held) {
+            out.push(closer_text(
+                base,
+                index,
+                "doubled-closer",
+                base.with_arguments(&body),
+                &held,
+            ));
+        } else {
+            out.push(mutant(
+                "tool_call.markup.stray-closer",
+                "parameter",
+                base.with_arguments(&body),
+                Need::Exact,
+            ));
+        }
+        // T6: text between a string value's closer and a second closer is
+        // text of the value, which ends at the second closer (ending it at
+        // the first leaves text between parameters, which no repair reads),
+        // unless the declared pattern rejects that value: then no reading
+        // reads the call.
         let strings = base.members_where(|declared, _| is_string_shape(&declared.shape));
         if let Some(&index) = strings.first() {
             let mut body = xml_body(&elements);
             let closer = nth_parameter_close(&body, index) + "</parameter>\n".len();
             body.insert_str(closer, "more text\n</parameter>\n");
-            out.push(mutant(
-                "tool_call.markup.stray-closer",
-                "text-between",
-                base.with_arguments(&body),
-                Need::Never,
-            ));
+            let held = format!("{}\n</parameter>\nmore text", elements[index].1);
+            if holds_closer_text(&base.declared(&members[index].key).shape, &held) {
+                out.push(closer_text(
+                    base,
+                    index,
+                    "text-between",
+                    base.with_arguments(&body),
+                    &held,
+                ));
+            } else {
+                out.push(mutant(
+                    "tool_call.value.closer-in-value",
+                    "text-between-rejected",
+                    base.with_arguments(&body),
+                    Need::Never,
+                ));
+            }
         }
         // The last element loses its closer: the function closer ends it.
         let mut open = elements.clone();

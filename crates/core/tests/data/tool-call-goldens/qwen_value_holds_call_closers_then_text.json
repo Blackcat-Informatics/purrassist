@@ -1,0 +1,118 @@
+{
+  "description": "T6: a content value holding `</function></tool_call>` text whose call's own `</tool_call>` is missing before trailing text. The call that ends at the first `</function>` closes the value by its element (a repair); the call whose value holds the closers needs its wrapper closer inserted before the text (`tool_call.markup.missing-wrapper-close.before-text`, a guess). Both cost one repair, so the call is Ambiguous with both values (the guessed reading is not admitted under Structural); the reading that holds the closers is found by repairing its last fork once the value reading on past closers ends.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "write_file": "mutating"
+  },
+  "input": "<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nx </function></tool_call> y\n</parameter>\n</function>\nDone.",
+  "outcome": "ambiguous",
+  "stopped": "completed",
+  "readings": [
+    {
+      "finish": "unresolved",
+      "openai_finish_reason": "stop",
+      "verdict": "nothing_usable",
+      "usable_calls": {
+        "strict": 0,
+        "accepting_guesses": 0
+      },
+      "calls": [
+        {
+          "tool": "write_file",
+          "arguments": {
+            "path": "a.md",
+            "content": "x </function></tool_call> y"
+          },
+          "candidate_dialects": [
+            "qwen3-coder-xml.v1"
+          ],
+          "outcome": "unresolved: rule_not_admitted: rule `tool_call.markup.missing-wrapper-close.before-text` is not admitted under Structural",
+          "rules": [
+            "tool_call.value.closer-in-value",
+            "tool_call.xml.framing-newline",
+            "tool_call.xml.framing-newline",
+            "tool_call.xml.framing-newline",
+            "tool_call.xml.framing-newline",
+            "tool_call.markup.missing-wrapper-close.before-text"
+          ]
+        }
+      ],
+      "rejected": [],
+      "embedded": [],
+      "content": [
+        "Done."
+      ]
+    },
+    {
+      "finish": "calls",
+      "openai_finish_reason": "tool_calls",
+      "verdict": "run",
+      "usable_calls": {
+        "strict": 1,
+        "accepting_guesses": 1
+      },
+      "calls": [
+        {
+          "tool": "write_file",
+          "arguments": {
+            "path": "a.md",
+            "content": "x "
+          },
+          "candidate_dialects": [
+            "qwen3-coder-xml.v1"
+          ],
+          "outcome": "resolved",
+          "rules": [
+            "tool_call.xml.framing-newline",
+            "tool_call.xml.framing-newline",
+            "tool_call.xml.framing-newline",
+            "tool_call.markup.parameter-closed-by-element"
+          ]
+        }
+      ],
+      "rejected": [],
+      "embedded": [],
+      "content": [
+        " y\n</parameter>\n</function>\nDone."
+      ]
+    }
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.value.closer-in-value",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.missing-wrapper-close.before-text",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.parameter-closed-by-element"
+  ]
+}

@@ -1593,6 +1593,89 @@ fn effort_exact_refuses_repair() {
     assert_eq!(reading(&result).usable().len(), 0);
 }
 
+/// T6: closer text a Qwen3-Coder XML value holds. When only the reading
+/// that holds it parses cleanly, the call is `Resolved` with the full value
+/// and records `tool_call.value.closer-in-value`, a non-guess evidence entry
+/// whose span names both places the value could end: from the first closer
+/// the value holds (where the other reading ends it) to where it ends.
+#[test]
+fn qwen_closer_text_held_by_evidence() {
+    // The content, the closer it holds, and the closer that ends the value
+    // (codec level: a `</parameter>`; call level: the arguments' end).
+    for (name, content, held, ending) in [
+        (
+            "qwen_value_holds_parameter_element",
+            "x <parameter>v</parameter> y",
+            "</parameter> y",
+            "\n</parameter>\n</function>",
+        ),
+        (
+            "qwen_value_holds_call_closers",
+            "End with </function></tool_call> then stop.",
+            "</function></tool_call> then",
+            "</function>\n</tool_call>",
+        ),
+    ] {
+        let (golden, result) = golden(name);
+        let call = the_call(&result);
+        assert_eq!(call.outcome, CallOutcome::Resolved, "{name}: {call:#?}");
+        assert_eq!(
+            call.arguments.get("content").and_then(Node::as_str),
+            Some(content),
+            "{name}"
+        );
+        assert_eq!(reading(&result).usable().len(), 1, "{name}");
+        let input = String::from_utf8(golden.input).expect("UTF-8 input");
+        let evidence: Vec<_> = call
+            .repairs
+            .evidence
+            .iter()
+            .filter(|evidence| evidence.rule == "tool_call.value.closer-in-value")
+            .collect();
+        assert_eq!(evidence.len(), 1, "{name}: {call:#?}");
+        let span = evidence[0].span.as_ref().expect("a span").bytes.clone();
+        let start = input.find(held).expect("held closer");
+        let end =
+            input.rfind(ending).expect("ending closer") + usize::from(ending.starts_with('\n'));
+        assert_eq!(span, start..end, "{name}");
+        assert!(call.repairs.inferences.is_empty(), "{name}: {call:#?}");
+    }
+}
+
+/// T6: a value ending with exactly the closers of a call reads two equally
+/// clean calls, so the turn is `Ambiguous` with both values: no single value
+/// to run, on a mutating tool or any other.
+#[test]
+fn qwen_closing_sequence_in_value_is_ambiguous() {
+    for (name, values) in [
+        (
+            "qwen_value_ends_with_closing_sequence",
+            ["x", "x\n</parameter>\n</function>\n</tool_call>"],
+        ),
+        (
+            "qwen_value_holds_call_closers_unclosed",
+            ["End with ", "End with </function></tool_call> then stop."],
+        ),
+    ] {
+        let (_, result) = golden(name);
+        let Outcome::Ambiguous(alternatives) = &result.outcome else {
+            panic!("{name}: {:?}", result.outcome)
+        };
+        let mut contents: Vec<&str> = alternatives
+            .iter()
+            .map(|calls| {
+                calls.calls[0]
+                    .arguments
+                    .get("content")
+                    .and_then(Node::as_str)
+                    .expect("a content value")
+            })
+            .collect();
+        contents.sort_unstable();
+        assert_eq!(contents, values, "{name}");
+    }
+}
+
 #[test]
 fn openai_member_order_missing_id() {
     let (_, result) = golden("openai_member_order_missing_id");

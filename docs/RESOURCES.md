@@ -686,6 +686,7 @@ every value below to equal the code's.
 | `GROUP_SPLIT` | 2 | Repair cost: an attempt reading several calls ended before the call it could not read |
 | `CLOSER_MISSPELLED` | 2 | Repair cost: a closer token one edit away from exactly one closer |
 | `TOKEN_MISSPELLED` | 2 | Repair cost: a markup token other than a closer one edit away from exactly one literal of the grammar |
+| `CLOSER_IN_VALUE` | 0 | Reading a closer's exact spelling inside a verbatim value as text (no repair) |
 | `DELETE_STRAY_CLOSER` | 3 | Repair cost: a stray closer |
 | `REASONING_UNCLOSED` | 4 | Repair cost: a reasoning block closed at a call opener |
 | `REJECT` | 16 | Cost of rejecting an unrepairable call attempt |

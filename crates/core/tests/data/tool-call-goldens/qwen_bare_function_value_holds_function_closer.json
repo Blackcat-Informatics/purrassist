@@ -1,0 +1,77 @@
+{
+  "description": "T6: a call written without its `<tool_call>` wrapper whose value holds `</function>` text: ending the value there closes it by its element (a repair); the value ending at the `</parameter>` before the last `</function>` needs none, so the content is kept whole.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "write_file": "mutating"
+  },
+  "input": "<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nsee </function> here\n</parameter>\n</function>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "a.md",
+        "content": "see </function> here"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.missing-token",
+        "tool_call.value.closer-in-value",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.markup.missing-token"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.missing-token",
+    "tool_call.value.closer-in-value",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.missing-token"
+  ]
+}

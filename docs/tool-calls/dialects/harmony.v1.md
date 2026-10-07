@@ -90,7 +90,14 @@ returns as a message from the tool to the assistant,
     never silent content;
   - `python`: a call to `python` whose arguments are the body as raw text
     (Python code); `Unresolved` (unknown tool, or arguments not an object)
-    unless declared and fitting;
+    unless declared and fitting. Code may hold the text of a call closer
+    (`print("<|call|>")`): the body is read both ending at that closer and
+    holding it, up to the closer that completes the call
+    (`tool_call.value.closer-in-value`). A raw body needs no repair either
+    way, so when the rest parses cleanly both readings are reported (the
+    call is `Ambiguous`); see
+    [Closer text inside a value](qwen3-coder-xml.v1.md#closer-text-inside-a-value).
+    A `<|start|>` (the next message) always ends the code.
   - any other bare `NAME`: read as `functions.NAME`, the namespace recorded
     as inserted (`tool_call.markup.missing-token`).
 - `ARGS` is read by the self-delimiting `json` codec (exact number

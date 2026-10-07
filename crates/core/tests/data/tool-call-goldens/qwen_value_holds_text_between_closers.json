@@ -1,0 +1,73 @@
+{
+  "description": "T6: text between a string value's `</parameter>` and a second `</parameter>` is text of the value: ending the value at the first closer leaves text between parameters (no repair reads it), so the value ends at the second, holding the closer and the text. It abstained before (the boundary was taken as ambiguous).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "write_file": "mutating"
+  },
+  "input": "<tool_call>\n<function=write_file>\n<parameter=content>\nx\n</parameter>\nmore text\n</parameter>\n<parameter=path>\na.md\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "write_file",
+      "arguments": {
+        "content": "x\n</parameter>\nmore text",
+        "path": "a.md"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.value.closer-in-value",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.value.closer-in-value",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline"
+  ]
+}

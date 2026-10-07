@@ -903,6 +903,8 @@ impl<'s> Recognizer<'s> {
                 governor.charge(Resource::ScratchBytes, BLOCKED_BYTES)?;
                 if open {
                     self.turn.blocked.push((start, pair));
+                    // A value read on past a closer never runs past it.
+                    self.engine.stop_past_at(start, governor)?;
                 } else {
                     self.turn.blocked_close.push((start, at + 1, pair));
                 }
@@ -2240,6 +2242,10 @@ fn explain_recovery(edit: &MarkupEdit, original: &str, replacement: &str) -> Str
         EditOperator::TokenMisspelled => format!(
             "read misspelled token `{original}` as `{replacement}`, the only token of the grammar within edit distance one"
         ),
+        EditOperator::CloserInValue => format!(
+            "read the closer spelling at byte {} as text of the value, which ends at byte {}: the reading that ends the value at byte {} was weighed against this one by the repairs each needs; when it needs no more, it is reported beside this one",
+            edit.span.start, edit.span.end, edit.span.start
+        ),
         _ => format!(
             "cut the call at the reasoning block's marker at byte {}: the marker belongs to the block, so what the call read from bytes {}..{} is dropped",
             edit.span.start, edit.span.start, edit.span.end
@@ -2327,6 +2333,7 @@ fn explain(edit: &MarkupEdit) -> String {
         EditOperator::GroupSplit
         | EditOperator::CloserMisspelled
         | EditOperator::TokenMisspelled
+        | EditOperator::CloserInValue
         | EditOperator::ReasoningMarkerCut => explain_recovery(edit, &original, &replacement),
         EditOperator::ContextFencedExample => {
             "call recognized inside fenced code, an inline code span or a block quote; it may be an example rather than a call".into()

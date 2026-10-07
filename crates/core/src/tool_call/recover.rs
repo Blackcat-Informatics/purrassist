@@ -152,7 +152,8 @@ use super::{
 use crate::contract::saturating_size as size;
 use crate::contract::{
     AlternativeReceipt, AssistResult, Budget, Effort, Evidence, Governor, Inference, InferenceKind,
-    Loss, Outcome, Receipt, Resource, SourceSpan, StopReason, Validation, invalid_input,
+    Loss, Outcome, Receipt, Resource, ScratchVec, SourceSpan, StopReason, Validation,
+    invalid_input,
 };
 use crate::digest::Digest;
 use crate::grammar::CallEnd;
@@ -1703,13 +1704,15 @@ impl MarkupScan<'_> {
         };
         // An alternative whose end literal is a bracket (a JSON object
         // or array call) nests by that bracket, outside JSON strings;
-        // any other nests by its opener spellings. The scan starts at
-        // the attempt's own start, so the depth at its failure is known.
+        // any other nests by its opener spellings, brackets paired by kind
+        // (`open`, `state.depth` of them). The scan starts at the
+        // attempt's own start, so the depth at its failure is known.
         let brackets: Vec<(u8, u8)> = [(b'{', b'}'), (b'[', b']')]
             .into_iter()
             .filter(|(_, close)| closers.iter().any(|spelling| spelling == &[*close]))
             .collect();
         let mut state = Nesting::default();
+        let mut open = Brackets::new(governor);
         let mut position = span.start;
         let mut next = boundaries.iter();
         let mut found = None;
@@ -1730,7 +1733,7 @@ impl MarkupScan<'_> {
                     // attempt ends as one left unclosed.
                     if !state.quoted
                         && position >= span.end
-                        && byte.is_ascii_alphabetic()
+                        && (byte.is_ascii_alphabetic() || byte == b'_')
                         && (position == 0 || !is_word_byte(self.output[position - 1]))
                     {
                         let (word, prose) = self.bare_word(position, limit);
@@ -1749,9 +1752,11 @@ impl MarkupScan<'_> {
                         }
                     } else if byte == b'"' {
                         state.quoted = true;
-                    } else if brackets.iter().any(|(open, _)| *open == byte) {
-                        state.depth += 1;
-                    } else if brackets.iter().any(|(_, close)| *close == byte) {
+                    } else if brackets.iter().any(|(opener, _)| *opener == byte) {
+                        state.depth = open.push(byte)?;
+                    } else if let Some(&(kind, _)) =
+                        brackets.iter().find(|(_, close)| *close == byte)
+                    {
                         // A bracket closing nothing the scan opened closes
                         // a structure around the attempt (it began inside
                         // one, or inside a string): the attempt's markup
@@ -1759,7 +1764,7 @@ impl MarkupScan<'_> {
                         if state.depth == 0 {
                             break 'scan;
                         }
-                        state.depth -= 1;
+                        state.depth = open.close(kind, governor)?;
                         if state.depth == 0 && position > span.end {
                             found = Some(position);
                             break 'scan;
@@ -1792,7 +1797,7 @@ impl MarkupScan<'_> {
                     // call holds the array's `]`), no later bracket closes
                     // the attempt, which ends unclosed.
                     if !brackets.is_empty()
-                        && self.closes(&mut state, &brackets, range, governor)?
+                        && self.closes(&mut state, &mut open, &brackets, range, governor)?
                     {
                         break 'scan;
                     }
@@ -1814,11 +1819,13 @@ impl MarkupScan<'_> {
     }
 
     /// Whether the bytes of `range` (a call inside a rejected attempt's
-    /// markup), nesting by `brackets` outside strings from `state`, close
-    /// the attempt's last open bracket.
+    /// markup), nesting by `brackets` outside strings from `state` (its
+    /// open brackets by kind in `open`, paired by kind), close the
+    /// attempt's last open bracket.
     fn closes(
         &self,
         state: &mut Nesting,
+        open: &mut Brackets,
         brackets: &[(u8, u8)],
         range: &Range<usize>,
         governor: &mut Governor,
@@ -1834,10 +1841,12 @@ impl MarkupScan<'_> {
                 }
             } else if byte == b'"' {
                 state.quoted = true;
-            } else if brackets.iter().any(|(open, _)| *open == byte) {
-                state.depth += 1;
-            } else if brackets.iter().any(|(_, close)| *close == byte) && state.depth > 0 {
-                state.depth -= 1;
+            } else if brackets.iter().any(|(opener, _)| *opener == byte) {
+                state.depth = open.push(byte)?;
+            } else if let Some(&(kind, _)) = brackets.iter().find(|(_, close)| *close == byte)
+                && state.depth > 0
+            {
+                state.depth = open.close(kind, governor)?;
                 if state.depth == 0 {
                     return Ok(true);
                 }
@@ -1977,8 +1986,10 @@ impl MarkupScan<'_> {
     /// `end`, moved past a JSON value the markup from `start` left open: when
     /// the bytes `start..read` its grammar read (to where it stopped; a
     /// resync may read on to `end` over bytes it does not parse) open more
-    /// brackets (`{`, `[`) than they close, outside JSON strings, the end of
-    /// the bracket that balances them before `limit` (an arguments object
+    /// brackets (`{`, `[`) than they close, outside JSON strings and paired
+    /// by kind (a `}` closes the innermost open `{` and any bracket a slip
+    /// left open inside it; it never closes a `[` alone), the end of the
+    /// bracket that balances them before `limit` (an arguments object
     /// whose value no repair read, with no closer of the dialect after it),
     /// when it lies past `end` and no prose comes before it outside a
     /// string: a bare word (other than `true`, `false`, `null`) not followed
@@ -1994,9 +2005,10 @@ impl MarkupScan<'_> {
         governor: &mut Governor,
     ) -> Result<usize, StopReason> {
         let mut state = Nesting::default();
+        let mut open = Brackets::new(governor);
         governor.charge(Resource::Work, size(read - start))?;
         for &byte in &self.output[start..read] {
-            state.step(byte);
+            state.step(byte, &mut open, governor)?;
         }
         if state.depth == 0 {
             return Ok(end);
@@ -2009,7 +2021,10 @@ impl MarkupScan<'_> {
             // word outside a string (prose after the value) is no part of
             // the value, so the bracket after it balances nothing the
             // attempt opened.
-            if !state.quoted && byte.is_ascii_alphabetic() {
+            if !state.quoted
+                && (byte.is_ascii_alphabetic() || byte == b'_')
+                && (position == 0 || !is_word_byte(self.output[position - 1]))
+            {
                 let (word, prose) = self.bare_word(position, limit);
                 if prose {
                     return Ok(end);
@@ -2018,7 +2033,7 @@ impl MarkupScan<'_> {
                 position += word;
                 continue;
             }
-            state.step(byte);
+            state.step(byte, &mut open, governor)?;
             position += 1;
             if state.depth == 0 {
                 return Ok(position.max(end));
@@ -2028,7 +2043,9 @@ impl MarkupScan<'_> {
     }
 
     /// The length of the bare word (outside a JSON string) at `position`,
-    /// before `limit`, and whether it is prose. A slip in JSON (`"f" oops,
+    /// before `limit`, and whether it is prose. A word begins at a letter
+    /// or `_` (`_dir`) that no letter, digit or `_` precedes, and runs over
+    /// letters, digits and `_`. A slip in JSON (`"f" oops,
     /// "arguments": ...`) is a word where a JSON token is due: what follows
     /// it is JSON punctuation (`,` `:` `}` `]` `"`, after spaces) or the
     /// end. A word (other than `true`, `false`, `null`) followed by another
@@ -2102,6 +2119,60 @@ const fn is_word_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
+/// The open brackets of a rejected attempt's markup scan by kind (`{` or
+/// `[`), innermost last, and how many of each kind are open.
+struct Brackets {
+    open: ScratchVec<u8>,
+    objects: usize,
+    lists: usize,
+}
+
+impl Brackets {
+    fn new(governor: &Governor) -> Self {
+        Self {
+            open: ScratchVec::new(governor),
+            objects: 0,
+            lists: 0,
+        }
+    }
+
+    /// The count of open brackets of `kind`'s kind.
+    const fn count(&mut self, kind: u8) -> &mut usize {
+        if kind == b'{' {
+            &mut self.objects
+        } else {
+            &mut self.lists
+        }
+    }
+
+    /// Open a bracket of `kind` (`{` or `[`), returning how many are open.
+    fn push(&mut self, kind: u8) -> Result<usize, StopReason> {
+        self.open.push(kind)?;
+        *self.count(kind) += 1;
+        Ok(self.open.len())
+    }
+
+    /// Close the innermost open bracket of `kind` (and every bracket opened
+    /// inside it, which a slip left unclosed: `{"a": [1}` closes the
+    /// object), returning how many stay open. With none of its kind open,
+    /// the closer is a slip inside the markup (a stray `}` in a list never
+    /// closes the list's `[`) and closes nothing. `Work` per bracket
+    /// closed, each paid once for its opening.
+    fn close(&mut self, kind: u8, governor: &mut Governor) -> Result<usize, StopReason> {
+        if *self.count(kind) == 0 {
+            return Ok(self.open.len());
+        }
+        while let Some(opener) = self.open.pop() {
+            governor.charge(Resource::Work, 1)?;
+            *self.count(opener) -= 1;
+            if opener == kind {
+                break;
+            }
+        }
+        Ok(self.open.len())
+    }
+}
+
 /// Where a scan of JSON-like bytes stands: its bracket depth and whether
 /// it is inside a string (just after an escape).
 #[derive(Default)]
@@ -2112,8 +2183,14 @@ struct Nesting {
 }
 
 impl Nesting {
-    /// Read one more byte.
-    const fn step(&mut self, byte: u8) {
+    /// Read one more byte, its brackets paired by kind in `open` (see
+    /// [`Brackets::close`]: a `}` never closes a `[`), `depth` of them open.
+    fn step(
+        &mut self,
+        byte: u8,
+        open: &mut Brackets,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
         if self.quoted {
             match byte {
                 _ if self.escaped => self.escaped = false,
@@ -2124,11 +2201,13 @@ impl Nesting {
         } else {
             match byte {
                 b'"' => self.quoted = true,
-                b'{' | b'[' => self.depth += 1,
-                b'}' | b']' => self.depth = self.depth.saturating_sub(1),
+                b'{' | b'[' => self.depth = open.push(byte)?,
+                b'}' => self.depth = open.close(b'{', governor)?,
+                b']' => self.depth = open.close(b'[', governor)?,
                 _ => {}
             }
         }
+        Ok(())
     }
 }
 

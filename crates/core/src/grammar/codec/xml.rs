@@ -105,6 +105,30 @@ const CLOSER_VARIANT: &[u8] = b"</parameters>";
 /// is resolved, or found unresolvable (a hallucinated tool), against its
 /// tool later.
 ///
+/// # Closer text in a value
+///
+/// A string value (declared as a string, unmodeled, or not declared; an
+/// array item read as one) may hold the exact text of a closer:
+/// `<parameter>v</parameter>`, or a doubled `</parameter>`. Every closer
+/// before the next declared parameter's opener (or the end of the body) is
+/// a place the value may end, and the readings are weighed by the rule
+/// costs of the repairs each needs: its own end's (a variant or misspelled
+/// closer), and what it leaves before the next parameter, which must be
+/// whitespace and closers (closing open nested objects, then stray) or
+/// begin a parameter. The least costly reading wins, the earliest among
+/// equals, so a value whose first closer needs nothing more ends there. A
+/// value ending at a later closer holds the earlier ones as text, recorded
+/// as `tool_call.value.closer-in-value` (no guess: every other reading
+/// needs a repair, or leaves text between parameters that no repair reads),
+/// spanning from the first closer it holds to where it ends. A declared
+/// parameter's opener always ends the region the value may run to, and so
+/// does a misspelled one after a canonical closer (between parameters it is
+/// a parameter boundary); text after a closer is read into the value only up
+/// to a later closer, never up to an opener or the end of the body. A string
+/// whose declared pattern rejects the value holding closer text ends at its
+/// first closer. Typed values (parsed as JSON) and enumerations end at their
+/// first closer.
+///
 /// A `</parameter>` outside any value closes the innermost nested object,
 /// or, at the top level, is a stray closer deleted as
 /// `tool_call.markup.stray-closer`. A body made only of closers and
@@ -124,8 +148,11 @@ const CLOSER_VARIANT: &[u8] = b"</parameters>";
 ///
 /// The codec's markup spellings are fixed (`<parameter=`, `</parameter>`,
 /// `</parameters>`); the call's own closers belong to the grammar, which
-/// ends the slot body with its delimiters, so a value cannot contain one of
-/// the slot's delimiters.
+/// ends the slot body with its delimiters. A body may also read on past a
+/// closer delimiter (`</function>`, `</tool_call>`, their variants) beside
+/// the reading that ends there, so a value may hold the call's closers as
+/// text too: the engine weighs those readings by the same costs
+/// ([`EditOperator::CloserInValue`]).
 ///
 /// ```
 /// use purrassist_core::grammar::codec::{Codec, CodecContext, CodecEnd, XmlParamsCodec};
@@ -218,6 +245,19 @@ enum Spelling {
     Variant,
     /// One edit away from `</parameter>` (`tool_call.markup.closer-misspelled`).
     Misspelled,
+}
+
+/// A place a value may end (see `Reader::terminator`): an offset into the
+/// body and what ends the value there; for an opener, the open scopes that
+/// declare its parameter, whether it is misspelled, and whether it is
+/// `text` of the value (an undeclared parameter's: no end of the value,
+/// though after a closer it begins a parameter).
+struct Candidate {
+    at: usize,
+    terminator: Terminator,
+    owners: Vec<usize>,
+    respelled: bool,
+    text: bool,
 }
 
 /// One object scope being read: the top-level arguments or a nested object
@@ -586,11 +626,22 @@ impl<'t> Reader<'_, 't, '_> {
                 return Ok(Ok(from));
             }
         }
-        let (stop, terminator) = self.terminator(from)?;
+        let first = self.skip_space(from)?;
+        let verbatim = verbatim(declared, self.body[first..].starts_with(b"["));
+        let (mut stop, mut terminator, mut inner) = self.terminator(from, verbatim)?;
+        if inner.is_some() && !self.admits(declared, from, stop, terminator)? {
+            // The declared pattern rejects the value holding closer text:
+            // that is no reading of the parameter, so it ends at its first
+            // closer.
+            (stop, terminator, inner) = self.terminator(from, false)?;
+        }
         let tree = match self.value(declared, from, stop, terminator)? {
             Ok(tree) => tree,
             Err(fault) => return Ok(Err(fault)),
         };
+        if let Some(inner) = inner {
+            self.closer_text(inner..stop)?;
+        }
         self.frames
             .last_mut()
             .expect("a scope is open")
@@ -659,43 +710,292 @@ impl<'t> Reader<'_, 't, '_> {
         }
     }
 
-    /// Where the value starting at `from` ends, and what ends it. A reading
-    /// that needs no repair comes first: the first canonical `</parameter>`
-    /// ends the value unless a parameter opener (canonical, of a declared
-    /// parameter) comes before it. A repaired spelling (the `</parameters>`
-    /// variant, a misspelled closer, a misspelled opener) ends the value
-    /// only where no canonical closer comes before that opener or the end
-    /// of the body: otherwise it is text of the value (`<Parameter>`,
-    /// `</parameterx>` and `</paramete>` written inside content).
-    fn terminator(&mut self, from: usize) -> Result<(usize, Terminator), StopReason> {
+    /// Where the value starting at `from` ends, and what ends it, and for a
+    /// verbatim value the first exact closer spelling (`</parameter>`,
+    /// `</parameters>`) it holds as text, if any.
+    ///
+    /// A typed value (parsed as JSON) ends at the first canonical
+    /// `</parameter>` unless a parameter opener (canonical, of a declared
+    /// parameter) comes before it; a repaired spelling (the `</parameters>`
+    /// variant, a misspelled closer, a misspelled opener) ends it only where
+    /// no canonical closer comes before that opener or the end of the body.
+    ///
+    /// A verbatim value ([`verbatim`]) may hold closer text: every closer
+    /// before the next declared parameter's opener (or the end of the body)
+    /// is a place it may end, and so are that opener (or end) and every
+    /// misspelled opener before it. Each reading is weighed by the repairs
+    /// it needs, with the rule costs of the edits it would record: its own
+    /// end's (a variant or misspelled closer, a missing closer), and those
+    /// of the bytes it leaves before the next parameter, which must be only
+    /// whitespace and closers (closing open nested objects, then stray). A
+    /// reading leaving other text there is malformed. The least costly
+    /// reading wins, the earliest among equals (so a value whose first
+    /// closer needs nothing more ends there, as before); when every reading
+    /// is malformed, the value ends as a typed one would.
+    fn terminator(
+        &mut self,
+        from: usize,
+        verbatim: bool,
+    ) -> Result<(usize, Terminator, Option<usize>), StopReason> {
         let mut at = from;
-        let mut fallback: Option<(usize, Terminator)> = None;
-        let found = loop {
+        let mut ends: Vec<Candidate> = Vec::new();
+        // Whether a canonical closer came first (the value may have ended).
+        let mut between = false;
+        let last = loop {
             let Some(offset) = self.body[at..].iter().position(|&byte| byte == b'<') else {
                 at = self.body.len();
-                break Terminator::End;
+                break Candidate {
+                    at,
+                    terminator: Terminator::End,
+                    owners: Vec::new(),
+                    respelled: false,
+                    text: false,
+                };
             };
             at += offset;
             if let Some((width, spelling)) = self.closer(at) {
-                if spelling == Spelling::Canonical {
-                    break Terminator::Closer(width, spelling);
+                if !verbatim && spelling == Spelling::Canonical {
+                    self.charge(at - from)?;
+                    return Ok((at, Terminator::Closer(width, spelling), None));
                 }
-                fallback.get_or_insert((at, Terminator::Closer(width, spelling)));
-            } else if let Some(opener) = self.opener(at)?
-                && self.boundary(&opener.name.value)?
-            {
-                if opener.respelled.is_none() {
-                    break Terminator::Boundary;
+                between |= spelling == Spelling::Canonical;
+                ends.push(Candidate {
+                    at,
+                    terminator: Terminator::Closer(width, spelling),
+                    owners: Vec::new(),
+                    respelled: false,
+                    text: false,
+                });
+            } else if let Some(opener) = self.opener(at)? {
+                let text = !self.boundary(&opener.name.value)?;
+                let candidate = Candidate {
+                    at,
+                    terminator: Terminator::Boundary,
+                    owners: self.owners(&opener.name.value)?,
+                    respelled: opener.respelled.is_some(),
+                    text,
+                };
+                // A declared parameter's opener ends the region: written
+                // exactly, or (between parameters, after a canonical closer)
+                // misspelled. Only before any closer may a misspelled opener
+                // be text of the value.
+                if !candidate.text && (!candidate.respelled || (verbatim && between)) {
+                    break candidate;
                 }
-                fallback.get_or_insert((at, Terminator::Boundary));
+                // An opener of an undeclared parameter is text of the value
+                // (no end of it), but after a closer it begins a parameter.
+                if verbatim || !candidate.text {
+                    ends.push(candidate);
+                }
             }
             at += 1;
         };
-        self.charge(at - from)?;
-        Ok(match (found, fallback) {
-            (Terminator::Closer(..), _) | (_, None) => (at, found),
-            (_, Some(fallback)) => fallback,
-        })
+        self.charge(last.at - from)?;
+        if verbatim && let Some(index) = self.cheapest(&ends, &last)? {
+            let chosen = ends.get(index).unwrap_or(&last);
+            let inner = ends[..index]
+                .iter()
+                .find(|candidate| {
+                    matches!(
+                        candidate.terminator,
+                        Terminator::Closer(_, Spelling::Canonical | Spelling::Variant)
+                    )
+                })
+                .map(|candidate| candidate.at);
+            return Ok((chosen.at, chosen.terminator, inner));
+        }
+        // A typed value, or a verbatim one every reading of which is
+        // malformed: the first canonical closer, else the first repaired
+        // spelling.
+        let chosen = ends
+            .iter()
+            .find(|candidate| {
+                candidate.terminator == Terminator::Closer(CLOSER.len(), Spelling::Canonical)
+            })
+            .or_else(|| ends.iter().find(|candidate| !candidate.text))
+            .unwrap_or(&last);
+        Ok((chosen.at, chosen.terminator, None))
+    }
+
+    /// Whether the string value `from..stop`, ended by `terminator`, is one
+    /// the declared pattern admits (a parameter declared as a string with a
+    /// pattern; any other value is admitted). Its framing newlines are not
+    /// part of it. Charges the pattern's matching.
+    fn admits(
+        &mut self,
+        declared: Option<&ValueShape>,
+        from: usize,
+        stop: usize,
+        terminator: Terminator,
+    ) -> Result<bool, StopReason> {
+        let Some(ValueShape::String(Some(constraint))) = declared else {
+            return Ok(true);
+        };
+        let (mut start, mut end) = (from, stop);
+        if start < end && self.body[start] == b'\n' {
+            start += 1;
+        }
+        if !self.cut(terminator) && start < end && self.body[end - 1] == b'\n' {
+            end -= 1;
+        }
+        self.charge(end - start)?;
+        let text = String::from_utf8_lossy(&self.body[start..end]);
+        constraint.pattern.is_match(&text, self.governor)
+    }
+
+    /// Record the closer text a value holds (`tool_call.value.closer-in-value`),
+    /// from its first exact closer to where the value ends (`range`): a
+    /// reading ending the value at that closer was weighed. In source order
+    /// among the value's own edits (its framing newlines), the last recorded.
+    fn closer_text(&mut self, range: Range<usize>) -> Result<(), StopReason> {
+        let span = self.absolute(range);
+        let edit = edit(
+            EditOperator::CloserInValue,
+            span,
+            self.body,
+            self.base,
+            Vec::new(),
+            self.governor,
+        )?;
+        let at = self.edits.len()
+            - self
+                .edits
+                .iter()
+                .rev()
+                .take_while(|other| other.span.start > edit.span.start)
+                .count();
+        self.edits.insert(at, edit);
+        Ok(())
+    }
+
+    /// The scope indices (into the open frames) that declare `name`.
+    fn owners(&mut self, name: &str) -> Result<Vec<usize>, StopReason> {
+        self.charge(self.frames.len())?;
+        Ok(self
+            .frames
+            .iter()
+            .enumerate()
+            .filter(|(_, frame)| declares(frame.scope, name))
+            .map(|(index, _)| index)
+            .collect())
+    }
+
+    /// The least costly reading of a verbatim value among the places it may
+    /// end (`ends`, in order, then `last`; see [`Self::terminator`]): its
+    /// index (`ends.len()` for `last`), the earliest among equals, or
+    /// `None` when every reading is malformed. One pass from the back.
+    fn cheapest(
+        &mut self,
+        ends: &[Candidate],
+        last: &Candidate,
+    ) -> Result<Option<usize>, StopReason> {
+        let nested = self.frames.len() - 1;
+        self.charge(ends.len().saturating_mul(nested.max(1)))?;
+        let cost = |operator: EditOperator| operator.rule().cost;
+        let at_end = self.closed_at_end().map_or(0, cost);
+        // Ending a value at an opener rather than at a closer.
+        let missing = if self.frames[0].scope.is_some() {
+            cost(EditOperator::MissingParameterClose)
+        } else {
+            cost(EditOperator::UndeclaredParameterBoundary)
+        };
+        // What the opener or end `stop` costs once the value has ended and
+        // `open` nested objects are still open: the objects it closes, and
+        // its own respelling.
+        let settle = |stop: &Candidate, open: usize| -> u64 {
+            if stop.terminator == Terminator::End {
+                return size(open).saturating_mul(at_end);
+            }
+            let owner = stop
+                .owners
+                .iter()
+                .copied()
+                .filter(|owner| *owner <= open)
+                .max()
+                .unwrap_or(open);
+            let respelled = if stop.respelled {
+                cost(EditOperator::TokenMisspelled)
+            } else {
+                0
+            };
+            size(open - owner)
+                .saturating_mul(missing)
+                .saturating_add(respelled)
+        };
+        let spelling = |terminator: Terminator| match terminator {
+            Terminator::Closer(_, Spelling::Variant) => cost(EditOperator::CloserVariant),
+            Terminator::Closer(_, Spelling::Misspelled) => cost(EditOperator::CloserMisspelled),
+            _ => 0,
+        };
+        let mut best: Option<(u64, usize)> = None;
+        let mut consider = |reading: Option<u64>, index: usize| {
+            if let Some(reading) = reading
+                && best.is_none_or(|(least, _)| reading <= least)
+            {
+                best = Some((reading, index));
+            }
+        };
+        // A value ends at an opener, or at the end of the body, only where
+        // no canonical closer comes before it: text after a closer is never
+        // read into the value up to an opener (text between parameters is
+        // malformed), only up to a later closer.
+        let first = ends.iter().position(|candidate| {
+            candidate.terminator == Terminator::Closer(CLOSER.len(), Spelling::Canonical)
+        });
+        let canonical = |index: usize| first.is_some_and(|first| first < index);
+        // The value runs to `last`: a string still open at the end of
+        // output is malformed (the output may have ended inside it).
+        let whole = match last.terminator {
+            _ if canonical(ends.len()) => None,
+            Terminator::End if self.end == CodecEnd::EndOfInput => None,
+            Terminator::End => Some(size(nested + 1).saturating_mul(at_end)),
+            _ => Some(missing.saturating_add(settle(last, nested))),
+        };
+        consider(whole, ends.len());
+        // The spelling costs of the closers between the current place and
+        // the next opener or end (`stop`), latest first, while only
+        // whitespace separates them; `None` once text does.
+        let mut tail: Option<Vec<u64>> = Some(Vec::new());
+        let mut stop = last;
+        for (index, candidate) in ends.iter().enumerate().rev() {
+            let next = ends.get(index + 1).map_or(last.at, |next| next.at);
+            if let Terminator::Closer(width, _) = candidate.terminator {
+                if !self.body[candidate.at + width..next]
+                    .iter()
+                    .all(u8::is_ascii_whitespace)
+                {
+                    tail = None;
+                }
+                // Ending here, the closers after it close open nested
+                // objects (paying their respelling), then are stray.
+                let reading = tail.as_ref().map(|tail| {
+                    let pops = tail.len().min(nested);
+                    let popped: u64 = tail.iter().rev().take(pops).sum();
+                    let strays = size(tail.len() - pops)
+                        .saturating_mul(cost(EditOperator::DeleteStrayCloser));
+                    settle(stop, nested - pops)
+                        .saturating_add(popped)
+                        .saturating_add(strays)
+                        .saturating_add(spelling(candidate.terminator))
+                });
+                consider(reading, index);
+                if let Some(tail) = tail.as_mut() {
+                    tail.push(spelling(candidate.terminator));
+                }
+            } else {
+                // A misspelled opener of a declared parameter: the value may
+                // end there; and the closers before any opener lead up to it.
+                if !candidate.text && !canonical(index) {
+                    consider(
+                        Some(missing.saturating_add(settle(candidate, nested))),
+                        index,
+                    );
+                }
+                tail = Some(Vec::new());
+                stop = candidate;
+            }
+        }
+        Ok(best.map(|(_, index)| index))
     }
 
     /// Whether the value ending at a terminator was cut off by a length stop.
@@ -903,6 +1203,21 @@ fn wrap_item(item: ArgTree) -> ArgTree {
         .collect();
     tree.arguments_were_stringified = item.arguments_were_stringified;
     tree
+}
+
+/// Whether a value of a parameter declared as `declared` (`None` when the
+/// parameter or the tool is not declared) is verbatim text, which may hold
+/// closer text (see `Reader::terminator`): a string, an unmodeled or
+/// undeclared parameter, or an array item read as one of those (a value
+/// that is not a JSON array, `bracket` telling whether it begins with
+/// `[`). Typed values are parsed as JSON, and an enumeration's members
+/// (trimmed, a non-verbatim type) never hold closer text.
+fn verbatim(declared: Option<&ValueShape>, bracket: bool) -> bool {
+    match declared {
+        None | Some(ValueShape::String(_) | ValueShape::Unmodeled) => true,
+        Some(ValueShape::Array(item)) => !bracket && verbatim(Some(item), false),
+        Some(_) => false,
+    }
 }
 
 /// Whether `scope` declares `name` (exactly, or as an alias).
