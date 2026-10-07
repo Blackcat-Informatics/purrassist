@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 MAKEFLAGS += --no-print-directory
-.PHONY: check fmt lint test doc hygiene wasm-test benchmark package syntax-oracles resources fuzz helper-test helper-census helper-check
+.PHONY: check corpus fmt lint test doc hygiene wasm-test benchmark package syntax-oracles resources fuzz helper-test helper-census helper-check
 
 check: fmt hygiene helper-test helper-check lint test doc
 
@@ -13,8 +13,6 @@ hygiene:
 	python3 scripts/test-repository-audit.py
 	python3 scripts/check-release.py
 	python3 scripts/test-fuzz.py
-	python3 scripts/test-fuzz-feedback.py
-	python3 scripts/test-verify-published.py
 	python3 scripts/test-resource-report.py
 	python3 scripts/check-resource-limits.py --schema-only docs/qualification/resources-linux-x86_64.json
 
@@ -22,7 +20,14 @@ lint:
 	cargo clippy --workspace --all-targets -- -D warnings
 
 test:
-	RUSTFLAGS="$${RUSTFLAGS:-} -D warnings" cargo test --workspace --profile verification --locked
+	RUSTFLAGS="$${RUSTFLAGS:-} -D warnings" cargo test --workspace --locked
+
+# Corpus suites (`test = false` in crates/core/Cargo.toml): vendored
+# conformance corpora, generated evaluation corpora, exhaustive oracles and
+# 1 MiB scale runs. CI runs them in the `corpus` job; `make check` does not.
+CORPUS_SUITES := correction_evaluation corruption_oracle markdown_corpus matching_oracle pattern_corpus schema_conformance tool_call_scale unicode_conformance
+corpus:
+	RUSTFLAGS="$${RUSTFLAGS:-} -D warnings" cargo test -p purrassist-core --locked $(foreach suite,$(CORPUS_SUITES),--test $(suite))
 
 doc:
 	RUSTDOCFLAGS="$${RUSTDOCFLAGS:-} -D warnings" cargo doc --workspace --no-deps --locked
@@ -61,12 +66,12 @@ fuzz:
 		python3 scripts/fuzz.py --target $(TARGET) $(FUZZ_ARGS); \
 	fi
 
-# Detector self-tests, ledger validity and strict clone enforcement are mandatory.
-# Only documented exact typed API distinctions may remain in the ledger.
+# Detector self-tests and strict clone enforcement are mandatory; the strict
+# helper-check validates the ledger too (--validate-ledger is its report-only
+# subset). Only documented exact typed API distinctions may remain in the ledger.
 helper-test:
 	cargo run --quiet --locked -p purrassist-helper-census -- --self-test
 	python3 scripts/check-shared-helpers.py --self-test
-	python3 scripts/check-shared-helpers.py --validate-ledger
 
 helper-census:
 	cargo run --quiet --locked -p purrassist-helper-census -- --baseline

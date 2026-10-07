@@ -13,7 +13,7 @@ and merge sequence in [RELEASE.md](RELEASE.md).
 | --- | --- | --- |
 | Pure, portable first-party core | `make hygiene`, `make wasm-test` | Zero runtime dependencies; registered data/tooling/source notices; executed transcripts |
 | JSON/schema validation | `schema_conformance`, `draft07`, `formats`, `vocabularies`, `schema_evidence` | 1,301 main Draft 2020-12 cases, 121 selected optional cases, all 878 vendored format/assertion cases; all 929 required Draft-07 cases and 905 of 911 Draft-07 optional cases (6 listed exclusions: annotation-only content, Draft 2019-09 cross-draft reference); nested observations and instance-scoped annotations |
-| Pattern engine | `pattern`, `pattern_generation`, `witness_pattern_generation` | 441 test262 Unicode-property fixtures; derivative/backtracking agreement; assertion-sensitive witnesses and exclusions; 3,024 exhaustive finite generation cases |
+| Pattern engine | `pattern`, `pattern_corpus`, `pattern_generation`, `witness_pattern_generation` | 441 test262 Unicode-property fixtures; derivative/backtracking agreement; assertion-sensitive witnesses and exclusions; 3,024 exhaustive finite generation cases |
 | Witness generation | `witness_algebra`, `witness_applicability`, `witness_formats`, `recursive_schemas` | 430 official-suite groups with valid instances witnessed; type-applicable bounds, occurrence-scoped contains counts, dialect-specific formats; explicit refutations and exhaustion; recursive/dynamic references |
 | Composed recovery | `recovery_goldens`, `corruption_oracle`, `recovery` | 66 curated goldens; deterministic known-origin corruptions; schema revalidation and guess labels |
 | Unicode | `unicode_conformance`, `matching_quality` | 20,034 normalization fixtures; refinement lattice and protected token contrasts |
@@ -26,7 +26,7 @@ and merge sequence in [RELEASE.md](RELEASE.md).
 | Shared Rust/CLI/MCP surface | host tests and CLI `protocol` | Single registry; every tool has CLI/MCP equivalence fixtures and schema-checked output |
 | Tool-call grammars and dialects | `grammar_engine`, `grammar_codecs`, `tool_call_dialects`, `tool_call_negative` | DSL compilation and errors; linear fast path; split-invariant push recognition; `commit` points (no rejection before call-shaped evidence); `next` (several calls in one attempt); `insert` (an omitted token read as inserted); `optional-id`, `declaration-content` and `json-envelope` statements (the JSON envelope syntax slips on all six JSON-envelope dialects); factorized ambiguity; `raw`/`json`/`json-args`/`xml-params` codecs; canonical anchor fixtures for `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`, `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1` and `bare-json.v1`, all twelve in one mixed turn; deliberate rejections; unparsed call markup reported |
 | Tool-call resolution and recovery | `tool_definitions`, `tool_adapters`, `tool_call_rules`, `tool_call_goldens`, `tool_call_recover`, `tool_call_roundtrip` | Typed definitions; byte-exact `OpenAI`/MCP/Anthropic render-back including Draft-07 MCP schemas; registry admission, costs and loss kinds; `RULES.md`/`GRAMMAR.md` checked against the code; one captured golden per rule; mutating-guess guards; `Exact` effort; stop-reason semantics; pinned order-independent result digest; print/recognize round trips for every dialect pair; `OpenAI` `tool_calls` shape |
-| Tool-call cost and quality | `tool_call_cost`, `correction_evaluation` | Published linear work bound and constants; 1 MiB arguments and 64-call busy turns under `ToolRecoveryRequest::sized`; 16,340 mutated turns with zero incorrect automatic answers and 100% abstention recall |
+| Tool-call cost and quality | `tool_call_cost`, `tool_call_scale`, `correction_evaluation` | Published linear work bound and constants; 1 MiB arguments and 64-call busy turns under `ToolRecoveryRequest::sized`; 16,340 mutated turns with zero incorrect automatic answers and 100% abstention recall |
 | Tool-call surfaces | host `tool_call_tools`, CLI `tool_calls_cli` and `protocol` | `recover_tool_calls` MCP tool and `recover-tool-calls` command equal direct core recovery; raw-byte input with invalid UTF-8 recorded; exit codes |
 | Independent syntax | `make syntax-oracles` | 15 positive/negative Python, Rust, JavaScript/JSX, TypeScript/TSX compiler probes |
 | Correction quality | `correction_evaluation`, `matching_oracle` | Four provenance-bound corpora, risk/coverage sweeps, exact distance and path oracles |
@@ -37,11 +37,18 @@ and merge sequence in [RELEASE.md](RELEASE.md).
 | Local release artifacts | `make package` | Five Cargo-verified archives in dependency order; source identity and registered notice audit |
 
 These integration-test names are in `crates/core/tests` unless qualified with
-another crate. `make check` runs the full formatting, hygiene, Clippy,
-helper detector self-tests and ledger validity, verification-profile workspace
-tests, and Rustdoc gate with warnings as errors.
-Focused test results establish their listed contracts; they do not replace this
-gate. Verification retains debug assertions and overflow checks.
+another crate. `make check` runs the formatting, hygiene, Clippy, helper
+detector self-tests, strict helper-ledger, workspace test, and Rustdoc gate
+with warnings as errors; workspace tests keep debug assertions and overflow
+checks. It runs the focused tests only. The corpus suites (`correction_evaluation`,
+`corruption_oracle`, `markdown_corpus`, `matching_oracle`, `pattern_corpus`,
+`schema_conformance`, `tool_call_scale`, `unicode_conformance`) are
+`test = false` targets that `make corpus` runs, in the CI `corpus` job and in
+release qualification; the coverage-guided and differential fuzzing campaign
+and its corpus-feedback self-test run under `make fuzz`, in the CI `fuzz`
+job. The table's corpus counts, conformance totals and 1 MiB measurements
+come from those lanes. Focused test results establish their listed
+contracts; they do not replace these gates.
 
 ## Recovery and document contracts
 
@@ -182,7 +189,7 @@ implementations against the exact helper ledger. Existing findings remain
 visible without blanket sanctions.
 
 `make check` requires detector positive/negative self-tests and strict ledger
-checking: resolved symbols, documentation anchors, exact group membership, and
+checking (`make helper-check`): resolved symbols, documentation anchors, exact group membership, and
 absence of cross-package source includes. The consolidation removed all six
 body groups and six forwarding groups from the initial inspection. Only two
 exact documented groups remain: distinct integer constructor input domains and
@@ -197,6 +204,7 @@ consolidation report for the source-bound census and review decisions.
 
 ```sh
 make check
+make corpus
 make syntax-oracles
 make wasm-test
 make fuzz

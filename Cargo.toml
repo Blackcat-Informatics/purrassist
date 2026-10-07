@@ -44,8 +44,3 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 overflow-checks = true
-
-[profile.verification]
-inherits = "release"
-debug-assertions = true
-overflow-checks = true

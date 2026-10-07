@@ -642,12 +642,13 @@ linear terms (segment events, captured bytes, codec scans, JSON recovery
 units, resolution) are each a small constant per byte: whole recoveries
 measure 10 to 26 units per byte in total (the throughput table below), far
 inside the slack of any built-in `K_d`.
-`crates/core/tests/tool_call_cost.rs` checks the bound on 64 KiB and 1 MiB
-Qwen3-Coder XML, Hermes, Llama 3 JSON, Mistral v3, Mistral v11,
+`crates/core/tests/tool_call_scale.rs` (`make corpus`) checks the bound on
+64 KiB and 1 MiB Qwen3-Coder XML, Hermes, Llama 3 JSON, Mistral v3, Mistral v11,
 DeepSeek-V3.1, DeepSeek-V3, Kimi-K2, Anthropic, Harmony and bare JSON
 string arguments
-(`E = 0`: no repair is recorded), that the 64 KiB to 1 MiB work ratio is within 1.05x of the byte
-ratio, that pushing the same output in chunks of 1, 16 and 4096 bytes
+(`E = 0`: no repair is recorded) and that the 64 KiB to 1 MiB work ratio is
+within 1.05x of the byte ratio; `crates/core/tests/tool_call_cost.rs` (`make
+check`) runs the same checks from 64 KiB to 256 KiB, and checks that pushing the same output in chunks of 1, 16 and 4096 bytes
 charges identical usage, and that adding a dialect to the allow-list adds
 at most its `K_d` per byte (measured, adding the dialects one at a time in
 the order Qwen3-Coder XML, Hermes, `OpenAI`, Llama 3 JSON, Mistral v3,
@@ -779,7 +780,7 @@ candidate share lets the readings outgrow it first, `ScratchBytes`. The host and
 `tool_calls_cli::busy_turn_resolves_every_call_by_default` recover the same
 64-call turn through the MCP tool and the CLI with no effort option.
 
-`tool_call_cost::one_mib_argument_fits_published_budget` recovers a 1 MiB
+`tool_call_scale::one_mib_argument_fits_published_budget` recovers a 1 MiB
 string argument in each built-in dialect's shape and checks that the call is
 `Resolved` under `sized(effort, output)` for every effort from `Quick` to
 `Maximum` (and, for Qwen3-Coder XML, Hermes, Llama 3 JSON, Mistral v3,

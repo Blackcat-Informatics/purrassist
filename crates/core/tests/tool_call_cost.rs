@@ -11,11 +11,9 @@ use purrassist_core::grammar::cost;
 use purrassist_core::json::Node;
 use purrassist_core::tool_call::{
     CallOutcome, DialectId, DialectSet, Effects, GenerationStop, Param, ReasoningPolicy,
-    Recognizer, ToolCalls, ToolDefinition, ToolRecoveryRequest, ToolSet,
+    Recognizer, ToolDefinition, ToolRecoveryRequest, ToolSet,
 };
-use purrassist_core::{
-    AssistResult, Budget, Effort, Governor, Outcome, StopReason, contract::Resource,
-};
+use purrassist_core::{Budget, Effort, Governor, Outcome, StopReason, contract::Resource};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
@@ -139,171 +137,14 @@ fn resources_doc_matches_cost_constants() {
     );
 }
 
-fn tools() -> ToolSet {
-    ToolSet::compile(
-        [ToolDefinition::new("write")
-            .effects(Effects::ReadOnly)
-            .param("content", Param::string().required())],
-        Budget::default(),
-    )
-    .expect("tools compile")
-}
+mod tool_call_cost_support;
+use tool_call_cost_support::{self as support, hermes, qwen, tools};
 
-fn qwen(content: &str) -> String {
-    format!(
-        "<tool_call>\n<function=write>\n<parameter=content>\n{content}\n</parameter>\n</function>\n</tool_call>"
-    )
-}
-
-fn openai(content: &str) -> String {
-    let arguments = format!("{{\"content\": \"{content}\"}}");
-    format!(
-        "{{\"id\": \"call_1\", \"type\": \"function\", \"function\": {{\"name\": \"write\", \"arguments\": {}}}}}",
-        purrassist_core::json::quote(&arguments)
-    )
-}
-
-fn hermes(content: &str) -> String {
-    format!(
-        "<tool_call>\n{{\"name\": \"write\", \"arguments\": {{\"content\": \"{content}\"}}}}\n</tool_call>"
-    )
-}
-
-fn llama3(content: &str) -> String {
-    format!("{{\"name\": \"write\", \"parameters\": {{\"content\": \"{content}\"}}}}")
-}
-
-fn mistral(content: &str) -> String {
-    format!(
-        "[TOOL_CALLS] [{{\"name\": \"write\", \"arguments\": {{\"content\": \"{content}\"}}, \"id\": \"a1B2c3D4e\"}}]"
-    )
-}
-
-fn mistral11(content: &str) -> String {
-    format!("[TOOL_CALLS]write[CALL_ID]a1B2c3D4e[ARGS]{{\"content\": \"{content}\"}}")
-}
-
-fn deepseek31(content: &str) -> String {
-    format!(
-        "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>write<｜tool▁sep｜>{{\"content\": \"{content}\"}}<｜tool▁call▁end｜><｜tool▁calls▁end｜>"
-    )
-}
-
-fn anthropic(content: &str) -> String {
-    format!(
-        "{{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"write\",\"input\":{{\"content\":\"{content}\"}}}}"
-    )
-}
-
-fn harmony(content: &str) -> String {
-    format!(
-        "<|start|>assistant<|channel|>commentary to=functions.write <|constrain|>json<|message|>{{\"content\": \"{content}\"}}<|call|>"
-    )
-}
-
-fn bare(content: &str) -> String {
-    format!("{{\"name\": \"write\", \"arguments\": {{\"content\": \"{content}\"}}}}")
-}
-
-fn kimi(content: &str) -> String {
-    format!(
-        "<|tool_calls_section_begin|><|tool_call_begin|>functions.write:0<|tool_call_argument_begin|>{{\"content\": \"{content}\"}}<|tool_call_end|><|tool_calls_section_end|>"
-    )
-}
-
-fn deepseek3(content: &str) -> String {
-    format!(
-        "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>write\n```json\n{{\"content\": \"{content}\"}}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>"
-    )
-}
-
-/// The published bound for `n` bytes over `set` with no error
-/// configuration explored (`E = 0`).
-fn bound(set: &DialectSet, n: usize) -> u64 {
-    let per_dialect: u64 = set
-        .dialects()
-        .iter()
-        .map(|dialect| cost::K_THREAD * dialect.grammar().configuration_bound())
-        .sum();
-    (2 + cost::K_LEX + per_dialect) * n as u64
-}
-
-/// Recover `input` and require the single call `Resolved` with `content`.
-fn resolved(
-    tools: &ToolSet,
-    input: &str,
-    request: &ToolRecoveryRequest,
-    content: &str,
-) -> AssistResult<ToolCalls> {
-    let result = tools.recover(input.as_bytes(), request);
-    let Outcome::Resolved(calls) = &result.outcome else {
-        panic!("{:?}", result.receipt.stopped)
-    };
-    assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
-    assert_eq!(
-        calls.calls[0]
-            .arguments
-            .get("content")
-            .and_then(Node::as_str),
-        Some(content)
-    );
-    result
-}
-
+/// The work bound and linear scaling, from 64 KiB to 256 KiB (`make
+/// corpus` runs 64 KiB to 1 MiB in `tool_call_scale`).
 #[test]
-fn one_mib_argument_work_bound() {
-    let tools = tools();
-    // One budget sized for 2 MiB serves both scales.
-    let request = ToolRecoveryRequest::new(Effort::Standard).budget(
-        ToolRecoveryRequest::sized_budget(Effort::Standard, 2 << 20, 2),
-    );
-    for (label, print) in [
-        ("qwen", qwen as fn(&str) -> String),
-        ("hermes", hermes),
-        ("llama3", llama3),
-        ("mistral", mistral),
-        ("mistral11", mistral11),
-        ("deepseek31", deepseek31),
-        ("deepseek3", deepseek3),
-        ("kimi", kimi),
-        ("anthropic", anthropic),
-        ("harmony", harmony),
-        ("bare", bare),
-    ] {
-        let mut measured = Vec::new();
-        for size in [1 << 16, 1 << 20] {
-            let content = "a".repeat(size);
-            let input = print(&content);
-            let result = resolved(&tools, &input, &request, &content);
-            // The fast path explores no error configuration (E = 0): no
-            // repair is recorded.
-            assert!(
-                result
-                    .receipt
-                    .evidence
-                    .iter()
-                    .all(|evidence| evidence.rule == "tool_call.xml.framing-newline"),
-                "{label}: {:?}",
-                result.receipt.evidence
-            );
-            let work = result.receipt.usage.work;
-            let limit = bound(&request.dialects, input.len());
-            println!(
-                "{label} {} bytes: work {work}, published bound {limit}",
-                input.len()
-            );
-            assert!(work <= limit, "{label}: work {work} exceeds {limit}");
-            measured.push((input.len() as u128, u128::from(work)));
-        }
-        // (work ratio) / (byte ratio) within [1/1.05, 1.05], exactly.
-        let ((small_bytes, small_work), (large_bytes, large_work)) = (measured[0], measured[1]);
-        let work_ratio = large_work * small_bytes;
-        let byte_ratio = small_work * large_bytes;
-        assert!(
-            work_ratio * 100 <= byte_ratio * 105 && byte_ratio * 100 <= work_ratio * 105,
-            "{label}: 64 KiB -> 1 MiB work ratio is not within 1.05x of the byte ratio"
-        );
-    }
+fn argument_work_bound() {
+    support::argument_work_bound(1 << 16, 1 << 18);
 }
 
 /// T6: closer text inside a value costs work linear in the output. A
@@ -377,75 +218,12 @@ fn closer_text_in_values_is_linear() {
     }
 }
 
-/// C4: a 1 MiB string argument recovers under the unmodified
-/// `Effort::Maximum` preset and under `ToolRecoveryRequest::sized` for every
-/// effort from `Quick` to `Maximum`, with identical charges in every case
-/// and peak scratch at most 16 bytes per input byte for Qwen3-Coder XML,
-/// Hermes, Llama 3 JSON, Mistral v3, Mistral v11, DeepSeek-V3.1, DeepSeek-V3, Kimi-K2, Anthropic, Harmony and bare JSON arguments (`docs/RESOURCES.md` quotes these
-/// measurements). `OpenAI`
-/// stringified arguments decode their escaped string again, so they are
-/// held to `RECOVER_SCRATCH_PER_BYTE` instead, under `sized` budgets.
+/// C4's published per-byte bounds on a 16 KiB argument (`make corpus` runs
+/// the 1 MiB argument, with its 16-bytes-per-byte scratch ceiling, in
+/// `tool_call_scale`).
 #[test]
-fn one_mib_argument_fits_published_budget() {
-    let tools = tools();
-    let content = "a".repeat(1 << 20);
-    for (label, input, sixteen) in [
-        ("qwen", qwen(&content), true),
-        ("hermes", hermes(&content), true),
-        ("llama3", llama3(&content), true),
-        ("mistral", mistral(&content), true),
-        ("mistral11", mistral11(&content), true),
-        ("deepseek31", deepseek31(&content), true),
-        ("deepseek3", deepseek3(&content), true),
-        ("kimi", kimi(&content), true),
-        ("anthropic", anthropic(&content), true),
-        ("harmony", harmony(&content), true),
-        ("bare", bare(&content), true),
-        ("openai", openai(&content), false),
-    ] {
-        let len = input.len();
-        let mut usages = Vec::new();
-        if sixteen {
-            let preset = resolved(
-                &tools,
-                &input,
-                &ToolRecoveryRequest::new(Effort::Maximum),
-                &content,
-            );
-            assert_eq!(preset.receipt.budget, Effort::Maximum.budget());
-            usages.push(preset.receipt.usage);
-        }
-        for effort in [
-            Effort::Quick,
-            Effort::Standard,
-            Effort::Deep,
-            Effort::Maximum,
-        ] {
-            let sized = resolved(
-                &tools,
-                &input,
-                &ToolRecoveryRequest::sized(effort, input.as_bytes()),
-                &content,
-            );
-            usages.push(sized.receipt.usage);
-        }
-        let usage = usages[0];
-        // The charges are a function of the input alone.
-        assert!(usages.iter().all(|other| *other == usage), "{label}");
-        println!(
-            "{label}: {len} bytes, work {}, peak scratch {}",
-            usage.work, usage.peak_scratch_bytes
-        );
-        assert!(usage.work <= cost::RECOVER_WORK_PER_BYTE * len as u64);
-        assert!(usage.peak_scratch_bytes <= cost::RECOVER_SCRATCH_PER_BYTE * len as u64);
-        if sixteen {
-            assert!(
-                usage.peak_scratch_bytes <= 16 * len as u64,
-                "{label}: peak scratch {} over 16 bytes per input byte",
-                usage.peak_scratch_bytes
-            );
-        }
-    }
+fn argument_fits_published_budget() {
+    support::argument_fits_published_budget(1 << 14);
 }
 
 /// A representative turn: reasoning, prose, a Qwen3-Coder XML call with a
@@ -488,68 +266,7 @@ fn push_chunking_identical_work() {
 
 #[test]
 fn work_independent_of_dialect_count_beyond_bound() {
-    let tools = tools();
-    let content = "a".repeat(1 << 16);
-    for input in [
-        qwen(&content),
-        hermes(&content),
-        llama3(&content),
-        mistral(&content),
-        mistral11(&content),
-        deepseek31(&content),
-        deepseek3(&content),
-        kimi(&content),
-        anthropic(&content),
-        harmony(&content),
-        bare(&content),
-    ] {
-        let n = input.len() as u64;
-        let mut previous: Option<(u64, Vec<DialectId>)> = None;
-        let order = [
-            DialectId::Qwen3CoderXml,
-            DialectId::Hermes,
-            DialectId::OpenAiToolCalls,
-            DialectId::Llama3Json,
-            DialectId::MistralV3,
-            DialectId::MistralV11,
-            DialectId::DeepSeekV31,
-            DialectId::DeepSeekV3,
-            DialectId::KimiK2,
-            DialectId::AnthropicToolUse,
-            DialectId::Harmony,
-            DialectId::BareJson,
-        ];
-        for count in 1..=order.len() {
-            let dialects = order[..count].to_vec();
-            let set = DialectSet::new(dialects.clone(), &mut Governor::new(Budget::default()))
-                .expect("dialects");
-            let request = ToolRecoveryRequest::sized_for(Effort::Standard, input.as_bytes(), set);
-            let result = tools.recover(input.as_bytes(), &request);
-            assert!(
-                matches!(result.outcome, Outcome::Resolved(_)),
-                "{dialects:?}"
-            );
-            let work = result.receipt.usage.work;
-            if let Some((before, known)) = &previous {
-                let added: u64 = dialects
-                    .iter()
-                    .filter(|dialect| !known.contains(dialect))
-                    .map(|dialect| cost::K_THREAD * dialect.grammar().configuration_bound())
-                    .sum();
-                println!(
-                    "{} -> {} dialects: work {before} -> {work} (+{} per byte; published term {added})",
-                    known.len(),
-                    dialects.len(),
-                    work.saturating_sub(*before) / n
-                );
-                assert!(
-                    work <= before + added * n,
-                    "adding dialects added more than their published per-byte term"
-                );
-            }
-            previous = Some((work, dialects));
-        }
-    }
+    support::work_independent_of_dialect_count(1 << 14);
 }
 
 /// Declarations of a directory listing tool, as an integrator passes them:
