@@ -1,0 +1,65 @@
+{
+  "description": "T5: Kimi-K2 resynchronization is string-aware: a call closer or opener inside a JSON string of the malformed call is the string's text, so no call `g {}` is fabricated from it (neither by the resynchronizing attempt nor by an attempt opened inside the string); the whole section is one rejected attempt.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "g",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "kimi-k2.v1"
+  ],
+  "effects": {
+    "f": "mutating",
+    "g": "mutating"
+  },
+  "input": "<|tool_calls_section_begin|><|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{\"a\":\"x<|tool_call_end|><|tool_call_begin|>functions.g:1<|tool_call_argument_begin|>{}<|tool_call_end|>\"}<|tool_call_end|><|tool_calls_section_end|>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        0,
+        241
+      ],
+      "dialect": "kimi-k2.v1",
+      "candidate_dialects": [
+        "kimi-k2.v1"
+      ],
+      "reason": "Malformed { at: 61 }",
+      "raw": "<|tool_calls_section_begin|><|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{\"a\":\"x<|tool_call_end|><|tool_call_begin|>functions.g:1<|tool_call_argument_begin|>{}<|tool_call_end|>\"}<|tool_call_end|><|tool_calls_section_end|>"
+    }
+  ],
+  "embedded": [],
+  "content": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

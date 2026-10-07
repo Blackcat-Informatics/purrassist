@@ -276,6 +276,14 @@ pub struct IncrementalRecovery {
     /// U+FFFD characters fed by [`Self::feed_replacement`] in place of
     /// malformed source bytes: each one's offset and source width.
     replaced: Vec<(usize, usize)>,
+    /// Whether a bare (unquoted) key must be followed by its `:` (see
+    /// [`Self::require_key_colons`]).
+    colon_keys: bool,
+    /// Where the key awaiting its `:` begins, when it was a bare word.
+    bare_key: Option<usize>,
+    /// Where the input became unrecoverable when that is before the
+    /// character that showed it (a bare word that is no key: its start).
+    fault_at: Option<usize>,
 }
 
 /// A partially decoded UTF-8 scalar.
@@ -573,6 +581,9 @@ impl IncrementalRecovery {
             opening: false,
             settling: None,
             replaced: Vec::new(),
+            colon_keys: false,
+            bare_key: None,
+            fault_at: None,
         }
     }
 
@@ -583,6 +594,24 @@ impl IncrementalRecovery {
         parser.base = base;
         parser.position = base;
         parser
+    }
+
+    /// Read a bare (unquoted) object key only when its `:` follows it: a bare
+    /// word with no `:` after it is no key (`{"a": "y" oops}`, prose after an
+    /// unclosed object), so no parameter name is invented from positional
+    /// text and no free text is read as an argument; the input is then
+    /// unrecoverable there. A quoted key may still have its `:` inserted,
+    /// and `{path: "a"}` keeps its bare key.
+    pub(crate) const fn require_key_colons(mut self) -> Self {
+        self.colon_keys = true;
+        self
+    }
+
+    /// Where the input became unrecoverable, when that lies before the
+    /// character that showed it: the start of a bare word that is no key
+    /// (see [`Self::require_key_colons`]).
+    pub(crate) const fn fault_at(&self) -> Option<usize> {
+        self.fault_at
     }
 
     /// Whether the value and its trailing whitespace/comments are complete:
@@ -596,6 +625,12 @@ impl IncrementalRecovery {
     /// recovery edit.
     pub(crate) const fn value_complete(&self) -> bool {
         matches!(self.mode, Mode::Done | Mode::Space(After::Top))
+    }
+
+    /// Whether the parser is inside a double-quoted string: a delimiter
+    /// written here is text of the string.
+    pub(crate) const fn in_string(&self) -> bool {
+        matches!(&self.mode, Mode::Text(text) if text.quote == '"')
     }
 
     /// Absolute offset just past the last consumed character.
@@ -1054,6 +1089,14 @@ impl IncrementalRecovery {
                     self.consume(':', at, governor)?;
                     self.enter_value(depth, governor)?;
                     Ok(Flow::Next)
+                } else if self.colon_keys
+                    && let Some(start) = self.bare_key
+                {
+                    self.fault_at = Some(start);
+                    Err(StopReason::InvalidInput(format!(
+                        "a bare word with no `:` after it at {} is no object key",
+                        at - self.base
+                    )))
                 } else {
                     self.insert("json.syntax.missing-colon", at, ":", false, governor)?;
                     self.enter_value(depth, governor)?;
@@ -1263,6 +1306,7 @@ impl IncrementalRecovery {
                 governor,
             )?;
             self.accept_key(text, span);
+            self.bare_key = Some(start);
             return Ok(());
         }
         if text.is_empty() {
@@ -1319,6 +1363,7 @@ impl IncrementalRecovery {
         if let Some(frame) = self.stack.as_mut_slice().last_mut() {
             frame.key = Some((key, span));
         }
+        self.bare_key = None;
         self.mode = Mode::Space(After::Colon);
     }
 

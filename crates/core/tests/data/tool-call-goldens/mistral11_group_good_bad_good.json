@@ -1,5 +1,5 @@
 {
-  "description": "T2/T3: Mistral v11 calls, each opening with its own [TOOL_CALLS] (good, malformed arguments, good): [ARGS] is written, so it is never read as omitted there; the malformed value goes through the json codec's repairs (a guessed missing value), so the middle call is a BestGuess and the first and third calls are Resolved; no markup is left as text.",
+  "description": "T2/T3/T5: Mistral v11 calls, each opening with its own [TOOL_CALLS] (good, malformed arguments, good): [ARGS] is written, so it is never read as omitted there. The middle value `{\"a\":\"y\" oops}` holds a bare word with no `:` after it, which is no key (T5/F10: no parameter name is invented from positional text), so the value is unreadable and the middle call is a rejected attempt over its markup; the first and third calls are Resolved and no markup is left as text.",
   "tools_openai": [
     {
       "type": "function",
@@ -23,14 +23,78 @@
     "f": "read_only"
   },
   "input": "Hi [TOOL_CALLS]f[ARGS]{\"a\":\"x\"}[TOOL_CALLS]f[ARGS]{\"a\":\"y\" oops}[TOOL_CALLS]f[ARGS]{\"a\":\"z\"} done",
-  "outcome": "best_guess",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "tool_calls",
+    "verdict": "run",
+    "usable_calls": {
+      "strict": 2,
+      "accepting_guesses": 2
+    },
+    "calls": [
+      {
+        "tool": "f",
+        "arguments": {
+          "a": "x"
+        },
+        "candidate_dialects": [
+          "mistral-v11.v1"
+        ],
+        "outcome": "resolved",
+        "rules": [
+          "tool_call.id.dedup"
+        ]
+      },
+      {
+        "tool": "f",
+        "arguments": {
+          "a": "z"
+        },
+        "candidate_dialects": [
+          "mistral-v11.v1"
+        ],
+        "outcome": "resolved",
+        "rules": [
+          "tool_call.id.dedup"
+        ]
+      }
+    ],
+    "rejected": [
+      {
+        "span": [
+          31,
+          64
+        ],
+        "dialect": "mistral-v11.v1",
+        "candidate_dialects": [
+          "mistral-v11.v1",
+          "mistral-v3.v1"
+        ],
+        "reason": "Malformed { at: 59 }",
+        "raw": "[TOOL_CALLS]f[ARGS]{\"a\":\"y\" oops}"
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "Hi ",
+      "done"
+    ],
+    "failed_validations": [],
+    "ledger_rules": [
+      "tool_call.id.dedup",
+      "tool_call.id.dedup"
+    ]
+  },
+  "outcome": "resolved",
   "stopped": "completed",
-  "finish": "calls",
+  "finish": "unresolved",
   "openai_finish_reason": "tool_calls",
   "verdict": "run",
   "usable_calls": {
     "strict": 2,
-    "accepting_guesses": 3
+    "accepting_guesses": 2
   },
   "calls": [
     {
@@ -49,25 +113,6 @@
     {
       "tool": "f",
       "arguments": {
-        "a": "y",
-        "oops": null
-      },
-      "candidate_dialects": [
-        "mistral-v11.v1"
-      ],
-      "outcome": "best_guess",
-      "rules": [
-        "json.syntax.missing-comma",
-        "json.syntax.bare-key",
-        "json.syntax.missing-colon",
-        "json.syntax.missing-value",
-        "tool_call.parameter.pass-through",
-        "tool_call.id.dedup"
-      ]
-    },
-    {
-      "tool": "f",
-      "arguments": {
         "a": "z"
       },
       "candidate_dialects": [
@@ -79,7 +124,20 @@
       ]
     }
   ],
-  "rejected": [],
+  "rejected": [
+    {
+      "span": [
+        31,
+        64
+      ],
+      "dialect": "mistral-v11.v1",
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "reason": "Malformed { at: 59 }",
+      "raw": "[TOOL_CALLS]f[ARGS]{\"a\":\"y\" oops}"
+    }
+  ],
   "embedded": [],
   "content": [
     "Hi ",
@@ -87,12 +145,6 @@
   ],
   "failed_validations": [],
   "ledger_rules": [
-    "tool_call.id.dedup",
-    "json.syntax.missing-comma",
-    "json.syntax.bare-key",
-    "json.syntax.missing-colon",
-    "json.syntax.missing-value",
-    "tool_call.parameter.pass-through",
     "tool_call.id.dedup",
     "tool_call.id.dedup"
   ]

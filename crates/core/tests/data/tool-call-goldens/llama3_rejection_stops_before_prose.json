@@ -1,0 +1,60 @@
+{
+  "description": "T5/F11: a rejected JSON-object attempt (Llama 3) runs on by its brackets to the one closing it only over bytes JSON reads. The grammar stops at the stray word `t_begin|>` after `<|python_tag|>`; that word is prose (followed by sentence punctuation, not JSON punctuation), so the `}` after it closes nothing the attempt read. The rejection covers the opener and everything after it stays content (it was 6..81, leaving a lone `}` as content).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "llama3-json.v1"
+  ],
+  "effects": {
+    "get_weather": "read_only"
+  },
+  "input": "Sure. <|python_tag|>t_begin|>\"name\": \"get_weather\", \"arguments\": {\"city\": \"Oslo\"}} Done.",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        6,
+        20
+      ],
+      "dialect": "llama3-json.v1",
+      "candidate_dialects": [
+        "llama3-json.v1"
+      ],
+      "reason": "Malformed { at: 20 }",
+      "raw": "<|python_tag|>"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Sure. ",
+    "t_begin|>\"name\": \"get_weather\", \"arguments\": {\"city\": \"Oslo\"}} Done."
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

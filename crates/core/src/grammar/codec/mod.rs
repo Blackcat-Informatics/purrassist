@@ -500,6 +500,15 @@ impl CodecState {
         }
     }
 
+    /// Whether a self-delimiting value is inside one of its strings (see
+    /// [`JsonCodec::in_string`]); `false` for the other codecs.
+    pub(crate) const fn in_string(&self) -> bool {
+        match self {
+            Self::Json(codec) => codec.in_string(),
+            Self::Raw(_) | Self::XmlParams(_) => false,
+        }
+    }
+
     /// Where a self-delimiting value already complete ends: the end of
     /// input then ends it with no recovery edit. `None` for a value still
     /// open, and for the codecs that are not self-delimiting.

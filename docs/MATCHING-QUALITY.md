@@ -144,7 +144,7 @@ test's assertions fails the build by design.
 | Path matching | 1594 | 1279 | 0 | 315 | 80.2% | 0.0% | 0.234% | 2% |
 | Phonetic ambiguity | 1408 | 1089 | 0 | 319 | 77.3% | 0.0% | 0.275% | 5% |
 | JSON recovery | 714 | 630 | 0 | 84 | 88.2% | 0.0% | 0.474% | 2% |
-| Tool-call recovery | 15246 | 10805 | 0 | 4441 | 70.9% | 0.0% | 0.028% | 1% |
+| Tool-call recovery | 16250 | 11157 | 0 | 5093 | 68.7% | 0.0% | 0.027% | 1% |
 
 "Coverage" is the fraction of cases an automatic decision was reached for at
 all (correct + incorrect, over the total); "risk" is the observed error rate
@@ -207,7 +207,7 @@ small oracle exhaustively proves the Unicode tables.
 
 ## Tool-call recovery evaluation
 
-`crates/core/tests/data/evaluation/tool-calls.jsonl` holds 15,246 mutated model
+`crates/core/tests/data/evaluation/tool-calls.jsonl` holds 16,250 mutated model
 turns, each with its `id`, `category` (the rule expected to repair it),
 `dialect` (the request's dialect allow-list), `policy`, `stop`, `input` and
 `truth`. The `tool-call-corpus` example generates it deterministically: it
@@ -302,7 +302,7 @@ any answer to a truth-`Unresolved` case. The test pins the totals above,
 asserts zero incorrect answers overall, per rule and per dialect, at least 20
 cases per rule, and abstention recall of 100%:
 
-Abstention recall: 4342 of 4342 truth-`Unresolved` cases abstained (100.0%).
+Abstention recall: 4994 of 4994 truth-`Unresolved` cases abstained (100.0%).
 
 The 99 other abstentions are coverage gaps, not errors: read-only calls whose
 required arguments were nested one level down (`DropWithLoss` drops the
@@ -320,12 +320,12 @@ unassignable (`UnknownParameter`), so the call abstains.
 
 | Rule | Cases | Correct | Incorrect | Abstained | Truth `Unresolved` |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `canonical` | 1411 | 1411 | 0 | 0 | 0 |
+| `canonical` | 1491 | 1491 | 0 | 0 | 0 |
 | `json.enum.match` | 168 | 96 | 0 | 72 | 72 |
 | `json.key.match` | 372 | 144 | 0 | 228 | 228 |
 | `json.key.relocate` | 308 | 0 | 0 | 308 | 209 |
 | `json.required.invent` | 336 | 0 | 0 | 336 | 336 |
-| `json.syntax.bare-key` | 389 | 389 | 0 | 0 | 0 |
+| `json.syntax.bare-key` | 1041 | 389 | 0 | 652 | 652 |
 | `json.syntax.bare-string` | 187 | 66 | 0 | 121 | 121 |
 | `json.syntax.close-container` | 24 | 24 | 0 | 0 | 0 |
 | `json.syntax.comment` | 389 | 389 | 0 | 0 | 0 |
@@ -359,7 +359,7 @@ unassignable (`UnknownParameter`), so the call abstains.
 | `tool_call.markup.parameter-closed-by-element` | 31 | 31 | 0 | 0 | 0 |
 | `tool_call.markup.stray-closer` | 699 | 671 | 0 | 28 | 28 |
 | `tool_call.markup.terminal-confusable` | 192 | 192 | 0 | 0 | 0 |
-| `tool_call.markup.token-misspelled` | 388 | 388 | 0 | 0 | 0 |
+| `tool_call.markup.token-misspelled` | 660 | 660 | 0 | 0 | 0 |
 | `tool_call.markup.undeclared-parameter-boundary` | 26 | 0 | 0 | 26 | 26 |
 | `tool_call.name.alias` | 96 | 96 | 0 | 0 | 0 |
 | `tool_call.name.from-arguments` | 64 | 24 | 0 | 40 | 40 |
@@ -388,37 +388,37 @@ and by dialect allow-list:
 | Dialect | Cases | Correct | Incorrect | Abstained |
 | --- | ---: | ---: | ---: | ---: |
 | `adapter` | 27 | 24 | 0 | 3 |
-| `anthropic` | 1246 | 883 | 0 | 363 |
-| `bare` | 1086 | 723 | 0 | 363 |
-| `deepseek3` | 1598 | 1219 | 0 | 379 |
-| `deepseek31` | 1374 | 1011 | 0 | 363 |
-| `harmony` | 1443 | 1052 | 0 | 391 |
-| `hermes` | 1272 | 864 | 0 | 408 |
-| `kimi` | 1470 | 1087 | 0 | 383 |
-| `llama3` | 1054 | 691 | 0 | 363 |
-| `mistral11` | 1086 | 743 | 0 | 343 |
-| `mistral3` | 1214 | 851 | 0 | 363 |
+| `anthropic` | 1308 | 883 | 0 | 425 |
+| `bare` | 1148 | 723 | 0 | 425 |
+| `deepseek3` | 1708 | 1267 | 0 | 441 |
+| `deepseek31` | 1484 | 1059 | 0 | 425 |
+| `harmony` | 1537 | 1084 | 0 | 453 |
+| `hermes` | 1382 | 912 | 0 | 470 |
+| `kimi` | 1580 | 1135 | 0 | 445 |
+| `llama3` | 1132 | 707 | 0 | 425 |
+| `mistral11` | 1180 | 775 | 0 | 405 |
+| `mistral3` | 1308 | 883 | 0 | 425 |
 | `mixed` | 96 | 96 | 0 | 0 |
-| `openai` | 932 | 586 | 0 | 346 |
-| `qwen` | 1348 | 975 | 0 | 373 |
+| `openai` | 964 | 586 | 0 | 378 |
+| `qwen` | 1396 | 1023 | 0 | 373 |
 
 | Allow-list | Cases | Correct | Incorrect | Abstained |
 | --- | ---: | ---: | ---: | ---: |
-| `anthropic-tool-use.v1` | 576 | 409 | 0 | 167 |
-| `anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1` | 8151 | 5759 | 0 | 2392 |
-| `bare-json.v1` | 496 | 329 | 0 | 167 |
-| `deepseek-v3.1.v1` | 640 | 473 | 0 | 167 |
+| `anthropic-tool-use.v1` | 606 | 409 | 0 | 197 |
+| `anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1` | 8677 | 5933 | 0 | 2744 |
+| `bare-json.v1` | 526 | 329 | 0 | 197 |
+| `deepseek-v3.1.v1` | 694 | 497 | 0 | 197 |
 | `deepseek-v3.1.v1,deepseek-v3.v1` | 32 | 32 | 0 | 0 |
-| `deepseek-v3.v1` | 752 | 577 | 0 | 175 |
-| `harmony.v1` | 675 | 496 | 0 | 179 |
-| `hermes.v1` | 604 | 408 | 0 | 196 |
+| `deepseek-v3.v1` | 806 | 601 | 0 | 205 |
+| `harmony.v1` | 721 | 512 | 0 | 209 |
+| `hermes.v1` | 658 | 432 | 0 | 226 |
 | `hermes.v1,qwen3-coder-xml.v1` | 64 | 64 | 0 | 0 |
-| `kimi-k2.v1` | 688 | 509 | 0 | 179 |
-| `llama3-json.v1` | 480 | 313 | 0 | 167 |
-| `mistral-v11.v1` | 464 | 309 | 0 | 155 |
-| `mistral-v3.v1` | 560 | 393 | 0 | 167 |
+| `kimi-k2.v1` | 742 | 533 | 0 | 209 |
+| `llama3-json.v1` | 520 | 323 | 0 | 197 |
+| `mistral-v11.v1` | 510 | 325 | 0 | 185 |
+| `mistral-v3.v1` | 606 | 409 | 0 | 197 |
 | `openai-tool-calls.v1` | 422 | 264 | 0 | 158 |
-| `qwen3-coder-xml.v1` | 642 | 470 | 0 | 172 |
+| `qwen3-coder-xml.v1` | 666 | 494 | 0 | 172 |
 
 Rules no case exercises: `json.syntax.literal-escape` (no witness value
 contains a backslash to unescape). `tool_call.markup.terminal-confusable` is

@@ -1607,12 +1607,15 @@ struct MarkupScan<'o> {
 /// ends (see [`Recovery::close_rejections`]): `boundaries` are the segments
 /// after it, in order, each marked whether the scan may pass over it (a call
 /// or attempt inside the broken wrapper) or stops at it (a reasoning block,
-/// reported unparsed markup). The recognizer reads the same end to keep
-/// fences inside rejected markup out of the prose context.
+/// reported unparsed markup). `reason` says where its grammar stopped reading
+/// (a resync may have read on past it, to a literal). The recognizer reads
+/// the same end to keep fences inside rejected markup out of the prose
+/// context.
 pub(super) fn rejected_end(
     output: &[u8],
     span: &Range<usize>,
     dialect: &DialectId,
+    reason: Rejection,
     boundaries: &[(Range<usize>, bool)],
     governor: &mut Governor,
 ) -> Result<usize, StopReason> {
@@ -1624,14 +1627,26 @@ pub(super) fn rejected_end(
             .map(Vec::len)
             .max()
     };
-    // The alternative the attempt opened (its longest opener spelling), or
-    // every alternative when no spelling matches.
+    // The alternatives the attempt opened (its longest opener spelling;
+    // every alternative sharing that opener, as an Anthropic block and a
+    // streaming event share `{`), or every alternative when no spelling
+    // matches.
     let opened: Vec<&CallEnd> = {
-        let best = ends
+        let matched: Vec<(usize, &CallEnd)> = ends
             .iter()
             .filter_map(|end| at(&end.openers, span.start).map(|length| (length, end)))
-            .max_by_key(|(length, _)| *length);
-        best.map_or_else(|| ends.iter().collect(), |(_, end)| vec![end])
+            .collect();
+        let best = matched.iter().map(|(length, _)| *length).max();
+        best.map_or_else(
+            || ends.iter().collect(),
+            |best| {
+                matched
+                    .into_iter()
+                    .filter(|(length, _)| *length == best)
+                    .map(|(_, end)| end)
+                    .collect()
+            },
+        )
     };
     let markup = Markup {
         openers: opened.iter().flat_map(|end| end.openers.clone()).collect(),
@@ -1655,7 +1670,14 @@ pub(super) fn rejected_end(
         },
         literals: dialect.grammar().call_literals(),
     };
-    MarkupScan { output }.markup_end(span, &markup, boundaries, governor)
+    // Where the grammar stopped reading the attempt's own syntax.
+    let read = match reason {
+        Rejection::Malformed { at }
+        | Rejection::InvalidUtf8 { at }
+        | Rejection::Overlapped { at } => at.clamp(span.start, span.end),
+        Rejection::Unterminated | Rejection::UnsupportedDialect { .. } => span.end,
+    };
+    MarkupScan { output }.markup_end(span, read, &markup, boundaries, governor)
 }
 
 impl MarkupScan<'_> {
@@ -1665,6 +1687,7 @@ impl MarkupScan<'_> {
     fn markup_end(
         &self,
         span: &Range<usize>,
+        read: usize,
         markup: &Markup<'_>,
         boundaries: &[(Range<usize>, bool)],
         governor: &mut Governor,
@@ -1686,11 +1709,7 @@ impl MarkupScan<'_> {
             .into_iter()
             .filter(|(_, close)| closers.iter().any(|spelling| spelling == &[*close]))
             .collect();
-        let mut state = Nesting {
-            depth: 0,
-            quoted: false,
-            escaped: false,
-        };
+        let mut state = Nesting::default();
         let mut position = span.start;
         let mut next = boundaries.iter();
         let mut found = None;
@@ -1703,6 +1722,23 @@ impl MarkupScan<'_> {
                 governor.charge(Resource::Work, 1)?;
                 let byte = self.output[position];
                 if !brackets.is_empty() {
+                    // Past where the grammar stopped, prose (a bare word
+                    // followed by another word or sentence punctuation,
+                    // outside a string) is no JSON structure: a bracket
+                    // after it closes nothing the attempt read
+                    // (`<|python_tag|>t_begin|>"name": ... {...}`), and the
+                    // attempt ends as one left unclosed.
+                    if !state.quoted
+                        && position >= span.end
+                        && byte.is_ascii_alphabetic()
+                        && (position == 0 || !is_word_byte(self.output[position - 1]))
+                    {
+                        let (word, prose) = self.bare_word(position, limit);
+                        governor.charge(Resource::Work, size(word))?;
+                        if prose {
+                            break 'scan;
+                        }
+                    }
                     position += 1;
                     if state.quoted {
                         match byte {
@@ -1716,7 +1752,14 @@ impl MarkupScan<'_> {
                     } else if brackets.iter().any(|(open, _)| *open == byte) {
                         state.depth += 1;
                     } else if brackets.iter().any(|(_, close)| *close == byte) {
-                        state.depth = state.depth.saturating_sub(1);
+                        // A bracket closing nothing the scan opened closes
+                        // a structure around the attempt (it began inside
+                        // one, or inside a string): the attempt's markup
+                        // ends before it, unclosed.
+                        if state.depth == 0 {
+                            break 'scan;
+                        }
+                        state.depth -= 1;
                         if state.depth == 0 && position > span.end {
                             found = Some(position);
                             break 'scan;
@@ -1744,38 +1787,99 @@ impl MarkupScan<'_> {
                 // A call or attempt inside the broken wrapper that does
                 // not reopen its alternative.
                 Some((range, true)) if at(openers, range.start).is_none() => {
+                    // Its brackets nest with the attempt's: when it closes
+                    // the bracket the attempt left open (a group's last
+                    // call holds the array's `]`), no later bracket closes
+                    // the attempt, which ends unclosed.
+                    if !brackets.is_empty()
+                        && self.closes(&mut state, &brackets, range, governor)?
+                    {
+                        break 'scan;
+                    }
                     position = range.end;
                 }
                 _ => break,
             }
         }
-        let Some(mut end) = found else {
-            return self.unclosed_end(span, markup, boundaries, governor);
+        let Some(end) = found else {
+            return self.unclosed_end(span, read, markup, boundaries, governor);
         };
         // Repeated closers right after the end (whitespace between) are
         // the attempt's stray closers, as after a completed call.
-        if brackets.is_empty() {
-            let limit = boundaries
-                .iter()
-                .map(|(range, _)| range.start)
-                .find(|start| *start >= end)
-                .unwrap_or(len);
-            let mut probe = end;
-            loop {
-                while probe < limit && self.output[probe].is_ascii_whitespace() {
-                    probe += 1;
+        Ok(if brackets.is_empty() {
+            self.stray_closers(end, markup, boundaries)
+        } else {
+            end
+        })
+    }
+
+    /// Whether the bytes of `range` (a call inside a rejected attempt's
+    /// markup), nesting by `brackets` outside strings from `state`, close
+    /// the attempt's last open bracket.
+    fn closes(
+        &self,
+        state: &mut Nesting,
+        brackets: &[(u8, u8)],
+        range: &Range<usize>,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        governor.charge(Resource::Work, size(range.len()))?;
+        for &byte in &self.output[range.clone()] {
+            if state.quoted {
+                match byte {
+                    _ if state.escaped => state.escaped = false,
+                    b'\\' => state.escaped = true,
+                    b'"' => state.quoted = false,
+                    _ => {}
                 }
-                match at(closers, probe).or_else(|| self.misspelled(closers, markup, probe, limit))
-                {
-                    Some(length) if probe + length <= limit => {
-                        probe += length;
-                        end = probe;
-                    }
-                    _ => break,
+            } else if byte == b'"' {
+                state.quoted = true;
+            } else if brackets.iter().any(|(open, _)| *open == byte) {
+                state.depth += 1;
+            } else if brackets.iter().any(|(_, close)| *close == byte) && state.depth > 0 {
+                state.depth -= 1;
+                if state.depth == 0 {
+                    return Ok(true);
                 }
             }
         }
-        Ok(end)
+        Ok(false)
+    }
+
+    /// `end`, moved past the closers of `markup`'s alternative repeated
+    /// right after it (whitespace between, each possibly with one slip),
+    /// before the next segment in `boundaries`.
+    fn stray_closers(
+        &self,
+        mut end: usize,
+        markup: &Markup<'_>,
+        boundaries: &[(Range<usize>, bool)],
+    ) -> usize {
+        let closers = &markup.closers;
+        let limit = boundaries
+            .iter()
+            .map(|(range, _)| range.start)
+            .find(|start| *start >= end)
+            .unwrap_or(self.output.len());
+        let mut probe = end;
+        loop {
+            while probe < limit && self.output[probe].is_ascii_whitespace() {
+                probe += 1;
+            }
+            let exact = closers
+                .iter()
+                .filter(|spelling| self.output[probe..].starts_with(spelling))
+                .map(Vec::len)
+                .max();
+            match exact.or_else(|| self.misspelled(closers, markup, probe, limit)) {
+                Some(length) if probe + length <= limit => {
+                    probe += length;
+                    end = probe;
+                }
+                _ => break,
+            }
+        }
+        end
     }
 
     /// The length of a token at `position` (before `limit`) that misspells
@@ -1835,6 +1939,7 @@ impl MarkupScan<'_> {
     fn unclosed_end(
         &self,
         span: &Range<usize>,
+        read: usize,
         markup: &Markup<'_>,
         boundaries: &[(Range<usize>, bool)],
         governor: &mut Governor,
@@ -1866,60 +1971,83 @@ impl MarkupScan<'_> {
         if let Some(last) = last {
             return Ok(last);
         }
-        self.balance_brackets(span.start, base, limit, governor)
+        self.balance_brackets(span.start, read, base, limit, governor)
     }
 
     /// `end`, moved past a JSON value the markup from `start` left open: when
-    /// the bytes `start..end` open more brackets (`{`, `[`) than they close,
-    /// outside JSON strings, the end of the bracket that balances them
-    /// before `limit` (an arguments object whose value no repair read, with
-    /// no closer of the dialect after it); otherwise `end`.
+    /// the bytes `start..read` its grammar read (to where it stopped; a
+    /// resync may read on to `end` over bytes it does not parse) open more
+    /// brackets (`{`, `[`) than they close, outside JSON strings, the end of
+    /// the bracket that balances them before `limit` (an arguments object
+    /// whose value no repair read, with no closer of the dialect after it),
+    /// when it lies past `end` and no prose comes before it outside a
+    /// string: a bare word (other than `true`, `false`, `null`) not followed
+    /// by JSON punctuation (`,` `:` `}` `]` `"`) but by another word or by
+    /// sentence punctuation is prose, which is no JSON structure. Otherwise
+    /// `end`.
     fn balance_brackets(
         &self,
         start: usize,
+        read: usize,
         end: usize,
         limit: usize,
         governor: &mut Governor,
     ) -> Result<usize, StopReason> {
-        let mut state = Nesting {
-            depth: 0,
-            quoted: false,
-            escaped: false,
-        };
-        let step = |state: &mut Nesting, byte: u8| {
-            if state.quoted {
-                match byte {
-                    _ if state.escaped => state.escaped = false,
-                    b'\\' => state.escaped = true,
-                    b'"' => state.quoted = false,
-                    _ => {}
-                }
-            } else {
-                match byte {
-                    b'"' => state.quoted = true,
-                    b'{' | b'[' => state.depth += 1,
-                    b'}' | b']' => state.depth = state.depth.saturating_sub(1),
-                    _ => {}
-                }
-            }
-        };
-        governor.charge(Resource::Work, size(end - start))?;
-        for &byte in &self.output[start..end] {
-            step(&mut state, byte);
+        let mut state = Nesting::default();
+        governor.charge(Resource::Work, size(read - start))?;
+        for &byte in &self.output[start..read] {
+            state.step(byte);
         }
         if state.depth == 0 {
             return Ok(end);
         }
-        let mut position = end;
+        let mut position = read;
         while position < limit {
             governor.charge(Resource::Work, 1)?;
-            step(&mut state, self.output[position]);
+            let byte = self.output[position];
+            // Only bytes JSON reads as structure, strings or scalars: a bare
+            // word outside a string (prose after the value) is no part of
+            // the value, so the bracket after it balances nothing the
+            // attempt opened.
+            if !state.quoted && byte.is_ascii_alphabetic() {
+                let (word, prose) = self.bare_word(position, limit);
+                if prose {
+                    return Ok(end);
+                }
+                governor.charge(Resource::Work, size(word))?;
+                position += word;
+                continue;
+            }
+            state.step(byte);
             position += 1;
             if state.depth == 0 {
-                return Ok(position);
+                return Ok(position.max(end));
             }
         }
         Ok(end)
+    }
+
+    /// The length of the bare word (outside a JSON string) at `position`,
+    /// before `limit`, and whether it is prose. A slip in JSON (`"f" oops,
+    /// "arguments": ...`) is a word where a JSON token is due: what follows
+    /// it is JSON punctuation (`,` `:` `}` `]` `"`, after spaces) or the
+    /// end. A word (other than `true`, `false`, `null`) followed by another
+    /// word or by sentence punctuation (`oops. Sorry`) is prose, which is no
+    /// JSON structure.
+    fn bare_word(&self, position: usize, limit: usize) -> (usize, bool) {
+        let word = self.output[position..limit]
+            .iter()
+            .take_while(|byte| is_word_byte(**byte))
+            .count();
+        let after = self.output[position + word..limit]
+            .iter()
+            .find(|byte| !matches!(byte, b' ' | b'\t'));
+        let literal = matches!(
+            &self.output[position..position + word],
+            b"true" | b"false" | b"null"
+        );
+        let prose = !literal && !matches!(after, None | Some(b',' | b':' | b'}' | b']' | b'"'));
+        (word, prose)
     }
 
     /// `span`'s end, moved to the end of the longest literal spelling that
@@ -1969,10 +2097,39 @@ struct Markup<'g> {
     literals: &'g [Vec<u8>],
 }
 
+/// Whether `byte` continues a bare word (an ASCII letter, digit or `_`).
+const fn is_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+/// Where a scan of JSON-like bytes stands: its bracket depth and whether
+/// it is inside a string (just after an escape).
+#[derive(Default)]
 struct Nesting {
     depth: usize,
     quoted: bool,
     escaped: bool,
+}
+
+impl Nesting {
+    /// Read one more byte.
+    const fn step(&mut self, byte: u8) {
+        if self.quoted {
+            match byte {
+                _ if self.escaped => self.escaped = false,
+                b'\\' => self.escaped = true,
+                b'"' => self.quoted = false,
+                _ => {}
+            }
+        } else {
+            match byte {
+                b'"' => self.quoted = true,
+                b'{' | b'[' => self.depth += 1,
+                b'}' | b']' => self.depth = self.depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+    }
 }
 
 /// Remove `cut` from the sorted, disjoint `ranges`.
@@ -3034,7 +3191,8 @@ impl Recovery<'_> {
                 .filter(|(range, _)| range.start >= span.end && !range.is_empty())
                 .collect();
             boundaries.sort_by_key(|(range, _)| range.start);
-            let end = rejected_end(self.output, &span, &dialect, &boundaries, governor)?;
+            let reason = value.rejected[index].reason;
+            let end = rejected_end(self.output, &span, &dialect, reason, &boundaries, governor)?;
             if end <= span.end {
                 continue;
             }

@@ -138,16 +138,25 @@ is reported as certain.
      its end: `pre <function=f><function=f>…</function> post` keeps
      `</function>` whole and leaves ` post` as content.
   3. *To its closer*: it runs on to the end literal of the `call`
-     alternative it opened (the wrapper or section closer in any declared
-     or confusable spelling, at nesting depth one: another opener of that
+     alternative it opened (of any alternative sharing its opener, as an
+     Anthropic block and a streaming event share `{`; the wrapper or
+     section closer in any declared or confusable spelling, at nesting
+     depth one: another opener of that
      alternative opens a level, unless the alternative chains several calls
      that each open with it, as a section-less Kimi-K2 attempt does; a JSON
-     object or array call nests by its brackets outside strings) when that
-     closer comes before the next call opening the same alternative, a
+     object or array call nests by its brackets outside strings, and only
+     over bytes JSON reads: a bracket closing nothing the scan opened
+     closes a structure around the attempt and ends the scan, and past
+     where its grammar stopped, prose, as defined below, ends it too, so a
+     bracket after it closes nothing the attempt read) when that closer
+     comes before the next call opening the same alternative, a
      reasoning block, or reported unparsed markup, plus any repeated
      closers right after it. A call or attempt inside the broken wrapper (a
      bare JSON object read from its body, an inner element's own failure)
-     is kept, and the wrapper's rejected span covers it. Without that
+     is kept, and the wrapper's rejected span covers it; its brackets nest
+     with the attempt's, and when it closes the bracket the attempt left
+     open (a Mistral group's last call holds the array's `]`), no later
+     bracket closes the attempt, which ends as unclosed. Without that
      closer it runs to the end of the last literal before the next segment
      that ends a call of its dialect: a chained call's own closer
      (Kimi-K2's `<|tool_call_end|>`, DeepSeek's `<｜tool▁call▁end｜>`) or
@@ -157,8 +166,13 @@ is reported as certain.
      call, when it misspells no other closer of the dialect).
 
   Without such a literal, an attempt that left a JSON value open (its
-  bytes open more brackets than they close, outside strings) runs to the
-  bracket that balances it.
+  bytes up to where its grammar stopped reading open more brackets than
+  they close, outside strings; bytes a resync read on past the failure are
+  not parsed as JSON and open nothing) runs to the bracket that balances
+  it, unless prose comes first: a bare word (not
+  `true`, `false` or `null`) outside a string followed by another word or
+  sentence punctuation rather than JSON punctuation is no JSON structure,
+  and the attempt then ends where its grammar stopped reading.
 
   Otherwise the span ends at step 2 and everything after it stays content
   (`Sure, I could call <function=f but actually no tool is needed. The
@@ -184,7 +198,13 @@ is reported as certain.
   `deepseek31_call_closer_ends_rejected_attempt`,
   `deepseek3_call_closer_ends_rejected_attempt`,
   `kimi_sectionless_rejected_call_before_sibling`,
-  `hermes_rejected_attempt_misspelled_closer` and
+  `hermes_rejected_attempt_misspelled_closer`,
+  `llama3_rejection_stops_before_prose`,
+  `llama3_rejection_stops_at_enclosing_bracket`,
+  `mistral3_group_bad_good_good_then_bracket`,
+  `mistral3_group_bad_good_good_then_array`,
+  `anthropic_rejection_shares_opener_closers`,
+  `deepseek31_rejection_balances_only_read_brackets` and
   `rejected_span_completes_literal_bare`, `_newlines` and `_wrapped`, and
   four `fuzz-tool-call` invariants: content after a rejected attempt that
   does not end with a literal ending a call of its dialect holds none; an
@@ -200,9 +220,12 @@ is reported as certain.
   is. The attempt *resynchronizes* past it: beside the repairs the failure
   proposes (which cost less and win where they read the call), it scans on
   for a literal that ends a call of its alternative (the call's own closer,
-  a list separator or closer, the section closer; a multi-byte special
-  token wherever it is written, a JSON element's `}` outside strings at the
-  call's bracket depth) or for the next call's opener (a multi-byte opener,
+  a list separator or closer, the section closer), never inside a JSON
+  string of the skipped call (a multi-byte special token at any bracket
+  depth, a JSON element's `}` at the call's bracket depth; an opener inside
+  such a string is the string's text, so no call is read from it and no
+  attempt opened there reads one), or for the next call's opener (a
+  multi-byte opener,
   or a JSON element's `{` where the failing element's member was due, so an
   element left open ends there), and reads on, so later calls of the same
   attempt are read and the malformed call is a rejected part of the
@@ -219,7 +242,9 @@ is reported as certain.
   and at the end of output; the attempt then ends at its failure, the
   calls before it recovered. An attempt that read no call at all (every call malformed) is
   one rejected attempt over all the markup it read, never one rejection
-  per call nor overlapping rejections. Mistral v11 calls each carry their
+  per call nor overlapping rejections; a resynchronization at a single byte
+  (a JSON bracket or separator, which prose writes too) extends no such
+  rejection, so prose after the failure stays content. Mistral v11 calls each carry their
   own `[TOOL_CALLS]` opener and no wrapper, so a malformed v11 call is its
   own rejected attempt and the calls after it are read by their own
   attempts, needing no repair. The same holds under a length stop.
@@ -237,7 +262,8 @@ is reported as certain.
   `kimi_group_bad_call_without_closer`,
   `kimi_group_bad_first_call_without_closer`,
   `kimi_group_bad_call_unbalanced_json`,
-  `mistral3_group_bad_element_without_closer` and
+  `mistral3_group_bad_element_without_closer`,
+  `kimi_resync_ignores_closer_inside_string` and
   `deepseek31_unclosed_section_then_section`, each also under the default
   allow-list, and the `tool_call.markup.group-split` rows of the correction
   evaluation (`middle`, `first`, `middle-unclosed`, `unread-arguments` and
@@ -281,8 +307,22 @@ is reported as certain.
   text after it. *Proved by* the goldens `mistral11_args_written_repairable`,
   `mistral11_args_written_unreadable`,
   `mistral11_args_written_unreadable_between_calls`,
-  `mistral11_call_id_written_args_cut` and
-  `mistral11_group_good_bad_good`, each also under the default allow-list.
+  `mistral11_call_id_written_args_cut`,
+  `mistral11_group_good_bad_good`, `mistral11_prose_after_unclosed_arguments`,
+  `mistral3_prose_after_unclosed_arguments`, `hermes_stray_word_in_arguments`,
+  `mistral11_bare_key_with_colon_kept`, `mistral3_rejection_stops_before_prose`
+  and `mistral11_bracket_balance_stops_at_prose`, each also under the
+  default allow-list, and the `json.syntax.bare-key` rows of the correction
+  evaluation.
+- **No parameter is invented from text.** In tool-call arguments a bare
+  (unquoted) word is an object key only when its `:` follows it: `{path:
+  "a"}` keeps its key (`json.syntax.bare-key`), but a stray word
+  (`{"a": "y" oops}`) or prose after an unclosed arguments object (`{"path":
+  "a.txt" oops. Sorry, my answer is 42`) is never read as a key with a
+  missing value: the value is unreadable where the word begins, the
+  attempt is rejected there, and the prose stays content. Issue #3's hard
+  limits: no parameter name from positional text, no trailing free text as
+  an argument.
 - **A misspelled closer still closes its call.** A closer token one edit
   away from exactly one closer of the grammar (one byte inserted, deleted or
   substituted, or two adjacent bytes swapped, between the closer's
@@ -302,9 +342,37 @@ is reported as certain.
   `kimi_call_closer_misspelled`, `deepseek31_closer_misspelled` and
   `deepseek31_closer_misspelled_ambiguous` (not admitted), each also under
   the default allow-list, and the unit tests of `grammar::misspelling`.
+- **A repair never overrides a reading that needs none.** Every repair is
+  a fallback: a misspelling, a resynchronization, a bracket balance, a
+  group split, a closer variant or confusable spelling is read only where
+  the reading of the same bytes that needs no repair fails, and no
+  canonical markup is ever deleted to make a repair fit. A value's text
+  near a closer (`<Parameter name="a">1</Parameter>`, `</parameterx>`,
+  `</paramete>`, the declared variants `</functions>` and `</tool_calls>`,
+  or a closer written inside a JSON string) is the value's text: an
+  `xml-params` value runs to its canonical `</parameter>` (a variant or
+  misspelled closer, or a misspelled `<parameter=`, ends it only when no
+  canonical closer comes before the next parameter opener or the body's
+  end), a body delimited by a closer variant or confusable spelling also
+  reads on past it, and a delimiter written inside a string of a JSON value
+  not yet complete ends the value only as a fallback (the value ending by
+  itself needs no repair). So canonical input is `Resolved` with its whole
+  value, under `Effort::Exact` too. *Proved by*
+  `tool_call_recover::canonical_values_with_near_closer_text_resolve`
+  (every closer of Qwen3-Coder XML, Hermes, Kimi-K2 and DeepSeek v3/v3.1,
+  case-variant, one-slip and over-long, pinned, under the default
+  allow-list and under `Effort::Exact`), the goldens
+  `qwen_value_holds_case_variant_parameter_closer`,
+  `qwen_value_holds_overlong_parameter_closer`,
+  `qwen_value_holds_misspelled_parameter_closers`,
+  `qwen_value_holds_function_closer_variant`,
+  `qwen_value_holds_wrapper_closer_variant`,
+  `hermes_value_holds_wrapper_closer`, `kimi_value_holds_call_closer` and
+  `deepseek31_value_holds_call_closer`, and the `canonical` `near-closer`
+  rows of the correction evaluation.
 - **A misspelled token still reads as its token.** The opener-side mirror
   of a misspelled closer: a markup token other than a closer (spelled with
-  a leading `<` or `[`), read after the call's attempt opened, one edit away
+  a leading `<` or `[`), the attempt's own opener included, one edit away
   from exactly one literal of the grammar (the next call's opener in a
   group, `<|tool_call_begn|>`; an argument separator,
   `<|tool_call_argument_begn|>`, `<｜tool▁sp｜>`; `[TOOL_CALS]` chaining a
@@ -313,13 +381,19 @@ is reported as certain.
   (`tool_call.markup.token-misspelled`, the original bytes recorded; a
   markup repair, single reading, so it does not demote). A token another
   literal of the grammar may spell exactly (a section opener where a call
-  opener was due) is never a misspelling. An attempt's own opener is never
-  respelled: it is the only evidence that markup begins at all. In a
-  grammar with `commit` (Harmony), a header token is respelled anywhere
-  after the opener, since the attempt is a call only once it reaches its
-  commit. *Proved by* the goldens `kimi_call_opener_misspelled`,
+  opener was due) is never a misspelling, nor is a short token (an inner
+  word under three bytes) or one as close to two literals. An attempt's own
+  opener written with one slip (`[TOOL_CALL]`, `<tool_cal>`,
+  `<｜tool▁call▁begn｜>`) is read the same way, never left as silent
+  content: as a canonical opener would, the attempt is then a call or a
+  rejected attempt. Prose naming markup without one-slip delimited
+  openers (`tool_call`, `TOOL_CALLS`, `<tool_calling>`) stays content.
+  *Proved by* the goldens `kimi_call_opener_misspelled`,
   `kimi_argument_separator_misspelled`, `mistral11_call_opener_misspelled`,
-  `qwen_function_opener_misspelled` and `qwen_parameter_opener_misspelled`,
+  `qwen_function_opener_misspelled`, `qwen_parameter_opener_misspelled`,
+  `mistral11_first_opener_misspelled`, `deepseek31_first_opener_misspelled`,
+  `hermes_first_opener_misspelled`, `kimi_first_opener_misspelled` and
+  `prose_similar_to_openers_stays_content`,
   each also under the default allow-list, and the
   `tool_call.markup.token-misspelled` rows of the correction evaluation.
 - **Reasoning markers are never call content.** The bytes of a reasoning
@@ -376,7 +450,7 @@ is reported as certain.
   five built-in dialects outside the allow-list, and negatives), the CLI
   test `tool_calls_cli::unparsed_markup_is_reported_via_cli`, and the host
   test `tool_call_tools::unparsed_markup_over_mcp`.
-- **Measured.** The 15,246-case correction evaluation records zero incorrect
+- **Measured.** The 16,250-case correction evaluation records zero incorrect
   automatic answers overall, per rule, and per dialect, and abstains on every
   case whose only correct answer is abstention
   (`correction_evaluation::tool_call_recovery_evaluation_has_zero_incorrect_corrections`;

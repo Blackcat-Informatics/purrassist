@@ -682,6 +682,55 @@ TOOL_CALL_REGRESSIONS = [
     b'\x00RHi <tool_call>{"name": "f" oops, "arguments": {"a": "x"}}<think>hmm</think></tool_call> done',
     b'\x00R<|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{"a":"x"}<|tool_call_end|><|tool_calls_section_end|> done',
     b'\x00R[TOOL_CALLS]read_file[ARGS]{"path":"[THINK]"}[THINK]x[/THINK]Answer.',
+    # T5: canonical values holding near-closer text (a repair never
+    # overrides a reading that needs none), prose after unclosed arguments
+    # and stray words (no invented keys), rejections that stop before prose,
+    # misspelled first openers, string-aware Kimi resynchronization.
+    b'\x00R<tool_call>\n<function=write_file>\n<parameter=path>\nx.xml\n</parameter>\n<parameter=content>\n<Parameter name="a">1</Parameter>\n</parameter>\n</function>\n</tool_call>',
+    b'\x00R<tool_call>\n<function=write_file>\n<parameter=path>\nx.xml\n</parameter>\n<parameter=content>\n<paramete>1</paramete>\n<parameter_>2</parameter_>\n</parameter>\n</function>\n</tool_call>',
+    b'\x00R<tool_call>\n<function=write_file>\n<parameter=path>\nx.xml\n</parameter>\n<parameter=content>\nWrap in <tool_calls> and </tool_calls> blocks.\n</parameter>\n</function>\n</tool_call>',
+    b'\x00R<tool_call>{"name":"write_file","arguments":{"path":"a","content":"x </tool_call> and </tool_cal> y"}}</tool_call>',
+    b'\x00R<|tool_calls_section_begin|><|tool_call_begin|>functions.write_file:0<|tool_call_argument_begin|>{"path":"a","content":"x <|tool_call_end|> and <|tool_call_ed|> y"}<|tool_call_end|><|tool_calls_section_end|>',
+    b'\x00RChecking. [TOOL_CALLS]read_file[ARGS]{"path":"a.txt" oops. Sorry, my answer is 42 (see {1,2} set).',
+    b'\x00RChecking. [TOOL_CALLS] [{"name":"read_file","arguments":{"path":"a.txt" oops. Sorry, my answer is 42 (see {1,2} set).',
+    b'\x00R<tool_call>{"name": "f", "arguments": {"a": "y" oops}}</tool_call>',
+    b'\x00R[TOOL_CALLS] [{"name": "read_file" oops. Sorry, I cannot call tools here. Options were {a, b}, final answer: 42.',
+    b'\x00R[TOOL_CALLS]read_file[ARGS]{"path":"x" oops. Sorry, my answer: use a mapping like m[k] = v} and done.',
+    b'\x00R[TOOL_CALL]f[ARGS]{"a":"x"}',
+    b'\x00R<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begn\xef\xbd\x9c>f<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>{"a":"x"}<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c>',
+    b'\x00R<tool_cal>{"name": "f", "arguments": {"a": "x"}}</tool_call>',
+    b'\x00RThe tool_call field, the TOOL_CALLS header and <tool_calling> docs say: call tools with care.',
+    b'\x00R<|tool_calls_section_begin|><|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{"a":"x<|tool_call_end|><|tool_call_begin|>functions.g:1<|tool_call_argument_begin|>{}<|tool_call_end|>"}<|tool_call_end|><|tool_calls_section_end|>',
+    b'\x00R<tool_call>\n<function=f>\n<parameter=a>\n1\n</parameter>\n</functions> bye',
+    b'\x00R<tool_call>\n<function=f>\n<parameter=a>\n1\n</parameter>\n</functions>',
+    b'\x04R<tool_call>\n<function=f>\n<parameter=a>\n1\n</parameter>\n</functions>',
+    b'\x00R[TOOL_CALLS]f[ARGS]{a: "x"}',
+    # An Anthropic attempt at `{`, the opener a tool_use block and a
+    # streaming event share: it ends at the block's `}` as well as the
+    # event's NUL (a campaign failure; the golden
+    # anthropic_rejection_shares_opener_closers).
+    b'\x05\x91{"type":"tool_result","tool_use_id":"toolu_0functionontent":"ok"\x00}',
+    # A Mistral v3 group whose bad first element's bracket scan passes over
+    # the calls read after it: the last one closes the array, so the stray
+    # `]` after the text closes nothing of the attempt (a campaign failure;
+    # the golden mistral3_group_bad_good_good_then_bracket).
+    b'[[\x00RHi [TOOL_CALLS] [{"name": "f" oops, "arguments": {"a": "x"}}, {"name": "f", "arguments": {"a": "y"}}, {"name": "f", "arguments": {"a": "z"}}] done]]',
+    # A Llama 3 attempt inside a JSON string: a bracket closing nothing it
+    # opened closes the structure around it and ends no part of it (a
+    # campaign failure; the golden llama3_rejection_stops_at_enclosing_bracket).
+    b'[\xe6#{\t\t"type":"tool_use","id"<|tool_call_argument_begin|>\t\t:\t"call_22bb690f",\t\t"name"\t:\t\t"write_file",\t"input":"{\\"pat<|python_tag|>\\"ratio\\":39.32,\\"count\\":-415,\\"options\\":{\\"backup\\":false}}"\t}]',
+    # A DeepSeek v3.1 attempt read on past its failure to the section
+    # closer: brackets are balanced only over the bytes its grammar read to
+    # where it stopped, so the `]` after the closer stays content (a
+    # campaign failure; the golden deepseek31_rejection_balances_only_read_brackets).
+    b'[[\x9c\xf0<\xef\xbd\x9ctool\xe2\x96\x81calls\xe2\x96\x81begin\xef\xbd\x9c><\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begin\xef\xbd\x9c>delete_path<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>"{\\"pat\x9c\xf0<\xef\xbd\x9ctool\xe2\x96\x81calls\xe2\x96\x81begin\xef\xbd\x9c><\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begin\xef\xbd\x9c>delete_path<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>"{\\"path\\":[\\"beta gamma \\\\n  block\\\\n\\""parameters":call\xe2\x96\x81begin\xef\xbd\x9c>\t\tread_file\t\t<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>"{\\"path\\":\\"tab\\\\tseparated   indented\\"}"<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c>\t<\xef\xbd\x9ctool\xe2\x96\x81calls\xe2\x96\x81end\xef\xbd\x9c>]]',
+    # A Llama 3 attempt stopped by prose after its opener: its bracket scan
+    # ends at the prose, so the JSON after it is no part of the rejection
+    # (a campaign failure; the golden llama3_rejection_stops_before_prose).
+    b'[\x05\x91{<<|python_tag|>t_begin|>"name": "get_weather", "arguments": {"city": "Oslo", "unit": "celsius"}}]',
+    # A Llama 3 attempt whose markup runs over a JSON object opened after its
+    # failure (no prose between): F4 admits the extension.
+    b'\x00RHi <tool_cal</tool_call>l<|python_tag|>>{"name": "f" oops, "arguments": {"a": "x"}}<think>hmm</think></tool_cal></tool_call> done',
     # An attempt reading several calls begins inside a starts_open block
     # and ends after its closer: the calls it read inside stay embedded.
     b'\x5b\x9c[TOOL_CALLS]t[TOOL_CALLS]S[/THINK][TOOL_CALLS]g',

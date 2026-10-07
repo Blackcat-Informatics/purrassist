@@ -1377,6 +1377,8 @@ fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
     }
     closer_misspelled_mutations(base, &mut out);
     token_misspelled_mutations(base, &mut out);
+    near_closer_mutations(base, &mut out);
+    bare_word_mutations(base, &mut out);
     invalid_value_mutations(base, &mut out);
     repeated_choice_mutations(base, xml, &mut out);
     if base.dialect == DialectId::MistralV11 {
@@ -1452,11 +1454,10 @@ fn closer_misspelled_mutations(base: &Base, out: &mut Vec<Mutant>) {
 }
 
 /// `tool_call.markup.token-misspelled`: the last occurrence of each markup
-/// token other than a closer the witness writes after its attempt's opener
-/// (a `<` or `[` spelled literal of its dialect's `call` production: an
-/// argument separator, `<function=`, `<parameter=`, `[ARGS]`), with one
-/// slip. The attempt's own opener (the witness's first bytes) is never
-/// mutated: it is the only evidence that markup begins.
+/// token other than a closer the witness writes (a `<` or `[` spelled
+/// literal of its dialect's `call` production: the attempt's own opener,
+/// an argument separator, `<function=`, `<parameter=`, `[ARGS]`), with one
+/// slip.
 fn token_misspelled_mutations(base: &Base, out: &mut Vec<Mutant>) {
     let closers: Vec<Vec<u8>> = base
         .dialect
@@ -1484,9 +1485,9 @@ fn token_misspelled_mutations(base: &Base, out: &mut Vec<Mutant>) {
         let Some(at) = base.text.rfind(&token) else {
             continue;
         };
-        // Not the attempt's opener, nor a part of a longer token written there.
-        if base.text[..at].trim().is_empty()
-            || base.text[..at].ends_with('<')
+        // Not a part of a longer token written there (the attempt's own
+        // opener is one of them: T5/F12).
+        if base.text[..at].ends_with('<')
             || closers
                 .iter()
                 .any(|closer| base.text.as_bytes()[at..].starts_with(closer))
@@ -1508,6 +1509,119 @@ fn token_misspelled_mutations(base: &Base, out: &mut Vec<Mutant>) {
             Need::Exact,
         ));
     }
+}
+
+/// T5/F9: a canonical value holding text near a closer of the dialect (a
+/// case variant, one slip, an over-long spelling, or, inside a JSON string,
+/// the closer itself), rotating by seed over the closers and the kinds: the
+/// value keeps its whole text, needing no repair (`canonical` cases).
+fn near_closer_mutations(base: &Base, out: &mut Vec<Mutant>) {
+    let json = match base.dialect {
+        DialectId::Qwen3CoderXml => false,
+        DialectId::Hermes | DialectId::KimiK2 | DialectId::DeepSeekV31 | DialectId::DeepSeekV3 => {
+            true
+        }
+        _ => return,
+    };
+    let members = base.members();
+    let Some((index, value)) = members.iter().enumerate().find_map(|(index, member)| {
+        let Value::String(value) = &member.value.value else {
+            return None;
+        };
+        matches!(base.declared(&member.key).shape, ValueShape::String(None))
+            .then(|| (index, value.clone()))
+    }) else {
+        return;
+    };
+    let mut closers: Vec<String> = base
+        .dialect
+        .grammar()
+        .call_ends()
+        .iter()
+        .flat_map(|end| end.call_closers.iter())
+        .filter(|spelling| spelling.len() > 1)
+        .filter_map(|spelling| String::from_utf8(spelling.clone()).ok())
+        .collect();
+    if !json {
+        closers.push("</parameter>".to_owned());
+    }
+    closers.sort();
+    closers.dedup();
+    let pick = usize::try_from(base.seed).unwrap_or(0);
+    let closer = &closers[pick % closers.len()];
+    let letters: Vec<usize> = closer
+        .char_indices()
+        .filter(|(_, character)| character.is_ascii_alphanumeric())
+        .map(|(at, _)| at)
+        .collect();
+    let (first, last, slip) = (
+        letters[0],
+        letters[letters.len() - 1] + 1,
+        letters[letters.len() - 2],
+    );
+    let kinds = if json { 4 } else { 3 };
+    let near = match (pick / closers.len()) % kinds {
+        0 => format!(
+            "{}{}{}",
+            &closer[..first],
+            closer[first..=first].to_ascii_uppercase(),
+            &closer[first + 1..]
+        ),
+        1 => format!("{}{}", &closer[..slip], &closer[slip + 1..]),
+        2 => format!("{}x{}", &closer[..last], &closer[last..]),
+        _ => closer.clone(),
+    };
+    let text = format!("{value} {near}");
+    let mut arguments = members.to_vec();
+    arguments[index].value = string(&text);
+    let mut kept = mutant(
+        "canonical",
+        "near-closer",
+        replace_value(base, index, &text),
+        Need::Exact,
+    );
+    kept.call = Some(Call {
+        name: base.call.name.clone(),
+        arguments: Node::new(Value::Object(arguments)),
+    });
+    out.push(kept);
+}
+
+/// T5/F10: a bare word in an arguments object is never a key unless its `:`
+/// follows: a stray word after the first member's value (`{"a": "y" oops}`),
+/// and prose after an arguments object left unclosed. No parameter name is
+/// invented and no free text is read as an argument, so the call cannot be
+/// read: abstain (`json.syntax.bare-key` cases, `Unresolved` truth).
+fn bare_word_mutations(base: &Base, out: &mut Vec<Mutant>) {
+    if base.form != Form::Object {
+        return;
+    }
+    let mut printed = base.printed();
+    if printed.is_empty() {
+        return;
+    }
+    printed[0].value.push_str(" oops");
+    out.push(mutant(
+        "json.syntax.bare-key",
+        "stray-word",
+        base.with_arguments(&Base::json_text(&printed)),
+        Need::Never,
+    ));
+    let split = base.split();
+    let arguments = base.arguments_text();
+    let Some(open) = arguments.strip_suffix('}') else {
+        return;
+    };
+    out.push(mutant(
+        "json.syntax.bare-key",
+        "prose-after-unclosed",
+        format!(
+            "{}{} oops. Sorry, my answer is 42 (see {{1,2}} set).",
+            split.prefix,
+            open.trim_end()
+        ),
+        Need::Never,
+    ));
 }
 
 /// `tool_call.value.invalid-utf8`: the first byte of a string value the

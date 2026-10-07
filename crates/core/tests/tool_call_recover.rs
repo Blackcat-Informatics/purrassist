@@ -730,13 +730,13 @@ fn deterministic_pinned_digest() {
 }
 
 const PINNED_DIGEST: &str =
-    "sha256:320970064af2a7708ea2207513f65e98b2e442750c535facd8c660da82f04893";
+    "sha256:941c91bc1c0467212b6832e12111f9e916d73e3d09824a90a30a18b50fee009a";
 const PINNED_PREFIX_DIGEST: &str =
-    "sha256:14835eca57d1270768f469144b6bdcdd4b0688c148276cac96e47688cb425d79";
+    "sha256:705a5ba5bfe9ce7bea097235b9ba8196b95c9fc86bb5bc9d10681d2f4a9c1d7a";
 const PINNED_AMBIGUOUS_DIGEST: &str =
-    "sha256:8e6ada7bb7e46728089a9c5788e2fb91743b1bff437419419906d7d4c5e193cd";
+    "sha256:a5eafd2f05f7af27c396ae3dd5bf935b67396290e600b1e80cc4e1a1e3521d24";
 const PINNED_PREFIX_AMBIGUOUS_DIGEST: &str =
-    "sha256:187dcb193deb2e32e41210ac1f1f674ae00b95b4115f13d186b87b90c8536d3c";
+    "sha256:4e5a031d71fec89f745a72e98c037b799e8d67571b562a4d34922a0f209e3f63";
 
 #[test]
 fn invalid_utf8_is_loss_and_bytes_retained() {
@@ -2289,4 +2289,130 @@ fn resync_that_gave_up_is_not_restarted() {
         "work {}",
         result.receipt.usage.work
     );
+}
+
+/// F9 (priority rule): a repair never overrides a reading that needs none.
+/// A canonical call whose string value holds text near a closer of its
+/// dialect (a case variant, one slip, an over-long spelling, a declared
+/// variant, the closer itself inside a JSON string) keeps its whole value,
+/// `Resolved` with no rejection and no content, pinned, under the default
+/// allow-list, and under `Effort::Exact`, for every closer of Qwen3-Coder
+/// XML, Hermes, Kimi-K2 and `DeepSeek` v3/v3.1.
+#[test]
+fn canonical_values_with_near_closer_text_resolve() {
+    let tools = compile([ToolDefinition::new("write_file")
+        .param("path", Param::string().required())
+        .param("content", Param::string().required())]);
+    let cases: [(DialectId, &[&str], bool); 5] = [
+        (
+            DialectId::Qwen3CoderXml,
+            &[
+                "</parameter>",
+                "</function>",
+                "</tool_call>",
+                "</parameters>",
+                "</functions>",
+                "</tool_calls>",
+            ],
+            false,
+        ),
+        (DialectId::Hermes, &["</tool_call>", "</tool_calls>"], true),
+        (
+            DialectId::KimiK2,
+            &["<|tool_call_end|>", "<|tool_calls_section_end|>"],
+            true,
+        ),
+        (
+            DialectId::DeepSeekV31,
+            &["<｜tool▁call▁end｜>", "<｜tool▁calls▁end｜>"],
+            true,
+        ),
+        (
+            DialectId::DeepSeekV3,
+            &["<｜tool▁call▁end｜>", "<｜tool▁calls▁end｜>"],
+            true,
+        ),
+    ];
+    for (dialect, closers, exact_too) in cases {
+        for closer in closers {
+            let mut variants = near_closer(closer);
+            // A canonical closer inside a JSON string is the string's text;
+            // inside an XML parameter value it ends the value.
+            if exact_too {
+                variants.push((*closer).to_owned());
+            }
+            for variant in variants {
+                let content = format!("x {variant} y");
+                let input = near_closer_input(&dialect, &content);
+                for request in [
+                    request(dialect.clone()),
+                    ToolRecoveryRequest::default(),
+                    ToolRecoveryRequest::sized(Effort::Exact, input.as_bytes())
+                        .dialects(set(std::slice::from_ref(&dialect))),
+                ] {
+                    let result = tools.recover(input.as_bytes(), &request);
+                    let Outcome::Resolved(calls) = &result.outcome else {
+                        panic!("{input:?}: {:#?}", result.outcome);
+                    };
+                    assert_eq!(calls.calls.len(), 1, "{input:?}: {calls:#?}");
+                    let call = &calls.calls[0];
+                    assert_eq!(call.outcome, CallOutcome::Resolved, "{input:?}");
+                    assert_eq!(
+                        call.arguments.pointer("/content").and_then(Node::as_str),
+                        Some(content.as_str()),
+                        "{input:?}"
+                    );
+                    assert!(calls.rejected.is_empty(), "{input:?}: {calls:#?}");
+                    assert!(calls.content.is_empty(), "{input:?}: {calls:#?}");
+                }
+            }
+        }
+    }
+}
+
+/// Text near `closer`: a case variant, one slip, two over-long spellings.
+fn near_closer(closer: &str) -> Vec<String> {
+    let letters: Vec<usize> = closer
+        .char_indices()
+        .filter(|(_, character)| character.is_ascii_alphanumeric())
+        .map(|(at, _)| at)
+        .collect();
+    let (first, last) = (letters[0], letters[letters.len() - 1] + 1);
+    let slip = letters[letters.len() - 2];
+    vec![
+        format!(
+            "{}{}{}",
+            &closer[..first],
+            closer[first..=first].to_ascii_uppercase(),
+            &closer[first + 1..]
+        ),
+        format!("{}{}", &closer[..slip], &closer[slip + 1..]),
+        format!("{}x{}", &closer[..last], &closer[last..]),
+        format!("{}_{}", &closer[..last], &closer[last..]),
+    ]
+}
+
+/// A canonical `write_file` call in `dialect` whose `content` is `content`.
+fn near_closer_input(dialect: &DialectId, content: &str) -> String {
+    let json = format!(
+        "{{\"path\":\"a\",\"content\":\"{}\"}}",
+        content.replace('"', "\\\"")
+    );
+    match dialect {
+        DialectId::Qwen3CoderXml => format!(
+            "<tool_call>\n<function=write_file>\n<parameter=path>\na\n</parameter>\n<parameter=content>\n{content}\n</parameter>\n</function>\n</tool_call>"
+        ),
+        DialectId::Hermes => {
+            format!("<tool_call>{{\"name\":\"write_file\",\"arguments\":{json}}}</tool_call>")
+        }
+        DialectId::KimiK2 => format!(
+            "<|tool_calls_section_begin|><|tool_call_begin|>functions.write_file:0<|tool_call_argument_begin|>{json}<|tool_call_end|><|tool_calls_section_end|>"
+        ),
+        DialectId::DeepSeekV31 => format!(
+            "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>write_file<｜tool▁sep｜>{json}<｜tool▁call▁end｜><｜tool▁calls▁end｜>"
+        ),
+        _ => format!(
+            "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>write_file\n```json\n{json}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>"
+        ),
+    }
 }

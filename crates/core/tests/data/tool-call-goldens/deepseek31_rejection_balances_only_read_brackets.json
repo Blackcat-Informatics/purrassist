@@ -1,0 +1,95 @@
+{
+  "description": "T5/F11 (a campaign failure): a rejected attempt whose grammar read on past its failure (here to the section closer) runs on to the bracket balancing a JSON value only when the bytes its grammar read up to where it stopped left one open. The `{` after the failure lies in bytes the grammar did not parse as JSON, so the `]` after the section closer closes nothing the attempt read and stays content with the other (the rejection used to take the first `]`).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "delete_path",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "deepseek-v3.1.v1"
+  ],
+  "effects": {
+    "delete_path": "mutating",
+    "read_file": "read_only"
+  },
+  "input": "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>delete_path<｜tool▁sep｜>\"{\\\"pat<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>delete_path<｜tool▁sep｜>\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\"\"parameters\":call▁begin｜>\t\tread_file\t\t<｜tool▁sep｜>\"{\\\"path\\\":\\\"tab\\\\tseparated   indented\\\"}\"<｜tool▁call▁end｜>\t<｜tool▁calls▁end｜>]]",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "delete_path",
+      "arguments": null,
+      "candidate_dialects": [
+        "deepseek-v3.1.v1"
+      ],
+      "outcome": "unresolved: arguments_not_object: the arguments are not a JSON object",
+      "rules": [
+        "json.syntax.missing-value",
+        "tool_call.markup.missing-function-close",
+        "tool_call.markup.group-split"
+      ]
+    }
+  ],
+  "rejected": [
+    {
+      "span": [
+        119,
+        370
+      ],
+      "dialect": "deepseek-v3.1.v1",
+      "candidate_dialects": [
+        "deepseek-v3.1.v1"
+      ],
+      "reason": "Malformed { at: 216 }",
+      "raw": "<｜tool▁call▁begin｜>delete_path<｜tool▁sep｜>\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\"\"parameters\":call▁begin｜>\t\tread_file\t\t<｜tool▁sep｜>\"{\\\"path\\\":\\\"tab\\\\tseparated   indented\\\"}\"<｜tool▁call▁end｜>\t<｜tool▁calls▁end｜>"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "]]"
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "json.syntax.missing-value",
+    "tool_call.markup.missing-function-close",
+    "tool_call.markup.group-split"
+  ]
+}

@@ -183,7 +183,7 @@ impl Codec for JsonCodec {
             utf8: Utf8Check::new(),
             held: [0; 4],
             held_len: 0,
-            parser: IncrementalRecovery::starting_at(at, governor),
+            parser: IncrementalRecovery::starting_at(at, governor).require_key_colons(),
             fault: None,
             stalled: false,
             lead: Lead::Any,
@@ -306,8 +306,8 @@ impl JsonCodec {
         match fed {
             Ok(()) => {}
             Err(StopReason::InvalidInput(_)) => {
-                self.fault
-                    .get_or_insert(ArgumentFault::InvalidJson { at: from });
+                let at = self.parser.fault_at().unwrap_or(from);
+                self.fault.get_or_insert(ArgumentFault::InvalidJson { at });
                 self.stalled = true;
                 return Ok(Some(CodecStep::Consumed));
             }
@@ -316,6 +316,12 @@ impl JsonCodec {
         Ok(self.parser.is_done().then(|| CodecStep::Complete {
             end: self.parser.position(),
         }))
+    }
+
+    /// Whether the value fed so far is inside one of its strings, with no
+    /// fault: a delimiter written here is text of the string.
+    pub(crate) const fn in_string(&self) -> bool {
+        !self.stalled && self.fault.is_none() && self.parser.in_string()
     }
 
     /// Where the value fed so far ends, when it is already one complete
@@ -359,6 +365,7 @@ impl JsonCodec {
         }
         let before = self.parser.edit_count();
         let stop = self.parser.position();
+        let fault_at = self.parser.fault_at();
         match self.parser.finish(governor) {
             Ok((node, _, edits)) => {
                 let incomplete = edits[before..]
@@ -370,9 +377,9 @@ impl JsonCodec {
                     incomplete,
                 })
             }
-            Err(StopReason::InvalidInput(_)) => {
-                Ok(Decoded::Fault(ArgumentFault::InvalidJson { at: stop }))
-            }
+            Err(StopReason::InvalidInput(_)) => Ok(Decoded::Fault(ArgumentFault::InvalidJson {
+                at: fault_at.unwrap_or(stop),
+            })),
             Err(reason) => Err(reason),
         }
     }

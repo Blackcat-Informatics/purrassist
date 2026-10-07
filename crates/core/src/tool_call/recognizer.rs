@@ -1306,7 +1306,7 @@ impl<'s> Recognizer<'s> {
             .blocked
             .iter()
             .copied()
-            .filter(|&(marker, _)| ended.start < marker && marker < ended.at)
+            .filter(|&(marker, _)| ended.start < marker && marker <= ended.at)
             .min();
         // The block's own closing marker, when it came before the end.
         let close = cut.and_then(|(marker, pair)| {
@@ -1945,7 +1945,11 @@ impl Builder<'_> {
                 // A rejected attempt's bytes are call markup, not prose: a
                 // fence inside it opens no fenced block. With the whole
                 // output, its markup extends as recovery reads it.
-                Segment::Rejected { span, dialect, .. } => {
+                Segment::Rejected {
+                    span,
+                    dialect,
+                    reason,
+                } => {
                     let end = match self.output {
                         Some(output) => {
                             let boundaries: Vec<(Range<usize>, bool)> = reading[index + 1..]
@@ -1966,6 +1970,7 @@ impl Builder<'_> {
                                 output,
                                 span,
                                 dialect,
+                                *reason,
                                 &boundaries,
                                 governor,
                             )?

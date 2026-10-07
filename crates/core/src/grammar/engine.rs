@@ -71,6 +71,11 @@ use crate::tool_call::{
 use core::cmp::Reverse;
 use core::ops::Range;
 
+/// Set in a body configuration's matcher state once the body read on past
+/// a repaired delimiter (a closer variant or confusable spelling), beside
+/// the reading that ended there (see `Step::step_body`).
+const PAST_REPAIRED: u32 = 1 << 31;
+
 /// The root of every call history.
 pub(crate) const ROOT: u32 = 0;
 
@@ -138,6 +143,19 @@ impl Sub {
     /// could not read (see `Engine::resync`).
     pub(crate) const fn resyncing(&self) -> bool {
         matches!(self, Self::Resync(..))
+    }
+
+    /// Whether a configuration in this mode reads on only beside a
+    /// fallback: resynchronizing, or a body that read past a repaired
+    /// delimiter (see [`PAST_REPAIRED`]). Such a configuration does not
+    /// keep its attempt from being stuck, so the repairs of the readings
+    /// that failed are still proposed.
+    pub(crate) const fn speculative(&self) -> bool {
+        match self {
+            Self::Resync(..) => true,
+            Self::Body(state, _) => *state & PAST_REPAIRED != 0,
+            _ => false,
+        }
     }
 
     pub(crate) const fn key(&self) -> (u8, u32) {
@@ -432,6 +450,10 @@ pub(crate) struct Step<'a, 's> {
     /// a later closer give up (a skipped call ends at its first call
     /// closer).
     pub(crate) resynced: &'a mut Vec<(u64, usize, usize)>,
+    /// The openers (by attempt start) a resynchronizing attempt met inside
+    /// a JSON string of the call it skips: text of the string, never a
+    /// reason to give up (see `step_resync`).
+    pub(crate) quoted_openers: &'a mut Vec<(u64, usize)>,
 }
 
 impl<'s> Step<'_, 's> {
@@ -590,19 +612,16 @@ impl<'s> Step<'_, 's> {
 
     /// Whether a misspelling of `canonical`, a literal other than a closer,
     /// is read where `thread` expects it (`tool_call.markup.token-misspelled`,
-    /// the opener-side mirror of a misspelled closer): a markup token (its
-    /// spelling begins with `<` or `[`) read after the attempt opened, so
-    /// its position is already call markup, as a closer's is (for a grammar
-    /// with `commit`, anywhere after its opener: such an attempt is a call
-    /// only once it reaches the commit, so a respelled header token, as in
-    /// a Harmony message, makes no call of a message that is none). An
-    /// attempt's own opener is never respelled: it is the only evidence
-    /// that markup begins at all.
-    fn respellable_token(&self, thread: &Thread, canonical: &[u8]) -> bool {
-        (thread.opened || self.program.deferred())
-            && canonical.len() > 1
-            && matches!(canonical[0], b'<' | b'[')
-            && !self.program.openers.contains(&thread.pc)
+    /// the opener-side mirror of a misspelled closer): a markup token (a
+    /// multi-byte spelling beginning with `<` or `[`), an attempt's own
+    /// opener included. A misspelling is only ever a fallback: it is read
+    /// where the canonical spelling failed at this byte, the token must
+    /// misspell exactly one literal of the grammar and spell none exactly
+    /// (see [`Self::misspell`]), and its inner word must be long enough
+    /// ([`super::misspelling::MIN_INNER`]), so a short or ambiguous token is
+    /// never respelled.
+    const fn respellable_token(canonical: &[u8]) -> bool {
+        canonical.len() > 1 && matches!(canonical[0], b'<' | b'[')
     }
 
     /// One byte of a literal: its canonical spelling, or (after a repair) a
@@ -626,7 +645,7 @@ impl<'s> Step<'_, 's> {
             Sub::Lit(depth) => {
                 if canonical[depth as usize] != byte {
                     if grammar.literals[lit as usize].closer.is_some()
-                        || self.respellable_token(&thread, canonical)
+                        || Self::respellable_token(canonical)
                     {
                         self.misspell(
                             thread,
@@ -716,11 +735,11 @@ impl<'s> Step<'_, 's> {
     /// One byte of a configuration resynchronizing at literal `lit` (see
     /// [`Engine::resync`]): a call closer ends the skipped call and the
     /// attempt reads on after it; the next call's opener ends the skipped
-    /// call where the opener begins, and the attempt reads that call. A
-    /// single-byte closer (a JSON element's `}`) is read outside JSON
-    /// strings at the call's bracket level; a multi-byte literal wherever it
-    /// is written. It gives up (silently: the attempt's failure stands) at
-    /// another attempt's opener.
+    /// call where the opener begins, and the attempt reads that call. Only
+    /// outside JSON strings: a single-byte closer (a JSON element's `}`) at
+    /// the call's bracket level, a multi-byte literal at any depth. It
+    /// gives up (silently: the attempt's failure stands) at another
+    /// attempt's opener.
     #[allow(clippy::too_many_arguments)]
     fn step_resync(
         &mut self,
@@ -744,7 +763,19 @@ impl<'s> Step<'_, 's> {
         let reading_it = opener && matched > 0 && newest == pos - matched;
         // Another attempt opened after the skipped call failed.
         let later = newest > thread.entry;
-        if (later && !reading_it)
+        let mut scan = JsonScan::unpack(state);
+        // An opener inside a JSON string of the skipped call is text of the
+        // string, not another call (its attempt opened inside this one's
+        // markup and has no reading of its own).
+        let ignored = self
+            .quoted_openers
+            .iter()
+            .any(|&(attempt, opener)| attempt == thread.attempt && opener == newest);
+        if later && !reading_it && scan.quoted && !ignored {
+            governor.charge(Resource::ScratchBytes, 16)?;
+            self.quoted_openers.push((thread.attempt, newest));
+        }
+        if (later && !reading_it && !scan.quoted && !ignored)
             || self
                 .resynced
                 .iter()
@@ -752,15 +783,14 @@ impl<'s> Step<'_, 's> {
         {
             return Ok(());
         }
-        let mut scan = JsonScan::unpack(state);
-        // A closing-bracket closer (a JSON element's own `}`) closes the
-        // bracket the call opened, outside JSON strings; a multi-byte
-        // literal (a special token) is read wherever it is written, as the
-        // rejected call's markup scan reads it.
+        // Never inside a JSON string (a string's text is no markup). A
+        // closing-bracket closer (a JSON element's own `}`) closes the
+        // bracket the call opened; a multi-byte literal (a special token)
+        // is read at any bracket depth (a value left open).
         let multi = canonical.len() > 1;
-        let level = multi
-            || (!scan.quoted
-                && if opener {
+        let level = !scan.quoted
+            && (multi
+                || if opener {
                     // A single-byte opener (a JSON element's `{`) inside the
                     // skipped element, at its member level where no value is
                     // due: no member begins with it, so the element was left
@@ -779,8 +809,14 @@ impl<'s> Step<'_, 's> {
                 governor.charge(Resource::ScratchBytes, 24)?;
                 let at = pos + 1 - matched;
                 // The skipped call's markup runs to its closer's end, or to
-                // where the next call's opener begins.
-                let read = if opener { at } else { pos + 1 };
+                // where the next call's opener begins; a single byte (a JSON
+                // element's bracket, which prose writes too) shows no markup
+                // read beyond the call's own failure (see `Engine::retire`).
+                let read = match (multi, opener) {
+                    (false, _) => 0,
+                    (true, true) => at,
+                    (true, false) => pos + 1,
+                };
                 self.resynced.push((thread.attempt, thread.entry, read));
                 thread.entry = at;
                 thread.sub = Sub::Lit(0);
@@ -796,7 +832,7 @@ impl<'s> Step<'_, 's> {
             matched = 0;
         }
         scan.step(byte);
-        if scan.quoted && !multi {
+        if scan.quoted {
             matched = 0;
         }
         let state = scan.pack();
@@ -1205,19 +1241,21 @@ impl<'s> Step<'_, 's> {
         out: &mut Out,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let Sub::Body(state, codec) = thread.sub else {
+        let Sub::Body(raw, codec) = thread.sub else {
             unreachable!("body configurations only")
         };
+        let (state, mut past) = (raw & !PAST_REPAIRED, raw & PAST_REPAIRED != 0);
         let pos = thread.pos;
         self.misspelled_delimiter(thread, set, next, byte, stack, out, governor)?;
         let matcher = &self.grammar.delimiters[set as usize].matcher;
         let released = pos - matcher.depth(state) as usize;
         let stepped = matcher.step(state, byte);
-        let (to, delimited) = match matcher.found(stepped) {
-            Some((_, length)) => (pos + 1 - length as usize, true),
-            None => (pos + 1 - matcher.depth(stepped) as usize, false),
+        let found = matcher.found(stepped);
+        let to = match found {
+            Some((_, length)) => pos + 1 - length as usize,
+            None => pos + 1 - matcher.depth(stepped) as usize,
         };
-        let mut end = delimited.then_some(to);
+        let mut end = None;
         if let Some(slot) = codec {
             match self.feed(slot, released..to, governor)? {
                 Ok(Some(complete)) => end = Some(complete),
@@ -1225,8 +1263,25 @@ impl<'s> Step<'_, 's> {
                 Err(fault) => return Self::fail(out, thread, pos, rejection(fault)),
             }
         }
+        if end.is_none()
+            && let Some((index, _)) = found
+        {
+            if self.repaired_delimiter(&thread, set, index) {
+                // A delimiter that ends the body only by a repair (a closer
+                // variant or confusable spelling, or one written inside a
+                // self-delimiting value not yet complete): a reading ending
+                // the body there is queued beside it as a fallback, and the
+                // body reads on, so a reading that needs no repair (running
+                // on to a canonical delimiter, or to the value's own end) is
+                // never overridden.
+                self.end_early(thread, to, next, stack, out, governor)?;
+                past = true;
+            } else {
+                end = Some(to);
+            }
+        }
         let Some(end) = end else {
-            thread.sub = Sub::Body(stepped, codec);
+            thread.sub = Sub::Body(stepped | if past { PAST_REPAIRED } else { 0 }, codec);
             thread.pos = pos + 1;
             return self.queue(thread, stack);
         };
@@ -1325,29 +1380,78 @@ impl<'s> Step<'_, 's> {
             }
         }
         for start in starts {
-            let codec = match kind {
-                Some(kind) => Some(
-                    self.arena
-                        .begin_codec(kind.begin(thread.entry, governor)?, governor)?,
-                ),
-                None => None,
-            };
-            let fork = Thread {
-                sub: Sub::Body(0, codec),
-                ..thread
-            };
-            self.end_body(
-                fork,
-                codec,
-                start,
-                CodecEnd::Delimited,
-                next,
-                stack,
-                out,
-                governor,
-            )?;
+            self.end_early(thread, start, next, stack, out, governor)?;
         }
         Ok(())
+    }
+
+    /// Whether the delimiter `index` of set `set` that `thread`'s body
+    /// found ends it only by a repair, so the body also reads on past it
+    /// (see `Step::step_body`): a self-delimiting (`json`) value not yet
+    /// complete, or, for a body read when it finishes (`raw`,
+    /// `xml-params`, or none), a confusable spelling or a declared closer
+    /// variant (not its class's canonical spelling).
+    fn repaired_delimiter(&self, thread: &Thread, set: u32, index: u32) -> bool {
+        if let Inst::Slot { codec, .. } = self.program.insts[thread.pc as usize]
+            && !matches!(codec, CodecKind::Raw | CodecKind::XmlParams)
+        {
+            // A delimiter written inside a string of a self-delimiting value:
+            // ending the value here repairs it (an unterminated string), so
+            // the body also reads on, and the value ending by itself later
+            // needs no repair.
+            let Sub::Body(_, Some(slot)) = thread.sub else {
+                return false;
+            };
+            return self.arena.codecs[slot as usize]
+                .as_ref()
+                .is_some_and(CodecState::in_string);
+        }
+        let declared = &self.grammar.delimiters[set as usize].declared;
+        let Some(spelling) = declared.get(index as usize) else {
+            return true;
+        };
+        self.grammar.closers.iter().any(|closer| {
+            closer.spellings.first() != Some(spelling) && closer.spellings.contains(spelling)
+        })
+    }
+
+    /// A fork of body `thread` ending at `end` (a fallback reading beside
+    /// the body, which reads on): its codec, when it has one, reads the
+    /// body's bytes afresh when it finishes.
+    fn end_early(
+        &mut self,
+        thread: Thread,
+        end: usize,
+        next: u32,
+        stack: &mut ScratchVec<Thread>,
+        out: &mut Out,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let kind = match self.program.insts[thread.pc as usize] {
+            Inst::Slot { codec, .. } => Some(codec),
+            _ => None,
+        };
+        let codec = match kind {
+            Some(kind) => Some(
+                self.arena
+                    .begin_codec(kind.begin(thread.entry, governor)?, governor)?,
+            ),
+            None => None,
+        };
+        let fork = Thread {
+            sub: Sub::Body(0, codec),
+            ..thread
+        };
+        self.end_body(
+            fork,
+            codec,
+            end,
+            CodecEnd::Delimited,
+            next,
+            stack,
+            out,
+            governor,
+        )
     }
 
     /// Offer `range`'s bytes to `codec`; the offset where a self-delimiting
@@ -1634,7 +1738,8 @@ impl<'s> Step<'_, 's> {
                 }
                 Ok(())
             }
-            (Inst::Until { set, next } | Inst::Slot { set, next, .. }, Sub::Body(state, codec)) => {
+            (Inst::Until { set, next } | Inst::Slot { set, next, .. }, Sub::Body(raw, codec)) => {
+                let state = raw & !PAST_REPAIRED;
                 let matcher = &self.grammar.delimiters[set as usize].matcher;
                 let released = pos - matcher.depth(state) as usize;
                 let mut end = pos;
@@ -1674,6 +1779,15 @@ impl<'s> Step<'_, 's> {
         out: &mut Out,
         governor: &mut Governor,
     ) -> Result<Option<(u32, u64)>, StopReason> {
+        if let Sub::Body(raw, _) = thread.sub
+            && raw & PAST_REPAIRED != 0
+        {
+            // A body that read on past a repaired delimiter beside the
+            // reading that ended there: cut off by the stop, it reads no
+            // call of its own (a cut-off reading needs no repair, so it
+            // would override that reading).
+            return Ok(None);
+        }
         let (Inst::Slot { set, next, .. }, Sub::Body(state, Some(slot))) =
             (self.program.insts[thread.pc as usize], thread.sub)
         else {
@@ -2715,6 +2829,8 @@ pub(crate) struct Engine<'s> {
     newest_open: usize,
     /// See [`Step::resynced`]; an entry leaves when its attempt ends.
     resynced: Vec<(u64, usize, usize)>,
+    /// See [`Step::quoted_openers`]; an entry leaves when its attempt ends.
+    quoted_openers: Vec<(u64, usize)>,
     /// The failures each attempt resynchronized from (see
     /// [`Self::resync`]), so a resynchronization that gave up is not
     /// started again; an entry leaves when its attempt ends.
@@ -2779,6 +2895,7 @@ impl<'s> Engine<'s> {
             pending: Vec::new(),
             newest_open: 0,
             resynced: Vec::new(),
+            quoted_openers: Vec::new(),
             spawned: Vec::new(),
             deferred: Vec::new(),
             whole: Vec::new(),
@@ -2823,6 +2940,7 @@ impl<'s> Engine<'s> {
                 tools: self.tools,
                 newest_open: self.newest_open,
                 resynced: &mut self.resynced,
+                quoted_openers: &mut self.quoted_openers,
             },
             &mut self.stack,
             &mut self.out,
@@ -2954,7 +3072,7 @@ impl<'s> Engine<'s> {
                 threads
                     .as_slice()
                     .iter()
-                    .any(|thread| thread.attempt == record.id && !thread.sub.resyncing())
+                    .any(|thread| thread.attempt == record.id && !thread.sub.speculative())
             };
             if touches(&live) || touches(&completed) || record.completed {
                 continue;
@@ -3067,7 +3185,7 @@ impl<'s> Engine<'s> {
                 && matches!(failure.thread.sub, Sub::Lit(_))
                 && live.as_slice().iter().any(|thread| {
                     thread.attempt == failure.thread.attempt
-                        && !thread.sub.resyncing()
+                        && !thread.sub.speculative()
                         && (trailing || thread.entry <= failure.thread.entry)
                 })
         };
@@ -3462,8 +3580,12 @@ impl<'s> Engine<'s> {
         let before = self.resynced.len() + self.spawned.len();
         self.resynced.retain(|&(owner, _, _)| owner != attempt);
         self.spawned.retain(|&(owner, _)| owner != attempt);
+        let quoted = self.quoted_openers.len();
+        self.quoted_openers.retain(|&(owner, _)| owner != attempt);
         governor.release_scratch(
-            size(before - self.resynced.len() - self.spawned.len()).saturating_mul(24),
+            size(before - self.resynced.len() - self.spawned.len())
+                .saturating_mul(24)
+                .saturating_add(size(quoted - self.quoted_openers.len()).saturating_mul(16)),
         )
     }
 

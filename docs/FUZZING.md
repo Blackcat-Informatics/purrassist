@@ -158,10 +158,19 @@ targets' mutation tokens so mutation can create or move field boundaries).
   not one), the content after it, up to the next call, reasoning block, or
   attempt, holds no such literal. (F4) A rejected attempt runs past where
   its grammar failed (the furthest the recognizer read an attempt of its
-  dialect at that opener, in any reading) only to such a literal, to
+  dialect at that opener, in any reading, and (T5) no further than the
+  failure its reason reports) only to such a literal (a
+  single-byte one, a JSON bracket or separator that prose writes too, only
+  as structure the grammar read (T5): after trailing whitespace, a
+  separator and brackets closing what the attempt did not open, its markup
+  ends by closing a bracket that opened before the failure, or after it
+  with no prose between), to the next
+  call of its attempt (T5: a skipped call left
+  without its closer), to
   complete a literal it began, (T3) to the bracket that balances a JSON
   value it left open (its bytes stay unbalanced, outside JSON strings, from
-  the failure to that bracket), or (T4) to such a closing literal written
+  the failure to that bracket, with no prose between: a bare word followed
+  by another word or sentence punctuation), or (T4) to such a closing literal written
   with one slip (one byte inserted, deleted or substituted, or two adjacent
   bytes swapped, its delimiters kept), so bytes after a closer-less attempt
   stay content. (F7) A rejected span never ends inside a literal it began. (F8)

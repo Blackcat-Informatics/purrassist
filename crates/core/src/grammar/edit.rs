@@ -85,10 +85,11 @@
 //! at its closing marker, and a call outside reasoning at an opening marker
 //! it read over as markup. `tool_call.markup.token-misspelled` (appended
 //! last) is the opener-side mirror of `closer-misspelled`: a markup token
-//! other than a closer (a tag- or special-token-shaped literal a call reads
-//! after its attempt opened, such as the next call's opener in a group, or
-//! a `<parameter=` opener) within edit distance one of exactly one literal
-//! of the grammar is read as that literal.
+//! other than a closer (a tag- or special-token-shaped literal: an
+//! attempt's own opener, the next call's opener in a group, a
+//! `<parameter=` opener) within edit distance one of exactly one literal of
+//! the grammar is read as that literal. Every misspelling is a fallback:
+//! it never overrides a reading of the same bytes that needs no repair.
 //! Closers inserted at the
 //! end of output under a non-length stop are
 //! `tool_call.markup.missing-closers-at-end`, usable only when the call is
@@ -273,12 +274,13 @@ pub enum EditOperator {
     /// block, never to the call, so what the call read from them is
     /// dropped.
     ReasoningMarkerCut,
-    /// Read a markup token other than a closer, after the call's attempt
-    /// opened (the next call's opener in a group, a `<parameter=` opener),
-    /// within edit distance one of exactly one literal of the grammar (one
-    /// byte inserted, deleted or substituted, or two adjacent bytes
-    /// swapped, inside its delimiters) as that literal: the opener-side
-    /// mirror of [`Self::CloserMisspelled`].
+    /// Read a markup token other than a closer (an attempt's own opener,
+    /// the next call's opener in a group, a `<parameter=` opener) where its
+    /// canonical spelling fails, within edit distance one of exactly one
+    /// literal of the grammar (one byte inserted, deleted or substituted, or
+    /// two adjacent bytes swapped, inside its delimiters) and spelling none
+    /// exactly, as that literal: the opener-side mirror of
+    /// [`Self::CloserMisspelled`], a fallback only.
     TokenMisspelled,
 }
 

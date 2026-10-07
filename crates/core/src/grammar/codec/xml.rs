@@ -659,9 +659,17 @@ impl<'t> Reader<'_, 't, '_> {
         }
     }
 
-    /// Where the value starting at `from` ends, and what ends it.
+    /// Where the value starting at `from` ends, and what ends it. A reading
+    /// that needs no repair comes first: the first canonical `</parameter>`
+    /// ends the value unless a parameter opener (canonical, of a declared
+    /// parameter) comes before it. A repaired spelling (the `</parameters>`
+    /// variant, a misspelled closer, a misspelled opener) ends the value
+    /// only where no canonical closer comes before that opener or the end
+    /// of the body: otherwise it is text of the value (`<Parameter>`,
+    /// `</parameterx>` and `</paramete>` written inside content).
     fn terminator(&mut self, from: usize) -> Result<(usize, Terminator), StopReason> {
         let mut at = from;
+        let mut fallback: Option<(usize, Terminator)> = None;
         let found = loop {
             let Some(offset) = self.body[at..].iter().position(|&byte| byte == b'<') else {
                 at = self.body.len();
@@ -669,17 +677,25 @@ impl<'t> Reader<'_, 't, '_> {
             };
             at += offset;
             if let Some((width, spelling)) = self.closer(at) {
-                break Terminator::Closer(width, spelling);
-            }
-            if let Some(opener) = self.opener(at)?
+                if spelling == Spelling::Canonical {
+                    break Terminator::Closer(width, spelling);
+                }
+                fallback.get_or_insert((at, Terminator::Closer(width, spelling)));
+            } else if let Some(opener) = self.opener(at)?
                 && self.boundary(&opener.name.value)?
             {
-                break Terminator::Boundary;
+                if opener.respelled.is_none() {
+                    break Terminator::Boundary;
+                }
+                fallback.get_or_insert((at, Terminator::Boundary));
             }
             at += 1;
         };
         self.charge(at - from)?;
-        Ok((at, found))
+        Ok(match (found, fallback) {
+            (Terminator::Closer(..), _) | (_, None) => (at, found),
+            (_, Some(fallback)) => fallback,
+        })
     }
 
     /// Whether the value ending at a terminator was cut off by a length stop.
