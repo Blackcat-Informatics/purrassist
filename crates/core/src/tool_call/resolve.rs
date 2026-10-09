@@ -478,6 +478,10 @@ pub enum UnresolvedReason {
         /// The canonical name of the tool the request forces.
         expected: String,
     },
+    /// The request forced exactly one call and this call follows the first
+    /// (recorded by [`ToolSet::recover_governed`]; see
+    /// [`StrictForced`](super::StrictForced)).
+    ToolChoiceCardinality,
     /// Only canonical parsing is permitted ([`Policies::exact`]) and the
     /// reading needs this repair rule.
     RepairNotPermitted {
@@ -493,6 +497,7 @@ impl UnresolvedReason {
     /// use purrassist_core::tool_call::UnresolvedReason;
     /// assert_eq!(UnresolvedReason::Truncated.code(), "truncated");
     /// assert_eq!(UnresolvedReason::ToolChoiceForced { expected: "f".into() }.code(), "tool_choice_forced");
+    /// assert_eq!(UnresolvedReason::ToolChoiceCardinality.code(), "tool_choice_cardinality");
     /// ```
     #[must_use]
     pub const fn code(&self) -> &'static str {
@@ -509,6 +514,7 @@ impl UnresolvedReason {
             Self::Truncated => "truncated",
             Self::ToolChoiceNone => "tool_choice_none",
             Self::ToolChoiceForced { .. } => "tool_choice_forced",
+            Self::ToolChoiceCardinality => "tool_choice_cardinality",
             Self::RepairNotPermitted { .. } => "repair_not_permitted",
         }
     }
@@ -549,6 +555,9 @@ impl fmt::Display for UnresolvedReason {
                     "the request's tool choice forces tool `{expected}`"
                 )
             }
+            Self::ToolChoiceCardinality => formatter.write_str(
+                "the request's tool choice forces exactly one call and this is not the first",
+            ),
             Self::RepairNotPermitted { rule } => write!(
                 formatter,
                 "repair `{rule}` is needed but only canonical parsing is permitted"

@@ -19,6 +19,15 @@
 //! (`Exact`, `Quick`, `Standard`, `Deep`), bit 2 the ambiguity policy
 //! (`Report`, `Reject`), bits 3-7 the split seed.
 //!
+//! Strict forced choice: the control bits are full, so the options of
+//! [`StrictForced`] come from a trailer, a separate later seed byte. Under
+//! the forced tool choice, a last byte of `0xF8..=0xFF` (never valid UTF-8,
+//! and the last byte of no earlier seed) is consumed as the trailer instead
+//! of being part of the turn: bit 0 `exactly_one`, bit 1 no content, bit 2
+//! no reasoning (`0xF8` is the all-lenient degenerate form). Every other
+//! input keeps its earlier meaning: the turn is `bytes[2..]` and the choice
+//! is the plain `Forced`.
+//!
 //! Checks (a panic is a fuzz failure):
 //! - recovery never panics, names the output's digest, and stays within its
 //!   budget; a value outcome completed, `Unresolved` did not; an `Ambiguous`
@@ -42,6 +51,11 @@
 //!   (whatever the finish) and otherwise `"tool_calls"` exactly when the
 //!   `OpenAI` array holds a call;
 //!   the wire `verdict` and usable-call counts match;
+//! - a strict forced choice that passed implies, by the options drawn:
+//!   exactly one call when `exactly_one`; no content byte other than ASCII
+//!   whitespace when content is not allowed; no reasoning range when
+//!   reasoning is not allowed; and conversely a second call under
+//!   `exactly_one` fails the check;
 //! - (F4) a rejected attempt runs past where its grammar failed (the
 //!   furthest the recognizer read an attempt of its dialect at its opener)
 //!   and (T5) no further than the failure its reason reports, only to a
@@ -111,8 +125,8 @@ use purrassist_core::digest::Digest;
 use purrassist_core::tool_call::{
     AmbiguityPolicy, CallOutcome, DialectId, DialectSet, Effects, Finish, GenerationStop, IdPolicy,
     ObjectSpec, Param, Piece, PolicySelection, ReasoningPolicy, RecognizedTurn, Recognizer,
-    Rejection, RepairPolicy, Segment, SkipReason, Skipped, ToolCalls, ToolChoice, ToolDefinition,
-    ToolRecoveryRequest, ToolSet, Verdict, emit,
+    Rejection, RepairPolicy, Segment, SkipReason, Skipped, StrictForced, ToolCalls, ToolChoice,
+    ToolDefinition, ToolRecoveryRequest, ToolSet, Verdict, emit,
 };
 use purrassist_core::wire::WireValue;
 use purrassist_core::{AssistResult, Budget, Effort, Governor, Outcome, StopReason, json};
@@ -166,7 +180,7 @@ fn tools() -> ToolSet {
 }
 
 /// The request knobs the two header bytes select.
-fn request(control: u8, split: u8, output: &[u8]) -> ToolRecoveryRequest {
+fn request(control: u8, split: u8, strict: Option<u8>, output: &[u8]) -> ToolRecoveryRequest {
     let effort =
         [Effort::Exact, Effort::Quick, Effort::Standard, Effort::Deep][usize::from(split & 3)];
     let policy = [
@@ -192,7 +206,17 @@ fn request(control: u8, split: u8, output: &[u8]) -> ToolRecoveryRequest {
         0 => ToolChoice::Auto,
         1 => ToolChoice::None,
         2 => ToolChoice::Required,
-        _ => ToolChoice::Forced("read_file".into()),
+        _ => strict.map_or_else(
+            || ToolChoice::Forced("read_file".into()),
+            |bits| {
+                ToolChoice::ForcedStrict(StrictForced {
+                    name: "read_file".into(),
+                    exactly_one: bits & 1 != 0,
+                    allow_content: bits & 2 == 0,
+                    allow_reasoning: bits & 4 == 0,
+                })
+            },
+        ),
     };
     let ambiguity = if split & 4 == 0 {
         AmbiguityPolicy::Report
@@ -836,6 +860,44 @@ fn check_result(
         );
         check_calls(output, calls);
         check_reemission(tools, calls);
+        check_strict(output, request, calls);
+    }
+}
+
+/// The options of a strict forced choice, as drawn: a passed check implies
+/// exactly one call (when `exactly_one`), no content byte other than ASCII
+/// whitespace (when content is not allowed) and no reasoning range (when
+/// reasoning is not allowed); a second call under `exactly_one` fails it.
+fn check_strict(output: &[u8], request: &ToolRecoveryRequest, calls: &ToolCalls) {
+    let ToolChoice::ForcedStrict(strict) = &request.tool_choice else {
+        return;
+    };
+    if strict.exactly_one && calls.calls.len() > 1 {
+        assert!(
+            !calls.tool_choice.passed,
+            "{} calls pass exactly-one",
+            calls.calls.len()
+        );
+    }
+    if !calls.tool_choice.passed {
+        return;
+    }
+    if strict.exactly_one {
+        assert_eq!(calls.calls.len(), 1, "a passed exactly-one check");
+    }
+    if !strict.allow_content {
+        for range in &calls.content {
+            assert!(
+                output[range.clone()].iter().all(u8::is_ascii_whitespace),
+                "a passed no-content check holds content {range:?}"
+            );
+        }
+    }
+    if !strict.allow_reasoning {
+        assert!(
+            calls.reasoning.is_empty(),
+            "a passed no-reasoning check holds reasoning"
+        );
     }
 }
 
@@ -1511,9 +1573,15 @@ fn main() {
     assert!(bytes.len() <= 4096, "probe input exceeds 4096 bytes");
     let control = bytes.first().copied().unwrap_or(0);
     let split = bytes.get(1).copied().unwrap_or(0);
-    let output = bytes.get(2..).unwrap_or_default();
+    let strict = bytes
+        .last()
+        .copied()
+        .filter(|last| bytes.len() > 2 && control >> 6 == 3 && *last >= 0xF8)
+        .map(|last| last & 7);
+    let end = bytes.len() - usize::from(strict.is_some());
+    let output = bytes.get(2..end).unwrap_or_default();
     let tools = tools();
-    let request = request(control, split, output);
+    let request = request(control, split, strict, output);
     let result = tools.recover(output, &request);
     check_result(&tools, output, &request, &result);
     check_reasoning_keeps_calls(&tools, output, &request, &result);

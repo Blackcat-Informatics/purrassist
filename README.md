@@ -140,7 +140,12 @@ that may not be used, such as a mutating tool's, or an `Unresolved` operation:
 an exhausted budget, invalid input) or the tool-choice check failed, even with
 usable calls: a violated tool choice is a contract failure the caller must
 see. Invocation errors exit 1. The printed JSON is the same whatever the exit
-code; the code only summarizes it. The [integration guide](docs/tool-calls/INTEGRATION.md)
+code; the code only summarizes it. `--tool-choice NAME` forces a tool; with
+`--tool-choice-exactly-one`, `--tool-choice-no-content` and
+`--tool-choice-no-reasoning` (a usage error without `--tool-choice NAME`) the
+turn must hold exactly one call, no content other than ASCII whitespace, and
+no reasoning block, or the tool-choice check fails like any violated choice.
+The [integration guide](docs/tool-calls/INTEGRATION.md)
 lists every option, the integrator guarantees, and the evidence for each.
 
 `prepare_helper`/`complete_helper` expose optional external-model helper

@@ -10,7 +10,7 @@ use purrassist::{
 use std::io::{self, Read};
 
 const MAX_INPUT: u64 = 16 * 1024 * 1024;
-const HELP: &str = "PurRAssist: evidence-bearing recovery for imperfect AI output\n\nUsage:\n  purrassist decode --schema FILE [--input FILE] [--effort exact|quick|standard|deep|maximum] [--no-guesses]\n  purrassist validate --schema FILE [--input FILE]\n  purrassist match QUERY CANDIDATE...\n  purrassist recover-tool-calls --tools FILE [--tools-format openai|mcp|anthropic] [--dialect ID]... [--stop stop|length|tool_calls|content_filter|unknown|stop-sequence=STR] [--tool-choice auto|none|required|NAME] [--policy per-tool|structural|tolerant] [--effects NAME=read-only|mutating]... [--reasoning separate|separate-open|content] [--ambiguity report|reject] [--emit openai|DIALECT] [--ids-source | [--ids-prefix P] [--ids-start N]] [--effort exact|quick|standard|deep|maximum] [FILE]\n  purrassist call TOOL --root DIRECTORY\n  purrassist mcp --root DIRECTORY\n\nInput defaults to stdin. Decode emits a JSON answer and receipt.\nrecover-tool-calls reads one model turn as raw bytes (invalid UTF-8 is a recorded loss) and\nemits the recover_tool_calls tool's result; built-in dialect ids for --dialect (default all)\nand --emit: {dialects}. Call markup no allowed dialect reads\n(a family not built in yet, or a built-in dialect left out of --dialect) is a rejected attempt\nwith reason unsupported_dialect, its bytes stay content, and the finish is unresolved. Call ids by default keep each id the model wrote\nand number every other call call_<12 hex of the output's SHA-256>_<index>, so\nturns never share ids (a missing or repeated model id is a recorded inference);\n--ids-source keeps the ids the output carries (deduplicated as ID#INDEX);\n--ids-prefix P/--ids-start N number every call P(N+index) (default prefix call_,\nstart 0; pass the result's next_id_start as the next round's --ids-start).\nExit: 0 resolved/best-guess, 3 ambiguous, 4 unresolved/invalid, 1 invocation error.\nrecover-tool-calls exits 0 when at least one call is usable and the tool-choice check passed\n(even if other attempts were rejected or unparsed; the JSON itemizes them) or for clean\ncontent_only; 3 when nothing is usable and a call or the operation is ambiguous; 4 when\nnothing is usable (unresolved calls, rejected or unparsed markup only, truncated, only\nunusable guesses, an exhausted budget or invalid input) or the tool-choice check failed,\neven with usable calls. The JSON output is the same either way.\n";
+const HELP: &str = "PurRAssist: evidence-bearing recovery for imperfect AI output\n\nUsage:\n  purrassist decode --schema FILE [--input FILE] [--effort exact|quick|standard|deep|maximum] [--no-guesses]\n  purrassist validate --schema FILE [--input FILE]\n  purrassist match QUERY CANDIDATE...\n  purrassist recover-tool-calls --tools FILE [--tools-format openai|mcp|anthropic] [--dialect ID]... [--stop stop|length|tool_calls|content_filter|unknown|stop-sequence=STR] [--tool-choice auto|none|required|NAME [--tool-choice-exactly-one] [--tool-choice-no-content] [--tool-choice-no-reasoning]] [--policy per-tool|structural|tolerant] [--effects NAME=read-only|mutating]... [--reasoning separate|separate-open|content] [--ambiguity report|reject] [--emit openai|DIALECT] [--ids-source | [--ids-prefix P] [--ids-start N]] [--effort exact|quick|standard|deep|maximum] [FILE]\n  purrassist call TOOL --root DIRECTORY\n  purrassist mcp --root DIRECTORY\n\nInput defaults to stdin. Decode emits a JSON answer and receipt.\nrecover-tool-calls reads one model turn as raw bytes (invalid UTF-8 is a recorded loss) and\nemits the recover_tool_calls tool's result; built-in dialect ids for --dialect (default all)\nand --emit: {dialects}. Call markup no allowed dialect reads\n(a family not built in yet, or a built-in dialect left out of --dialect) is a rejected attempt\nwith reason unsupported_dialect, its bytes stay content, and the finish is unresolved. Call ids by default keep each id the model wrote\nand number every other call call_<12 hex of the output's SHA-256>_<index>, so\nturns never share ids (a missing or repeated model id is a recorded inference);\n--ids-source keeps the ids the output carries (deduplicated as ID#INDEX);\n--ids-prefix P/--ids-start N number every call P(N+index) (default prefix call_,\nstart 0; pass the result's next_id_start as the next round's --ids-start).\n--tool-choice NAME forces calls to that tool (at least one); the three --tool-choice-* flags, which need\na NAME, make it strict: exactly one call, no content other than ASCII whitespace, no reasoning\nblock. A failed check makes the turn unresolved (exit 4) and emits nothing.\nExit: 0 resolved/best-guess, 3 ambiguous, 4 unresolved/invalid, 1 invocation error.\nrecover-tool-calls exits 0 when at least one call is usable and the tool-choice check passed\n(even if other attempts were rejected or unparsed; the JSON itemizes them) or for clean\ncontent_only; 3 when nothing is usable and a call or the operation is ambiguous; 4 when\nnothing is usable (unresolved calls, rejected or unparsed markup only, truncated, only\nunusable guesses, an exhausted budget or invalid input) or the tool-choice check failed,\neven with usable calls. The JSON output is the same either way.\n";
 
 /// The help text, with the built-in dialect ids taken from
 /// `DialectId::BUILT_IN` so the list cannot drift from the shipped set.
@@ -181,6 +181,8 @@ fn recover_tool_calls(args: &[String]) -> Result<u8, String> {
     let mut dialects = Vec::new();
     let mut effects: Vec<(String, Node)> = Vec::new();
     let (mut ids_prefix, mut ids_start, mut ids_source) = (None, None, false);
+    // `--tool-choice-exactly-one`, `-no-content`, `-no-reasoning`.
+    let mut strict = [false; 3];
     let mut position = 0;
     while position < args.len() {
         let option = args[position].as_str();
@@ -197,6 +199,14 @@ fn recover_tool_calls(args: &[String]) -> Result<u8, String> {
                 return Err(format!("unknown or repeated option {option:?}"));
             }
             ids_source = true;
+            position += 1;
+            continue;
+        }
+        if let Some(flag) = STRICT_FLAGS.iter().position(|name| *name == option) {
+            if strict[flag] {
+                return Err(format!("unknown or repeated option {option:?}"));
+            }
+            strict[flag] = true;
             position += 1;
             continue;
         }
@@ -246,6 +256,7 @@ fn recover_tool_calls(args: &[String]) -> Result<u8, String> {
         }
         position += 2;
     }
+    strict_options(strict, &mut options)?;
     // The file's exact text: the adapters' render-back and schema digests
     // refer to the caller's bytes, not to a re-serialization.
     let declarations = read_input(Some(tools_path.ok_or("--tools is required")?))?;
@@ -314,6 +325,45 @@ fn stop(value: &str) -> Node {
         |sequence| object([("stop_sequence", string(sequence))]),
     )
 }
+/// The `tool_choice_strict` member the `--tool-choice-*` flags set (none
+/// when no flag is given). It is a usage error unless `--tool-choice` names a
+/// tool: the flags make a forced choice strict.
+fn strict_options(
+    strict: [bool; 3],
+    options: &mut Vec<(&'static str, Node)>,
+) -> Result<(), String> {
+    if !strict.contains(&true) {
+        return Ok(());
+    }
+    let named = options
+        .iter()
+        .any(|(key, node)| *key == "tool_choice" && matches!(node.value, Value::Object(_)));
+    if !named {
+        return Err("--tool-choice-exactly-one, --tool-choice-no-content and \
+                    --tool-choice-no-reasoning need --tool-choice NAME (a tool name, \
+                    not auto, none or required)"
+            .into());
+    }
+    options.push((
+        "tool_choice_strict",
+        object([
+            ("exactly_one", Node::new(Value::Bool(strict[0]))),
+            ("allow_content", Node::new(Value::Bool(!strict[1]))),
+            ("allow_reasoning", Node::new(Value::Bool(!strict[2]))),
+        ]),
+    ));
+    Ok(())
+}
+
+/// The valueless flags that make a forced `--tool-choice NAME` strict, in the
+/// order of the `tool_choice_strict` members they set (`exactly_one`,
+/// `allow_content` cleared, `allow_reasoning` cleared).
+const STRICT_FLAGS: [&str; 3] = [
+    "--tool-choice-exactly-one",
+    "--tool-choice-no-content",
+    "--tool-choice-no-reasoning",
+];
+
 /// `--tool-choice`: `auto`, `none`, `required`, or the name of the one tool
 /// the turn must call (the `OpenAI` function form).
 fn tool_choice(value: &str) -> Node {

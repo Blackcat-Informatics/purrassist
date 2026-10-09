@@ -35,8 +35,8 @@ use purrassist_core::tool_call::rules::RULES;
 use purrassist_core::tool_call::{
     AmbiguityPolicy, CallOutcome, DeclarationForm, DialectId, DialectSet, Effects, Finish,
     GenerationStop, IdPolicy, ObjectSpec, Param, ParameterSpec, PolicySelection, ReasoningPolicy,
-    RepairPolicy, ToolCall, ToolCalls, ToolChoice, ToolDefinition, ToolRecoveryRequest, ToolSet,
-    UnknownParameters, UnresolvedReason,
+    RepairPolicy, StrictForced, ToolCall, ToolCalls, ToolChoice, ToolDefinition,
+    ToolRecoveryRequest, ToolSet, UnknownParameters, UnresolvedReason,
 };
 use purrassist_core::{AssistResult, Budget, Effort, Governor, Outcome, StopReason};
 use std::path::{Path, PathBuf};
@@ -314,6 +314,46 @@ fn input_bytes(golden: &Node, path: &Path) -> Vec<u8> {
         .collect()
 }
 
+/// The `tool_choice` input: the `OpenAI` form, or the Anthropic form when
+/// it is an object whose `type` is not `"function"` (as the host reads it),
+/// with the optional `tool_choice_strict` object
+/// `{exactly_one, allow_content, allow_reasoning}` (all booleans, all
+/// required) applied to a forced choice.
+fn tool_choice(golden: &Node, choice: &Node, path: &Path) -> ToolChoice {
+    let anthropic = matches!(choice.value, Value::Object(_))
+        && choice.get("type").and_then(Node::as_str) != Some("function");
+    let parsed = if anthropic {
+        ToolChoice::from_anthropic(choice)
+    } else {
+        ToolChoice::from_openai(choice)
+    }
+    .unwrap_or_else(|error| panic!("{}: tool_choice: {error:?}", path.display()));
+    let Some(strict) = golden.get("tool_choice_strict") else {
+        return parsed;
+    };
+    let flag = |key: &str| match strict.get(key).map(|node| &node.value) {
+        Some(Value::Bool(flag)) => *flag,
+        other => panic!(
+            "{}: tool_choice_strict.{key} must be a boolean, not {other:?}",
+            path.display()
+        ),
+    };
+    let name = match parsed {
+        ToolChoice::Forced(name) => name,
+        ToolChoice::ForcedStrict(existing) => existing.name,
+        other => panic!(
+            "{}: tool_choice_strict needs a forced tool_choice, not {other:?}",
+            path.display()
+        ),
+    };
+    ToolChoice::ForcedStrict(StrictForced {
+        name,
+        exactly_one: flag("exactly_one"),
+        allow_content: flag("allow_content"),
+        allow_reasoning: flag("allow_reasoning"),
+    })
+}
+
 fn request(golden: &Node, path: &Path, input: &[u8], dialects: DialectSet) -> ToolRecoveryRequest {
     let effort = golden
         .get("effort")
@@ -336,9 +376,12 @@ fn request(golden: &Node, path: &Path, input: &[u8], dialects: DialectSet) -> To
         request = request.stop(stop_of(stop));
     }
     if let Some(choice) = golden.get("tool_choice") {
-        request = request.tool_choice(
-            ToolChoice::from_openai(choice)
-                .unwrap_or_else(|error| panic!("{}: tool_choice: {error:?}", path.display())),
+        request = request.tool_choice(tool_choice(golden, choice, path));
+    } else {
+        assert!(
+            golden.get("tool_choice_strict").is_none(),
+            "{}: `tool_choice_strict` needs a forced `tool_choice`",
+            path.display()
         );
     }
     if let Some(reasoning) = golden.get("reasoning").and_then(Node::as_str) {
@@ -1226,6 +1269,196 @@ fn forced_tool_choice_violated() {
         result.receipt.validations
     );
     assert!(!reading(&result).tool_choice.passed);
+}
+
+/// A strict forced run that must fail its tool-choice check: the whole-turn
+/// contract (finish `Unresolved`, verdict `NothingUsable`, nothing emitted)
+/// and the strict constraint among the failed validations.
+fn assert_strict_failed(name: &str, constraint: &str) -> ToolCalls {
+    let (_, result) = golden(name);
+    let calls = reading(&result).clone();
+    assert!(!calls.tool_choice.passed, "{name}: {calls:#?}");
+    assert_eq!(calls.tool_choice.choice.constraint(), constraint, "{name}");
+    assert!(
+        result
+            .receipt
+            .validations
+            .iter()
+            .any(|validation| !validation.passed && validation.constraint == constraint),
+        "{name}: {:#?}",
+        result.receipt.validations
+    );
+    assert_eq!(calls.finish, Finish::Unresolved, "{name}");
+    assert_eq!(calls.verdict().code(), "nothing_usable", "{name}");
+    assert!(calls.emitted_calls().is_empty(), "{name}");
+    assert!(calls.usable_accepting_guesses().len() <= 1, "{name}");
+    calls
+}
+
+#[test]
+fn forced_strict_two_calls() {
+    let calls = assert_strict_failed(
+        "forced_strict_two_calls",
+        "tool_choice=forced[exactly-one,no-content]:read_file",
+    );
+    assert_eq!(calls.calls.len(), 2);
+    assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
+    assert_eq!(
+        calls.calls[1].outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::ToolChoiceCardinality
+        }
+    );
+    assert_eq!(
+        calls.tool_choice.diagnostics.len(),
+        1,
+        "{:?}",
+        calls.tool_choice.diagnostics
+    );
+    assert!(calls.tool_choice.diagnostics[0].contains("call 1"));
+}
+
+#[test]
+fn forced_strict_call_plus_prose() {
+    let calls = assert_strict_failed(
+        "forced_strict_call_plus_prose",
+        "tool_choice=forced[exactly-one,no-content]:read_file",
+    );
+    // The call itself is fine; the prose is what fails the choice.
+    assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
+    assert!(
+        calls
+            .tool_choice
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.contains("content")),
+        "{:?}",
+        calls.tool_choice.diagnostics
+    );
+    assert!(!calls.tool_choice.diagnostics.is_empty(), "{calls:#?}");
+}
+
+#[test]
+fn forced_strict_single_call_passes() {
+    let (_, result) = golden("forced_strict_single_call_passes");
+    let calls = reading(&result);
+    assert!(calls.tool_choice.passed, "{:?}", calls.tool_choice);
+    assert_eq!(
+        calls.tool_choice.choice.constraint(),
+        "tool_choice=forced[exactly-one,no-content]:read_file"
+    );
+    assert_eq!(calls.finish, Finish::Calls);
+    assert_eq!(calls.verdict().code(), "run");
+    assert_eq!(calls.emitted_calls().len(), 1);
+    // Whitespace-only content frames the call.
+    assert_eq!(calls.content.len(), 2);
+    assert!(
+        result
+            .receipt
+            .validations
+            .iter()
+            .all(|validation| validation.passed)
+    );
+}
+
+#[test]
+fn forced_strict_non_ascii_whitespace_is_content() {
+    // U+00A0 after the call is content, not framing whitespace.
+    let (golden, _) = golden("forced_strict_single_call_passes");
+    let mut input = golden.input.clone();
+    input.truncate(input.len() - 1);
+    input.extend_from_slice("\u{a0}".as_bytes());
+    let result = golden.tools.recover(&input, &golden.request);
+    let calls = reading(&result);
+    assert!(!calls.tool_choice.passed, "{calls:#?}");
+    assert_eq!(calls.finish, Finish::Unresolved);
+    assert!(calls.emitted_calls().is_empty(), "{calls:#?}");
+    assert!(
+        calls
+            .tool_choice
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("content")),
+        "{:?}",
+        calls.tool_choice.diagnostics
+    );
+    // ASCII whitespace of every kind still passes.
+    let mut input = golden.input.clone();
+    input.truncate(input.len() - 1);
+    input.extend_from_slice(b" \t\r\n\x0c");
+    let result = golden.tools.recover(&input, &golden.request);
+    assert!(reading(&result).tool_choice.passed);
+}
+
+#[test]
+fn forced_strict_tool_result_is_content() {
+    // A tool result the model wrote after its call is content, so it fails
+    // no-content even though no prose surrounds the call.
+    let (golden, _) = golden("forced_strict_single_call_passes");
+    let mut input = golden.input.clone();
+    input.extend_from_slice(b"<tool_response>\n{\"text\":\"a\"}\n</tool_response>\n");
+    let result = golden.tools.recover(&input, &golden.request);
+    let calls = reading(&result);
+    assert_eq!(calls.calls.len(), 1, "{calls:#?}");
+    assert!(calls.rejected.is_empty(), "{calls:#?}");
+    assert!(!calls.tool_choice.passed, "{calls:#?}");
+    assert_eq!(
+        calls.tool_choice.diagnostics.len(),
+        1,
+        "{:?}",
+        calls.tool_choice.diagnostics
+    );
+    assert!(
+        calls.tool_choice.diagnostics[0].contains("content"),
+        "{:?}",
+        calls.tool_choice.diagnostics
+    );
+    assert_eq!(calls.finish, Finish::Unresolved);
+    assert!(calls.emitted_calls().is_empty(), "{calls:#?}");
+}
+
+#[test]
+fn forced_strict_reasoning_rejected() {
+    let calls = assert_strict_failed(
+        "forced_strict_reasoning_rejected",
+        "tool_choice=forced[exactly-one,no-content,no-reasoning]:read_file",
+    );
+    assert_eq!(calls.reasoning.len(), 1);
+    assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
+    // Only the reasoning fails: the remaining content is a newline.
+    assert_eq!(calls.tool_choice.diagnostics.len(), 1);
+    assert!(calls.tool_choice.diagnostics[0].contains("reasoning"));
+}
+
+#[test]
+fn forced_strict_anthropic_disable_parallel() {
+    let calls = assert_strict_failed(
+        "forced_strict_anthropic_disable_parallel",
+        "tool_choice=forced[exactly-one]:read_file",
+    );
+    assert_eq!(calls.calls.len(), 2);
+    assert_eq!(
+        calls.calls[1].outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::ToolChoiceCardinality
+        }
+    );
+    // Content is allowed by this form: the prose is not what fails.
+    assert!(!calls.content.is_empty(), "{calls:#?}");
+    assert!(
+        calls
+            .tool_choice
+            .diagnostics
+            .iter()
+            .all(|diagnostic| !diagnostic.contains("content")),
+        "{:?}",
+        calls.tool_choice.diagnostics
+    );
+    let (_, result) = golden("forced_strict_anthropic_one_call_with_prose_passes");
+    let calls = reading(&result);
+    assert!(calls.tool_choice.passed, "{:?}", calls.tool_choice);
+    assert_eq!(calls.finish, Finish::Calls);
+    assert_eq!(calls.emitted_calls().len(), 1);
 }
 
 fn assert_parameter_boundary(name: &str, expected: &str) {

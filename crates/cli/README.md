@@ -31,7 +31,13 @@ missing or repeated model id is numbered and recorded as a
 call `P(N + index)` instead (prefix `call_`, start 0 when omitted; pass the
 result's `next_id_start` as the next round's `--ids-start`), and
 `--ids-source` keeps the output's ids, deduplicated as `ID#INDEX`; combining
-`--ids-source` with either numbering option is an invocation error. `--help`
+`--ids-source` with either numbering option is an invocation error.
+`--tool-choice NAME` forces the tool `NAME` (at least one call, all to
+`NAME`); adding `--tool-choice-exactly-one`, `--tool-choice-no-content`
+(content other than ASCII whitespace fails) and `--tool-choice-no-reasoning`
+makes the forced choice strict, and is an invocation error without
+`--tool-choice NAME` (a tool name, not `auto`, `none` or `required`). A failed
+choice exits 4. `--help`
 lists every option; repeated single-valued options are rejected. The exit
 code is `tool_call::exit_code` of the result, so it always agrees with the
 printed `value.verdict`: 0 for `run` (the tool-choice check passed and at

@@ -356,13 +356,21 @@ impl fmt::Debug for IdPolicy {
 ///   (its canonical name or an alias; undeclared is a request error). Each
 ///   call to anything else that is not already `Unresolved` becomes
 ///   `Unresolved` with [`UnresolvedReason::ToolChoiceForced`].
+/// - `ForcedStrict(strict)`: the `Forced` checks, plus the options of
+///   [`StrictForced`]: exactly one call (each call after the first becomes
+///   `Unresolved` with [`UnresolvedReason::ToolChoiceCardinality`]), no
+///   content outside the call, and optionally no reasoning. `Forced(name)`
+///   is the lenient form: a `ForcedStrict` with every option lenient checks
+///   exactly what `Forced` checks and renders the same constraint.
 ///
 /// A failed check makes the turn's [`Finish`] `Unresolved`.
 ///
 /// ```
-/// use purrassist_core::tool_call::ToolChoice;
+/// use purrassist_core::tool_call::{StrictForced, ToolChoice};
 /// assert_eq!(ToolChoice::default(), ToolChoice::Auto);
 /// assert_eq!(ToolChoice::Forced("read".into()).constraint(), "tool_choice=forced:read");
+/// let strict = ToolChoice::ForcedStrict(StrictForced::exactly_one("read").allow_content(false));
+/// assert_eq!(strict.constraint(), "tool_choice=forced[exactly-one,no-content]:read");
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum ToolChoice {
@@ -375,6 +383,130 @@ pub enum ToolChoice {
     Required,
     /// Only calls to this tool, at least one.
     Forced(String),
+    /// [`Self::Forced`] plus the cardinality, content and reasoning options
+    /// of [`StrictForced`].
+    ForcedStrict(StrictForced),
+}
+
+/// A forced tool choice with options: the strict form of
+/// [`ToolChoice::Forced`].
+///
+/// It enforces everything `Forced` does (at least one call, every call to
+/// `name`, an alias counting as its canonical name; an undeclared `name` is
+/// a request error, `invalid_input`) and then the three options:
+///
+/// - `exactly_one`: the turn holds exactly one call. "Calls" are the
+///   entries of [`ToolCalls::calls`] (recognized calls of any outcome, as
+///   [`ToolChoice::Required`] counts them); each call after the first
+///   becomes `Unresolved` with [`UnresolvedReason::ToolChoiceCardinality`]
+///   unless it already was unresolved. Calls embedded in reasoning are not
+///   counted (see [`ToolCalls::embedded`]); `allow_reasoning` governs them.
+/// - `allow_content: false`: no content range holds a byte that is not
+///   ASCII whitespace (`u8::is_ascii_whitespace`: space, tab, line feed,
+///   carriage return, form feed). Framing whitespace between calls passes;
+///   non-ASCII whitespace such as U+00A0 is content, and so are tool
+///   results the model wrote.
+/// - `allow_reasoning: false`: no reasoning block at all.
+///
+/// A failed option is a diagnostic on the tool choice check; the check then
+/// fails and the turn follows the whole-turn contract of
+/// [`ToolChoice`] (`Finish::Unresolved`, nothing emitted). The constraint
+/// string lists the active options, the name last:
+/// `tool_choice=forced[exactly-one,no-content,no-reasoning]:NAME`. With no
+/// option active it is exactly `tool_choice=forced:NAME`.
+///
+/// ```
+/// use purrassist_core::{Budget, Outcome};
+/// use purrassist_core::tool_call::{
+///     Effects, Finish, Param, StrictForced, ToolChoice, ToolDefinition, ToolRecoveryRequest, ToolSet,
+/// };
+/// let tools = ToolSet::compile(
+///     [ToolDefinition::new("ls").effects(Effects::ReadOnly).param("depth", Param::integer())],
+///     Budget::default(),
+/// ).unwrap();
+/// let strict = StrictForced::exactly_one("ls");
+/// assert_eq!(
+///     ToolChoice::ForcedStrict(strict.clone()).constraint(),
+///     "tool_choice=forced[exactly-one,no-content]:ls",
+/// );
+/// let request = ToolRecoveryRequest::default().tool_choice(ToolChoice::ForcedStrict(strict));
+/// let call = r#"<tool_call>{"name": "ls", "arguments": {}}</tool_call>"#;
+/// // Two calls: the second is unresolved and the turn fails.
+/// let twice = format!("{call}\n{call}");
+/// let Outcome::Resolved(calls) = tools.recover(twice.as_bytes(), &request).outcome else { unreachable!() };
+/// assert!(!calls.tool_choice.passed);
+/// assert_eq!(calls.finish, Finish::Unresolved);
+/// // One call passes.
+/// let Outcome::Resolved(calls) = tools.recover(call.as_bytes(), &request).outcome else { unreachable!() };
+/// assert!(calls.tool_choice.passed);
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StrictForced {
+    /// The tool the request forces (canonical name or alias).
+    pub name: String,
+    /// Exactly one call, not just at least one.
+    pub exactly_one: bool,
+    /// Whether content other than ASCII whitespace may surround the call.
+    pub allow_content: bool,
+    /// Whether reasoning blocks may appear.
+    pub allow_reasoning: bool,
+}
+
+impl StrictForced {
+    /// Exactly one call to `name`, with no content outside it and reasoning
+    /// allowed: `exactly_one` set, `allow_content` unset, `allow_reasoning`
+    /// set.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::StrictForced;
+    /// let strict = StrictForced::exactly_one("read");
+    /// assert!(strict.exactly_one && !strict.allow_content && strict.allow_reasoning);
+    /// ```
+    #[must_use]
+    pub fn exactly_one(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            exactly_one: true,
+            allow_content: false,
+            allow_reasoning: true,
+        }
+    }
+
+    /// Set whether content other than ASCII whitespace is allowed.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::StrictForced;
+    /// assert!(StrictForced::exactly_one("read").allow_content(true).allow_content);
+    /// ```
+    #[must_use]
+    pub const fn allow_content(mut self, allow: bool) -> Self {
+        self.allow_content = allow;
+        self
+    }
+
+    /// Set whether reasoning blocks are allowed.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::StrictForced;
+    /// assert!(!StrictForced::exactly_one("read").allow_reasoning(false).allow_reasoning);
+    /// ```
+    #[must_use]
+    pub const fn allow_reasoning(mut self, allow: bool) -> Self {
+        self.allow_reasoning = allow;
+        self
+    }
+
+    /// Set whether more than one call is allowed (`false` is exactly one).
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::StrictForced;
+    /// assert!(!StrictForced::exactly_one("read").with_exactly_one(false).exactly_one);
+    /// ```
+    #[must_use]
+    pub const fn with_exactly_one(mut self, exactly_one: bool) -> Self {
+        self.exactly_one = exactly_one;
+        self
+    }
 }
 
 /// A tool choice that is not one of the accepted wire forms.
@@ -479,19 +611,30 @@ impl ToolChoice {
 
     /// Read an Anthropic Messages `tool_choice`: `{"type":"auto"}`,
     /// `{"type":"any"}` (read as `Required`), `{"type":"none"}`, or
-    /// `{"type":"tool","name":NAME}`.
+    /// `{"type":"tool","name":NAME}`. For `"tool"`, `disable_parallel_tool_use`
+    /// is read: `true` is [`ToolChoice::ForcedStrict`] with exactly one call
+    /// and content and reasoning allowed (`StrictForced { exactly_one: true,
+    /// allow_content: true, allow_reasoning: true }`), `false` is
+    /// [`ToolChoice::Forced`].
     ///
     /// # Errors
     /// [`ToolChoiceError`] for a non-object, an unknown `type`, a `name`
-    /// missing for `"tool"` or present otherwise, or any other member
-    /// (including `disable_parallel_tool_use`, which this choice model does
-    /// not represent and so never silently drops).
+    /// missing for `"tool"` or present otherwise, a `disable_parallel_tool_use`
+    /// that is not a boolean, or any other member (including
+    /// `disable_parallel_tool_use` on a type other than `"tool"`, which this
+    /// choice model does not represent and so never silently drops).
     ///
     /// ```
     /// use purrassist_core::{json, tool_call::ToolChoice};
     /// let parse = |text: &str| ToolChoice::from_anthropic(&json::parse(text).unwrap());
     /// assert_eq!(parse(r#"{"type":"any"}"#), Ok(ToolChoice::Required));
     /// assert_eq!(parse(r#"{"type":"tool","name":"read"}"#), Ok(ToolChoice::Forced("read".into())));
+    /// let strict = parse(r#"{"type":"tool","name":"read","disable_parallel_tool_use":true}"#).unwrap();
+    /// assert_eq!(strict.constraint(), "tool_choice=forced[exactly-one]:read");
+    /// assert_eq!(
+    ///     parse(r#"{"type":"tool","name":"read","disable_parallel_tool_use":false}"#),
+    ///     Ok(ToolChoice::Forced("read".into())),
+    /// );
     /// assert!(parse(r#"{"type":"auto","disable_parallel_tool_use":true}"#).is_err());
     /// ```
     pub fn from_anthropic(node: &Node) -> Result<Self, ToolChoiceError> {
@@ -499,12 +642,41 @@ impl ToolChoice {
             return Err(choice_error("expected an object with a `type` member"));
         }
         let kind = {
-            choice_members(node, &["type", "name"])?;
+            choice_members(node, &["type", "name", "disable_parallel_tool_use"])?;
             choice_string(node, "type")?
         };
         let named = node.get("name").is_some();
+        let parallel = node.get("disable_parallel_tool_use");
+        if parallel.is_some() && kind != "tool" {
+            return Err(choice_error(format!(
+                "`disable_parallel_tool_use` is accepted only for type \"tool\", not \"{kind}\""
+            )));
+        }
         match (kind, named) {
-            ("tool", true) => Ok(Self::Forced(choice_string(node, "name")?.to_owned())),
+            ("tool", true) => {
+                let name = choice_string(node, "name")?.to_owned();
+                let disabled = match parallel {
+                    None => false,
+                    Some(flag) => match flag.value {
+                        Value::Bool(flag) => flag,
+                        _ => {
+                            return Err(choice_error(
+                                "`disable_parallel_tool_use` must be a boolean",
+                            ));
+                        }
+                    },
+                };
+                Ok(if disabled {
+                    Self::ForcedStrict(StrictForced {
+                        name,
+                        exactly_one: true,
+                        allow_content: true,
+                        allow_reasoning: true,
+                    })
+                } else {
+                    Self::Forced(name)
+                })
+            }
             ("tool", false) => Err(choice_error("`name` is required for type \"tool\"")),
             ("auto" | "any" | "none", true) => Err(choice_error(format!(
                 "`name` is accepted only for type \"tool\", not \"{kind}\""
@@ -519,7 +691,11 @@ impl ToolChoice {
     }
 
     /// The validation constraint: `tool_choice=auto`, `tool_choice=none`,
-    /// `tool_choice=required`, or `tool_choice=forced:NAME`.
+    /// `tool_choice=required`, or `tool_choice=forced:NAME`. A
+    /// [`Self::ForcedStrict`] lists its active options in brackets before
+    /// the name, which comes last so a name holding `:`, `;` or `,` stays
+    /// unambiguous: `tool_choice=forced[exactly-one,no-content,no-reasoning]:NAME`.
+    /// With every option lenient it is `tool_choice=forced:NAME`.
     ///
     /// See [`ToolChoice`] for an example.
     #[must_use]
@@ -529,6 +705,21 @@ impl ToolChoice {
             Self::None => "tool_choice=none".into(),
             Self::Required => "tool_choice=required".into(),
             Self::Forced(name) => format!("tool_choice=forced:{name}"),
+            Self::ForcedStrict(strict) => {
+                let options: Vec<&str> = [
+                    (strict.exactly_one, "exactly-one"),
+                    (!strict.allow_content, "no-content"),
+                    (!strict.allow_reasoning, "no-reasoning"),
+                ]
+                .into_iter()
+                .filter_map(|(active, text)| active.then_some(text))
+                .collect();
+                if options.is_empty() {
+                    format!("tool_choice=forced:{}", strict.name)
+                } else {
+                    format!("tool_choice=forced[{}]:{}", options.join(","), strict.name)
+                }
+            }
         }
     }
 }
@@ -3124,7 +3315,7 @@ impl Recovery<'_> {
         governor.check()?;
         self.policies.validate(self.tools)?;
         let forced = match &self.request.tool_choice {
-            ToolChoice::Forced(name) => Some(
+            ToolChoice::Forced(name) | ToolChoice::ForcedStrict(StrictForced { name, .. }) => Some(
                 self.tools
                     .lookup_exact(name)
                     .ok_or_else(|| {
@@ -4069,7 +4260,7 @@ impl Recovery<'_> {
                     diagnostics.push(format!("no call was made under {constraint}"));
                 }
             }
-            ToolChoice::Forced(_) => {
+            ToolChoice::Forced(_) | ToolChoice::ForcedStrict(_) => {
                 let expected = forced.unwrap_or_default();
                 if value.calls.is_empty() {
                     diagnostics.push(format!("no call was made under {constraint}"));
@@ -4090,10 +4281,56 @@ impl Recovery<'_> {
                         };
                     }
                 }
+                if let ToolChoice::ForcedStrict(strict) = choice {
+                    self.strict(strict, value, &constraint, &mut diagnostics);
+                }
             }
         }
         value.tool_choice.passed = diagnostics.is_empty();
         value.tool_choice.diagnostics = diagnostics;
+    }
+
+    /// The options of a strict forced choice, after the `Forced` checks.
+    fn strict(
+        &self,
+        strict: &StrictForced,
+        value: &mut ToolCalls,
+        constraint: &str,
+        diagnostics: &mut Vec<String>,
+    ) {
+        if strict.exactly_one {
+            let total = value.calls.len();
+            for call in value.calls.iter_mut().skip(1) {
+                diagnostics.push(format!(
+                    "{} is one of {total} calls under {constraint}",
+                    label(call)
+                ));
+                if !matches!(call.outcome, CallOutcome::Unresolved { .. }) {
+                    call.outcome = CallOutcome::Unresolved {
+                        reason: UnresolvedReason::ToolChoiceCardinality,
+                    };
+                }
+            }
+        }
+        if !strict.allow_content {
+            for range in &value.content {
+                let text = self.output.get(range.clone()).unwrap_or_default();
+                if let Some(offset) = text.iter().position(|byte| !byte.is_ascii_whitespace()) {
+                    diagnostics.push(format!(
+                        "content at byte {} is not allowed under {constraint}",
+                        range.start + offset
+                    ));
+                }
+            }
+        }
+        if !strict.allow_reasoning {
+            for range in &value.reasoning {
+                diagnostics.push(format!(
+                    "reasoning at bytes {}..{} is not allowed under {constraint}",
+                    range.start, range.end
+                ));
+            }
+        }
     }
 
     /// The unmodeled keywords of an adapter tool's schema on the call's

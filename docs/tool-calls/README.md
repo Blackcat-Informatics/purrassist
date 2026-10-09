@@ -114,7 +114,7 @@ kind in [RULES.md](RULES.md).
 | `ToolDefinition`, `Param`, `ObjectSpec` | Typed builders: name, aliases, `Effects`, `RepairPolicy`, `UnknownParameters`, parameters. |
 | `ToolSet::compile`, `from_openai`, `from_mcp`, `from_anthropic` | A governed, validated tool set. Wire declarations are kept byte for byte and validated against their exact schema (Draft 2020-12 or Draft-07). |
 | `DialectId`, `DialectSet` | One dialect (built-in or `DialectId::custom`), and one model's dialect allow-list. |
-| `ToolRecoveryRequest` | Effort, budget, dialects, `ReasoningPolicy`, `GenerationStop`, `ToolChoice`, `IdPolicy`, `PolicySelection`, effects overrides, `AmbiguityPolicy`, `EmitTarget`. |
+| `ToolRecoveryRequest` | Effort, budget, dialects, `ReasoningPolicy`, `GenerationStop`, `ToolChoice` (`Auto`, `None`, `Required`, `Forced(name)`, and `ForcedStrict(StrictForced)`: forced plus exactly one call, no content, no reasoning, see [strict forced tool choice](INTEGRATION.md#strict-forced-tool-choice)), `IdPolicy`, `PolicySelection`, effects overrides, `AmbiguityPolicy`, `EmitTarget`. |
 | `ToolSet::recover`, `recover_governed` | Recover one turn; returns `AssistResult<ToolCalls>`. |
 | `ToolCalls` | `calls`, `rejected` (each `RejectedCall` with its `dialect` and `candidate_dialects`), `embedded`, `content`, `reasoning`, `finish`, `tool_choice`, `next_id_start`, `turn` (the output's digest), `emitted`; `usable()`, `usable_accepting_guesses()`, `verdict()` (wire `verdict`, with `usable_calls` and `usable_calls_accepting_guesses`), `reemit_with`. |
 | `IdPolicy` | `Turn` (default: the model's own ids, every other call `call_<12 hex of the output's SHA-256>_<index>`), `Prefix { prefix, start }`, `Generator`, `Source`; see [call ids](#call-ids). |
@@ -233,7 +233,7 @@ numbers keep their spelling).
 | `Resolved` | One reading, every rule admitted, no guess, no data loss. Markup losses never demote. |
 | `BestGuess` | One reading with a guess inference or a data loss. |
 | `Ambiguous` | Several distinct readings of the call (a different tool, arguments, or blocker) at the least cost, whatever the policy. |
-| `Unresolved { reason }` | No usable reading: an unknown tool, a missing required argument, a schema validation failure, a malformed or truncated call, a rule the policy does not admit, a repair under `Effort::Exact`, or a tool-choice violation. |
+| `Unresolved { reason }` | No usable reading: an unknown tool, a missing required argument, a schema validation failure, a malformed or truncated call, a rule the policy does not admit, a repair under `Effort::Exact`, or a tool-choice violation (`tool_choice_none`, `tool_choice_forced`, or, for a strict forced choice, `tool_choice_cardinality` on each call after the first). |
 
 **Markup and data losses.** A `markup` loss discards bytes that carry no
 argument data: closers, framing newlines, fence markers, a closers-only body.
@@ -259,7 +259,7 @@ dropped: it stays content.
 "Read-only" means the tool's effective effects after request overrides.
 Emission (`ToolRecoveryRequest::emit`, `tool_call::emit`) prints exactly the
 calls `ToolCalls::emitted_calls()` selects (those `usable_accepting_guesses()`
-selects, and none when the turn fails its tool-choice check), because
+selects, and none when the turn fails its tool-choice check, which a strict forced choice also fails for a second call, content other than ASCII whitespace, or reasoning when it forbids them), because
 emitted output carries no outcome and a downstream executor may run whatever
 it holds. The same selection decides `verdict()` (`Run` exactly when it is
 not empty) and `openai_finish_reason()`. Every call or
@@ -303,7 +303,7 @@ for the status × verdict table.
 | `ContentOnly` | No call, nothing wrong. | `"stop"` |
 | `TruncatedWithCalls` | A `Length` stop after at least one call that may run (a cut-off call never may). | `"length"` |
 | `Truncated` | A `Length` stop with no call that may run. | `"length"` |
-| `Unresolved` | A rejected attempt (other than one a length stop cut off), including call markup no allowed dialect reads, an `Unresolved` (other than by truncation) or `Ambiguous` call, a failed tool-choice check (even beside calls that would run), or calls of which none may run (each a guess on a mutating tool). | `"length"` under a length stop; otherwise `"tool_calls"` when the emission still holds a call (a rejected or unresolved attempt beside calls that run), `"stop"` otherwise |
+| `Unresolved` | A rejected attempt (other than one a length stop cut off), including call markup no allowed dialect reads, an `Unresolved` (other than by truncation) or `Ambiguous` call, a failed tool-choice check (even beside calls that would run, including a strict forced choice's cardinality, content and reasoning conditions), or calls of which none may run (each a guess on a mutating tool). | `"length"` under a length stop; otherwise `"tool_calls"` when the emission still holds a call (a rejected or unresolved attempt beside calls that run), `"stop"` otherwise |
 
 `Calls` and `TruncatedWithCalls` imply the verdict `run`. The
 `finish_reason` (`tool_call::openai_finish_reason`, the one mapping) is

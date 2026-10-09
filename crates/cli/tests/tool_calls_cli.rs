@@ -1182,3 +1182,106 @@ fn help_lists_every_built_in_dialect() {
         );
     }
 }
+
+/// `--tool-choice NAME` with the `--tool-choice-*` flags is the strict
+/// forced choice: the constraint lists the active options, the exit code is
+/// 0 when the check passes and 4 when it fails.
+#[test]
+fn strict_forced_tool_choice_flags() {
+    let call = r#"<tool_call>{"name": "list_dir", "arguments": {"path": "src"}}</tool_call>"#;
+    let strict = |arguments: &[&str], turn: &str| {
+        let (output, tools) = run(arguments, turn.as_bytes());
+        fs::remove_file(tools).unwrap();
+        let node = result(&output);
+        let constraint = node
+            .pointer("/value/tool_choice/constraint")
+            .and_then(Node::as_str)
+            .map(str::to_owned);
+        (output.status.code().expect("an exit code"), constraint)
+    };
+    let all = [
+        "--tool-choice",
+        "list_dir",
+        "--tool-choice-exactly-one",
+        "--tool-choice-no-content",
+        "--tool-choice-no-reasoning",
+    ];
+    assert_eq!(
+        strict(&all, call),
+        (
+            0,
+            Some("tool_choice=forced[exactly-one,no-content,no-reasoning]:list_dir".into())
+        )
+    );
+    // Two calls fail exactly-one.
+    let two = format!("{call}\n{call}");
+    assert_eq!(
+        strict(
+            &["--tool-choice", "list_dir", "--tool-choice-exactly-one"],
+            &two
+        ),
+        (4, Some("tool_choice=forced[exactly-one]:list_dir".into()))
+    );
+    // Prose fails no-content; framing whitespace does not.
+    assert_eq!(
+        strict(
+            &["--tool-choice", "list_dir", "--tool-choice-no-content"],
+            &format!("Sure.\n{call}")
+        ),
+        (4, Some("tool_choice=forced[no-content]:list_dir".into()))
+    );
+    assert_eq!(
+        strict(
+            &["--tool-choice", "list_dir", "--tool-choice-no-content"],
+            &format!("\n{call}\n")
+        ),
+        (0, Some("tool_choice=forced[no-content]:list_dir".into()))
+    );
+    // A reasoning block fails no-reasoning.
+    assert_eq!(
+        strict(
+            &["--tool-choice", "list_dir", "--tool-choice-no-reasoning"],
+            &format!("<think>plan</think>{call}")
+        ),
+        (4, Some("tool_choice=forced[no-reasoning]:list_dir".into()))
+    );
+    // Without the flags the choice is the plain forced one.
+    assert_eq!(
+        strict(&["--tool-choice", "list_dir"], &two),
+        (0, Some("tool_choice=forced:list_dir".into()))
+    );
+}
+
+/// The `--tool-choice-*` flags are a usage error without a tool name, and
+/// each may be given once.
+#[test]
+fn strict_forced_flags_need_a_tool_name() {
+    for arguments in [
+        &["--tool-choice-exactly-one"][..],
+        &["--tool-choice", "auto", "--tool-choice-no-content"][..],
+        &["--tool-choice", "none", "--tool-choice-no-reasoning"][..],
+        &["--tool-choice", "required", "--tool-choice-exactly-one"][..],
+    ] {
+        let (output, tools) = run(arguments, b"No call needed.");
+        fs::remove_file(tools).unwrap();
+        assert_eq!(output.status.code(), Some(1), "{arguments:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("--tool-choice NAME"),
+            "{arguments:?}: {stderr}"
+        );
+        assert!(output.stdout.is_empty(), "{arguments:?}");
+    }
+    let (output, tools) = run(
+        &[
+            "--tool-choice",
+            "list_dir",
+            "--tool-choice-no-content",
+            "--tool-choice-no-content",
+        ],
+        b"x",
+    );
+    fs::remove_file(tools).unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("repeated"));
+}

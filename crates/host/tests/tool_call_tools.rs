@@ -265,6 +265,134 @@ fn tool_choice_json_forms() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn tool_choice_strict_member() {
+    let (tools, root) = tools("strict");
+    let call = r#"<tool_call>{"name": "list_dir", "arguments": {"path": "src"}}</tool_call>"#;
+    let forced = r#"{"type":"function","function":{"name":"list_dir"}}"#;
+    let anthropic = r#"{"type":"tool","name":"list_dir","disable_parallel_tool_use":true}"#;
+    let run = |output: &str, choice: &str, strict: &str| {
+        let args = arguments(
+            output,
+            &format!(r#","tool_choice":{choice},"tool_choice_strict":{strict}"#),
+        );
+        tools.call("recover_tool_calls", &args)
+    };
+    let constraint = |result: &Node| {
+        result
+            .pointer("/value/tool_choice/constraint")
+            .and_then(Node::as_str)
+            .map(str::to_owned)
+    };
+    let passed = |result: &Node| {
+        matches!(
+            result
+                .pointer("/value/tool_choice/passed")
+                .map(|node| &node.value),
+            Some(json::Value::Bool(true))
+        )
+    };
+    let all = r#"{"exactly_one":true,"allow_content":false,"allow_reasoning":false}"#;
+    let result = run(call, forced, all).unwrap();
+    assert_eq!(
+        constraint(&result).as_deref(),
+        Some("tool_choice=forced[exactly-one,no-content,no-reasoning]:list_dir")
+    );
+    assert!(passed(&result));
+    // The same options as core, over the wire: prose fails no-content.
+    let prose = format!("Sure.\n{call}");
+    let result = run(&prose, forced, all).unwrap();
+    assert!(!passed(&result));
+    assert_eq!(
+        result.pointer("/value/verdict").and_then(Node::as_str),
+        Some("nothing_usable")
+    );
+    // Lenient options render the plain forced constraint.
+    let lenient = r#"{"exactly_one":false,"allow_content":true,"allow_reasoning":true}"#;
+    let result = run(&prose, forced, lenient).unwrap();
+    assert_eq!(
+        constraint(&result).as_deref(),
+        Some("tool_choice=forced:list_dir")
+    );
+    assert!(passed(&result));
+    // Beside the Anthropic exactly-one flag.
+    let result = run(
+        &prose,
+        anthropic,
+        r#"{"exactly_one":true,"allow_content":false,"allow_reasoning":true}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        constraint(&result).as_deref(),
+        Some("tool_choice=forced[exactly-one,no-content]:list_dir")
+    );
+    assert!(!passed(&result));
+    // The Anthropic flag alone is strict exactly-one with content allowed.
+    let result = tools
+        .call(
+            "recover_tool_calls",
+            &arguments(&prose, &format!(r#","tool_choice":{anthropic}"#)),
+        )
+        .unwrap();
+    assert_eq!(
+        constraint(&result).as_deref(),
+        Some("tool_choice=forced[exactly-one]:list_dir")
+    );
+    assert!(passed(&result));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn tool_choice_strict_member_errors() {
+    let (tools, root) = tools("strict-errors");
+    let call = r#"<tool_call>{"name": "list_dir", "arguments": {"path": "src"}}</tool_call>"#;
+    let forced = r#"{"type":"function","function":{"name":"list_dir"}}"#;
+    let anthropic = r#"{"type":"tool","name":"list_dir","disable_parallel_tool_use":true}"#;
+    let all = r#"{"exactly_one":true,"allow_content":false,"allow_reasoning":false}"#;
+    let run = |choice: &str, strict: &str| {
+        let args = arguments(
+            call,
+            &format!(r#","tool_choice":{choice},"tool_choice_strict":{strict}"#),
+        );
+        tools.call("recover_tool_calls", &args)
+    };
+    // Errors: not forced, contradicting the flag, or malformed.
+    for (choice, strict, message) in [
+        (r#""auto""#, all, "requires a forced tool_choice"),
+        (r#""required""#, all, "requires a forced tool_choice"),
+        (r#"{"type":"any"}"#, all, "requires a forced tool_choice"),
+        (
+            anthropic,
+            r#"{"exactly_one":false,"allow_content":true,"allow_reasoning":true}"#,
+            "disable_parallel_tool_use",
+        ),
+        (forced, "true", "/tool_choice_strict"),
+        (
+            forced,
+            r#"{"exactly_one":true,"allow_content":false}"#,
+            "allow_reasoning",
+        ),
+        (
+            forced,
+            r#"{"exactly_one":1,"allow_content":false,"allow_reasoning":true}"#,
+            "/tool_choice_strict/exactly_one",
+        ),
+        (
+            forced,
+            r#"{"exactly_one":true,"allow_content":false,"allow_reasoning":true,"x":true}"#,
+            "tool_choice_strict",
+        ),
+    ] {
+        let error = run(choice, strict).unwrap_err();
+        assert!(error.contains(message), "{choice} {strict}: {error}");
+    }
+    // Without a tool_choice at all it is not forced either.
+    let args = arguments(call, &format!(r#","tool_choice_strict":{all}"#));
+    let error = tools.call("recover_tool_calls", &args).unwrap_err();
+    assert!(error.contains("requires a forced tool_choice"), "{error}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// A complete call followed by a dangling `<tool_call>` under the default
 /// allow-list (every built-in dialect): the call stays usable, the dangling
 /// attempt names both dialects that share the opener, and the result

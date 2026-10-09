@@ -183,7 +183,9 @@ PATCH_TOKENS = [
 # `tool-call` input is raw bytes: byte 0 selects the request knobs (repair
 # policy, generation stop, reasoning policy, tool choice), byte 1 the effort,
 # the ambiguity policy, and the chunking split seed; the rest is one model
-# turn (see `crates/core/examples/fuzz_tool_call.rs`). Seeds pair each turn
+# turn; under the forced choice a trailing byte in 0xF8..=0xFF instead draws
+# the strict-forced options (see `crates/core/examples/fuzz_tool_call.rs`).
+# Seeds pair each turn
 # with a header so the fixed seeds already span the request space.
 TOOL_CALL_HEADERS = [
     b'\x00\x52',  # per tool, stop, separate reasoning, auto; standard effort
@@ -866,11 +868,25 @@ TOOL_CALL_REGRESSIONS = [
     b'[\xe6#Let me check both.\n{"name": "get_weather", "parameters": {"city": "Oslo"}}; {"name": "read_file", "parameters": {"path": "notes.txt", "limit": 10}}\n{"parameters": {"city": "Bergen", "unit": "celsius"}, "name": rgen", "unit": "celsius"}, "name": "get_weather"}ius"}, "name": "get_weather"}]',
 ]
 
+# Strict forced tool choice: header `\xe6\x23` (forced `read_file`) plus a
+# trailer byte in 0xF8..=0xFF, a seed byte after the turn that the probe
+# consumes instead of reading it as part of the turn (bit 0 exactly one,
+# bit 1 no content, bit 2 no reasoning; see `fuzz_tool_call.rs`). Earlier
+# seeds end in other bytes, so they keep their meaning.
+_STRICT_CALL = b'<tool_call>\n{"name": "read_file", "arguments": {"path": "a"}}\n</tool_call>'
+TOOL_CALL_STRICT = [
+    b'\xe6\x23' + _STRICT_CALL + b'\n' + _STRICT_CALL + b'\xf9',  # two calls, exactly one
+    b'\xe6\x23Sure.\n' + _STRICT_CALL + b'\xfa',  # prose, no content
+    b'\xe6\x23' + _STRICT_CALL + b'\n' + b'\xf8',  # lenient degenerate form
+    b'\xe6\x23<think>plan</think>\n' + _STRICT_CALL + b'\xfc',  # reasoning, no reasoning
+    b'\xe6\x23\n' + _STRICT_CALL + b'\n\xc2\xa0' + b'\xff',  # U+00A0 is content, all options
+]
+
 TOOL_CALL_SEEDS = [
     _tool_call_seed(index, turn)
     for index, turn in enumerate(
         _tool_call_conformance_markup() + TOOL_CALL_WITNESSES + TOOL_CALL_REPAIRS + TOOL_CALL_NEGATIVES)
-] + TOOL_CALL_REGRESSIONS
+] + TOOL_CALL_REGRESSIONS + TOOL_CALL_STRICT
 TOOL_CALL_TOKENS = [
     b'<tool_call>', b'</tool_call>', b'<function=', b'</function>', b'<parameter=',
     b'</parameter>', b'</parameters>', b'<think>', b'</think>', b'{"name":',

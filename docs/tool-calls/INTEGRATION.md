@@ -1027,7 +1027,11 @@ the raw declaration JSON, which the adapters read byte for byte; see
 default, `mcp`, or `anthropic`), `dialects` (built-in dialect ids; default
 all of them), `stop` (`stop`, `length`, `tool_calls`, `content_filter`,
 `unknown`, or `{"stop_sequence": STRING}`), `tool_choice` (an `OpenAI` or
-Anthropic form), `policy` (`per-tool`, `structural`, `tolerant`), `effects`,
+Anthropic form; the Anthropic `{"type":"tool","name":N,"disable_parallel_tool_use":true}`
+is the strict form with exactly one call), `tool_choice_strict`
+(`{"exactly_one", "allow_content", "allow_reasoning"}`, all three booleans
+and all required: the options of a [strict forced choice](#strict-forced-tool-choice),
+valid only beside a forced `tool_choice`), `policy` (`per-tool`, `structural`, `tolerant`), `effects`,
 `reasoning` (`separate`, `separate-open`, `content`), `ambiguity` (`report`,
 `reject`), `ids` (omitted for the default turn-scoped ids, `"source"`, or
 `{"prefix", "start"}`; see [Ids across rounds](#ids-across-rounds)), `emit` (`none`,
@@ -1055,6 +1059,12 @@ result:
 ```sh
 purrassist recover-tool-calls --tools tools.json --emit openai turn.txt
 ```
+
+`--tool-choice NAME` forces the tool `NAME`; the flags
+`--tool-choice-exactly-one`, `--tool-choice-no-content` and
+`--tool-choice-no-reasoning` (each at most once, and a usage error, exit 1,
+without `--tool-choice NAME`, a tool name rather than `auto`, `none` or
+`required`) make it a [strict forced choice](#strict-forced-tool-choice).
 
 With `tools.json` holding the `tools` array above and `turn.txt` holding the
 `output` above (a missing `</parameter>` before `<parameter=content>`), the
@@ -1104,6 +1114,76 @@ false) whatever it recovered, and `isError` is true only when the request
 itself is invalid. Its `value.verdict` is the field the CLI's exit code
 summarizes; `status` is not (see below).
 
+### Strict forced tool choice
+
+`ToolChoice::Forced(name)` stays what it was: at least one call, and every
+call to `name` (its canonical name or an alias). It accepts two calls to
+`name`, and prose around the call. `ToolChoice::ForcedStrict(StrictForced)`
+adds three options on top of exactly those checks:
+
+| Option | Field | Constraint text | Violation |
+| --- | --- | --- | --- |
+| exactly one call | `exactly_one` | `exactly-one` | Each call after the first, in `calls`, is `Unresolved` with `tool_choice_cardinality` (unless it already was unresolved), and the choice records a diagnostic. |
+| no content | `allow_content: false` | `no-content` | Any `content` range holding a byte that is not ASCII whitespace (`u8::is_ascii_whitespace`: space, tab, line feed, carriage return, form feed) is a diagnostic. |
+| no reasoning | `allow_reasoning: false` | `no-reasoning` | Any reasoning block is a diagnostic. |
+
+`StrictForced::exactly_one(name)` is the usual form (exactly one call, no
+content, reasoning allowed). The constraint recorded in the receipt's
+`tool_call.recover.v1` validation and in `value.tool_choice.constraint` lists
+the active options in brackets with the name last, so a name holding `:`, `;`
+or `,` stays unambiguous: `tool_choice=forced[exactly-one,no-content,no-reasoning]:read`.
+A `ForcedStrict` with all three options lenient (`exactly_one` false,
+content and reasoning allowed) checks exactly what `Forced` checks and
+renders exactly `tool_choice=forced:NAME`.
+
+What counts:
+
+- **One call** counts the entries of `calls`, recognized calls of any
+  outcome, as `required` does. A rejected attempt already fails the turn's
+  finish. Calls embedded in reasoning are never counted (they are never
+  tool-choice-checked); `allow_reasoning` governs the block that holds them.
+- **Content** is whitespace-insensitive only for ASCII whitespace, so the
+  newlines a model writes between or around calls pass. Non-ASCII
+  whitespace such as U+00A0 or U+2003 is content, and so are tool results
+  the model wrote.
+- An undeclared `name` is an `invalid_input` request error, as for `Forced`.
+
+A failed strict check is the same whole-turn contract failure as any failed
+tool choice: `finish` `unresolved`, `verdict` `nothing_usable`, the emission
+empty, exit 4, even when the single call would run on its own.
+
+Requesting it:
+
+- Rust: `ToolChoice::ForcedStrict(StrictForced::exactly_one("read"))`, with
+  `allow_content(true)`, `allow_reasoning(false)` and `with_exactly_one(false)`
+  to change an option.
+- Anthropic wire form: `{"type":"tool","name":N,"disable_parallel_tool_use":true}`
+  (`ToolChoice::from_anthropic`) is `ForcedStrict` with exactly one call and
+  content and reasoning allowed; `disable_parallel_tool_use: false` is
+  `Forced`. `disable_parallel_tool_use` on `auto`, `any` or `none` stays an
+  error: at-most-one for a free choice is not offered.
+- MCP: `tool_choice_strict` beside a forced `tool_choice`. It is a tool
+  error beside a choice that is not forced, and when `exactly_one` is false
+  beside an Anthropic `disable_parallel_tool_use: true`.
+- CLI: `--tool-choice NAME` with `--tool-choice-exactly-one`,
+  `--tool-choice-no-content`, `--tool-choice-no-reasoning`.
+
+*Proved by* the goldens `forced_strict_two_calls`,
+`forced_strict_call_plus_prose`, `forced_strict_single_call_passes`,
+`forced_strict_reasoning_rejected`,
+`forced_strict_anthropic_disable_parallel` and
+`forced_strict_anthropic_one_call_with_prose_passes` and their named
+assertions in `tool_call_goldens` (including
+`forced_strict_non_ascii_whitespace_is_content`),
+`tool_call_recover::strict_forced_constraint_strings`,
+`tool_call_recover::strict_forced_cardinality_content_and_reasoning`,
+`tool_call_recover::tool_choice_from_openai_and_anthropic_json`,
+`tool_call_tools::tool_choice_strict_member`,
+`tool_call_tools::tool_choice_strict_member_errors`,
+`tool_calls_cli::strict_forced_tool_choice_flags` and
+`tool_calls_cli::strict_forced_flags_need_a_tool_name`, and the fuzz
+invariants of `docs/FUZZING.md`.
+
 ### Reading a result: status, finish and verdict
 
 `status` and the usability of the calls are different questions, answered
@@ -1147,7 +1227,8 @@ beside a call that would run on its own (the forced tool called, plus an
 extra call), the verdict is `nothing_usable`, the finish `unresolved`, the
 emission empty (the call skipped as `tool_choice_failed`), and
 `finish_reason` `"stop"` (`"length"` under a length stop). `usable_calls` still counts each call's own
-usability.
+usability. A strict forced choice fails the same way when its extra
+conditions fail (see [Strict forced tool choice](#strict-forced-tool-choice)).
 
 | `status` | `value.verdict` | `value.finish` | `openai_finish_reason` | Exit | What the caller should do |
 | --- | --- | --- | --- | --- | --- |

@@ -82,9 +82,9 @@ pub use ir::{
 pub use recognizer::{GenerationStop, ReasoningPolicy, RecognizedTurn, Recognizer};
 pub use recover::{
     AmbiguityPolicy, DEFAULT_ID_PREFIX, Finish, IdGenerator, IdPolicy, KeywordUse,
-    RECOVER_OPERATION, RejectedCall, TOOL_CALL_VALIDATOR, TURN_TAG_DIGITS, ToolCall, ToolCalls,
-    ToolChoice, ToolChoiceCheck, ToolChoiceError, ToolRecoveryRequest, Verdict, exit_code,
-    openai_finish_reason, turn_id_prefix,
+    RECOVER_OPERATION, RejectedCall, StrictForced, TOOL_CALL_VALIDATOR, TURN_TAG_DIGITS, ToolCall,
+    ToolCalls, ToolChoice, ToolChoiceCheck, ToolChoiceError, ToolRecoveryRequest, Verdict,
+    exit_code, openai_finish_reason, turn_id_prefix,
 };
 pub use resolve::{
     CallFacts, CallLedger, CallLoss, CallOutcome, CallReading, Policies, PolicySelection,

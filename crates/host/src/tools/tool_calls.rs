@@ -9,18 +9,20 @@ use purrassist::{
     tool_call::{
         AmbiguityPolicy, DEFAULT_ID_PREFIX, DialectId, DialectSet, DialectSetError, Effects,
         EmitTarget, GenerationStop, IdPolicy, PolicySelection, RECOVER_OPERATION, ReasoningPolicy,
-        RepairPolicy, ToolCalls, ToolChoice, ToolRecoveryRequest, ToolSet, ToolSetError,
+        RepairPolicy, StrictForced, ToolCalls, ToolChoice, ToolRecoveryRequest, ToolSet,
+        ToolSetError,
     },
 };
 
 /// Every member a `recover_tool_calls` argument object may carry.
-const MEMBERS: [&str; 13] = [
+const MEMBERS: [&str; 14] = [
     "output",
     "tools",
     "tools_format",
     "dialects",
     "stop",
     "tool_choice",
+    "tool_choice_strict",
     "policy",
     "effects",
     "reasoning",
@@ -75,7 +77,10 @@ pub(super) fn recover(
             openers,
         ))
         .stop(stop(options.get("stop"))?)
-        .tool_choice(tool_choice(options.get("tool_choice"))?)
+        .tool_choice(tool_choice(
+            options.get("tool_choice"),
+            options.get("tool_choice_strict"),
+        )?)
         .policy(policy(options.get("policy"))?)
         .reasoning(reasoning(options.get("reasoning"))?)
         .ambiguity(ambiguity(options.get("ambiguity"))?)
@@ -170,9 +175,65 @@ fn stop(node: Option<&Node>) -> Result<GenerationStop, String> {
     }
 }
 
+/// The tool choice, with the strict options applied to a forced choice.
+///
+/// `strict` is `{exactly_one, allow_content, allow_reasoning}` (all
+/// booleans, all required). It is an error beside a choice that is not
+/// forced, and `exactly_one: false` is an error beside an Anthropic
+/// `disable_parallel_tool_use: true`, which it contradicts.
+fn tool_choice(node: Option<&Node>, strict: Option<&Node>) -> Result<ToolChoice, String> {
+    let choice = base_choice(node)?;
+    let Some(strict) = strict else {
+        return Ok(choice);
+    };
+    let Value::Object(members) = &strict.value else {
+        return Err("tool_choice_strict must be an object".into());
+    };
+    if let Some(member) = members.iter().find(|member| {
+        !["exactly_one", "allow_content", "allow_reasoning"].contains(&member.key.as_str())
+    }) {
+        return Err(format!(
+            "tool_choice_strict has an unknown member {:?}",
+            member.key
+        ));
+    }
+    let flag = |key: &str| -> Result<bool, String> {
+        match strict.get(key).map(|node| &node.value) {
+            Some(Value::Bool(flag)) => Ok(*flag),
+            Some(_) => Err(format!("tool_choice_strict.{key} must be a boolean")),
+            None => Err(format!("tool_choice_strict.{key} is required")),
+        }
+    };
+    let (exactly_one, allow_content, allow_reasoning) = (
+        flag("exactly_one")?,
+        flag("allow_content")?,
+        flag("allow_reasoning")?,
+    );
+    let name = match choice {
+        ToolChoice::Forced(name) => name,
+        ToolChoice::ForcedStrict(existing) => {
+            if existing.exactly_one && !exactly_one {
+                return Err(
+                    "tool_choice_strict.exactly_one is false, but the Anthropic tool_choice \
+                     sets disable_parallel_tool_use: true, which means exactly one call"
+                        .into(),
+                );
+            }
+            existing.name
+        }
+        _ => return Err("tool_choice_strict requires a forced tool_choice".into()),
+    };
+    Ok(ToolChoice::ForcedStrict(StrictForced {
+        name,
+        exactly_one,
+        allow_content,
+        allow_reasoning,
+    }))
+}
+
 /// An `OpenAI` choice (any string, or an object whose `type` is
 /// `"function"`), otherwise an Anthropic choice.
-fn tool_choice(node: Option<&Node>) -> Result<ToolChoice, String> {
+fn base_choice(node: Option<&Node>) -> Result<ToolChoice, String> {
     let Some(node) = node else {
         return Ok(ToolChoice::Auto);
     };

@@ -138,7 +138,17 @@ targets' mutation tokens so mutation can create or move field boundaries).
   reasoning policy (separate, starting open, as content), and the tool
   choice (`auto`, `none`, `required`, forced `read_file`); byte 1 selects
   the effort (`Exact`, `Quick`, `Standard`, `Deep`), the ambiguity policy,
-  and a split seed; the rest is the turn. Invariants:
+  and a split seed; the rest is the turn. The control bits are full, so the
+  options of a strict forced choice (`ToolChoice::ForcedStrict`) come from a
+  separate later seed byte: under the forced choice, a last byte in
+  `0xF8..=0xFF` (never valid UTF-8, and the last byte of no earlier seed) is
+  consumed as a trailer instead of being read as part of the turn (bit 0
+  exactly one call, bit 1 no content, bit 2 no reasoning; `0xF8` is the
+  all-lenient form), so every earlier seed keeps its meaning. A passed strict
+  check implies exactly one call when `exactly_one` is drawn, no content byte
+  other than ASCII whitespace when content is not allowed, and no reasoning
+  range when reasoning is not allowed; a second call under `exactly_one`
+  fails the check. Invariants:
   recovery never panics, names the output's digest, and stays within its
   budget; a value outcome completed and `Unresolved` did not; an
   `Ambiguous` outcome's readings match the receipt's alternative ledger;

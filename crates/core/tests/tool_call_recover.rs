@@ -13,8 +13,8 @@ use purrassist_core::tool_call::emit;
 use purrassist_core::tool_call::{
     AmbiguityPolicy, CallOutcome, DialectId, DialectSet, Effects, Finish, FromNode, FromNodeError,
     GenerationStop, IdGenerator, IdPolicy, Param, PolicySelection, ReasoningPolicy, Rejection,
-    RepairPolicy, ToolCall, ToolCalls, ToolChoice, ToolDefinition, ToolRecoveryRequest, ToolSet,
-    UnresolvedReason, turn_id_prefix,
+    RepairPolicy, StrictForced, ToolCall, ToolCalls, ToolChoice, ToolDefinition,
+    ToolRecoveryRequest, ToolSet, UnresolvedReason, turn_id_prefix,
 };
 use purrassist_core::wire::WireValue;
 use purrassist_core::{
@@ -1292,7 +1292,25 @@ fn tool_choice_from_openai_and_anthropic_json() {
         anthropic(r#"{"type":"tool","name":"read"}"#),
         Ok(ToolChoice::Forced("read".into()))
     );
+    assert_eq!(
+        anthropic(r#"{"type":"tool","name":"read","disable_parallel_tool_use":true}"#),
+        Ok(ToolChoice::ForcedStrict(StrictForced {
+            name: "read".into(),
+            exactly_one: true,
+            allow_content: true,
+            allow_reasoning: true,
+        }))
+    );
+    assert_eq!(
+        anthropic(r#"{"type":"tool","name":"read","disable_parallel_tool_use":false}"#),
+        Ok(ToolChoice::Forced("read".into()))
+    );
     for malformed in [
+        r#"{"type":"tool","name":"read","disable_parallel_tool_use":"yes"}"#,
+        r#"{"type":"tool","name":"read","disable_parallel_tool_use":null}"#,
+        r#"{"type":"tool","name":"read","disable_parallel_tool_use":true,"disable_parallel_tool_use":true}"#,
+        r#"{"type":"auto","disable_parallel_tool_use":false}"#,
+        r#"{"type":"none","disable_parallel_tool_use":true}"#,
         r#""auto""#,
         r#"{"type":"tool"}"#,
         r#"{"type":"auto","name":"read"}"#,
@@ -1304,6 +1322,154 @@ fn tool_choice_from_openai_and_anthropic_json() {
         let error = anthropic(malformed).expect_err(malformed);
         assert_ne!(error.reason.len(), 0);
     }
+}
+
+#[test]
+fn strict_forced_constraint_strings() {
+    let constraint = |strict: StrictForced| ToolChoice::ForcedStrict(strict).constraint();
+    let base = StrictForced::exactly_one("read");
+    assert_eq!(
+        constraint(base.clone()),
+        "tool_choice=forced[exactly-one,no-content]:read"
+    );
+    assert_eq!(
+        constraint(base.clone().allow_reasoning(false)),
+        "tool_choice=forced[exactly-one,no-content,no-reasoning]:read"
+    );
+    assert_eq!(
+        constraint(base.clone().allow_content(true)),
+        "tool_choice=forced[exactly-one]:read"
+    );
+    assert_eq!(
+        constraint(base.clone().allow_content(true).allow_reasoning(false)),
+        "tool_choice=forced[exactly-one,no-reasoning]:read"
+    );
+    assert_eq!(
+        constraint(base.clone().with_exactly_one(false)),
+        "tool_choice=forced[no-content]:read"
+    );
+    assert_eq!(
+        constraint(base.clone().with_exactly_one(false).allow_reasoning(false)),
+        "tool_choice=forced[no-content,no-reasoning]:read"
+    );
+    // The degenerate form is the lenient one, exactly.
+    let lenient = base.with_exactly_one(false).allow_content(true);
+    assert_eq!(constraint(lenient), "tool_choice=forced:read");
+    assert_eq!(
+        ToolChoice::Forced("read".into()).constraint(),
+        "tool_choice=forced:read"
+    );
+    // The name comes last, so punctuation in it stays unambiguous.
+    assert_eq!(
+        constraint(StrictForced::exactly_one("a:b;c,d]")),
+        "tool_choice=forced[exactly-one,no-content]:a:b;c,d]"
+    );
+}
+
+#[test]
+fn strict_forced_cardinality_content_and_reasoning() {
+    let tools = compile([
+        ToolDefinition::new("read")
+            .effects(Effects::ReadOnly)
+            .alias("cat")
+            .param("path", Param::string()),
+        ToolDefinition::new("list").effects(Effects::ReadOnly),
+    ]);
+    let request = |strict: StrictForced| {
+        ToolRecoveryRequest::default().tool_choice(ToolChoice::ForcedStrict(strict))
+    };
+    let one = hermes("read", r#"{"path": "a"}"#);
+    let two = format!("{one}\n{}", hermes("cat", r#"{"path": "b"}"#));
+    // Exactly one: the second call (an alias of the forced tool) is the
+    // cardinality violation, the first stays Resolved.
+    let result = tools.recover(two.as_bytes(), &request(StrictForced::exactly_one("read")));
+    let calls = value(&result);
+    assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
+    assert_eq!(
+        calls.calls[1].outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::ToolChoiceCardinality
+        }
+    );
+    assert_eq!(
+        UnresolvedReason::ToolChoiceCardinality.code(),
+        "tool_choice_cardinality"
+    );
+    assert!(!calls.tool_choice.passed);
+    assert_eq!(calls.finish, Finish::Unresolved);
+    assert_eq!(calls.verdict().code(), "nothing_usable");
+    assert!(calls.emitted_calls().is_empty(), "{calls:#?}");
+    let wire = result.to_node();
+    assert_eq!(
+        wire.pointer("/value/calls/1/outcome/reason/code")
+            .and_then(Node::as_str),
+        Some("tool_choice_cardinality")
+    );
+    // Without exactly_one, two calls to the forced tool pass.
+    let lenient = StrictForced::exactly_one("read")
+        .with_exactly_one(false)
+        .allow_content(true);
+    let result = tools.recover(two.as_bytes(), &request(lenient));
+    assert!(value(&result).tool_choice.passed);
+    // A call to another tool is the Forced violation, not a cardinality one.
+    let mixed = format!("{one}\n{}", hermes("list", "{}"));
+    let result = tools.recover(
+        mixed.as_bytes(),
+        &request(StrictForced::exactly_one("read")),
+    );
+    assert_eq!(
+        value(&result).calls[1].outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::ToolChoiceForced {
+                expected: "read".into()
+            }
+        }
+    );
+    // No call at all fails, as under Forced.
+    let result = tools.recover(b"nothing", &request(StrictForced::exactly_one("read")));
+    assert!(!value(&result).tool_choice.passed);
+    // An undeclared name is a request error for the strict form too.
+    let result = tools.recover(one.as_bytes(), &request(StrictForced::exactly_one("write")));
+    assert!(
+        matches!(result.receipt.stopped, StopReason::InvalidInput(ref detail) if detail.contains("`write`"))
+    );
+    assert_eq!(result.outcome, Outcome::Unresolved);
+    // Content: ASCII whitespace frames, anything else (U+00A0 included) fails.
+    let framed = format!(" \t\r\n\x0c{one}\n");
+    let result = tools.recover(
+        framed.as_bytes(),
+        &request(StrictForced::exactly_one("read")),
+    );
+    assert!(value(&result).tool_choice.passed);
+    for prose in ["Sure.\n", "\u{a0}", "\u{2003}"] {
+        let output = format!("{prose}{one}");
+        let result = tools.recover(
+            output.as_bytes(),
+            &request(StrictForced::exactly_one("read")),
+        );
+        assert!(!value(&result).tool_choice.passed, "{prose:?}");
+        let allowed = StrictForced::exactly_one("read").allow_content(true);
+        let result = tools.recover(output.as_bytes(), &request(allowed));
+        assert!(value(&result).tool_choice.passed, "{prose:?}");
+    }
+    // Reasoning: an embedded call is not counted; the block is what fails.
+    let thought = format!("<think>maybe {}</think>\n{one}", hermes("read", "{}"));
+    let result = tools.recover(
+        thought.as_bytes(),
+        &request(StrictForced::exactly_one("read")),
+    );
+    assert!(value(&result).tool_choice.passed);
+    assert_eq!(value(&result).embedded.len(), 1);
+    let result = tools.recover(
+        thought.as_bytes(),
+        &request(StrictForced::exactly_one("read").allow_reasoning(false)),
+    );
+    assert!(!value(&result).tool_choice.passed);
+    assert!(
+        value(&result).tool_choice.diagnostics[0].contains("reasoning"),
+        "{:?}",
+        value(&result).tool_choice.diagnostics
+    );
 }
 
 /// Fuzz regression (`scripts/fuzz.py --target tool-call`): an attempt that
