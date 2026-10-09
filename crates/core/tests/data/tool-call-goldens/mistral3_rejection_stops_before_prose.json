@@ -59,6 +59,7 @@
     "content": [
       "oops. Sorry, I cannot call tools here. Options were {a, b}, final answer: 42."
     ],
+    "reasoning_text": [],
     "failed_validations": [],
     "ledger_rules": []
   },
@@ -90,6 +91,7 @@
   "content": [
     "oops. Sorry, I cannot call tools here. Options were {a, b}, final answer: 42."
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

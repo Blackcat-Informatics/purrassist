@@ -59,6 +59,7 @@
   "content": [
     "brave_search.call(query=\"weather in Paris\")"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

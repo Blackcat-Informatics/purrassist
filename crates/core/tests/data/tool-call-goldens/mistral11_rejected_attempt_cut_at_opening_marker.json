@@ -56,6 +56,9 @@
     "content": [
       "Answer."
     ],
+    "reasoning_text": [
+      "thinking"
+    ],
     "failed_validations": [],
     "ledger_rules": []
   },
@@ -86,6 +89,9 @@
   "embedded": [],
   "content": [
     "Answer."
+  ],
+  "reasoning_text": [
+    "thinking"
   ],
   "failed_validations": [],
   "ledger_rules": []

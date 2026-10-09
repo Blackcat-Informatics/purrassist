@@ -188,6 +188,9 @@ struct Think {
     cost: u64,
     hist: u32,
     start: usize,
+    /// Where the block's text begins: the end of its opening marker, or
+    /// `0` for a block the turn starts in (no opener).
+    text_start: usize,
     pair: Option<u32>,
     /// The opener start and promoted base, once the block was closed at its
     /// first opener.
@@ -472,6 +475,7 @@ impl Turn {
         let index = self.store(
             Segment::Reasoning(ReasoningSegment {
                 span: think.start..end,
+                text: think.text_start..marker.unwrap_or(end),
                 closure,
                 embedded,
                 edits,
@@ -810,6 +814,7 @@ impl<'s> Recognizer<'s> {
                 cost: 0,
                 hist: 0,
                 start: 0,
+                text_start: 0,
                 pair: None,
                 promoted: None,
                 embedded: Vec::new(),
@@ -1011,10 +1016,10 @@ impl<'s> Recognizer<'s> {
                 }
                 Pending::Marker {
                     start,
+                    end,
                     pair,
                     open: true,
-                    ..
-                } => self.think_opened(&mut frame, start, pair, governor)?,
+                } => self.think_opened(&mut frame, start, end, pair, governor)?,
                 Pending::Engine(Event::Completed {
                     table,
                     attempt,
@@ -1175,6 +1180,7 @@ impl<'s> Recognizer<'s> {
         &mut self,
         frame: &mut Frame,
         start: usize,
+        text_start: usize,
         pair: u32,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
@@ -1186,6 +1192,7 @@ impl<'s> Recognizer<'s> {
             cost: top.cost,
             hist: self.turn.close(top, start, governor)?,
             start,
+            text_start,
             pair: Some(pair),
             promoted: None,
             embedded: Vec::new(),
@@ -1263,6 +1270,7 @@ impl<'s> Recognizer<'s> {
                         cost: chain.cost,
                         hist: chain.hist,
                         start: marker,
+                        text_start: self.opener_end(marker, pair),
                         pair: Some(pair),
                         promoted: None,
                         embedded: Vec::new(),
@@ -1484,6 +1492,7 @@ impl<'s> Recognizer<'s> {
                     cost,
                     hist,
                     start: marker,
+                    text_start: self.opener_end(marker, pair),
                     pair: Some(pair),
                     promoted: None,
                     embedded: Vec::new(),
@@ -1513,6 +1522,16 @@ impl<'s> Recognizer<'s> {
             }
         }
         Ok(())
+    }
+
+    /// The end of the opening marker of `pair` found at `start`.
+    fn opener_end(&self, start: usize, pair: u32) -> usize {
+        start
+            + self
+                .set
+                .markers
+                .get(pair as usize)
+                .map_or(0, |(open, _)| open.len())
     }
 
     /// Drop the blocked reasoning markers no live attempt began before.

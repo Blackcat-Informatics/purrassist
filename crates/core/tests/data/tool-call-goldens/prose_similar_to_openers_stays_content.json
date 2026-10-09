@@ -38,6 +38,7 @@
   "content": [
     "The tool_call field, the TOOL_CALLS header and <tool_calling> docs say: call tools with care."
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

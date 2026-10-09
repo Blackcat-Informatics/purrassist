@@ -53,6 +53,9 @@
       "Sure. ",
       " Done."
     ],
+    "reasoning_text": [
+      "wait"
+    ],
     "failed_validations": [],
     "ledger_rules": []
   },
@@ -85,6 +88,7 @@
     "Sure. ",
     "<think>wait</think> Done."
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

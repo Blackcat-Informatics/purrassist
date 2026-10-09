@@ -1518,6 +1518,35 @@ impl ToolCall {
     }
 }
 
+/// One reasoning block of a turn: its source range with the markers, and
+/// its text without them.
+///
+/// `text` begins where the opening marker ends (at `0` under
+/// [`ReasoningPolicy::Separate`] with `starts_open`, where the turn begins
+/// inside a block and no opener is stripped) and ends where the closing
+/// marker begins; a block closed at a call opener ends at the opener, and an
+/// unterminated block at the end of output. It is a range of the output's
+/// bytes, verbatim and never unescaped: the text of an Anthropic `thinking`
+/// block stays JSON-escaped.
+///
+/// ```
+/// use purrassist_core::tool_call::{Effects, ToolDefinition, ToolRecoveryRequest, ToolSet};
+/// use purrassist_core::{Budget, Outcome};
+/// let tools = ToolSet::compile([ToolDefinition::new("ls").effects(Effects::ReadOnly)], Budget::default()).unwrap();
+/// let result = tools.recover(b"<think>abc</think>Done.", &ToolRecoveryRequest::default());
+/// let Outcome::Resolved(calls) = result.outcome else { unreachable!() };
+/// let block = &calls.reasoning_blocks[0];
+/// assert_eq!(block.span, 0..18);
+/// assert_eq!(block.text, 7..10);
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReasoningBlock {
+    /// The block's range, markers included.
+    pub span: Range<usize>,
+    /// The block's text range, markers excluded; inside [`Self::span`].
+    pub text: Range<usize>,
+}
+
 /// Every call of one turn, with what surrounds them.
 ///
 /// Whether anything can run is [`Self::verdict`] (wire `verdict`, with the
@@ -1562,8 +1591,32 @@ pub struct ToolCalls {
     /// The content ranges (tool results the model wrote count as content),
     /// adjacent ranges merged.
     pub content: Vec<Range<usize>>,
-    /// The reasoning block ranges, markers included.
+    /// The reasoning ranges, markers included, adjacent ranges merged:
+    /// `<think>a</think><think>b</think>` is one range, `0..32`. See
+    /// [`Self::reasoning_blocks`] for the blocks one by one, and for their
+    /// marker-free text.
     pub reasoning: Vec<Range<usize>>,
+    /// The reasoning blocks, one entry per block in source order and never
+    /// merged, each with its marker-free text range
+    /// ([`ReasoningBlock::text`]). Every block's `span` lies inside one
+    /// [`Self::reasoning`] range, and the spans together cover exactly the
+    /// bytes those ranges cover.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::{Effects, ToolDefinition, ToolRecoveryRequest, ToolSet};
+    /// use purrassist_core::{Budget, Outcome};
+    /// let tools = ToolSet::compile([ToolDefinition::new("ls").effects(Effects::ReadOnly)], Budget::default()).unwrap();
+    /// let output = b"<think>a</think><think>b</think>";
+    /// let result = tools.recover(output, &ToolRecoveryRequest::default());
+    /// let Outcome::Resolved(calls) = result.outcome else { unreachable!() };
+    /// // One merged outer range, two blocks whose text excludes the markers.
+    /// assert_eq!(calls.reasoning, vec![0..32]);
+    /// assert_eq!(calls.reasoning_blocks[0].span, 0..16);
+    /// assert_eq!(calls.reasoning_blocks[0].text, 7..8);
+    /// assert_eq!(calls.reasoning_blocks[1].text, 23..24);
+    /// assert_eq!(&output[calls.reasoning_blocks[1].text.clone()], b"b");
+    /// ```
+    pub reasoning_blocks: Vec<ReasoningBlock>,
     /// How the turn finished.
     pub finish: Finish,
     /// The tool choice check.
@@ -2741,7 +2794,8 @@ impl WireValue for ToolCalls {
     /// dialect parses), candidate_dialects, reason: {code, at, and for
     /// unsupported_dialect also family, built_in, detail}, raw: {text |
     /// bytes_hex}, repairs}], embedded, content: [{start, end}], reasoning:
-    /// [{start, end}], finish, openai_finish_reason, tool_choice: {constraint,
+    /// [{start, end}], reasoning_blocks: [{span: {start, end}, text: {start,
+    /// end}}] (one per block, never merged), finish, openai_finish_reason, tool_choice: {constraint,
     /// passed, diagnostics}, next_id_start, verdict, usable_calls,
     /// usable_calls_accepting_guesses}` (the [`Verdict`] code and the
     /// counts of [`ToolCalls::usable`] and
@@ -2787,6 +2841,15 @@ impl WireValue for ToolCalls {
             ),
             ("content", ranges(&self.content)),
             ("reasoning", ranges(&self.reasoning)),
+            (
+                "reasoning_blocks",
+                array(self.reasoning_blocks.iter().map(|block| {
+                    object([
+                        ("span", byte_range(&block.span)),
+                        ("text", byte_range(&block.text)),
+                    ])
+                })),
+            ),
             ("finish", string(self.finish.code())),
             ("openai_finish_reason", string(self.openai_finish_reason())),
             (
@@ -3494,6 +3557,7 @@ impl Recovery<'_> {
                 embedded: Vec::new(),
                 content: Vec::new(),
                 reasoning: Vec::new(),
+                reasoning_blocks: Vec::new(),
                 finish: Finish::ContentOnly,
                 tool_choice: ToolChoiceCheck {
                     choice: self.request.tool_choice.clone(),
@@ -3715,6 +3779,10 @@ impl Recovery<'_> {
                 embedded,
             } => {
                 push_range(&mut reading.value.reasoning, &reasoning.span);
+                reading.value.reasoning_blocks.push(ReasoningBlock {
+                    span: reasoning.span.clone(),
+                    text: reasoning.text.clone(),
+                });
                 for call in embedded {
                     let index = reading.value.embedded.len();
                     let (built, _) = tool_call(call, index, governor)?;
@@ -4866,7 +4934,9 @@ fn union_call_dialects(
 
 /// The digest of everything a reading recovers: its calls (each with its
 /// outcome, repairs, and alternatives, whichever dialect read it), the calls embedded in
-/// reasoning, the reasoning ranges, and every message-level ledger other
+/// reasoning, the reasoning blocks (each block's span and marker-free text,
+/// so readings that divide the same bytes into different blocks stay
+/// distinct), and every message-level ledger other
 /// than a rejected attempt's. Content ranges and rejected attempts, the
 /// bytes outside every call, are not part of it.
 fn calls_key(reading: &Reading, governor: &mut Governor) -> Result<Digest, StopReason> {
@@ -4874,7 +4944,15 @@ fn calls_key(reading: &Reading, governor: &mut Governor) -> Result<Digest, StopR
     let json = object([
         ("calls", array(value.calls.iter().map(call_identity))),
         ("embedded", array(value.embedded.iter().map(call_identity))),
-        ("reasoning", array(value.reasoning.iter().map(byte_range))),
+        (
+            "reasoning",
+            array(value.reasoning_blocks.iter().map(|block| {
+                object([
+                    ("span", byte_range(&block.span)),
+                    ("text", byte_range(&block.text)),
+                ])
+            })),
+        ),
         (
             "messages",
             array(reading.parts.iter().filter_map(|part| match part {

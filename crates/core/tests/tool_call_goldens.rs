@@ -8,8 +8,8 @@
 //! optional custom `grammar`, and the request (`dialects`, `policy`,
 //! `effects`, `stop`, `tool_choice`, `effort`, `reasoning`, `ids`,
 //! `ambiguity`). The outcome, finish, usability verdict and usable-call
-//! counts, calls, rejected attempts, the content (each range as text), calls
-//! embedded in reasoning, failed validations and the recorded rule ids are
+//! counts, calls, rejected attempts, the content and the marker-free
+//! reasoning text (each range as text), calls embedded in reasoning, failed validations and the recorded rule ids are
 //! captured from an actual run rather than
 //! hand-transcribed.
 //!
@@ -68,6 +68,7 @@ const CAPTURED: &[&str] = &[
     "rejected",
     "embedded",
     "content",
+    "reasoning_text",
     "readings",
     "failed_validations",
     "ledger_rules",
@@ -618,6 +619,25 @@ fn reading_fields(output: &[u8], calls: &ToolCalls) -> Vec<Member> {
                     .iter()
                     .map(|range| {
                         let bytes = &output[range.clone()];
+                        string(
+                            std::str::from_utf8(bytes)
+                                .map_or_else(|_| format!("{bytes:?}"), str::to_owned),
+                        )
+                    })
+                    .collect(),
+            )),
+        ),
+        // The marker-free text of each reasoning block, one entry per block
+        // (`ToolCalls::reasoning_blocks`, never merged), as text (bytes when
+        // not UTF-8). Not the `reasoning` fixture input, the policy.
+        member(
+            "reasoning_text",
+            Node::new(Value::Array(
+                calls
+                    .reasoning_blocks
+                    .iter()
+                    .map(|block| {
+                        let bytes = &output[block.text.clone()];
                         string(
                             std::str::from_utf8(bytes)
                                 .map_or_else(|_| format!("{bytes:?}"), str::to_owned),

@@ -38,6 +38,9 @@
   "content": [
     "</tool_call> done"
   ],
+  "reasoning_text": [
+    "talking about </tool_call> tags"
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

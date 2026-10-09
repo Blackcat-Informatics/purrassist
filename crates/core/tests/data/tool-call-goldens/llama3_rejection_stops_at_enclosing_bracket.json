@@ -52,6 +52,7 @@
     "Example: {\"text\": \"",
     "\\\"name\\\": \\\"read_file\\\", \\\"note\\\": {\\\"a\\\": 2}\"} done."
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

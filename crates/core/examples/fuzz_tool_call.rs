@@ -89,6 +89,12 @@
 //! - (F5) every embedded call is offered once, in span order;
 //! - (T2) no call, embedded call or rejected attempt holds bytes of a
 //!   reasoning range's opener or closer marker in the same reading;
+//! - the reasoning blocks (`reasoning_blocks`, unmerged) are ordered and
+//!   disjoint, each text lies inside its block, each block inside one
+//!   `reasoning` range, the blocks cover exactly the `reasoning` ranges, and
+//!   the bytes between a block and its text are a marker pair's opener (none
+//!   for the block a `starts_open` turn begins in) and its closer (none when
+//!   the block was closed at a call opener or is unterminated);
 //! - (F8) a malformed attempt's `at` lies inside its span or at its end, or
 //!   past it only inside a literal the failing reading began and matched
 //!   in part (at most the longest literal spelling past the end);
@@ -1567,6 +1573,99 @@ fn check_markers_not_calls(
     }
 }
 
+/// The marker-free reasoning text of every reading: the blocks are ordered
+/// and disjoint, each `text` lies inside its `span`, each `span` inside one
+/// `reasoning` range, and the spans cover exactly the bytes the `reasoning`
+/// ranges cover. The bytes between a block's `span` and its `text` are
+/// markers: the head is an opener spelling of an allowed dialect (empty only
+/// for the block a `starts_open` turn begins in, at offset 0), and the tail
+/// is that pair's closer or empty (a block closed at a call opener, or
+/// unterminated). A `text` may itself start or end with a marker spelling (a
+/// second `<think>` inside a block is text); only the stripped edges are
+/// markers.
+fn check_reasoning_blocks(
+    output: &[u8],
+    request: &ToolRecoveryRequest,
+    result: &AssistResult<ToolCalls>,
+) {
+    let readings: Vec<&ToolCalls> = match &result.outcome {
+        Outcome::Resolved(calls) | Outcome::BestGuess(calls) => vec![calls],
+        Outcome::Ambiguous(values) => values.iter().collect(),
+        Outcome::Unresolved => Vec::new(),
+    };
+    let mut pairs: Vec<(&[u8], &[u8])> = Vec::new();
+    for dialect in request.dialects.dialects() {
+        for (open, close) in dialect.grammar().reasoning_markers() {
+            pairs.push((open, close));
+        }
+    }
+    let starts_open = request.reasoning == ReasoningPolicy::Separate { starts_open: true };
+    for calls in readings {
+        let blocks = &calls.reasoning_blocks;
+        if request.reasoning == ReasoningPolicy::AsContent {
+            assert!(
+                blocks.is_empty() && calls.reasoning.is_empty(),
+                "reasoning as content records blocks: {blocks:?}"
+            );
+        }
+        let mut covered = vec![false; output.len()];
+        for range in &calls.reasoning {
+            covered[range.clone()].fill(true);
+        }
+        let mut blocked = vec![false; output.len()];
+        for block in blocks {
+            check_range(output, &block.span, "reasoning block span");
+            check_range(output, &block.text, "reasoning block text");
+            assert!(
+                block.span.start <= block.text.start && block.text.end <= block.span.end,
+                "reasoning text {:?} lies outside its block {:?}",
+                block.text,
+                block.span
+            );
+            assert!(
+                calls
+                    .reasoning
+                    .iter()
+                    .any(|range| range.start <= block.span.start && block.span.end <= range.end),
+                "reasoning block {:?} lies in no reasoning range {:?}",
+                block.span,
+                calls.reasoning
+            );
+            blocked[block.span.clone()].fill(true);
+            let head = &output[block.span.start..block.text.start];
+            let tail = &output[block.text.end..block.span.end];
+            if head.is_empty() {
+                assert!(
+                    starts_open && block.span.start == 0,
+                    "reasoning block {:?} has no opener outside a starts_open turn",
+                    block.span
+                );
+            }
+            assert!(
+                head.is_empty()
+                    && (tail.is_empty() || pairs.iter().any(|(_, close)| *close == tail))
+                    || pairs.iter().any(|(open, close)| {
+                        *open == head && (tail.is_empty() || *close == tail)
+                    }),
+                "reasoning block {:?} (text {:?}) is not delimited by a marker pair: head {head:?}, tail {tail:?}",
+                block.span,
+                block.text
+            );
+        }
+        assert_eq!(
+            covered, blocked,
+            "the reasoning blocks {blocks:?} do not cover exactly the reasoning ranges {:?}",
+            calls.reasoning
+        );
+        assert!(
+            blocks
+                .windows(2)
+                .all(|pair| pair[0].span.end <= pair[1].span.start),
+            "reasoning blocks are out of order or overlap: {blocks:?}"
+        );
+    }
+}
+
 fn main() {
     let mut bytes = Vec::new();
     io::stdin().take(4097).read_to_end(&mut bytes).unwrap();
@@ -1586,6 +1685,7 @@ fn main() {
     check_result(&tools, output, &request, &result);
     check_reasoning_keeps_calls(&tools, output, &request, &result);
     check_markers_not_calls(output, &request, &result);
+    check_reasoning_blocks(output, &request, &result);
     check_chunking(&tools, output, &request, split >> 3);
     check_exhaustion(&tools, output, &request);
     println!("ok");

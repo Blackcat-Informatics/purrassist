@@ -63,6 +63,7 @@
   "rejected": [],
   "embedded": [],
   "content": [],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": [
     "json.syntax.literal-case"

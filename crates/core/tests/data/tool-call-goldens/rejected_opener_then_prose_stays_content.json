@@ -52,6 +52,7 @@
     "Sure, I could call ",
     " but actually no tool is needed. The answer to your question is 42."
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

@@ -59,6 +59,7 @@
     "content": [
       "oops. Sorry, my answer: use a mapping like m[k] = v} and done."
     ],
+    "reasoning_text": [],
     "failed_validations": [],
     "ledger_rules": []
   },
@@ -90,6 +91,7 @@
   "content": [
     "oops. Sorry, my answer: use a mapping like m[k] = v} and done."
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

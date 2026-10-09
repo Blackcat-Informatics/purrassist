@@ -54,6 +54,7 @@
       "Hi ",
       " The answer."
     ],
+    "reasoning_text": [],
     "failed_validations": [],
     "ledger_rules": []
   },
@@ -86,6 +87,7 @@
     "Hi ",
     " The answer."
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

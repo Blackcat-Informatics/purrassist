@@ -37,31 +37,6 @@
       "calls": [
         {
           "tool": null,
-          "arguments": "print(\"<|call|>\")\nprint(1)",
-          "candidate_dialects": [
-            "harmony.v1"
-          ],
-          "outcome": "unresolved: unknown_tool: no declared tool matches `python`",
-          "rules": [
-            "tool_call.value.closer-in-value"
-          ]
-        }
-      ],
-      "rejected": [],
-      "embedded": [],
-      "content": []
-    },
-    {
-      "finish": "unresolved",
-      "openai_finish_reason": "stop",
-      "verdict": "nothing_usable",
-      "usable_calls": {
-        "strict": 0,
-        "accepting_guesses": 0
-      },
-      "calls": [
-        {
-          "tool": null,
           "arguments": "print(\"",
           "candidate_dialects": [
             "harmony.v1"
@@ -74,7 +49,34 @@
       "embedded": [],
       "content": [
         "\")\nprint(1)<|call|>"
-      ]
+      ],
+      "reasoning_text": []
+    },
+    {
+      "finish": "unresolved",
+      "openai_finish_reason": "stop",
+      "verdict": "nothing_usable",
+      "usable_calls": {
+        "strict": 0,
+        "accepting_guesses": 0
+      },
+      "calls": [
+        {
+          "tool": null,
+          "arguments": "print(\"<|call|>\")\nprint(1)",
+          "candidate_dialects": [
+            "harmony.v1"
+          ],
+          "outcome": "unresolved: unknown_tool: no declared tool matches `python`",
+          "rules": [
+            "tool_call.value.closer-in-value"
+          ]
+        }
+      ],
+      "rejected": [],
+      "embedded": [],
+      "content": [],
+      "reasoning_text": []
     }
   ],
   "failed_validations": [],

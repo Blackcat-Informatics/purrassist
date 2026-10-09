@@ -59,6 +59,7 @@
     "rejected": [],
     "embedded": [],
     "content": [],
+    "reasoning_text": [],
     "failed_validations": [],
     "ledger_rules": [
       "tool_call.id.dedup"
@@ -90,6 +91,7 @@
   "content": [
     "[TOOL_CALLS] [{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Paris\"}}]"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.unparsed-dialect"

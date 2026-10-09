@@ -65,6 +65,7 @@
   "rejected": [],
   "embedded": [],
   "content": [],
+  "reasoning_text": [],
   "failed_validations": [
     "tool_choice=forced:read_file"
   ],

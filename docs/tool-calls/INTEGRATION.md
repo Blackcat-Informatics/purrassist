@@ -903,6 +903,20 @@ the `embedded_calls_once_in_span_order` and
 and the tool-call fuzz probe's reasoning invariant (a call the turn
 recovers with reasoning as content never vanishes under a reasoning mode).
 
+The merged `reasoning` ranges include the markers and join adjacent blocks
+(`<think>a</think><think>b</think>` is one range, `0..32`). To read the text,
+use `reasoning_blocks` (wire `[{"span": {start, end}, "text": {start, end}}]`):
+one entry per block in source order, never merged
+(here `text` is `7..8` and `23..24`), where `text` excludes both markers.
+Under `starts_open` the block has no opener, so its `text` begins at `0` (the
+`span` and the `text` start together); a closed block's `text` ends at its
+closer, a block closed at a call opener ends at the opener, and an
+unterminated block ends at the end of output. The bytes are exactly those of
+the output: Anthropic thinking text stays JSON-escaped (`\n`, `\"`), never
+unescaped. *Proved by* the `reasoning_blocks_*` tests in `tool_call_recover`,
+the goldens' captured `reasoning_text`, and the tool-call fuzz probe's
+block invariants.
+
 ### Ids across rounds
 
 With no id option (Rust `IdPolicy::Turn`, the default; MCP without `ids`; CLI

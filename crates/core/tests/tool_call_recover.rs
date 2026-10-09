@@ -730,13 +730,13 @@ fn deterministic_pinned_digest() {
 }
 
 const PINNED_DIGEST: &str =
-    "sha256:639146bae6bc8954ddc3e166111582a66265079051873cbcd831def4fbf0ba32";
+    "sha256:cfa56735bd0949dc85802203549193d3d85754f45fcaebe7a4e817f9f086a2c4";
 const PINNED_PREFIX_DIGEST: &str =
-    "sha256:d47024fe69e05a442cf6e47c86a0bab7929229fc3fa02c8e3a640f8936dd998a";
+    "sha256:e9cf080da50b1b36618c64953850bca3baeecd5eb14c2e547551474076f234ba";
 const PINNED_AMBIGUOUS_DIGEST: &str =
-    "sha256:f67bed0cc0ff12375d632ad3318dd8e2643f4031329b2a6a51f8f3ae5e35e6ef";
+    "sha256:acb05cb9241b14df7843bdcfd491ffe55128d16a1691fb37cb96c2027422f267";
 const PINNED_PREFIX_AMBIGUOUS_DIGEST: &str =
-    "sha256:f3c07ce770bf72121cdaec177bdf1f37f92dfa42f0529a105d8a09ac7a50aa08";
+    "sha256:aa85e30b2579f1c069ee869464941753162f25a975600167f1128faa448dd126";
 
 #[test]
 fn invalid_utf8_is_loss_and_bytes_retained() {
@@ -1589,6 +1589,172 @@ fn starts_open_reasoning_separated() {
         result.receipt.evidence
     );
     assert_eq!(calls.finish, Finish::Calls);
+}
+
+/// Every reasoning block of `calls` as `(span, text)`, with the text bytes.
+fn blocks<'a>(
+    output: &'a [u8],
+    calls: &ToolCalls,
+) -> Vec<(core::ops::Range<usize>, core::ops::Range<usize>, &'a [u8])> {
+    calls
+        .reasoning_blocks
+        .iter()
+        .map(|block| {
+            (
+                block.span.clone(),
+                block.text.clone(),
+                &output[block.text.clone()],
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn reasoning_blocks_two_adjacent_blocks_are_never_merged() {
+    let tools = compile([ToolDefinition::new("ls").effects(Effects::ReadOnly)]);
+    let output = format!("<think>a</think><think>b</think>\n{}", hermes("ls", "{}"));
+    let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+    let calls = value(&result);
+    // The outer ranges merge, the blocks do not.
+    assert_eq!(calls.reasoning, vec![0..32]);
+    assert_eq!(
+        blocks(output.as_bytes(), calls),
+        vec![(0..16, 7..8, &b"a"[..]), (16..32, 23..24, &b"b"[..])]
+    );
+    assert_eq!(calls.calls.len(), 1);
+    let wire = result.to_node();
+    assert_eq!(
+        wire.pointer("/value/reasoning_blocks")
+            .expect("reasoning_blocks on the wire")
+            .to_json(),
+        r#"[{"span":{"start":0,"end":16},"text":{"start":7,"end":8}},{"span":{"start":16,"end":32},"text":{"start":23,"end":24}}]"#
+    );
+}
+
+#[test]
+fn reasoning_blocks_closed_block_before_a_call() {
+    let tools = compile([ToolDefinition::new("ls").effects(Effects::ReadOnly)]);
+    let output = format!("<think>abc</think>\n{}", hermes("ls", "{}"));
+    let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+    let calls = value(&result);
+    assert_eq!(calls.reasoning, vec![0..18]);
+    assert_eq!(
+        blocks(output.as_bytes(), calls),
+        vec![(0..18, 7..10, &b"abc"[..])]
+    );
+    assert_eq!(calls.calls.len(), 1);
+}
+
+#[test]
+fn reasoning_blocks_starts_open_text_begins_at_zero() {
+    let tools = compile([ToolDefinition::new("ls").effects(Effects::ReadOnly)]);
+    let output = format!("abc</think>\n{}", hermes("ls", "{}"));
+    let result = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default().reasoning(ReasoningPolicy::Separate { starts_open: true }),
+    );
+    let calls = value(&result);
+    // No opener is stripped: the text starts with the block, and ends at the
+    // closer.
+    assert_eq!(calls.reasoning, vec![0..11]);
+    assert_eq!(
+        blocks(output.as_bytes(), calls),
+        vec![(0..11, 0..3, &b"abc"[..])]
+    );
+    assert_eq!(calls.calls.len(), 1);
+}
+
+#[test]
+fn reasoning_blocks_closed_at_a_call_opener() {
+    let tools = compile([ToolDefinition::new("ls").effects(Effects::ReadOnly)]);
+    let output = format!("<think>abc{}", hermes("ls", "{}"));
+    let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+    let calls = value(&result);
+    // No closer: the block ends at the opener, so the text ends with the
+    // span.
+    assert_eq!(calls.reasoning, vec![0..10]);
+    assert_eq!(
+        blocks(output.as_bytes(), calls),
+        vec![(0..10, 7..10, &b"abc"[..])]
+    );
+    assert!(
+        result
+            .receipt
+            .evidence
+            .iter()
+            .any(|evidence| evidence.rule == "tool_call.reasoning.unclosed"),
+        "{:#?}",
+        result.receipt.evidence
+    );
+}
+
+#[test]
+fn reasoning_blocks_unterminated_runs_to_the_end_of_output() {
+    let tools = compile([ToolDefinition::new("ls").effects(Effects::ReadOnly)]);
+    let output = "<think>abc";
+    let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+    let calls = value(&result);
+    assert_eq!(calls.reasoning, vec![0..10]);
+    assert_eq!(
+        blocks(output.as_bytes(), calls),
+        vec![(0..10, 7..10, &b"abc"[..])]
+    );
+    assert!(
+        result
+            .receipt
+            .evidence
+            .iter()
+            .any(|evidence| evidence.rule == "tool_call.reasoning.unterminated"),
+        "{:#?}",
+        result.receipt.evidence
+    );
+}
+
+#[test]
+fn reasoning_blocks_harmony_analysis_channel() {
+    let tools = compile([ToolDefinition::new("ls").effects(Effects::ReadOnly)]);
+    // `<|channel|>analysis<|message|>` is 30 bytes, `<|end|>` 7.
+    let output = "<|channel|>analysis<|message|>think hard<|end|>done";
+    let result = tools.recover(output.as_bytes(), &request(DialectId::Harmony));
+    let calls = value(&result);
+    assert_eq!(calls.reasoning, vec![0..47]);
+    assert_eq!(
+        blocks(output.as_bytes(), calls),
+        vec![(0..47, 30..40, &b"think hard"[..])]
+    );
+    assert_eq!(calls.calls.len(), 0);
+}
+
+#[test]
+fn reasoning_blocks_other_pairs_and_policies() {
+    let tools = compile([ToolDefinition::new("ls").effects(Effects::ReadOnly)]);
+    // Mistral's `[THINK]` pair.
+    let output = "[THINK]x[/THINK]";
+    let result = tools.recover(output.as_bytes(), &request(DialectId::MistralV11));
+    assert_eq!(
+        blocks(output.as_bytes(), value(&result)),
+        vec![(0..16, 7..8, &b"x"[..])]
+    );
+    // A second opener inside a block is text; only the stripped edges are
+    // markers.
+    let output = "<think><think>x</think>";
+    let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+    assert_eq!(
+        blocks(output.as_bytes(), value(&result)),
+        vec![(0..23, 7..15, &b"<think>x"[..])]
+    );
+    // Reasoning as content has no blocks, and neither does an empty output
+    // that starts open.
+    let result = tools.recover(
+        b"<think>a</think>",
+        &ToolRecoveryRequest::default().reasoning(ReasoningPolicy::AsContent),
+    );
+    assert_eq!(value(&result).reasoning_blocks.len(), 0);
+    let result = tools.recover(
+        b"",
+        &ToolRecoveryRequest::default().reasoning(ReasoningPolicy::Separate { starts_open: true }),
+    );
+    assert_eq!(value(&result).reasoning_blocks.len(), 0);
 }
 
 fn mode_tool() -> ToolSet {

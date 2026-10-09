@@ -88,6 +88,7 @@
     ", ",
     ", {\"name\": \"summary\", \"count\": 2}]"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

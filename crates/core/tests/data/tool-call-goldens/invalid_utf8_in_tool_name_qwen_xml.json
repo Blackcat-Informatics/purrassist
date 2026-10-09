@@ -57,6 +57,7 @@
     ],
     "embedded": [],
     "content": [],
+    "reasoning_text": [],
     "failed_validations": [],
     "ledger_rules": [
       "tool_call.input.invalid-utf8"
@@ -88,6 +89,7 @@
   ],
   "embedded": [],
   "content": [],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.input.invalid-utf8"

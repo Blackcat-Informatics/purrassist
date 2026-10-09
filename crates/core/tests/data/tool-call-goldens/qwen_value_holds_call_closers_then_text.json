@@ -34,6 +34,40 @@
   "stopped": "completed",
   "readings": [
     {
+      "finish": "calls",
+      "openai_finish_reason": "tool_calls",
+      "verdict": "run",
+      "usable_calls": {
+        "strict": 1,
+        "accepting_guesses": 1
+      },
+      "calls": [
+        {
+          "tool": "write_file",
+          "arguments": {
+            "path": "a.md",
+            "content": "x "
+          },
+          "candidate_dialects": [
+            "qwen3-coder-xml.v1"
+          ],
+          "outcome": "resolved",
+          "rules": [
+            "tool_call.xml.framing-newline",
+            "tool_call.xml.framing-newline",
+            "tool_call.xml.framing-newline",
+            "tool_call.markup.parameter-closed-by-element"
+          ]
+        }
+      ],
+      "rejected": [],
+      "embedded": [],
+      "content": [
+        " y\n</parameter>\n</function>\nDone."
+      ],
+      "reasoning_text": []
+    },
+    {
       "finish": "unresolved",
       "openai_finish_reason": "stop",
       "verdict": "ambiguous",
@@ -67,54 +101,22 @@
       "embedded": [],
       "content": [
         "Done."
-      ]
-    },
-    {
-      "finish": "calls",
-      "openai_finish_reason": "tool_calls",
-      "verdict": "run",
-      "usable_calls": {
-        "strict": 1,
-        "accepting_guesses": 1
-      },
-      "calls": [
-        {
-          "tool": "write_file",
-          "arguments": {
-            "path": "a.md",
-            "content": "x "
-          },
-          "candidate_dialects": [
-            "qwen3-coder-xml.v1"
-          ],
-          "outcome": "resolved",
-          "rules": [
-            "tool_call.xml.framing-newline",
-            "tool_call.xml.framing-newline",
-            "tool_call.xml.framing-newline",
-            "tool_call.markup.parameter-closed-by-element"
-          ]
-        }
       ],
-      "rejected": [],
-      "embedded": [],
-      "content": [
-        " y\n</parameter>\n</function>\nDone."
-      ]
+      "reasoning_text": []
     }
   ],
   "failed_validations": [],
   "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.parameter-closed-by-element",
     "tool_call.value.closer-in-value",
     "tool_call.xml.framing-newline",
     "tool_call.xml.framing-newline",
     "tool_call.xml.framing-newline",
     "tool_call.value.text-after-closer",
     "tool_call.xml.framing-newline",
-    "tool_call.markup.missing-wrapper-close.before-text",
-    "tool_call.xml.framing-newline",
-    "tool_call.xml.framing-newline",
-    "tool_call.xml.framing-newline",
-    "tool_call.markup.parameter-closed-by-element"
+    "tool_call.markup.missing-wrapper-close.before-text"
   ]
 }

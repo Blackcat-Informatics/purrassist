@@ -43,6 +43,7 @@
   "content": [
     "The area is f(x) = 2x (see [1]); [a(b)] and [x + f(y)] are math, `sum(a=1)` is inline code.\n```python\nprint(x)\nresult = [run(cmd=\"ls\")]\n```\n"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

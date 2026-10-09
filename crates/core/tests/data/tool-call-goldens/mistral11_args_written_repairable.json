@@ -54,6 +54,7 @@
     "Hi ",
     "The answer."
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": [
     "json.syntax.trailing-comma",

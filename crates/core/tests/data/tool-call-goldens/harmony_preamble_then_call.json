@@ -51,6 +51,7 @@
   "content": [
     "<|channel|>commentary<|message|>I will check the weather.<|end|>"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

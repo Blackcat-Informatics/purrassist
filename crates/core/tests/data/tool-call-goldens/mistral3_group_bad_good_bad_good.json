@@ -95,6 +95,7 @@
       "Hi ",
       " done"
     ],
+    "reasoning_text": [],
     "failed_validations": [],
     "ledger_rules": [
       "tool_call.markup.group-split",
@@ -173,6 +174,7 @@
     "Hi ",
     " done"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.group-split",

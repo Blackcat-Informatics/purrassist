@@ -53,6 +53,7 @@
     "content": [
       " tail"
     ],
+    "reasoning_text": [],
     "failed_validations": [],
     "ledger_rules": []
   },
@@ -84,6 +85,7 @@
   "content": [
     " tail"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

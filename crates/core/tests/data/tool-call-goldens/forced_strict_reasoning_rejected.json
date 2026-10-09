@@ -66,6 +66,9 @@
   "content": [
     "\n"
   ],
+  "reasoning_text": [
+    "I should read the file."
+  ],
   "emitted": {
     "calls": 0,
     "skipped": [

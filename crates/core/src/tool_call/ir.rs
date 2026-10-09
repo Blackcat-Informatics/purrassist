@@ -535,6 +535,13 @@ pub enum ReasoningClosure {
 pub struct ReasoningSegment {
     /// The source range, markers included.
     pub span: Range<usize>,
+    /// The block's text: `span` without its markers. It begins where the
+    /// opening marker ends (at `0` for a block the turn starts in, which has
+    /// no opener) and ends where the closing marker begins; a block closed at
+    /// a call opener ends at the opener, and an unterminated one at the end of
+    /// output. The bytes are verbatim source offsets, never unescaped
+    /// (Anthropic thinking text stays JSON-escaped).
+    pub text: Range<usize>,
     /// How the block ended.
     pub closure: ReasoningClosure,
     /// Calls recognized inside the closed block. They remain reasoning text;

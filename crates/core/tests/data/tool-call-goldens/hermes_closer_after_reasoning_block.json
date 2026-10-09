@@ -67,6 +67,9 @@
     "content": [
       " done"
     ],
+    "reasoning_text": [
+      "x <tool_call>{\"name\": \"f\", \"arguments\": {\"a\": \"x\"}}"
+    ],
     "failed_validations": [],
     "ledger_rules": [
       "tool_call.reasoning.embedded-call"
@@ -99,6 +102,9 @@
   "embedded": [],
   "content": [
     " done"
+  ],
+  "reasoning_text": [
+    "x <tool_call>{\"name\": \"f\", \"arguments\": {\"a\": \"x\"}}"
   ],
   "failed_validations": [],
   "ledger_rules": []

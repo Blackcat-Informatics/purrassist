@@ -55,6 +55,9 @@
   "rejected": [],
   "embedded": [],
   "content": [],
+  "reasoning_text": [
+    "I should read the file first.\n"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.reasoning.unclosed",

@@ -36,6 +36,9 @@
   "content": [
     "<|start|>assistant<|channel|>final<|message|>2 + 2 = 4.<|return|>"
   ],
+  "reasoning_text": [
+    "Simple arithmetic."
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

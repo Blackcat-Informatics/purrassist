@@ -54,6 +54,9 @@
   "content": [
     "Answer."
   ],
+  "reasoning_text": [
+    "hmm {\"type\": \"tool_use\", \"id\": \"toolu_01\", \"name\": \"read_file\", \"input\": {\"path\": \"x\"}} done"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.reasoning.embedded-call"

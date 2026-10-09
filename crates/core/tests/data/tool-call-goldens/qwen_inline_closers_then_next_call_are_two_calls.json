@@ -100,6 +100,7 @@
   "content": [
     "\n"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.xml.framing-newline",

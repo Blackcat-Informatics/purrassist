@@ -67,6 +67,7 @@
   "content": [
     "<arg_key>city</arg_key>\n<arg_value>Paris</arg_value>\n</tool_call>"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.unparsed-dialect"

@@ -59,6 +59,9 @@
   "content": [
     "\n\n"
   ],
+  "reasoning_text": [
+    "The user wants the weather in Lima.\n"
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

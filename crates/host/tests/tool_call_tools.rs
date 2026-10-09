@@ -448,6 +448,70 @@ fn dangling_opener_after_a_call_keeps_the_call() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// The result carries `reasoning_blocks` (one `{span, text}` per block,
+/// never merged, `text` without the markers) next to the merged `reasoning`
+/// ranges, and validates against the published output schema, which requires
+/// the member.
+#[test]
+fn reasoning_blocks_are_published_and_validate() {
+    let (tools, root) = tools("reasoning-blocks");
+    let output = format!("<think>a</think><think>b</think>\n{QWEN}");
+    let actual = tools
+        .call("recover_tool_calls", &arguments(&output, ""))
+        .unwrap();
+    assert_eq!(
+        actual
+            .pointer("/value/reasoning")
+            .map(Node::to_json)
+            .as_deref(),
+        Some(r#"[{"start":0,"end":32}]"#),
+        "{}",
+        actual.to_json()
+    );
+    let blocks = actual.pointer("/value/reasoning_blocks").unwrap();
+    assert_eq!(
+        blocks.to_json(),
+        r#"[{"span":{"start":0,"end":16},"text":{"start":7,"end":8}},{"span":{"start":16,"end":32},"text":{"start":23,"end":24}}]"#
+    );
+    let definitions = Tools::definitions().unwrap();
+    let json::Value::Array(definitions) = definitions.value else {
+        panic!("tool definitions must be an array")
+    };
+    let definition = definitions
+        .iter()
+        .find(|definition| {
+            definition.get("name").and_then(Node::as_str) == Some("recover_tool_calls")
+        })
+        .unwrap();
+    let schema = Schema::compile(&definition.get("outputSchema").unwrap().to_json()).unwrap();
+    assert!(schema.validate(&actual).unwrap().valid);
+    // The member is required, and a block holds exactly a span and a text.
+    let member = format!(r#""reasoning_blocks":{},"#, blocks.to_json());
+    let json = actual.to_json();
+    assert!(json.contains(&member));
+    let without = json::parse(&json.replace(&member, "")).unwrap();
+    assert!(!schema.validate(&without).unwrap().valid);
+    let extra = json::parse(&json.replace(
+        r#"{"span":{"start":0,"end":16},"text""#,
+        r#"{"extra":1,"span":{"start":0,"end":16},"text""#,
+    ))
+    .unwrap();
+    assert!(!schema.validate(&extra).unwrap().valid);
+    // No reasoning, no blocks.
+    let plain = tools
+        .call("recover_tool_calls", &arguments(QWEN, ""))
+        .unwrap();
+    assert_eq!(
+        plain
+            .pointer("/value/reasoning_blocks")
+            .map(Node::to_json)
+            .as_deref(),
+        Some("[]")
+    );
+    assert!(schema.validate(&plain).unwrap().valid);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// F5: `status` is the certainty of the reading of the turn and
 /// `value.verdict` is the usability verdict. A turn read with certainty
 /// whose only call names an undeclared tool, misses a required argument, or

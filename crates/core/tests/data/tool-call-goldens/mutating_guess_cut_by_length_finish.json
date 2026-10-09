@@ -64,6 +64,7 @@
   "content": [
     "\nMore text"
   ],
+  "reasoning_text": [],
   "emitted": {
     "calls": 0,
     "skipped": [

@@ -64,6 +64,9 @@
     "\n",
     "\n</parameter>\n</function>\n</tool_call>"
   ],
+  "reasoning_text": [
+    "plan"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.xml.framing-newline",

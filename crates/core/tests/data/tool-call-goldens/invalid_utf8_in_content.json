@@ -55,6 +55,7 @@
   "content": [
     "[110, 111, 116, 101, 32, 255, 254, 32, 116, 104, 101, 110, 32]"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.input.invalid-utf8",

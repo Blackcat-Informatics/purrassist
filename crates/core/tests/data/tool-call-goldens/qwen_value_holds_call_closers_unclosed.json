@@ -64,7 +64,8 @@
       ],
       "rejected": [],
       "embedded": [],
-      "content": []
+      "content": [],
+      "reasoning_text": []
     },
     {
       "finish": "calls",
@@ -97,7 +98,8 @@
       "embedded": [],
       "content": [
         " then stop.\n</function>\n</tool_call>"
-      ]
+      ],
+      "reasoning_text": []
     }
   ],
   "failed_validations": [],

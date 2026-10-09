@@ -86,6 +86,9 @@
   "content": [
     "\n\n"
   ],
+  "reasoning_text": [
+    "\nThe user wants the weather and a file.\n"
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

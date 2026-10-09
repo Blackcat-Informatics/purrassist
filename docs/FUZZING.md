@@ -211,7 +211,14 @@ targets' mutation tokens so mutation can create or move field boundaries).
   most the longest literal spelling past the end). (F5) Every embedded
   call is offered once, in span order. (T2) No call, embedded call or
   rejected attempt holds bytes of a reasoning range's opener or closer
-  marker in the same reading. Every `Resolved` call printed in its own dialect
+  marker in the same reading. (R) The unmerged `reasoning_blocks` are
+  ordered and disjoint; each `text` lies inside its block's `span`, each
+  `span` inside one `reasoning` range, and the spans cover exactly the bytes
+  the `reasoning` ranges cover; the bytes between a `span` and its `text`
+  are an allowed dialect's opener (none only for the block a `starts_open`
+  turn begins in, at offset 0) and that pair's closer (none for a block closed
+  at a call opener or left unterminated), so `text` is marker-free at both
+  edges. Every `Resolved` call printed in its own dialect
   (`emit::emit`) recovers to the same tool with `Node::equivalent`
   arguments and `Resolved`, and the printed text is stable (a fixed point
   from its first recovery; a `Resolved` call is skipped only as

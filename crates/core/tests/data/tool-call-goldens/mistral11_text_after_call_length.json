@@ -60,6 +60,7 @@
   "content": [
     "Done"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.id.dedup"

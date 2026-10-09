@@ -57,6 +57,9 @@
     "EqQB\"},",
     "],\"stop_reason\":\"tool_use\",\"stop_sequence\":null}"
   ],
+  "reasoning_text": [
+    "Need the weather."
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

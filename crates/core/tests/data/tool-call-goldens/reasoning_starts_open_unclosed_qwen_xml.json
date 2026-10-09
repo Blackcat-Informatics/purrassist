@@ -54,6 +54,9 @@
   "rejected": [],
   "embedded": [],
   "content": [],
+  "reasoning_text": [
+    "Let me look. "
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.reasoning.unclosed",
