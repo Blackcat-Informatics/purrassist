@@ -162,6 +162,19 @@ pub fn tools() -> ToolSet {
             .effects(Effects::Mutating)
             .param("path", Param::string().required().pattern(PATH_PATTERN))
             .param("recursive", Param::boolean().required()),
+        // Issue #8 section 1: an array of objects, the shape Qwen3-Coder XML
+        // writes as repeated nested elements.
+        ToolDefinition::new("plan_outfits")
+            .effects(Effects::ReadOnly)
+            .param(
+                "outfits",
+                Param::array(Param::object(
+                    ObjectSpec::new()
+                        .param("wearer", Param::string().required().pattern(PATH_PATTERN))
+                        .param("garments", Param::array(Param::string())),
+                ))
+                .required(),
+            ),
     ];
     ToolSet::compile(definitions, Budget::default()).expect("the corpus tool set compiles")
 }
@@ -947,7 +960,7 @@ fn mutant(category: &'static str, variant: impl Into<String>, text: String, need
     }
 }
 
-const NEAR_MISS: [(&str, [&str; 2]); 8] = [
+const NEAR_MISS: [(&str, [&str; 2]); 9] = [
     ("read_file", ["read_fiel", "reed_file"]),
     ("search_code", ["serach_code", "search_cod"]),
     ("get_forecast", ["get_forcast", "get_forecats"]),
@@ -956,6 +969,7 @@ const NEAR_MISS: [(&str, [&str; 2]); 8] = [
     ("create_issue", ["create_isue", "craete_issue"]),
     ("run_command", ["run_comand", "run_commnad"]),
     ("delete_path", ["delete_pth", "delte_path"]),
+    ("plan_outfits", ["plan_outfit", "paln_outfits"]),
 ];
 
 const HALLUCINATED: [&str; 6] = [
@@ -967,7 +981,7 @@ const HALLUCINATED: [&str; 6] = [
     "query_database",
 ];
 
-const KEY_TYPOS: [(&str, &str); 20] = [
+const KEY_TYPOS: [(&str, &str); 21] = [
     ("path", "pth"),
     ("limit", "limt"),
     ("encoding", "encodng"),
@@ -988,6 +1002,7 @@ const KEY_TYPOS: [(&str, &str); 20] = [
     ("command", "comand"),
     ("timeout_seconds", "timeout_secnods"),
     ("recursive", "recursve"),
+    ("outfits", "outfitz"),
 ];
 
 const ENUM_TYPOS: [(&str, &str); 14] = [
@@ -1739,15 +1754,21 @@ fn closer_in_value_mutations(base: &Base, out: &mut Vec<Mutant>) {
             replace_value(base, index, &held),
             Need::Exact,
         ));
-        let held = format!(
-            "{value}</parameter></function></tool_call>\n<tool_call>\n{documented}\n</tool_call>"
-        );
-        out.push(mutant(
-            "tool_call.markup.stray-closer",
-            "inline-closers-then-call",
-            replace_value(base, index, &held),
-            Need::Exact,
-        ));
+        // A value that ends in a newline cannot be followed inline by its
+        // closer: the newline is then the value's framing newline (consumed
+        // as `tool_call.xml.framing-newline`), so the text no longer spells
+        // the value and the truth would not be what the text says.
+        if !value.ends_with('\n') {
+            let held = format!(
+                "{value}</parameter></function></tool_call>\n<tool_call>\n{documented}\n</tool_call>"
+            );
+            out.push(mutant(
+                "tool_call.markup.stray-closer",
+                "inline-closers-then-call",
+                replace_value(base, index, &held),
+                Need::Exact,
+            ));
+        }
     }
 }
 
@@ -2667,6 +2688,95 @@ fn xml_mutations(base: &Base, random: &mut XorShift, out: &mut Vec<Mutant>) {
             Need::Exact,
         ));
     }
+    // Array-of-object parameters as repeated nested elements. The truth is
+    // issue #8 section 1: each repetition of `<parameter=NAME>` holding
+    // nested `<parameter=>` elements is one object item, collected in source
+    // order (`tool_call.markup.nested-parameter` per item,
+    // `tool_call.xml.array-item` per item, `tool_call.parameter.collect`).
+    // The witness writes at most one item, so a second mutant repeats the
+    // first item to put the collection under the evaluation too.
+    for (index, member) in members.iter().enumerate() {
+        let Value::Array(items) = &member.value.value else {
+            continue;
+        };
+        let ValueShape::Array(item_shape) = &base.declared(&member.key).shape else {
+            continue;
+        };
+        let ValueShape::Object(shape) = &**item_shape else {
+            continue;
+        };
+        let nested = |item: &Node| -> Option<String> {
+            let Value::Object(fields) = &item.value else {
+                return None;
+            };
+            if fields.is_empty() {
+                return None;
+            }
+            let elements: Vec<(String, String, bool)> = fields
+                .iter()
+                .map(|field| {
+                    let declared = shape
+                        .parameters
+                        .iter()
+                        .find(|param| param.name == field.key)
+                        .expect("a declared member");
+                    (field.key.clone(), raw(&field.value, &declared.value), true)
+                })
+                .collect();
+            Some(
+                xml_body(&elements)
+                    .trim_start_matches('\n')
+                    .trim_end_matches('\n')
+                    .to_owned(),
+            )
+        };
+        let Some(first) = items.first() else {
+            continue;
+        };
+        for (variant, repeated) in [("items", 0), ("items-repeated", 1)] {
+            let mut written: Vec<&Node> = items.iter().collect();
+            written.extend(std::iter::repeat_n(first, repeated));
+            let Some(bodies) = written
+                .iter()
+                .map(|item| nested(item))
+                .collect::<Option<Vec<String>>>()
+            else {
+                continue;
+            };
+            let mut spread: Vec<(String, String, bool)> = Vec::new();
+            for (position, element) in elements.iter().enumerate() {
+                if position == index {
+                    for body in &bodies {
+                        spread.push((element.0.clone(), body.clone(), true));
+                    }
+                } else {
+                    spread.push(element.clone());
+                }
+            }
+            let category = if bodies.len() == 1 {
+                "tool_call.xml.array-item"
+            } else {
+                "tool_call.parameter.collect"
+            };
+            let mut mutated = mutant(
+                category,
+                format!("{}-{variant}", member.key),
+                base.with_arguments(&xml_body(&spread)),
+                Need::Exact,
+            );
+            if repeated > 0 {
+                let mut arguments = base.members().to_vec();
+                arguments[index].value = Node::new(Value::Array(
+                    written.iter().map(|item| (*item).clone()).collect(),
+                ));
+                mutated.call = Some(Call {
+                    name: base.call.name.clone(),
+                    arguments: Node::new(Value::Object(arguments)),
+                });
+            }
+            out.push(mutated);
+        }
+    }
     // Array parameters as plain items.
     for (index, member) in members.iter().enumerate() {
         let Value::Array(items) = &member.value.value else {
@@ -3114,6 +3224,9 @@ fn inline_closers_pair(first: &Base, second: &Base, out: &mut Vec<Mutant>) {
     if first.dialect == DialectId::Qwen3CoderXml
         && let Some(at) = first.text.rfind("</parameter>")
         && let Some(head) = first.text[..at].strip_suffix('\n')
+        // A value ending in a newline loses it to the framing newline when
+        // the closer follows inline (see `closer_in_value_mutations`).
+        && (!head.ends_with('\n') || head.ends_with(">\n"))
         && first.text[at..]
             .chars()
             .filter(|character| !character.is_ascii_whitespace())

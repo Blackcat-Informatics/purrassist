@@ -2321,13 +2321,15 @@ fn explain(edit: &MarkupEdit) -> String {
             "read a function body of only closers `{original}` as no arguments; valid only when the tool requires no parameter"
         ),
         EditOperator::NestedParameter => format!(
-            "read nested parameter elements after `{original}` as the members of an object parameter"
+            "read nested parameter elements after `{original}` as the members of an object parameter, or of one object item of an array parameter"
         ),
         EditOperator::JsonBody => {
             "read a whole JSON object in the function body as the arguments".into()
         }
         EditOperator::ArrayItem => {
-            format!("read array parameter value `{original}` as one item of the array")
+            format!(
+                "read array parameter value `{original}` as one item of the array (an object item when written as nested parameter elements)"
+            )
         }
         EditOperator::TrimNonverbatim => format!(
             "trimmed whitespace around the value `{original}` of a non-verbatim declared type to `{replacement}`"

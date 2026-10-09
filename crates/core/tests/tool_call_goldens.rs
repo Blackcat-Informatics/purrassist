@@ -1281,6 +1281,244 @@ fn nested_parameter_object_unclosed() {
     assert!(rules_of(call).contains(&"tool_call.markup.parameter-closed-by-element"));
 }
 
+/// Assert a nested array-of-objects golden: one resolved call holding
+/// `arguments`, whose rules include every id in `rules` (with counts).
+fn assert_nested_items(name: &str, arguments: &str, rules: &[(&str, usize)]) {
+    let (_, result) = golden(name);
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{name}: {call:#?}");
+    assert_eq!(call.arguments.to_json(), arguments, "{name}");
+    assert!(call.alternatives.is_empty(), "{name}: {call:#?}");
+    let used = rules_of(call);
+    for (rule, count) in rules {
+        assert_eq!(
+            used.iter().filter(|id| **id == *rule).count(),
+            *count,
+            "{name}: {rule} in {used:?}"
+        );
+    }
+    for absent in [
+        "json.syntax.bare-string",
+        "tool_call.parameter.pass-through",
+        "tool_call.markup.stray-closer",
+    ] {
+        assert!(!used.contains(&absent), "{name}: {absent} in {used:?}");
+    }
+}
+
+const OUTFITS: &str = r#"{"outfits":[{"wearer":"Alice","garments":["a red coat"]},{"wearer":"Bob","garments":["a grey scarf"]}]}"#;
+
+#[test]
+fn xml_array_nested_object_items() {
+    // Issue #8 section 1: repeated nested elements are an array of objects.
+    assert_nested_items(
+        "xml_array_nested_object_items",
+        OUTFITS,
+        &[
+            ("tool_call.markup.nested-parameter", 2),
+            ("tool_call.xml.array-item", 2),
+            ("tool_call.parameter.collect", 1),
+        ],
+    );
+}
+
+#[test]
+fn xml_array_nested_object_items_in_object() {
+    assert_nested_items(
+        "xml_array_nested_object_items_in_object",
+        r#"{"plan":{"cast":["Alice","Bob"],"outfits":[{"wearer":"Alice","garments":["a red coat"]},{"wearer":"Bob","garments":["a grey scarf"]}]}}"#,
+        &[
+            ("tool_call.markup.nested-parameter", 3),
+            ("tool_call.xml.array-item", 2),
+            ("tool_call.parameter.collect", 1),
+        ],
+    );
+}
+
+#[test]
+fn xml_array_nested_object_items_mixed() {
+    // A JSON-object item and a nested item collect in source order.
+    assert_nested_items(
+        "xml_array_nested_object_items_mixed",
+        OUTFITS,
+        &[
+            ("tool_call.markup.nested-parameter", 1),
+            ("tool_call.xml.array-item", 2),
+            ("tool_call.parameter.collect", 1),
+        ],
+    );
+}
+
+#[test]
+fn xml_array_nested_object_item_unclosed() {
+    assert_nested_items(
+        "xml_array_nested_object_item_unclosed",
+        OUTFITS,
+        &[
+            ("tool_call.markup.nested-parameter", 2),
+            ("tool_call.markup.parameter-closed-by-element", 1),
+            ("tool_call.xml.array-item", 2),
+        ],
+    );
+}
+
+#[test]
+fn xml_array_nested_object_item_unclosed_before_sibling() {
+    assert_nested_items(
+        "xml_array_nested_object_item_unclosed_before_sibling",
+        OUTFITS,
+        &[
+            ("tool_call.markup.nested-parameter", 2),
+            ("tool_call.markup.missing-parameter-close", 1),
+            ("tool_call.xml.array-item", 2),
+            ("tool_call.parameter.collect", 1),
+        ],
+    );
+}
+
+#[test]
+fn xml_array_unmodeled_items_nested() {
+    assert_nested_items(
+        "xml_array_unmodeled_items_nested",
+        OUTFITS,
+        &[
+            ("tool_call.markup.nested-parameter", 2),
+            ("tool_call.xml.array-item", 2),
+            ("tool_call.value.schema-typed", 2),
+        ],
+    );
+}
+
+#[test]
+fn xml_array_string_item_keeps_nested_tags() {
+    // An array of strings never nests: the tags are the item's text.
+    let (_, result) = golden("xml_array_string_item_keeps_nested_tags");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"tags":["<parameter=wearer>Alice</parameter>"]}"#
+    );
+    assert!(!rules_of(call).contains(&"tool_call.markup.nested-parameter"));
+    assert!(rules_of(call).contains(&"tool_call.value.closer-in-value"));
+}
+
+#[test]
+fn xml_array_nested_object_same_name_member() {
+    // Limit: an item scope declaring the array's own name owns the inner
+    // opener, so it is the item's member (a child), not a sibling item.
+    let (_, result) = golden("xml_array_nested_object_same_name_member");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"children":[{"name":"a","children":[{"name":"b"}]}]}"#
+    );
+    let used = rules_of(call);
+    let count = |rule: &str| used.iter().filter(|id| **id == rule).count();
+    assert_eq!(count("tool_call.markup.nested-parameter"), 2);
+    assert_eq!(count("tool_call.xml.array-item"), 2);
+    assert_eq!(count("tool_call.parameter.collect"), 0);
+    assert_eq!(count("tool_call.markup.missing-parameter-close"), 0);
+}
+
+#[test]
+fn xml_array_recursive_ref_items_are_siblings() {
+    // Limit: a recursive `$ref` item is unmodeled and declares nothing, so
+    // the inner opener of the array's own name closes the open item and
+    // starts the next one; the closer left over is stray.
+    let (_, result) = golden("xml_array_recursive_ref_items_are_siblings");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"children":[{"name":"a"},{"name":"b"}]}"#
+    );
+    let used = rules_of(call);
+    let count = |rule: &str| used.iter().filter(|id| **id == rule).count();
+    assert_eq!(count("tool_call.markup.nested-parameter"), 2);
+    assert_eq!(count("tool_call.xml.array-item"), 2);
+    assert_eq!(count("tool_call.markup.missing-parameter-close"), 1);
+    assert_eq!(count("tool_call.markup.stray-closer"), 1);
+    assert_eq!(count("tool_call.parameter.collect"), 1);
+}
+
+#[test]
+fn xml_array_nested_object_items_keep_their_own_spans() {
+    // Each item's values point at its own occurrence, never at item 0.
+    let (golden, result) = golden("xml_array_nested_object_items");
+    let call = the_call(&result);
+    for (pointer, text) in [
+        ("/outfits/0/wearer", "Alice"),
+        ("/outfits/1/wearer", "Bob"),
+        ("/outfits/0/garments/0", "a red coat"),
+        ("/outfits/1/garments/0", "a grey scarf"),
+    ] {
+        let span = call
+            .arguments
+            .pointer(pointer)
+            .and_then(|node| node.span.clone())
+            .unwrap_or_else(|| panic!("{pointer} has a span"));
+        assert!(
+            std::str::from_utf8(&golden.input[span.clone()])
+                .unwrap()
+                .contains(text),
+            "{pointer}: {span:?}"
+        );
+    }
+    let bob = call.arguments.pointer("/outfits/1/wearer").unwrap();
+    let bob = bob.span.clone().unwrap();
+    assert_eq!(
+        std::str::from_utf8(&golden.input[bob]).unwrap().trim(),
+        "Bob"
+    );
+    let alice = call.arguments.pointer("/outfits/0/wearer").unwrap();
+    let alice = alice.span.clone().unwrap();
+    assert_eq!(
+        std::str::from_utf8(&golden.input[alice]).unwrap().trim(),
+        "Alice"
+    );
+}
+
+#[test]
+fn xml_array_nested_object_item_missing_required_is_not_resolved() {
+    // The item schema's `required: [wearer]` still binds a nested item.
+    let (golden, _) = golden("xml_array_nested_object_items");
+    let text = std::str::from_utf8(&golden.input).unwrap();
+    let broken = text.replace("<parameter=wearer>\nBob\n</parameter>\n", "");
+    assert_ne!(broken, text);
+    let result = golden.tools.recover(broken.as_bytes(), &golden.request);
+    for call in &reading(&result).calls {
+        assert_ne!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    }
+    assert_eq!(reading(&result).usable().len(), 0);
+}
+
+#[test]
+fn xml_array_nested_object_item_fault_names_its_own_item() {
+    // An undecodable value in the second occurrence is reported at
+    // `/xs/1/n`, not at the first occurrence's `/xs/0/n`.
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("f").param(
+            "xs",
+            Param::array(Param::object(
+                ObjectSpec::new().param("n", Param::integer()),
+            )),
+        )],
+        Budget::default(),
+    )
+    .unwrap();
+    let input = "<tool_call>\n<function=f>\n<parameter=xs>\n<parameter=n>\n1\n</parameter>\n</parameter>\n<parameter=xs>\n<parameter=n>\n{{{ 1 2 zz\n</parameter>\n</parameter>\n</function>\n</tool_call>";
+    let result = tools.recover(input.as_bytes(), &ToolRecoveryRequest::default());
+    let call = the_call(&result);
+    match &call.outcome {
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::InvalidArgument { pointer, .. },
+        } => assert_eq!(pointer, "/xs/1/n", "{call:#?}"),
+        other => panic!("expected InvalidArgument, got {other:?}"),
+    }
+}
+
 #[test]
 fn json_body_one_stray_closer() {
     let (_, result) = golden("json_body_one_stray_closer");

@@ -700,6 +700,46 @@ fn repeated_array_param_is_array() {
 }
 
 #[test]
+fn repeated_nested_array_items_are_objects() {
+    // Issue #8 section 1: an array of objects as repeated nested elements.
+    let tools = compile([ToolDefinition::new("f").param(
+        "outfits",
+        Param::array(Param::object(
+            ObjectSpec::new()
+                .param("wearer", Param::string().required())
+                .param("garments", Param::array(Param::string())),
+        )),
+    )]);
+    let text = qwen(
+        "f",
+        "<parameter=outfits>\n<parameter=wearer>\nAlice\n</parameter>\n<parameter=garments>\n[\"a coat\"]\n</parameter>\n</parameter>\n<parameter=outfits>\n<parameter=wearer>\nBob\n</parameter>\n</parameter>",
+    );
+    let turn = run(DialectId::Qwen3CoderXml, &tools, &text);
+    let call = one(&turn);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments().to_json(),
+        r#"{"outfits":[{"wearer":"Alice","garments":["a coat"]},{"wearer":"Bob"}]}"#
+    );
+    assert_eq!(count(call, "tool_call.markup.nested-parameter"), 2);
+    assert_eq!(count(call, "tool_call.xml.array-item"), 2);
+    assert_eq!(count(call, "tool_call.parameter.collect"), 1);
+    // An array of strings never nests: the tags are the item's text.
+    let tools = compile([ToolDefinition::new("f").param("tags", Param::array(Param::string()))]);
+    let text = qwen(
+        "f",
+        "<parameter=tags>\n<parameter=wearer>Alice</parameter>\n</parameter>",
+    );
+    let turn = run(DialectId::Qwen3CoderXml, &tools, &text);
+    let call = one(&turn);
+    assert_eq!(count(call, "tool_call.markup.nested-parameter"), 0);
+    assert_eq!(
+        call.arguments().to_json(),
+        r#"{"tags":["<parameter=wearer>Alice</parameter>"]}"#
+    );
+}
+
+#[test]
 fn positional_text_never_named() {
     let tools = compile([ToolDefinition::new("f")
         .effects(Effects::ReadOnly)

@@ -213,13 +213,15 @@ pub enum EditOperator {
     /// Read a function body made only of closers and whitespace as no
     /// arguments (`{}`); usable only when the tool requires no parameter.
     ClosersOnlyEmpty,
-    /// Read nested `<parameter=` elements as an object parameter's members.
+    /// Read nested `<parameter=` elements as an object parameter's members,
+    /// or as the members of one object item of an array parameter.
     NestedParameter,
     /// Read a whole JSON object placed directly in a function body as the
     /// arguments.
     JsonBody,
     /// Read an array parameter's XML value that is not a JSON array as one
-    /// item of the array.
+    /// item of the array (for an array of objects, one repetition holding
+    /// nested `<parameter=` elements is one object item).
     ArrayItem,
     /// Trim whitespace around a value of a non-verbatim declared type
     /// (integer, number, boolean, enumeration) beyond the framing newlines.

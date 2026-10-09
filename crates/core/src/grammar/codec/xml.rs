@@ -43,7 +43,8 @@ use super::{XML_CLOSER as CLOSER, XML_CLOSER_VARIANT as CLOSER_VARIANT};
 ///   (`tool_call.value.schema-typed`); an unmodeled parameter whose value
 ///   begins with a `<parameter=` opener holds nested parameters, read as an
 ///   untyped object (`tool_call.markup.nested-parameter`) whose members
-///   resolution types the same way.
+///   resolution types the same way. The same holds for an unmodeled item of
+///   an array parameter (see below).
 /// - An enumeration value is read the same way, then trimmed of any
 ///   whitespace left around it (a non-verbatim type), recorded as
 ///   `tool_call.value.trim-nonverbatim`.
@@ -61,6 +62,22 @@ use super::{XML_CLOSER as CLOSER, XML_CLOSER_VARIANT as CLOSER_VARIANT};
 ///   other value is one item of the array, read by the item type and
 ///   recorded as `tool_call.xml.array-item`, so repeated elements collect
 ///   into one array when the call is resolved.
+/// - An array parameter declared with object items (or unmodeled items,
+///   `$ref`, `anyOf`, ...) whose item begins with a `<parameter=` opener
+///   holds one nested object item: its elements are the item's members
+///   (recorded as `tool_call.markup.nested-parameter`, typed by the item
+///   object's declared shape, or untyped for an unmodeled item and typed later
+///   by the tool's exact schema), and the item is recorded as
+///   `tool_call.xml.array-item` where it closes. Each repetition of the
+///   parameter is one more item, collected in source order with items written
+///   as inline JSON. An array of strings (or any verbatim or scalar item) never
+///   nests: tags in its value stay text. Nesting needs the tool known when the
+///   body is read: with no declared tool there is no scope, so no value nests.
+///   An item's members are declared only in the item's scope, so a member
+///   whose name is the array's own name is the item's member (a child), never
+///   the next item; an item schema that is a recursive `$ref` is unmodeled and
+///   declares no members, so an opener of the array's name ends the open item
+///   (`tool_call.markup.missing-parameter-close`) and is the next item.
 /// - Bytes inside a value or a parameter name that are not well-formed
 ///   UTF-8 are read as U+FFFD, one per maximal malformed subpart, each run
 ///   recorded as `tool_call.value.invalid-utf8` (a data loss keeping the
@@ -344,6 +361,10 @@ struct Frame<'t> {
     tree: ArgTree,
     /// The parameter holding this object; `None` at the top level.
     name: Option<Spanned<String>>,
+    /// Whether this object is one item of the array parameter `name`
+    /// (repeated nested elements of an array of objects): it is adopted as a
+    /// one-element array, recorded as `tool_call.xml.array-item`.
+    item: bool,
 }
 
 struct Reader<'b, 't, 'g> {
@@ -825,18 +846,29 @@ impl<'t> Reader<'_, 't, '_> {
             .unwrap_or(self.frames.len() - 1))
     }
 
-    /// Close the innermost nested object at `at`.
-    fn pop(&mut self, at: usize) {
+    /// Close the innermost nested object at `at`; an item of an array
+    /// parameter is adopted as a one-element array (`tool_call.xml.array-item`).
+    fn pop(&mut self, at: usize) -> Result<(), StopReason> {
         let frame = self.frames.pop().expect("a nested scope is open");
         let mut tree = frame.tree;
         let end = self.base + at;
         tree.root.span = tree.root.span.map(|span| span.start..end);
         let name = frame.name.expect("nested scopes are named");
+        if frame.item {
+            let from = tree
+                .root
+                .span
+                .as_ref()
+                .map_or(at, |span| span.start - self.base);
+            self.record(EditOperator::ArrayItem, from..at, b"")?;
+            tree = wrap_item(tree);
+        }
         self.frames
             .last_mut()
             .expect("the top-level scope stays open")
             .tree
             .adopt(name, tree);
+        Ok(())
     }
 
     /// The operator recording a closer missing where the body ended: at the
@@ -864,6 +896,7 @@ impl<'t> Reader<'_, 't, '_> {
                 span: Some(span),
             }),
             name: None,
+            item: false,
         });
         let mut at = 0;
         loop {
@@ -883,7 +916,7 @@ impl<'t> Reader<'_, 't, '_> {
             };
             if self.frames.len() > 1 {
                 self.respelled(at, width, spelling)?;
-                self.pop(at);
+                self.pop(at)?;
             } else {
                 self.record(EditOperator::DeleteStrayCloser, at..at + width, b"")?;
             }
@@ -893,7 +926,7 @@ impl<'t> Reader<'_, 't, '_> {
             if let Some(operator) = self.closed_at_end() {
                 self.record(operator, at..at, CLOSER)?;
             }
-            self.pop(at);
+            self.pop(at)?;
         }
         Ok(Ok(self.frames.pop().expect("the top-level scope").tree))
     }
@@ -919,7 +952,7 @@ impl<'t> Reader<'_, 't, '_> {
                 opener.start..opener.start,
                 CLOSER,
             )?;
-            self.pop(opener.start);
+            self.pop(opener.start)?;
         }
         let scope = self.frames.last().expect("a scope is open").scope;
         let declared = scope.and_then(|scope| {
@@ -931,12 +964,11 @@ impl<'t> Reader<'_, 't, '_> {
         // its declared shape; an unmodeled parameter's (`$ref`, `anyOf`,
         // ...) are members of an untyped object, typed later by the tool's
         // exact schema (`tool_call.value.schema-typed`).
-        let nested = match declared {
-            Some(ValueShape::Object(inner)) => Some(Some(inner)),
-            Some(ValueShape::Unmodeled) => Some(None),
-            _ => None,
-        };
-        if let Some(inner) = nested {
+        // The same holds for an array of objects (or of unmodeled items): an
+        // item whose body begins with an opener is one nested object, and
+        // each repetition of the parameter is one more item.
+        let nested = nesting(declared);
+        if let Some((inner, item)) = nested {
             let next = self.skip_space(from)?;
             if self.body[next..].starts_with(OPENER) {
                 self.governor
@@ -949,6 +981,7 @@ impl<'t> Reader<'_, 't, '_> {
                         span: Some(self.absolute(from..from)),
                     }),
                     name: Some(opener.name),
+                    item,
                 });
                 return Ok(Ok(from));
             }
@@ -1614,6 +1647,22 @@ impl<'t> Reader<'_, 't, '_> {
             }
         }
         Ok(Ok(tree))
+    }
+}
+
+/// The object scope a parameter declared as `declared` opens for nested
+/// elements, and whether the object is one item of an array parameter: an
+/// object or unmodeled parameter, or an array of objects or unmodeled items.
+const fn nesting(declared: Option<&ValueShape>) -> Option<(Option<&ObjectShape>, bool)> {
+    match declared {
+        Some(ValueShape::Object(inner)) => Some((Some(inner), false)),
+        Some(ValueShape::Unmodeled) => Some((None, false)),
+        Some(ValueShape::Array(item)) => match &**item {
+            ValueShape::Object(inner) => Some((Some(inner), true)),
+            ValueShape::Unmodeled => Some((None, true)),
+            _ => None,
+        },
+        _ => None,
     }
 }
 

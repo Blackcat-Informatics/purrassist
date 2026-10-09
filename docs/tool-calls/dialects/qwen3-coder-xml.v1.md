@@ -42,7 +42,25 @@ first-party; no chat-template text is copied into this repository.
   repair). Integer, number, boolean, array and object parameters are parsed
   as JSON with their exact spellings. An object parameter may hold nested
   `<parameter=...>` elements instead of inline JSON; both give the same
-  tree. A body that is one whole JSON object is accepted as the arguments.
+  tree. An array parameter whose items are objects (or unmodeled, such as a
+  `$ref` or `anyOf` item schema) may be written as one `<parameter=P>` element
+  per item, each holding nested `<parameter=...>` elements; every repetition
+  is one object item (`tool_call.markup.nested-parameter` and
+  `tool_call.xml.array-item`), the items collect in source order
+  (`tool_call.parameter.collect`), and they mix freely with items written as
+  inline JSON. *Proved by* `tool_call_goldens::xml_array_nested_object_items`
+  and its siblings (`..._in_object`, `..._mixed`, `..._item_unclosed`,
+  `..._item_unclosed_before_sibling`, `xml_array_unmodeled_items_nested`).
+  This needs the tool to be known when the body is read: with no declared tool
+  there is no scope to open, so the repetitions are not nested objects.
+  An array of strings never nests: nested tags stay verbatim text of the item
+  (`xml_array_string_item_keeps_nested_tags`). Limit: where an item's own
+  schema declares a member with the array's name, an inner opener of that
+  name is that member (a child), not the next item
+  (`xml_array_nested_object_same_name_member`); an item schema that is only
+  a recursive `$ref` is unmodeled and has no such members, so the inner
+  opener is read as the next item, with `tool_call.markup.missing-parameter-close`.
+  A body that is one whole JSON object is accepted as the arguments.
   A string value may hold closer text (see
   [Closer text inside a value](#closer-text-inside-a-value)).
 - The `<tool_call>` opener is shared with [Hermes](hermes.v1.md). With both
@@ -81,7 +99,8 @@ edit but the framing newlines.
   between the two framing newlines; every other value is inline compact
   JSON with exact number spellings. Nested objects are written as inline
   JSON, not as nested parameter elements (both read to the same tree; inline
-  JSON is the single canonical choice). A repeatable parameter is one element
+  JSON is the single canonical choice), and so are the object items of an
+  array parameter. A repeatable parameter is one element
   per item.
 - The body is checked by decoding it with the codec under the tool's shape
   (a round trip). When that gives back the same tree, resolved, with no

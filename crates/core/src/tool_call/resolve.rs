@@ -2296,8 +2296,11 @@ impl Resolver<'_> {
         for occurrence in occurrences {
             match occurrence.value.value {
                 Value::Array(values) => {
+                    // Items number across occurrences, as the recognized
+                    // tree's leaf pointers do (`ArgTree::adopt`).
+                    let before = items.len();
                     for (index, value) in values.into_iter().enumerate() {
-                        items.push((value, format!("{}/{index}", occurrence.source)));
+                        items.push((value, format!("{}/{}", occurrence.source, before + index)));
                     }
                 }
                 _ => items.push((occurrence.value, occurrence.source)),

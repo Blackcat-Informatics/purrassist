@@ -311,9 +311,37 @@ impl ArgTree {
 
     /// Append `value` as member `name` of this object tree, re-rooting its
     /// leaves and unresolved values under the member's pointer.
-    pub(crate) fn adopt(&mut self, name: Spanned<String>, value: Self) {
+    ///
+    /// A repeated name keeps every occurrence as a duplicate member, and
+    /// resolution collects the occurrences of an array parameter into one
+    /// array, in order. An array occurrence is therefore re-rooted past the
+    /// items the earlier occurrences hold (`/outfits/1/wearer` for the second
+    /// occurrence's item, not `/outfits/0/wearer` again), so every leaf and
+    /// unresolved value names the item it was read from.
+    pub(crate) fn adopt(&mut self, name: Spanned<String>, mut value: Self) {
         let prefix = format!("/{}", pointer_segment(&name.value));
         let whole = value.is_stand_in();
+        if matches!(value.root.value, Value::Array(_)) && !whole {
+            let earlier = match &self.root.value {
+                Value::Object(members) => members
+                    .iter()
+                    .filter(|member| member.key == name.value)
+                    .map(|member| match &member.value.value {
+                        Value::Array(items) => items.len(),
+                        _ => 1,
+                    })
+                    .sum(),
+                _ => 0,
+            };
+            if earlier > 0 {
+                for leaf in &mut value.leaves {
+                    leaf.pointer = shift_item(&leaf.pointer, earlier);
+                }
+                for unresolved in &mut value.unresolved {
+                    unresolved.pointer = shift_item(&unresolved.pointer, earlier);
+                }
+            }
+        }
         self.leaves
             .extend(value.leaves.into_iter().map(|leaf| ArgLeaf {
                 pointer: format!("{prefix}{}", leaf.pointer),
@@ -595,5 +623,24 @@ impl Piece {
             Self::Segment(segment) => segment.span(),
             Self::Choice(choice) => choice.span.clone(),
         }
+    }
+}
+
+/// `pointer`, whose first segment is an array index, with `by` added to the
+/// index; a pointer without an index segment is unchanged.
+fn shift_item(pointer: &str, by: usize) -> String {
+    let Some(rest) = pointer.strip_prefix('/') else {
+        return pointer.to_owned();
+    };
+    let (index, tail) = rest
+        .split_once('/')
+        .map_or((rest, ""), |(index, tail)| (index, tail));
+    let Ok(index) = index.parse::<usize>() else {
+        return pointer.to_owned();
+    };
+    if tail.is_empty() {
+        format!("/{}", index.saturating_add(by))
+    } else {
+        format!("/{}/{tail}", index.saturating_add(by))
     }
 }

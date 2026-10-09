@@ -717,7 +717,8 @@ declarations the model was shown and lose nothing.
   Qwen3-Coder XML as text, which the exact schema types itself: each
   verbatim string is also read as the JSON value it spells (a number with
   its exact spelling, a boolean, `null`, an array or object written inline,
-  and nested `<parameter=...>` elements read as an object's members), and
+  and nested `<parameter=...>` elements read as an object's members, or as
+  the object items of an array whose items are unmodeled), and
   the exact validator chooses. The verbatim string is kept wherever it
   validates, so `12345` under `anyOf[string, integer]` or `Optional[str]`
   stays a string as for a declared string; the JSON reading is taken where
