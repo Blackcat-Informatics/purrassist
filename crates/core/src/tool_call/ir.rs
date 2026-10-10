@@ -26,7 +26,7 @@ use crate::grammar::edit::MarkupEdit;
 use crate::json::{Member, Node, Value, pointer_segment};
 use crate::provenance::Derivation;
 use core::ops::Range;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// A value with the absolute byte range it was read from.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -177,7 +177,8 @@ pub struct ArgTree {
     /// parameter's occurrences.
     pub collected: Vec<CollectedMember>,
     /// What each parameter name holds so far, so that adopting an
-    /// occurrence is O(1) in the members already held.
+    /// occurrence never walks the members already held (a lookup in an
+    /// ordered map of the distinct names; core has no seeded hashing).
     held: Held,
 }
 
@@ -186,7 +187,7 @@ pub struct ArgTree {
 /// object's members. It is derived from [`ArgTree::root`] and
 /// [`ArgTree::collected`], so it never takes part in equality.
 #[derive(Clone, Debug, Default)]
-struct Held(HashMap<String, Holding>);
+struct Held(BTreeMap<String, Holding>);
 
 #[cfg(test)]
 thread_local! {
@@ -401,9 +402,10 @@ impl ArgTree {
     /// of `canonical` together: an alias and the canonical spelling of one
     /// parameter share one item sequence, as resolution's collection of the
     /// occurrences does. Aliases exist only on declared scopes, which never
-    /// collect, so `collect` occurrences always share one spelling. Each adoption costs O(1) in the members already
-    /// held plus the size of `value`, which the reader has charged: the
-    /// per-name state is a running count, not a scan of the members.
+    /// collect, so `collect` occurrences always share one spelling. Each
+    /// adoption is constant in the members already held plus the size of
+    /// `value`, which the reader has charged: the per-name state is a
+    /// running count, not a scan of the members.
     pub(crate) fn adopt_keyed(
         &mut self,
         name: Spanned<String>,
