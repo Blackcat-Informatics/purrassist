@@ -1402,3 +1402,153 @@ table states, over every golden), the goldens
 `length_stop_required_choice_on_content` and
 `length_stop_rejected_attempt_beside_usable_call` (each with an `OpenAI`
 emission), and the CLI tests above.
+
+## Compatibility
+
+`tool_call.recover.v1` is a pre-0.1.0 wire value: additive members may appear
+in it, and in the MCP output schema, before 0.1.0. Parse by member name and
+ignore members you do not know; the MCP output schema sets
+`additionalProperties: false`, so validate against the schema your server
+lists (`tools/list`), not a copy. This release changes the following against
+the previous head (`main`). Rust API changes are listed under "Rust API"
+below.
+
+Wire and MCP:
+
+- `value.reasoning_blocks` is new and **required** in the output schema:
+  `[{"span": {start, end}, "text": {start, end}}]`, one entry per reasoning
+  block, never merged (`value.reasoning` keeps the merged ranges).
+- A strict forced choice has a constraint string of the family
+  `tool_choice=forced[exactly-one,no-content,no-reasoning]:NAME` (only the
+  active options, the name last); a choice with no active option is still
+  `tool_choice=forced:NAME`.
+- A new per-call unresolved reason code, `tool_choice_cardinality`: a call
+  after the first beneath an `exactly_one` choice.
+- The MCP input has a new optional member, `tool_choice_strict`, and
+  `tool_choice` accepts the Anthropic `disable_parallel_tool_use` boolean
+  (`true` means exactly one call). Both are described in
+  [Strict forced tool choice](#strict-forced-tool-choice).
+- `value.usable_calls` and `value.usable_calls_accepting_guesses` are 0
+  whenever `value.tool_choice.passed` is false; they used to count calls
+  beside `verdict: nothing_usable`.
+- Evidence pointers of a repeated array parameter number its items across all
+  occurrences (`/xs/0`, `/xs/1`, ...), where each occurrence used to restart
+  at 0, and `decode-typed` evidence cites each item's own span. Alias
+  spellings of one parameter share one sequence.
+- Ambiguous readings are ordered among equal costs by the digest of their
+  wire JSON, which now includes `reasoning_blocks`; the order can differ from
+  the previous release.
+- A new rule id, `tool_call.markup.unmodeled-scope-boundary` (46 operators
+  in all; see [RULES.md](RULES.md)).
+- Receipt `budget` and `usage` numbers differ for the same input (see
+  Budgets below); decisions, values and spans do not.
+
+CLI:
+
+- `recover-tool-calls` has the flags `--tool-choice-exactly-one`,
+  `--tool-choice-no-content` and `--tool-choice-no-reasoning` (see
+  [CLI](#cli)).
+
+Behaviour:
+
+- A repeated `<parameter=NAME>` whose body holds nested `<parameter=`
+  elements is read as the object items of an array-of-object parameter.
+- `$ref`, `anyOf` and `oneOf` item and parameter scopes declare their
+  schema's member names, so a recursive tree nests and an inner member that
+  shares an outer parameter's name stays inside its item.
+- Free-form object parameters and items (`additionalProperties: true`, no
+  declared members) close by the guess `unmodeled-scope-boundary` rather than
+  `missing-parameter-close`: a `best_guess`, never run on a mutating tool.
+- A strict choice with `allow_reasoning: false` beside reasoning `content`
+  is `invalid_input`; any rejected call attempt counts against `exactly_one`
+  and `allow_content: false`.
+- Anthropic `disable_parallel_tool_use` used to be rejected; it is accepted.
+- A root `$ref`, a root `allOf` of one schema and a root `anyOf`/`oneOf` of
+  objects now project their parameters (a Draft-07 root `$ref`, the
+  FastMCP/pydantic shape, used to project none), see
+  [C5](#c5-lossless-declaration-adapters).
+- A reasoning closer is recognized only at or after the block's text start,
+  and a reasoning marker inside a JSON string of a repeated parameter stays
+  value text.
+- A whole call nests about `(depth - 1) / 3` item levels (about 42 at the
+  CLI and MCP value); deeper input is the explicit `BudgetExceeded(Depth)`.
+
+Budgets (see [RESOURCES.md](../RESOURCES.md)):
+
+- The per-byte constants behind `ToolRecoveryRequest::sized` are
+  `RECOVER_WORK_PER_BYTE` 176 (was 32), `RECOVER_SCRATCH_PER_BYTE` 368 (was
+  48) and the new `RECOVER_EVIDENCE_BYTES_PER_ENTRY` 7, so the dense
+  repeated markup the previous constants exhausted on now recovers. An
+  exhausted budget stays an explicit outcome.
+- Repeated parameters, Mistral chained calls and call arrays cost linear
+  time. The default budget admits about 610 one-property root-union
+  branches (about 670 before).
+
+### Rust API
+
+The Rust types are not `#[non_exhaustive]`, so new variants and fields break
+exhaustive matches and struct literals.
+
+Breaking:
+
+- `ToolChoice` gains the variant `ForcedStrict(StrictForced)`. An exhaustive
+  `match` no longer compiles.
+- `UnresolvedReason` gains `ToolChoiceCardinality` (`code()` is
+  `tool_choice_cardinality`, with a `Display` text). Exhaustive matches break.
+- `EditOperator` gains `UnmodeledScopeBoundary`
+  (`tool_call.markup.unmodeled-scope-boundary`, appended last);
+  `grammar::edit::OPERATOR_COUNT` is 46 (was 45) and `OPERATORS.len()` is 46.
+  Exhaustive matches and code that hardcodes 45 break.
+- `ToolCalls` gains the pub field `reasoning_blocks: Vec<ReasoningBlock>`.
+  Struct-literal construction breaks. The doc of `ToolCalls::reasoning`
+  changes: adjacent ranges are merged (`<think>a</think><think>b</think>` is
+  `0..32`); the per-block view is `reasoning_blocks`.
+- `ReasoningSegment` gains the pub field `text: Range<usize>` (marker-free
+  text range; invariant `text.start <= text.end`, `text` inside `span`).
+  Struct literals break.
+- `ArgumentShape` gains `scopes: ScopeGraph` and `ParameterShape` gains
+  `nesting: Nesting`. Struct literals break.
+- `ArgTree` gains the pub field `collected: Vec<CollectedMember>` and a
+  private field, so external struct-literal construction no longer compiles.
+  Derives are unchanged (the private running state never takes part in
+  equality).
+- `ArgTree::value` and `ArgTree::empty_object` are no longer `const fn`.
+- `ToolCalls::usable()`, `usable_accepting_guesses()` and `emitted_calls()`
+  return an empty list when `tool_choice.passed` is false (a violated tool
+  choice means nothing of the turn runs). `emitted_calls()` is now exactly
+  `usable_accepting_guesses()`. Callers that read `usable()` beside a failed
+  check used to get the `Resolved` calls.
+- `ToolChoice::from_anthropic` accepts `disable_parallel_tool_use` on
+  `{"type":"tool",...}`: `true` is `ForcedStrict { exactly_one: true,
+  allow_content: true, allow_reasoning: true }`, `false` is `Forced`. A
+  non-boolean value, or the member on `auto`/`any`/`none`, is a
+  `ToolChoiceError`. It used to be an error for every type.
+- Request error: `ForcedStrict { allow_reasoning: false }` with
+  `ReasoningPolicy::AsContent` is an `invalid_input` outcome (reasoning is
+  never recognized, so the option could not be enforced).
+- Published constants change value (see the budget items above):
+  `cost::RECOVER_WORK_PER_BYTE`, `cost::RECOVER_SCRATCH_PER_BYTE`.
+  `ToolRecoveryRequest::sized_budget` / `sized` / `sized_for` also grow
+  `evidence_entries` (signatures unchanged).
+
+Added:
+
+- `tool_call::StrictForced { name, exactly_one, allow_content, allow_reasoning
+  }` (`Clone, Debug, PartialEq, Eq`) with `exactly_one(name)`,
+  `allow_content(bool)`, `allow_reasoning(bool)`, `with_exactly_one(bool)`
+  (the last three `const fn`).
+- `tool_call::ReasoningBlock { span, text }` (`Clone, Debug, PartialEq, Eq`).
+- `tool_call::CollectedMember { pointer, key_span, occurrences }` (`Clone,
+  Debug, PartialEq, Eq`).
+- New public module surface `tool_call::{Nesting, ScopeGraph, ScopeMember,
+  ScopeNode}`. `Nesting` is `None | Object(usize) | ArrayOfObject(usize)`
+  (`Default` is `None`). `ScopeMember { name, nesting, array }`.
+  `ScopeNode::{members, member, declares, is_open, is_opaque}`.
+  `ScopeGraph::{node, len, is_empty}`.
+- `cost::RECOVER_EVIDENCE_BYTES_PER_ENTRY: u64 = 7`.
+- Docs: `Budget::depth` documents the stack guard and the `(depth - 1) / 3`
+  nested-item capacity; `ToolChoice::constraint` documents the `forced[...]`
+  family; `ToolCalls::usable` has a doctest.
+
+Root `$ref` projection follows local references only (`#/definitions/…` or
+`#/$defs/…`), up to 64 hops, with a cycle check; see C5.
