@@ -1,0 +1,35 @@
+{
+  "issue": 8,
+  "repo": "Blackcat-Informatics/purrassist",
+  "forge": "github",
+  "title": "Tool-call recovery: arrays of nested-parameter objects, strict forced cardinality, marker-free reasoning range",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {
+    "5": "feat(3): tool-call recovery \u2014 typed definitions, grammar-driven parsing (12 dialects), schema-guided repair",
+    "4": "Tool-call recovery, part 2: streaming recognizer, remaining dialects, purrassist-derive",
+    "8": "Tool-call recovery: arrays of nested-parameter objects, strict forced cardinality, marker-free reasoning range",
+    "3": "Tool-call recovery: typed tool definitions, multi-dialect parsing, schema-guided repair, streaming",
+    "6": "Tool-call fuzz: finish the rejected-span oracle failures left at the #3 merge",
+    "1": "Complete PurRAssist 0.1.0 plan and release qualification"
+  },
+  "related": [
+    {
+      "number": 3,
+      "title": "Tool-call recovery: typed tool definitions, multi-dialect parsing, schema-guided repair, streaming",
+      "state": "OPEN"
+    },
+    {
+      "number": 1,
+      "title": "Complete PurRAssist 0.1.0 plan and release qualification",
+      "state": "OPEN"
+    }
+  ],
+  "defect_classes": {},
+  "coverage": [
+    "issue #8 + 5 comment(s) via github",
+    "link crawl: 6 issue(s) within 2 hop(s) of `#N` references",
+    "forge search on ['Tool-call', 'recovery:', 'arrays']: 2 other item(s)",
+    "no GhpRsq-Defect-Class trailers in history yet \u2014 recurrence cannot be counted from trailers for this repo"
+  ]
+}
