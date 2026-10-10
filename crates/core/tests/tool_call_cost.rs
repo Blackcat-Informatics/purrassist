@@ -64,6 +64,10 @@ fn constants() -> Vec<(&'static str, u64)> {
         ("RECOVER_WORK_PER_BYTE", cost::RECOVER_WORK_PER_BYTE),
         ("RECOVER_SCRATCH_PER_BYTE", cost::RECOVER_SCRATCH_PER_BYTE),
         (
+            "RECOVER_EVIDENCE_BYTES_PER_ENTRY",
+            cost::RECOVER_EVIDENCE_BYTES_PER_ENTRY,
+        ),
+        (
             "RECOVER_OPENER_CANDIDATE_DIVISOR",
             cost::RECOVER_OPENER_CANDIDATE_DIVISOR,
         ),
@@ -146,6 +150,15 @@ use tool_call_cost_support::{self as support, hermes, qwen, tools};
 #[test]
 fn argument_work_bound() {
     support::argument_work_bound(1 << 16, 1 << 18);
+}
+
+/// Dense markup of 64 KiB in every dialect's densest shape (many small
+/// calls; repeated nested, JSON-array and string items) recovers under plain
+/// `sized(Effort::Standard, output)`. `tool_call_scale` runs the same shapes
+/// at 1 MiB (`make corpus`).
+#[test]
+fn dense_markup_fits_published_budget() {
+    support::dense_markup_fits_published_budget(1 << 16);
 }
 
 /// T6: closer text inside a value costs work linear in the output. A
@@ -490,8 +503,12 @@ fn sized_budget_follows_the_published_formula() {
                     * openers
         );
         assert_eq!(
-            (budget.depth, budget.evidence_entries, budget.helper_calls),
-            (preset.depth, preset.evidence_entries, preset.helper_calls)
+            budget.evidence_entries,
+            preset.evidence_entries + n.div_ceil(cost::RECOVER_EVIDENCE_BYTES_PER_ENTRY)
+        );
+        assert_eq!(
+            (budget.depth, budget.helper_calls),
+            (preset.depth, preset.helper_calls)
         );
     }
     // Restricting the allow-list counts only its dialects' openers.
@@ -634,13 +651,6 @@ fn schema_typing_is_uncapped_and_governed() {
     );
 }
 
-/// Ceiling on `Work` per byte for output that is only repeated parameters
-/// (measured 52 to 62), used to size the repeated-parameter budget.
-const DENSE_WORK_PER_BYTE: u64 = 80;
-/// Ceiling on peak scratch per byte for the same output (measured 104 to
-/// 262).
-const DENSE_SCRATCH_PER_BYTE: u64 = 320;
-
 /// A tool with an array of objects and an array of strings, to repeat.
 fn repeated_tool() -> ToolSet {
     ToolSet::compile(
@@ -672,17 +682,13 @@ fn repeated_tool() -> ToolSet {
 /// `total_scratch_charged` track the byte ratio within the 1.05x tolerance
 /// used for the other linear bounds in this file.
 ///
-/// The budget is `ToolRecoveryRequest::sized` with `work` and
-/// `scratch_bytes` raised to [`DENSE_WORK_PER_BYTE`] and
-/// [`DENSE_SCRATCH_PER_BYTE`] per byte. Output that is nothing but repeated
-/// markup costs more per byte (measured 52 to 62 work, 104 to 262 peak
-/// scratch) than the 32 and 48 per byte `sized` adds for ordinary output, so
-/// `sized` alone exhausts explicitly (`BudgetExceeded`), never quietly: on
-/// `Work` already at k = 1,000 nested items (3.66 million needed against a
-/// sized 2.99 million), and at about 1,500 JSON items and 1,100 string items;
-/// on `ScratchBytes` (peak) between k = 4,000 and 8,000 nested items
-/// (130 MB at 8,000 against a sized 86.7 MiB). The test pins the
-/// measured per-byte costs as ceilings, so they cannot grow unnoticed.
+/// The budget is plain `ToolRecoveryRequest::sized(Effort::Standard,
+/// output)`, with no raised limit: output that is nothing but repeated
+/// markup costs 52 to 62 work and 104 to 262 peak scratch per byte
+/// (`docs/RESOURCES.md`, "Dense markup"), which `RECOVER_WORK_PER_BYTE` and
+/// `RECOVER_SCRATCH_PER_BYTE` cover with a margin, and about 0.07 evidence
+/// entries per byte, which `RECOVER_EVIDENCE_BYTES_PER_ENTRY` covers. The
+/// test also asserts the published per-byte constants as ceilings.
 #[test]
 fn repeated_parameters_cost_is_linear() {
     let tools = repeated_tool();
@@ -700,11 +706,8 @@ fn repeated_parameters_cost_is_linear() {
                 "<tool_call>\n<function=tree>\n{}</function>\n</tool_call>",
                 item.repeat(k)
             );
-            let mut request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
+            let request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
             let n = input.len() as u64;
-            request.budget.work = request.budget.work.max(DENSE_WORK_PER_BYTE * n);
-            request.budget.scratch_bytes =
-                request.budget.scratch_bytes.max(DENSE_SCRATCH_PER_BYTE * n);
             let started = std::time::Instant::now();
             let result = tools.recover(input.as_bytes(), &request);
             let elapsed = started.elapsed();
@@ -719,9 +722,9 @@ fn repeated_parameters_cost_is_linear() {
             };
             assert_eq!(count, k, "{item} {k}");
             let usage = result.receipt.usage;
-            assert!(usage.work <= DENSE_WORK_PER_BYTE * n, "{item} {k}");
+            assert!(usage.work <= cost::RECOVER_WORK_PER_BYTE * n, "{item} {k}");
             assert!(
-                usage.peak_scratch_bytes <= DENSE_SCRATCH_PER_BYTE * n,
+                usage.peak_scratch_bytes <= cost::RECOVER_SCRATCH_PER_BYTE * n,
                 "{item} {k}"
             );
             println!(

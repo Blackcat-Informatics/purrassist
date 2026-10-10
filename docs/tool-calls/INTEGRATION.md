@@ -679,8 +679,12 @@ allow-list, with a published bound, and every limit is explicit.
   and the `tool_call_recover` row of the allocation oracle.
 - **Sizing.** Use `ToolRecoveryRequest::sized(effort, output)` (or
   `sized_for(effort, output, dialects)` for another allow-list); the MCP tool
-  and the CLI use it by default. It adds 32 work units and 48 scratch bytes
-  per output byte to the preset, and `⌈preset.candidates / 8⌉` candidates
+  and the CLI use it by default. It adds 176 work units, 368 scratch bytes
+  and one evidence entry per 7 bytes per output byte to the preset (the
+  measured maximum of the densest markup up to 1 MiB, plus a margin of
+  25% to 40%; `RECOVER_WORK_PER_BYTE`, `RECOVER_SCRATCH_PER_BYTE` and
+  `RECOVER_EVIDENCE_BYTES_PER_ENTRY`; the shapes `docs/RESOURCES.md` lists as
+  not covered still exhaust explicitly), and `⌈preset.candidates / 8⌉` candidates
   per call opener of the output (16 per opener at `Standard`), counted by a
   linear pre-scan (`DialectSet::call_openers`), so a busy turn does not
   exhaust a budget sized for an ordinary one. Contested spans whose
@@ -693,7 +697,12 @@ allow-list, with a published bound, and every limit is explicit.
   `Resolved` at `Effort::Standard`, where the fixed preset exhausts),
   `tool_call_cost::per_call_competition_scales_with_calls`,
   `tool_call_cost::crafted_reading_explosion_exhausts_explicitly`,
-  `tool_call_cost::sized_budget_follows_the_published_formula`, and the host
+  `tool_call_cost::sized_budget_follows_the_published_formula`,
+  `tool_call_cost::dense_markup_fits_published_budget` and
+  `tool_call_scale::one_mib_dense_markup_fits_published_budget` (about 1 MiB
+  of tiny calls in every built-in dialect and of repeated nested, JSON-array
+  and string items recovers under plain `sized(Effort::Standard, output)`),
+  and the host
   and CLI tests `tool_call_tools::busy_turn_resolves_every_call_by_default`
   and `tool_calls_cli::busy_turn_resolves_every_call_by_default`. See
   [RESOURCES.md](../RESOURCES.md#budgets-for-large-outputs-and-busy-turns).

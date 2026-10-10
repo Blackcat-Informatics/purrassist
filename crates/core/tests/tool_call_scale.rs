@@ -22,3 +22,11 @@ fn one_mib_argument_fits_published_budget() {
 fn work_independent_of_dialect_count_beyond_bound() {
     tool_call_cost_support::work_independent_of_dialect_count(1 << 16);
 }
+
+/// Dense markup (many small calls in every built-in dialect, repeated nested,
+/// JSON-array and string items in Qwen3-Coder XML) of about 1 MiB recovers
+/// under plain `ToolRecoveryRequest::sized(Effort::Standard, output)`.
+#[test]
+fn one_mib_dense_markup_fits_published_budget() {
+    tool_call_cost_support::dense_markup_fits_published_budget(1 << 20);
+}

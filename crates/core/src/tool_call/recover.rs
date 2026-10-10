@@ -158,7 +158,8 @@ use crate::contract::{
 use crate::digest::Digest;
 use crate::grammar::CallEnd;
 use crate::grammar::cost::{
-    RECOVER_OPENER_CANDIDATE_DIVISOR, RECOVER_SCRATCH_PER_BYTE, RECOVER_WORK_PER_BYTE,
+    RECOVER_EVIDENCE_BYTES_PER_ENTRY, RECOVER_OPENER_CANDIDATE_DIVISOR, RECOVER_SCRATCH_PER_BYTE,
+    RECOVER_WORK_PER_BYTE,
 };
 use crate::grammar::edit::LossKind;
 use crate::json::{Node, Value, pointer_segment};
@@ -833,7 +834,10 @@ impl ToolRecoveryRequest {
     }
 
     /// [`Self::new`] with a budget sized for `output` over the built-in
-    /// dialects: [`Self::sized_for`] with [`DialectSet::built_in`].
+    /// dialects: [`Self::sized_for`] with [`DialectSet::built_in`]. The
+    /// budget covers dense markup (many small calls, many repeated
+    /// parameters) up to the measured maximum plus a margin, see
+    /// [`Self::sized_budget`].
     ///
     /// ```
     /// use purrassist_core::{Effort, tool_call::{DialectSet, ToolRecoveryRequest}};
@@ -885,11 +889,18 @@ impl ToolRecoveryRequest {
     /// input_bytes   = max(preset.input_bytes, input_len)
     /// candidates    = preset.candidates
     ///               + ⌈preset.candidates / RECOVER_OPENER_CANDIDATE_DIVISOR⌉ · openers
+    /// evidence_entries = preset.evidence_entries
+    ///               + ⌈input_len / RECOVER_EVIDENCE_BYTES_PER_ENTRY⌉
     /// ```
     ///
     /// Every other limit is the preset's. Saturating, finite, and a function
     /// of its arguments alone. Openers never exceed `input_len`, so every
-    /// limit is linear in the output length.
+    /// limit is linear in the output length. The per-byte constants cover
+    /// the densest markup measured up to 1 MiB under the built-in dialects
+    /// (see `docs/RESOURCES.md`, "Dense markup"), so output of that kind
+    /// recovers under this budget as ordinary output does. The shapes that
+    /// section lists as not covered still end in an explicit
+    /// [`StopReason::BudgetExceeded`].
     ///
     /// ```
     /// use purrassist_core::{Effort, grammar::cost};
@@ -899,6 +910,7 @@ impl ToolRecoveryRequest {
     /// assert_eq!(budget.work, preset.work + cost::RECOVER_WORK_PER_BYTE * (1 << 20));
     /// assert_eq!(budget.scratch_bytes, preset.scratch_bytes + cost::RECOVER_SCRATCH_PER_BYTE * (1 << 20));
     /// assert_eq!(budget.candidates, 16 + 2 * 64);
+    /// assert_eq!(budget.evidence_entries, preset.evidence_entries + (1u64 << 20).div_ceil(cost::RECOVER_EVIDENCE_BYTES_PER_ENTRY));
     /// assert_eq!(ToolRecoveryRequest::sized_budget(Effort::Standard, 0, 0), Effort::Standard.budget());
     /// ```
     #[must_use]
@@ -912,6 +924,9 @@ impl ToolRecoveryRequest {
             .scratch_bytes
             .saturating_add(RECOVER_SCRATCH_PER_BYTE.saturating_mul(length));
         budget.input_bytes = budget.input_bytes.max(length);
+        budget.evidence_entries = budget
+            .evidence_entries
+            .saturating_add(length.div_ceil(RECOVER_EVIDENCE_BYTES_PER_ENTRY));
         let per_opener = budget.candidates.div_ceil(RECOVER_OPENER_CANDIDATE_DIVISOR);
         budget.candidates = budget
             .candidates

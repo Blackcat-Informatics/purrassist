@@ -377,11 +377,14 @@ Fixed presets are sized for ordinary turns. `ToolRecoveryRequest::sized(effort,
 output)` (and `sized_for(effort, output, dialects)` for another allow-list)
 sizes a budget for the output in two phases: a linear pre-scan counts its
 call openers `m` (`DialectSet::call_openers`), then the budget is the
-preset's work plus `RECOVER_WORK_PER_BYTE · n` (32 per byte), its scratch
-bytes plus `RECOVER_SCRATCH_PER_BYTE · n` (48 per byte), at least `n` input
-bytes, and its candidates plus `⌈preset.candidates / 8⌉ · m`
+preset's work plus `RECOVER_WORK_PER_BYTE · n` (176 per byte), its scratch
+bytes plus `RECOVER_SCRATCH_PER_BYTE · n` (368 per byte), at least `n` input
+bytes, its evidence entries plus `⌈n / 7⌉`
+(`RECOVER_EVIDENCE_BYTES_PER_ENTRY`), and its candidates plus `⌈preset.candidates / 8⌉ · m`
 (`RECOVER_OPENER_CANDIDATE_DIVISOR`; 16 per opener at `Standard`); every
-other limit is the preset's. The MCP tool and the CLI use it. Competing
+other limit is the preset's. The MCP tool and the CLI use it. The
+shapes `docs/RESOURCES.md` ("Dense markup") lists as not covered still end
+in an explicit `BudgetExceeded`. Competing
 segmentations of a contested span that recover the same calls are folded
 before whole-message readings are enumerated, so a turn with many calls
 spends candidates linearly; readings that genuinely multiply still exhaust
