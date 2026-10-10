@@ -947,9 +947,19 @@ Under `starts_open` the block has no opener, so its `text` begins at `0` (the
 closer, a block closed at a call opener ends at the opener, and an
 unterminated block ends at the end of output. The bytes are exactly those of
 the output: Anthropic thinking text stays JSON-escaped (`\n`, `\"`), never
-unescaped. *Proved by* the `reasoning_blocks_*` tests in `tool_call_recover`,
-the goldens' captured `reasoning_text`, and the tool-call fuzz probe's
-block invariants.
+unescaped. The text of an Anthropic `redacted_thinking` block is not
+reasoning prose: it is the opaque encrypted `data` payload, verbatim
+(`EmwKAhgB` in the `anthropic_redacted_thinking` golden), and consumers must
+not interpret or display it. A closer is recognized only at or after the start
+of the block's text, so `text` is never a reversed range: in
+`{"type": "redacted_thinking", "data": "}x` the `"}` begins inside the opener
+(its final `"`), does not close the block, and the block is unterminated with
+`text` `39..41` (`}x`). *Proved by* the `reasoning_blocks_*` tests in
+`tool_call_recover`, the goldens' captured `reasoning_text`,
+`tool_call_goldens::anthropic_redacted_thinking_text_is_the_opaque_payload`,
+`anthropic_redacted_thinking_closer_overlaps_opener`,
+`reasoning_block_ranges_slice_over_every_golden`, and the tool-call fuzz
+probe's block invariants.
 
 ### Ids across rounds
 

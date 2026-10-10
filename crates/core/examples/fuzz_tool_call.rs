@@ -1617,6 +1617,11 @@ fn check_reasoning_blocks(
             check_range(output, &block.span, "reasoning block span");
             check_range(output, &block.text, "reasoning block text");
             assert!(
+                block.text.start <= block.text.end,
+                "reasoning text {:?} is reversed",
+                block.text
+            );
+            assert!(
                 block.span.start <= block.text.start && block.text.end <= block.span.end,
                 "reasoning text {:?} lies outside its block {:?}",
                 block.text,

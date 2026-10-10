@@ -1527,7 +1527,12 @@ impl ToolCall {
 /// marker begins; a block closed at a call opener ends at the opener, and an
 /// unterminated block at the end of output. It is a range of the output's
 /// bytes, verbatim and never unescaped: the text of an Anthropic `thinking`
-/// block stays JSON-escaped.
+/// block stays JSON-escaped. The text of an Anthropic `redacted_thinking`
+/// block is not reasoning prose: it is the opaque encrypted `data` payload,
+/// verbatim, which a consumer must not interpret or display. `text` is
+/// never a reversed range: a closing marker is recognized only at or after
+/// the start of the text, so one that overlaps the opening marker does not
+/// close the block.
 ///
 /// ```
 /// use purrassist_core::tool_call::{Effects, ToolDefinition, ToolRecoveryRequest, ToolSet};

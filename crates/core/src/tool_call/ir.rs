@@ -611,6 +611,23 @@ pub enum ReasoningClosure {
 }
 
 /// A reasoning block.
+///
+/// `text` is `span` without its markers, so slicing the output by it never
+/// panics for a segment the recognizer produced:
+///
+/// ```
+/// use purrassist_core::tool_call::{ReasoningClosure, ReasoningSegment};
+/// let output = b"<think>abc</think>Done.";
+/// let segment = ReasoningSegment {
+///     span: 0..18,
+///     text: 7..10,
+///     closure: ReasoningClosure::Closed,
+///     embedded: Vec::new(),
+///     edits: Vec::new(),
+/// };
+/// assert_eq!(&output[segment.text.clone()], b"abc");
+/// assert!(segment.span.start <= segment.text.start && segment.text.end <= segment.span.end);
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReasoningSegment {
     /// The source range, markers included.
@@ -620,7 +637,11 @@ pub struct ReasoningSegment {
     /// no opener) and ends where the closing marker begins; a block closed at
     /// a call opener ends at the opener, and an unterminated one at the end of
     /// output. The bytes are verbatim source offsets, never unescaped
-    /// (Anthropic thinking text stays JSON-escaped).
+    /// (Anthropic thinking text stays JSON-escaped). For an Anthropic
+    /// `redacted_thinking` block the text is the opaque encrypted `data`
+    /// payload, not reasoning prose. Invariant: `text.start <= text.end` and
+    /// `text` lies inside `span`; a closing marker that begins before the
+    /// text does not close the block.
     pub text: Range<usize>,
     /// How the block ended.
     pub closure: ReasoningClosure,

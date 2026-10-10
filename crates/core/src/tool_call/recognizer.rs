@@ -427,6 +427,12 @@ impl Turn {
         edits: Vec<MarkupEdit>,
         governor: &mut Governor,
     ) -> Result<u32, StopReason> {
+        let text = think.text_start..marker.unwrap_or(end);
+        debug_assert!(
+            think.start <= text.start && text.start <= text.end && text.end <= end,
+            "reasoning text {text:?} must lie inside span {}..{end}",
+            think.start,
+        );
         let mut embedded = Vec::new();
         for &index in &think.embedded {
             let (Segment::Call(segment) | Segment::Result(segment)) = &self.store[index as usize]
@@ -475,7 +481,7 @@ impl Turn {
         let index = self.store(
             Segment::Reasoning(ReasoningSegment {
                 span: think.start..end,
-                text: think.text_start..marker.unwrap_or(end),
+                text,
                 closure,
                 embedded,
                 edits,
@@ -1142,6 +1148,11 @@ impl<'s> Recognizer<'s> {
         if let Some((promoted_start, base)) = think.promoted {
             return Ok((promoted_start == start).then_some(base));
         }
+        // A call opener inside the block's own opening marker leaves no
+        // text to close: the block does not close there.
+        if start < think.text_start {
+            return Ok(None);
+        }
         let edit = MarkupEdit {
             operator: EditOperator::ReasoningUnclosed,
             span: start..start,
@@ -1319,12 +1330,17 @@ impl<'s> Recognizer<'s> {
             .filter(|&(marker, _)| ended.start < marker && marker <= ended.at)
             .min();
         // The block's own closing marker, when it came before the end.
+        // A closer that begins inside the opening marker (Anthropic's `"}`
+        // against a spaced opener's final `"`) does not close the block.
         let close = cut.and_then(|(marker, pair)| {
+            let text_start = self.opener_end(marker, pair);
             self.turn
                 .blocked_close
                 .iter()
                 .copied()
-                .filter(|&(start, end, closer)| closer == pair && start > marker && end <= ended.at)
+                .filter(|&(start, end, closer)| {
+                    closer == pair && start >= text_start && end <= ended.at
+                })
                 .min()
         });
         self.prune_blocked(governor)?;
@@ -1669,7 +1685,9 @@ impl<'s> Recognizer<'s> {
                 .copied()
                 .unwrap_or(false),
         };
-        if !closes || think.start > start {
+        // A closer begins at or after the block's text: one inside the opening
+        // marker would end the text before it begins.
+        if !closes || start < think.text_start {
             return Ok(());
         }
         let segment = self.turn.reasoning(

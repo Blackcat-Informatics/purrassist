@@ -573,6 +573,12 @@ TOOL_CALL_REGRESSIONS = [
     # A bare Qwen3-Coder element (Round A), and invalid UTF-8 in a tool name.
     b'\x00\x52<function=read_file>\n<parameter=path>\na\n</parameter>\n</function>',
     b'\x00\x52<tool_call>\n<function=read_fil\xe9>\n<parameter=path>\na\n</parameter>\n</function>\n</tool_call>',
+    # Anthropic's spaced redacted_thinking opener ends in the quote that
+    # begins the closer `"}`: the closer overlaps the opener, so it does not
+    # close the block (its text must never be a reversed range), under the
+    # default and the open-at-start reasoning modes.
+    b'\x00\x52{"type": "redacted_thinking", "data": "}x',
+    b'\x10\x52{"type": "redacted_thinking", "data": "}x',
     # S1: a turn that starts inside a reasoning block (control bits 4-5 = 1)
     # must not let Anthropic's explicit closer `"}` inside a call's JSON end
     # the block and swallow the call; nor end it inside the call before its

@@ -3757,6 +3757,101 @@ fn anthropic_tool_use() {
     assert_eq!(calls.finish, Finish::Unresolved);
 }
 
+/// A redacted-thinking block's text is the opaque encrypted payload, not
+/// reasoning prose.
+#[test]
+fn anthropic_redacted_thinking_text_is_the_opaque_payload() {
+    let (golden, result) = golden("anthropic_redacted_thinking");
+    let blocks = &reading(&result).reasoning_blocks;
+    assert_eq!(blocks.len(), 1);
+    let texts: Vec<&[u8]> = blocks
+        .iter()
+        .map(|block| &golden.input[block.text.clone()])
+        .collect();
+    assert_eq!(texts, [b"EmwKAhgB".as_slice()]);
+    assert_eq!(
+        golden
+            .node
+            .get("reasoning_text")
+            .map(|node| strings_of(Some(node))),
+        Some(vec!["EmwKAhgB".to_owned()])
+    );
+}
+
+/// A closer that begins inside the opening marker (the final quote of the
+/// spaced opener begins `"}`) does not close the block: the block runs
+/// unterminated, and its text is never a reversed range.
+///
+/// The input is 41 bytes. The opener `{"type": "redacted_thinking",
+/// "data": "` is bytes 0..39, so the text begins at 39 with the `}`; the
+/// only `"}` is at 38..40, before the text, and is rejected.
+#[test]
+fn anthropic_redacted_thinking_closer_overlaps_opener() {
+    let (golden, result) = golden("anthropic_redacted_thinking_closer_overlaps_opener");
+    assert_eq!(golden.input.len(), 41);
+    let calls = reading(&result);
+    assert_eq!(calls.reasoning_blocks.len(), 1);
+    let block = &calls.reasoning_blocks[0];
+    assert_eq!(block.span, 0..41);
+    assert_eq!(block.text, 39..41);
+    assert_eq!(&golden.input[block.text.clone()], b"}x");
+    assert!(ledger_rules(&result).contains(&"tool_call.reasoning.unterminated".to_owned()));
+    assert_eq!(
+        golden
+            .node
+            .get("reasoning_text")
+            .map(|node| strings_of(Some(node))),
+        Some(vec!["}x".to_owned()])
+    );
+    // A block the turn starts in has no opener to overlap: the same
+    // input is recovered with ordered ranges.
+    let request = ToolRecoveryRequest::sized_for(
+        Effort::Standard,
+        &golden.input,
+        dialect_set(&golden.node, &golden.path),
+    )
+    .reasoning(ReasoningPolicy::Separate { starts_open: true });
+    let open = golden.tools.recover(&golden.input, &request);
+    for block in &reading(&open).reasoning_blocks {
+        assert!(block.text.start <= block.text.end, "{block:?}");
+        assert!(
+            block.span.start <= block.text.start && block.text.end <= block.span.end,
+            "{block:?}"
+        );
+        let _ = &golden.input[block.text.clone()];
+    }
+}
+
+/// Every reasoning block of every golden, under the pinned and the
+/// default allow-list runs, slices its input by `text` and `span`, and
+/// its text lies inside its span.
+#[test]
+fn reasoning_block_ranges_slice_over_every_golden() {
+    let mut checked = 0;
+    for (golden, result) in all_goldens().into_iter().chain(all_default_runs()) {
+        let readings: Vec<&ToolCalls> = match &result.outcome {
+            Outcome::Resolved(calls) | Outcome::BestGuess(calls) => vec![calls],
+            Outcome::Ambiguous(readings) => readings.iter().collect(),
+            Outcome::Unresolved => Vec::new(),
+        };
+        for calls in readings {
+            for block in &calls.reasoning_blocks {
+                let name = golden.path.display();
+                assert!(block.text.start <= block.text.end, "{name}: {block:?}");
+                assert!(
+                    block.span.start <= block.text.start && block.text.end <= block.span.end,
+                    "{name}: {block:?}"
+                );
+                assert!(block.span.end <= golden.input.len(), "{name}: {block:?}");
+                let _ = &golden.input[block.span.clone()];
+                let _ = &golden.input[block.text.clone()];
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 0, "no golden holds a reasoning block");
+}
+
 /// Harmony (gpt-oss): a call message in the documented and renderer
 /// layouts, with or without `<|start|>assistant`, after an analysis message
 /// (reasoning) or a commentary preamble (content), and its repairs; built-in

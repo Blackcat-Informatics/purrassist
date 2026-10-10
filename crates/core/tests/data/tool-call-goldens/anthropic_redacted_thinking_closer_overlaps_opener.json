@@ -1,0 +1,54 @@
+{
+  "description": "A redacted_thinking opener whose final quote begins the closer `\"}` (the closer overlaps the opener): the closer starts before the block's text, so it does not close the block. The block runs unterminated to the end of output, its text is the two bytes after the 39-byte opener, `}x` (span 0..41, text 39..41), never a reversed range.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "anthropic-tool-use.v1"
+  ],
+  "stop": "stop",
+  "input": "{\"type\": \"redacted_thinking\", \"data\": \"}x",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "content_only",
+  "openai_finish_reason": "stop",
+  "verdict": "no_calls",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [
+    "}x"
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.reasoning.unterminated"
+  ]
+}
