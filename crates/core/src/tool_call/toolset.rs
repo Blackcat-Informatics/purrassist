@@ -712,10 +712,7 @@ impl ToolSet {
     /// ```
     #[must_use]
     pub fn tool(&self, name: &str) -> Option<&CompiledTool> {
-        self.tools
-            .binary_search_by(|tool| tool.name.as_str().cmp(name))
-            .ok()
-            .map(|position| &self.tools[position])
+        super::by_name(&self.tools, name, |tool| tool.name.as_str())
     }
 
     /// Resolve an exact canonical name or explicit alias (byte equality).

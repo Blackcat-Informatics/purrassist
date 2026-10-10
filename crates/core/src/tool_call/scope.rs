@@ -127,10 +127,7 @@ impl ScopeNode {
     /// The member with this exact name, if the scope declares it.
     #[must_use]
     pub fn member(&self, name: &str) -> Option<&ScopeMember> {
-        self.members
-            .binary_search_by(|member| member.name.as_str().cmp(name))
-            .ok()
-            .map(|index| &self.members[index])
+        super::by_name(&self.members, name, |member| member.name.as_str())
     }
 
     /// Whether the scope declares a member of this exact name.

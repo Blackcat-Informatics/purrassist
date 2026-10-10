@@ -99,3 +99,12 @@ pub use shape::{
     ShapeStep, ValueShape,
 };
 pub use toolset::{CompiledTool, ToolSet, ToolSetError, collision_key, is_valid_name};
+
+/// The entry of `items`, sorted by the name `key` gives, whose name is
+/// exactly `name`: one binary search (tools of a set, members of a scope).
+fn by_name<'a, T>(items: &'a [T], name: &str, key: impl Fn(&'a T) -> &'a str) -> Option<&'a T> {
+    items
+        .binary_search_by(|item| key(item).cmp(name))
+        .ok()
+        .map(|index| &items[index])
+}
