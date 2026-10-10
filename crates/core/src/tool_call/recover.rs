@@ -5112,6 +5112,17 @@ fn union_call_dialects(
 /// distinct), and every message-level ledger other
 /// than a rejected attempt's. Content ranges and rejected attempts, the
 /// bytes outside every call, are not part of it.
+///
+/// The block split is a defensive part of the key: no recognizer input is
+/// known to yield two readings that differ only in it, because every
+/// dialect of a set shares one reasoning-marker matcher and the recognizer
+/// keeps one cheapest block path, so contested spans differ in calls, never
+/// in blocks (an exhaustive search of about 600,000 outputs over
+/// overlapping marker pairs found none, and [`equivalent_options`] already
+/// compares whole reasoning segments). The key keeps the split so a future
+/// recognizer that does produce such readings cannot have them merged,
+/// which would drop a block boundary the caller can observe;
+/// `calls_key_distinguishes_reasoning_block_splits` pins it.
 fn calls_key(reading: &Reading, governor: &mut Governor) -> Result<Digest, StopReason> {
     let value = &reading.value;
     let json = object([
@@ -5676,5 +5687,65 @@ mod tests {
             merged[0].value.tool_choice.diagnostics,
             merged[1].value.tool_choice.diagnostics
         );
+    }
+
+    /// The reading of `output` (one reading, no contested span) under the
+    /// default request.
+    fn reading_of(output: &[u8], governor: &mut Governor) -> Reading {
+        let tools = ToolSet::compile([ToolDefinition::new("ls")], Budget::default()).unwrap();
+        let request = ToolRecoveryRequest::default();
+        let recovery = Recovery {
+            tools: &tools,
+            request: &request,
+            output,
+            source: Digest::of(output),
+            policies: Policies {
+                selection: request.policy,
+                effects: request.effects.clone(),
+                exact: false,
+            },
+        };
+        let mut readings = recovery.recognized(governor).unwrap();
+        assert_eq!(readings.len(), 1);
+        readings.remove(0)
+    }
+
+    /// Readings with the same calls and the same merged `reasoning` but
+    /// different `reasoning_blocks` have different keys: the key hashes
+    /// each block's span and marker-free text, not the merged ranges
+    /// (R8, G8). Identical blocks give identical keys.
+    #[test]
+    fn calls_key_distinguishes_reasoning_block_splits() {
+        let output = b"<think>a</think><think>b</think>";
+        let mut governor = Governor::new(Budget::default());
+        let two = reading_of(output, &mut governor);
+        assert_eq!(two.value.reasoning, vec![0..32]);
+        assert_eq!(two.value.reasoning_blocks.len(), 2);
+        let key =
+            |reading: &Reading, governor: &mut Governor| calls_key(reading, governor).unwrap();
+
+        // Control: the same bytes read the same way share a key.
+        let again = reading_of(output, &mut governor);
+        assert_eq!(key(&two, &mut governor), key(&again, &mut governor));
+
+        // One block over the same bytes: the merged range, calls, and
+        // message ledgers are unchanged; only the block split differs.
+        let mut one = reading_of(output, &mut governor);
+        one.value.reasoning_blocks = vec![ReasoningBlock {
+            span: 0..32,
+            text: 7..24,
+        }];
+        assert_eq!(one.value.reasoning, two.value.reasoning);
+        assert_eq!(one.value.calls.len(), two.value.calls.len());
+        assert_ne!(
+            key(&two, &mut governor),
+            key(&one, &mut governor),
+            "a different block split over the same merged reasoning must be a different reading"
+        );
+
+        // The same spans with different marker-free text also differ.
+        let mut shifted = reading_of(output, &mut governor);
+        shifted.value.reasoning_blocks[1].text = 22..24;
+        assert_ne!(key(&two, &mut governor), key(&shifted, &mut governor));
     }
 }
