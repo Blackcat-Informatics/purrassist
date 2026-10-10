@@ -240,6 +240,7 @@ fn every_rule_has_cost_and_policy() {
         "tool_call.markup.closer-variant",
         "tool_call.markup.closers-only-empty",
         "tool_call.markup.missing-parameter-close",
+        "tool_call.markup.unmodeled-scope-boundary",
         "tool_call.markup.missing-function-close",
         "tool_call.markup.missing-wrapper-close",
         "tool_call.markup.missing-wrapper-close.before-text",
@@ -585,6 +586,86 @@ fn definition_grounded_beats_syntax_only() {
     assert_eq!(blind.outcome, CallOutcome::BestGuess);
 }
 
+/// `tool_call.markup.unmodeled-scope-boundary`: closing a scope whose schema
+/// names no member at an opener an enclosing scope declares is a guess
+/// (syntax-grounded, multiple readings), unlike the definition-grounded
+/// `missing-parameter-close` of a scope that does declare names.
+#[test]
+fn unmodeled_scope_boundary_is_a_guess_and_declared_scopes_are_not() {
+    let rule = rules::rule("tool_call.markup.unmodeled-scope-boundary").expect("rule");
+    assert_eq!(
+        (
+            rule.cost,
+            rule.guess,
+            rule.readings,
+            rule.grounding,
+            rule.loss
+        ),
+        (
+            EditOperator::UnmodeledScopeBoundary.rule().cost * rules::SYNTAX_COST_MULTIPLIER,
+            true,
+            Readings::Multiple,
+            Grounding::Syntax,
+            None
+        )
+    );
+    assert!(rule.is_repair() && !rule.admits(RepairPolicy::Structural));
+    assert!(rule.admits(RepairPolicy::Tolerant));
+    assert_eq!(
+        EditOperator::UnmodeledScopeBoundary.rule().cost,
+        EditOperator::MissingParameterClose.rule().cost
+    );
+    assert!(rules::of_operator(EditOperator::MissingParameterClose).cost < rule.cost);
+    // A free-form object item (no declared member, unknown members kept).
+    let free = compile([ToolDefinition::new("f")
+        .param("path", Param::string())
+        .param(
+            "keep",
+            Param::array(Param::object(
+                ObjectSpec::new().unknown_parameters(UnknownParameters::PassThrough),
+            )),
+        )]);
+    let text = qwen(
+        "f",
+        "<parameter=keep>\n<parameter=path>\n/p\n</parameter>\n</parameter>",
+    );
+    let tolerant = Policies {
+        selection: PolicySelection::All(RepairPolicy::Tolerant),
+        ..Policies::default()
+    };
+    let turn = run_with(
+        DialectId::Qwen3CoderXml,
+        &free,
+        &text,
+        GenerationStop::ToolCalls,
+        &tolerant,
+    );
+    let call = one(&turn);
+    assert_eq!(call.outcome, CallOutcome::BestGuess);
+    assert_eq!(count(call, "tool_call.markup.unmodeled-scope-boundary"), 1);
+    assert_eq!(count(call, "tool_call.markup.missing-parameter-close"), 0);
+    // An object item that declares a member names its scope: the same
+    // opener of an outer parameter ends it by the definition, not a guess.
+    let declared = compile([ToolDefinition::new("f")
+        .param("path", Param::string())
+        .param(
+            "keep",
+            Param::array(Param::object(
+                ObjectSpec::new().param("n", Param::integer()),
+            )),
+        )]);
+    let turn = run_with(
+        DialectId::Qwen3CoderXml,
+        &declared,
+        &text,
+        GenerationStop::ToolCalls,
+        &Policies::default(),
+    );
+    let call = one(&turn);
+    assert_eq!(count(call, "tool_call.markup.missing-parameter-close"), 1);
+    assert_eq!(count(call, "tool_call.markup.unmodeled-scope-boundary"), 0);
+}
+
 fn string_tool(effects: Effects) -> ToolSet {
     compile([ToolDefinition::new("f")
         .effects(effects)
@@ -697,6 +778,46 @@ fn repeated_array_param_is_array() {
         r#"{"tags":["a","b","c"],"ids":[7]}"#
     );
     assert_eq!(call.outcome, CallOutcome::Resolved);
+}
+
+#[test]
+fn repeated_nested_array_items_are_objects() {
+    // Issue #8 section 1: an array of objects as repeated nested elements.
+    let tools = compile([ToolDefinition::new("f").param(
+        "outfits",
+        Param::array(Param::object(
+            ObjectSpec::new()
+                .param("wearer", Param::string().required())
+                .param("garments", Param::array(Param::string())),
+        )),
+    )]);
+    let text = qwen(
+        "f",
+        "<parameter=outfits>\n<parameter=wearer>\nAlice\n</parameter>\n<parameter=garments>\n[\"a coat\"]\n</parameter>\n</parameter>\n<parameter=outfits>\n<parameter=wearer>\nBob\n</parameter>\n</parameter>",
+    );
+    let turn = run(DialectId::Qwen3CoderXml, &tools, &text);
+    let call = one(&turn);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments().to_json(),
+        r#"{"outfits":[{"wearer":"Alice","garments":["a coat"]},{"wearer":"Bob"}]}"#
+    );
+    assert_eq!(count(call, "tool_call.markup.nested-parameter"), 2);
+    assert_eq!(count(call, "tool_call.xml.array-item"), 2);
+    assert_eq!(count(call, "tool_call.parameter.collect"), 1);
+    // An array of strings never nests: the tags are the item's text.
+    let tools = compile([ToolDefinition::new("f").param("tags", Param::array(Param::string()))]);
+    let text = qwen(
+        "f",
+        "<parameter=tags>\n<parameter=wearer>Alice</parameter>\n</parameter>",
+    );
+    let turn = run(DialectId::Qwen3CoderXml, &tools, &text);
+    let call = one(&turn);
+    assert_eq!(count(call, "tool_call.markup.nested-parameter"), 0);
+    assert_eq!(
+        call.arguments().to_json(),
+        r#"{"tags":["<parameter=wearer>Alice</parameter>"]}"#
+    );
 }
 
 #[test]
@@ -2049,4 +2170,95 @@ fn grammar_doc_example_compiles() {
             "the canonical form recognizes with no repair"
         );
     }
+}
+
+/// A5, G6: an alias and the canonical spelling of one array parameter
+/// number their items in one sequence, so each item's evidence names its own
+/// pointer and its own bytes. The tool is known only after name resolution
+/// (`Nums` for `nums`), so each item is typed by its declared type.
+#[test]
+fn alias_and_canonical_repetitions_share_one_item_sequence() {
+    let tools = compile([ToolDefinition::new("nums")
+        .effects(Effects::ReadOnly)
+        .param("xs", Param::array(Param::integer()).alias("ex").required())]);
+    let body = "<parameter=xs>\n11\n</parameter>\n<parameter=ex>\n2222\n</parameter>\n<parameter=xs>\n33333\n</parameter>";
+    let text = qwen("Nums", body);
+    let tolerant = Policies {
+        selection: PolicySelection::All(RepairPolicy::Tolerant),
+        ..Policies::default()
+    };
+    let turn = run_with(
+        DialectId::Qwen3CoderXml,
+        &tools,
+        &text,
+        GenerationStop::ToolCalls,
+        &tolerant,
+    );
+    let call = one(&turn);
+    assert_eq!(
+        call.reading.arguments.to_json(),
+        r#"{"xs":[11,2222,33333]}"#
+    );
+    let decoded: Vec<(&str, std::ops::Range<usize>)> = call
+        .repairs()
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.rule == "tool_call.value.decode-typed")
+        .map(|evidence| {
+            let span = evidence.span.as_ref().expect("a source span");
+            (evidence.destination.as_str(), span.bytes.clone())
+        })
+        .collect();
+    let at = |literal: &str| {
+        let start = text.find(literal).expect("literal");
+        start..start + literal.len()
+    };
+    assert_eq!(decoded.len(), 3, "{decoded:?}");
+    for (index, literal) in ["11", "2222", "33333"].into_iter().enumerate() {
+        let (destination, span) = &decoded[index];
+        assert!(
+            destination.ends_with(&format!("/xs/{index}")),
+            "{destination}"
+        );
+        assert_eq!(*span, at(literal), "item {index}");
+    }
+}
+
+/// R5 review advisory 2, G7: a leaf keeps its written spelling, so the
+/// second occurrence of an aliased array parameter is `/ex/1` while the tool
+/// declares `xs`. A reasoning-marker spelling inside that occurrence's JSON
+/// string is value text: the call is not cut, and no reasoning is recorded.
+#[test]
+fn reasoning_marker_in_json_string_of_alias_repetition_is_value_text() {
+    let tools = compile([ToolDefinition::new("notes")
+        .effects(Effects::ReadOnly)
+        .param(
+            "rows",
+            Param::array(Param::object(
+                ObjectSpec::new().param("n", Param::string().required()),
+            ))
+            .alias("ex")
+            .required(),
+        )]);
+    let body = "<parameter=rows>\n[{\"n\":\"a\"}]\n</parameter>\n<parameter=ex>\n[{\"n\":\"b <think> c\"}]\n</parameter>";
+    let turn = run(DialectId::Qwen3CoderXml, &tools, &qwen("notes", body));
+    let call = one(&turn);
+    assert_eq!(
+        call.outcome,
+        CallOutcome::Resolved,
+        "the alias occurrence resolves: {call:#?}"
+    );
+    assert_eq!(
+        call.reading.arguments.to_json(),
+        r#"{"rows":[{"n":"a"},{"n":"b <think> c"}]}"#
+    );
+    assert_eq!(count(call, "tool_call.reasoning.marker-cut"), 0);
+    assert!(
+        !turn
+            .selected()
+            .iter()
+            .any(|segment| matches!(segment, ResolvedSegment::Reasoning { .. })),
+        "a marker inside a JSON string opens no reasoning block: {:#?}",
+        turn.pieces
+    );
 }

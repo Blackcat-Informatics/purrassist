@@ -58,6 +58,7 @@
   "content": [
     "{\"role\":\"assistant\",\"content\":["
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

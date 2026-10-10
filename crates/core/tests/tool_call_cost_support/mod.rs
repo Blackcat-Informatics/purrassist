@@ -8,10 +8,10 @@
 use purrassist_core::grammar::cost;
 use purrassist_core::json::Node;
 use purrassist_core::tool_call::{
-    CallOutcome, DialectId, DialectSet, Effects, Param, ToolCalls, ToolDefinition,
+    CallOutcome, DialectId, DialectSet, Effects, ObjectSpec, Param, ToolCalls, ToolDefinition,
     ToolRecoveryRequest, ToolSet,
 };
-use purrassist_core::{AssistResult, Budget, Effort, Governor, Outcome};
+use purrassist_core::{AssistResult, Budget, Effort, Governor, Outcome, StopReason};
 
 pub fn tools() -> ToolSet {
     ToolSet::compile(
@@ -321,4 +321,236 @@ pub fn work_independent_of_dialect_count(size: usize) {
             previous = Some((work, dialects));
         }
     }
+}
+
+/// A read-only tool with an array of objects and an array of strings, to
+/// repeat, and the `write` tool the dialect shapes call.
+fn dense_tools() -> ToolSet {
+    ToolSet::compile(
+        [
+            ToolDefinition::new("write")
+                .effects(Effects::ReadOnly)
+                .param("content", Param::string().required()),
+            ToolDefinition::new("tree")
+                .effects(Effects::ReadOnly)
+                .param(
+                    "children",
+                    Param::array(Param::object(
+                        ObjectSpec::new().param("name", Param::string().required()),
+                    )),
+                )
+                .param("tags", Param::array(Param::string())),
+        ],
+        Budget::default(),
+    )
+    .expect("tools compile")
+}
+
+/// The dense-markup shapes `docs/RESOURCES.md` ("Dense markup") measures:
+/// output that is nothing but one small unit repeated, in every built-in
+/// dialect. Each is `(label, wrapper before, unit, wrapper after, what the
+/// units become)`.
+const DENSE: [(&str, &str, &str, &str, Dense); 17] = [
+    (
+        "qwen-nested-items",
+        "<tool_call>\n<function=tree>\n",
+        "<parameter=children><parameter=name>a</parameter></parameter>\n",
+        "</function>\n</tool_call>",
+        Dense::Items("children"),
+    ),
+    (
+        "qwen-json-array-items",
+        "<tool_call>\n<function=tree>\n",
+        "<parameter=tags>[\"a\"]</parameter>\n",
+        "</function>\n</tool_call>",
+        Dense::Items("tags"),
+    ),
+    (
+        "qwen-string-items",
+        "<tool_call>\n<function=tree>\n",
+        "<parameter=tags>a</parameter>\n",
+        "</function>\n</tool_call>",
+        Dense::Items("tags"),
+    ),
+    (
+        "qwen-calls",
+        "",
+        "<tool_call>\n<function=write>\n<parameter=content>\na\n</parameter>\n</function>\n</tool_call>\n",
+        "",
+        Dense::Calls,
+    ),
+    (
+        "hermes-calls",
+        "",
+        "<tool_call>\n{\"name\": \"write\", \"arguments\": {\"content\": \"a\"}}\n</tool_call>\n",
+        "",
+        Dense::Calls,
+    ),
+    (
+        "openai-calls",
+        "",
+        "{\"id\": \"c\", \"type\": \"function\", \"function\": {\"name\": \"write\", \"arguments\": \"{\\\"content\\\": \\\"a\\\"}\"}}\n",
+        "",
+        Dense::Calls,
+    ),
+    (
+        "mistral-v3-calls",
+        "",
+        "[TOOL_CALLS] [{\"name\": \"write\", \"arguments\": {\"content\": \"a\"}, \"id\": \"a1B2c3D4e\"}]\n",
+        "",
+        Dense::Calls,
+    ),
+    (
+        "mistral-v3-array",
+        "[TOOL_CALLS] [",
+        "{\"name\": \"write\", \"arguments\": {\"content\": \"a\"}, \"id\": \"a1B2c3D4e\"}, ",
+        "{\"name\": \"write\", \"arguments\": {\"content\": \"a\"}, \"id\": \"a1B2c3D4e\"}]",
+        Dense::ArrayOfCalls,
+    ),
+    (
+        "mistral-v11-calls",
+        "",
+        "[TOOL_CALLS]write[CALL_ID]a1B2c3D4e[ARGS]{\"content\": \"a\"}</s>\n",
+        "",
+        Dense::Calls,
+    ),
+    (
+        "mistral-v11-chained-calls",
+        "",
+        "[TOOL_CALLS]write[CALL_ID]a1B2c3D4e[ARGS]{\"content\": \"a\"}\n",
+        "",
+        Dense::Calls,
+    ),
+    (
+        "harmony-calls",
+        "",
+        "<|start|>assistant<|channel|>commentary to=functions.write <|constrain|>json<|message|>{\"content\": \"a\"}<|call|>",
+        "",
+        Dense::Calls,
+    ),
+    (
+        "deepseek-v3.1-calls",
+        "<｜tool▁calls▁begin｜>",
+        "<｜tool▁call▁begin｜>write<｜tool▁sep｜>{\"content\": \"a\"}<｜tool▁call▁end｜>",
+        "<｜tool▁calls▁end｜>",
+        Dense::Calls,
+    ),
+    (
+        "deepseek-v3-calls",
+        "<｜tool▁calls▁begin｜>",
+        "<｜tool▁call▁begin｜>function<｜tool▁sep｜>write\n```json\n{\"content\": \"a\"}\n```<｜tool▁call▁end｜>",
+        "<｜tool▁calls▁end｜>",
+        Dense::Calls,
+    ),
+    (
+        "kimi-calls",
+        "<|tool_calls_section_begin|>",
+        "<|tool_call_begin|>functions.write:0<|tool_call_argument_begin|>{\"content\": \"a\"}<|tool_call_end|>",
+        "<|tool_calls_section_end|>",
+        Dense::Calls,
+    ),
+    (
+        "llama3-calls",
+        "",
+        "{\"name\": \"write\", \"parameters\": {\"content\": \"a\"}}\n",
+        "",
+        Dense::Calls,
+    ),
+    (
+        "anthropic-calls",
+        "",
+        "{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"write\",\"input\":{\"content\":\"a\"}}\n",
+        "",
+        Dense::Calls,
+    ),
+    (
+        "bare-json-empty-calls",
+        "",
+        "{\"name\":\"tree\",\"arguments\":{}}",
+        "",
+        Dense::Calls,
+    ),
+];
+
+/// What the repeated units of a dense shape become.
+#[derive(Clone, Copy)]
+enum Dense {
+    /// One call each.
+    Calls,
+    /// One call each, and one more in the closing text: the elements of one
+    /// JSON array.
+    ArrayOfCalls,
+    /// One item each of the named array parameter of the one call.
+    Items(&'static str),
+}
+
+/// Dense markup of `bytes` bytes in the shape `label` recovers under plain
+/// `ToolRecoveryRequest::sized(Effort::Standard, output)`, with no raised
+/// limit: the stop is `Completed` and every unit (call or array item) is
+/// recovered. Mistral v3 calls are measured both as one `[TOOL_CALLS]`
+/// section each and as the elements of one JSON array; v11 calls both
+/// separated by `</s>` and as one whitespace-separated chain.
+fn dense_fits_published_budget(label: &str, bytes: usize) {
+    let tools = dense_tools();
+    let &(_, before, unit, after, expected) = DENSE
+        .iter()
+        .find(|shape| shape.0 == label)
+        .expect("a dense shape");
+    let units = (bytes - before.len() - after.len()) / unit.len();
+    let input = format!("{before}{}{after}", unit.repeat(units));
+    let request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
+    let result = tools.recover(input.as_bytes(), &request);
+    let n = input.len() as u64;
+    let usage = result.receipt.usage;
+    // Per byte, in thousandths.
+    let per_byte = |charged: u64| charged.saturating_mul(1000) / n;
+    println!(
+        "{label}: {n} bytes, {units} units, work {} / 1000 per byte, peak scratch {} / 1000, evidence {} / 1000 ({} entries), {:?}",
+        per_byte(usage.work),
+        per_byte(usage.peak_scratch_bytes),
+        per_byte(usage.evidence_entries),
+        usage.evidence_entries,
+        result.receipt.stopped
+    );
+    assert_eq!(result.receipt.stopped, StopReason::Completed, "{label}");
+    let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = &result.outcome else {
+        panic!("{label}: {:?}", result.outcome)
+    };
+    match expected {
+        Dense::Calls | Dense::ArrayOfCalls => {
+            let expected_calls = units + usize::from(matches!(expected, Dense::ArrayOfCalls));
+            assert_eq!(calls.calls.len(), expected_calls, "{label}");
+            assert!(
+                calls
+                    .calls
+                    .iter()
+                    .all(|call| call.outcome == CallOutcome::Resolved),
+                "{label}"
+            );
+        }
+        Dense::Items(name) => {
+            assert_eq!(calls.calls.len(), 1, "{label}");
+            let items = calls.calls[0].arguments.get(name).expect("the parameter");
+            let purrassist_core::json::Value::Array(items) = &items.value else {
+                panic!("{label}: {items:?}")
+            };
+            assert_eq!(items.len(), units, "{label}");
+        }
+    }
+}
+
+/// [`dense_fits_published_budget`] for every dense shape, each on its own
+/// thread (the shapes are independent recoveries).
+pub fn dense_markup_fits_published_budget(bytes: usize) {
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = DENSE
+            .iter()
+            .map(|shape| scope.spawn(move || dense_fits_published_budget(shape.0, bytes)))
+            .collect();
+        for handle in handles {
+            if let Err(panic) = handle.join() {
+                std::panic::resume_unwind(panic);
+            }
+        }
+    });
 }

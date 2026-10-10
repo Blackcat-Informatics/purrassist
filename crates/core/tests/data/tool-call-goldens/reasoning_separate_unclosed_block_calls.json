@@ -67,6 +67,9 @@
   "content": [
     "\n"
   ],
+  "reasoning_text": [
+    "plan "
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.reasoning.unclosed"

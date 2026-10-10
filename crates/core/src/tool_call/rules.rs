@@ -92,6 +92,7 @@
 //!   `json.key.match`, `json.key.relocate`, `tool_call.parameter.repeated`,
 //!   `tool_call.parameter.repeated-choice`,
 //!   `json.enum.match`, `tool_call.markup.undeclared-parameter-boundary`,
+//!   `tool_call.markup.unmodeled-scope-boundary`,
 //!   `tool_call.value.text-after-closer`,
 //!   `tool_call.markup.text-between-parameters`),
 //!   `tool_call.value.enum-normalize`, and

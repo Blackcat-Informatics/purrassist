@@ -679,8 +679,12 @@ allow-list, with a published bound, and every limit is explicit.
   and the `tool_call_recover` row of the allocation oracle.
 - **Sizing.** Use `ToolRecoveryRequest::sized(effort, output)` (or
   `sized_for(effort, output, dialects)` for another allow-list); the MCP tool
-  and the CLI use it by default. It adds 32 work units and 48 scratch bytes
-  per output byte to the preset, and `⌈preset.candidates / 8⌉` candidates
+  and the CLI use it by default. It adds 176 work units, 368 scratch bytes
+  and one evidence entry per 7 bytes per output byte to the preset (the
+  measured maximum of the densest markup up to 1 MiB, plus a margin of
+  25% to 40%; `RECOVER_WORK_PER_BYTE`, `RECOVER_SCRATCH_PER_BYTE` and
+  `RECOVER_EVIDENCE_BYTES_PER_ENTRY`; the shapes `docs/RESOURCES.md` lists as
+  not covered still exhaust explicitly), and `⌈preset.candidates / 8⌉` candidates
   per call opener of the output (16 per opener at `Standard`), counted by a
   linear pre-scan (`DialectSet::call_openers`), so a busy turn does not
   exhaust a budget sized for an ordinary one. Contested spans whose
@@ -693,10 +697,34 @@ allow-list, with a published bound, and every limit is explicit.
   `Resolved` at `Effort::Standard`, where the fixed preset exhausts),
   `tool_call_cost::per_call_competition_scales_with_calls`,
   `tool_call_cost::crafted_reading_explosion_exhausts_explicitly`,
-  `tool_call_cost::sized_budget_follows_the_published_formula`, and the host
+  `tool_call_cost::sized_budget_follows_the_published_formula`,
+  `tool_call_cost::chained_mistral_v11_calls_cost_is_linear` (256 to 4,096
+  Mistral v11 calls separated by whitespace alone, one chained attempt:
+  work and scratch linear in the bytes),
+  `tool_call_cost::dense_markup_fits_published_budget` and
+  `tool_call_scale::one_mib_dense_markup_fits_published_budget` (about 1 MiB
+  of tiny calls in every built-in dialect, Mistral v11 calls chained by
+  whitespace included, and of repeated nested, JSON-array
+  and string items recovers under plain `sized(Effort::Standard, output)`),
+  and the host
   and CLI tests `tool_call_tools::busy_turn_resolves_every_call_by_default`
   and `tool_calls_cli::busy_turn_resolves_every_call_by_default`. See
   [RESOURCES.md](../RESOURCES.md#budgets-for-large-outputs-and-busy-turns).
+- **Repeated parameters.** A parameter repeated k times (`<parameter=xs>`
+  occurrences that resolve as array items) is inside the linear bound: its
+  `work` and `total_scratch_charged` grow with the output, not with k times
+  the output, because resolution appends each single-reading item to the
+  partial array in place. Output that is only repeated markup costs about 52
+  to 61 work and 104 to 262 peak scratch bytes per byte, above the
+  `sized` allowance for ordinary output, so `sized` alone exhausts
+  explicitly rather than quietly: on `Work` at k = 1,000 nested items
+  (3.66 million needed against 2.99 million), about 1,500 JSON items and
+  1,100 string items; on peak `ScratchBytes` between 4,000 and 8,000 nested
+  items (130 MB against 86.7 MiB at 8,000). *Proved by*
+  `tool_call_cost::repeated_parameters_cost_is_linear` (1,000 to 8,000
+  occurrences as nested items, JSON arrays and strings; both counters within
+  1.05x of the byte ratio). See
+  [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound).
 
 ### C5. Lossless declaration adapters
 
@@ -717,7 +745,8 @@ declarations the model was shown and lose nothing.
   Qwen3-Coder XML as text, which the exact schema types itself: each
   verbatim string is also read as the JSON value it spells (a number with
   its exact spelling, a boolean, `null`, an array or object written inline,
-  and nested `<parameter=...>` elements read as an object's members), and
+  and nested `<parameter=...>` elements read as an object's members, or as
+  the object items of an array whose items are unmodeled), and
   the exact validator chooses. The verbatim string is kept wherever it
   validates, so `12345` under `anyOf[string, integer]` or `Optional[str]`
   stays a string as for a declared string; the JSON reading is taken where
@@ -735,7 +764,84 @@ declarations the model was shown and lose nothing.
   ancestor are tried one at a time), so a call costs a handful of
   validations whatever its size, each charged to the request's governor;
   running out is the request's explicit `BudgetExceeded`, never a quiet
-  verbatim fallback. JSON arguments arrive typed and are never retyped. *Proved by* `tool_call_goldens::unmodeled_schemas_type_xml_text`
+  verbatim fallback. JSON arguments arrive typed and are never retyped.
+  - **Scope graph (member names of unmodeled scopes).** Typing is the
+    exact schema's, but which parameter a nested `<parameter=NAME>` opener
+    belongs to is decided by names, so the adapters also compile, once per
+    tool and charged to the governor, a *scope graph* from the exact
+    schema (`ArgumentShape::scopes`; each `ParameterShape::nesting` refers
+    into it): one node per distinct schema location (a `$defs` or
+    `definitions` entry, an inline object, an `anyOf`/`oneOf`/`allOf`
+    union), holding the member names it declares and, per member, whether
+    its value nests as an object or as an array of objects. A recursive
+    `$ref` is a back-edge by node index. So a `$ref` item or object
+    parameter whose member shares the name of an outer parameter (the
+    common pydantic `$defs` shape: `name`, `id`, `tags`) keeps that member
+    inside its own scope, and a balanced recursive tree nests exactly as
+    its inline twin does; neither is flattened or hoisted into a
+    `Resolved` call. A scope whose schema names no member (a free-form
+    object, a `$ref` to a non-object) has unknown membership: closing it at
+    an enclosing scope's opener is the guess
+    `tool_call.markup.unmodeled-scope-boundary`, a best guess that is never
+    usable on a mutating tool. Only local `$ref` pointers are resolved.
+    *Nesting limit.* `Budget::depth` guards nested parameters: the codec
+    fits `depth - 1` object levels, and a whole recovered call fits about
+    `(depth - 1) / 3` nested item levels (about 42 at the CLI and MCP value,
+    128), because depth is charged again where the value is read back;
+    anything deeper is the explicit `BudgetExceeded(Depth)`, never a partial
+    value (`tool_call_recover::nested_item_depth_is_a_stack_guard`).
+    *Proved by* `tool_call_goldens::xml_array_recursive_ref_items_nest`,
+    `xml_array_ref_items_member_shares_outer_name`,
+    `xml_array_ref_items_keep_path_not_hijacked`,
+    `xml_array_ref_items_outer_array_collision`,
+    `xml_object_ref_param_member_shares_outer_name`,
+    `xml_array_anyof_items_union_nest` and
+    `xml_unmodeled_opaque_scope_boundary`, and the correction corpus's
+    `file_tasks` cases.
+  - **Root `$ref` and composed roots.** The FastMCP/pydantic shape has no
+    `properties` at the root, only `{"$ref":"#/definitions/Args",
+    "definitions":{...}}` (Draft-07) or `{"$ref":"#/$defs/Args",
+    "$defs":{...}}` (2020-12). The projection follows a root `$ref` to a
+    local pointer (transitively through further local `$ref`s) and projects
+    the target object's parameters, so repair knows the tool's parameter
+    names and types exactly as for an inline schema. **Draft-07 sibling
+    rule:** a `$ref` overrides its siblings, so the root's `properties`,
+    `type` and the like are ignored for projection, as they are for
+    validation, and stay listed as unmodeled keywords beside `$ref` and
+    `definitions`; in **2020-12** the siblings apply with the target, so
+    their parameters are projected too. A root `allOf` of one schema that
+    resolves the same way is projected with the root; a root `anyOf` or
+    `oneOf` whose every branch is an object schema (or a `$ref` to one)
+    projects the *union of the branches' names*. A name declared by one
+    applying schema is typed from it; a name a union branch declares, or
+    that several schemas declare, stays unmodeled (not marked required): its
+    typing is the exact schema's (`tool_call.value.schema-typed`), as for
+    the scope graph's unions. A nested `$ref` member goes through the scope
+    graph with the pointer below the target. An external or missing `$ref`
+    makes the declaration invalid (the exact schema cannot compile); a
+    cyclic `$ref`, a target that is not an object schema (a `type` array, a
+    string type) and a union with a non-object branch are not followed: the
+    projection is the root's own, which for a Draft-07 root `$ref` is no
+    parameter, `PassThrough`, with every root keyword listed. Validation
+    still uses the exact declaration and its draft, and rendering back
+    embeds the parameters text verbatim in every wire form and prompt form
+    (the prompt forms print the exact schema, so a root-`$ref` tool's
+    printed declaration does not change). *Proved by*
+    `tool_adapters::root_ref_projects_the_target_object`,
+    `root_ref_prompt_form_declaration_prints_the_exact_schema`,
+    `root_ref_defs_2020_12_merges_siblings_with_the_target`,
+    `root_all_of_single_ref_projects_the_target`,
+    `root_any_of_objects_projects_the_union_of_names`,
+    `unprojectable_root_ref_stays_pass_through_with_its_evidence`,
+    `root_ref_nested_ref_members_flow_into_the_scope_graph` and
+    `draft07_mcp_tools_adapt_losslessly` (the Draft-07 sibling rule), and
+    `tool_call_goldens::mcp_root_ref_calls_resolve_with_typed_arguments`
+    (`mcp_root_ref_qwen3_xml_resolved`, `mcp_root_ref_hermes_json_resolved`,
+    `mcp_root_defs_2020_12_resolved`, `mcp_root_all_of_ref_resolved`,
+    `mcp_root_any_of_union_resolved`),
+    `mcp_root_ref_misspelled_parameter_repairs_like_inline` and
+    `mcp_root_ref_unprojectable_stays_pass_through`.
+  - *Typing proved by* `tool_call_goldens::unmodeled_schemas_type_xml_text`
   (`Optional[int]`, `Optional[str]` with numeric text, `anyOf[string,
   integer]`, `$ref` scalar, `$ref` object inline and as nested parameters,
   `oneOf` constants, a recursive `$ref`, a type array, an unmatched value,
@@ -902,6 +1008,30 @@ the `embedded_calls_once_in_span_order` and
 and the tool-call fuzz probe's reasoning invariant (a call the turn
 recovers with reasoning as content never vanishes under a reasoning mode).
 
+The merged `reasoning` ranges include the markers and join adjacent blocks
+(`<think>a</think><think>b</think>` is one range, `0..32`). To read the text,
+use `reasoning_blocks` (wire `[{"span": {start, end}, "text": {start, end}}]`):
+one entry per block in source order, never merged
+(here `text` is `7..8` and `23..24`), where `text` excludes both markers.
+Under `starts_open` the block has no opener, so its `text` begins at `0` (the
+`span` and the `text` start together); a closed block's `text` ends at its
+closer, a block closed at a call opener ends at the opener, and an
+unterminated block ends at the end of output. The bytes are exactly those of
+the output: Anthropic thinking text stays JSON-escaped (`\n`, `\"`), never
+unescaped. The text of an Anthropic `redacted_thinking` block is not
+reasoning prose: it is the opaque encrypted `data` payload, verbatim
+(`EmwKAhgB` in the `anthropic_redacted_thinking` golden), and consumers must
+not interpret or display it. A closer is recognized only at or after the start
+of the block's text, so `text` is never a reversed range: in
+`{"type": "redacted_thinking", "data": "}x` the `"}` begins inside the opener
+(its final `"`), does not close the block, and the block is unterminated with
+`text` `39..41` (`}x`). *Proved by* the `reasoning_blocks_*` tests in
+`tool_call_recover`, the goldens' captured `reasoning_text`,
+`tool_call_goldens::anthropic_redacted_thinking_text_is_the_opaque_payload`,
+`anthropic_redacted_thinking_closer_overlaps_opener`,
+`reasoning_block_ranges_slice_over_every_golden`, and the tool-call fuzz
+probe's block invariants.
+
 ### Ids across rounds
 
 With no id option (Rust `IdPolicy::Turn`, the default; MCP without `ids`; CLI
@@ -1026,7 +1156,11 @@ the raw declaration JSON, which the adapters read byte for byte; see
 default, `mcp`, or `anthropic`), `dialects` (built-in dialect ids; default
 all of them), `stop` (`stop`, `length`, `tool_calls`, `content_filter`,
 `unknown`, or `{"stop_sequence": STRING}`), `tool_choice` (an `OpenAI` or
-Anthropic form), `policy` (`per-tool`, `structural`, `tolerant`), `effects`,
+Anthropic form; the Anthropic `{"type":"tool","name":N,"disable_parallel_tool_use":true}`
+is the strict form with exactly one call), `tool_choice_strict`
+(`{"exactly_one", "allow_content", "allow_reasoning"}`, all three booleans
+and all required: the options of a [strict forced choice](#strict-forced-tool-choice),
+valid only beside a forced `tool_choice`), `policy` (`per-tool`, `structural`, `tolerant`), `effects`,
 `reasoning` (`separate`, `separate-open`, `content`), `ambiguity` (`report`,
 `reject`), `ids` (omitted for the default turn-scoped ids, `"source"`, or
 `{"prefix", "start"}`; see [Ids across rounds](#ids-across-rounds)), `emit` (`none`,
@@ -1054,6 +1188,12 @@ result:
 ```sh
 purrassist recover-tool-calls --tools tools.json --emit openai turn.txt
 ```
+
+`--tool-choice NAME` forces the tool `NAME`; the flags
+`--tool-choice-exactly-one`, `--tool-choice-no-content` and
+`--tool-choice-no-reasoning` (each at most once, and a usage error, exit 1,
+without `--tool-choice NAME`, a tool name rather than `auto`, `none` or
+`required`) make it a [strict forced choice](#strict-forced-tool-choice).
 
 With `tools.json` holding the `tools` array above and `turn.txt` holding the
 `output` above (a missing `</parameter>` before `<parameter=content>`), the
@@ -1103,6 +1243,92 @@ false) whatever it recovered, and `isError` is true only when the request
 itself is invalid. Its `value.verdict` is the field the CLI's exit code
 summarizes; `status` is not (see below).
 
+### Strict forced tool choice
+
+`ToolChoice::Forced(name)` stays what it was: at least one call, and every
+call to `name` (its canonical name or an alias). It accepts two calls to
+`name`, and prose around the call. `ToolChoice::ForcedStrict(StrictForced)`
+adds three options on top of exactly those checks:
+
+| Option | Field | Constraint text | Violation |
+| --- | --- | --- | --- |
+| exactly one call | `exactly_one` | `exactly-one` | Each call after the first, in `calls`, is `Unresolved` with `tool_choice_cardinality` (unless it already was unresolved), every entry of `rejected` (of any reason, an unsupported dialect's included) is one more call beyond the one, and the choice records one diagnostic stating both counts. |
+| no content | `allow_content: false` | `no-content` | Any `content` range holding a byte that is not ASCII whitespace (`u8::is_ascii_whitespace`: space, tab, line feed, carriage return, form feed), and any rejected attempt (its bytes are outside every call), is a diagnostic: at most one for the content (the first byte, and a count of the other ranges) and one for the attempts. |
+| no reasoning | `allow_reasoning: false` | `no-reasoning` | Any reasoning block is a diagnostic: one, naming the first block and a count of the others. Under `reasoning: "content"` reasoning is never recognized, so this combination is an `invalid_input` request error (MCP and CLI included) instead of a check that passes vacuously. |
+
+`StrictForced::exactly_one(name)` is the usual form (exactly one call, no
+content, reasoning allowed). The constraint recorded in the receipt's
+`tool_call.recover.v1` validation and in `value.tool_choice.constraint` lists
+the active options in brackets with the name last, so a name holding `:`, `;`
+or `,` stays unambiguous: `tool_choice=forced[exactly-one,no-content,no-reasoning]:read`.
+A `ForcedStrict` with all three options lenient (`exactly_one` false,
+content and reasoning allowed) checks exactly what `Forced` checks and
+renders exactly `tool_choice=forced:NAME`.
+
+What counts:
+
+- **One call** counts the entries of `calls`, recognized calls of any
+  outcome, as `required` does. A rejected attempt of any reason, a
+  malformed or truncated second call or markup of a dialect that is not
+  supported, is a call attempt beyond the one call and fails the check (and
+  so the verdict, not only the finish), as it fails no-content. Calls
+  embedded in reasoning are never counted (they are never
+  tool-choice-checked); `allow_reasoning` governs the block that holds them.
+- **Content** is whitespace-insensitive only for ASCII whitespace, so the
+  newlines a model writes between or around calls pass. Non-ASCII
+  whitespace such as U+00A0 or U+2003 is content, and so are tool results
+  the model wrote.
+- An undeclared `name` is an `invalid_input` request error, as for `Forced`.
+
+A failed strict check is the same whole-turn contract failure as any failed
+tool choice: `finish` `unresolved`, `verdict` `nothing_usable`, the emission
+empty, exit 4, even when the single call would run on its own.
+
+Requesting it:
+
+- Rust: `ToolChoice::ForcedStrict(StrictForced::exactly_one("read"))`, with
+  `allow_content(true)`, `allow_reasoning(false)` and `with_exactly_one(false)`
+  to change an option.
+- Anthropic wire form: `{"type":"tool","name":N,"disable_parallel_tool_use":true}`
+  (`ToolChoice::from_anthropic`) is `ForcedStrict` with exactly one call and
+  content and reasoning allowed; `disable_parallel_tool_use: false` is
+  `Forced`. `disable_parallel_tool_use` on `auto`, `any` or `none` stays an
+  error: at-most-one for a free choice is not offered.
+- MCP: `tool_choice_strict` beside a forced `tool_choice`. It is a tool
+  error beside a choice that is not forced, and when `exactly_one` is false
+  beside an Anthropic `disable_parallel_tool_use: true`.
+- CLI: `--tool-choice NAME` with `--tool-choice-exactly-one`,
+  `--tool-choice-no-content`, `--tool-choice-no-reasoning`.
+
+*Proved by* the goldens `forced_strict_two_calls`,
+`forced_strict_call_plus_prose`, `forced_strict_single_call_passes`,
+`forced_strict_reasoning_rejected`,
+`forced_strict_anthropic_disable_parallel`,
+`forced_strict_anthropic_one_call_with_prose_passes`,
+`forced_strict_rejected_second_attempt` and
+`forced_strict_anthropic_unsupported_dialect_attempt` and their named
+assertions in `tool_call_goldens` (including
+`forced_strict_non_ascii_whitespace_is_content`),
+`tool_call_recover::strict_forced_constraint_strings`,
+`tool_call_recover::strict_forced_cardinality_content_and_reasoning`,
+`tool_call_recover::strict_forced_counts_rejected_attempts_of_any_reason`,
+`tool_call_recover::strict_forced_contested_second_body_is_order_independent`,
+the unit test `merge_fails_closed_in_either_order` (`recover.rs`),
+`tool_call_recover::strict_forced_diagnostics_are_capped`,
+`tool_call_recover::strict_no_reasoning_under_reasoning_as_content_is_invalid_input`,
+`tool_call_recover::failed_tool_choice_has_no_usable_calls`,
+`tool_call_tools::strict_choice_counts_a_rejected_second_attempt`,
+`tool_call_tools::failed_tool_choice_zeroes_the_usable_counts`,
+`tool_call_tools::strict_no_reasoning_beside_content_reasoning_is_invalid_input`,
+`tool_calls_cli::strict_forced_flags_count_a_rejected_second_attempt`,
+`tool_calls_cli::strict_no_reasoning_with_content_reasoning_is_invalid_input`,
+`tool_call_recover::tool_choice_from_openai_and_anthropic_json`,
+`tool_call_tools::tool_choice_strict_member`,
+`tool_call_tools::tool_choice_strict_member_errors`,
+`tool_calls_cli::strict_forced_tool_choice_flags` and
+`tool_calls_cli::strict_forced_flags_need_a_tool_name`, and the fuzz
+invariants of `docs/FUZZING.md`.
+
 ### Reading a result: status, finish and verdict
 
 `status` and the usability of the calls are different questions, answered
@@ -1123,7 +1349,10 @@ by different fields:
   (`ToolCalls::verdict`). `value.usable_calls` counts the calls that may run
   as is (`Resolved`, `ToolCalls::usable`), and
   `value.usable_calls_accepting_guesses` also counts best guesses on
-  read-only tools (`ToolCalls::usable_accepting_guesses`).
+  read-only tools (`ToolCalls::usable_accepting_guesses`). Both are 0
+  whenever `value.tool_choice.passed` is false, so they always agree with
+  the empty emission and a client reading either never runs a call from a
+  failed turn.
 - **`value.finish`** classifies the turn: `calls` or
   `truncated_with_calls` only when at least one call may run (so they imply
   `verdict: "run"`), `content_only`, `truncated`, or `unresolved` when
@@ -1145,15 +1374,17 @@ A failed tool-choice check is a contract failure of the whole turn: even
 beside a call that would run on its own (the forced tool called, plus an
 extra call), the verdict is `nothing_usable`, the finish `unresolved`, the
 emission empty (the call skipped as `tool_choice_failed`), and
-`finish_reason` `"stop"` (`"length"` under a length stop). `usable_calls` still counts each call's own
-usability.
+`finish_reason` `"stop"` (`"length"` under a length stop). `usable_calls` and
+`usable_calls_accepting_guesses` are 0: nothing of the turn may run, and a
+call's own `outcome` still says what it would have been. A strict forced choice fails the same way when its extra
+conditions fail (see [Strict forced tool choice](#strict-forced-tool-choice)).
 
 | `status` | `value.verdict` | `value.finish` | `openai_finish_reason` | Exit | What the caller should do |
 | --- | --- | --- | --- | --- | --- |
 | `resolved`, `best_guess` | `run` | `calls`, `truncated_with_calls`, or `unresolved` (a rejected or unresolved attempt beside the calls that run) | `"tool_calls"` (`"length"` under a length stop) | 0 | Run the usable calls: `usable_calls` (strict) or, accepting read-only guesses, `usable_calls_accepting_guesses` (what the emission prints); report `rejected` |
 | `resolved`, `best_guess` | `no_calls` | `content_only` | `"stop"` | 0 | Use the content; nothing to run |
 | `resolved`, `best_guess` | `ambiguous` | `unresolved` | `"stop"` (`"length"` under a length stop) | 3 | Choose among the ambiguous call's `alternatives`, or re-ask |
-| `resolved`, `best_guess` | `nothing_usable` | `unresolved` (calls that may not run, a failed tool choice, unresolved calls, rejected attempts) or `truncated` | `"stop"` (`"length"` under a length stop) | 4 | Run nothing; re-ask or report the per-call reasons and the tool-choice diagnostics |
+| `resolved`, `best_guess` | `nothing_usable` | `unresolved` (calls that may not run, a failed tool choice, unresolved calls, rejected attempts) or `truncated` | `"stop"` (`"length"` under a length stop) | 4 | Run nothing (`usable_calls` and `usable_calls_accepting_guesses` are 0 when the tool-choice check failed); re-ask or report the per-call reasons and the tool-choice diagnostics |
 | `ambiguous` | none (`value` is null; each of `alternatives` carries its own `verdict`) | none | none | 3 | Choose a reading, or re-ask |
 | `unresolved` | none (`value` is null) | none | none | 4 | Read `receipt.termination`; run nothing |
 
@@ -1171,3 +1402,153 @@ table states, over every golden), the goldens
 `length_stop_required_choice_on_content` and
 `length_stop_rejected_attempt_beside_usable_call` (each with an `OpenAI`
 emission), and the CLI tests above.
+
+## Compatibility
+
+`tool_call.recover.v1` is a pre-0.1.0 wire value: additive members may appear
+in it, and in the MCP output schema, before 0.1.0. Parse by member name and
+ignore members you do not know; the MCP output schema sets
+`additionalProperties: false`, so validate against the schema your server
+lists (`tools/list`), not a copy. This release changes the following against
+the previous head (`main`). Rust API changes are listed under "Rust API"
+below.
+
+Wire and MCP:
+
+- `value.reasoning_blocks` is new and **required** in the output schema:
+  `[{"span": {start, end}, "text": {start, end}}]`, one entry per reasoning
+  block, never merged (`value.reasoning` keeps the merged ranges).
+- A strict forced choice has a constraint string of the family
+  `tool_choice=forced[exactly-one,no-content,no-reasoning]:NAME` (only the
+  active options, the name last); a choice with no active option is still
+  `tool_choice=forced:NAME`.
+- A new per-call unresolved reason code, `tool_choice_cardinality`: a call
+  after the first beneath an `exactly_one` choice.
+- The MCP input has a new optional member, `tool_choice_strict`, and
+  `tool_choice` accepts the Anthropic `disable_parallel_tool_use` boolean
+  (`true` means exactly one call). Both are described in
+  [Strict forced tool choice](#strict-forced-tool-choice).
+- `value.usable_calls` and `value.usable_calls_accepting_guesses` are 0
+  whenever `value.tool_choice.passed` is false; they used to count calls
+  beside `verdict: nothing_usable`.
+- Evidence pointers of a repeated array parameter number its items across all
+  occurrences (`/xs/0`, `/xs/1`, ...), where each occurrence used to restart
+  at 0, and `decode-typed` evidence cites each item's own span. Alias
+  spellings of one parameter share one sequence.
+- Ambiguous readings are ordered among equal costs by the digest of their
+  wire JSON, which now includes `reasoning_blocks`; the order can differ from
+  the previous release.
+- A new rule id, `tool_call.markup.unmodeled-scope-boundary` (46 operators
+  in all; see [RULES.md](RULES.md)).
+- Receipt `budget` and `usage` numbers differ for the same input (see
+  Budgets below); decisions, values and spans do not.
+
+CLI:
+
+- `recover-tool-calls` has the flags `--tool-choice-exactly-one`,
+  `--tool-choice-no-content` and `--tool-choice-no-reasoning` (see
+  [CLI](#cli)).
+
+Behaviour:
+
+- A repeated `<parameter=NAME>` whose body holds nested `<parameter=`
+  elements is read as the object items of an array-of-object parameter.
+- `$ref`, `anyOf` and `oneOf` item and parameter scopes declare their
+  schema's member names, so a recursive tree nests and an inner member that
+  shares an outer parameter's name stays inside its item.
+- Free-form object parameters and items (`additionalProperties: true`, no
+  declared members) close by the guess `unmodeled-scope-boundary` rather than
+  `missing-parameter-close`: a `best_guess`, never run on a mutating tool.
+- A strict choice with `allow_reasoning: false` beside reasoning `content`
+  is `invalid_input`; any rejected call attempt counts against `exactly_one`
+  and `allow_content: false`.
+- Anthropic `disable_parallel_tool_use` used to be rejected; it is accepted.
+- A root `$ref`, a root `allOf` of one schema and a root `anyOf`/`oneOf` of
+  objects now project their parameters (a Draft-07 root `$ref`, the
+  FastMCP/pydantic shape, used to project none), see
+  [C5](#c5-lossless-declaration-adapters).
+- A reasoning closer is recognized only at or after the block's text start,
+  and a reasoning marker inside a JSON string of a repeated parameter stays
+  value text.
+- A whole call nests about `(depth - 1) / 3` item levels (about 42 at the
+  CLI and MCP value); deeper input is the explicit `BudgetExceeded(Depth)`.
+
+Budgets (see [RESOURCES.md](../RESOURCES.md)):
+
+- The per-byte constants behind `ToolRecoveryRequest::sized` are
+  `RECOVER_WORK_PER_BYTE` 176 (was 32), `RECOVER_SCRATCH_PER_BYTE` 368 (was
+  48) and the new `RECOVER_EVIDENCE_BYTES_PER_ENTRY` 7, so the dense
+  repeated markup the previous constants exhausted on now recovers. An
+  exhausted budget stays an explicit outcome.
+- Repeated parameters, Mistral chained calls and call arrays cost linear
+  time. The default budget admits about 610 one-property root-union
+  branches (about 670 before).
+
+### Rust API
+
+The Rust types are not `#[non_exhaustive]`, so new variants and fields break
+exhaustive matches and struct literals.
+
+Breaking:
+
+- `ToolChoice` gains the variant `ForcedStrict(StrictForced)`. An exhaustive
+  `match` no longer compiles.
+- `UnresolvedReason` gains `ToolChoiceCardinality` (`code()` is
+  `tool_choice_cardinality`, with a `Display` text). Exhaustive matches break.
+- `EditOperator` gains `UnmodeledScopeBoundary`
+  (`tool_call.markup.unmodeled-scope-boundary`, appended last);
+  `grammar::edit::OPERATOR_COUNT` is 46 (was 45) and `OPERATORS.len()` is 46.
+  Exhaustive matches and code that hardcodes 45 break.
+- `ToolCalls` gains the pub field `reasoning_blocks: Vec<ReasoningBlock>`.
+  Struct-literal construction breaks. The doc of `ToolCalls::reasoning`
+  changes: adjacent ranges are merged (`<think>a</think><think>b</think>` is
+  `0..32`); the per-block view is `reasoning_blocks`.
+- `ReasoningSegment` gains the pub field `text: Range<usize>` (marker-free
+  text range; invariant `text.start <= text.end`, `text` inside `span`).
+  Struct literals break.
+- `ArgumentShape` gains `scopes: ScopeGraph` and `ParameterShape` gains
+  `nesting: Nesting`. Struct literals break.
+- `ArgTree` gains the pub field `collected: Vec<CollectedMember>` and a
+  private field, so external struct-literal construction no longer compiles.
+  Derives are unchanged (the private running state never takes part in
+  equality).
+- `ArgTree::value` and `ArgTree::empty_object` are no longer `const fn`.
+- `ToolCalls::usable()`, `usable_accepting_guesses()` and `emitted_calls()`
+  return an empty list when `tool_choice.passed` is false (a violated tool
+  choice means nothing of the turn runs). `emitted_calls()` is now exactly
+  `usable_accepting_guesses()`. Callers that read `usable()` beside a failed
+  check used to get the `Resolved` calls.
+- `ToolChoice::from_anthropic` accepts `disable_parallel_tool_use` on
+  `{"type":"tool",...}`: `true` is `ForcedStrict { exactly_one: true,
+  allow_content: true, allow_reasoning: true }`, `false` is `Forced`. A
+  non-boolean value, or the member on `auto`/`any`/`none`, is a
+  `ToolChoiceError`. It used to be an error for every type.
+- Request error: `ForcedStrict { allow_reasoning: false }` with
+  `ReasoningPolicy::AsContent` is an `invalid_input` outcome (reasoning is
+  never recognized, so the option could not be enforced).
+- Published constants change value (see the budget items above):
+  `cost::RECOVER_WORK_PER_BYTE`, `cost::RECOVER_SCRATCH_PER_BYTE`.
+  `ToolRecoveryRequest::sized_budget` / `sized` / `sized_for` also grow
+  `evidence_entries` (signatures unchanged).
+
+Added:
+
+- `tool_call::StrictForced { name, exactly_one, allow_content, allow_reasoning
+  }` (`Clone, Debug, PartialEq, Eq`) with `exactly_one(name)`,
+  `allow_content(bool)`, `allow_reasoning(bool)`, `with_exactly_one(bool)`
+  (the last three `const fn`).
+- `tool_call::ReasoningBlock { span, text }` (`Clone, Debug, PartialEq, Eq`).
+- `tool_call::CollectedMember { pointer, key_span, occurrences }` (`Clone,
+  Debug, PartialEq, Eq`).
+- New public module surface `tool_call::{Nesting, ScopeGraph, ScopeMember,
+  ScopeNode}`. `Nesting` is `None | Object(usize) | ArrayOfObject(usize)`
+  (`Default` is `None`). `ScopeMember { name, nesting, array }`.
+  `ScopeNode::{members, member, declares, is_open, is_opaque}`.
+  `ScopeGraph::{node, len, is_empty}`.
+- `cost::RECOVER_EVIDENCE_BYTES_PER_ENTRY: u64 = 7`.
+- Docs: `Budget::depth` documents the stack guard and the `(depth - 1) / 3`
+  nested-item capacity; `ToolChoice::constraint` documents the `forced[...]`
+  family; `ToolCalls::usable` has a doctest.
+
+Root `$ref` projection follows local references only (`#/definitions/…` or
+`#/$defs/…`), up to 64 hops, with a cycle check; see C5.

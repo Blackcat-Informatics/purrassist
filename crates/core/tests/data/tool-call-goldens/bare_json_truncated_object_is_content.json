@@ -63,6 +63,7 @@
   "content": [
     "{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Os"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

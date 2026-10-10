@@ -1,0 +1,86 @@
+{
+  "description": "G6: repeated scalar items of a parameter under a near-miss tool name (`Nums` for `nums`): the decode-typed evidence of each item cites that item's own bytes, not the first occurrence's.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "nums",
+        "description": "n",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "xs": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "xs"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "policy": "tolerant",
+  "input": "<tool_call>\n<function=Nums>\n<parameter=xs>\n11\n</parameter>\n<parameter=xs>\n2222\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "nums",
+      "arguments": {
+        "xs": [
+          11,
+          2222
+        ]
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.name.match",
+        "tool_call.parameter.collect",
+        "tool_call.value.decode-typed",
+        "tool_call.value.decode-typed"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.name.match",
+    "tool_call.parameter.collect",
+    "tool_call.value.decode-typed",
+    "tool_call.value.decode-typed"
+  ]
+}

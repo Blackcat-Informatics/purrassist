@@ -702,8 +702,9 @@ every value below to equal the code's.
 | `EXTRACT_PROSE` | 2 | Repair cost: prose dropped inside a call |
 | `EXTRACT_FENCE` | 1 | Repair cost: a fence marker dropped inside a call |
 | `UNDECLARED_NAME` | 4 | Selection weight of a call whose name denotes no declared tool |
-| `RECOVER_WORK_PER_BYTE` | 32 | `Work` per output byte `ToolRecoveryRequest::sized` adds |
-| `RECOVER_SCRATCH_PER_BYTE` | 48 | `ScratchBytes` per output byte `ToolRecoveryRequest::sized` adds |
+| `RECOVER_WORK_PER_BYTE` | 176 | `Work` per output byte `ToolRecoveryRequest::sized` adds |
+| `RECOVER_SCRATCH_PER_BYTE` | 368 | `ScratchBytes` per output byte `ToolRecoveryRequest::sized` adds |
+| `RECOVER_EVIDENCE_BYTES_PER_ENTRY` | 7 | `ToolRecoveryRequest::sized` adds `⌈n / 7⌉` `EvidenceEntries` |
 | `RECOVER_OPENER_CANDIDATE_DIVISOR` | 8 | `ToolRecoveryRequest::sized` adds `⌈preset.candidates / 8⌉` `Candidates` per call opener |
 
 | Built-in dialect | `B_d` | `K_d` per byte |
@@ -741,12 +742,22 @@ open at `{` and commit only on call-shaped evidence, each count every `{`). Then
 preset, the output length `n`, and the constants above:
 
 ```text
-work          = preset.work          + RECOVER_WORK_PER_BYTE    · n   (32 per byte)
-scratch_bytes = preset.scratch_bytes + RECOVER_SCRATCH_PER_BYTE · n   (48 per byte)
-input_bytes   = max(preset.input_bytes, n)
-candidates    = preset.candidates
-              + ⌈preset.candidates / RECOVER_OPENER_CANDIDATE_DIVISOR⌉ · m
+work             = preset.work          + RECOVER_WORK_PER_BYTE    · n   (176 per byte)
+scratch_bytes    = preset.scratch_bytes + RECOVER_SCRATCH_PER_BYTE · n   (368 per byte)
+input_bytes      = max(preset.input_bytes, n)
+candidates       = preset.candidates
+                 + ⌈preset.candidates / RECOVER_OPENER_CANDIDATE_DIVISOR⌉ · m
+evidence_entries = preset.evidence_entries
+                 + ⌈n / RECOVER_EVIDENCE_BYTES_PER_ENTRY⌉
 ```
+
+The per-byte constants are the measured maximum over the densest markup the
+built-in dialects accept, up to 1 MiB, plus a margin (see "Dense markup"
+below), so output of any measured shape recovers under plain
+`sized(effort, output)`. The budget stays linear in `n`; the published
+worst-case bound `work ≤ (2 + K_LEX + Σ_d K_d)·n + K_ERR·E` above is the
+analytical bound, and `RECOVER_WORK_PER_BYTE` is the measured sizing, not a
+replacement for it.
 
 The candidate term is the effort's multiplier per opener: 1 at `Exact`, 2 at
 `Quick`, 16 at `Standard`, 128 at `Deep`, and 1,024 at `Maximum`. Competing
@@ -838,6 +849,149 @@ validating one string argument peaks below the recognizer's buffers. The
 constants leave headroom over these fast-path measurements; inputs that need repair
 search spend from the preset part of the budget, and exhaustion is reported
 as `BudgetExceeded` naming the resource.
+
+Repeated parameters are covered by the same linear bound. A declared array
+parameter (or a `$ref` or `anyOf` scope) written as k repeated
+`<parameter=...>` occurrences costs `work` and `total_scratch_charged` linear
+in the output: resolution appends each item to the partial array in place
+when the item has one reading, and copies (and charges the copy of) the
+array only for an item with several readings, which genuinely multiplies the
+readings (`Candidates` bounds those). Before this, each item copied and
+charged the growing partial array, so k items charged O(k²) scratch
+(measured on the previous head: 13.99 GB at k = 8,000 nested items, against
+1.54 GB now) and took quadratic wall time (9.0 s against 1.8 s).
+`tool_call_cost::repeated_parameters_cost_is_linear` recovers 1,000 to 8,000
+occurrences as nested items, as one-item JSON arrays and as string items,
+and requires both counters to track the byte ratio within 1.05x. At k =
+8,000 the nested form charges 29.2 million work (59 per byte), 1.54 GB of
+total scratch and peaks at 130 MB (262 per byte), the JSON form 52 work and
+104 peak scratch per byte, and the string form 61 and 244. The test recovers
+every k under plain `sized(Effort::Standard, output)`, with no raised limit,
+and asserts `RECOVER_WORK_PER_BYTE` and `RECOVER_SCRATCH_PER_BYTE` as
+ceilings.
+
+### Dense markup
+
+Output that is nothing but one small unit repeated (many tiny calls, many
+repeated parameters) costs more per byte than a long string argument: 53 to
+142 work and 80 to 302 peak scratch per byte, against 10 to 26 and 8 to 45.
+Before the constants were raised (32 work and 48 scratch per byte), plain
+`sized(Effort::Standard, output)` exhausted explicitly on such output:
+`BudgetExceeded(Work)` for every shape at 1 MiB but DeepSeek-V3, which ran
+out of `ScratchBytes` first. With work and scratch raised alone, the shapes
+that record more than 65,536 evidence entries per MiB (0.0625 per byte:
+Qwen3-Coder XML nested items, string items and calls, `OpenAI`, Mistral v11
+and Anthropic) would still have run out of the preset's flat
+`EvidenceEntries`.
+`tool_call_scale::
+one_mib_dense_markup_fits_published_budget` (`make corpus`; 19 s in a debug
+build) now recovers each of these shapes at 1 MiB under plain
+`sized(Effort::Standard, output)` with the stop `Completed` and every unit
+recovered; `tool_call_cost::dense_markup_fits_published_budget` (`make
+check`) runs the same shapes at 64 KiB. All use the default request (all
+twelve dialects).
+
+| Dense shape (1 MiB) | Units | Work per byte | Peak scratch per byte | Evidence per byte |
+| --- | ---: | ---: | ---: | ---: |
+| Qwen3-Coder XML repeated nested items | 16,911 | 59.4 | 268.3 | 0.065 |
+| Qwen3-Coder XML repeated JSON-array items | 30,838 | 52.9 | 103.6 | 0.000 |
+| Qwen3-Coder XML repeated string items | 34,950 | 62.1 | 250.5 | 0.067 |
+| Qwen3-Coder XML calls | 11,781 | 72.4 | 281.6 | 0.101 |
+| Hermes calls | 14,169 | 82.4 | 114.0 | 0.014 |
+| `OpenAI` stringified calls | 10,485 | 72.0 | 183.0 | 0.070 |
+| Mistral v3 calls (one section each) | 12,633 | 71.9 | 160.6 | 0.060 |
+| Mistral v3 calls (one `[TOOL_CALLS] [..]` array) | 15,195 | 79.6 | 186.0 | 0.072 |
+| Mistral v11 calls (`</s>` after each) | 16,912 | 58.6 | 203.7 | 0.081 |
+| Mistral v11 calls (chained, a newline after each) | 18,078 | 67.8 | 220.8 | 0.086 |
+| Harmony calls | 9,446 | 118.9 | 80.1 | 0.009 |
+| DeepSeek-V3.1 calls | 11,522 | 73.0 | 98.7 | 0.011 |
+| DeepSeek-V3 calls | 9,361 | 82.3 | 301.6 | 0.045 |
+| Kimi-K2 calls | 10,809 | 142.3 | 131.4 | 0.052 |
+| Llama 3 JSON calls | 20,971 | 76.2 | 150.1 | 0.020 |
+| Anthropic `tool_use` calls | 13,981 | 56.5 | 170.0 | 0.067 |
+| Bare JSON calls with empty arguments | 34,952 | 101.4 | 165.6 | 0.033 |
+| Qwen3-Coder XML 1 MiB string (above) | 1 | 17.0 | 11.1 | 0.000 |
+
+Peak scratch per byte falls with size toward these values (a 4 KiB input
+shows up to 325 for DeepSeek-V3 and 143 work for Kimi-K2, which the preset's
+fixed part of the budget covers), and work and peak scratch per byte are
+the same at 64 KiB and 1 MiB. `Work` binds first, then `EvidenceEntries`
+(the preset's flat 65,536 against up to 0.101 entries per byte), then
+`ScratchBytes`. `Candidates` never bind in these shapes (the sized term
+grows with the openers), and `Depth` is not per-byte and is not reached.
+
+The constants are the maximum plus a margin: `RECOVER_WORK_PER_BYTE` = 176
+is 24% over the 142.3 of Kimi-K2, `RECOVER_SCRATCH_PER_BYTE` = 368 is 22%
+over the 301.6 of DeepSeek-V3 (Qwen3-Coder XML calls peak at
+281.6, repeated nested items at 268.3), and
+`RECOVER_EVIDENCE_BYTES_PER_ENTRY` = 7 is 41% over the 0.101 entries per
+byte of Qwen3-Coder XML calls (one entry per 9.9 bytes). A 1 MiB output
+therefore carries a budget of 185 million work, 432 MiB of scratch and
+215,000 evidence entries at `Effort::Standard`; the cost of the margin is that
+much more work and memory before a pathological input exhausts.
+
+Not covered, by design, and still explicit exhaustions under `sized`:
+
+- Text with no call in it that opens many attempts: a megabyte of `{` charges
+  895 work per byte (every `{` may open a Llama 3 JSON, Anthropic `tool_use`
+  or bare JSON attempt, and each stays live), and a megabyte of `{"a":`
+  195. Both are linear in `n`, and both end `BudgetExceeded(Work)`.
+- DeepSeek-V3.1 output with many sections, each restarted after a truncated
+  stringified-argument call (issue #10). The history of each restarted
+  section packs readings that reach different call boundaries, so each is
+  segmented whole (the fallback below). Charged work grows quadratically in
+  the number of such sections: at `Effort::Maximum`, 238 work per byte at 8
+  sections, 460 at 16, 911 at 32 and 1,813 at 64, where a clean DeepSeek-V3.1
+  output costs 73. Wall time grows faster than the charged work (0.3 s, 3.8 s
+  and 42 s at 16, 32 and 64 sections), so the governor under-counts this
+  shape (wall times in the dev profile, which is optimized). The growth
+  predates the chained segmentation, and the numbers are the same on `main`
+  943fa04. Under plain `sized`, such output ends
+  `BudgetExceeded(Work)` explicitly from about 16 sections. Ordinary output
+  rarely restarts a section. The fix is tracked in issue #10.
+- A mutated Qwen3-Coder XML turn calling a tool whose array items are
+  free-form objects (issue #11): the repair search spends about 240 to 280 ns
+  per charged work unit, against 40 to 80 ns for ordinary recovery. Charged
+  work therefore under-counts its real work several times over. Under plain
+  `sized` the 192-byte reproduction ends `BudgetExceeded(Work)` in 0.3 s; at
+  `Effort::Maximum` it completes in 1.65 s (6.9 million work). The fix is
+  tracked in issue #11.
+
+Consecutive Mistral v11 calls with nothing but whitespace between them (or
+nothing at all) are one `next`-chained attempt. Each call extends the
+segmentation of the calls before it, reading only itself, so work, scratch
+and wall time are linear: the "Mistral v11 calls (chained)" row above, and
+`tool_call_cost::chained_mistral_v11_calls_cost_is_linear` (256 to 4,096
+calls, three separators). Before this, the segmentation was re-run at each
+call, and work and peak scratch per byte grew with the number of calls (141
+and 2,009 at 409 calls, 1,139 and 27,354 at 6,553), so `sized` exhausted.
+
+The chained segmentation covers every history whose alternative readings
+lie within one call. A history whose equal-cost readings reach different
+call boundaries, or differ in whether a call was skipped, is segmented
+whole, as before, at the completion that reaches it; the work is charged
+(per history node, per call read) like any segmentation. No Mistral v11
+chain tried reached this path. It was reached only by DeepSeek-V3.1
+sections restarted after a truncated call, once per section
+(`tool_call_cost::whole_segmentation_fallback_is_correct_and_charged`).
+
+A Mistral v3 `[TOOL_CALLS] [..]` array of thousands of calls holds one
+literal failure per element (each element's closing `}` or `]` meets the
+`,` that follows it, and a sibling reading takes the comma), kept as a
+repair seed while any configuration of the array's attempt lives. They are
+indexed by the position they began at, grouped by attempt, so a byte
+examines only the failures that its step makes droppable (none while the
+attempt's earliest live position is unchanged) and every examination is
+charged as `Work`. Before, each byte re-examined every held failure without
+charging it: the work charged stayed linear (73.5 per byte) while the wall
+time was quadratic (release build: 0.108 s at 256 calls, 1.26 s at 1,024,
+4.46 s at 2,048, and no finish at 1 MiB within 300 s). Now the work is 79.6 per
+byte from 256 calls to 1 MiB and 1 MiB (15,195 calls) recovers in about 6 s
+(release build): the "Mistral v3 calls (one `[TOOL_CALLS] [..]` array)" row
+above, and `tool_call_cost::mistral_v3_call_arrays_cost_is_linear` (1,024 to
+16,384 calls: work, scratch ever charged and peak scratch within 1.05x of the
+byte ratio), with a unit test of the held failures' per-step work in
+`grammar::engine`.
 
 ## Tool-call recovery throughput (illustrative)
 

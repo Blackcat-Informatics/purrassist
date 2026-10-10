@@ -11,6 +11,14 @@
 //! number, boolean, enumeration, array, and nested object parameters) over
 //! every built-in dialect.
 //!
+//! `--tools ref` (the `tool-call-ref` target) selects a second fixed tool
+//! set compiled with `ToolSet::from_openai`: arrays of `$ref` items, `anyOf`
+//! items, member names that collide with an outer parameter, a recursive
+//! `$ref` tree, free-form object items, inline object items, and a Draft-07
+//! root `$ref` tool. The default (`--tools fixed`) is unchanged: new tools
+//! live only in the `ref` set so no earlier seed changes meaning. Every
+//! other byte of the protocol and every check below is shared.
+//!
 //! Control byte: bits 0-1 the repair policy (per tool, all `Structural`, all
 //! `Tolerant`, per tool), bits 2-3 the generation stop (`Stop`, `Length`,
 //! `ToolCalls`, `Unknown`), bits 4-5 the reasoning policy (separate, starting
@@ -18,6 +26,18 @@
 //! `Required`, forced `read_file`). Split byte: bits 0-1 the effort
 //! (`Exact`, `Quick`, `Standard`, `Deep`), bit 2 the ambiguity policy
 //! (`Report`, `Reject`), bits 3-7 the split seed.
+//!
+//! Strict forced choice: the control bits are full, so the options of
+//! [`StrictForced`] come from a trailer, a separate later seed byte. Under
+//! the forced tool choice, a last byte of `0xF8..=0xFF` (never valid UTF-8,
+//! and the last byte of no earlier seed) is consumed as the trailer instead
+//! of being part of the turn: bit 0 `exactly_one`, bit 1 no content, bit 2
+//! no reasoning (`0xF8` is the all-lenient degenerate form). Every other
+//! input keeps its earlier meaning: the turn is `bytes[2..]` and the choice
+//! is the plain `Forced`. A strict choice with no reasoning (bit 2) under
+//! the reasoning policy "as content" (bits 4-5 `10`) is a request error
+//! (`invalid_input`): the probe asserts that error, with no value, and prints
+//! `ok`.
 //!
 //! Checks (a panic is a fuzz failure):
 //! - recovery never panics, names the output's digest, and stays within its
@@ -27,12 +47,14 @@
 //!   turn records no guess;
 //! - (A13) a `Resolved` call carries no guess and no data loss, so no guessed
 //!   call on a mutating tool is `Resolved`; `usable()` holds only `Resolved`
-//!   calls that name a tool; `usable_accepting_guesses()` never holds a guess
-//!   on a tool that is not read-only; a call embedded in reasoning is never
-//!   `Resolved` and never usable;
+//!   calls that name a tool, and none when the tool-choice check failed;
+//!   `usable_accepting_guesses()` never holds a guess on a tool that is not
+//!   read-only, and is empty too when the check failed (the wire
+//!   `usable_calls` counts are then 0, as the emission is); a call embedded
+//!   in reasoning is never `Resolved` and never usable;
 //! - (F5, F7) the verdict, finish, emission and `finish_reason` agree:
-//!   `emitted_calls()` is `usable_accepting_guesses()` when the tool-choice
-//!   check passed and empty otherwise; the verdict is `Run` exactly when it
+//!   `emitted_calls()` is `usable_accepting_guesses()` (empty when the
+//!   tool-choice check failed); the verdict is `Run` exactly when it
 //!   is not empty, and the CLI exit code is 0 exactly for `Run` and
 //!   `NoCalls`; the `OpenAI` array holds exactly the emitted calls; a finish
 //!   with calls implies `Run`, a `Run` turn finishing otherwise is
@@ -42,6 +64,12 @@
 //!   (whatever the finish) and otherwise `"tool_calls"` exactly when the
 //!   `OpenAI` array holds a call;
 //!   the wire `verdict` and usable-call counts match;
+//! - a strict forced choice that passed implies, by the options drawn:
+//!   exactly one call when `exactly_one`; no content byte other than ASCII
+//!   whitespace when content is not allowed; no reasoning range when
+//!   reasoning is not allowed; no rejected attempt when `exactly_one` or
+//!   content is not allowed; and conversely a second call, or a rejected
+//!   attempt, under `exactly_one` fails the check;
 //! - (F4) a rejected attempt runs past where its grammar failed (the
 //!   furthest the recognizer read an attempt of its dialect at its opener)
 //!   and (T5) no further than the failure its reason reports, only to a
@@ -75,6 +103,12 @@
 //! - (F5) every embedded call is offered once, in span order;
 //! - (T2) no call, embedded call or rejected attempt holds bytes of a
 //!   reasoning range's opener or closer marker in the same reading;
+//! - the reasoning blocks (`reasoning_blocks`, unmerged) are ordered and
+//!   disjoint, each text lies inside its block, each block inside one
+//!   `reasoning` range, the blocks cover exactly the `reasoning` ranges, and
+//!   the bytes between a block and its text are a marker pair's opener (none
+//!   for the block a `starts_open` turn begins in) and its closer (none when
+//!   the block was closed at a call opener or is unterminated);
 //! - (F8) a malformed attempt's `at` lies inside its span or at its end, or
 //!   past it only inside a literal the failing reading began and matched
 //!   in part (at most the longest literal spelling past the end);
@@ -111,8 +145,8 @@ use purrassist_core::digest::Digest;
 use purrassist_core::tool_call::{
     AmbiguityPolicy, CallOutcome, DialectId, DialectSet, Effects, Finish, GenerationStop, IdPolicy,
     ObjectSpec, Param, Piece, PolicySelection, ReasoningPolicy, RecognizedTurn, Recognizer,
-    Rejection, RepairPolicy, Segment, SkipReason, Skipped, ToolCalls, ToolChoice, ToolDefinition,
-    ToolRecoveryRequest, ToolSet, Verdict, emit,
+    Rejection, RepairPolicy, Segment, SkipReason, Skipped, StrictForced, ToolCalls, ToolChoice,
+    ToolDefinition, ToolRecoveryRequest, ToolSet, Verdict, emit,
 };
 use purrassist_core::wire::WireValue;
 use purrassist_core::{AssistResult, Budget, Effort, Governor, Outcome, StopReason, json};
@@ -122,7 +156,7 @@ use std::io::{self, Read};
 /// mutating, with every parameter kind), a read-only tool with no required
 /// parameter (the issue's motivating stray-closer case), and a mutating
 /// tool with an alias and a repeatable parameter.
-fn tools() -> ToolSet {
+fn fixed_tools() -> ToolSet {
     let owner = ObjectSpec::new()
         .param("name", Param::string())
         .param("uid", Param::integer());
@@ -165,8 +199,72 @@ fn tools() -> ToolSet {
     .expect("the fixed tool set compiles")
 }
 
+/// The `--tools ref` set: a second fixed tool set compiled with
+/// [`ToolSet::from_openai`] so schema keywords the builder cannot express
+/// (`$ref`, `anyOf`, `additionalProperties`, `$defs` roots) reach the
+/// nested-parameter code. Every tool is mutating (the adapter's default).
+/// `read_file` is kept so the forced tool choice of the header names a tool.
+///
+/// - `read_file`: a string `path` and an integer `limit`;
+/// - `batch_refs`: an outer `name` beside an array of `$ref` items whose
+///   `name` collides with it, and a plain array of strings;
+/// - `any_items`: an array whose items are `anyOf` an object or a string;
+/// - `tree_walk`: a recursive `$ref` tree (`children` items refer to the node);
+/// - `free_items`: a `path` and an array of free-form object items
+///   (`additionalProperties` true);
+/// - `list_records`: an array of inline object items (one member an array
+///   of strings), the plain `Param::array(Param::object(..))` shape;
+/// - `root_ref`: a root `$ref` into `definitions` under Draft-07, with an
+///   array of object items inside the target.
+const REF_TOOLS: &str = r##"[
+ {"type":"function","function":{"name":"read_file","parameters":{"type":"object",
+  "properties":{"path":{"type":"string"},"limit":{"type":"integer"}},"required":["path"]}}},
+ {"type":"function","function":{"name":"batch_refs","parameters":{"type":"object",
+  "properties":{"name":{"type":"string"},
+   "items":{"type":"array","items":{"$ref":"#/$defs/rec"}},
+   "tags":{"type":"array","items":{"type":"string"}}},
+  "$defs":{"rec":{"type":"object","properties":{"name":{"type":"string"},"count":{"type":"integer"},
+   "tags":{"type":"array","items":{"type":"string"}}}}}}}},
+ {"type":"function","function":{"name":"any_items","parameters":{"type":"object",
+  "properties":{"path":{"type":"string"},
+   "choices":{"type":"array","items":{"anyOf":[
+    {"type":"object","properties":{"kind":{"type":"string"},"n":{"type":"integer"}}},
+    {"type":"string"}]}}}}}},
+ {"type":"function","function":{"name":"tree_walk","parameters":{"type":"object",
+  "properties":{"root":{"$ref":"#/$defs/node"}},
+  "$defs":{"node":{"type":"object","properties":{"label":{"type":"string"},
+   "children":{"type":"array","items":{"$ref":"#/$defs/node"}}}}}}}},
+ {"type":"function","function":{"name":"free_items","parameters":{"type":"object",
+  "properties":{"path":{"type":"string"},
+   "keep":{"type":"array","items":{"type":"object","additionalProperties":true}}}}}},
+ {"type":"function","function":{"name":"list_records","parameters":{"type":"object",
+  "properties":{"owner":{"type":"string"},
+   "records":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},
+    "uid":{"type":"integer"},"tags":{"type":"array","items":{"type":"string"}}}}}}}}},
+ {"type":"function","function":{"name":"root_ref","parameters":{
+  "$schema":"http://json-schema.org/draft-07/schema#","$ref":"#/definitions/args",
+  "definitions":{"args":{"type":"object","properties":{"path":{"type":"string"},
+   "entries":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},
+    "size":{"type":"integer"}}}}},"required":["path"]}}}}}
+]"##;
+
+fn ref_tools() -> ToolSet {
+    ToolSet::from_openai(REF_TOOLS, Budget::default()).expect("the ref tool set compiles")
+}
+
+/// The tool set the command line selects: `--tools fixed` (the default) or
+/// `--tools ref`. Anything else is a usage error, never a silent fallback.
+fn tools() -> ToolSet {
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    match arguments.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+        [] | ["--tools", "fixed"] => fixed_tools(),
+        ["--tools", "ref"] => ref_tools(),
+        _ => panic!("usage: fuzz-tool-call [--tools fixed|ref]; got {arguments:?}"),
+    }
+}
+
 /// The request knobs the two header bytes select.
-fn request(control: u8, split: u8, output: &[u8]) -> ToolRecoveryRequest {
+fn request(control: u8, split: u8, strict: Option<u8>, output: &[u8]) -> ToolRecoveryRequest {
     let effort =
         [Effort::Exact, Effort::Quick, Effort::Standard, Effort::Deep][usize::from(split & 3)];
     let policy = [
@@ -192,7 +290,17 @@ fn request(control: u8, split: u8, output: &[u8]) -> ToolRecoveryRequest {
         0 => ToolChoice::Auto,
         1 => ToolChoice::None,
         2 => ToolChoice::Required,
-        _ => ToolChoice::Forced("read_file".into()),
+        _ => strict.map_or_else(
+            || ToolChoice::Forced("read_file".into()),
+            |bits| {
+                ToolChoice::ForcedStrict(StrictForced {
+                    name: "read_file".into(),
+                    exactly_one: bits & 1 != 0,
+                    allow_content: bits & 2 == 0,
+                    allow_reasoning: bits & 4 == 0,
+                })
+            },
+        ),
     };
     let ambiguity = if split & 4 == 0 {
         AmbiguityPolicy::Report
@@ -597,10 +705,14 @@ fn check_calls(output: &[u8], calls: &ToolCalls) {
 fn check_verdict(calls: &ToolCalls) {
     let emitted = calls.emitted_calls();
     let usable = calls.usable_accepting_guesses();
-    if calls.tool_choice.passed {
-        assert_eq!(emitted, usable, "emitted_calls() is not the usable calls");
-    } else {
+    assert_eq!(emitted, usable, "emitted_calls() is not the usable calls");
+    if !calls.tool_choice.passed {
+        // A3: nothing of a failed turn is usable, as nothing is emitted.
         assert!(emitted.is_empty(), "a failed tool choice emits calls");
+        assert!(
+            calls.usable().is_empty() && usable.is_empty(),
+            "a failed tool choice leaves usable calls"
+        );
     }
     let verdict = calls.verdict();
     assert_eq!(verdict == Verdict::Run, !emitted.is_empty(), "{verdict:?}");
@@ -836,6 +948,62 @@ fn check_result(
         );
         check_calls(output, calls);
         check_reemission(tools, calls);
+        check_strict(output, request, calls);
+    }
+}
+
+/// The options of a strict forced choice, as drawn: a passed check implies
+/// exactly one call (when `exactly_one`), no content byte other than ASCII
+/// whitespace (when content is not allowed) and no reasoning range (when
+/// reasoning is not allowed); a second call under `exactly_one` fails it.
+fn check_strict(output: &[u8], request: &ToolRecoveryRequest, calls: &ToolCalls) {
+    let ToolChoice::ForcedStrict(strict) = &request.tool_choice else {
+        return;
+    };
+    if strict.exactly_one && calls.calls.len() > 1 {
+        assert!(
+            !calls.tool_choice.passed,
+            "{} calls pass exactly-one",
+            calls.calls.len()
+        );
+    }
+    if strict.exactly_one && !calls.rejected.is_empty() {
+        assert!(
+            !calls.tool_choice.passed,
+            "{} rejected attempts pass exactly-one",
+            calls.rejected.len()
+        );
+    }
+    if !calls.tool_choice.passed {
+        return;
+    }
+    if strict.exactly_one || !strict.allow_content {
+        assert!(
+            calls.rejected.is_empty(),
+            "a passed exactly-one or no-content check holds rejected attempts {:?}",
+            calls
+                .rejected
+                .iter()
+                .map(|r| r.span.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+    if strict.exactly_one {
+        assert_eq!(calls.calls.len(), 1, "a passed exactly-one check");
+    }
+    if !strict.allow_content {
+        for range in &calls.content {
+            assert!(
+                output[range.clone()].iter().all(u8::is_ascii_whitespace),
+                "a passed no-content check holds content {range:?}"
+            );
+        }
+    }
+    if !strict.allow_reasoning {
+        assert!(
+            calls.reasoning.is_empty(),
+            "a passed no-reasoning check holds reasoning"
+        );
     }
 }
 
@@ -1505,19 +1673,142 @@ fn check_markers_not_calls(
     }
 }
 
+/// The marker-free reasoning text of every reading: the blocks are ordered
+/// and disjoint, each `text` lies inside its `span`, each `span` inside one
+/// `reasoning` range, and the spans cover exactly the bytes the `reasoning`
+/// ranges cover. The bytes between a block's `span` and its `text` are
+/// markers: the head is an opener spelling of an allowed dialect (empty only
+/// for the block a `starts_open` turn begins in, at offset 0), and the tail
+/// is that pair's closer or empty (a block closed at a call opener, or
+/// unterminated). A `text` may itself start or end with a marker spelling (a
+/// second `<think>` inside a block is text); only the stripped edges are
+/// markers.
+fn check_reasoning_blocks(
+    output: &[u8],
+    request: &ToolRecoveryRequest,
+    result: &AssistResult<ToolCalls>,
+) {
+    let readings: Vec<&ToolCalls> = match &result.outcome {
+        Outcome::Resolved(calls) | Outcome::BestGuess(calls) => vec![calls],
+        Outcome::Ambiguous(values) => values.iter().collect(),
+        Outcome::Unresolved => Vec::new(),
+    };
+    let mut pairs: Vec<(&[u8], &[u8])> = Vec::new();
+    for dialect in request.dialects.dialects() {
+        for (open, close) in dialect.grammar().reasoning_markers() {
+            pairs.push((open, close));
+        }
+    }
+    let starts_open = request.reasoning == ReasoningPolicy::Separate { starts_open: true };
+    for calls in readings {
+        let blocks = &calls.reasoning_blocks;
+        if request.reasoning == ReasoningPolicy::AsContent {
+            assert!(
+                blocks.is_empty() && calls.reasoning.is_empty(),
+                "reasoning as content records blocks: {blocks:?}"
+            );
+        }
+        let mut covered = vec![false; output.len()];
+        for range in &calls.reasoning {
+            covered[range.clone()].fill(true);
+        }
+        let mut blocked = vec![false; output.len()];
+        for block in blocks {
+            check_range(output, &block.span, "reasoning block span");
+            check_range(output, &block.text, "reasoning block text");
+            assert!(
+                block.text.start <= block.text.end,
+                "reasoning text {:?} is reversed",
+                block.text
+            );
+            assert!(
+                block.span.start <= block.text.start && block.text.end <= block.span.end,
+                "reasoning text {:?} lies outside its block {:?}",
+                block.text,
+                block.span
+            );
+            assert!(
+                calls
+                    .reasoning
+                    .iter()
+                    .any(|range| range.start <= block.span.start && block.span.end <= range.end),
+                "reasoning block {:?} lies in no reasoning range {:?}",
+                block.span,
+                calls.reasoning
+            );
+            blocked[block.span.clone()].fill(true);
+            let head = &output[block.span.start..block.text.start];
+            let tail = &output[block.text.end..block.span.end];
+            if head.is_empty() {
+                assert!(
+                    starts_open && block.span.start == 0,
+                    "reasoning block {:?} has no opener outside a starts_open turn",
+                    block.span
+                );
+            }
+            assert!(
+                head.is_empty()
+                    && (tail.is_empty() || pairs.iter().any(|(_, close)| *close == tail))
+                    || pairs.iter().any(|(open, close)| {
+                        *open == head && (tail.is_empty() || *close == tail)
+                    }),
+                "reasoning block {:?} (text {:?}) is not delimited by a marker pair: head {head:?}, tail {tail:?}",
+                block.span,
+                block.text
+            );
+        }
+        assert_eq!(
+            covered, blocked,
+            "the reasoning blocks {blocks:?} do not cover exactly the reasoning ranges {:?}",
+            calls.reasoning
+        );
+        assert!(
+            blocks
+                .windows(2)
+                .all(|pair| pair[0].span.end <= pair[1].span.start),
+            "reasoning blocks are out of order or overlap: {blocks:?}"
+        );
+    }
+}
+
 fn main() {
     let mut bytes = Vec::new();
     io::stdin().take(4097).read_to_end(&mut bytes).unwrap();
     assert!(bytes.len() <= 4096, "probe input exceeds 4096 bytes");
     let control = bytes.first().copied().unwrap_or(0);
     let split = bytes.get(1).copied().unwrap_or(0);
-    let output = bytes.get(2..).unwrap_or_default();
+    let strict = bytes
+        .last()
+        .copied()
+        .filter(|last| bytes.len() > 2 && control >> 6 == 3 && *last >= 0xF8)
+        .map(|last| last & 7);
+    let end = bytes.len() - usize::from(strict.is_some());
+    let output = bytes.get(2..end).unwrap_or_default();
     let tools = tools();
-    let request = request(control, split, output);
+    let request = request(control, split, strict, output);
     let result = tools.recover(output, &request);
+    if let ToolChoice::ForcedStrict(StrictForced {
+        allow_reasoning: false,
+        ..
+    }) = &request.tool_choice
+        && request.reasoning == ReasoningPolicy::AsContent
+    {
+        // G15: forbidding reasoning while reasoning markers are content is a
+        // contradictory request, an error rather than a vacuous pass.
+        assert_eq!(result.outcome, Outcome::Unresolved, "{result:?}");
+        assert!(
+            matches!(result.receipt.stopped, StopReason::InvalidInput(_)),
+            "{:?}",
+            result.receipt.stopped
+        );
+        assert_eq!(result.receipt.source, Digest::of(output));
+        println!("ok");
+        return;
+    }
     check_result(&tools, output, &request, &result);
     check_reasoning_keeps_calls(&tools, output, &request, &result);
     check_markers_not_calls(output, &request, &result);
+    check_reasoning_blocks(output, &request, &result);
     check_chunking(&tools, output, &request, split >> 3);
     check_exhaustion(&tools, output, &request);
     println!("ok");

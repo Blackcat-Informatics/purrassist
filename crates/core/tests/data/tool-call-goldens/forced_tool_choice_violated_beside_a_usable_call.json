@@ -60,8 +60,8 @@
   "openai_finish_reason": "stop",
   "verdict": "nothing_usable",
   "usable_calls": {
-    "strict": 1,
-    "accepting_guesses": 1
+    "strict": 0,
+    "accepting_guesses": 0
   },
   "calls": [
     {
@@ -92,6 +92,7 @@
   "content": [
     "\n"
   ],
+  "reasoning_text": [],
   "emitted": {
     "calls": 0,
     "skipped": [

@@ -54,6 +54,7 @@
   "content": [
     "I will look it up.\n```tool_code\nget_weather(city=\"Paris\")\n```\n"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.unparsed-dialect"

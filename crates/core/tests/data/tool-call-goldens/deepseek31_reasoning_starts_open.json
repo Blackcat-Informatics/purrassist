@@ -57,6 +57,9 @@
   "rejected": [],
   "embedded": [],
   "content": [],
+  "reasoning_text": [
+    "The user wants the weather in Lima."
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

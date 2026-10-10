@@ -12,8 +12,8 @@ use crate::grammar::cost::K_CODEC;
 use crate::grammar::edit::{EditOperator, MarkupEdit};
 use crate::json::{Node, Value};
 use crate::tool_call::{
-    ArgLeaf, ArgOrigin, ArgTree, ArgumentFault, ObjectShape, Spanned, UnresolvedArgument,
-    ValueShape,
+    ArgLeaf, ArgOrigin, ArgTree, ArgumentFault, CollectedMember, Nesting, ObjectShape, ScopeGraph,
+    ScopeNode, Spanned, UnknownParameters, UnresolvedArgument, ValueShape,
 };
 use core::ops::Range;
 
@@ -43,7 +43,8 @@ use super::{XML_CLOSER as CLOSER, XML_CLOSER_VARIANT as CLOSER_VARIANT};
 ///   (`tool_call.value.schema-typed`); an unmodeled parameter whose value
 ///   begins with a `<parameter=` opener holds nested parameters, read as an
 ///   untyped object (`tool_call.markup.nested-parameter`) whose members
-///   resolution types the same way.
+///   resolution types the same way. The same holds for an unmodeled item of
+///   an array parameter (see below).
 /// - An enumeration value is read the same way, then trimmed of any
 ///   whitespace left around it (a non-verbatim type), recorded as
 ///   `tool_call.value.trim-nonverbatim`.
@@ -61,6 +62,34 @@ use super::{XML_CLOSER as CLOSER, XML_CLOSER_VARIANT as CLOSER_VARIANT};
 ///   other value is one item of the array, read by the item type and
 ///   recorded as `tool_call.xml.array-item`, so repeated elements collect
 ///   into one array when the call is resolved.
+/// - An array parameter declared with object items (or unmodeled items,
+///   `$ref`, `anyOf`, ...) whose item begins with a `<parameter=` opener
+///   holds one nested object item: its elements are the item's members
+///   (recorded as `tool_call.markup.nested-parameter`, typed by the item
+///   object's declared shape, or untyped for an unmodeled item and typed later
+///   by the tool's exact schema), and the item is recorded as
+///   `tool_call.xml.array-item` where it closes. Each repetition of the
+///   parameter is one more item, collected in source order with items written
+///   as inline JSON. An array of strings (or any verbatim or scalar item) never
+///   nests: tags in its value stay text. Nesting needs the tool known when the
+///   body is read: with no declared tool there is no scope, so no value nests.
+///   An item's members are declared only in the item's scope, so a member
+///   whose name is the array's own name is the item's member (a child), never
+///   the next item. That holds for an unmodeled item too (a `$ref` or an
+///   `anyOf`, recursive or not): the tool's exact schema declares its member
+///   names, and the call's scope graph ([`ScopeGraph`], compiled once per
+///   tool from the exact schema, one node per schema location, a recursive
+///   `$ref` a back-edge) supplies them, so such an item nests like its inline
+///   twin. Under a union scope (`anyOf`/`oneOf`/`allOf`) a member nests when
+///   its body begins with `<parameter=` and any object branch declares it an
+///   object or an array of objects. Typing stays with the exact schema,
+///   except that a member whose every non-null branch is an array reads text
+///   that is not a JSON array as one item, and its occurrences collect into
+///   one array. A scope that names no member (a free-form object, a `$ref` to
+///   a non-object) has unknown membership (an opaque scope): an opener an
+///   enclosing scope declares closes it as a guess
+///   (`tool_call.markup.unmodeled-scope-boundary`), never as the
+///   definition-grounded `tool_call.markup.missing-parameter-close`.
 /// - Bytes inside a value or a parameter name that are not well-formed
 ///   UTF-8 are read as U+FFFD, one per maximal malformed subpart, each run
 ///   recorded as `tool_call.value.invalid-utf8` (a data loss keeping the
@@ -81,7 +110,10 @@ use super::{XML_CLOSER as CLOSER, XML_CLOSER_VARIANT as CLOSER_VARIANT};
 /// - at a declared parameter's opener the missing closer is recorded as
 ///   `tool_call.markup.missing-parameter-close` (single reading, non-guess,
 ///   grounded in the definition: a declared parameter's opener never occurs
-///   inside a value), and an already-bound `NAME` simply repeats;
+///   inside a value), and an already-bound `NAME` simply repeats; the nested
+///   objects such an opener closes are closed the same way, except an
+///   object whose scope names no member, closed as the guess
+///   `tool_call.markup.unmodeled-scope-boundary`;
 /// - where the enclosing element closes (the slot's delimiter), as
 ///   `tool_call.markup.parameter-closed-by-element`;
 /// - at the end of output under a non-length stop, as
@@ -340,16 +372,28 @@ impl Ending {
 /// One object scope being read: the top-level arguments or a nested object
 /// parameter.
 struct Frame<'t> {
-    scope: Option<&'t ObjectShape>,
+    scope: Scope<'t>,
     tree: ArgTree,
     /// The parameter holding this object; `None` at the top level.
     name: Option<Spanned<String>>,
+    /// Whether this object is one item of the array parameter `name`
+    /// (repeated nested elements of an array of objects): it is adopted as a
+    /// one-element array, recorded as `tool_call.xml.array-item`.
+    item: bool,
+    /// Whether the parameter `name` is an array member of a graph scope
+    /// ([`Scope::Schema`]), whose repeated occurrences are collected into
+    /// one array when adopted.
+    collect: bool,
 }
 
 struct Reader<'b, 't, 'g> {
     body: &'b [u8],
     base: usize,
     end: CodecEnd,
+    /// Whether the call's tool is known (a declared tool's shape is given).
+    known: bool,
+    /// The scope graph of the call's tool (see [`Scope::Schema`]).
+    graph: Option<&'t ScopeGraph>,
     frames: Vec<Frame<'t>>,
     edits: Vec<MarkupEdit>,
     /// The dialect's call openers and closers (see `CodecContext`).
@@ -468,7 +512,7 @@ impl Held {
 impl<'b, 't, 'g> Reader<'b, 't, 'g> {
     /// A pass over `body` (starting at absolute offset `base`) reading
     /// `mode`'s reading of a value holding text after an unpaired closer.
-    const fn new(
+    fn new(
         body: &'b [u8],
         base: usize,
         end: CodecEnd,
@@ -480,6 +524,8 @@ impl<'b, 't, 'g> Reader<'b, 't, 'g> {
             body,
             base,
             end,
+            known: context.shape.is_some(),
+            graph: context.shape.map(|shape| &shape.scopes),
             frames: Vec::new(),
             edits: Vec::new(),
             openers: context.openers,
@@ -808,11 +854,11 @@ impl<'t> Reader<'_, 't, '_> {
     /// Whether an opener of `name` ends an open value: it names a parameter
     /// declared in some open scope, or no tool is known.
     fn boundary(&mut self, name: &str) -> Result<bool, StopReason> {
-        if self.frames[0].scope.is_none() {
+        if !self.known {
             return Ok(true);
         }
         self.charge(self.frames.len())?;
-        Ok(self.frames.iter().any(|frame| declares(frame.scope, name)))
+        Ok(self.frames.iter().any(|frame| frame.scope.declares(name)))
     }
 
     /// The innermost open scope declaring `name`, or the innermost scope.
@@ -821,22 +867,36 @@ impl<'t> Reader<'_, 't, '_> {
         Ok(self
             .frames
             .iter()
-            .rposition(|frame| declares(frame.scope, name))
+            .rposition(|frame| frame.scope.declares(name))
             .unwrap_or(self.frames.len() - 1))
     }
 
-    /// Close the innermost nested object at `at`.
-    fn pop(&mut self, at: usize) {
+    /// Close the innermost nested object at `at`; an item of an array
+    /// parameter is adopted as a one-element array (`tool_call.xml.array-item`).
+    fn pop(&mut self, at: usize) -> Result<(), StopReason> {
         let frame = self.frames.pop().expect("a nested scope is open");
         let mut tree = frame.tree;
         let end = self.base + at;
         tree.root.span = tree.root.span.map(|span| span.start..end);
         let name = frame.name.expect("nested scopes are named");
-        self.frames
+        if frame.item {
+            let from = tree
+                .root
+                .span
+                .as_ref()
+                .map_or(at, |span| span.start - self.base);
+            self.record(EditOperator::ArrayItem, from..at, b"")?;
+            tree = wrap_item(tree);
+        }
+        let parent = self
+            .frames
             .last_mut()
-            .expect("the top-level scope stays open")
+            .expect("the top-level scope stays open");
+        let canonical = parent.scope.canonical(&name.value).to_owned();
+        parent
             .tree
-            .adopt(name, tree);
+            .adopt_keyed(name, &canonical, tree, frame.collect);
+        Ok(())
     }
 
     /// The operator recording a closer missing where the body ended: at the
@@ -858,12 +918,16 @@ impl<'t> Reader<'_, 't, '_> {
         context: CodecContext<'t>,
     ) -> Result<Result<ArgTree, CodecFault>, StopReason> {
         self.frames.push(Frame {
-            scope: context.shape.map(|shape| &shape.arguments),
+            scope: context
+                .shape
+                .map_or(Scope::Opaque, |shape| Scope::Declared(&shape.arguments)),
             tree: ArgTree::value(Node {
                 value: Value::Object(Vec::new()),
                 span: Some(span),
             }),
             name: None,
+            item: false,
+            collect: false,
         });
         let mut at = 0;
         loop {
@@ -883,7 +947,7 @@ impl<'t> Reader<'_, 't, '_> {
             };
             if self.frames.len() > 1 {
                 self.respelled(at, width, spelling)?;
-                self.pop(at);
+                self.pop(at)?;
             } else {
                 self.record(EditOperator::DeleteStrayCloser, at..at + width, b"")?;
             }
@@ -893,9 +957,54 @@ impl<'t> Reader<'_, 't, '_> {
             if let Some(operator) = self.closed_at_end() {
                 self.record(operator, at..at, CLOSER)?;
             }
-            self.pop(at);
+            self.pop(at)?;
         }
         Ok(Ok(self.frames.pop().expect("the top-level scope").tree))
+    }
+
+    /// The scope the nested parameter elements of a member open, and
+    /// whether the object is one item of an array parameter, for a member
+    /// declared as `declared` (`None` for an untyped member of a graph
+    /// scope) whose scope-graph entry is `member`; `None` when the member
+    /// does not nest.
+    ///
+    /// An object parameter nests as a typed object. An unmodeled parameter
+    /// (or an array of unmodeled items) nests as an untyped object whose
+    /// names are its node of the scope graph, or opaque with none. A member
+    /// of a graph scope nests when the schema location declares it an
+    /// object or an array of objects in any branch.
+    fn nesting(
+        &self,
+        declared: Option<&'t ValueShape>,
+        member: Nesting,
+    ) -> Option<(Scope<'t>, bool)> {
+        let node = |index: usize| {
+            self.graph
+                .and_then(|graph| graph.node(index))
+                .map_or(Scope::Opaque, Scope::of_node)
+        };
+        let unmodeled = |item: bool| {
+            let scope = match member {
+                Nesting::Object(index) | Nesting::ArrayOfObject(index) => node(index),
+                Nesting::None => Scope::Opaque,
+            };
+            Some((scope, item))
+        };
+        match declared {
+            Some(ValueShape::Object(inner)) => Some((Scope::of_object(inner), false)),
+            Some(ValueShape::Unmodeled) => unmodeled(false),
+            Some(ValueShape::Array(item)) => match &**item {
+                ValueShape::Object(inner) => Some((Scope::of_object(inner), true)),
+                ValueShape::Unmodeled => unmodeled(true),
+                _ => None,
+            },
+            Some(_) => None,
+            None => match member {
+                Nesting::Object(index) => Some((node(index), false)),
+                Nesting::ArrayOfObject(index) => Some((node(index), true)),
+                Nesting::None => None,
+            },
+        }
     }
 
     /// Read one parameter from its opener; the offset after it.
@@ -914,33 +1023,36 @@ impl<'t> Reader<'_, 't, '_> {
         }
         let owner = self.owner(&opener.name.value)?;
         while self.frames.len() - 1 > owner {
-            self.record(
-                EditOperator::MissingParameterClose,
-                opener.start..opener.start,
-                CLOSER,
-            )?;
-            self.pop(opener.start);
+            // A scope whose schema names no member has unknown membership:
+            // the opener may be its own member, so closing it is a guess.
+            let operator = if matches!(self.frames[self.frames.len() - 1].scope, Scope::Opaque) {
+                EditOperator::UnmodeledScopeBoundary
+            } else {
+                EditOperator::MissingParameterClose
+            };
+            self.record(operator, opener.start..opener.start, CLOSER)?;
+            self.pop(opener.start)?;
         }
         let scope = self.frames.last().expect("a scope is open").scope;
-        let declared = scope.and_then(|scope| {
-            let canonical = scope.resolve_name(&opener.name.value)?;
-            scope.parameter(canonical).map(|parameter| &parameter.value)
-        });
+        let member = scope.member(&opener.name.value);
+        let (declared, collect) = (member.declared, member.collect);
         let from = opener.end;
         // An object parameter's nested elements are its members, typed by
         // its declared shape; an unmodeled parameter's (`$ref`, `anyOf`,
-        // ...) are members of an untyped object, typed later by the tool's
-        // exact schema (`tool_call.value.schema-typed`).
-        let nested = match declared {
-            Some(ValueShape::Object(inner)) => Some(Some(inner)),
-            Some(ValueShape::Unmodeled) => Some(None),
-            _ => None,
-        };
-        if let Some(inner) = nested {
+        // ...) are members of an untyped object whose member names come from
+        // the tool's scope graph, typed later by the tool's exact schema
+        // (`tool_call.value.schema-typed`).
+        // The same holds for an array of objects (or of unmodeled items): an
+        // item whose body begins with an opener is one nested object, and
+        // each repetition of the parameter is one more item.
+        let nested = self.nesting(declared, member.nesting);
+        if let Some((inner, item)) = nested {
             let next = self.skip_space(from)?;
             if self.body[next..].starts_with(OPENER) {
+                // The frame being pushed is one more level of depth, the
+                // arguments object being the first.
                 self.governor
-                    .charge(Resource::Depth, size(self.frames.len()))?;
+                    .charge(Resource::Depth, size(self.frames.len() + 1))?;
                 self.record(EditOperator::NestedParameter, opener.start..from, b"")?;
                 self.frames.push(Frame {
                     scope: inner,
@@ -949,6 +1061,8 @@ impl<'t> Reader<'_, 't, '_> {
                         span: Some(self.absolute(from..from)),
                     }),
                     name: Some(opener.name),
+                    item,
+                    collect,
                 });
                 return Ok(Ok(from));
             }
@@ -956,13 +1070,22 @@ impl<'t> Reader<'_, 't, '_> {
         let first = self.skip_space(from)?;
         let verbatim = verbatim(declared, self.body[first..].starts_with(b"["));
         let (ending, dropped) = self.reading(declared, from, verbatim)?;
+        // A member of a graph scope whose schema is an array holds a value
+        // that is not a JSON array as one item (the item type stays with the
+        // exact schema).
         let Ending {
             stop,
             terminator,
             inner,
             fork,
         } = ending;
-        let tree = match self.value(declared, from, dropped.unwrap_or(stop), terminator)? {
+        let end = dropped.unwrap_or(stop);
+        let tree = if collect && !self.body[first..end].starts_with(b"[") {
+            self.array_item(from, end, terminator)?
+        } else {
+            self.value(declared, from, end, terminator)?
+        };
+        let tree = match tree {
             Ok(tree) => tree,
             Err(fault) => return Ok(Err(fault)),
         };
@@ -974,11 +1097,11 @@ impl<'t> Reader<'_, 't, '_> {
         } else if let Some(first) = fork {
             self.closer_text(EditOperator::TextAfterCloser, first..stop)?;
         }
-        self.frames
-            .last_mut()
-            .expect("a scope is open")
+        let parent = self.frames.last_mut().expect("a scope is open");
+        let canonical = parent.scope.canonical(&opener.name.value).to_owned();
+        parent
             .tree
-            .adopt(opener.name, tree);
+            .adopt_keyed(opener.name, &canonical, tree, collect);
         Ok(Ok(match terminator {
             Terminator::Closer(width, spelling) => {
                 self.respelled(stop, width, spelling)?;
@@ -988,7 +1111,7 @@ impl<'t> Reader<'_, 't, '_> {
                 // Grounded in the definition when the tool is known; with no
                 // known tool every opener is a boundary, a guess (the opener
                 // may be text of the value).
-                let operator = if self.frames[0].scope.is_some() {
+                let operator = if self.known {
                     EditOperator::MissingParameterClose
                 } else {
                     EditOperator::UndeclaredParameterBoundary
@@ -1047,6 +1170,26 @@ impl<'t> Reader<'_, 't, '_> {
         ending.inner = ending.inner.filter(|&inner| inner < first);
         ending.fork = None;
         Ok((ending, Some(first)))
+    }
+
+    /// The text `from..stop` as one item of an array member of a graph
+    /// scope, as a verbatim string re-rooted under `/0`
+    /// (`tool_call.xml.array-item`).
+    fn array_item(
+        &mut self,
+        from: usize,
+        stop: usize,
+        terminator: Terminator,
+    ) -> Result<Result<ArgTree, CodecFault>, StopReason> {
+        let item = match self.string(from, stop, terminator, false)? {
+            Ok(item) => item,
+            Err(fault) => return Ok(Err(fault)),
+        };
+        if item.is_stand_in() {
+            return Ok(Ok(item));
+        }
+        self.record(EditOperator::ArrayItem, from..stop, b"")?;
+        Ok(Ok(wrap_item(item)))
     }
 
     /// The value of a parameter declared as `declared` (`None` when the
@@ -1312,7 +1455,7 @@ impl<'t> Reader<'_, 't, '_> {
             .frames
             .iter()
             .enumerate()
-            .filter(|(_, frame)| declares(frame.scope, name))
+            .filter(|(_, frame)| frame.scope.declares(name))
             .map(|(index, _)| index)
             .collect())
     }
@@ -1332,11 +1475,23 @@ impl<'t> Reader<'_, 't, '_> {
         let cost = |operator: EditOperator| operator.rule().cost;
         let at_end = self.closed_at_end().map_or(0, cost);
         // Ending a value at an opener rather than at a closer.
-        let missing = if self.frames[0].scope.is_some() {
+        let missing = if self.known {
             cost(EditOperator::MissingParameterClose)
         } else {
             cost(EditOperator::UndeclaredParameterBoundary)
         };
+        // What closing each open frame costs at an opener: a scope whose
+        // schema names no member is closed as a guess
+        // (`tool_call.markup.unmodeled-scope-boundary`), any other at the
+        // definition's boundary.
+        let unit: Vec<u64> = self
+            .frames
+            .iter()
+            .map(|frame| match frame.scope {
+                Scope::Opaque => cost(EditOperator::UnmodeledScopeBoundary),
+                _ => missing,
+            })
+            .collect();
         // What the opener or end `stop` costs once the value has ended and
         // `open` nested objects are still open: the objects it closes, and
         // its own respelling.
@@ -1356,9 +1511,9 @@ impl<'t> Reader<'_, 't, '_> {
             } else {
                 0
             };
-            size(open - owner)
-                .saturating_mul(missing)
-                .saturating_add(respelled)
+            unit[owner + 1..=open]
+                .iter()
+                .fold(respelled, |total, unit| total.saturating_add(*unit))
         };
         let spelling = |terminator: Terminator| match terminator {
             Terminator::Closer(_, Spelling::Variant) => cost(EditOperator::CloserVariant),
@@ -1642,6 +1797,14 @@ fn wrap_item(item: ArgTree) -> ArgTree {
         })
         .collect();
     tree.arguments_were_stringified = item.arguments_were_stringified;
+    tree.collected = item
+        .collected
+        .into_iter()
+        .map(|merged| CollectedMember {
+            pointer: format!("/0{}", merged.pointer),
+            ..merged
+        })
+        .collect();
     tree
 }
 
@@ -1660,7 +1823,106 @@ fn verbatim(declared: Option<&ValueShape>, bracket: bool) -> bool {
     }
 }
 
-/// Whether `scope` declares `name` (exactly, or as an alias).
-fn declares(scope: Option<&ObjectShape>, name: &str) -> bool {
-    scope.is_some_and(|scope| scope.resolve_name(name).is_some())
+/// The member names an open object frame accepts.
+#[derive(Clone, Copy)]
+enum Scope<'t> {
+    /// The declared parameters of a typed object (a tool's arguments, or an
+    /// object parameter, or an object item).
+    Declared(&'t ObjectShape),
+    /// The names a schema location declares where the typed shape stops
+    /// (`$ref`, `anyOf`, ...): a node of the tool's scope graph.
+    Schema(&'t ScopeNode),
+    /// A scope whose membership is unknown: it declares no member and may
+    /// hold any (a free-form object, an unmodeled value naming none, or no
+    /// tool at all). It declares no name, so an opener an enclosing scope
+    /// declares ends it, as a guess.
+    Opaque,
+}
+
+impl<'t> Scope<'t> {
+    /// The scope of a nested object: a free-form object (no declared
+    /// parameter, unknown members passed through) has unknown membership.
+    fn of_object(object: &'t ObjectShape) -> Self {
+        if object.parameters.is_empty()
+            && object.unknown_parameters == UnknownParameters::PassThrough
+        {
+            Self::Opaque
+        } else {
+            Self::Declared(object)
+        }
+    }
+
+    /// The scope of a graph node.
+    const fn of_node(node: &'t ScopeNode) -> Self {
+        if node.is_opaque() {
+            Self::Opaque
+        } else {
+            Self::Schema(node)
+        }
+    }
+
+    /// Whether the scope declares `name` (exactly, or as an alias).
+    fn declares(self, name: &str) -> bool {
+        match self {
+            Self::Declared(object) => object.resolve_name(name).is_some(),
+            Self::Schema(node) => node.declares(name),
+            Self::Opaque => false,
+        }
+    }
+
+    /// The canonical name of `name` in the scope: the declared parameter an
+    /// alias denotes, else `name` itself. Occurrences of one canonical name
+    /// share one item sequence.
+    fn canonical<'a>(self, name: &'a str) -> &'a str
+    where
+        't: 'a,
+    {
+        match self {
+            Self::Declared(object) => object.resolve_name(name).unwrap_or(name),
+            Self::Schema(_) | Self::Opaque => name,
+        }
+    }
+
+    /// The member `name` of the scope (see [`Member`]).
+    fn member(self, name: &str) -> Member<'t> {
+        match self {
+            Self::Declared(object) => {
+                let parameter = object
+                    .resolve_name(name)
+                    .and_then(|canonical| object.parameter(canonical));
+                Member {
+                    declared: parameter.map(|parameter| &parameter.value),
+                    nesting: parameter.map_or(Nesting::None, |parameter| parameter.nesting),
+                    collect: false,
+                }
+            }
+            Self::Schema(node) => {
+                let member = node.member(name);
+                Member {
+                    declared: None,
+                    nesting: member.map_or(Nesting::None, |member| member.nesting),
+                    collect: member.is_some_and(|member| member.array),
+                }
+            }
+            Self::Opaque => Member {
+                declared: None,
+                nesting: Nesting::None,
+                collect: false,
+            },
+        }
+    }
+}
+
+/// What a scope says about one member it holds.
+struct Member<'t> {
+    /// The member's declared shape (a typed scope's parameter); `None` for
+    /// an undeclared member and for any member of a graph scope, whose
+    /// typing stays with the exact schema.
+    declared: Option<&'t ValueShape>,
+    /// How the member's nested elements are scoped when `declared` does not
+    /// say (an unmodeled parameter, or a member of a graph scope).
+    nesting: Nesting,
+    /// Whether the member is an array member of a graph scope: a value that
+    /// is not a JSON array is one item, and occurrences are collected.
+    collect: bool,
 }

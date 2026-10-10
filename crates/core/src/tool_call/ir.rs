@@ -26,6 +26,7 @@ use crate::grammar::edit::MarkupEdit;
 use crate::json::{Member, Node, Value, pointer_segment};
 use crate::provenance::Derivation;
 use core::ops::Range;
+use std::collections::BTreeMap;
 
 /// A value with the absolute byte range it was read from.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -169,6 +170,68 @@ pub struct ArgTree {
     /// [`ToolSet::argument_shape`](super::ToolSet::argument_shape)), or
     /// `None` when no declared tool was known to the codec.
     pub tool: Option<String>,
+    /// Array members whose repeated occurrences the codec merged into one
+    /// array, where the typed shape does not declare the member (a `$ref`
+    /// or `anyOf` scope), in document order. Resolution records each as
+    /// `tool_call.parameter.collect`, as it does for a declared array
+    /// parameter's occurrences.
+    pub collected: Vec<CollectedMember>,
+    /// What each parameter name holds so far, so that adopting an
+    /// occurrence never walks the members already held (a lookup in an
+    /// ordered map of the distinct names; core has no seeded hashing).
+    held: Held,
+}
+
+/// What the members adopted under one canonical parameter name hold: the
+/// running state [`ArgTree::adopt_keyed`] keeps so no adoption walks the
+/// object's members. It is derived from [`ArgTree::root`] and
+/// [`ArgTree::collected`], so it never takes part in equality.
+#[derive(Clone, Debug, Default)]
+struct Held(BTreeMap<String, Holding>);
+
+#[cfg(test)]
+thread_local! {
+    /// Members of the object an adoption read or wrote besides the one it
+    /// appends (the first array member it merges into): the linearity test
+    /// asserts at most one per adoption, whatever the object holds.
+    static MEMBERS_INSPECTED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+/// The members adopted under one canonical name.
+#[derive(Clone, Copy, Debug, Default)]
+struct Holding {
+    /// Items held: an array member's length, otherwise one per member.
+    items: usize,
+    /// The index in `root`'s members of the first array member.
+    first_array: Option<usize>,
+    /// The index in `collected` of this name's merge marker.
+    marker: Option<usize>,
+}
+
+impl PartialEq for Held {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for Held {}
+
+/// A repeated array member the codec merged into one array (see
+/// [`ArgTree::collected`]).
+///
+/// ```
+/// use purrassist_core::tool_call::CollectedMember;
+/// let merged = CollectedMember { pointer: "/children".into(), key_span: 3..11, occurrences: 2 };
+/// assert_eq!(merged.occurrences, 2);
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CollectedMember {
+    /// The merged member's pointer in the arguments.
+    pub pointer: String,
+    /// The byte range of the first occurrence's name.
+    pub key_span: Range<usize>,
+    /// How many occurrences were merged (at least two).
+    pub occurrences: usize,
 }
 
 impl ArgTree {
@@ -182,7 +245,7 @@ impl ArgTree {
     /// assert!(empty.root.span.is_none() && empty.leaves.is_empty());
     /// ```
     #[must_use]
-    pub const fn empty_object() -> Self {
+    pub fn empty_object() -> Self {
         Self::value(Node {
             value: Value::Object(Vec::new()),
             span: None,
@@ -200,13 +263,15 @@ impl ArgTree {
     /// assert!(tree.leaves.is_empty() && tree.unresolved.is_empty() && tree.tool.is_none());
     /// ```
     #[must_use]
-    pub const fn value(root: Node) -> Self {
+    pub fn value(root: Node) -> Self {
         Self {
             root,
             leaves: Vec::new(),
             unresolved: Vec::new(),
             arguments_were_stringified: false,
             tool: None,
+            collected: Vec::new(),
+            held: Held::default(),
         }
     }
 
@@ -311,9 +376,63 @@ impl ArgTree {
 
     /// Append `value` as member `name` of this object tree, re-rooting its
     /// leaves and unresolved values under the member's pointer.
+    ///
+    /// A repeated name keeps every occurrence as a duplicate member, and
+    /// resolution collects the occurrences of an array parameter into one
+    /// array, in order. An array occurrence is therefore re-rooted past the
+    /// items the earlier occurrences hold (`/outfits/1/wearer` for the second
+    /// occurrence's item, not `/outfits/0/wearer` again), so every leaf and
+    /// unresolved value names the item it was read from.
     pub(crate) fn adopt(&mut self, name: Spanned<String>, value: Self) {
+        self.adopt_collecting(name, value, false);
+    }
+
+    /// [`Self::adopt`], and with `collect` an array `value` is appended to
+    /// the array an earlier occurrence of `name` already holds instead of
+    /// becoming a duplicate member: the occurrences of an array member of a
+    /// scope the typed model does not declare (a `$ref` or `anyOf` item)
+    /// are collected here, as resolution collects those of a declared array
+    /// parameter.
+    pub(crate) fn adopt_collecting(&mut self, name: Spanned<String>, value: Self, collect: bool) {
+        let canonical = name.value.clone();
+        self.adopt_keyed(name, &canonical, value, collect);
+    }
+
+    /// [`Self::adopt_collecting`], numbering and collecting the occurrences
+    /// of `canonical` together: an alias and the canonical spelling of one
+    /// parameter share one item sequence, as resolution's collection of the
+    /// occurrences does. Aliases exist only on declared scopes, which never
+    /// collect, so `collect` occurrences always share one spelling. Each
+    /// adoption is constant in the members already held plus the size of
+    /// `value`, which the reader has charged: the per-name state is a
+    /// running count, not a scan of the members.
+    pub(crate) fn adopt_keyed(
+        &mut self,
+        name: Spanned<String>,
+        canonical: &str,
+        mut value: Self,
+        collect: bool,
+    ) {
         let prefix = format!("/{}", pointer_segment(&name.value));
         let whole = value.is_stand_in();
+        let holding = self.held.0.get(canonical).copied().unwrap_or_default();
+        if matches!(value.root.value, Value::Array(_)) && !whole && holding.items > 0 {
+            let earlier = holding.items;
+            for leaf in &mut value.leaves {
+                leaf.pointer = shift_item(&leaf.pointer, earlier);
+            }
+            for unresolved in &mut value.unresolved {
+                unresolved.pointer = shift_item(&unresolved.pointer, earlier);
+            }
+            for merged in &mut value.collected {
+                merged.pointer = shift_item(&merged.pointer, earlier);
+            }
+        }
+        self.collected
+            .extend(value.collected.into_iter().map(|merged| CollectedMember {
+                pointer: format!("{prefix}{}", merged.pointer),
+                ..merged
+            }));
         self.leaves
             .extend(value.leaves.into_iter().map(|leaf| ArgLeaf {
                 pointer: format!("{prefix}{}", leaf.pointer),
@@ -332,13 +451,58 @@ impl ArgTree {
         if whole {
             return;
         }
-        if let Value::Object(members) = &mut self.root.value {
-            members.push(Member {
-                key: name.value,
-                key_span: Some(name.span),
-                value: value.root,
-            });
+        let Value::Object(members) = &mut self.root.value else {
+            return;
+        };
+        let mut holding = holding;
+        if collect
+            && let Value::Array(items) = &mut value.root.value
+            && let Some(index) = holding.first_array
+            && let Value::Array(into) = &mut members[index].value.value
+        {
+            #[cfg(test)]
+            MEMBERS_INSPECTED.with(|count| count.set(count.get() + 1));
+            holding.items += items.len();
+            into.append(items);
+            let earlier = &mut members[index];
+            let first = earlier
+                .key_span
+                .clone()
+                .unwrap_or_else(|| name.span.clone());
+            if let Some(marker) = holding.marker {
+                self.collected[marker].occurrences += 1;
+            } else {
+                holding.marker = Some(self.collected.len());
+                self.collected.push(CollectedMember {
+                    pointer: prefix,
+                    key_span: first,
+                    occurrences: 2,
+                });
+            }
+            earlier.value.span = match (earlier.value.span.take(), value.root.span.take()) {
+                (Some(first), Some(last)) => {
+                    Some(first.start.min(last.start)..first.end.max(last.end))
+                }
+                (span, other) => span.or(other),
+            };
+            self.held.0.insert(canonical.to_owned(), holding);
+            return;
         }
+        match &value.root.value {
+            Value::Array(items) => {
+                holding.items += items.len();
+                if holding.first_array.is_none() {
+                    holding.first_array = Some(members.len());
+                }
+            }
+            _ => holding.items += 1,
+        }
+        members.push(Member {
+            key: name.value,
+            key_span: Some(name.span),
+            value: value.root,
+        });
+        self.held.0.insert(canonical.to_owned(), holding);
     }
 }
 
@@ -503,10 +667,38 @@ pub enum ReasoningClosure {
 }
 
 /// A reasoning block.
+///
+/// `text` is `span` without its markers, so slicing the output by it never
+/// panics for a segment the recognizer produced:
+///
+/// ```
+/// use purrassist_core::tool_call::{ReasoningClosure, ReasoningSegment};
+/// let output = b"<think>abc</think>Done.";
+/// let segment = ReasoningSegment {
+///     span: 0..18,
+///     text: 7..10,
+///     closure: ReasoningClosure::Closed,
+///     embedded: Vec::new(),
+///     edits: Vec::new(),
+/// };
+/// assert_eq!(&output[segment.text.clone()], b"abc");
+/// assert!(segment.span.start <= segment.text.start && segment.text.end <= segment.span.end);
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReasoningSegment {
     /// The source range, markers included.
     pub span: Range<usize>,
+    /// The block's text: `span` without its markers. It begins where the
+    /// opening marker ends (at `0` for a block the turn starts in, which has
+    /// no opener) and ends where the closing marker begins; a block closed at
+    /// a call opener ends at the opener, and an unterminated one at the end of
+    /// output. The bytes are verbatim source offsets, never unescaped
+    /// (Anthropic thinking text stays JSON-escaped). For an Anthropic
+    /// `redacted_thinking` block the text is the opaque encrypted `data`
+    /// payload, not reasoning prose. Invariant: `text.start <= text.end` and
+    /// `text` lies inside `span`; a closing marker that begins before the
+    /// text does not close the block.
+    pub text: Range<usize>,
     /// How the block ended.
     pub closure: ReasoningClosure,
     /// Calls recognized inside the closed block. They remain reasoning text;
@@ -595,5 +787,108 @@ impl Piece {
             Self::Segment(segment) => segment.span(),
             Self::Choice(choice) => choice.span.clone(),
         }
+    }
+}
+
+/// `pointer`, whose first segment is an array index, with `by` added to the
+/// index; a pointer without an index segment is unchanged.
+fn shift_item(pointer: &str, by: usize) -> String {
+    let Some(rest) = pointer.strip_prefix('/') else {
+        return pointer.to_owned();
+    };
+    let (index, tail) = rest
+        .split_once('/')
+        .map_or((rest, ""), |(index, tail)| (index, tail));
+    let Ok(index) = index.parse::<usize>() else {
+        return pointer.to_owned();
+    };
+    if tail.is_empty() {
+        format!("/{}", index.saturating_add(by))
+    } else {
+        format!("/{}/{tail}", index.saturating_add(by))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn leaf_tree(item: usize) -> ArgTree {
+        let mut tree = ArgTree::value(Node {
+            value: Value::Array(vec![Node {
+                value: Value::String("a".into()),
+                span: Some(item..item + 1),
+            }]),
+            span: Some(item..item + 1),
+        });
+        tree.leaves.push(ArgLeaf {
+            pointer: "/0".into(),
+            origin: ArgOrigin::Raw,
+            raw: item..item + 1,
+        });
+        tree
+    }
+
+    fn named(name: &str, at: usize) -> Spanned<String> {
+        Spanned {
+            value: name.into(),
+            span: at..at + 1,
+        }
+    }
+
+    /// G5: adopting is O(1) in the members held, deterministically (a count
+    /// of members inspected, not wall time). 32768 one-item array
+    /// occurrences of one name, and of 32768 distinct names beside it, never
+    /// inspect more than one existing member per adoption (the earlier
+    /// scan inspected every member of the object each time), and both
+    /// shapes number their leaves by the items held.
+    #[test]
+    fn adopt_is_constant_in_the_members_held() {
+        let k = 1 << 15;
+        for collect in [false, true] {
+            MEMBERS_INSPECTED.with(|count| count.set(0));
+            let mut tree = ArgTree::empty_object();
+            for item in 0..k {
+                tree.adopt_collecting(named("xs", item), leaf_tree(item), collect);
+                tree.adopt_collecting(named(&format!("n{item}"), item), leaf_tree(item), collect);
+            }
+            let inspected = MEMBERS_INSPECTED.with(core::cell::Cell::get);
+            assert!(
+                inspected <= k,
+                "{inspected} members inspected in {} adoptions",
+                2 * k
+            );
+            let last = tree
+                .leaves
+                .iter()
+                .rev()
+                .find(|leaf| leaf.pointer.starts_with("/xs/"));
+            assert_eq!(
+                last.map(|leaf| leaf.pointer.clone()),
+                Some(format!("/xs/{}", k - 1))
+            );
+            // The merge markers, when collecting, re-root with the shifts.
+            assert_eq!(tree.collected.len(), usize::from(collect));
+            if collect {
+                assert_eq!(tree.collected[0].pointer, "/xs");
+                assert_eq!(tree.collected[0].occurrences, k);
+            }
+        }
+    }
+
+    /// An alias and the canonical name share one numbering when the caller
+    /// keys them by the canonical name (A5).
+    #[test]
+    fn canonical_key_shares_one_sequence() {
+        let mut tree = ArgTree::empty_object();
+        tree.adopt_keyed(named("xs", 0), "xs", leaf_tree(0), false);
+        tree.adopt_keyed(named("items", 1), "xs", leaf_tree(1), false);
+        tree.adopt_keyed(named("xs", 2), "xs", leaf_tree(2), false);
+        let pointers: Vec<&str> = tree
+            .leaves
+            .iter()
+            .map(|leaf| leaf.pointer.as_str())
+            .collect();
+        assert_eq!(pointers, ["/xs/0", "/items/1", "/xs/2"]);
     }
 }

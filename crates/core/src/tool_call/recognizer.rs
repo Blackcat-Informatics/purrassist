@@ -188,6 +188,9 @@ struct Think {
     cost: u64,
     hist: u32,
     start: usize,
+    /// Where the block's text begins: the end of its opening marker, or
+    /// `0` for a block the turn starts in (no opener).
+    text_start: usize,
     pair: Option<u32>,
     /// The opener start and promoted base, once the block was closed at its
     /// first opener.
@@ -424,6 +427,12 @@ impl Turn {
         edits: Vec<MarkupEdit>,
         governor: &mut Governor,
     ) -> Result<u32, StopReason> {
+        let text = think.text_start..marker.unwrap_or(end);
+        debug_assert!(
+            think.start <= text.start && text.start <= text.end && text.end <= end,
+            "reasoning text {text:?} must lie inside span {}..{end}",
+            think.start,
+        );
         let mut embedded = Vec::new();
         for &index in &think.embedded {
             let (Segment::Call(segment) | Segment::Result(segment)) = &self.store[index as usize]
@@ -472,6 +481,7 @@ impl Turn {
         let index = self.store(
             Segment::Reasoning(ReasoningSegment {
                 span: think.start..end,
+                text,
                 closure,
                 embedded,
                 edits,
@@ -706,7 +716,9 @@ pub struct Recognizer<'s> {
     engine: Engine<'s>,
     digest: DigestBuilder,
     marker: u32,
-    pending: Vec<Pending>,
+    /// The queued reports, by offset, phase and arrival.
+    pending: BTreeMap<(usize, u8, u64), Pending>,
+    arrivals: u64,
     queued: Queued,
     turn: Turn,
     context: ContextTracker,
@@ -810,6 +822,7 @@ impl<'s> Recognizer<'s> {
                 cost: 0,
                 hist: 0,
                 start: 0,
+                text_start: 0,
                 pair: None,
                 promoted: None,
                 embedded: Vec::new(),
@@ -826,7 +839,8 @@ impl<'s> Recognizer<'s> {
             engine,
             digest: DigestBuilder::new(),
             marker: 0,
-            pending: Vec::new(),
+            pending: BTreeMap::new(),
+            arrivals: 0,
             queued: Queued {
                 meter: governor.scratch_meter(),
                 bytes: 0,
@@ -937,7 +951,9 @@ impl<'s> Recognizer<'s> {
     fn queue(&mut self, pending: Pending, governor: &mut Governor) -> Result<(), StopReason> {
         governor.charge(Resource::ScratchBytes, QUEUED_REPORT)?;
         self.queued.bytes += QUEUED_REPORT;
-        self.pending.push(pending);
+        self.arrivals += 1;
+        self.pending
+            .insert((pending.at(), pending.phase(), self.arrivals), pending);
         Ok(())
     }
 
@@ -953,23 +969,21 @@ impl<'s> Recognizer<'s> {
     /// Process every pending report at an offset up to `limit`, releasing
     /// each one's queue charge.
     fn settle(&mut self, limit: usize, governor: &mut Governor) -> Result<(), StopReason> {
-        if !self.pending.iter().any(|pending| pending.at() <= limit) {
+        let mut ready: Vec<(usize, usize, Pending)> = Vec::new();
+        // Stable order: offset, then phase, then arrival.
+        while let Some(entry) = self.pending.first_entry() {
+            if entry.key().0 > limit {
+                break;
+            }
+            let pending = entry.remove();
+            ready.push((ready.len(), pending.at(), pending));
+        }
+        if ready.is_empty() {
             return Ok(());
         }
-        let (ready, rest): (Vec<Pending>, Vec<Pending>) = core::mem::take(&mut self.pending)
-            .into_iter()
-            .partition(|pending| pending.at() <= limit);
-        self.pending = rest;
         let released = size(ready.len()).saturating_mul(QUEUED_REPORT);
         governor.release_scratch(released)?;
         self.queued.bytes -= released;
-        // Stable order: offset, then phase, then arrival.
-        let mut ready: Vec<(usize, usize, Pending)> = ready
-            .into_iter()
-            .enumerate()
-            .map(|(sequence, pending)| (sequence, pending.at(), pending))
-            .collect();
-        ready.sort_by_key(|(sequence, at, pending)| (*at, pending.phase(), *sequence));
         let mut start = 0;
         while start < ready.len() {
             let at = ready[start].1;
@@ -1011,10 +1025,10 @@ impl<'s> Recognizer<'s> {
                 }
                 Pending::Marker {
                     start,
+                    end,
                     pair,
                     open: true,
-                    ..
-                } => self.think_opened(&mut frame, start, pair, governor)?,
+                } => self.think_opened(&mut frame, start, end, pair, governor)?,
                 Pending::Engine(Event::Completed {
                     table,
                     attempt,
@@ -1137,6 +1151,11 @@ impl<'s> Recognizer<'s> {
         if let Some((promoted_start, base)) = think.promoted {
             return Ok((promoted_start == start).then_some(base));
         }
+        // A call opener inside the block's own opening marker leaves no
+        // text to close: the block does not close there.
+        if start < think.text_start {
+            return Ok(None);
+        }
         let edit = MarkupEdit {
             operator: EditOperator::ReasoningUnclosed,
             span: start..start,
@@ -1175,6 +1194,7 @@ impl<'s> Recognizer<'s> {
         &mut self,
         frame: &mut Frame,
         start: usize,
+        text_start: usize,
         pair: u32,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
@@ -1186,6 +1206,7 @@ impl<'s> Recognizer<'s> {
             cost: top.cost,
             hist: self.turn.close(top, start, governor)?,
             start,
+            text_start,
             pair: Some(pair),
             promoted: None,
             embedded: Vec::new(),
@@ -1216,7 +1237,7 @@ impl<'s> Recognizer<'s> {
         };
         // An opening reasoning marker a call read over as markup, not as
         // the data of a string value, cuts it (see `marker_cut`).
-        let cut = self.marker_cut(&parts);
+        let cut = self.marker_cut(&parts, governor)?;
         let mut stored = Vec::with_capacity(parts.len());
         let mut cut_part = None;
         for (index, (segment, cost)) in parts.into_iter().enumerate() {
@@ -1263,6 +1284,7 @@ impl<'s> Recognizer<'s> {
                         cost: chain.cost,
                         hist: chain.hist,
                         start: marker,
+                        text_start: self.opener_end(marker, pair),
                         pair: Some(pair),
                         promoted: None,
                         embedded: Vec::new(),
@@ -1311,12 +1333,17 @@ impl<'s> Recognizer<'s> {
             .filter(|&(marker, _)| ended.start < marker && marker <= ended.at)
             .min();
         // The block's own closing marker, when it came before the end.
+        // A closer that begins inside the opening marker (Anthropic's `"}`
+        // against a spaced opener's final `"`) does not close the block.
         let close = cut.and_then(|(marker, pair)| {
+            let text_start = self.opener_end(marker, pair);
             self.turn
                 .blocked_close
                 .iter()
                 .copied()
-                .filter(|&(start, end, closer)| closer == pair && start > marker && end <= ended.at)
+                .filter(|&(start, end, closer)| {
+                    closer == pair && start >= text_start && end <= ended.at
+                })
                 .min()
         });
         self.prune_blocked(governor)?;
@@ -1393,25 +1420,30 @@ impl<'s> Recognizer<'s> {
     /// marker's start and its pair. The marker's
     /// bytes belong to the block it opens, as a block's closing marker cuts
     /// a call inside the block (`tool_call.reasoning.marker-cut`).
-    fn marker_cut(&self, parts: &[(Segment, u64)]) -> Option<(usize, usize, u32)> {
+    fn marker_cut(
+        &self,
+        parts: &[(Segment, u64)],
+        governor: &mut Governor,
+    ) -> Result<Option<(usize, usize, u32)>, StopReason> {
         if self.turn.blocked.is_empty() {
-            return None;
+            return Ok(None);
         }
         for (index, (segment, _)) in parts.iter().enumerate() {
             let (Segment::Call(call) | Segment::Result(call)) = segment else {
                 continue;
             };
-            let found = self
-                .turn
-                .blocked
-                .iter()
-                .copied()
-                .filter(|&(marker, _)| call.span.start < marker && marker < call.span.end)
-                .filter(|&(marker, _)| {
-                    // Read as data: inside a capture or the arguments' bytes
-                    // (not markup its grammar spells, which is the call's),
-                    // and not inside a string value.
-                    let in_data = |reading: &RawCall| {
+            // Built on first need, once per reading, not once per marker.
+            let mut indexes: Vec<Option<DataIndex>> = call.readings.iter().map(|_| None).collect();
+            let mut found: Option<(usize, u32)> = None;
+            for &(marker, pair) in &self.turn.blocked {
+                if !(call.span.start < marker && marker < call.span.end) {
+                    continue;
+                }
+                // Read as data: inside a capture or the arguments' bytes
+                // (not markup its grammar spells, which is the call's),
+                // and not inside a string value.
+                let in_data =
+                    call.readings.iter().any(|reading| {
                         reading.captures.iter().any(|capture| {
                             capture.span.start <= marker && marker < capture.span.end
                         }) || reading
@@ -1420,32 +1452,31 @@ impl<'s> Recognizer<'s> {
                             .span
                             .as_ref()
                             .is_some_and(|span| span.start <= marker && marker < span.end)
-                    };
-                    call.readings.iter().any(in_data)
-                        && !call.readings.iter().all(|reading| {
-                            reading.arguments.leaves.iter().any(|leaf| {
-                                leaf.raw.start <= marker
-                                    && marker < leaf.raw.end
-                                    && match leaf.origin {
-                                        ArgOrigin::Raw | ArgOrigin::XmlText => true,
-                                        ArgOrigin::Json | ArgOrigin::StringifiedJson => matches!(
-                                            reading
-                                                .arguments
-                                                .root
-                                                .pointer(&leaf.pointer)
-                                                .map(|node| &node.value),
-                                            Some(crate::json::Value::String(_))
-                                        ),
-                                    }
-                            })
-                        })
-                })
-                .min();
+                    });
+                if !in_data {
+                    continue;
+                }
+                let mut every_reading_in_string = true;
+                for (reading, slot) in call.readings.iter().zip(&mut indexes) {
+                    if slot.is_none() {
+                        *slot = Some(DataIndex::build(&reading.arguments, governor)?);
+                    }
+                    let held = slot.as_ref().is_some_and(|held| held.holds(marker));
+                    governor.charge(Resource::Work, 1)?;
+                    if !held {
+                        every_reading_in_string = false;
+                        break;
+                    }
+                }
+                if !every_reading_in_string && found.is_none_or(|best| (marker, pair) < best) {
+                    found = Some((marker, pair));
+                }
+            }
             if let Some((marker, pair)) = found {
-                return Some((index, marker, pair));
+                return Ok(Some((index, marker, pair)));
             }
         }
-        None
+        Ok(None)
     }
 
     /// The rejected attempt `ended`, which ran over the opening reasoning
@@ -1484,6 +1515,7 @@ impl<'s> Recognizer<'s> {
                     cost,
                     hist,
                     start: marker,
+                    text_start: self.opener_end(marker, pair),
                     pair: Some(pair),
                     promoted: None,
                     embedded: Vec::new(),
@@ -1513,6 +1545,16 @@ impl<'s> Recognizer<'s> {
             }
         }
         Ok(())
+    }
+
+    /// The end of the opening marker of `pair` found at `start`.
+    fn opener_end(&self, start: usize, pair: u32) -> usize {
+        start
+            + self
+                .set
+                .markers
+                .get(pair as usize)
+                .map_or(0, |(open, _)| open.len())
     }
 
     /// Drop the blocked reasoning markers no live attempt began before.
@@ -1650,7 +1692,9 @@ impl<'s> Recognizer<'s> {
                 .copied()
                 .unwrap_or(false),
         };
-        if !closes || think.start > start {
+        // A closer begins at or after the block's text: one inside the opening
+        // marker would end the text before it begins.
+        if !closes || start < think.text_start {
             return Ok(());
         }
         let segment = self.turn.reasoning(
@@ -2252,6 +2296,12 @@ fn explain_recovery(edit: &MarkupEdit, original: &str, replacement: &str) -> Str
             "read the text after the unpaired closer at byte {} as text of the value, which ends at byte {}; the reading that ends the value at that closer and drops the text is as cheap, so the call is ambiguous",
             edit.span.start, edit.span.end
         ),
+        EditOperator::UndeclaredParameterBoundary => format!(
+            "ended the open parameter value at a parameter opener of a call that names no declared tool (inserted `{replacement}`); the opener may also be text of the value"
+        ),
+        EditOperator::UnmodeledScopeBoundary => format!(
+            "closed the open object parameter before the opener of a parameter an enclosing scope declares (inserted `{replacement}`); the object's schema names no member, so the opener may instead be one of its own members, and the call is a best guess"
+        ),
         EditOperator::TextBetweenParameters => format!(
             "ended the value at the unpaired closer at byte {} and dropped `{original}` as text between parameters; the reading that holds the text as value text is as cheap, so the call is ambiguous",
             edit.span.start
@@ -2314,20 +2364,19 @@ fn explain(edit: &MarkupEdit) -> String {
         EditOperator::ParameterClosedByElement => format!(
             "ended the open parameter value where its enclosing element closes (inserted `{replacement}`)"
         ),
-        EditOperator::UndeclaredParameterBoundary => format!(
-            "ended the open parameter value at a parameter opener of a call that names no declared tool (inserted `{replacement}`); the opener may also be text of the value"
-        ),
         EditOperator::ClosersOnlyEmpty => format!(
             "read a function body of only closers `{original}` as no arguments; valid only when the tool requires no parameter"
         ),
         EditOperator::NestedParameter => format!(
-            "read nested parameter elements after `{original}` as the members of an object parameter"
+            "read nested parameter elements after `{original}` as the members of an object parameter, or of one object item of an array parameter"
         ),
         EditOperator::JsonBody => {
             "read a whole JSON object in the function body as the arguments".into()
         }
         EditOperator::ArrayItem => {
-            format!("read array parameter value `{original}` as one item of the array")
+            format!(
+                "read array parameter value `{original}` as one item of the array (an object item when written as nested parameter elements)"
+            )
         }
         EditOperator::TrimNonverbatim => format!(
             "trimmed whitespace around the value `{original}` of a non-verbatim declared type to `{replacement}`"
@@ -2346,6 +2395,8 @@ fn explain(edit: &MarkupEdit) -> String {
         | EditOperator::CloserInValue
         | EditOperator::TextAfterCloser
         | EditOperator::TextBetweenParameters
+        | EditOperator::UnmodeledScopeBoundary
+        | EditOperator::UndeclaredParameterBoundary
         | EditOperator::ReasoningMarkerCut => explain_recovery(edit, &original, &replacement),
         EditOperator::ContextFencedExample => {
             "call recognized inside fenced code, an inline code span or a block quote; it may be an example rather than a call".into()
@@ -2702,5 +2753,174 @@ impl RecognizedTurn {
                 Piece::Choice(choice) => product.saturating_mul(choice.readings.len() as u128),
                 Piece::Segment(_) => product,
             })
+    }
+}
+
+/// Where a reading's arguments hold data a reasoning marker must not cut:
+/// the leaves whose raw bytes are string data (verbatim text, or a JSON
+/// string), as a sorted index so each marker is answered in O(log leaves).
+///
+/// Whether a JSON leaf is a string is decided by span, not by resolving its
+/// pointer: a repeated parameter holds duplicate members (which pointer
+/// lookup refuses) and a leaf keeps its written spelling (an alias
+/// repetition is `/ex/1`). The index sorts rather than assuming siblings'
+/// spans are in order or present: generated nodes carry no span and are
+/// skipped, and a stand-in or wrapper may repeat its child's span.
+struct DataIndex {
+    /// `(start, greatest end over data leaves starting at or before it)`,
+    /// sorted by start.
+    leaves: Vec<(usize, usize)>,
+    /// Scratch held while the index lives; released on every path, drop
+    /// included.
+    _lease: crate::contract::ScratchLease,
+}
+
+impl DataIndex {
+    /// Index `arguments`, charging one unit of work per node and leaf and
+    /// the index's scratch (leased, so released when the index drops).
+    fn build(arguments: &ArgTree, governor: &mut Governor) -> Result<Self, StopReason> {
+        use crate::json::Value;
+        let mut strings: Vec<(usize, usize)> = Vec::new();
+        let mut visited = 0_usize;
+        let mut pending = vec![&arguments.root];
+        while let Some(node) = pending.pop() {
+            visited += 1;
+            match &node.value {
+                Value::String(_) => {
+                    if let Some(span) = &node.span {
+                        strings.push((span.start, span.end));
+                    }
+                }
+                Value::Array(items) => pending.extend(items),
+                Value::Object(members) => pending.extend(members.iter().map(|m| &m.value)),
+                _ => {}
+            }
+        }
+        let held = visited + arguments.leaves.len();
+        let charged = size(held).saturating_mul(32);
+        governor.charge(Resource::Work, size(held))?;
+        let lease = governor.lease_scratch(charged)?;
+        strings.sort_unstable();
+        let mut leaves: Vec<(usize, usize)> = arguments
+            .leaves
+            .iter()
+            .filter(|leaf| match leaf.origin {
+                ArgOrigin::Raw | ArgOrigin::XmlText => true,
+                ArgOrigin::Json | ArgOrigin::StringifiedJson => strings
+                    .binary_search(&(leaf.raw.start, leaf.raw.end))
+                    .is_ok(),
+            })
+            .map(|leaf| (leaf.raw.start, leaf.raw.end))
+            .collect();
+        leaves.sort_unstable();
+        let mut greatest = 0;
+        for entry in &mut leaves {
+            greatest = greatest.max(entry.1);
+            entry.1 = greatest;
+        }
+        Ok(Self {
+            leaves,
+            _lease: lease,
+        })
+    }
+
+    /// Whether `marker` lies inside the raw bytes of a data leaf.
+    fn holds(&self, marker: usize) -> bool {
+        let at = self.leaves.partition_point(|entry| {
+            #[cfg(test)]
+            LOOKUP_STEPS.with(|steps| steps.set(steps.get() + 1));
+            entry.0 <= marker
+        });
+        at > 0 && self.leaves[at - 1].1 > marker
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Comparisons made by [`DataIndex::holds`] on this thread.
+    static LOOKUP_STEPS: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Budget;
+    use crate::json::{Member, Node, Value};
+
+    fn string_at(start: usize, end: usize) -> Node {
+        Node {
+            value: Value::String("a <think> b".into()),
+            span: Some(start..end),
+        }
+    }
+
+    fn leaf(origin: ArgOrigin, start: usize, end: usize) -> super::super::ir::ArgLeaf {
+        super::super::ir::ArgLeaf {
+            pointer: format!("/{start}"),
+            origin,
+            raw: start..end,
+        }
+    }
+
+    /// A marker inside one JSON string of k duplicate members (the shape that
+    /// pointer lookup refuses) is found by span; one inside a number is not;
+    /// and each lookup takes O(log k) comparisons.
+    #[test]
+    fn data_index_finds_strings_among_duplicates_in_log_steps() {
+        let mut governor = Governor::new(Budget::default());
+        for k in [1_000_usize, 8_000, 64_000] {
+            let members: Vec<Member> = (0..k)
+                .map(|i| Member {
+                    key: "xs".into(),
+                    key_span: None,
+                    value: string_at(i * 20 + 1, i * 20 + 15),
+                })
+                .collect();
+            let mut tree = ArgTree::value(Node {
+                value: Value::Object(members),
+                span: Some(0..k * 20),
+            });
+            for i in 0..k {
+                tree.leaves
+                    .push(leaf(ArgOrigin::Json, i * 20 + 1, i * 20 + 15));
+            }
+            // A number leaf and a spanless node: not strings, not skipped
+            // incorrectly, and the build does not assume ordering.
+            tree.leaves
+                .push(leaf(ArgOrigin::Json, k * 20 + 1, k * 20 + 3));
+            let index = DataIndex::build(&tree, &mut governor).expect("builds");
+            LOOKUP_STEPS.with(|steps| steps.set(0));
+            for i in 0..k {
+                assert!(index.holds(i * 20 + 5), "k={k} string {i}");
+                assert!(!index.holds(i * 20 + 17), "k={k} gap {i}");
+            }
+            assert!(!index.holds(k * 20 + 2), "a number is not string data");
+            let steps = LOOKUP_STEPS.with(core::cell::Cell::get);
+            let lookups = (2 * k + 1) as u64;
+            let log = u64::from(k.ilog2()) + 3;
+            assert!(
+                steps <= lookups * log,
+                "k={k}: {steps} steps for {lookups} lookups (bound {log} each)"
+            );
+        }
+    }
+
+    /// A wrapper array repeating its child string's span does not hide the
+    /// string, and a node without a span is skipped, not mis-ordered.
+    #[test]
+    fn data_index_handles_wrappers_and_spanless_nodes() {
+        let mut governor = Governor::new(Budget::default());
+        let wrapped = Node {
+            value: Value::Array(vec![
+                Node::new(Value::String("generated".into())),
+                string_at(10, 20),
+            ]),
+            span: Some(10..20),
+        };
+        let mut tree = ArgTree::value(wrapped);
+        tree.leaves.push(leaf(ArgOrigin::Json, 10, 20));
+        let index = DataIndex::build(&tree, &mut governor).expect("builds");
+        assert!(index.holds(12));
+        assert!(!index.holds(25));
     }
 }

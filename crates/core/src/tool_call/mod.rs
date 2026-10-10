@@ -60,6 +60,7 @@ mod recognizer;
 pub mod recover;
 pub mod resolve;
 pub mod rules;
+mod scope;
 mod shape;
 mod toolset;
 
@@ -76,15 +77,15 @@ pub use emit::{
 pub use from_node::{FromNode, FromNodeError};
 pub use ir::{
     ArgLeaf, ArgOrigin, ArgTree, ArgumentFault, CallSegment, CaptureSpan, Choice, Closure,
-    LEAF_CHARGE, Piece, ProductionKind, RawCall, ReasoningClosure, ReasoningSegment, Rejection,
-    Segment, Spanned, UnresolvedArgument,
+    CollectedMember, LEAF_CHARGE, Piece, ProductionKind, RawCall, ReasoningClosure,
+    ReasoningSegment, Rejection, Segment, Spanned, UnresolvedArgument,
 };
 pub use recognizer::{GenerationStop, ReasoningPolicy, RecognizedTurn, Recognizer};
 pub use recover::{
     AmbiguityPolicy, DEFAULT_ID_PREFIX, Finish, IdGenerator, IdPolicy, KeywordUse,
-    RECOVER_OPERATION, RejectedCall, TOOL_CALL_VALIDATOR, TURN_TAG_DIGITS, ToolCall, ToolCalls,
-    ToolChoice, ToolChoiceCheck, ToolChoiceError, ToolRecoveryRequest, Verdict, exit_code,
-    openai_finish_reason, turn_id_prefix,
+    RECOVER_OPERATION, ReasoningBlock, RejectedCall, StrictForced, TOOL_CALL_VALIDATOR,
+    TURN_TAG_DIGITS, ToolCall, ToolCalls, ToolChoice, ToolChoiceCheck, ToolChoiceError,
+    ToolRecoveryRequest, Verdict, exit_code, openai_finish_reason, turn_id_prefix,
 };
 pub use resolve::{
     CallFacts, CallLedger, CallLoss, CallOutcome, CallReading, Policies, PolicySelection,
@@ -92,8 +93,18 @@ pub use resolve::{
     resolve_forest,
 };
 pub use rules::{RULES, Rule};
+pub use scope::{Nesting, ScopeGraph, ScopeMember, ScopeNode};
 pub use shape::{
     ArgumentShape, NameLiteral, ObjectShape, ParameterDefault, ParameterShape, PatternConstraint,
     ShapeStep, ValueShape,
 };
 pub use toolset::{CompiledTool, ToolSet, ToolSetError, collision_key, is_valid_name};
+
+/// The entry of `items`, sorted by the name `key` gives, whose name is
+/// exactly `name`: one binary search (tools of a set, members of a scope).
+fn by_name<'a, T>(items: &'a [T], name: &str, key: impl Fn(&'a T) -> &'a str) -> Option<&'a T> {
+    items
+        .binary_search_by(|item| key(item).cmp(name))
+        .ok()
+        .map(|index| &items[index])
+}

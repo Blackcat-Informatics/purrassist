@@ -52,6 +52,7 @@
     "Hi ",
     " The answer is 42."
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

@@ -43,6 +43,7 @@
   "content": [
     "{\"name\":\"get_weather\",\"input\":{\"city\":\"Oslo\"}}"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

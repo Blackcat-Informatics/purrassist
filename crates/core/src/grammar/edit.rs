@@ -57,6 +57,7 @@
 //! | [`CloserInValue`](EditOperator::CloserInValue) | `tool_call.value.closer-in-value` | 0 | no | single | syntax | none | no |
 //! | [`TextAfterCloser`](EditOperator::TextAfterCloser) | `tool_call.value.text-after-closer` | 0 | yes | multiple | syntax | none | no |
 //! | [`TextBetweenParameters`](EditOperator::TextBetweenParameters) | `tool_call.markup.text-between-parameters` | 0 | yes | multiple | syntax | data | no |
+//! | [`UnmodeledScopeBoundary`](EditOperator::UnmodeledScopeBoundary) | `tool_call.markup.unmodeled-scope-boundary` | 2 | yes | multiple | syntax | none | yes |
 //!
 //! The first seven operators are the engine's markup repairs: a missing
 //! closer inserted mid-message is a *function* close when more of the
@@ -109,6 +110,13 @@
 //! between parameters (a data loss). Both are guesses and cost the same, so
 //! the two readings tie and the call is `Ambiguous`: trailing free text is
 //! never accepted as an argument, and never silently dropped either.
+//! `tool_call.markup.unmodeled-scope-boundary` (appended last) closes an
+//! open nested object whose schema names no member (an unmodeled scope: a
+//! free-form object, or a `$ref` or `anyOf` whose object branches declare
+//! none) at the opener of a parameter some enclosing scope declares. The
+//! scope's membership is unknown, not empty, so the opener may as well be
+//! the scope's own member: the closing is a guess, never grounded in the
+//! definition as `tool_call.markup.missing-parameter-close` is.
 //! Closers inserted at the
 //! end of output under a non-length stop are
 //! `tool_call.markup.missing-closers-at-end`, usable only when the call is
@@ -138,7 +146,7 @@
 //! assert_eq!(stray.id, "tool_call.markup.stray-closer");
 //! assert_eq!(stray.loss, Some(LossKind::Markup));
 //! assert!(!stray.guess && stray.repair);
-//! assert_eq!(OPERATORS.len(), 45);
+//! assert_eq!(OPERATORS.len(), 46);
 //! let framing = EditOperator::FramingNewline.rule();
 //! assert_eq!((framing.loss, framing.repair), (Some(LossKind::Markup), false));
 //! ```
@@ -213,13 +221,15 @@ pub enum EditOperator {
     /// Read a function body made only of closers and whitespace as no
     /// arguments (`{}`); usable only when the tool requires no parameter.
     ClosersOnlyEmpty,
-    /// Read nested `<parameter=` elements as an object parameter's members.
+    /// Read nested `<parameter=` elements as an object parameter's members,
+    /// or as the members of one object item of an array parameter.
     NestedParameter,
     /// Read a whole JSON object placed directly in a function body as the
     /// arguments.
     JsonBody,
     /// Read an array parameter's XML value that is not a JSON array as one
-    /// item of the array.
+    /// item of the array (for an array of objects, one repetition holding
+    /// nested `<parameter=` elements is one object item).
     ArrayItem,
     /// Trim whitespace around a value of a non-verbatim declared type
     /// (integer, number, boolean, enumeration) beyond the framing newlines.
@@ -319,6 +329,12 @@ pub enum EditOperator {
     /// ends it in the competing [`Self::TextAfterCloser`] reading, as text
     /// between parameters: a data loss, one of two equally cheap readings.
     TextBetweenParameters,
+    /// Close an open nested object whose schema names no member (a
+    /// free-form object, or an unmodeled `$ref` or `anyOf` scope declaring
+    /// no name) at the opener of a parameter an enclosing scope declares:
+    /// the scope's membership is unknown, so the opener may be its own
+    /// member, and the closing is a guess.
+    UnmodeledScopeBoundary,
 }
 
 /// Static metadata of one [`EditOperator`].
@@ -410,7 +426,7 @@ const fn guessed_repair(operator: EditOperator, id: &'static str, cost: u64) -> 
 }
 
 /// The number of [`EditOperator`]s.
-pub const OPERATOR_COUNT: usize = 45;
+pub const OPERATOR_COUNT: usize = 46;
 
 /// Every grammar edit operator, in [`EditOperator`] order, as a constant
 /// table (the tool-call rule registry is built from it at compile time).
@@ -713,6 +729,14 @@ pub(crate) const OPERATOR_TABLE: [OperatorRule; OPERATOR_COUNT] = [
         cost::TEXT_AFTER_CLOSER,
         true,
         Some(LossKind::Data),
+    ),
+    guessed_repair(
+        EditOperator::UnmodeledScopeBoundary,
+        "tool_call.markup.unmodeled-scope-boundary",
+        // Any missing closer's base cost; the registry doubles it (syntax
+        // grounding), unlike the definition-grounded
+        // `tool_call.markup.missing-parameter-close`.
+        cost::INSERT_CLOSER,
     ),
 ];
 

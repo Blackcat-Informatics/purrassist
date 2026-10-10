@@ -258,13 +258,16 @@ pub const UNDECLARED_NAME: u64 = 4;
 /// JSON recovery parser's units, and the per-byte resolution and
 /// digest work. On the fast path (string arguments with no repair) that is
 /// 10 to 17 units per byte for the built-in dialects' arguments, and 26 for
-/// `OpenAI` stringified arguments (which the bare JSON dialect also reads and
-/// decodes), over the built-in dialect set (see `docs/RESOURCES.md`); this
-/// constant leaves headroom above them. Repair
-/// search beyond that stays bounded by the preset itself.
+/// `OpenAI` stringified arguments. Output that is dense markup costs more:
+/// many small calls or many repeated parameters charge 52 to 139 units per
+/// byte over the built-in dialect set, the most for Kimi-K2 sections (138.3
+/// at 1 MiB) and Harmony messages (115.4), so this constant is that
+/// measured maximum plus a margin of about 25% (see `docs/RESOURCES.md`,
+/// "Dense markup"). Repair search beyond that stays bounded by the preset
+/// itself.
 ///
 /// [`ToolRecoveryRequest::sized`]: crate::tool_call::ToolRecoveryRequest::sized
-pub const RECOVER_WORK_PER_BYTE: u64 = 32;
+pub const RECOVER_WORK_PER_BYTE: u64 = 176;
 
 /// `ScratchBytes` per output byte that [`ToolRecoveryRequest::sized`] adds
 /// to an effort preset's budget for tool-call recovery.
@@ -274,10 +277,27 @@ pub const RECOVER_WORK_PER_BYTE: u64 = 32;
 /// 8 to 12 bytes per byte on the fast path for the built-in dialects'
 /// arguments, and 45 for `OpenAI` stringified arguments, whose escaped
 /// string is also decoded, recorded as the decoding's replacement, and
-/// parsed again (see `docs/RESOURCES.md`).
+/// parsed again. Dense markup peaks higher: 80 to 293 bytes per byte at
+/// 1 MiB over the built-in dialect set, the most for DeepSeek-V3 sections
+/// (292.8), Qwen3-Coder XML calls (281.6) and repeated nested items (268),
+/// so this constant is that measured maximum plus a margin of about 25%
+/// (see `docs/RESOURCES.md`, "Dense markup").
 ///
 /// [`ToolRecoveryRequest::sized`]: crate::tool_call::ToolRecoveryRequest::sized
-pub const RECOVER_SCRATCH_PER_BYTE: u64 = 48;
+pub const RECOVER_SCRATCH_PER_BYTE: u64 = 368;
+
+/// Output bytes per `EvidenceEntries` that [`ToolRecoveryRequest::sized`]
+/// adds to an effort preset's budget for tool-call recovery.
+///
+/// Dense markup records evidence per call and per repeated item (each
+/// framing newline of a Qwen3-Coder XML parameter, each decoded value): up
+/// to one entry per 9.9 output bytes at 1 MiB (106,030 entries for a 1 MiB
+/// run of tiny Qwen3-Coder XML calls). The preset's flat 65,536 entries
+/// exhaust on such output, so `sized` adds `⌈n / 7⌉` entries for `n` bytes,
+/// the measured maximum plus a margin of about 40%.
+///
+/// [`ToolRecoveryRequest::sized`]: crate::tool_call::ToolRecoveryRequest::sized
+pub const RECOVER_EVIDENCE_BYTES_PER_ENTRY: u64 = 7;
 
 /// The share of an effort preset's `Candidates` that
 /// [`ToolRecoveryRequest::sized`] adds per call opener.

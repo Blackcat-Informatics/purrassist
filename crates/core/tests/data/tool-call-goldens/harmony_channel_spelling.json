@@ -51,6 +51,7 @@
   "rejected": [],
   "embedded": [],
   "content": [],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.terminal-confusable"

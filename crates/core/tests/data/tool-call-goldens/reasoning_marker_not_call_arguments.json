@@ -73,6 +73,9 @@
   "content": [
     "Answer."
   ],
+  "reasoning_text": [
+    "[TOOL_CALLS]t[TOOL_CALLS]s"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.missing-token",

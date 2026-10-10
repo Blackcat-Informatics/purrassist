@@ -62,6 +62,7 @@
       "Here: ",
       "then nothing."
     ],
+    "reasoning_text": [],
     "failed_validations": [],
     "ledger_rules": []
   },
@@ -94,6 +95,7 @@
     "Here: ",
     "then nothing."
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

@@ -54,6 +54,7 @@
       "pre ",
       " post"
     ],
+    "reasoning_text": [],
     "failed_validations": [],
     "ledger_rules": []
   },
@@ -86,6 +87,7 @@
     "pre ",
     " post"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

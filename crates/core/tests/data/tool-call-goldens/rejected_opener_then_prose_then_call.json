@@ -67,6 +67,7 @@
     "<oops. Now the real one: ",
     " bye"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.xml.framing-newline",

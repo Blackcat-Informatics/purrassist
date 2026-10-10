@@ -73,6 +73,7 @@
     "\n\nevent: content_block_delta\ndata: ",
     "\n"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

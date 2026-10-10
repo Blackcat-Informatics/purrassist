@@ -54,6 +54,7 @@
   "content": [
     "functionget_weather\n```json\n{\"city\": \"Paris\"}\n```"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.unparsed-dialect"

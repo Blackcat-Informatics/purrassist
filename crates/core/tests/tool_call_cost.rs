@@ -10,8 +10,8 @@
 use purrassist_core::grammar::cost;
 use purrassist_core::json::Node;
 use purrassist_core::tool_call::{
-    CallOutcome, DialectId, DialectSet, Effects, GenerationStop, Param, ReasoningPolicy,
-    Recognizer, ToolDefinition, ToolRecoveryRequest, ToolSet,
+    CallOutcome, DialectId, DialectSet, Effects, GenerationStop, ObjectSpec, Param,
+    ReasoningPolicy, Recognizer, ToolDefinition, ToolRecoveryRequest, ToolSet,
 };
 use purrassist_core::{Budget, Effort, Governor, Outcome, StopReason, contract::Resource};
 use std::collections::BTreeMap;
@@ -63,6 +63,10 @@ fn constants() -> Vec<(&'static str, u64)> {
         ("UNDECLARED_NAME", cost::UNDECLARED_NAME),
         ("RECOVER_WORK_PER_BYTE", cost::RECOVER_WORK_PER_BYTE),
         ("RECOVER_SCRATCH_PER_BYTE", cost::RECOVER_SCRATCH_PER_BYTE),
+        (
+            "RECOVER_EVIDENCE_BYTES_PER_ENTRY",
+            cost::RECOVER_EVIDENCE_BYTES_PER_ENTRY,
+        ),
         (
             "RECOVER_OPENER_CANDIDATE_DIVISOR",
             cost::RECOVER_OPENER_CANDIDATE_DIVISOR,
@@ -146,6 +150,15 @@ use tool_call_cost_support::{self as support, hermes, qwen, tools};
 #[test]
 fn argument_work_bound() {
     support::argument_work_bound(1 << 16, 1 << 18);
+}
+
+/// Dense markup of 64 KiB in every dialect's densest shape (many small
+/// calls; repeated nested, JSON-array and string items) recovers under plain
+/// `sized(Effort::Standard, output)`. `tool_call_scale` runs the same shapes
+/// at 1 MiB (`make corpus`).
+#[test]
+fn dense_markup_fits_published_budget() {
+    support::dense_markup_fits_published_budget(1 << 16);
 }
 
 /// T6: closer text inside a value costs work linear in the output. A
@@ -490,8 +503,12 @@ fn sized_budget_follows_the_published_formula() {
                     * openers
         );
         assert_eq!(
-            (budget.depth, budget.evidence_entries, budget.helper_calls),
-            (preset.depth, preset.evidence_entries, preset.helper_calls)
+            budget.evidence_entries,
+            preset.evidence_entries + n.div_ceil(cost::RECOVER_EVIDENCE_BYTES_PER_ENTRY)
+        );
+        assert_eq!(
+            (budget.depth, budget.helper_calls),
+            (preset.depth, preset.helper_calls)
         );
     }
     // Restricting the allow-list counts only its dialects' openers.
@@ -632,4 +649,445 @@ fn schema_typing_is_uncapped_and_governed() {
         calls.calls[0].arguments.to_json(),
         r#"{"opts":{"depth":2,"label":"42"}}"#
     );
+}
+
+/// A tool with an array of objects and an array of strings, to repeat.
+fn repeated_tool() -> ToolSet {
+    ToolSet::compile(
+        [ToolDefinition::new("tree")
+            .effects(Effects::ReadOnly)
+            .param(
+                "children",
+                Param::array(Param::object(
+                    ObjectSpec::new().param("name", Param::string().required()),
+                )),
+            )
+            .param("tags", Param::array(Param::string()))],
+        Budget::default(),
+    )
+    .expect("tools")
+}
+
+/// G5, G18: a repeated parameter costs work and charged scratch linear in
+/// the output. The items number across occurrences in O(1) each (pinned by
+/// the `tool_call::ir` unit test `adopt_is_constant_in_the_members_held`),
+/// and resolution appends each item to the partial array in place when the
+/// item has one reading (`extend_readings` in `tool_call::resolve`), so it
+/// no longer copies and re-charges the growing array once per item.
+///
+/// From k = 1000 to 8000 occurrences of one parameter, as nested items
+/// (`<parameter=children><parameter=name>..`), as one-item JSON arrays
+/// (`<parameter=tags>["a"]`) and as string items (`<parameter=tags>a`), the
+/// call is `Resolved` with all k items, and both `work` and
+/// `total_scratch_charged` track the byte ratio within the 1.05x tolerance
+/// used for the other linear bounds in this file.
+///
+/// The budget is plain `ToolRecoveryRequest::sized(Effort::Standard,
+/// output)`, with no raised limit: output that is nothing but repeated
+/// markup costs 52 to 62 work and 104 to 262 peak scratch per byte
+/// (`docs/RESOURCES.md`, "Dense markup"), which `RECOVER_WORK_PER_BYTE` and
+/// `RECOVER_SCRATCH_PER_BYTE` cover with a margin, and about 0.07 evidence
+/// entries per byte, which `RECOVER_EVIDENCE_BYTES_PER_ENTRY` covers. The
+/// test also asserts the published per-byte constants as ceilings.
+#[test]
+fn repeated_parameters_cost_is_linear() {
+    let tools = repeated_tool();
+    for (name, item) in [
+        (
+            "children",
+            "<parameter=children><parameter=name>a</parameter></parameter>\n",
+        ),
+        ("tags", "<parameter=tags>[\"a\"]</parameter>\n"),
+        ("tags", "<parameter=tags>a</parameter>\n"),
+    ] {
+        let mut measured = Vec::new();
+        for k in [1000_usize, 2000, 4000, 8000] {
+            let input = format!(
+                "<tool_call>\n<function=tree>\n{}</function>\n</tool_call>",
+                item.repeat(k)
+            );
+            let request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
+            let n = input.len() as u64;
+            let started = std::time::Instant::now();
+            let result = tools.recover(input.as_bytes(), &request);
+            let elapsed = started.elapsed();
+            assert_eq!(result.receipt.stopped, StopReason::Completed, "{item} {k}");
+            let Outcome::Resolved(calls) = &result.outcome else {
+                panic!("{item} {k}: {:?}", result.outcome)
+            };
+            let items = calls.calls[0].arguments.get(name).expect("the parameter");
+            let count = match &items.value {
+                purrassist_core::json::Value::Array(items) => items.len(),
+                other => panic!("{item} {k}: {other:?}"),
+            };
+            assert_eq!(count, k, "{item} {k}");
+            let usage = result.receipt.usage;
+            assert!(usage.work <= cost::RECOVER_WORK_PER_BYTE * n, "{item} {k}");
+            assert!(
+                usage.peak_scratch_bytes <= cost::RECOVER_SCRATCH_PER_BYTE * n,
+                "{item} {k}"
+            );
+            println!(
+                "{item:?} k={k} bytes {}: work {} total_scratch_charged {} peak_scratch {} in {elapsed:?}",
+                input.len(),
+                usage.work,
+                usage.total_scratch_charged,
+                usage.peak_scratch_bytes,
+            );
+            measured.push((
+                input.len() as u128,
+                u128::from(usage.work),
+                u128::from(usage.total_scratch_charged),
+            ));
+        }
+        let (small_bytes, small_work, small_scratch) = measured[0];
+        for &(bytes, work, scratch) in &measured[1..] {
+            // Both counters track the byte ratio, both ways, within 1.05x.
+            for (label, charged, small) in [
+                ("work", work, small_work),
+                ("total_scratch_charged", scratch, small_scratch),
+            ] {
+                let (ratio, byte_ratio) = (charged * small_bytes, small * bytes);
+                assert!(
+                    ratio * 100 <= byte_ratio * 105 && byte_ratio * 100 <= ratio * 105,
+                    "{item}: {small_bytes} -> {bytes} bytes: {label} is not linear"
+                );
+            }
+        }
+    }
+}
+
+/// R15 (G25): repeated nested items that each hold a JSON-array child
+/// (`plan_outfits`) cost work and charged scratch linear in the bytes, with
+/// every item recovered, under plain `sized`. Two quadratic steps hid behind
+/// the linear charge: the provenance forest's dedup index inserted into a
+/// sorted `Vec` (`ScratchMap`), and `Derivation::push` scanned the members
+/// held. Both are pinned by unit tests (`ordered_index_charges_like_scratch_map_and_inserts_in_log_steps`
+/// in `contract`, `derivation_membership_is_a_set_lookup` in `provenance`);
+/// this test pins the charge of the whole shape and records the wall time.
+#[test]
+fn repeated_nested_items_with_array_children_cost_is_linear() {
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("plan_outfits")
+            .effects(Effects::ReadOnly)
+            .param(
+                "outfits",
+                Param::array(Param::object(
+                    ObjectSpec::new()
+                        .param("wearer", Param::string().required())
+                        .param("garments", Param::array(Param::string())),
+                ))
+                .required(),
+            )],
+        Budget::default(),
+    )
+    .expect("tools");
+    let item = "<parameter=outfits><parameter=wearer>Alice</parameter>\
+                <parameter=garments>[\"hat\"]</parameter></parameter>\n";
+    let mut measured = Vec::new();
+    for k in [500_usize, 1000, 2000, 4000] {
+        let input = format!(
+            "<tool_call>\n<function=plan_outfits>\n{}</function>\n</tool_call>",
+            item.repeat(k)
+        );
+        let request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
+        let n = input.len() as u64;
+        let started = std::time::Instant::now();
+        let result = tools.recover(input.as_bytes(), &request);
+        let elapsed = started.elapsed();
+        assert_eq!(result.receipt.stopped, StopReason::Completed, "{k}");
+        let Outcome::Resolved(calls) = &result.outcome else {
+            panic!("{k}: {:?}", result.outcome)
+        };
+        match &calls.calls[0]
+            .arguments
+            .get("outfits")
+            .expect("outfits")
+            .value
+        {
+            purrassist_core::json::Value::Array(items) => assert_eq!(items.len(), k),
+            other => panic!("{k}: {other:?}"),
+        }
+        let usage = result.receipt.usage;
+        assert!(usage.work <= cost::RECOVER_WORK_PER_BYTE * n, "{k}");
+        assert!(
+            usage.peak_scratch_bytes <= cost::RECOVER_SCRATCH_PER_BYTE * n,
+            "{k}"
+        );
+        println!(
+            "k={k} bytes {n}: work {} total_scratch_charged {} peak_scratch {} in {elapsed:?}",
+            usage.work, usage.total_scratch_charged, usage.peak_scratch_bytes
+        );
+        measured.push((
+            u128::from(n),
+            u128::from(usage.work),
+            u128::from(usage.total_scratch_charged),
+        ));
+    }
+    let (small_bytes, small_work, small_scratch) = measured[0];
+    for &(bytes, work, scratch) in &measured[1..] {
+        for (label, charged, small) in [
+            ("work", work, small_work),
+            ("total_scratch_charged", scratch, small_scratch),
+        ] {
+            let (ratio, byte_ratio) = (charged * small_bytes, small * bytes);
+            assert!(
+                ratio * 100 <= byte_ratio * 105 && byte_ratio * 100 <= ratio * 105,
+                "{small_bytes} -> {bytes} bytes: {label} is not linear"
+            );
+        }
+    }
+}
+
+/// G7, R6 review: a reasoning-marker spelling inside a JSON string of every
+/// one of k repeated nested items is value text, and finding that out costs
+/// work and charged scratch linear in the bytes (each marker is answered by a
+/// binary search over a per-reading index, built once; the comparison count
+/// per marker is pinned by the `recognizer` unit test
+/// `data_index_finds_strings_among_duplicates_in_log_steps`). From k = 1000
+/// to 8000, the call is `Resolved` with all k items, no reasoning, and both
+/// counters track the byte ratio within 1.05x.
+#[test]
+fn reasoning_marker_in_every_repeated_item_is_linear() {
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("plan_outfits")
+            .effects(Effects::ReadOnly)
+            .param(
+                "outfits",
+                Param::array(Param::object(
+                    ObjectSpec::new()
+                        .param("wearer", Param::string().required())
+                        .param("garments", Param::array(Param::string())),
+                )),
+            )],
+        Budget::default(),
+    )
+    .expect("tools");
+    let item = "<parameter=outfits><parameter=wearer>a</parameter><parameter=garments>[\"x <think> y\"]</parameter></parameter>\n";
+    let mut measured = Vec::new();
+    for k in [1000_usize, 2000, 4000, 8000] {
+        let input = format!(
+            "<tool_call>\n<function=plan_outfits>\n{}</function>\n</tool_call>",
+            item.repeat(k)
+        );
+        let request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
+        let result = tools.recover(input.as_bytes(), &request);
+        assert_eq!(result.receipt.stopped, StopReason::Completed, "k={k}");
+        let Outcome::Resolved(calls) = &result.outcome else {
+            panic!("k={k}: {:?}", result.outcome)
+        };
+        assert!(calls.reasoning.is_empty(), "k={k}");
+        let purrassist_core::json::Value::Array(items) = &calls.calls[0]
+            .arguments
+            .get("outfits")
+            .expect("outfits")
+            .value
+        else {
+            panic!("k={k}: not an array")
+        };
+        assert_eq!(items.len(), k);
+        let usage = result.receipt.usage;
+        let n = input.len() as u64;
+        assert!(usage.work <= cost::RECOVER_WORK_PER_BYTE * n, "k={k}");
+        measured.push((
+            u128::from(n),
+            u128::from(usage.work),
+            u128::from(usage.total_scratch_charged),
+        ));
+    }
+    let (small_bytes, small_work, small_scratch) = measured[0];
+    for &(bytes, work, scratch) in &measured[1..] {
+        for (label, charged, small) in [
+            ("work", work, small_work),
+            ("total_scratch_charged", scratch, small_scratch),
+        ] {
+            let (ratio, byte_ratio) = (charged * small_bytes, small * bytes);
+            assert!(
+                ratio * 100 <= byte_ratio * 105 && byte_ratio * 100 <= ratio * 105,
+                "{small_bytes} -> {bytes} bytes: {label} is not linear"
+            );
+        }
+    }
+}
+
+/// G21: Mistral v11 calls separated by whitespace alone (or by nothing) are
+/// one `next`-chained attempt, and each call extends the one segmentation
+/// before it instead of re-reading the chain. From 256 to 4,096 calls the
+/// work, the scratch ever charged and the peak scratch each grow with the
+/// bytes (within 1.05x of the byte ratio, both ways), every call is
+/// `Resolved`, and plain `ToolRecoveryRequest::sized` completes.
+#[test]
+fn chained_mistral_v11_calls_cost_is_linear() {
+    let tools = tools();
+    for separator in ["\n", " ", ""] {
+        let unit =
+            format!("[TOOL_CALLS]write[CALL_ID]a1B2c3D4e[ARGS]{{\"content\": \"a\"}}{separator}");
+        let mut measured = Vec::new();
+        for k in [256_usize, 512, 1024, 2048, 4096] {
+            let input = unit.repeat(k);
+            let request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
+            let result = tools.recover(input.as_bytes(), &request);
+            assert_eq!(
+                result.receipt.stopped,
+                StopReason::Completed,
+                "{separator:?} {k}"
+            );
+            let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = &result.outcome else {
+                panic!("{separator:?} {k}: {:?}", result.outcome)
+            };
+            assert_eq!(calls.calls.len(), k, "{separator:?} {k}");
+            assert!(calls.rejected.is_empty(), "{separator:?} {k}");
+            assert!(
+                calls
+                    .calls
+                    .iter()
+                    .all(|call| call.outcome == CallOutcome::Resolved),
+                "{separator:?} {k}"
+            );
+            let usage = result.receipt.usage;
+            println!(
+                "{separator:?} k={k} bytes {}: work {} total_scratch_charged {} peak_scratch {}",
+                input.len(),
+                usage.work,
+                usage.total_scratch_charged,
+                usage.peak_scratch_bytes,
+            );
+            measured.push((
+                input.len() as u128,
+                [
+                    u128::from(usage.work),
+                    u128::from(usage.total_scratch_charged),
+                    u128::from(usage.peak_scratch_bytes),
+                ],
+            ));
+        }
+        let (small_bytes, small) = measured[0];
+        for &(bytes, charged) in &measured[1..] {
+            for (index, label) in ["work", "total_scratch_charged", "peak_scratch_bytes"]
+                .into_iter()
+                .enumerate()
+            {
+                let (ratio, byte_ratio) = (charged[index] * small_bytes, small[index] * bytes);
+                assert!(
+                    ratio * 100 <= byte_ratio * 105 && byte_ratio * 100 <= ratio * 105,
+                    "{separator:?}: {small_bytes} -> {bytes} bytes: {label} is not linear"
+                );
+            }
+        }
+    }
+}
+
+/// G22: the elements of a Mistral v3 `[TOOL_CALLS]` array are held as the
+/// array's calls, and each byte costs the same however many elements came
+/// before it. From 1,024 to 16,384 calls the work, the scratch ever charged
+/// and the peak scratch each grow with the bytes (within 1.05x of the byte
+/// ratio, both ways), the work per byte stays inside
+/// `RECOVER_WORK_PER_BYTE`, every call is `Resolved`, and plain
+/// `ToolRecoveryRequest::sized` completes. The held literal failures of the
+/// array (one per element) are charged where they are examined, so a
+/// regression to examining all of them at every byte shows as superlinear
+/// work here; `grammar::engine`'s unit test counts the examination per
+/// step directly.
+#[test]
+fn mistral_v3_call_arrays_cost_is_linear() {
+    let tools = tools();
+    let unit = r#"{"name": "write", "arguments": {"content": "a"}, "id": "a1B2c3D4e"}"#;
+    let mut measured = Vec::new();
+    for k in [1024_usize, 2048, 4096, 8192, 16384] {
+        let elements = vec![unit; k].join(", ");
+        let input = format!("[TOOL_CALLS] [{elements}]");
+        let request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
+        let result = tools.recover(input.as_bytes(), &request);
+        assert_eq!(result.receipt.stopped, StopReason::Completed, "{k}");
+        let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = &result.outcome else {
+            panic!("{k}: {:?}", result.outcome)
+        };
+        assert_eq!(calls.calls.len(), k, "{k}");
+        assert!(calls.rejected.is_empty(), "{k}");
+        assert!(
+            calls
+                .calls
+                .iter()
+                .all(|call| call.outcome == CallOutcome::Resolved),
+            "{k}"
+        );
+        let usage = result.receipt.usage;
+        let n = input.len() as u64;
+        assert!(usage.work <= cost::RECOVER_WORK_PER_BYTE * n, "{k}");
+        assert!(
+            usage.peak_scratch_bytes <= cost::RECOVER_SCRATCH_PER_BYTE * n,
+            "{k}"
+        );
+        println!(
+            "v3 array k={k} bytes {n}: work {} total_scratch_charged {} peak_scratch {}",
+            usage.work, usage.total_scratch_charged, usage.peak_scratch_bytes,
+        );
+        measured.push((
+            u128::from(n),
+            [
+                u128::from(usage.work),
+                u128::from(usage.total_scratch_charged),
+                u128::from(usage.peak_scratch_bytes),
+            ],
+        ));
+    }
+    let (small_bytes, small) = measured[0];
+    for &(bytes, charged) in &measured[1..] {
+        for (index, label) in ["work", "total_scratch_charged", "peak_scratch_bytes"]
+            .into_iter()
+            .enumerate()
+        {
+            let (ratio, byte_ratio) = (charged[index] * small_bytes, small[index] * bytes);
+            assert!(
+                ratio * 100 <= byte_ratio * 105 && byte_ratio * 100 <= ratio * 105,
+                "{small_bytes} -> {bytes} bytes: {label} is not linear"
+            );
+        }
+    }
+}
+
+/// A chained attempt whose history packs readings that reach different
+/// call boundaries is segmented whole, as before chained segmentation: a
+/// DeepSeek-V3.1 section restarted after a truncated call (the shape of the
+/// golden `deepseek31_rejection_balances_only_read_brackets`). The result is
+/// the golden's (one unresolved `delete_path` call, one rejected span, the
+/// trailing `]]` as content), and its cost stays inside the published
+/// per-byte bounds under plain `sized`: the fallback is charged, not free.
+#[test]
+fn whole_segmentation_fallback_is_correct_and_charged() {
+    let input = "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>delete_path<｜tool▁sep｜>\"{\\\"pat<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>delete_path<｜tool▁sep｜>\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\"\"parameters\":call▁begin｜>\t\tread_file\t\t<｜tool▁sep｜>\"{\\\"path\\\":\\\"tab\\\\tseparated   indented\\\"}\"<｜tool▁call▁end｜>\t<｜tool▁calls▁end｜>]]";
+    let tools = ToolSet::compile(
+        [
+            ToolDefinition::new("delete_path")
+                .effects(Effects::Mutating)
+                .param("path", Param::string().required()),
+            ToolDefinition::new("read_file")
+                .effects(Effects::ReadOnly)
+                .param("path", Param::string().required()),
+        ],
+        Budget::default(),
+    )
+    .expect("tools compile");
+    let dialects = DialectSet::new(
+        [DialectId::DeepSeekV31],
+        &mut Governor::new(Budget::default()),
+    )
+    .expect("dialects");
+    let request = ToolRecoveryRequest::sized_for(Effort::Standard, input.as_bytes(), dialects);
+    let result = tools.recover(input.as_bytes(), &request);
+    assert_eq!(result.receipt.stopped, StopReason::Completed);
+    let Outcome::BestGuess(calls) = &result.outcome else {
+        panic!("{:?}", result.outcome)
+    };
+    assert_eq!(calls.calls.len(), 1);
+    assert_eq!(calls.calls[0].tool.as_deref(), Some("delete_path"));
+    assert_ne!(calls.calls[0].outcome, CallOutcome::Resolved);
+    assert_eq!(calls.rejected.len(), 1);
+    assert_eq!(calls.rejected[0].span, 119..370);
+    let tail = input.len() - 2..input.len();
+    assert_eq!(calls.content, std::slice::from_ref(&tail));
+    let usage = result.receipt.usage;
+    let n = input.len() as u64;
+    assert!(usage.work > 0 && usage.work <= cost::RECOVER_WORK_PER_BYTE * n);
+    assert!(usage.peak_scratch_bytes <= cost::RECOVER_SCRATCH_PER_BYTE * n);
 }

@@ -66,6 +66,9 @@
       "Hi ",
       " done"
     ],
+    "reasoning_text": [
+      "hmm"
+    ],
     "failed_validations": [],
     "ledger_rules": []
   },
@@ -109,6 +112,9 @@
   "content": [
     "Hi ",
     " done"
+  ],
+  "reasoning_text": [
+    "hmm"
   ],
   "failed_validations": [],
   "ledger_rules": []

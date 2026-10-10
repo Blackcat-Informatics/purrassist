@@ -3,11 +3,11 @@
 # Coverage-guided and differential qualification
 
 `scripts/fuzz.py --target <name>` generalizes the original single-purpose
-JSON runner (`scripts/fuzz-json.py`, now removed) across nine
+JSON runner (`scripts/fuzz-json.py`, now removed) across ten
 `purrassist-core` targets: `json`, `markdown`, `schema`, `pattern`,
-`unified`, `fuzzy`, `matching`, `patch`, `tool-call`. Each target is a
+`unified`, `fuzzy`, `matching`, `patch`, `tool-call`, `tool-call-ref`. Each target is a
 process-isolated Rust example (`crates/core/examples/fuzz_<target>.rs`, with
-`-` spelled `_`, registered as `[[example]] name = "fuzz-<target>"` in
+`-` spelled `_`; `tool-call-ref` runs the `tool-call` example with `--tools ref`; registered as `[[example]] name = "fuzz-<target>"` in
 `crates/core/Cargo.toml`) that reads bounded stdin (at most 4,096 bytes),
 asserts the target's invariants, and completes its protocol (`ok` or
 `invalid-utf8`, optionally followed by newline-delimited JSON differential
@@ -47,7 +47,7 @@ skipping.
 
 ## Targets, invariants, and seed provenance
 
-Every probe except `tool-call` rejects invalid UTF-8 explicitly before
+Every probe except `tool-call` and `tool-call-ref` rejects invalid UTF-8 explicitly before
 entering the core (the report counts those executions in `invalid_utf8`).
 Tool-call recovery accepts arbitrary bytes and records each invalid UTF-8
 run as a loss, so the `tool-call` probe admits them and always completes
@@ -138,15 +138,37 @@ targets' mutation tokens so mutation can create or move field boundaries).
   reasoning policy (separate, starting open, as content), and the tool
   choice (`auto`, `none`, `required`, forced `read_file`); byte 1 selects
   the effort (`Exact`, `Quick`, `Standard`, `Deep`), the ambiguity policy,
-  and a split seed; the rest is the turn. Invariants:
+  and a split seed; the rest is the turn. The control bits are full, so the
+  options of a strict forced choice (`ToolChoice::ForcedStrict`) come from a
+  separate later seed byte: under the forced choice, a last byte in
+  `0xF8..=0xFF` (never valid UTF-8, and the last byte of no earlier seed) is
+  consumed as a trailer instead of being read as part of the turn (bit 0
+  exactly one call, bit 1 no content, bit 2 no reasoning; `0xF8` is the
+  all-lenient form), so every earlier seed keeps its meaning. A passed strict
+  check implies exactly one call when `exactly_one` is drawn, no content byte
+  other than ASCII whitespace when content is not allowed, no reasoning
+  range when reasoning is not allowed, and no rejected attempt when
+  `exactly_one` is drawn or content is not allowed; a second call or a
+  rejected attempt under `exactly_one` fails the check. A strict choice with
+  no reasoning under the reasoning policy "as content" (control bits 4-5
+  `10`) is a request error (`invalid_input`, never a vacuous pass): the
+  probe asserts the error outcome and prints `ok`. **Meaning correction, not
+  a preservation:** the two committed strict seeds that draw no-reasoning
+  (reasoning with no reasoning, and U+00A0 with all options) began with control
+  byte `0xe6`, whose reasoning policy is "as content", so they never tested
+  no-reasoning; they now begin with `0xc6` (separate reasoning, same other
+  bits), and one added seed keeps the `0xe6` form to draw the request error
+  (`scripts/test-fuzz.py` asserts the bits each seed draws and that every
+  strict seed runs `ok` in the built probe). Invariants:
   recovery never panics, names the output's digest, and stays within its
   budget; a value outcome completed and `Unresolved` did not; an
   `Ambiguous` outcome's readings match the receipt's alternative ledger;
   a `Resolved` turn records no guess. (A13) A `Resolved` call records no
   guess inference and no data loss, so no guessed call on a mutating tool
-  is `Resolved`; `usable()` holds only `Resolved` calls;
-  `usable_accepting_guesses()` never holds a guess on a tool that is not
-  read-only; a call embedded in reasoning is never `Resolved` and lies
+  is `Resolved`; `usable()` holds only `Resolved` calls, and none when the
+  tool-choice check failed (as `usable_accepting_guesses()`, which never
+  holds a guess on a tool that is not read-only; the wire `usable_calls`
+  counts are then 0, as the emission is); a call embedded in reasoning is never `Resolved` and lies
   inside a reasoning range. Every call, rejected-attempt, content, and
   reasoning range lies within the output, never splits a well-formed UTF-8
   character, and slices back to the retained source (a rejected attempt's
@@ -201,7 +223,14 @@ targets' mutation tokens so mutation can create or move field boundaries).
   most the longest literal spelling past the end). (F5) Every embedded
   call is offered once, in span order. (T2) No call, embedded call or
   rejected attempt holds bytes of a reasoning range's opener or closer
-  marker in the same reading. Every `Resolved` call printed in its own dialect
+  marker in the same reading. (R) The unmerged `reasoning_blocks` are
+  ordered and disjoint; each `text` lies inside its block's `span`, each
+  `span` inside one `reasoning` range, and the spans cover exactly the bytes
+  the `reasoning` ranges cover; the bytes between a `span` and its `text`
+  are an allowed dialect's opener (none only for the block a `starts_open`
+  turn begins in, at offset 0) and that pair's closer (none for a block closed
+  at a call opener or left unterminated), so `text` is marker-free at both
+  edges. Every `Resolved` call printed in its own dialect
   (`emit::emit`) recovers to the same tool with `Node::equivalent`
   arguments and `Resolved`, and the printed text is stable (a fixed point
   from its first recovery; a `Resolved` call is skipped only as
@@ -255,6 +284,52 @@ targets' mutation tokens so mutation can create or move field boundaries).
   Schema as arguments, a bare `[TOOL_CALLS]`, and nested unterminated call
   objects); the header bytes cycle through five
   fixed request configurations.
+
+- **`tool-call-ref`**: the `tool-call` probe (`fuzz-tool-call`) run with
+  `--tools ref`, with its own seeds and mutation tokens. Everything else is
+  shared with `tool-call`: the header and split bytes, the strict-forced
+  trailer, every check, and the raw-byte protocol. The `ref` tool set is a
+  second fixed set compiled with `ToolSet::from_openai` (the default,
+  `--tools fixed`, is the `tool-call` set, which stays byte-for-byte as it
+  was: the `ref` tools are not added to it, because a new tool name could
+  change what a fuzzy name match or an ambiguity means for an earlier seed).
+  Any other `--tools` value is a usage panic. The set holds `read_file`
+  (so the forced choice still names a tool) and six tools for the
+  nested-parameter shapes the fixed set cannot express:
+  `list_records` (an array of inline object items, one member an array of
+  strings), `batch_refs` (an outer `name` beside an array of `$ref` items
+  whose `name` collides with it, and an array of strings), `any_items` (an
+  array of `anyOf` object-or-string items), `tree_walk` (a recursive `$ref`
+  tree), `free_items` (an array of free-form object items,
+  `additionalProperties` true), and `root_ref` (a Draft-07 root `$ref` into
+  `definitions`, with an array of object items in the target). `from_mcp`
+  cannot be mixed into the same set (a `ToolSet` is built by one adapter),
+  so the root-`$ref` tool is the OpenAI form of the same shape. Seeds (every
+  seed runs under two of four non-forced headers, tolerant and per-tool,
+  structural with a length stop, and required with reasoning open at the
+  start) cover: repeated object items at the top level, an object parameter
+  holding an array of its own kind (in-object), mixed JSON-array and nested
+  items, an unclosed last item, an unclosed item before a sibling outer
+  parameter, an item member that shares the array's or an outer parameter's
+  name, string items, `$ref` items, colliding names in both orders (and
+  unclosed), a balanced and an unclosed recursive tree, `anyOf` items, an
+  opaque free-form item before and after a sibling, a root-`$ref` call, the
+  same shapes as Hermes and Mistral JSON, markers and markup inside values,
+  invalid UTF-8, a truncated item, and negatives (unknown member and tool
+  names, stray closers, an empty opaque item). Strict-trailer handling is
+  that of `tool-call`: a seed with the forced header (control bits 6-7 `11`)
+  and a last byte of `0xF8..=0xFF` draws the strict options, so the only
+  such seeds are the five registered in `TOOL_CALL_REF_STRICT` (a second
+  nested call with exactly one, a nested call with no content, prose with no
+  reasoning, the lenient degenerate form, a rejected nested attempt with all
+  options). `scripts/test-fuzz.py` asserts, for both targets, that every seed
+  with a forced header and a last byte of at least `0xF8` is in its registered
+  strict list (so a seed cannot be misread as carrying options), and that
+  every seed of `tool-call-ref` completes with `ok` in the built probe under
+  both tool sets. Coverage evidence that mutated executions reach the item
+  branches of `pop` and `nesting` in `crates/core/src/grammar/codec/xml.rs`
+  and the scope-graph paths comes from the llvm-cov procedure under "Isolating
+  issue #6" below.
 
 ## Differential probes
 
@@ -797,7 +872,7 @@ Exact discovery counts are tied to compiler, flags, and source mapping; they
 are not comparable coverage percentages across toolchain versions.
 
 **Smoke** (`verify.yml` on pull requests, main-branch pushes, and manual
-runs): `make fuzz` runs the corpus-feedback test once and all nine targets
+runs): `make fuzz` runs the corpus-feedback test once and all ten targets
 with the runner's default 1,000 mutations each. `TARGET` and `FUZZ_ARGS`
 apply only to a selected-target invocation. **Qualification** (this task, evidence committed
 under `docs/qualification/`): 10,000 iterations per target, matching both
@@ -820,7 +895,76 @@ fields are never reconstructed retrospectively. New Markdown reports
 add guarded engine/harness/runner hashes and a private executable snapshot.
 The full local gate and hosted smoke campaigns on the exact final commit
 provide separate final-integration evidence; hosted smoke must execute
-1,000 mutations for each of all nine targets.
+1,000 mutations for each of all ten targets.
+
+### Isolating issue #6 (`--continue-on-known`)
+
+Issue #6 tracks `fuzz-tool-call` failing on the rejected-span oracle (the F4
+clauses) at the `tool-call` target's merge: a plain campaign stops at the
+first such panic, which can hide a new failure behind it. For campaigns that
+need to look past it, `scripts/fuzz.py` has `--continue-on-known`. A probe
+panic whose message matches one of two signatures, `rejected attempt ... runs
+past where it failed` or `rejected attempt ... beyond a literal past its
+end`, does not stop the campaign. The input is retained, never dropped, as
+`known-6/<sha256>.bin` beside the panic output `known-6/<sha256>.stderr`, is
+listed in the report's `known_failures` (execution, digest, signature,
+parent corpus index, size), and is not counted in `crashes`. It is not
+retained in the novelty corpus (a panicking run supplies no coverage), except
+that a fixed seed stays a mutation parent. Any other failure, a timeout,
+or a coverage diagnostic still stops the campaign and counts as a crash. The
+option is never used by `make fuzz`, the smoke gate, or a qualification
+run; they stay strict.
+
+Attribution procedure (run after any campaign that used the option, and for
+a campaign that failed any other way). Every retained input, matching a
+signature or not, is replayed through a probe built from the base commit
+`943fa04`: create a temporary git worktree of that commit outside the
+repository (`git worktree add /tmp/base-943fa04 943fa04`), build
+`--example fuzz-tool-call` in it, locate the binary through
+`cargo metadata --format-version 1 --no-deps` run inside that worktree (a
+cargo wrapper may remap target directories), pipe each `known-6/*.bin` (and
+the failing `current.bin` of an aborted campaign) to it, and compare the
+panic. An input that panics on the base with the same signature is #6's. An
+input that passes on the base, or panics differently, is branch-only and must
+be fixed before the campaign is called clean. The base has no `--tools`
+argument and no strict-forced trailer, so for `tool-call-ref` the base probe
+replays the same bytes against its fixed tool set: it reproduces the oracle
+signature (the oracle is the rejected-span clauses, which do not depend on the
+tool set) or does not; the report says which, and a `tool-call-ref` input that
+the base cannot parse into the same shape is judged by whether the same
+signature fires on the branch's fixed-set probe. Remove the worktree after.
+
+Coverage evidence: the campaign directory keeps no per-input profile (each is
+deleted after its novelty decision), so to count the executions that reached
+particular lines, rebuild the execution stream and replay it. The stream is
+deterministic: with `fuzz.py`'s own `Random(report["seed"])` and `mutate`, the
+fixed seeds come first and each later input is the mutation of corpus entry
+`random.index(len(corpus))`, where the corpus holds the fixed seeds and the
+mutations listed in `report.json`'s `retained` (digests check the rebuild).
+Run each input through the campaign's own `probe` executable (built with
+`-C instrument-coverage`) with `LLVM_PROFILE_FILE` set, merge with
+`llvm-profdata merge -sparse`, and run `llvm-cov export probe
+-instr-profile=... <source files>`; an execution reaches a line group when a
+code region (`kind` 0) with a nonzero count lies inside it. The tools are the
+ones `fuzz.py` resolves under `rustc --print sysroot`. Inputs retained in
+`known-6/` panic and supply no profile. Use the `tool-call-ref` campaign for
+the nested-array item branches (`pop`'s item branch and `nesting`'s item arms
+in `crates/core/src/grammar/codec/xml.rs`) and the scope-graph paths
+(`Scope::of_node`, `ScopeNode::member`/`declares`, `ScopeGraph::node`): the
+`tool-call` tool set holds no array of objects and no unmodeled parameter, so
+its executions reach none of them, which is why `tool-call-ref` exists.
+
+### Known slow input (issue #11)
+
+The `tool-call-ref` campaign at the default seed reaches, at execution 682, a
+192-byte turn (free-form-object items with mutated closers) on which the repair
+search spends about 240 to 280 ns per charged work unit, several times the
+ordinary rate. With the probe's request it takes about 5 s in a release build,
+on `main` as on this branch, so under the coverage build it exceeds the default
+10 s `--timeout` and `make fuzz` fails there. Under the CLI and MCP sized budget
+the same turn ends explicitly (`BudgetExceeded`) in 0.3 s. Issue #11 tracks the
+fix. Until then, run `tool-call-ref` campaigns with a larger `--timeout`. The
+#8 campaign used `--timeout 120`; see its stage report.
 
 ### Recorded 10,000-mutation baselines
 

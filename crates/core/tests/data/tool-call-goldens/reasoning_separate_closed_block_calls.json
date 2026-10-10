@@ -105,6 +105,9 @@
     }
   ],
   "content": [],
+  "reasoning_text": [
+    "plan <tool_call>{\"name\": \"read_file\", \"arguments\": {\"path\": \"x\"}}</tool_call> [TOOL_CALLS] [{\"name\": \"read_file\", \"arguments\": {\"path\": \"x\"}}] <|python_tag|>{\"name\": \"read_file\", \"parameters\": {\"path\": \"x\"}} <tool_call>\n<function=read_file>\n<parameter=path>\nx\n</parameter>\n</function>\n</tool_call>"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.reasoning.embedded-call",

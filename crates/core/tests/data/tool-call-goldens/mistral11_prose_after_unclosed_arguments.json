@@ -60,6 +60,7 @@
       "Checking. ",
       "oops. Sorry, my answer is 42 (see {1,2} set)."
     ],
+    "reasoning_text": [],
     "failed_validations": [],
     "ledger_rules": []
   },
@@ -92,6 +93,7 @@
     "Checking. ",
     "oops. Sorry, my answer is 42 (see {1,2} set)."
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

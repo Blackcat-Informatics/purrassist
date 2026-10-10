@@ -63,6 +63,7 @@
   "content": [
     "Here is the declaration: {\"name\": \"get_weather\", \"parameters\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}}, \"required\": [\"city\"]}}"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

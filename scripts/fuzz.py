@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 """Deterministic source-region coverage-guided qualification (LLVM, pinned
 in vendor/tooling.json's `llvm-coverage` entry),
-generalized across nine `purrassist-core` targets, with differential probes
+generalized across ten `purrassist-core` targets, with differential probes
 against Node's `RegExp` (`pattern`) and `cmark-gfm` (`markdown`).
 
 Replaces the single-purpose `scripts/fuzz-json.py`; see `docs/FUZZING.md`.
@@ -183,7 +183,9 @@ PATCH_TOKENS = [
 # `tool-call` input is raw bytes: byte 0 selects the request knobs (repair
 # policy, generation stop, reasoning policy, tool choice), byte 1 the effort,
 # the ambiguity policy, and the chunking split seed; the rest is one model
-# turn (see `crates/core/examples/fuzz_tool_call.rs`). Seeds pair each turn
+# turn; under the forced choice a trailing byte in 0xF8..=0xFF instead draws
+# the strict-forced options (see `crates/core/examples/fuzz_tool_call.rs`).
+# Seeds pair each turn
 # with a header so the fixed seeds already span the request space.
 TOOL_CALL_HEADERS = [
     b'\x00\x52',  # per tool, stop, separate reasoning, auto; standard effort
@@ -571,6 +573,12 @@ TOOL_CALL_REGRESSIONS = [
     # A bare Qwen3-Coder element (Round A), and invalid UTF-8 in a tool name.
     b'\x00\x52<function=read_file>\n<parameter=path>\na\n</parameter>\n</function>',
     b'\x00\x52<tool_call>\n<function=read_fil\xe9>\n<parameter=path>\na\n</parameter>\n</function>\n</tool_call>',
+    # Anthropic's spaced redacted_thinking opener ends in the quote that
+    # begins the closer `"}`: the closer overlaps the opener, so it does not
+    # close the block (its text must never be a reversed range), under the
+    # default and the open-at-start reasoning modes.
+    b'\x00\x52{"type": "redacted_thinking", "data": "}x',
+    b'\x10\x52{"type": "redacted_thinking", "data": "}x',
     # S1: a turn that starts inside a reasoning block (control bits 4-5 = 1)
     # must not let Anthropic's explicit closer `"}` inside a call's JSON end
     # the block and swallow the call; nor end it inside the call before its
@@ -866,11 +874,38 @@ TOOL_CALL_REGRESSIONS = [
     b'[\xe6#Let me check both.\n{"name": "get_weather", "parameters": {"city": "Oslo"}}; {"name": "read_file", "parameters": {"path": "notes.txt", "limit": 10}}\n{"parameters": {"city": "Bergen", "unit": "celsius"}, "name": rgen", "unit": "celsius"}, "name": "get_weather"}ius"}, "name": "get_weather"}]',
 ]
 
+# Strict forced tool choice: header `\xe6\x23` (forced `read_file`) plus a
+# trailer byte in 0xF8..=0xFF, a seed byte after the turn that the probe
+# consumes instead of reading it as part of the turn (bit 0 exactly one,
+# bit 1 no content, bit 2 no reasoning; see `fuzz_tool_call.rs`). Earlier
+# seeds end in other bytes, so they keep their meaning.
+#
+# Control byte `\xe6` has bits 4-5 `10`, the reasoning policy "as content",
+# under which a strict choice with no reasoning (trailer bit 2) is a request
+# error (`invalid_input`). The two seeds that draw no-reasoning (3 and 4) were
+# first written with `\xe6` and so never tested no-reasoning at all (they
+# drew the then-vacuous check); they now use `\xc6` (bits 4-5 `00`, separate
+# reasoning; bits 6-7 `11` forced; the other bits as `\xe6`). That is a
+# meaning correction, not a preservation. Seed 5 below keeps the old
+# `\xe6` + `\xfc` bytes to draw the request-error combination.
+_STRICT_CALL = b'<tool_call>\n{"name": "read_file", "arguments": {"path": "a"}}\n</tool_call>'
+_STRICT_ATTEMPT = b'<tool_call>\n{"name": "read_file", "arguments": {"path": "b"}} junk junk {{{\n</tool_call>'
+TOOL_CALL_STRICT = [
+    b'\xe6\x23' + _STRICT_CALL + b'\n' + _STRICT_CALL + b'\xf9',  # two calls, exactly one
+    b'\xe6\x23Sure.\n' + _STRICT_CALL + b'\xfa',  # prose, no content
+    b'\xe6\x23' + _STRICT_CALL + b'\n' + b'\xf8',  # lenient degenerate form
+    b'\xc6\x23<think>plan</think>\n' + _STRICT_CALL + b'\xfc',  # reasoning, no reasoning (separate)
+    b'\xc6\x23\n' + _STRICT_CALL + b'\n\xc2\xa0' + b'\xff',  # U+00A0 is content, all options
+    b'\xe6\x23<think>plan</think>\n' + _STRICT_CALL + b'\xfc',  # no reasoning under as-content: request error
+    b'\xe6\x23' + _STRICT_CALL + b'\n' + _STRICT_ATTEMPT + b'\xf9',  # rejected second attempt, exactly one
+    b'\xe6\x23' + _STRICT_CALL + b'\n' + _STRICT_ATTEMPT + b'\xfa',  # rejected second attempt, no content
+]
+
 TOOL_CALL_SEEDS = [
     _tool_call_seed(index, turn)
     for index, turn in enumerate(
         _tool_call_conformance_markup() + TOOL_CALL_WITNESSES + TOOL_CALL_REPAIRS + TOOL_CALL_NEGATIVES)
-] + TOOL_CALL_REGRESSIONS
+] + TOOL_CALL_REGRESSIONS + TOOL_CALL_STRICT
 TOOL_CALL_TOKENS = [
     b'<tool_call>', b'</tool_call>', b'<function=', b'</function>', b'<parameter=',
     b'</parameter>', b'</parameters>', b'<think>', b'</think>', b'{"name":',
@@ -890,6 +925,132 @@ TOOL_CALL_TOKENS = [
     b'\x00', b'\x04', b'\x80', 'é'.encode(), b'\xff', b'\xe2\x82',
 ]
 
+# `tool-call-ref` runs the same probe with `--tools ref`: a second fixed tool
+# set compiled by `ToolSet::from_openai` (see `fuzz_tool_call.rs`) holding
+# the nested-parameter shapes the fixed set lacks: arrays of inline object
+# items (`list_records`), `$ref` items and a colliding member name
+# (`batch_refs`), `anyOf` items (`any_items`), a recursive `$ref` tree
+# (`tree_walk`), free-form object items (`free_items`), and a Draft-07 root
+# `$ref` tool (`root_ref`). Each seed is one header (control byte without the
+# forced choice, so no seed here is read as carrying a strict trailer) plus a
+# turn; the strict-trailer seeds below carry the forced header and trailer
+# exactly as `TOOL_CALL_STRICT` does and are the only seeds that do.
+TOOL_CALL_REF_HEADERS = [
+    b'\x02\x52',  # all tolerant, stop, separate reasoning, auto; standard effort
+    b'\x00\x52',  # per tool (the adapter's mutating default is structural)
+    b'\x05\x91',  # all structural, length stop; quick effort
+    b'\x9c\xf0',  # all tolerant, unknown stop, reasoning open at start, required; exact effort
+]
+
+
+def _qwen_call(name, body):
+    return f'<tool_call>\n<function={name}>\n{body}</function>\n</tool_call>'.encode()
+
+
+def _param(name, value):
+    return f'<parameter={name}>\n{value}\n</parameter>\n'
+
+
+_REF_ITEM_A = _param('records', _param('name', 'A').rstrip('\n') + '\n' + _param('uid', '1').rstrip('\n'))
+_REF_ITEM_B = _param('records', _param('name', 'B').rstrip('\n'))
+
+TOOL_CALL_REF_TURNS = [
+    # Top level: repeated object items of an array parameter.
+    _qwen_call('list_records', _REF_ITEM_A + _REF_ITEM_B),
+    # In-object: an object parameter (`$ref`) holding an array of its own kind.
+    _qwen_call('tree_walk', _param('root', _param('label', 'r') + _param('children', _param('label', 'c')))),
+    # Mixed JSON and nested items of one array parameter.
+    _qwen_call('list_records', _param('records', '[{"name": "A", "uid": 1}]') + _REF_ITEM_B),
+    _qwen_call('list_records', _REF_ITEM_A + _param('records', '{"name": "J"}')),
+    # An unclosed last item (no `</parameter>` before `</function>`).
+    b'<tool_call>\n<function=list_records>\n<parameter=records>\n<parameter=name>\nA\n</parameter>\n</function>\n</tool_call>',
+    b'<tool_call>\n<function=list_records>\n<parameter=records>\n<parameter=name>\nA\n</function>\n</tool_call>',
+    # An unclosed item before a sibling parameter of the outer call.
+    b'<tool_call>\n<function=list_records>\n<parameter=records>\n<parameter=name>\nA\n</parameter>\n<parameter=owner>\nme\n</parameter>\n</function>\n</tool_call>',
+    b'<tool_call>\n<function=list_records>\n<parameter=records>\n<parameter=name>\nA\n<parameter=owner>\nme\n</parameter>\n</function>\n</tool_call>',
+    # A member of an item that shares its name with the array parameter or
+    # with an outer parameter.
+    _qwen_call('batch_refs', _param('items', _param('tags', 'x') + _param('name', 'n')) + _param('tags', 'outer')),
+    _qwen_call('list_records', _param('records', _param('records', 'r') + _param('name', 'n'))),
+    # String items: repeated scalar parameters of an array of strings.
+    _qwen_call('batch_refs', _param('tags', 'a') + _param('tags', 'b') + _param('tags', 'c')),
+    _qwen_call('batch_refs', _param('tags', '["a", "b"]') + _param('tags', 'c')),
+    _qwen_call('list_records', _param('records', _param('name', 'A') + _param('tags', 'x') + _param('tags', 'y'))),
+    # `$ref` items.
+    _qwen_call('batch_refs', _param('items', _param('name', 'A') + _param('count', '2')) + _param('items', _param('name', 'B'))),
+    b'<tool_call>\n<function=batch_refs>\n<parameter=items>\n<parameter=name>\nA\n</parameter>\n<parameter=items>\n<parameter=name>\nB\n</parameter>\n</parameter>\n</function>\n</tool_call>',
+    # Colliding names: an item `name` beside the outer `name`, in both orders,
+    # and an unclosed item `name` before the outer one.
+    _qwen_call('batch_refs', _param('items', _param('name', 'inner')) + _param('name', 'outer')),
+    _qwen_call('batch_refs', _param('name', 'outer') + _param('items', _param('name', 'inner'))),
+    b'<tool_call>\n<function=batch_refs>\n<parameter=items>\n<parameter=name>\ninner\n</parameter>\n<parameter=name>\nouter\n</parameter>\n</function>\n</tool_call>',
+    b'<tool_call>\n<function=batch_refs>\n<parameter=items>\n<parameter=name>\ninner\n<parameter=name>\nouter\n</parameter>\n</function>\n</tool_call>',
+    # A recursive `$ref` tree: balanced, deeper, and unclosed.
+    _qwen_call('tree_walk', _param('root', _param('label', 'a') + _param('children', _param('label', 'b') + _param('children', _param('label', 'c'))))),
+    _qwen_call('tree_walk', _param('root', _param('children', _param('label', 'b')) + _param('children', _param('label', 'c')) + _param('label', 'a'))),
+    b'<tool_call>\n<function=tree_walk>\n<parameter=root>\n<parameter=label>\na\n</parameter>\n<parameter=children>\n<parameter=label>\nb\n</parameter>\n<parameter=children>\n<parameter=label>\nc\n</function>\n</tool_call>',
+    # `anyOf` items: a string, an object, and the mix.
+    _qwen_call('any_items', _param('choices', 'plain') + _param('choices', _param('kind', 'k').rstrip('\n'))),
+    _qwen_call('any_items', _param('path', 'p') + _param('choices', _param('kind', 'k') + _param('n', '3'))),
+    # An opaque free-form item: any member is kept.
+    _qwen_call('free_items', _param('keep', _param('anything', 'x') + _param('else', 'y')) + _param('keep', _param('path', 'z'))),
+    b'<tool_call>\n<function=free_items>\n<parameter=keep>\n<parameter=path>\n/p\n</parameter>\n</parameter>\n<parameter=path>\nq\n</parameter>\n</function>\n</tool_call>',
+    b'<tool_call>\n<function=free_items>\n<parameter=path>\nq\n</parameter>\n<parameter=keep>\n<parameter=path>\n/p\n</parameter>\n</function>\n</tool_call>',
+    # The Draft-07 root-`$ref` tool: its parameters project from the target.
+    _qwen_call('root_ref', _param('path', 'p') + _param('entries', _param('name', 'e') + _param('size', '7'))),
+    b'<tool_call>\n<function=root_ref>\n<parameter=entries>\n<parameter=name>\ne\n</parameter>\n<parameter=path>\np\n</parameter>\n</function>\n</tool_call>',
+    # The same shapes as JSON-bodied dialects.
+    b'<tool_call>{"name": "list_records", "arguments": {"owner": "me", "records": [{"name": "A", "uid": 1, "tags": ["x"]}, {"name": "B"}]}}</tool_call>',
+    b'<tool_call>{"name": "batch_refs", "arguments": {"name": "outer", "items": [{"name": "inner", "count": 2}]}}</tool_call>',
+    b'<tool_call>{"name": "tree_walk", "arguments": {"root": {"label": "a", "children": [{"label": "b", "children": []}]}}}</tool_call>',
+    b'<tool_call>{"name": "any_items", "arguments": {"choices": ["s", {"kind": "k"}, 3]}}</tool_call>',
+    b'<tool_call>{"name": "free_items", "arguments": {"keep": [{"x": 1}, {"y": [2]}]}}</tool_call>',
+    b'<tool_call>{"name": "root_ref", "arguments": {"path": "p", "entries": [{"name": "e", "size": 1}]}}</tool_call>',
+    b'[TOOL_CALLS] [{"name": "list_records", "arguments": {"records": [{"name": "A"}, {"name": "B"}]}}]',
+    b'[TOOL_CALLS]tree_walk[ARGS]{"root": {"label": "a", "children": [{"label": "b"}]}}',
+    b'<tool_call>{"name": "list_records", "arguments": {"records": [{"name": "A"}, {"name": "B"',
+    # Markup values, markers and prose inside items.
+    _qwen_call('list_records', _param('records', _param('name', '</parameter> and <parameter=name>') + _param('uid', 'x'))),
+    b'<think>plan <parameter=records></think>\n' + _qwen_call('list_records', _REF_ITEM_A),
+    b'Sure.\n' + _qwen_call('list_records', _REF_ITEM_A) + b'\nDone.\n' + _qwen_call('read_file', _param('path', 'a')),
+    # Invalid UTF-8 and a truncated item.
+    _qwen_call('list_records', _param('records', _param('name', 'a\xffb'))),
+    b'<tool_call>\n<function=list_records>\n<parameter=records>\n<parameter=na',
+]
+TOOL_CALL_REF_NEGATIVES = [
+    # Unknown member names and tool names beside the nested shapes.
+    _qwen_call('list_records', _param('records', _param('nmae', 'A'))),
+    _qwen_call('list_record', _REF_ITEM_A),
+    _qwen_call('tree_walk', _param('children', _param('label', 'c'))),
+    b'</parameter></parameter></function></tool_call>',
+    b'<tool_call>\n<function=free_items>\n<parameter=keep>\n</parameter>\n</parameter>\n</function>\n</tool_call>',
+]
+# Strict forced choice under the ref set: the same header and trailer rules as
+# `TOOL_CALL_STRICT` (control bits 6-7 `11` force `read_file`; a last byte in
+# 0xF8..=0xFF is the trailer). These are the only `tool-call-ref` seeds with a
+# forced header, which `test-fuzz.py` asserts.
+_REF_STRICT_CALL = b'<tool_call>\n{"name": "read_file", "arguments": {"path": "a"}}\n</tool_call>'
+TOOL_CALL_REF_STRICT = [
+    b'\xe6\x23' + _REF_STRICT_CALL + b'\n' + _qwen_call('list_records', _REF_ITEM_A) + b'\xf9',  # a second, nested call, exactly one
+    b'\xc6\x23' + _REF_STRICT_CALL + b'\n' + _qwen_call('tree_walk', _param('root', _param('label', 'r'))) + b'\xfa',  # content-free: a call is not content
+    b'\xc6\x23Sure.\n' + _REF_STRICT_CALL + b'\xfc',  # prose beside no reasoning
+    b'\xe6\x23' + _REF_STRICT_CALL + b'\n' + _qwen_call('batch_refs', _param('items', _param('name', 'n'))) + b'\xf8',  # lenient degenerate form
+    b'\xe6\x23' + b'<tool_call>\n<function=list_records>\n<parameter=records>\n<parameter=name>\nA\n</function>\n</tool_call>' + b'\xff',  # a rejected nested attempt, all options
+]
+
+TOOL_CALL_REF_SEEDS = [
+    TOOL_CALL_REF_HEADERS[(index + offset) % len(TOOL_CALL_REF_HEADERS)] + turn
+    for index, turn in enumerate(TOOL_CALL_REF_TURNS + TOOL_CALL_REF_NEGATIVES)
+    for offset in (0, 2)
+] + TOOL_CALL_REF_STRICT
+TOOL_CALL_REF_TOKENS = TOOL_CALL_TOKENS + [
+    b'list_records', b'batch_refs', b'any_items', b'tree_walk', b'free_items', b'root_ref',
+    b'records', b'items', b'children', b'root', b'label', b'name', b'owner', b'tags', b'keep',
+    b'choices', b'entries', b'<parameter=records>', b'<parameter=name>', b'<parameter=children>',
+    b'<parameter=items>', b'<parameter=tags>', b'<parameter=keep>', b'\n</parameter>\n',
+    b'[{', b'}]', b'{"name":',
+]
+
 TARGETS = {
     'json': {'seeds': JSON_SEEDS, 'tokens': JSON_TOKENS, 'differential': None},
     'markdown': {'seeds': MARKDOWN_SEEDS, 'tokens': MARKDOWN_TOKENS, 'differential': 'markdown'},
@@ -900,14 +1061,30 @@ TARGETS = {
     'matching': {'seeds': MATCHING_SEEDS, 'tokens': MATCHING_TOKENS, 'differential': None},
     'patch': {'seeds': PATCH_SEEDS, 'tokens': PATCH_TOKENS, 'differential': None},
     'tool-call': {'seeds': TOOL_CALL_SEEDS, 'tokens': TOOL_CALL_TOKENS, 'differential': None,
-                  'input': 'bytes'},
+                  'input': 'bytes', 'strict': TOOL_CALL_STRICT},
+    # The same probe, built once more, run with `--tools ref` (a second fixed
+    # tool set) and its own seeds.
+    'tool-call-ref': {'seeds': TOOL_CALL_REF_SEEDS, 'tokens': TOOL_CALL_REF_TOKENS, 'differential': None,
+                      'input': 'bytes', 'example': 'tool-call', 'probe_args': ['--tools', 'ref'],
+                      'strict': TOOL_CALL_REF_STRICT},
 }
 
 
+def example_name(target):
+    """The example `target` builds: the target's own name unless it reuses
+    another target's probe (`tool-call-ref` is `fuzz-tool-call --tools ref`)."""
+    return TARGETS[target].get('example', target)
+
+
+def probe_arguments(target):
+    """The command-line arguments `target` passes its probe."""
+    return list(TARGETS[target].get('probe_args', []))
+
+
 def harness_source(target):
-    """The probe source of `target` (`fuzz-<target>` builds `fuzz_<target>.rs`,
-    with `-` spelled `_`)."""
-    return ROOT / f'crates/core/examples/fuzz_{target.replace("-", "_")}.rs'
+    """The probe source of `target` (`fuzz-<example>` builds
+    `fuzz_<example>.rs`, with `-` spelled `_`)."""
+    return ROOT / f'crates/core/examples/fuzz_{example_name(target).replace("-", "_")}.rs'
 
 
 def admits_bytes(target):
@@ -2113,7 +2290,7 @@ def build(directory, target):
     flags = environment.get('CARGO_ENCODED_RUSTFLAGS')
     flags = flags.split('\x1f') if flags is not None else environment.get('RUSTFLAGS', '').split()
     environment['CARGO_ENCODED_RUSTFLAGS'] = '\x1f'.join(flags + ['-C', 'instrument-coverage'])
-    example = f'fuzz-{target}'
+    example = f'fuzz-{example_name(target)}'
     command = ['cargo', 'build', '-p', 'purrassist-core', '--example', example, '--locked',
                '--config', 'profile.dev.opt-level=1', '--config', 'profile.dev.debug=1',
                '--config', 'profile.dev.strip=false', '--config', 'profile.dev.debug-assertions=true',
@@ -2204,7 +2381,7 @@ def probe(binary, data, directory, timeout, target, oracle, tool_paths, counts=N
             limited = False
         if limited:
             environment['PURRASSIST_FUZZ_TASKLIST_REFERENCE_PROFILE'] = 'tasklist-neutral'
-    result = subprocess.run([str(binary)], input=data, capture_output=True, env=environment, timeout=timeout)
+    result = subprocess.run([str(binary), *probe_arguments(target)], input=data, capture_output=True, env=environment, timeout=timeout)
     (directory / 'probe.stderr').write_bytes(result.stderr)
     if result.returncode:
         if counts is not None:
@@ -2264,6 +2441,28 @@ def probe(binary, data, directory, timeout, target, oracle, tool_paths, counts=N
     return covered_regions(json.loads(exported.stdout)), invalid, checked
 
 
+# Issue #6: the rejected-span oracle of `fuzz_tool_call.rs` (the F4 clauses)
+# fails on inputs that also fail on the base `943fa04`. `--continue-on-known`
+# lets a bounded campaign run past these panics, retaining each such input
+# (never silently dropping it) so it can be replayed on a base probe; any
+# other failure still stops the campaign. `make fuzz` never passes it.
+KNOWN_FAILURES = {
+    # Anchored to the probe's own panic line, so the text cannot match
+    # elsewhere in the output (an echoed input, another panic's message).
+    'issue-6-rejected-span-runs-past-failure': re.compile(
+        r'panicked at [^\n]*fuzz_tool_call\.rs:\d+:\d+:\n'
+        r'rejected attempt \d+\.\.\d+ runs past where it failed \(\d+\)'),
+    'issue-6-failure-beyond-literal-past-its-end': re.compile(
+        r'panicked at [^\n]*fuzz_tool_call\.rs:\d+:\d+:\n'
+        r'rejected attempt \d+\.\.\d+ fails at \d+, beyond a literal past its end'),
+}
+
+
+def known_failure(stderr):
+    """The name of the known (#6) failure `stderr` carries, or `None`."""
+    return next((name for name, pattern in KNOWN_FAILURES.items() if pattern.search(stderr)), None)
+
+
 def source_digest():
     names = subprocess.check_output(['git', 'ls-files', '-co', '--exclude-standard', '-z'], cwd=ROOT).split(b'\0')
     digest = hashlib.sha256()
@@ -2281,6 +2480,10 @@ def main():
     parser.add_argument('--seed', type=int, default=0x5A1727EE614D934B)
     parser.add_argument('--timeout', type=float, default=10, help='seconds per probe, LLVM, or oracle command')
     parser.add_argument('--replay', type=Path, help='execute one saved input instead of a campaign')
+    parser.add_argument('--continue-on-known', action='store_true',
+                        help='keep running past a probe panic matching a known issue #6 signature '
+                             '(rejected-span oracle) and retain each such input under known-6/; '
+                             'any other failure still stops the campaign; never used by `make fuzz`')
     args = parser.parse_args()
     if args.iterations < 0 or not 0 <= args.seed < 1 << 64 or not 0 < args.timeout <= 3600:
         parser.error('invalid iteration, seed, or timeout bound')
@@ -2318,6 +2521,7 @@ def main():
               'backtick_reference_cases': [],
               'destination_reference_checks': 0, 'destination_reference_disagreements': 0,
               'destination_reference_cases': [],
+              'continue_on_known': args.continue_on_known, 'known_failures': [],
               'retained': [], 'regions': 0}
     corpus, seen = [], set()
     random = Random(args.seed)
@@ -2334,9 +2538,26 @@ def main():
                 parent = random.index(len(corpus))
                 data = mutate(corpus[parent], random, tokens)
             report['current_execution'] = index
-            regions, invalid, checked = probe(
-                binary, data, directory, args.timeout, target, oracle, tool_paths, report
-            )
+            try:
+                regions, invalid, checked = probe(
+                    binary, data, directory, args.timeout, target, oracle, tool_paths, report
+                )
+            except subprocess.CalledProcessError:
+                name = known_failure((directory / 'probe.stderr').read_text(errors='replace')) \
+                    if args.continue_on_known else None
+                if name is None:
+                    raise
+                digest = hashlib.sha256(data).hexdigest()
+                (directory / 'known-6').mkdir(exist_ok=True)
+                (directory / 'known-6' / f'{digest}.bin').write_bytes(data)
+                (directory / 'known-6' / f'{digest}.stderr').write_bytes((directory / 'probe.stderr').read_bytes())
+                report['crashes'] -= 1
+                report['known_failures'].append({'execution': index, 'sha256': digest, 'signature': name,
+                                                 'parent_corpus_index': parent, 'bytes': len(data)})
+                report['executions'] += 1
+                if index < len(seeds):
+                    corpus.append(data)
+                continue
             report['differential_checks'] += checked
             novel = regions - seen
             seen.update(regions)
@@ -2367,6 +2588,9 @@ def main():
     finally:
         (directory / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
         (directory / 'regions.json').write_text(json.dumps(sorted(seen), indent=2) + '\n')
+    if report['known_failures']:
+        print(f'{len(report["known_failures"])} inputs hit a known issue #6 panic; retained in '
+              f'{directory / "known-6"} for base replay', flush=True)
     print(f'Passed {report["executions"]} inputs; report: {directory / "report.json"}', flush=True)
 
 

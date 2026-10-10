@@ -265,6 +265,308 @@ fn tool_choice_json_forms() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn tool_choice_strict_member() {
+    let (tools, root) = tools("strict");
+    let call = r#"<tool_call>{"name": "list_dir", "arguments": {"path": "src"}}</tool_call>"#;
+    let forced = r#"{"type":"function","function":{"name":"list_dir"}}"#;
+    let anthropic = r#"{"type":"tool","name":"list_dir","disable_parallel_tool_use":true}"#;
+    let run = |output: &str, choice: &str, strict: &str| {
+        let args = arguments(
+            output,
+            &format!(r#","tool_choice":{choice},"tool_choice_strict":{strict}"#),
+        );
+        tools.call("recover_tool_calls", &args)
+    };
+    let constraint = |result: &Node| {
+        result
+            .pointer("/value/tool_choice/constraint")
+            .and_then(Node::as_str)
+            .map(str::to_owned)
+    };
+    let passed = |result: &Node| {
+        matches!(
+            result
+                .pointer("/value/tool_choice/passed")
+                .map(|node| &node.value),
+            Some(json::Value::Bool(true))
+        )
+    };
+    let all = r#"{"exactly_one":true,"allow_content":false,"allow_reasoning":false}"#;
+    let result = run(call, forced, all).unwrap();
+    assert_eq!(
+        constraint(&result).as_deref(),
+        Some("tool_choice=forced[exactly-one,no-content,no-reasoning]:list_dir")
+    );
+    assert!(passed(&result));
+    // The same options as core, over the wire: prose fails no-content.
+    let prose = format!("Sure.\n{call}");
+    let result = run(&prose, forced, all).unwrap();
+    assert!(!passed(&result));
+    assert_eq!(
+        result.pointer("/value/verdict").and_then(Node::as_str),
+        Some("nothing_usable")
+    );
+    // Lenient options render the plain forced constraint.
+    let lenient = r#"{"exactly_one":false,"allow_content":true,"allow_reasoning":true}"#;
+    let result = run(&prose, forced, lenient).unwrap();
+    assert_eq!(
+        constraint(&result).as_deref(),
+        Some("tool_choice=forced:list_dir")
+    );
+    assert!(passed(&result));
+    // Beside the Anthropic exactly-one flag.
+    let result = run(
+        &prose,
+        anthropic,
+        r#"{"exactly_one":true,"allow_content":false,"allow_reasoning":true}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        constraint(&result).as_deref(),
+        Some("tool_choice=forced[exactly-one,no-content]:list_dir")
+    );
+    assert!(!passed(&result));
+    // The Anthropic flag alone is strict exactly-one with content allowed.
+    let result = tools
+        .call(
+            "recover_tool_calls",
+            &arguments(&prose, &format!(r#","tool_choice":{anthropic}"#)),
+        )
+        .unwrap();
+    assert_eq!(
+        constraint(&result).as_deref(),
+        Some("tool_choice=forced[exactly-one]:list_dir")
+    );
+    assert!(passed(&result));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// A second call attempt that is rejected fails the strict forced choice
+/// over MCP (R4, G3): the first call is valid on its own, yet the verdict is
+/// `nothing_usable`, both usable counts are 0 (A3) and nothing is emitted.
+#[test]
+fn strict_choice_counts_a_rejected_second_attempt() {
+    let (tools, root) = tools("strict-rejected");
+    let call = r#"<tool_call>{"name": "list_dir", "arguments": {"path": "src"}}</tool_call>"#;
+    let attempt = r#"<tool_call>{"name": "list_dir", "arguments": {"path": "lib"}} junk junk {{{</tool_call>"#;
+    let output = format!("{call}\n{attempt}");
+    let forced = r#"{"type":"function","function":{"name":"list_dir"}}"#;
+    let anthropic = r#"{"type":"tool","name":"list_dir","disable_parallel_tool_use":true}"#;
+    let all = r#"{"exactly_one":true,"allow_content":false,"allow_reasoning":false}"#;
+    for (choice, strict) in [(forced, Some(all)), (anthropic, None)] {
+        let extra = format!(
+            r#","dialects":["hermes.v1"],"emit":"openai","tool_choice":{choice}{}"#,
+            strict.map_or_else(String::new, |strict| format!(
+                r#","tool_choice_strict":{strict}"#
+            ))
+        );
+        let result = tools
+            .call("recover_tool_calls", &arguments(&output, &extra))
+            .unwrap();
+        let text = |pointer: &str| result.pointer(pointer).map(json::Node::to_json);
+        assert_eq!(
+            text("/value/tool_choice/passed").as_deref(),
+            Some("false"),
+            "{choice}"
+        );
+        assert_eq!(
+            text("/value/verdict").as_deref(),
+            Some("\"nothing_usable\"")
+        );
+        assert_eq!(text("/value/usable_calls").as_deref(), Some("0"));
+        assert_eq!(
+            text("/value/usable_calls_accepting_guesses").as_deref(),
+            Some("0")
+        );
+        assert_eq!(text("/value/emitted/output").as_deref(), Some("[]"));
+        let diagnostics = text("/value/tool_choice/diagnostics").unwrap();
+        assert!(
+            diagnostics.contains("1 rejected call attempt beyond"),
+            "{diagnostics}"
+        );
+    }
+    // Without the attempt, the same options pass and one call is usable.
+    let extra =
+        format!(r#","dialects":["hermes.v1"],"tool_choice":{forced},"tool_choice_strict":{all}"#);
+    let result = tools
+        .call("recover_tool_calls", &arguments(call, &extra))
+        .unwrap();
+    assert_eq!(
+        result
+            .pointer("/value/usable_calls")
+            .map(json::Node::to_json)
+            .as_deref(),
+        Some("1")
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// A failed tool choice leaves no usable call over MCP whatever the choice
+/// (A3), though each call's own outcome is still `resolved`.
+#[test]
+fn failed_tool_choice_zeroes_the_usable_counts() {
+    let (tools, root) = tools("usable-zero");
+    let call = r#"<tool_call>{"name": "list_dir", "arguments": {"path": "src"}}</tool_call>"#;
+    let output = format!("{call}\n{call}");
+    let run = |choice: &str, strict: Option<&str>| {
+        let extra = format!(
+            r#","tool_choice":{choice}{}"#,
+            strict.map_or_else(String::new, |strict| format!(
+                r#","tool_choice_strict":{strict}"#
+            ))
+        );
+        tools
+            .call("recover_tool_calls", &arguments(&output, &extra))
+            .unwrap()
+    };
+    let counts = |result: &Node| {
+        (
+            result
+                .pointer("/value/tool_choice/passed")
+                .map(json::Node::to_json),
+            result
+                .pointer("/value/usable_calls")
+                .map(json::Node::to_json),
+            result
+                .pointer("/value/usable_calls_accepting_guesses")
+                .map(json::Node::to_json),
+        )
+    };
+    let owned = |passed: &str, strict: &str, guesses: &str| {
+        (
+            Some(passed.to_owned()),
+            Some(strict.to_owned()),
+            Some(guesses.to_owned()),
+        )
+    };
+    // Passing: both calls usable. Failing cardinality: none.
+    assert_eq!(
+        counts(&run(
+            r#"{"type":"function","function":{"name":"list_dir"}}"#,
+            None
+        )),
+        owned("true", "2", "2")
+    );
+    assert_eq!(
+        counts(&run(
+            r#"{"type":"function","function":{"name":"list_dir"}}"#,
+            Some(r#"{"exactly_one":true,"allow_content":true,"allow_reasoning":true}"#)
+        )),
+        owned("false", "0", "0")
+    );
+    assert_eq!(counts(&run(r#""none""#, None)), owned("false", "0", "0"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// A strict choice forbidding reasoning cannot be enforced when reasoning is
+/// content (R4, G15): the tool result is `unresolved` with an
+/// `invalid_input` termination, never a passed check.
+#[test]
+fn strict_no_reasoning_beside_content_reasoning_is_invalid_input() {
+    let (tools, root) = tools("strict-reasoning");
+    let call = r#"<tool_call>{"name": "list_dir", "arguments": {"path": "src"}}</tool_call>"#;
+    let output = format!("<think>plan</think>\n{call}");
+    let forced = r#"{"type":"function","function":{"name":"list_dir"}}"#;
+    let strict = r#"{"exactly_one":true,"allow_content":false,"allow_reasoning":false}"#;
+    let extra =
+        format!(r#","reasoning":"content","tool_choice":{forced},"tool_choice_strict":{strict}"#);
+    let result = tools
+        .call("recover_tool_calls", &arguments(&output, &extra))
+        .unwrap();
+    assert_eq!(
+        result.pointer("/status").and_then(Node::as_str),
+        Some("unresolved")
+    );
+    assert_eq!(
+        result
+            .pointer("/receipt/termination/kind")
+            .and_then(Node::as_str),
+        Some("invalid_input")
+    );
+    let detail = result
+        .pointer("/receipt/termination/detail")
+        .and_then(Node::as_str)
+        .unwrap();
+    assert!(detail.contains("allow_reasoning"), "{detail}");
+    assert!(
+        result
+            .pointer("/value")
+            .is_some_and(|value| matches!(value.value, json::Value::Null))
+    );
+    // Reasoning allowed, or separate reasoning, is a normal result.
+    let allowed = r#"{"exactly_one":true,"allow_content":true,"allow_reasoning":true}"#;
+    let extra =
+        format!(r#","reasoning":"content","tool_choice":{forced},"tool_choice_strict":{allowed}"#);
+    let result = tools
+        .call("recover_tool_calls", &arguments(&output, &extra))
+        .unwrap();
+    assert_eq!(
+        result.pointer("/status").and_then(Node::as_str),
+        Some("resolved")
+    );
+    let extra = format!(r#","tool_choice":{forced},"tool_choice_strict":{strict}"#);
+    let result = tools
+        .call("recover_tool_calls", &arguments(&output, &extra))
+        .unwrap();
+    assert_eq!(
+        result.pointer("/status").and_then(Node::as_str),
+        Some("resolved")
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn tool_choice_strict_member_errors() {
+    let (tools, root) = tools("strict-errors");
+    let call = r#"<tool_call>{"name": "list_dir", "arguments": {"path": "src"}}</tool_call>"#;
+    let forced = r#"{"type":"function","function":{"name":"list_dir"}}"#;
+    let anthropic = r#"{"type":"tool","name":"list_dir","disable_parallel_tool_use":true}"#;
+    let all = r#"{"exactly_one":true,"allow_content":false,"allow_reasoning":false}"#;
+    let run = |choice: &str, strict: &str| {
+        let args = arguments(
+            call,
+            &format!(r#","tool_choice":{choice},"tool_choice_strict":{strict}"#),
+        );
+        tools.call("recover_tool_calls", &args)
+    };
+    // Errors: not forced, contradicting the flag, or malformed.
+    for (choice, strict, message) in [
+        (r#""auto""#, all, "requires a forced tool_choice"),
+        (r#""required""#, all, "requires a forced tool_choice"),
+        (r#"{"type":"any"}"#, all, "requires a forced tool_choice"),
+        (
+            anthropic,
+            r#"{"exactly_one":false,"allow_content":true,"allow_reasoning":true}"#,
+            "disable_parallel_tool_use",
+        ),
+        (forced, "true", "/tool_choice_strict"),
+        (
+            forced,
+            r#"{"exactly_one":true,"allow_content":false}"#,
+            "allow_reasoning",
+        ),
+        (
+            forced,
+            r#"{"exactly_one":1,"allow_content":false,"allow_reasoning":true}"#,
+            "/tool_choice_strict/exactly_one",
+        ),
+        (
+            forced,
+            r#"{"exactly_one":true,"allow_content":false,"allow_reasoning":true,"x":true}"#,
+            "tool_choice_strict",
+        ),
+    ] {
+        let error = run(choice, strict).unwrap_err();
+        assert!(error.contains(message), "{choice} {strict}: {error}");
+    }
+    // Without a tool_choice at all it is not forced either.
+    let args = arguments(call, &format!(r#","tool_choice_strict":{all}"#));
+    let error = tools.call("recover_tool_calls", &args).unwrap_err();
+    assert!(error.contains("requires a forced tool_choice"), "{error}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// A complete call followed by a dangling `<tool_call>` under the default
 /// allow-list (every built-in dialect): the call stays usable, the dangling
 /// attempt names both dialects that share the opener, and the result
@@ -317,6 +619,70 @@ fn dangling_opener_after_a_call_keeps_the_call() {
         .unwrap();
     let schema = Schema::compile(&definition.get("outputSchema").unwrap().to_json()).unwrap();
     assert!(schema.validate(&actual).unwrap().valid);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// The result carries `reasoning_blocks` (one `{span, text}` per block,
+/// never merged, `text` without the markers) next to the merged `reasoning`
+/// ranges, and validates against the published output schema, which requires
+/// the member.
+#[test]
+fn reasoning_blocks_are_published_and_validate() {
+    let (tools, root) = tools("reasoning-blocks");
+    let output = format!("<think>a</think><think>b</think>\n{QWEN}");
+    let actual = tools
+        .call("recover_tool_calls", &arguments(&output, ""))
+        .unwrap();
+    assert_eq!(
+        actual
+            .pointer("/value/reasoning")
+            .map(Node::to_json)
+            .as_deref(),
+        Some(r#"[{"start":0,"end":32}]"#),
+        "{}",
+        actual.to_json()
+    );
+    let blocks = actual.pointer("/value/reasoning_blocks").unwrap();
+    assert_eq!(
+        blocks.to_json(),
+        r#"[{"span":{"start":0,"end":16},"text":{"start":7,"end":8}},{"span":{"start":16,"end":32},"text":{"start":23,"end":24}}]"#
+    );
+    let definitions = Tools::definitions().unwrap();
+    let json::Value::Array(definitions) = definitions.value else {
+        panic!("tool definitions must be an array")
+    };
+    let definition = definitions
+        .iter()
+        .find(|definition| {
+            definition.get("name").and_then(Node::as_str) == Some("recover_tool_calls")
+        })
+        .unwrap();
+    let schema = Schema::compile(&definition.get("outputSchema").unwrap().to_json()).unwrap();
+    assert!(schema.validate(&actual).unwrap().valid);
+    // The member is required, and a block holds exactly a span and a text.
+    let member = format!(r#""reasoning_blocks":{},"#, blocks.to_json());
+    let json = actual.to_json();
+    assert!(json.contains(&member));
+    let without = json::parse(&json.replace(&member, "")).unwrap();
+    assert!(!schema.validate(&without).unwrap().valid);
+    let extra = json::parse(&json.replace(
+        r#"{"span":{"start":0,"end":16},"text""#,
+        r#"{"extra":1,"span":{"start":0,"end":16},"text""#,
+    ))
+    .unwrap();
+    assert!(!schema.validate(&extra).unwrap().valid);
+    // No reasoning, no blocks.
+    let plain = tools
+        .call("recover_tool_calls", &arguments(QWEN, ""))
+        .unwrap();
+    assert_eq!(
+        plain
+            .pointer("/value/reasoning_blocks")
+            .map(Node::to_json)
+            .as_deref(),
+        Some("[]")
+    );
+    assert!(schema.validate(&plain).unwrap().valid);
     std::fs::remove_dir_all(root).unwrap();
 }
 

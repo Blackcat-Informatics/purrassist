@@ -80,6 +80,7 @@
       "Hi ",
       " done"
     ],
+    "reasoning_text": [],
     "failed_validations": [],
     "ledger_rules": []
   },
@@ -136,6 +137,7 @@
     "Hi ",
     " done"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

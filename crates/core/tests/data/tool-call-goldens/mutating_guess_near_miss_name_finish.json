@@ -63,6 +63,7 @@
   "rejected": [],
   "embedded": [],
   "content": [],
+  "reasoning_text": [],
   "emitted": {
     "calls": 0,
     "skipped": [

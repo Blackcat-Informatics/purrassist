@@ -44,6 +44,7 @@
   "content": [
     "The answer is coming"
   ],
+  "reasoning_text": [],
   "emitted": {
     "calls": 0,
     "skipped": []

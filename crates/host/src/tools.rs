@@ -248,7 +248,13 @@ pub fn validate_json(args: &Node) -> Result<Node, String> {
 /// or `anthropic`), `dialects` (built-in dialect ids; default every
 /// built-in), `stop` (`stop`, `length`, `tool_calls`, `content_filter`,
 /// `unknown`, or `{"stop_sequence": STRING}`), `tool_choice` (an `OpenAI`
-/// form: a string or `{"type":"function",..}`; or an Anthropic object form),
+/// form: a string or `{"type":"function",..}`; or an Anthropic object form,
+/// where `{"type":"tool","name":N,"disable_parallel_tool_use":true}` forces
+/// exactly one call), `tool_choice_strict` (`{"exactly_one": BOOL,
+/// "allow_content": BOOL, "allow_reasoning": BOOL}`, all required: the
+/// options of a strict forced choice, valid only beside a forced
+/// `tool_choice`; `exactly_one: false` contradicts an Anthropic
+/// `disable_parallel_tool_use: true`),
 /// `policy` (`per-tool`, `structural`, `tolerant`), `effects` (tool name to
 /// `read-only` or `mutating`), `reasoning` (`separate`, `separate-open`,
 /// `content`), `ambiguity` (`report`, `reject`), `ids` (`"source"` or
@@ -278,7 +284,9 @@ pub fn validate_json(args: &Node) -> Result<Node, String> {
 ///
 /// # Errors
 /// Returns a message for options that are malformed (an unknown member, an
-/// unknown enumeration value, a malformed `tool_choice`, an unknown or
+/// unknown enumeration value, a malformed `tool_choice`, a
+/// `tool_choice_strict` that is malformed, beside a choice that is not
+/// forced, or contradicting `disable_parallel_tool_use`, an unknown or
 /// repeated dialect) and for declarations that are not valid (not strict
 /// JSON, an invalid definition, a name collision). Exhaustion and
 /// cancellation are never errors: they are an `Unresolved` result whose

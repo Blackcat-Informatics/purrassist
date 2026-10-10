@@ -57,6 +57,9 @@
   "content": [
     "done"
   ],
+  "reasoning_text": [
+    "maybe <tool_call>\n<function=read_file>\n<parameter=path>\na.rs\n</parameter>\n</function>\n</tool_call>"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.xml.framing-newline",

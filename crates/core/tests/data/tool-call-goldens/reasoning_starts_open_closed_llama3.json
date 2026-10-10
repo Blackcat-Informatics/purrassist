@@ -54,6 +54,9 @@
   "content": [
     "Answer."
   ],
+  "reasoning_text": [
+    "hmm <|python_tag|>{\"name\": \"read_file\", \"parameters\": {\"path\": \"x\"}} done"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.reasoning.embedded-call"

@@ -3,13 +3,14 @@
 //! Tool-call rule goldens (A3, A3a–A3q, A13): each fixture under
 //! `tests/data/tool-call-goldens/` pairs a model turn (`input`) with its
 //! tool declarations (`tools_openai`, the exact `OpenAI` `tools` text or
-//! value, or `tools`, a builder specification for aliases, repeatable
+//! value; `tools_mcp`, the exact MCP declaration or `tools/list` text or
+//! value; or `tools`, a builder specification for aliases, repeatable
 //! parameters and unknown-parameter modes adapters cannot express), an
 //! optional custom `grammar`, and the request (`dialects`, `policy`,
 //! `effects`, `stop`, `tool_choice`, `effort`, `reasoning`, `ids`,
 //! `ambiguity`). The outcome, finish, usability verdict and usable-call
-//! counts, calls, rejected attempts, the content (each range as text), calls
-//! embedded in reasoning, failed validations and the recorded rule ids are
+//! counts, calls, rejected attempts, the content and the marker-free
+//! reasoning text (each range as text), calls embedded in reasoning, failed validations and the recorded rule ids are
 //! captured from an actual run rather than
 //! hand-transcribed.
 //!
@@ -35,8 +36,8 @@ use purrassist_core::tool_call::rules::RULES;
 use purrassist_core::tool_call::{
     AmbiguityPolicy, CallOutcome, DeclarationForm, DialectId, DialectSet, Effects, Finish,
     GenerationStop, IdPolicy, ObjectSpec, Param, ParameterSpec, PolicySelection, ReasoningPolicy,
-    RepairPolicy, ToolCall, ToolCalls, ToolChoice, ToolDefinition, ToolRecoveryRequest, ToolSet,
-    UnknownParameters, UnresolvedReason,
+    RepairPolicy, StrictForced, ToolCall, ToolCalls, ToolChoice, ToolDefinition,
+    ToolRecoveryRequest, ToolSet, UnknownParameters, UnresolvedReason,
 };
 use purrassist_core::{AssistResult, Budget, Effort, Governor, Outcome, StopReason};
 use std::path::{Path, PathBuf};
@@ -68,6 +69,7 @@ const CAPTURED: &[&str] = &[
     "rejected",
     "embedded",
     "content",
+    "reasoning_text",
     "readings",
     "failed_validations",
     "ledger_rules",
@@ -215,24 +217,35 @@ fn definition(node: &Node) -> ToolDefinition {
     tool
 }
 
-/// The exact `OpenAI` tools text: a string member verbatim, else the
+/// The exact tools text of `key`: a string member verbatim, else the
 /// value's compact JSON.
-fn openai_text(golden: &Node) -> Option<String> {
+fn tools_text(golden: &Node, key: &str) -> Option<String> {
     golden
-        .get("tools_openai")
+        .get(key)
         .map(|node| node.as_str().map_or_else(|| node.to_json(), str::to_owned))
 }
 
+/// The exact `OpenAI` tools text (`tools_openai`).
+fn openai_text(golden: &Node) -> Option<String> {
+    tools_text(golden, "tools_openai")
+}
+
 fn tool_set(golden: &Node, path: &Path) -> ToolSet {
-    match (openai_text(golden), golden.get("tools")) {
-        (Some(text), None) => ToolSet::from_openai(&text, Budget::default())
+    match (
+        openai_text(golden),
+        tools_text(golden, "tools_mcp"),
+        golden.get("tools"),
+    ) {
+        (Some(text), None, None) => ToolSet::from_openai(&text, Budget::default())
             .unwrap_or_else(|error| panic!("{}: tools_openai: {error}", path.display())),
-        (None, Some(tools)) => {
+        (None, Some(text), None) => ToolSet::from_mcp(&text, Budget::default())
+            .unwrap_or_else(|error| panic!("{}: tools_mcp: {error}", path.display())),
+        (None, None, Some(tools)) => {
             ToolSet::compile(items(tools).iter().map(definition), Budget::default())
                 .unwrap_or_else(|error| panic!("{}: tools: {error}", path.display()))
         }
         _ => panic!(
-            "{}: exactly one of `tools_openai` and `tools` is required",
+            "{}: exactly one of `tools_openai`, `tools_mcp` and `tools` is required",
             path.display()
         ),
     }
@@ -314,6 +327,46 @@ fn input_bytes(golden: &Node, path: &Path) -> Vec<u8> {
         .collect()
 }
 
+/// The `tool_choice` input: the `OpenAI` form, or the Anthropic form when
+/// it is an object whose `type` is not `"function"` (as the host reads it),
+/// with the optional `tool_choice_strict` object
+/// `{exactly_one, allow_content, allow_reasoning}` (all booleans, all
+/// required) applied to a forced choice.
+fn tool_choice(golden: &Node, choice: &Node, path: &Path) -> ToolChoice {
+    let anthropic = matches!(choice.value, Value::Object(_))
+        && choice.get("type").and_then(Node::as_str) != Some("function");
+    let parsed = if anthropic {
+        ToolChoice::from_anthropic(choice)
+    } else {
+        ToolChoice::from_openai(choice)
+    }
+    .unwrap_or_else(|error| panic!("{}: tool_choice: {error:?}", path.display()));
+    let Some(strict) = golden.get("tool_choice_strict") else {
+        return parsed;
+    };
+    let flag = |key: &str| match strict.get(key).map(|node| &node.value) {
+        Some(Value::Bool(flag)) => *flag,
+        other => panic!(
+            "{}: tool_choice_strict.{key} must be a boolean, not {other:?}",
+            path.display()
+        ),
+    };
+    let name = match parsed {
+        ToolChoice::Forced(name) => name,
+        ToolChoice::ForcedStrict(existing) => existing.name,
+        other => panic!(
+            "{}: tool_choice_strict needs a forced tool_choice, not {other:?}",
+            path.display()
+        ),
+    };
+    ToolChoice::ForcedStrict(StrictForced {
+        name,
+        exactly_one: flag("exactly_one"),
+        allow_content: flag("allow_content"),
+        allow_reasoning: flag("allow_reasoning"),
+    })
+}
+
 fn request(golden: &Node, path: &Path, input: &[u8], dialects: DialectSet) -> ToolRecoveryRequest {
     let effort = golden
         .get("effort")
@@ -336,9 +389,12 @@ fn request(golden: &Node, path: &Path, input: &[u8], dialects: DialectSet) -> To
         request = request.stop(stop_of(stop));
     }
     if let Some(choice) = golden.get("tool_choice") {
-        request = request.tool_choice(
-            ToolChoice::from_openai(choice)
-                .unwrap_or_else(|error| panic!("{}: tool_choice: {error:?}", path.display())),
+        request = request.tool_choice(tool_choice(golden, choice, path));
+    } else {
+        assert!(
+            golden.get("tool_choice_strict").is_none(),
+            "{}: `tool_choice_strict` needs a forced `tool_choice`",
+            path.display()
         );
     }
     if let Some(reasoning) = golden.get("reasoning").and_then(Node::as_str) {
@@ -575,6 +631,25 @@ fn reading_fields(output: &[u8], calls: &ToolCalls) -> Vec<Member> {
                     .iter()
                     .map(|range| {
                         let bytes = &output[range.clone()];
+                        string(
+                            std::str::from_utf8(bytes)
+                                .map_or_else(|_| format!("{bytes:?}"), str::to_owned),
+                        )
+                    })
+                    .collect(),
+            )),
+        ),
+        // The marker-free text of each reasoning block, one entry per block
+        // (`ToolCalls::reasoning_blocks`, never merged), as text (bytes when
+        // not UTF-8). Not the `reasoning` fixture input, the policy.
+        member(
+            "reasoning_text",
+            Node::new(Value::Array(
+                calls
+                    .reasoning_blocks
+                    .iter()
+                    .map(|block| {
+                        let bytes = &output[block.text.clone()];
                         string(
                             std::str::from_utf8(bytes)
                                 .map_or_else(|_| format!("{bytes:?}"), str::to_owned),
@@ -1160,6 +1235,159 @@ fn near_miss_name_structural() {
     assert_eq!(reading(&result).usable_accepting_guesses().len(), 0);
 }
 
+/// R11 (G19): the arguments and rules of the single call of golden `name`,
+/// after asserting the byte-exact render-back of its MCP declaration in all
+/// three wire forms (the `parameters` text is embedded verbatim).
+fn mcp_golden(name: &str) -> (Golden, AssistResult<ToolCalls>) {
+    let (golden, result) = golden(name);
+    let source = tools_text(&golden.node, "tools_mcp").expect("tools_mcp text");
+    let listing = parse(&source).expect("tools json");
+    let declaration = &items(listing.get("tools").expect("tools"))[0];
+    let span = declaration.span.clone().expect("declaration span");
+    assert_eq!(
+        golden
+            .tools
+            .render_declaration("search", DeclarationForm::Mcp)
+            .expect("rendered")
+            .as_bytes(),
+        &source.as_bytes()[span],
+        "{name}: MCP render-back"
+    );
+    let schema = declaration
+        .get("inputSchema")
+        .expect("inputSchema")
+        .to_json();
+    for (form, wrapped) in [
+        (
+            DeclarationForm::OpenAi,
+            format!(
+                r#"{{"type":"function","function":{{"name":"search","description":"Search the index.","parameters":{schema}}}}}"#
+            ),
+        ),
+        (
+            DeclarationForm::Anthropic,
+            format!(
+                r#"{{"name":"search","description":"Search the index.","input_schema":{schema}}}"#
+            ),
+        ),
+    ] {
+        assert_eq!(
+            golden
+                .tools
+                .render_declaration("search", form)
+                .expect("rendered"),
+            wrapped,
+            "{name}: {form:?} render-back"
+        );
+    }
+    (golden, result)
+}
+
+/// R11 (G19): a root `$ref` MCP declaration (the FastMCP/pydantic shape)
+/// projects its target's parameters. Expectations are written here, not
+/// taken from the blessed files.
+#[test]
+fn mcp_root_ref_calls_resolve_with_typed_arguments() {
+    for (name, arguments, rules, outcome) in [
+        // Qwen3-Coder XML: `limit` decoded to the declared integer, `tags`
+        // read as the JSON array it spells.
+        (
+            "mcp_root_ref_qwen3_xml_resolved",
+            r#"{"query":"rust lifetimes","limit":5,"tags":["a","b"]}"#,
+            &[][..],
+            CallOutcome::Resolved,
+        ),
+        (
+            "mcp_root_ref_hermes_json_resolved",
+            r#"{"query":"rust","limit":3,"mode":"fast"}"#,
+            &[][..],
+            CallOutcome::Resolved,
+        ),
+        // 2020-12: the root's `extra` (boolean) and the target's `query`;
+        // `limit` is declared by both, typed by the exact schema.
+        (
+            "mcp_root_defs_2020_12_resolved",
+            r#"{"extra":true,"query":"q","limit":2}"#,
+            &["tool_call.value.schema-typed"][..],
+            CallOutcome::Resolved,
+        ),
+        (
+            "mcp_root_all_of_ref_resolved",
+            r#"{"query":"q","limit":7}"#,
+            &[][..],
+            CallOutcome::Resolved,
+        ),
+        // The union of branch names; `count` is typed by the exact schema.
+        (
+            "mcp_root_any_of_union_resolved",
+            r#"{"url":"http://example.com","count":4}"#,
+            &["tool_call.value.schema-typed"][..],
+            CallOutcome::Resolved,
+        ),
+    ] {
+        let (_, result) = mcp_golden(name);
+        let call = the_call(&result);
+        assert_eq!(call.outcome, outcome, "{name}");
+        assert_eq!(call.arguments.to_json(), arguments, "{name}");
+        assert_eq!(rules_of(call), rules, "{name}");
+        assert!(!has_guess(call), "{name}");
+        assert_eq!(reading(&result).usable().len(), 1, "{name}");
+    }
+}
+
+/// R11 (G19): a misspelled parameter name is repaired through the root
+/// `$ref` exactly as for the inline twin, in both prompt dialects.
+#[test]
+fn mcp_root_ref_misspelled_parameter_repairs_like_inline() {
+    for (via_ref, inline) in [
+        (
+            "mcp_root_ref_misspelled_parameter_repaired",
+            "mcp_inline_misspelled_parameter_repaired",
+        ),
+        (
+            "mcp_root_ref_misspelled_qwen_parameter_repaired",
+            "mcp_inline_misspelled_qwen_parameter_repaired",
+        ),
+    ] {
+        let (_, referenced) = mcp_golden(via_ref);
+        let (_, direct) = mcp_golden(inline);
+        let (referenced, direct) = (the_call(&referenced), the_call(&direct));
+        assert_eq!(
+            referenced.arguments.to_json(),
+            r#"{"query":"rust"}"#,
+            "{via_ref}"
+        );
+        assert_eq!(direct.arguments.to_json(), referenced.arguments.to_json());
+        assert_eq!(rules_of(referenced), ["json.key.match"], "{via_ref}");
+        assert_eq!(rules_of(direct), rules_of(referenced));
+        assert_eq!(referenced.outcome, direct.outcome);
+        assert!(has_guess(referenced), "{via_ref}: a renamed key is a guess");
+    }
+}
+
+/// R11 (G19): a root `$ref` that names no object schema keeps the
+/// pass-through projection: no repair, the arguments verbatim, and the
+/// exact schema's verdict.
+#[test]
+fn mcp_root_ref_unprojectable_stays_pass_through() {
+    let (golden, result) = mcp_golden("mcp_root_ref_unprojectable_stays_pass_through");
+    let call = the_call(&result);
+    assert_eq!(call.arguments.to_json(), r#"{"qurey":"rust"}"#);
+    assert_eq!(rules_of(call), ["tool_call.parameter.pass-through"]);
+    assert_eq!(
+        call.outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::SchemaValidation
+        }
+    );
+    let shape = golden.tools.argument_shape("search").expect("shape");
+    assert_eq!(shape.arguments.parameters.len(), 0);
+    assert_eq!(
+        shape.arguments.unknown_parameters,
+        UnknownParameters::PassThrough
+    );
+}
+
 #[test]
 fn adapter_anyof_ref_verbatim_and_enforced() {
     let (golden, result) = golden("adapter_anyof_ref_verbatim_and_enforced");
@@ -1228,6 +1456,257 @@ fn forced_tool_choice_violated() {
     assert!(!reading(&result).tool_choice.passed);
 }
 
+/// A strict forced run that must fail its tool-choice check: the whole-turn
+/// contract (finish `Unresolved`, verdict `NothingUsable`, nothing emitted)
+/// and the strict constraint among the failed validations.
+fn assert_strict_failed(name: &str, constraint: &str) -> ToolCalls {
+    let (_, result) = golden(name);
+    let calls = reading(&result).clone();
+    assert!(!calls.tool_choice.passed, "{name}: {calls:#?}");
+    assert_eq!(calls.tool_choice.choice.constraint(), constraint, "{name}");
+    assert!(
+        result
+            .receipt
+            .validations
+            .iter()
+            .any(|validation| !validation.passed && validation.constraint == constraint),
+        "{name}: {:#?}",
+        result.receipt.validations
+    );
+    assert_eq!(calls.finish, Finish::Unresolved, "{name}");
+    assert_eq!(calls.verdict().code(), "nothing_usable", "{name}");
+    assert!(calls.emitted_calls().is_empty(), "{name}");
+    // A failed check leaves nothing to run (A3): both counts are zero.
+    assert!(
+        calls.usable().is_empty() && calls.usable_accepting_guesses().is_empty(),
+        "{name}"
+    );
+    calls
+}
+
+#[test]
+fn forced_strict_two_calls() {
+    let calls = assert_strict_failed(
+        "forced_strict_two_calls",
+        "tool_choice=forced[exactly-one,no-content]:read_file",
+    );
+    assert_eq!(calls.calls.len(), 2);
+    assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
+    assert_eq!(
+        calls.calls[1].outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::ToolChoiceCardinality
+        }
+    );
+    assert_eq!(
+        calls.tool_choice.diagnostics.len(),
+        1,
+        "{:?}",
+        calls.tool_choice.diagnostics
+    );
+    assert!(calls.tool_choice.diagnostics[0].contains("1 extra call"));
+}
+
+#[test]
+fn forced_strict_call_plus_prose() {
+    let calls = assert_strict_failed(
+        "forced_strict_call_plus_prose",
+        "tool_choice=forced[exactly-one,no-content]:read_file",
+    );
+    // The call itself is fine; the prose is what fails the choice.
+    assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
+    assert!(
+        calls
+            .tool_choice
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.contains("content")),
+        "{:?}",
+        calls.tool_choice.diagnostics
+    );
+    assert!(!calls.tool_choice.diagnostics.is_empty(), "{calls:#?}");
+}
+
+#[test]
+fn forced_strict_single_call_passes() {
+    let (_, result) = golden("forced_strict_single_call_passes");
+    let calls = reading(&result);
+    assert!(calls.tool_choice.passed, "{:?}", calls.tool_choice);
+    assert_eq!(
+        calls.tool_choice.choice.constraint(),
+        "tool_choice=forced[exactly-one,no-content]:read_file"
+    );
+    assert_eq!(calls.finish, Finish::Calls);
+    assert_eq!(calls.verdict().code(), "run");
+    assert_eq!(calls.emitted_calls().len(), 1);
+    // Whitespace-only content frames the call.
+    assert_eq!(calls.content.len(), 2);
+    assert!(
+        result
+            .receipt
+            .validations
+            .iter()
+            .all(|validation| validation.passed)
+    );
+}
+
+#[test]
+fn forced_strict_non_ascii_whitespace_is_content() {
+    // U+00A0 after the call is content, not framing whitespace.
+    let (golden, _) = golden("forced_strict_single_call_passes");
+    let mut input = golden.input.clone();
+    input.truncate(input.len() - 1);
+    input.extend_from_slice("\u{a0}".as_bytes());
+    let result = golden.tools.recover(&input, &golden.request);
+    let calls = reading(&result);
+    assert!(!calls.tool_choice.passed, "{calls:#?}");
+    assert_eq!(calls.finish, Finish::Unresolved);
+    assert!(calls.emitted_calls().is_empty(), "{calls:#?}");
+    assert!(
+        calls
+            .tool_choice
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("content")),
+        "{:?}",
+        calls.tool_choice.diagnostics
+    );
+    // ASCII whitespace of every kind still passes.
+    let mut input = golden.input.clone();
+    input.truncate(input.len() - 1);
+    input.extend_from_slice(b" \t\r\n\x0c");
+    let result = golden.tools.recover(&input, &golden.request);
+    assert!(reading(&result).tool_choice.passed);
+}
+
+#[test]
+fn forced_strict_tool_result_is_content() {
+    // A tool result the model wrote after its call is content, so it fails
+    // no-content even though no prose surrounds the call.
+    let (golden, _) = golden("forced_strict_single_call_passes");
+    let mut input = golden.input.clone();
+    input.extend_from_slice(b"<tool_response>\n{\"text\":\"a\"}\n</tool_response>\n");
+    let result = golden.tools.recover(&input, &golden.request);
+    let calls = reading(&result);
+    assert_eq!(calls.calls.len(), 1, "{calls:#?}");
+    assert!(calls.rejected.is_empty(), "{calls:#?}");
+    assert!(!calls.tool_choice.passed, "{calls:#?}");
+    assert_eq!(
+        calls.tool_choice.diagnostics.len(),
+        1,
+        "{:?}",
+        calls.tool_choice.diagnostics
+    );
+    assert!(
+        calls.tool_choice.diagnostics[0].contains("content"),
+        "{:?}",
+        calls.tool_choice.diagnostics
+    );
+    assert_eq!(calls.finish, Finish::Unresolved);
+    assert!(calls.emitted_calls().is_empty(), "{calls:#?}");
+}
+
+#[test]
+fn forced_strict_reasoning_rejected() {
+    let calls = assert_strict_failed(
+        "forced_strict_reasoning_rejected",
+        "tool_choice=forced[exactly-one,no-content,no-reasoning]:read_file",
+    );
+    assert_eq!(calls.reasoning.len(), 1);
+    assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
+    // Only the reasoning fails: the remaining content is a newline.
+    assert_eq!(calls.tool_choice.diagnostics.len(), 1);
+    assert!(calls.tool_choice.diagnostics[0].contains("reasoning"));
+}
+
+/// A second call attempt that is rejected (a `read_file` body with trailing
+/// junk) fails every strict option at once: it is a call beyond the one
+/// (`exactly-one`) and bytes outside it (`no-content`), so the turn is
+/// `nothing_usable` with nothing emitted though the first call is valid.
+#[test]
+fn forced_strict_rejected_second_attempt() {
+    let calls = assert_strict_failed(
+        "forced_strict_rejected_second_attempt",
+        "tool_choice=forced[exactly-one,no-content,no-reasoning]:read_file",
+    );
+    assert_eq!(calls.calls.len(), 1);
+    assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
+    assert_eq!(calls.rejected.len(), 1);
+    assert!(
+        calls
+            .tool_choice
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.starts_with("1 rejected call attempt beyond")),
+        "{:?}",
+        calls.tool_choice.diagnostics
+    );
+    assert!(
+        calls
+            .tool_choice
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.starts_with("rejected call attempt at bytes 75..163")),
+        "{:?}",
+        calls.tool_choice.diagnostics
+    );
+}
+
+/// The Anthropic exactly-one form allows content, but an attempt in a
+/// dialect that is not supported is still a call attempt beyond the one
+/// call: the turn fails although the attempt's bytes are also content.
+#[test]
+fn forced_strict_anthropic_unsupported_dialect_attempt() {
+    let calls = assert_strict_failed(
+        "forced_strict_anthropic_unsupported_dialect_attempt",
+        "tool_choice=forced[exactly-one]:read_file",
+    );
+    assert_eq!(calls.calls.len(), 1);
+    assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
+    assert_eq!(calls.rejected.len(), 1);
+    assert!(
+        matches!(
+            calls.rejected[0].reason,
+            purrassist_core::tool_call::Rejection::UnsupportedDialect { .. }
+        ),
+        "{:?}",
+        calls.rejected
+    );
+    assert_eq!(calls.tool_choice.diagnostics.len(), 1);
+    assert!(calls.tool_choice.diagnostics[0].starts_with("1 rejected call attempt beyond"));
+}
+
+#[test]
+fn forced_strict_anthropic_disable_parallel() {
+    let calls = assert_strict_failed(
+        "forced_strict_anthropic_disable_parallel",
+        "tool_choice=forced[exactly-one]:read_file",
+    );
+    assert_eq!(calls.calls.len(), 2);
+    assert_eq!(
+        calls.calls[1].outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::ToolChoiceCardinality
+        }
+    );
+    // Content is allowed by this form: the prose is not what fails.
+    assert!(!calls.content.is_empty(), "{calls:#?}");
+    assert!(
+        calls
+            .tool_choice
+            .diagnostics
+            .iter()
+            .all(|diagnostic| !diagnostic.contains("content")),
+        "{:?}",
+        calls.tool_choice.diagnostics
+    );
+    let (_, result) = golden("forced_strict_anthropic_one_call_with_prose_passes");
+    let calls = reading(&result);
+    assert!(calls.tool_choice.passed, "{:?}", calls.tool_choice);
+    assert_eq!(calls.finish, Finish::Calls);
+    assert_eq!(calls.emitted_calls().len(), 1);
+}
+
 fn assert_parameter_boundary(name: &str, expected: &str) {
     let (_, result) = golden(name);
     let call = the_call(&result);
@@ -1279,6 +1758,487 @@ fn nested_parameter_object_unclosed() {
     );
     assert!(rules_of(call).contains(&"tool_call.markup.nested-parameter"));
     assert!(rules_of(call).contains(&"tool_call.markup.parameter-closed-by-element"));
+}
+
+/// Assert a nested array-of-objects golden: one resolved call holding
+/// `arguments`, whose rules include every id in `rules` (with counts).
+fn assert_nested_items(name: &str, arguments: &str, rules: &[(&str, usize)]) {
+    let (_, result) = golden(name);
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{name}: {call:#?}");
+    assert_eq!(call.arguments.to_json(), arguments, "{name}");
+    assert!(call.alternatives.is_empty(), "{name}: {call:#?}");
+    let used = rules_of(call);
+    for (rule, count) in rules {
+        assert_eq!(
+            used.iter().filter(|id| **id == *rule).count(),
+            *count,
+            "{name}: {rule} in {used:?}"
+        );
+    }
+    for absent in [
+        "json.syntax.bare-string",
+        "tool_call.parameter.pass-through",
+        "tool_call.markup.stray-closer",
+    ] {
+        assert!(!used.contains(&absent), "{name}: {absent} in {used:?}");
+    }
+}
+
+const OUTFITS: &str = r#"{"outfits":[{"wearer":"Alice","garments":["a red coat"]},{"wearer":"Bob","garments":["a grey scarf"]}]}"#;
+
+#[test]
+fn xml_array_nested_object_items() {
+    // Issue #8 section 1: repeated nested elements are an array of objects.
+    assert_nested_items(
+        "xml_array_nested_object_items",
+        OUTFITS,
+        &[
+            ("tool_call.markup.nested-parameter", 2),
+            ("tool_call.xml.array-item", 2),
+            ("tool_call.parameter.collect", 1),
+        ],
+    );
+}
+
+#[test]
+fn xml_array_nested_object_items_in_object() {
+    assert_nested_items(
+        "xml_array_nested_object_items_in_object",
+        r#"{"plan":{"cast":["Alice","Bob"],"outfits":[{"wearer":"Alice","garments":["a red coat"]},{"wearer":"Bob","garments":["a grey scarf"]}]}}"#,
+        &[
+            ("tool_call.markup.nested-parameter", 3),
+            ("tool_call.xml.array-item", 2),
+            ("tool_call.parameter.collect", 1),
+        ],
+    );
+}
+
+#[test]
+fn xml_array_nested_object_items_mixed() {
+    // A JSON-object item and a nested item collect in source order.
+    assert_nested_items(
+        "xml_array_nested_object_items_mixed",
+        OUTFITS,
+        &[
+            ("tool_call.markup.nested-parameter", 1),
+            ("tool_call.xml.array-item", 2),
+            ("tool_call.parameter.collect", 1),
+        ],
+    );
+}
+
+#[test]
+fn xml_array_nested_object_item_unclosed() {
+    assert_nested_items(
+        "xml_array_nested_object_item_unclosed",
+        OUTFITS,
+        &[
+            ("tool_call.markup.nested-parameter", 2),
+            ("tool_call.markup.parameter-closed-by-element", 1),
+            ("tool_call.xml.array-item", 2),
+        ],
+    );
+}
+
+#[test]
+fn xml_array_nested_object_item_unclosed_before_sibling() {
+    assert_nested_items(
+        "xml_array_nested_object_item_unclosed_before_sibling",
+        OUTFITS,
+        &[
+            ("tool_call.markup.nested-parameter", 2),
+            ("tool_call.markup.missing-parameter-close", 1),
+            ("tool_call.xml.array-item", 2),
+            ("tool_call.parameter.collect", 1),
+        ],
+    );
+}
+
+#[test]
+fn xml_array_unmodeled_items_nested() {
+    assert_nested_items(
+        "xml_array_unmodeled_items_nested",
+        OUTFITS,
+        &[
+            ("tool_call.markup.nested-parameter", 2),
+            ("tool_call.xml.array-item", 2),
+            ("tool_call.value.schema-typed", 2),
+        ],
+    );
+}
+
+#[test]
+fn xml_array_string_item_keeps_nested_tags() {
+    // An array of strings never nests: the tags are the item's text.
+    let (_, result) = golden("xml_array_string_item_keeps_nested_tags");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"tags":["<parameter=wearer>Alice</parameter>"]}"#
+    );
+    assert!(!rules_of(call).contains(&"tool_call.markup.nested-parameter"));
+    assert!(rules_of(call).contains(&"tool_call.value.closer-in-value"));
+}
+
+#[test]
+fn xml_array_nested_object_same_name_member() {
+    // Limit: an item scope declaring the array's own name owns the inner
+    // opener, so it is the item's member (a child), not a sibling item.
+    let (_, result) = golden("xml_array_nested_object_same_name_member");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"children":[{"name":"a","children":[{"name":"b"}]}]}"#
+    );
+    let used = rules_of(call);
+    let count = |rule: &str| used.iter().filter(|id| **id == rule).count();
+    assert_eq!(count("tool_call.markup.nested-parameter"), 2);
+    assert_eq!(count("tool_call.xml.array-item"), 2);
+    assert_eq!(count("tool_call.parameter.collect"), 0);
+    assert_eq!(count("tool_call.markup.missing-parameter-close"), 0);
+}
+
+/// Count of `rule` among the rules a call recorded.
+fn rule_count(call: &ToolCall, rule: &str) -> usize {
+    rules_of(call).iter().filter(|id| **id == rule).count()
+}
+
+#[test]
+fn xml_array_recursive_ref_items_nest() {
+    // Issue #8 section 1, gap G2: a recursive `$ref` item takes the member
+    // names its exact schema declares from the scope graph, so the inner
+    // opener of the array's own name is the item's child, never the next
+    // sibling. The input is balanced: no repair is needed (the engine used
+    // to read it as two siblings with a missing and a stray closer).
+    let (_, result) = golden("xml_array_recursive_ref_items_nest");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"children":[{"name":"a","children":[{"name":"b"}]}]}"#
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.nested-parameter"), 2);
+    assert_eq!(rule_count(call, "tool_call.xml.array-item"), 2);
+    assert_eq!(
+        rule_count(call, "tool_call.markup.missing-parameter-close"),
+        0
+    );
+    assert_eq!(
+        rule_count(call, "tool_call.markup.unmodeled-scope-boundary"),
+        0
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.stray-closer"), 0);
+    assert_eq!(rule_count(call, "tool_call.parameter.collect"), 0);
+    assert_eq!(reading(&result).verdict().code(), "run");
+}
+
+#[test]
+fn xml_array_recursive_ref_items_equal_the_inline_schema() {
+    // The same bytes under the inline (modeled) twin of the recursive
+    // schema read identically: same arguments, same rules.
+    let (golden, result) = golden("xml_array_recursive_ref_items_nest");
+    let inline = ToolSet::from_openai(
+        r#"[{"type":"function","function":{"name":"tree","parameters":{"type":"object","properties":{"children":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"children":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}},"required":["name"]}}},"required":["children"]}}}]"#,
+        Budget::default(),
+    )
+    .expect("inline twin");
+    let twin = inline.recover(&golden.input, &golden.request);
+    let (call, twin) = (the_call(&result), the_call(&twin));
+    assert_eq!(call.arguments.to_json(), twin.arguments.to_json());
+    assert_eq!(rules_of(call), rules_of(twin));
+}
+
+#[test]
+fn xml_array_ref_items_repeated_member_collects() {
+    // Repeated array members inside a `$ref` item collect into one array,
+    // in source order, as the inline schema's do.
+    let (_, result) = golden("xml_array_ref_items_repeated_member_collects");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"children":[{"name":"a","children":[{"name":"b"},{"name":"c"}]}]}"#
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.nested-parameter"), 3);
+    assert_eq!(rule_count(call, "tool_call.xml.array-item"), 3);
+    // The merge is reported, as the inline twin's is: once, for the member
+    // that occurred twice.
+    assert_eq!(rule_count(call, "tool_call.parameter.collect"), 1);
+    assert_eq!(
+        rule_count(call, "tool_call.markup.missing-parameter-close"),
+        0
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.stray-closer"), 0);
+}
+
+/// The `$ref` and inline forms of one schema record the same rules for the
+/// same bytes, repeated array members included: collection has one source of
+/// truth (resolution's `tool_call.parameter.collect`), fed by the codec's
+/// merge marker under a scope the typed shape does not declare.
+#[test]
+fn xml_array_ref_items_and_inline_twin_record_the_same_rules() {
+    let (golden, _) = golden("xml_array_ref_items_repeated_member_collects");
+    let inline = ToolSet::from_openai(
+        r#"[{"type":"function","function":{"name":"tree","parameters":{"type":"object","properties":{"children":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"children":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}},"required":["name"]}}},"required":["children"]}}}]"#,
+        Budget::default(),
+    )
+    .expect("inline twin");
+    let text = std::str::from_utf8(&golden.input).expect("utf-8 input");
+    let three = text.replace(
+        "<parameter=name>c</parameter></parameter>",
+        "<parameter=name>c</parameter></parameter><parameter=children><parameter=name>d</parameter></parameter>",
+    );
+    assert_ne!(three, text);
+    let destinations = |call: &ToolCall| -> Vec<String> {
+        call.repairs
+            .evidence
+            .iter()
+            .filter(|evidence| evidence.rule == "tool_call.parameter.collect")
+            .map(|evidence| evidence.destination.clone())
+            .collect()
+    };
+    // Two occurrences, then three: one collect each, at the same place.
+    for input in [text, three.as_str()] {
+        let reference = golden.tools.recover(input.as_bytes(), &golden.request);
+        let twin = inline.recover(input.as_bytes(), &golden.request);
+        let (reference, twin) = (the_call(&reference), the_call(&twin));
+        assert_eq!(reference.outcome, CallOutcome::Resolved, "{reference:#?}");
+        assert_eq!(reference.arguments.to_json(), twin.arguments.to_json());
+        assert_eq!(rules_of(reference), rules_of(twin), "{input}");
+        assert_eq!(rule_count(reference, "tool_call.parameter.collect"), 1);
+        assert_eq!(destinations(reference), destinations(twin));
+    }
+}
+
+#[test]
+fn xml_array_ref_items_member_shares_outer_name() {
+    // Gap G2 (b): a `$ref` item member named like an outer parameter stays
+    // inside its item (it used to be hoisted to the top level).
+    let (_, result) = golden("xml_array_ref_items_member_shares_outer_name");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"name":"party","outfits":[{"name":"Alice","size":3},{"name":"Bob","size":4}]}"#
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.nested-parameter"), 2);
+    assert_eq!(rule_count(call, "tool_call.xml.array-item"), 2);
+    assert_eq!(
+        rule_count(call, "tool_call.markup.missing-parameter-close"),
+        0
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.stray-closer"), 0);
+    assert_eq!(reading(&result).verdict().code(), "run");
+}
+
+#[test]
+fn xml_array_ref_items_keep_path_not_hijacked() {
+    // Security review R1: in rm(path, keep: array of $ref{path}) the keep
+    // item's `path` stays inside the item; the top-level path is the one
+    // the model wrote as such.
+    let (_, result) = golden("xml_array_ref_items_keep_path_not_hijacked");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"path":"/tmp/x","keep":[{"path":"/home/user/important"}]}"#
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.nested-parameter"), 1);
+    assert_eq!(rule_count(call, "tool_call.xml.array-item"), 1);
+    assert_eq!(
+        rule_count(call, "tool_call.markup.missing-parameter-close"),
+        0
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.stray-closer"), 0);
+}
+
+#[test]
+fn xml_array_ref_items_outer_array_collision() {
+    // Completion audit F1 repro 2: each note's `tags` stays inside its
+    // note (one item of the note's tags); the outer `tags` is unaffected.
+    let (_, result) = golden("xml_array_ref_items_outer_array_collision");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"tags":["work"],"notes":[{"text":"buy milk","tags":["home"]}]}"#
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.nested-parameter"), 1);
+    assert_eq!(rule_count(call, "tool_call.xml.array-item"), 3);
+    assert_eq!(
+        rule_count(call, "tool_call.markup.missing-parameter-close"),
+        0
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.stray-closer"), 0);
+}
+
+#[test]
+fn xml_object_ref_param_member_shares_outer_name() {
+    // The single `$ref` object parameter (same root cause, pre-existing):
+    // its members come from the same scope graph, so `cfg.path` stays in
+    // `cfg` and is never the top-level `path`.
+    let (_, result) = golden("xml_object_ref_param_member_shares_outer_name");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"path":"/a","cfg":{"path":"/b","mode":"x"}}"#
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.nested-parameter"), 1);
+    assert_eq!(
+        rule_count(call, "tool_call.markup.missing-parameter-close"),
+        0
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.stray-closer"), 0);
+}
+
+#[test]
+fn xml_array_anyof_items_union_nest() {
+    // Union nesting rule: an `anyOf` item scope is the union of its object
+    // branches' members, and the item nests because an object branch
+    // declares it; typing stays with the exact schema.
+    let (_, result) = golden("xml_array_anyof_items_union_nest");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"path":"/a","keep":[{"path":"/b","n":3}]}"#
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.nested-parameter"), 1);
+    assert_eq!(rule_count(call, "tool_call.xml.array-item"), 1);
+    assert_eq!(rule_count(call, "tool_call.value.schema-typed"), 1);
+    assert_eq!(
+        rule_count(call, "tool_call.markup.missing-parameter-close"),
+        0
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.stray-closer"), 0);
+}
+
+#[test]
+fn xml_unmodeled_opaque_scope_boundary() {
+    // Plan review F2: an item whose schema names no member has unknown
+    // membership, so closing it at the opener of `path` (an enclosing
+    // scope's parameter) is a guess. The hoisted path must never run on a
+    // mutating tool: the operation is a best guess and nothing is usable.
+    let (golden, result) = golden("xml_unmodeled_opaque_scope_boundary");
+    let Outcome::BestGuess(calls) = &result.outcome else {
+        panic!("expected a best guess, got {:#?}", result.outcome);
+    };
+    let call = &calls.calls[0];
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"keep":[{}],"path":"/home/user/important"}"#
+    );
+    assert_eq!(
+        rule_count(call, "tool_call.markup.unmodeled-scope-boundary"),
+        1
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.stray-closer"), 1);
+    assert_eq!(
+        rule_count(call, "tool_call.markup.missing-parameter-close"),
+        0
+    );
+    assert!(has_guess(call), "{call:#?}");
+    assert_eq!(call.effects, Some(Effects::Mutating));
+    assert_eq!(calls.verdict().code(), "nothing_usable");
+    assert!(calls.usable().is_empty() && calls.usable_accepting_guesses().is_empty());
+    // The default policy of a mutating tool (`Structural`) does not admit
+    // the guessed rule; under `Tolerant` the call itself is a best guess,
+    // and still not usable on a mutating tool.
+    assert!(is_unresolved(&call.outcome), "{call:#?}");
+    let tolerant = golden.tools.recover(
+        &golden.input,
+        &golden
+            .request
+            .clone()
+            .policy(PolicySelection::All(RepairPolicy::Tolerant)),
+    );
+    let tolerant = the_call(&tolerant);
+    assert_eq!(tolerant.outcome, CallOutcome::BestGuess, "{tolerant:#?}");
+    assert_eq!(
+        tolerant.arguments.to_json(),
+        r#"{"keep":[{}],"path":"/home/user/important"}"#
+    );
+    assert!(!tolerant.is_usable_accepting_guesses());
+}
+
+#[test]
+fn xml_array_nested_object_items_keep_their_own_spans() {
+    // Each item's values point at its own occurrence, never at item 0.
+    let (golden, result) = golden("xml_array_nested_object_items");
+    let call = the_call(&result);
+    for (pointer, text) in [
+        ("/outfits/0/wearer", "Alice"),
+        ("/outfits/1/wearer", "Bob"),
+        ("/outfits/0/garments/0", "a red coat"),
+        ("/outfits/1/garments/0", "a grey scarf"),
+    ] {
+        let span = call
+            .arguments
+            .pointer(pointer)
+            .and_then(|node| node.span.clone())
+            .unwrap_or_else(|| panic!("{pointer} has a span"));
+        assert!(
+            std::str::from_utf8(&golden.input[span.clone()])
+                .unwrap()
+                .contains(text),
+            "{pointer}: {span:?}"
+        );
+    }
+    let bob = call.arguments.pointer("/outfits/1/wearer").unwrap();
+    let bob = bob.span.clone().unwrap();
+    assert_eq!(
+        std::str::from_utf8(&golden.input[bob]).unwrap().trim(),
+        "Bob"
+    );
+    let alice = call.arguments.pointer("/outfits/0/wearer").unwrap();
+    let alice = alice.span.clone().unwrap();
+    assert_eq!(
+        std::str::from_utf8(&golden.input[alice]).unwrap().trim(),
+        "Alice"
+    );
+}
+
+#[test]
+fn xml_array_nested_object_item_missing_required_is_not_resolved() {
+    // The item schema's `required: [wearer]` still binds a nested item.
+    let (golden, _) = golden("xml_array_nested_object_items");
+    let text = std::str::from_utf8(&golden.input).unwrap();
+    let broken = text.replace("<parameter=wearer>\nBob\n</parameter>\n", "");
+    assert_ne!(broken, text);
+    let result = golden.tools.recover(broken.as_bytes(), &golden.request);
+    for call in &reading(&result).calls {
+        assert_ne!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    }
+    assert_eq!(reading(&result).usable().len(), 0);
+}
+
+#[test]
+fn xml_array_nested_object_item_fault_names_its_own_item() {
+    // An undecodable value in the second occurrence is reported at
+    // `/xs/1/n`, not at the first occurrence's `/xs/0/n`.
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("f").param(
+            "xs",
+            Param::array(Param::object(
+                ObjectSpec::new().param("n", Param::integer()),
+            )),
+        )],
+        Budget::default(),
+    )
+    .unwrap();
+    let input = "<tool_call>\n<function=f>\n<parameter=xs>\n<parameter=n>\n1\n</parameter>\n</parameter>\n<parameter=xs>\n<parameter=n>\n{{{ 1 2 zz\n</parameter>\n</parameter>\n</function>\n</tool_call>";
+    let result = tools.recover(input.as_bytes(), &ToolRecoveryRequest::default());
+    let call = the_call(&result);
+    match &call.outcome {
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::InvalidArgument { pointer, .. },
+        } => assert_eq!(pointer, "/xs/1/n", "{call:#?}"),
+        other => panic!("expected InvalidArgument, got {other:?}"),
+    }
 }
 
 #[test]
@@ -1338,6 +2298,34 @@ fn repeated_scalar_both_readings() {
     readings.sort();
     readings.dedup();
     assert_eq!(readings, [r#"{"path":"a"}"#, r#"{"path":"b"}"#]);
+}
+
+/// G6: with the tool known only after name resolution (`Nums` for `nums`),
+/// each repeated scalar item's `decode-typed` evidence cites that item's own
+/// bytes, found by span, not the first occurrence's (both share the source
+/// pointer `/xs`).
+#[test]
+fn xml_repeated_scalar_items_near_miss_tool_spans() {
+    let (golden, result) = golden("xml_repeated_scalar_items_near_miss_tool_spans");
+    let call = the_call(&result);
+    assert_eq!(call.arguments.to_json(), r#"{"xs":[11,2222]}"#, "{call:#?}");
+    let input = std::str::from_utf8(&golden.input).expect("utf-8 input");
+    let (first, last) = (input.find("11").unwrap(), input.find("2222").unwrap());
+    assert_eq!((first, last), (43, 74), "the fixture's own offsets");
+    let span = |destination: &str| -> Vec<(usize, usize)> {
+        call.repairs
+            .evidence
+            .iter()
+            .filter(|evidence| evidence.rule == "tool_call.value.decode-typed")
+            .filter(|evidence| evidence.destination.ends_with(destination))
+            .map(|evidence| {
+                let span = evidence.span.as_ref().expect("a source span");
+                (span.bytes.start, span.bytes.end)
+            })
+            .collect()
+    };
+    assert_eq!(span("/arguments/xs/0"), [(43, 45)]);
+    assert_eq!(span("/arguments/xs/1"), [(74, 78)]);
 }
 
 #[test]
@@ -3023,6 +4011,101 @@ fn anthropic_tool_use() {
     assert_eq!(calls.finish, Finish::Unresolved);
 }
 
+/// A redacted-thinking block's text is the opaque encrypted payload, not
+/// reasoning prose.
+#[test]
+fn anthropic_redacted_thinking_text_is_the_opaque_payload() {
+    let (golden, result) = golden("anthropic_redacted_thinking");
+    let blocks = &reading(&result).reasoning_blocks;
+    assert_eq!(blocks.len(), 1);
+    let texts: Vec<&[u8]> = blocks
+        .iter()
+        .map(|block| &golden.input[block.text.clone()])
+        .collect();
+    assert_eq!(texts, [b"EmwKAhgB".as_slice()]);
+    assert_eq!(
+        golden
+            .node
+            .get("reasoning_text")
+            .map(|node| strings_of(Some(node))),
+        Some(vec!["EmwKAhgB".to_owned()])
+    );
+}
+
+/// A closer that begins inside the opening marker (the final quote of the
+/// spaced opener begins `"}`) does not close the block: the block runs
+/// unterminated, and its text is never a reversed range.
+///
+/// The input is 41 bytes. The opener `{"type": "redacted_thinking",
+/// "data": "` is bytes 0..39, so the text begins at 39 with the `}`; the
+/// only `"}` is at 38..40, before the text, and is rejected.
+#[test]
+fn anthropic_redacted_thinking_closer_overlaps_opener() {
+    let (golden, result) = golden("anthropic_redacted_thinking_closer_overlaps_opener");
+    assert_eq!(golden.input.len(), 41);
+    let calls = reading(&result);
+    assert_eq!(calls.reasoning_blocks.len(), 1);
+    let block = &calls.reasoning_blocks[0];
+    assert_eq!(block.span, 0..41);
+    assert_eq!(block.text, 39..41);
+    assert_eq!(&golden.input[block.text.clone()], b"}x");
+    assert!(ledger_rules(&result).contains(&"tool_call.reasoning.unterminated".to_owned()));
+    assert_eq!(
+        golden
+            .node
+            .get("reasoning_text")
+            .map(|node| strings_of(Some(node))),
+        Some(vec!["}x".to_owned()])
+    );
+    // A block the turn starts in has no opener to overlap: the same
+    // input is recovered with ordered ranges.
+    let request = ToolRecoveryRequest::sized_for(
+        Effort::Standard,
+        &golden.input,
+        dialect_set(&golden.node, &golden.path),
+    )
+    .reasoning(ReasoningPolicy::Separate { starts_open: true });
+    let open = golden.tools.recover(&golden.input, &request);
+    for block in &reading(&open).reasoning_blocks {
+        assert!(block.text.start <= block.text.end, "{block:?}");
+        assert!(
+            block.span.start <= block.text.start && block.text.end <= block.span.end,
+            "{block:?}"
+        );
+        let _ = &golden.input[block.text.clone()];
+    }
+}
+
+/// Every reasoning block of every golden, under the pinned and the
+/// default allow-list runs, slices its input by `text` and `span`, and
+/// its text lies inside its span.
+#[test]
+fn reasoning_block_ranges_slice_over_every_golden() {
+    let mut checked = 0;
+    for (golden, result) in all_goldens().into_iter().chain(all_default_runs()) {
+        let readings: Vec<&ToolCalls> = match &result.outcome {
+            Outcome::Resolved(calls) | Outcome::BestGuess(calls) => vec![calls],
+            Outcome::Ambiguous(readings) => readings.iter().collect(),
+            Outcome::Unresolved => Vec::new(),
+        };
+        for calls in readings {
+            for block in &calls.reasoning_blocks {
+                let name = golden.path.display();
+                assert!(block.text.start <= block.text.end, "{name}: {block:?}");
+                assert!(
+                    block.span.start <= block.text.start && block.text.end <= block.span.end,
+                    "{name}: {block:?}"
+                );
+                assert!(block.span.end <= golden.input.len(), "{name}: {block:?}");
+                let _ = &golden.input[block.span.clone()];
+                let _ = &golden.input[block.text.clone()];
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 0, "no golden holds a reasoning block");
+}
+
 /// Harmony (gpt-oss): a call message in the documented and renderer
 /// layouts, with or without `<|start|>assistant`, after an analysis message
 /// (reasoning) or a commentary preamble (content), and its repairs; built-in
@@ -3837,4 +4920,37 @@ fn unmodeled_schemas_type_xml_text() {
         }
     );
     assert!(call.keywords.iter().all(|use_| !use_.used));
+}
+
+/// G7: the issue's shape with a reasoning-marker spelling in a JSON string of
+/// a repeated nested-parameter item. The marker is value text.
+#[test]
+fn xml_repeated_items_reasoning_marker_in_json_string() {
+    let (_, result) = golden("xml_repeated_items_reasoning_marker_in_json_string");
+    let calls = reading(&result);
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"outfits":[{"wearer":"Alice","garments":["a red coat"]},{"wearer":"Bob","garments":["a <think> scarf"]}]}"#
+    );
+    assert!(calls.reasoning.is_empty(), "{:#?}", calls.reasoning);
+    assert_eq!(calls.reasoning_blocks, []);
+    assert_eq!(rule_count(call, "tool_call.reasoning.marker-cut"), 0);
+}
+
+/// G7: the same for repeated JSON-array occurrences of the parameter.
+#[test]
+fn xml_repeated_json_array_items_reasoning_marker_in_json_string() {
+    let (_, result) = golden("xml_repeated_json_array_items_reasoning_marker_in_json_string");
+    let calls = reading(&result);
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"outfits":[{"wearer":"Alice"},{"wearer":"Bob","garments":["a <think> scarf"]}]}"#
+    );
+    assert!(calls.reasoning.is_empty(), "{:#?}", calls.reasoning);
+    assert_eq!(calls.reasoning_blocks, []);
+    assert_eq!(rule_count(call, "tool_call.reasoning.marker-cut"), 0);
 }

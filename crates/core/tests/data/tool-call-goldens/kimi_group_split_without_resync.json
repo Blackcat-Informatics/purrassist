@@ -66,6 +66,7 @@
     "Hi ",
     "oops. The answer is 42."
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.group-split"

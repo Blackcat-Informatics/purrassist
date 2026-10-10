@@ -46,6 +46,9 @@
   "rejected": [],
   "embedded": [],
   "content": [],
+  "reasoning_text": [
+    "Need to use function get_weather."
+  ],
   "failed_validations": [],
   "ledger_rules": []
 }

@@ -63,6 +63,7 @@
   "rejected": [],
   "embedded": [],
   "content": [],
+  "reasoning_text": [],
   "failed_validations": [
     "sha256:dd20a8d9d4010349911af50677ca83d855ed8ef974dd77f09fced6d8ceca97d2"
   ],

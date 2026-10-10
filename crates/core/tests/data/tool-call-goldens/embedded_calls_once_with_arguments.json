@@ -94,6 +94,9 @@
   "content": [
     "Answer."
   ],
+  "reasoning_text": [
+    "[TOOL_CALLS]t{\"x\":1}[TOOL_CALLS]s{\"y\":2}"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.missing-token",

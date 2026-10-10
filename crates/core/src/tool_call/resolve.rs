@@ -478,6 +478,10 @@ pub enum UnresolvedReason {
         /// The canonical name of the tool the request forces.
         expected: String,
     },
+    /// The request forced exactly one call and this call follows the first
+    /// (recorded by [`ToolSet::recover_governed`]; see
+    /// [`StrictForced`](super::StrictForced)).
+    ToolChoiceCardinality,
     /// Only canonical parsing is permitted ([`Policies::exact`]) and the
     /// reading needs this repair rule.
     RepairNotPermitted {
@@ -493,6 +497,7 @@ impl UnresolvedReason {
     /// use purrassist_core::tool_call::UnresolvedReason;
     /// assert_eq!(UnresolvedReason::Truncated.code(), "truncated");
     /// assert_eq!(UnresolvedReason::ToolChoiceForced { expected: "f".into() }.code(), "tool_choice_forced");
+    /// assert_eq!(UnresolvedReason::ToolChoiceCardinality.code(), "tool_choice_cardinality");
     /// ```
     #[must_use]
     pub const fn code(&self) -> &'static str {
@@ -509,6 +514,7 @@ impl UnresolvedReason {
             Self::Truncated => "truncated",
             Self::ToolChoiceNone => "tool_choice_none",
             Self::ToolChoiceForced { .. } => "tool_choice_forced",
+            Self::ToolChoiceCardinality => "tool_choice_cardinality",
             Self::RepairNotPermitted { .. } => "repair_not_permitted",
         }
     }
@@ -549,6 +555,9 @@ impl fmt::Display for UnresolvedReason {
                     "the request's tool choice forces tool `{expected}`"
                 )
             }
+            Self::ToolChoiceCardinality => formatter.write_str(
+                "the request's tool choice forces exactly one call and this is not the first",
+            ),
             Self::RepairNotPermitted { rule } => write!(
                 formatter,
                 "repair `{rule}` is needed but only canonical parsing is permitted"
@@ -1760,6 +1769,7 @@ impl<'a> Resolver<'a> {
                 repairs.entries().saturating_mul(ENTRY_BYTES),
             )?;
             repairs.extend(draft.ledger);
+            self.record_merged(&mut repairs, raw, governor)?;
             let mut blocker = draft.blocker;
             if raw.closure == Closure::Unterminated
                 && let Some(UnresolvedReason::MissingRequired { pointer }) = &blocker
@@ -1833,6 +1843,7 @@ impl<'a> Resolver<'a> {
         }
         let mut sites = Vec::new();
         schema_sites(
+            tool,
             &tool.argument_shape().arguments,
             &arguments,
             "",
@@ -2261,6 +2272,56 @@ impl Resolver<'_> {
         Ok(readings)
     }
 
+    /// Record `tool_call.parameter.collect` for the occurrences the codec
+    /// merged under a scope the typed shape does not declare.
+    fn record_merged(
+        &self,
+        ledger: &mut CallLedger,
+        raw: &RawCall,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        for merged in &raw.arguments.collected {
+            let name = merged.pointer.rsplit('/').next().unwrap_or_default();
+            let name = name.replace("~1", "/").replace("~0", "~");
+            self.record_collect(
+                ledger,
+                raw,
+                &merged.pointer,
+                &name,
+                merged.occurrences,
+                Some(merged.key_span.clone()),
+                governor,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Record `tool_call.parameter.collect` for the `occurrences`
+    /// occurrences of the array member `name` at `pointer`: the one place
+    /// the evidence is made, for a declared array parameter's occurrences
+    /// (above) and for those the codec merged under a `$ref` or `anyOf`
+    /// scope ([`ArgTree::collected`](super::ArgTree::collected)).
+    #[allow(clippy::too_many_arguments)]
+    fn record_collect(
+        &self,
+        ledger: &mut CallLedger,
+        raw: &RawCall,
+        pointer: &str,
+        name: &str,
+        occurrences: usize,
+        key_span: Option<Range<usize>>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let rule = rules::resolution_rule("tool_call.parameter.collect");
+        let evidence = self.evidence(
+            rule.id,
+            format!("collected {occurrences} occurrence(s) of parameter `{name}` as array items"),
+            key_span,
+            destination(raw, pointer),
+        );
+        ledger.record(rule, evidence, String::new(), String::new(), governor)
+    }
+
     /// The readings of an array or repeatable parameter: every
     /// occurrence's items, in order.
     fn collect(
@@ -2278,32 +2339,32 @@ impl Resolver<'_> {
                 .first()
                 .is_some_and(|occurrence| !matches!(occurrence.value.value, Value::Array(_)));
         if gathered {
-            let rule = rules::resolution_rule("tool_call.parameter.collect");
-            let evidence = self.evidence(
-                rule.id,
-                format!(
-                    "collected {} occurrence(s) of parameter `{}` as array items",
-                    occurrences.len(),
-                    parameter.name
-                ),
+            self.record_collect(
+                &mut ledger,
+                scope.raw,
+                &here.pointer,
+                &parameter.name,
+                occurrences.len(),
                 occurrences[0].key_span.clone(),
-                destination(scope.raw, &here.pointer),
-            );
-            ledger.record(rule, evidence, String::new(), String::new(), governor)?;
+                governor,
+            )?;
         }
         let span = occurrences[0].value.span.clone();
         let mut items: Vec<(Node, String)> = Vec::new();
         for occurrence in occurrences {
             match occurrence.value.value {
                 Value::Array(values) => {
+                    // Items number across occurrences, as the recognized
+                    // tree's leaf pointers do (`ArgTree::adopt`).
+                    let before = items.len();
                     for (index, value) in values.into_iter().enumerate() {
-                        items.push((value, format!("{}/{index}", occurrence.source)));
+                        items.push((value, format!("{}/{}", occurrence.source, before + index)));
                     }
                 }
                 _ => items.push((occurrence.value, occurrence.source)),
             }
         }
-        let mut partial = vec![Typed {
+        let mut partial = vec![Sized::new(Typed {
             value: Node {
                 value: Value::Array(Vec::new()),
                 span,
@@ -2311,31 +2372,16 @@ impl Resolver<'_> {
             ledger,
             cost: 0,
             blocker: None,
-        }];
+        })];
         for (index, (value, source)) in items.into_iter().enumerate() {
             let site = Site {
                 pointer: format!("{}/{index}", here.pointer),
                 source,
             };
             let typed = self.typed(scope, value, item, &site, governor)?;
-            let mut next = Vec::with_capacity(partial.len() * typed.len());
-            for base in &partial {
-                for alternative in &typed {
-                    governor.charge(Resource::Work, 1)?;
-                    governor.charge(Resource::ScratchBytes, combined_bytes(base, alternative))?;
-                    let mut combined = base.clone();
-                    if let Value::Array(values) = &mut combined.value.value {
-                        values.push(alternative.value.clone());
-                    }
-                    combined.ledger.extend(alternative.ledger.clone());
-                    combined.cost = combined.cost.saturating_add(alternative.cost);
-                    combined.blocker = combined.blocker.or_else(|| alternative.blocker.clone());
-                    next.push(combined);
-                }
-            }
-            partial = next;
+            partial = extend_readings(partial, &typed, governor)?;
         }
-        Ok(partial)
+        Ok(partial.into_iter().map(|sized| sized.reading).collect())
     }
 
     /// Every reading of `value` as declared by `shape`.
@@ -2365,7 +2411,7 @@ impl Resolver<'_> {
                 let Value::Array(values) = &decoded.value.value else {
                     return Ok(vec![decoded]);
                 };
-                let mut partial = vec![Typed {
+                let mut partial = vec![Sized::new(Typed {
                     value: Node {
                         value: Value::Array(Vec::new()),
                         span: decoded.value.span.clone(),
@@ -2373,7 +2419,7 @@ impl Resolver<'_> {
                     ledger: decoded.ledger.clone(),
                     cost: decoded.cost,
                     blocker: None,
-                }];
+                })];
                 for (index, value) in values.iter().enumerate() {
                     let typed = self.typed(
                         scope,
@@ -2382,28 +2428,9 @@ impl Resolver<'_> {
                         &site.item(index, index),
                         governor,
                     )?;
-                    let mut next = Vec::with_capacity(partial.len() * typed.len());
-                    for base in &partial {
-                        for alternative in &typed {
-                            governor.charge(Resource::Work, 1)?;
-                            governor.charge(
-                                Resource::ScratchBytes,
-                                combined_bytes(base, alternative),
-                            )?;
-                            let mut combined = base.clone();
-                            if let Value::Array(values) = &mut combined.value.value {
-                                values.push(alternative.value.clone());
-                            }
-                            combined.ledger.extend(alternative.ledger.clone());
-                            combined.cost = combined.cost.saturating_add(alternative.cost);
-                            combined.blocker =
-                                combined.blocker.or_else(|| alternative.blocker.clone());
-                            next.push(combined);
-                        }
-                    }
-                    partial = next;
+                    partial = extend_readings(partial, &typed, governor)?;
                 }
-                Ok(partial)
+                Ok(partial.into_iter().map(|sized| sized.reading).collect())
             }
             ValueShape::Object(inner) => {
                 let decoded = self.decoded(scope, value, shape, site, governor)?;
@@ -2445,13 +2472,11 @@ impl Resolver<'_> {
         let Value::String(text) = &value.value else {
             return Ok(Typed::plain(value));
         };
-        let Some(leaf) = scope
-            .raw
-            .arguments
-            .leaves
-            .iter()
-            .find(|leaf| leaf.pointer == site.source && leaf.origin == ArgOrigin::XmlText)
-        else {
+        // By span, not pointer: the occurrences of a parameter the codec could
+        // not type share one source pointer, so the pointer names the first.
+        let Some(leaf) = scope.raw.arguments.leaves.iter().find(|leaf| {
+            leaf.origin == ArgOrigin::XmlText && value.span.as_ref() == Some(&leaf.raw)
+        }) else {
             return Ok(Typed::plain(value));
         };
         let mut decoded = match crate::json::parse_with(text, governor) {
@@ -3010,7 +3035,9 @@ struct SchemaSite {
 
 /// Collect every XML-text string inside the unmodeled values of an object
 /// scope, walking the modeled scopes of `shape` down to them.
+#[allow(clippy::too_many_arguments)]
 fn schema_sites(
+    tool: &CompiledTool,
     shape: &ObjectShape,
     node: &Node,
     pointer: &str,
@@ -3028,7 +3055,13 @@ fn schema_sites(
             continue;
         };
         let here = format!("{pointer}/{}", pointer_segment(&member.key));
-        let here_schema = format!("{schema}/properties/{}", pointer_segment(&member.key));
+        // A top-level parameter's schema sits below the location the root
+        // projection read it from (a root `$ref` target, a union branch).
+        let here_schema = if pointer.is_empty() {
+            tool.parameter_pointer(&member.key)
+        } else {
+            format!("{schema}/properties/{}", pointer_segment(&member.key))
+        };
         let value_shape = match &parameter.value {
             ValueShape::Array(inner) => inner.as_ref(),
             other => other,
@@ -3039,7 +3072,7 @@ fn schema_sites(
                 unmodeled_sites(node, at, root, raw, out, governor)
             }
             ValueShape::Object(inner) => {
-                schema_sites(inner, node, at, at_schema, raw, out, governor)
+                schema_sites(tool, inner, node, at, at_schema, raw, out, governor)
             }
             _ => Ok(()),
         };
@@ -3440,25 +3473,106 @@ fn product(
     Ok(next)
 }
 
-/// The scratch of an array reading extended by one item: a copy of `base`
-/// (its value with room for the item, and its ledger) and of the item.
-fn combined_bytes(base: &Typed, alternative: &Typed) -> u64 {
-    let items = match &base.value.value {
+/// One partial array reading and the `estimated_bytes` of its value, kept
+/// current as items are appended so no step re-walks the array.
+struct Sized {
+    reading: Typed,
+    bytes: u64,
+}
+
+impl Sized {
+    fn new(reading: Typed) -> Self {
+        let bytes = reading.value.estimated_bytes();
+        Self { reading, bytes }
+    }
+}
+
+/// The scratch of an array reading extended by one item by copying: a copy
+/// of `base` (its value with room for the item, and its ledger) and of the
+/// item.
+fn combined_bytes(base: &Sized, alternative: &Typed, alternative_bytes: u64) -> u64 {
+    let items = match &base.reading.value.value {
         Value::Array(values) => size(values.len().saturating_add(1).saturating_mul(2)),
         _ => 0,
     };
     TYPED_BYTES
-        .saturating_add(base.value.estimated_bytes())
+        .saturating_add(base.bytes)
         .saturating_add(
             items.saturating_mul(size(<Node as crate::contract::ScratchCharge>::CHARGE)),
         )
-        .saturating_add(alternative.value.estimated_bytes())
+        .saturating_add(alternative_bytes)
         .saturating_add(
-            base.ledger
+            base.reading
+                .ledger
                 .entries()
                 .saturating_add(alternative.ledger.entries())
                 .saturating_mul(ENTRY_BYTES),
         )
+}
+
+/// The scratch of appending one item to a reading it owns: the item, its
+/// slot, and its ledger entries. The reading's existing items are not
+/// copied, so they are not charged again.
+fn appended_bytes(alternative: &Typed, alternative_bytes: u64) -> u64 {
+    alternative_bytes
+        .saturating_add(size(<Node as crate::contract::ScratchCharge>::CHARGE).saturating_mul(2))
+        .saturating_add(alternative.ledger.entries().saturating_mul(ENTRY_BYTES))
+}
+
+/// Extend every partial array reading by every alternative reading of the
+/// next item, in reading-major order. A reading that has no later
+/// alternative to serve is extended in place (amortized O(item)); each
+/// other alternative copies it, and is charged for the copy. With one
+/// reading per item, which is the common case, no array is ever copied, so
+/// an array of `n` items costs O(n) work and scratch rather than O(n^2).
+fn extend_readings(
+    partial: Vec<Sized>,
+    alternatives: &[Typed],
+    governor: &mut Governor,
+) -> Result<Vec<Sized>, StopReason> {
+    let weights: Vec<u64> = alternatives
+        .iter()
+        .map(|alternative| alternative.value.estimated_bytes())
+        .collect();
+    let mut next = Vec::with_capacity(partial.len().saturating_mul(alternatives.len()));
+    for base in partial {
+        let mut owned = Some(base);
+        for (index, (alternative, &weight)) in alternatives.iter().zip(&weights).enumerate() {
+            governor.charge(Resource::Work, 1)?;
+            let last = index + 1 == alternatives.len();
+            let (mut combined, held) = match owned.take() {
+                Some(base) if last => {
+                    governor.charge(Resource::ScratchBytes, appended_bytes(alternative, weight))?;
+                    let slot = size(<Node as crate::contract::ScratchCharge>::CHARGE);
+                    let bytes = base.bytes.saturating_add(slot).saturating_add(weight);
+                    (base.reading, bytes)
+                }
+                Some(base) => {
+                    governor.charge(
+                        Resource::ScratchBytes,
+                        combined_bytes(&base, alternative, weight),
+                    )?;
+                    let slot = size(<Node as crate::contract::ScratchCharge>::CHARGE);
+                    let bytes = base.bytes.saturating_add(slot).saturating_add(weight);
+                    let copy = base.reading.clone();
+                    owned = Some(base);
+                    (copy, bytes)
+                }
+                None => unreachable!("a base is held until its last alternative"),
+            };
+            if let Value::Array(values) = &mut combined.value.value {
+                values.push(alternative.value.clone());
+            }
+            combined.ledger.extend(alternative.ledger.clone());
+            combined.cost = combined.cost.saturating_add(alternative.cost);
+            combined.blocker = combined.blocker.or_else(|| alternative.blocker.clone());
+            next.push(Sized {
+                reading: combined,
+                bytes: held,
+            });
+        }
+    }
+    Ok(next)
 }
 
 /// A charged copy of `draft`, with room for its remaining members.

@@ -162,6 +162,19 @@ pub fn tools() -> ToolSet {
             .effects(Effects::Mutating)
             .param("path", Param::string().required().pattern(PATH_PATTERN))
             .param("recursive", Param::boolean().required()),
+        // Issue #8 section 1: an array of objects, the shape Qwen3-Coder XML
+        // writes as repeated nested elements.
+        ToolDefinition::new("plan_outfits")
+            .effects(Effects::ReadOnly)
+            .param(
+                "outfits",
+                Param::array(Param::object(
+                    ObjectSpec::new()
+                        .param("wearer", Param::string().required().pattern(PATH_PATTERN))
+                        .param("garments", Param::array(Param::string())),
+                ))
+                .required(),
+            ),
     ];
     ToolSet::compile(definitions, Budget::default()).expect("the corpus tool set compiles")
 }
@@ -171,11 +184,14 @@ pub fn tools() -> ToolSet {
 /// servers emit and the typed model does not express (`Optional[...]` as
 /// `anyOf` with `null`, a `$ref` to `$defs`, a `oneOf` of constants, a type
 /// array), typed in Qwen3-Coder XML by the exact schema itself
-/// (`tool_call.value.schema-typed`).
+/// (`tool_call.value.schema-typed`). `file_tasks` adds the `$ref` item
+/// scopes of issue #8 section 1 (gap G2): array items, a recursive `$ref`
+/// and a single `$ref` object whose members share the names of outer
+/// parameters (`name`, `tags`), and a free-form object item.
 #[must_use]
 pub fn adapter_tools() -> ToolSet {
     ToolSet::from_openai(
-        r##"[{"type":"function","function":{"name":"search_index","description":"Search the index","parameters":{"type":"object","properties":{"query":{"type":"string"},"limit":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null},"since":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null},"opts":{"$ref":"#/$defs/Opts"},"mode":{"oneOf":[{"const":"fast"},{"const":"safe"}]},"ids":{"type":["array","null"],"items":{"type":"integer"}}},"required":["query"],"$defs":{"Opts":{"type":"object","properties":{"depth":{"type":"integer"},"label":{"type":"string"}},"required":["depth"]}}}}}]"##,
+        r##"[{"type":"function","function":{"name":"search_index","description":"Search the index","parameters":{"type":"object","properties":{"query":{"type":"string"},"limit":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null},"since":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null},"opts":{"$ref":"#/$defs/Opts"},"mode":{"oneOf":[{"const":"fast"},{"const":"safe"}]},"ids":{"type":["array","null"],"items":{"type":"integer"}}},"required":["query"],"$defs":{"Opts":{"type":"object","properties":{"depth":{"type":"integer"},"label":{"type":"string"}},"required":["depth"]}}}}},{"type":"function","function":{"name":"file_tasks","description":"File tasks","parameters":{"type":"object","properties":{"name":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},"cfg":{"$ref":"#/$defs/Cfg"},"items":{"type":"array","items":{"$ref":"#/$defs/Item"}},"free":{"type":"array","items":{"type":"object","additionalProperties":true}}},"required":["name"],"$defs":{"Cfg":{"type":"object","properties":{"name":{"type":"string"},"mode":{"type":"string"}},"required":["name"]},"Item":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"integer"},"tags":{"type":"array","items":{"type":"string"}},"children":{"type":"array","items":{"$ref":"#/$defs/Item"}}},"required":["name"]}}}}}]"##,
         Budget::default(),
     )
     .expect("the adapter tool set compiles")
@@ -188,6 +204,102 @@ pub fn tools_for<'t>(record: &Node, tools: &'t ToolSet, adapter: &'t ToolSet) ->
         adapter
     } else {
         tools
+    }
+}
+
+/// The `file_tasks` adapter cases (see [`adapter_tools`]).
+fn ref_scope_cases(cases: &mut Vec<Case>) {
+    let parameter =
+        |name: &str, value: &str| format!("<parameter={name}>\n{value}\n</parameter>\n");
+    // Issue #8 section 1, gap G2: the member names of a `$ref` scope belong
+    // to that scope even when an outer parameter shares them (`name`,
+    // `tags`), at any depth, and a scope that names no member is closed at an
+    // enclosing scope's opener only as a guess (a mutating call never runs
+    // it). Before the scope graph, these read as siblings or as hoisted
+    // top-level parameters, `Resolved`.
+    let file =
+        |body: &str| format!("<tool_call>\n<function=file_tasks>\n{body}</function>\n</tool_call>");
+    let nested = |name: &str, body: &str| format!("<parameter={name}>\n{body}</parameter>\n");
+    let ref_entries: Vec<(&str, String, Option<&str>)> = vec![
+        (
+            "ref-items-colliding-name",
+            file(
+                &(parameter("name", "party")
+                    + &nested(
+                        "items",
+                        "<parameter=name>Alice</parameter>\n<parameter=size>3</parameter>\n",
+                    )
+                    + &nested(
+                        "items",
+                        "<parameter=name>Bob</parameter>\n<parameter=size>4</parameter>\n",
+                    )),
+            ),
+            Some(r#"{"name":"party","items":[{"name":"Alice","size":3},{"name":"Bob","size":4}]}"#),
+        ),
+        (
+            "ref-items-outer-array-collision",
+            file(
+                &(parameter("tags", "work")
+                    + &parameter("name", "chores")
+                    + &nested(
+                        "items",
+                        &(parameter("name", "milk") + &parameter("tags", "home")),
+                    )),
+            ),
+            Some(r#"{"tags":["work"],"name":"chores","items":[{"name":"milk","tags":["home"]}]}"#),
+        ),
+        (
+            "ref-items-recursive",
+            file(
+                &(parameter("name", "root")
+                    + &nested(
+                        "items",
+                        "<parameter=name>a</parameter><parameter=children><parameter=name>b</parameter></parameter>",
+                    )),
+            ),
+            Some(r#"{"name":"root","items":[{"name":"a","children":[{"name":"b"}]}]}"#),
+        ),
+        (
+            "ref-object-colliding-name",
+            file(
+                &(parameter("name", "top")
+                    + &nested(
+                        "cfg",
+                        &(parameter("name", "inner") + &parameter("mode", "fast")),
+                    )),
+            ),
+            Some(r#"{"name":"top","cfg":{"name":"inner","mode":"fast"}}"#),
+        ),
+        (
+            "free-object-item-opener-of-outer-name",
+            file(&nested("free", &parameter("name", "hoisted"))),
+            None,
+        ),
+    ];
+    for (variant, input, truth) in ref_entries {
+        for (label, policy) in [
+            ("qwen", Policy::PerTool),
+            ("structural", Policy::Structural),
+        ] {
+            cases.push(Case {
+                tool_set: Some("adapter"),
+                invalid: None,
+                id: format!(
+                    "adapter/file_tasks/{label}/tool_call.markup.nested-parameter/{variant}"
+                ),
+                category: "tool_call.markup.nested-parameter".to_owned(),
+                dialect: "qwen3-coder-xml.v1".to_owned(),
+                policy,
+                stop: Ending::Stop,
+                input: input.clone(),
+                truth: truth.map(|arguments| {
+                    vec![Call {
+                        name: "file_tasks".to_owned(),
+                        arguments: json::parse(arguments).expect("truth arguments"),
+                    }]
+                }),
+            });
+        }
     }
 }
 
@@ -213,6 +325,7 @@ fn adapter_cases(cases: &mut Vec<Case>) {
         ("unmatched", "tool_call.value.schema-typed", qwen(&(query + &parameter("limit", "many"))), None),
         ("json-control", "canonical", r#"<tool_call>{"name": "search_index", "arguments": {"query": "cats", "limit": 5}}</tool_call>"#.to_owned(), Some(r#"{"query":"cats","limit":5}"#)),
     ];
+    ref_scope_cases(cases);
     for (variant, category, input, truth) in entries {
         let single = if category == "canonical" {
             "hermes.v1"
@@ -947,7 +1060,7 @@ fn mutant(category: &'static str, variant: impl Into<String>, text: String, need
     }
 }
 
-const NEAR_MISS: [(&str, [&str; 2]); 8] = [
+const NEAR_MISS: [(&str, [&str; 2]); 9] = [
     ("read_file", ["read_fiel", "reed_file"]),
     ("search_code", ["serach_code", "search_cod"]),
     ("get_forecast", ["get_forcast", "get_forecats"]),
@@ -956,6 +1069,7 @@ const NEAR_MISS: [(&str, [&str; 2]); 8] = [
     ("create_issue", ["create_isue", "craete_issue"]),
     ("run_command", ["run_comand", "run_commnad"]),
     ("delete_path", ["delete_pth", "delte_path"]),
+    ("plan_outfits", ["plan_outfit", "paln_outfits"]),
 ];
 
 const HALLUCINATED: [&str; 6] = [
@@ -967,7 +1081,7 @@ const HALLUCINATED: [&str; 6] = [
     "query_database",
 ];
 
-const KEY_TYPOS: [(&str, &str); 20] = [
+const KEY_TYPOS: [(&str, &str); 21] = [
     ("path", "pth"),
     ("limit", "limt"),
     ("encoding", "encodng"),
@@ -988,6 +1102,7 @@ const KEY_TYPOS: [(&str, &str); 20] = [
     ("command", "comand"),
     ("timeout_seconds", "timeout_secnods"),
     ("recursive", "recursve"),
+    ("outfits", "outfitz"),
 ];
 
 const ENUM_TYPOS: [(&str, &str); 14] = [
@@ -1739,15 +1854,21 @@ fn closer_in_value_mutations(base: &Base, out: &mut Vec<Mutant>) {
             replace_value(base, index, &held),
             Need::Exact,
         ));
-        let held = format!(
-            "{value}</parameter></function></tool_call>\n<tool_call>\n{documented}\n</tool_call>"
-        );
-        out.push(mutant(
-            "tool_call.markup.stray-closer",
-            "inline-closers-then-call",
-            replace_value(base, index, &held),
-            Need::Exact,
-        ));
+        // A value that ends in a newline cannot be followed inline by its
+        // closer: the newline is then the value's framing newline (consumed
+        // as `tool_call.xml.framing-newline`), so the text no longer spells
+        // the value and the truth would not be what the text says.
+        if !value.ends_with('\n') {
+            let held = format!(
+                "{value}</parameter></function></tool_call>\n<tool_call>\n{documented}\n</tool_call>"
+            );
+            out.push(mutant(
+                "tool_call.markup.stray-closer",
+                "inline-closers-then-call",
+                replace_value(base, index, &held),
+                Need::Exact,
+            ));
+        }
     }
 }
 
@@ -2667,6 +2788,95 @@ fn xml_mutations(base: &Base, random: &mut XorShift, out: &mut Vec<Mutant>) {
             Need::Exact,
         ));
     }
+    // Array-of-object parameters as repeated nested elements. The truth is
+    // issue #8 section 1: each repetition of `<parameter=NAME>` holding
+    // nested `<parameter=>` elements is one object item, collected in source
+    // order (`tool_call.markup.nested-parameter` per item,
+    // `tool_call.xml.array-item` per item, `tool_call.parameter.collect`).
+    // The witness writes at most one item, so a second mutant repeats the
+    // first item to put the collection under the evaluation too.
+    for (index, member) in members.iter().enumerate() {
+        let Value::Array(items) = &member.value.value else {
+            continue;
+        };
+        let ValueShape::Array(item_shape) = &base.declared(&member.key).shape else {
+            continue;
+        };
+        let ValueShape::Object(shape) = &**item_shape else {
+            continue;
+        };
+        let nested = |item: &Node| -> Option<String> {
+            let Value::Object(fields) = &item.value else {
+                return None;
+            };
+            if fields.is_empty() {
+                return None;
+            }
+            let elements: Vec<(String, String, bool)> = fields
+                .iter()
+                .map(|field| {
+                    let declared = shape
+                        .parameters
+                        .iter()
+                        .find(|param| param.name == field.key)
+                        .expect("a declared member");
+                    (field.key.clone(), raw(&field.value, &declared.value), true)
+                })
+                .collect();
+            Some(
+                xml_body(&elements)
+                    .trim_start_matches('\n')
+                    .trim_end_matches('\n')
+                    .to_owned(),
+            )
+        };
+        let Some(first) = items.first() else {
+            continue;
+        };
+        for (variant, repeated) in [("items", 0), ("items-repeated", 1)] {
+            let mut written: Vec<&Node> = items.iter().collect();
+            written.extend(std::iter::repeat_n(first, repeated));
+            let Some(bodies) = written
+                .iter()
+                .map(|item| nested(item))
+                .collect::<Option<Vec<String>>>()
+            else {
+                continue;
+            };
+            let mut spread: Vec<(String, String, bool)> = Vec::new();
+            for (position, element) in elements.iter().enumerate() {
+                if position == index {
+                    for body in &bodies {
+                        spread.push((element.0.clone(), body.clone(), true));
+                    }
+                } else {
+                    spread.push(element.clone());
+                }
+            }
+            let category = if bodies.len() == 1 {
+                "tool_call.xml.array-item"
+            } else {
+                "tool_call.parameter.collect"
+            };
+            let mut mutated = mutant(
+                category,
+                format!("{}-{variant}", member.key),
+                base.with_arguments(&xml_body(&spread)),
+                Need::Exact,
+            );
+            if repeated > 0 {
+                let mut arguments = base.members().to_vec();
+                arguments[index].value = Node::new(Value::Array(
+                    written.iter().map(|item| (*item).clone()).collect(),
+                ));
+                mutated.call = Some(Call {
+                    name: base.call.name.clone(),
+                    arguments: Node::new(Value::Object(arguments)),
+                });
+            }
+            out.push(mutated);
+        }
+    }
     // Array parameters as plain items.
     for (index, member) in members.iter().enumerate() {
         let Value::Array(items) = &member.value.value else {
@@ -3114,6 +3324,9 @@ fn inline_closers_pair(first: &Base, second: &Base, out: &mut Vec<Mutant>) {
     if first.dialect == DialectId::Qwen3CoderXml
         && let Some(at) = first.text.rfind("</parameter>")
         && let Some(head) = first.text[..at].strip_suffix('\n')
+        // A value ending in a newline loses it to the framing newline when
+        // the closer follows inline (see `closer_in_value_mutations`).
+        && (!head.ends_with('\n') || head.ends_with(">\n"))
         && first.text[at..]
             .chars()
             .filter(|character| !character.is_ascii_whitespace())

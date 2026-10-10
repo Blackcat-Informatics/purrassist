@@ -46,6 +46,9 @@
     ],
     "embedded": [],
     "content": [],
+    "reasoning_text": [
+      "a\": \"x\"}}</tool_call>"
+    ],
     "failed_validations": [],
     "ledger_rules": [
       "tool_call.reasoning.unterminated"
@@ -89,6 +92,9 @@
   "embedded": [],
   "content": [
     "{\"name\": \"f\", \"arguments\": {\"a\":{\"name\": \"f\", \"arguments\": {\""
+  ],
+  "reasoning_text": [
+    "a\": \"x\"}}</tool_call>"
   ],
   "failed_validations": [],
   "ledger_rules": [

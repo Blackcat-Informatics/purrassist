@@ -63,6 +63,7 @@
   "content": [
     "{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Oslo\"}, \"description\": \"weather lookup\"}"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

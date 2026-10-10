@@ -54,6 +54,7 @@
   "content": [
     "assistantcommentary to=functions.get_weather json{\"city\": \"Paris\"}"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.unparsed-dialect"

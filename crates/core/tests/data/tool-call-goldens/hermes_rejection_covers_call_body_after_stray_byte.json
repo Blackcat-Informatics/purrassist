@@ -53,6 +53,7 @@
     "Hi ",
     " Done."
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": []
 }

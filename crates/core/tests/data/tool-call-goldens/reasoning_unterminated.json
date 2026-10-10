@@ -36,6 +36,9 @@
   "rejected": [],
   "embedded": [],
   "content": [],
+  "reasoning_text": [
+    "still deciding what to do"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.reasoning.unterminated"

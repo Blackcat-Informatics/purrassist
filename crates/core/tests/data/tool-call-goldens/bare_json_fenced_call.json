@@ -79,6 +79,7 @@
     "Calling the tool:\n```json\n",
     "\n```\n"
   ],
+  "reasoning_text": [],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.context.fenced-example"

@@ -54,6 +54,9 @@
   "content": [
     "\n"
   ],
+  "reasoning_text": [
+    "The user wants a file.\n"
+  ],
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.xml.framing-newline",
