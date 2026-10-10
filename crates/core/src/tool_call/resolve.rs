@@ -2505,13 +2505,11 @@ impl Resolver<'_> {
         let Value::String(text) = &value.value else {
             return Ok(Typed::plain(value));
         };
-        let Some(leaf) = scope
-            .raw
-            .arguments
-            .leaves
-            .iter()
-            .find(|leaf| leaf.pointer == site.source && leaf.origin == ArgOrigin::XmlText)
-        else {
+        // By span, not pointer: the occurrences of a parameter the codec could
+        // not type share one source pointer, so the pointer names the first.
+        let Some(leaf) = scope.raw.arguments.leaves.iter().find(|leaf| {
+            leaf.origin == ArgOrigin::XmlText && value.span.as_ref() == Some(&leaf.raw)
+        }) else {
             return Ok(Typed::plain(value));
         };
         let mut decoded = match crate::json::parse_with(text, governor) {

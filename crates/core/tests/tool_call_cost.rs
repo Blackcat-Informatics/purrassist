@@ -10,8 +10,8 @@
 use purrassist_core::grammar::cost;
 use purrassist_core::json::Node;
 use purrassist_core::tool_call::{
-    CallOutcome, DialectId, DialectSet, Effects, GenerationStop, Param, ReasoningPolicy,
-    Recognizer, ToolDefinition, ToolRecoveryRequest, ToolSet,
+    CallOutcome, DialectId, DialectSet, Effects, GenerationStop, ObjectSpec, Param,
+    ReasoningPolicy, Recognizer, ToolDefinition, ToolRecoveryRequest, ToolSet,
 };
 use purrassist_core::{Budget, Effort, Governor, Outcome, StopReason, contract::Resource};
 use std::collections::BTreeMap;
@@ -632,4 +632,94 @@ fn schema_typing_is_uncapped_and_governed() {
         calls.calls[0].arguments.to_json(),
         r#"{"opts":{"depth":2,"label":"42"}}"#
     );
+}
+
+/// A tool with an array of objects and an array of strings, to repeat.
+fn repeated_tool() -> ToolSet {
+    ToolSet::compile(
+        [ToolDefinition::new("tree")
+            .effects(Effects::ReadOnly)
+            .param(
+                "children",
+                Param::array(Param::object(
+                    ObjectSpec::new().param("name", Param::string().required()),
+                )),
+            )
+            .param("tags", Param::array(Param::string()))],
+        Budget::default(),
+    )
+    .expect("tools")
+}
+
+/// G5: a repeated parameter costs work linear in the output, and the items
+/// number across occurrences in O(1) each (the adoption itself is pinned by
+/// the `tool_call::ir` unit test `adopt_is_constant_in_the_members_held`).
+/// From k = 1000 to 8000 occurrences of one parameter, as nested items
+/// (`<parameter=children><parameter=name>..`) and as one-item JSON arrays
+/// (`<parameter=tags>["a"]`), the call is `Resolved` with all k items under
+/// a budget that does not exhaust, and the `work` ratio is within 1.05x of
+/// the byte ratio. `total_scratch_charged` is not yet linear: resolution
+/// still copies the growing partial array once per item (a pre-existing
+/// quadratic, which R10 removes), so it is only bounded by the square of the
+/// size ratio here, and R10 tightens this assertion to the byte ratio.
+#[test]
+fn repeated_parameters_cost_is_linear() {
+    let tools = repeated_tool();
+    for (name, item) in [
+        (
+            "children",
+            "<parameter=children><parameter=name>a</parameter></parameter>\n",
+        ),
+        ("tags", "<parameter=tags>[\"a\"]</parameter>\n"),
+    ] {
+        let mut measured = Vec::new();
+        for k in [1000_usize, 2000, 4000, 8000] {
+            let input = format!(
+                "<tool_call>\n<function=tree>\n{}</function>\n</tool_call>",
+                item.repeat(k)
+            );
+            let mut request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
+            request.budget.work = u64::MAX / 4;
+            request.budget.scratch_bytes = u64::MAX / 4;
+            request.budget.candidates = u64::MAX / 4;
+            let result = tools.recover(input.as_bytes(), &request);
+            assert_eq!(result.receipt.stopped, StopReason::Completed, "{name} {k}");
+            let Outcome::Resolved(calls) = &result.outcome else {
+                panic!("{name} {k}: {:?}", result.outcome)
+            };
+            let items = calls.calls[0].arguments.get(name).expect("the parameter");
+            let count = match &items.value {
+                purrassist_core::json::Value::Array(items) => items.len(),
+                other => panic!("{name} {k}: {other:?}"),
+            };
+            assert_eq!(count, k, "{name} {k}");
+            let usage = result.receipt.usage;
+            println!(
+                "{name} k={k} bytes {}: work {} total_scratch_charged {}",
+                input.len(),
+                usage.work,
+                usage.total_scratch_charged
+            );
+            measured.push((
+                input.len() as u128,
+                u128::from(usage.work),
+                u128::from(usage.total_scratch_charged),
+            ));
+        }
+        let (small_bytes, small_work, small_scratch) = measured[0];
+        for &(bytes, work, scratch) in &measured[1..] {
+            // Work tracks the byte ratio, both ways, within 1.05x.
+            let (work_ratio, byte_ratio) = (work * small_bytes, small_work * bytes);
+            assert!(
+                work_ratio * 100 <= byte_ratio * 105 && byte_ratio * 100 <= work_ratio * 105,
+                "{name}: {small_bytes} -> {bytes} bytes: work is not linear"
+            );
+            // R10: tighten to `scratch * small_bytes <= small_scratch * bytes * 105 / 100`.
+            let squared = (bytes * bytes) / (small_bytes * small_bytes);
+            assert!(
+                scratch * 100 <= small_scratch * squared * 105,
+                "{name}: {small_bytes} -> {bytes} bytes: scratch charged exceeds the squared ratio"
+            );
+        }
+    }
 }

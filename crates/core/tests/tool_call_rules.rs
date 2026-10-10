@@ -2171,3 +2171,55 @@ fn grammar_doc_example_compiles() {
         );
     }
 }
+
+/// A5, G6: an alias and the canonical spelling of one array parameter
+/// number their items in one sequence, so each item's evidence names its own
+/// pointer and its own bytes. The tool is known only after name resolution
+/// (`Nums` for `nums`), so each item is typed by its declared type.
+#[test]
+fn alias_and_canonical_repetitions_share_one_item_sequence() {
+    let tools = compile([ToolDefinition::new("nums")
+        .effects(Effects::ReadOnly)
+        .param("xs", Param::array(Param::integer()).alias("ex").required())]);
+    let body = "<parameter=xs>\n11\n</parameter>\n<parameter=ex>\n2222\n</parameter>\n<parameter=xs>\n33333\n</parameter>";
+    let text = qwen("Nums", body);
+    let tolerant = Policies {
+        selection: PolicySelection::All(RepairPolicy::Tolerant),
+        ..Policies::default()
+    };
+    let turn = run_with(
+        DialectId::Qwen3CoderXml,
+        &tools,
+        &text,
+        GenerationStop::ToolCalls,
+        &tolerant,
+    );
+    let call = one(&turn);
+    assert_eq!(
+        call.reading.arguments.to_json(),
+        r#"{"xs":[11,2222,33333]}"#
+    );
+    let decoded: Vec<(&str, std::ops::Range<usize>)> = call
+        .repairs()
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.rule == "tool_call.value.decode-typed")
+        .map(|evidence| {
+            let span = evidence.span.as_ref().expect("a source span");
+            (evidence.destination.as_str(), span.bytes.clone())
+        })
+        .collect();
+    let at = |literal: &str| {
+        let start = text.find(literal).expect("literal");
+        start..start + literal.len()
+    };
+    assert_eq!(decoded.len(), 3, "{decoded:?}");
+    for (index, literal) in ["11", "2222", "33333"].into_iter().enumerate() {
+        let (destination, span) = &decoded[index];
+        assert!(
+            destination.ends_with(&format!("/xs/{index}")),
+            "{destination}"
+        );
+        assert_eq!(*span, at(literal), "item {index}");
+    }
+}

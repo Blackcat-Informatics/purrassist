@@ -2135,6 +2135,34 @@ fn repeated_scalar_both_readings() {
     assert_eq!(readings, [r#"{"path":"a"}"#, r#"{"path":"b"}"#]);
 }
 
+/// G6: with the tool known only after name resolution (`Nums` for `nums`),
+/// each repeated scalar item's `decode-typed` evidence cites that item's own
+/// bytes, found by span, not the first occurrence's (both share the source
+/// pointer `/xs`).
+#[test]
+fn xml_repeated_scalar_items_near_miss_tool_spans() {
+    let (golden, result) = golden("xml_repeated_scalar_items_near_miss_tool_spans");
+    let call = the_call(&result);
+    assert_eq!(call.arguments.to_json(), r#"{"xs":[11,2222]}"#, "{call:#?}");
+    let input = std::str::from_utf8(&golden.input).expect("utf-8 input");
+    let (first, last) = (input.find("11").unwrap(), input.find("2222").unwrap());
+    assert_eq!((first, last), (43, 74), "the fixture's own offsets");
+    let span = |destination: &str| -> Vec<(usize, usize)> {
+        call.repairs
+            .evidence
+            .iter()
+            .filter(|evidence| evidence.rule == "tool_call.value.decode-typed")
+            .filter(|evidence| evidence.destination.ends_with(destination))
+            .map(|evidence| {
+                let span = evidence.span.as_ref().expect("a source span");
+                (span.bytes.start, span.bytes.end)
+            })
+            .collect()
+    };
+    assert_eq!(span("/arguments/xs/0"), [(43, 45)]);
+    assert_eq!(span("/arguments/xs/1"), [(74, 78)]);
+}
+
 #[test]
 fn repeated_array_param_is_array() {
     let (_, result) = golden("repeated_array_param_is_array");

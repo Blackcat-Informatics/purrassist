@@ -888,11 +888,14 @@ impl<'t> Reader<'_, 't, '_> {
             self.record(EditOperator::ArrayItem, from..at, b"")?;
             tree = wrap_item(tree);
         }
-        self.frames
+        let parent = self
+            .frames
             .last_mut()
-            .expect("the top-level scope stays open")
+            .expect("the top-level scope stays open");
+        let canonical = parent.scope.canonical(&name.value).to_owned();
+        parent
             .tree
-            .adopt_collecting(name, tree, frame.collect);
+            .adopt_keyed(name, &canonical, tree, frame.collect);
         Ok(())
     }
 
@@ -1094,11 +1097,11 @@ impl<'t> Reader<'_, 't, '_> {
         } else if let Some(first) = fork {
             self.closer_text(EditOperator::TextAfterCloser, first..stop)?;
         }
-        self.frames
-            .last_mut()
-            .expect("a scope is open")
+        let parent = self.frames.last_mut().expect("a scope is open");
+        let canonical = parent.scope.canonical(&opener.name.value).to_owned();
+        parent
             .tree
-            .adopt_collecting(opener.name, tree, collect);
+            .adopt_keyed(opener.name, &canonical, tree, collect);
         Ok(Ok(match terminator {
             Terminator::Closer(width, spelling) => {
                 self.respelled(stop, width, spelling)?;
@@ -1864,6 +1867,19 @@ impl<'t> Scope<'t> {
             Self::Declared(object) => object.resolve_name(name).is_some(),
             Self::Schema(node) => node.declares(name),
             Self::Opaque => false,
+        }
+    }
+
+    /// The canonical name of `name` in the scope: the declared parameter an
+    /// alias denotes, else `name` itself. Occurrences of one canonical name
+    /// share one item sequence.
+    fn canonical<'a>(self, name: &'a str) -> &'a str
+    where
+        't: 'a,
+    {
+        match self {
+            Self::Declared(object) => object.resolve_name(name).unwrap_or(name),
+            Self::Schema(_) | Self::Opaque => name,
         }
     }
 

@@ -712,3 +712,33 @@ fn codec_every_split_equals_batch() {
         assert_eq!(governor.usage(), whole.usage());
     }
 }
+
+/// A5: the recognized tree numbers the items of an array parameter's
+/// repetitions in one sequence across its alias and canonical spellings (the
+/// resolver collects them in one array), so a leaf's pointer names the item
+/// the resolved value holds; each leaf keeps the spelling it was written
+/// with.
+#[test]
+fn alias_and_canonical_repetitions_number_items_in_one_sequence() {
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("nums").param("xs", Param::array(Param::integer()).alias("ex"))],
+        Budget::default(),
+    )
+    .expect("tools compile");
+    let input = "<tool_call>\n<function=nums>\n<parameter=xs>\n[1]\n</parameter>\n<parameter=ex>\n[2]\n</parameter>\n<parameter=xs>\n[3]\n</parameter>\n</function>\n</tool_call>";
+    let set = DialectSet::new(
+        [DialectId::Qwen3CoderXml],
+        &mut Governor::new(Budget::default()),
+    )
+    .expect("dialect set");
+    let turn = run(
+        &set,
+        &tools,
+        &[input.as_bytes()],
+        &mut Governor::new(Budget::default()),
+    )
+    .expect("recognized");
+    let call = one_call(&turn);
+    assert_eq!(pointers(call), ["/xs/0", "/ex/1", "/xs/2"]);
+    assert_eq!(raw_texts(call, input.as_bytes()), ["1", "2", "3"]);
+}
