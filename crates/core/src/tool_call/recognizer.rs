@@ -2271,6 +2271,12 @@ fn explain_recovery(edit: &MarkupEdit, original: &str, replacement: &str) -> Str
             "read the text after the unpaired closer at byte {} as text of the value, which ends at byte {}; the reading that ends the value at that closer and drops the text is as cheap, so the call is ambiguous",
             edit.span.start, edit.span.end
         ),
+        EditOperator::UndeclaredParameterBoundary => format!(
+            "ended the open parameter value at a parameter opener of a call that names no declared tool (inserted `{replacement}`); the opener may also be text of the value"
+        ),
+        EditOperator::UnmodeledScopeBoundary => format!(
+            "closed the open object parameter before the opener of a parameter an enclosing scope declares (inserted `{replacement}`); the object's schema names no member, so the opener may instead be one of its own members, and the call is a best guess"
+        ),
         EditOperator::TextBetweenParameters => format!(
             "ended the value at the unpaired closer at byte {} and dropped `{original}` as text between parameters; the reading that holds the text as value text is as cheap, so the call is ambiguous",
             edit.span.start
@@ -2333,9 +2339,6 @@ fn explain(edit: &MarkupEdit) -> String {
         EditOperator::ParameterClosedByElement => format!(
             "ended the open parameter value where its enclosing element closes (inserted `{replacement}`)"
         ),
-        EditOperator::UndeclaredParameterBoundary => format!(
-            "ended the open parameter value at a parameter opener of a call that names no declared tool (inserted `{replacement}`); the opener may also be text of the value"
-        ),
         EditOperator::ClosersOnlyEmpty => format!(
             "read a function body of only closers `{original}` as no arguments; valid only when the tool requires no parameter"
         ),
@@ -2367,6 +2370,8 @@ fn explain(edit: &MarkupEdit) -> String {
         | EditOperator::CloserInValue
         | EditOperator::TextAfterCloser
         | EditOperator::TextBetweenParameters
+        | EditOperator::UnmodeledScopeBoundary
+        | EditOperator::UndeclaredParameterBoundary
         | EditOperator::ReasoningMarkerCut => explain_recovery(edit, &original, &replacement),
         EditOperator::ContextFencedExample => {
             "call recognized inside fenced code, an inline code span or a block quote; it may be an example rather than a call".into()

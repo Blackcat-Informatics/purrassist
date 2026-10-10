@@ -1675,25 +1675,268 @@ fn xml_array_nested_object_same_name_member() {
     assert_eq!(count("tool_call.markup.missing-parameter-close"), 0);
 }
 
+/// Count of `rule` among the rules a call recorded.
+fn rule_count(call: &ToolCall, rule: &str) -> usize {
+    rules_of(call).iter().filter(|id| **id == rule).count()
+}
+
 #[test]
-fn xml_array_recursive_ref_items_are_siblings() {
-    // Limit: a recursive `$ref` item is unmodeled and declares nothing, so
-    // the inner opener of the array's own name closes the open item and
-    // starts the next one; the closer left over is stray.
-    let (_, result) = golden("xml_array_recursive_ref_items_are_siblings");
+fn xml_array_recursive_ref_items_nest() {
+    // Issue #8 section 1, gap G2: a recursive `$ref` item takes the member
+    // names its exact schema declares from the scope graph, so the inner
+    // opener of the array's own name is the item's child, never the next
+    // sibling. The input is balanced: no repair is needed (the engine used
+    // to read it as two siblings with a missing and a stray closer).
+    let (_, result) = golden("xml_array_recursive_ref_items_nest");
     let call = the_call(&result);
     assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
     assert_eq!(
         call.arguments.to_json(),
-        r#"{"children":[{"name":"a"},{"name":"b"}]}"#
+        r#"{"children":[{"name":"a","children":[{"name":"b"}]}]}"#
     );
-    let used = rules_of(call);
-    let count = |rule: &str| used.iter().filter(|id| **id == rule).count();
-    assert_eq!(count("tool_call.markup.nested-parameter"), 2);
-    assert_eq!(count("tool_call.xml.array-item"), 2);
-    assert_eq!(count("tool_call.markup.missing-parameter-close"), 1);
-    assert_eq!(count("tool_call.markup.stray-closer"), 1);
-    assert_eq!(count("tool_call.parameter.collect"), 1);
+    assert_eq!(rule_count(call, "tool_call.markup.nested-parameter"), 2);
+    assert_eq!(rule_count(call, "tool_call.xml.array-item"), 2);
+    assert_eq!(
+        rule_count(call, "tool_call.markup.missing-parameter-close"),
+        0
+    );
+    assert_eq!(
+        rule_count(call, "tool_call.markup.unmodeled-scope-boundary"),
+        0
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.stray-closer"), 0);
+    assert_eq!(rule_count(call, "tool_call.parameter.collect"), 0);
+    assert_eq!(reading(&result).verdict().code(), "run");
+}
+
+#[test]
+fn xml_array_recursive_ref_items_equal_the_inline_schema() {
+    // The same bytes under the inline (modeled) twin of the recursive
+    // schema read identically: same arguments, same rules.
+    let (golden, result) = golden("xml_array_recursive_ref_items_nest");
+    let inline = ToolSet::from_openai(
+        r#"[{"type":"function","function":{"name":"tree","parameters":{"type":"object","properties":{"children":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"children":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}},"required":["name"]}}},"required":["children"]}}}]"#,
+        Budget::default(),
+    )
+    .expect("inline twin");
+    let twin = inline.recover(&golden.input, &golden.request);
+    let (call, twin) = (the_call(&result), the_call(&twin));
+    assert_eq!(call.arguments.to_json(), twin.arguments.to_json());
+    assert_eq!(rules_of(call), rules_of(twin));
+}
+
+#[test]
+fn xml_array_ref_items_repeated_member_collects() {
+    // Repeated array members inside a `$ref` item collect into one array,
+    // in source order, as the inline schema's do.
+    let (_, result) = golden("xml_array_ref_items_repeated_member_collects");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"children":[{"name":"a","children":[{"name":"b"},{"name":"c"}]}]}"#
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.nested-parameter"), 3);
+    assert_eq!(rule_count(call, "tool_call.xml.array-item"), 3);
+    // The merge is reported, as the inline twin's is: once, for the member
+    // that occurred twice.
+    assert_eq!(rule_count(call, "tool_call.parameter.collect"), 1);
+    assert_eq!(
+        rule_count(call, "tool_call.markup.missing-parameter-close"),
+        0
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.stray-closer"), 0);
+}
+
+/// The `$ref` and inline forms of one schema record the same rules for the
+/// same bytes, repeated array members included: collection has one source of
+/// truth (resolution's `tool_call.parameter.collect`), fed by the codec's
+/// merge marker under a scope the typed shape does not declare.
+#[test]
+fn xml_array_ref_items_and_inline_twin_record_the_same_rules() {
+    let (golden, _) = golden("xml_array_ref_items_repeated_member_collects");
+    let inline = ToolSet::from_openai(
+        r#"[{"type":"function","function":{"name":"tree","parameters":{"type":"object","properties":{"children":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"children":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}},"required":["name"]}}},"required":["children"]}}}]"#,
+        Budget::default(),
+    )
+    .expect("inline twin");
+    let text = std::str::from_utf8(&golden.input).expect("utf-8 input");
+    let three = text.replace(
+        "<parameter=name>c</parameter></parameter>",
+        "<parameter=name>c</parameter></parameter><parameter=children><parameter=name>d</parameter></parameter>",
+    );
+    assert_ne!(three, text);
+    let destinations = |call: &ToolCall| -> Vec<String> {
+        call.repairs
+            .evidence
+            .iter()
+            .filter(|evidence| evidence.rule == "tool_call.parameter.collect")
+            .map(|evidence| evidence.destination.clone())
+            .collect()
+    };
+    // Two occurrences, then three: one collect each, at the same place.
+    for input in [text, three.as_str()] {
+        let reference = golden.tools.recover(input.as_bytes(), &golden.request);
+        let twin = inline.recover(input.as_bytes(), &golden.request);
+        let (reference, twin) = (the_call(&reference), the_call(&twin));
+        assert_eq!(reference.outcome, CallOutcome::Resolved, "{reference:#?}");
+        assert_eq!(reference.arguments.to_json(), twin.arguments.to_json());
+        assert_eq!(rules_of(reference), rules_of(twin), "{input}");
+        assert_eq!(rule_count(reference, "tool_call.parameter.collect"), 1);
+        assert_eq!(destinations(reference), destinations(twin));
+    }
+}
+
+#[test]
+fn xml_array_ref_items_member_shares_outer_name() {
+    // Gap G2 (b): a `$ref` item member named like an outer parameter stays
+    // inside its item (it used to be hoisted to the top level).
+    let (_, result) = golden("xml_array_ref_items_member_shares_outer_name");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"name":"party","outfits":[{"name":"Alice","size":3},{"name":"Bob","size":4}]}"#
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.nested-parameter"), 2);
+    assert_eq!(rule_count(call, "tool_call.xml.array-item"), 2);
+    assert_eq!(
+        rule_count(call, "tool_call.markup.missing-parameter-close"),
+        0
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.stray-closer"), 0);
+    assert_eq!(reading(&result).verdict().code(), "run");
+}
+
+#[test]
+fn xml_array_ref_items_keep_path_not_hijacked() {
+    // Security review R1: in rm(path, keep: array of $ref{path}) the keep
+    // item's `path` stays inside the item; the top-level path is the one
+    // the model wrote as such.
+    let (_, result) = golden("xml_array_ref_items_keep_path_not_hijacked");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"path":"/tmp/x","keep":[{"path":"/home/user/important"}]}"#
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.nested-parameter"), 1);
+    assert_eq!(rule_count(call, "tool_call.xml.array-item"), 1);
+    assert_eq!(
+        rule_count(call, "tool_call.markup.missing-parameter-close"),
+        0
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.stray-closer"), 0);
+}
+
+#[test]
+fn xml_array_ref_items_outer_array_collision() {
+    // Completion audit F1 repro 2: each note's `tags` stays inside its
+    // note (one item of the note's tags); the outer `tags` is unaffected.
+    let (_, result) = golden("xml_array_ref_items_outer_array_collision");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"tags":["work"],"notes":[{"text":"buy milk","tags":["home"]}]}"#
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.nested-parameter"), 1);
+    assert_eq!(rule_count(call, "tool_call.xml.array-item"), 3);
+    assert_eq!(
+        rule_count(call, "tool_call.markup.missing-parameter-close"),
+        0
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.stray-closer"), 0);
+}
+
+#[test]
+fn xml_object_ref_param_member_shares_outer_name() {
+    // The single `$ref` object parameter (same root cause, pre-existing):
+    // its members come from the same scope graph, so `cfg.path` stays in
+    // `cfg` and is never the top-level `path`.
+    let (_, result) = golden("xml_object_ref_param_member_shares_outer_name");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"path":"/a","cfg":{"path":"/b","mode":"x"}}"#
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.nested-parameter"), 1);
+    assert_eq!(
+        rule_count(call, "tool_call.markup.missing-parameter-close"),
+        0
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.stray-closer"), 0);
+}
+
+#[test]
+fn xml_array_anyof_items_union_nest() {
+    // Union nesting rule: an `anyOf` item scope is the union of its object
+    // branches' members, and the item nests because an object branch
+    // declares it; typing stays with the exact schema.
+    let (_, result) = golden("xml_array_anyof_items_union_nest");
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"path":"/a","keep":[{"path":"/b","n":3}]}"#
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.nested-parameter"), 1);
+    assert_eq!(rule_count(call, "tool_call.xml.array-item"), 1);
+    assert_eq!(rule_count(call, "tool_call.value.schema-typed"), 1);
+    assert_eq!(
+        rule_count(call, "tool_call.markup.missing-parameter-close"),
+        0
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.stray-closer"), 0);
+}
+
+#[test]
+fn xml_unmodeled_opaque_scope_boundary() {
+    // Plan review F2: an item whose schema names no member has unknown
+    // membership, so closing it at the opener of `path` (an enclosing
+    // scope's parameter) is a guess. The hoisted path must never run on a
+    // mutating tool: the operation is a best guess and nothing is usable.
+    let (golden, result) = golden("xml_unmodeled_opaque_scope_boundary");
+    let Outcome::BestGuess(calls) = &result.outcome else {
+        panic!("expected a best guess, got {:#?}", result.outcome);
+    };
+    let call = &calls.calls[0];
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"keep":[{}],"path":"/home/user/important"}"#
+    );
+    assert_eq!(
+        rule_count(call, "tool_call.markup.unmodeled-scope-boundary"),
+        1
+    );
+    assert_eq!(rule_count(call, "tool_call.markup.stray-closer"), 1);
+    assert_eq!(
+        rule_count(call, "tool_call.markup.missing-parameter-close"),
+        0
+    );
+    assert!(has_guess(call), "{call:#?}");
+    assert_eq!(call.effects, Some(Effects::Mutating));
+    assert_eq!(calls.verdict().code(), "nothing_usable");
+    assert!(calls.usable().is_empty() && calls.usable_accepting_guesses().is_empty());
+    // The default policy of a mutating tool (`Structural`) does not admit
+    // the guessed rule; under `Tolerant` the call itself is a best guess,
+    // and still not usable on a mutating tool.
+    assert!(is_unresolved(&call.outcome), "{call:#?}");
+    let tolerant = golden.tools.recover(
+        &golden.input,
+        &golden
+            .request
+            .clone()
+            .policy(PolicySelection::All(RepairPolicy::Tolerant)),
+    );
+    let tolerant = the_call(&tolerant);
+    assert_eq!(tolerant.outcome, CallOutcome::BestGuess, "{tolerant:#?}");
+    assert_eq!(
+        tolerant.arguments.to_json(),
+        r#"{"keep":[{}],"path":"/home/user/important"}"#
+    );
+    assert!(!tolerant.is_usable_accepting_guesses());
 }
 
 #[test]

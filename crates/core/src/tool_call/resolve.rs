@@ -1769,6 +1769,7 @@ impl<'a> Resolver<'a> {
                 repairs.entries().saturating_mul(ENTRY_BYTES),
             )?;
             repairs.extend(draft.ledger);
+            self.record_merged(&mut repairs, raw, governor)?;
             let mut blocker = draft.blocker;
             if raw.closure == Closure::Unterminated
                 && let Some(UnresolvedReason::MissingRequired { pointer }) = &blocker
@@ -2270,6 +2271,56 @@ impl Resolver<'_> {
         Ok(readings)
     }
 
+    /// Record `tool_call.parameter.collect` for the occurrences the codec
+    /// merged under a scope the typed shape does not declare.
+    fn record_merged(
+        &self,
+        ledger: &mut CallLedger,
+        raw: &RawCall,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        for merged in &raw.arguments.collected {
+            let name = merged.pointer.rsplit('/').next().unwrap_or_default();
+            let name = name.replace("~1", "/").replace("~0", "~");
+            self.record_collect(
+                ledger,
+                raw,
+                &merged.pointer,
+                &name,
+                merged.occurrences,
+                Some(merged.key_span.clone()),
+                governor,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Record `tool_call.parameter.collect` for the `occurrences`
+    /// occurrences of the array member `name` at `pointer`: the one place
+    /// the evidence is made, for a declared array parameter's occurrences
+    /// (above) and for those the codec merged under a `$ref` or `anyOf`
+    /// scope ([`ArgTree::collected`](super::ArgTree::collected)).
+    #[allow(clippy::too_many_arguments)]
+    fn record_collect(
+        &self,
+        ledger: &mut CallLedger,
+        raw: &RawCall,
+        pointer: &str,
+        name: &str,
+        occurrences: usize,
+        key_span: Option<Range<usize>>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let rule = rules::resolution_rule("tool_call.parameter.collect");
+        let evidence = self.evidence(
+            rule.id,
+            format!("collected {occurrences} occurrence(s) of parameter `{name}` as array items"),
+            key_span,
+            destination(raw, pointer),
+        );
+        ledger.record(rule, evidence, String::new(), String::new(), governor)
+    }
+
     /// The readings of an array or repeatable parameter: every
     /// occurrence's items, in order.
     fn collect(
@@ -2287,18 +2338,15 @@ impl Resolver<'_> {
                 .first()
                 .is_some_and(|occurrence| !matches!(occurrence.value.value, Value::Array(_)));
         if gathered {
-            let rule = rules::resolution_rule("tool_call.parameter.collect");
-            let evidence = self.evidence(
-                rule.id,
-                format!(
-                    "collected {} occurrence(s) of parameter `{}` as array items",
-                    occurrences.len(),
-                    parameter.name
-                ),
+            self.record_collect(
+                &mut ledger,
+                scope.raw,
+                &here.pointer,
+                &parameter.name,
+                occurrences.len(),
                 occurrences[0].key_span.clone(),
-                destination(scope.raw, &here.pointer),
-            );
-            ledger.record(rule, evidence, String::new(), String::new(), governor)?;
+                governor,
+            )?;
         }
         let span = occurrences[0].value.span.clone();
         let mut items: Vec<(Node, String)> = Vec::new();

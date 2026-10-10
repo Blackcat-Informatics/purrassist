@@ -20,6 +20,7 @@ use purrassist_core::wire::WireValue;
 use purrassist_core::{
     AssistResult, Budget, CancellationToken, Effort, Governor, Outcome, StopReason,
 };
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -406,6 +407,126 @@ fn exhaustion_is_explicit_every_resource() {
         StopReason::BudgetExceeded(Resource::Work)
     );
     assert_eq!(result.receipt.sources[0].bytes, output);
+}
+
+/// G16 (security review A6 and P1, historical-fit risk 5): the `Depth`
+/// charge of a nested object frame counts the frame being pushed, the
+/// arguments object being level 1, so with `Budget { depth: d, .. }` the
+/// `xml-params` codec holds objects down to level `d` (`d - 1` nested array
+/// items) and refuses the next with an explicit `BudgetExceeded(Depth)`: no
+/// panic, no string fallback, no partial value. Whole-call recovery charges
+/// the same resource again where it reads the nested value back (JSON tree,
+/// exact-schema validation), so it fits fewer levels under the same budget,
+/// and refuses the first level that does not fit the same way.
+#[test]
+fn nested_item_depth_is_a_stack_guard() {
+    use purrassist_core::grammar::codec::{Codec, CodecContext, CodecEnd, XmlParamsCodec};
+    // A recursive `$ref` schema: its compile cost does not grow with the
+    // output's nesting.
+    let tools = ToolSet::from_openai(
+        r##"[{"type":"function","function":{"name":"tree","parameters":{"type":"object","properties":{"children":{"type":"array","items":{"$ref":"#/$defs/node"}}},"required":["children"],"$defs":{"node":{"type":"object","properties":{"name":{"type":"string"},"children":{"type":"array","items":{"$ref":"#/$defs/node"}}},"required":["name"]}}}}}]"##,
+        Budget::default(),
+    )
+    .expect("tools compile");
+    // `levels` nested items, the innermost at object level `levels + 1`.
+    let body = |levels: usize| -> String {
+        let mut body = String::new();
+        for level in 0..levels {
+            write!(
+                body,
+                "<parameter=children><parameter=name>n{level}</parameter>"
+            )
+            .expect("writing to a String");
+        }
+        body.push_str(&"</parameter>".repeat(levels));
+        body
+    };
+    let turn = |levels: usize| {
+        format!(
+            "<tool_call>\n<function=tree>\n{}\n</function>\n</tool_call>",
+            body(levels)
+        )
+    };
+    let expected = |levels: usize| -> String {
+        let mut json = format!(r#"{{"name":"n{}"}}"#, levels - 1);
+        for level in (0..levels - 1).rev() {
+            json = format!(r#"{{"name":"n{level}","children":[{json}]}}"#);
+        }
+        format!(r#"{{"children":[{json}]}}"#)
+    };
+    let read = |levels: usize, depth: u32| {
+        let text = body(levels);
+        let bytes = text.as_bytes();
+        let context = CodecContext {
+            shape: tools.argument_shape("tree"),
+            ..CodecContext::default()
+        };
+        let mut governor = Governor::new(Budget {
+            depth,
+            ..Budget::default()
+        });
+        XmlParamsCodec::begin(0, &mut governor)
+            .expect("begin")
+            .finish(
+                bytes,
+                0..bytes.len(),
+                CodecEnd::Delimited,
+                context,
+                &mut governor,
+            )
+    };
+    for d in [2_u32, 3, 8, 40, 127] {
+        // The codec: `d - 1` nested items fit, `d` do not.
+        let levels = d as usize - 1;
+        let value = read(levels, d).expect("within the depth").expect("read");
+        assert_eq!(value.tree.root.to_json(), expected(levels), "depth {d}");
+        assert_eq!(
+            read(levels + 1, d).err(),
+            Some(StopReason::BudgetExceeded(Resource::Depth)),
+            "depth {d}: {} nested items",
+            levels + 1
+        );
+        // Whole-call recovery: a level fits when the budget covers all three
+        // layers' charges (`3 * levels + 1`); the first that does not is an
+        // explicit exhaustion.
+        let fits = (d as usize - 1) / 3;
+        let request = ToolRecoveryRequest::default().budget(Budget {
+            depth: d,
+            ..Budget::default()
+        });
+        if fits > 0 {
+            let result = tools.recover(turn(fits).as_bytes(), &request);
+            let Outcome::Resolved(calls) = &result.outcome else {
+                panic!("depth {d}: {fits} nested items: {:#?}", result.outcome);
+            };
+            assert_eq!(
+                calls.calls[0].arguments.to_json(),
+                expected(fits),
+                "depth {d}"
+            );
+            assert_eq!(result.receipt.stopped, StopReason::Completed, "depth {d}");
+        }
+        let result = tools.recover(turn(fits + 1).as_bytes(), &request);
+        assert_eq!(result.outcome, Outcome::Unresolved, "depth {d}");
+        assert_eq!(
+            result.receipt.stopped,
+            StopReason::BudgetExceeded(Resource::Depth),
+            "depth {d}: {} nested items",
+            fits + 1
+        );
+        assert_eq!(
+            result.to_node().get("value").unwrap().to_json(),
+            "null",
+            "depth {d}: no partial value"
+        );
+    }
+    // The CLI and MCP fix the budget at the effort presets' depth, 128.
+    assert_eq!(Budget::default().depth, 128);
+    assert!(read(127, 128).is_ok_and(|value| value.is_ok()));
+    assert_eq!(
+        read(128, 128).err(),
+        Some(StopReason::BudgetExceeded(Resource::Depth))
+    );
 }
 
 #[test]

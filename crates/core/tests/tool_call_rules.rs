@@ -240,6 +240,7 @@ fn every_rule_has_cost_and_policy() {
         "tool_call.markup.closer-variant",
         "tool_call.markup.closers-only-empty",
         "tool_call.markup.missing-parameter-close",
+        "tool_call.markup.unmodeled-scope-boundary",
         "tool_call.markup.missing-function-close",
         "tool_call.markup.missing-wrapper-close",
         "tool_call.markup.missing-wrapper-close.before-text",
@@ -583,6 +584,86 @@ fn definition_grounded_beats_syntax_only() {
     assert_eq!(blind.arguments().to_json(), grounded.arguments().to_json());
     assert!(grounded.reading.cost < blind.reading.cost);
     assert_eq!(blind.outcome, CallOutcome::BestGuess);
+}
+
+/// `tool_call.markup.unmodeled-scope-boundary`: closing a scope whose schema
+/// names no member at an opener an enclosing scope declares is a guess
+/// (syntax-grounded, multiple readings), unlike the definition-grounded
+/// `missing-parameter-close` of a scope that does declare names.
+#[test]
+fn unmodeled_scope_boundary_is_a_guess_and_declared_scopes_are_not() {
+    let rule = rules::rule("tool_call.markup.unmodeled-scope-boundary").expect("rule");
+    assert_eq!(
+        (
+            rule.cost,
+            rule.guess,
+            rule.readings,
+            rule.grounding,
+            rule.loss
+        ),
+        (
+            EditOperator::UnmodeledScopeBoundary.rule().cost * rules::SYNTAX_COST_MULTIPLIER,
+            true,
+            Readings::Multiple,
+            Grounding::Syntax,
+            None
+        )
+    );
+    assert!(rule.is_repair() && !rule.admits(RepairPolicy::Structural));
+    assert!(rule.admits(RepairPolicy::Tolerant));
+    assert_eq!(
+        EditOperator::UnmodeledScopeBoundary.rule().cost,
+        EditOperator::MissingParameterClose.rule().cost
+    );
+    assert!(rules::of_operator(EditOperator::MissingParameterClose).cost < rule.cost);
+    // A free-form object item (no declared member, unknown members kept).
+    let free = compile([ToolDefinition::new("f")
+        .param("path", Param::string())
+        .param(
+            "keep",
+            Param::array(Param::object(
+                ObjectSpec::new().unknown_parameters(UnknownParameters::PassThrough),
+            )),
+        )]);
+    let text = qwen(
+        "f",
+        "<parameter=keep>\n<parameter=path>\n/p\n</parameter>\n</parameter>",
+    );
+    let tolerant = Policies {
+        selection: PolicySelection::All(RepairPolicy::Tolerant),
+        ..Policies::default()
+    };
+    let turn = run_with(
+        DialectId::Qwen3CoderXml,
+        &free,
+        &text,
+        GenerationStop::ToolCalls,
+        &tolerant,
+    );
+    let call = one(&turn);
+    assert_eq!(call.outcome, CallOutcome::BestGuess);
+    assert_eq!(count(call, "tool_call.markup.unmodeled-scope-boundary"), 1);
+    assert_eq!(count(call, "tool_call.markup.missing-parameter-close"), 0);
+    // An object item that declares a member names its scope: the same
+    // opener of an outer parameter ends it by the definition, not a guess.
+    let declared = compile([ToolDefinition::new("f")
+        .param("path", Param::string())
+        .param(
+            "keep",
+            Param::array(Param::object(
+                ObjectSpec::new().param("n", Param::integer()),
+            )),
+        )]);
+    let turn = run_with(
+        DialectId::Qwen3CoderXml,
+        &declared,
+        &text,
+        GenerationStop::ToolCalls,
+        &Policies::default(),
+    );
+    let call = one(&turn);
+    assert_eq!(count(call, "tool_call.markup.missing-parameter-close"), 1);
+    assert_eq!(count(call, "tool_call.markup.unmodeled-scope-boundary"), 0);
 }
 
 fn string_tool(effects: Effects) -> ToolSet {

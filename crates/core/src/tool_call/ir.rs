@@ -169,6 +169,30 @@ pub struct ArgTree {
     /// [`ToolSet::argument_shape`](super::ToolSet::argument_shape)), or
     /// `None` when no declared tool was known to the codec.
     pub tool: Option<String>,
+    /// Array members whose repeated occurrences the codec merged into one
+    /// array, where the typed shape does not declare the member (a `$ref`
+    /// or `anyOf` scope), in document order. Resolution records each as
+    /// `tool_call.parameter.collect`, as it does for a declared array
+    /// parameter's occurrences.
+    pub collected: Vec<CollectedMember>,
+}
+
+/// A repeated array member the codec merged into one array (see
+/// [`ArgTree::collected`]).
+///
+/// ```
+/// use purrassist_core::tool_call::CollectedMember;
+/// let merged = CollectedMember { pointer: "/children".into(), key_span: 3..11, occurrences: 2 };
+/// assert_eq!(merged.occurrences, 2);
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CollectedMember {
+    /// The merged member's pointer in the arguments.
+    pub pointer: String,
+    /// The byte range of the first occurrence's name.
+    pub key_span: Range<usize>,
+    /// How many occurrences were merged (at least two).
+    pub occurrences: usize,
 }
 
 impl ArgTree {
@@ -207,6 +231,7 @@ impl ArgTree {
             unresolved: Vec::new(),
             arguments_were_stringified: false,
             tool: None,
+            collected: Vec::new(),
         }
     }
 
@@ -318,7 +343,22 @@ impl ArgTree {
     /// items the earlier occurrences hold (`/outfits/1/wearer` for the second
     /// occurrence's item, not `/outfits/0/wearer` again), so every leaf and
     /// unresolved value names the item it was read from.
-    pub(crate) fn adopt(&mut self, name: Spanned<String>, mut value: Self) {
+    pub(crate) fn adopt(&mut self, name: Spanned<String>, value: Self) {
+        self.adopt_collecting(name, value, false);
+    }
+
+    /// [`Self::adopt`], and with `collect` an array `value` is appended to
+    /// the array an earlier occurrence of `name` already holds instead of
+    /// becoming a duplicate member: the occurrences of an array member of a
+    /// scope the typed model does not declare (a `$ref` or `anyOf` item)
+    /// are collected here, as resolution collects those of a declared array
+    /// parameter.
+    pub(crate) fn adopt_collecting(
+        &mut self,
+        name: Spanned<String>,
+        mut value: Self,
+        collect: bool,
+    ) {
         let prefix = format!("/{}", pointer_segment(&name.value));
         let whole = value.is_stand_in();
         if matches!(value.root.value, Value::Array(_)) && !whole {
@@ -340,8 +380,16 @@ impl ArgTree {
                 for unresolved in &mut value.unresolved {
                     unresolved.pointer = shift_item(&unresolved.pointer, earlier);
                 }
+                for merged in &mut value.collected {
+                    merged.pointer = shift_item(&merged.pointer, earlier);
+                }
             }
         }
+        self.collected
+            .extend(value.collected.into_iter().map(|merged| CollectedMember {
+                pointer: format!("{prefix}{}", merged.pointer),
+                ..merged
+            }));
         self.leaves
             .extend(value.leaves.into_iter().map(|leaf| ArgLeaf {
                 pointer: format!("{prefix}{}", leaf.pointer),
@@ -361,6 +409,38 @@ impl ArgTree {
             return;
         }
         if let Value::Object(members) = &mut self.root.value {
+            if collect
+                && let Value::Array(items) = &mut value.root.value
+                && let Some(earlier) = members.iter_mut().find(|member| {
+                    member.key == name.value && matches!(member.value.value, Value::Array(_))
+                })
+                && let Value::Array(into) = &mut earlier.value.value
+            {
+                into.append(items);
+                let first = earlier
+                    .key_span
+                    .clone()
+                    .unwrap_or_else(|| name.span.clone());
+                match self
+                    .collected
+                    .iter_mut()
+                    .find(|merged| merged.pointer == prefix)
+                {
+                    Some(merged) => merged.occurrences += 1,
+                    None => self.collected.push(CollectedMember {
+                        pointer: prefix,
+                        key_span: first,
+                        occurrences: 2,
+                    }),
+                }
+                earlier.value.span = match (earlier.value.span.take(), value.root.span.take()) {
+                    (Some(first), Some(last)) => {
+                        Some(first.start.min(last.start)..first.end.max(last.end))
+                    }
+                    (span, other) => span.or(other),
+                };
+                return;
+            }
             members.push(Member {
                 key: name.value,
                 key_span: Some(name.span),

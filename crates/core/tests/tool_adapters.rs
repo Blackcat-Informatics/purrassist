@@ -9,7 +9,7 @@ use purrassist_core::{
     json,
     schema::Schema,
     tool_call::{
-        CompiledTool, DeclarationForm, Effects, Param, RepairPolicy, ToolDeclaration,
+        CompiledTool, DeclarationForm, Effects, Nesting, Param, RepairPolicy, ToolDeclaration,
         ToolDefinition, ToolSet, ToolSetError, ToolSource, UnknownParameters, ValueShape,
     },
 };
@@ -1164,4 +1164,117 @@ fn assert_draft07_root_rules(tools: &ToolSet) {
             .unwrap()
             .valid
     );
+}
+
+/// The scope graph (issue #8 section 1, gap G2): one node per distinct schema
+/// location, a recursive `$ref` a back-edge by node index, unions the union
+/// of their object branches, and a typed-definition tool has none.
+#[test]
+fn scope_graph_has_one_node_per_location_and_back_edges() {
+    let tools = ToolSet::from_openai(
+        r##"[{"type":"function","function":{"name":"t","parameters":{"type":"object",
+        "properties":{"children":{"type":"array","items":{"$ref":"#/$defs/node"}},
+                      "root":{"$ref":"#/$defs/node"},
+                      "u":{"anyOf":[{"type":"object","properties":{"a":{"type":"string"}}},
+                                    {"$ref":"#/$defs/node"},{"type":"null"}]},
+                      "free":{"type":"array","items":{"type":"object","additionalProperties":true}},
+                      "text":{"$ref":"#/$defs/text"}},
+        "$defs":{"node":{"type":"object","properties":{"name":{"type":"string"},
+                  "tags":{"type":"array","items":{"type":"string"}},
+                  "children":{"type":"array","items":{"$ref":"#/$defs/node"}}}},
+                 "text":{"type":"string"}}}}}]"##,
+        Budget::default(),
+    )
+    .unwrap();
+    let shape = tools.argument_shape("t").unwrap();
+    let nesting = |name: &str| shape.arguments.parameter(name).unwrap().nesting;
+    // `children` items, `root` and the `$ref` branch of `u` share the one
+    // `node` location; the `anyOf` union is its own location.
+    let Nesting::ArrayOfObject(node) = nesting("children") else {
+        panic!("{:?}", nesting("children"))
+    };
+    assert_eq!(nesting("root"), Nesting::Object(node));
+    let scope = shape.scopes.node(node).unwrap();
+    assert!(scope.declares("name") && scope.declares("children") && scope.declares("tags"));
+    assert!(!scope.declares("a") && scope.is_open() && !scope.is_opaque());
+    // The recursion is a back-edge to the same node, not an unrolling.
+    let child = scope.member("children").unwrap();
+    assert_eq!(child.nesting, Nesting::ArrayOfObject(node));
+    assert!(child.array);
+    let tags = scope.member("tags").unwrap();
+    assert_eq!((tags.nesting, tags.array), (Nesting::None, true));
+    assert!(!scope.member("name").unwrap().array);
+    let Nesting::Object(union) = nesting("u") else {
+        panic!("{:?}", nesting("u"))
+    };
+    assert_ne!(union, node);
+    let union = shape.scopes.node(union).unwrap();
+    assert!(
+        ["a", "name", "tags", "children"]
+            .iter()
+            .all(|name| union.declares(name))
+    );
+    // A free-form object item is a typed object (no graph node); a `$ref`
+    // to a string names no member, so its scope is opaque.
+    assert_eq!(nesting("free"), Nesting::None);
+    let Nesting::Object(text) = nesting("text") else {
+        panic!("{:?}", nesting("text"))
+    };
+    assert!(shape.scopes.node(text).unwrap().is_opaque());
+    // Nodes: node, union, text.
+    assert_eq!(shape.scopes.len(), 3);
+    // A typed-definition tool has no graph.
+    let typed = ToolSet::compile(
+        [ToolDefinition::new("p").param("a", Param::string())],
+        Budget::default(),
+    )
+    .unwrap();
+    assert!(typed.argument_shape("p").unwrap().scopes.is_empty());
+}
+
+/// Scope graph compilation is charged and bounded by the schema's size, and
+/// running out is explicit.
+#[test]
+fn scope_graph_compilation_is_charged_and_explicit() {
+    let defs: Vec<String> = (0..40)
+        .map(|index| {
+            format!(
+                r##""d{index}":{{"type":"object","properties":{{"x":{{"type":"string"}},"next":{{"$ref":"#/$defs/d{}"}}}}}}"##,
+                (index + 1) % 40
+            )
+        })
+        .collect();
+    let properties: Vec<String> = (0..40)
+        .map(|index| format!(r##""p{index}":{{"$ref":"#/$defs/d{index}"}}"##))
+        .collect();
+    let schema = format!(
+        r#"{{"type":"object","properties":{{{}}},"$defs":{{{}}}}}"#,
+        properties.join(","),
+        defs.join(",")
+    );
+    let input = format!(r#"{{"name":"wide","inputSchema":{schema}}}"#);
+    let mut governor = Governor::new(Budget::default());
+    let tools = ToolSet::from_mcp_governed(&input, &mut governor).unwrap();
+    let shape = tools.argument_shape("wide").unwrap();
+    // 40 locations, each referred to by one parameter and by the previous
+    // location's `next`: one node each, however many references.
+    assert_eq!(shape.scopes.len(), 40);
+    let usage = governor.usage();
+    for (resource, needed) in [
+        (Resource::Work, usage.work),
+        (Resource::ScratchBytes, usage.peak_scratch_bytes),
+    ] {
+        for limit in [needed / 2, needed - 1] {
+            let mut budget = Budget::default();
+            match resource {
+                Resource::Work => budget.work = limit,
+                _ => budget.scratch_bytes = limit,
+            }
+            assert_eq!(
+                ToolSet::from_mcp_governed(&input, &mut Governor::new(budget)).unwrap_err(),
+                ToolSetError::Resource(StopReason::BudgetExceeded(resource)),
+                "{resource:?} {limit}"
+            );
+        }
+    }
 }

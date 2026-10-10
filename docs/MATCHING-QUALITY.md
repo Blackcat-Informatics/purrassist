@@ -144,7 +144,7 @@ test's assertions fails the build by design.
 | Path matching | 1594 | 1279 | 0 | 315 | 80.2% | 0.0% | 0.234% | 2% |
 | Phonetic ambiguity | 1408 | 1089 | 0 | 319 | 77.3% | 0.0% | 0.275% | 5% |
 | JSON recovery | 714 | 630 | 0 | 84 | 88.2% | 0.0% | 0.474% | 2% |
-| Tool-call recovery | 18166 | 12621 | 0 | 5545 | 69.5% | 0.0% | 0.024% | 1% |
+| Tool-call recovery | 18176 | 12629 | 0 | 5547 | 69.5% | 0.0% | 0.024% | 1% |
 
 "Coverage" is the fraction of cases an automatic decision was reached for at
 all (correct + incorrect, over the total); "risk" is the observed error rate
@@ -260,7 +260,18 @@ parameters use pydantic and MCP schema forms: `Optional[int]` and
 constants and a type array) write Qwen3-Coder XML calls whose text the exact
 schema types (`tool_call.value.schema-typed`), alone, under every built-in
 dialect and under `Structural`, with a Hermes JSON control and a value no
-reading validates (abstain). For the six
+reading validates (abstain). The adapter tool `file_tasks` adds the `$ref`
+scopes of issue #8 section 1 (gap G2), filed under
+`tool_call.markup.nested-parameter`, each under the per-tool and the
+`Structural` policy: array items whose members share the name of an outer
+parameter (`name`, and an outer array parameter's `tags`), a recursive
+`$ref` item written with balanced nested markup, and a single `$ref` object
+parameter whose member shares an outer name each keep their members inside
+their own scope (the truth is the faithful nesting; before the scope graph
+these were hoisted or flattened and reported `Resolved`), while a free-form
+object item that names no member and holds an opener of an outer parameter
+abstains (the closing is a guess, `tool_call.markup.unmodeled-scope-boundary`,
+never run on a mutating tool). For the six
 JSON-envelope dialects (Hermes, Llama 3 JSON, Mistral v3, Anthropic,
 `OpenAI`, bare JSON), `envelope` cases put one JSON syntax slip in the call
 object around the arguments, two slips per witness rotating by tool and
@@ -337,7 +348,7 @@ any answer to a truth-`Unresolved` case. The test pins the totals above,
 asserts zero incorrect answers overall, per rule and per dialect, at least 20
 cases per rule, and abstention recall of 100%:
 
-Abstention recall: 5413 of 5413 truth-`Unresolved` cases abstained (100.0%).
+Abstention recall: 5415 of 5415 truth-`Unresolved` cases abstained (100.0%).
 
 The 132 other abstentions are coverage gaps, not errors: read-only calls whose
 required arguments were nested one level down (`DropWithLoss` drops the
@@ -390,7 +401,7 @@ unassignable (`UnknownParameter`), so the call abstains.
 | `tool_call.markup.missing-token` | 432 | 432 | 0 | 0 | 0 |
 | `tool_call.markup.missing-wrapper-close` | 324 | 324 | 0 | 0 | 0 |
 | `tool_call.markup.missing-wrapper-close.before-text` | 288 | 120 | 0 | 168 | 168 |
-| `tool_call.markup.nested-parameter` | 24 | 24 | 0 | 0 | 0 |
+| `tool_call.markup.nested-parameter` | 34 | 32 | 0 | 2 | 2 |
 | `tool_call.markup.parameter-closed-by-element` | 35 | 35 | 0 | 0 | 0 |
 | `tool_call.markup.stray-closer` | 836 | 803 | 0 | 33 | 33 |
 | `tool_call.markup.terminal-confusable` | 216 | 216 | 0 | 0 | 0 |
@@ -424,7 +435,7 @@ and by dialect allow-list:
 
 | Dialect | Cases | Correct | Incorrect | Abstained |
 | --- | ---: | ---: | ---: | ---: |
-| `adapter` | 27 | 24 | 0 | 3 |
+| `adapter` | 37 | 32 | 0 | 5 |
 | `anthropic` | 1446 | 991 | 0 | 455 |
 | `bare` | 1266 | 811 | 0 | 455 |
 | `deepseek3` | 1894 | 1423 | 0 | 471 |
@@ -455,7 +466,7 @@ and by dialect allow-list:
 | `mistral-v11.v1` | 558 | 364 | 0 | 194 |
 | `mistral-v3.v1` | 666 | 459 | 0 | 207 |
 | `openai-tool-calls.v1` | 460 | 294 | 0 | 166 |
-| `qwen3-coder-xml.v1` | 840 | 608 | 0 | 232 |
+| `qwen3-coder-xml.v1` | 850 | 616 | 0 | 234 |
 
 Rules no case exercises: `json.syntax.literal-escape` (no witness value
 contains a backslash to unescape). `tool_call.markup.terminal-confusable` is

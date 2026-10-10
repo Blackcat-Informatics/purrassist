@@ -60,6 +60,7 @@ mod recognizer;
 pub mod recover;
 pub mod resolve;
 pub mod rules;
+mod scope;
 mod shape;
 mod toolset;
 
@@ -76,8 +77,8 @@ pub use emit::{
 pub use from_node::{FromNode, FromNodeError};
 pub use ir::{
     ArgLeaf, ArgOrigin, ArgTree, ArgumentFault, CallSegment, CaptureSpan, Choice, Closure,
-    LEAF_CHARGE, Piece, ProductionKind, RawCall, ReasoningClosure, ReasoningSegment, Rejection,
-    Segment, Spanned, UnresolvedArgument,
+    CollectedMember, LEAF_CHARGE, Piece, ProductionKind, RawCall, ReasoningClosure,
+    ReasoningSegment, Rejection, Segment, Spanned, UnresolvedArgument,
 };
 pub use recognizer::{GenerationStop, ReasoningPolicy, RecognizedTurn, Recognizer};
 pub use recover::{
@@ -92,6 +93,7 @@ pub use resolve::{
     resolve_forest,
 };
 pub use rules::{RULES, Rule};
+pub use scope::{Nesting, ScopeGraph, ScopeMember, ScopeNode};
 pub use shape::{
     ArgumentShape, NameLiteral, ObjectShape, ParameterDefault, ParameterShape, PatternConstraint,
     ShapeStep, ValueShape,

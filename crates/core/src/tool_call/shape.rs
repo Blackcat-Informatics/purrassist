@@ -9,6 +9,7 @@
 //! the required set, and repeatable flags. It carries no parser state, so any
 //! grammar engine can compile it.
 use super::UnknownParameters;
+use super::scope::{Nesting, ScopeGraph};
 use crate::json::Node;
 use crate::pattern::Pattern;
 
@@ -28,6 +29,11 @@ pub struct ArgumentShape {
     pub tool: String,
     /// The top-level arguments object.
     pub arguments: ObjectShape,
+    /// The scope graph of the member names the exact schema declares where
+    /// the typed shape stops ([`ValueShape::Unmodeled`]); empty for a tool
+    /// built from typed definitions. [`ParameterShape::nesting`] refers
+    /// into it by node index.
+    pub scopes: ScopeGraph,
 }
 
 /// One object scope: its parameters and name literal table.
@@ -144,6 +150,11 @@ pub struct ParameterShape {
     pub repeatable: bool,
     /// The declared default; exposed only, never applied by repair.
     pub default: Option<Node>,
+    /// For a [`ValueShape::Unmodeled`] value (or an array of them) built from
+    /// an exact schema, the scope its nested parameter elements are members
+    /// of: a node of [`ArgumentShape::scopes`]. [`Nesting::None`] for every
+    /// other parameter.
+    pub nesting: Nesting,
 }
 
 /// A declared value type with the literals and constraints a grammar needs.
@@ -186,7 +197,9 @@ pub enum ValueShape {
     /// where the schema admits it and not the verbatim string, and the
     /// verbatim string is kept wherever it validates
     /// (`tool_call.value.schema-typed`, grounded in the definition, not a
-    /// guess).
+    /// guess). The member names its exact schema declares are in the tool's
+    /// [`ArgumentShape::scopes`], reached through
+    /// [`ParameterShape::nesting`].
     ///
     /// ```
     /// use purrassist_core::{Budget, tool_call::{ToolSet, ValueShape}};

@@ -74,6 +74,15 @@
 //! Draft-07 tuple-form `items` array) has [`super::ValueShape::Unmodeled`]
 //! items. Adapters create no aliases.
 //!
+//! The member names an unmodeled value's exact schema declares are kept
+//! beside the typed shape, as a scope graph ([`super::ScopeGraph`], one
+//! node per schema location, local `$ref` followed one hop per location and
+//! a recursive `$ref` a back-edge by node index; compile cost is charged to
+//! the governor and bounded by the schema's size): the Qwen3-Coder XML codec
+//! uses it to tell which scope a nested `<parameter=NAME>` opener belongs to.
+//! [`super::ParameterShape::nesting`] refers a parameter into it. It carries
+//! names only; typing stays with the exact schema.
+//!
 //! Draft-07 schemas follow Draft-07 rules: a parameter using `dependencies`
 //! (whose schema form is `dependentSchemas`) is unmodeled; a nested
 //! `$schema` that switches dialect makes its value unmodeled; a root `$ref`

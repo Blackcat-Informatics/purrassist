@@ -1,0 +1,78 @@
+{
+  "description": "Issue #8 section 1, gap G2 (plan review F2): an item whose schema names no member (a free-form object) has unknown membership, so an opener an enclosing scope declares (path) closing it is a guess (unmodeled-scope-boundary), never definition-grounded. The call is a best guess, never usable on a mutating tool, instead of running the hoisted path.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "rm",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "keep": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "input": "<tool_call>\n<function=rm>\n<parameter=keep>\n<parameter=path>\n/home/user/important\n</parameter>\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "rm",
+      "arguments": {
+        "keep": [
+          {}
+        ],
+        "path": "/home/user/important"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "unresolved: rule_not_admitted: rule `tool_call.markup.unmodeled-scope-boundary` is not admitted under Structural",
+      "rules": [
+        "tool_call.markup.nested-parameter",
+        "tool_call.markup.unmodeled-scope-boundary",
+        "tool_call.xml.array-item",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.markup.stray-closer"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.nested-parameter",
+    "tool_call.markup.unmodeled-scope-boundary",
+    "tool_call.xml.array-item",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.stray-closer"
+  ]
+}

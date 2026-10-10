@@ -54,12 +54,44 @@ first-party; no chat-template text is copied into this repository.
   This needs the tool to be known when the body is read: with no declared tool
   there is no scope to open, so the repetitions are not nested objects.
   An array of strings never nests: nested tags stay verbatim text of the item
-  (`xml_array_string_item_keeps_nested_tags`). Limit: where an item's own
-  schema declares a member with the array's name, an inner opener of that
-  name is that member (a child), not the next item
-  (`xml_array_nested_object_same_name_member`); an item schema that is only
-  a recursive `$ref` is unmodeled and has no such members, so the inner
-  opener is read as the next item, with `tool_call.markup.missing-parameter-close`.
+  (`xml_array_string_item_keeps_nested_tags`). An item's members are
+  declared only in the item's scope, so a member whose name is the array's
+  own name is the item's member (a child), never the next item
+  (`xml_array_nested_object_same_name_member`).
+  *Scope graph.* A `$ref`, `anyOf`, `oneOf` or `allOf` item or parameter is
+  unmodeled by the typed shape, but the tool's exact schema still declares
+  its member names, and the codec uses them: the tool's schema is compiled
+  once into a scope graph with one node per distinct schema location (a
+  `$defs` or `definitions` entry, an inline object, or the union of the
+  object branches of an `anyOf`/`oneOf`/`allOf`), each node holding its
+  member names and, per member, whether its value nests as an object or as an
+  array of objects. A recursive `$ref` is a back-edge to its own node, never
+  an unrolling. So a recursive `$ref` item nests exactly like its inline
+  twin (`xml_array_recursive_ref_items_nest`, balanced input needing no
+  repair; `xml_array_ref_items_repeated_member_collects`), and a `$ref` item
+  member that shares the name of an outer parameter stays inside its item
+  (`xml_array_ref_items_member_shares_outer_name`,
+  `xml_array_ref_items_keep_path_not_hijacked`,
+  `xml_array_ref_items_outer_array_collision`, and for a single `$ref`
+  object parameter `xml_object_ref_param_member_shares_outer_name`). Under a
+  union scope a member nests when its body begins with `<parameter=` and any
+  object branch declares it an object or an array of objects
+  (`xml_array_anyof_items_union_nest`). The graph names scopes only: typing
+  stays with the tool's exact schema (`tool_call.value.schema-typed`), except
+  that a member whose every non-null branch is an array reads text that is
+  not a JSON array as one item and collects repeated occurrences.
+  *Opaque scopes.* A scope whose schema names no member (a free-form object
+  item such as `{"type":"object","additionalProperties":true}`, or a `$ref`
+  to a value that is not an object) has unknown membership. If its open
+  nested element's opener names a parameter an enclosing scope declares, the
+  codec closes the scope there as a guess,
+  `tool_call.markup.unmodeled-scope-boundary` (not the definition-grounded
+  `tool_call.markup.missing-parameter-close`: the opener may be the scope's
+  own member). The call is a best guess, never usable on a mutating tool
+  (`xml_unmodeled_opaque_scope_boundary`: `rm` with `keep` of free-form
+  objects does not run with the item's `path` as its own path). The scope
+  graph resolves local `$ref` pointers only (`#`, `#/...`); a remote or
+  anchor reference leaves the scope open and, with no name, opaque.
   A body that is one whole JSON object is accepted as the arguments.
   A string value may hold closer text (see
   [Closer text inside a value](#closer-text-inside-a-value)).

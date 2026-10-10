@@ -1,5 +1,5 @@
 {
-  "description": "Issue #8 section 1, documented limit: a recursive $ref item is unmodeled and declares nothing, so an inner opener of the array's own name inside an unclosed item is the next item (missing-parameter-close), never the item's child.",
+  "description": "Issue #8 section 1: repeated array members inside a $ref item collect into one array in source order, as the inline schema's do.",
   "tools_openai": [
     {
       "type": "function",
@@ -44,7 +44,7 @@
   "dialects": [
     "qwen3-coder-xml.v1"
   ],
-  "input": "<tool_call>\n<function=tree>\n<parameter=children><parameter=name>a</parameter><parameter=children><parameter=name>b</parameter></parameter></parameter></function>\n</tool_call>",
+  "input": "<tool_call>\n<function=tree>\n<parameter=children><parameter=name>a</parameter><parameter=children><parameter=name>b</parameter></parameter><parameter=children><parameter=name>c</parameter></parameter></parameter>\n</function>\n</tool_call>",
   "outcome": "resolved",
   "stopped": "completed",
   "finish": "calls",
@@ -60,10 +60,15 @@
       "arguments": {
         "children": [
           {
-            "name": "a"
-          },
-          {
-            "name": "b"
+            "name": "a",
+            "children": [
+              {
+                "name": "b"
+              },
+              {
+                "name": "c"
+              }
+            ]
           }
         ]
       },
@@ -73,11 +78,11 @@
       "outcome": "resolved",
       "rules": [
         "tool_call.markup.nested-parameter",
-        "tool_call.markup.missing-parameter-close",
+        "tool_call.markup.nested-parameter",
         "tool_call.xml.array-item",
         "tool_call.markup.nested-parameter",
         "tool_call.xml.array-item",
-        "tool_call.markup.stray-closer",
+        "tool_call.xml.array-item",
         "tool_call.parameter.collect"
       ]
     }
@@ -89,11 +94,11 @@
   "failed_validations": [],
   "ledger_rules": [
     "tool_call.markup.nested-parameter",
-    "tool_call.markup.missing-parameter-close",
+    "tool_call.markup.nested-parameter",
     "tool_call.xml.array-item",
     "tool_call.markup.nested-parameter",
     "tool_call.xml.array-item",
-    "tool_call.markup.stray-closer",
+    "tool_call.xml.array-item",
     "tool_call.parameter.collect"
   ]
 }

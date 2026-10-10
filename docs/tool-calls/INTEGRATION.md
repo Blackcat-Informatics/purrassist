@@ -736,7 +736,41 @@ declarations the model was shown and lose nothing.
   ancestor are tried one at a time), so a call costs a handful of
   validations whatever its size, each charged to the request's governor;
   running out is the request's explicit `BudgetExceeded`, never a quiet
-  verbatim fallback. JSON arguments arrive typed and are never retyped. *Proved by* `tool_call_goldens::unmodeled_schemas_type_xml_text`
+  verbatim fallback. JSON arguments arrive typed and are never retyped.
+  - **Scope graph (member names of unmodeled scopes).** Typing is the
+    exact schema's, but which parameter a nested `<parameter=NAME>` opener
+    belongs to is decided by names, so the adapters also compile, once per
+    tool and charged to the governor, a *scope graph* from the exact
+    schema (`ArgumentShape::scopes`; each `ParameterShape::nesting` refers
+    into it): one node per distinct schema location (a `$defs` or
+    `definitions` entry, an inline object, an `anyOf`/`oneOf`/`allOf`
+    union), holding the member names it declares and, per member, whether
+    its value nests as an object or as an array of objects. A recursive
+    `$ref` is a back-edge by node index. So a `$ref` item or object
+    parameter whose member shares the name of an outer parameter (the
+    common pydantic `$defs` shape: `name`, `id`, `tags`) keeps that member
+    inside its own scope, and a balanced recursive tree nests exactly as
+    its inline twin does; neither is flattened or hoisted into a
+    `Resolved` call. A scope whose schema names no member (a free-form
+    object, a `$ref` to a non-object) has unknown membership: closing it at
+    an enclosing scope's opener is the guess
+    `tool_call.markup.unmodeled-scope-boundary`, a best guess that is never
+    usable on a mutating tool. Only local `$ref` pointers are resolved.
+    *Nesting limit.* `Budget::depth` guards nested parameters: the codec
+    fits `depth - 1` object levels, and a whole recovered call fits about
+    `(depth - 1) / 3` nested item levels (about 42 at the CLI and MCP value,
+    128), because depth is charged again where the value is read back;
+    anything deeper is the explicit `BudgetExceeded(Depth)`, never a partial
+    value (`tool_call_recover::nested_item_depth_is_a_stack_guard`).
+    *Proved by* `tool_call_goldens::xml_array_recursive_ref_items_nest`,
+    `xml_array_ref_items_member_shares_outer_name`,
+    `xml_array_ref_items_keep_path_not_hijacked`,
+    `xml_array_ref_items_outer_array_collision`,
+    `xml_object_ref_param_member_shares_outer_name`,
+    `xml_array_anyof_items_union_nest` and
+    `xml_unmodeled_opaque_scope_boundary`, and the correction corpus's
+    `file_tasks` cases.
+  - *Typing proved by* `tool_call_goldens::unmodeled_schemas_type_xml_text`
   (`Optional[int]`, `Optional[str]` with numeric text, `anyOf[string,
   integer]`, `$ref` scalar, `$ref` object inline and as nested parameters,
   `oneOf` constants, a recursive `$ref`, a type array, an unmatched value,

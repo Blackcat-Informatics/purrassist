@@ -8,6 +8,7 @@ use super::definition::{
     UnknownParameters,
 };
 use super::emit::{self, EmitError};
+use super::scope::{Nesting, ScopeCompiler, ScopeGraph};
 use super::shape::{
     ArgumentShape, NameLiteral, ObjectShape, ParameterDefault, ParameterShape, PatternConstraint,
     ShapeStep, ValueShape,
@@ -901,9 +902,18 @@ fn compile_tool(entry: Pending, governor: &mut Governor) -> Result<CompiledTool,
             .as_ref()
             .map(|declared| declared.schema_text.as_str()),
         resources: BTreeMap::new(),
+        scopes: declaration.as_ref().map(|declared| {
+            ScopeCompiler::new(declared.schema.document(), declared.schema.dialect())
+        }),
     };
     let arguments = builder.object(&definition.arguments, unknown, 1)?;
     let defaults = builder.defaults;
+    let scopes = match builder.scopes {
+        Some(compiler) => compiler
+            .finish(builder.governor)
+            .map_err(ToolSetError::Resource)?,
+        None => ScopeGraph::default(),
+    };
     let (schema_document, schema_text, schema, source, unmodeled_keywords) =
         if let Some(declared) = declaration {
             let Declared {
@@ -963,6 +973,7 @@ fn compile_tool(entry: Pending, governor: &mut Governor) -> Result<CompiledTool,
         shape: ArgumentShape {
             tool: definition.name.clone(),
             arguments,
+            scopes,
         },
         defaults,
         source,
@@ -1132,9 +1143,39 @@ struct ShapeBuilder<'a> {
     exact: Option<&'a str>,
     /// `exact` supplied under [`ARGUMENTS_URI`], filled on first use.
     resources: BTreeMap<String, String>,
+    /// The scope graph under construction (an adapter tool's exact schema).
+    scopes: Option<ScopeCompiler<'a>>,
 }
 
 impl ShapeBuilder<'_> {
+    /// How the nested parameter elements of a parameter of shape `value`
+    /// at the current path are scoped: the scope graph node of its exact
+    /// schema location when the value is unmodeled (or an array of
+    /// unmodeled items).
+    fn nesting(&mut self, value: &ValueShape) -> Result<Nesting, ToolSetError> {
+        if self.scopes.is_none() {
+            return Ok(Nesting::None);
+        }
+        let pointer = match value {
+            ValueShape::Unmodeled => self.schema_pointer(),
+            ValueShape::Array(items) if **items == ValueShape::Unmodeled => {
+                format!("{}/items", self.schema_pointer())
+            }
+            _ => return Ok(Nesting::None),
+        };
+        let Some(scopes) = self.scopes.as_mut() else {
+            return Ok(Nesting::None);
+        };
+        let node = scopes
+            .scope(&pointer, self.governor)
+            .map_err(ToolSetError::Resource)?;
+        Ok(if matches!(value, ValueShape::Unmodeled) {
+            Nesting::Object(node)
+        } else {
+            Nesting::ArrayOfObject(node)
+        })
+    }
+
     fn location(&self, leaf: Option<&str>) -> String {
         let mut location = String::from("#");
         for step in &self.path {
@@ -1312,6 +1353,7 @@ impl ShapeBuilder<'_> {
                 ));
             }
             let value = builder.value(spec, inherited, depth)?;
+            let nesting = builder.nesting(&value)?;
             if let Some(default) = &spec.default {
                 builder.validate_default(spec, inherited, default)?;
             }
@@ -1322,6 +1364,7 @@ impl ShapeBuilder<'_> {
                 required: spec.required,
                 repeatable: spec.repeatable,
                 default: spec.default.clone(),
+                nesting,
             })
         })
     }
