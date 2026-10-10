@@ -949,6 +949,13 @@ Not covered, by design, and still explicit exhaustions under `sized`:
   943fa04. Under plain `sized`, such output ends
   `BudgetExceeded(Work)` explicitly from about 16 sections. Ordinary output
   rarely restarts a section. The fix is tracked in issue #10.
+- A mutated Qwen3-Coder XML turn calling a tool whose array items are
+  free-form objects (issue #11): the repair search spends about 240 to 280 ns
+  per charged work unit, against 40 to 80 ns for ordinary recovery. Charged
+  work therefore under-counts its real work several times over. Under plain
+  `sized` the 192-byte reproduction ends `BudgetExceeded(Work)` in 0.3 s; at
+  `Effort::Maximum` it completes in 1.65 s (6.9 million work). The fix is
+  tracked in issue #11.
 
 Consecutive Mistral v11 calls with nothing but whitespace between them (or
 nothing at all) are one `next`-chained attempt. Each call extends the

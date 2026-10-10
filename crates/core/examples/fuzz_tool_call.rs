@@ -11,6 +11,14 @@
 //! number, boolean, enumeration, array, and nested object parameters) over
 //! every built-in dialect.
 //!
+//! `--tools ref` (the `tool-call-ref` target) selects a second fixed tool
+//! set compiled with `ToolSet::from_openai`: arrays of `$ref` items, `anyOf`
+//! items, member names that collide with an outer parameter, a recursive
+//! `$ref` tree, free-form object items, inline object items, and a Draft-07
+//! root `$ref` tool. The default (`--tools fixed`) is unchanged: new tools
+//! live only in the `ref` set so no earlier seed changes meaning. Every
+//! other byte of the protocol and every check below is shared.
+//!
 //! Control byte: bits 0-1 the repair policy (per tool, all `Structural`, all
 //! `Tolerant`, per tool), bits 2-3 the generation stop (`Stop`, `Length`,
 //! `ToolCalls`, `Unknown`), bits 4-5 the reasoning policy (separate, starting
@@ -148,7 +156,7 @@ use std::io::{self, Read};
 /// mutating, with every parameter kind), a read-only tool with no required
 /// parameter (the issue's motivating stray-closer case), and a mutating
 /// tool with an alias and a repeatable parameter.
-fn tools() -> ToolSet {
+fn fixed_tools() -> ToolSet {
     let owner = ObjectSpec::new()
         .param("name", Param::string())
         .param("uid", Param::integer());
@@ -189,6 +197,70 @@ fn tools() -> ToolSet {
         Budget::default(),
     )
     .expect("the fixed tool set compiles")
+}
+
+/// The `--tools ref` set: a second fixed tool set compiled with
+/// [`ToolSet::from_openai`] so schema keywords the builder cannot express
+/// (`$ref`, `anyOf`, `additionalProperties`, `$defs` roots) reach the
+/// nested-parameter code. Every tool is mutating (the adapter's default).
+/// `read_file` is kept so the forced tool choice of the header names a tool.
+///
+/// - `read_file`: a string `path` and an integer `limit`;
+/// - `batch_refs`: an outer `name` beside an array of `$ref` items whose
+///   `name` collides with it, and a plain array of strings;
+/// - `any_items`: an array whose items are `anyOf` an object or a string;
+/// - `tree_walk`: a recursive `$ref` tree (`children` items refer to the node);
+/// - `free_items`: a `path` and an array of free-form object items
+///   (`additionalProperties` true);
+/// - `list_records`: an array of inline object items (one member an array
+///   of strings), the plain `Param::array(Param::object(..))` shape;
+/// - `root_ref`: a root `$ref` into `definitions` under Draft-07, with an
+///   array of object items inside the target.
+const REF_TOOLS: &str = r##"[
+ {"type":"function","function":{"name":"read_file","parameters":{"type":"object",
+  "properties":{"path":{"type":"string"},"limit":{"type":"integer"}},"required":["path"]}}},
+ {"type":"function","function":{"name":"batch_refs","parameters":{"type":"object",
+  "properties":{"name":{"type":"string"},
+   "items":{"type":"array","items":{"$ref":"#/$defs/rec"}},
+   "tags":{"type":"array","items":{"type":"string"}}},
+  "$defs":{"rec":{"type":"object","properties":{"name":{"type":"string"},"count":{"type":"integer"},
+   "tags":{"type":"array","items":{"type":"string"}}}}}}}},
+ {"type":"function","function":{"name":"any_items","parameters":{"type":"object",
+  "properties":{"path":{"type":"string"},
+   "choices":{"type":"array","items":{"anyOf":[
+    {"type":"object","properties":{"kind":{"type":"string"},"n":{"type":"integer"}}},
+    {"type":"string"}]}}}}}},
+ {"type":"function","function":{"name":"tree_walk","parameters":{"type":"object",
+  "properties":{"root":{"$ref":"#/$defs/node"}},
+  "$defs":{"node":{"type":"object","properties":{"label":{"type":"string"},
+   "children":{"type":"array","items":{"$ref":"#/$defs/node"}}}}}}}},
+ {"type":"function","function":{"name":"free_items","parameters":{"type":"object",
+  "properties":{"path":{"type":"string"},
+   "keep":{"type":"array","items":{"type":"object","additionalProperties":true}}}}}},
+ {"type":"function","function":{"name":"list_records","parameters":{"type":"object",
+  "properties":{"owner":{"type":"string"},
+   "records":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},
+    "uid":{"type":"integer"},"tags":{"type":"array","items":{"type":"string"}}}}}}}}},
+ {"type":"function","function":{"name":"root_ref","parameters":{
+  "$schema":"http://json-schema.org/draft-07/schema#","$ref":"#/definitions/args",
+  "definitions":{"args":{"type":"object","properties":{"path":{"type":"string"},
+   "entries":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},
+    "size":{"type":"integer"}}}}},"required":["path"]}}}}}
+]"##;
+
+fn ref_tools() -> ToolSet {
+    ToolSet::from_openai(REF_TOOLS, Budget::default()).expect("the ref tool set compiles")
+}
+
+/// The tool set the command line selects: `--tools fixed` (the default) or
+/// `--tools ref`. Anything else is a usage error, never a silent fallback.
+fn tools() -> ToolSet {
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    match arguments.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+        [] | ["--tools", "fixed"] => fixed_tools(),
+        ["--tools", "ref"] => ref_tools(),
+        _ => panic!("usage: fuzz-tool-call [--tools fixed|ref]; got {arguments:?}"),
+    }
 }
 
 /// The request knobs the two header bytes select.

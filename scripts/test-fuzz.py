@@ -5,6 +5,7 @@
 fail-closed campaign behavior for `scripts/fuzz.py`."""
 import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -150,8 +151,9 @@ class Coverage(unittest.TestCase):
         manifest = (FUZZ.ROOT / 'crates/core/Cargo.toml').read_text()
         for target in FUZZ.TARGETS:
             self.assertTrue(FUZZ.harness_source(target).is_file(), f'{target}: no probe source')
-            self.assertIn(f'name = "fuzz-{target}"', manifest, f'{target}: no [[example]] entry')
+            self.assertIn(f'name = "fuzz-{FUZZ.example_name(target)}"', manifest, f'{target}: no [[example]] entry')
         self.assertEqual(FUZZ.harness_source('tool-call').name, 'fuzz_tool_call.rs')
+        self.assertEqual(FUZZ.harness_source('tool-call-ref').name, 'fuzz_tool_call.rs')
 
     def test_tool_call_seeds_cover_every_conformance_fixture_and_raw_bytes(self):
         markup = FUZZ._tool_call_conformance_markup()
@@ -161,7 +163,9 @@ class Coverage(unittest.TestCase):
             self.assertIn(fixture, turns)
         self.assertTrue(any(b'\xff' in turn for turn in turns))
         self.assertTrue(FUZZ.admits_bytes('tool-call'))
-        self.assertFalse(any(FUZZ.admits_bytes(target) for target in FUZZ.TARGETS if target != 'tool-call'))
+        self.assertTrue(FUZZ.admits_bytes('tool-call-ref'))
+        self.assertFalse(any(FUZZ.admits_bytes(target) for target in FUZZ.TARGETS
+                             if target not in ('tool-call', 'tool-call-ref')))
 
     def test_strict_tool_call_seeds_draw_what_their_comments_claim(self):
         """The strict seeds' control and trailer bytes, decoded as the probe
@@ -200,6 +204,183 @@ class Coverage(unittest.TestCase):
         for index, seed in enumerate(FUZZ.TOOL_CALL_STRICT):
             run = subprocess.run([str(probe)], input=seed, capture_output=True, cwd=root)
             self.assertEqual((run.returncode, run.stdout), (0, b'ok\n'), (index, run.stderr.decode(errors='replace')))
+
+    def test_forced_header_seeds_with_a_trailer_byte_are_registered_strict_seeds(self):
+        """G9: the probe consumes a last byte >= 0xF8 as the strict-forced
+        trailer only under the forced choice (control bits 6-7 `11`). Every
+        seed of a tool-call target with that header and such a last byte must
+        therefore be one of its registered strict seeds (and so be reviewed
+        for what its trailer draws); a seed that is not registered would be
+        silently misread as carrying options."""
+        for target in ('tool-call', 'tool-call-ref'):
+            config = FUZZ.TARGETS[target]
+            strict = config['strict']
+            self.assertTrue(strict, target)
+            forced = [seed for seed in config['seeds']
+                      if len(seed) > 2 and seed[0] >> 6 == 3 and seed[-1] >= 0xF8]
+            self.assertTrue(forced, target)
+            for seed in forced:
+                self.assertIn(seed, strict, f'{target}: an unregistered forced-header trailer seed {seed[:40]!r}')
+            for seed in strict:
+                self.assertIn(seed, config['seeds'], target)
+                self.assertGreaterEqual(seed[-1], 0xF8)
+                self.assertEqual(seed[0] >> 6, 3)
+
+    def test_the_tool_call_seed_set_is_unchanged_by_the_ref_target(self):
+        """The existing `tool-call` seeds are byte-for-byte what they were
+        (modulo the R4 seed-4 correction), not extended by `tool-call-ref`."""
+        self.assertNotIn('probe_args', FUZZ.TARGETS['tool-call'])
+        self.assertEqual(FUZZ.probe_arguments('tool-call'), [])
+        self.assertEqual(FUZZ.example_name('tool-call'), 'tool-call')
+        self.assertFalse(set(FUZZ.TOOL_CALL_REF_SEEDS) & set(FUZZ.TOOL_CALL_SEEDS))
+
+    def test_tool_call_ref_target_is_registered_with_the_ref_tool_set(self):
+        config = FUZZ.TARGETS['tool-call-ref']
+        self.assertEqual(FUZZ.example_name('tool-call-ref'), 'tool-call')
+        self.assertEqual(FUZZ.probe_arguments('tool-call-ref'), ['--tools', 'ref'])
+        self.assertEqual(config['input'], 'bytes')
+        makefile = (FUZZ.ROOT / 'Makefile').read_text()
+        loop = next(line for line in makefile.splitlines() if 'for target in' in line)
+        self.assertIn('tool-call-ref', loop.replace(';', ' ').split())
+        self.assertNotIn('continue-on-known', ''.join(
+            line for line in makefile.splitlines() if 'scripts/fuzz.py' in line))
+        documentation = (FUZZ.ROOT / 'docs/FUZZING.md').read_text()
+        for needle in ('tool-call-ref', '--tools ref', '--continue-on-known'):
+            self.assertIn(needle, documentation)
+
+    def test_tool_call_ref_seeds_cover_every_nested_shape(self):
+        turns = [seed[2:] for seed in FUZZ.TOOL_CALL_REF_SEEDS if seed[0] >> 6 != 3]
+        joined = b'\n'.join(turns)
+        # Each tool of the ref set is called, and each shape is present.
+        for tool in (b'list_records', b'batch_refs', b'any_items', b'tree_walk', b'free_items', b'root_ref'):
+            self.assertIn(b'<function=' + tool + b'>', joined, tool)
+        shapes = {
+            'top level repeated items': FUZZ._qwen_call('list_records', FUZZ._REF_ITEM_A + FUZZ._REF_ITEM_B),
+            'in-object array': b'<parameter=children>',
+            'mixed JSON and nested': b'<parameter=records>\n[{"name": "A", "uid": 1}]',
+            'unclosed last item': b'<parameter=name>\nA\n</function>',
+            'unclosed item before a sibling': b'<parameter=name>\nA\n<parameter=owner>',
+            'same-name member': b'<parameter=records>\nr\n</parameter>\n<parameter=name>',
+            'string items': b'<parameter=tags>\na\n</parameter>\n<parameter=tags>\nb',
+            'ref items': b'<function=batch_refs>\n<parameter=items>',
+            'colliding names': b'<parameter=name>\ninner\n</parameter>\n<parameter=name>\nouter',
+            'recursive tree': b'<parameter=children>\n<parameter=label>\nb\n</parameter>\n<parameter=children>',
+            'anyOf items': b'<function=any_items>',
+            'opaque item': b'<parameter=anything>',
+            'root ref call': b'<function=root_ref>\n<parameter=path>',
+        }
+        for shape, needle in shapes.items():
+            self.assertIn(needle, joined, shape)
+
+    def test_tool_call_ref_seeds_run_ok_in_the_built_probe_under_both_tool_sets(self):
+        root = FUZZ.ROOT
+        build = subprocess.run(
+            ['cargo', 'build', '-q', '-p', 'purrassist-core', '--example', 'fuzz-tool-call'],
+            cwd=root, capture_output=True, text=True)
+        self.assertEqual(build.returncode, 0, build.stderr)
+        metadata = subprocess.run(
+            ['cargo', 'metadata', '--format-version', '1', '--no-deps'],
+            cwd=root, capture_output=True, text=True, check=True)
+        probe = Path(json.loads(metadata.stdout)['target_directory']) / 'debug/examples/fuzz-tool-call'
+        for arguments in (FUZZ.probe_arguments('tool-call-ref'), []):
+            for index, seed in enumerate(FUZZ.TARGETS['tool-call-ref']['seeds']):
+                run = subprocess.run([str(probe), *arguments], input=seed, capture_output=True, cwd=root)
+                self.assertEqual((run.returncode, run.stdout), (0, b'ok\n'),
+                                 (arguments, index, run.stderr.decode(errors='replace')))
+        usage = subprocess.run([str(probe), '--tools', 'bogus'], input=b'\x00\x00', capture_output=True, cwd=root)
+        self.assertNotEqual(usage.returncode, 0)
+
+    def test_probe_runs_the_selected_tool_set(self):
+        seen = []
+
+        def fake(command, **_):
+            seen.append(command)
+            raise subprocess.TimeoutExpired(command, 1)
+
+        for target, expected in (('tool-call', ['probe']), ('tool-call-ref', ['probe', '--tools', 'ref'])):
+            with tempfile.TemporaryDirectory() as directory:
+                with patch.object(FUZZ.subprocess, 'run', side_effect=fake):
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        FUZZ.probe(Path('probe'), b'\x00\x00', Path(directory), 1, target, {}, {})
+            self.assertEqual(seen[-1], expected)
+
+    def test_known_failure_signatures_are_only_the_issue_6_panics(self):
+        runs_past = ('thread \'main\' (24424) panicked at crates/core/examples/fuzz_tool_call.rs:1156:9:\n'
+                     'rejected attempt 1..190 runs past where it failed (39) without its closer: "x"\n')
+        beyond = ('thread \'main\' (154968) panicked at crates/core/examples/fuzz_tool_call.rs:495:9:\n'
+                  'rejected attempt 218..322 fails at 159, beyond a literal past its end\n')
+        self.assertEqual(FUZZ.known_failure(runs_past), 'issue-6-rejected-span-runs-past-failure')
+        self.assertEqual(FUZZ.known_failure(beyond), 'issue-6-failure-beyond-literal-past-its-end')
+        echoed = ('input: rejected attempt 1..2 runs past where it failed (3)\n'
+                  'thread \'main\' panicked at crates/core/examples/fuzz_tool_call.rs:7:9:\n'
+                  'assertion failed: reasoning blocks overlap\n')
+        for other in ('assertion failed: reasoning blocks overlap',
+                      'a rejected attempt\'s raw bytes are not its range',
+                      'rejected attempt without either phrase', '',
+                      'rejected attempt 1..190 runs past where it failed (39) without a panic line',
+                      echoed):
+            self.assertIsNone(FUZZ.known_failure(other), other)
+
+    def _campaign(self, arguments, outcomes):
+        """Run `FUZZ.main` over a two-seed fake target whose probe gives
+        `outcomes` (a stderr string for a crash, `None` for a pass)."""
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(directory, ignore_errors=True))
+        outcomes = list(outcomes)
+        seeds = [bytes([index]) * 3 for index in range(len(outcomes))]
+
+        def fake_probe(binary, data, where, timeout, target, oracle, tool_paths, counts=None):
+            stderr = outcomes[seeds.index(data)]
+            (where / 'probe.stderr').write_text(stderr or '')
+            if stderr is not None:
+                counts['crashes'] += 1
+                raise subprocess.CalledProcessError(101, ['probe'])
+            return {('crates/core/src/x.rs', len(data), 1, 2, 3)}, False, 0
+
+        config = dict(FUZZ.TARGETS['tool-call'], seeds=seeds)
+        with patch.object(FUZZ, 'TARGETS', {'tool-call': config}), \
+             patch.object(FUZZ, 'probe', fake_probe), \
+             patch.object(FUZZ, 'tool_identity', return_value=({}, {}, {})), \
+             patch.object(FUZZ, 'build', return_value=(Path('probe'), {})), \
+             patch.object(FUZZ.tempfile, 'mkdtemp', return_value=str(directory)), \
+             patch.object(FUZZ.subprocess, 'check_output', return_value=''), \
+             patch.object(FUZZ, 'source_digest', return_value='digest'), \
+             patch('sys.argv', ['fuzz.py', '--target', 'tool-call', '--iterations', '0', *arguments]):
+            try:
+                FUZZ.main()
+                error = None
+            except subprocess.CalledProcessError as caught:
+                error = caught
+        return directory, error
+
+    KNOWN = ('thread \'main\' (1) panicked at crates/core/examples/fuzz_tool_call.rs:1156:9:\n'
+             'rejected attempt 0..3 runs past where it failed (3) without its closer: ""\n')
+
+    def test_continue_on_known_retains_every_issue_6_input_and_continues(self):
+        directory, error = self._campaign(['--continue-on-known'], [self.KNOWN, None, self.KNOWN])
+        self.assertIsNone(error)
+        report = json.loads((directory / 'report.json').read_text())
+        self.assertEqual((report['status'], report['executions'], report['crashes']), ('passed', 3, 0))
+        self.assertTrue(report['continue_on_known'])
+        self.assertEqual([entry['execution'] for entry in report['known_failures']], [0, 2])
+        for entry in report['known_failures']:
+            self.assertTrue((directory / 'known-6' / f'{entry["sha256"]}.bin').is_file())
+            self.assertIn('runs past where it failed',
+                          (directory / 'known-6' / f'{entry["sha256"]}.stderr').read_text())
+
+    def test_without_continue_on_known_the_first_issue_6_panic_stops_the_campaign(self):
+        directory, error = self._campaign([], [self.KNOWN, None])
+        self.assertIsInstance(error, subprocess.CalledProcessError)
+        report = json.loads((directory / 'report.json').read_text())
+        self.assertEqual((report['status'], report['crashes'], report['known_failures']), ('failed', 1, []))
+        self.assertFalse((directory / 'known-6').exists())
+
+    def test_continue_on_known_still_stops_at_any_other_failure(self):
+        directory, error = self._campaign(['--continue-on-known'], [self.KNOWN, 'assertion failed: overlap'])
+        self.assertIsInstance(error, subprocess.CalledProcessError)
+        report = json.loads((directory / 'report.json').read_text())
+        self.assertEqual((report['status'], report['crashes']), ('failed', 1))
+        self.assertEqual(len(report['known_failures']), 1)
 
     def test_byte_input_probe_completes_with_ok_on_invalid_utf8(self):
         document = Coverage().document()
