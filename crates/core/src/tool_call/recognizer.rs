@@ -716,7 +716,9 @@ pub struct Recognizer<'s> {
     engine: Engine<'s>,
     digest: DigestBuilder,
     marker: u32,
-    pending: Vec<Pending>,
+    /// The queued reports, by offset, phase and arrival.
+    pending: BTreeMap<(usize, u8, u64), Pending>,
+    arrivals: u64,
     queued: Queued,
     turn: Turn,
     context: ContextTracker,
@@ -837,7 +839,8 @@ impl<'s> Recognizer<'s> {
             engine,
             digest: DigestBuilder::new(),
             marker: 0,
-            pending: Vec::new(),
+            pending: BTreeMap::new(),
+            arrivals: 0,
             queued: Queued {
                 meter: governor.scratch_meter(),
                 bytes: 0,
@@ -948,7 +951,9 @@ impl<'s> Recognizer<'s> {
     fn queue(&mut self, pending: Pending, governor: &mut Governor) -> Result<(), StopReason> {
         governor.charge(Resource::ScratchBytes, QUEUED_REPORT)?;
         self.queued.bytes += QUEUED_REPORT;
-        self.pending.push(pending);
+        self.arrivals += 1;
+        self.pending
+            .insert((pending.at(), pending.phase(), self.arrivals), pending);
         Ok(())
     }
 
@@ -964,23 +969,21 @@ impl<'s> Recognizer<'s> {
     /// Process every pending report at an offset up to `limit`, releasing
     /// each one's queue charge.
     fn settle(&mut self, limit: usize, governor: &mut Governor) -> Result<(), StopReason> {
-        if !self.pending.iter().any(|pending| pending.at() <= limit) {
+        let mut ready: Vec<(usize, usize, Pending)> = Vec::new();
+        // Stable order: offset, then phase, then arrival.
+        while let Some(entry) = self.pending.first_entry() {
+            if entry.key().0 > limit {
+                break;
+            }
+            let pending = entry.remove();
+            ready.push((ready.len(), pending.at(), pending));
+        }
+        if ready.is_empty() {
             return Ok(());
         }
-        let (ready, rest): (Vec<Pending>, Vec<Pending>) = core::mem::take(&mut self.pending)
-            .into_iter()
-            .partition(|pending| pending.at() <= limit);
-        self.pending = rest;
         let released = size(ready.len()).saturating_mul(QUEUED_REPORT);
         governor.release_scratch(released)?;
         self.queued.bytes -= released;
-        // Stable order: offset, then phase, then arrival.
-        let mut ready: Vec<(usize, usize, Pending)> = ready
-            .into_iter()
-            .enumerate()
-            .map(|(sequence, pending)| (sequence, pending.at(), pending))
-            .collect();
-        ready.sort_by_key(|(sequence, at, pending)| (*at, pending.phase(), *sequence));
         let mut start = 0;
         while start < ready.len() {
             let at = ready[start].1;

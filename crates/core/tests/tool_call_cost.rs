@@ -756,3 +756,116 @@ fn repeated_parameters_cost_is_linear() {
         }
     }
 }
+
+/// G21: Mistral v11 calls separated by whitespace alone (or by nothing) are
+/// one `next`-chained attempt, and each call extends the one segmentation
+/// before it instead of re-reading the chain. From 256 to 4,096 calls the
+/// work, the scratch ever charged and the peak scratch each grow with the
+/// bytes (within 1.05x of the byte ratio, both ways), every call is
+/// `Resolved`, and plain `ToolRecoveryRequest::sized` completes.
+#[test]
+fn chained_mistral_v11_calls_cost_is_linear() {
+    let tools = tools();
+    for separator in ["\n", " ", ""] {
+        let unit =
+            format!("[TOOL_CALLS]write[CALL_ID]a1B2c3D4e[ARGS]{{\"content\": \"a\"}}{separator}");
+        let mut measured = Vec::new();
+        for k in [256_usize, 512, 1024, 2048, 4096] {
+            let input = unit.repeat(k);
+            let request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
+            let result = tools.recover(input.as_bytes(), &request);
+            assert_eq!(
+                result.receipt.stopped,
+                StopReason::Completed,
+                "{separator:?} {k}"
+            );
+            let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = &result.outcome else {
+                panic!("{separator:?} {k}: {:?}", result.outcome)
+            };
+            assert_eq!(calls.calls.len(), k, "{separator:?} {k}");
+            assert!(calls.rejected.is_empty(), "{separator:?} {k}");
+            assert!(
+                calls
+                    .calls
+                    .iter()
+                    .all(|call| call.outcome == CallOutcome::Resolved),
+                "{separator:?} {k}"
+            );
+            let usage = result.receipt.usage;
+            println!(
+                "{separator:?} k={k} bytes {}: work {} total_scratch_charged {} peak_scratch {}",
+                input.len(),
+                usage.work,
+                usage.total_scratch_charged,
+                usage.peak_scratch_bytes,
+            );
+            measured.push((
+                input.len() as u128,
+                [
+                    u128::from(usage.work),
+                    u128::from(usage.total_scratch_charged),
+                    u128::from(usage.peak_scratch_bytes),
+                ],
+            ));
+        }
+        let (small_bytes, small) = measured[0];
+        for &(bytes, charged) in &measured[1..] {
+            for (index, label) in ["work", "total_scratch_charged", "peak_scratch_bytes"]
+                .into_iter()
+                .enumerate()
+            {
+                let (ratio, byte_ratio) = (charged[index] * small_bytes, small[index] * bytes);
+                assert!(
+                    ratio * 100 <= byte_ratio * 105 && byte_ratio * 100 <= ratio * 105,
+                    "{separator:?}: {small_bytes} -> {bytes} bytes: {label} is not linear"
+                );
+            }
+        }
+    }
+}
+
+/// A chained attempt whose history packs readings that reach different
+/// call boundaries is segmented whole, as before chained segmentation: a
+/// DeepSeek-V3.1 section restarted after a truncated call (the shape of the
+/// golden `deepseek31_rejection_balances_only_read_brackets`). The result is
+/// the golden's (one unresolved `delete_path` call, one rejected span, the
+/// trailing `]]` as content), and its cost stays inside the published
+/// per-byte bounds under plain `sized`: the fallback is charged, not free.
+#[test]
+fn whole_segmentation_fallback_is_correct_and_charged() {
+    let input = "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>delete_path<｜tool▁sep｜>\"{\\\"pat<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>delete_path<｜tool▁sep｜>\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\"\"parameters\":call▁begin｜>\t\tread_file\t\t<｜tool▁sep｜>\"{\\\"path\\\":\\\"tab\\\\tseparated   indented\\\"}\"<｜tool▁call▁end｜>\t<｜tool▁calls▁end｜>]]";
+    let tools = ToolSet::compile(
+        [
+            ToolDefinition::new("delete_path")
+                .effects(Effects::Mutating)
+                .param("path", Param::string().required()),
+            ToolDefinition::new("read_file")
+                .effects(Effects::ReadOnly)
+                .param("path", Param::string().required()),
+        ],
+        Budget::default(),
+    )
+    .expect("tools compile");
+    let dialects = DialectSet::new(
+        [DialectId::DeepSeekV31],
+        &mut Governor::new(Budget::default()),
+    )
+    .expect("dialects");
+    let request = ToolRecoveryRequest::sized_for(Effort::Standard, input.as_bytes(), dialects);
+    let result = tools.recover(input.as_bytes(), &request);
+    assert_eq!(result.receipt.stopped, StopReason::Completed);
+    let Outcome::BestGuess(calls) = &result.outcome else {
+        panic!("{:?}", result.outcome)
+    };
+    assert_eq!(calls.calls.len(), 1);
+    assert_eq!(calls.calls[0].tool.as_deref(), Some("delete_path"));
+    assert_ne!(calls.calls[0].outcome, CallOutcome::Resolved);
+    assert_eq!(calls.rejected.len(), 1);
+    assert_eq!(calls.rejected[0].span, 119..370);
+    let tail = input.len() - 2..input.len();
+    assert_eq!(calls.content, std::slice::from_ref(&tail));
+    let usage = result.receipt.usage;
+    let n = input.len() as u64;
+    assert!(usage.work > 0 && usage.work <= cost::RECOVER_WORK_PER_BYTE * n);
+    assert!(usage.peak_scratch_bytes <= cost::RECOVER_SCRATCH_PER_BYTE * n);
+}

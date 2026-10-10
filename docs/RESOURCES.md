@@ -874,7 +874,7 @@ ceilings.
 
 Output that is nothing but one small unit repeated (many tiny calls, many
 repeated parameters) costs more per byte than a long string argument: 52 to
-139 work and 80 to 293 peak scratch per byte, against 10 to 26 and 8 to 45.
+139 work and 80 to 302 peak scratch per byte, against 10 to 26 and 8 to 45.
 Before the constants were raised (32 work and 48 scratch per byte), plain
 `sized(Effort::Standard, output)` exhausted explicitly on such output:
 `BudgetExceeded(Work)` for every shape at 1 MiB but DeepSeek-V3, which ran
@@ -901,9 +901,10 @@ twelve dialects).
 | `OpenAI` stringified calls | 10,485 | 67.7 | 183.0 | 0.070 |
 | Mistral v3 calls (one section each) | 12,633 | 66.9 | 160.6 | 0.060 |
 | Mistral v11 calls (`</s>` after each) | 16,912 | 56.0 | 203.7 | 0.081 |
+| Mistral v11 calls (chained, a newline after each) | 18,078 | 64.1 | 220.1 | 0.086 |
 | Harmony calls | 9,446 | 115.4 | 80.1 | 0.009 |
-| DeepSeek-V3.1 calls | 11,522 | 70.0 | 86.7 | 0.011 |
-| DeepSeek-V3 calls | 9,361 | 79.7 | 291.8 | 0.045 |
+| DeepSeek-V3.1 calls | 11,522 | 70.0 | 98.8 | 0.011 |
+| DeepSeek-V3 calls | 9,361 | 79.7 | 301.6 | 0.045 |
 | Kimi-K2 calls | 10,809 | 138.3 | 131.4 | 0.052 |
 | Llama 3 JSON calls | 20,971 | 69.1 | 150.1 | 0.020 |
 | Anthropic `tool_use` calls | 13,981 | 51.6 | 170.0 | 0.067 |
@@ -911,7 +912,7 @@ twelve dialects).
 | Qwen3-Coder XML 1 MiB string (above) | 1 | 17.0 | 11.1 | 0.000 |
 
 Peak scratch per byte falls with size toward these values (a 4 KiB input
-shows up to 318 for DeepSeek-V3 and 139 work for Kimi-K2, which the preset's
+shows up to 328 for DeepSeek-V3 and 139 work for Kimi-K2, which the preset's
 fixed part of the budget covers), and work and peak scratch per byte are
 the same at 64 KiB and 1 MiB. `Work` binds first, then `EvidenceEntries`
 (the preset's flat 65,536 against up to 0.101 entries per byte), then
@@ -919,8 +920,8 @@ the same at 64 KiB and 1 MiB. `Work` binds first, then `EvidenceEntries`
 grows with the openers), and `Depth` is not per-byte and is not reached.
 
 The constants are the maximum plus a margin: `RECOVER_WORK_PER_BYTE` = 176
-is 27% over the 138.3 of Kimi-K2, `RECOVER_SCRATCH_PER_BYTE` = 368 is 26%
-over the 291.8 to 292.8 of DeepSeek-V3 (Qwen3-Coder XML calls peak at
+is 27% over the 138.3 of Kimi-K2, `RECOVER_SCRATCH_PER_BYTE` = 368 is 22%
+over the 301.6 of DeepSeek-V3 (Qwen3-Coder XML calls peak at
 281.6, repeated nested items at 268.3), and
 `RECOVER_EVIDENCE_BYTES_PER_ENTRY` = 7 is 41% over the 0.101 entries per
 byte of Qwen3-Coder XML calls (one entry per 9.9 bytes). A 1 MiB output
@@ -934,19 +935,30 @@ Not covered, by design, and still explicit exhaustions under `sized`:
   895 work per byte (every `{` may open a Llama 3 JSON, Anthropic `tool_use`
   or bare JSON attempt, and each stays live), and a megabyte of `{"a":`
   195. Both are linear in `n`, and both end `BudgetExceeded(Work)`.
-- Consecutive calls of a dialect whose production separates calls with `next`
-  and ends the call only at the next non-call text (Mistral v11 calls with
-  nothing but whitespace between them) are read as one attempt whose
-  segmentation is re-run at each call. Their work and peak scratch per
-  byte grow with the number of calls: Mistral v11 with a newline after each
-  call charges 141 work and 2,009 scratch per byte at 409 calls (16 KiB),
-  and 1,139 and 27,354 at 6,553 calls (256 KiB), so `sized` exhausts
-  (`BudgetExceeded(ScratchBytes)`) and no per-byte constant covers it; any
-  separator that ends the attempt (`</s>`, as above) restores the linear
-  56 and 204. A Mistral v3 array holding thousands of calls charges linear
-  work and scratch (81 and 258 per byte) but its wall time grows
-  quadratically (0.18 s at 16 KiB, 1.8 s at 64 KiB in a release build). Both are a tracked
-  limitation of the `next` repetition, not of the budget.
+- A Mistral v3 array holding thousands of calls in one `[TOOL_CALLS] [..]`
+  charges linear work and scratch (81 and 258 per byte) but its wall time
+  grows quadratically (0.18 s at 16 KiB, 1.8 s at 64 KiB in a release
+  build): the engine keeps a literal failure per element and re-examines
+  every one at each byte, work no counter charges. The budget does not
+  bound it; it is a tracked limitation of the `next` repetition.
+
+Consecutive Mistral v11 calls with nothing but whitespace between them (or
+nothing at all) are one `next`-chained attempt. Each call extends the
+segmentation of the calls before it, reading only itself, so work, scratch
+and wall time are linear: the "Mistral v11 calls (chained)" row above, and
+`tool_call_cost::chained_mistral_v11_calls_cost_is_linear` (256 to 4,096
+calls, three separators). Before this, the segmentation was re-run at each
+call, and work and peak scratch per byte grew with the number of calls (141
+and 2,009 at 409 calls, 1,139 and 27,354 at 6,553), so `sized` exhausted.
+
+The chained segmentation covers every history whose alternative readings
+lie within one call. A history whose equal-cost readings reach different
+call boundaries, or differ in whether a call was skipped, is segmented
+whole, as before, at the completion that reaches it; the work is charged
+(per history node, per call read) like any segmentation. No Mistral v11
+chain tried reached this path. It was reached only by DeepSeek-V3.1
+sections restarted after a truncated call, once per section
+(`tool_call_cost::whole_segmentation_fallback_is_correct_and_charged`).
 
 ## Tool-call recovery throughput (illustrative)
 

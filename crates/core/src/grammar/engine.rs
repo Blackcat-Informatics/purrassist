@@ -44,6 +44,13 @@
 //! A history records each `next` it passed with its offset and cost, so one
 //! completed attempt of a production with `next` materializes as several
 //! call segments ([`Parts`]), one per call.
+//! A completion whose history is one path (or packs alternatives only within
+//! a call) is segmented incrementally: each `next` node closes the call
+//! before it once, into a chain shared by every completion that extends it,
+//! so a chain of calls reads each call twice at most however many follow
+//! (see [`Step::segment_chained`]); the completion is materialized only if
+//! no later completion of its attempt dominates it. Any other history is
+//! segmented whole ([`Step::segment`]).
 // `unreachable_pub` and `redundant_pub_crate` disagree on the right
 // visibility for items of a crate-private module
 // (https://github.com/rust-lang/rust-clippy/issues/6188); these items are
@@ -70,6 +77,7 @@ use crate::tool_call::{
 };
 use core::cmp::Reverse;
 use core::ops::Range;
+use std::collections::BTreeMap;
 
 /// Set in a body configuration's matcher state once the body read on past
 /// a repaired delimiter (a closer variant or confusable spelling), beside
@@ -313,6 +321,15 @@ pub(crate) struct Arena {
     /// [`Self::reset`] or, for what is still held, when the arena drops.
     charged: u64,
     meter: ScratchMeter,
+    /// The closed parts of grouped attempts' histories, shared by every
+    /// completion that extends them (see [`Step::segment_chained`]).
+    chains: Vec<ChainNode>,
+    /// The tokens read as omitted at the start of an attempt whose first
+    /// call was skipped, once per such chain.
+    leads: Vec<Lead>,
+    /// What each `next` node of a history closes: its chain of parts, the
+    /// rejection that ended it, or that it must be segmented whole.
+    memo: BTreeMap<u32, Closed>,
 }
 
 impl Drop for Arena {
@@ -341,6 +358,9 @@ impl Arena {
             deferred: ScratchVec::new(governor),
             charged: 0,
             meter: governor.scratch_meter(),
+            chains: Vec::new(),
+            leads: Vec::new(),
+            memo: BTreeMap::new(),
         })
     }
 
@@ -441,6 +461,9 @@ impl Arena {
         self.edits.clear();
         self.codecs.clear();
         self.deferred.clear();
+        self.chains.clear();
+        self.leads.clear();
+        self.memo.clear();
         governor.release_scratch(core::mem::take(&mut self.charged))
     }
 }
@@ -2630,6 +2653,584 @@ fn lead_split(parts: &mut Parts, lead: &[MarkupEdit]) {
     }
 }
 
+/// No chain: the parts closed so far are none.
+const NO_CHAIN: u32 = u32::MAX;
+
+/// Scratch bytes charged for each closed part's node and memo entry, on top
+/// of what reading the part charged.
+const CHAIN_BYTES: u64 = 192;
+
+/// One closed call of a grouped attempt's history: the call between two
+/// `next` nodes (or the attempt's start and the first). Every completion
+/// that extends the history shares the node, so a call is read once however
+/// many calls follow it.
+struct ChainNode {
+    parent: u32,
+    /// The part, as the segmentation of any completion holds it.
+    part: Part,
+    /// The cost the part carries, before [`lead_split`] moves any.
+    cost: u64,
+    /// The costs of the parts up to and including this one.
+    cum: u64,
+    /// The number of parts up to and including this one.
+    depth: u32,
+    /// The index of the first call among the parts up to this one.
+    first_call: u32,
+    /// The cost of the part before that first call, when it is not the
+    /// first part (which [`lead_split`] takes cost from).
+    before: u64,
+    /// The attempt's lead (see [`Lead`]) when its first part was skipped.
+    lead: u32,
+    /// The scratch the parts up to and including this one charged.
+    bytes: u64,
+}
+
+/// The tokens read as omitted at the start of an attempt whose first call
+/// was skipped, and the cost [`lead_split`] moves to its first read call.
+struct Lead {
+    edits: Vec<MarkupEdit>,
+    moved: u64,
+}
+
+/// What a `next` node closes.
+#[derive(Clone, Copy)]
+enum Closed {
+    /// The parts before it, as a chain.
+    Chain(u32),
+    /// A part before it had no reading.
+    Failed(Rejection),
+    /// The history before it packs several readings: it is segmented whole.
+    Whole,
+}
+
+/// A completion of a grouped attempt whose history is one path: the closed
+/// parts it shares with the completions before it, and its last part.
+/// [`Arena::parts`] materializes it.
+pub(crate) struct Chained {
+    pub(crate) table: u32,
+    pub(crate) attempt: u64,
+    pub(crate) at: usize,
+    closed: u32,
+    last: Part,
+    last_cost: u64,
+    last_bytes: u64,
+    lead: u32,
+    first_call: u32,
+}
+
+impl Chained {
+    /// The scratch the last part charged.
+    pub(crate) const fn last_bytes(&self) -> u64 {
+        self.last_bytes
+    }
+
+    /// Whether the last part began its arguments.
+    pub(crate) fn arguments(&self) -> bool {
+        began_arguments(&self.last)
+    }
+}
+
+/// Whether `part` is a call with a reading that began its arguments (the
+/// model was still writing it, should the output stop there).
+fn began_arguments(part: &Part) -> bool {
+    let Part::Call(segment) = part else {
+        return false;
+    };
+    segment.readings.iter().any(|reading| {
+        reading.captures.iter().any(|capture| {
+            matches!(
+                capture.kind,
+                CaptureKind::Arguments | CaptureKind::ParamName
+            )
+        })
+    })
+}
+
+/// What reading a part of a history gave.
+enum Built {
+    /// The part, its cost, and the lead of a skipped first part.
+    Part(Part, u64, Option<Vec<MarkupEdit>>),
+    /// A call of the part had no reading.
+    Failed(Rejection),
+    /// Its paths do not read alike: the segmentation has several groups.
+    Mixed,
+}
+
+/// The history of a completion up to its nearest `next` node.
+struct Tail {
+    /// Every equal-cost path (see [`Step::histories`]), forward: more than
+    /// one where packed alternatives lie between the cut and the end.
+    paths: Vec<Vec<HistKind>>,
+    /// The `next` node, with where it cuts and the cost there; none for the
+    /// attempt's start.
+    cut: Option<(u32, usize, u64)>,
+}
+
+impl Arena {
+    /// The parts of `chained` and the scratch holding them charges.
+    pub(crate) fn parts(
+        &self,
+        chained: &Chained,
+        governor: &mut Governor,
+    ) -> Result<(Parts, u64), StopReason> {
+        let mut closed = Vec::new();
+        let mut at = chained.closed;
+        let mut bytes = chained.last_bytes;
+        if at != NO_CHAIN {
+            bytes = bytes.saturating_add(self.chains[at as usize].bytes);
+        }
+        while at != NO_CHAIN {
+            governor.charge(Resource::Work, K_CAPTURE)?;
+            let node = &self.chains[at as usize];
+            closed.push(at);
+            at = node.parent;
+        }
+        governor.charge(Resource::Work, K_CAPTURE)?;
+        governor.charge(Resource::ScratchBytes, bytes)?;
+        let mut parts: Parts = closed
+            .iter()
+            .rev()
+            .map(|&id| {
+                let node = &self.chains[id as usize];
+                (node.part.clone(), node.cost)
+            })
+            .collect();
+        parts.push((chained.last.clone(), chained.last_cost));
+        let no_lead = [];
+        let lead = match chained.lead {
+            NO_CHAIN => &no_lead[..],
+            lead => &self.leads[lead as usize].edits,
+        };
+        lead_split(&mut parts, lead);
+        Ok((parts, bytes))
+    }
+
+    /// How many parts `chained` closed before its last.
+    pub(crate) fn depth_of(&self, chained: &Chained) -> usize {
+        match chained.closed {
+            NO_CHAIN => 0,
+            id => self.chains[id as usize].depth as usize,
+        }
+    }
+
+    /// The cost `lead_split` moves between the parts of `chained`, if any:
+    /// the cost the part before its first call gives up, and the cost that
+    /// call gains.
+    fn moved(&self, lead: u32, first_call: u32, before: u64) -> (u64, u64) {
+        if lead == NO_CHAIN || first_call == 0 || first_call == u32::MAX {
+            return (0, 0);
+        }
+        let moved = self.leads[lead as usize].moved;
+        (before.min(moved), moved)
+    }
+
+    /// What the costs of `chained`'s calls sum to, after `lead_split`.
+    pub(crate) fn total(&self, chained: &Chained) -> u64 {
+        let (depth, closed, tip, held) = match chained.closed {
+            NO_CHAIN => (0, 0, 0, 0),
+            id => {
+                let node = &self.chains[id as usize];
+                (node.depth, node.cum, node.cost, node.before)
+            }
+        };
+        let before = if chained.first_call == depth {
+            tip
+        } else {
+            held
+        };
+        let (down, up) = self.moved(chained.lead, chained.first_call, before);
+        closed
+            .saturating_add(chained.last_cost)
+            .saturating_sub(down)
+            .saturating_add(up)
+    }
+
+    /// The costs of the first `0..=closed` parts of `chained` summed (index
+    /// `n`: the first `n` parts), after `lead_split`.
+    pub(crate) fn table(
+        &self,
+        chained: &Chained,
+        governor: &mut Governor,
+    ) -> Result<Vec<u64>, StopReason> {
+        let depth = match chained.closed {
+            NO_CHAIN => 0,
+            id => self.chains[id as usize].depth as usize,
+        };
+        governor.charge(Resource::Work, size(depth).saturating_add(1))?;
+        governor.charge(
+            Resource::ScratchBytes,
+            size(depth + 1).saturating_mul(size(core::mem::size_of::<u64>())),
+        )?;
+        let mut costs = vec![0_u64; depth];
+        let mut at = chained.closed;
+        while at != NO_CHAIN {
+            let node = &self.chains[at as usize];
+            costs[node.depth as usize - 1] = node.cost;
+            at = node.parent;
+        }
+        let first = chained.first_call;
+        if chained.lead != NO_CHAIN && first != 0 && first != u32::MAX {
+            let moved = self.leads[chained.lead as usize].moved;
+            let first = first as usize;
+            costs[first - 1] = costs[first - 1].saturating_sub(moved);
+            if let Some(cost) = costs.get_mut(first) {
+                *cost = cost.saturating_add(moved);
+            }
+        }
+        let mut sums = Vec::with_capacity(depth + 1);
+        let mut sum = 0_u64;
+        sums.push(0);
+        for cost in costs {
+            sum = sum.saturating_add(cost);
+            sums.push(sum);
+        }
+        Ok(sums)
+    }
+}
+
+impl Step<'_, '_> {
+    /// The paths of `hist` back to its nearest `next` node (or the start),
+    /// each forward, deduplicated as [`Self::histories`] does; `None` when
+    /// they do not all reach the same cut.
+    fn tail(&self, hist: u32, governor: &mut Governor) -> Result<Option<Tail>, StopReason> {
+        let mut paths: Vec<Vec<HistKind>> = Vec::new();
+        let mut path: Vec<HistKind> = Vec::new();
+        let mut cut: Option<Option<(u32, usize, u64)>> = None;
+        let mut stack = vec![(hist, 0_usize)];
+        while let Some((node, depth)) = stack.pop() {
+            governor.charge(Resource::Work, K_CAPTURE)?;
+            path.truncate(depth);
+            let HistNode { prev, kind } = self.arena.nodes.as_slice()[node as usize];
+            let reached = match kind {
+                HistKind::Root => Some(None),
+                HistKind::Next(position, cost) => Some(Some((node, position, cost))),
+                HistKind::Pack(other) => {
+                    stack.push((other, depth));
+                    stack.push((prev, depth));
+                    None
+                }
+                kind => {
+                    path.push(kind);
+                    stack.push((prev, depth + 1));
+                    None
+                }
+            };
+            let Some(reached) = reached else {
+                continue;
+            };
+            if cut.is_some_and(|known| known != reached) {
+                return Ok(None);
+            }
+            cut = Some(reached);
+            let forward: Vec<HistKind> = path.iter().rev().copied().collect();
+            if !paths.contains(&forward) {
+                paths.push(forward);
+            }
+        }
+        Ok(Some(Tail {
+            paths,
+            cut: cut.expect("a history reaches its start"),
+        }))
+    }
+
+    /// One part of a history: its `paths` between the cut before it and the
+    /// span's `end`. The part, its cost (the cost `span` carries less the
+    /// cost at the cut before it, and the undeclared weight of a call), and
+    /// the tokens read as omitted at the start when it is the first part and
+    /// was skipped; or the rejection of a call with no reading. `None` when
+    /// its paths do not all read alike (some skipped, or one without a
+    /// reading): the segmentation then has several groups.
+    fn part(
+        &self,
+        paths: &[Vec<HistKind>],
+        first: bool,
+        shape: &Shape<'_>,
+        governor: &mut Governor,
+    ) -> Result<Built, StopReason> {
+        let skips: Vec<Option<usize>> = paths
+            .iter()
+            .map(|steps| {
+                steps.iter().find_map(|step| match *step {
+                    HistKind::Skipped(at) => Some(at),
+                    _ => None,
+                })
+            })
+            .collect();
+        if skips.iter().any(Option::is_some) {
+            let Some(at) = skips[0].filter(|_| skips.iter().all(Option::is_some)) else {
+                return Ok(Built::Mixed);
+            };
+            // A token inserted where the attempt began (a section or list
+            // opener the model left out) opens every call of the attempt,
+            // not the skipped one alone.
+            let mut lead = Vec::new();
+            if first {
+                for step in &paths[0] {
+                    let HistKind::Edit(index) = *step else {
+                        continue;
+                    };
+                    let edit = &self.arena.edits[index as usize];
+                    if edit.operator == EditOperator::MissingToken
+                        && edit.span == (shape.span.start..shape.span.start)
+                    {
+                        governor.charge(Resource::ScratchBytes, edit.estimated_bytes())?;
+                        lead.push(edit.clone());
+                    }
+                }
+            }
+            let part = Part::Rejected {
+                span: shape.span.clone(),
+                reason: Rejection::Malformed { at },
+            };
+            return Ok(Built::Part(part, shape.cost, first.then_some(lead)));
+        }
+        let mut readings: Vec<RawCall> = Vec::new();
+        for steps in paths {
+            let call = match self.reading(steps, shape, governor)? {
+                Ok(call) => call,
+                Err(reason) if paths.len() == 1 => return Ok(Built::Failed(reason)),
+                Err(_) => return Ok(Built::Mixed),
+            };
+            if !readings.contains(&call) {
+                // Every reading beyond the first competes.
+                if !readings.is_empty() {
+                    governor.charge(Resource::Candidates, 1)?;
+                }
+                readings.push(call);
+            }
+        }
+        let weight = self.undeclared(shape.kind, &readings);
+        let span = readings[0].span.clone();
+        let part = Part::Call(CallSegment {
+            span,
+            readings,
+            derivations: Vec::new(),
+        });
+        Ok(Built::Part(part, shape.cost.saturating_add(weight), None))
+    }
+
+    /// What the `next` node `node` closes, built (with the nodes before it
+    /// that are not yet) from the history before each.
+    fn close(
+        &mut self,
+        node: u32,
+        shape: &Shape<'_>,
+        governor: &mut Governor,
+    ) -> Result<Closed, StopReason> {
+        // The unbuilt nodes, newest first, with where each cuts and the
+        // steps of the part before it.
+        let mut pending: Vec<(u32, usize, u64, Tail)> = Vec::new();
+        let mut at = node;
+        let mut state = loop {
+            if let Some(&known) = self.arena.memo.get(&at) {
+                break known;
+            }
+            let HistNode { prev, kind } = self.arena.nodes.as_slice()[at as usize];
+            let HistKind::Next(position, cost) = kind else {
+                unreachable!("a cut is a next node")
+            };
+            let Some(tail) = self.tail(prev, governor)? else {
+                self.remember(at, Closed::Whole, governor)?;
+                break Closed::Whole;
+            };
+            let before = tail.cut;
+            pending.push((at, position, cost, tail));
+            match before {
+                Some((cut, ..)) => at = cut,
+                None => break Closed::Chain(NO_CHAIN),
+            }
+        };
+        while let Some((at, position, cost, tail)) = pending.pop() {
+            state = match state {
+                Closed::Chain(parent) => {
+                    let (start, before) = match tail.cut {
+                        Some((_, start, before)) => (start, before),
+                        None => (shape.span.start, 0),
+                    };
+                    let part_shape = Shape {
+                        span: start..position,
+                        dialect: shape.dialect,
+                        kind: shape.kind,
+                        dangling: false,
+                        open_end: position,
+                        cost: cost.saturating_sub(before),
+                    };
+                    self.extend(parent, &tail.paths, &part_shape, governor)?
+                }
+                other => other,
+            };
+            self.remember(at, state, governor)?;
+        }
+        Ok(state)
+    }
+
+    /// Record what `node` closes.
+    fn remember(
+        &mut self,
+        node: u32,
+        closed: Closed,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(Resource::ScratchBytes, CHAIN_BYTES)?;
+        self.arena.charged = self.arena.charged.saturating_add(CHAIN_BYTES);
+        self.arena.memo.insert(node, closed);
+        Ok(())
+    }
+
+    /// The chain after `parent` with the closed part `steps` read as `shape`.
+    fn extend(
+        &mut self,
+        parent: u32,
+        paths: &[Vec<HistKind>],
+        shape: &Shape<'_>,
+        governor: &mut Governor,
+    ) -> Result<Closed, StopReason> {
+        let first = parent == NO_CHAIN;
+        let charged = governor.scratch_meter().total_charged();
+        let (part, cost, lead) = match self.part(paths, first, shape, governor)? {
+            Built::Part(part, cost, lead) => (part, cost, lead),
+            Built::Failed(reason) => return Ok(Closed::Failed(reason)),
+            Built::Mixed => return Ok(Closed::Whole),
+        };
+        let bytes = governor
+            .scratch_meter()
+            .total_charged()
+            .saturating_sub(charged);
+        let (depth, cum, first_call, before, held, total) = if first {
+            (0, 0, u32::MAX, 0, NO_CHAIN, 0)
+        } else {
+            let node = &self.arena.chains[parent as usize];
+            (
+                node.depth,
+                node.cum,
+                node.first_call,
+                node.before,
+                node.lead,
+                node.bytes,
+            )
+        };
+        let lead = match lead {
+            Some(edits) => {
+                let moved = edits
+                    .iter()
+                    .map(|edit| edit.operator.rule().cost)
+                    .fold(EditOperator::GroupSplit.rule().cost, u64::saturating_add);
+                self.arena.leads.push(Lead { edits, moved });
+                index_u32(self.arena.leads.len() - 1)
+            }
+            None => held,
+        };
+        let (first_call, before) = match (&part, first_call) {
+            (Part::Call(..), u32::MAX) => (depth, if first { 0 } else { self.tip_cost(parent) }),
+            _ => (first_call, before),
+        };
+        governor.charge(Resource::ScratchBytes, CHAIN_BYTES)?;
+        self.arena.charged = self
+            .arena
+            .charged
+            .saturating_add(bytes)
+            .saturating_add(CHAIN_BYTES);
+        self.arena.chains.push(ChainNode {
+            parent,
+            part,
+            cost,
+            cum: cum.saturating_add(cost),
+            depth: depth + 1,
+            first_call,
+            before,
+            lead,
+            bytes: total.saturating_add(bytes),
+        });
+        Ok(Closed::Chain(index_u32(self.arena.chains.len() - 1)))
+    }
+
+    fn tip_cost(&self, chain: u32) -> u64 {
+        self.arena.chains[chain as usize].cost
+    }
+
+    /// Segment the completion `hist` as `shape` over a chain of the parts
+    /// closed before its last one, when its history is one path; `None` when
+    /// it packs alternatives (see [`Self::segment`]). Every part is read
+    /// once however many completions extend it, so a chain of calls costs
+    /// work and scratch linear in the calls.
+    pub(crate) fn segment_chained(
+        &mut self,
+        hist: u32,
+        shape: &Shape<'_>,
+        governor: &mut Governor,
+    ) -> Result<Option<Result<Chained, Rejection>>, StopReason> {
+        let Some(tail) = self.tail(hist, governor)? else {
+            return Ok(None);
+        };
+        let (closed, start, before) = match tail.cut {
+            None => (NO_CHAIN, shape.span.start, 0),
+            Some((node, start, before)) => match self.close(node, shape, governor)? {
+                Closed::Chain(chain) => (chain, start, before),
+                Closed::Failed(reason) => return Ok(Some(Err(reason))),
+                Closed::Whole => return Ok(None),
+            },
+        };
+        let last = closed == NO_CHAIN;
+        let part_shape = Shape {
+            span: start..shape.span.end,
+            dialect: shape.dialect,
+            kind: shape.kind,
+            dangling: shape.dangling,
+            open_end: shape.open_end,
+            cost: shape.cost.saturating_sub(before),
+        };
+        let charged = governor.scratch_meter().total_charged();
+        let (part, cost, lead) = match self.part(&tail.paths, last, &part_shape, governor)? {
+            Built::Part(part, cost, lead) => (part, cost, lead),
+            Built::Failed(reason) => return Ok(Some(Err(reason))),
+            Built::Mixed => return Ok(None),
+        };
+        let last_bytes = governor
+            .scratch_meter()
+            .total_charged()
+            .saturating_sub(charged);
+        let (depth, first_call, held) = match closed {
+            NO_CHAIN => (0, u32::MAX, NO_CHAIN),
+            id => {
+                let node = &self.arena.chains[id as usize];
+                (node.depth, node.first_call, node.lead)
+            }
+        };
+        let first_call = match (&part, first_call) {
+            (Part::Call(..), u32::MAX) => depth,
+            _ => first_call,
+        };
+        if first_call == u32::MAX {
+            // No call was read: the attempt is rejected whole.
+            return Ok(Some(Err(Rejection::Malformed { at: shape.span.end })));
+        }
+        let lead = match lead {
+            Some(edits) => {
+                let moved = edits
+                    .iter()
+                    .map(|edit| edit.operator.rule().cost)
+                    .fold(EditOperator::GroupSplit.rule().cost, u64::saturating_add);
+                self.arena.leads.push(Lead { edits, moved });
+                governor.charge(Resource::ScratchBytes, CHAIN_BYTES)?;
+                self.arena.charged = self.arena.charged.saturating_add(CHAIN_BYTES);
+                index_u32(self.arena.leads.len() - 1)
+            }
+            None => held,
+        };
+        Ok(Some(Ok(Chained {
+            table: 0,
+            attempt: 0,
+            at: 0,
+            closed,
+            last: part,
+            last_cost: cost,
+            last_bytes,
+            lead,
+            first_call,
+        })))
+    }
+}
+
 impl Step<'_, '_> {
     /// The readings of each part of history `path` (its `next` cuts at
     /// `cuts`), or `None` when a call part has no reading (its rejection
@@ -3141,7 +3742,7 @@ struct Table<'s> {
     trails: Vec<Trail>,
     /// Completions of a grouped program's live attempts (see
     /// `Program::grouped`), released when the attempt ends.
-    held: Vec<Held>,
+    held: HeldSet,
     /// Completions of readings beside another (a body that read on past a
     /// closer; see [`Thread::beside`]) of live attempts, by attempt, oldest
     /// first: when the attempt ends, the newest whose value is read is
@@ -3172,9 +3773,12 @@ struct Table<'s> {
 /// ends.
 struct Held {
     attempt: u64,
-    event: Event,
-    /// The cost each call of the completion carries, in order.
-    costs: Vec<u64>,
+    /// Where the completion ends.
+    at: usize,
+    body: HeldBody,
+    /// How many calls the completion reads, and what their costs sum to.
+    calls: usize,
+    total: u64,
     dangling: bool,
     /// Whether the last call of a cut-off reading began its arguments: only
     /// then is it evidence that the attempt went on past an earlier
@@ -3182,11 +3786,49 @@ struct Held {
     arguments: bool,
 }
 
-impl Held {
-    /// What the completion's first `calls` calls cost together.
-    fn prefix(&self, calls: usize) -> u64 {
-        self.costs.iter().take(calls).sum()
+/// The held completions of a table, by attempt, and the earliest end among
+/// them (kept, so asking for it costs nothing per byte).
+#[derive(Default)]
+struct HeldSet {
+    /// Each attempt's completions with the earliest end among them.
+    by_attempt: BTreeMap<u64, (usize, Vec<Held>)>,
+    /// The earliest end of any held completion.
+    floor: Option<usize>,
+}
+
+impl HeldSet {
+    fn push(&mut self, entry: Held) {
+        self.floor = Some(self.floor.map_or(entry.at, |floor| floor.min(entry.at)));
+        let (earliest, entries) = self
+            .by_attempt
+            .entry(entry.attempt)
+            .or_insert_with(|| (entry.at, Vec::new()));
+        *earliest = (*earliest).min(entry.at);
+        entries.push(entry);
     }
+
+    /// Take the completions of `attempt`, oldest first.
+    fn take(&mut self, attempt: u64) -> Vec<Held> {
+        let Some((_, taken)) = self.by_attempt.remove(&attempt) else {
+            return Vec::new();
+        };
+        self.floor = self
+            .by_attempt
+            .values()
+            .map(|&(earliest, _)| earliest)
+            .min();
+        taken
+    }
+}
+
+/// What a held completion stands for.
+enum HeldBody {
+    /// Its event, and the cost each call carries, in order.
+    Event(Event, Vec<u64>),
+    /// A completion whose history is one path, sharing its parts with the
+    /// completions before it; materialized only if no later completion
+    /// dominates it.
+    Chain(Chained),
 }
 
 /// A completed configuration held while closer spellings of its grammar
@@ -3314,7 +3956,7 @@ impl<'s> Engine<'s> {
                     threads: ScratchVec::new(governor),
                     attempts: ScratchVec::new(governor),
                     trails: Vec::new(),
-                    held: Vec::new(),
+                    held: HeldSet::default(),
                     past: Vec::new(),
                     written: Vec::new(),
                     stalled: ScratchVec::new(governor),
@@ -4610,48 +5252,131 @@ impl<'s> Engine<'s> {
         attempt: u64,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let held = &mut self.tables[table].held;
-        if !held.iter().any(|entry| entry.attempt == attempt) {
+        let mine = self.tables[table].held.take(attempt);
+        if mine.is_empty() {
             return Ok(());
         }
-        let (mine, rest): (Vec<Held>, Vec<Held>) = core::mem::take(held)
-            .into_iter()
-            .partition(|entry| entry.attempt == attempt);
-        self.tables[table].held = rest;
+        let count = mine.len();
+        // Latest end first: the completion that dominates the rest is almost
+        // always the one that read the most.
+        let mut order: Vec<usize> = (0..count).collect();
+        order.sort_by_key(|&index| Reverse((mine[index].at, mine[index].calls)));
         governor.charge(
             Resource::Work,
-            size(mine.len()).saturating_mul(size(mine.len())),
+            size(count).saturating_mul(size(usize::BITS as usize - count.leading_zeros() as usize)),
         )?;
-        let dominated = |entry: &Held| {
-            mine.iter().any(|other| {
-                let later = other.event.at() > entry.event.at();
-                let more = other.costs.len() > entry.costs.len();
-                if other.dangling {
+        // The cost of the first calls of a completion, built when asked.
+        let mut tables: Vec<Option<Vec<u64>>> = vec![None; count];
+        let mut table_bytes = 0_u64;
+        let mut keep = vec![true; count];
+        for (index, entry) in mine.iter().enumerate() {
+            for &other in &order {
+                if other == index {
+                    continue;
+                }
+                governor.charge(Resource::Work, 1)?;
+                let other_entry = &mine[other];
+                let later = other_entry.at > entry.at;
+                let more = other_entry.calls > entry.calls;
+                let dominated = if other_entry.dangling {
                     // Cut off while writing a further call's arguments.
-                    later && more && other.arguments
+                    later && more && other_entry.arguments
                 } else if entry.dangling {
                     // A cut-off reading of no more calls than a completion
                     // reads, or one whose last call never began its
                     // arguments, or one that reaches no further.
                     !entry.arguments
-                        || other.event.at() >= entry.event.at()
-                        || (other.costs.len() >= entry.costs.len()
-                            && other.prefix(entry.costs.len()) <= entry.prefix(entry.costs.len()))
+                        || other_entry.at >= entry.at
+                        || (other_entry.calls >= entry.calls
+                            && self.prefix(
+                                other_entry,
+                                &mut tables[other],
+                                &mut table_bytes,
+                                entry.calls,
+                                governor,
+                            )? <= entry.total)
                 } else {
                     // The same calls read no worse, and further ones.
                     later
                         && more
-                        && other.prefix(entry.costs.len()) <= entry.prefix(entry.costs.len())
+                        && self.prefix(
+                            other_entry,
+                            &mut tables[other],
+                            &mut table_bytes,
+                            entry.calls,
+                            governor,
+                        )? <= entry.total
+                };
+                if dominated {
+                    keep[index] = false;
+                    break;
                 }
-            })
-        };
-        let keep: Vec<bool> = mine.iter().map(|entry| !dominated(entry)).collect();
+            }
+        }
+        governor.release_scratch(table_bytes)?;
         for (entry, keep) in mine.into_iter().zip(keep) {
-            if keep {
-                self.events.push(entry.event);
+            if !keep {
+                if let HeldBody::Chain(chained) = &entry.body {
+                    governor.release_scratch(chained.last_bytes())?;
+                }
+                continue;
+            }
+            match entry.body {
+                HeldBody::Event(event, _) => self.events.push(event),
+                HeldBody::Chain(chained) => {
+                    let (parts, charged) = self.arena.parts(&chained, governor)?;
+                    // The shared last part's charge is the copy's now.
+                    governor.release_scratch(chained.last_bytes())?;
+                    self.events.push(Event::Completed {
+                        table: chained.table,
+                        attempt: chained.attempt,
+                        at: chained.at,
+                        parts,
+                        charged,
+                    });
+                }
             }
         }
         Ok(())
+    }
+
+    /// What the first `calls` calls of `held` cost together, building and
+    /// keeping its table of prefix costs (counted in `bytes`) when asked
+    /// for the first time.
+    fn prefix(
+        &self,
+        held: &Held,
+        table: &mut Option<Vec<u64>>,
+        bytes: &mut u64,
+        calls: usize,
+        governor: &mut Governor,
+    ) -> Result<u64, StopReason> {
+        if calls >= held.calls {
+            return Ok(held.total);
+        }
+        if table.is_none() {
+            let built = match &held.body {
+                HeldBody::Chain(chained) => self.arena.table(chained, governor)?,
+                HeldBody::Event(_, costs) => {
+                    governor.charge(Resource::Work, size(costs.len()))?;
+                    governor.charge(
+                        Resource::ScratchBytes,
+                        size(costs.len() + 1).saturating_mul(size(core::mem::size_of::<u64>())),
+                    )?;
+                    let mut sums = Vec::with_capacity(costs.len() + 1);
+                    let mut sum = 0_u64;
+                    sums.push(0);
+                    for cost in costs {
+                        sum += cost;
+                        sums.push(sum);
+                    }
+                    sums
+                }
+            };
+            *bytes = bytes.saturating_add(size(built.len()).saturating_mul(8));
+            *table = Some(built);
+        }
+        Ok(table.as_ref().expect("built")[calls])
     }
 
     /// Group completions by attempt and offset, pack equal-cost histories,
@@ -4920,11 +5645,7 @@ impl<'s> Engine<'s> {
         // An uncommitted attempt of a deferred program may still open at
         // its start: nothing at or after its start is settled until it
         // commits or ends.
-        let held = self
-            .tables
-            .iter()
-            .flat_map(|table| table.held.iter())
-            .map(|entry| entry.event.at());
+        let held = self.tables.iter().filter_map(|table| table.held.floor);
         let uncommitted = self
             .tables
             .iter()
@@ -5194,6 +5915,55 @@ impl<'s> Engine<'s> {
         governor.release_scratch(size(before - written.len()).saturating_mul(WRITTEN_BYTES))
     }
 
+    /// Hold the completion `thread` reported, segmented as a chain (see
+    /// [`Step::segment_chained`]), or record why its attempt could not read
+    /// it.
+    fn hold_chained(
+        &mut self,
+        table: usize,
+        thread: &Thread,
+        dangling: bool,
+        chained: Result<Chained, Rejection>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let record = self.tables[table]
+            .attempts
+            .as_mut_slice()
+            .iter_mut()
+            .find(|record| record.id == thread.attempt)
+            .expect("completing attempt is live");
+        let mut chained = match chained {
+            Ok(chained) => chained,
+            Err(reason) => {
+                record.failure.get_or_insert(reason);
+                return Ok(());
+            }
+        };
+        record.completed = true;
+        let start = record.start;
+        chained.table = index_u32(table);
+        chained.attempt = thread.attempt;
+        chained.at = thread.pos;
+        // It ends whole: a held report at its opener is outread now.
+        if !self.whole.contains(&start) {
+            governor.charge(Resource::ScratchBytes, DEFERRED_BYTES)?;
+            self.whole.push(start);
+        }
+        governor.charge(Resource::Work, super::cost::K_EVENT)?;
+        let calls = self.arena.depth_of(&chained) + 1;
+        let total = self.arena.total(&chained);
+        self.tables[table].held.push(Held {
+            attempt: thread.attempt,
+            at: thread.pos,
+            calls,
+            total,
+            dangling,
+            arguments: chained.arguments(),
+            body: HeldBody::Chain(chained),
+        });
+        Ok(())
+    }
+
     fn report(
         &mut self,
         table: usize,
@@ -5219,7 +5989,7 @@ impl<'s> Engine<'s> {
         }
         let kind = self.tables[table].kind;
         let dialect = self.grammars[self.tables[table].grammar].dialect.clone();
-        let (step, _, _) = self.split(table);
+        let (mut step, _, _) = self.split(table);
         // A length stop inside a character a class run had begun: the
         // capture keeps the whole characters (as a cut-off slot does).
         let open_end = match (step.program.insts[thread.pc as usize], thread.sub) {
@@ -5236,6 +6006,12 @@ impl<'s> Engine<'s> {
             open_end,
             cost: thread.cost,
         };
+        if step.program.grouped
+            && let Some(chained) = step.segment_chained(thread.hist, &shape, governor)?
+        {
+            return self.hold_chained(table, &thread, dangling, chained, governor);
+        }
+        let (step, _, _) = self.split(table);
         let before = governor.scratch_meter().total_charged();
         let segmentations = step.segment(thread.hist, &shape, governor)?;
         // Materializing charges only retained scratch (no lease), so the
@@ -5273,28 +6049,18 @@ impl<'s> Engine<'s> {
                         let (costs, arguments) = match &event {
                             Event::Completed { parts, .. } => (
                                 parts.iter().map(|(_, cost)| *cost).collect(),
-                                parts.last().is_some_and(|(part, _)| {
-                                    let Part::Call(segment) = part else {
-                                        return false;
-                                    };
-                                    segment.readings.iter().any(|reading| {
-                                        reading.captures.iter().any(|capture| {
-                                            matches!(
-                                                capture.kind,
-                                                CaptureKind::Arguments | CaptureKind::ParamName
-                                            )
-                                        })
-                                    })
-                                }),
+                                parts.last().is_some_and(|(part, _)| began_arguments(part)),
                             ),
                             _ => (Vec::new(), false),
                         };
                         self.tables[table].held.push(Held {
                             attempt: thread.attempt,
-                            event,
-                            costs,
+                            at: event.at(),
+                            calls: costs.len(),
+                            total: costs.iter().sum(),
                             dangling,
                             arguments,
+                            body: HeldBody::Event(event, costs),
                         });
                     } else {
                         self.events.push(event);
@@ -5444,7 +6210,13 @@ impl<'s> Engine<'s> {
                 failure.thread.attempt != attempt
             });
             table.trails.retain(|trail| trail.thread.attempt != attempt);
-            table.held.retain(|entry| entry.attempt != attempt);
+            let mut freed = 0_u64;
+            for entry in table.held.take(attempt) {
+                if let HeldBody::Chain(chained) = &entry.body {
+                    freed = freed.saturating_add(chained.last_bytes());
+                }
+            }
+            governor.release_scratch(freed)?;
             let dropped = table
                 .past
                 .iter()

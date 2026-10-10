@@ -350,7 +350,7 @@ fn dense_tools() -> ToolSet {
 /// output that is nothing but one small unit repeated, in every built-in
 /// dialect. Each is `(label, wrapper before, unit, wrapper after, what the
 /// units become)`.
-const DENSE: [(&str, &str, &str, &str, Dense); 15] = [
+const DENSE: [(&str, &str, &str, &str, Dense); 16] = [
     (
         "qwen-nested-items",
         "<tool_call>\n<function=tree>\n",
@@ -404,6 +404,13 @@ const DENSE: [(&str, &str, &str, &str, Dense); 15] = [
         "mistral-v11-calls",
         "",
         "[TOOL_CALLS]write[CALL_ID]a1B2c3D4e[ARGS]{\"content\": \"a\"}</s>\n",
+        "",
+        Dense::Calls,
+    ),
+    (
+        "mistral-v11-chained-calls",
+        "",
+        "[TOOL_CALLS]write[CALL_ID]a1B2c3D4e[ARGS]{\"content\": \"a\"}\n",
         "",
         Dense::Calls,
     ),
@@ -470,10 +477,10 @@ enum Dense {
 /// Dense markup of `bytes` bytes in the shape `label` recovers under plain
 /// `ToolRecoveryRequest::sized(Effort::Standard, output)`, with no raised
 /// limit: the stop is `Completed` and every unit (call or array item) is
-/// recovered. Mistral v3 and v11 calls are separated (by their own
-/// `[TOOL_CALLS]` section and by `</s>`), because a v3 array or a v11 run of
-/// consecutive calls is one attempt whose segmentation is not linear
-/// (`docs/RESOURCES.md`, "Dense markup").
+/// recovered. Mistral v3 calls are separated by their own `[TOOL_CALLS]`
+/// section, because a v3 array of thousands of calls costs quadratic wall
+/// time (`docs/RESOURCES.md`, "Dense markup"); v11 calls are measured both
+/// separated by `</s>` and as one whitespace-separated chain.
 fn dense_fits_published_budget(label: &str, bytes: usize) {
     let tools = dense_tools();
     let &(_, before, unit, after, expected) = DENSE

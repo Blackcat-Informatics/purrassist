@@ -698,9 +698,13 @@ allow-list, with a published bound, and every limit is explicit.
   `tool_call_cost::per_call_competition_scales_with_calls`,
   `tool_call_cost::crafted_reading_explosion_exhausts_explicitly`,
   `tool_call_cost::sized_budget_follows_the_published_formula`,
+  `tool_call_cost::chained_mistral_v11_calls_cost_is_linear` (256 to 4,096
+  Mistral v11 calls separated by whitespace alone, one chained attempt:
+  work and scratch linear in the bytes),
   `tool_call_cost::dense_markup_fits_published_budget` and
   `tool_call_scale::one_mib_dense_markup_fits_published_budget` (about 1 MiB
-  of tiny calls in every built-in dialect and of repeated nested, JSON-array
+  of tiny calls in every built-in dialect, Mistral v11 calls chained by
+  whitespace included, and of repeated nested, JSON-array
   and string items recovers under plain `sized(Effort::Standard, output)`),
   and the host
   and CLI tests `tool_call_tools::busy_turn_resolves_every_call_by_default`
