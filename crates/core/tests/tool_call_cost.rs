@@ -757,6 +757,77 @@ fn repeated_parameters_cost_is_linear() {
     }
 }
 
+/// G7, R6 review: a reasoning-marker spelling inside a JSON string of every
+/// one of k repeated nested items is value text, and finding that out costs
+/// work and charged scratch linear in the bytes (each marker is answered by a
+/// binary search over a per-reading index, built once; the comparison count
+/// per marker is pinned by the `recognizer` unit test
+/// `data_index_finds_strings_among_duplicates_in_log_steps`). From k = 1000
+/// to 8000, the call is `Resolved` with all k items, no reasoning, and both
+/// counters track the byte ratio within 1.05x.
+#[test]
+fn reasoning_marker_in_every_repeated_item_is_linear() {
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("plan_outfits")
+            .effects(Effects::ReadOnly)
+            .param(
+                "outfits",
+                Param::array(Param::object(
+                    ObjectSpec::new()
+                        .param("wearer", Param::string().required())
+                        .param("garments", Param::array(Param::string())),
+                )),
+            )],
+        Budget::default(),
+    )
+    .expect("tools");
+    let item = "<parameter=outfits><parameter=wearer>a</parameter><parameter=garments>[\"x <think> y\"]</parameter></parameter>\n";
+    let mut measured = Vec::new();
+    for k in [1000_usize, 2000, 4000, 8000] {
+        let input = format!(
+            "<tool_call>\n<function=plan_outfits>\n{}</function>\n</tool_call>",
+            item.repeat(k)
+        );
+        let request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
+        let result = tools.recover(input.as_bytes(), &request);
+        assert_eq!(result.receipt.stopped, StopReason::Completed, "k={k}");
+        let Outcome::Resolved(calls) = &result.outcome else {
+            panic!("k={k}: {:?}", result.outcome)
+        };
+        assert!(calls.reasoning.is_empty(), "k={k}");
+        let purrassist_core::json::Value::Array(items) = &calls.calls[0]
+            .arguments
+            .get("outfits")
+            .expect("outfits")
+            .value
+        else {
+            panic!("k={k}: not an array")
+        };
+        assert_eq!(items.len(), k);
+        let usage = result.receipt.usage;
+        let n = input.len() as u64;
+        assert!(usage.work <= cost::RECOVER_WORK_PER_BYTE * n, "k={k}");
+        measured.push((
+            u128::from(n),
+            u128::from(usage.work),
+            u128::from(usage.total_scratch_charged),
+        ));
+    }
+    let (small_bytes, small_work, small_scratch) = measured[0];
+    for &(bytes, work, scratch) in &measured[1..] {
+        for (label, charged, small) in [
+            ("work", work, small_work),
+            ("total_scratch_charged", scratch, small_scratch),
+        ] {
+            let (ratio, byte_ratio) = (charged * small_bytes, small * bytes);
+            assert!(
+                ratio * 100 <= byte_ratio * 105 && byte_ratio * 100 <= ratio * 105,
+                "{small_bytes} -> {bytes} bytes: {label} is not linear"
+            );
+        }
+    }
+}
+
 /// G21: Mistral v11 calls separated by whitespace alone (or by nothing) are
 /// one `next`-chained attempt, and each call extends the one segmentation
 /// before it instead of re-reading the chain. From 256 to 4,096 calls the

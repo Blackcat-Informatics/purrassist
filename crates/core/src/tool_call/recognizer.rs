@@ -1237,7 +1237,7 @@ impl<'s> Recognizer<'s> {
         };
         // An opening reasoning marker a call read over as markup, not as
         // the data of a string value, cuts it (see `marker_cut`).
-        let cut = self.marker_cut(&parts);
+        let cut = self.marker_cut(&parts, governor)?;
         let mut stored = Vec::with_capacity(parts.len());
         let mut cut_part = None;
         for (index, (segment, cost)) in parts.into_iter().enumerate() {
@@ -1420,25 +1420,30 @@ impl<'s> Recognizer<'s> {
     /// marker's start and its pair. The marker's
     /// bytes belong to the block it opens, as a block's closing marker cuts
     /// a call inside the block (`tool_call.reasoning.marker-cut`).
-    fn marker_cut(&self, parts: &[(Segment, u64)]) -> Option<(usize, usize, u32)> {
+    fn marker_cut(
+        &self,
+        parts: &[(Segment, u64)],
+        governor: &mut Governor,
+    ) -> Result<Option<(usize, usize, u32)>, StopReason> {
         if self.turn.blocked.is_empty() {
-            return None;
+            return Ok(None);
         }
         for (index, (segment, _)) in parts.iter().enumerate() {
             let (Segment::Call(call) | Segment::Result(call)) = segment else {
                 continue;
             };
-            let found = self
-                .turn
-                .blocked
-                .iter()
-                .copied()
-                .filter(|&(marker, _)| call.span.start < marker && marker < call.span.end)
-                .filter(|&(marker, _)| {
-                    // Read as data: inside a capture or the arguments' bytes
-                    // (not markup its grammar spells, which is the call's),
-                    // and not inside a string value.
-                    let in_data = |reading: &RawCall| {
+            // Built on first need, once per reading, not once per marker.
+            let mut indexes: Vec<Option<DataIndex>> = call.readings.iter().map(|_| None).collect();
+            let mut found: Option<(usize, u32)> = None;
+            for &(marker, pair) in &self.turn.blocked {
+                if !(call.span.start < marker && marker < call.span.end) {
+                    continue;
+                }
+                // Read as data: inside a capture or the arguments' bytes
+                // (not markup its grammar spells, which is the call's),
+                // and not inside a string value.
+                let in_data =
+                    call.readings.iter().any(|reading| {
                         reading.captures.iter().any(|capture| {
                             capture.span.start <= marker && marker < capture.span.end
                         }) || reading
@@ -1447,32 +1452,31 @@ impl<'s> Recognizer<'s> {
                             .span
                             .as_ref()
                             .is_some_and(|span| span.start <= marker && marker < span.end)
-                    };
-                    call.readings.iter().any(in_data)
-                        && !call.readings.iter().all(|reading| {
-                            reading.arguments.leaves.iter().any(|leaf| {
-                                leaf.raw.start <= marker
-                                    && marker < leaf.raw.end
-                                    && match leaf.origin {
-                                        ArgOrigin::Raw | ArgOrigin::XmlText => true,
-                                        ArgOrigin::Json | ArgOrigin::StringifiedJson => matches!(
-                                            reading
-                                                .arguments
-                                                .root
-                                                .pointer(&leaf.pointer)
-                                                .map(|node| &node.value),
-                                            Some(crate::json::Value::String(_))
-                                        ),
-                                    }
-                            })
-                        })
-                })
-                .min();
+                    });
+                if !in_data {
+                    continue;
+                }
+                let mut every_reading_in_string = true;
+                for (reading, slot) in call.readings.iter().zip(&mut indexes) {
+                    if slot.is_none() {
+                        *slot = Some(DataIndex::build(&reading.arguments, governor)?);
+                    }
+                    let held = slot.as_ref().is_some_and(|held| held.holds(marker));
+                    governor.charge(Resource::Work, 1)?;
+                    if !held {
+                        every_reading_in_string = false;
+                        break;
+                    }
+                }
+                if !every_reading_in_string && found.is_none_or(|best| (marker, pair) < best) {
+                    found = Some((marker, pair));
+                }
+            }
             if let Some((marker, pair)) = found {
-                return Some((index, marker, pair));
+                return Ok(Some((index, marker, pair)));
             }
         }
-        None
+        Ok(None)
     }
 
     /// The rejected attempt `ended`, which ran over the opening reasoning
@@ -2749,5 +2753,174 @@ impl RecognizedTurn {
                 Piece::Choice(choice) => product.saturating_mul(choice.readings.len() as u128),
                 Piece::Segment(_) => product,
             })
+    }
+}
+
+/// Where a reading's arguments hold data a reasoning marker must not cut:
+/// the leaves whose raw bytes are string data (verbatim text, or a JSON
+/// string), as a sorted index so each marker is answered in O(log leaves).
+///
+/// Whether a JSON leaf is a string is decided by span, not by resolving its
+/// pointer: a repeated parameter holds duplicate members (which pointer
+/// lookup refuses) and a leaf keeps its written spelling (an alias
+/// repetition is `/ex/1`). The index sorts rather than assuming siblings'
+/// spans are in order or present: generated nodes carry no span and are
+/// skipped, and a stand-in or wrapper may repeat its child's span.
+struct DataIndex {
+    /// `(start, greatest end over data leaves starting at or before it)`,
+    /// sorted by start.
+    leaves: Vec<(usize, usize)>,
+    /// Scratch held while the index lives; released on every path, drop
+    /// included.
+    _lease: crate::contract::ScratchLease,
+}
+
+impl DataIndex {
+    /// Index `arguments`, charging one unit of work per node and leaf and
+    /// the index's scratch (leased, so released when the index drops).
+    fn build(arguments: &ArgTree, governor: &mut Governor) -> Result<Self, StopReason> {
+        use crate::json::Value;
+        let mut strings: Vec<(usize, usize)> = Vec::new();
+        let mut visited = 0_usize;
+        let mut pending = vec![&arguments.root];
+        while let Some(node) = pending.pop() {
+            visited += 1;
+            match &node.value {
+                Value::String(_) => {
+                    if let Some(span) = &node.span {
+                        strings.push((span.start, span.end));
+                    }
+                }
+                Value::Array(items) => pending.extend(items),
+                Value::Object(members) => pending.extend(members.iter().map(|m| &m.value)),
+                _ => {}
+            }
+        }
+        let held = visited + arguments.leaves.len();
+        let charged = size(held).saturating_mul(32);
+        governor.charge(Resource::Work, size(held))?;
+        let lease = governor.lease_scratch(charged)?;
+        strings.sort_unstable();
+        let mut leaves: Vec<(usize, usize)> = arguments
+            .leaves
+            .iter()
+            .filter(|leaf| match leaf.origin {
+                ArgOrigin::Raw | ArgOrigin::XmlText => true,
+                ArgOrigin::Json | ArgOrigin::StringifiedJson => strings
+                    .binary_search(&(leaf.raw.start, leaf.raw.end))
+                    .is_ok(),
+            })
+            .map(|leaf| (leaf.raw.start, leaf.raw.end))
+            .collect();
+        leaves.sort_unstable();
+        let mut greatest = 0;
+        for entry in &mut leaves {
+            greatest = greatest.max(entry.1);
+            entry.1 = greatest;
+        }
+        Ok(Self {
+            leaves,
+            _lease: lease,
+        })
+    }
+
+    /// Whether `marker` lies inside the raw bytes of a data leaf.
+    fn holds(&self, marker: usize) -> bool {
+        let at = self.leaves.partition_point(|entry| {
+            #[cfg(test)]
+            LOOKUP_STEPS.with(|steps| steps.set(steps.get() + 1));
+            entry.0 <= marker
+        });
+        at > 0 && self.leaves[at - 1].1 > marker
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Comparisons made by [`DataIndex::holds`] on this thread.
+    static LOOKUP_STEPS: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Budget;
+    use crate::json::{Member, Node, Value};
+
+    fn string_at(start: usize, end: usize) -> Node {
+        Node {
+            value: Value::String("a <think> b".into()),
+            span: Some(start..end),
+        }
+    }
+
+    fn leaf(origin: ArgOrigin, start: usize, end: usize) -> super::super::ir::ArgLeaf {
+        super::super::ir::ArgLeaf {
+            pointer: format!("/{start}"),
+            origin,
+            raw: start..end,
+        }
+    }
+
+    /// A marker inside one JSON string of k duplicate members (the shape that
+    /// pointer lookup refuses) is found by span; one inside a number is not;
+    /// and each lookup takes O(log k) comparisons.
+    #[test]
+    fn data_index_finds_strings_among_duplicates_in_log_steps() {
+        let mut governor = Governor::new(Budget::default());
+        for k in [1_000_usize, 8_000, 64_000] {
+            let members: Vec<Member> = (0..k)
+                .map(|i| Member {
+                    key: "xs".into(),
+                    key_span: None,
+                    value: string_at(i * 20 + 1, i * 20 + 15),
+                })
+                .collect();
+            let mut tree = ArgTree::value(Node {
+                value: Value::Object(members),
+                span: Some(0..k * 20),
+            });
+            for i in 0..k {
+                tree.leaves
+                    .push(leaf(ArgOrigin::Json, i * 20 + 1, i * 20 + 15));
+            }
+            // A number leaf and a spanless node: not strings, not skipped
+            // incorrectly, and the build does not assume ordering.
+            tree.leaves
+                .push(leaf(ArgOrigin::Json, k * 20 + 1, k * 20 + 3));
+            let index = DataIndex::build(&tree, &mut governor).expect("builds");
+            LOOKUP_STEPS.with(|steps| steps.set(0));
+            for i in 0..k {
+                assert!(index.holds(i * 20 + 5), "k={k} string {i}");
+                assert!(!index.holds(i * 20 + 17), "k={k} gap {i}");
+            }
+            assert!(!index.holds(k * 20 + 2), "a number is not string data");
+            let steps = LOOKUP_STEPS.with(core::cell::Cell::get);
+            let lookups = (2 * k + 1) as u64;
+            let log = u64::from(k.ilog2()) + 3;
+            assert!(
+                steps <= lookups * log,
+                "k={k}: {steps} steps for {lookups} lookups (bound {log} each)"
+            );
+        }
+    }
+
+    /// A wrapper array repeating its child string's span does not hide the
+    /// string, and a node without a span is skipped, not mis-ordered.
+    #[test]
+    fn data_index_handles_wrappers_and_spanless_nodes() {
+        let mut governor = Governor::new(Budget::default());
+        let wrapped = Node {
+            value: Value::Array(vec![
+                Node::new(Value::String("generated".into())),
+                string_at(10, 20),
+            ]),
+            span: Some(10..20),
+        };
+        let mut tree = ArgTree::value(wrapped);
+        tree.leaves.push(leaf(ArgOrigin::Json, 10, 20));
+        let index = DataIndex::build(&tree, &mut governor).expect("builds");
+        assert!(index.holds(12));
+        assert!(!index.holds(25));
     }
 }

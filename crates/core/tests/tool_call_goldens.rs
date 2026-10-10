@@ -4756,3 +4756,36 @@ fn unmodeled_schemas_type_xml_text() {
     );
     assert!(call.keywords.iter().all(|use_| !use_.used));
 }
+
+/// G7: the issue's shape with a reasoning-marker spelling in a JSON string of
+/// a repeated nested-parameter item. The marker is value text.
+#[test]
+fn xml_repeated_items_reasoning_marker_in_json_string() {
+    let (_, result) = golden("xml_repeated_items_reasoning_marker_in_json_string");
+    let calls = reading(&result);
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"outfits":[{"wearer":"Alice","garments":["a red coat"]},{"wearer":"Bob","garments":["a <think> scarf"]}]}"#
+    );
+    assert!(calls.reasoning.is_empty(), "{:#?}", calls.reasoning);
+    assert_eq!(calls.reasoning_blocks, []);
+    assert_eq!(rule_count(call, "tool_call.reasoning.marker-cut"), 0);
+}
+
+/// G7: the same for repeated JSON-array occurrences of the parameter.
+#[test]
+fn xml_repeated_json_array_items_reasoning_marker_in_json_string() {
+    let (_, result) = golden("xml_repeated_json_array_items_reasoning_marker_in_json_string");
+    let calls = reading(&result);
+    let call = the_call(&result);
+    assert_eq!(call.outcome, CallOutcome::Resolved, "{call:#?}");
+    assert_eq!(
+        call.arguments.to_json(),
+        r#"{"outfits":[{"wearer":"Alice"},{"wearer":"Bob","garments":["a <think> scarf"]}]}"#
+    );
+    assert!(calls.reasoning.is_empty(), "{:#?}", calls.reasoning);
+    assert_eq!(calls.reasoning_blocks, []);
+    assert_eq!(rule_count(call, "tool_call.reasoning.marker-cut"), 0);
+}

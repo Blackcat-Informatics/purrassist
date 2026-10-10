@@ -2223,3 +2223,42 @@ fn alias_and_canonical_repetitions_share_one_item_sequence() {
         assert_eq!(*span, at(literal), "item {index}");
     }
 }
+
+/// R5 review advisory 2, G7: a leaf keeps its written spelling, so the
+/// second occurrence of an aliased array parameter is `/ex/1` while the tool
+/// declares `xs`. A reasoning-marker spelling inside that occurrence's JSON
+/// string is value text: the call is not cut, and no reasoning is recorded.
+#[test]
+fn reasoning_marker_in_json_string_of_alias_repetition_is_value_text() {
+    let tools = compile([ToolDefinition::new("notes")
+        .effects(Effects::ReadOnly)
+        .param(
+            "rows",
+            Param::array(Param::object(
+                ObjectSpec::new().param("n", Param::string().required()),
+            ))
+            .alias("ex")
+            .required(),
+        )]);
+    let body = "<parameter=rows>\n[{\"n\":\"a\"}]\n</parameter>\n<parameter=ex>\n[{\"n\":\"b <think> c\"}]\n</parameter>";
+    let turn = run(DialectId::Qwen3CoderXml, &tools, &qwen("notes", body));
+    let call = one(&turn);
+    assert_eq!(
+        call.outcome,
+        CallOutcome::Resolved,
+        "the alias occurrence resolves: {call:#?}"
+    );
+    assert_eq!(
+        call.reading.arguments.to_json(),
+        r#"{"rows":[{"n":"a"},{"n":"b <think> c"}]}"#
+    );
+    assert_eq!(count(call, "tool_call.reasoning.marker-cut"), 0);
+    assert!(
+        !turn
+            .selected()
+            .iter()
+            .any(|segment| matches!(segment, ResolvedSegment::Reasoning { .. })),
+        "a marker inside a JSON string opens no reasoning block: {:#?}",
+        turn.pieces
+    );
+}

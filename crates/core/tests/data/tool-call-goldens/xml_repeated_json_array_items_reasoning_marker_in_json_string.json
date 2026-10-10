@@ -1,0 +1,85 @@
+{
+  "description": "Issue #8, G7: a reasoning-marker spelling inside a JSON string of a repeated JSON-array occurrence is value text; the call resolves and no reasoning is recorded.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "plan_outfits",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "outfits": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "wearer": {
+                    "type": "string"
+                  },
+                  "garments": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "wearer"
+                ]
+              }
+            }
+          },
+          "required": [
+            "outfits"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "input": "<tool_call>\n<function=plan_outfits>\n<parameter=outfits>\n[{\"wearer\":\"Alice\"}]\n</parameter>\n<parameter=outfits>\n[{\"wearer\":\"Bob\",\"garments\":[\"a <think> scarf\"]}]\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "plan_outfits",
+      "arguments": {
+        "outfits": [
+          {
+            "wearer": "Alice"
+          },
+          {
+            "wearer": "Bob",
+            "garments": [
+              "a <think> scarf"
+            ]
+          }
+        ]
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.parameter.collect"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.parameter.collect"
+  ]
+}
