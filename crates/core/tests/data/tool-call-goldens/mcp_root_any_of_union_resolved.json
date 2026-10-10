@@ -1,0 +1,79 @@
+{
+  "description": "R11 (G19, decided): a root anyOf of two object schemas projects the union of their names with typing left to the exact schema: count is read as the JSON integer the second branch requires.",
+  "tools_mcp": {
+    "tools": [
+      {
+        "name": "search",
+        "description": "Search the index.",
+        "inputSchema": {
+          "type": "object",
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "url",
+                "count"
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "input": "<tool_call>\n<function=search>\n<parameter=url>http://example.com</parameter>\n<parameter=count>4</parameter>\n</function>\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "search",
+      "arguments": {
+        "url": "http://example.com",
+        "count": 4
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.value.schema-typed"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.value.schema-typed"
+  ]
+}

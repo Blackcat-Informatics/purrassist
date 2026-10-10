@@ -1,0 +1,84 @@
+{
+  "description": "R11 (G19): a root allOf of one $ref to the Args object projects its parameters: the integer limit is decoded from XML text.",
+  "tools_mcp": {
+    "tools": [
+      {
+        "name": "search",
+        "description": "Search the index.",
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Args"
+            }
+          ],
+          "definitions": {
+            "Args": {
+              "title": "Args",
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string",
+                  "description": "what to find"
+                },
+                "limit": {
+                  "type": "integer"
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "fast",
+                    "full"
+                  ]
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          }
+        }
+      }
+    ]
+  },
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "input": "<tool_call>\n<function=search>\n<parameter=query>q</parameter>\n<parameter=limit>7</parameter>\n</function>\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "search",
+      "arguments": {
+        "query": "q",
+        "limit": 7
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

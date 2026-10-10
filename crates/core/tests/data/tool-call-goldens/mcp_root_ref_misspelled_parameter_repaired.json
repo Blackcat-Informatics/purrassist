@@ -1,0 +1,85 @@
+{
+  "description": "R11 (G19): a misspelled parameter name of a Hermes JSON call is renamed to the declared one through the root $ref's target (json.key.match, a guess), exactly as for the inline twin mcp_inline_misspelled_parameter_repaired.",
+  "tools_mcp": {
+    "tools": [
+      {
+        "name": "search",
+        "description": "Search the index.",
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "$ref": "#/definitions/Args",
+          "definitions": {
+            "Args": {
+              "title": "Args",
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string",
+                  "description": "what to find"
+                },
+                "limit": {
+                  "type": "integer"
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "fast",
+                    "full"
+                  ]
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          }
+        }
+      }
+    ]
+  },
+  "dialects": [
+    "hermes.v1"
+  ],
+  "effects": {
+    "search": "read_only"
+  },
+  "input": "<tool_call>\n{\"name\": \"search\", \"arguments\": {\"qurey\": \"rust\"}}\n</tool_call>",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "search",
+      "arguments": {
+        "query": "rust"
+      },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "outcome": "best_guess",
+      "rules": [
+        "json.key.match"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "json.key.match"
+  ]
+}

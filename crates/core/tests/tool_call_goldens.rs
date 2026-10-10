@@ -3,7 +3,8 @@
 //! Tool-call rule goldens (A3, A3a–A3q, A13): each fixture under
 //! `tests/data/tool-call-goldens/` pairs a model turn (`input`) with its
 //! tool declarations (`tools_openai`, the exact `OpenAI` `tools` text or
-//! value, or `tools`, a builder specification for aliases, repeatable
+//! value; `tools_mcp`, the exact MCP declaration or `tools/list` text or
+//! value; or `tools`, a builder specification for aliases, repeatable
 //! parameters and unknown-parameter modes adapters cannot express), an
 //! optional custom `grammar`, and the request (`dialects`, `policy`,
 //! `effects`, `stop`, `tool_choice`, `effort`, `reasoning`, `ids`,
@@ -216,24 +217,35 @@ fn definition(node: &Node) -> ToolDefinition {
     tool
 }
 
-/// The exact `OpenAI` tools text: a string member verbatim, else the
+/// The exact tools text of `key`: a string member verbatim, else the
 /// value's compact JSON.
-fn openai_text(golden: &Node) -> Option<String> {
+fn tools_text(golden: &Node, key: &str) -> Option<String> {
     golden
-        .get("tools_openai")
+        .get(key)
         .map(|node| node.as_str().map_or_else(|| node.to_json(), str::to_owned))
 }
 
+/// The exact `OpenAI` tools text (`tools_openai`).
+fn openai_text(golden: &Node) -> Option<String> {
+    tools_text(golden, "tools_openai")
+}
+
 fn tool_set(golden: &Node, path: &Path) -> ToolSet {
-    match (openai_text(golden), golden.get("tools")) {
-        (Some(text), None) => ToolSet::from_openai(&text, Budget::default())
+    match (
+        openai_text(golden),
+        tools_text(golden, "tools_mcp"),
+        golden.get("tools"),
+    ) {
+        (Some(text), None, None) => ToolSet::from_openai(&text, Budget::default())
             .unwrap_or_else(|error| panic!("{}: tools_openai: {error}", path.display())),
-        (None, Some(tools)) => {
+        (None, Some(text), None) => ToolSet::from_mcp(&text, Budget::default())
+            .unwrap_or_else(|error| panic!("{}: tools_mcp: {error}", path.display())),
+        (None, None, Some(tools)) => {
             ToolSet::compile(items(tools).iter().map(definition), Budget::default())
                 .unwrap_or_else(|error| panic!("{}: tools: {error}", path.display()))
         }
         _ => panic!(
-            "{}: exactly one of `tools_openai` and `tools` is required",
+            "{}: exactly one of `tools_openai`, `tools_mcp` and `tools` is required",
             path.display()
         ),
     }
@@ -1221,6 +1233,159 @@ fn near_miss_name_structural() {
     let call = the_call(&result);
     assert!(is_unresolved(&call.outcome), "{call:#?}");
     assert_eq!(reading(&result).usable_accepting_guesses().len(), 0);
+}
+
+/// R11 (G19): the arguments and rules of the single call of golden `name`,
+/// after asserting the byte-exact render-back of its MCP declaration in all
+/// three wire forms (the `parameters` text is embedded verbatim).
+fn mcp_golden(name: &str) -> (Golden, AssistResult<ToolCalls>) {
+    let (golden, result) = golden(name);
+    let source = tools_text(&golden.node, "tools_mcp").expect("tools_mcp text");
+    let listing = parse(&source).expect("tools json");
+    let declaration = &items(listing.get("tools").expect("tools"))[0];
+    let span = declaration.span.clone().expect("declaration span");
+    assert_eq!(
+        golden
+            .tools
+            .render_declaration("search", DeclarationForm::Mcp)
+            .expect("rendered")
+            .as_bytes(),
+        &source.as_bytes()[span],
+        "{name}: MCP render-back"
+    );
+    let schema = declaration
+        .get("inputSchema")
+        .expect("inputSchema")
+        .to_json();
+    for (form, wrapped) in [
+        (
+            DeclarationForm::OpenAi,
+            format!(
+                r#"{{"type":"function","function":{{"name":"search","description":"Search the index.","parameters":{schema}}}}}"#
+            ),
+        ),
+        (
+            DeclarationForm::Anthropic,
+            format!(
+                r#"{{"name":"search","description":"Search the index.","input_schema":{schema}}}"#
+            ),
+        ),
+    ] {
+        assert_eq!(
+            golden
+                .tools
+                .render_declaration("search", form)
+                .expect("rendered"),
+            wrapped,
+            "{name}: {form:?} render-back"
+        );
+    }
+    (golden, result)
+}
+
+/// R11 (G19): a root `$ref` MCP declaration (the FastMCP/pydantic shape)
+/// projects its target's parameters. Expectations are written here, not
+/// taken from the blessed files.
+#[test]
+fn mcp_root_ref_calls_resolve_with_typed_arguments() {
+    for (name, arguments, rules, outcome) in [
+        // Qwen3-Coder XML: `limit` decoded to the declared integer, `tags`
+        // read as the JSON array it spells.
+        (
+            "mcp_root_ref_qwen3_xml_resolved",
+            r#"{"query":"rust lifetimes","limit":5,"tags":["a","b"]}"#,
+            &[][..],
+            CallOutcome::Resolved,
+        ),
+        (
+            "mcp_root_ref_hermes_json_resolved",
+            r#"{"query":"rust","limit":3,"mode":"fast"}"#,
+            &[][..],
+            CallOutcome::Resolved,
+        ),
+        // 2020-12: the root's `extra` (boolean) and the target's `query`;
+        // `limit` is declared by both, typed by the exact schema.
+        (
+            "mcp_root_defs_2020_12_resolved",
+            r#"{"extra":true,"query":"q","limit":2}"#,
+            &["tool_call.value.schema-typed"][..],
+            CallOutcome::Resolved,
+        ),
+        (
+            "mcp_root_all_of_ref_resolved",
+            r#"{"query":"q","limit":7}"#,
+            &[][..],
+            CallOutcome::Resolved,
+        ),
+        // The union of branch names; `count` is typed by the exact schema.
+        (
+            "mcp_root_any_of_union_resolved",
+            r#"{"url":"http://example.com","count":4}"#,
+            &["tool_call.value.schema-typed"][..],
+            CallOutcome::Resolved,
+        ),
+    ] {
+        let (_, result) = mcp_golden(name);
+        let call = the_call(&result);
+        assert_eq!(call.outcome, outcome, "{name}");
+        assert_eq!(call.arguments.to_json(), arguments, "{name}");
+        assert_eq!(rules_of(call), rules, "{name}");
+        assert!(!has_guess(call), "{name}");
+        assert_eq!(reading(&result).usable().len(), 1, "{name}");
+    }
+}
+
+/// R11 (G19): a misspelled parameter name is repaired through the root
+/// `$ref` exactly as for the inline twin, in both prompt dialects.
+#[test]
+fn mcp_root_ref_misspelled_parameter_repairs_like_inline() {
+    for (via_ref, inline) in [
+        (
+            "mcp_root_ref_misspelled_parameter_repaired",
+            "mcp_inline_misspelled_parameter_repaired",
+        ),
+        (
+            "mcp_root_ref_misspelled_qwen_parameter_repaired",
+            "mcp_inline_misspelled_qwen_parameter_repaired",
+        ),
+    ] {
+        let (_, referenced) = mcp_golden(via_ref);
+        let (_, direct) = mcp_golden(inline);
+        let (referenced, direct) = (the_call(&referenced), the_call(&direct));
+        assert_eq!(
+            referenced.arguments.to_json(),
+            r#"{"query":"rust"}"#,
+            "{via_ref}"
+        );
+        assert_eq!(direct.arguments.to_json(), referenced.arguments.to_json());
+        assert_eq!(rules_of(referenced), ["json.key.match"], "{via_ref}");
+        assert_eq!(rules_of(direct), rules_of(referenced));
+        assert_eq!(referenced.outcome, direct.outcome);
+        assert!(has_guess(referenced), "{via_ref}: a renamed key is a guess");
+    }
+}
+
+/// R11 (G19): a root `$ref` that names no object schema keeps the
+/// pass-through projection: no repair, the arguments verbatim, and the
+/// exact schema's verdict.
+#[test]
+fn mcp_root_ref_unprojectable_stays_pass_through() {
+    let (golden, result) = mcp_golden("mcp_root_ref_unprojectable_stays_pass_through");
+    let call = the_call(&result);
+    assert_eq!(call.arguments.to_json(), r#"{"qurey":"rust"}"#);
+    assert_eq!(rules_of(call), ["tool_call.parameter.pass-through"]);
+    assert_eq!(
+        call.outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::SchemaValidation
+        }
+    );
+    let shape = golden.tools.argument_shape("search").expect("shape");
+    assert_eq!(shape.arguments.parameters.len(), 0);
+    assert_eq!(
+        shape.arguments.unknown_parameters,
+        UnknownParameters::PassThrough
+    );
 }
 
 #[test]

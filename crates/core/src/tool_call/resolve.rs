@@ -1843,6 +1843,7 @@ impl<'a> Resolver<'a> {
         }
         let mut sites = Vec::new();
         schema_sites(
+            tool,
             &tool.argument_shape().arguments,
             &arguments,
             "",
@@ -3034,7 +3035,9 @@ struct SchemaSite {
 
 /// Collect every XML-text string inside the unmodeled values of an object
 /// scope, walking the modeled scopes of `shape` down to them.
+#[allow(clippy::too_many_arguments)]
 fn schema_sites(
+    tool: &CompiledTool,
     shape: &ObjectShape,
     node: &Node,
     pointer: &str,
@@ -3052,7 +3055,13 @@ fn schema_sites(
             continue;
         };
         let here = format!("{pointer}/{}", pointer_segment(&member.key));
-        let here_schema = format!("{schema}/properties/{}", pointer_segment(&member.key));
+        // A top-level parameter's schema sits below the location the root
+        // projection read it from (a root `$ref` target, a union branch).
+        let here_schema = if pointer.is_empty() {
+            tool.parameter_pointer(&member.key)
+        } else {
+            format!("{schema}/properties/{}", pointer_segment(&member.key))
+        };
         let value_shape = match &parameter.value {
             ValueShape::Array(inner) => inner.as_ref(),
             other => other,
@@ -3063,7 +3072,7 @@ fn schema_sites(
                 unmodeled_sites(node, at, root, raw, out, governor)
             }
             ValueShape::Object(inner) => {
-                schema_sites(inner, node, at, at_schema, raw, out, governor)
+                schema_sites(tool, inner, node, at, at_schema, raw, out, governor)
             }
             _ => Ok(()),
         };

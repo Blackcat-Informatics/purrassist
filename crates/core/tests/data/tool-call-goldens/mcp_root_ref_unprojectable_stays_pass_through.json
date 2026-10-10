@@ -1,0 +1,75 @@
+{
+  "description": "R11 (G19): a root $ref whose target is not an object schema ('type' is an array) projects no parameter and keeps PassThrough: a misspelled name is not repaired (it passes through verbatim, tool_call.parameter.pass-through), and the exact schema then rejects the arguments for the missing required query: Unresolved, SchemaValidation.",
+  "tools_mcp": {
+    "tools": [
+      {
+        "name": "search",
+        "description": "Search the index.",
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "$ref": "#/definitions/Args",
+          "definitions": {
+            "Args": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "query": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          }
+        }
+      }
+    ]
+  },
+  "dialects": [
+    "hermes.v1"
+  ],
+  "effects": {
+    "search": "read_only"
+  },
+  "input": "<tool_call>\n{\"name\": \"search\", \"arguments\": {\"qurey\": \"rust\"}}\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "search",
+      "arguments": {
+        "qurey": "rust"
+      },
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "outcome": "unresolved: schema_validation: the arguments fail the tool's schema",
+      "rules": [
+        "tool_call.parameter.pass-through"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [
+    "sha256:e3a2da5d0c4cd5cc2971ec016150b44732c5dfc3180460221cf57b73c94cf7a2",
+    "keyword /$schema",
+    "keyword /$ref",
+    "keyword /definitions"
+  ],
+  "ledger_rules": [
+    "tool_call.parameter.pass-through"
+  ]
+}

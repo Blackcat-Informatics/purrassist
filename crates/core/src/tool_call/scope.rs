@@ -206,8 +206,11 @@ pub(super) struct ScopeCompiler<'d> {
     dialect: Dialect,
     /// Node index by (reference-resolved) location pointer.
     index: BTreeMap<String, usize>,
+    /// Node index by the (reference-resolved, sorted) pointers of a scope
+    /// declared at several locations at once ([`Self::scope_many`]).
+    joint: BTreeMap<Vec<String>, usize>,
     nodes: Vec<ScopeNode>,
-    pending: Vec<(usize, String)>,
+    pending: Vec<(usize, Vec<String>)>,
 }
 
 impl<'d> ScopeCompiler<'d> {
@@ -216,6 +219,7 @@ impl<'d> ScopeCompiler<'d> {
             root,
             dialect,
             index: BTreeMap::new(),
+            joint: BTreeMap::new(),
             nodes: Vec::new(),
             pending: Vec::new(),
         }
@@ -228,6 +232,11 @@ impl<'d> ScopeCompiler<'d> {
         governor: &mut Governor,
     ) -> Result<usize, StopReason> {
         let located = self.locate(pointer, governor)?;
+        self.intern(located, governor)
+    }
+
+    /// The node index of the scope at the already located `located`.
+    fn intern(&mut self, located: String, governor: &mut Governor) -> Result<usize, StopReason> {
         if let Some(&index) = self.index.get(&located) {
             return Ok(index);
         }
@@ -238,14 +247,48 @@ impl<'d> ScopeCompiler<'d> {
         let index = self.nodes.len();
         self.nodes.push(ScopeNode::default());
         self.index.insert(located.clone(), index);
+        self.pending.push((index, vec![located]));
+        Ok(index)
+    }
+
+    /// The node index of the scope that is the union of the schemas at
+    /// `pointers`: a value declared at several locations at once (a name
+    /// several `anyOf`/`oneOf` branches of the root declare). One location
+    /// is [`Self::scope`]; the members of several are the union of what
+    /// each declares.
+    pub(super) fn scope_many(
+        &mut self,
+        pointers: &[String],
+        governor: &mut Governor,
+    ) -> Result<usize, StopReason> {
+        let mut located = Vec::with_capacity(pointers.len());
+        for pointer in pointers {
+            located.push(self.locate(pointer, governor)?);
+        }
+        located.sort();
+        located.dedup();
+        if located.len() == 1 {
+            let only = located.swap_remove(0);
+            return self.intern(only, governor);
+        }
+        if let Some(&index) = self.joint.get(&located) {
+            return Ok(index);
+        }
+        let bytes = located.iter().fold(NODE_RECORD, |total, at| {
+            total.saturating_add(at.len().saturating_mul(2))
+        });
+        governor.charge(Resource::ScratchBytes, size(bytes))?;
+        let index = self.nodes.len();
+        self.nodes.push(ScopeNode::default());
+        self.joint.insert(located.clone(), index);
         self.pending.push((index, located));
         Ok(index)
     }
 
     /// Read every interned location's members and return the graph.
     pub(super) fn finish(mut self, governor: &mut Governor) -> Result<ScopeGraph, StopReason> {
-        while let Some((index, pointer)) = self.pending.pop() {
-            let node = self.read(&pointer, governor)?;
+        while let Some((index, pointers)) = self.pending.pop() {
+            let node = self.read(&pointers, governor)?;
             self.nodes[index] = node;
         }
         Ok(ScopeGraph { nodes: self.nodes })
@@ -349,9 +392,27 @@ impl<'d> ScopeCompiler<'d> {
             )
     }
 
-    /// The members a location declares and whether it is open.
-    fn read(&mut self, pointer: &str, governor: &mut Governor) -> Result<ScopeNode, StopReason> {
-        let reach = self.reach(pointer, governor)?;
+    /// The members the locations declare together and whether the scope is
+    /// open.
+    fn read(
+        &mut self,
+        pointers: &[String],
+        governor: &mut Governor,
+    ) -> Result<ScopeNode, StopReason> {
+        let mut reach = Reach {
+            pointers: Vec::new(),
+            unresolved: false,
+        };
+        let mut known = BTreeSet::new();
+        for pointer in pointers {
+            let part = self.reach(pointer, governor)?;
+            reach.unresolved |= part.unresolved;
+            for at in part.pointers {
+                if known.insert(at.clone()) {
+                    reach.pointers.push(at);
+                }
+            }
+        }
         let mut declared: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let mut open = reach.unresolved || reach.pointers.is_empty();
         for at in &reach.pointers {
@@ -498,7 +559,7 @@ fn names_type_only(node: &Node, kind: &str) -> bool {
 
 /// The JSON Pointer a local `$ref` (`#` or `#/...`) denotes within the
 /// document; `None` for any other reference (remote, anchor).
-fn local_pointer(reference: &str) -> Option<String> {
+pub(super) fn local_pointer(reference: &str) -> Option<String> {
     let fragment = reference.strip_prefix('#')?;
     if !fragment.is_empty() && !fragment.starts_with('/') {
         return None;

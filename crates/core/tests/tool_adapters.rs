@@ -10,7 +10,8 @@ use purrassist_core::{
     schema::Schema,
     tool_call::{
         CompiledTool, DeclarationForm, Effects, Nesting, Param, RepairPolicy, ToolDeclaration,
-        ToolDefinition, ToolSet, ToolSetError, ToolSource, UnknownParameters, ValueShape,
+        ToolDefinition, ToolRecoveryRequest, ToolSet, ToolSetError, ToolSource, UnknownParameters,
+        ValueShape,
     },
 };
 
@@ -1140,10 +1141,17 @@ fn assert_draft07_root_rules(tools: &ToolSet) {
         UnknownParameters::PassThrough
     );
 
-    // A Draft-07 root `$ref` overrides its siblings: no parameter is
-    // projected from the ignored `properties`, and every member is listed.
+    // A Draft-07 root `$ref` overrides its siblings (R11, gap G19). The
+    // sibling `properties` stay ignored for projection and stay listed as
+    // unmodeled keywords with `$ref` and `definitions` (retained evidence);
+    // the local `$ref` target `#/definitions/args` is what describes the
+    // arguments, so its `properties` are projected: `q` (a string), not the
+    // ignored `ignored`. Before R11 this root projected no parameter.
     let wrapped = &tools.argument_shape("wrapped").unwrap().arguments;
-    assert_eq!(wrapped.parameters.len(), 0);
+    assert_eq!(wrapped.parameters.len(), 1);
+    assert_eq!(wrapped.parameters[0].name, "q");
+    assert_eq!(wrapped.parameters[0].value, ValueShape::String(None));
+    assert!(wrapped.parameter("ignored").is_none());
     assert_eq!(wrapped.unknown_parameters, UnknownParameters::PassThrough);
     assert_eq!(
         tools.tool("wrapped").unwrap().unmodeled_keywords(),
@@ -1155,12 +1163,18 @@ fn assert_draft07_root_rules(tools: &ToolSet) {
             ("", "type"),
         ])
     );
+    let wrapped_schema = tools.tool("wrapped").unwrap().schema();
     assert!(
-        !tools
-            .tool("wrapped")
-            .unwrap()
-            .schema()
+        !wrapped_schema
             .validate(&json::parse(r#"{"q":1}"#).unwrap())
+            .unwrap()
+            .valid
+    );
+    // The ignored sibling `properties` constrain nothing: validation is the
+    // exact Draft-07 schema.
+    assert!(
+        wrapped_schema
+            .validate(&json::parse(r#"{"q":"a","ignored":1}"#).unwrap())
             .unwrap()
             .valid
     );
@@ -1277,4 +1291,570 @@ fn scope_graph_compilation_is_charged_and_explicit() {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Root `$ref` declarations (issue #8, R11, gap G19)
+// ---------------------------------------------------------------------------
+
+/// The shape `FastMCP` and pydantic emit for a tool with one model argument.
+const FASTMCP_SCHEMA: &str = r##"{"$schema":"http://json-schema.org/draft-07/schema#","$ref":"#/definitions/Args","definitions":{"Args":{"title":"Args","type":"object","properties":{"query":{"type":"string","description":"what to find"},"limit":{"type":"integer","default":10},"mode":{"type":"string","enum":["fast","full"]},"tags":{"type":"array","items":{"type":"string"}}},"required":["query"]}}}"##;
+
+fn mcp_tool(name: &str, schema: &str) -> String {
+    format!(r#"{{"name":"{name}","description":"d","inputSchema":{schema}}}"#)
+}
+
+/// The three wire renderings of a tool named `name` with `schema`.
+fn wire_forms(name: &str, schema: &str) -> [(DeclarationForm, String); 3] {
+    [
+        (
+            DeclarationForm::OpenAi,
+            format!(
+                r#"{{"type":"function","function":{{"name":"{name}","description":"d","parameters":{schema}}}}}"#
+            ),
+        ),
+        (DeclarationForm::Mcp, mcp_tool(name, schema)),
+        (
+            DeclarationForm::Anthropic,
+            format!(r#"{{"name":"{name}","description":"d","input_schema":{schema}}}"#),
+        ),
+    ]
+}
+
+/// Every wire form of a declaration reads back byte-exact from its own
+/// source text and re-renders canonically with the verbatim `parameters`
+/// text, and the tool built from each form projects the same parameters.
+fn assert_render_back(name: &str, schema: &str, parameter_names: &[&str]) {
+    for (form, text) in wire_forms(name, schema) {
+        let tools = match form {
+            DeclarationForm::OpenAi => {
+                ToolSet::from_openai(&format!("[{text}]"), Budget::default())
+            }
+            DeclarationForm::Mcp => ToolSet::from_mcp(&text, Budget::default()),
+            _ => ToolSet::from_anthropic(&format!("[{text}]"), Budget::default()),
+        }
+        .unwrap();
+        let tool = tools.tool(name).unwrap();
+        assert_eq!(
+            tool.render_declaration(form).unwrap(),
+            text,
+            "{form:?} source"
+        );
+        assert_eq!(tool.json_schema(), schema, "{form:?} schema text");
+        assert_eq!(declaration(tool).parameters_text(), Some(schema));
+        // Every other wire form embeds the parameters text verbatim.
+        for (other, rendered) in wire_forms(name, schema) {
+            assert_eq!(
+                tool.render_declaration(other).unwrap(),
+                rendered,
+                "{form:?} -> {other:?}"
+            );
+        }
+        let projected: Vec<&str> = tools
+            .argument_shape(name)
+            .unwrap()
+            .arguments
+            .parameters
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect();
+        assert_eq!(projected, parameter_names, "{form:?}");
+    }
+}
+
+#[test]
+fn root_ref_projects_the_target_object() {
+    let tools = ToolSet::from_mcp(&mcp_tool("search", FASTMCP_SCHEMA), Budget::default()).unwrap();
+    let shape = tools.argument_shape("search").unwrap();
+    let names: Vec<_> = shape
+        .arguments
+        .parameters
+        .iter()
+        .map(|parameter| (parameter.name.as_str(), parameter.required))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("query", true),
+            ("limit", false),
+            ("mode", false),
+            ("tags", false)
+        ]
+    );
+    assert_eq!(shape.arguments.required, ["query"]);
+    assert_eq!(
+        shape.arguments.parameter("limit").unwrap().value,
+        ValueShape::Integer
+    );
+    assert_eq!(
+        shape
+            .arguments
+            .parameter("limit")
+            .unwrap()
+            .default
+            .as_ref()
+            .map(json::Node::to_json),
+        Some("10".to_owned())
+    );
+    assert_eq!(
+        shape.arguments.parameter("mode").unwrap().value,
+        ValueShape::Enumeration(vec!["fast".into(), "full".into()])
+    );
+    assert_eq!(
+        shape.arguments.parameter("tags").unwrap().value,
+        ValueShape::Array(Box::new(ValueShape::String(None)))
+    );
+    assert_eq!(
+        shape.arguments.unknown_parameters,
+        UnknownParameters::PassThrough
+    );
+    // The root keywords stay evidence; the target's `title` is listed at
+    // the target's pointer, relative to the parameters schema.
+    assert_eq!(
+        tools.tool("search").unwrap().unmodeled_keywords(),
+        pairs(&[
+            ("", "$schema"),
+            ("", "$ref"),
+            ("", "definitions"),
+            ("/definitions/Args", "title"),
+        ])
+    );
+    // Validation is the exact declaration and its draft.
+    let schema = tools.tool("search").unwrap().schema();
+    assert_eq!(schema.dialect(), purrassist_core::schema::Dialect::Draft07);
+    for (call, valid) in [
+        (r#"{"query":"a"}"#, true),
+        (r#"{"query":"a","limit":3,"extra":1}"#, true),
+        (r#"{"limit":3}"#, false),
+        (r#"{"query":"a","limit":"3"}"#, false),
+    ] {
+        assert_eq!(
+            schema.validate(&json::parse(call).unwrap()).unwrap().valid,
+            valid,
+            "{call}"
+        );
+    }
+    assert_render_back(
+        "search",
+        FASTMCP_SCHEMA,
+        &["query", "limit", "mode", "tags"],
+    );
+}
+
+/// The prompt-form declaration of a root-`$ref` tool is the verbatim
+/// parameters text, as for every adapter-built tool: projecting the target's
+/// parameters changes what repair knows, not what a prompt declares.
+#[test]
+fn root_ref_prompt_form_declaration_prints_the_exact_schema() {
+    let tools = ToolSet::from_mcp(&mcp_tool("search", FASTMCP_SCHEMA), Budget::default()).unwrap();
+    let tool = tools.tool("search").unwrap();
+    for form in [DeclarationForm::Qwen3CoderXml, DeclarationForm::Hermes] {
+        let rendered = tool.render_declaration(form).unwrap();
+        assert!(rendered.contains(FASTMCP_SCHEMA), "{form:?}: {rendered}");
+        assert!(
+            rendered.contains("\"name\":\"search\"") || rendered.contains("<name>search</name>")
+        );
+    }
+    // A hand-inlined schema with the same parameters prints the same
+    // parameters text structure: the only difference is the schema bytes.
+    let inline =
+        r#"{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}"#;
+    let inline_tools = ToolSet::from_mcp(&mcp_tool("search", inline), Budget::default()).unwrap();
+    let rendered = inline_tools
+        .tool("search")
+        .unwrap()
+        .render_declaration(DeclarationForm::Qwen3CoderXml)
+        .unwrap();
+    assert!(rendered.contains(inline));
+}
+
+#[test]
+fn root_ref_defs_2020_12_merges_siblings_with_the_target() {
+    // 2020-12: the siblings of `$ref` apply with the target. `extra` is the
+    // root's own, `query` the target's; `limit` is declared by both, so its
+    // typing stays with the exact schema (unmodeled, not required).
+    let schema = r##"{"$schema":"https://json-schema.org/draft/2020-12/schema","$ref":"#/$defs/Args","properties":{"extra":{"type":"boolean"},"limit":{"type":"integer","minimum":1}},"required":["extra"],"$defs":{"Args":{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"]}}}"##;
+    let tools = ToolSet::from_mcp(&mcp_tool("search", schema), Budget::default()).unwrap();
+    let shape = tools.argument_shape("search").unwrap();
+    let arguments = &shape.arguments;
+    let names: Vec<_> = arguments
+        .parameters
+        .iter()
+        .map(|parameter| (parameter.name.as_str(), parameter.required))
+        .collect();
+    assert_eq!(names, [("extra", true), ("limit", false), ("query", true)]);
+    assert_eq!(
+        arguments.parameter("extra").unwrap().value,
+        ValueShape::Boolean
+    );
+    assert_eq!(
+        arguments.parameter("query").unwrap().value,
+        ValueShape::String(None)
+    );
+    assert_eq!(
+        arguments.parameter("limit").unwrap().value,
+        ValueShape::Unmodeled
+    );
+    assert_eq!(arguments.required, ["extra", "query"]);
+    let schema_tool = tools.tool("search").unwrap().schema();
+    assert_eq!(
+        schema_tool.dialect(),
+        purrassist_core::schema::Dialect::Draft202012
+    );
+    for (call, valid) in [
+        (r#"{"extra":true,"query":"a"}"#, true),
+        (r#"{"extra":true,"query":"a","limit":0}"#, false),
+        (r#"{"query":"a"}"#, false),
+    ] {
+        assert_eq!(
+            schema_tool
+                .validate(&json::parse(call).unwrap())
+                .unwrap()
+                .valid,
+            valid,
+            "{call}"
+        );
+    }
+    // The keywords the target and root carry beyond the projection stay
+    // evidence at their own pointers.
+    let keywords = tools.tool("search").unwrap().unmodeled_keywords();
+    for expected in [("", "$schema"), ("", "$ref"), ("", "$defs")] {
+        assert!(
+            keywords.contains(&(expected.0.to_owned(), expected.1.to_owned())),
+            "{expected:?}"
+        );
+    }
+    assert_render_back("search", schema, &["extra", "limit", "query"]);
+}
+
+#[test]
+fn root_ref_defs_2020_12_target_alone() {
+    let schema = r##"{"$schema":"https://json-schema.org/draft/2020-12/schema","$ref":"#/$defs/Args","$defs":{"Args":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}}}"##;
+    let tools = ToolSet::from_mcp(&mcp_tool("search", schema), Budget::default()).unwrap();
+    let shape = tools.argument_shape("search").unwrap();
+    assert_eq!(shape.arguments.parameters.len(), 1);
+    assert_eq!(shape.arguments.required, ["query"]);
+    // The target closes its scope (`additionalProperties: false`), and the
+    // exact schema rejects any other member, so unknown members are errors.
+    assert_eq!(shape.arguments.unknown_parameters, UnknownParameters::Error);
+    let exact = tools.tool("search").unwrap().schema();
+    assert!(
+        !exact
+            .validate(&json::parse(r#"{"query":"a","x":1}"#).unwrap())
+            .unwrap()
+            .valid
+    );
+    assert_render_back("search", schema, &["query"]);
+}
+
+#[test]
+fn root_all_of_single_ref_projects_the_target() {
+    let schema = r##"{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","allOf":[{"$ref":"#/definitions/Args"}],"definitions":{"Args":{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"]}}}"##;
+    let tools = ToolSet::from_mcp(&mcp_tool("search", schema), Budget::default()).unwrap();
+    let shape = tools.argument_shape("search").unwrap();
+    let names: Vec<_> = shape
+        .arguments
+        .parameters
+        .iter()
+        .map(|parameter| (parameter.name.as_str(), parameter.required))
+        .collect();
+    assert_eq!(names, [("query", true), ("limit", false)]);
+    assert_eq!(
+        shape.arguments.parameter("limit").unwrap().value,
+        ValueShape::Integer
+    );
+    // The `$ref` element of the `allOf` overrides its (absent) siblings in
+    // Draft-07 and is listed at its own pointer.
+    let keywords = tools.tool("search").unwrap().unmodeled_keywords();
+    assert!(keywords.contains(&("/allOf/0".to_owned(), "$ref".to_owned())));
+    assert!(keywords.contains(&(String::new(), "allOf".to_owned())));
+    assert_render_back("search", schema, &["query", "limit"]);
+    // An `allOf` of two schemas is not followed: the inline projection.
+    let two = r##"{"type":"object","properties":{"a":{"type":"string"}},"allOf":[{"$ref":"#/definitions/A"},{"$ref":"#/definitions/B"}],"definitions":{"A":{"type":"object","properties":{"b":{}}},"B":{"type":"object","properties":{"c":{}}}}}"##;
+    let tools = ToolSet::from_mcp(&mcp_tool("t", two), Budget::default()).unwrap();
+    let names: Vec<_> = tools
+        .argument_shape("t")
+        .unwrap()
+        .arguments
+        .parameters
+        .iter()
+        .map(|parameter| parameter.name.clone())
+        .collect();
+    assert_eq!(names, ["a"]);
+}
+
+#[test]
+fn root_any_of_objects_projects_the_union_of_names() {
+    let schema = r##"{"type":"object","anyOf":[{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]},{"$ref":"#/definitions/Url"}],"definitions":{"Url":{"type":"object","properties":{"url":{"type":"string"},"path":{"type":"integer"}},"required":["url"]}}}"##;
+    let tools = ToolSet::from_mcp(&mcp_tool("open", schema), Budget::default()).unwrap();
+    let shape = tools.argument_shape("open").unwrap();
+    let names: Vec<_> = shape
+        .arguments
+        .parameters
+        .iter()
+        .map(|parameter| {
+            (
+                parameter.name.as_str(),
+                &parameter.value,
+                parameter.required,
+            )
+        })
+        .collect();
+    // Typing stays with the exact schema (as R2 unions do): both names are
+    // unmodeled and none is marked required.
+    assert_eq!(
+        names,
+        [
+            ("path", &ValueShape::Unmodeled, false),
+            ("url", &ValueShape::Unmodeled, false)
+        ]
+    );
+    assert_eq!(shape.arguments.required.len(), 0);
+    assert_eq!(
+        shape.arguments.unknown_parameters,
+        UnknownParameters::PassThrough
+    );
+    // A name declared by several branches has one scope-graph entry that
+    // is the union of the branches.
+    let path = shape.arguments.parameter("path").unwrap();
+    assert!(matches!(path.nesting, Nesting::Object(_)));
+    let tool_schema = tools.tool("open").unwrap().schema();
+    for (call, valid) in [
+        (r#"{"path":"a"}"#, true),
+        (r#"{"url":"u","path":3}"#, true),
+        (r#"{"path":3}"#, false),
+        ("{}", false),
+    ] {
+        assert_eq!(
+            tool_schema
+                .validate(&json::parse(call).unwrap())
+                .unwrap()
+                .valid,
+            valid,
+            "{call}"
+        );
+    }
+    assert_render_back("open", schema, &["path", "url"]);
+    // A branch that is not an object schema: the union is not followed.
+    let mixed = r#"{"type":"object","properties":{"a":{"type":"string"}},"oneOf":[{"required":["a"]},{"required":["b"]}]}"#;
+    let tools = ToolSet::from_mcp(&mcp_tool("t", mixed), Budget::default()).unwrap();
+    let names: Vec<_> = tools
+        .argument_shape("t")
+        .unwrap()
+        .arguments
+        .parameters
+        .iter()
+        .map(|parameter| parameter.name.clone())
+        .collect();
+    assert_eq!(names, ["a"]);
+}
+
+#[test]
+fn unprojectable_root_ref_stays_pass_through_with_its_evidence() {
+    // A root `$ref` that compiles but names no object schema projects no
+    // parameter: a non-object target, a reference cycle, the root itself.
+    for (schema, keywords) in [
+        (
+            r##"{"$schema":"http://json-schema.org/draft-07/schema#","$ref":"#/definitions/N","definitions":{"N":{"type":"string"}}}"##,
+            pairs(&[("", "$schema"), ("", "$ref"), ("", "definitions")]),
+        ),
+        (
+            r##"{"$schema":"http://json-schema.org/draft-07/schema#","$ref":"#/definitions/A","definitions":{"A":{"$ref":"#/definitions/B"},"B":{"$ref":"#/definitions/A"}}}"##,
+            pairs(&[("", "$schema"), ("", "$ref"), ("", "definitions")]),
+        ),
+        (
+            r##"{"$schema":"http://json-schema.org/draft-07/schema#","$ref":"#"}"##,
+            pairs(&[("", "$schema"), ("", "$ref")]),
+        ),
+    ] {
+        let tools = ToolSet::from_mcp(&mcp_tool("t", schema), Budget::default()).unwrap();
+        let arguments = &tools.argument_shape("t").unwrap().arguments;
+        assert_eq!(arguments.parameters.len(), 0, "{schema}");
+        assert_eq!(
+            arguments.unknown_parameters,
+            UnknownParameters::PassThrough,
+            "{schema}"
+        );
+        assert_eq!(
+            tools.tool("t").unwrap().unmodeled_keywords(),
+            keywords,
+            "{schema}"
+        );
+        assert_render_back("t", schema, &[]);
+    }
+    // An unresolvable or external reference never reaches the projection:
+    // the exact schema does not compile, so the declaration is invalid.
+    for schema in [
+        r##"{"$schema":"http://json-schema.org/draft-07/schema#","$ref":"#/definitions/Missing"}"##,
+        r#"{"$schema":"http://json-schema.org/draft-07/schema#","$ref":"https://example.com/args.json"}"#,
+    ] {
+        assert!(
+            matches!(
+                ToolSet::from_mcp(&mcp_tool("t", schema), Budget::default()),
+                Err(ToolSetError::InvalidDefinition { .. })
+            ),
+            "{schema}"
+        );
+    }
+    // A target with a non-object `type` is not an object schema either.
+    let typed = r##"{"$schema":"http://json-schema.org/draft-07/schema#","$ref":"#/definitions/A","definitions":{"A":{"type":["object","null"],"properties":{"q":{"type":"string"}}}}}"##;
+    let tools = ToolSet::from_mcp(&mcp_tool("t", typed), Budget::default()).unwrap();
+    assert_eq!(
+        tools
+            .argument_shape("t")
+            .unwrap()
+            .arguments
+            .parameters
+            .len(),
+        0
+    );
+}
+
+#[test]
+fn root_ref_nested_ref_members_flow_into_the_scope_graph() {
+    let schema = r##"{"$schema":"http://json-schema.org/draft-07/schema#","$ref":"#/definitions/Args","definitions":{"Args":{"type":"object","properties":{"filter":{"$ref":"#/definitions/Filter"},"limit":{"type":"integer","default":5}}},"Filter":{"type":"object","properties":{"kind":{"type":"string"}}}}}"##;
+    let tools = ToolSet::from_mcp(&mcp_tool("search", schema), Budget::default()).unwrap();
+    let shape = tools.argument_shape("search").unwrap();
+    let filter = shape.arguments.parameter("filter").unwrap();
+    assert_eq!(filter.value, ValueShape::Unmodeled);
+    let Nesting::Object(node) = filter.nesting else {
+        panic!("a `$ref` member nests as an object scope");
+    };
+    assert!(shape.scopes.node(node).unwrap().declares("kind"));
+    // The default is validated against its exact subschema below the
+    // target, and retained.
+    assert_eq!(
+        shape
+            .arguments
+            .parameter("limit")
+            .unwrap()
+            .default
+            .as_ref()
+            .map(json::Node::to_json),
+        Some("5".to_owned())
+    );
+    let bad = schema.replace(r#""default":5"#, r#""default":"five""#);
+    assert!(matches!(
+        ToolSet::from_mcp(&mcp_tool("search", &bad), Budget::default()),
+        Err(ToolSetError::InvalidDefinition { .. })
+    ));
+    assert_render_back("search", schema, &["filter", "limit"]);
+}
+
+/// A tool whose root `anyOf` has `branches` object schemas of `properties`
+/// string properties each; `shared` names the properties alike in every
+/// branch instead of distinctly.
+fn union_declaration(branches: usize, properties: usize, shared: bool) -> String {
+    let branches: Vec<String> = (0..branches)
+        .map(|branch| {
+            let members: Vec<String> = (0..properties)
+                .map(|property| {
+                    let name = if shared {
+                        format!("p{property}")
+                    } else {
+                        format!("p{branch}_{property}")
+                    };
+                    format!(r#""{name}":{{"type":"string"}}"#)
+                })
+                .collect();
+            format!(
+                r#"{{"type":"object","properties":{{{}}}}}"#,
+                members.join(",")
+            )
+        })
+        .collect();
+    mcp_tool(
+        "t",
+        &format!(r#"{{"type":"object","anyOf":[{}]}}"#, branches.join(",")),
+    )
+}
+
+/// R11: the charged work and scratch of projecting a root union and
+/// compiling its scope graph grow with the declaration's size, not with the
+/// branches times the names (issue #8, coordinator follow-up). A 500-branch
+/// union of one-property branches still resolves under the default budget,
+/// as it does without the projection.
+#[test]
+fn root_union_projection_cost_is_linear() {
+    let measure = |branches: usize, properties: usize, shared: bool| {
+        let input = union_declaration(branches, properties, shared);
+        let mut governor = Governor::new(Budget::default());
+        let tools = ToolSet::from_mcp_governed(&input, &mut governor)
+            .unwrap_or_else(|error| panic!("{branches}x{properties}: {error}"));
+        let names = tools
+            .argument_shape("t")
+            .unwrap()
+            .arguments
+            .parameters
+            .len();
+        assert_eq!(
+            names,
+            if shared {
+                properties
+            } else {
+                branches * properties
+            }
+        );
+        let usage = governor.usage();
+        let bytes = input.len() as u64;
+        // Milli-units per input byte.
+        (
+            usage.work * 1000 / bytes,
+            usage.total_scratch_charged * 1000 / bytes,
+        )
+    };
+    for (properties, shared, small, large) in [
+        (1, false, 50, 500),
+        (5, false, 25, 200),
+        (1, true, 50, 500),
+        (5, true, 25, 200),
+    ] {
+        let (work_small, scratch_small) = measure(small, properties, shared);
+        let (work_large, scratch_large) = measure(large, properties, shared);
+        assert!(
+            work_large * 10 <= work_small * 11,
+            "{properties} properties, shared {shared}: work per byte {work_small} -> {work_large}"
+        );
+        assert!(
+            scratch_large * 10 <= scratch_small * 11,
+            "{properties} properties, shared {shared}: scratch per byte {scratch_small} -> {scratch_large}"
+        );
+    }
+}
+
+/// R11: recovering a call against a root union costs linear work in the
+/// branches, not quadratic. Every branch's keywords describe the arguments
+/// object, so a call carries about two keyword validations per branch; the
+/// receipt's validation log once compared each against all the call's
+/// earlier ones. A 500-branch union resolves under the default budget.
+#[test]
+fn root_union_call_recovery_cost_is_linear() {
+    let work = |branches: usize| {
+        let members: Vec<String> = (0..branches)
+            .map(|i| format!(r#"{{"type":"object","properties":{{"p{i}":{{"type":"string"}}}}}}"#))
+            .collect();
+        let declaration = mcp_tool("t", &format!(r#"{{"anyOf":[{}]}}"#, members.join(",")));
+        let tools = ToolSet::from_mcp(&declaration, Budget::default()).unwrap();
+        let output = "<tool_call>\n{\"name\": \"t\", \"arguments\": {\"p1\": \"x\"}}\n</tool_call>";
+        let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+        let calls = match &result.outcome {
+            purrassist_core::Outcome::Resolved(calls) => calls,
+            other => panic!("{branches} branches: {other:?}"),
+        };
+        assert_eq!(calls.calls[0].arguments.to_json(), r#"{"p1":"x"}"#);
+        assert!(calls.calls[0].keywords.len() >= 2 * branches);
+        result.receipt.usage.work
+    };
+    let (small, middle, large) = (work(50), work(200), work(500));
+    // Linear growth: the increments are proportional to the branch counts
+    // (150 and 450 more than the smallest), within 20%.
+    let (to_middle, to_large) = (middle - small, large - small);
+    assert!(
+        to_large * 150 <= to_middle * 450 * 12 / 10,
+        "{small} {middle} {large}"
+    );
+    assert!(
+        to_large * 150 * 12 >= to_middle * 450 * 10,
+        "{small} {middle} {large}"
+    );
 }

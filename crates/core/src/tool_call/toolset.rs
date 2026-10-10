@@ -23,7 +23,7 @@ use crate::schema::{CompilationError, Schema};
 use crate::text::comparison_key;
 use crate::wire;
 use core::fmt;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Portable per-parameter charge for its retained shape, name literal, and
 /// schema-node records (64-bit layout over-estimate; see [`ScratchCharge`]).
@@ -207,6 +207,7 @@ pub struct CompiledTool {
     defaults: Vec<ParameterDefault>,
     source: ToolSource,
     unmodeled_keywords: Vec<(String, String)>,
+    locations: RootLocations,
 }
 
 impl CompiledTool {
@@ -437,6 +438,19 @@ impl CompiledTool {
     #[must_use]
     pub fn unmodeled_keywords(&self) -> &[(String, String)] {
         &self.unmodeled_keywords
+    }
+
+    /// The schema pointer of the top-level parameter `name`: below the
+    /// location the root projection read it from (the first that declares
+    /// it).
+    pub(super) fn parameter_pointer(&self, name: &str) -> String {
+        self.locations.declaring(name).swap_remove(0)
+    }
+
+    /// Where an unmodeled-keyword `pointer` sits relative to the arguments
+    /// object: `""` or `/properties/NAME` and `/items` steps.
+    pub(super) fn argument_pointer<'p>(&self, pointer: &'p str) -> &'p str {
+        self.locations.relative(pointer)
     }
 
     /// Render this tool's declaration in `form` under a fresh governor with
@@ -872,6 +886,73 @@ pub(super) struct Declared {
     pub(super) schema: Schema,
     /// `(schema pointer, keyword)` pairs the typed model does not represent.
     pub(super) unmodeled_keywords: Vec<(String, String)>,
+    /// The schema locations the root projection read its `properties` from.
+    pub(super) locations: RootLocations,
+}
+
+/// The schema locations that describe an adapter tool's arguments object.
+///
+/// An inline parameters schema describes the arguments at its own root
+/// (`""`). A root `$ref` (Draft-07 `definitions`, 2020-12 `$defs`), a root
+/// `allOf` of one object, and a root `anyOf`/`oneOf` of objects describe
+/// them at other locations of the same document; the projection reads
+/// `properties` from those, and every pointer below them is a pointer into
+/// the arguments.
+#[derive(Clone, Debug, Default)]
+pub(super) struct RootLocations {
+    /// Per top-level property name, the pointers of the schemas that declare
+    /// it, in order (empty for an inline root, whose one location is `""`).
+    declared: BTreeMap<String, Vec<String>>,
+    /// Every location that describes the arguments object itself (empty for
+    /// an inline root).
+    describing: BTreeSet<String>,
+}
+
+impl RootLocations {
+    /// The root of an inline schema.
+    pub(super) const fn inline() -> Self {
+        Self {
+            declared: BTreeMap::new(),
+            describing: BTreeSet::new(),
+        }
+    }
+
+    pub(super) const fn new(
+        declared: BTreeMap<String, Vec<String>>,
+        describing: BTreeSet<String>,
+    ) -> Self {
+        Self {
+            declared,
+            describing,
+        }
+    }
+
+    /// The pointers of the property schemas that declare the top-level
+    /// property `name`, in order; the inline location's when none is
+    /// recorded.
+    pub(super) fn declaring(&self, name: &str) -> Vec<String> {
+        self.declared
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| vec![format!("/properties/{}", pointer_segment(name))])
+    }
+
+    /// The location of `pointer` relative to the arguments object it is
+    /// below, when it lies at or below a location that describes it (the
+    /// longest such location wins).
+    pub(super) fn relative<'p>(&self, pointer: &'p str) -> &'p str {
+        if self.describing.is_empty() {
+            return pointer;
+        }
+        // Longest prefix first: every `/` boundary, then the whole pointer.
+        let mut boundaries = pointer.match_indices('/').map(|(at, _)| at);
+        let mut cuts: Vec<usize> = boundaries.by_ref().collect();
+        cuts.push(pointer.len());
+        cuts.into_iter()
+            .rev()
+            .find(|&at| self.describing.contains(&pointer[..at]))
+            .map_or(pointer, |at| &pointer[at..])
+    }
 }
 
 /// The base URI under which an adapter tool's exact parameters schema is
@@ -905,6 +986,7 @@ fn compile_tool(entry: Pending, governor: &mut Governor) -> Result<CompiledTool,
         scopes: declaration.as_ref().map(|declared| {
             ScopeCompiler::new(declared.schema.document(), declared.schema.dialect())
         }),
+        root: declaration.as_ref().map(|declared| &declared.locations),
     };
     let arguments = builder.object(&definition.arguments, unknown, 1)?;
     let defaults = builder.defaults;
@@ -914,13 +996,14 @@ fn compile_tool(entry: Pending, governor: &mut Governor) -> Result<CompiledTool,
             .map_err(ToolSetError::Resource)?,
         None => ScopeGraph::default(),
     };
-    let (schema_document, schema_text, schema, source, unmodeled_keywords) =
+    let (schema_document, schema_text, schema, source, unmodeled_keywords, locations) =
         if let Some(declared) = declaration {
             let Declared {
                 source,
                 schema_text,
                 schema,
                 unmodeled_keywords,
+                locations,
             } = *declared;
             governor
                 .charge(Resource::ScratchBytes, schema.document().estimated_bytes())
@@ -931,31 +1014,18 @@ fn compile_tool(entry: Pending, governor: &mut Governor) -> Result<CompiledTool,
                 schema,
                 ToolSource::Declaration(source),
                 unmodeled_keywords,
+                locations,
             )
         } else {
-            governor
-                .charge(
-                    Resource::ScratchBytes,
-                    object_estimate(&definition.arguments),
-                )
-                .map_err(ToolSetError::Resource)?;
-            let schema_document = wire::object(object_fields(
-                &definition.arguments,
-                unknown,
-                vec![("type", wire::string("object"))],
-            ));
-            let schema_text = schema_document.to_json();
-            let schema = compiled(
-                &definition.name,
-                "generated schema",
-                Schema::compile_governed(&schema_text, governor),
-            )?;
+            let (schema_document, schema_text, schema) =
+                generated_schema(&definition, unknown, governor)?;
             (
                 schema_document,
                 schema_text,
                 schema,
                 ToolSource::Builder,
                 Vec::new(),
+                RootLocations::inline(),
             )
         };
     let mut aliases = definition.aliases.clone();
@@ -978,7 +1048,35 @@ fn compile_tool(entry: Pending, governor: &mut Governor) -> Result<CompiledTool,
         defaults,
         source,
         unmodeled_keywords,
+        locations,
     })
+}
+
+/// The schema document, text, and validator generated from a typed
+/// definition's arguments.
+fn generated_schema(
+    definition: &ToolDefinition,
+    unknown: UnknownParameters,
+    governor: &mut Governor,
+) -> Result<(Node, String, Schema), ToolSetError> {
+    governor
+        .charge(
+            Resource::ScratchBytes,
+            object_estimate(&definition.arguments),
+        )
+        .map_err(ToolSetError::Resource)?;
+    let schema_document = wire::object(object_fields(
+        &definition.arguments,
+        unknown,
+        vec![("type", wire::string("object"))],
+    ));
+    let schema_text = schema_document.to_json();
+    let schema = compiled(
+        &definition.name,
+        "generated schema",
+        Schema::compile_governed(&schema_text, governor),
+    )?;
+    Ok((schema_document, schema_text, schema))
 }
 
 /// Map a schema compilation result for `tool`, labeling a rejection with
@@ -1145,6 +1243,8 @@ struct ShapeBuilder<'a> {
     resources: BTreeMap<String, String>,
     /// The scope graph under construction (an adapter tool's exact schema).
     scopes: Option<ScopeCompiler<'a>>,
+    /// Where an adapter tool's root projection read its parameters from.
+    root: Option<&'a RootLocations>,
 }
 
 impl ShapeBuilder<'_> {
@@ -1156,18 +1256,20 @@ impl ShapeBuilder<'_> {
         if self.scopes.is_none() {
             return Ok(Nesting::None);
         }
-        let pointer = match value {
-            ValueShape::Unmodeled => self.schema_pointer(),
-            ValueShape::Array(items) if **items == ValueShape::Unmodeled => {
-                format!("{}/items", self.schema_pointer())
-            }
+        let pointers = match value {
+            ValueShape::Unmodeled => self.schema_pointers(),
+            ValueShape::Array(items) if **items == ValueShape::Unmodeled => self
+                .schema_pointers()
+                .into_iter()
+                .map(|pointer| format!("{pointer}/items"))
+                .collect(),
             _ => return Ok(Nesting::None),
         };
         let Some(scopes) = self.scopes.as_mut() else {
             return Ok(Nesting::None);
         };
         let node = scopes
-            .scope(&pointer, self.governor)
+            .scope_many(&pointers, self.governor)
             .map_err(ToolSetError::Resource)?;
         Ok(if matches!(value, ValueShape::Unmodeled) {
             Nesting::Object(node)
@@ -1194,21 +1296,43 @@ impl ShapeBuilder<'_> {
         location
     }
 
-    /// The JSON Pointer of the current parameter within an adapter tool's
+    /// The JSON Pointers of the current parameter within an adapter tool's
     /// parameters schema: adapters project only `properties` members and
-    /// object-form `items`, so each step has exactly one schema location.
-    fn schema_pointer(&self) -> String {
-        let mut pointer = String::new();
-        for step in &self.path {
+    /// object-form `items`, so each step has one schema location below the
+    /// location(s) the root projection read the top-level parameter from
+    /// (several when the root is a union that declares the name in more
+    /// than one branch).
+    fn schema_pointers(&self) -> Vec<String> {
+        let mut pointers = vec![String::new()];
+        for (index, step) in self.path.iter().enumerate() {
             match step {
                 ShapeStep::Parameter(name) => {
-                    pointer.push_str("/properties/");
-                    pointer.push_str(&pointer_segment(name));
+                    if index == 0 {
+                        pointers = self.root.map_or_else(
+                            || vec![format!("/properties/{}", pointer_segment(name))],
+                            |locations| locations.declaring(name),
+                        );
+                    } else {
+                        for pointer in &mut pointers {
+                            pointer.push_str("/properties/");
+                            pointer.push_str(&pointer_segment(name));
+                        }
+                    }
                 }
-                ShapeStep::Item => pointer.push_str("/items"),
+                ShapeStep::Item => {
+                    for pointer in &mut pointers {
+                        pointer.push_str("/items");
+                    }
+                }
             }
         }
-        pointer
+        pointers
+    }
+
+    /// The first of [`Self::schema_pointers`]: the location a default or
+    /// an exact subschema is read from.
+    fn schema_pointer(&self) -> String {
+        self.schema_pointers().swap_remove(0)
     }
 
     /// Compile the exact subschema at the current parameter, resolving it

@@ -798,6 +798,49 @@ declarations the model was shown and lose nothing.
     `xml_array_anyof_items_union_nest` and
     `xml_unmodeled_opaque_scope_boundary`, and the correction corpus's
     `file_tasks` cases.
+  - **Root `$ref` and composed roots.** The FastMCP/pydantic shape has no
+    `properties` at the root, only `{"$ref":"#/definitions/Args",
+    "definitions":{...}}` (Draft-07) or `{"$ref":"#/$defs/Args",
+    "$defs":{...}}` (2020-12). The projection follows a root `$ref` to a
+    local pointer (transitively through further local `$ref`s) and projects
+    the target object's parameters, so repair knows the tool's parameter
+    names and types exactly as for an inline schema. **Draft-07 sibling
+    rule:** a `$ref` overrides its siblings, so the root's `properties`,
+    `type` and the like are ignored for projection, as they are for
+    validation, and stay listed as unmodeled keywords beside `$ref` and
+    `definitions`; in **2020-12** the siblings apply with the target, so
+    their parameters are projected too. A root `allOf` of one schema that
+    resolves the same way is projected with the root; a root `anyOf` or
+    `oneOf` whose every branch is an object schema (or a `$ref` to one)
+    projects the *union of the branches' names*. A name declared by one
+    applying schema is typed from it; a name a union branch declares, or
+    that several schemas declare, stays unmodeled (not marked required): its
+    typing is the exact schema's (`tool_call.value.schema-typed`), as for
+    the scope graph's unions. A nested `$ref` member goes through the scope
+    graph with the pointer below the target. An external or missing `$ref`
+    makes the declaration invalid (the exact schema cannot compile); a
+    cyclic `$ref`, a target that is not an object schema (a `type` array, a
+    string type) and a union with a non-object branch are not followed: the
+    projection is the root's own, which for a Draft-07 root `$ref` is no
+    parameter, `PassThrough`, with every root keyword listed. Validation
+    still uses the exact declaration and its draft, and rendering back
+    embeds the parameters text verbatim in every wire form and prompt form
+    (the prompt forms print the exact schema, so a root-`$ref` tool's
+    printed declaration does not change). *Proved by*
+    `tool_adapters::root_ref_projects_the_target_object`,
+    `root_ref_prompt_form_declaration_prints_the_exact_schema`,
+    `root_ref_defs_2020_12_merges_siblings_with_the_target`,
+    `root_all_of_single_ref_projects_the_target`,
+    `root_any_of_objects_projects_the_union_of_names`,
+    `unprojectable_root_ref_stays_pass_through_with_its_evidence`,
+    `root_ref_nested_ref_members_flow_into_the_scope_graph` and
+    `draft07_mcp_tools_adapt_losslessly` (the Draft-07 sibling rule), and
+    `tool_call_goldens::mcp_root_ref_calls_resolve_with_typed_arguments`
+    (`mcp_root_ref_qwen3_xml_resolved`, `mcp_root_ref_hermes_json_resolved`,
+    `mcp_root_defs_2020_12_resolved`, `mcp_root_all_of_ref_resolved`,
+    `mcp_root_any_of_union_resolved`),
+    `mcp_root_ref_misspelled_parameter_repairs_like_inline` and
+    `mcp_root_ref_unprojectable_stays_pass_through`.
   - *Typing proved by* `tool_call_goldens::unmodeled_schemas_type_xml_text`
   (`Optional[int]`, `Optional[str]` with numeric text, `anyOf[string,
   integer]`, `$ref` scalar, `$ref` object inline and as nested parameters,

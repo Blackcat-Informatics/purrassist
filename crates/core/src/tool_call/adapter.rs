@@ -85,9 +85,10 @@
 //!
 //! Draft-07 schemas follow Draft-07 rules: a parameter using `dependencies`
 //! (whose schema form is `dependentSchemas`) is unmodeled; a nested
-//! `$schema` that switches dialect makes its value unmodeled; a root `$ref`
-//! overrides its siblings, so such a root projects no parameters (every
-//! root member is listed below) and passes unknown parameters through; and
+//! `$schema` that switches dialect makes its value unmodeled; a `$ref`
+//! overrides its siblings, so a root `$ref` is projected from its target
+//! alone (see "Root `$ref` and composed roots" below) and every ignored
+//! sibling is still listed as an unmodeled keyword; and
 //! `unevaluatedProperties`, not a Draft-07 keyword, never closes a scope.
 //! `definitions`, `additionalItems`, and `dependencies` are listed as
 //! unmodeled keywords like every other keyword the projection does not carry.
@@ -95,6 +96,61 @@
 //! within the complete parameters schema, so `$ref`s work) and retained with
 //! source spans relative to [`super::CompiledTool::json_schema`]; a
 //! nonconforming default is an invalid declaration.
+//!
+//! # Root `$ref` and composed roots
+//!
+//! The pydantic and `FastMCP` shape puts no `properties` at the root:
+//! `{"$ref":"#/definitions/Args","definitions":{"Args":{...}}}` (Draft-07) or
+//! `{"$ref":"#/$defs/Args","$defs":{...}}` (2020-12). The projection follows
+//! it, so the target's parameters are the tool's parameters:
+//!
+//! * a root `$ref` to a local pointer (`#/definitions/X` or `#/$defs/X`,
+//!   and a target that is itself a `$ref`, transitively) projects the
+//!   target object's `properties`, `required`, and `additionalProperties`.
+//!   In Draft-07 the root's siblings (`properties`, `type`, ...) are
+//!   *ignored for projection*, as they are for validation, and stay listed
+//!   as unmodeled keywords beside `$ref` and `definitions`; in Draft 2020-12
+//!   the siblings apply with the target, so their parameters are projected
+//!   too;
+//! * a root `allOf` of exactly one schema that resolves the same way
+//!   projects it together with the root;
+//! * a root `anyOf` or `oneOf` whose every branch is an object schema (or a
+//!   `$ref` to one) projects the union of the branches' names;
+//! * a name declared by one applying schema is typed from it. A name a
+//!   union branch declares, or that several schemas declare, is unmodeled
+//!   with no `required` mark: its typing stays with the exact schema
+//!   (`tool_call.value.schema-typed`), as for the unions of the scope
+//!   graph, whose node for it is the union of its declarations;
+//! * a nested `$ref` member below a projected object goes through the scope
+//!   graph as any other, its schema pointer taken from the target.
+//!
+//! The keywords of the followed schemas that the projection does not carry
+//! are listed at their own pointers (for example `/definitions/Args` for a
+//! `title` there). An external, missing, or cyclic `$ref`, a target that is
+//! not an object schema (`type` other than `"object"`, no `properties`), and
+//! a union with a non-object branch are not followed: the projection is then
+//! what it is for the root alone (Draft-07: no parameter, unknown
+//! parameters pass through, every root keyword listed). A reference the
+//! schema engine cannot resolve (external or missing) never gets this far:
+//! it makes the declaration invalid. Validation uses the exact declaration
+//! and its draft, and rendering back embeds the parameters text verbatim, so
+//! neither is affected; the prompt forms print that same text.
+//!
+//! ```
+//! use purrassist_core::{Budget, tool_call::{ToolSet, ValueShape}};
+//! let tools = ToolSet::from_mcp(
+//!     r##"{"name":"search","inputSchema":{
+//!         "$schema":"http://json-schema.org/draft-07/schema#",
+//!         "$ref":"#/definitions/Args",
+//!         "definitions":{"Args":{"type":"object",
+//!             "properties":{"query":{"type":"string"},"limit":{"type":"integer"}},
+//!             "required":["query"]}}}}"##,
+//!     Budget::default(),
+//! ).unwrap();
+//! let arguments = &tools.argument_shape("search").unwrap().arguments;
+//! assert_eq!(arguments.required, ["query"]);
+//! assert_eq!(arguments.parameter("limit").unwrap().value, ValueShape::Integer);
+//! ```
 //!
 //! # Unmodeled keywords
 //!
@@ -138,9 +194,10 @@ use super::definition::{
     Effects, ObjectSpec, ParameterKind, ParameterSpec, ToolDefinition, UnknownParameters,
 };
 use super::emit::NO_PARAMETERS;
+use super::scope::local_pointer;
 use super::toolset::{
-    Declared, PARAMETER_RECORD, Pending, ToolSet, ToolSetError, compiled, invalid, retain_text,
-    sort_factor,
+    Declared, PARAMETER_RECORD, Pending, RootLocations, ToolSet, ToolSetError, compiled, invalid,
+    retain_text, sort_factor,
 };
 use crate::contract::{
     Budget, Governor, Resource, ScratchCharge, ScratchVec, saturating_size as size,
@@ -148,6 +205,7 @@ use crate::contract::{
 use crate::json::{self, Member, Node, ParseFailure, Value, pointer_segment};
 use crate::schema::{Dialect, Schema};
 use core::ops::Range;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Keywords whose presence makes a parameter's value unmodeled.
 const RESHAPING: [&str; 12] = [
@@ -793,12 +851,15 @@ fn declare(
     // Project the compiled document (the exact parameters text, parsed with
     // spans relative to it) so retained defaults never depend on where the
     // declaration sat in the input.
-    let arguments = match parameters {
+    let (arguments, locations) = match parameters {
         Some(_) => projector.root(schema.document())?,
-        None => ObjectSpec {
-            parameters: Vec::new(),
-            unknown: Some(UnknownParameters::PassThrough),
-        },
+        None => (
+            ObjectSpec {
+                parameters: Vec::new(),
+                unknown: Some(UnknownParameters::PassThrough),
+            },
+            RootLocations::inline(),
+        ),
     };
     let unmodeled_keywords = projector.unmodeled;
     Ok(Pending {
@@ -820,8 +881,62 @@ fn declare(
             schema_text: schema_text.to_owned(),
             schema,
             unmodeled_keywords,
+            locations,
         })),
     })
+}
+
+/// Longest chain of local `$ref`s the root projection follows.
+const REF_HOPS: usize = 64;
+
+/// How a followed schema relates to the arguments object.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Role {
+    /// It applies together with the root (a `$ref` target, an `allOf`
+    /// member): its parameters are typed unless declared more than once.
+    Apply,
+    /// It is one branch of a root `anyOf`/`oneOf`: its parameters are
+    /// unmodeled.
+    Branch,
+}
+
+/// The object schemas of a root that composes others, as pointers.
+#[derive(Debug, Default)]
+struct RootPlan {
+    /// Draft-07 `$ref` nodes whose siblings the `$ref` overrides.
+    overridden: Vec<String>,
+    /// Schemas that apply together.
+    apply: Vec<String>,
+    /// Branches of a union.
+    branches: Vec<String>,
+    /// Every `(is a branch, pointer)` in `apply` and `branches`.
+    known: BTreeSet<(bool, String)>,
+}
+
+impl RootPlan {
+    fn add(&mut self, role: Role, at: &str) {
+        let list = match role {
+            Role::Apply => &mut self.apply,
+            Role::Branch => &mut self.branches,
+        };
+        if self.known.insert((role == Role::Branch, at.to_owned())) {
+            list.push(at.to_owned());
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        for at in other.overridden {
+            if !self.overridden.contains(&at) {
+                self.overridden.push(at);
+            }
+        }
+        for at in other.apply {
+            self.add(Role::Apply, &at);
+        }
+        for at in other.branches {
+            self.add(Role::Branch, &at);
+        }
+    }
 }
 
 /// Where a schema object sits in the projection.
@@ -889,8 +1004,9 @@ impl<'a> Projector<'a> {
         self.charge(Resource::ScratchBytes, size(PARAMETER_RECORD))
     }
 
-    /// Project the root parameters schema, which must describe an object.
-    fn root(&mut self, node: &Node) -> Result<ObjectSpec, ToolSetError> {
+    /// Project the root parameters schema, which must describe an object,
+    /// and the locations its parameters were read from.
+    fn root(&mut self, node: &Node) -> Result<(ObjectSpec, RootLocations), ToolSetError> {
         // Every string, default, and key the projection copies is part of
         // this tree, so its estimate bounds those copies.
         self.charge(Resource::ScratchBytes, node.estimated_bytes())?;
@@ -911,20 +1027,349 @@ impl<'a> Projector<'a> {
                 "the parameters schema must be a JSON object".into(),
             ));
         };
+        if let Some(plan) = self.plan(node)? {
+            return self.composed(node, &plan);
+        }
         if self.dialect == Dialect::Draft07 && node.get("$ref").is_some() {
-            // Draft-07 `$ref` overrides every sibling: nothing beside it
-            // describes the arguments, so no parameter is projected.
+            // Draft-07 `$ref` overrides every sibling, and this one names
+            // no local object schema (external, missing, cyclic, or not an
+            // object): nothing describes the arguments, so no parameter is
+            // projected.
             self.note(members, "", Position::Root, Tag::Unmodeled)?;
-            return Ok(ObjectSpec {
-                parameters: Vec::new(),
-                unknown: Some(UnknownParameters::PassThrough),
-            });
+            return Ok((
+                ObjectSpec {
+                    parameters: Vec::new(),
+                    unknown: Some(UnknownParameters::PassThrough),
+                },
+                RootLocations::inline(),
+            ));
         }
         let tag = Tag::Object {
             required: self.required_declared(node)?,
         };
         self.note(members, "", Position::Root, tag)?;
-        self.object(node, members, "", 2)
+        Ok((self.object(node, members, "", 2)?, RootLocations::inline()))
+    }
+
+    /// The object schemas that describe the arguments through the root's
+    /// `$ref`, `allOf`, `anyOf`, and `oneOf`, when any of them resolves.
+    ///
+    /// - A root `$ref` to a local pointer (`#/definitions/X`, `#/$defs/X`,
+    ///   followed through further local `$ref`s) names an object schema. In
+    ///   Draft-07 the `$ref` overrides its siblings, so the root describes
+    ///   nothing itself; in Draft 2020-12 the siblings and the target apply
+    ///   together.
+    /// - A root `allOf` of exactly one schema that resolves the same way
+    ///   applies together with the root.
+    /// - A root `anyOf` or `oneOf` whose every branch resolves to an object
+    ///   schema is a union of the branches.
+    ///
+    /// A keyword whose targets cannot all be resolved to object schemas
+    /// (external, missing, cyclic, or not an object) contributes nothing: the
+    /// projection is then what it was before the keyword was followed.
+    fn plan(&mut self, root: &Node) -> Result<Option<RootPlan>, ToolSetError> {
+        let mut plan = RootPlan::default();
+        let mut used = false;
+        if self.dialect == Dialect::Draft07 && root.get("$ref").is_some() {
+            let mut part = RootPlan::default();
+            if self.follow(root, "", Role::Apply, &mut part, &mut BTreeSet::new())? {
+                return Ok(Some(part));
+            }
+            return Ok(None);
+        }
+        plan.apply.push(String::new());
+        if root.get("$ref").is_some() {
+            let mut part = RootPlan::default();
+            if self.follow_ref(root, "", Role::Apply, &mut part, &mut BTreeSet::new())? {
+                plan.merge(part);
+                used = true;
+            }
+        }
+        if let Some(Value::Array(branches)) = root.get("allOf").map(|node| &node.value)
+            && branches.len() == 1
+        {
+            let mut part = RootPlan::default();
+            if self.follow(
+                root,
+                "/allOf/0",
+                Role::Apply,
+                &mut part,
+                &mut BTreeSet::new(),
+            )? {
+                plan.merge(part);
+                used = true;
+            }
+        }
+        for keyword in ["anyOf", "oneOf"] {
+            let Some(Value::Array(branches)) = root.get(keyword).map(|node| &node.value) else {
+                continue;
+            };
+            if branches.is_empty() {
+                continue;
+            }
+            let mut part = RootPlan::default();
+            let mut all = true;
+            for index in 0..branches.len() {
+                let at = format!("/{keyword}/{index}");
+                if !self.follow(root, &at, Role::Branch, &mut part, &mut BTreeSet::new())? {
+                    all = false;
+                    break;
+                }
+            }
+            if all {
+                plan.merge(part);
+                used = true;
+            }
+        }
+        Ok(used.then_some(plan))
+    }
+
+    /// Follow the schema object at `at` into `plan` as `role`; whether it
+    /// (and everything it references) is an object schema.
+    fn follow(
+        &mut self,
+        root: &Node,
+        at: &str,
+        role: Role,
+        plan: &mut RootPlan,
+        seen: &mut BTreeSet<String>,
+    ) -> Result<bool, ToolSetError> {
+        self.charge(Resource::Work, size(at.len() / 16 + 1))?;
+        if seen.len() >= REF_HOPS || !seen.insert(at.to_owned()) {
+            return Ok(false);
+        }
+        let Some(node) = root.pointer(at) else {
+            return Ok(false);
+        };
+        let Value::Object(members) = &node.value else {
+            return Ok(false);
+        };
+        if node
+            .get("type")
+            .is_some_and(|kind| kind.as_str() != Some("object"))
+        {
+            return Ok(false);
+        }
+        if node.get("$ref").is_some() {
+            if self.dialect == Dialect::Draft07 {
+                // The `$ref` overrides every sibling.
+                plan.overridden.push(at.to_owned());
+                self.charge(Resource::ScratchBytes, size(at.len()) + KEYWORD_RECORD)?;
+            } else if !members.is_empty() && Self::declares_object(node) {
+                plan.add(role, at);
+                self.charge(Resource::ScratchBytes, size(at.len()) + KEYWORD_RECORD)?;
+            }
+            return self.follow_ref(root, at, role, plan, seen);
+        }
+        if !Self::declares_object(node) {
+            return Ok(false);
+        }
+        plan.add(role, at);
+        self.charge(Resource::ScratchBytes, size(at.len()) + KEYWORD_RECORD)?;
+        Ok(true)
+    }
+
+    /// Follow the local `$ref` of the schema object at `at`.
+    fn follow_ref(
+        &mut self,
+        root: &Node,
+        at: &str,
+        role: Role,
+        plan: &mut RootPlan,
+        seen: &mut BTreeSet<String>,
+    ) -> Result<bool, ToolSetError> {
+        let Some(target) = root
+            .pointer(at)
+            .and_then(|node| node.get("$ref"))
+            .and_then(Node::as_str)
+            .and_then(local_pointer)
+        else {
+            return Ok(false);
+        };
+        self.follow(root, &target, role, plan, seen)
+    }
+
+    /// Whether the schema object `node` declares an object: `type` is
+    /// `"object"`, or `properties` is an object.
+    fn declares_object(node: &Node) -> bool {
+        node.get("type").and_then(Node::as_str) == Some("object")
+            || matches!(
+                node.get("properties").map(|properties| &properties.value),
+                Some(Value::Object(_))
+            )
+    }
+
+    /// Record the keywords of every schema `plan` follows as unmodeled
+    /// evidence, and return the names the applying schemas require and the
+    /// handling of members no schema declares.
+    fn note_plan<'n>(
+        &mut self,
+        root: &'n Node,
+        plan: &RootPlan,
+    ) -> Result<(BTreeSet<&'n str>, UnknownParameters), ToolSetError> {
+        let mut declared: BTreeSet<&str> = BTreeSet::new();
+        for at in &plan.apply {
+            if let Some(Node {
+                value: Value::Object(properties),
+                ..
+            }) = root.pointer(at).and_then(|node| node.get("properties"))
+            {
+                declared.extend(properties.iter().map(|property| property.key.as_str()));
+            }
+        }
+        // Overridden nodes: every member is evidence, none is projected.
+        for at in &plan.overridden {
+            let Some(
+                node @ Node {
+                    value: Value::Object(members),
+                    ..
+                },
+            ) = root.pointer(at)
+            else {
+                continue;
+            };
+            if !at.is_empty() {
+                self.enter(node, at, 2)?;
+            }
+            self.note(members, at, Position::Root, Tag::Unmodeled)?;
+        }
+        let mut closed = false;
+        let mut required: BTreeSet<&str> = BTreeSet::new();
+        for at in &plan.apply {
+            let Some(
+                node @ Node {
+                    value: Value::Object(members),
+                    ..
+                },
+            ) = root.pointer(at)
+            else {
+                continue;
+            };
+            if !at.is_empty() {
+                self.enter(node, at, 2)?;
+            }
+            let listed = match node.get("required").map(|names| &names.value) {
+                None => true,
+                Some(Value::Array(names)) => {
+                    self.charge(Resource::Work, size(names.len()))?;
+                    required.extend(names.iter().filter_map(Node::as_str));
+                    names
+                        .iter()
+                        .all(|name| name.as_str().is_some_and(|name| declared.contains(name)))
+                }
+                Some(_) => false,
+            };
+            self.note(
+                members,
+                at,
+                Position::Root,
+                Tag::Object { required: listed },
+            )?;
+            closed |= self.closes(node, members);
+        }
+        let mut every_branch_closed = !plan.branches.is_empty();
+        for at in &plan.branches {
+            let Some(
+                node @ Node {
+                    value: Value::Object(members),
+                    ..
+                },
+            ) = root.pointer(at)
+            else {
+                continue;
+            };
+            self.enter(node, at, 2)?;
+            self.note(members, at, Position::Root, Tag::Unmodeled)?;
+            every_branch_closed &= self.closes(node, members);
+        }
+        let unknown = if closed || every_branch_closed {
+            UnknownParameters::Error
+        } else {
+            UnknownParameters::PassThrough
+        };
+        Ok((required, unknown))
+    }
+
+    /// Project the composed root `plan`: the parameters its object schemas
+    /// declare together.
+    ///
+    /// A name declared by exactly one applying schema is typed from it. A
+    /// name a union branch declares, or several schemas declare, is
+    /// [`ParameterKind::Unmodeled`]: its typing stays with the exact schema
+    /// (`tool_call.value.schema-typed`), as for the unions of the scope
+    /// graph, and it is not marked required.
+    fn composed(
+        &mut self,
+        root: &Node,
+        plan: &RootPlan,
+    ) -> Result<(ObjectSpec, RootLocations), ToolSetError> {
+        let (required, unknown) = self.note_plan(root, plan)?;
+        let (order, sites) = declarations(root, plan);
+        let mut parameters = Vec::with_capacity(order.len());
+        let mut declared = BTreeMap::new();
+        for name in order {
+            let entries = &sites[name];
+            let pointers: Vec<String> = entries
+                .iter()
+                .map(|(pointer, _, _)| pointer.clone())
+                .collect();
+            let bytes = pointers.iter().fold(size(name.len()), |total, pointer| {
+                total.saturating_add(size(pointer.len()))
+            });
+            self.charge(Resource::ScratchBytes, bytes.saturating_add(KEYWORD_RECORD))?;
+            declared.insert(name.to_owned(), pointers);
+            let spec = if let [(pointer, property, false)] = entries.as_slice() {
+                let mut spec = self.spec(property, pointer, Position::Parameter, 2)?;
+                spec.required = required.contains(name);
+                spec
+            } else {
+                for (pointer, property, _) in entries {
+                    self.enter(property, pointer, 2)?;
+                    if let Value::Object(members) = &property.value {
+                        self.note(members, pointer, Position::Parameter, Tag::Unmodeled)?;
+                    }
+                }
+                ParameterSpec::of(ParameterKind::Unmodeled)
+            };
+            parameters.push((name.to_owned(), spec));
+        }
+        let describing: BTreeSet<String> = plan
+            .overridden
+            .iter()
+            .chain(&plan.apply)
+            .chain(&plan.branches)
+            .cloned()
+            .collect();
+        let bytes = describing.iter().fold(0_u64, |total, at| {
+            total.saturating_add(size(at.len()).saturating_add(KEYWORD_RECORD))
+        });
+        self.charge(Resource::ScratchBytes, bytes)?;
+        Ok((
+            ObjectSpec {
+                parameters,
+                unknown: Some(unknown),
+            },
+            RootLocations::new(declared, describing),
+        ))
+    }
+
+    /// Whether the schema object `node` at `at` closes its object scope: a
+    /// false `additionalProperties` (or, outside Draft-07,
+    /// `unevaluatedProperties`) with nothing that could admit other members.
+    /// A composing keyword (`$ref`, `allOf`, `anyOf`, `oneOf`, ...) could
+    /// admit other members, as in an inline schema, so it keeps the scope
+    /// open even where the projection followed it.
+    fn closes(&self, node: &Node, members: &[Member]) -> bool {
+        let closing: &[&str] = match self.dialect {
+            Dialect::Draft07 => &["additionalProperties"],
+            _ => &["additionalProperties", "unevaluatedProperties"],
+        };
+        closing.iter().any(|keyword| {
+            node.get(keyword)
+                .is_some_and(|value| value.value == Value::Bool(false))
+        }) && !members.iter().any(|member| {
+            member.key == "patternProperties" || RESHAPING.contains(&member.key.as_str())
+        })
     }
 
     /// Whether `keyword` makes a value unmodeled: [`RESHAPING`], Draft-07
@@ -1144,6 +1589,41 @@ impl<'a> Projector<'a> {
         }
         Ok(())
     }
+}
+
+/// Per property name, each declaring `(property pointer, schema, in a union
+/// branch)`.
+type Sites<'n> = BTreeMap<&'n str, Vec<(String, &'n Node, bool)>>;
+
+/// The top-level property declarations of a composed root by name: the names
+/// in order of first declaration (applying schemas, then union branches) and,
+/// per name, each declaring `(property pointer, schema, in a union branch)`.
+fn declarations<'n>(root: &'n Node, plan: &RootPlan) -> (Vec<&'n str>, Sites<'n>) {
+    let mut order: Vec<&str> = Vec::new();
+    let mut sites: Sites = BTreeMap::new();
+    for (list, branch) in [(&plan.apply, false), (&plan.branches, true)] {
+        for at in list {
+            let Some(Node {
+                value: Value::Object(properties),
+                ..
+            }) = root.pointer(at).and_then(|node| node.get("properties"))
+            else {
+                continue;
+            };
+            for property in properties {
+                let entry = sites.entry(property.key.as_str()).or_insert_with(|| {
+                    order.push(property.key.as_str());
+                    Vec::new()
+                });
+                entry.push((
+                    format!("{at}/properties/{}", pointer_segment(&property.key)),
+                    &property.value,
+                    branch,
+                ));
+            }
+        }
+    }
+    (order, sites)
 }
 
 /// Whether the projection of kind `tag` at `position` carries `member`.

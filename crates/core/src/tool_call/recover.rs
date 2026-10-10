@@ -3325,10 +3325,13 @@ impl Reading {
     }
 }
 
-/// The receipt's validation log, deduplicated per source range.
+/// The receipt's validation log, deduplicated per source range and
+/// constraint: a validation can only equal another with the same
+/// constraint, so only those are compared (a call with thousands of
+/// distinct keyword validations costs linear, not quadratic, work).
 struct Log {
     entries: Vec<Validation>,
-    index: BTreeMap<(usize, usize), Vec<usize>>,
+    index: BTreeMap<((usize, usize), String), Vec<usize>>,
 }
 
 impl Log {
@@ -3338,7 +3341,10 @@ impl Log {
         validation: &Validation,
         governor: &mut Governor,
     ) -> Result<usize, StopReason> {
-        let known = self.index.entry(key).or_default();
+        let known = self
+            .index
+            .entry((key, validation.constraint.clone()))
+            .or_default();
         governor.charge(Resource::Work, size(known.len()).saturating_add(1))?;
         if let Some(&found) = known
             .iter()
@@ -4585,7 +4591,7 @@ impl Recovery<'_> {
         let mut validations = Vec::new();
         for (pointer, keyword) in tool.unmodeled_keywords() {
             governor.charge(Resource::Work, size(pointer.len()).saturating_add(1))?;
-            if !on_path(pointer, &call.arguments, governor)? {
+            if !on_path(tool.argument_pointer(pointer), &call.arguments, governor)? {
                 continue;
             }
             // A reshaping keyword (`$ref`, `anyOf`, ...) or an unmodeled
