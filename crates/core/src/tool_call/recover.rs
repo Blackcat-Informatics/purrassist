@@ -358,7 +358,8 @@ impl fmt::Debug for IdPolicy {
 ///   `Unresolved` with [`UnresolvedReason::ToolChoiceForced`].
 /// - `ForcedStrict(strict)`: the `Forced` checks, plus the options of
 ///   [`StrictForced`]: exactly one call (each call after the first becomes
-///   `Unresolved` with [`UnresolvedReason::ToolChoiceCardinality`]), no
+///   `Unresolved` with [`UnresolvedReason::ToolChoiceCardinality`]; every
+///   rejected call attempt, of any reason, counts against it too), no
 ///   content outside the call, and optionally no reasoning. `Forced(name)`
 ///   is the lenient form: a `ForcedStrict` with every option lenient checks
 ///   exactly what `Forced` checks and renders the same constraint.
@@ -399,14 +400,21 @@ pub enum ToolChoice {
 ///   entries of [`ToolCalls::calls`] (recognized calls of any outcome, as
 ///   [`ToolChoice::Required`] counts them); each call after the first
 ///   becomes `Unresolved` with [`UnresolvedReason::ToolChoiceCardinality`]
-///   unless it already was unresolved. Calls embedded in reasoning are not
+///   unless it already was unresolved, and every entry of
+///   [`ToolCalls::rejected`] (a call attempt of any [`Rejection`] reason,
+///   an unsupported dialect's included) is one more call beyond the one.
+///   The check states the count of both in one diagnostic. Calls embedded in reasoning are not
 ///   counted (see [`ToolCalls::embedded`]); `allow_reasoning` governs them.
 /// - `allow_content: false`: no content range holds a byte that is not
 ///   ASCII whitespace (`u8::is_ascii_whitespace`: space, tab, line feed,
-///   carriage return, form feed). Framing whitespace between calls passes;
-///   non-ASCII whitespace such as U+00A0 is content, and so are tool
-///   results the model wrote.
-/// - `allow_reasoning: false`: no reasoning block at all.
+///   carriage return, form feed), and no rejected call attempt: the bytes
+///   of an attempt that is not a call are outside every call. Framing
+///   whitespace between calls passes; non-ASCII whitespace such as U+00A0
+///   is content, and so are tool results the model wrote.
+/// - `allow_reasoning: false`: no reasoning block at all. Under
+///   [`ReasoningPolicy::AsContent`] reasoning is never recognized, so the
+///   combination is a request error (`invalid_input`) rather than a check
+///   that passes vacuously.
 ///
 /// A failed option is a diagnostic on the tool choice check; the check then
 /// fails and the turn follows the whole-turn contract of
@@ -1149,7 +1157,7 @@ impl Finish {
 /// | `Run` | the tool-choice check passed and at least one call is usable when guesses are accepted ([`ToolCalls::usable_accepting_guesses`]) | run [`ToolCalls::usable`] (strict) or [`ToolCalls::usable_accepting_guesses`] |
 /// | `NoCalls` | the tool-choice check passed and the turn is clean content (finish `content_only`) | use the content; nothing to run |
 /// | `Ambiguous` | the tool-choice check passed, nothing is usable, and a call is `Ambiguous` | choose among the call's `alternatives`, or re-ask |
-/// | `NothingUsable` | nothing to run: no usable call, or the tool-choice check failed (even beside usable calls) | re-ask or report; never run a call |
+/// | `NothingUsable` | nothing to run: no usable call, or the tool-choice check failed (even beside calls that would be usable: [`ToolCalls::usable`] and [`ToolCalls::usable_accepting_guesses`] are then empty, and nothing is emitted) | re-ask or report; never run a call |
 ///
 /// The CLI's exit code is [`Self::exit_code`] of this verdict.
 ///
@@ -1646,17 +1654,37 @@ pub struct ToolCalls {
 }
 
 impl ToolCalls {
-    /// The calls that may run as is: per-call `Resolved` only.
+    /// The calls that may run as is: per-call `Resolved` only, and none
+    /// when the turn fails the request's tool-choice check (a violated tool
+    /// choice is a contract failure, so nothing of the turn runs, and a
+    /// count of these calls always agrees with the empty emission).
     ///
-    /// See [`ToolSet::recover`] for an example.
+    /// ```
+    /// use purrassist_core::tool_call::{ToolChoice, ToolDefinition, ToolRecoveryRequest, ToolSet};
+    /// use purrassist_core::{Budget, Outcome};
+    /// let tools = ToolSet::compile([ToolDefinition::new("ls"), ToolDefinition::new("cat")], Budget::default()).unwrap();
+    /// let output = br#"<tool_call>{"name": "ls", "arguments": {}}</tool_call>"#;
+    /// let result = tools.recover(output, &ToolRecoveryRequest::default());
+    /// let Outcome::Resolved(calls) = &result.outcome else { panic!() };
+    /// assert_eq!(calls.usable().len(), 1);
+    /// // Forced to `cat`, the check fails: the call is still `Resolved`, but nothing may run.
+    /// let forced = ToolRecoveryRequest::default().tool_choice(ToolChoice::Forced("cat".into()));
+    /// let result = tools.recover(output, &forced);
+    /// let Outcome::Resolved(calls) = &result.outcome else { panic!() };
+    /// assert!(!calls.tool_choice.passed && calls.usable().is_empty());
+    /// ```
     #[must_use]
     pub fn usable(&self) -> Vec<&ToolCall> {
+        if !self.tool_choice.passed {
+            return Vec::new();
+        }
         self.calls.iter().filter(|call| call.is_usable()).collect()
     }
 
     /// The calls that may run when the caller accepts guesses: also every
     /// `BestGuess` call to a read-only tool, never a guess on a mutating
-    /// tool.
+    /// tool. As with [`Self::usable`], none when the turn fails the
+    /// request's tool-choice check.
     ///
     /// ```
     /// use purrassist_core::tool_call::{Effects, Param, ToolDefinition, ToolRecoveryRequest, ToolSet};
@@ -1669,6 +1697,9 @@ impl ToolCalls {
     /// ```
     #[must_use]
     pub fn usable_accepting_guesses(&self) -> Vec<&ToolCall> {
+        if !self.tool_choice.passed {
+            return Vec::new();
+        }
         self.calls
             .iter()
             .filter(|call| call.is_usable_accepting_guesses())
@@ -1687,10 +1718,9 @@ impl ToolCalls {
     }
 
     /// The calls every emitter prints, and the calls a caller may run:
-    /// [`Self::usable_accepting_guesses`] when the turn passes the
-    /// request's tool-choice check, none when it fails it (a violated tool
-    /// choice is a contract failure, so nothing of the turn runs). The one
-    /// selection [`Self::verdict`] (`Run` exactly when it is not empty),
+    /// [`Self::usable_accepting_guesses`], which is empty when the turn
+    /// fails the request's tool-choice check (a violated tool choice is a
+    /// contract failure, so nothing of the turn runs). The one selection [`Self::verdict`] (`Run` exactly when it is not empty),
     /// [`Self::openai_finish_reason`] and the emitters use.
     ///
     /// ```
@@ -1710,11 +1740,7 @@ impl ToolCalls {
     /// ```
     #[must_use]
     pub fn emitted_calls(&self) -> Vec<&ToolCall> {
-        if self.tool_choice.passed {
-            self.usable_accepting_guesses()
-        } else {
-            Vec::new()
-        }
+        self.usable_accepting_guesses()
     }
 
     /// What a caller should do with this reading (see [`Verdict`]): the
@@ -3063,6 +3089,55 @@ struct Reading {
     /// opener offset: the reading's own rejected attempts and those of the
     /// options folded into its choices ([`Fold`]).
     attempts: BTreeMap<usize, BTreeSet<DialectId>>,
+    /// What the strict cardinality check counted (see [`Extras`]).
+    extras: Extras,
+    /// The index of the tool-choice validation in [`Self::validations`].
+    choice_validation: usize,
+}
+
+/// What a strict `exactly_one` check counted beyond the one call: calls
+/// after the first, and rejected call attempts of any reason. Readings
+/// that recover the same calls can differ in the attempts (a dialect that
+/// rejects the bytes another reads as content), so [`merge`] keeps the
+/// largest count.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Extras {
+    calls: usize,
+    attempts: usize,
+}
+
+impl Extras {
+    /// The one cardinality diagnostic, stating both counts; `None` when
+    /// there is nothing beyond the one call.
+    fn diagnostic(self, constraint: &str) -> Option<String> {
+        let plural = |count: usize| if count == 1 { "" } else { "s" };
+        let mut parts = Vec::new();
+        if self.calls > 0 {
+            parts.push(format!("{} extra call{}", self.calls, plural(self.calls)));
+        }
+        if self.attempts > 0 {
+            parts.push(format!(
+                "{} rejected call attempt{}",
+                self.attempts,
+                plural(self.attempts)
+            ));
+        }
+        (!parts.is_empty()).then(|| {
+            format!(
+                "{} beyond the one call allowed under {constraint}",
+                parts.join(" and ")
+            )
+        })
+    }
+}
+
+/// The count of further entries a capped diagnostic leaves out.
+fn more(rest: usize) -> String {
+    if rest == 0 {
+        String::new()
+    } else {
+        format!(" (and {rest} more)")
+    }
 }
 
 /// One option of a contested span after equivalent segmentations are
@@ -3380,6 +3455,13 @@ struct Recovery<'a> {
 
 impl Recovery<'_> {
     fn run(&self, governor: &mut Governor) -> Result<Done, StopReason> {
+        let readings = self.recognized(governor)?;
+        self.conclude(readings, governor)
+    }
+
+    /// Every whole-message reading of the output, before they are compared
+    /// ([`Self::conclude`]).
+    fn recognized(&self, governor: &mut Governor) -> Result<Vec<Reading>, StopReason> {
         governor.check()?;
         self.policies.validate(self.tools)?;
         let forced = match &self.request.tool_choice {
@@ -3396,6 +3478,20 @@ impl Recovery<'_> {
             ),
             _ => None,
         };
+        if let ToolChoice::ForcedStrict(StrictForced {
+            allow_reasoning: false,
+            ..
+        }) = &self.request.tool_choice
+            && self.request.reasoning == ReasoningPolicy::AsContent
+        {
+            // Reasoning is never recognized, so the option could not be
+            // enforced: the request is contradictory, not satisfied.
+            return Err(invalid_input(
+                "tool choice forbids reasoning (`allow_reasoning: false`), but the reasoning policy \
+                 treats reasoning markers as content, so reasoning is never recognized"
+                    .to_owned(),
+            ));
+        }
         let encoding = self.encoding(governor)?;
         let mut recognizer = Recognizer::with_tools(
             &self.request.dialects,
@@ -3417,7 +3513,7 @@ impl Recovery<'_> {
             governor,
         )?;
         drop(resolved);
-        self.conclude(readings, governor)
+        Ok(readings)
     }
 
     /// The `tool_call.input.invalid-utf8` losses of the output.
@@ -3580,6 +3676,8 @@ impl Recovery<'_> {
             cost,
             inexact: Vec::new(),
             attempts: BTreeMap::new(),
+            extras: Extras::default(),
+            choice_validation: 0,
         };
         for segment in segments {
             self.segment(&mut reading, segment, governor)?;
@@ -3608,7 +3706,8 @@ impl Recovery<'_> {
         self.close_rejections(&mut reading.value, governor)?;
         self.closers_after_cut(&mut reading, governor)?;
         reading.value.next_id_start = self.ids(&mut reading.value.calls, governor)?;
-        self.tool_choice(&mut reading.value, forced);
+        reading.extras = self.tool_choice(&mut reading.value, forced, governor)?;
+        reading.choice_validation = reading.validations.len();
         let check = &reading.value.tool_choice;
         reading.validations.push((
             MESSAGE,
@@ -4310,9 +4409,16 @@ impl Recovery<'_> {
         Ok(())
     }
 
-    /// Enforce the tool choice on a reading's calls.
-    fn tool_choice(&self, value: &mut ToolCalls, forced: Option<&str>) {
+    /// Enforce the tool choice on a reading's calls; the extras a strict
+    /// `exactly_one` counted (see [`Extras`]) for [`merge`].
+    fn tool_choice(
+        &self,
+        value: &mut ToolCalls,
+        forced: Option<&str>,
+        governor: &mut Governor,
+    ) -> Result<Extras, StopReason> {
         let choice = &self.request.tool_choice;
+        let mut extras = Extras::default();
         let constraint = choice.constraint();
         let mut diagnostics = Vec::new();
         let unresolved = |call: &ToolCall| matches!(call.outcome, CallOutcome::Unresolved { .. });
@@ -4355,55 +4461,96 @@ impl Recovery<'_> {
                     }
                 }
                 if let ToolChoice::ForcedStrict(strict) = choice {
-                    self.strict(strict, value, &constraint, &mut diagnostics);
+                    extras = self.strict(strict, value, &constraint, &mut diagnostics, governor)?;
                 }
             }
         }
+        for diagnostic in &diagnostics {
+            governor.charge(
+                Resource::ScratchBytes,
+                size(diagnostic.len()).saturating_add(ENTRY_BYTES),
+            )?;
+        }
         value.tool_choice.passed = diagnostics.is_empty();
         value.tool_choice.diagnostics = diagnostics;
+        Ok(extras)
     }
 
     /// The options of a strict forced choice, after the `Forced` checks.
+    ///
+    /// Each failed option adds at most one diagnostic, however many entries
+    /// fail it (the first, and a count of the rest); every entry visited is
+    /// charged as work.
     fn strict(
         &self,
         strict: &StrictForced,
         value: &mut ToolCalls,
         constraint: &str,
         diagnostics: &mut Vec<String>,
-    ) {
+        governor: &mut Governor,
+    ) -> Result<Extras, StopReason> {
+        let mut extras = Extras::default();
         if strict.exactly_one {
-            let total = value.calls.len();
+            // Every rejected attempt, whatever its reason, is a call
+            // attempt beyond the one call.
+            governor.charge(
+                Resource::Work,
+                size(value.calls.len().saturating_add(value.rejected.len())),
+            )?;
+            extras = Extras {
+                calls: value.calls.len().saturating_sub(1),
+                attempts: value.rejected.len(),
+            };
             for call in value.calls.iter_mut().skip(1) {
-                diagnostics.push(format!(
-                    "{} is one of {total} calls under {constraint}",
-                    label(call)
-                ));
                 if !matches!(call.outcome, CallOutcome::Unresolved { .. }) {
                     call.outcome = CallOutcome::Unresolved {
                         reason: UnresolvedReason::ToolChoiceCardinality,
                     };
                 }
             }
-        }
-        if !strict.allow_content {
-            for range in &value.content {
-                let text = self.output.get(range.clone()).unwrap_or_default();
-                if let Some(offset) = text.iter().position(|byte| !byte.is_ascii_whitespace()) {
-                    diagnostics.push(format!(
-                        "content at byte {} is not allowed under {constraint}",
-                        range.start + offset
-                    ));
-                }
+            if let Some(diagnostic) = extras.diagnostic(constraint) {
+                diagnostics.push(diagnostic);
             }
         }
-        if !strict.allow_reasoning {
-            for range in &value.reasoning {
+        if !strict.allow_content {
+            governor.charge(
+                Resource::Work,
+                size(value.content.len().saturating_add(value.rejected.len())),
+            )?;
+            let mut offending = value.content.iter().filter_map(|range| {
+                let text = self.output.get(range.clone()).unwrap_or_default();
+                text.iter()
+                    .position(|byte| !byte.is_ascii_whitespace())
+                    .map(|offset| range.start + offset)
+            });
+            if let Some(first) = offending.next() {
                 diagnostics.push(format!(
-                    "reasoning at bytes {}..{} is not allowed under {constraint}",
-                    range.start, range.end
+                    "content at byte {first} is not allowed under {constraint}{}",
+                    more(offending.count())
+                ));
+            }
+            // A rejected attempt's bytes are outside every call: content.
+            if let Some(first) = value.rejected.first() {
+                diagnostics.push(format!(
+                    "rejected call attempt at bytes {}..{} is not allowed under {constraint}{}",
+                    first.span.start,
+                    first.span.end,
+                    more(value.rejected.len() - 1)
                 ));
             }
         }
+        if !strict.allow_reasoning {
+            governor.charge(Resource::Work, size(value.reasoning.len()))?;
+            if let Some(first) = value.reasoning.first() {
+                diagnostics.push(format!(
+                    "reasoning at bytes {}..{} is not allowed under {constraint}{}",
+                    first.start,
+                    first.end,
+                    more(value.reasoning.len() - 1)
+                ));
+            }
+        }
+        Ok(extras)
     }
 
     /// The unmodeled keywords of an adapter tool's schema on the call's
@@ -4544,7 +4691,7 @@ impl Recovery<'_> {
                 stopped: StopReason::NoCandidate,
             });
         }
-        let mut readings = same_calls(readings, governor)?;
+        let mut readings = same_calls(self, readings, governor)?;
         let reject = self.request.ambiguity == AmbiguityPolicy::Reject;
         let mut log = Log {
             entries: Vec::new(),
@@ -4571,7 +4718,7 @@ impl Recovery<'_> {
                     let groups = indistinguishable(&derivations, governor)?;
                     if groups.len() < readings.len() {
                         // Still nothing tells them apart: one reading.
-                        readings = merge(readings, &groups, governor)?;
+                        readings = merge(self, readings, &groups, governor)?;
                         derivations =
                             whole_derivations(&readings, &mut forest, &mut log, governor)?;
                     }
@@ -4977,7 +5124,11 @@ fn calls_key(reading: &Reading, governor: &mut Governor) -> Result<Digest, StopR
 /// call and how the bytes outside every call divide into rejected attempts
 /// and content (which dialect's attempt was rejected, and where it failed)
 /// are one reading; see [`merge`].
-fn same_calls(readings: Vec<Reading>, governor: &mut Governor) -> Result<Vec<Reading>, StopReason> {
+fn same_calls(
+    recovery: &Recovery<'_>,
+    readings: Vec<Reading>,
+    governor: &mut Governor,
+) -> Result<Vec<Reading>, StopReason> {
     if readings.len() < 2 {
         return Ok(readings);
     }
@@ -4996,7 +5147,7 @@ fn same_calls(readings: Vec<Reading>, governor: &mut Governor) -> Result<Vec<Rea
     if groups.len() == readings.len() {
         return Ok(readings);
     }
-    merge(readings, &groups, governor)
+    merge(recovery, readings, &groups, governor)
 }
 
 /// Each group of `readings` (indices, best first) as one reading: the
@@ -5007,7 +5158,20 @@ fn same_calls(readings: Vec<Reading>, governor: &mut Governor) -> Result<Vec<Rea
 /// that attempted a call at the same opener in any member, and every
 /// call's (and embedded call's) [`ToolCall::candidate_dialects`] extended
 /// to the dialects that read the same call in any member.
+///
+/// The merge fails closed: members can differ in how they divide the bytes
+/// outside every call (a rejected attempt in one is content in another), and
+/// a strict tool choice counts them differently, so the merged reading's
+/// tool-choice check fails when any member's does, whichever member is kept.
+/// Its diagnostics are then the deduplicated, sorted union of the members'
+/// (one cardinality diagnostic, with the largest count). The calls are the
+/// same in every member (they are the key), so the cardinality outcomes the
+/// failing member gave them are the kept member's. The keep order already
+/// favours failing: a rejected attempt is body evidence and content is not,
+/// so the member that reads the bytes as an attempt is kept. Failing closed
+/// does not rely on that order; it holds for any kept member.
 fn merge(
+    recovery: &Recovery<'_>,
     readings: Vec<Reading>,
     groups: &[Vec<usize>],
     governor: &mut Governor,
@@ -5035,6 +5199,17 @@ fn merge(
                     .extend(dialects.iter().cloned());
             }
         }
+        let checks: Vec<(bool, Vec<String>, Extras)> = group
+            .iter()
+            .filter_map(|&member| slots[member].as_ref())
+            .map(|other| {
+                (
+                    other.value.tool_choice.passed,
+                    other.value.tool_choice.diagnostics.clone(),
+                    other.extras,
+                )
+            })
+            .collect();
         let mut reading = slots[best].take().expect("each reading is in one group");
         let members: Vec<&Reading> = group
             .iter()
@@ -5056,9 +5231,79 @@ fn merge(
             rejected.candidate_dialects = candidates.iter().cloned().collect();
         }
         reading.attempts = attempts;
+        fail_closed(recovery, &mut reading, &checks, governor)?;
         merged.push(reading);
     }
     Ok(merged)
+}
+
+/// Make `reading`, the kept member of a merged group, carry the tool-choice
+/// check of every member (`checks`: each member's `passed`, diagnostics and
+/// extras, the kept member included): failed if any failed, with the
+/// deduplicated union of the diagnostics, sorted so the order of the
+/// readings cannot show.
+fn fail_closed(
+    recovery: &Recovery<'_>,
+    reading: &mut Reading,
+    checks: &[(bool, Vec<String>, Extras)],
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    let agree = checks.iter().all(|(passed, diagnostics, _)| {
+        *passed == reading.value.tool_choice.passed
+            && *diagnostics == reading.value.tool_choice.diagnostics
+    });
+    if agree {
+        return Ok(());
+    }
+    let constraint = reading.value.tool_choice.choice.constraint();
+    let mut extras = Extras::default();
+    let mut union: BTreeSet<String> = BTreeSet::new();
+    let mut passed = true;
+    for (member_passed, diagnostics, member_extras) in checks {
+        passed &= *member_passed;
+        extras.attempts = extras.attempts.max(member_extras.attempts);
+        extras.calls = extras.calls.max(member_extras.calls);
+        let cardinality = member_extras.diagnostic(&constraint);
+        for diagnostic in diagnostics {
+            governor.charge(Resource::Work, size(diagnostic.len()).saturating_add(1))?;
+            if cardinality.as_ref() != Some(diagnostic) {
+                union.insert(diagnostic.clone());
+            }
+        }
+    }
+    if let Some(diagnostic) = extras.diagnostic(&constraint) {
+        union.insert(diagnostic);
+    }
+    let diagnostics: Vec<String> = union.into_iter().collect();
+    for diagnostic in &diagnostics {
+        governor.charge(
+            Resource::ScratchBytes,
+            size(diagnostic.len()).saturating_add(ENTRY_BYTES),
+        )?;
+    }
+    let newly_failed = reading.value.tool_choice.passed && !passed;
+    reading.extras = extras;
+    reading.value.tool_choice.passed = passed;
+    reading
+        .value
+        .tool_choice
+        .diagnostics
+        .clone_from(&diagnostics);
+    if let Some((_, validation)) = reading.validations.get_mut(reading.choice_validation) {
+        validation.passed = passed;
+        validation.diagnostics = diagnostics;
+    }
+    if newly_failed {
+        // A failed choice makes the finish `Unresolved` and nothing emitted.
+        reading.value.finish = recovery.finish(&reading.value);
+        reading.value.emitted = emit::emission(
+            recovery.tools,
+            &reading.value,
+            &recovery.request.emit,
+            governor,
+        )?;
+    }
+    Ok(())
 }
 
 /// Record, as a passing `dialect=ID` validation of each call, the dialect
@@ -5289,4 +5534,126 @@ fn push_ledger(
         derivation.push(forest.inference(governor, inference.clone())?);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tool_call::{DialectSet, EmitTarget, Param, ToolDefinition};
+    use crate::{Budget, Governor};
+
+    const OUTPUT: &[u8] = b"<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"a\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"b\"}} junk junk {{{\n</tool_call>";
+
+    fn printed(emitted: Option<&crate::tool_call::Emission>) -> Option<usize> {
+        match emitted {
+            Some(crate::tool_call::Emission::OpenAiToolCalls(emitted)) => Some(emitted.calls.len()),
+            _ => None,
+        }
+    }
+
+    /// The two readings of [`OUTPUT`] a merge would join if two dialects
+    /// contested the second body: `failing` reads it as a rejected attempt
+    /// (the real Hermes reading), `passing` is the same reading with the
+    /// attempt counted as content, as a dialect that did not attempt it
+    /// would leave it (the strict check passes with content allowed).
+    fn members(
+        tools: &ToolSet,
+        request: &ToolRecoveryRequest,
+        governor: &mut Governor,
+    ) -> (Reading, Reading) {
+        let recovery = Recovery {
+            tools,
+            request,
+            output: OUTPUT,
+            source: Digest::of(OUTPUT),
+            policies: Policies {
+                selection: request.policy,
+                effects: request.effects.clone(),
+                exact: false,
+            },
+        };
+        let mut failing = recovery.recognized(governor).unwrap();
+        let mut passing = recovery.recognized(governor).unwrap();
+        let (failing, mut passing) = (failing.remove(0), passing.remove(0));
+        assert!(!failing.value.tool_choice.passed);
+        assert_eq!(
+            failing.extras,
+            Extras {
+                calls: 0,
+                attempts: 1
+            }
+        );
+        passing.extras = Extras::default();
+        passing.value.tool_choice.passed = true;
+        passing.value.tool_choice.diagnostics = Vec::new();
+        let index = passing.choice_validation;
+        passing.validations[index].1.passed = true;
+        passing.validations[index].1.diagnostics = Vec::new();
+        passing.value.finish = recovery.finish(&passing.value);
+        passing.value.emitted =
+            emit::emission(tools, &passing.value, &request.emit, governor).unwrap();
+        (failing, passing)
+    }
+
+    /// A merge of readings whose strict checks disagree fails closed
+    /// whichever member it keeps and whatever the readings' order: the
+    /// merged check fails with the same diagnostics, the finish is
+    /// `Unresolved`, and nothing is emitted (R4, G3).
+    #[test]
+    fn merge_fails_closed_in_either_order() {
+        let tools = ToolSet::compile(
+            [ToolDefinition::new("read_file").param("path", Param::string().required())],
+            Budget::default(),
+        )
+        .unwrap();
+        let mut governor = Governor::new(Budget::default());
+        let dialects = DialectSet::new([DialectId::Hermes], &mut governor).unwrap();
+        let request = ToolRecoveryRequest::default()
+            .dialects(dialects)
+            .emit(EmitTarget::OpenAiToolCalls)
+            .tool_choice(ToolChoice::ForcedStrict(
+                StrictForced::exactly_one("read_file").allow_content(true),
+            ));
+        let mut merged = Vec::new();
+        for failing_first in [true, false] {
+            let (failing, passing) = members(&tools, &request, &mut governor);
+            assert!(passing.value.tool_choice.passed);
+            assert_eq!(printed(passing.value.emitted.as_ref()), Some(1));
+            let recovery = Recovery {
+                tools: &tools,
+                request: &request,
+                output: OUTPUT,
+                source: Digest::of(OUTPUT),
+                policies: Policies {
+                    selection: request.policy,
+                    effects: request.effects.clone(),
+                    exact: false,
+                },
+            };
+            let readings = if failing_first {
+                vec![failing, passing]
+            } else {
+                vec![passing, failing]
+            };
+            let readings = same_calls(&recovery, readings, &mut governor).unwrap();
+            assert_eq!(readings.len(), 1, "the members recover the same calls");
+            merged.push(readings.into_iter().next().unwrap());
+        }
+        for reading in &merged {
+            let check = &reading.value.tool_choice;
+            assert!(!check.passed, "{check:?}");
+            assert_eq!(check.diagnostics.len(), 1, "{check:?}");
+            assert!(check.diagnostics[0].starts_with("1 rejected call attempt beyond"));
+            assert_eq!(reading.value.finish, Finish::Unresolved);
+            assert_eq!(reading.value.emitted_calls().len(), 0);
+            assert_eq!(printed(reading.value.emitted.as_ref()), Some(0));
+            let (_, validation) = &reading.validations[reading.choice_validation];
+            assert!(!validation.passed);
+            assert_eq!(validation.diagnostics, check.diagnostics);
+        }
+        assert_eq!(
+            merged[0].value.tool_choice.diagnostics,
+            merged[1].value.tool_choice.diagnostics
+        );
+    }
 }

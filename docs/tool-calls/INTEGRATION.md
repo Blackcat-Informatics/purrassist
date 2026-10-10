@@ -1181,9 +1181,9 @@ adds three options on top of exactly those checks:
 
 | Option | Field | Constraint text | Violation |
 | --- | --- | --- | --- |
-| exactly one call | `exactly_one` | `exactly-one` | Each call after the first, in `calls`, is `Unresolved` with `tool_choice_cardinality` (unless it already was unresolved), and the choice records a diagnostic. |
-| no content | `allow_content: false` | `no-content` | Any `content` range holding a byte that is not ASCII whitespace (`u8::is_ascii_whitespace`: space, tab, line feed, carriage return, form feed) is a diagnostic. |
-| no reasoning | `allow_reasoning: false` | `no-reasoning` | Any reasoning block is a diagnostic. |
+| exactly one call | `exactly_one` | `exactly-one` | Each call after the first, in `calls`, is `Unresolved` with `tool_choice_cardinality` (unless it already was unresolved), every entry of `rejected` (of any reason, an unsupported dialect's included) is one more call beyond the one, and the choice records one diagnostic stating both counts. |
+| no content | `allow_content: false` | `no-content` | Any `content` range holding a byte that is not ASCII whitespace (`u8::is_ascii_whitespace`: space, tab, line feed, carriage return, form feed), and any rejected attempt (its bytes are outside every call), is a diagnostic: at most one for the content (the first byte, and a count of the other ranges) and one for the attempts. |
+| no reasoning | `allow_reasoning: false` | `no-reasoning` | Any reasoning block is a diagnostic: one, naming the first block and a count of the others. Under `reasoning: "content"` reasoning is never recognized, so this combination is an `invalid_input` request error (MCP and CLI included) instead of a check that passes vacuously. |
 
 `StrictForced::exactly_one(name)` is the usual form (exactly one call, no
 content, reasoning allowed). The constraint recorded in the receipt's
@@ -1197,8 +1197,11 @@ renders exactly `tool_choice=forced:NAME`.
 What counts:
 
 - **One call** counts the entries of `calls`, recognized calls of any
-  outcome, as `required` does. A rejected attempt already fails the turn's
-  finish. Calls embedded in reasoning are never counted (they are never
+  outcome, as `required` does. A rejected attempt of any reason, a
+  malformed or truncated second call or markup of a dialect that is not
+  supported, is a call attempt beyond the one call and fails the check (and
+  so the verdict, not only the finish), as it fails no-content. Calls
+  embedded in reasoning are never counted (they are never
   tool-choice-checked); `allow_reasoning` governs the block that holds them.
 - **Content** is whitespace-insensitive only for ASCII whitespace, so the
   newlines a model writes between or around calls pass. Non-ASCII
@@ -1229,12 +1232,25 @@ Requesting it:
 *Proved by* the goldens `forced_strict_two_calls`,
 `forced_strict_call_plus_prose`, `forced_strict_single_call_passes`,
 `forced_strict_reasoning_rejected`,
-`forced_strict_anthropic_disable_parallel` and
-`forced_strict_anthropic_one_call_with_prose_passes` and their named
+`forced_strict_anthropic_disable_parallel`,
+`forced_strict_anthropic_one_call_with_prose_passes`,
+`forced_strict_rejected_second_attempt` and
+`forced_strict_anthropic_unsupported_dialect_attempt` and their named
 assertions in `tool_call_goldens` (including
 `forced_strict_non_ascii_whitespace_is_content`),
 `tool_call_recover::strict_forced_constraint_strings`,
 `tool_call_recover::strict_forced_cardinality_content_and_reasoning`,
+`tool_call_recover::strict_forced_counts_rejected_attempts_of_any_reason`,
+`tool_call_recover::strict_forced_contested_second_body_is_order_independent`,
+the unit test `merge_fails_closed_in_either_order` (`recover.rs`),
+`tool_call_recover::strict_forced_diagnostics_are_capped`,
+`tool_call_recover::strict_no_reasoning_under_reasoning_as_content_is_invalid_input`,
+`tool_call_recover::failed_tool_choice_has_no_usable_calls`,
+`tool_call_tools::strict_choice_counts_a_rejected_second_attempt`,
+`tool_call_tools::failed_tool_choice_zeroes_the_usable_counts`,
+`tool_call_tools::strict_no_reasoning_beside_content_reasoning_is_invalid_input`,
+`tool_calls_cli::strict_forced_flags_count_a_rejected_second_attempt`,
+`tool_calls_cli::strict_no_reasoning_with_content_reasoning_is_invalid_input`,
 `tool_call_recover::tool_choice_from_openai_and_anthropic_json`,
 `tool_call_tools::tool_choice_strict_member`,
 `tool_call_tools::tool_choice_strict_member_errors`,
@@ -1262,7 +1278,10 @@ by different fields:
   (`ToolCalls::verdict`). `value.usable_calls` counts the calls that may run
   as is (`Resolved`, `ToolCalls::usable`), and
   `value.usable_calls_accepting_guesses` also counts best guesses on
-  read-only tools (`ToolCalls::usable_accepting_guesses`).
+  read-only tools (`ToolCalls::usable_accepting_guesses`). Both are 0
+  whenever `value.tool_choice.passed` is false, so they always agree with
+  the empty emission and a client reading either never runs a call from a
+  failed turn.
 - **`value.finish`** classifies the turn: `calls` or
   `truncated_with_calls` only when at least one call may run (so they imply
   `verdict: "run"`), `content_only`, `truncated`, or `unresolved` when
@@ -1284,8 +1303,9 @@ A failed tool-choice check is a contract failure of the whole turn: even
 beside a call that would run on its own (the forced tool called, plus an
 extra call), the verdict is `nothing_usable`, the finish `unresolved`, the
 emission empty (the call skipped as `tool_choice_failed`), and
-`finish_reason` `"stop"` (`"length"` under a length stop). `usable_calls` still counts each call's own
-usability. A strict forced choice fails the same way when its extra
+`finish_reason` `"stop"` (`"length"` under a length stop). `usable_calls` and
+`usable_calls_accepting_guesses` are 0: nothing of the turn may run, and a
+call's own `outcome` still says what it would have been. A strict forced choice fails the same way when its extra
 conditions fail (see [Strict forced tool choice](#strict-forced-tool-choice)).
 
 | `status` | `value.verdict` | `value.finish` | `openai_finish_reason` | Exit | What the caller should do |
@@ -1293,7 +1313,7 @@ conditions fail (see [Strict forced tool choice](#strict-forced-tool-choice)).
 | `resolved`, `best_guess` | `run` | `calls`, `truncated_with_calls`, or `unresolved` (a rejected or unresolved attempt beside the calls that run) | `"tool_calls"` (`"length"` under a length stop) | 0 | Run the usable calls: `usable_calls` (strict) or, accepting read-only guesses, `usable_calls_accepting_guesses` (what the emission prints); report `rejected` |
 | `resolved`, `best_guess` | `no_calls` | `content_only` | `"stop"` | 0 | Use the content; nothing to run |
 | `resolved`, `best_guess` | `ambiguous` | `unresolved` | `"stop"` (`"length"` under a length stop) | 3 | Choose among the ambiguous call's `alternatives`, or re-ask |
-| `resolved`, `best_guess` | `nothing_usable` | `unresolved` (calls that may not run, a failed tool choice, unresolved calls, rejected attempts) or `truncated` | `"stop"` (`"length"` under a length stop) | 4 | Run nothing; re-ask or report the per-call reasons and the tool-choice diagnostics |
+| `resolved`, `best_guess` | `nothing_usable` | `unresolved` (calls that may not run, a failed tool choice, unresolved calls, rejected attempts) or `truncated` | `"stop"` (`"length"` under a length stop) | 4 | Run nothing (`usable_calls` and `usable_calls_accepting_guesses` are 0 when the tool-choice check failed); re-ask or report the per-call reasons and the tool-choice diagnostics |
 | `ambiguous` | none (`value` is null; each of `alternatives` carries its own `verdict`) | none | none | 3 | Choose a reading, or re-ask |
 | `unresolved` | none (`value` is null) | none | none | 4 | Read `receipt.termination`; run nothing |
 

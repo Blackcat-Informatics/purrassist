@@ -146,17 +146,29 @@ targets' mutation tokens so mutation can create or move field boundaries).
   exactly one call, bit 1 no content, bit 2 no reasoning; `0xF8` is the
   all-lenient form), so every earlier seed keeps its meaning. A passed strict
   check implies exactly one call when `exactly_one` is drawn, no content byte
-  other than ASCII whitespace when content is not allowed, and no reasoning
-  range when reasoning is not allowed; a second call under `exactly_one`
-  fails the check. Invariants:
+  other than ASCII whitespace when content is not allowed, no reasoning
+  range when reasoning is not allowed, and no rejected attempt when
+  `exactly_one` is drawn or content is not allowed; a second call or a
+  rejected attempt under `exactly_one` fails the check. A strict choice with
+  no reasoning under the reasoning policy "as content" (control bits 4-5
+  `10`) is a request error (`invalid_input`, never a vacuous pass): the
+  probe asserts the error outcome and prints `ok`. **Meaning correction, not
+  a preservation:** the two committed strict seeds that draw no-reasoning
+  (reasoning with no reasoning, and U+00A0 with all options) began with control
+  byte `0xe6`, whose reasoning policy is "as content", so they never tested
+  no-reasoning; they now begin with `0xc6` (separate reasoning, same other
+  bits), and one added seed keeps the `0xe6` form to draw the request error
+  (`scripts/test-fuzz.py` asserts the bits each seed draws and that every
+  strict seed runs `ok` in the built probe). Invariants:
   recovery never panics, names the output's digest, and stays within its
   budget; a value outcome completed and `Unresolved` did not; an
   `Ambiguous` outcome's readings match the receipt's alternative ledger;
   a `Resolved` turn records no guess. (A13) A `Resolved` call records no
   guess inference and no data loss, so no guessed call on a mutating tool
-  is `Resolved`; `usable()` holds only `Resolved` calls;
-  `usable_accepting_guesses()` never holds a guess on a tool that is not
-  read-only; a call embedded in reasoning is never `Resolved` and lies
+  is `Resolved`; `usable()` holds only `Resolved` calls, and none when the
+  tool-choice check failed (as `usable_accepting_guesses()`, which never
+  holds a guess on a tool that is not read-only; the wire `usable_calls`
+  counts are then 0, as the emission is); a call embedded in reasoning is never `Resolved` and lies
   inside a reasoning range. Every call, rejected-attempt, content, and
   reasoning range lies within the output, never splits a well-formed UTF-8
   character, and slices back to the retained source (a rejected attempt's

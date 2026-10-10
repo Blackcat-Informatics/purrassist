@@ -1593,6 +1593,302 @@ fn strict_forced_cardinality_content_and_reasoning() {
     );
 }
 
+/// A second call attempt that is not a call (R4, G3): a rejected attempt of
+/// any reason is a call beyond the one call (`exactly_one`) and bytes
+/// outside it (`no-content`), so the strict choice fails and nothing of the
+/// turn runs, although the first call is valid on its own.
+#[test]
+fn strict_forced_counts_rejected_attempts_of_any_reason() {
+    let tools = compile([ToolDefinition::new("read_file")
+        .effects(Effects::ReadOnly)
+        .param("path", Param::string().required())]);
+    let first = hermes("read_file", r#"{"path": "a"}"#);
+    let junk = "<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"b\"}} junk junk {{{\n</tool_call>";
+    let truncated = "<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": ";
+    let unsupported = "[read_file(path=\"b\")]";
+    let hermes_only = set(&[DialectId::Hermes]);
+    for second in [junk, truncated] {
+        let output = format!("{first}\n{second}");
+        let result = tools.recover(
+            output.as_bytes(),
+            &ToolRecoveryRequest::default()
+                .dialects(hermes_only.clone())
+                .tool_choice(ToolChoice::ForcedStrict(
+                    StrictForced::exactly_one("read_file").allow_reasoning(true),
+                )),
+        );
+        let calls = value(&result);
+        assert_eq!(calls.rejected.len(), 1, "{second:?}");
+        assert!(!calls.tool_choice.passed, "{second:?}");
+        // Both options name it: the attempt count and the attempt's bytes.
+        assert!(
+            calls
+                .tool_choice
+                .diagnostics
+                .iter()
+                .any(|d| d.starts_with("1 rejected call attempt beyond")),
+            "{:?}",
+            calls.tool_choice.diagnostics
+        );
+        assert!(
+            calls
+                .tool_choice
+                .diagnostics
+                .iter()
+                .any(|d| d.starts_with("rejected call attempt at bytes")),
+            "{:?}",
+            calls.tool_choice.diagnostics
+        );
+        assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
+        assert_eq!(calls.verdict().code(), "nothing_usable");
+        assert!(calls.emitted_calls().is_empty(), "{calls:#?}");
+        // Each option fails on its own.
+        let only_cardinality = StrictForced::exactly_one("read_file").allow_content(true);
+        let result = tools.recover(
+            output.as_bytes(),
+            &ToolRecoveryRequest::default()
+                .dialects(hermes_only.clone())
+                .tool_choice(ToolChoice::ForcedStrict(only_cardinality)),
+        );
+        assert!(
+            !value(&result).tool_choice.passed,
+            "exactly-one alone: {second:?}"
+        );
+        let only_content = StrictForced::exactly_one("read_file").with_exactly_one(false);
+        let result = tools.recover(
+            output.as_bytes(),
+            &ToolRecoveryRequest::default()
+                .dialects(hermes_only.clone())
+                .tool_choice(ToolChoice::ForcedStrict(only_content.clone())),
+        );
+        assert!(
+            !value(&result).tool_choice.passed,
+            "no-content alone: {second:?}"
+        );
+        // With both lenient, the attempt is not a strict matter.
+        let lenient = only_content.allow_content(true);
+        let result = tools.recover(
+            output.as_bytes(),
+            &ToolRecoveryRequest::default()
+                .dialects(hermes_only.clone())
+                .tool_choice(ToolChoice::ForcedStrict(lenient)),
+        );
+        assert!(value(&result).tool_choice.passed, "lenient: {second:?}");
+    }
+    // An unsupported dialect's attempt: the Anthropic form (exactly one,
+    // content allowed) fails on it, where it used to pass because the bytes
+    // were only content.
+    let output = format!("{first}\n{unsupported}");
+    let anthropic = ToolChoice::from_anthropic(
+        &json::parse(r#"{"type":"tool","name":"read_file","disable_parallel_tool_use":true}"#)
+            .unwrap(),
+    )
+    .unwrap();
+    let result = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default().tool_choice(anthropic),
+    );
+    let calls = value(&result);
+    assert!(matches!(
+        calls.rejected[0].reason,
+        Rejection::UnsupportedDialect { .. }
+    ));
+    assert!(!calls.tool_choice.passed, "{:?}", calls.tool_choice);
+    assert_eq!(calls.verdict().code(), "nothing_usable");
+    assert!(calls.emitted_calls().is_empty(), "{calls:#?}");
+    // The same turn without the attempt passes.
+    let result = tools.recover(
+        format!("Sure.\n{first}").as_bytes(),
+        &ToolRecoveryRequest::default().tool_choice(ToolChoice::ForcedStrict(
+            StrictForced::exactly_one("read_file").allow_content(true),
+        )),
+    );
+    assert!(value(&result).tool_choice.passed);
+}
+
+/// The strict result does not depend on the order of the readings (R4,
+/// F5): two dialects contest the second `<tool_call>` body (Qwen3-Coder XML
+/// rejects the opener alone and leaves the rest as content, Hermes rejects
+/// the whole body), and the check fails, with identical diagnostics, whether
+/// Hermes or Qwen is listed first. (The two cannot disagree on whether the
+/// body holds an attempt: every dialect that contests a body rejects it, so
+/// the merge-level fail-closed rule, which handles a member that read it as
+/// content, is covered by the unit test `merge_fails_closed_in_either_order`
+/// in `recover.rs`.)
+#[test]
+fn strict_forced_contested_second_body_is_order_independent() {
+    let tools = compile([ToolDefinition::new("read_file")
+        .effects(Effects::ReadOnly)
+        .param("path", Param::string().required())]);
+    let output = format!(
+        "{}\n<tool_call>\n{{\"name\": \"read_file\", \"arguments\": {{\"path\": \"b\"}}}} junk junk {{{{{{\n</tool_call>",
+        hermes("read_file", r#"{"path": "a"}"#)
+    );
+    for strict in [
+        StrictForced::exactly_one("read_file").allow_content(true),
+        StrictForced::exactly_one("read_file"),
+    ] {
+        let mut seen = Vec::new();
+        for dialects in [
+            [DialectId::Hermes, DialectId::Qwen3CoderXml],
+            [DialectId::Qwen3CoderXml, DialectId::Hermes],
+        ] {
+            let result = tools.recover(
+                output.as_bytes(),
+                &ToolRecoveryRequest::default()
+                    .dialects(set(&dialects))
+                    .tool_choice(ToolChoice::ForcedStrict(strict.clone())),
+            );
+            let calls = value(&result);
+            assert_eq!(calls.rejected.len(), 1, "{calls:#?}");
+            assert_eq!(calls.rejected[0].candidate_dialects.len(), 2);
+            assert!(!calls.tool_choice.passed, "{strict:?} {dialects:?}");
+            assert!(calls.emitted_calls().is_empty(), "{calls:#?}");
+            seen.push(calls.tool_choice.diagnostics.clone());
+        }
+        assert_eq!(seen[0], seen[1], "{strict:?}");
+    }
+}
+
+/// The diagnostics of a strict choice are capped (R4, G17): one cardinality
+/// diagnostic stating the count of extra calls and attempts, one for the
+/// content, one for the attempts' bytes and one for the reasoning, however
+/// many calls, attempts, content ranges and blocks there are.
+#[test]
+fn strict_forced_diagnostics_are_capped() {
+    let tools = compile([ToolDefinition::new("read_file")
+        .effects(Effects::ReadOnly)
+        .param("path", Param::string().required())]);
+    let call = hermes("read_file", r#"{"path": "a"}"#);
+    let attempt = "<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": ";
+    let mut output = String::new();
+    for _ in 0..40 {
+        writeln!(output, "<think>t</think>prose {call}").unwrap();
+    }
+    for _ in 0..7 {
+        write!(output, "{attempt}\n</tool_call>\n").unwrap();
+    }
+    let strict = StrictForced::exactly_one("read_file").allow_reasoning(false);
+    let result = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default()
+            .dialects(set(&[DialectId::Hermes]))
+            .tool_choice(ToolChoice::ForcedStrict(strict)),
+    );
+    let calls = value(&result);
+    assert_eq!(calls.calls.len(), 40);
+    assert!(calls.rejected.len() >= 7, "{}", calls.rejected.len());
+    let diagnostics = &calls.tool_choice.diagnostics;
+    assert!(!calls.tool_choice.passed);
+    assert_eq!(diagnostics.len(), 4, "{diagnostics:#?}");
+    assert!(
+        diagnostics[0].starts_with(&format!(
+            "39 extra calls and {} rejected call attempts beyond",
+            calls.rejected.len()
+        )),
+        "{diagnostics:#?}"
+    );
+    assert!(diagnostics[1].starts_with("content at byte") && diagnostics[1].contains("(and "));
+    assert!(
+        diagnostics[2].starts_with("rejected call attempt at bytes")
+            && diagnostics[2].contains("(and ")
+    );
+    assert!(diagnostics[3].starts_with("reasoning at bytes"));
+    // Not one per entry: the wire form carries no more.
+    assert!(diagnostics.iter().all(|d| d.len() < 200));
+    // Every call after the first is still marked individually.
+    assert!(calls.calls[1..].iter().all(|call| matches!(
+        call.outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::ToolChoiceCardinality
+        }
+    )));
+}
+
+/// A strict choice that forbids reasoning cannot be enforced when reasoning
+/// markers are content (R4, G15): the request is an `invalid_input` error,
+/// not a check that passes vacuously.
+#[test]
+fn strict_no_reasoning_under_reasoning_as_content_is_invalid_input() {
+    let tools = compile([ToolDefinition::new("ls").effects(Effects::ReadOnly)]);
+    let output = format!("<think>plan</think>\n{}", hermes("ls", "{}"));
+    let strict = StrictForced::exactly_one("ls").allow_reasoning(false);
+    let request = ToolRecoveryRequest::default()
+        .reasoning(ReasoningPolicy::AsContent)
+        .tool_choice(ToolChoice::ForcedStrict(strict.clone()));
+    let result = tools.recover(output.as_bytes(), &request);
+    assert_eq!(result.outcome, Outcome::Unresolved);
+    assert!(
+        matches!(result.receipt.stopped, StopReason::InvalidInput(ref detail) if detail.contains("allow_reasoning")),
+        "{:?}",
+        result.receipt.stopped
+    );
+    // Reasoning allowed under AsContent, and no-reasoning under Separate,
+    // are fine.
+    let allowed = ToolRecoveryRequest::default()
+        .reasoning(ReasoningPolicy::AsContent)
+        .tool_choice(ToolChoice::ForcedStrict(
+            strict.clone().allow_reasoning(true).allow_content(true),
+        ));
+    assert!(matches!(
+        tools.recover(output.as_bytes(), &allowed).outcome,
+        Outcome::Resolved(_)
+    ));
+    let separate = ToolRecoveryRequest::default().tool_choice(ToolChoice::ForcedStrict(strict));
+    assert!(
+        !value(&tools.recover(output.as_bytes(), &separate))
+            .tool_choice
+            .passed
+    );
+}
+
+/// A failed tool choice leaves no usable call (R4, A3): both counts are zero
+/// and agree with the empty emission, whatever the choice.
+#[test]
+fn failed_tool_choice_has_no_usable_calls() {
+    let tools = compile([
+        ToolDefinition::new("ls").effects(Effects::ReadOnly),
+        ToolDefinition::new("cat").effects(Effects::ReadOnly),
+    ]);
+    let output = format!("{}\n{}", hermes("ls", "{}"), hermes("ls", "{}"));
+    for choice in [
+        ToolChoice::Auto,
+        ToolChoice::Forced("cat".into()),
+        ToolChoice::ForcedStrict(StrictForced::exactly_one("ls")),
+        ToolChoice::None,
+    ] {
+        let result = tools.recover(
+            output.as_bytes(),
+            &ToolRecoveryRequest::default().tool_choice(choice.clone()),
+        );
+        let calls = value(&result);
+        let wire = result.to_node();
+        let count = |key: &str| {
+            wire.pointer(&format!("/value/{key}"))
+                .and_then(|node| match &node.value {
+                    Value::Number(number) => Some(number.as_str().to_owned()),
+                    _ => None,
+                })
+        };
+        if calls.tool_choice.passed {
+            assert_eq!(calls.usable().len(), 2, "{choice:?}");
+            assert_eq!(count("usable_calls").as_deref(), Some("2"));
+        } else {
+            assert!(
+                calls.usable().is_empty() && calls.usable_accepting_guesses().is_empty(),
+                "{choice:?}"
+            );
+            assert_eq!(count("usable_calls").as_deref(), Some("0"), "{choice:?}");
+            assert_eq!(
+                count("usable_calls_accepting_guesses").as_deref(),
+                Some("0"),
+                "{choice:?}"
+            );
+            assert!(calls.emitted_calls().is_empty(), "{calls:#?}");
+        }
+    }
+}
+
 /// Fuzz regression (`scripts/fuzz.py --target tool-call`): an attempt that
 /// reads several calls (Mistral v11 `[TOOL_CALLS]` elements) can begin
 /// inside a reasoning block and end after its closer. The calls it read

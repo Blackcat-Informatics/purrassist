@@ -1311,7 +1311,11 @@ fn assert_strict_failed(name: &str, constraint: &str) -> ToolCalls {
     assert_eq!(calls.finish, Finish::Unresolved, "{name}");
     assert_eq!(calls.verdict().code(), "nothing_usable", "{name}");
     assert!(calls.emitted_calls().is_empty(), "{name}");
-    assert!(calls.usable_accepting_guesses().len() <= 1, "{name}");
+    // A failed check leaves nothing to run (A3): both counts are zero.
+    assert!(
+        calls.usable().is_empty() && calls.usable_accepting_guesses().is_empty(),
+        "{name}"
+    );
     calls
 }
 
@@ -1335,7 +1339,7 @@ fn forced_strict_two_calls() {
         "{:?}",
         calls.tool_choice.diagnostics
     );
-    assert!(calls.tool_choice.diagnostics[0].contains("call 1"));
+    assert!(calls.tool_choice.diagnostics[0].contains("1 extra call"));
 }
 
 #[test]
@@ -1448,6 +1452,63 @@ fn forced_strict_reasoning_rejected() {
     // Only the reasoning fails: the remaining content is a newline.
     assert_eq!(calls.tool_choice.diagnostics.len(), 1);
     assert!(calls.tool_choice.diagnostics[0].contains("reasoning"));
+}
+
+/// A second call attempt that is rejected (a `read_file` body with trailing
+/// junk) fails every strict option at once: it is a call beyond the one
+/// (`exactly-one`) and bytes outside it (`no-content`), so the turn is
+/// `nothing_usable` with nothing emitted though the first call is valid.
+#[test]
+fn forced_strict_rejected_second_attempt() {
+    let calls = assert_strict_failed(
+        "forced_strict_rejected_second_attempt",
+        "tool_choice=forced[exactly-one,no-content,no-reasoning]:read_file",
+    );
+    assert_eq!(calls.calls.len(), 1);
+    assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
+    assert_eq!(calls.rejected.len(), 1);
+    assert!(
+        calls
+            .tool_choice
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.starts_with("1 rejected call attempt beyond")),
+        "{:?}",
+        calls.tool_choice.diagnostics
+    );
+    assert!(
+        calls
+            .tool_choice
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.starts_with("rejected call attempt at bytes 75..163")),
+        "{:?}",
+        calls.tool_choice.diagnostics
+    );
+}
+
+/// The Anthropic exactly-one form allows content, but an attempt in a
+/// dialect that is not supported is still a call attempt beyond the one
+/// call: the turn fails although the attempt's bytes are also content.
+#[test]
+fn forced_strict_anthropic_unsupported_dialect_attempt() {
+    let calls = assert_strict_failed(
+        "forced_strict_anthropic_unsupported_dialect_attempt",
+        "tool_choice=forced[exactly-one]:read_file",
+    );
+    assert_eq!(calls.calls.len(), 1);
+    assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
+    assert_eq!(calls.rejected.len(), 1);
+    assert!(
+        matches!(
+            calls.rejected[0].reason,
+            purrassist_core::tool_call::Rejection::UnsupportedDialect { .. }
+        ),
+        "{:?}",
+        calls.rejected
+    );
+    assert_eq!(calls.tool_choice.diagnostics.len(), 1);
+    assert!(calls.tool_choice.diagnostics[0].starts_with("1 rejected call attempt beyond"));
 }
 
 #[test]

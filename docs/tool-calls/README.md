@@ -291,7 +291,7 @@ anything can run. A turn whose only call names an undeclared tool is read
 with certainty (`Resolved`) and has nothing to run. Branch on
 `ToolCalls::verdict()` (wire `value.verdict`): `run`, `no_calls`, `ambiguous`
 or `nothing_usable`, with `usable_calls` and `usable_calls_accepting_guesses`
-counting what may run; the CLI's exit code is `tool_call::exit_code` of it.
+counting what may run (both are 0 when the tool-choice check failed, as the emission is empty); the CLI's exit code is `tool_call::exit_code` of it.
 See [INTEGRATION.md](INTEGRATION.md#reading-a-result-status-finish-and-verdict)
 for the status × verdict table.
 

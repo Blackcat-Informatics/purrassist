@@ -145,6 +145,9 @@ code; the code only summarizes it. `--tool-choice NAME` forces a tool; with
 `--tool-choice-no-reasoning` (a usage error without `--tool-choice NAME`) the
 turn must hold exactly one call, no content other than ASCII whitespace, and
 no reasoning block, or the tool-choice check fails like any violated choice.
+A rejected call attempt of any reason counts as a call beyond the one and as
+content, and `--tool-choice-no-reasoning` with `--reasoning content` (where
+reasoning is never recognized) is invalid input.
 The [integration guide](docs/tool-calls/INTEGRATION.md)
 lists every option, the integrator guarantees, and the evidence for each.
 

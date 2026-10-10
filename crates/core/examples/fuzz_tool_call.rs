@@ -26,7 +26,10 @@
 //! of being part of the turn: bit 0 `exactly_one`, bit 1 no content, bit 2
 //! no reasoning (`0xF8` is the all-lenient degenerate form). Every other
 //! input keeps its earlier meaning: the turn is `bytes[2..]` and the choice
-//! is the plain `Forced`.
+//! is the plain `Forced`. A strict choice with no reasoning (bit 2) under
+//! the reasoning policy "as content" (bits 4-5 `10`) is a request error
+//! (`invalid_input`): the probe asserts that error, with no value, and prints
+//! `ok`.
 //!
 //! Checks (a panic is a fuzz failure):
 //! - recovery never panics, names the output's digest, and stays within its
@@ -36,12 +39,14 @@
 //!   turn records no guess;
 //! - (A13) a `Resolved` call carries no guess and no data loss, so no guessed
 //!   call on a mutating tool is `Resolved`; `usable()` holds only `Resolved`
-//!   calls that name a tool; `usable_accepting_guesses()` never holds a guess
-//!   on a tool that is not read-only; a call embedded in reasoning is never
-//!   `Resolved` and never usable;
+//!   calls that name a tool, and none when the tool-choice check failed;
+//!   `usable_accepting_guesses()` never holds a guess on a tool that is not
+//!   read-only, and is empty too when the check failed (the wire
+//!   `usable_calls` counts are then 0, as the emission is); a call embedded
+//!   in reasoning is never `Resolved` and never usable;
 //! - (F5, F7) the verdict, finish, emission and `finish_reason` agree:
-//!   `emitted_calls()` is `usable_accepting_guesses()` when the tool-choice
-//!   check passed and empty otherwise; the verdict is `Run` exactly when it
+//!   `emitted_calls()` is `usable_accepting_guesses()` (empty when the
+//!   tool-choice check failed); the verdict is `Run` exactly when it
 //!   is not empty, and the CLI exit code is 0 exactly for `Run` and
 //!   `NoCalls`; the `OpenAI` array holds exactly the emitted calls; a finish
 //!   with calls implies `Run`, a `Run` turn finishing otherwise is
@@ -54,8 +59,9 @@
 //! - a strict forced choice that passed implies, by the options drawn:
 //!   exactly one call when `exactly_one`; no content byte other than ASCII
 //!   whitespace when content is not allowed; no reasoning range when
-//!   reasoning is not allowed; and conversely a second call under
-//!   `exactly_one` fails the check;
+//!   reasoning is not allowed; no rejected attempt when `exactly_one` or
+//!   content is not allowed; and conversely a second call, or a rejected
+//!   attempt, under `exactly_one` fails the check;
 //! - (F4) a rejected attempt runs past where its grammar failed (the
 //!   furthest the recognizer read an attempt of its dialect at its opener)
 //!   and (T5) no further than the failure its reason reports, only to a
@@ -627,10 +633,14 @@ fn check_calls(output: &[u8], calls: &ToolCalls) {
 fn check_verdict(calls: &ToolCalls) {
     let emitted = calls.emitted_calls();
     let usable = calls.usable_accepting_guesses();
-    if calls.tool_choice.passed {
-        assert_eq!(emitted, usable, "emitted_calls() is not the usable calls");
-    } else {
+    assert_eq!(emitted, usable, "emitted_calls() is not the usable calls");
+    if !calls.tool_choice.passed {
+        // A3: nothing of a failed turn is usable, as nothing is emitted.
         assert!(emitted.is_empty(), "a failed tool choice emits calls");
+        assert!(
+            calls.usable().is_empty() && usable.is_empty(),
+            "a failed tool choice leaves usable calls"
+        );
     }
     let verdict = calls.verdict();
     assert_eq!(verdict == Verdict::Run, !emitted.is_empty(), "{verdict:?}");
@@ -885,8 +895,26 @@ fn check_strict(output: &[u8], request: &ToolRecoveryRequest, calls: &ToolCalls)
             calls.calls.len()
         );
     }
+    if strict.exactly_one && !calls.rejected.is_empty() {
+        assert!(
+            !calls.tool_choice.passed,
+            "{} rejected attempts pass exactly-one",
+            calls.rejected.len()
+        );
+    }
     if !calls.tool_choice.passed {
         return;
+    }
+    if strict.exactly_one || !strict.allow_content {
+        assert!(
+            calls.rejected.is_empty(),
+            "a passed exactly-one or no-content check holds rejected attempts {:?}",
+            calls
+                .rejected
+                .iter()
+                .map(|r| r.span.clone())
+                .collect::<Vec<_>>()
+        );
     }
     if strict.exactly_one {
         assert_eq!(calls.calls.len(), 1, "a passed exactly-one check");
@@ -1687,6 +1715,24 @@ fn main() {
     let tools = tools();
     let request = request(control, split, strict, output);
     let result = tools.recover(output, &request);
+    if let ToolChoice::ForcedStrict(StrictForced {
+        allow_reasoning: false,
+        ..
+    }) = &request.tool_choice
+        && request.reasoning == ReasoningPolicy::AsContent
+    {
+        // G15: forbidding reasoning while reasoning markers are content is a
+        // contradictory request, an error rather than a vacuous pass.
+        assert_eq!(result.outcome, Outcome::Unresolved, "{result:?}");
+        assert!(
+            matches!(result.receipt.stopped, StopReason::InvalidInput(_)),
+            "{:?}",
+            result.receipt.stopped
+        );
+        assert_eq!(result.receipt.source, Digest::of(output));
+        println!("ok");
+        return;
+    }
     check_result(&tools, output, &request, &result);
     check_reasoning_keeps_calls(&tools, output, &request, &result);
     check_markers_not_calls(output, &request, &result);

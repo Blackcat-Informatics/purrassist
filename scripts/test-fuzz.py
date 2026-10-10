@@ -163,6 +163,44 @@ class Coverage(unittest.TestCase):
         self.assertTrue(FUZZ.admits_bytes('tool-call'))
         self.assertFalse(any(FUZZ.admits_bytes(target) for target in FUZZ.TARGETS if target != 'tool-call'))
 
+    def test_strict_tool_call_seeds_draw_what_their_comments_claim(self):
+        """The strict seeds' control and trailer bytes, decoded as the probe
+        header documents (`fuzz_tool_call.rs`): bits 4-5 of the control byte
+        pick the reasoning policy (`10` is "as content"), bits 6-7 `11` force
+        `read_file`; trailer bit 2 forbids reasoning. A strict no-reasoning
+        choice under "as content" is a request error, so the seeds that test
+        no-reasoning must not draw it, and one seed must."""
+        seeds = FUZZ.TOOL_CALL_STRICT
+        for seed in seeds:
+            self.assertEqual(seed[0] >> 6, 3, 'strict seeds force read_file')
+            self.assertGreaterEqual(seed[-1], 0xF8)
+        decoded = [((seed[0] >> 4) & 3, seed[-1] & 4 != 0) for seed in seeds]
+        as_content, separate = 2, (0, 3)
+        for index in (3, 4):
+            reasoning, no_reasoning = decoded[index]
+            self.assertIn(reasoning, separate, f'seed {index} must test no-reasoning under separate reasoning')
+            self.assertTrue(no_reasoning)
+        self.assertEqual(decoded[5], (as_content, True), 'seed 5 draws the request-error combination')
+        for index in (0, 1, 2, 6, 7):
+            self.assertFalse(decoded[index][1] and decoded[index][0] == as_content, f'seed {index}')
+
+    def test_strict_tool_call_seeds_run_ok_in_the_built_probe(self):
+        """Every strict seed, the request-error seed included, completes with
+        `ok` in the real probe."""
+        root = FUZZ.ROOT
+        build = subprocess.run(
+            ['cargo', 'build', '-q', '-p', 'purrassist-core', '--example', 'fuzz-tool-call'],
+            cwd=root, capture_output=True, text=True)
+        self.assertEqual(build.returncode, 0, build.stderr)
+        metadata = subprocess.run(
+            ['cargo', 'metadata', '--format-version', '1', '--no-deps'],
+            cwd=root, capture_output=True, text=True, check=True)
+        probe = Path(json.loads(metadata.stdout)['target_directory']) / 'debug/examples/fuzz-tool-call'
+        self.assertTrue(probe.is_file(), probe)
+        for index, seed in enumerate(FUZZ.TOOL_CALL_STRICT):
+            run = subprocess.run([str(probe)], input=seed, capture_output=True, cwd=root)
+            self.assertEqual((run.returncode, run.stdout), (0, b'ok\n'), (index, run.stderr.decode(errors='replace')))
+
     def test_byte_input_probe_completes_with_ok_on_invalid_utf8(self):
         document = Coverage().document()
         results = [subprocess.CompletedProcess([], 0, b'ok\n', b''),

@@ -1252,6 +1252,103 @@ fn strict_forced_tool_choice_flags() {
     );
 }
 
+/// A second call attempt that is rejected fails the strict forced choice
+/// (R4, G3): exit 4, `passed: false`, both usable counts 0 (A3), nothing
+/// emitted, though the first call is valid on its own.
+#[test]
+fn strict_forced_flags_count_a_rejected_second_attempt() {
+    let call = r#"<tool_call>{"name": "list_dir", "arguments": {"path": "src"}}</tool_call>"#;
+    let attempt = r#"<tool_call>{"name": "list_dir", "arguments": {"path": "lib"}} junk junk {{{</tool_call>"#;
+    let turn = format!("{call}\n{attempt}");
+    let (output, tools) = run(
+        &[
+            "--dialect",
+            "hermes.v1",
+            "--tool-choice",
+            "list_dir",
+            "--tool-choice-exactly-one",
+            "--tool-choice-no-content",
+            "--emit",
+            "openai",
+        ],
+        turn.as_bytes(),
+    );
+    fs::remove_file(tools).unwrap();
+    assert_eq!(output.status.code(), Some(4));
+    let node = result(&output);
+    let text = |pointer: &str| node.pointer(pointer).map(Node::to_json);
+    assert_eq!(text("/value/tool_choice/passed").as_deref(), Some("false"));
+    assert_eq!(
+        text("/value/verdict").as_deref(),
+        Some("\"nothing_usable\"")
+    );
+    assert_eq!(text("/value/usable_calls").as_deref(), Some("0"));
+    assert_eq!(
+        text("/value/usable_calls_accepting_guesses").as_deref(),
+        Some("0")
+    );
+    assert_eq!(text("/value/emitted/output").as_deref(), Some("[]"));
+    let diagnostics = text("/value/tool_choice/diagnostics").unwrap();
+    assert!(
+        diagnostics.contains("1 rejected call attempt beyond"),
+        "{diagnostics}"
+    );
+    assert!(
+        diagnostics.contains("rejected call attempt at bytes"),
+        "{diagnostics}"
+    );
+}
+
+/// `--tool-choice-no-reasoning` with `--reasoning content` is a request
+/// error (R4, G15): reasoning is never recognized, so the option could not
+/// be enforced. The result is unresolved with an `invalid_input` termination
+/// (exit 4), never a passed check.
+#[test]
+fn strict_no_reasoning_with_content_reasoning_is_invalid_input() {
+    let call = r#"<tool_call>{"name": "list_dir", "arguments": {"path": "src"}}</tool_call>"#;
+    let turn = format!("<think>plan</think>\n{call}");
+    let (output, tools) = run(
+        &[
+            "--reasoning",
+            "content",
+            "--tool-choice",
+            "list_dir",
+            "--tool-choice-no-reasoning",
+        ],
+        turn.as_bytes(),
+    );
+    fs::remove_file(tools).unwrap();
+    assert_eq!(output.status.code(), Some(4));
+    let node = result(&output);
+    assert_eq!(
+        node.pointer("/status").and_then(Node::as_str),
+        Some("unresolved")
+    );
+    assert_eq!(
+        node.pointer("/receipt/termination/kind")
+            .and_then(Node::as_str),
+        Some("invalid_input")
+    );
+    let detail = node
+        .pointer("/receipt/termination/detail")
+        .and_then(Node::as_str)
+        .unwrap();
+    assert!(detail.contains("allow_reasoning"), "{detail}");
+    // Separate reasoning (the default) enforces it as before.
+    let (output, tools) = run(
+        &["--tool-choice", "list_dir", "--tool-choice-no-reasoning"],
+        turn.as_bytes(),
+    );
+    fs::remove_file(tools).unwrap();
+    assert_eq!(output.status.code(), Some(4));
+    assert_eq!(
+        result(&output)
+            .pointer("/value/tool_choice/constraint")
+            .and_then(Node::as_str),
+        Some("tool_choice=forced[no-reasoning]:list_dir")
+    );
+}
+
 /// The `--tool-choice-*` flags are a usage error without a tool name, and
 /// each may be given once.
 #[test]

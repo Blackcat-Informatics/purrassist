@@ -879,13 +879,26 @@ TOOL_CALL_REGRESSIONS = [
 # consumes instead of reading it as part of the turn (bit 0 exactly one,
 # bit 1 no content, bit 2 no reasoning; see `fuzz_tool_call.rs`). Earlier
 # seeds end in other bytes, so they keep their meaning.
+#
+# Control byte `\xe6` has bits 4-5 `10`, the reasoning policy "as content",
+# under which a strict choice with no reasoning (trailer bit 2) is a request
+# error (`invalid_input`). The two seeds that draw no-reasoning (3 and 4) were
+# first written with `\xe6` and so never tested no-reasoning at all (they
+# drew the then-vacuous check); they now use `\xc6` (bits 4-5 `00`, separate
+# reasoning; bits 6-7 `11` forced; the other bits as `\xe6`). That is a
+# meaning correction, not a preservation. Seed 5 below keeps the old
+# `\xe6` + `\xfc` bytes to draw the request-error combination.
 _STRICT_CALL = b'<tool_call>\n{"name": "read_file", "arguments": {"path": "a"}}\n</tool_call>'
+_STRICT_ATTEMPT = b'<tool_call>\n{"name": "read_file", "arguments": {"path": "b"}} junk junk {{{\n</tool_call>'
 TOOL_CALL_STRICT = [
     b'\xe6\x23' + _STRICT_CALL + b'\n' + _STRICT_CALL + b'\xf9',  # two calls, exactly one
     b'\xe6\x23Sure.\n' + _STRICT_CALL + b'\xfa',  # prose, no content
     b'\xe6\x23' + _STRICT_CALL + b'\n' + b'\xf8',  # lenient degenerate form
-    b'\xe6\x23<think>plan</think>\n' + _STRICT_CALL + b'\xfc',  # reasoning, no reasoning
-    b'\xe6\x23\n' + _STRICT_CALL + b'\n\xc2\xa0' + b'\xff',  # U+00A0 is content, all options
+    b'\xc6\x23<think>plan</think>\n' + _STRICT_CALL + b'\xfc',  # reasoning, no reasoning (separate)
+    b'\xc6\x23\n' + _STRICT_CALL + b'\n\xc2\xa0' + b'\xff',  # U+00A0 is content, all options
+    b'\xe6\x23<think>plan</think>\n' + _STRICT_CALL + b'\xfc',  # no reasoning under as-content: request error
+    b'\xe6\x23' + _STRICT_CALL + b'\n' + _STRICT_ATTEMPT + b'\xf9',  # rejected second attempt, exactly one
+    b'\xe6\x23' + _STRICT_CALL + b'\n' + _STRICT_ATTEMPT + b'\xfa',  # rejected second attempt, no content
 ]
 
 TOOL_CALL_SEEDS = [
