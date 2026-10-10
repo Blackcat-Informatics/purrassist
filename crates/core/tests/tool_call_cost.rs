@@ -824,6 +824,75 @@ fn chained_mistral_v11_calls_cost_is_linear() {
     }
 }
 
+/// G22: the elements of a Mistral v3 `[TOOL_CALLS]` array are held as the
+/// array's calls, and each byte costs the same however many elements came
+/// before it. From 1,024 to 16,384 calls the work, the scratch ever charged
+/// and the peak scratch each grow with the bytes (within 1.05x of the byte
+/// ratio, both ways), the work per byte stays inside
+/// `RECOVER_WORK_PER_BYTE`, every call is `Resolved`, and plain
+/// `ToolRecoveryRequest::sized` completes. The held literal failures of the
+/// array (one per element) are charged where they are examined, so a
+/// regression to examining all of them at every byte shows as superlinear
+/// work here; `grammar::engine`'s unit test counts the examination per
+/// step directly.
+#[test]
+fn mistral_v3_call_arrays_cost_is_linear() {
+    let tools = tools();
+    let unit = r#"{"name": "write", "arguments": {"content": "a"}, "id": "a1B2c3D4e"}"#;
+    let mut measured = Vec::new();
+    for k in [1024_usize, 2048, 4096, 8192, 16384] {
+        let elements = vec![unit; k].join(", ");
+        let input = format!("[TOOL_CALLS] [{elements}]");
+        let request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
+        let result = tools.recover(input.as_bytes(), &request);
+        assert_eq!(result.receipt.stopped, StopReason::Completed, "{k}");
+        let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = &result.outcome else {
+            panic!("{k}: {:?}", result.outcome)
+        };
+        assert_eq!(calls.calls.len(), k, "{k}");
+        assert!(calls.rejected.is_empty(), "{k}");
+        assert!(
+            calls
+                .calls
+                .iter()
+                .all(|call| call.outcome == CallOutcome::Resolved),
+            "{k}"
+        );
+        let usage = result.receipt.usage;
+        let n = input.len() as u64;
+        assert!(usage.work <= cost::RECOVER_WORK_PER_BYTE * n, "{k}");
+        assert!(
+            usage.peak_scratch_bytes <= cost::RECOVER_SCRATCH_PER_BYTE * n,
+            "{k}"
+        );
+        println!(
+            "v3 array k={k} bytes {n}: work {} total_scratch_charged {} peak_scratch {}",
+            usage.work, usage.total_scratch_charged, usage.peak_scratch_bytes,
+        );
+        measured.push((
+            u128::from(n),
+            [
+                u128::from(usage.work),
+                u128::from(usage.total_scratch_charged),
+                u128::from(usage.peak_scratch_bytes),
+            ],
+        ));
+    }
+    let (small_bytes, small) = measured[0];
+    for &(bytes, charged) in &measured[1..] {
+        for (index, label) in ["work", "total_scratch_charged", "peak_scratch_bytes"]
+            .into_iter()
+            .enumerate()
+        {
+            let (ratio, byte_ratio) = (charged[index] * small_bytes, small[index] * bytes);
+            assert!(
+                ratio * 100 <= byte_ratio * 105 && byte_ratio * 100 <= ratio * 105,
+                "{small_bytes} -> {bytes} bytes: {label} is not linear"
+            );
+        }
+    }
+}
+
 /// A chained attempt whose history packs readings that reach different
 /// call boundaries is segmented whole, as before chained segmentation: a
 /// DeepSeek-V3.1 section restarted after a truncated call (the shape of the

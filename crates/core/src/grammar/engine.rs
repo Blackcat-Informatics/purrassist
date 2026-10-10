@@ -77,7 +77,7 @@ use crate::tool_call::{
 };
 use core::cmp::Reverse;
 use core::ops::Range;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Set in a body configuration's matcher state once the body read on past
 /// a repaired delimiter (a closer variant or confusable spelling), beside
@@ -3034,6 +3034,7 @@ impl Step<'_, '_> {
                 break Closed::Whole;
             };
             let before = tail.cut;
+            governor.charge(Resource::ScratchBytes, CLOSE_PENDING_BYTES)?;
             pending.push((at, position, cost, tail));
             match before {
                 Some((cut, ..)) => at = cut,
@@ -3060,6 +3061,7 @@ impl Step<'_, '_> {
                 other => other,
             };
             self.remember(at, state, governor)?;
+            governor.release_scratch(CLOSE_PENDING_BYTES)?;
         }
         Ok(state)
     }
@@ -3763,10 +3765,203 @@ struct Table<'s> {
     /// Literal failures of live attempts kept as repair seeds while a
     /// configuration of the same attempt that began its terminal at or
     /// before the failed literal's start is still live (see `settle`).
-    failures: ScratchVec<Failure>,
+    failures: HeldFailures,
     /// For a grouped program, the last call boundary of each attempt that
     /// got stuck after one (see [`Salvaged`]).
     boundaries: ScratchVec<Boundary>,
+}
+
+/// The scratch one held failure is charged: the failure itself
+/// ([`Failure::CHARGE`]), plus its share of the ordered maps that hold it and
+/// of the key that finds it by `entry`, including B-tree node slack. A
+/// counting allocator measured 274 bytes for a keyed failure and 240 for a
+/// trailing one, with a 120-byte `Failure`. The allowance keeps the charge at
+/// or above that whatever the size of `Failure`.
+const HELD_FAILURE_INDEX_BYTES: usize = 128;
+const HELD_FAILURE_CHARGE: u64 = {
+    assert!(core::mem::size_of::<Failure>() <= Failure::CHARGE);
+    (Failure::CHARGE + HELD_FAILURE_INDEX_BYTES) as u64
+};
+
+/// The literal failures of live attempts a table keeps between steps (see
+/// `Engine::hold_failures`), grouped by attempt, each group in the order its
+/// failures were held.
+///
+/// A held failure survives a step while its attempt has a configuration
+/// that is not speculative and, unless the failure is a `trailing` one (a
+/// JSON closer that met a comma, held while any configuration of its
+/// attempt lives), began its terminal at or before the failure's. Every
+/// other failure is therefore keyed by `entry` in an ordered set: a step
+/// examines only the failures whose `entry` lies below the attempt's
+/// earliest live `entry` (the ones it drops) and the groups of attempts
+/// with no live configuration, never the failures that stay held.
+struct HeldFailures {
+    groups: BTreeMap<u64, HeldGroup>,
+    meter: ScratchMeter,
+    /// The scratch charged for the held failures.
+    reserved: u64,
+    /// The `floors` of the last [`Self::retain`] that examined the groups:
+    /// while they stand, no held failure became droppable, so the groups
+    /// are not examined again.
+    settled: ScratchVec<(u64, usize)>,
+}
+
+/// One attempt's held failures.
+#[derive(Default)]
+struct HeldGroup {
+    /// The sequence number the next held failure takes.
+    next: u64,
+    /// The failures, by the order they were held.
+    items: BTreeMap<u64, Failure>,
+    /// The failures that are not `trailing`: `(entry, sequence)`.
+    keyed: BTreeSet<(usize, u64)>,
+}
+
+impl HeldFailures {
+    fn new(governor: &Governor) -> Self {
+        Self {
+            groups: BTreeMap::new(),
+            meter: governor.scratch_meter(),
+            reserved: 0,
+            settled: ScratchVec::new(governor),
+        }
+    }
+
+    /// The failures held for `attempt`, oldest first.
+    fn of(&self, attempt: u64) -> impl Iterator<Item = &Failure> {
+        self.groups
+            .get(&attempt)
+            .into_iter()
+            .flat_map(|group| group.items.values())
+    }
+
+    /// How many failures are held for `attempt`.
+    fn count(&self, attempt: u64) -> usize {
+        self.groups
+            .get(&attempt)
+            .map_or(0, |group| group.items.len())
+    }
+
+    fn release(&mut self, failures: usize) {
+        let amount = size(failures).saturating_mul(HELD_FAILURE_CHARGE);
+        self.reserved = self.reserved.saturating_sub(amount);
+        let _ = self.meter.release(amount);
+    }
+
+    /// Drop every failure held for `attempt`; the number dropped.
+    fn remove_attempt(&mut self, attempt: u64) -> usize {
+        let dropped = self
+            .groups
+            .remove(&attempt)
+            .map_or(0, |group| group.items.len());
+        self.release(dropped);
+        dropped
+    }
+
+    /// Drop every failure.
+    fn clear(&mut self) {
+        let held: usize = self.groups.values().map(|group| group.items.len()).sum();
+        self.groups.clear();
+        self.release(held);
+    }
+
+    /// Drop the failures `floors` shows are no longer repair seeds, then
+    /// hold the `fresh` ones that are. `floors` lists the earliest `entry`
+    /// of a non-speculative live configuration of each attempt that has one,
+    /// by attempt. The groups are examined only when `floors` differ from
+    /// the last examination's: `Work` per group, and per failure dropped.
+    fn retain(
+        &mut self,
+        floors: &[(u64, usize)],
+        fresh: &[(Failure, bool)],
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let floor_of = |attempt: u64| {
+            floors
+                .binary_search_by_key(&attempt, |&(owner, _)| owner)
+                .ok()
+                .map(|index| floors[index].1)
+        };
+        // A failure is droppable only when its attempt's floor rose or its
+        // last configuration went, and a failure held under these floors
+        // was not droppable then: with the floors unchanged only the fresh
+        // failures need a look.
+        let examine = self.settled.as_slice() != floors;
+        if examine {
+            self.settled.clear();
+            self.settled.extend(floors.iter().copied())?;
+            self.drop_below(&floor_of, governor)?;
+        }
+        self.hold(&floor_of, fresh)?;
+        Ok(())
+    }
+
+    /// Drop every held failure `floor_of` shows is no longer a repair seed.
+    /// `Work` per group and per failure dropped.
+    fn drop_below(
+        &mut self,
+        floor_of: &impl Fn(u64) -> Option<usize>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, size(self.groups.len()))?;
+        let _emptied = governor.lease_scratch(size(self.groups.len()).saturating_mul(8))?;
+        let mut dropped = 0;
+        let mut emptied = Vec::new();
+        for (&attempt, group) in &mut self.groups {
+            let Some(floor) = floor_of(attempt) else {
+                governor.charge(Resource::Work, size(group.items.len()))?;
+                dropped += group.items.len();
+                emptied.push(attempt);
+                continue;
+            };
+            while let Some(&(entry, order)) = group.keyed.first() {
+                if entry >= floor {
+                    break;
+                }
+                governor.charge(Resource::Work, 1)?;
+                group.keyed.pop_first();
+                group.items.remove(&order);
+                dropped += 1;
+            }
+        }
+        for attempt in emptied {
+            self.groups.remove(&attempt);
+        }
+        self.release(dropped);
+        Ok(())
+    }
+
+    /// Hold the `fresh` failures `floor_of` shows are repair seeds.
+    fn hold(
+        &mut self,
+        floor_of: &impl Fn(u64) -> Option<usize>,
+        fresh: &[(Failure, bool)],
+    ) -> Result<(), StopReason> {
+        for &(failure, trailing) in fresh {
+            let Some(floor) = floor_of(failure.thread.attempt) else {
+                continue;
+            };
+            if !(trailing || floor <= failure.thread.entry) {
+                continue;
+            }
+            self.meter.charge(HELD_FAILURE_CHARGE)?;
+            self.reserved = self.reserved.saturating_add(HELD_FAILURE_CHARGE);
+            let group = self.groups.entry(failure.thread.attempt).or_default();
+            let order = group.next;
+            group.next += 1;
+            if !trailing {
+                group.keyed.insert((failure.thread.entry, order));
+            }
+            group.items.insert(order, failure);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for HeldFailures {
+    fn drop(&mut self) {
+        let _ = self.meter.release(self.reserved);
+    }
 }
 
 /// A completion of a grouped program's attempt, held until the attempt
@@ -3923,6 +4118,19 @@ pub(crate) struct Engine<'s> {
 /// [`Table::written`]).
 const WRITTEN_BYTES: u64 = 24;
 
+/// The scratch one unbuilt `next` node of [`Step::close`] holds while its
+/// chain is built (its cut, cost and the tail's own vectors, which are
+/// charged where they are built).
+const CLOSE_PENDING_BYTES: u64 = {
+    assert!(core::mem::size_of::<(u32, usize, u64, Tail)>() <= 96);
+    96
+};
+
+/// The scratch one held completion takes in the working vectors of
+/// [`Engine::release`]: its position in the order (8), its prefix-cost
+/// table slot (24) and its keep flag (1), rounded up.
+const RELEASE_VECTOR_BYTES: u64 = 40;
+
 /// Scratch bytes charged per held ended report or recorded opener.
 const DEFERRED_BYTES: u64 = 64;
 
@@ -3960,7 +4168,7 @@ impl<'s> Engine<'s> {
                     past: Vec::new(),
                     written: Vec::new(),
                     stalled: ScratchVec::new(governor),
-                    failures: ScratchVec::new(governor),
+                    failures: HeldFailures::new(governor),
                     boundaries: ScratchVec::new(governor),
                 });
             }
@@ -4142,8 +4350,6 @@ impl<'s> Engine<'s> {
         // section closer that shares its first bytes) is still a repair
         // seed, by respelling only, when the attempt later runs out of
         // configurations. The table keeps such failures between steps.
-        let earlier =
-            core::mem::replace(&mut self.tables[table].failures, ScratchVec::new(governor));
         self.commit(
             table,
             live.as_slice()
@@ -4176,19 +4382,26 @@ impl<'s> Engine<'s> {
                 continue;
             }
             let mine = |failure: &&Failure| failure.thread.attempt == record.id;
-            let held = earlier
-                .as_slice()
-                .iter()
+            // The failures held from earlier steps (none at the end of
+            // input), one `Work` unit each.
+            let held_count = if eof.is_none() {
+                self.tables[table].failures.count(record.id)
+            } else {
+                0
+            };
+            governor.charge(Resource::Work, size(held_count))?;
+            let _failures = governor.lease_scratch(
+                size(failed.as_slice().iter().filter(mine).count() + held_count)
+                    .saturating_mul(size(<Failure as ScratchCharge>::CHARGE)),
+            )?;
+            let held = self.tables[table]
+                .failures
+                .of(record.id)
                 .filter(|_| eof.is_none())
-                .filter(mine)
                 .map(|failure| Failure {
                     respell: true,
                     ..*failure
                 });
-            let _failures = governor.lease_scratch(
-                size(failed.as_slice().iter().filter(mine).count() + held.clone().count())
-                    .saturating_mul(size(<Failure as ScratchCharge>::CHARGE)),
-            )?;
             let failures: Vec<Failure> = failed
                 .as_slice()
                 .iter()
@@ -4212,7 +4425,7 @@ impl<'s> Engine<'s> {
                 self.resync(table, record, until, &mut live, governor)?;
             }
         }
-        self.hold_failures(table, earlier, &failed, &live)?;
+        self.hold_failures(table, &failed, &live, governor)?;
         self.merge_settled(table, at, eof, &mut live, &mut completed, governor)?;
         self.unstick(table, &live, governor)?;
         // A repair may carry an attempt past its commit, and a completion
@@ -4440,16 +4653,35 @@ impl<'s> Engine<'s> {
     fn hold_failures(
         &mut self,
         table: usize,
-        mut earlier: ScratchVec<Failure>,
         failed: &ScratchVec<Failure>,
         live: &ScratchVec<Thread>,
+        governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        if self.tables[table].failures.groups.is_empty() && failed.is_empty() {
+            return Ok(());
+        }
         let grammar = self.grammars[self.tables[table].grammar].grammar;
         let program = self.tables[table].program;
-        let sibling = |failure: &Failure| {
-            // Only a literal with a respelling (or, in a `json-envelope`
-            // grammar, a JSON separator insertion or deletion) can be
-            // repaired later.
+        // The earliest `entry` of a non-speculative configuration of each
+        // attempt, by attempt. `live` and `failed` hold configurations this
+        // step advanced, each charged `K_THREAD` where it was stepped, so
+        // passing over them adds no unit; the held failures, which this
+        // step did not advance, are charged in [`HeldFailures::retain`].
+        let _floors = governor.lease_scratch(
+            size(live.len()).saturating_mul(size(<(u64, usize) as ScratchCharge>::CHARGE)),
+        )?;
+        let mut floors: Vec<(u64, usize)> = live
+            .as_slice()
+            .iter()
+            .filter(|thread| !thread.speculative())
+            .map(|thread| (thread.attempt, thread.entry))
+            .collect();
+        floors.sort_unstable();
+        floors.dedup_by_key(|&mut (attempt, _)| attempt);
+        // Only a literal with a respelling (or, in a `json-envelope`
+        // grammar, a JSON separator insertion or deletion) can be repaired
+        // later.
+        let candidate = |failure: &Failure| {
             let respellable = match program.insts[failure.thread.pc as usize] {
                 Inst::Lit { lit, .. } => {
                     let tables = &grammar.literal_tables[lit as usize];
@@ -4468,6 +4700,7 @@ impl<'s> Engine<'s> {
             // separator before an optional member a sibling took) is held
             // while any configuration of its attempt lives: the sibling
             // has moved past the comma by the time the attempt runs out.
+            // The byte stays in the window while its attempt lives.
             let trailing = grammar.json_envelope
                 && matches!(failure.thread.sub, Sub::Lit(0))
                 && matches!(
@@ -4480,32 +4713,16 @@ impl<'s> Engine<'s> {
                     .checked_sub(self.base)
                     .and_then(|at| self.buffer.as_slice().get(at))
                     == Some(&b',');
-            respellable
-                && matches!(failure.thread.sub, Sub::Lit(_))
-                && live.as_slice().iter().any(|thread| {
-                    thread.attempt == failure.thread.attempt
-                        && !thread.speculative()
-                        && (trailing || thread.entry <= failure.thread.entry)
-                })
+            (respellable && matches!(failure.thread.sub, Sub::Lit(_)))
+                .then_some((*failure, trailing))
         };
-        let mut write = 0;
-        for read in 0..earlier.len() {
-            let failure = earlier.as_slice()[read];
-            if sibling(&failure) {
-                earlier.as_mut_slice()[write] = failure;
-                write += 1;
-            }
-        }
-        while earlier.len() > write {
-            earlier.pop();
-        }
-        for failure in failed.as_slice() {
-            if sibling(failure) {
-                earlier.push(*failure)?;
-            }
-        }
-        self.tables[table].failures = earlier;
-        Ok(())
+        let _fresh = governor.lease_scratch(
+            size(failed.len()).saturating_mul(size(<Failure as ScratchCharge>::CHARGE) + 8),
+        )?;
+        let fresh: Vec<(Failure, bool)> = failed.as_slice().iter().filter_map(candidate).collect();
+        self.tables[table]
+            .failures
+            .retain(&floors, &fresh, governor)
     }
 
     /// Queue the opening of every attempt of a deferred program (one with
@@ -5257,6 +5474,7 @@ impl<'s> Engine<'s> {
             return Ok(());
         }
         let count = mine.len();
+        let _vectors = governor.lease_scratch(size(count).saturating_mul(RELEASE_VECTOR_BYTES))?;
         // Latest end first: the completion that dominates the rest is almost
         // always the one that read the most.
         let mut order: Vec<usize> = (0..count).collect();
@@ -6202,9 +6420,11 @@ impl<'s> Engine<'s> {
             )?;
             keep(&mut table.threads, |thread| thread.attempt != attempt);
             keep(&mut table.attempts, |record| record.id != attempt);
-            keep(&mut table.failures, |failure| {
-                failure.thread.attempt != attempt
-            });
+            governor.charge(
+                Resource::Work,
+                size(table.failures.count(attempt)).saturating_add(1),
+            )?;
+            table.failures.remove_attempt(attempt);
             keep(&mut table.boundaries, |known| known.attempt != attempt);
             keep(&mut table.stalled, |failure| {
                 failure.thread.attempt != attempt
@@ -6428,4 +6648,79 @@ pub(crate) fn extend_digest(digest: Digest, operator: EditOperator, at: usize) -
     builder.update(&[operator as u8]);
     builder.update(&(at as u64).to_be_bytes());
     builder.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contract::Budget;
+
+    fn failure(attempt: u64, entry: usize) -> Failure {
+        Failure {
+            thread: Thread {
+                pc: 0,
+                sub: Sub::Lit(0),
+                attempt,
+                start: 0,
+                entry,
+                pos: entry,
+                cost: 0,
+                hist: 0,
+                opened: false,
+                stall: 0,
+                reach: 0,
+                past: false,
+                pending: 0,
+            },
+            at: entry,
+            reason: Rejection::Malformed { at: entry },
+            respell: false,
+        }
+    }
+
+    fn work(governor: &Governor) -> u64 {
+        governor.usage().work
+    }
+
+    /// A step examines the failures it can drop, not the ones that stay: with
+    /// every live configuration at or before the held failures' entries, a
+    /// step over 100 held failures and a step over 20,000 charge the same;
+    /// a step whose floors changed examines each group once and charges one
+    /// unit more for each of the `d` failures it drops.
+    #[test]
+    fn a_step_over_held_failures_costs_what_it_changes() {
+        let mut governor = Governor::new(Budget::default());
+        let mut held = HeldFailures::new(&governor);
+        let floors = [(1_u64, 0_usize)];
+        let mut cost_at = Vec::new();
+        for count in [100_usize, 20_000] {
+            while held.count(1) < count {
+                // Half the failures are `trailing` ones, keyed by nothing.
+                let next = held.count(1);
+                let fresh = [(failure(1, next + 10), next.is_multiple_of(2))];
+                held.retain(&floors, &fresh, &mut governor).unwrap();
+            }
+            let before = work(&governor);
+            held.retain(&floors, &[], &mut governor).unwrap();
+            cost_at.push(work(&governor) - before);
+            assert_eq!(held.count(1), count);
+        }
+        assert_eq!(cost_at[0], cost_at[1], "{cost_at:?}");
+        assert_eq!(cost_at[1], 0, "{cost_at:?}");
+        // The floor rises past the first 5,010 entries: only the keyed
+        // (non-trailing) ones below it go, one `Work` unit each, and the
+        // others keep their order.
+        let before = work(&governor);
+        held.retain(&[(1, 5_010)], &[], &mut governor).unwrap();
+        let dropped = 20_000 - held.count(1);
+        assert_eq!(dropped, 2_500);
+        assert_eq!(work(&governor) - before, 1 + dropped as u64);
+        let entries: Vec<usize> = held.of(1).map(|failure| failure.thread.entry).collect();
+        assert!(entries.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(entries.iter().take(2_500).all(|&entry| entry < 5_010));
+        // Without a live configuration the attempt's failures all go.
+        held.retain(&[], &[], &mut governor).unwrap();
+        assert_eq!(held.count(1), 0);
+        assert_eq!(held.reserved, 0);
+    }
 }

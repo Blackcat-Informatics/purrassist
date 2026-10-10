@@ -350,7 +350,7 @@ fn dense_tools() -> ToolSet {
 /// output that is nothing but one small unit repeated, in every built-in
 /// dialect. Each is `(label, wrapper before, unit, wrapper after, what the
 /// units become)`.
-const DENSE: [(&str, &str, &str, &str, Dense); 16] = [
+const DENSE: [(&str, &str, &str, &str, Dense); 17] = [
     (
         "qwen-nested-items",
         "<tool_call>\n<function=tree>\n",
@@ -399,6 +399,13 @@ const DENSE: [(&str, &str, &str, &str, Dense); 16] = [
         "[TOOL_CALLS] [{\"name\": \"write\", \"arguments\": {\"content\": \"a\"}, \"id\": \"a1B2c3D4e\"}]\n",
         "",
         Dense::Calls,
+    ),
+    (
+        "mistral-v3-array",
+        "[TOOL_CALLS] [",
+        "{\"name\": \"write\", \"arguments\": {\"content\": \"a\"}, \"id\": \"a1B2c3D4e\"}, ",
+        "{\"name\": \"write\", \"arguments\": {\"content\": \"a\"}, \"id\": \"a1B2c3D4e\"}]",
+        Dense::ArrayOfCalls,
     ),
     (
         "mistral-v11-calls",
@@ -470,6 +477,9 @@ const DENSE: [(&str, &str, &str, &str, Dense); 16] = [
 enum Dense {
     /// One call each.
     Calls,
+    /// One call each, and one more in the closing text: the elements of one
+    /// JSON array.
+    ArrayOfCalls,
     /// One item each of the named array parameter of the one call.
     Items(&'static str),
 }
@@ -477,9 +487,8 @@ enum Dense {
 /// Dense markup of `bytes` bytes in the shape `label` recovers under plain
 /// `ToolRecoveryRequest::sized(Effort::Standard, output)`, with no raised
 /// limit: the stop is `Completed` and every unit (call or array item) is
-/// recovered. Mistral v3 calls are separated by their own `[TOOL_CALLS]`
-/// section, because a v3 array of thousands of calls costs quadratic wall
-/// time (`docs/RESOURCES.md`, "Dense markup"); v11 calls are measured both
+/// recovered. Mistral v3 calls are measured both as one `[TOOL_CALLS]`
+/// section each and as the elements of one JSON array; v11 calls both
 /// separated by `</s>` and as one whitespace-separated chain.
 fn dense_fits_published_budget(label: &str, bytes: usize) {
     let tools = dense_tools();
@@ -508,8 +517,9 @@ fn dense_fits_published_budget(label: &str, bytes: usize) {
         panic!("{label}: {:?}", result.outcome)
     };
     match expected {
-        Dense::Calls => {
-            assert_eq!(calls.calls.len(), units, "{label}");
+        Dense::Calls | Dense::ArrayOfCalls => {
+            let expected_calls = units + usize::from(matches!(expected, Dense::ArrayOfCalls));
+            assert_eq!(calls.calls.len(), expected_calls, "{label}");
             assert!(
                 calls
                     .calls
