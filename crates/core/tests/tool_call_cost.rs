@@ -634,6 +634,13 @@ fn schema_typing_is_uncapped_and_governed() {
     );
 }
 
+/// Ceiling on `Work` per byte for output that is only repeated parameters
+/// (measured 52 to 62), used to size the repeated-parameter budget.
+const DENSE_WORK_PER_BYTE: u64 = 80;
+/// Ceiling on peak scratch per byte for the same output (measured 104 to
+/// 262).
+const DENSE_SCRATCH_PER_BYTE: u64 = 320;
+
 /// A tool with an array of objects and an array of strings, to repeat.
 fn repeated_tool() -> ToolSet {
     ToolSet::compile(
@@ -651,17 +658,31 @@ fn repeated_tool() -> ToolSet {
     .expect("tools")
 }
 
-/// G5: a repeated parameter costs work linear in the output, and the items
-/// number across occurrences in O(1) each (the adoption itself is pinned by
-/// the `tool_call::ir` unit test `adopt_is_constant_in_the_members_held`).
+/// G5, G18: a repeated parameter costs work and charged scratch linear in
+/// the output. The items number across occurrences in O(1) each (pinned by
+/// the `tool_call::ir` unit test `adopt_is_constant_in_the_members_held`),
+/// and resolution appends each item to the partial array in place when the
+/// item has one reading (`extend_readings` in `tool_call::resolve`), so it
+/// no longer copies and re-charges the growing array once per item.
+///
 /// From k = 1000 to 8000 occurrences of one parameter, as nested items
-/// (`<parameter=children><parameter=name>..`) and as one-item JSON arrays
-/// (`<parameter=tags>["a"]`), the call is `Resolved` with all k items under
-/// a budget that does not exhaust, and the `work` ratio is within 1.05x of
-/// the byte ratio. `total_scratch_charged` is not yet linear: resolution
-/// still copies the growing partial array once per item (a pre-existing
-/// quadratic, which R10 removes), so it is only bounded by the square of the
-/// size ratio here, and R10 tightens this assertion to the byte ratio.
+/// (`<parameter=children><parameter=name>..`), as one-item JSON arrays
+/// (`<parameter=tags>["a"]`) and as string items (`<parameter=tags>a`), the
+/// call is `Resolved` with all k items, and both `work` and
+/// `total_scratch_charged` track the byte ratio within the 1.05x tolerance
+/// used for the other linear bounds in this file.
+///
+/// The budget is `ToolRecoveryRequest::sized` with `work` and
+/// `scratch_bytes` raised to [`DENSE_WORK_PER_BYTE`] and
+/// [`DENSE_SCRATCH_PER_BYTE`] per byte. Output that is nothing but repeated
+/// markup costs more per byte (measured 52 to 62 work, 104 to 262 peak
+/// scratch) than the 32 and 48 per byte `sized` adds for ordinary output, so
+/// `sized` alone exhausts explicitly (`BudgetExceeded`), never quietly: on
+/// `Work` already at k = 1,000 nested items (3.66 million needed against a
+/// sized 2.99 million), and at about 1,500 JSON items and 1,100 string items;
+/// on `ScratchBytes` (peak) between k = 4,000 and 8,000 nested items
+/// (130 MB at 8,000 against a sized 86.7 MiB). The test pins the
+/// measured per-byte costs as ceilings, so they cannot grow unnoticed.
 #[test]
 fn repeated_parameters_cost_is_linear() {
     let tools = repeated_tool();
@@ -671,6 +692,7 @@ fn repeated_parameters_cost_is_linear() {
             "<parameter=children><parameter=name>a</parameter></parameter>\n",
         ),
         ("tags", "<parameter=tags>[\"a\"]</parameter>\n"),
+        ("tags", "<parameter=tags>a</parameter>\n"),
     ] {
         let mut measured = Vec::new();
         for k in [1000_usize, 2000, 4000, 8000] {
@@ -679,26 +701,35 @@ fn repeated_parameters_cost_is_linear() {
                 item.repeat(k)
             );
             let mut request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
-            request.budget.work = u64::MAX / 4;
-            request.budget.scratch_bytes = u64::MAX / 4;
-            request.budget.candidates = u64::MAX / 4;
+            let n = input.len() as u64;
+            request.budget.work = request.budget.work.max(DENSE_WORK_PER_BYTE * n);
+            request.budget.scratch_bytes =
+                request.budget.scratch_bytes.max(DENSE_SCRATCH_PER_BYTE * n);
+            let started = std::time::Instant::now();
             let result = tools.recover(input.as_bytes(), &request);
-            assert_eq!(result.receipt.stopped, StopReason::Completed, "{name} {k}");
+            let elapsed = started.elapsed();
+            assert_eq!(result.receipt.stopped, StopReason::Completed, "{item} {k}");
             let Outcome::Resolved(calls) = &result.outcome else {
-                panic!("{name} {k}: {:?}", result.outcome)
+                panic!("{item} {k}: {:?}", result.outcome)
             };
             let items = calls.calls[0].arguments.get(name).expect("the parameter");
             let count = match &items.value {
                 purrassist_core::json::Value::Array(items) => items.len(),
-                other => panic!("{name} {k}: {other:?}"),
+                other => panic!("{item} {k}: {other:?}"),
             };
-            assert_eq!(count, k, "{name} {k}");
+            assert_eq!(count, k, "{item} {k}");
             let usage = result.receipt.usage;
+            assert!(usage.work <= DENSE_WORK_PER_BYTE * n, "{item} {k}");
+            assert!(
+                usage.peak_scratch_bytes <= DENSE_SCRATCH_PER_BYTE * n,
+                "{item} {k}"
+            );
             println!(
-                "{name} k={k} bytes {}: work {} total_scratch_charged {}",
+                "{item:?} k={k} bytes {}: work {} total_scratch_charged {} peak_scratch {} in {elapsed:?}",
                 input.len(),
                 usage.work,
-                usage.total_scratch_charged
+                usage.total_scratch_charged,
+                usage.peak_scratch_bytes,
             );
             measured.push((
                 input.len() as u128,
@@ -708,18 +739,17 @@ fn repeated_parameters_cost_is_linear() {
         }
         let (small_bytes, small_work, small_scratch) = measured[0];
         for &(bytes, work, scratch) in &measured[1..] {
-            // Work tracks the byte ratio, both ways, within 1.05x.
-            let (work_ratio, byte_ratio) = (work * small_bytes, small_work * bytes);
-            assert!(
-                work_ratio * 100 <= byte_ratio * 105 && byte_ratio * 100 <= work_ratio * 105,
-                "{name}: {small_bytes} -> {bytes} bytes: work is not linear"
-            );
-            // R10: tighten to `scratch * small_bytes <= small_scratch * bytes * 105 / 100`.
-            let squared = (bytes * bytes) / (small_bytes * small_bytes);
-            assert!(
-                scratch * 100 <= small_scratch * squared * 105,
-                "{name}: {small_bytes} -> {bytes} bytes: scratch charged exceeds the squared ratio"
-            );
+            // Both counters track the byte ratio, both ways, within 1.05x.
+            for (label, charged, small) in [
+                ("work", work, small_work),
+                ("total_scratch_charged", scratch, small_scratch),
+            ] {
+                let (ratio, byte_ratio) = (charged * small_bytes, small * bytes);
+                assert!(
+                    ratio * 100 <= byte_ratio * 105 && byte_ratio * 100 <= ratio * 105,
+                    "{item}: {small_bytes} -> {bytes} bytes: {label} is not linear"
+                );
+            }
         }
     }
 }

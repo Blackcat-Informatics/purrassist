@@ -839,6 +839,33 @@ constants leave headroom over these fast-path measurements; inputs that need rep
 search spend from the preset part of the budget, and exhaustion is reported
 as `BudgetExceeded` naming the resource.
 
+Repeated parameters are covered by the same linear bound. A declared array
+parameter (or a `$ref` or `anyOf` scope) written as k repeated
+`<parameter=...>` occurrences costs `work` and `total_scratch_charged` linear
+in the output: resolution appends each item to the partial array in place
+when the item has one reading, and copies (and charges the copy of) the
+array only for an item with several readings, which genuinely multiplies the
+readings (`Candidates` bounds those). Before this, each item copied and
+charged the growing partial array, so k items charged O(k²) scratch
+(measured on the previous head: 13.99 GB at k = 8,000 nested items, against
+1.54 GB now) and took quadratic wall time (9.0 s against 1.8 s).
+`tool_call_cost::repeated_parameters_cost_is_linear` recovers 1,000 to 8,000
+occurrences as nested items, as one-item JSON arrays and as string items,
+and requires both counters to track the byte ratio within 1.05x. At k =
+8,000 the nested form charges 29.2 million work (59 per byte), 1.54 GB of
+total scratch and peaks at 130 MB (262 per byte), the JSON form 52 work and
+104 peak scratch per byte, and the string form 61 and 244. Output that is
+nothing but repeated markup therefore costs more per byte than the 32 work
+and 48 scratch bytes per byte `sized` adds for ordinary output, so
+`sized(Effort::Standard, output)` alone exhausts explicitly, never quietly.
+`Work` runs out first: at k = 1,000 nested items the call needs 3.66 million
+against a sized 2.99 million (`BudgetExceeded(Work)`), and the crossover is
+about 1,500 JSON items and 1,100 string items. Peak `ScratchBytes` runs out
+later, between 4,000 nested items (65 MB against a sized 79 MB) and 8,000
+(130 MB against 90.9 MB; `BudgetExceeded(ScratchBytes)`). The test raises
+`work` to 80 and `scratch_bytes` to 320 per byte, which it also asserts as
+ceilings.
+
 ## Tool-call recovery throughput (illustrative)
 
 `crates/core/benches/tool_calls.rs` (`cargo bench -p purrassist-core --bench

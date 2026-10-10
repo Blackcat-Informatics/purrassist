@@ -697,6 +697,21 @@ allow-list, with a published bound, and every limit is explicit.
   and CLI tests `tool_call_tools::busy_turn_resolves_every_call_by_default`
   and `tool_calls_cli::busy_turn_resolves_every_call_by_default`. See
   [RESOURCES.md](../RESOURCES.md#budgets-for-large-outputs-and-busy-turns).
+- **Repeated parameters.** A parameter repeated k times (`<parameter=xs>`
+  occurrences that resolve as array items) is inside the linear bound: its
+  `work` and `total_scratch_charged` grow with the output, not with k times
+  the output, because resolution appends each single-reading item to the
+  partial array in place. Output that is only repeated markup costs about 52
+  to 61 work and 104 to 262 peak scratch bytes per byte, above the
+  `sized` allowance for ordinary output, so `sized` alone exhausts
+  explicitly rather than quietly: on `Work` at k = 1,000 nested items
+  (3.66 million needed against 2.99 million), about 1,500 JSON items and
+  1,100 string items; on peak `ScratchBytes` between 4,000 and 8,000 nested
+  items (130 MB against 86.7 MiB at 8,000). *Proved by*
+  `tool_call_cost::repeated_parameters_cost_is_linear` (1,000 to 8,000
+  occurrences as nested items, JSON arrays and strings; both counters within
+  1.05x of the byte ratio). See
+  [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound).
 
 ### C5. Lossless declaration adapters
 
