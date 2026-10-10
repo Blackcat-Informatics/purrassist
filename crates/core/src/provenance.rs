@@ -115,10 +115,10 @@
 //! # Ok::<(), purrassist_core::StopReason>(())
 //! ```
 
+use crate::contract::ScratchOrdMap;
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    AlternativeReceipt, Evidence, Governor, Inference, Loss, Resource, ScratchMap, ScratchVec,
-    StopReason,
+    AlternativeReceipt, Evidence, Governor, Inference, Loss, Resource, ScratchVec, StopReason,
 };
 use crate::digest::Digest;
 use std::collections::BTreeSet;
@@ -127,8 +127,37 @@ use std::collections::BTreeSet;
 ///
 /// Ids are assigned in interning order and are only comparable within the
 /// [`Forest`] that issued them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(not(test), derive(PartialEq, Eq, PartialOrd, Ord))]
 pub struct NodeId(u32);
+
+// Under test every id comparison is counted, so a membership test that scans
+// the members held (`Vec::contains`) is visible as a count linear in the
+// members, where a set lookup counts logarithmically.
+#[cfg(test)]
+thread_local!(static ID_COMPARES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) });
+#[cfg(test)]
+impl PartialEq for NodeId {
+    fn eq(&self, other: &Self) -> bool {
+        ID_COMPARES.with(|c| c.set(c.get() + 1));
+        self.0 == other.0
+    }
+}
+#[cfg(test)]
+impl Eq for NodeId {}
+#[cfg(test)]
+impl PartialOrd for NodeId {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+#[cfg(test)]
+impl Ord for NodeId {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        ID_COMPARES.with(|c| c.set(c.get() + 1));
+        self.0.cmp(&other.0)
+    }
+}
 
 /// One deduplicated unit of provenance.
 ///
@@ -181,12 +210,27 @@ fn clone_reservation(node: &ProvenanceNode) -> u64 {
 /// One candidate answer: an output identity, a search cost comparable only
 /// within the same operation, and the (deduplicated, insertion-ordered) set
 /// of forest nodes this answer depends on.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `seen` mirrors `order` for membership tests. Like `order`, it is not
+/// charged to the scratch meter: a derivation holds one entry per forest node
+/// it depends on, so both are bounded by the charged evidence entries, and
+/// cloning one (`permute`) copies both at O(1) per member beyond what the
+/// uncharged `order` clone already costs.
+#[derive(Clone, Debug)]
 pub struct Derivation {
     output: Digest,
     cost: u64,
     order: Vec<NodeId>,
+    /// The members of `order`, so a duplicate is found in `O(log n)`.
+    seen: BTreeSet<NodeId>,
 }
+impl PartialEq for Derivation {
+    fn eq(&self, other: &Self) -> bool {
+        // `seen` is derived from `order`.
+        self.output == other.output && self.cost == other.cost && self.order == other.order
+    }
+}
+impl Eq for Derivation {}
 impl Derivation {
     /// Start a derivation for one candidate answer, identified by the digest
     /// of its wire encoding (see `crate::wire`) and its search cost.
@@ -196,19 +240,20 @@ impl Derivation {
             output,
             cost,
             order: Vec::new(),
+            seen: BTreeSet::new(),
         }
     }
     /// Record that this derivation depends on `node`, preserving first-seen
     /// order and silently ignoring a duplicate id.
     pub fn push(&mut self, node: NodeId) {
-        if !self.order.contains(&node) {
+        if self.seen.insert(node) {
             self.order.push(node);
         }
     }
     /// Whether this derivation depends on `node`.
     #[must_use]
     pub fn contains(&self, node: NodeId) -> bool {
-        self.order.contains(&node)
+        self.seen.contains(&node)
     }
     /// This derivation's output identity.
     #[must_use]
@@ -291,7 +336,7 @@ pub fn permute<T: Clone>(values: &[T], order: &[usize]) -> Vec<T> {
 #[derive(Debug)]
 pub struct Forest {
     nodes: ScratchVec<ProvenanceNode>,
-    index: ScratchMap<String, NodeId>,
+    index: ScratchOrdMap<String, NodeId>,
 }
 impl Forest {
     /// An empty forest charging against `governor`'s scratch meter.
@@ -299,7 +344,7 @@ impl Forest {
     pub fn new(governor: &Governor) -> Self {
         Self {
             nodes: ScratchVec::new(governor),
-            index: ScratchMap::new(governor),
+            index: ScratchOrdMap::new(governor),
         }
     }
     /// Intern one evidence entry, returning its (possibly pre-existing) id.
@@ -741,5 +786,70 @@ mod tests {
         assert_eq!(published.losses, vec![loss]);
         assert_eq!(published.inferences, vec![inference]);
         assert_eq!(published.alternatives, Vec::new());
+    }
+
+    /// R15: `push` and `contains` do not scan the members held, so building a
+    /// derivation of n nodes (a call with many repeated items) is not
+    /// quadratic; duplicates are ignored and first-seen order is kept.
+    #[test]
+    fn derivation_membership_is_a_set_lookup() {
+        let mut governor = Governor::new(Budget::default());
+        let mut forest = Forest::new(&governor);
+        let mut derivation = Derivation::new(Digest::of(b"a"), 0);
+        let mut ids = Vec::new();
+        for i in 0..2000 {
+            ids.push(
+                forest
+                    .evidence(&mut governor, evidence(&i.to_string()))
+                    .unwrap(),
+            );
+        }
+        for &id in ids.iter().chain(&ids).rev().chain(&ids) {
+            derivation.push(id);
+        }
+        let expected: Vec<_> = ids.iter().rev().copied().collect();
+        assert_eq!(derivation.nodes(), expected);
+        assert!(ids.iter().all(|&id| derivation.contains(id)));
+        let other = Derivation::new(Digest::of(b"a"), 0);
+        assert!(!ids.iter().any(|&id| other.contains(id)));
+        assert_ne!(derivation, other);
+    }
+
+    /// R15: building a derivation of n members compares ids O(n log n) times,
+    /// not O(n^2): the count is taken on `NodeId`'s own comparisons, so a
+    /// scan of the members held (`Vec::contains`) drives it to n^2/2.
+    #[test]
+    fn derivation_push_compares_ids_in_log_steps() {
+        let n: u32 = 4000;
+        let mut derivation = Derivation::new(Digest::of(b"a"), 0);
+        super::ID_COMPARES.with(|c| c.set(0));
+        for i in (0..n).chain(0..n) {
+            derivation.push(super::NodeId(i));
+        }
+        let compares = super::ID_COMPARES.with(std::cell::Cell::get);
+        let bound = u64::from(n) * 2 * (2 * u64::from(n.ilog2()) + 8);
+        assert!(compares <= bound, "{compares} id comparisons > {bound}");
+        assert_eq!(derivation.nodes().len(), n as usize);
+    }
+
+    /// R15: interning n distinct nodes shifts no index entries (the dedup
+    /// index is not a sorted `Vec`, whose insert moves O(n) entries).
+    #[test]
+    fn forest_index_insert_shifts_no_entries() {
+        let n = 4000;
+        let mut governor = Governor::new(Budget::default());
+        let mut forest = Forest::new(&governor);
+        crate::contract::SHIFTED.with(|c| c.set(0));
+        for i in 0..n {
+            forest
+                .evidence(
+                    &mut governor,
+                    evidence(&format!("{}", (i * 7919) % 100_003)),
+                )
+                .unwrap();
+        }
+        let shifted = crate::contract::SHIFTED.with(std::cell::Cell::get);
+        assert!(shifted < n, "{shifted} entries shifted for {n} inserts");
+        assert_eq!(forest.nodes().len(), usize::try_from(n).unwrap());
     }
 }

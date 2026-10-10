@@ -7,7 +7,7 @@ use crate::digest::Digest;
 use core::fmt;
 use core::mem;
 use core::ops::Range;
-use std::collections::TryReserveError;
+use std::collections::{BTreeMap, TryReserveError};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -986,6 +986,8 @@ impl<K: Ord + ScratchCharge, V: ScratchCharge> ScratchMap<K, V> {
                 if self.inner.len() == self.inner.inner.capacity() {
                     self.reserve(1)?;
                 }
+                #[cfg(test)]
+                SHIFTED.with(|c| c.set(c.get() + (self.inner.inner.len() - index) as u64));
                 self.inner.inner.insert(index, (key, value));
                 Ok(None)
             }
@@ -1038,6 +1040,72 @@ impl<K: Ord + ScratchCharge, V: ScratchCharge> ScratchMap<K, V> {
     #[must_use]
     pub fn into_pairs(self) -> Vec<(K, V)> {
         self.inner.into_vec()
+    }
+}
+
+// Under test, the entries `ScratchMap::insert` shifted to make room.
+#[cfg(test)]
+thread_local!(pub(crate) static SHIFTED: core::cell::Cell<u64> = const { core::cell::Cell::new(0) });
+
+/// A key-ordered map with `O(log n)` insert whose growth is charged exactly
+/// as the sorted-`Vec` [`ScratchMap`] charges it.
+///
+/// [`ScratchMap`] shifts every later entry on each insert, `O(n)` and
+/// uncharged, so a map that grows to hundreds of thousands of entries (the
+/// provenance forest's dedup index on a call with many repeated items) costs
+/// quadratic time while its charge stays linear. This map stores its entries
+/// in a `BTreeMap` and charges the capacity a `ScratchMap<K, V>` holding the
+/// same entries would have charged: the same doubling steps, `(K, V)` charged
+/// at [`ScratchCharge::CHARGE`], each step charged before the entry is
+/// inserted and released when the map drops. The heap bytes of the tree's
+/// nodes beyond that charge are `O(1)` per entry, like the entries' own keys.
+#[derive(Debug)]
+pub(crate) struct ScratchOrdMap<K, V> {
+    entries: BTreeMap<K, V>,
+    capacity: usize,
+    meter: ScratchMeter,
+    /// One lease per capacity step, each released on drop.
+    steps: Vec<ScratchLease>,
+}
+
+impl<K: Ord + ScratchCharge, V: ScratchCharge> ScratchOrdMap<K, V> {
+    /// An empty map charging against `governor`'s scratch meter.
+    pub(crate) fn new(governor: &Governor) -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            capacity: 0,
+            meter: governor.scratch_meter(),
+            steps: Vec::new(),
+        }
+    }
+
+    /// Borrow the value for `key`.
+    pub(crate) fn get<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: core::borrow::Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.entries.get(key)
+    }
+
+    /// Insert or replace the value for `key`, charging a capacity step first
+    /// when a new entry exceeds the capacity charged so far.
+    ///
+    /// # Errors
+    /// Returns `BudgetExceeded(ScratchBytes)` before the entry is stored.
+    pub(crate) fn insert(&mut self, key: K, value: V) -> Result<Option<V>, StopReason> {
+        if !self.entries.contains_key(&key) && self.entries.len() == self.capacity {
+            let Some(target) = grown_capacity(self.entries.len(), self.capacity, 1) else {
+                return Err(StopReason::BudgetExceeded(Resource::ScratchBytes));
+            };
+            let delta = saturating_size(target - self.capacity)
+                .saturating_mul(saturating_size(<(K, V)>::CHARGE.max(1)));
+            self.meter.charge(delta)?;
+            self.steps
+                .push(ScratchLease::new(self.meter.clone(), delta));
+            self.capacity = target;
+        }
+        Ok(self.entries.insert(key, value))
     }
 }
 
@@ -1749,5 +1817,79 @@ mod tests {
         // Releasing on the original does not affect the independent clone.
         assert!(clone.release_scratch(200).is_err());
         assert_eq!(clone.release_scratch(150), Ok(()));
+    }
+    /// R15: the ordered index charges exactly what the sorted-`Vec`
+    /// `ScratchMap` charges for the same keys in the same order (total,
+    /// peak, and the charge left after each insert), releases it all on
+    /// drop, and finds every key. Its inserts compare `O(log n)` times
+    /// each, where the map it replaces shifted `O(n)` entries per insert.
+    #[test]
+    fn ordered_index_charges_like_scratch_map_and_inserts_in_log_steps() {
+        use super::ScratchOrdMap;
+        use std::cell::Cell;
+        use std::cmp::Ordering;
+
+        thread_local!(static COMPARES: Cell<u64> = const { Cell::new(0) });
+        #[derive(Debug, PartialEq, Eq)]
+        struct Key(u64);
+        impl Ord for Key {
+            fn cmp(&self, other: &Self) -> Ordering {
+                COMPARES.with(|c| c.set(c.get() + 1));
+                self.0.cmp(&other.0)
+            }
+        }
+        impl PartialOrd for Key {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+        impl super::ScratchCharge for Key {
+            const CHARGE: usize = 8;
+        }
+
+        let key = |i: u64| (i * 2_654_435_761) % 1_000_003;
+        for n in [1000_u64, 4000, 16_000] {
+            let plain = Governor::new(Budget::default());
+            let ordered = Governor::new(Budget::default());
+            let mut map: ScratchMap<Key, u32> = ScratchMap::new(&plain);
+            let mut index: ScratchOrdMap<Key, u32> = ScratchOrdMap::new(&ordered);
+            for i in 0..n {
+                assert_eq!(map.insert(Key(key(i)), 1).unwrap(), None);
+            }
+            COMPARES.with(|c| c.set(0));
+            for i in 0..n {
+                assert_eq!(index.insert(Key(key(i)), 1).unwrap(), None);
+                assert_eq!(index.insert(Key(key(i)), 2).unwrap(), Some(1));
+            }
+            let after_index = COMPARES.with(Cell::get);
+            assert!((0..n).all(|i| index.get(&Key(key(i))) == Some(&2)));
+            assert_eq!(index.get(&Key(1_000_004)), None);
+            // Two inserts per key, each two searches of a few compares per level.
+            let log = u64::from(n.ilog2()) + 1;
+            assert!(after_index <= 4 * n * (2 * log + 8), "n={n}: {after_index}");
+            assert_eq!(map.len(), usize::try_from(n).unwrap());
+            let (plain, ordered_usage) = (plain.usage(), ordered.usage());
+            assert_eq!(
+                plain.total_scratch_charged,
+                ordered_usage.total_scratch_charged
+            );
+            assert_eq!(plain.total_scratch_charged, ordered.scratch.total_charged());
+            let live = ordered
+                .scratch
+                .0
+                .live
+                .load(std::sync::atomic::Ordering::Relaxed);
+            assert!(live > 0);
+            assert_eq!(live, map.inner.reserved);
+            drop(index);
+            assert_eq!(
+                ordered
+                    .scratch
+                    .0
+                    .live
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                0
+            );
+        }
     }
 }

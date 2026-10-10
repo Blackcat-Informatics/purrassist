@@ -757,6 +757,88 @@ fn repeated_parameters_cost_is_linear() {
     }
 }
 
+/// R15 (G25): repeated nested items that each hold a JSON-array child
+/// (`plan_outfits`) cost work and charged scratch linear in the bytes, with
+/// every item recovered, under plain `sized`. Two quadratic steps hid behind
+/// the linear charge: the provenance forest's dedup index inserted into a
+/// sorted `Vec` (`ScratchMap`), and `Derivation::push` scanned the members
+/// held. Both are pinned by unit tests (`ordered_index_charges_like_scratch_map_and_inserts_in_log_steps`
+/// in `contract`, `derivation_membership_is_a_set_lookup` in `provenance`);
+/// this test pins the charge of the whole shape and records the wall time.
+#[test]
+fn repeated_nested_items_with_array_children_cost_is_linear() {
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("plan_outfits")
+            .effects(Effects::ReadOnly)
+            .param(
+                "outfits",
+                Param::array(Param::object(
+                    ObjectSpec::new()
+                        .param("wearer", Param::string().required())
+                        .param("garments", Param::array(Param::string())),
+                ))
+                .required(),
+            )],
+        Budget::default(),
+    )
+    .expect("tools");
+    let item = "<parameter=outfits><parameter=wearer>Alice</parameter>\
+                <parameter=garments>[\"hat\"]</parameter></parameter>\n";
+    let mut measured = Vec::new();
+    for k in [500_usize, 1000, 2000, 4000] {
+        let input = format!(
+            "<tool_call>\n<function=plan_outfits>\n{}</function>\n</tool_call>",
+            item.repeat(k)
+        );
+        let request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
+        let n = input.len() as u64;
+        let started = std::time::Instant::now();
+        let result = tools.recover(input.as_bytes(), &request);
+        let elapsed = started.elapsed();
+        assert_eq!(result.receipt.stopped, StopReason::Completed, "{k}");
+        let Outcome::Resolved(calls) = &result.outcome else {
+            panic!("{k}: {:?}", result.outcome)
+        };
+        match &calls.calls[0]
+            .arguments
+            .get("outfits")
+            .expect("outfits")
+            .value
+        {
+            purrassist_core::json::Value::Array(items) => assert_eq!(items.len(), k),
+            other => panic!("{k}: {other:?}"),
+        }
+        let usage = result.receipt.usage;
+        assert!(usage.work <= cost::RECOVER_WORK_PER_BYTE * n, "{k}");
+        assert!(
+            usage.peak_scratch_bytes <= cost::RECOVER_SCRATCH_PER_BYTE * n,
+            "{k}"
+        );
+        println!(
+            "k={k} bytes {n}: work {} total_scratch_charged {} peak_scratch {} in {elapsed:?}",
+            usage.work, usage.total_scratch_charged, usage.peak_scratch_bytes
+        );
+        measured.push((
+            u128::from(n),
+            u128::from(usage.work),
+            u128::from(usage.total_scratch_charged),
+        ));
+    }
+    let (small_bytes, small_work, small_scratch) = measured[0];
+    for &(bytes, work, scratch) in &measured[1..] {
+        for (label, charged, small) in [
+            ("work", work, small_work),
+            ("total_scratch_charged", scratch, small_scratch),
+        ] {
+            let (ratio, byte_ratio) = (charged * small_bytes, small * bytes);
+            assert!(
+                ratio * 100 <= byte_ratio * 105 && byte_ratio * 100 <= ratio * 105,
+                "{small_bytes} -> {bytes} bytes: {label} is not linear"
+            );
+        }
+    }
+}
+
 /// G7, R6 review: a reasoning-marker spelling inside a JSON string of every
 /// one of k repeated nested items is value text, and finding that out costs
 /// work and charged scratch linear in the bytes (each marker is answered by a
