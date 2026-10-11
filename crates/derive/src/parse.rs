@@ -10,9 +10,9 @@
 //! belong to other macros and are ignored.
 
 use crate::model::{
-    Body, DefaultValue, Delim, Diagnostic, Effects, Ident, Kind, ParamAttrs, Policy, RawField,
-    RawItem, RawVariant, Span, Text, ToolAttrs, Tree, Unknown, decode_string, doc_description,
-    is_json_number,
+    Body, CratePath, DefaultValue, Delim, Diagnostic, Effects, Ident, Kind, ParamAttrs, Policy,
+    RawField, RawItem, RawVariant, Span, Text, ToolAttrs, Tree, Unknown, decode_string,
+    doc_description, is_json_number,
 };
 
 /// Which derive is running.
@@ -361,6 +361,85 @@ fn text_value(item: &KeyItem<'_>) -> Result<Text, Diagnostic> {
     }
 }
 
+/// Keywords that cannot be a path segment (a raw identifier can).
+const KEYWORDS: &[&str] = &[
+    "as", "async", "await", "break", "const", "continue", "dyn", "else", "enum", "extern", "false",
+    "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref",
+    "return", "static", "struct", "trait", "true", "type", "unsafe", "use", "where", "while",
+    "Self",
+];
+
+/// `crate = path`: a plain path of identifiers joined by `::`, with an optional
+/// leading `::`. `crate`, `self` and `super` may only start it (`super` may
+/// repeat), and then not after a leading `::`.
+fn crate_path(item: &KeyItem<'_>) -> Result<CratePath, Diagnostic> {
+    const SHAPE: &str = "`crate` must be a path such as `::purrassist`, `my_alias` or \
+                         `crate::reexports::pa`";
+    let Some(tokens) = item.value else {
+        return Err(Diagnostic::new(
+            item.key.span,
+            format!("`crate` needs a value: `crate = path`; {SHAPE}"),
+        ));
+    };
+    let separator = |at: usize| {
+        tokens.get(at).is_some_and(|tree| {
+            matches!(
+                tree.kind,
+                Kind::Punct {
+                    ch: ':',
+                    joint: true
+                }
+            )
+        }) && tokens.get(at + 1).is_some_and(|tree| tree.is_punct(':'))
+    };
+    let mut source = String::new();
+    let mut at = if separator(0) { 2 } else { 0 };
+    if at == 2 {
+        source.push_str("::");
+    }
+    let mut first = at == 0;
+    loop {
+        let Some(tree) = tokens.get(at) else {
+            // Only reachable after a `::`.
+            return Err(Diagnostic::new(
+                tokens[at - 1].span,
+                format!("`crate` path ends with `::`; {SHAPE}"),
+            ));
+        };
+        let Some(segment) = tree.ident() else {
+            return Err(Diagnostic::new(
+                tree.span,
+                format!("expected a path segment in `crate`; {SHAPE}"),
+            ));
+        };
+        let leading = matches!(segment, "crate" | "self" | "super");
+        if KEYWORDS.contains(&segment) || (leading && !first) {
+            return Err(Diagnostic::new(
+                tree.span,
+                format!("`{segment}` cannot be a segment of the `crate` path here; {SHAPE}"),
+            ));
+        }
+        source.push_str(segment);
+        at += 1;
+        if at == tokens.len() {
+            break;
+        }
+        if !separator(at) {
+            return Err(Diagnostic::new(
+                tokens[at].span,
+                format!("expected `::` between the segments of `crate`; {SHAPE}"),
+            ));
+        }
+        source.push_str("::");
+        at += 2;
+        first = first && segment == "super";
+    }
+    Ok(CratePath {
+        source,
+        span: tokens[0].span,
+    })
+}
+
 fn choice_value<T: Copy>(item: &KeyItem<'_>, choices: &[(&str, T)]) -> Result<T, Diagnostic> {
     let list = || {
         choices
@@ -416,7 +495,7 @@ fn once<T>(slot: &mut Option<T>, item: &KeyItem<'_>, value: T) -> Result<(), Dia
 
 fn tool_attrs(attrs: &Attrs<'_>, site: Site) -> Result<ToolAttrs, Diagnostic> {
     let accepted: &[&str] = match site {
-        Site::Enum => &["description"],
+        Site::Enum => &["description", "crate"],
         _ => &[
             "name",
             "alias",
@@ -424,6 +503,7 @@ fn tool_attrs(attrs: &Attrs<'_>, site: Site) -> Result<ToolAttrs, Diagnostic> {
             "effects",
             "policy",
             "unknown",
+            "crate",
         ],
     };
     let mut out = ToolAttrs::default();
@@ -433,6 +513,7 @@ fn tool_attrs(attrs: &Attrs<'_>, site: Site) -> Result<ToolAttrs, Diagnostic> {
                 return Err(unknown_key(AttrKind::Tool, site, &item, accepted));
             }
             match item.name() {
+                "crate" => once(&mut out.crate_path, &item, crate_path(&item)?)?,
                 "name" => once(&mut out.name, &item, text_value(&item)?)?,
                 "alias" => out.aliases.push(text_value(&item)?),
                 "description" => once(&mut out.description, &item, text_value(&item)?)?,
@@ -794,6 +875,27 @@ mod tests {
         find(&trees(source), needle).expect("token present")
     }
 
+    /// The span index of the last token of `source` whose text is `needle`.
+    fn span_of_last(source: &str, needle: &str) -> Span {
+        fn walk(trees: &[Tree], needle: &str, last: &mut Option<Span>) {
+            for tree in trees {
+                match &tree.kind {
+                    Kind::Ident(text) | Kind::Literal(text) if text == needle => {
+                        *last = Some(tree.span);
+                    }
+                    Kind::Punct { ch, .. } if needle.len() == 1 && needle.starts_with(*ch) => {
+                        *last = Some(tree.span);
+                    }
+                    Kind::Group { inner, .. } => walk(inner, needle, last),
+                    _ => {}
+                }
+            }
+        }
+        let mut last = None;
+        walk(&trees(source), needle, &mut last);
+        last.expect("token present")
+    }
+
     fn error(source: &str) -> Diagnostic {
         parse_struct(source).expect_err(source)
     }
@@ -965,7 +1067,7 @@ mod tests {
             error(source),
             Diagnostic::new(
                 span_of(source, "colour"),
-                "unknown key `colour` in `#[tool(..)]` on a struct; expected one of: name, alias, description, effects, policy, unknown"
+                "unknown key `colour` in `#[tool(..)]` on a struct; expected one of: name, alias, description, effects, policy, unknown, crate"
             )
         );
         let source = "struct A { #[param(colour)] a: u8 }";
@@ -985,7 +1087,7 @@ mod tests {
             parse_enum(r#"#[tool(name = "x")] enum E { A }"#)
                 .unwrap_err()
                 .message,
-            "unknown key `name` in `#[tool(..)]` on an enum; expected one of: description"
+            "unknown key `name` in `#[tool(..)]` on an enum; expected one of: description, crate"
         );
         let source = r#"#[tool(name = "a", name = "b")] struct A {}"#;
         let duplicate = error(source);
@@ -1209,6 +1311,96 @@ mod tests {
             "1 2",
             0,
             "`default` must be a JSON value: null, true, false, a number, a string, an array `[..]` or an object `{ \"key\": value }`",
+        );
+    }
+
+    #[test]
+    fn crate_paths_are_plain_paths() {
+        for path in [
+            "::purrassist",
+            "::purrassist_core",
+            "my_alias",
+            "crate::reexports::pa",
+            "self::pa",
+            "super::super::pa",
+            "::a::r#fn",
+        ] {
+            let spelled = path.replace("::", " :: ");
+            let item = parse_struct(&format!("#[tool(crate = {spelled})] struct A {{}}")).unwrap();
+            assert_eq!(item.tool.crate_path.unwrap().source, path);
+            let item = parse_enum(&format!("#[tool(crate = {path})] enum E {{ A }}")).unwrap();
+            assert_eq!(item.tool.crate_path.unwrap().source, path);
+        }
+    }
+
+    #[test]
+    fn malformed_crate_paths_are_spanned_errors() {
+        const SHAPE: &str = "`crate` must be a path such as `::purrassist`, `my_alias` or \
+                             `crate::reexports::pa`";
+        for (value, at, detail) in [
+            ("", "crate", "`crate` needs a value: `crate = path`"),
+            ("a::", ":", "`crate` path ends with `::`"),
+            ("::", ":", "`crate` path ends with `::`"),
+            (
+                "\"purrassist\"",
+                "\"purrassist\"",
+                "expected a path segment in `crate`",
+            ),
+            ("a::<T>", "<", "expected a path segment in `crate`"),
+            ("a:b", ":", "expected `::` between the segments of `crate`"),
+            ("a b", "b", "expected `::` between the segments of `crate`"),
+            (
+                "a::crate",
+                "crate",
+                "`crate` cannot be a segment of the `crate` path here",
+            ),
+            (
+                "::crate",
+                "crate",
+                "`crate` cannot be a segment of the `crate` path here",
+            ),
+            (
+                "fn",
+                "fn",
+                "`fn` cannot be a segment of the `crate` path here",
+            ),
+            (
+                "a::Self",
+                "Self",
+                "`Self` cannot be a segment of the `crate` path here",
+            ),
+        ] {
+            let equals = if value.is_empty() { "" } else { " = " };
+            let source = format!("#[tool(crate{equals}{value})] struct A {{}}");
+            let diagnostic = error(&source);
+            assert_eq!(diagnostic.message, format!("{detail}; {SHAPE}"), "{source}");
+            // Spans: the last token named by `at` (the value, never the key).
+            assert_eq!(diagnostic.span, span_of_last(&source, at), "{source}");
+        }
+    }
+
+    #[test]
+    fn crate_may_be_given_once() {
+        let duplicate = error("#[tool(crate = a, crate = b)] struct A {}");
+        assert_eq!(duplicate.message, "duplicate key `crate`");
+        let split = error("#[tool(crate = a)] #[tool(crate = b)] struct A {}");
+        assert_eq!(split.message, "duplicate key `crate`");
+        let enumeration = parse_enum("#[tool(crate = a, crate = b)] enum E { A }").unwrap_err();
+        assert_eq!(enumeration.message, "duplicate key `crate`");
+    }
+
+    #[test]
+    fn crate_is_not_a_field_or_variant_key() {
+        assert!(
+            error("struct A { #[param(crate = a)] x: u8 }")
+                .message
+                .starts_with("unknown key `crate` in `#[param(..)]` on a field")
+        );
+        assert!(
+            parse_enum("enum E { #[param(crate = a)] A }")
+                .unwrap_err()
+                .message
+                .starts_with("unknown key `crate` in `#[param(..)]` on an enum variant")
         );
     }
 }

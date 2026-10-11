@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! The facade flavor of the derives: `#[derive(purrassist::ToolDefinition)]`
-//! with no `crate =` attribute, generating `::purrassist::__core` paths.
+//! with no `crate =` attribute, generating `::purrassist::__core` paths; and
+//! `#[tool(crate = ..)]` replacing that prefix. The facade re-exports core's
+//! `tool_call` and `json` modules at its root, so `::purrassist` is itself a
+//! valid `crate =` path, as is a module that re-exports the facade.
+#![allow(clippy::redundant_pub_crate)] // with `unreachable_pub`, `pub(crate)` wins
 
 use purrassist::json::{self, Node};
 use purrassist::tool_call::{
@@ -90,4 +94,54 @@ fn conversion_errors_name_the_pointer() {
             found: "string".into(),
         }
     );
+}
+
+mod reexports {
+    pub(crate) use purrassist as pa;
+}
+
+#[derive(purrassist::ToolEnum, Debug, PartialEq)]
+#[tool(crate = ::purrassist)]
+enum Root {
+    A,
+}
+
+#[derive(purrassist::ToolDefinition, Debug, PartialEq)]
+#[tool(crate = ::purrassist)]
+struct ViaRoot {
+    root: Root,
+}
+
+#[derive(purrassist::ToolDefinition, Debug, PartialEq)]
+#[tool(crate = ::purrassist::__core)]
+struct ViaHiddenCore {
+    path: String,
+}
+
+#[derive(purrassist::ToolDefinition, Debug, PartialEq)]
+#[tool(crate = crate::reexports::pa)]
+struct ViaReexport {
+    path: String,
+    unit: Unit,
+}
+
+#[test]
+fn the_override_accepts_the_facade_root_a_hidden_core_and_a_reexport() {
+    assert_eq!(Root::parameter(), Param::enumeration(&["A"]));
+    assert_eq!(
+        ViaRoot::from_node(&json::parse(r#"{"root": "A"}"#).unwrap()),
+        Ok(ViaRoot { root: Root::A })
+    );
+    assert_eq!(
+        ViaHiddenCore::from_node(&json::parse(r#"{"path": "p"}"#).unwrap()),
+        Ok(ViaHiddenCore { path: "p".into() })
+    );
+    assert_eq!(
+        ViaReexport::from_node(&json::parse(r#"{"path": "p", "unit": "em"}"#).unwrap()),
+        Ok(ViaReexport {
+            path: "p".into(),
+            unit: Unit::Em
+        })
+    );
+    assert_eq!(ViaReexport::tool_definition().name(), "via_reexport");
 }

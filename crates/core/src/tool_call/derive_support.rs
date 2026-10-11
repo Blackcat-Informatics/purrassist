@@ -557,6 +557,23 @@ pub fn __derive_number(spelling: &'static str) -> Number {
     }
 }
 
+/// The version marker of the derive ABI: generated code references the item
+/// named `__DERIVE_ABI_<major>_<minor>` of the `purrassist-derive` that wrote
+/// it, so a derive and a core whose major.minor differ fail to compile with an
+/// error that names the missing marker.
+///
+/// Doc-hidden on purpose: it is not API, only the compile-time half of the
+/// rule that `purrassist-derive` and `purrassist-core` share a major.minor
+/// version (patch releases may differ). A release that changes the version
+/// renames this item; a unit test fails until it does. Never reference it by
+/// hand.
+///
+/// ```
+/// const _: () = purrassist_core::tool_call::__DERIVE_ABI_0_1;
+/// ```
+#[doc(hidden)]
+pub const __DERIVE_ABI_0_1: () = ();
+
 /// [`is_valid_name`](super::is_valid_name) as a `const` check for generated
 /// code: derives assert explicit tool, parameter and alias names with it, so
 /// an invalid name is a compile error at the derive.
@@ -1005,5 +1022,22 @@ mod tests {
     fn non_permutation_order_panics_in_debug() {
         let node = json::parse("{}").unwrap();
         let _ = Members::new(&["a", "b"], &[0, 0], &node);
+    }
+
+    #[test]
+    fn the_derive_abi_marker_is_named_after_the_crate_version() {
+        // The marker must exist (this fails to compile otherwise) and its name
+        // must be the one `purrassist-derive` builds from the same version:
+        // bumping the major or minor without renaming the marker fails here.
+        let () = super::__DERIVE_ABI_0_1;
+        assert_eq!(
+            stringify!(__DERIVE_ABI_0_1),
+            concat!(
+                "__DERIVE_ABI_",
+                env!("CARGO_PKG_VERSION_MAJOR"),
+                "_",
+                env!("CARGO_PKG_VERSION_MINOR")
+            )
+        );
     }
 }

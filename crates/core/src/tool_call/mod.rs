@@ -70,7 +70,7 @@ pub use definition::{
     Effects, ObjectSpec, Param, ParameterSpec, RepairPolicy, ToolDefinition, UnknownParameters,
 };
 #[doc(hidden)]
-pub use derive_support::{__derive_number, __sorted, __valid_name};
+pub use derive_support::{__DERIVE_ABI_0_1, __derive_number, __sorted, __valid_name};
 pub use derive_support::{
     Members, Slot, ToolArguments, ToolExtra, ToolItem, ToolParameter, ToolPattern, ToolRepeatable,
     max_depth,

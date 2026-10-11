@@ -59,4 +59,33 @@ dependency. The crate documentation lists the type map, the `#[tool(..)]` and
 `#[param(..)]` attributes, defaults, naming, the conversion's error semantics,
 integer-range and recursion limits, and every rejected input.
 
+## Versions, the crate path and which calls to convert
+
+- **Same version.** `purrassist-derive` and `purrassist-core` must have the
+  same major and minor version (patch versions may differ). Generated code
+  references a marker in core, `tool_call::__DERIVE_ABI_<major>_<minor>`, so a
+  mismatched pair fails to compile with an error naming `__DERIVE_ABI_*`.
+  Cargo accepts such a pair (the requirements are caret requirements); bring
+  both to the same `major.minor`. The marker is `#[doc(hidden)]`, not API.
+- **Crate path.** The generated code names `::purrassist_core` (this crate's
+  derives) or `::purrassist::__core` (the derives re-exported by `purrassist`),
+  so depend on `purrassist-core` (direct flavor) or `purrassist` (facade
+  flavor) under that name. If the dependency is renamed, or core is reached
+  through a re-export, add `#[tool(crate = path)]` to the struct or enum, for
+  example `#[tool(crate = my_core)]`, `#[tool(crate = crate::reexports::pa)]`
+  or `#[tool(crate = ::purrassist)]`. The path replaces the whole prefix and
+  must be one at which the modules `tool_call` and `json` resolve as in
+  `purrassist-core`. It is a plain `::`-separated path; an empty path, a
+  trailing `::`, a literal, generics and a second `crate =` are compile
+  errors.
+- **Convert only usable calls.** `from_node` reads arguments exactly but does
+  not decide whether a call may run. Call it only on the arguments of calls
+  that recovery reports as usable or resolved:
+  [`ToolCalls::usable`](https://docs.rs/purrassist-core/latest/purrassist_core/tool_call/recover/struct.ToolCalls.html#method.usable)
+  (`CallOutcome::Resolved`), or
+  [`ToolCalls::usable_accepting_guesses`](https://docs.rs/purrassist-core/latest/purrassist_core/tool_call/recover/struct.ToolCalls.html#method.usable_accepting_guesses)
+  (which also lists best guesses of read-only tools). The arguments of an
+  unresolved call are only the best tree reached, and a mutating tool's best
+  guess never runs.
+
 Licensed under MIT OR Apache-2.0 OR MulanPSL-2.0.

@@ -13,7 +13,9 @@
 //! The impls are written against `purrassist-core`, which must therefore be a
 //! dependency of the crate that derives. Users of the `purrassist` facade
 //! crate derive through `purrassist::ToolDefinition` and
-//! `purrassist::ToolEnum`, which need no other dependency.
+//! `purrassist::ToolEnum`, which need no other dependency. See
+//! [Using the derives](#using-the-derives) for the version rule, the crate
+//! path and which calls to convert.
 //!
 //! ```
 //! use purrassist_core::tool_call::{
@@ -60,6 +62,76 @@
 //! );
 //! ```
 //!
+//! # Using the derives
+//!
+//! **Same version.** The derive and the core it generates code for must have
+//! the same major and minor version (the patch version may differ). Every
+//! expansion references a marker item in core,
+//! `purrassist_core::tool_call::__DERIVE_ABI_<major>_<minor>`, built from this
+//! crate's own version, so a mismatched pair fails to compile with an error
+//! that names `__DERIVE_ABI_*` (for example, a derive 0.2 against a core 0.1
+//! cannot find `__DERIVE_ABI_0_2`). Cargo itself accepts such a pair, because
+//! the requirements between the crates are caret requirements; the fix is to
+//! bring both to the same `major.minor`. The item is `#[doc(hidden)]` and not
+//! API: never name it.
+//!
+//! **Crate path.** The generated code names core by absolute path:
+//! `::purrassist_core` for the derives of this crate and `::purrassist::__core`
+//! for the ones re-exported by the facade. The crate that derives must
+//! therefore depend on `purrassist-core` (direct flavor) or `purrassist`
+//! (facade flavor) *under that name*, with no `package = ".."` rename. If the
+//! dependency is renamed, or core is reached through a re-export, give the
+//! path with `#[tool(crate = path)]`:
+//!
+//! ```
+//! // Any path that reaches core works: a renamed dependency, as here, or
+//! // a module that re-exports it, such as `crate::reexports::pa`.
+//! use purrassist_core as pa;
+//! use purrassist_derive::{ToolDefinition, ToolEnum};
+//!
+//! #[derive(ToolEnum)]
+//! #[tool(crate = pa)]
+//! enum Mode {
+//!     Fast,
+//! }
+//!
+//! #[derive(ToolDefinition)]
+//! #[tool(crate = pa)]
+//! struct Run {
+//!     mode: Mode,
+//! }
+//! ```
+//!
+//! `crate = path` replaces the whole prefix, in both flavors and on every
+//! derive (structs and enums). The path must be one at which the modules
+//! `tool_call` and `json` resolve as in the core crate: `::purrassist_core`
+//! itself, a rename such as `my_core` (the dependency's key in `Cargo.toml`,
+//! with `-` as `_`), a re-export such as `crate::reexports::pa`, `self::`,
+//! `super::` or `crate::` paths, `::purrassist` (the facade re-exports both
+//! modules at its root) or `::purrassist::__core`. It is a plain path of
+//! identifiers joined by `::`, optionally starting with `::`; an empty path,
+//! a trailing `::`, a literal, generics and a second `crate =` are compile
+//! errors at the offending token, and a path where `tool_call` does not
+//! resolve is rustc's unresolved-path error at the derive. It is resolved
+//! where the derive is applied. Types derived with different paths
+//! interoperate, as long as every path reaches the same core crate.
+//!
+//! **Convert only usable calls.** `from_node` converts the arguments of a call
+//! to the struct exactly, but it is not a safety check on the call: a call
+//! that did not resolve carries "the best tree resolution reached", which may
+//! be partial or wrong. Call `from_node` only on the arguments of a call that
+//! recovery says may run: [`ToolCalls::usable`] and
+//! [`ToolCalls::usable_accepting_guesses`] list those calls (a
+//! [`ToolCall::is_usable`] call, whose outcome is [`CallOutcome::Resolved`]; the
+//! second also lists best guesses of read-only tools). Do not convert the
+//! arguments of an unresolved call, and never run a mutating tool's best
+//! guess.
+//!
+//! [`ToolCalls::usable`]: https://docs.rs/purrassist-core/latest/purrassist_core/tool_call/recover/struct.ToolCalls.html#method.usable
+//! [`ToolCalls::usable_accepting_guesses`]: https://docs.rs/purrassist-core/latest/purrassist_core/tool_call/recover/struct.ToolCalls.html#method.usable_accepting_guesses
+//! [`ToolCall::is_usable`]: https://docs.rs/purrassist-core/latest/purrassist_core/tool_call/recover/struct.ToolCall.html#method.is_usable
+//! [`CallOutcome::Resolved`]: https://docs.rs/purrassist-core/latest/purrassist_core/tool_call/resolve/enum.CallOutcome.html#variant.Resolved
+//!
 //! # Type map
 //!
 //! A field's type decides its schema through the `ToolParameter` trait of
@@ -86,7 +158,8 @@
 //!
 //! # Attributes
 //!
-//! `#[tool(..)]` goes on the struct; every key is optional.
+//! `#[tool(..)]` goes on the struct; every key is optional. On an enum only
+//! `description` and `crate` are accepted.
 //!
 //! | Key | Meaning |
 //! |---|---|
@@ -96,6 +169,7 @@
 //! | `effects = mutating \| read_only` | what a call can do (default: `mutating`) |
 //! | `policy = structural \| tolerant` | how far recovery may repair a call |
 //! | `unknown = error \| drop \| pass` | handling of undeclared arguments |
+//! | `crate = path` | the path to core, for a renamed or re-exported dependency (see above) |
 //!
 //! `#[param(..)]` goes on a field; every key is optional.
 //!
@@ -249,6 +323,7 @@
 //! | enum to `ToolDefinition`, struct to `ToolEnum` | `applies to structs`, `applies to enums` |
 //! | non-unit variant | `variant .. carries data` |
 //! | unknown or repeated key | `unknown key ..`, `duplicate key ..` |
+//! | malformed `crate` path | `expected a path segment`, `path ends with` |
 //! | malformed `default` | `.. is not a JSON number`, `must be a JSON value` |
 //! | `pass` and `extra` misuse | `needs exactly one field marked`, `needs #[tool(unknown = pass)]` |
 //! | direct self-reference | `refers to .. itself` |
@@ -1350,5 +1425,89 @@ mod rejected_input {
     //! struct A { b: Box<B> }
     //! #[derive(ToolDefinition)]
     //! struct B { a: Vec<u8> }
+    //! ```
+    //!
+    //! # 47. Rejected: a `crate` path that ends with `::`
+    //!
+    //! ```compile_fail
+    //! use purrassist_derive::ToolDefinition;
+    //!
+    //! #[derive(ToolDefinition)]
+    //! #[tool(crate = ::purrassist_core::)]
+    //! struct A { a: u8 }
+    //! ```
+    //!
+    //! The twin without the trailing `::`:
+    //!
+    //! ```
+    //! use purrassist_derive::ToolDefinition;
+    //!
+    //! #[derive(ToolDefinition)]
+    //! #[tool(crate = ::purrassist_core)]
+    //! struct A { a: u8 }
+    //! ```
+    //!
+    //! # 48. Rejected: a `crate` value that is a literal, not a path
+    //!
+    //! ```compile_fail
+    //! use purrassist_derive::ToolEnum;
+    //!
+    //! #[derive(ToolEnum)]
+    //! #[tool(crate = "purrassist_core")]
+    //! enum E { A }
+    //! ```
+    //!
+    //! The twin with a path:
+    //!
+    //! ```
+    //! use purrassist_derive::ToolEnum;
+    //!
+    //! #[derive(ToolEnum)]
+    //! #[tool(crate = purrassist_core)]
+    //! enum E { A }
+    //! ```
+    //!
+    //! # 49. Rejected: `crate` given twice
+    //!
+    //! ```compile_fail
+    //! use purrassist_derive::ToolDefinition;
+    //!
+    //! #[derive(ToolDefinition)]
+    //! #[tool(crate = ::purrassist_core, crate = ::purrassist_core)]
+    //! struct A { a: u8 }
+    //! ```
+    //!
+    //! The twin with it once:
+    //!
+    //! ```
+    //! use purrassist_derive::ToolDefinition;
+    //!
+    //! #[derive(ToolDefinition)]
+    //! #[tool(crate = ::purrassist_core)]
+    //! struct A { a: u8 }
+    //! ```
+    //!
+    //! # 50. Rejected: a `crate` path that does not reach core
+    //!
+    //! The override replaces the default, so a path where `tool_call` does not
+    //! resolve is an unresolved-path error (the default would have compiled).
+    //!
+    //! ```compile_fail,E0433
+    //! use purrassist_derive::ToolDefinition;
+    //!
+    //! #[derive(ToolDefinition)]
+    //! #[tool(crate = not_a_crate)]
+    //! struct A { a: u8 }
+    //! ```
+    //!
+    //! The twin whose path reaches core:
+    //!
+    //! ```
+    //! use purrassist_core as not_a_crate;
+    //! use purrassist_derive::ToolDefinition;
+    //!
+    //! #[derive(ToolDefinition)]
+    //! #[tool(crate = not_a_crate)]
+    //! struct A { a: u8 }
     //! ```
 }

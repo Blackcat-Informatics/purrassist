@@ -14,7 +14,18 @@ use crate::model::{
 };
 use core::fmt::Write as _;
 
-/// Which crate path the generated code names.
+/// The name of the core item every expansion references: it exists in core
+/// exactly when core has the same major and minor version as this derive, so a
+/// mismatched pair fails to compile with an error naming it.
+pub(crate) const ABI_MARKER: &str = concat!(
+    "__DERIVE_ABI_",
+    env!("CARGO_PKG_VERSION_MAJOR"),
+    "_",
+    env!("CARGO_PKG_VERSION_MINOR")
+);
+
+/// Which crate path the generated code names, unless `#[tool(crate = ..)]`
+/// replaces it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Flavor {
     /// `::purrassist_core`, for users of the core crate.
@@ -47,16 +58,25 @@ pub(crate) struct Output {
 }
 
 /// Write the impls for `item`.
+///
+/// Every path starts at the root: the `crate = ..` path of the item when it has
+/// one, else the flavor's.
 pub(crate) fn generate(item: &Item, flavor: Flavor) -> Output {
+    let override_path = match item {
+        Item::Tool(tool) => tool.crate_path.as_ref(),
+        Item::Enumeration(enumeration) => enumeration.crate_path.as_ref(),
+    };
+    let root = override_path.map_or_else(|| flavor.root(), |path| path.source.as_str());
     let mut writer = Writer {
-        tc: format!("{}::tool_call", flavor.root()),
-        js: format!("{}::json", flavor.root()),
+        tc: format!("{root}::tool_call"),
+        js: format!("{root}::json"),
         splices: Vec::new(),
     };
-    let text = match item {
+    let body = match item {
         Item::Tool(tool) => writer.tool(tool),
         Item::Enumeration(enumeration) => writer.enumeration(enumeration),
     };
+    let text = format!("const _: () = {}::{ABI_MARKER}; {body}", writer.tc);
     Output {
         text,
         splices: writer.splices,
@@ -832,5 +852,111 @@ mod tests {
         assert_eq!(span("#[tool(unknown = pass)] struct A { a: u8 }"), 6);
         // The undeclared-`extra` error points at the field name.
         assert_eq!(span("struct A { #[param(extra)] x: Node }"), 8);
+    }
+
+    #[test]
+    fn the_crate_override_replaces_the_prefix_of_both_flavors() {
+        let tool = r"#[tool(crate = crate::reexports::pa, unknown = pass)]
+            struct A { a: Vec<u8>, #[param(extra)] rest: Node }";
+        let enumeration = "#[tool(crate = crate::reexports::pa)] enum E { A, B }";
+        for flavor in [Flavor::Core, Flavor::Facade] {
+            for (target, source) in [
+                (Target::Definition, tool),
+                (Target::Enumeration, enumeration),
+            ] {
+                let output = write(target, flavor, source);
+                assert_balanced(&output.text);
+                assert!(
+                    output
+                        .text
+                        .contains("crate::reexports::pa::tool_call::ToolParameter"),
+                    "{}",
+                    output.text
+                );
+                assert!(
+                    output.text.contains("crate::reexports::pa::json::Node"),
+                    "{}",
+                    output.text
+                );
+                // Nothing names the flavor's own root, and no path reaches
+                // `tool_call` or `json` except through the override.
+                assert!(!output.text.contains("::purrassist"), "{}", output.text);
+                for module in ["tool_call", "json"] {
+                    for (at, _) in output.text.match_indices(&format!("::{module}::")) {
+                        assert!(
+                            output.text[..at].ends_with("crate::reexports::pa"),
+                            "{module} at {at} in {}",
+                            output.text
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_leading_colon_override_is_absolute() {
+        let output = write(
+            Target::Definition,
+            Flavor::Facade,
+            "#[tool(crate = ::purrassist)] struct A { a: u8 }",
+        );
+        assert!(
+            output
+                .text
+                .contains("impl ::purrassist::tool_call::ToolArguments for"),
+            "{}",
+            output.text
+        );
+        assert!(!output.text.contains("__core"), "{}", output.text);
+        assert!(!output.text.contains(":::"), "{}", output.text);
+    }
+
+    #[test]
+    fn every_expansion_references_the_versioned_core_marker() {
+        // The marker's name comes from the derive's own version at build time.
+        let name = format!(
+            "__DERIVE_ABI_{}_{}",
+            env!("CARGO_PKG_VERSION_MAJOR"),
+            env!("CARGO_PKG_VERSION_MINOR")
+        );
+        assert_eq!(ABI_MARKER, name);
+        for (target, flavor, source, root) in [
+            (
+                Target::Definition,
+                Flavor::Core,
+                "struct A { a: u8 }",
+                "::purrassist_core",
+            ),
+            (
+                Target::Enumeration,
+                Flavor::Core,
+                "enum E { A }",
+                "::purrassist_core",
+            ),
+            (
+                Target::Definition,
+                Flavor::Facade,
+                "struct A { a: u8 }",
+                "::purrassist::__core",
+            ),
+            (
+                Target::Enumeration,
+                Flavor::Facade,
+                "enum E { A }",
+                "::purrassist::__core",
+            ),
+            (
+                Target::Enumeration,
+                Flavor::Core,
+                "#[tool(crate = my_alias)] enum E { A }",
+                "my_alias",
+            ),
+        ] {
+            let output = write(target, flavor, source);
+            let reference = format!("const _: () = {root}::tool_call::{name};");
+            assert!(output.text.starts_with(&reference), "{}", output.text);
+            assert_eq!(output.text.matches(&name).count(), 1, "{}", output.text);
+        }
     }
 }

@@ -164,9 +164,18 @@ pub(crate) enum DefaultValue {
     Object(Vec<(String, Self)>),
 }
 
+/// A `crate = path` value: the path, validated and spelled with `::`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CratePath {
+    /// The path as source text, such as `::purrassist` or `crate::reexports::pa`.
+    pub(crate) source: String,
+    pub(crate) span: Span,
+}
+
 /// The `#[tool(..)]` keys of one item.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ToolAttrs {
+    pub(crate) crate_path: Option<CratePath>,
     pub(crate) name: Option<Text>,
     pub(crate) aliases: Vec<Text>,
     pub(crate) description: Option<Text>,
@@ -247,6 +256,7 @@ pub(crate) struct Extra {
 /// A validated tool struct.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Tool {
+    pub(crate) crate_path: Option<CratePath>,
     pub(crate) ident: Ident,
     pub(crate) name: Text,
     pub(crate) aliases: Vec<Text>,
@@ -261,6 +271,7 @@ pub(crate) struct Tool {
 /// A validated enumeration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Enumeration {
+    pub(crate) crate_path: Option<CratePath>,
     pub(crate) ident: Ident,
     pub(crate) description: Option<Text>,
     /// The ident of each variant and the string value it stands for.
@@ -620,6 +631,7 @@ fn resolve_tool(
     }
     check_pass(extra.as_ref(), tool.unknown)?;
     Ok(Item::Tool(Tool {
+        crate_path: tool.crate_path,
         ident,
         name,
         aliases: tool.aliases,
@@ -673,6 +685,7 @@ fn resolve_enumeration(
         (Some(own), false) => Some(format!("{own}\n{}", lines.join("\n"))),
     };
     Ok(Item::Enumeration(Enumeration {
+        crate_path: tool.crate_path,
         description: composed.map(|text| Text::synthesized(text, ident.span)),
         ident,
         variants: resolved,
