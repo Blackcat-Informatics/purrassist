@@ -478,7 +478,7 @@ fn tool_attrs(attrs: &Attrs<'_>, site: Site) -> Result<ToolAttrs, Diagnostic> {
 
 fn param_attrs(attrs: &Attrs<'_>, site: Site) -> Result<ParamAttrs, Diagnostic> {
     let accepted: &[&str] = match site {
-        Site::Variant => &["name"],
+        Site::Variant => &["name", "description"],
         _ => &[
             "name",
             "alias",
@@ -747,8 +747,11 @@ fn variants(tokens: &[Tree]) -> Result<Vec<RawVariant>, Diagnostic> {
         }
         at += 1;
         reject_helpers(&attrs, AttrKind::Tool, Site::Variant)?;
+        let param = param_attrs(&attrs, Site::Variant)?;
         out.push(RawVariant {
-            name: param_attrs(&attrs, Site::Variant)?.name,
+            name: param.name,
+            description: param.description,
+            doc: doc_description(&attrs.docs),
             ident,
         });
     }
@@ -976,7 +979,7 @@ mod tests {
         let source = "enum E { #[param(repeat)] A }";
         assert_eq!(
             parse_enum(source).unwrap_err().message,
-            "unknown key `repeat` in `#[param(..)]` on an enum variant; expected one of: name"
+            "unknown key `repeat` in `#[param(..)]` on an enum variant; expected one of: name, description"
         );
         assert_eq!(
             parse_enum(r#"#[tool(name = "x")] enum E { A }"#)

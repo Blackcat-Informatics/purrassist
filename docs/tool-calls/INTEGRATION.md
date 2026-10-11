@@ -1557,11 +1557,11 @@ Added for typed (derived) tool definitions, none of which breaks existing code:
   `object_spec()`); `ToolParameter: FromNode` (`parameter()`,
   `const REQUIRED`, `absent()`, `const DEPTH`), implemented for `String`, the
   twelve integer types, `f64`, `json::Number`, `bool`, `Vec<T: ToolItem>` and
-  `Option<T: ToolParameter>`; the marker `ToolItem: ToolParameter` (every
+  `Option<T: ToolItem>` (so `Option<Option<T>>` is rejected); the marker `ToolItem: ToolParameter` (every
   `ToolParameter` except `Option<T>`, so `Vec<Option<T>>` does not compile);
   `ToolRepeatable` (`repeated()`, for `Vec<T>` and `Option<Vec<T>>`);
-  `ToolPattern` (`with_pattern(&'static str)`, for `String`, `Option<String>`
-  and `Vec<String>`); and the marker `ToolExtra` (for `json::Node`).
+  `ToolPattern` (`with_pattern(&'static str)`, for `String`, `Option<String>`,
+  `Vec<String>` and `Option<Vec<String>>`); and the marker `ToolExtra` (for `json::Node`).
 - `tool_call::max_depth(&[usize]) -> usize` (`const fn`): the nesting depth
   of a derived type, evaluated at compile time to reject indirect recursion.
 - `tool_call::Members<'a>` (`new(declared, order, node)`, `is_present(index)`,

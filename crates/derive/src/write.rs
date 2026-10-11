@@ -332,16 +332,29 @@ impl Writer {
     /// Compile-time assertions that every tool, parameter and alias name is
     /// valid (the rule itself lives in core).
     fn name_checks(tc: &str, tool: &Tool) -> String {
-        let mut names: Vec<(&str, &Text)> = vec![("tool name", &tool.name)];
-        names.extend(tool.aliases.iter().map(|text| ("tool alias", text)));
+        const TOOL: &str = "#[tool(name = \"..\")]";
+        const PARAM: &str = "#[param(name = \"..\")]";
+        // Aliases are always written explicitly, so their remedy is a valid
+        // spelling; derived names can also be replaced with `name = ".."`.
+        let mut names: Vec<(&str, Option<&str>, &Text)> =
+            vec![("tool name", Some(TOOL), &tool.name)];
+        names.extend(tool.aliases.iter().map(|text| ("tool alias", None, text)));
         for param in &tool.params {
-            names.push(("parameter name", &param.key));
-            names.extend(param.aliases.iter().map(|text| ("parameter alias", text)));
+            names.push(("parameter name", Some(PARAM), &param.key));
+            names.extend(
+                param
+                    .aliases
+                    .iter()
+                    .map(|text| ("parameter alias", None, text)),
+            );
         }
         let mut out = String::new();
-        for (what, text) in names {
+        for (what, attribute, text) in names {
+            let remedy = attribute.map_or_else(String::new, |attribute| {
+                format!(", or set it with {attribute}")
+            });
             let message = format!(
-                "{what} {:?} is not valid: use ASCII letters, digits and `_ . : -`",
+                "{what} {:?} is not valid: use ASCII letters, digits and `_ . : -`{remedy}",
                 text.value
             );
             let _ = write!(

@@ -108,8 +108,9 @@
 //! | `pattern = ".."` | a regular expression each string must match; only on `String`, `Option<String>`, `Vec<String>`, `Option<Vec<String>>` |
 //! | `extra` | receives the undeclared arguments (see `unknown = pass`) |
 //!
-//! `#[param(name = "..")]` also goes on an enum variant, naming the value
-//! that variant stands for. A nested struct needs no attributes of its own:
+//! `#[param(name = "..")]` and `#[param(description = "..")]` also go on an enum
+//! variant, naming the value it stands for and describing it. A nested struct
+//! needs no attributes of its own:
 //! its tool-level keys `name`, `alias`, `effects` and `policy` are accepted
 //! and ignored when it is used as a field, `unknown` applies to the nested
 //! object, and its description becomes the field's description when the field
@@ -134,8 +135,18 @@
 //! The doc comment of a struct, field or enum is the description when no
 //! `description` key is given (an explicit key wins): each line is trimmed and
 //! the lines are joined with `\n`. Only `///` and `#[doc = "literal"]` lines
-//! count. A variant's doc comment is accepted and has no effect, because an
-//! enumeration carries only its values.
+//! count.
+//!
+//! An enumeration has one description, so the descriptions of its variants are
+//! folded into it. A variant's description is its
+//! `#[param(description = "..")]`, else its doc comment (whitespace collapsed to
+//! single spaces). The enum's description is its own part (`#[tool(description = "..")]`
+//! or its doc comment, which the explicit key replaces) followed, when any
+//! variant has a description, by one line per such variant, in declaration
+//! order, of the form `- <value>: <text>`, separated by `\n`. An enum with
+//! only variant descriptions is just those lines. A field of an enum type
+//! without a description of its own uses this composed text, as a field of a
+//! nested struct type uses the struct's.
 //!
 //! # Defaults
 //!
@@ -288,8 +299,12 @@ pub fn derive_tool_definition(input: TokenStream) -> TokenStream {
 ///
 /// The enum is an enumeration parameter whose values are its variant names,
 /// verbatim, or the `#[param(name = "..")]` of a variant. The conversion
-/// accepts exactly those strings. The enum's doc comment, or
-/// `#[tool(description = "..")]`, is the description of the enumeration.
+/// accepts exactly those strings. The description of the enumeration is the
+/// enum's own part (its doc comment, replaced by `#[tool(description = "..")]`
+/// when given) followed by one `- <value>: <text>` line per variant that has a
+/// description (`#[param(description = "..")]`, else its doc comment,
+/// collapsed to one line), in declaration order, separated by `\n`. A field of
+/// this type with no description of its own uses the composed text.
 ///
 /// ```
 /// use purrassist_core::{json, tool_call::{FromNode, Param, ToolParameter}};
@@ -314,7 +329,7 @@ pub fn derive_tool_definition(input: TokenStream) -> TokenStream {
 /// A `compile_error!` spanned at the offending token for a struct or union,
 /// generics, an enum without variants, a variant that carries data, repeated
 /// values, and keys other than `#[tool(description)]` on the enum or
-/// `#[param(name)]` on a variant. The conversion returns a `FromNodeError`
+/// `#[param(name, description)]` on a variant. The conversion returns a `FromNodeError`
 /// (`expected: "one of \"A\", \"B\""`) for any value that is not one of the
 /// declared strings, including non-strings and different case.
 #[proc_macro_derive(ToolEnum, attributes(tool, param))]

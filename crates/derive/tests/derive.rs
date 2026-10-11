@@ -576,8 +576,30 @@ struct DocumentedNested {
 /// The enum's own text.
 #[derive(ToolEnum)]
 enum DocumentedEnum {
-    /// Variant docs have no schema sink.
+    /// First value.
+    ///
+    /// More text.
     One,
+    #[param(name = "two", description = "Explicit wins over the doc.")]
+    /// Ignored.
+    Two,
+    Three,
+}
+
+/// Fields without their own description take the enum's composed one.
+#[derive(ToolDefinition)]
+struct EnumFallback {
+    chosen: DocumentedEnum,
+    /// The field's own doc.
+    own: DocumentedEnum,
+    only_variants: OnlyVariantDocs,
+}
+
+#[derive(ToolEnum)]
+enum OnlyVariantDocs {
+    /// Alpha value.
+    A,
+    B,
 }
 
 /// Overridden.
@@ -592,6 +614,9 @@ struct Escapes {}
 #[derive(ToolDefinition)]
 #[tool(description = r#"raw "x" \n"#)]
 struct RawEscapes {}
+
+const ENUM_DESCRIPTION: &str =
+    "The enum's own text.\n- One: First value. More text.\n- two: Explicit wins over the doc.";
 
 #[test]
 fn doc_comments_are_descriptions_and_explicit_keys_win() {
@@ -634,7 +659,34 @@ fn doc_comments_are_descriptions_and_explicit_keys_win() {
     );
     assert_eq!(
         <DocumentedEnum as ToolParameter>::parameter(),
-        Param::enumeration(&["One"]).description("The enum's own text.")
+        Param::enumeration(&["One", "two", "Three"]).description(ENUM_DESCRIPTION)
+    );
+    assert_eq!(
+        <OnlyVariantDocs as ToolParameter>::parameter(),
+        Param::enumeration(&["A", "B"]).description("- A: Alpha value.")
+    );
+    assert_eq!(
+        EnumFallback::tool_definition(),
+        Definition::new("enum_fallback")
+            .description("Fields without their own description take the enum's composed one.")
+            .param(
+                "chosen",
+                Param::enumeration(&["One", "two", "Three"])
+                    .description(ENUM_DESCRIPTION)
+                    .required()
+            )
+            .param(
+                "own",
+                Param::enumeration(&["One", "two", "Three"])
+                    .description("The field's own doc.")
+                    .required()
+            )
+            .param(
+                "only_variants",
+                Param::enumeration(&["A", "B"])
+                    .description("- A: Alpha value.")
+                    .required()
+            )
     );
     assert_eq!(
         ExplicitOverDoc::tool_definition(),

@@ -201,6 +201,10 @@ pub(crate) struct RawField {
 pub(crate) struct RawVariant {
     pub(crate) ident: Ident,
     pub(crate) name: Option<Text>,
+    /// An explicit `#[param(description = "..")]`.
+    pub(crate) description: Option<Text>,
+    /// The doc comment, used when there is no explicit description.
+    pub(crate) doc: Option<String>,
 }
 
 /// The body of the derived item.
@@ -614,6 +618,7 @@ fn resolve_enumeration(
         ));
     }
     let mut resolved: Vec<(Ident, Text)> = Vec::with_capacity(variants.len());
+    let mut lines: Vec<String> = Vec::new();
     for variant in variants {
         let value = variant.name.unwrap_or_else(|| {
             Text::synthesized(variant.ident.bare().to_owned(), variant.ident.span)
@@ -624,10 +629,24 @@ fn resolve_enumeration(
                 format!("enumeration value `{}` is declared twice", value.value),
             ));
         }
+        let text = variant.description.map(|text| text.value).or(variant.doc);
+        if let Some(text) = text {
+            lines.push(format!(
+                "- {}: {}",
+                value.value,
+                text.split_whitespace().collect::<Vec<_>>().join(" ")
+            ));
+        }
         resolved.push((variant.ident, value));
     }
+    let own = describe(tool.description, doc, ident.span).map(|text| text.value);
+    let composed = match (own, lines.is_empty()) {
+        (own, true) => own,
+        (None, false) => Some(lines.join("\n")),
+        (Some(own), false) => Some(format!("{own}\n{}", lines.join("\n"))),
+    };
     Ok(Item::Enumeration(Enumeration {
-        description: describe(tool.description, doc, ident.span),
+        description: composed.map(|text| Text::synthesized(text, ident.span)),
         ident,
         variants: resolved,
     }))
