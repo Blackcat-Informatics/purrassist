@@ -50,10 +50,12 @@ undeclared member of a nested struct without `extra` is therefore dropped and
 recorded (a `BestGuess` call), and a nested struct that should keep such members
 declares `unknown = pass` with its own `extra` field. A nested struct that
 inherited `error` and left a call unresolved now drops the member, so that call
-becomes a `BestGuess`; declare `unknown = error` on it to stay strict. One
-exception: an undeclared key that is a near miss of a declared name (one that
-name matching would rename) is never dropped, so when it is not renamed the
-call is unresolved rather than a `BestGuess`.
+becomes a `BestGuess`; declare `unknown = error` on it to stay strict. Under
+`policy = structural` (the default for mutating tools), an undeclared key that
+is a near miss of a declared name is never dropped, and the call is unresolved
+rather than a `BestGuess`. Under `policy = tolerant` (the default for read-only
+tools), such a key is renamed to a free declared name as a guess, or dropped
+with a recorded loss when no declared name is free.
 
 The impls are written against `purrassist-core`, which must be a dependency of
 the crate that derives. Users of the `purrassist` facade crate derive through

@@ -25,8 +25,10 @@ versions may differ. To keep that promise, a patch release must not change what
 generated code needs from core: any change to the derive support surface
 (`tool_call::derive_support`, the `FromNodeError` constructors, or another item
 generated code names) that an older core patch of the same minor lacks requires
-a minor version bump, which renames the marker. The core unit test fails if the
-workspace major or minor version moves without renaming the marker.
+a minor version bump, which renames the marker. Likewise, a core patch release
+must not remove or change a `#[doc(hidden)]` support item that same-minor
+derive output uses. The core unit test fails if the workspace major or minor
+version moves without renaming the marker.
 
 ## Placeholder name records (already minted)
 
