@@ -1556,12 +1556,23 @@ Added for typed (derived) tool definitions, none of which breaks existing code:
   supported field types: `ToolArguments: FromNode` (`tool_definition()`,
   `object_spec()`); `ToolParameter: FromNode` (`parameter()`,
   `const REQUIRED`, `absent()`, `const DEPTH`), implemented for `String`, the
-  twelve integer types, `f64`, `json::Number`, `bool`, `Vec<T: ToolItem>` and
-  `Option<T: ToolItem>` (so `Option<Option<T>>` is rejected); the marker `ToolItem: ToolParameter` (every
+  twelve integer types, `f32`, `f64`, `json::Number`, `bool`,
+  `Vec<T: ToolItem>`, `Option<T: ToolItem>` (so `Option<Option<T>>` is
+  rejected) and `Box<T: ToolItem>` (forwards `REQUIRED`, `absent()` and
+  `DEPTH`; it does not enable recursion, and a cycle through it is still
+  E0391). Only `parameter()` is required of a hand-written impl: `REQUIRED`
+  defaults to `true`, `absent()` to `None` and `DEPTH` to `0`, and `REQUIRED`
+  must be `false` exactly when `absent()` is `Some(..)`. `FromNode` is also
+  implemented for `f32` (the spelling is parsed once with `str::parse::<f32>`,
+  so reading is round-to-nearest and never double-rounded through `f64`;
+  writing is exact; infinity is rejected with `expected: "number within the
+  finite f32 range"`) and for `Box<T: FromNode>`. The marker `ToolItem: ToolParameter` (every
   `ToolParameter` except `Option<T>`, so `Vec<Option<T>>` does not compile);
   `ToolRepeatable` (`repeated()`, for `Vec<T>` and `Option<Vec<T>>`);
   `ToolPattern` (`with_pattern(&'static str)`, for `String`, `Option<String>`,
-  `Vec<String>` and `Option<Vec<String>>`); and the marker `ToolExtra` (for `json::Node`).
+  `Vec<String>` and `Option<Vec<String>>`); and `ToolExtra`, a **sealed**
+  marker (private supertrait) implemented only for `json::Node`, built by the
+  generated code through its `#[doc(hidden)]` `__from_members` constructor.
 - Nested derived structs state their unknown-member handling explicitly:
   `ToolArguments::object_spec()` (reached only through
   `ToolParameter::parameter()`, as a field) always calls
@@ -1581,16 +1592,23 @@ Added for typed (derived) tool definitions, none of which breaks existing code:
   of a derived type, evaluated at compile time to reject indirect recursion.
 - `tool_call::Members<'a>` (`new(declared, order, node)`, `is_present(index)`,
   and `Iterator<Item = Slot<'a>>`) and `tool_call::Slot<'a>` (`Declared`,
-  `Duplicate`, `Undeclared`): a single-pass classifier of an object's members
+  `Duplicate`, `Undeclared`; `#[non_exhaustive]`, so a match outside core needs
+  a wildcard arm, and generated code reports a `FromNodeError` for it instead
+  of panicking): a single-pass classifier of an object's members
   (O(n log k)) that tells a duplicate and an undeclared member from an absent
   one, which `Node::get` cannot.
 - `FromNodeError::{mismatch(expected, &Node), missing(name), duplicate(name),
   unknown(name), within(segment)}`: constructors for the exact
   `pointer`/`expected`/`found` shape; `within` prefixes a JSON Pointer segment.
 - `tool_call::is_valid_name` is now a `const fn` (same behavior).
-- `#[doc(hidden)]` `tool_call::{__derive_number, __valid_name}`: support for
-  generated code only (a number built from a spelling that the macro already
-  validated, and name validation at compile time). They are not part of the
+- `#[doc(hidden)]` `tool_call::{__derive_number, __sorted, __valid_name}`:
+  support for generated code only (a number built from a spelling that the
+  macro already validated, a `const` check that the declared-name table is in
+  strictly ascending byte order, which generated code asserts at compile time
+  so release builds cannot misclassify members, and name validation at
+  compile time). The `Members` classifier is documented to report absent
+  members through per-field slots and `ToolParameter::absent()`;
+  `is_present` remains available to hand-written conversions. They are not part of the
   stable API, and their preconditions are documented on the items.
 - New crate `purrassist-derive` (zero dependencies, built-in `proc_macro`
   only) with `#[derive(ToolDefinition)]` and `#[derive(ToolEnum)]`, and the

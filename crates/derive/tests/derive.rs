@@ -86,6 +86,7 @@ struct Everything {
     a_u64: u64,
     a_u128: u128,
     a_usize: usize,
+    single: f32,
     float: f64,
     exact: Number,
     flag: bool,
@@ -98,6 +99,12 @@ struct Everything {
     units: Vec<Unit>,
     maybe_list: Option<Vec<u8>>,
     matrix: Vec<Vec<u8>>,
+    boxed: Box<Dims>,
+    #[allow(clippy::box_collection)] // the point: any `ToolItem` may be boxed
+    boxed_text: Box<String>,
+    maybe_boxed: Option<Box<Dims>>,
+    #[allow(clippy::vec_box)] // the point: `Vec<Box<T>>` is a supported field type
+    boxed_list: Vec<Box<Dims>>,
 }
 
 fn dims() -> ParameterSpec {
@@ -128,6 +135,7 @@ fn everything_by_hand() -> Definition {
         .param("a_u64", Param::integer().required())
         .param("a_u128", Param::integer().required())
         .param("a_usize", Param::integer().required())
+        .param("single", Param::number().required())
         .param("float", Param::number().required())
         .param("exact", Param::number().required())
         .param("flag", Param::boolean().required())
@@ -143,6 +151,10 @@ fn everything_by_hand() -> Definition {
             "matrix",
             Param::array(Param::array(Param::integer())).required(),
         )
+        .param("boxed", dims().required())
+        .param("boxed_text", Param::string().required())
+        .param("maybe_boxed", dims())
+        .param("boxed_list", Param::array(dims()).required())
 }
 
 #[test]
@@ -162,15 +174,16 @@ fn every_mapped_type_equals_the_hand_built_definition() {
     ] {
         assert!(schema.contains(fragment), "{fragment} in {schema}");
     }
-    // `maybe`, `maybe_nested` and `maybe_list` (the `Option` fields) are the
+    // `maybe`, `maybe_nested`, `maybe_list` and `maybe_boxed` (the `Option`
+    // fields) are the
     // only members left out of the top-level `required` list.
     let document = tools.tool("everything").unwrap().schema_document();
     let required: Vec<&str> = match &document.get("required").unwrap().value {
         Value::Array(items) => items.iter().map(|item| item.as_str().unwrap()).collect(),
         other => panic!("{other:?}"),
     };
-    assert_eq!(required.len(), 25 - 3, "{required:?}");
-    for optional in ["maybe", "maybe_nested", "maybe_list"] {
+    assert_eq!(required.len(), 30 - 4, "{required:?}");
+    for optional in ["maybe", "maybe_nested", "maybe_list", "maybe_boxed"] {
         assert!(!required.contains(&optional), "{optional}");
     }
     assert!(required.contains(&"nested") && required.contains(&"matrix"));
@@ -183,10 +196,12 @@ fn every_mapped_type_round_trips_through_from_node() {
             "a_i128":-170141183460469231731687303715884105728,"a_isize":-1,
             "a_u8":8,"a_u16":16,"a_u32":32,"a_u64":18446744073709551615,
             "a_u128":340282366920938463463374607431768211455,"a_usize":1,
-            "float":2.5,"exact":1.50,"flag":true,"list":["x","y"],
+            "single":0.1,"float":2.5,"exact":1.50,"flag":true,"list":["x","y"],
             "nested":{"width":3},"unit":"Em","nested_list":[{"width":1,"height":2},{"width":4}],
             "maybe_nested":{"width":5},"units":["Px","Em"],"maybe_list":[1,2],
-            "matrix":[[1],[2,3],[]]}"#,
+            "matrix":[[1],[2,3],[]],
+            "boxed":{"width":6},"boxed_text":"b","maybe_boxed":null,
+            "boxed_list":[{"width":7,"height":8}]}"#,
     );
     let expected = Everything {
         text: "t".into(),
@@ -202,6 +217,7 @@ fn every_mapped_type_round_trips_through_from_node() {
         a_u64: u64::MAX,
         a_u128: u128::MAX,
         a_usize: 1,
+        single: 0.1,
         float: 2.5,
         exact: "1.50".parse().unwrap(),
         flag: true,
@@ -229,6 +245,16 @@ fn every_mapped_type_round_trips_through_from_node() {
         units: vec![Unit::Px, Unit::Em],
         maybe_list: Some(vec![1, 2]),
         matrix: vec![vec![1], vec![2, 3], vec![]],
+        boxed: Box::new(Dims {
+            width: 6,
+            height: None,
+        }),
+        boxed_text: Box::new("b".into()),
+        maybe_boxed: None,
+        boxed_list: vec![Box::new(Dims {
+            width: 7,
+            height: Some(8),
+        })],
     };
     assert_eq!(Everything::from_node(&node), Ok(expected));
     assert_eq!(
@@ -238,6 +264,52 @@ fn every_mapped_type_round_trips_through_from_node() {
         "1.50",
         "an exact number keeps its spelling"
     );
+}
+
+#[test]
+fn f32_reads_round_to_nearest_and_rejects_non_finite() {
+    #[derive(ToolDefinition, Debug, PartialEq)]
+    struct Floats {
+        single: f32,
+        maybe: Option<f32>,
+    }
+    assert_eq!(
+        Floats::tool_definition(),
+        Definition::new("floats")
+            .param("single", Param::number().required())
+            .param("maybe", Param::number())
+    );
+    // Not rounded through f64: this spelling sits just above an f32 midpoint.
+    let above_midpoint = "1.00000005960464477539062500000001";
+    let node = parse(&format!(r#"{{"single":{above_midpoint}}}"#));
+    assert_eq!(
+        Floats::from_node(&node),
+        Ok(Floats {
+            single: f32::from_bits(1.0_f32.to_bits() + 1),
+            maybe: None,
+        })
+    );
+    for overflow in ["1e39", "-3.5e38", "1e999999"] {
+        assert_eq!(
+            Floats::from_node(&parse(&format!(r#"{{"single":{overflow}}}"#))),
+            Err(error(
+                "/single",
+                "number within the finite f32 range",
+                &format!("number {overflow}")
+            )),
+            "{overflow}"
+        );
+    }
+}
+
+#[test]
+fn boxed_fields_are_the_target_parameter() {
+    assert_eq!(<Box<Dims> as ToolParameter>::parameter(), dims());
+    assert_eq!(<Box<Dims> as ToolParameter>::DEPTH, 1);
+    const { assert!(<Box<Dims> as ToolParameter>::REQUIRED) };
+    const { assert!(!<Option<Box<Dims>> as ToolParameter>::REQUIRED) };
+    let error = Everything::from_node(&parse(r#"{"boxed":{"width":"x"}}"#)).unwrap_err();
+    assert_eq!(error.pointer, "/boxed/width");
 }
 
 #[test]

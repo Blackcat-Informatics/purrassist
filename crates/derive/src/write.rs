@@ -238,13 +238,6 @@ impl Writer {
             .collect();
         let from_node = self.tool_from_node(tool);
         let name_checks = Self::name_checks(&tc, tool);
-        let extra_check = tool.extra.as_ref().map_or_else(String::new, |extra| {
-            let ty = self.ty(&extra.ty);
-            format!(
-                "const _: () = {{ fn __pa_extra<__pa_T: {tc}::ToolExtra>() {{}} let _ = \
-                 __pa_extra::<{ty}>; }};"
-            )
-        });
         format!(
             "#[automatically_derived] impl {tc}::ToolArguments for {name} {{ \
                 fn tool_definition() -> {tc}::ToolDefinition {{ {definition} }} \
@@ -260,7 +253,6 @@ impl Writer {
              }} \
              #[automatically_derived] impl {tc}::ToolItem for {name} {{}} \
              {from_node} \
-             {extra_check} \
              {name_checks} \
              const _: ::core::primitive::usize = <{name} as {tc}::ToolParameter>::DEPTH;",
             depths = depths.join(", "),
@@ -310,11 +302,12 @@ impl Writer {
             let field = self.splice([param.ident.span]);
             let _ = write!(fields, "{field}: __pa_v{index}, ");
         }
-        if let Some(Extra { ident, .. }) = &tool.extra {
+        if let Some(Extra { ident, ty }) = &tool.extra {
             let field = self.splice([ident.span]);
+            let ty = self.ty(ty);
             let _ = write!(
                 fields,
-                "{field}: {js}::Node::new({js}::Value::Object(__pa_extra)), "
+                "{field}: <{ty} as {tc}::ToolExtra>::__from_members(__pa_extra), "
             );
         }
 
@@ -324,6 +317,9 @@ impl Writer {
                     ::core::result::Result<Self, {tc}::FromNodeError> {{ \
                     const __PA_NAMES: &[&::core::primitive::str] = &[{names}]; \
                     const __PA_ORDER: &[::core::primitive::usize] = &[{order}]; \
+                    const _: () = ::core::assert!({tc}::__sorted(__PA_NAMES), \"{{}}\", \
+                        \"declared member names are not in strictly ascending byte order \
+                        (internal error in the derive)\"); \
                     let mut __pa_members = {tc}::Members::new(__PA_NAMES, __PA_ORDER, __pa_node)?; \
                     {declarations} \
                     for __pa_slot in &mut __pa_members {{ match __pa_slot {{ {arms} }} }} \
@@ -412,6 +408,14 @@ impl Writer {
                  return ::core::result::Result::Err({tc}::FromNodeError::unknown(&__pa_member.key)), "
             );
         }
+        // `Slot` is `#[non_exhaustive]`; a classification this derive does not
+        // know is reported, never a panic.
+        let _ = write!(
+            arms,
+            "_ => return ::core::result::Result::Err({tc}::FromNodeError::mismatch(\
+             \"a member classification known to this derive (internal error: \
+             rebuild against a matching purrassist-derive)\", __pa_node)), "
+        );
 
         arms
     }
@@ -562,6 +566,53 @@ mod tests {
             "{}",
             output.text
         );
+    }
+
+    #[test]
+    fn the_name_table_is_asserted_sorted_at_compile_time() {
+        let output = write(
+            Target::Definition,
+            Flavor::Core,
+            "struct A { b: u8, a: u8 }",
+        );
+        assert!(
+            output.text.contains(
+                "const _: () = ::core::assert!(::purrassist_core::tool_call::__sorted(__PA_NAMES), \"{}\", "
+            ),
+            "{}",
+            output.text
+        );
+        assert_balanced(&output.text);
+    }
+
+    #[test]
+    fn extra_is_built_through_the_sealed_constructor_and_matches_have_a_wildcard() {
+        let output = write(
+            Target::Definition,
+            Flavor::Core,
+            "#[tool(unknown = pass)] struct A { a: u8, #[param(extra)] rest: Node }",
+        );
+        assert!(
+            output
+                .text
+                .contains("::purrassist_core::tool_call::ToolExtra>::__from_members(__pa_extra)"),
+            "{}",
+            output.text
+        );
+        assert!(
+            !output.text.contains("Value::Object(__pa_extra)"),
+            "{}",
+            output.text
+        );
+        // The match ends in a wildcard that reports an error (no panic).
+        assert!(
+            output
+                .text
+                .contains("_ => return ::core::result::Result::Err(::purrassist_core::tool_call::FromNodeError::mismatch("),
+            "{}",
+            output.text
+        );
+        assert!(!output.text.contains("panic!"), "{}", output.text);
     }
 
     #[test]

@@ -70,11 +70,12 @@
 //! |---|---|
 //! | `String` | string |
 //! | `i8`..`i128`, `isize`, `u8`..`u128`, `usize` | integer |
-//! | `f64` | number |
+//! | `f32`, `f64` | number; `f32` is written exactly and read round-to-nearest, and a value outside the finite `f32` range is rejected |
 //! | `json::Number` | number, read back with its exact spelling |
 //! | `bool` | boolean |
 //! | `Vec<T>` | array of `T` |
 //! | `Option<T>` | `T`, not required |
+//! | `Box<T>` | `T` (required exactly as `T`; it does not enable recursion) |
 //! | a struct deriving `ToolDefinition` | nested object |
 //! | an enum deriving `ToolEnum` | enumeration of its values |
 //!
@@ -224,7 +225,8 @@
 //! is a compile-time cycle error (E0391) in an associated constant; because
 //! the generated code is built from text, that error is reported at the
 //! `#[derive]` rather than at a field. A recursive schema must be declared by
-//! hand.
+//! hand. `Box` does not change this: a cycle through `Box<B>` is still E0391
+//! and `Option<Box<Self>>` is still a compile error at the token.
 //!
 //! # Limits
 //!
@@ -1326,5 +1328,27 @@ mod rejected_input {
     //! #[derive(ToolDefinition)]
     //! #[tool(name = "good_name")]
     //! struct A { a: u8 }
+    //! ```
+    //!
+    //! # 46. Rejected: an indirect cycle through `Box` (a cycle in an associated constant)
+    //!
+    //! ```compile_fail,E0391
+    //! use purrassist_derive::ToolDefinition;
+    //!
+    //! #[derive(ToolDefinition)]
+    //! struct A { b: Box<B> }
+    //! #[derive(ToolDefinition)]
+    //! struct B { a: Vec<A> }
+    //! ```
+    //!
+    //! The twin without the cycle:
+    //!
+    //! ```
+    //! use purrassist_derive::ToolDefinition;
+    //!
+    //! #[derive(ToolDefinition)]
+    //! struct A { b: Box<B> }
+    //! #[derive(ToolDefinition)]
+    //! struct B { a: Vec<u8> }
     //! ```
 }

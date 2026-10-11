@@ -17,7 +17,7 @@
 //! unsupported combination is a compile error at the field type rather than a
 //! runtime failure: [`ToolItem`] excludes `Option<T>` from `Vec<T>`,
 //! [`ToolRepeatable`] exists only for `Vec<T>` and `Option<Vec<T>>`,
-//! [`ToolPattern`] only for strings, and [`ToolExtra`] only for
+//! [`ToolPattern`] only for strings, and [`ToolExtra`] (sealed) only for
 //! [`Node`].
 //!
 //! # Integer ranges
@@ -71,6 +71,8 @@ use core::str::FromStr;
 ///                 }
 ///                 Slot::Duplicate { member, .. } => return Err(FromNodeError::duplicate(&member.key)),
 ///                 Slot::Undeclared(member) => return Err(FromNodeError::unknown(&member.key)),
+///                 // `Slot` is `#[non_exhaustive]`: a new classification is not a breaking change.
+///                 _ => return Err(FromNodeError::mismatch("a known member classification", node)),
 ///             }
 ///         }
 ///         Ok(Self {
@@ -124,11 +126,43 @@ pub trait ToolArguments: FromNode {
 /// `Option<T>` shares the parameter shape of `T` and is the only type that is
 /// not required.
 ///
-/// Implemented here for `String`, the twelve integer types, `f64`,
-/// [`Number`], `bool`, `Vec<T: ToolItem>` and `Option<T: ToolItem>`; the
-/// derive implements it (and [`ToolItem`]) for derived structs and enums.
-/// `Option<Option<T>>` is deliberately not a parameter: JSON has one
-/// `null`, so the nesting is meaningless.
+/// Implemented here for `String`, the twelve integer types, `f32`, `f64`,
+/// [`Number`], `bool`, `Vec<T: ToolItem>`, `Option<T: ToolItem>` and
+/// `Box<T: ToolItem>`; the derive implements it (and [`ToolItem`]) for
+/// derived structs and enums. `Option<Option<T>>` is deliberately not a
+/// parameter: JSON has one `null`, so the nesting is meaningless.
+///
+/// # Hand-written implementations
+/// Only [`parameter`](Self::parameter) is required. The other items default
+/// to a required, scalar-depth parameter: `REQUIRED = true`,
+/// `absent() = None` and `DEPTH = 0`. `REQUIRED` and `absent()` must agree:
+/// `REQUIRED` is `false` exactly when `absent()` is `Some(..)`. Declaring
+/// `REQUIRED = false` while `absent()` stays `None` makes the schema accept a
+/// missing member that [`FromNode`] then rejects as
+/// [`FromNodeError::missing`]. Only a type that nests derived types needs a
+/// `DEPTH` other than `0`.
+///
+/// ```
+/// use purrassist_core::{json::Node, tool_call::{FromNode, FromNodeError, Param, ParameterSpec, ToolParameter}};
+///
+/// struct FilePath(String);
+///
+/// impl FromNode for FilePath {
+///     fn from_node(node: &Node) -> Result<Self, FromNodeError> {
+///         String::from_node(node).map(Self)
+///     }
+/// }
+///
+/// impl ToolParameter for FilePath {
+///     fn parameter() -> ParameterSpec {
+///         Param::string()
+///     }
+/// }
+///
+/// assert!(FilePath::REQUIRED);
+/// assert!(FilePath::absent().is_none());
+/// assert_eq!(FilePath::DEPTH, 0);
+/// ```
 ///
 /// ```
 /// use purrassist_core::tool_call::{Param, ToolParameter};
@@ -152,19 +186,25 @@ pub trait ToolParameter: FromNode {
     fn parameter() -> ParameterSpec;
 
     /// Whether a member of this type must be present (false only for
-    /// `Option<T>`).
-    const REQUIRED: bool;
+    /// `Option<T>`). Defaults to `true`.
+    ///
+    /// This must be `false` exactly when [`absent`](Self::absent) returns
+    /// `Some(..)`.
+    const REQUIRED: bool = true;
 
     /// The value an absent member converts to: `Some(None)` for `Option<T>`,
     /// otherwise `None` (absence is then a [`FromNodeError::missing`] error).
+    /// Defaults to `None`; see [`REQUIRED`](Self::REQUIRED) for the relation.
     #[must_use]
-    fn absent() -> Option<Self>;
+    fn absent() -> Option<Self> {
+        None
+    }
 
     /// Nesting depth of derived types: `0` for scalars, `T::DEPTH` for
     /// `Vec<T>` and `Option<T>`, and `1 + max_depth(..)` over its fields for a
     /// derived type. A derive evaluates it in a `const` so that indirectly
-    /// recursive types become a compile-time cycle error.
-    const DEPTH: usize;
+    /// recursive types become a compile-time cycle error. Defaults to `0`.
+    const DEPTH: usize = 0;
 }
 
 /// A [`ToolParameter`] that is not an `Option`: the bound of `Vec<T>` items.
@@ -177,9 +217,10 @@ pub trait ToolParameter: FromNode {
 /// fn item<T: ToolItem>() {}
 /// item::<String>();
 /// item::<Vec<u8>>();
+/// item::<Box<String>>();
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0277
 /// use purrassist_core::tool_call::ToolItem;
 /// fn item<T: ToolItem>() {}
 /// item::<Option<String>>();
@@ -237,8 +278,20 @@ pub trait ToolPattern {
     fn with_pattern(pattern: &'static str) -> ParameterSpec;
 }
 
+mod sealed {
+    /// The private supertrait that closes [`super::ToolExtra`].
+    pub trait Sealed {}
+    impl Sealed for crate::json::Node {}
+}
+
 /// Marker for the type of a field that collects undeclared members
 /// (`unknown = pass`): [`Node`], holding an object of those members.
+///
+/// The trait is sealed: `json::Node` is the only implementor, and the
+/// derive builds the field through the hidden `__from_members` constructor.
+/// It is not an extension point. Sealing it now leaves room to accept more
+/// collection types later without breaking an implementor; unsealing a
+/// sealed trait is compatible, sealing a published one is not.
 ///
 /// ```
 /// use purrassist_core::{json::Node, tool_call::ToolExtra};
@@ -246,14 +299,34 @@ pub trait ToolPattern {
 /// extra::<Node>();
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0277
 /// use purrassist_core::tool_call::ToolExtra;
 /// fn extra<T: ToolExtra>() {}
 /// extra::<String>();
 /// ```
-pub trait ToolExtra {}
+///
+/// A downstream implementation is rejected (the supertrait is private and
+/// cannot be named, so it cannot be implemented):
+///
+/// ```compile_fail,E0277
+/// use purrassist_core::{json::Member, tool_call::ToolExtra};
+/// struct Mine;
+/// impl ToolExtra for Mine {
+///     fn __from_members(_: Vec<Member>) -> Self { Self }
+/// }
+/// ```
+pub trait ToolExtra: sealed::Sealed + Sized {
+    /// Build the field from the collected undeclared members, in member
+    /// order. For generated code only.
+    #[doc(hidden)]
+    fn __from_members(members: Vec<Member>) -> Self;
+}
 
-impl ToolExtra for Node {}
+impl ToolExtra for Node {
+    fn __from_members(members: Vec<Member>) -> Self {
+        Self::new(Value::Object(members))
+    }
+}
 
 macro_rules! scalar_parameter {
     ($($target:ty => $spec:expr),* $(,)?) => {$(
@@ -261,11 +334,6 @@ macro_rules! scalar_parameter {
             fn parameter() -> ParameterSpec {
                 $spec
             }
-            const REQUIRED: bool = true;
-            fn absent() -> Option<Self> {
-                None
-            }
-            const DEPTH: usize = 0;
         }
         impl ToolItem for $target {}
     )*};
@@ -274,6 +342,7 @@ macro_rules! scalar_parameter {
 scalar_parameter!(
     String => Param::string(),
     bool => Param::boolean(),
+    f32 => Param::number(),
     f64 => Param::number(),
     Number => Param::number(),
     i8 => Param::integer(),
@@ -293,10 +362,6 @@ scalar_parameter!(
 impl<T: ToolItem> ToolParameter for Vec<T> {
     fn parameter() -> ParameterSpec {
         Param::array(T::parameter())
-    }
-    const REQUIRED: bool = true;
-    fn absent() -> Option<Self> {
-        None
     }
     const DEPTH: usize = T::DEPTH;
 }
@@ -327,6 +392,86 @@ impl<T: ToolItem> ToolParameter for Option<T> {
     }
     const DEPTH: usize = T::DEPTH;
 }
+
+/// `Box<T>` is a parameter exactly as `T` is, forwarding `REQUIRED`,
+/// `absent()` and `DEPTH`. It lets a field own a large nested value on the
+/// heap, but it does **not** make recursion possible: `DEPTH` still forms a
+/// cycle through the box, so a recursive tool definition remains a compile
+/// error (`E0391`), as does `Option<Box<Self>>`.
+///
+/// ```
+/// use purrassist_core::tool_call::{Param, ToolParameter};
+/// assert_eq!(<Box<u8> as ToolParameter>::parameter(), Param::integer());
+/// assert_eq!(<Option<Box<u8>> as ToolParameter>::absent(), Some(None));
+/// assert_eq!(<Vec<Box<String>> as ToolParameter>::parameter(), Param::array(Param::string()));
+/// ```
+///
+/// An indirect cycle through a `Box` is still a cycle:
+///
+/// ```compile_fail,E0391
+/// use purrassist_core::tool_call::{FromNode, FromNodeError, ParameterSpec, ToolParameter, ToolItem};
+/// use purrassist_core::json::Node;
+///
+/// struct A(Box<B>);
+/// struct B(Vec<A>);
+/// impl FromNode for A {
+///     fn from_node(_: &Node) -> Result<Self, FromNodeError> { unimplemented!() }
+/// }
+/// impl FromNode for B {
+///     fn from_node(_: &Node) -> Result<Self, FromNodeError> { unimplemented!() }
+/// }
+/// impl ToolParameter for A {
+///     fn parameter() -> ParameterSpec { unimplemented!() }
+///     const DEPTH: usize = 1 + <Box<B> as ToolParameter>::DEPTH;
+/// }
+/// impl ToolItem for A {}
+/// impl ToolParameter for B {
+///     fn parameter() -> ParameterSpec { unimplemented!() }
+///     const DEPTH: usize = 1 + <Vec<A> as ToolParameter>::DEPTH;
+/// }
+/// impl ToolItem for B {}
+/// const _: usize = <A as ToolParameter>::DEPTH;
+/// ```
+///
+/// The twin whose chain ends in a scalar compiles:
+///
+/// ```
+/// use purrassist_core::tool_call::{FromNode, FromNodeError, ParameterSpec, ToolParameter, ToolItem};
+/// use purrassist_core::json::Node;
+///
+/// struct A(Box<B>);
+/// struct B(Vec<u8>);
+/// impl FromNode for A {
+///     fn from_node(_: &Node) -> Result<Self, FromNodeError> { unimplemented!() }
+/// }
+/// impl FromNode for B {
+///     fn from_node(_: &Node) -> Result<Self, FromNodeError> { unimplemented!() }
+/// }
+/// impl ToolParameter for A {
+///     fn parameter() -> ParameterSpec { unimplemented!() }
+///     const DEPTH: usize = 1 + <Box<B> as ToolParameter>::DEPTH;
+/// }
+/// impl ToolItem for A {}
+/// impl ToolParameter for B {
+///     fn parameter() -> ParameterSpec { unimplemented!() }
+///     const DEPTH: usize = 1 + <Vec<u8> as ToolParameter>::DEPTH;
+/// }
+/// impl ToolItem for B {}
+/// const _: usize = <A as ToolParameter>::DEPTH;
+/// assert_eq!(<A as ToolParameter>::DEPTH, 2);
+/// ```
+impl<T: ToolItem> ToolParameter for Box<T> {
+    fn parameter() -> ParameterSpec {
+        T::parameter()
+    }
+    const REQUIRED: bool = T::REQUIRED;
+    fn absent() -> Option<Self> {
+        T::absent().map(Self::new)
+    }
+    const DEPTH: usize = T::DEPTH;
+}
+
+impl<T: ToolItem> ToolItem for Box<T> {}
 
 impl<T: ToolItem> ToolRepeatable for Vec<T> {
     fn repeated() -> ParameterSpec {
@@ -426,6 +571,46 @@ pub const fn __valid_name(name: &str) -> bool {
     super::is_valid_name(name)
 }
 
+/// Whether `names` is in strictly ascending byte order (no duplicates), as a
+/// `const` check for generated code. A derive asserts it for the sorted table
+/// of declared member names that [`Members`] binary-searches, so a table that
+/// the generator and the compiler disagree about is a compile error rather
+/// than a release-only misclassification.
+///
+/// ```
+/// use purrassist_core::tool_call::__sorted;
+/// const _: () = assert!(__sorted(&["a", "ab", "b", "é"]));
+/// assert!(__sorted(&[]));
+/// assert!(__sorted(&["only"]));
+/// assert!(!__sorted(&["b", "a"]));
+/// assert!(!__sorted(&["a", "a"]));
+/// assert!(!__sorted(&["é", "z"])); // byte order: 0xc3 sorts after `z`
+/// ```
+#[doc(hidden)]
+#[must_use]
+pub const fn __sorted(names: &[&str]) -> bool {
+    let mut index = 1;
+    while index < names.len() {
+        if !bytes_less(names[index - 1].as_bytes(), names[index].as_bytes()) {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+/// Lexicographic byte order, strictly less.
+const fn bytes_less(left: &[u8], right: &[u8]) -> bool {
+    let mut at = 0;
+    while at < left.len() && at < right.len() {
+        if left[at] != right[at] {
+            return left[at] < right[at];
+        }
+        at += 1;
+    }
+    left.len() < right.len()
+}
+
 /// How one member of an object relates to the declared member names.
 ///
 /// ```
@@ -435,7 +620,11 @@ pub const fn __valid_name(name: &str) -> bool {
 /// assert!(matches!(slots[0], Slot::Declared { index: 0, .. }));
 /// assert!(matches!(slots[1], Slot::Undeclared(_)));
 /// ```
+///
+/// The enum is `#[non_exhaustive]`, so a match outside this crate needs a
+/// wildcard arm; generated conversions report a [`FromNodeError`] for it.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub enum Slot<'a> {
     /// The first occurrence of a declared member.
     Declared {
@@ -463,9 +652,11 @@ pub enum Slot<'a> {
 /// binary search over the table: O(n log k) for n members and k declared
 /// names, with no per-field [`Node::get`] (which cannot tell a duplicate from
 /// an absent member). A generated conversion matches on the slots, stores
-/// each declared value by index, and afterwards asks
-/// [`is_present`](Self::is_present) for each required field to report
-/// [`FromNodeError::missing`]. Undeclared members are an
+/// each declared value by index in its own slot, and afterwards turns every
+/// slot that stayed empty into the field's default, its
+/// [`ToolParameter::absent`] value, or [`FromNodeError::missing`]. (Derived
+/// conversions do not need [`is_present`](Self::is_present); hand-written
+/// ones may use it instead of per-field slots.) Undeclared members are an
 /// [`FromNodeError::unknown`] error, or are cloned into an `extra` object
 /// under `unknown = pass`.
 ///
@@ -473,7 +664,9 @@ pub enum Slot<'a> {
 /// additionally check that `declared` is strictly sorted and that `order` is a
 /// permutation of `0..declared.len()`. Release builds do not, so an unsorted
 /// table or a non-permutation is a caller defect that yields misclassified
-/// members (or an out-of-range panic), never undefined behavior.
+/// members (or an out-of-range panic), never undefined behavior. Generated
+/// code removes the first hazard at compile time with the hidden `__sorted`
+/// const check on its table.
 ///
 /// ```
 /// use purrassist_core::{json, tool_call::{FromNodeError, Members, Slot}};
@@ -488,6 +681,7 @@ pub enum Slot<'a> {
 ///         Slot::Declared { .. } => {}
 ///         Slot::Duplicate { member, .. } => errors.push(FromNodeError::duplicate(&member.key)),
 ///         Slot::Undeclared(member) => errors.push(FromNodeError::unknown(&member.key)),
+///         _ => unreachable!("no other classification exists"),
 ///     }
 /// }
 /// assert!(members.is_present(0)); // `path`
@@ -729,6 +923,48 @@ mod tests {
             Param::array(Param::string().pattern("x"))
         );
         assert_eq!(<Vec<Vec<u8>> as ToolParameter>::DEPTH, 0);
+    }
+
+    #[test]
+    fn sorted_is_strict_byte_order_and_const_evaluable() {
+        const { assert!(__sorted(&["", "a", "a_", "b", "é", "日"])) };
+        assert!(__sorted(&[]));
+        for unsorted in [&["b", "a"][..], &["a", "a"], &["ab", "a"], &["é", "z"]] {
+            assert!(!__sorted(unsorted), "{unsorted:?}");
+        }
+        // Agrees with `str` ordering on a spread of names.
+        let names = ["a", "a.b", "a_b", "a-b", "A", "ab", "z", "é"];
+        for left in names {
+            for right in names {
+                assert_eq!(__sorted(&[left, right]), left < right, "{left} {right}");
+            }
+        }
+    }
+
+    #[test]
+    fn extra_collects_members_as_an_object() {
+        let node = json::parse(r#"{"a":1}"#).unwrap();
+        let Value::Object(members) = node.value.clone() else {
+            unreachable!()
+        };
+        assert_eq!(
+            <Node as ToolExtra>::__from_members(members).value,
+            node.value
+        );
+        assert_eq!(
+            <Node as ToolExtra>::__from_members(Vec::new()).value,
+            Value::Object(Vec::new())
+        );
+    }
+
+    #[test]
+    fn box_and_f32_parameters_match_their_targets() {
+        assert_eq!(<f32 as ToolParameter>::parameter(), Param::number());
+        assert_eq!(<Box<f32> as ToolParameter>::parameter(), Param::number());
+        const { assert!(<Box<String> as ToolParameter>::REQUIRED) };
+        assert_eq!(<Box<String> as ToolParameter>::absent(), None);
+        assert_eq!(<Box<Vec<Vec<u8>>> as ToolParameter>::DEPTH, 0);
+        assert_eq!(<Option<Box<u8>> as ToolParameter>::absent(), Some(None));
     }
 
     #[test]

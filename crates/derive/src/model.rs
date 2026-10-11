@@ -920,6 +920,103 @@ mod tests {
         }
     }
 
+    /// The derive validates a `default` number with its own grammar check
+    /// (it cannot depend on core); core builds the value with its parser. The
+    /// two must agree, because the generated `__derive_number` panics on a
+    /// spelling the derive let through and a rejected valid spelling would
+    /// be a false error. A proc-macro crate's private function cannot be
+    /// reached from an integration test, so this unit test uses core (a
+    /// dev-dependency only) as the oracle: a hand-picked corpus, then every
+    /// string over a small alphabet up to seven characters.
+    #[test]
+    fn number_validator_agrees_with_cores_parser() {
+        use purrassist_core::json::Number;
+        const ALPHABET: [char; 7] = ['-', '0', '1', '.', 'e', '+', 'E'];
+
+        let agrees = |text: &str| {
+            let core = text.parse::<Number>();
+            assert_eq!(
+                is_json_number(text),
+                core.is_ok(),
+                "{text:?}: derive says {}, core says {core:?}",
+                is_json_number(text)
+            );
+            if let Ok(number) = core {
+                assert_eq!(number.as_str(), text, "core keeps the spelling");
+            }
+        };
+        for text in [
+            "0",
+            "-0",
+            "7",
+            "10",
+            "-1.5",
+            "1e5",
+            "1E+5",
+            "2.5e-3",
+            "0.0",
+            "0e0",
+            "-0.0E-0",
+            "123456789012345678901234567890",
+            "1e999999999999999999999",
+            "9007199254740993",
+            "",
+            "-",
+            "--1",
+            "+1",
+            "01",
+            "-01",
+            "00",
+            "1.",
+            ".5",
+            "-.5",
+            "1.e1",
+            "1e",
+            "1e+",
+            "1e-",
+            "1E",
+            "1.5.2",
+            "1e5.5",
+            "1_000",
+            "0x10",
+            "1u8",
+            "1f64",
+            "NaN",
+            "Infinity",
+            "-Infinity",
+            "inf",
+            "1 ",
+            " 1",
+            "1\n",
+            "\u{0661}",
+            "１",
+            "1\u{0}",
+            "1e5e5",
+            "e5",
+            "0.",
+            "-0.",
+            "1.0e",
+            "١٢٣",
+        ] {
+            agrees(text);
+        }
+        // Exhaustive over the characters that decide the grammar.
+        let mut text = String::new();
+        let mut count = 0_usize;
+        for length in 0..=7_u32 {
+            for mut code in 0..ALPHABET.len().pow(length) {
+                text.clear();
+                for _ in 0..length {
+                    text.push(ALPHABET[code % ALPHABET.len()]);
+                    code /= ALPHABET.len();
+                }
+                agrees(&text);
+                count += 1;
+            }
+        }
+        assert!(count > 800_000, "{count}");
+    }
+
     #[test]
     fn doc_comments_are_trimmed_and_joined() {
         let lines = [
