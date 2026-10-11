@@ -1587,7 +1587,9 @@ Added for typed (derived) tool definitions, none of which breaks existing code:
   it to stay strict. `tool_definition()` is unchanged: a top-level tool
   keeps the effects-based default. A hand-built tool that embeds a derived
   `parameter()` keeps the nested handling; a hand-built nested `ObjectSpec`
-  without `unknown_parameters` still inherits the tool's.
+  without `unknown_parameters` still inherits the tool's. As in core, a near
+  miss of a declared name is never dropped: when name matching does not
+  rename it, the call is `Unresolved` with `UnknownParameter`.
 - `tool_call::max_depth(&[usize]) -> usize` (`const fn`): the nesting depth
   of a derived type, evaluated at compile time to reject indirect recursion.
 - `tool_call::Members<'a>` (`new(declared, order, node)`, `is_present(index)`,

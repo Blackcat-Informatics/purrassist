@@ -18,6 +18,16 @@ below) that `.github/workflows/publish.yml` has the required trigger,
 environment, permissions, qualification gate, SHA-pinned actions, publish
 order, and verification step. It runs in `make check` and `make package`.
 
+**Derive/core compatibility within a minor series.** Generated code references
+`purrassist_core::tool_call::__DERIVE_ABI_<major>_<minor>`, so the derive and
+core must share `major.minor`, and the documentation promises that their patch
+versions may differ. To keep that promise, a patch release must not change what
+generated code needs from core: any change to the derive support surface
+(`tool_call::derive_support`, the `FromNodeError` constructors, or another item
+generated code names) that an older core patch of the same minor lacks requires
+a minor version bump, which renames the marker. The core unit test fails if the
+workspace major or minor version moves without renaming the marker.
+
 ## Placeholder name records (already minted)
 
 One-time, irreversible `0.0.0` name-reservation records exist on crates.io for
