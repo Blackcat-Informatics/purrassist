@@ -105,6 +105,12 @@ pub trait ToolArguments: FromNode {
 
     /// The parameters as a nested object, for use as a field of another
     /// struct ([`Param::object`]) or as the argument scope of a tool.
+    ///
+    /// For a derived struct the object always states its unknown-member
+    /// handling: the struct's `unknown` value, or
+    /// [`DropWithLoss`](super::UnknownParameters::DropWithLoss) when it
+    /// declares none. [`tool_definition`](Self::tool_definition) does not:
+    /// a top-level tool keeps the default of its effects.
     #[must_use]
     fn object_spec() -> ObjectSpec;
 }
@@ -136,6 +142,12 @@ pub trait ToolArguments: FromNode {
 /// ```
 pub trait ToolParameter: FromNode {
     /// The unrequired parameter specification of this type.
+    ///
+    /// For a derived struct this is an object that states its own
+    /// unknown-member handling (the struct's `unknown` value, or
+    /// [`super::UnknownParameters::DropWithLoss`] when it declares none), so it does
+    /// not inherit the enclosing tool's handling, including inside a
+    /// hand-built [`super::UnknownParameters::PassThrough`] tool.
     #[must_use]
     fn parameter() -> ParameterSpec;
 

@@ -405,6 +405,16 @@ impl Param {
 /// When [`Self::unknown_parameters`] is not called, the object inherits the
 /// resolved handling of its enclosing tool.
 ///
+/// The `ToolDefinition` derive of `purrassist-derive` never relies on this:
+/// the `ObjectSpec` of a derived struct (and so its
+/// [`ToolParameter::parameter`](super::ToolParameter::parameter)) always calls
+/// `unknown_parameters`, with the struct's `unknown` value or
+/// [`UnknownParameters::DropWithLoss`] when it declares none. A hand-built tool
+/// that embeds such a parameter therefore keeps that handling, and a
+/// hand-built `ObjectSpec` that omits the call under a
+/// [`UnknownParameters::PassThrough`] tool keeps undeclared members, which a
+/// derived `FromNode` without an `extra` field rejects.
+///
 /// ```
 /// use purrassist_core::{Budget, tool_call::{ObjectSpec, Param, ToolDefinition, ToolSet, UnknownParameters}};
 /// let options = ObjectSpec::new()

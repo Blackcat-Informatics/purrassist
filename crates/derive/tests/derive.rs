@@ -11,8 +11,8 @@
 use purrassist_core::json::{self, Node, Number, Value};
 use purrassist_core::tool_call::{
     CallOutcome, DialectId, DialectSet, Effects, FromNode, FromNodeError, ObjectSpec, Param,
-    ParameterSpec, RepairPolicy, ShapeStep, ToolArguments, ToolDefinition as Definition,
-    ToolParameter, ToolRecoveryRequest, ToolSet, ToolSetError, UnknownParameters,
+    ParameterSpec, RepairPolicy, ShapeStep, ToolArguments, ToolCalls, ToolDefinition as Definition,
+    ToolParameter, ToolRecoveryRequest, ToolSet, ToolSetError, UnknownParameters, UnresolvedReason,
 };
 use purrassist_core::{Budget, Governor, Outcome};
 use purrassist_derive::{ToolDefinition, ToolEnum};
@@ -103,6 +103,7 @@ struct Everything {
 fn dims() -> ParameterSpec {
     Param::object(
         ObjectSpec::new()
+            .unknown_parameters(UnknownParameters::DropWithLoss)
             .param("width", Param::integer().required())
             .param("height", Param::integer()),
     )
@@ -621,7 +622,11 @@ const ENUM_DESCRIPTION: &str =
 #[test]
 fn doc_comments_are_descriptions_and_explicit_keys_win() {
     let nested = |description: Option<&str>| {
-        let object = Param::object(ObjectSpec::new().param("value", Param::integer().required()));
+        let object = Param::object(
+            ObjectSpec::new()
+                .unknown_parameters(UnknownParameters::DropWithLoss)
+                .param("value", Param::integer().required()),
+        );
         match description {
             Some(text) => object.description(text),
             None => object,
@@ -1262,6 +1267,251 @@ fn tool_keys_on_a_nested_struct_are_ignored_except_unknown() {
         r#"{"more":[true]}"#
     );
     compile([OuterOfNested::tool_definition()]);
+}
+
+// ------------------------------------- nested unknown-member policy (G1)
+
+/// The turn every nested-policy case recovers: undeclared `zz` inside the
+/// nested object and inside an array element, and an undeclared `top`.
+const NESTED_TURN: &str = r#"{"inner":{"a":1,"zz":2},"items":[{"a":1,"zz":2}],"top":3}"#;
+
+mod nested_error {
+    use super::*;
+    #[derive(ToolDefinition, Debug, PartialEq)]
+    #[tool(unknown = error)]
+    pub(crate) struct Inner {
+        pub(crate) a: u8,
+    }
+    #[derive(ToolDefinition, Debug, PartialEq)]
+    #[tool(unknown = pass)]
+    pub(crate) struct Outer {
+        pub(crate) inner: Inner,
+        pub(crate) items: Vec<Inner>,
+        #[param(extra)]
+        pub(crate) rest: Node,
+    }
+}
+
+mod nested_drop {
+    use super::*;
+    #[derive(ToolDefinition, Debug, PartialEq)]
+    #[tool(unknown = drop)]
+    pub(crate) struct Inner {
+        pub(crate) a: u8,
+    }
+    #[derive(ToolDefinition, Debug, PartialEq)]
+    #[tool(unknown = pass)]
+    pub(crate) struct Outer {
+        pub(crate) inner: Inner,
+        pub(crate) items: Vec<Inner>,
+        #[param(extra)]
+        pub(crate) rest: Node,
+    }
+}
+
+mod nested_pass {
+    use super::*;
+    #[derive(ToolDefinition, Debug, PartialEq)]
+    #[tool(unknown = pass)]
+    pub(crate) struct Inner {
+        pub(crate) a: u8,
+        #[param(extra)]
+        pub(crate) extra: Node,
+    }
+    #[derive(ToolDefinition, Debug, PartialEq)]
+    #[tool(unknown = pass)]
+    pub(crate) struct Outer {
+        pub(crate) inner: Inner,
+        pub(crate) items: Vec<Inner>,
+        #[param(extra)]
+        pub(crate) rest: Node,
+    }
+}
+
+mod nested_default {
+    use super::*;
+    #[derive(ToolDefinition, Debug, PartialEq)]
+    pub(crate) struct Inner {
+        pub(crate) a: u8,
+    }
+    #[derive(ToolDefinition, Debug, PartialEq)]
+    #[tool(unknown = pass)]
+    pub(crate) struct Outer {
+        pub(crate) inner: Inner,
+        pub(crate) items: Vec<Inner>,
+        #[param(extra)]
+        pub(crate) rest: Node,
+    }
+    #[derive(ToolDefinition, Debug, PartialEq)]
+    #[tool(unknown = drop)]
+    pub(crate) struct Outer2 {
+        pub(crate) inner: Inner,
+        pub(crate) items: Vec<Inner>,
+    }
+    #[derive(ToolDefinition, Debug, PartialEq)]
+    #[tool(effects = read_only)]
+    pub(crate) struct Outer2ReadOnly {
+        pub(crate) inner: Inner,
+        pub(crate) items: Vec<Inner>,
+    }
+}
+
+/// Recover `NESTED_TURN` for the tool `name` with the real pipeline.
+fn recover_nested(definition: Definition, name: &str) -> purrassist_core::AssistResult<ToolCalls> {
+    let tools = compile([definition]);
+    tools.recover(
+        hermes(name, NESTED_TURN).as_bytes(),
+        &request(DialectId::Hermes),
+    )
+}
+
+/// The recorded `drop-unknown` losses of the single call, as
+/// `(destination, original)` pairs, in order. The destination is the pointer
+/// within the arguments: the recorded evidence destination is
+/// `/turn/<span>/arguments/<pointer>`, and the prefix is dropped here.
+fn drop_losses(calls: &ToolCalls) -> Vec<(String, String)> {
+    assert_eq!(calls.calls.len(), 1, "{calls:#?}");
+    calls.calls[0]
+        .repairs
+        .losses
+        .iter()
+        .inspect(|entry| assert_eq!(entry.loss.evidence.rule, "tool_call.parameter.drop-unknown"))
+        .map(|entry| {
+            let destination = &entry.loss.evidence.destination;
+            let (_, pointer) = destination
+                .split_once("/arguments")
+                .expect("an argument destination");
+            (pointer.to_owned(), entry.loss.original.clone())
+        })
+        .collect()
+}
+
+fn assert_best_guess_with_drops(result: &purrassist_core::AssistResult<ToolCalls>, drops: &[&str]) {
+    let Outcome::BestGuess(calls) = &result.outcome else {
+        panic!("expected BestGuess: {:#?}", result.outcome);
+    };
+    assert_eq!(calls.calls[0].outcome, CallOutcome::BestGuess);
+    let mut found = drop_losses(calls);
+    found.sort();
+    let mut expected: Vec<(String, String)> = drops
+        .iter()
+        .map(|pointer| {
+            let value = if *pointer == "/top" {
+                "\"top\":3"
+            } else {
+                "\"zz\":2"
+            };
+            ((*pointer).to_owned(), value.to_owned())
+        })
+        .collect();
+    expected.sort();
+    assert_eq!(found, expected);
+}
+
+#[test]
+fn nested_unknown_error_makes_the_call_unusable() {
+    let result = recover_nested(nested_error::Outer::tool_definition(), "outer");
+    // The turn carries the call, but the call is not `Resolved`: its reason
+    // names the first nested undeclared member.
+    let Outcome::Resolved(calls) = &result.outcome else {
+        panic!("the turn carries the call: {:#?}", result.outcome);
+    };
+    assert_eq!(calls.calls.len(), 1);
+    assert_eq!(
+        calls.calls[0].outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::UnknownParameter {
+                pointer: "/inner/zz".into()
+            }
+        }
+    );
+    assert!(!calls.calls[0].is_usable_accepting_guesses());
+}
+
+#[test]
+fn nested_unknown_drop_records_the_losses_and_converts() {
+    let result = recover_nested(nested_drop::Outer::tool_definition(), "outer");
+    assert_best_guess_with_drops(&result, &["/inner/zz", "/items/0/zz"]);
+    let Outcome::BestGuess(calls) = &result.outcome else {
+        unreachable!()
+    };
+    let outer = nested_drop::Outer::from_node(&calls.calls[0].arguments).unwrap();
+    assert_eq!(outer.inner, nested_drop::Inner { a: 1 });
+    assert_eq!(outer.items, vec![nested_drop::Inner { a: 1 }]);
+    assert_eq!(outer.rest.to_json(), r#"{"top":3}"#);
+}
+
+#[test]
+fn nested_unknown_pass_with_extra_resolves_and_collects() {
+    let result = recover_nested(nested_pass::Outer::tool_definition(), "outer");
+    let Outcome::Resolved(calls) = &result.outcome else {
+        panic!("expected Resolved: {:#?}", result.outcome);
+    };
+    assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
+    let outer = nested_pass::Outer::from_node(&calls.calls[0].arguments).unwrap();
+    assert_eq!(outer.inner.extra.to_json(), r#"{"zz":2}"#);
+    assert_eq!(outer.items[0].extra.to_json(), r#"{"zz":2}"#);
+    assert_eq!(outer.rest.to_json(), r#"{"top":3}"#);
+}
+
+#[test]
+fn nested_without_an_unknown_key_drops_with_recorded_loss() {
+    // The default of a derived nested struct is DropWithLoss, not the
+    // enclosing tool's `unknown = pass`.
+    let result = recover_nested(nested_default::Outer::tool_definition(), "outer");
+    assert_best_guess_with_drops(&result, &["/inner/zz", "/items/0/zz"]);
+    let Outcome::BestGuess(calls) = &result.outcome else {
+        unreachable!()
+    };
+    let outer = nested_default::Outer::from_node(&calls.calls[0].arguments).unwrap();
+    assert_eq!(outer.inner, nested_default::Inner { a: 1 });
+    assert_eq!(outer.items, vec![nested_default::Inner { a: 1 }]);
+    assert_eq!(outer.rest.to_json(), r#"{"top":3}"#);
+    assert_eq!(
+        <nested_default::Inner as ToolParameter>::parameter(),
+        Param::object(
+            ObjectSpec::new()
+                .unknown_parameters(UnknownParameters::DropWithLoss)
+                .param("a", Param::integer().required())
+        )
+    );
+    // Identical to the explicit `unknown = drop` case.
+    let explicit = recover_nested(nested_drop::Outer::tool_definition(), "outer");
+    let (Outcome::BestGuess(a), Outcome::BestGuess(b)) = (&result.outcome, &explicit.outcome)
+    else {
+        panic!("both BestGuess");
+    };
+    assert_eq!(a.calls[0].arguments, b.calls[0].arguments);
+    assert_eq!(drop_losses(a), drop_losses(b));
+}
+
+#[test]
+fn nested_default_drops_at_every_level_when_the_tool_has_no_extra() {
+    for (definition, name) in [
+        (nested_default::Outer2::tool_definition(), "outer2"),
+        (
+            nested_default::Outer2ReadOnly::tool_definition(),
+            "outer2_read_only",
+        ),
+    ] {
+        let result = recover_nested(definition, name);
+        assert_best_guess_with_drops(&result, &["/top", "/inner/zz", "/items/0/zz"]);
+        let Outcome::BestGuess(calls) = &result.outcome else {
+            unreachable!()
+        };
+        let arguments = &calls.calls[0].arguments;
+        let expected = (
+            nested_default::Inner { a: 1 },
+            vec![nested_default::Inner { a: 1 }],
+        );
+        if name == "outer2" {
+            let outer = nested_default::Outer2::from_node(arguments).unwrap();
+            assert_eq!((outer.inner, outer.items), expected);
+        } else {
+            let outer = nested_default::Outer2ReadOnly::from_node(arguments).unwrap();
+            assert_eq!((outer.inner, outer.items), expected);
+        }
+    }
 }
 
 // ----------------------------------------------------------- determinism

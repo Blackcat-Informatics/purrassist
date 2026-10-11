@@ -43,6 +43,15 @@ assert_eq!(
 );
 ```
 
+A derived nested struct states its own handling of undeclared members: its
+`#[tool(unknown = ..)]` value, or drop-with-recorded-loss when it declares no
+`unknown` key, whatever the enclosing tool does. Under a `pass` tool, an
+undeclared member of a nested struct without `extra` is therefore dropped and
+recorded (a `BestGuess` call), and a nested struct that should keep such members
+declares `unknown = pass` with its own `extra` field. A nested struct that
+inherited `error` and left a call unresolved now drops the member, so that call
+becomes a `BestGuess`; declare `unknown = error` on it to stay strict.
+
 The impls are written against `purrassist-core`, which must be a dependency of
 the crate that derives. Users of the `purrassist` facade crate derive through
 `purrassist::ToolDefinition` and `purrassist::ToolEnum` and need no other

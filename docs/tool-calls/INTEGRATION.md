@@ -1562,6 +1562,21 @@ Added for typed (derived) tool definitions, none of which breaks existing code:
   `ToolRepeatable` (`repeated()`, for `Vec<T>` and `Option<Vec<T>>`);
   `ToolPattern` (`with_pattern(&'static str)`, for `String`, `Option<String>`,
   `Vec<String>` and `Option<Vec<String>>`); and the marker `ToolExtra` (for `json::Node`).
+- Nested derived structs state their unknown-member handling explicitly:
+  `ToolArguments::object_spec()` (reached only through
+  `ToolParameter::parameter()`, as a field) always calls
+  `unknown_parameters`, with the struct's `unknown` value or
+  `UnknownParameters::DropWithLoss` when it declares none. It does not
+  inherit the enclosing tool's handling, so under a top-level
+  `unknown = pass` an undeclared nested member is dropped with a recorded
+  `tool_call.parameter.drop-unknown` loss (a `BestGuess` call) and the derived
+  `from_node` succeeds. A nested struct without `unknown` that formerly
+  inherited `error` (a mutating tool) and left the call `Unresolved` now
+  drops the member and the call is a `BestGuess`; declare `unknown = error` on
+  it to stay strict. `tool_definition()` is unchanged: a top-level tool
+  keeps the effects-based default. A hand-built tool that embeds a derived
+  `parameter()` keeps the nested handling; a hand-built nested `ObjectSpec`
+  without `unknown_parameters` still inherits the tool's.
 - `tool_call::max_depth(&[usize]) -> usize` (`const fn`): the nesting depth
   of a derived type, evaluated at compile time to reject indirect recursion.
 - `tool_call::Members<'a>` (`new(declared, order, node)`, `is_present(index)`,

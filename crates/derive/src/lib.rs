@@ -116,6 +116,31 @@
 //! object, and its description becomes the field's description when the field
 //! has none.
 //!
+//! # Undeclared members of a nested struct
+//!
+//! A derived nested struct always states its own handling of undeclared
+//! members; it never inherits the enclosing tool's. It is the struct's
+//! `unknown` value, or `drop` when the struct declares no `unknown` key. A
+//! nested object therefore drops an undeclared member and records the loss
+//! (`tool_call.parameter.drop-unknown`, at a pointer such as `/inner/zz`), so
+//! the call is a `BestGuess` and the derived conversion of the recovered
+//! arguments succeeds. This holds under a top-level `unknown = pass` too: the
+//! top-level tool keeps its own handling (its `unknown` value, else the
+//! default of its `effects`), and only the nested objects default to `drop`.
+//! A nested struct that should keep undeclared members declares
+//! `unknown = pass` and an `extra` field of its own; `unknown = error` makes a
+//! nested undeclared member an unresolved call.
+//!
+//! The recovery contract of the recovered call follows: a nested struct under
+//! `unknown = error` (or a mutating default) that used to inherit `error` and
+//! to leave the call unresolved now drops the member, so such a call moves
+//! from unresolved to `BestGuess`. Declare `unknown = error` on the nested
+//! struct to keep it strict. A hand-built `ToolDefinition` that embeds a
+//! derived `parameter()` is not affected by the enclosing handling: the nested
+//! object states it. A hand-built nested `ObjectSpec` that does not call
+//! `unknown_parameters` still inherits the enclosing handling (see its
+//! documentation).
+//!
 //! Unknown keys, repeated keys and keys in the wrong place are compile
 //! errors, spanned at the key. Attributes of other macros (`#[serde]`,
 //! `#[allow]`, ...) are ignored.

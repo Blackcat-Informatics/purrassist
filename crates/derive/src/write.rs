@@ -174,6 +174,12 @@ impl Writer {
         })
     }
 
+    /// The unknown-member call for a nested object: always explicit, defaulting to
+    /// `DropWithLoss` when the struct declares no `unknown` key.
+    fn nested_unknown_call(&self, unknown: Option<Unknown>) -> String {
+        self.unknown_call(Some(unknown.unwrap_or(Unknown::Drop)))
+    }
+
     fn params_calls(&mut self, tool: &Tool) -> String {
         let mut calls = String::new();
         for param in &tool.params {
@@ -215,7 +221,7 @@ impl Writer {
         definition.push_str(&self.params_calls(tool));
         let object = format!(
             "{tc}::ObjectSpec::new(){}{}",
-            self.unknown_call(tool.unknown),
+            self.nested_unknown_call(tool.unknown),
             self.params_calls(tool)
         );
         let description = tool
