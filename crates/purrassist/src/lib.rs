@@ -28,7 +28,7 @@ pub use purrassist_core as __core;
 /// dependency).
 ///
 /// The derive macro `purrassist::ToolDefinition` and the type
-/// [`tool_call::ToolDefinition`](crate::tool_call::ToolDefinition) are
+/// [`tool_call::ToolDefinition`] are
 /// distinct items; the type is not re-exported at the crate root. The
 /// attributes, naming, and errors are those of `purrassist_derive::ToolDefinition`.
 ///
