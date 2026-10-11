@@ -6,6 +6,16 @@ The computational core has no third-party Cargo dependencies. JSON parsing,
 exact decimals, schema evaluation, regex matching, normalization algorithms,
 edit distances, phonetics, recovery search, and receipts are first-party Rust.
 
+`purrassist-derive`, the procedural-macro crate behind
+`#[derive(ToolDefinition)]` and `#[derive(ToolEnum)]`, also has no third-party
+dependencies, and no `syn`, `quote` or `proc-macro2`: it uses only the
+compiler's built-in `proc_macro` crate, with a first-party token parser and
+code writer. Its only Cargo dependency is a dev-dependency on
+`purrassist-core`, used by its tests and examples; `scripts/check-repository.py`
+requires its normal and build closure to be empty and its dev closure to reach
+only `purrassist-core`, and scans `crates/derive/src` for ambient access.
+`purrassist-core` never depends on `purrassist-derive`.
+
 Standards data remains third-party material. Unicode tables and conformance
 fixtures retain the Unicode-3.0 license. UTS #39 confusables data (Unicode
 17.0.0, published alongside the UCD release starting with that version) is

@@ -6,7 +6,7 @@
 Installs `purrassist-cli` at an exact version into a fresh, throwaway
 `CARGO_HOME` (never the caller's own registry cache or credentials), replays
 fixed CLI and MCP stdio transcripts against the installed binary and compares
-them byte-for-byte with committed fixtures, then downloads each of the five
+them byte-for-byte with committed fixtures, then downloads each of the six
 release crates' `.crate` archives and diffs their contents against a fresh
 `cargo package` of the same source. Never publishes anything; every network
 or registry access here is read-only.

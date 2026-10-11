@@ -29,9 +29,14 @@ Twelve dialects are built in:
 | `bare-json.v1` | an unwrapped `{"name": NAME, "arguments": {...}}` object: the whole turn, in prose, in a code fence, or an array element; never a declaration-shaped object | [dialect](dialects/bare-json.v1.md) |
 
 Callers add their own dialects with the grammar DSL
-([GRAMMAR.md](GRAMMAR.md)). Still tracked in issue #4: the `pythonic.v1`,
-`gemma3-tool-code.v1` and `glm-4.5.v1` dialects, the `*-stripped` variants,
-streaming recognition, and `purrassist-derive`.
+([GRAMMAR.md](GRAMMAR.md)). Tool definitions and their typed arguments can be
+derived from Rust structs and enums with `#[derive(ToolDefinition)]` and
+`#[derive(ToolEnum)]` (the `purrassist-derive` crate, re-exported by the
+`purrassist` facade; see [INTEGRATION.md](INTEGRATION.md) and the crate's
+[README](../../crates/derive/README.md)). Still tracked: the `pythonic.v1`
+(#12), `glm-4.5.v1` (#13) and `gemma3-tool-code.v1` (#14) dialects, the
+`*-stripped` variants (#18), streaming recognition (#16), and provider
+streaming events (#17).
 
 ## Design
 

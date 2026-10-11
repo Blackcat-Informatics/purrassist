@@ -1550,5 +1550,39 @@ Added:
   nested-item capacity; `ToolChoice::constraint` documents the `forced[...]`
   family; `ToolCalls::usable` has a doctest.
 
+Added for typed (derived) tool definitions, none of which breaks existing code:
+
+- Traits in `tool_call`, implemented by the derives and by core for the
+  supported field types: `ToolArguments: FromNode` (`tool_definition()`,
+  `object_spec()`); `ToolParameter: FromNode` (`parameter()`,
+  `const REQUIRED`, `absent()`, `const DEPTH`), implemented for `String`, the
+  twelve integer types, `f64`, `json::Number`, `bool`, `Vec<T: ToolItem>` and
+  `Option<T: ToolParameter>`; the marker `ToolItem: ToolParameter` (every
+  `ToolParameter` except `Option<T>`, so `Vec<Option<T>>` does not compile);
+  `ToolRepeatable` (`repeated()`, for `Vec<T>` and `Option<Vec<T>>`);
+  `ToolPattern` (`with_pattern(&'static str)`, for `String`, `Option<String>`
+  and `Vec<String>`); and the marker `ToolExtra` (for `json::Node`).
+- `tool_call::max_depth(&[usize]) -> usize` (`const fn`): the nesting depth
+  of a derived type, evaluated at compile time to reject indirect recursion.
+- `tool_call::Members<'a>` (`new(declared, order, node)`, `is_present(index)`,
+  and `Iterator<Item = Slot<'a>>`) and `tool_call::Slot<'a>` (`Declared`,
+  `Duplicate`, `Undeclared`): a single-pass classifier of an object's members
+  (O(n log k)) that tells a duplicate and an undeclared member from an absent
+  one, which `Node::get` cannot.
+- `FromNodeError::{mismatch(expected, &Node), missing(name), duplicate(name),
+  unknown(name), within(segment)}`: constructors for the exact
+  `pointer`/`expected`/`found` shape; `within` prefixes a JSON Pointer segment.
+- `tool_call::is_valid_name` is now a `const fn` (same behavior).
+- `#[doc(hidden)]` `tool_call::{__derive_number, __valid_name}`: support for
+  generated code only (a number built from a spelling that the macro already
+  validated, and name validation at compile time). They are not part of the
+  stable API, and their preconditions are documented on the items.
+- New crate `purrassist-derive` (zero dependencies, built-in `proc_macro`
+  only) with `#[derive(ToolDefinition)]` and `#[derive(ToolEnum)]`, and the
+  facade re-exports `purrassist::{ToolDefinition, ToolEnum}` (the derive macros
+  plus the `#[doc(hidden)]` `purrassist::__core`, the core crate under a name
+  the generated code reaches through `::purrassist`, so users of the facade
+  need no direct core dependency). Core never depends on the derive crate.
+
 Root `$ref` projection follows local references only (`#/definitions/…` or
 `#/$defs/…`), up to 64 hops, with a cycle check; see C5.

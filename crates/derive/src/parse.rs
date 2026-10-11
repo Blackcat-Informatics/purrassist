@@ -809,7 +809,7 @@ mod tests {
                 #[param(repeat)]
                 tags: Vec<String>,
                 #[cfg(feature = "x")]
-                maybe: Option<Vec<std::collections::HashMap<String, u8>>>,
+                maybe: Option<Vec<std::collections::BTreeMap<String, u8>>>,
             }
         "#;
         let item = parse_struct(source).unwrap();

@@ -73,7 +73,7 @@ def package_workspace() -> Path:
              *configuration], cwd=ROOT, env=environment, text=True))
         if Path(metadata['target_directory']).resolve() != target.resolve():
             raise ValueError('Cargo metadata did not honor the isolated package target directory')
-        # check-release.py proves this is the complete five-crate release set.
+        # check-release.py proves this is the complete six-crate release set.
         # Unpublished target-specific harnesses remain outside packaging.
         publishable = sorted(
             (package['name'], package['version']) for package in metadata['packages']

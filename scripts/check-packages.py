@@ -64,9 +64,11 @@ for package in metadata['packages']:
         manifest = tomllib.loads(extract(source, members['Cargo.toml'], identity).decode())
         if manifest['package']['license'] != 'MIT OR Apache-2.0 OR MulanPSL-2.0':
             raise SystemExit(f'{identity}: unexpected first-party license')
-        if package['name'] == 'purrassist-core':
-            if manifest.get('dependencies') or any(target.get('dependencies') for target in manifest.get('target', {}).values()):
-                raise SystemExit('packaged core gained runtime dependencies')
+        if package['name'] in ('purrassist-core', 'purrassist-derive'):
+            if (manifest.get('dependencies') or manifest.get('build-dependencies')
+                    or any(target.get('dependencies') or target.get('build-dependencies')
+                           for target in manifest.get('target', {}).values())):
+                raise SystemExit(f"packaged {package['name']} gained runtime or build dependencies")
         inventory = json.loads((ROOT / 'vendor/dependencies.json').read_text())
         notices = inventory['packaged_notices'][crate_root.name]
         registered = set(notices)
