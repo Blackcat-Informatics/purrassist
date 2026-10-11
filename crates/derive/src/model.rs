@@ -466,6 +466,19 @@ fn describe(explicit: Option<Text>, doc: Option<String>, span: Span) -> Option<T
     explicit.or_else(|| doc.map(|doc| Text::synthesized(doc, span)))
 }
 
+/// The message for a derived name that is not valid.
+pub(crate) fn invalid_derived_name_message(
+    what: &str,
+    derived: &str,
+    source: &str,
+    attribute: &str,
+) -> String {
+    format!(
+        "the {what} name `{derived}` derived from {source} is not a valid {what} name \
+         (ASCII letters, digits and `_ . : -`); add {attribute}"
+    )
+}
+
 /// The tool name: the explicit one, or the type name in `snake_case`.
 fn tool_name(explicit: Option<Text>, ident: &Ident) -> Result<Text, Diagnostic> {
     if let Some(name) = explicit {
@@ -477,10 +490,11 @@ fn tool_name(explicit: Option<Text>, ident: &Ident) -> Result<Text, Diagnostic> 
     } else {
         Err(Diagnostic::new(
             ident.span,
-            format!(
-                "the tool name `{derived}` derived from `{}` is not a valid tool name \
-                 (ASCII letters, digits and `_ . : -`); add #[tool(name = \"..\")]",
-                ident.bare()
+            invalid_derived_name_message(
+                "tool",
+                &derived,
+                &format!("`{}`", ident.bare()),
+                "#[tool(name = \"..\")]",
             ),
         ))
     }
@@ -524,10 +538,23 @@ fn resolve_param(owner: &Ident, field: RawField, siblings: &[Param]) -> Result<P
             ),
         ));
     }
-    let key = field
-        .attrs
-        .name
-        .unwrap_or_else(|| Text::synthesized(field.ident.bare().to_owned(), field.ident.span));
+    let key = match field.attrs.name {
+        Some(name) => name,
+        None if is_valid_derived_name(field.ident.bare()) => {
+            Text::synthesized(field.ident.bare().to_owned(), field.ident.span)
+        }
+        None => {
+            return Err(Diagnostic::new(
+                field.ident.span,
+                invalid_derived_name_message(
+                    "parameter",
+                    field.ident.bare(),
+                    &format!("field `{}`", field.ident.bare()),
+                    "#[param(name = \"..\")]",
+                ),
+            ));
+        }
+    };
     if let Some(first) = siblings.iter().find(|param| param.key.value == key.value) {
         return Err(Diagnostic::new(
             key.span,
@@ -814,6 +841,30 @@ mod tests {
         assert!(!is_valid_derived_name(""));
         assert!(!is_valid_derived_name("größe"));
         assert!(!is_valid_derived_name("日本"));
+    }
+
+    #[test]
+    fn derived_names_that_are_not_valid_are_spanned_errors() {
+        use crate::parse::{Target, parse};
+        let error = |source: &str| {
+            let raw = parse(Target::Definition, &lex::trees(source)).unwrap();
+            resolve(raw).unwrap_err()
+        };
+        // `struct A { größe : u8 }`: the field is token 3.
+        let found = error("struct A { größe: u8 }");
+        assert_eq!(found.span, 3);
+        assert_eq!(
+            found.message,
+            "the parameter name `größe` derived from field `größe` is not a valid parameter \
+             name (ASCII letters, digits and `_ . : -`); add #[param(name = \"..\")]"
+        );
+        // An explicit name is left to the compile-time assertion.
+        let raw = parse(
+            Target::Definition,
+            &lex::trees(r#"struct A { #[param(name = "g")] größe: u8 }"#),
+        )
+        .unwrap();
+        assert!(resolve(raw).is_ok());
     }
 
     #[test]

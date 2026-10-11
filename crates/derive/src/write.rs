@@ -132,7 +132,7 @@ impl Writer {
                 // calling the array-shaped `with_pattern`.
                 let ty_again = self.ty(&param.ty);
                 format!(
-                    "{{ let _: fn(&'static str) -> {tc}::ParameterSpec = \
+                    "{{ let _: fn(&'static ::core::primitive::str) -> {tc}::ParameterSpec = \
                      <{ty_again} as {tc}::ToolPattern>::with_pattern; \
                      <{ty} as {tc}::ToolRepeatable>::repeated().pattern({}) }}",
                     pattern.source
@@ -248,15 +248,15 @@ impl Writer {
                 fn parameter() -> {tc}::ParameterSpec {{ \
                     {tc}::Param::object(<{name} as {tc}::ToolArguments>::object_spec()){description} \
                 }} \
-                const REQUIRED: bool = true; \
+                const REQUIRED: ::core::primitive::bool = true; \
                 fn absent() -> ::core::option::Option<Self> {{ ::core::option::Option::None }} \
-                const DEPTH: usize = 1 + {tc}::max_depth(&[{depths}]); \
+                const DEPTH: ::core::primitive::usize = 1 + {tc}::max_depth(&[{depths}]); \
              }} \
              #[automatically_derived] impl {tc}::ToolItem for {name} {{}} \
              {from_node} \
              {extra_check} \
              {name_checks} \
-             const _: usize = <{name} as {tc}::ToolParameter>::DEPTH;",
+             const _: ::core::primitive::usize = <{name} as {tc}::ToolParameter>::DEPTH;",
             depths = depths.join(", "),
         )
     }
@@ -301,13 +301,14 @@ impl Writer {
                  ::core::option::Option::Some(__pa_value) => __pa_value, \
                  ::core::option::Option::None => {absent} }}; "
             );
-            let _ = write!(fields, "{}: __pa_v{index}, ", param.ident.text);
+            let field = self.splice([param.ident.span]);
+            let _ = write!(fields, "{field}: __pa_v{index}, ");
         }
         if let Some(Extra { ident, .. }) = &tool.extra {
+            let field = self.splice([ident.span]);
             let _ = write!(
                 fields,
-                "{}: {js}::Node::new({js}::Value::Object(__pa_extra)), ",
-                ident.text
+                "{field}: {js}::Node::new({js}::Value::Object(__pa_extra)), "
             );
         }
 
@@ -315,8 +316,8 @@ impl Writer {
             "#[automatically_derived] impl {tc}::FromNode for {name} {{ \
                 fn from_node(__pa_node: &{js}::Node) -> \
                     ::core::result::Result<Self, {tc}::FromNodeError> {{ \
-                    const __PA_NAMES: &[&str] = &[{names}]; \
-                    const __PA_ORDER: &[usize] = &[{order}]; \
+                    const __PA_NAMES: &[&::core::primitive::str] = &[{names}]; \
+                    const __PA_ORDER: &[::core::primitive::usize] = &[{order}]; \
                     let mut __pa_members = {tc}::Members::new(__PA_NAMES, __PA_ORDER, __pa_node)?; \
                     {declarations} \
                     for __pa_slot in &mut __pa_members {{ match __pa_slot {{ {arms} }} }} \
@@ -359,7 +360,7 @@ impl Writer {
             );
             let _ = write!(
                 out,
-                "const _: () = assert!({tc}::__valid_name({}), {message:?}); ",
+                "const _: () = ::core::assert!({tc}::__valid_name({}), \"{{}}\", {message:?}); ",
                 text.source
             );
         }
@@ -448,10 +449,11 @@ impl Writer {
             });
         let mut arms = String::new();
         for (variant, value) in &enumeration.variants {
+            let variant = self.splice([variant.span]);
             let _ = write!(
                 arms,
-                "::core::option::Option::Some({}) => ::core::result::Result::Ok(Self::{}), ",
-                value.source, variant.text
+                "::core::option::Option::Some({}) => ::core::result::Result::Ok(Self::{variant}), ",
+                value.source
             );
         }
         let expected = format!(
@@ -479,12 +481,12 @@ impl Writer {
                 fn parameter() -> {tc}::ParameterSpec {{ \
                     {tc}::Param::enumeration(&[{values}]){description} \
                 }} \
-                const REQUIRED: bool = true; \
+                const REQUIRED: ::core::primitive::bool = true; \
                 fn absent() -> ::core::option::Option<Self> {{ ::core::option::Option::None }} \
-                const DEPTH: usize = 0; \
+                const DEPTH: ::core::primitive::usize = 0; \
              }} \
              #[automatically_derived] impl {tc}::ToolItem for {name} {{}} \
-             const _: usize = <{name} as {tc}::ToolParameter>::DEPTH;",
+             const _: ::core::primitive::usize = <{name} as {tc}::ToolParameter>::DEPTH;",
             values = values.join(", "),
         )
     }
@@ -543,12 +545,14 @@ mod tests {
         assert!(
             output
                 .text
-                .contains(r#"&[&str] = &["alpha", "mid", "zed"];"#),
+                .contains(r#"&[&::core::primitive::str] = &["alpha", "mid", "zed"];"#),
             "{}",
             output.text
         );
         assert!(
-            output.text.contains("&[usize] = &[1, 2, 0];"),
+            output
+                .text
+                .contains("&[::core::primitive::usize] = &[1, 2, 0];"),
             "{}",
             output.text
         );
@@ -610,6 +614,74 @@ mod tests {
     }
 
     #[test]
+    fn primitive_types_are_absolute_paths() {
+        let sources = [
+            (
+                Target::Definition,
+                r#"struct A { #[param(pattern = "^a", repeat)] a: Vec<String>, #[param(extra)] r: Node }"#,
+            ),
+            (Target::Enumeration, "enum E { A, B }"),
+        ];
+        for (target, source) in sources {
+            let source = if source.contains("extra") {
+                format!("#[tool(unknown = pass)] {source}")
+            } else {
+                source.to_owned()
+            };
+            let output = write(target, Flavor::Core, &source);
+            for word in ["bool", "usize", "str"] {
+                for (at, _) in output.text.match_indices(word) {
+                    let before = output.text[..at].chars().last();
+                    let after = output.text[at + word.len()..].chars().next();
+                    let whole = !matches!(before, Some(c) if c.is_alphanumeric() || c == '_')
+                        && !matches!(after, Some(c) if c.is_alphanumeric() || c == '_');
+                    if whole {
+                        assert!(
+                            output.text[..at].ends_with("::core::primitive::"),
+                            "bare `{word}` in {}",
+                            output.text
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn name_checks_pass_the_message_as_an_argument() {
+        let output = write(
+            Target::Definition,
+            Flavor::Core,
+            r#"#[tool(name = "bad {name}")] struct A { a: u8 }"#,
+        );
+        assert!(
+            output.text.contains(
+                "const _: () = ::core::assert!(::purrassist_core::tool_call::__valid_name(\"bad {name}\"), \"{}\", \"tool name \\\"bad {name}\\\" is not valid: use ASCII letters, digits and `_ . : -`, or set it with #[tool(name = \\\"..\\\")]\");"
+            ),
+            "{}",
+            output.text
+        );
+        assert!(!output.text.contains(" assert!("), "{}", output.text);
+        assert!(!output.text.contains("(assert!("), "{}", output.text);
+    }
+
+    #[test]
+    fn field_and_variant_idents_are_spliced_from_the_input() {
+        // `struct A { __pa_splice_0 : u8 }`: `A`=1, the field is token 3.
+        let output = write(
+            Target::Definition,
+            Flavor::Core,
+            "struct A { __pa_splice_0: u8 }",
+        );
+        assert!(output.splices.contains(&vec![3]), "{:?}", output.splices);
+        assert!(!output.text.contains("__pa_splice_0: __pa_v0"));
+        // `enum E { V }`: `V` is token 3.
+        let output = write(Target::Enumeration, Flavor::Core, "enum E { V }");
+        assert!(output.splices.contains(&vec![3]), "{:?}", output.splices);
+        assert!(!output.text.contains("Self::V"));
+    }
+
+    #[test]
     fn enumerations_generate_a_matching_conversion() {
         let output = write(
             Target::Enumeration,
@@ -629,7 +701,7 @@ mod tests {
             "{}",
             output.text
         );
-        assert!(output.text.contains("DEPTH: usize = 0;"));
+        assert!(output.text.contains("DEPTH: ::core::primitive::usize = 0;"));
     }
 
     #[test]

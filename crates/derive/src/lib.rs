@@ -129,8 +129,10 @@
 //! parameter is named after its field with any `r#` removed, and an enum value
 //! after its variant, verbatim. An explicit `name` always wins. Every tool name,
 //! parameter name and alias, derived or explicit, is checked at compile time
-//! against the same rule as the core crate (a `const` assertion, reported at the
-//! `#[derive]`); a field whose name is not valid needs `#[param(name = "..")]`.
+//! against the same rule as the core crate. A derived tool or parameter name
+//! that is not valid is a compile error at the type or field asking for
+//! `#[tool(name = "..")]` or `#[param(name = "..")]`; an explicit name or alias
+//! that is not valid fails a `const` assertion, reported at the `#[derive]`.
 //!
 //! The doc comment of a struct, field or enum is the description when no
 //! `description` key is given (an explicit key wins): each line is trimmed and
@@ -1233,6 +1235,71 @@ mod rejected_input {
     //!
     //! #[derive(ToolDefinition)]
     //! #[tool(alias = "a")]
+    //! struct A { a: u8 }
+    //! ```
+    //!
+    //! # 43. Rejected: a derived parameter name that is not valid
+    //!
+    //! ```compile_fail
+    //! use purrassist_derive::ToolDefinition;
+    //!
+    //! #[derive(ToolDefinition)]
+    //! struct A { größe: u8 }
+    //! ```
+    //!
+    //! The twin without it:
+    //!
+    //! ```
+    //! use purrassist_derive::ToolDefinition;
+    //!
+    //! #[derive(ToolDefinition)]
+    //! struct A { #[param(name = "groesse")] größe: u8 }
+    //! ```
+    //!
+    //! # 44. Rejected: a name with braces gets its own message, not a format error
+    //!
+    //! The name is passed to the assertion as an argument, never as a format
+    //! string, so `{name}` is text rather than a captured variable.
+    //!
+    //! ```compile_fail,E0080
+    //! use purrassist_derive::ToolDefinition;
+    //!
+    //! #[derive(ToolDefinition)]
+    //! #[tool(name = "bad {name}")]
+    //! struct A { a: u8 }
+    //! ```
+    //!
+    //! The twin without it:
+    //!
+    //! ```
+    //! use purrassist_derive::ToolDefinition;
+    //!
+    //! #[derive(ToolDefinition)]
+    //! #[tool(name = "good_name")]
+    //! struct A { a: u8 }
+    //! ```
+    //!
+    //! # 45. Rejected: a user `assert!` macro does not disable the name check
+    //!
+    //! ```compile_fail,E0080
+    //! use purrassist_derive::ToolDefinition;
+    //!
+    //! macro_rules! assert { ($($t:tt)*) => {}; }
+    //!
+    //! #[derive(ToolDefinition)]
+    //! #[tool(name = "bad name")]
+    //! struct A { a: u8 }
+    //! ```
+    //!
+    //! The twin without the bad name:
+    //!
+    //! ```
+    //! use purrassist_derive::ToolDefinition;
+    //!
+    //! macro_rules! assert { ($($t:tt)*) => {}; }
+    //!
+    //! #[derive(ToolDefinition)]
+    //! #[tool(name = "good_name")]
     //! struct A { a: u8 }
     //! ```
 }

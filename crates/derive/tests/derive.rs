@@ -1302,7 +1302,8 @@ mod hygiene {
         non_upper_case_globals,
         non_camel_case_types,
         dead_code,
-        unused_imports
+        unused_imports,
+        clippy::struct_field_names
     )]
     use ::purrassist_core::json::Node;
     use ::purrassist_core::tool_call::{FromNode, ToolArguments};
@@ -1325,6 +1326,23 @@ mod hygiene {
     struct Members;
     struct FromNodeError;
     struct Node_;
+    // Primitive types and prelude names are shadowable too.
+    struct bool;
+    struct usize;
+    struct str;
+    struct Option;
+    struct Result;
+    struct Some;
+    struct None;
+    struct Ok;
+    struct Err;
+    struct Vec;
+    struct String;
+    struct Box;
+    // A user macro named like one the generated code calls.
+    macro_rules! assert {
+        ($($t:tt)*) => {};
+    }
 
     #[derive(ToolEnum, Debug, PartialEq)]
     enum Mode {
@@ -1342,13 +1360,65 @@ mod hygiene {
         error: ::core::option::Option<Mode>,
         #[param(default = [1])]
         value: ::std::vec::Vec<u8>,
-        spec: bool,
+        spec: ::core::primitive::bool,
         #[param(extra)]
         extra: Node,
     }
 
+    // Field and variant names equal to the writer's internal placeholders
+    // are ordinary names.
+    #[derive(ToolDefinition, Debug, PartialEq)]
+    #[tool(unknown = pass)]
+    struct Placeholders {
+        __pa_splice_0: u8,
+        __pa_splice_1: ::core::option::Option<u8>,
+        __pa_node: u8,
+        __pa_v0: u8,
+        __pa_f0: u8,
+        #[param(extra)]
+        __pa_extra: Node,
+    }
+
+    #[derive(ToolEnum, Debug, PartialEq)]
+    enum Placeholder {
+        __pa_splice_0,
+        __pa_splice_1,
+        __pa_value,
+    }
+
+    #[test]
+    fn placeholder_named_fields_and_variants_convert() {
+        let converted = Placeholders::from_node(&purrassist_core_shadow_free_parse(
+            r#"{"__pa_splice_0":1,"__pa_node":2,"__pa_v0":3,"__pa_f0":4,"x":5}"#,
+        ))
+        .unwrap();
+        ::core::assert_eq!(
+            (
+                converted.__pa_splice_0,
+                converted.__pa_splice_1,
+                converted.__pa_node,
+                converted.__pa_v0,
+                converted.__pa_f0
+            ),
+            (1, ::core::option::Option::None, 2, 3, 4)
+        );
+        assert_eq!(converted.__pa_extra.to_json(), r#"{"x":5}"#);
+        for (text, expected) in [
+            ("__pa_splice_0", Placeholder::__pa_splice_0),
+            ("__pa_splice_1", Placeholder::__pa_splice_1),
+            ("__pa_value", Placeholder::__pa_value),
+        ] {
+            let json = ::std::format!("\"{text}\"");
+            let parsed = purrassist_core_shadow_free_parse(&json);
+            ::core::assert_eq!(Placeholder::from_node(&parsed).unwrap(), expected);
+        }
+    }
+
     #[test]
     fn generated_code_ignores_shadowing_items() {
+        // The shadowing `assert!` above expands to nothing, so this passes;
+        // the derives' name checks must not be routed through it.
+        assert!(false);
         let definition = Hygienic::tool_definition();
         assert_eq!(definition.name(), "hygienic");
         let converted = Hygienic::from_node(&purrassist_core_shadow_free_parse(
@@ -1356,7 +1426,7 @@ mod hygiene {
         ))
         .unwrap();
         assert_eq!(converted.node, "n");
-        assert_eq!(converted.members, None);
+        ::core::assert_eq!(converted.members, ::core::option::Option::None);
         assert_eq!(converted.value, [1]);
         assert_eq!(converted.slot, Mode::A);
         assert_eq!(converted.extra.to_json(), r#"{"more":1}"#);
@@ -1364,7 +1434,9 @@ mod hygiene {
 
     // `purrassist_core` is shadowed by a local module here, so reach the real
     // crate through an absolute path.
-    fn purrassist_core_shadow_free_parse(text: &str) -> ::purrassist_core::json::Node {
+    fn purrassist_core_shadow_free_parse(
+        text: &::core::primitive::str,
+    ) -> ::purrassist_core::json::Node {
         ::purrassist_core::json::parse(text).unwrap()
     }
 }
