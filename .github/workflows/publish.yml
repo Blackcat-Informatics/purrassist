@@ -4,8 +4,9 @@
 # The one and only publish lane. Distinct from release-qualification.yml
 # (package/audit evidence only, never publishes) and from verify.yml's
 # `qualification` job (PR-time evidence gathering, never publishes). Triggers
-# on `rust-v*` tags. Publishes core -> syntax -> purrassist -> host -> cli via
-# crates.io trusted publishing (OIDC; no long-lived registry token is stored
+# on `rust-v*` tags. After a crates.io name and owner preflight, publishes
+# core -> derive -> syntax -> purrassist -> host -> cli via crates.io trusted
+# publishing (OIDC; no long-lived registry token is stored
 # anywhere in this repository or its secrets), gated on release-qualification.yml
 # having already succeeded for this exact commit.
 name: Publish
