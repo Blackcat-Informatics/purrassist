@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # cargo publish verifies the packaged crate against the registry.
 RELEASE_ORDER = (
     'purrassist-core',
+    'purrassist-derive',
     'purrassist-syntax',
     'purrassist',
     'purrassist-host',

@@ -400,6 +400,20 @@ pub fn __derive_number(spelling: &'static str) -> Number {
     }
 }
 
+/// [`is_valid_name`](super::is_valid_name) as a `const` check for generated
+/// code: derives assert explicit tool, parameter and alias names with it, so
+/// an invalid name is a compile error at the derive.
+///
+/// ```
+/// const _: () = assert!(purrassist_core::tool_call::__valid_name("read_file"));
+/// assert!(!purrassist_core::tool_call::__valid_name("read file"));
+/// ```
+#[doc(hidden)]
+#[must_use]
+pub const fn __valid_name(name: &str) -> bool {
+    super::is_valid_name(name)
+}
+
 /// How one member of an object relates to the declared member names.
 ///
 /// ```

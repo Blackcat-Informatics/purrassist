@@ -91,6 +91,13 @@ name = "purrassist-core"
 version = "0.1.0"
 
 [[package]]
+name = "purrassist-derive"
+version = "0.1.0"
+dependencies = [
+ "purrassist-core",
+]
+
+[[package]]
 name = "purrassist-helper-census"
 version = "0.1.0"
 dependencies = [
