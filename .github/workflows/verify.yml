@@ -23,6 +23,8 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install nightly-2026-09-14 --profile minimal --component clippy,rustfmt,llvm-tools
       - run: make check
+      - name: Test release workflow validation and publish preflight offline
+        run: python3 scripts/test-check-release.py
       - name: Replay committed CLI/MCP transcripts against the built CLI
         run: python3 scripts/test-verify-published.py
       - if: runner.os == 'Linux'

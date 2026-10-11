@@ -82,6 +82,13 @@ jobs:
           echo "VERSION=$version" >> "$GITHUB_ENV"
       - name: Verify release set, order, and tag
         run: python3 scripts/check-release.py --tag "$GITHUB_REF_NAME"
+      # Fails before any publish if a release crate is missing from crates.io
+      # or the release set is not owned identically (owners are compared with
+      # purrassist-core's; no login is hard-coded). Trusted-publisher state is
+      # not verifiable unauthenticated, so it is not checked here and remains
+      # the manual pre-tag step in docs/RELEASE.md.
+      - name: Preflight crates.io names and owners
+        run: python3 scripts/check-release.py --preflight-owners --user-agent 'purrassist-release (https://github.com/${{ github.repository }})'
       - name: Authenticate with crates.io trusted publishing
         id: auth
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5

@@ -12,6 +12,7 @@ hygiene:
 	python3 scripts/check-repository.py
 	python3 scripts/test-repository-audit.py
 	python3 scripts/check-release.py
+	python3 scripts/test-check-release.py
 	python3 scripts/test-fuzz.py
 	python3 scripts/test-resource-report.py
 	python3 scripts/check-resource-limits.py --schema-only docs/qualification/resources-linux-x86_64.json

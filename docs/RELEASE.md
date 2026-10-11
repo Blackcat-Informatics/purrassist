@@ -38,10 +38,33 @@ tag is pushed:
 2. Configure the crates.io trusted publisher for `purrassist-derive`
    (repository, workflow and environment below).
 
-Until both are done, `publish.yml` would fail at `purrassist-derive` after
-`purrassist-core` has already been published, leaving the release half
-published. Re-confirm both through the crates.io API immediately before
+Until both are done the release must not be tagged. `publish.yml` now has a
+preflight step (see below) that fails before `purrassist-core` is published
+when any release crate name is absent from crates.io (HTTP 200 is required
+for `purrassist-derive` too, so its name must be reserved first) or when the
+release set is not owned identically. The preflight cannot see trusted-publisher
+configuration, which is not verifiable unauthenticated; confirming it stays the
+manual step. Re-confirm both through the crates.io API immediately before
 tagging.
+
+## Publish preflight
+
+Before authenticating, `publish.yml` calls `preflight_owners()` in
+`scripts/check-release.py` for every crate in `RELEASE_ORDER` (the single
+source of the order). For each crate, `GET https://crates.io/api/v1/crates/<name>`
+must return 200, and the set of owner logins from
+`GET https://crates.io/api/v1/crates/<name>/owners` must equal that of
+`purrassist-core`. No login is hard-coded; the release set must simply be owned
+identically. Both requests send the `purrassist-release` user agent. Any
+failure (missing crate, mismatched owners, network error, malformed response)
+exits non-zero before any `cargo publish`, so a missing reservation cannot
+leave a half-published release. `scripts/check-release.py` requires the step
+and its position, and `scripts/test-check-release.py` tests both offline with
+fake registry responses.
+
+The preflight does **not** verify trusted-publisher configuration: that state
+is not visible to an unauthenticated request. Confirming that each crate's
+trusted publisher is configured stays the manual pre-tag step below.
 
 ## Trusted publishing (configured for five of six crates)
 
@@ -101,7 +124,9 @@ It has two jobs:
    touches crates.io.
 2. **`publish`** — runs in the `crates-io` environment with
    `permissions: id-token: write, contents: read`. It re-verifies the release
-   set/order/tag with `scripts/check-release.py --tag`, authenticates via
+   set/order/tag with `scripts/check-release.py --tag`, runs the **preflight**
+   (`scripts/check-release.py --preflight-owners --user-agent ...`, before
+   authentication and before any `cargo publish`), authenticates via
    `rust-lang/crates-io-auth-action` (pinned by full commit SHA, registered in
    `vendor/tooling.json`), then publishes `purrassist-core` → `purrassist-derive`
    → `purrassist-syntax` → `purrassist` → `purrassist-host` →
