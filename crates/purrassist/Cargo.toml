@@ -19,4 +19,5 @@ workspace = true
 
 [dependencies]
 purrassist-core.workspace = true
+purrassist-derive.workspace = true
 purrassist-syntax.workspace = true

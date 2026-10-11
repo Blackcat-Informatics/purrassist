@@ -52,6 +52,7 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install 1.98.0 --profile minimal
       - run: cargo test -p purrassist-core -p purrassist-syntax --locked
+      - run: cargo test -p purrassist-derive -p purrassist --locked
       - run: cargo test -p purrassist-host -p purrassist-cli --locked
       - run: rustup component add clippy
       - run: cargo clippy -p purrassist-host -p purrassist-cli --all-targets --locked -- -D warnings
