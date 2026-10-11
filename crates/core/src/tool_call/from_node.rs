@@ -30,7 +30,22 @@ pub struct FromNodeError {
 }
 
 impl FromNodeError {
-    fn mismatch(expected: &'static str, node: &Node) -> Self {
+    /// The value `node` is not what the target type requires.
+    ///
+    /// The pointer is empty (the value itself); `expected` is what the type
+    /// requires and `found` describes `node` (`"null"`, `"boolean true"`,
+    /// `"number 256"`, `"string"`, `"array of 2 items"`,
+    /// `"object with 1 members"`).
+    ///
+    /// ```
+    /// use purrassist_core::{json, tool_call::FromNodeError};
+    /// let node = json::parse("[1, 2]").unwrap();
+    /// let error = FromNodeError::mismatch("string", &node);
+    /// assert_eq!(error.pointer, "");
+    /// assert_eq!(error.found, "array of 2 items");
+    /// ```
+    #[must_use]
+    pub fn mismatch(expected: &'static str, node: &Node) -> Self {
         Self {
             pointer: String::new(),
             expected,
@@ -38,11 +53,66 @@ impl FromNodeError {
         }
     }
 
-    /// Prefix the pointer with one enclosing segment (escaped per RFC 6901).
+    /// A required member `name` is absent from the object being converted.
+    ///
+    /// The pointer addresses where the member was required (`/name`).
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::FromNodeError;
+    /// let error = FromNodeError::missing("path");
+    /// assert_eq!(error.to_string(), "at /path: expected required member, found missing");
+    /// ```
     #[must_use]
-    fn within(mut self, segment: &str) -> Self {
+    pub fn missing(name: &str) -> Self {
+        Self::member(name, "required member", "missing")
+    }
+
+    /// The member `name` occurs more than once in the object being converted.
+    ///
+    /// Exact conversion never picks between occurrences; the pointer is
+    /// `/name`.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::FromNodeError;
+    /// let error = FromNodeError::duplicate("path");
+    /// assert_eq!(error.to_string(), "at /path: expected a single occurrence, found duplicate member");
+    /// ```
+    #[must_use]
+    pub fn duplicate(name: &str) -> Self {
+        Self::member(name, "a single occurrence", "duplicate member")
+    }
+
+    /// The object has a member `name` that the target type does not declare.
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::FromNodeError;
+    /// let error = FromNodeError::unknown("colour");
+    /// assert_eq!(error.to_string(), "at /colour: expected a declared member, found undeclared member");
+    /// ```
+    #[must_use]
+    pub fn unknown(name: &str) -> Self {
+        Self::member(name, "a declared member", "undeclared member")
+    }
+
+    /// Prefix the pointer with one enclosing segment (escaped per RFC 6901).
+    ///
+    /// ```
+    /// use purrassist_core::tool_call::FromNodeError;
+    /// let error = FromNodeError::missing("b").within("a/b").within("0");
+    /// assert_eq!(error.pointer, "/0/a~1b/b");
+    /// ```
+    #[must_use]
+    pub fn within(mut self, segment: &str) -> Self {
         self.pointer = format!("/{}{}", pointer_segment(segment), self.pointer);
         self
+    }
+
+    fn member(name: &str, expected: &'static str, found: &str) -> Self {
+        Self {
+            pointer: format!("/{}", pointer_segment(name)),
+            expected,
+            found: found.into(),
+        }
     }
 }
 

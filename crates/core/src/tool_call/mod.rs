@@ -51,6 +51,7 @@
 mod adapter;
 mod context;
 mod definition;
+mod derive_support;
 mod detect;
 mod dialect;
 pub mod emit;
@@ -67,6 +68,12 @@ mod toolset;
 pub use adapter::{DeclarationForm, ToolDeclaration, ToolSource};
 pub use definition::{
     Effects, ObjectSpec, Param, ParameterSpec, RepairPolicy, ToolDefinition, UnknownParameters,
+};
+#[doc(hidden)]
+pub use derive_support::__derive_number;
+pub use derive_support::{
+    Members, Slot, ToolArguments, ToolExtra, ToolItem, ToolParameter, ToolPattern, ToolRepeatable,
+    max_depth,
 };
 pub use detect::{DETECTION_BYTES, Detection, MarkupFamily, detect_unparsed};
 pub use dialect::{DialectId, DialectSet, DialectSetError};
