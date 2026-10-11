@@ -1,0 +1,8 @@
+corpus	fail	3s	https://github.com/Blackcat-Informatics/purrassist/actions/runs/38109120786/job/114380797718	
+fuzz	fail	2s	https://github.com/Blackcat-Informatics/purrassist/actions/runs/38109120786/job/114380797737	
+msrv	fail	2s	https://github.com/Blackcat-Informatics/purrassist/actions/runs/38109120786/job/114380797578	
+native (macos-14)	fail	6s	https://github.com/Blackcat-Informatics/purrassist/actions/runs/38109120786/job/114380797767	
+native (ubuntu-24.04)	fail	3s	https://github.com/Blackcat-Informatics/purrassist/actions/runs/38109120786/job/114380797731	
+qualification	fail	2s	https://github.com/Blackcat-Informatics/purrassist/actions/runs/38109120786/job/114380797698	
+wasm	fail	3s	https://github.com/Blackcat-Informatics/purrassist/actions/runs/38109120786/job/114380797723	
+windows-engines	fail	3s	https://github.com/Blackcat-Informatics/purrassist/actions/runs/38109120786/job/114380797674	

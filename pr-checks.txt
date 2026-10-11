@@ -1,0 +1,10 @@
+$ stagectl pr-checks 19
+FAILURE    native (ubuntu-24.04)
+FAILURE    native (macos-14)
+FAILURE    msrv
+FAILURE    windows-engines
+FAILURE    wasm
+FAILURE    corpus
+FAILURE    fuzz
+FAILURE    qualification
+state: fail

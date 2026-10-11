@@ -1,0 +1,82 @@
+{
+  "issue": 15,
+  "branch": "paudley/15-purrassist-derive-zero-dependency",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "e4850a806b00ff2c7ec9c0b721b67d8c8e79c321",
+      "subject": "feat(derive): variant descriptions compose into the enum description (#15)",
+      "date": "2026-10-10"
+    },
+    {
+      "oid": "d2410edc281f62215363869f8efa416d503b1ead",
+      "subject": "docs(purrassist): drop a redundant intra-doc link target (#15)",
+      "date": "2026-10-10"
+    },
+    {
+      "oid": "534f862e3e2732be99884ee39f2201fac9aa5a77",
+      "subject": "build(release): register purrassist-derive for packaging, audit and docs (#15)",
+      "date": "2026-10-10"
+    },
+    {
+      "oid": "4085bf31a2c470e35896da43d755767c2ce5809e",
+      "subject": "feat(purrassist): re-export the tool derives through the facade (#15)",
+      "date": "2026-10-10"
+    },
+    {
+      "oid": "e97a973678f7760659f6ef870b2dbf14b0209c8c",
+      "subject": "feat(derive): zero-dependency #[derive(ToolDefinition)] and #[derive(ToolEnum)] (#15)",
+      "date": "2026-10-10"
+    },
+    {
+      "oid": "0fb045418f035e86d0bb1c34bdfd09f16c4f67cd",
+      "subject": "feat(tool-call): core support for derived tool definitions (#15)",
+      "date": "2026-10-10"
+    }
+  ],
+  "files": [
+    ".github/workflows/publish.yml",
+    ".github/workflows/verify.yml",
+    "Cargo.lock",
+    "Cargo.toml",
+    "README.md",
+    "crates/core/src/tool_call/derive_support.rs",
+    "crates/core/src/tool_call/from_node.rs",
+    "crates/core/src/tool_call/mod.rs",
+    "crates/core/src/tool_call/toolset.rs",
+    "crates/derive/Cargo.toml",
+    "crates/derive/LICENSE-APACHE",
+    "crates/derive/LICENSE-MIT",
+    "crates/derive/LICENSE-MULAN",
+    "crates/derive/README.md",
+    "crates/derive/src/bridge.rs",
+    "crates/derive/src/lib.rs",
+    "crates/derive/src/model.rs",
+    "crates/derive/src/parse.rs",
+    "crates/derive/src/write.rs",
+    "crates/derive/tests/derive.rs",
+    "crates/host/tests/derive_facade.rs",
+    "crates/purrassist/Cargo.toml",
+    "crates/purrassist/README.md",
+    "crates/purrassist/src/lib.rs",
+    "crates/purrassist/tests/derive_facade.rs",
+    "docs/DEPENDENCIES.md",
+    "docs/IMPLEMENTATION.md",
+    "docs/QUALIFICATION.md",
+    "docs/RELEASE.md",
+    "docs/RESOURCES.md",
+    "docs/tool-calls/INTEGRATION.md",
+    "docs/tool-calls/README.md",
+    "docs/tool-calls/dialects/anthropic-tool-use.v1.md",
+    "scripts/check-packages.py",
+    "scripts/check-release.py",
+    "scripts/check-repository.py",
+    "scripts/package-workspace.py",
+    "scripts/test-package-workspace.py",
+    "scripts/test-repository-audit.py",
+    "scripts/test-verify-published.py",
+    "scripts/verify-published.py",
+    "vendor/dependencies.json"
+  ],
+  "adrs_touched": []
+}
