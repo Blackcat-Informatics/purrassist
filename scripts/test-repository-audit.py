@@ -199,6 +199,48 @@ class Inventory(unittest.TestCase):
         self.assertIn('maintainer approval', errors[0])
 
 
+class DeriveExample(unittest.TestCase):
+    """`check_derive_example` over a synthetic pair of READMEs."""
+
+    BLOCK = '```rust\nlet x = 1;\n```\n'
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root)
+        (self.root / 'crates/purrassist').mkdir(parents=True)
+        self.write('README.md', self.BLOCK)
+        self.write('crates/purrassist/README.md', self.BLOCK)
+
+    def write(self, name, block, begin='<!-- derive-example:begin -->\n',
+              end='<!-- derive-example:end -->\n'):
+        (self.root / name).write_text(f'# title\n\n{begin}{block}{end}\ntext\n')
+
+    def test_identical_copies_pass(self):
+        self.assertEqual(AUDIT.check_derive_example(self.root), [])
+
+    def test_drifted_root_copy_fails_naming_both_files(self):
+        self.write('README.md', self.BLOCK.replace('1', '2'))
+        errors = AUDIT.check_derive_example(self.root)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith('README.md: derive example differs'))
+        self.assertIn('crates/purrassist/README.md', errors[0])
+
+    def test_one_byte_of_whitespace_fails(self):
+        self.write('README.md', self.BLOCK.replace('let x', 'let  x'))
+        self.assertEqual(len(AUDIT.check_derive_example(self.root)), 1)
+
+    def test_missing_marker_fails(self):
+        self.write('README.md', self.BLOCK, begin='')
+        errors = AUDIT.check_derive_example(self.root)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith('README.md: needs exactly one'))
+
+    def test_missing_file_fails(self):
+        (self.root / 'README.md').unlink()
+        self.assertEqual(AUDIT.check_derive_example(self.root),
+                         ['README.md: derive example copy is missing'])
+
+
 class EvaluationManifest(unittest.TestCase):
     """`check_evaluation_manifest` over a synthetic repository tree."""
 

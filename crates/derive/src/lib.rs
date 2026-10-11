@@ -240,15 +240,15 @@
 //! count.
 //!
 //! An enumeration has one description, so the descriptions of its variants are
-//! folded into it. A variant's description is its
-//! `#[param(description = "..")]`, else its doc comment (whitespace collapsed to
-//! single spaces). The enum's description is its own part (`#[tool(description = "..")]`
-//! or its doc comment, which the explicit key replaces) followed, when any
-//! variant has a description, by one line per such variant, in declaration
-//! order, of the form `- <value>: <text>`, separated by `\n`. An enum with
-//! only variant descriptions is just those lines. A field of an enum type
-//! without a description of its own uses this composed text, as a field of a
-//! nested struct type uses the struct's.
+//! folded into it. A variant's description is its `#[param(description = "..")]`,
+//! else its doc comment (whitespace collapsed to single spaces). The enum's
+//! description is its own part (`#[tool(description = "..")]` or its doc
+//! comment, which the explicit key replaces) followed, when any variant has a
+//! description, by one line per such variant, in declaration order, of the form
+//! `- <value>: <text>`, separated by `\n`. An enum with only variant
+//! descriptions is just those lines. A field of an enum type without a
+//! description of its own uses this composed text, as a field of a nested
+//! struct type uses the struct's.
 //!
 //! # Defaults
 //!
@@ -464,6 +464,12 @@ pub fn derive_facade_tool_definition(input: TokenStream) -> TokenStream {
 pub fn derive_facade_tool_enum(input: TokenStream) -> TokenStream {
     bridge::expand(Target::Enumeration, Flavor::Facade, input)
 }
+
+// The README is the crates.io page; compiling it as a doctest keeps its example
+// running. Its only code block is a complete program, so nothing is ignored.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
 
 // Evidence for the rejections: every case is a `compile_fail` doctest paired
 // with a passing twin that differs only in the rejected construct, so the

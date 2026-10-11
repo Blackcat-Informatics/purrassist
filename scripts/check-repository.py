@@ -251,6 +251,46 @@ def check_evaluation_manifest(root):
     return errors
 
 
+DERIVE_EXAMPLE_COPIES = ['README.md', 'crates/purrassist/README.md']
+DERIVE_EXAMPLE_DOCTESTED = 'crates/purrassist/README.md'
+DERIVE_EXAMPLE_BEGIN = '<!-- derive-example:begin -->\n'
+DERIVE_EXAMPLE_END = '<!-- derive-example:end -->\n'
+
+
+def check_derive_example(root):
+    """The root README derive example must equal the doctested facade README copy.
+
+    `crates/purrassist/README.md` is the crate documentation of the facade, so
+    its example runs as a doctest; the root README carries a byte copy that no
+    test executes. Both copies sit between the `derive-example` markers.
+    """
+    errors = []
+    blocks = {}
+    for name in DERIVE_EXAMPLE_COPIES:
+        path = root / name
+        if not path.is_file():
+            errors.append(f'{name}: derive example copy is missing')
+            continue
+        text = path.read_text()
+        if text.count(DERIVE_EXAMPLE_BEGIN) != 1 or text.count(DERIVE_EXAMPLE_END) != 1:
+            errors.append(f'{name}: needs exactly one {DERIVE_EXAMPLE_BEGIN.strip()} and one '
+                          f'{DERIVE_EXAMPLE_END.strip()} marker line')
+            continue
+        start = text.index(DERIVE_EXAMPLE_BEGIN) + len(DERIVE_EXAMPLE_BEGIN)
+        end = text.index(DERIVE_EXAMPLE_END)
+        if end < start:
+            errors.append(f'{name}: derive-example end marker precedes the begin marker')
+            continue
+        blocks[name] = text[start:end]
+    doctested = blocks.get(DERIVE_EXAMPLE_DOCTESTED)
+    if doctested is not None:
+        for name, block in blocks.items():
+            if block != doctested:
+                errors.append(f'{name}: derive example differs from the doctested copy in '
+                              f'{DERIVE_EXAMPLE_DOCTESTED}; copy it over byte for byte')
+    return errors
+
+
 def main():
     errors = []
     core = tomllib.loads((ROOT / 'crates/core/Cargo.toml').read_text())
@@ -325,6 +365,7 @@ def main():
             if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != entry.get('notice_sha256', {}).get(name):
                 errors.append(f'{identity}: license notice missing or changed: {name}')
     errors.extend(check_evaluation_manifest(ROOT))
+    errors.extend(check_derive_example(ROOT))
     for crate_name, notices in inventory['packaged_notices'].items():
         for name, expected in notices.items():
             path = ROOT / 'crates' / crate_name / name

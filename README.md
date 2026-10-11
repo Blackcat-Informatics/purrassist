@@ -20,6 +20,7 @@ The [release procedure](docs/RELEASE.md) records the package and registry gates.
 
 A tool's schema and its typed arguments can come from one Rust struct:
 
+<!-- derive-example:begin -->
 ```rust
 use purrassist::json;
 use purrassist::tool_call::{FromNode, ToolArguments};
@@ -49,6 +50,7 @@ assert_eq!(
 );
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
+<!-- derive-example:end -->
 
 ```rust
 use purrassist::{Outcome, RecoveryRequest, Schema};

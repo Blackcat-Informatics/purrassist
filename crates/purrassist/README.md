@@ -38,6 +38,7 @@ A tool's schema and its typed arguments can come from one Rust struct, through
 the `purrassist::ToolDefinition` and `purrassist::ToolEnum` derives
 (`purrassist-derive`):
 
+<!-- derive-example:begin -->
 ```rust
 use purrassist::json;
 use purrassist::tool_call::{FromNode, ToolArguments};
@@ -67,6 +68,7 @@ assert_eq!(
 );
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
+<!-- derive-example:end -->
 
 Inspect every result's status and receipt. Validation does not turn an invented
 value into a fact. Ambiguity and resource exhaustion are explicit outcomes.

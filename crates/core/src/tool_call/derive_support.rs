@@ -242,7 +242,7 @@ pub trait ToolItem: ToolParameter {}
 /// assert_eq!(<Option<Vec<u8>> as ToolRepeatable>::repeated(), Param::integer().repeatable());
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0277
 /// use purrassist_core::tool_call::ToolRepeatable;
 /// let _ = <String as ToolRepeatable>::repeated();
 /// ```
@@ -268,7 +268,7 @@ pub trait ToolRepeatable {
 /// );
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0277
 /// use purrassist_core::tool_call::ToolPattern;
 /// let _ = <u8 as ToolPattern>::with_pattern("^a");
 /// ```
@@ -371,13 +371,13 @@ impl<T: ToolItem> ToolItem for Vec<T> {}
 /// `Option<T>` requires `T: ToolItem`, which rejects `Option<Option<T>>`
 /// (JSON has a single `null`).
 ///
-/// ```compile_fail
+/// ```compile_fail,E0277
 /// use purrassist_core::tool_call::ToolParameter;
 /// fn parameter<T: ToolParameter>() {}
 /// parameter::<Option<Option<String>>>();
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0277
 /// use purrassist_core::tool_call::ToolParameter;
 /// fn parameter<T: ToolParameter>() {}
 /// parameter::<Vec<Option<String>>>();

@@ -10,9 +10,10 @@ registry downloads and installed CLI/MCP behavior are verified.
 The release set is six crates, in this order: `purrassist-core`,
 `purrassist-derive`, `purrassist-syntax`, `purrassist`, `purrassist-host`, then
 `purrassist-cli`. `purrassist-derive` follows `purrassist-core` because it
-dev-depends on it, and precedes `purrassist`, which depends on it. `scripts/check-release.py` proves that
-this is exactly the publishable workspace, all versions match, internal version
-requirements match, normal and dev dependencies precede their users, and (see
+dev-depends on it, and precedes `purrassist`, which depends on it.
+`scripts/check-release.py` proves that this is exactly the publishable
+workspace, all versions match, internal version requirements match, normal and
+dev dependencies precede their users, and (see
 below) that `.github/workflows/publish.yml` has the required trigger,
 environment, permissions, qualification gate, SHA-pinned actions, publish
 order, and verification step. It runs in `make check` and `make package`.
@@ -21,10 +22,11 @@ order, and verification step. It runs in `make check` and `make package`.
 
 One-time, irreversible `0.0.0` name-reservation records exist on crates.io for
 the original five crates (`purrassist-core`, `purrassist-syntax`,
-`purrassist`, `purrassist-host`, `purrassist-cli`; minimal `lib` packages, `version = "0.0.0"`, no dependencies,
-`//! Reserved name.`; see the issue #1 comment recording this for the exact
-mechanics). These are **not** the `0.1.0` release; they only hold the names and
-let a trusted publisher be configured before the first real publication.
+`purrassist`, `purrassist-host`, `purrassist-cli`; minimal `lib` packages,
+`version = "0.0.0"`, no dependencies, `//! Reserved name.`; see the issue #1
+comment recording this for the exact mechanics). These are **not** the `0.1.0`
+release; they only hold the names and let a trusted publisher be configured
+before the first real publication.
 
 **`purrassist-derive` has no placeholder record yet.** Its name has not been
 reserved on crates.io. That is an external, one-time, irreversible maintainer
@@ -69,7 +71,8 @@ trusted publisher is configured stays the manual pre-tag step below.
 ## Trusted publishing (configured for five of six crates)
 
 Each of the original five crates (all except `purrassist-derive`, whose
-trusted publisher is not yet configured; see above) has a crates.io trusted publisher configured against:
+trusted publisher is not yet configured; see above) has a crates.io trusted
+publisher configured against:
 
 - Repository: `Blackcat-Informatics/purrassist`
 - Workflow: `publish.yml`
@@ -200,8 +203,9 @@ checks listed in `QUALIFICATION.md`, and re-confirm the trusted-publisher
 settings above via the crates.io API immediately before tagging (a repository
 rename, workflow rename, or environment rename would silently break trusted
 publishing). The `purrassist-derive` name reservation and trusted publisher are
-not yet done and must exist first (see "Placeholder name records"). Tagging `rust-vVERSION` is irreversible and requires explicit
-authorization; `publish.yml` then does the rest. After it succeeds, create
+not yet done and must exist first (see "Placeholder name records"). Tagging
+`rust-vVERSION` is irreversible and requires explicit authorization;
+`publish.yml` then does the rest. After it succeeds, create
 the GitHub release and link the `verify-published.py` output in the release
 notes.
 

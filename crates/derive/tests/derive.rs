@@ -659,6 +659,17 @@ enum DocumentedEnum {
     Three,
 }
 
+/// Replaced by the explicit key.
+#[derive(ToolEnum)]
+#[tool(description = "Explicit enum text.")]
+enum ExplicitOverDocEnum {
+    /// Alpha value.
+    A,
+    #[param(description = "Beta  value.")]
+    B,
+    C,
+}
+
 /// Fields without their own description take the enum's composed one.
 #[derive(ToolDefinition)]
 struct EnumFallback {
@@ -737,6 +748,13 @@ fn doc_comments_are_descriptions_and_explicit_keys_win() {
     assert_eq!(
         <DocumentedEnum as ToolParameter>::parameter(),
         Param::enumeration(&["One", "two", "Three"]).description(ENUM_DESCRIPTION)
+    );
+    // An explicit `#[tool(description)]` replaces the enum's doc comment and
+    // the variant lines still follow it.
+    assert_eq!(
+        <ExplicitOverDocEnum as ToolParameter>::parameter(),
+        Param::enumeration(&["A", "B", "C"])
+            .description("Explicit enum text.\n- A: Alpha value.\n- B: Beta value.")
     );
     assert_eq!(
         <OnlyVariantDocs as ToolParameter>::parameter(),
