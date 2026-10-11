@@ -62,6 +62,46 @@ class Closure(unittest.TestCase):
             self.assertEqual(len(errors), 2, kind)
             self.assertIn('purrassist-core -> mid -> leaf', ' '.join(errors))
 
+    def derive_data(self, edges):
+        packages = [package('purrassist-core'), package('purrassist-derive'),
+                    package('helper', source=REGISTRY), package('leaf', source=REGISTRY)]
+        return metadata(packages, edges, ['purrassist-core', 'purrassist-derive'])
+
+    def test_derive_without_dependencies_passes(self):
+        self.assertEqual(AUDIT.check_derive_closure(self.derive_data({})), [])
+
+    def test_derive_normal_dependency_fails_with_path(self):
+        errors = AUDIT.check_derive_closure(self.derive_data(
+            {'purrassist-derive': [('helper', None)], 'helper': [('leaf', None)]}))
+        self.assertEqual(len(errors), 2)
+        self.assertIn('purrassist-derive -> helper -> leaf', ' '.join(errors))
+        self.assertIn('normal and build', errors[0])
+
+    def test_derive_normal_or_build_edge_to_core_fails(self):
+        for kind in (None, 'build'):
+            errors = AUDIT.check_derive_closure(self.derive_data({'purrassist-derive': [('purrassist-core', kind)]}))
+            self.assertEqual(len(errors), 1, kind)
+            self.assertIn('purrassist-derive -> purrassist-core', errors[0])
+
+    def test_derive_build_dependency_fails(self):
+        errors = AUDIT.check_derive_closure(self.derive_data({'purrassist-derive': [('helper', 'build')]}))
+        self.assertEqual(len(errors), 1)
+        self.assertIn('purrassist-derive -> helper', errors[0])
+
+    def test_derive_dev_dependency_on_core_passes(self):
+        self.assertEqual(AUDIT.check_derive_closure(
+            self.derive_data({'purrassist-derive': [('purrassist-core', 'dev')]})), [])
+
+    def test_derive_dev_dependency_on_third_party_fails(self):
+        errors = AUDIT.check_derive_closure(self.derive_data(
+            {'purrassist-derive': [('purrassist-core', 'dev'), ('helper', 'dev')]}))
+        self.assertEqual(len(errors), 1)
+        self.assertIn('dev dependencies may reach only purrassist-core', errors[0])
+        self.assertIn('purrassist-derive -> helper', errors[0])
+
+    def test_missing_derive_package_fails(self):
+        self.assertEqual(len(AUDIT.check_derive_closure(clean())), 1)
+
     def test_tokio_in_publishable_closure_fails(self):
         data = metadata([package('purrassist-core'), package('purrassist-cli'),
                          package('client', source=REGISTRY), package('tokio', source=REGISTRY)],
@@ -119,8 +159,27 @@ class Ambient(unittest.TestCase):
         self.assertTrue(self.scan('let s = "http://x"; let m = HashSet::new();\n'))
         self.assertEqual(self.scan('let s = r#"//"#; let t = Instantiate;\n'), [])
 
+    def test_derive_source_is_scanned_under_the_derive_label(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        for source in ('crates/core/src', 'crates/derive/src'):
+            (root / source).mkdir(parents=True)
+            (root / source / 'lib.rs').write_text('fn ok() {}\n')
+        self.assertEqual(AUDIT.check_ambient_access(root), [])
+        (root / 'crates/derive/src/parse.rs').write_text('fn a() {\n    let _ = std::env::var("X");\n}\n')
+        errors = AUDIT.check_ambient_access(root)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith('crates/derive/src/parse.rs:2:'))
+        self.assertIn('forbidden in purrassist-derive', errors[0])
+        self.assertNotIn('purrassist-core', errors[0])
+
+    def test_core_source_keeps_the_core_label(self):
+        errors = AUDIT.scan_ambient_source('crates/core/src/x.rs', 'use std::fs;\n')
+        self.assertIn('forbidden in purrassist-core', errors[0])
+
     def test_current_core_source_is_clean(self):
         self.assertEqual(AUDIT.check_ambient_access(AUDIT.ROOT), [])
+        self.assertTrue(list((AUDIT.ROOT / 'crates/derive/src').rglob('*.rs')))
 
 
 class Inventory(unittest.TestCase):
@@ -138,6 +197,48 @@ class Inventory(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn('extra@0.1.0', errors[0])
         self.assertIn('maintainer approval', errors[0])
+
+
+class DeriveExample(unittest.TestCase):
+    """`check_derive_example` over a synthetic pair of READMEs."""
+
+    BLOCK = '```rust\nlet x = 1;\n```\n'
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root)
+        (self.root / 'crates/purrassist').mkdir(parents=True)
+        self.write('README.md', self.BLOCK)
+        self.write('crates/purrassist/README.md', self.BLOCK)
+
+    def write(self, name, block, begin='<!-- derive-example:begin -->\n',
+              end='<!-- derive-example:end -->\n'):
+        (self.root / name).write_text(f'# title\n\n{begin}{block}{end}\ntext\n')
+
+    def test_identical_copies_pass(self):
+        self.assertEqual(AUDIT.check_derive_example(self.root), [])
+
+    def test_drifted_root_copy_fails_naming_both_files(self):
+        self.write('README.md', self.BLOCK.replace('1', '2'))
+        errors = AUDIT.check_derive_example(self.root)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith('README.md: derive example differs'))
+        self.assertIn('crates/purrassist/README.md', errors[0])
+
+    def test_one_byte_of_whitespace_fails(self):
+        self.write('README.md', self.BLOCK.replace('let x', 'let  x'))
+        self.assertEqual(len(AUDIT.check_derive_example(self.root)), 1)
+
+    def test_missing_marker_fails(self):
+        self.write('README.md', self.BLOCK, begin='')
+        errors = AUDIT.check_derive_example(self.root)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith('README.md: needs exactly one'))
+
+    def test_missing_file_fails(self):
+        (self.root / 'README.md').unlink()
+        self.assertEqual(AUDIT.check_derive_example(self.root),
+                         ['README.md: derive example copy is missing'])
 
 
 class EvaluationManifest(unittest.TestCase):

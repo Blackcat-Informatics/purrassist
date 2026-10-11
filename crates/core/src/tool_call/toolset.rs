@@ -100,11 +100,17 @@ pub fn collision_key(name: &str) -> String {
 /// assert!(!is_valid_name("read file"));
 /// ```
 #[must_use]
-pub fn is_valid_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b':' | b'-'))
+pub const fn is_valid_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if !(byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b':' | b'-')) {
+            return false;
+        }
+        index += 1;
+    }
+    !bytes.is_empty()
 }
 
 /// Why a tool set could not be compiled.

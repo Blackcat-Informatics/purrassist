@@ -17,3 +17,10 @@ members = ["purrassist_core::grammar::GrammarError::from", "purrassist_core::gra
 criterion = "a"
 anchor = "purrassist_core::json::parser::ParseFailure"
 reason = "Distinct public nominal error types for JSON parsing, pattern compilation, schema compilation, grammar compilation, grammar production printing (shared by witness generation), tool-call emission and dialect-set compilation. Each From<StopReason> preserves the exact reason in its own Resource variant; merging the variants would change the public result contract."
+
+[[distinct]]
+kind = "shim"
+members = ["purrassist_core::tool_call::derive_support::Box::parameter", "purrassist_core::tool_call::derive_support::Option::parameter"]
+criterion = "a"
+anchor = "purrassist_core::tool_call::ToolParameter"
+reason = "Distinct public wrapper types with a specified conformance difference: Option<T> shares the parameter shape of T but is the only not-required parameter (REQUIRED false, absent Some(None)), while Box<T> is exactly T (REQUIRED, absent and DEPTH forward). Each is an impl of the documented ToolParameter trait for its own type, whose parameter() is the item both forward to; a trait impl cannot share a body across Self types, and the differing associated items in the same impls are the contract."

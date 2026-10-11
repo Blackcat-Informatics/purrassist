@@ -1080,7 +1080,7 @@ Rationale per category:
   toolchain growth between releases without masking an accidental doubling.
 - `cold_build_elapsed_ns`: 180 seconds. This limits the uncached release
   CLI compilation and link measured with empty build directories; 180s is a
-  generous ceiling for an actually cold compile of this workspace's five
+  generous ceiling for an actually cold compile of this workspace's six
   publishable crates and their dependencies on ordinary CI hardware.
 - `latency_workloads`/`syntax_latency_workloads`: core median/p95 ceilings
   are 10/15 milliseconds; syntax median/p95 ceilings are 3/4 milliseconds.

@@ -19,7 +19,7 @@ if SPEC is None or SPEC.loader is None:
     raise ImportError('cannot load package-workspace.py')
 PACKAGE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PACKAGE)
-NAMES = ['purrassist-core', 'purrassist-syntax', 'purrassist', 'purrassist-host', 'purrassist-cli']
+NAMES = ['purrassist-core', 'purrassist-derive', 'purrassist-syntax', 'purrassist', 'purrassist-host', 'purrassist-cli']
 
 
 class Packaging(unittest.TestCase):
@@ -98,8 +98,11 @@ class Packaging(unittest.TestCase):
     def test_repeated_commit_uses_fresh_sources_and_builds_and_exact_verified_archives(self):
         ambient = dict(os.environ)
         contaminated = {'CARGO_HOME': '/old-source-cache', 'CARGO_TARGET_DIR': '/shared-target',
-                        'CARGO_BUILD_BUILD_DIR': '/shared-build', 'CARGO_TOKEN': 'fake-credential',
-                        'CARGO_REGISTRY_TOKEN': 'fake-credential', 'CARGO_REGISTRIES_OTHER_TOKEN': 'fake-credential'}
+                        'CARGO_BUILD_BUILD_DIR': '/shared-build'}
+        # Registry token variables carry a sentinel, never a real credential;
+        # packaging must remove every one of them from the child environment.
+        tokens = ('CARGO_TOKEN', 'CARGO_REGISTRY_TOKEN', 'CARGO_REGISTRIES_OTHER_TOKEN')
+        contaminated.update({name: 'sentinel-not-a-credential' for name in tokens})
         wrappers = ('RUSTC_WRAPPER', 'RUSTC_WORKSPACE_WRAPPER',
                     'CARGO_BUILD_RUSTC_WRAPPER', 'CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER')
         contaminated.update({name: 'host-wrapper' for name in wrappers})
@@ -108,7 +111,7 @@ class Packaging(unittest.TestCase):
         self.assertEqual(dict(os.environ), ambient)
         self.assertNotEqual(first, second)
         for env in self.environments:
-            for name in ('CARGO_TOKEN', 'CARGO_REGISTRY_TOKEN', 'CARGO_REGISTRIES_OTHER_TOKEN'):
+            for name in tokens:
                 self.assertNotIn(name, env)
             for name in wrappers:
                 self.assertEqual(env[name], '')

@@ -1550,5 +1550,113 @@ Added:
   nested-item capacity; `ToolChoice::constraint` documents the `forced[...]`
   family; `ToolCalls::usable` has a doctest.
 
+Added for typed (derived) tool definitions, none of which breaks existing code:
+
+- Traits in `tool_call`, implemented by the derives and by core for the
+  supported field types: `ToolArguments: FromNode` (`tool_definition()`,
+  `object_spec()`); `ToolParameter: FromNode` (`parameter()`,
+  `const REQUIRED`, `absent()`, `const DEPTH`), implemented for `String`, the
+  twelve integer types, `f32`, `f64`, `json::Number`, `bool`,
+  `Vec<T: ToolItem>`, `Option<T: ToolItem>` (so `Option<Option<T>>` is
+  rejected) and `Box<T: ToolItem>` (forwards `REQUIRED`, `absent()` and
+  `DEPTH`; it does not enable recursion, and a cycle through it is still
+  E0391). Only `parameter()` is required of a hand-written impl: `REQUIRED`
+  defaults to `true`, `absent()` to `None` and `DEPTH` to `0`, and `REQUIRED`
+  must be `false` exactly when `absent()` is `Some(..)`. `FromNode` is also
+  implemented for `f32` (the spelling is parsed once with `str::parse::<f32>`,
+  so reading is round-to-nearest and never double-rounded through `f64`;
+  writing is exact; infinity is rejected with `expected: "number within the
+  finite f32 range"`) and for `Box<T: FromNode>`. The marker `ToolItem: ToolParameter` (every
+  `ToolParameter` except `Option<T>`, so `Vec<Option<T>>` does not compile);
+  `ToolRepeatable` (`repeated()`, for `Vec<T>` and `Option<Vec<T>>`);
+  `ToolPattern` (`with_pattern(&'static str)`, for `String`, `Option<String>`,
+  `Vec<String>` and `Option<Vec<String>>`); and `ToolExtra`, a **sealed**
+  marker (private supertrait) implemented only for `json::Node`, built by the
+  generated code through its `#[doc(hidden)]` `__from_members` constructor.
+- Nested derived structs state their unknown-member handling explicitly:
+  `ToolArguments::object_spec()` (reached only through
+  `ToolParameter::parameter()`, as a field) always calls
+  `unknown_parameters`, with the struct's `unknown` value or
+  `UnknownParameters::DropWithLoss` when it declares none. It does not
+  inherit the enclosing tool's handling, so under a top-level
+  `unknown = pass` an undeclared nested member is dropped with a recorded
+  `tool_call.parameter.drop-unknown` loss (a `BestGuess` call) and the derived
+  `from_node` succeeds. A nested struct without `unknown` that formerly
+  inherited `error` (a mutating tool) and left the call `Unresolved` now
+  drops the member and the call is a `BestGuess`; declare `unknown = error` on
+  it to stay strict. `tool_definition()` is unchanged: a top-level tool
+  keeps the effects-based default. A hand-built tool that embeds a derived
+  `parameter()` keeps the nested handling; a hand-built nested `ObjectSpec`
+  without `unknown_parameters` still inherits the tool's. Near misses of
+  declared names follow core's matching policy. Under `Structural` (the
+  default for mutating tools) a near miss is never dropped, and the call is
+  `Unresolved` with `UnknownParameter`. Under `Tolerant` (the default for
+  read-only tools) it is renamed as a guess to a free declared name it nearly
+  matches, or dropped with a recorded loss when no such name is free.
+- `tool_call::max_depth(&[usize]) -> usize` (`const fn`): the nesting depth
+  of a derived type, evaluated at compile time to reject indirect recursion.
+- `tool_call::Members<'a>` (`new(declared, order, node)`, `is_present(index)`,
+  and `Iterator<Item = Slot<'a>>`) and `tool_call::Slot<'a>` (`Declared`,
+  `Duplicate`, `Undeclared`; `#[non_exhaustive]`, so a match outside core needs
+  a wildcard arm, and generated code reports a `FromNodeError` for it instead
+  of panicking): a single-pass classifier of an object's members
+  (O(n log k)) that tells a duplicate and an undeclared member from an absent
+  one, which `Node::get` cannot.
+- `FromNodeError::{mismatch(expected, &Node), missing(name), duplicate(name),
+  unknown(name), within(segment)}`: constructors for the exact
+  `pointer`/`expected`/`found` shape; `within` prefixes a JSON Pointer segment.
+- `tool_call::is_valid_name` is now a `const fn` (same behavior).
+- `#[doc(hidden)]` `tool_call::{__derive_number, __sorted, __valid_name,
+  __DERIVE_ABI_0_1}`:
+  support for generated code only (a number built from a spelling that the
+  macro already validated, a `const` check that the declared-name table is in
+  strictly ascending byte order, which generated code asserts at compile time
+  so release builds cannot misclassify members, and name validation at
+  compile time). The `Members` classifier is documented to report absent
+  members through per-field slots and `ToolParameter::absent()`;
+  `is_present` remains available to hand-written conversions. They are not part of the
+  stable API, and their preconditions are documented on the items.
+- New crate `purrassist-derive` (zero dependencies, built-in `proc_macro`
+  only) with `#[derive(ToolDefinition)]` and `#[derive(ToolEnum)]`, and the
+  facade re-exports `purrassist::{ToolDefinition, ToolEnum}` (the derive macros
+  plus the `#[doc(hidden)]` `purrassist::__core`, the core crate under a name
+  the generated code reaches through `::purrassist`, so users of the facade
+  need no direct core dependency). Core never depends on the derive crate.
+- Using the derives, three rules (also in the `purrassist-derive` README and
+  crate documentation):
+  - **Same version.** `purrassist-derive` and `purrassist-core` must share
+    major.minor (patch may differ). Every expansion references the
+    `#[doc(hidden)]` marker `tool_call::__DERIVE_ABI_<major>_<minor>`
+    (`__DERIVE_ABI_0_1` for 0.1.x), named from the derive's own version at
+    build time, so a mismatched pair fails to compile with an error naming
+    `__DERIVE_ABI_*`. Cargo accepts the pair (the internal requirements are
+    caret requirements, deliberately not `=` pins), so the compile error is
+    the guard. The marker is not API and is renamed with each major or minor
+    version; a core unit test fails until it is.
+  - **Crate path.** Generated code names `::purrassist_core` (the
+    `purrassist-derive` derives) or `::purrassist::__core` (the facade's), so
+    depend on `purrassist-core` or `purrassist` under that name, or add
+    `#[tool(crate = path)]` to the struct or enum. The path replaces the whole
+    prefix, in both flavors and for `ToolDefinition` and `ToolEnum`, and must
+    be one at which the modules `tool_call` and `json` resolve as in core:
+    `::purrassist_core`, a renamed dependency, a re-export such as
+    `crate::reexports::pa`, `::purrassist` (the facade re-exports both
+    modules at its root) or `::purrassist::__core`. An empty path, a trailing
+    `::`, a literal, generics and a repeated `crate =` are compile errors.
+  - **Convert only usable calls.** `FromNode::from_node` reads a call's
+    arguments exactly but does not decide whether the call may run; the
+    arguments of an unresolved call are only the best tree reached. Convert
+    the arguments of the calls in `ToolCalls::usable()` (outcome
+    `CallOutcome::Resolved`), or of `ToolCalls::usable_accepting_guesses()`
+    when best guesses of read-only tools are acceptable, never those of a
+    mutating tool's best guess or an unresolved call.
+  *Proved by* `crates/derive/tests/crate_override.rs`, the facade's
+  `derive_facade::the_override_accepts_the_facade_root_a_hidden_core_and_a_reexport`,
+  the derive's `write` unit tests on the prefix and the marker, the core test
+  `tool_call::derive_support::tests::the_derive_abi_marker_is_named_after_the_crate_version`
+  and the `compile_fail` doctests for a malformed or repeated `crate` path. A
+  version-skewed derive/core pair cannot be built in-tree, so the skew error
+  itself is not exercised.
+
 Root `$ref` projection follows local references only (`#/definitions/…` or
 `#/$defs/…`), up to 64 hops, with a cycle check; see C5.

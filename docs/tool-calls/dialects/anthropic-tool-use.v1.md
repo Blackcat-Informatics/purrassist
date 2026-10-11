@@ -101,7 +101,7 @@ decoded object is validated like any arguments.
     (`tool_call.markup.missing-closers-at-end`), a repeated one absorbed.
   - A length stop inside `input` truncates the call (`Unresolved`,
     `Truncated`).
-- Streaming events (not in scope here; see issue #4): a
+- Streaming events (not in scope here; see issue #17): a
   `content_block_start` event whose `content_block` is a `tool_use` block,
   and an `input_json_delta` event, are rejected attempts spanning their
   line. They are never silently content, and the nested block with its empty

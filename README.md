@@ -18,6 +18,40 @@ acceptance follows review and merge; 0.1.0 is not claimed as published.
 
 The [release procedure](docs/RELEASE.md) records the package and registry gates.
 
+A tool's schema and its typed arguments can come from one Rust struct:
+
+<!-- derive-example:begin -->
+```rust
+use purrassist::json;
+use purrassist::tool_call::{FromNode, ToolArguments};
+
+#[derive(purrassist::ToolEnum, Debug, PartialEq)]
+enum Order {
+    Asc,
+    Desc,
+}
+
+/// Search the index.
+#[derive(purrassist::ToolDefinition, Debug, PartialEq)]
+#[tool(effects = read_only)]
+struct Search {
+    /// What to look for.
+    query: String,
+    #[param(default = 10)]
+    limit: u32,
+    order: Option<Order>,
+}
+
+assert_eq!(Search::tool_definition().name(), "search");
+let arguments = json::parse(r#"{"query": "cats", "order": "Desc"}"#)?;
+assert_eq!(
+    Search::from_node(&arguments),
+    Ok(Search { query: "cats".into(), limit: 10, order: Some(Order::Desc) }),
+);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+<!-- derive-example:end -->
+
 ```rust
 use purrassist::{Outcome, RecoveryRequest, Schema};
 
@@ -73,9 +107,12 @@ Current surfaces include:
   `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`,
   `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`,
   `anthropic-tool-use.v1`, `harmony.v1`, and `bare-json.v1`; callers add
-  their own with the grammar DSL. Still tracked in issue #4: the
-  `pythonic.v1`, `gemma3-tool-code.v1` and `glm-4.5.v1` dialects, the
-  `*-stripped` variants, streaming recognition, and `purrassist-derive`. See
+  their own with the grammar DSL. Typed tool definitions derive from Rust
+  structs and enums with `#[derive(ToolDefinition)]` and `#[derive(ToolEnum)]`
+  (the zero-dependency `purrassist-derive` crate, re-exported by the facade;
+  see the example above). Still tracked: the `pythonic.v1` (#12), `glm-4.5.v1`
+  (#13) and `gemma3-tool-code.v1` (#14) dialects, the `*-stripped` variants
+  (#18), streaming recognition (#16), and provider streaming events (#17). See
   [tool-call recovery](docs/tool-calls/README.md).
 - CLI, stdio MCP, and resumable helper request/response adapters. No model is
   required, loaded, or contacted by default.

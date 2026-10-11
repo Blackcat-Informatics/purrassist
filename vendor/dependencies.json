@@ -580,6 +580,7 @@
       "tests/data/test262/LICENSE": "4dd9244dfe8197c75348c4b24ab53d29d3b1cfad143ac76b5a3d8942aa354ce0",
       "tests/data/unicode/LICENSE": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96"
     },
+    "derive": {},
     "host": {},
     "purrassist": {},
     "syntax": {},

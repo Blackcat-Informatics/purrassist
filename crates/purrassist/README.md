@@ -34,6 +34,42 @@ assert_eq!(calls.calls[0].tool.as_deref(), Some("get_weather"));
 assert_eq!(calls.calls[0].dialect.id(), "mistral-v3.v1");
 ```
 
+A tool's schema and its typed arguments can come from one Rust struct, through
+the `purrassist::ToolDefinition` and `purrassist::ToolEnum` derives
+(`purrassist-derive`):
+
+<!-- derive-example:begin -->
+```rust
+use purrassist::json;
+use purrassist::tool_call::{FromNode, ToolArguments};
+
+#[derive(purrassist::ToolEnum, Debug, PartialEq)]
+enum Order {
+    Asc,
+    Desc,
+}
+
+/// Search the index.
+#[derive(purrassist::ToolDefinition, Debug, PartialEq)]
+#[tool(effects = read_only)]
+struct Search {
+    /// What to look for.
+    query: String,
+    #[param(default = 10)]
+    limit: u32,
+    order: Option<Order>,
+}
+
+assert_eq!(Search::tool_definition().name(), "search");
+let arguments = json::parse(r#"{"query": "cats", "order": "Desc"}"#)?;
+assert_eq!(
+    Search::from_node(&arguments),
+    Ok(Search { query: "cats".into(), limit: 10, order: Some(Order::Desc) }),
+);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+<!-- derive-example:end -->
+
 Inspect every result's status and receipt. Validation does not turn an invented
 value into a fact. Ambiguity and resource exhaustion are explicit outcomes.
 

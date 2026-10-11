@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-"""Verify attribution, frozen upstream data, and the zero-dependency core boundary."""
+"""Verify attribution, frozen upstream data, and the zero-dependency core and derive boundaries."""
 import hashlib
 import json
 from pathlib import Path
@@ -12,6 +12,9 @@ import tomllib
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = 'scripts/data/dependency-baseline.json'
 CORE_PACKAGE = 'purrassist-core'
+DERIVE_PACKAGE = 'purrassist-derive'
+# Source trees held to the ambient-access rule, with the crate named in each report.
+AMBIENT_FREE_SOURCES = [('crates/core/src', CORE_PACKAGE), ('crates/derive/src', DERIVE_PACKAGE)]
 NETWORK_DENYLIST = re.compile(
     r'(hyper.*|reqwest|h2|h3.*|http|http-body.*|tokio.*|mio|async-std|async-io|smol|socket2'
     r'|rustls.*|native-tls|openssl.*|ureq|curl.*|isahc|surf|quinn.*|tonic|axum|actix.*|warp)')
@@ -62,6 +65,21 @@ def check_core_closure(metadata):
         return [f'{CORE_PACKAGE}: package missing from cargo metadata']
     return [f'{CORE_PACKAGE} must have an empty dependency closure but reaches {" -> ".join(path)}'
             for path in _closure_paths(metadata, root_id, {'normal', 'build', 'dev'}).values()]
+
+
+def check_derive_closure(metadata):
+    """purrassist-derive reaches nothing over normal or build edges; over dev edges it may
+    reach only purrassist-core (its tests build the traits it expands against)."""
+    root_id = _package_id(metadata, DERIVE_PACKAGE)
+    if root_id is None:
+        return [f'{DERIVE_PACKAGE}: package missing from cargo metadata']
+    errors = [f'{DERIVE_PACKAGE} must have an empty normal and build dependency closure but reaches '
+              f'{" -> ".join(path)}'
+              for path in _closure_paths(metadata, root_id, {'normal', 'build'}).values()]
+    errors.extend(
+        f'{DERIVE_PACKAGE} dev dependencies may reach only {CORE_PACKAGE} but reach {" -> ".join(path)}'
+        for path in _closure_paths(metadata, root_id, {'dev'}).values() if path[-1] != CORE_PACKAGE)
+    return errors
 
 
 def publishable_workspace_packages(metadata):
@@ -132,26 +150,27 @@ def _code_only(text):
     return ''.join(out)
 
 
-def scan_ambient_source(label, text):
+def scan_ambient_source(label, text, crate=CORE_PACKAGE):
     """Report every ambient-access token in the code (non-comment) text of one source file."""
     code = _code_only(text)
     errors = []
     for number, line in enumerate(code.splitlines(), 1):
         match = AMBIENT_PATTERN.search(line)
         if match:
-            errors.append(f'{label}:{number}: ambient access token {match.group(0)!r} is forbidden in purrassist-core')
+            errors.append(f'{label}:{number}: ambient access token {match.group(0)!r} is forbidden in {crate}')
     for group in AMBIENT_GROUP.finditer(code):
         member = AMBIENT_GROUP_MEMBER.search(group.group(1))
         if member:
             number = code.count('\n', 0, group.start()) + 1
-            errors.append(f'{label}:{number}: ambient access import std::{{{member.group(1)}}} is forbidden in purrassist-core')
+            errors.append(f'{label}:{number}: ambient access import std::{{{member.group(1)}}} is forbidden in {crate}')
     return errors
 
 
 def check_ambient_access(root):
     errors = []
-    for path in sorted((root / 'crates/core/src').rglob('*.rs')):
-        errors.extend(scan_ambient_source(str(path.relative_to(root)), path.read_text()))
+    for source, crate in AMBIENT_FREE_SOURCES:
+        for path in sorted((root / source).rglob('*.rs')):
+            errors.extend(scan_ambient_source(str(path.relative_to(root)), path.read_text(), crate))
     return errors
 
 
@@ -232,6 +251,46 @@ def check_evaluation_manifest(root):
     return errors
 
 
+DERIVE_EXAMPLE_COPIES = ['README.md', 'crates/purrassist/README.md']
+DERIVE_EXAMPLE_DOCTESTED = 'crates/purrassist/README.md'
+DERIVE_EXAMPLE_BEGIN = '<!-- derive-example:begin -->\n'
+DERIVE_EXAMPLE_END = '<!-- derive-example:end -->\n'
+
+
+def check_derive_example(root):
+    """The root README derive example must equal the doctested facade README copy.
+
+    `crates/purrassist/README.md` is the crate documentation of the facade, so
+    its example runs as a doctest; the root README carries a byte copy that no
+    test executes. Both copies sit between the `derive-example` markers.
+    """
+    errors = []
+    blocks = {}
+    for name in DERIVE_EXAMPLE_COPIES:
+        path = root / name
+        if not path.is_file():
+            errors.append(f'{name}: derive example copy is missing')
+            continue
+        text = path.read_text()
+        if text.count(DERIVE_EXAMPLE_BEGIN) != 1 or text.count(DERIVE_EXAMPLE_END) != 1:
+            errors.append(f'{name}: needs exactly one {DERIVE_EXAMPLE_BEGIN.strip()} and one '
+                          f'{DERIVE_EXAMPLE_END.strip()} marker line')
+            continue
+        start = text.index(DERIVE_EXAMPLE_BEGIN) + len(DERIVE_EXAMPLE_BEGIN)
+        end = text.index(DERIVE_EXAMPLE_END)
+        if end < start:
+            errors.append(f'{name}: derive-example end marker precedes the begin marker')
+            continue
+        blocks[name] = text[start:end]
+    doctested = blocks.get(DERIVE_EXAMPLE_DOCTESTED)
+    if doctested is not None:
+        for name, block in blocks.items():
+            if block != doctested:
+                errors.append(f'{name}: derive example differs from the doctested copy in '
+                              f'{DERIVE_EXAMPLE_DOCTESTED}; copy it over byte for byte')
+    return errors
+
+
 def main():
     errors = []
     core = tomllib.loads((ROOT / 'crates/core/Cargo.toml').read_text())
@@ -285,6 +344,7 @@ def main():
     full_metadata = json.loads(subprocess.check_output(
         ['cargo', 'metadata', '--format-version', '1', '--locked', '--all-features'], cwd=ROOT, text=True))
     errors.extend(check_core_closure(full_metadata))
+    errors.extend(check_derive_closure(full_metadata))
     errors.extend(check_network_denylist(full_metadata))
     errors.extend(check_ambient_access(ROOT))
     errors.extend(check_core_dev_dependencies(core))
@@ -305,6 +365,7 @@ def main():
             if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != entry.get('notice_sha256', {}).get(name):
                 errors.append(f'{identity}: license notice missing or changed: {name}')
     errors.extend(check_evaluation_manifest(ROOT))
+    errors.extend(check_derive_example(ROOT))
     for crate_name, notices in inventory['packaged_notices'].items():
         for name, expected in notices.items():
             path = ROOT / 'crates' / crate_name / name
@@ -322,7 +383,7 @@ def main():
                 errors.append(f'{crate.name}: package license missing or differs: {name}')
     if errors:
         raise SystemExit('\n'.join(errors))
-    print('Repository attribution, frozen schema data, dependency inventory, and core boundary verified.')
+    print('Repository attribution, frozen schema data, dependency inventory, core and derive boundaries verified.')
 
 
 if __name__ == '__main__':

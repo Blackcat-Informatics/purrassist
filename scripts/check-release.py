@@ -3,11 +3,14 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 """Check the complete publish set and dependency order without publishing."""
 
+import http.client
 import json
 from pathlib import Path
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -15,6 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # cargo publish verifies the packaged crate against the registry.
 RELEASE_ORDER = (
     'purrassist-core',
+    'purrassist-derive',
     'purrassist-syntax',
     'purrassist',
     'purrassist-host',
@@ -22,7 +26,89 @@ RELEASE_ORDER = (
 )
 
 
-def validate_publish_workflow():
+API = 'https://crates.io/api/v1/crates'
+PREFLIGHT_STEP = 'Preflight crates.io names and owners'
+AUTH_STEP = 'Authenticate with crates.io trusted publishing'
+
+
+def preflight_owners(fetch, names=RELEASE_ORDER):
+    """Check crate names and owners on the registry before anything publishes.
+
+    `fetch(url)` returns `(status, body_bytes)` and may raise `OSError` (the
+    production fetcher raises it for network failures). Every crate in
+    `names` must answer 200 at `/api/v1/crates/<name>`, and the set of owner
+    logins at `/api/v1/crates/<name>/owners` must equal that of the first
+    name (`purrassist-core`). No login is hard-coded: the release set must be
+    owned identically, whoever owns it. Returns the shared owner set; raises
+    `SystemExit` listing every failure.
+
+    Trusted-publisher configuration is not visible to an unauthenticated
+    request, so this does not and cannot check it; it stays the manual
+    pre-tag step in docs/RELEASE.md.
+    """
+    errors = []
+    owners = {}
+    for name in names:
+        try:
+            status, _ = fetch(f'{API}/{name}')
+        except OSError as error:
+            errors.append(f'{name}: request for {API}/{name} failed: {error}')
+            continue
+        if status != 200:
+            errors.append(f'{name}: {API}/{name} returned HTTP {status}, expected 200 '
+                          '(the crate name must be reserved before tagging)')
+            continue
+        try:
+            status, body = fetch(f'{API}/{name}/owners')
+        except OSError as error:
+            errors.append(f'{name}: request for {API}/{name}/owners failed: {error}')
+            continue
+        if status != 200:
+            errors.append(f'{name}: {API}/{name}/owners returned HTTP {status}, expected 200')
+            continue
+        try:
+            users = json.loads(body)['users']
+            owners[name] = {user['login'] for user in users}
+        except (ValueError, KeyError, TypeError) as error:
+            errors.append(f'{name}: owners response is not the expected JSON '
+                          f'({type(error).__name__}: {error})')
+            continue
+        if not owners[name]:
+            errors.append(f'{name}: crates.io reports no owners')
+    reference = owners.get(names[0])
+    if reference is not None:
+        for name in names[1:]:
+            if name in owners and owners[name] != reference:
+                errors.append(f'{name}: owners {sorted(owners[name])} differ from '
+                              f'{names[0]} owners {sorted(reference)}')
+    if errors:
+        raise SystemExit('publish preflight failed:\n' + '\n'.join(errors))
+    return reference
+
+
+def registry_fetch(user_agent):
+    """Return a `fetch(url)` that GETs from the real registry with `user_agent`."""
+    def fetch(url):
+        request = urllib.request.Request(url, headers={'User-Agent': user_agent})
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return response.status, response.read()
+        except urllib.error.HTTPError as error:
+            return error.code, b''
+        except urllib.error.URLError as error:
+            raise OSError(str(error.reason)) from error
+        except http.client.HTTPException as error:
+            raise OSError(f'{type(error).__name__}: {error}') from error
+    return fetch
+
+
+def run_preflight(user_agent):
+    owners = preflight_owners(registry_fetch(user_agent))
+    print(f'Publish preflight passed: {len(RELEASE_ORDER)} crates exist and share owners '
+          + ', '.join(sorted(owners)))
+
+
+def validate_publish_workflow(path=None):
     """Validate `.github/workflows/publish.yml` without a YAML dependency.
 
     Checked by plain text/regex against the exact shape this project's
@@ -31,7 +117,7 @@ def validate_publish_workflow():
     YAML-parsing dependency for one file this script itself authors no
     freeform structure for.
     """
-    path = ROOT / '.github/workflows/publish.yml'
+    path = Path(path) if path else ROOT / '.github/workflows/publish.yml'
     text = path.read_text()
     errors = []
 
@@ -82,6 +168,33 @@ def validate_publish_workflow():
     elif tuple(loop_match[1].split()) != RELEASE_ORDER:
         errors.append(f'publish.yml publish order {tuple(loop_match[1].split())} does not match {RELEASE_ORDER}')
 
+    # Step order: the preflight must precede auth and every cargo publish.
+    preflight_at = text.find(f'- name: {PREFLIGHT_STEP}\n')
+    auth_at = text.find(f'- name: {AUTH_STEP}\n')
+    publish_at = text.find('cargo publish')
+    if preflight_at < 0:
+        errors.append(f'publish.yml must have a "{PREFLIGHT_STEP}" step')
+    else:
+        step = text[preflight_at:].split('\n      - ', 1)[0]
+        if not re.search(r'scripts/check-release\.py --preflight-owners\b', step):
+            errors.append('preflight step must run scripts/check-release.py --preflight-owners '
+                          '(crate existence and owners check against '
+                          'https://crates.io/api/v1/crates/<name>/owners)')
+        if not re.search(r'--user-agent\s+"?\'?purrassist-release', step):
+            errors.append('preflight step must send the purrassist-release user agent via --user-agent')
+        comment = []
+        for line in reversed(text[:preflight_at].rstrip(' ').split('\n')[:-1]):
+            if not line.lstrip().startswith('#'):
+                break
+            comment.append(line)
+        if 'trusted-publisher state' not in ' '.join(comment).lower().replace('#', ''):
+            errors.append('preflight step comment must state that trusted-publisher state is '
+                          'not verifiable unauthenticated and stays a manual pre-tag step')
+        if auth_at >= 0 and preflight_at > auth_at:
+            errors.append(f'preflight step must precede the "{AUTH_STEP}" step')
+        if publish_at >= 0 and preflight_at > publish_at:
+            errors.append('preflight step must precede the first cargo publish')
+
     if not re.search(r'cargo publish -p "\$crate" --locked', text):
         errors.append('publish.yml must run cargo publish --locked (full verification) per crate')
 
@@ -95,6 +208,9 @@ def validate_publish_workflow():
 
 
 def main():
+    if len(sys.argv) == 4 and sys.argv[1] == '--preflight-owners' and sys.argv[2] == '--user-agent':
+        run_preflight(sys.argv[3])
+        return
     metadata = json.loads(subprocess.check_output(
         ['cargo', 'metadata', '--no-deps', '--format-version', '1', '--locked', '--offline'],
         text=True))
@@ -114,7 +230,7 @@ def main():
         if sys.argv[2] != f'rust-v{version}':
             raise SystemExit(f'tag {sys.argv[2]} does not match rust-v{version}')
     elif len(sys.argv) != 1:
-        raise SystemExit('usage: check-release.py [--tag rust-vVERSION]')
+        raise SystemExit('usage: check-release.py [--tag rust-vVERSION | --preflight-owners --user-agent AGENT]')
     position = {name: index for index, name in enumerate(RELEASE_ORDER)}
     for name in RELEASE_ORDER:
         for dependency in packages[name]['dependencies']:

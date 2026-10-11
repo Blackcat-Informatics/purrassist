@@ -53,10 +53,12 @@ computational engines remain wasmable.
   `finish_reason` `"length"`, and recovered calls print in any dialect or as
   the `OpenAI` `tool_calls` array. Recovery is deterministic, governed by a
   published linear cost bound, and exposed through Rust, CLI
-  (`recover-tool-calls`), and MCP (`recover_tool_calls`). Still tracked in
-  issue #4: the `pythonic.v1`, `gemma3-tool-code.v1` and `glm-4.5.v1`
-  dialects, the `*-stripped` variants, streaming recognition, and
-  `purrassist-derive`. See `tool-calls/README.md`.
+  (`recover-tool-calls`), and MCP (`recover_tool_calls`). Typed tool
+  definitions can be derived from Rust structs and enums (`purrassist-derive`).
+  Still tracked: the `pythonic.v1` (#12), `glm-4.5.v1` (#13) and
+  `gemma3-tool-code.v1` (#14) dialects, the `*-stripped` variants (#18),
+  streaming recognition (#16), and provider streaming events (#17).
+  See `tool-calls/README.md`.
 - Rust facade, CLI, and stdio MCP server using the same operations.
 - Standard helper-provider adapters and caller-managed endpoints. No model is
   required. Bundled small models remain an evaluation track, not a prerequisite.
@@ -86,8 +88,11 @@ Core operations are synchronous and resumable around supplied helper responses.
 
 - `purrassist-core`: first-party pure engines and common contracts; zero external
   runtime dependencies.
+- `purrassist-derive`: proc-macro crate with `#[derive(ToolDefinition)]` and
+  `#[derive(ToolEnum)]`; zero dependencies (only the compiler's `proc_macro`),
+  with `purrassist-core` as a dev-dependency only. Core never depends on it.
 - `purrassist-syntax`: isolated syntax grammar integration.
-- `purrassist`: standard public facade.
+- `purrassist`: standard public facade; re-exports the derives.
 - `purrassist-host`: filesystem and model transport facilities.
 - `purrassist-cli`: executable and stdio MCP server.
 

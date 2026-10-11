@@ -31,10 +31,11 @@ and merge sequence in [RELEASE.md](RELEASE.md).
 | Independent syntax | `make syntax-oracles` | 15 positive/negative Python, Rust, JavaScript/JSX, TypeScript/TSX compiler probes |
 | Correction quality | `correction_evaluation`, `matching_oracle` | Four provenance-bound corpora, risk/coverage sweeps, exact distance and path oracles |
 | Coverage-guided/differential probes | `make fuzz` | Nine targets (including `tool-call`), retained source-region novelty, exact failure replay, V8/cmark-gfm comparisons |
+| Typed tool definitions (`purrassist-derive`) | `crates/derive/tests/derive.rs`, `crates/derive/tests/crate_override.rs`, the `compile_fail` doctests in `crates/derive/src/lib.rs` (each rejected construct with a passing twin) and the derive README doctest, `crates/derive/src/{model,write,parse}.rs` unit tests (including the default-number agreement test against core's JSON parser), `crates/purrassist/tests/derive_facade.rs`, `crates/host/tests/derive_facade.rs`, core `tool_call::derive_support` unit tests and doctests, and `scripts/check-repository.py`'s README derive-example drift check | Derived definitions equal hand-built ones; recovery through `hermes.v1` and `qwen3-coder-xml.v1` converts to the struct with exact `FromNodeError` pointers; single-pass member classification (duplicate vs. missing vs. unknown); defaults, naming, `extra`, hygiene against shadowed names, recursion and every rejected input; nested undeclared members dropped with a recorded loss unless the nested struct declares `unknown`; `f32` and `Box<T>` fields; the `#[tool(crate = ..)]` override; the `__DERIVE_ABI_<major>_<minor>` marker; facade derives work with no direct core dependency; the crate has no dependencies (`make hygiene` audit) |
 | Tool-call fuzzing | `make fuzz` (`TARGET=tool-call` alone) | Raw-byte model turns over every built-in dialect with fuzzed policy, stop, reasoning, tool choice, effort, ambiguity and chunking; no panic, budget respected, mutating-guess guards and span invariants hold; see [FUZZING.md](FUZZING.md) |
 | Resource/performance observations | `make resources`, resource-limit checker | Latency, real allocations, heap/RSS, artifact hashes/sizes, cache-disabled cold build |
 | Structural helper detector | `make helper-test`, `make helper-census`, `make helper-check` | syn-based normalized body/shim/constant/table census, strict ledger validity and exact group enforcement; repository tooling only |
-| Local release artifacts | `make package` | Five Cargo-verified archives in dependency order; source identity and registered notice audit |
+| Local release artifacts | `make package` | Six Cargo-verified archives in dependency order; source identity and registered notice audit |
 
 These integration-test names are in `crates/core/tests` unless qualified with
 another crate. `make check` runs the formatting, hygiene, Clippy, helper
@@ -114,9 +115,10 @@ establishes behavior on those cases rather than a production error rate.
 Twelve dialects ship (`qwen3-coder-xml.v1`, `hermes.v1`,
 `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`,
 `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`,
-`anthropic-tool-use.v1`, `harmony.v1`, `bare-json.v1`). Still tracked in issue
-#4: the `pythonic.v1`, `gemma3-tool-code.v1` and `glm-4.5.v1` dialects, the
-`*-stripped` variants, streaming recognition, and `purrassist-derive`.
+`anthropic-tool-use.v1`, `harmony.v1`, `bare-json.v1`). Still tracked: the
+`pythonic.v1` (#12), `glm-4.5.v1` (#13) and `gemma3-tool-code.v1` (#14)
+dialects, the `*-stripped` variants (#18), streaming recognition (#16), and
+provider streaming events (#17).
 
 ## Resource and platform qualification
 
@@ -224,7 +226,7 @@ separate from qualification and uses the registered publisher identity.
 The established issue #1 sequence reserves publication for the reviewed merge
 commit. It requires the full gate and hosted CI on that commit, verified
 trusted-publisher settings, explicit release-tag authorization, dependency-order
-publication, all five downloadable archives, installed CLI/MCP transcripts from
+publication, all six downloadable archives, installed CLI/MCP transcripts from
 crates.io, and the GitHub release. The verifier's offline local-registry tests
 prove its detection path; successful local packages and installs cannot establish
 that the real registry downloads work. Its default MCP transcript reads a seeded

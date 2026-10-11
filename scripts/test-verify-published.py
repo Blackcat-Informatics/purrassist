@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 """Offline unit/integration tests for scripts/verify-published.py.
 
-Builds a throwaway five-crate fixture workspace (`purrassist-core` ->
+Builds a throwaway six-crate fixture workspace (`purrassist-core` ->
 `purrassist-syntax` -> `purrassist` -> `purrassist-host` -> `purrassist-cli`,
-the same names and dependency order as the real release set, but a fixture
+plus the dependency-free proc-macro crate `purrassist-derive` that
+`purrassist` also depends on; the same names and dependency order as the
+real release set, but a fixture
 version and trivial bodies), packages it with `cargo package --workspace`,
 and turns that packaged output into a Cargo `local-registry` fixture
 directory (see
@@ -48,9 +50,10 @@ def _load_verify_published():
 
 VP = _load_verify_published()
 FIXTURE_VERSION = '9.9.9'
-CRATE_NAMES = ('purrassist-core', 'purrassist-syntax', 'purrassist', 'purrassist-host', 'purrassist-cli')
+CRATE_NAMES = ('purrassist-core', 'purrassist-derive', 'purrassist-syntax', 'purrassist', 'purrassist-host', 'purrassist-cli')
 LIB_NAMES = {
     'purrassist-core': 'purrassist_core',
+    'purrassist-derive': 'purrassist_derive',
     'purrassist-syntax': 'purrassist_syntax',
     'purrassist': 'purrassist',
     'purrassist-host': 'purrassist_host',
@@ -76,26 +79,28 @@ def write_license_triple(directory: Path):
 
 
 def build_fixture_workspace(root: Path, version: str):
-    """A minimal, real (not mocked) five-crate dependency chain: each crate
-    actually depends on and calls into the one before it, so a successful
+    """A minimal, real (not mocked) six-crate dependency graph: each crate
+    actually depends on and calls into the one before it (the facade also
+    expands a macro from the proc-macro crate `purrassist-derive`), so a successful
     build genuinely proves the dependency-ordered install works, not just
     that files with the right names exist."""
     root.mkdir(parents=True, exist_ok=True)
-    members = ['core', 'syntax', 'mid', 'host', 'cli']
+    members = ['core', 'derive', 'syntax', 'mid', 'host', 'cli']
     (root / 'Cargo.toml').write_text(
         '[workspace]\n'
         'resolver = "2"\n'
         f'members = {json.dumps(members)}\n'
     )
     chain = [
-        ('core', 'purrassist-core', None),
-        ('syntax', 'purrassist-syntax', 'purrassist-core'),
-        ('mid', 'purrassist', 'purrassist-syntax'),
-        ('host', 'purrassist-host', 'purrassist'),
+        ('core', 'purrassist-core', ()),
+        ('derive', 'purrassist-derive', ()),
+        ('syntax', 'purrassist-syntax', ('purrassist-core',)),
+        ('mid', 'purrassist', ('purrassist-syntax', 'purrassist-derive')),
+        ('host', 'purrassist-host', ('purrassist',)),
     ]
     directory_of_name = {name: directory for directory, name, _ in chain}
     previous_lib = None
-    for directory, name, dependency in chain:
+    for directory, name, dependencies in chain:
         crate_dir = root / directory
         (crate_dir / 'src').mkdir(parents=True, exist_ok=True)
         write_license_triple(crate_dir)
@@ -103,13 +108,17 @@ def build_fixture_workspace(root: Path, version: str):
         lib_name = LIB_NAMES[name]
         deps_toml = ''
         marker_body = f'"{directory}".to_string()'
-        if dependency is not None:
-            dependency_directory = directory_of_name[dependency]
-            deps_toml = (
-                '\n[dependencies]\n'
-                f'{dependency} = {{ path = "../{dependency_directory}", version = "{version}" }}\n'
-            )
+        lib_toml = ''
+        if name == 'purrassist-derive':
+            lib_toml = '\n[lib]\nproc-macro = true\n'
+        if dependencies:
+            deps_toml = '\n[dependencies]\n' + ''.join(
+                f'{dependency} = {{ path = "../{directory_of_name[dependency]}", version = "{version}" }}\n'
+                for dependency in dependencies)
             marker_body = f'format!("{{}}+{{}}", "{directory}", {previous_lib}::marker())'
+        if 'purrassist-derive' in dependencies:
+            marker_body = (f'format!("{{}}+{{}}+{{}}", "{directory}", {previous_lib}::marker(), '
+                           'purrassist_derive::derived_marker!())')
         (crate_dir / 'Cargo.toml').write_text(
             '[package]\n'
             f'name = "{name}"\n'
@@ -117,12 +126,18 @@ def build_fixture_workspace(root: Path, version: str):
             'edition = "2021"\n'
             'license = "MIT OR Apache-2.0 OR MulanPSL-2.0"\n'
             'description = "verify-published.py fixture crate; never published"\n'
+            f'{lib_toml}'
             f'{deps_toml}'
         )
-        (crate_dir / 'src/lib.rs').write_text(
-            f'pub fn marker() -> String {{ {marker_body} }}\n'
-        )
-        previous_lib = lib_name
+        if name == 'purrassist-derive':
+            # Dependency-free proc-macro crate, like the real one: it uses only the
+            # compiler-provided `proc_macro` crate.
+            body = ('#[proc_macro]\npub fn derived_marker(_: proc_macro::TokenStream) '
+                    '-> proc_macro::TokenStream { "\\"derive\\"".parse().unwrap() }\n')
+        else:
+            body = f'pub fn marker() -> String {{ {marker_body} }}\n'
+            previous_lib = lib_name
+        (crate_dir / 'src/lib.rs').write_text(body)
 
     cli_dir = root / 'cli'
     (cli_dir / 'src').mkdir(parents=True, exist_ok=True)
@@ -208,12 +223,13 @@ def build_fixture_workspace(root: Path, version: str):
 def build_local_registry(package_directory: Path, registry: Path, version: str):
     registry.mkdir(parents=True, exist_ok=True)
     (registry / 'index').mkdir()
-    dependency_of = {
-        'purrassist-core': None,
-        'purrassist-syntax': 'purrassist-core',
-        'purrassist': 'purrassist-syntax',
-        'purrassist-host': 'purrassist',
-        'purrassist-cli': 'purrassist-host',
+    dependencies_of = {
+        'purrassist-core': (),
+        'purrassist-derive': (),
+        'purrassist-syntax': ('purrassist-core',),
+        'purrassist': ('purrassist-syntax', 'purrassist-derive'),
+        'purrassist-host': ('purrassist',),
+        'purrassist-cli': ('purrassist-host',),
     }
     for name in CRATE_NAMES:
         identity = f'{name}-{version}'
@@ -222,11 +238,10 @@ def build_local_registry(package_directory: Path, registry: Path, version: str):
             raise SystemExit(f'fixture packaging did not produce {crate}')
         data = crate.read_bytes()
         shutil.copy(crate, registry / f'{identity}.crate')
-        dependency = dependency_of[name]
-        deps = [] if dependency is None else [{
+        deps = [{
             'name': dependency, 'req': f'^{version}', 'features': [], 'optional': False,
             'default_features': True, 'target': None, 'kind': 'normal', 'registry': None, 'package': None,
-        }]
+        } for dependency in dependencies_of[name]]
         entry = {
             'name': name, 'vers': version, 'deps': deps,
             'cksum': hashlib.sha256(data).hexdigest(), 'features': {}, 'yanked': False, 'links': None,

@@ -23,6 +23,8 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install nightly-2026-09-14 --profile minimal --component clippy,rustfmt,llvm-tools
       - run: make check
+      - name: Test release workflow validation and publish preflight offline
+        run: python3 scripts/test-check-release.py
       - name: Replay committed CLI/MCP transcripts against the built CLI
         run: python3 scripts/test-verify-published.py
       - if: runner.os == 'Linux'
@@ -52,6 +54,7 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install 1.98.0 --profile minimal
       - run: cargo test -p purrassist-core -p purrassist-syntax --locked
+      - run: cargo test -p purrassist-derive -p purrassist --locked
       - run: cargo test -p purrassist-host -p purrassist-cli --locked
       - run: rustup component add clippy
       - run: cargo clippy -p purrassist-host -p purrassist-cli --all-targets --locked -- -D warnings
