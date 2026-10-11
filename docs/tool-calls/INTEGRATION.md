@@ -1591,8 +1591,8 @@ Added for typed (derived) tool definitions, none of which breaks existing code:
   declared names follow core's matching policy. Under `Structural` (the
   default for mutating tools) a near miss is never dropped, and the call is
   `Unresolved` with `UnknownParameter`. Under `Tolerant` (the default for
-  read-only tools) it is renamed to a free declared name as a guess, or
-  dropped with a recorded loss when none is free.
+  read-only tools) it is renamed as a guess to a free declared name it nearly
+  matches, or dropped with a recorded loss when no such name is free.
 - `tool_call::max_depth(&[usize]) -> usize` (`const fn`): the nesting depth
   of a derived type, evaluated at compile time to reject indirect recursion.
 - `tool_call::Members<'a>` (`new(declared, order, node)`, `is_present(index)`,

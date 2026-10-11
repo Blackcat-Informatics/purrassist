@@ -212,9 +212,9 @@
 //! rename, such as `z` beside `a`) is never dropped, because the evidence
 //! assigns its value to the declared parameter; the call is unresolved with an
 //! unknown parameter rather than a `BestGuess`. Under `policy = tolerant` (the
-//! default for read-only tools), such a key is renamed to a free declared name
-//! as a guess, or, when no declared name is free, dropped with the recorded
-//! loss like any other undeclared member.
+//! default for read-only tools), such a key is renamed as a guess to a free
+//! declared name it nearly matches, or, when no such name is free, dropped
+//! with the recorded loss like any other undeclared member.
 //!
 //! The recovery contract of the recovered call follows: a nested struct under
 //! `unknown = error` (or a mutating default) that used to inherit `error` and
