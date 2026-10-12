@@ -11,7 +11,7 @@
     {
       "issue": 7,
       "title": "Audit the unreviewed #3 stage-3 commits and close the F14/F19 rule's known limits",
-      "impact": "Some stage-3 commits of the tool-call work were merged without an audit, and the known limits of the F14/F19 rule remain open.",
+      "impact": "Some commits of the #3 tool-call work were merged without an audit, and the known limits of the F14/F19 rule remain open.",
       "blocks_release": false
     },
     {

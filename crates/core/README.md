@@ -50,7 +50,7 @@ models, or consults ambient clocks or randomness.
 Version 0.1.0. Markdown parsing and rendering are tested against
 all 652 `CommonMark` and 672 GFM specification examples, with source-preserving
 structural edits and explicit resource outcomes. See the
-[implementation contract](https://github.com/Blackcat-Informatics/purrassist/blob/main/docs/IMPLEMENTATION.md).
+[implementation contract](https://github.com/Blackcat-Informatics/purrassist/blob/rust-v0.1.0/docs/IMPLEMENTATION.md).
 
 First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0. Unicode and HTML entity tables,
 schema meta-schemas, and test corpora retain the upstream notices included with them.

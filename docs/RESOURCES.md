@@ -1070,7 +1070,7 @@ recorded above (never below one); a limit failing here means measured
 resource use grew past a deliberately generous ceiling, not that it
 regressed by any amount. `make hygiene` uses `--schema-only` against the *committed*
 `qualification/resources-linux-x86_64.json` (complete inventories, valid types,
-digests, uncached-build evidence and correctness observations); Task 17's CI `qualification` job runs `make resources` fresh and
+digests, uncached-build evidence and correctness observations); the CI `qualification` job runs `make resources` fresh and
 checks that output instead.
 
 Rationale per category:

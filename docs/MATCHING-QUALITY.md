@@ -300,7 +300,7 @@ closes an element the value opened, the reading that holds the closer text
 needs no repair the other reading needs, so the truth is the value holding
 it (the maintainer's decision on issue #3). The `call-closers` cases
 (`</function></tool_call>` then text inside the value) abstain since
-adversary pass 6: those closers close nothing the value opened, and text
+the issue #3 review: those closers close nothing the value opened, and text
 after an unpaired closer is `Ambiguous` (maintainer: "Newlines have zero
 meaning here."). Call markup inside such a value: a whole documented call
 (`<function=example>...</function>`), bare or wrapped in `<tool_call>` and
@@ -318,7 +318,7 @@ written inline after the value), keeps the value as written with the
 closers after the call stray (issue #3 §3); in two-call Qwen3-Coder XML
 turns, `inline-closers-then-call` writes the first call's closers inline
 after its last value, then the second call, then stray closers: the truth
-is the two calls (adversary pass 6, F19: two calls in a row are never one
+is the two calls (issue #3 review finding F19: two calls in a row are never one
 call holding the other). `tool_call.value.text-after-closer` cases write
 the `text-between` and `trailing-text` shapes with the value's closer on
 the value's own line (`same-line`, `trailing-same-line`) or indented

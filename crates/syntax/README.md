@@ -23,7 +23,7 @@ Parser progress and external allocations are accounted per operation;
 Tree-sitter allocation overshoot between progress callbacks has explicit,
 measured limits. Native/WASI transcripts exercise all five grammars, and
 independent compiler probes check accepted and rejected buffers. See the
-[qualification record](https://github.com/Blackcat-Informatics/purrassist/blob/main/docs/QUALIFICATION.md)
+[qualification record](https://github.com/Blackcat-Informatics/purrassist/blob/rust-v0.1.0/docs/QUALIFICATION.md)
 for measurement scope and limits.
 
 First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0. Pinned grammar dependencies

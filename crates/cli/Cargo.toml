@@ -12,7 +12,7 @@ keywords = ["mcp", "cli", "json", "recovery", "agents"]
 categories = ["command-line-utilities", "development-tools"]
 authors.workspace = true
 repository.workspace = true
-documentation = "https://github.com/Blackcat-Informatics/purrassist/blob/main/docs/TOOLS.md"
+documentation = "https://github.com/Blackcat-Informatics/purrassist/blob/rust-v0.1.0/docs/TOOLS.md"
 
 [lints]
 workspace = true

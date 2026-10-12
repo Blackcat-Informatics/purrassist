@@ -153,8 +153,8 @@ is reported as certain.
      opened, with none open, closes a structure around the attempt and
      ends the scan, and past
      where its grammar stopped, prose, as defined below, ends it too, so a
-     bracket after it closes nothing the attempt read; stage-3 pass 5,
-     F16: the tail of a cut special token, a word followed by `|` or `｜`
+     bracket after it closes nothing the attempt read; issue #3 review
+     finding F16: the tail of a cut special token, a word followed by `|` or `｜`
      (`t_begin|>`), is markup, not prose, and a call's member past the
      failure (`"name"`, then `:`) is the attempt's call body: outside any
      bracket its object's `{` was lost and the scan closes it by its `}`,
@@ -432,8 +432,8 @@ is reported as certain.
     markup (`tool_call.markup.stray-closer`), and reading B is not offered
     (`a.py\n</parameter>\n</parameter>`, `</parameter></parameters>`,
     `<|call|><|call|>`);
-  - where a closer sits on its line carries no meaning (maintainer, adversary
-    pass 6: "Newlines have zero meaning here"): a closer after a newline,
+  - where a closer sits on its line carries no meaning (maintainer, issue #3
+    review: "Newlines have zero meaning here"): a closer after a newline,
     mid-line or indented, in a value framed by newlines or not, is read the
     same way. A closer that closes an element the value opened
     (`<parameter>v</parameter>`, `<tool_calls>…</tool_calls>`,

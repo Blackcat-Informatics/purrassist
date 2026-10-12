@@ -43,7 +43,7 @@ engine's Unicode property tables: `Script`, `Script_Extensions` (from
 `DerivedNormalizationProps.txt`, and the property aliases in
 `PropertyAliases.txt`; `ASCII`, `Any`, `Assigned`, and `Bidi_Mirrored` are
 computed rather than sourced from one file). It also produces the IDNA/
-UTS-46 mapping table (`idna/IdnaMappingTable.txt`) the Task 7 hostname/
+UTS-46 mapping table (`idna/IdnaMappingTable.txt`) the hostname/
 idn-hostname format validators consume. All are Unicode-3.0, pinned by URL
 and SHA-256 in `vendor/unicode/manifest.json` alongside the other Unicode
 Character Database inputs; the generated Rust tables carry the same license

@@ -93,5 +93,5 @@ value into a fact. Ambiguity and resource exhaustion are explicit outcomes.
 
 Version 0.1.0, with executable conformance, recovery, resource, and portability
 qualification. Capabilities, known limitations, verification, and provenance are
-recorded in the [qualification record](https://github.com/Blackcat-Informatics/purrassist/blob/main/docs/QUALIFICATION.md).
+recorded in the [qualification record](https://github.com/Blackcat-Informatics/purrassist/blob/rust-v0.1.0/docs/QUALIFICATION.md).
 First-party code is licensed under MIT OR Apache-2.0 OR MulanPSL-2.0.
