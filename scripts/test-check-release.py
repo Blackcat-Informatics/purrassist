@@ -159,6 +159,8 @@ class WorkflowValidation(unittest.TestCase):
     def test_escapes_tags_and_block_scalar_permissions_fail(self):
         for permissions in ('    permissions:\n      "id\\x2dtoken": write\n',
                             '    permissions: !!str write-all\n',
+                            '    permissions: !<tag:yaml.org,2002:str> write-all\n',
+                            '    permissions: !str write-all\n',
                             '    permissions: >-\n      write-all\n'):
             with self.subTest(permissions=permissions):
                 self.check_copy(self.gate_with(permissions),

@@ -162,7 +162,7 @@ def validate_publish_workflow(path=None):
         errors.append('publish.yml must not use YAML anchors or aliases')
     # Escapes, explicit tags and block scalars can spell a grant the patterns
     # above do not read; none has a use in this workflow.
-    if re.search(r'\\|!!|^[^#\n]*\bpermissions:\s*[|>]', text, re.M):
+    if re.search(r'\\|^[^#\n]*(?:^|[\s:\[{,-])!(?:!|<|[A-Za-z])|^[^#\n]*\bpermissions:\s*[|>]', text, re.M):
         errors.append('publish.yml must not use escapes, YAML tags or block-scalar permissions')
     id_token = re.compile(r'^[^#\n]*["\']?\bid-token["\']?\s*:', re.M)
     if len(id_token.findall(text)) != len(id_token.findall(publish_job_body)):
