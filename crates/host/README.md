@@ -38,6 +38,6 @@ assert_eq!(node.pointer("/value/finish").and_then(Node::as_str), Some("calls"));
 assert_eq!(node.pointer("/value/calls/0/dialect").and_then(Node::as_str), Some("hermes.v1"));
 ```
 
-Pre-release implementation. See the
-[repository](https://github.com/Blackcat-Informatics/purrassist) for the complete
-contract. First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0.
+Version 0.1.0. Capabilities, known limitations and verification are recorded in
+the [qualification record](https://github.com/Blackcat-Informatics/purrassist/blob/main/docs/QUALIFICATION.md).
+First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0.

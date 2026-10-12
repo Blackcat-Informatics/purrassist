@@ -43,7 +43,7 @@ Recovery may resolve, guess, preserve ambiguity, or exhaust its explicit budget.
 Guesses remain labeled after validation. The core never reads files, contacts
 models, or consults ambient clocks or randomness.
 
-Pre-release implementation. Markdown parsing and rendering are tested against
+Version 0.1.0. Markdown parsing and rendering are tested against
 all 652 `CommonMark` and 672 GFM specification examples, with source-preserving
 structural edits and explicit resource outcomes. See the
 [implementation contract](https://github.com/Blackcat-Informatics/purrassist/blob/main/docs/IMPLEMENTATION.md).

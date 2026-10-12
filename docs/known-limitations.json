@@ -1,0 +1,66 @@
+{
+  "observed": "2026-10-12",
+  "observation": "issues open as of the observed date",
+  "limitations": [
+    {
+      "issue": 6,
+      "title": "Tool-call fuzz: finish the rejected-span oracle failures left at the #3 merge",
+      "impact": "A plain tool-call fuzz campaign stops at the first rejected-span oracle panic, so the default `make fuzz` fails there.",
+      "blocks_release": false
+    },
+    {
+      "issue": 7,
+      "title": "Audit the unreviewed #3 stage-3 commits and close the F14/F19 rule's known limits",
+      "impact": "Some stage-3 commits of the tool-call work were merged without an audit, and the known limits of the F14/F19 rule remain open.",
+      "blocks_release": false
+    },
+    {
+      "issue": 10,
+      "title": "Tool-call recovery: restarted DeepSeek-V3.1 sections cost quadratic work and super-quadratic time",
+      "impact": "A turn with many restarted DeepSeek-V3.1 sections costs quadratic work and super-quadratic time.",
+      "blocks_release": false
+    },
+    {
+      "issue": 11,
+      "title": "Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes)",
+      "impact": "One 192-byte mutated turn takes about 5 s in a release build, so the default `make fuzz` exceeds its timeout on `tool-call-ref`; the CLI and MCP sized budget ends it explicitly in 0.3 s.",
+      "blocks_release": false
+    },
+    {
+      "issue": 12,
+      "title": "Tool-call recovery: add the pythonic.v1 dialect and pythonic codec",
+      "impact": "`pythonic.v1` is not built in, so its call markup is not recovered as a tool call.",
+      "blocks_release": false
+    },
+    {
+      "issue": 13,
+      "title": "Tool-call recovery: add the glm-4.5.v1 dialect and kv-pairs codec",
+      "impact": "`glm-4.5.v1` is not built in, so its call markup is not recovered as a tool call.",
+      "blocks_release": false
+    },
+    {
+      "issue": 14,
+      "title": "Tool-call recovery: add the gemma3-tool-code.v1 dialect",
+      "impact": "`gemma3-tool-code.v1` is not built in, so its call markup is not recovered as a tool call.",
+      "blocks_release": false
+    },
+    {
+      "issue": 16,
+      "title": "Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress)",
+      "impact": "There is no `ToolCallStream`, no stable-prefix events, no CLI `--stream` option and no MCP progress reporting for recovery.",
+      "blocks_release": false
+    },
+    {
+      "issue": 17,
+      "title": "Tool-call recovery: reassemble provider streaming events (Anthropic SSE tool_use, OpenAI tool_calls deltas)",
+      "impact": "Anthropic SSE `tool_use` and OpenAI `tool_calls` delta streams are not reassembled into a turn.",
+      "blocks_release": false
+    },
+    {
+      "issue": 18,
+      "title": "Tool-call recovery: special-token-stripped dialect variants (*-stripped.v1)",
+      "impact": "Dialect variants for output whose special tokens were stripped (`*-stripped.v1`) are not built in.",
+      "blocks_release": false
+    }
+  ]
+}

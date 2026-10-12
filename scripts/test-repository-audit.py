@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -239,6 +240,48 @@ class DeriveExample(unittest.TestCase):
         (self.root / 'README.md').unlink()
         self.assertEqual(AUDIT.check_derive_example(self.root),
                          ['README.md: derive example copy is missing'])
+
+
+class MarkdownAttribution(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+
+    def write(self, name, text):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    HEADER = ('<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. -->\n'
+              '<!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->\n')
+
+    def test_headed_markdown_passes(self):
+        self.write('docs/A.md', self.HEADER + '# A\n')
+        self.assertEqual(AUDIT.check_markdown_attribution(self.root, ['docs/A.md']), [])
+
+    def test_unheaded_markdown_fails_naming_the_file(self):
+        self.write('docs/B.md', '# B\n')
+        self.assertEqual(AUDIT.check_markdown_attribution(self.root, ['docs/B.md']),
+                         ['docs/B.md: missing attribution'])
+
+    def test_one_missing_tag_fails(self):
+        self.write('C.md', '<!-- SPDX-License-Identifier: MIT -->\n# C\n')
+        self.assertEqual(len(AUDIT.check_markdown_attribution(self.root, ['C.md'])), 1)
+
+    def test_tracked_markdown_is_the_git_index_minus_test_data(self):
+        subprocess.run(['git', 'init', '--quiet'], cwd=self.root, check=True)
+        for name in ['README.md', 'docs/A.md', 'crates/core/tests/data/x/README.md', 'untracked.md']:
+            self.write(name, self.HEADER)
+        subprocess.run(['git', 'add', 'README.md', 'docs/A.md', 'crates/core/tests/data/x/README.md'],
+                       cwd=self.root, check=True)
+        self.assertEqual(AUDIT.tracked_markdown(self.root), ['README.md', 'docs/A.md'])
+
+    def test_current_repository_markdown_is_attributed(self):
+        root = Path(__file__).resolve().parent.parent
+        names = AUDIT.tracked_markdown(root)
+        self.assertIn('README.md', names)
+        self.assertEqual(AUDIT.check_markdown_attribution(root, names), [])
 
 
 class EvaluationManifest(unittest.TestCase):

@@ -17,7 +17,8 @@ to simplify a small algorithm. Keep all source attribution intact.
 
 Use meaningful Rustdoc examples and error semantics. Keep formatting and lint
 warnings clean. Capability or performance claims need executable evidence;
-`docs/QUALIFICATION.md` separates local checks from remaining release work.
+`docs/QUALIFICATION.md` records the executable evidence and its limits, including its
+Known limitations section.
 
 First-party contributions use MIT OR Apache-2.0 OR MulanPSL-2.0. Add SPDX headers
 to new source files. Do not include credentials, personal service endpoints, or

@@ -11,10 +11,13 @@ decoder a schema and an effort level: it searches composed corrections, validate
 the complete result, and returns evidence of what changed. A schema-valid guess
 is still a guess. Ambiguous alternatives remain visible.
 
-**Pre-release 0.1.0 implementation.** The accepted scope is in
-[the implementation contract](docs/IMPLEMENTATION.md), with executable evidence
-and limits in [the qualification record](docs/QUALIFICATION.md). Publication
-acceptance follows review and merge; 0.1.0 is not claimed as published.
+**Version 0.1.0.** Merged to `main` (PR #2, `699d9ff`); tool-call recovery (#3,
+#8) and `purrassist-derive` (#15) merged since; not yet tagged `rust-v0.1.0`. The
+accepted scope is in [the implementation contract](docs/IMPLEMENTATION.md), with
+executable evidence and limits in [the qualification record](docs/QUALIFICATION.md);
+its [known limitations](docs/QUALIFICATION.md#known-limitations) are not release
+blockers. Publication follows the release procedure; 0.1.0 is not claimed as
+published.
 
 The [release procedure](docs/RELEASE.md) records the package and registry gates.
 
@@ -384,7 +387,7 @@ make check       # formatting, attribution/dependencies, lint, optimized tests, 
 make wasm-test   # compare native/WASI recovery, matching, embeddings, Markdown, and grammars
 make syntax-oracles  # compare fixed syntax probes to independent compilers
 make benchmark  # recovery quality assertions and latency baseline
-make fuzz       # nine coverage-guided targets and independent pattern/Markdown oracles
+make fuzz       # ten coverage-guided targets and independent pattern/Markdown oracles
 make resources  # allocations, heap/RSS, latency, artifact size, and uncached build cost
 make package    # Cargo verification and registered source/license archive audit
 ```
@@ -423,8 +426,11 @@ the braces and validation mark are this crate's service emblem.
 
 Resource profiling is available with `make resources`; see [measurement scope and prerequisites](docs/RESOURCES.md). It uses external profilers and adds no crate runtime dependencies.
 
-Coverage-guided JSON campaigns are available with `make fuzz TARGET=json`; see
-[properties, replay, and qualification limits](docs/FUZZING.md).
+Coverage-guided campaigns for each of the ten targets are available with
+`make fuzz TARGET=<target>` (for example `TARGET=json`); see
+[properties, replay, and qualification limits](docs/FUZZING.md). The default
+`make fuzz` currently stops on the issue #11 and #6 signatures, listed under
+[known limitations](docs/QUALIFICATION.md#known-limitations).
 
 Governed engines and host tools accept [caller-owned cancellation](docs/CANCELLATION.md),
 with explicit transaction boundaries. The stdio MCP server handles cancellation

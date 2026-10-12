@@ -3,8 +3,10 @@
 # Rust release procedure
 
 PurRAssist 0.1.0 has an implemented scope and executable qualification record
-in `QUALIFICATION.md`. Publication acceptance is performed on the reviewed
-merge commit using the steps below. A published 0.1.0 is not claimed before
+in `QUALIFICATION.md`. Status: merged to `main` (PR #2, `699d9ff`); tool-call
+recovery (#3, #8) and `purrassist-derive` (#15) merged since; not yet tagged
+`rust-v0.1.0`. Publication acceptance is performed on the exact `main` commit
+to be tagged, using the steps below. A published 0.1.0 is not claimed before
 registry downloads and installed CLI/MCP behavior are verified.
 
 The release set is six crates, in this order: `purrassist-core`,
@@ -33,33 +35,25 @@ version moves without renaming the marker.
 ## Placeholder name records (already minted)
 
 One-time, irreversible `0.0.0` name-reservation records exist on crates.io for
-the original five crates (`purrassist-core`, `purrassist-syntax`,
-`purrassist`, `purrassist-host`, `purrassist-cli`; minimal `lib` packages,
+all six crates in the release set. The original five (`purrassist-core`,
+`purrassist-syntax`, `purrassist`, `purrassist-host`, `purrassist-cli`) were
+minted first; `purrassist-derive` was minted on 2026-10-12, with ownership
+identical to the other five. Each is a minimal `lib` package,
 `version = "0.0.0"`, no dependencies, `//! Reserved name.`; see the issue #1
-comment recording this for the exact mechanics). These are **not** the `0.1.0`
-release; they only hold the names and let a trusted publisher be configured
-before the first real publication.
+comment recording this for the exact mechanics (the derive record is a
+proc-macro crate in the workspace, but its placeholder only holds the name).
+These are **not** the `0.1.0` release; they only hold the names and let a
+trusted publisher be configured before the first real publication.
 
-**`purrassist-derive` has no placeholder record yet.** Its name has not been
-reserved on crates.io. That is an external, one-time, irreversible maintainer
-action that has **not** been done, and it must be completed before any release
-tag is pushed:
-
-1. Mint the `0.0.0` placeholder record for `purrassist-derive` the same way as
-   for the other crates (a minimal `lib` package, `version = "0.0.0"`, no
-   dependencies, `//! Reserved name.`; see the issue #1 comment). The crate is
-   a proc-macro crate, but the placeholder only holds the name.
-2. Configure the crates.io trusted publisher for `purrassist-derive`
-   (repository, workflow and environment below).
-
-Until both are done the release must not be tagged. `publish.yml` now has a
-preflight step (see below) that fails before `purrassist-core` is published
-when any release crate name is absent from crates.io (HTTP 200 is required
-for `purrassist-derive` too, so its name must be reserved first) or when the
-release set is not owned identically. The preflight cannot see trusted-publisher
+`publish.yml` has a preflight step (see below) that fails before
+`purrassist-core` is published when any release crate name is absent from
+crates.io (HTTP 200 is required for every crate) or when the release set is
+not owned identically. The preflight cannot see trusted-publisher
 configuration, which is not verifiable unauthenticated; confirming it stays the
-manual step. Re-confirm both through the crates.io API immediately before
-tagging.
+manual step. The `purrassist-derive` trusted publisher is pending owner
+configuration (repository, workflow and environment below). Re-confirm all six
+through the crates.io API immediately before tagging, and do not tag until
+`purrassist-derive` is configured.
 
 ## Publish preflight
 
@@ -80,18 +74,21 @@ The preflight does **not** verify trusted-publisher configuration: that state
 is not visible to an unauthenticated request. Confirming that each crate's
 trusted publisher is configured stays the manual pre-tag step below.
 
-## Trusted publishing (configured for five of six crates)
+## Trusted publishing (original five confirmed; derive pending)
 
-Each of the original five crates (all except `purrassist-derive`, whose
-trusted publisher is not yet configured; see above) has a crates.io trusted
-publisher configured against:
+Observed on 2026-09-28: each of the original five crates (all except
+`purrassist-derive`) has a crates.io trusted publisher configured against:
 
 - Repository: `Blackcat-Informatics/purrassist`
 - Workflow: `publish.yml`
 - Environment: `crates-io`
 
-This lets `publish.yml`'s `publish` job mint a short-lived registry token via
-GitHub OIDC (`permissions: id-token: write`) instead of a stored
+As of 2026-10-12 the `purrassist-derive` trusted publisher is pending owner
+configuration against the same three values; re-confirm it through the API
+before tagging.
+
+A trusted publisher lets `publish.yml`'s `publish` job mint a short-lived
+registry token via GitHub OIDC (`permissions: id-token: write`) instead of a stored
 `CARGO_REGISTRY_TOKEN` secret. No registry credential is stored in this
 repository or its CI configuration at any point.
 
@@ -207,15 +204,15 @@ on checkout.
   Pipe writes, response reads, and child exit have bounded timeouts; regression
   tests prove cleanup for missing responses, partial output, and stderr flooding.
 
-## Release step (after merge)
+## Release step
 
-Before a first publication, verify hosted CI for the exact merge commit, run
+Before a first publication, verify hosted CI for the exact `main` commit to be tagged, run
 the portability, conformance, syntax-oracle, fuzz, performance, and package
 checks listed in `QUALIFICATION.md`, and re-confirm the trusted-publisher
 settings above via the crates.io API immediately before tagging (a repository
 rename, workflow rename, or environment rename would silently break trusted
-publishing). The `purrassist-derive` name reservation and trusted publisher are
-not yet done and must exist first (see "Placeholder name records"). Tagging
+publishing). The `purrassist-derive` trusted publisher is pending owner
+configuration and must exist first (see "Placeholder name records"). Tagging
 `rust-vVERSION` is irreversible and requires explicit authorization;
 `publish.yml` then does the rest. After it succeeds, create
 the GitHub release and link the `verify-published.py` output in the release

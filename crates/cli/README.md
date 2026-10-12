@@ -83,6 +83,6 @@ spans. `plan_markdown_reference` takes `path`, `occurrence`, decoded `destinatio
 and explicit `title` (string or `null`). It preserves the selected label and all
 unselected definitions, with a structural-validation receipt and conditional undo.
 
-Pre-release implementation. See the
-[repository](https://github.com/Blackcat-Informatics/purrassist) for current
-limitations and verification. First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0.
+Version 0.1.0. Capabilities, known limitations and verification are recorded in
+the [qualification record](https://github.com/Blackcat-Informatics/purrassist/blob/main/docs/QUALIFICATION.md).
+First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0.

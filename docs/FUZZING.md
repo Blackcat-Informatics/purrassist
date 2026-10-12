@@ -848,6 +848,28 @@ for loose rendering. Authoritative tests preserve tight list behavior with
 and without a body row; the diagnostic retains every disagreement and both
 HTML answers. Mandatory campaign acceptance remains unchanged.
 
+## Known limitations
+
+These issues were open on 2026-10-12. None blocks the 0.1.0 release. The list
+matches its single source, [known-limitations.json](known-limitations.json);
+`scripts/check-docs.py` compares the two.
+
+- [#6](https://github.com/Blackcat-Informatics/purrassist/issues/6) Tool-call fuzz: finish the rejected-span oracle failures left at the #3 merge. A plain tool-call fuzz campaign stops at the first rejected-span oracle panic, so the default `make fuzz` fails there.
+- [#7](https://github.com/Blackcat-Informatics/purrassist/issues/7) Audit the unreviewed #3 stage-3 commits and close the F14/F19 rule's known limits. Some stage-3 commits of the tool-call work were merged without an audit, and the known limits of the F14/F19 rule remain open.
+- [#10](https://github.com/Blackcat-Informatics/purrassist/issues/10) Tool-call recovery: restarted DeepSeek-V3.1 sections cost quadratic work and super-quadratic time. A turn with many restarted DeepSeek-V3.1 sections costs quadratic work and super-quadratic time.
+- [#11](https://github.com/Blackcat-Informatics/purrassist/issues/11) Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes). One 192-byte mutated turn takes about 5 s in a release build, so the default `make fuzz` exceeds its timeout on `tool-call-ref`; the CLI and MCP sized budget ends it explicitly in 0.3 s.
+- [#12](https://github.com/Blackcat-Informatics/purrassist/issues/12) Tool-call recovery: add the pythonic.v1 dialect and pythonic codec. `pythonic.v1` is not built in, so its call markup is not recovered as a tool call.
+- [#13](https://github.com/Blackcat-Informatics/purrassist/issues/13) Tool-call recovery: add the glm-4.5.v1 dialect and kv-pairs codec. `glm-4.5.v1` is not built in, so its call markup is not recovered as a tool call.
+- [#14](https://github.com/Blackcat-Informatics/purrassist/issues/14) Tool-call recovery: add the gemma3-tool-code.v1 dialect. `gemma3-tool-code.v1` is not built in, so its call markup is not recovered as a tool call.
+- [#16](https://github.com/Blackcat-Informatics/purrassist/issues/16) Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress). There is no `ToolCallStream`, no stable-prefix events, no CLI `--stream` option and no MCP progress reporting for recovery.
+- [#17](https://github.com/Blackcat-Informatics/purrassist/issues/17) Tool-call recovery: reassemble provider streaming events (Anthropic SSE tool_use, OpenAI tool_calls deltas). Anthropic SSE `tool_use` and OpenAI `tool_calls` delta streams are not reassembled into a turn.
+- [#18](https://github.com/Blackcat-Informatics/purrassist/issues/18) Tool-call recovery: special-token-stripped dialect variants (*-stripped.v1). Dialect variants for output whose special tokens were stripped (`*-stripped.v1`) are not built in.
+
+The default `make fuzz` stops on the #11 and #6 signatures. The sections
+"Isolating issue #6" and "Known slow input (issue #11)" below record how to
+isolate and attribute each stop, and the baseline table records `none` for the two
+tool-call targets, which have no 10,000-mutation baseline.
+
 ## Running a campaign
 
 ```sh
@@ -874,11 +896,12 @@ are not comparable coverage percentages across toolchain versions.
 **Smoke** (`verify.yml` on pull requests, main-branch pushes, and manual
 runs): `make fuzz` runs the corpus-feedback test once and all ten targets
 with the runner's default 1,000 mutations each. `TARGET` and `FUZZ_ARGS`
-apply only to a selected-target invocation. **Qualification** (this task, evidence committed
-under `docs/qualification/`): 10,000 iterations per target, matching both
-this plan's stated floor and the sample size of the existing
+apply only to a selected-target invocation. **Qualification** (evidence committed under `docs/qualification/`): 10,000
+iterations for each target that has a recorded baseline, matching the sample size
+of the existing
 `derivative_and_backtracking_engines_agree_on_ten_thousand_generated_pairs`
-and property-based oracles elsewhere in this codebase, providing the same mutation-count floor for every target. Counts measure
+and property-based oracles elsewhere in this codebase. The `tool-call` and
+`tool-call-ref` targets have no recorded baseline (see the table below). Counts measure
 executed cases and do not imply statistical independence or a bound on
 undiscovered defects. `docs/qualification/fuzz-<target>-linux-x86_64.json` records
 successful status, executions, regions covered, retained corpus size,
@@ -963,12 +986,13 @@ ordinary rate. With the probe's request it takes about 5 s in a release build,
 on `main` as on this branch, so under the coverage build it exceeds the default
 10 s `--timeout` and `make fuzz` fails there. Under the CLI and MCP sized budget
 the same turn ends explicitly (`BudgetExceeded`) in 0.3 s. Issue #11 tracks the
-fix. Until then, run `tool-call-ref` campaigns with a larger `--timeout`. The
-#8 campaign used `--timeout 120`; see its stage report.
+fix. Until then, run `tool-call-ref` campaigns with a larger `--timeout`; the #8
+campaign used `--timeout 120`.
 
 ### Recorded 10,000-mutation baselines
 
-Every row is copied from its actual successful phase report. Counts include fixed
+Every row is copied from its actual successful phase report, and a target without
+a baseline says `none`. Counts include fixed
 seeds in addition to the 10,000 mutations; they are observations of the recorded
 source/tool identities, rather than whole-crate coverage percentages.
 
@@ -982,6 +1006,8 @@ source/tool identities, rather than whole-crate coverage percentages.
 | [fuzzy](qualification/fuzz-fuzzy-linux-x86_64.json) | 10,003 | 849 | 6 | 0 | 0 | not recorded |
 | [matching](qualification/fuzz-matching-linux-x86_64.json) | 10,004 | 1,390 | 22 | 0 | 0 | not recorded |
 | [patch](qualification/fuzz-patch-linux-x86_64.json) | 10,003 | 435 | 5 | 0 | 0 | not recorded |
+| tool-call | none | none | none | none | none | none |
+| tool-call-ref | none | none | none | none | none | none |
 
 The final Markdown phase rejected 332 invalid UTF-8 inputs explicitly and
 reported zero resource non-results. Its 9,683 comparisons include 27 independently

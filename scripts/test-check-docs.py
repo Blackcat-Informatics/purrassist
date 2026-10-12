@@ -1,0 +1,696 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+"""Tests for scripts/check-docs.py.
+
+The checker passes on this checkout. Every other test copies the documents and
+the files that carry the facts into a temporary tree, breaks one thing, and
+requires the rule that owns it to fail by name. Each fact also has a fixture
+in which the sentence the rule reads is absent, which must fail with "fact
+sentence not found", and a phrase wrapped across a line break must still be
+found. Nothing here touches the network or the checkout.
+"""
+import importlib.util
+import json
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parent.parent
+SOURCES = ('Cargo.toml', 'Makefile', 'scripts/check-release.py', 'scripts/fuzz.py',
+           'crates/core/src/contract.rs', 'docs/known-limitations.json')
+NOT_FOUND = 'fact sentence not found'
+
+
+def _load():
+    path = ROOT / 'scripts/check-docs.py'
+    spec = importlib.util.spec_from_file_location('purrassist_check_docs', path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f'could not load module spec for {path}')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+CD = _load()
+TRACKED = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT, text=True).split('\0')[:-1]
+
+
+class Tree:
+    """A temporary copy of the documents and fact sources."""
+
+    def __init__(self, test):
+        directory = tempfile.TemporaryDirectory()
+        test.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.names = CD.markdown_names(ROOT)
+        for name in [*self.names, *SOURCES]:
+            self.copy(name)
+        shutil.copytree(ROOT / 'docs/qualification', self.root / 'docs/qualification')
+        # Every other tracked file is linked in, so that relative links to it resolve. A
+        # test only ever writes a copied or a new file, never one of these links.
+        for name in TRACKED:
+            target = self.root / name
+            if not target.exists() and not target.is_symlink():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.symlink_to(ROOT / name)
+
+    def copy(self, name):
+        target = self.root / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / name, target)
+
+    def read(self, name):
+        return (self.root / name).read_text()
+
+    def write(self, name, text):
+        (self.root / name).write_text(text)
+
+    def sub(self, name, pattern, replacement, count=1):
+        """Replace the regex `pattern` in `name`, which must occur `count` times (0 = any)."""
+        text, replaced = re.subn(pattern, lambda _: replacement, self.read(name), flags=re.DOTALL)
+        if replaced == 0 or (count and replaced != count):
+            raise AssertionError(f'{name}: /{pattern}/ replaced {replaced} times, expected {count or "some"}')
+        self.write(name, text)
+
+    def replace(self, name, old, new, count=1):
+        """Replace `old` (any whitespace in it matches any whitespace run, so a wrapped
+        sentence is found) with the literal `new`."""
+        self.sub(name, r'\s+'.join(re.escape(word) for word in old.split()), new, count)
+
+    def append(self, name, text):
+        self.write(name, self.read(name) + text)
+
+    def drop(self, name):
+        (self.root / name).unlink()
+        if name in self.names:
+            self.names.remove(name)
+
+    def limitations(self):
+        return json.loads(self.read('docs/known-limitations.json'))
+
+    def save_limitations(self, data):
+        self.write('docs/known-limitations.json', json.dumps(data, indent=2) + '\n')
+
+    def errors(self):
+        return CD.check(self.root, self.names)
+
+
+class Case(unittest.TestCase):
+    def tree(self):
+        return Tree(self)
+
+    def assertFails(self, errors, rule, *needles):
+        matching = [error for error in errors if error.startswith(f'[{rule}] ')]
+        self.assertTrue(
+            any(all(needle in error for needle in needles) for error in matching),
+            f'no [{rule}] error containing {needles}; got:\n' + '\n'.join(errors))
+
+    def assertNoRule(self, errors, rule):
+        self.assertEqual([error for error in errors if error.startswith(f'[{rule}] ')], [])
+
+
+class Checkout(Case):
+    def test_the_checkout_passes(self):
+        self.assertEqual(CD.check(ROOT, CD.markdown_names(ROOT)), [])
+
+    def test_scope_is_tracked_markdown_outside_stage_vendor_and_test_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(['git', 'init', '--quiet'], cwd=root, check=True)
+            names = ['README.md', 'docs/A.md', 'vendor/x/README.md', 'crates/core/tests/data/x/README.md',
+                     '.stage/p/plan.md', 'untracked.md', 'notes.txt']
+            for name in names:
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_text('x\n')
+            subprocess.run(['git', 'add', '-f', *names[:5], 'notes.txt'], cwd=root, check=True)
+            self.assertEqual(sorted(CD.markdown_names(root)), ['README.md', 'docs/A.md'])
+
+
+class Helpers(Case):
+    def test_collapse_maps_back_to_lines(self):
+        text = 'one\n\n  two\tthree\n'
+        collapsed, offsets = CD.collapse(text), CD.collapse_offsets(text)
+        self.assertEqual(collapsed, 'one two three ')
+        self.assertEqual(len(offsets), len(collapsed))
+        self.assertEqual(text.count('\n', 0, offsets[collapsed.index('three')]) + 1, 3)
+
+    def test_heading_slug_follows_github(self):
+        self.assertEqual(CD.heading_slug('## Known limitations'), 'known-limitations')
+        self.assertEqual(CD.heading_slug('### The `make fuzz` (10,000) run'), 'the-make-fuzz-10000-run')
+
+    def test_anchors_number_repeats_and_ignore_fences(self):
+        found = CD.anchors('# A\n## A\n```\n# not\n```\n<a id="x"></a>\n')
+        self.assertEqual(found, {'a', 'a-1', 'x'})
+
+    def test_report_commits_reads_each_shape(self):
+        self.assertEqual(CD.report_commits({'source_commit': 'a' * 40}), {'a' * 40})
+        self.assertEqual(CD.report_commits({'source': {'commit': 'b' * 40}}), {'b' * 40})
+        self.assertEqual(CD.report_commits({'reports': [{'source_commit': 'c' * 40}, {}]}), {'c' * 40})
+        self.assertEqual(CD.report_commits([{'case': 'exact'}]), set())
+
+    def test_commit_named_accepts_a_prefix_of_seven_or_more(self):
+        self.assertTrue(CD.commit_named('bound to `66b3756`', '66b3756776a072af'))
+        self.assertFalse(CD.commit_named('bound to `66b375`', '66b3756776a072af'))
+
+    def test_number_value(self):
+        self.assertEqual((CD.number_value('Twelve'), CD.number_value('12'), CD.number_value('many')), (12, 12, None))
+
+
+class ReleaseSet(Case):
+    def test_reordered_set_fails(self):
+        tree = self.tree()
+        tree.replace('docs/RELEASE.md', '`purrassist-core`, `purrassist-derive`', '`purrassist-derive`, `purrassist-core`')
+        self.assertFails(tree.errors(), 'release-set', 'RELEASE_ORDER')
+
+    def test_wrong_count_fails(self):
+        tree = self.tree()
+        tree.replace('docs/RELEASE.md', 'release set is six crates', 'release set is five crates')
+        self.assertFails(tree.errors(), 'release-set', "'five'", 'has 6')
+
+    def test_wrong_archive_count_fails(self):
+        tree = self.tree()
+        tree.replace('docs/QUALIFICATION.md', 'Six Cargo-verified archives', 'Five Cargo-verified archives')
+        self.assertFails(tree.errors(), 'release-set', 'archives')
+
+    def test_the_order_comes_from_check_release(self):
+        tree = self.tree()
+        tree.replace('scripts/check-release.py', "    'purrassist-core',\n", "    'purrassist-core',\n    'purrassist-extra',\n")
+        self.assertFails(tree.errors(), 'release-set', 'purrassist-extra')
+
+
+class WorkspaceVersion(Case):
+    def test_a_version_bump_fails_every_restatement(self):
+        tree = self.tree()
+        tree.replace('Cargo.toml', 'version = "0.1.0"', 'version = "0.2.0"', count=0)
+        errors = tree.errors()
+        for name in ('docs/RELEASE.md', 'docs/IMPLEMENTATION.md', 'docs/QUALIFICATION.md', 'SECURITY.md', 'README.md'):
+            self.assertFails(errors, 'workspace-version', name, '0.2.0')
+
+    def test_a_stale_tag_in_the_status_line_fails(self):
+        tree = self.tree()
+        tree.sub('SECURITY.md', r'rust-v0\.1\.0', 'rust-v0.0.9')
+        self.assertFails(tree.errors(), 'workspace-version', 'SECURITY.md', '0.0.9')
+
+
+class FuzzTargets(Case):
+    def test_a_new_target_fails_every_restatement(self):
+        tree = self.tree()
+        tree.replace('scripts/fuzz.py', "    'tool-call-ref': {", "    'extra': {},\n    'tool-call-ref': {")
+        errors = tree.errors()
+        self.assertFails(errors, 'fuzz-targets', 'docs/FUZZING.md', 'extra')
+        self.assertFails(errors, 'fuzz-targets', 'Makefile', 'fuzz loop')
+        self.assertFails(errors, 'fuzz-targets', 'README.md', 'has 11')
+        self.assertFails(errors, 'fuzz-targets', 'docs/QUALIFICATION.md', 'has 11')
+
+    def test_wrong_counts_fail(self):
+        for name, old, new in (('README.md', 'ten coverage-guided targets', 'nine coverage-guided targets'),
+                               ('docs/QUALIFICATION.md', 'the ten mutation targets', 'the eleven mutation targets'),
+                               ('docs/FUZZING.md', 'across ten `purrassist-core`', 'across eleven `purrassist-core`'),
+                               ('Makefile', 'across all ten targets', 'across all nine targets')):
+            with self.subTest(name=name):
+                tree = self.tree()
+                tree.replace(name, old, new)
+                self.assertFails(tree.errors(), 'fuzz-targets', name)
+
+    def test_the_makefile_loop_must_run_every_target(self):
+        tree = self.tree()
+        tree.replace('Makefile', ' tool-call-ref; do', '; do')
+        self.assertFails(tree.errors(), 'fuzz-targets', 'Makefile', 'fuzz loop')
+
+    def test_the_makefile_comment_must_list_every_target(self):
+        tree = self.tree()
+        tree.replace('Makefile', '/tool-call/tool-call-ref', '/tool-call-ref')
+        self.assertFails(tree.errors(), 'fuzz-targets', 'Makefile', 'comment lists')
+
+    def test_the_documented_list_must_match(self):
+        tree = self.tree()
+        tree.replace('docs/FUZZING.md', '`tool-call`, `tool-call-ref`. Each', '`tool-call`. Each')
+        self.assertFails(tree.errors(), 'fuzz-targets', 'docs/FUZZING.md', 'lists')
+
+
+class ReceiptVersion(Case):
+    def test_stale_wire_version_fails(self):
+        tree = self.tree()
+        tree.replace('docs/QUALIFICATION.md', 'receipt wire v3', 'receipt wire v4')
+        self.assertFails(tree.errors(), 'receipt-version', 'RECEIPT_VERSION is 3')
+
+    def test_the_source_constant_is_the_truth(self):
+        tree = self.tree()
+        tree.replace('crates/core/src/contract.rs', 'RECEIPT_VERSION: u32 = 3;', 'RECEIPT_VERSION: u32 = 4;')
+        self.assertFails(tree.errors(), 'receipt-version', 'RECEIPT_VERSION is 4')
+
+
+class DialectIds(Case):
+    def test_a_new_dialect_page_fails_every_list(self):
+        tree = self.tree()
+        tree.write('docs/tool-calls/dialects/pythonic.v1.md', '# x\n')
+        errors = tree.errors()
+        for name in ('README.md', 'crates/core/README.md', 'docs/QUALIFICATION.md', 'docs/IMPLEMENTATION.md',
+                     'docs/tool-calls/GRAMMAR.md', 'docs/tool-calls/README.md', 'docs/MATCHING-QUALITY.md'):
+            self.assertFails(errors, 'dialect-ids', name, "missing ['pythonic.v1']")
+
+    def test_a_removed_page_fails_with_the_extra_id(self):
+        tree = self.tree()
+        tree.drop('docs/tool-calls/dialects/hermes.v1.md')
+        self.assertFails(tree.errors(), 'dialect-ids', 'README.md', "extra ['hermes.v1']")
+
+    def test_a_list_missing_an_id_fails(self):
+        tree = self.tree()
+        tree.replace('crates/purrassist/README.md', '`hermes.v1`, ', '')
+        self.assertFails(tree.errors(), 'dialect-ids', 'crates/purrassist/README.md', "missing ['hermes.v1']")
+
+    def test_a_linked_list_missing_an_id_fails(self):
+        tree = self.tree()
+        tree.sub('docs/tool-calls/GRAMMAR.md', r'\[`hermes\.v1`\]\([^)]*\),\n', '')
+        self.assertFails(tree.errors(), 'dialect-ids', 'docs/tool-calls/GRAMMAR.md', "missing ['hermes.v1']")
+
+    def test_a_table_missing_a_row_fails(self):
+        tree = self.tree()
+        tree.sub('docs/tool-calls/README.md', r'\| `harmony\.v1` \|[^\n]*\n', '')
+        self.assertFails(tree.errors(), 'dialect-ids', 'docs/tool-calls/README.md', "missing ['harmony.v1']")
+
+    def test_a_list_with_an_unknown_id_fails(self):
+        tree = self.tree()
+        tree.replace('crates/host/README.md', '`bare-json.v1`', '`bare-json.v2`')
+        self.assertFails(tree.errors(), 'dialect-ids', 'crates/host/README.md', 'bare-json.v2')
+
+    def test_a_list_broken_into_short_pieces_is_not_found(self):
+        tree = self.tree()
+        tree.replace('crates/host/README.md', '`llama3-json.v1`', 'llama3-json.v1')
+        tree.replace('crates/host/README.md', '`kimi-k2.v1`', 'kimi-k2.v1')
+        self.assertFails(tree.errors(), 'dialect-ids', 'crates/host/README.md', NOT_FOUND)
+
+    def test_a_list_wrapped_across_lines_is_still_a_list(self):
+        tree = self.tree()
+        tree.replace('crates/core/README.md', '`hermes.v1`, `openai-tool-calls.v1`,', '`hermes.v1`,\n`openai-tool-calls.v1`,')
+        tree.replace('crates/core/README.md', '`mistral-v3.v1`, ', '')
+        self.assertFails(tree.errors(), 'dialect-ids', 'crates/core/README.md', "missing ['mistral-v3.v1']")
+
+    def test_wrong_count_fails(self):
+        for name, old, new in (('README.md', 'Twelve dialects ship', 'Eleven dialects ship'),
+                               ('docs/tool-calls/GRAMMAR.md', 'twelve built-in dialects', 'ten built-in dialects'),
+                               ('docs/RESOURCES.md', 'all twelve built-in dialects', 'all ten built-in dialects'),
+                               ('docs/tool-calls/dialects/bare-json.v1.md', 'all twelve dialects', 'all ten dialects'),
+                               ('docs/IMPLEMENTATION.md', 'twelve ship', 'ten ship'),
+                               ('crates/host/README.md', 'over twelve built-in', 'over ten built-in')):
+            with self.subTest(name=name):
+                tree = self.tree()
+                tree.replace(name, old, new)
+                self.assertFails(tree.errors(), 'dialect-count', name, 'has 12')
+
+    def test_a_subset_count_is_not_a_dialect_count(self):
+        tree = self.tree()
+        tree.append('CONTRIBUTING.md', '\nThe slip is tolerated across two dialects (all six dialects, here).\n')
+        self.assertNoRule(tree.errors(), 'dialect-count')
+
+    def test_a_missing_count_sentence_is_not_found(self):
+        tree = self.tree()
+        tree.replace('crates/purrassist/README.md', 'Twelve dialects ship:', 'These dialects exist:')
+        self.assertFails(tree.errors(), 'dialect-count', 'crates/purrassist/README.md', NOT_FOUND)
+
+
+class Links(Case):
+    def test_a_broken_relative_link_fails(self):
+        tree = self.tree()
+        tree.append('README.md', '\nSee [gone](docs/NOPE.md).\n')
+        self.assertFails(tree.errors(), 'links', 'README.md', 'docs/NOPE.md')
+
+    def test_a_broken_anchor_fails(self):
+        tree = self.tree()
+        tree.append('README.md', '\nSee [x](docs/QUALIFICATION.md#no-such-heading).\n')
+        self.assertFails(tree.errors(), 'links', 'no-such-heading')
+
+    def test_a_broken_same_file_anchor_fails(self):
+        tree = self.tree()
+        tree.append('README.md', '\nSee [x](#no-such-heading).\n')
+        self.assertFails(tree.errors(), 'links', 'no-such-heading')
+
+    def test_a_broken_reference_definition_fails(self):
+        tree = self.tree()
+        tree.append('README.md', '\n[ref]: docs/NOPE.md\n')
+        self.assertFails(tree.errors(), 'links', 'docs/NOPE.md')
+
+    def test_a_broken_image_source_fails(self):
+        tree = self.tree()
+        tree.append('README.md', '\n<img src="docs/nope.svg">\n')
+        self.assertFails(tree.errors(), 'links', 'docs/nope.svg')
+
+    def test_links_in_code_and_external_links_are_not_checked(self):
+        tree = self.tree()
+        tree.append('README.md', '\n```\n[gone](docs/NOPE.md)\n```\n`[gone](docs/NOPE.md)` [site](https://example.org/x#y)\n')
+        self.assertNoRule(tree.errors(), 'links')
+
+    def test_a_valid_anchor_passes(self):
+        tree = self.tree()
+        tree.append('README.md', '\nSee [x](docs/QUALIFICATION.md#known-limitations).\n')
+        self.assertNoRule(tree.errors(), 'links')
+
+
+class StageReferences(Case):
+    def test_a_stage_directory_reference_fails(self):
+        tree = self.tree()
+        tree.append('docs/RELEASE.md', '\nSee `.stage/plan/plan.md`.\n')
+        self.assertFails(tree.errors(), 'stage-references', 'docs/RELEASE.md')
+
+    def test_words_that_merely_contain_stage_pass(self):
+        tree = self.tree()
+        tree.append('docs/RELEASE.md', '\nA backstage .stagecoach is fine; so is stage 2.\n')
+        self.assertNoRule(tree.errors(), 'stage-references')
+
+
+BANNED_SAMPLES = {
+    r'issue branch': 'Delivered on the issue branch.',
+    r'nine (mutation |coverage-guided )?targets': 'It runs Nine targets.',
+    r'wire v2': 'The receipt wire v2 is current.',
+    r'reviewed merge commit': 'Use the reviewed merge commit.',
+    r'follows? (the )?review and merge': 'Publication follows review and merge.',
+    r'after review and merge': 'Release after review and merge.',
+    r'no placeholder record': 'There is no placeholder record.',
+    r'not yet done': 'That is not yet done.',
+    r'five of six': 'Configured for five of six crates.',
+    r'Pre-release': 'This is a pre-release build.',
+    r'stage report': 'See its stage report.',
+    r'proved by the [^.]*hosted': 'Windows is proved by the windows-engines hosted lane.',
+}
+
+
+class BannedPhrases(Case):
+    def test_samples_cover_the_exact_list(self):
+        self.assertEqual(set(BANNED_SAMPLES), set(CD.BANNED_PHRASES))
+
+    def test_every_phrase_fails(self):
+        for phrase, sample in BANNED_SAMPLES.items():
+            with self.subTest(phrase=phrase):
+                tree = self.tree()
+                tree.append('CONTRIBUTING.md', f'\n{sample}\n')
+                self.assertFails(tree.errors(), 'banned-phrase', 'CONTRIBUTING.md', f'/{phrase}/')
+
+    def test_a_phrase_wrapped_across_lines_fails_with_its_first_line(self):
+        for phrase, sample in BANNED_SAMPLES.items():
+            with self.subTest(phrase=phrase):
+                tree = self.tree()
+                match = re.search(phrase, sample, re.IGNORECASE)
+                if ' ' not in match.group(0):
+                    continue
+                wrapped = sample[:match.start()] + match.group(0).replace(' ', '\n', 1) + sample[match.end():]
+                before = len(tree.read('CONTRIBUTING.md').splitlines())
+                tree.append('CONTRIBUTING.md', f'\n{wrapped}\n')
+                # The phrase starts on the first line of the wrapped sentence.
+                self.assertFails(tree.errors(), 'banned-phrase', f'CONTRIBUTING.md:{before + 2}', f'/{phrase}/')
+
+    def test_a_phrase_wrapped_with_an_indent_fails(self):
+        tree = self.tree()
+        tree.append('CONTRIBUTING.md', '\nUse the reviewed\n    merge   commit now.\n')
+        self.assertFails(tree.errors(), 'banned-phrase', 'reviewed merge commit')
+
+    def test_matching_ignores_case(self):
+        tree = self.tree()
+        tree.append('CONTRIBUTING.md', '\nPRE-RELEASE\n')
+        self.assertFails(tree.errors(), 'banned-phrase', 'PRE-RELEASE')
+
+
+class KnownLimitationsSource(Case):
+    def test_a_blocking_issue_fails(self):
+        tree = self.tree()
+        data = tree.limitations()
+        data['limitations'][0]['blocks_release'] = True
+        tree.save_limitations(data)
+        self.assertFails(tree.errors(), 'known-limitations-source', 'blocks_release must be false')
+
+    def test_a_missing_key_fails(self):
+        tree = self.tree()
+        data = tree.limitations()
+        del data['limitations'][1]['impact']
+        tree.save_limitations(data)
+        self.assertFails(tree.errors(), 'known-limitations-source', 'exactly issue, title, impact')
+
+    def test_a_duplicate_issue_fails(self):
+        tree = self.tree()
+        data = tree.limitations()
+        data['limitations'][1]['issue'] = data['limitations'][0]['issue']
+        tree.save_limitations(data)
+        self.assertFails(tree.errors(), 'known-limitations-source', 'duplicate issue')
+
+    def test_a_multi_line_impact_fails(self):
+        tree = self.tree()
+        data = tree.limitations()
+        data['limitations'][0]['impact'] = 'one\ntwo'
+        tree.save_limitations(data)
+        self.assertFails(tree.errors(), 'known-limitations-source', 'impact must be one non-empty line')
+
+    def test_unparseable_json_fails(self):
+        tree = self.tree()
+        tree.write('docs/known-limitations.json', '{')
+        self.assertFails(tree.errors(), 'known-limitations-source', 'unreadable')
+
+    def test_a_missing_file_fails(self):
+        tree = self.tree()
+        (tree.root / 'docs/known-limitations.json').unlink()
+        self.assertFails(tree.errors(), 'missing-file', 'known-limitations.json')
+
+    def test_the_real_set_is_the_agreed_one(self):
+        data = json.loads((ROOT / 'docs/known-limitations.json').read_text())
+        self.assertEqual([entry['issue'] for entry in data['limitations']], [6, 7, 10, 11, 12, 13, 14, 16, 17, 18])
+
+
+class KnownLimitationsSection(Case):
+    def test_a_missing_heading_fails_in_each_document(self):
+        for name in ('docs/QUALIFICATION.md', 'docs/FUZZING.md'):
+            with self.subTest(name=name):
+                tree = self.tree()
+                tree.replace(name, '## Known limitations', '## Open items')
+                self.assertFails(tree.errors(), 'known-limitations-section', name, 'exactly one')
+
+    def test_a_dropped_issue_fails_in_each_document(self):
+        for name in ('docs/QUALIFICATION.md', 'docs/FUZZING.md'):
+            with self.subTest(name=name):
+                tree = self.tree()
+                tree.sub(name, r'- \[#18\][^\n]*\n', '')
+                self.assertFails(tree.errors(), 'known-limitations-section', name, 'differs')
+
+    def test_an_extra_issue_in_the_source_fails_in_each_document(self):
+        tree = self.tree()
+        data = tree.limitations()
+        data['limitations'].append({'issue': 99, 'title': 'New', 'impact': 'New impact.', 'blocks_release': False})
+        tree.save_limitations(data)
+        for name in ('docs/QUALIFICATION.md', 'docs/FUZZING.md'):
+            self.assertFails(tree.errors(), 'known-limitations-section', name)
+
+    def test_an_issue_outside_the_source_fails(self):
+        tree = self.tree()
+        tree.replace('docs/FUZZING.md', 'The default `make fuzz` stops on the #11 and #6 signatures.',
+                     'The default `make fuzz` stops on the #11 and #6 signatures (see #3).')
+        self.assertFails(tree.errors(), 'known-limitations-section', 'docs/FUZZING.md', '3')
+
+    def test_a_changed_title_in_the_source_fails(self):
+        tree = self.tree()
+        data = tree.limitations()
+        data['limitations'][0]['title'] = 'A different title'
+        tree.save_limitations(data)
+        self.assertFails(tree.errors(), 'known-limitations-section', 'docs/QUALIFICATION.md', '#6 title')
+
+    def test_a_changed_impact_in_the_document_fails(self):
+        tree = self.tree()
+        data = tree.limitations()
+        tree.replace('docs/FUZZING.md', data['limitations'][3]['impact'], 'It is fine.')
+        self.assertFails(tree.errors(), 'known-limitations-section', 'docs/FUZZING.md', '#11 impact')
+
+    def test_a_missing_stop_sentence_is_not_found(self):
+        for name in ('docs/QUALIFICATION.md', 'docs/FUZZING.md'):
+            with self.subTest(name=name):
+                tree = self.tree()
+                tree.replace(name, '`make fuzz` stops on the #11 and #6 signatures', '`make fuzz` passes', count=0 if name.endswith('QUALIFICATION.md') else 1)
+                self.assertFails(tree.errors(), 'known-limitations-section', name, NOT_FOUND)
+
+    def test_a_stop_citing_an_unlisted_issue_fails(self):
+        tree = self.tree()
+        tree.replace('docs/FUZZING.md', 'stops on the #11 and #6 signatures.', 'stops on the #11 and #8 signatures.')
+        self.assertFails(tree.errors(), 'known-limitations-section', 'docs/FUZZING.md')
+
+    def test_a_changelog_is_held_to_the_same_source(self):
+        tree = self.tree()
+        tree.write('CHANGELOG.md', '<!-- SPDX-FileCopyrightText: x -->\n# Changelog\n\n## Known limitations\n\n- [#6](x)\n')
+        tree.names.append('CHANGELOG.md')
+        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md')
+
+
+class FuzzRows(Case):
+    def test_a_row_without_the_link_fails(self):
+        tree = self.tree()
+        tree.replace('docs/QUALIFICATION.md', '`make fuzz` (see [Known limitations](#known-limitations)) |', '`make fuzz` |')
+        self.assertFails(tree.errors(), 'fuzz-row-limits', 'must link to #known-limitations')
+
+    def test_a_row_without_the_stop_fails(self):
+        tree = self.tree()
+        tree.sub('docs/QUALIFICATION.md', r'\. The default `make fuzz` stops on the #11 and #6 signatures, so it is not a passing result for the two tool-call targets', '')
+        self.assertFails(tree.errors(), 'fuzz-row-limits', 'stops on the #N and #N signatures')
+
+    def test_the_tool_call_row_must_also_state_the_stop(self):
+        tree = self.tree()
+        tree.sub('docs/QUALIFICATION.md', r'but the default `make fuzz` stops on the #11 and #6 signatures and has no', 'and has no')
+        self.assertFails(tree.errors(), 'fuzz-row-limits', 'stops on the #N and #N signatures')
+
+    def test_no_make_fuzz_row_is_not_found(self):
+        tree = self.tree()
+        text = '\n'.join(line.replace('`make fuzz`', '`make  fuzz`') if line.startswith('|') else line
+                         for line in tree.read('docs/QUALIFICATION.md').splitlines()) + '\n'
+        tree.write('docs/QUALIFICATION.md', text)
+        self.assertFails(tree.errors(), 'fuzz-row-limits', NOT_FOUND)
+
+
+class BaselineTable(Case):
+    def test_a_missing_target_row_fails(self):
+        tree = self.tree()
+        tree.sub('docs/FUZZING.md', r'\| tool-call-ref \|[^\n]*\n', '')
+        self.assertFails(tree.errors(), 'fuzz-baseline-table', 'differ from TARGETS')
+
+    def test_an_extra_row_fails(self):
+        tree = self.tree()
+        tree.replace('docs/FUZZING.md', '| tool-call-ref | none', '| other | none | none | none | none | none | none |\n| tool-call-ref | none')
+        self.assertFails(tree.errors(), 'fuzz-baseline-table', 'differ from TARGETS')
+
+    def test_a_target_without_a_baseline_must_say_none(self):
+        tree = self.tree()
+        tree.replace('docs/FUZZING.md', '| tool-call | none | none | none | none | none | none |',
+                     '| tool-call | 10,000 | none | none | none | none | none |')
+        self.assertFails(tree.errors(), 'fuzz-baseline-table', 'tool-call has no baseline report', 'none')
+
+    def test_a_target_with_a_baseline_must_link_it(self):
+        tree = self.tree()
+        tree.replace('docs/FUZZING.md', '| [json](qualification/fuzz-json-linux-x86_64.json) |', '| json |')
+        self.assertFails(tree.errors(), 'fuzz-baseline-table', 'json has a baseline report')
+
+    def test_a_target_with_a_baseline_must_not_say_none(self):
+        tree = self.tree()
+        tree.replace('docs/FUZZING.md', '| 10,021 | 3,799 | 86 | 0 | 0 | 0 |', '| none | 3,799 | 86 | 0 | 0 | 0 |')
+        self.assertFails(tree.errors(), 'fuzz-baseline-table', 'json has a baseline report but its row says none')
+
+    def test_a_new_baseline_report_requires_a_linked_row(self):
+        tree = self.tree()
+        shutil.copy(tree.root / 'docs/qualification/fuzz-json-linux-x86_64.json',
+                    tree.root / 'docs/qualification/fuzz-tool-call-linux-x86_64.json')
+        self.assertFails(tree.errors(), 'fuzz-baseline-table', 'tool-call has a baseline report')
+
+    def test_a_renamed_heading_is_not_found(self):
+        tree = self.tree()
+        tree.replace('docs/FUZZING.md', '### Recorded 10,000-mutation baselines', '### Baselines')
+        self.assertFails(tree.errors(), 'fuzz-baseline-table', NOT_FOUND)
+
+
+class ArchivedEvidence(Case):
+    def test_a_paragraph_without_the_commit_fails(self):
+        tree = self.tree()
+        tree.sub('docs/QUALIFICATION.md', r'This section records the local integration at `66b3756`, which', 'This section records the local integration, which')
+        tree.sub('docs/QUALIFICATION.md', r'`66b3756` by this record only', 'this record only')
+        self.assertFails(tree.errors(), 'archived-evidence', 'does not name commit 66b3756776a0')
+
+    def test_a_rebound_report_fails(self):
+        tree = self.tree()
+        path = 'docs/qualification/resources-stage2-linux-x86_64.json'
+        tree.replace(path, '66b3756776a072af1889596ae98a5faa5a50cea6', 'ba2a35cc3ab655cf377fade556d3e0c066cd633c')
+        self.assertFails(tree.errors(), 'archived-evidence', 'ba2a35cc3ab6')
+
+    def test_a_report_without_a_commit_must_say_so(self):
+        tree = self.tree()
+        tree.replace('docs/QUALIFICATION.md', 'records no source commit', 'was measured')
+        self.assertFails(tree.errors(), 'archived-evidence', 'recovery-bench-stage2', 'records no source commit')
+
+    def test_no_archived_evidence_paragraph_is_not_found(self):
+        tree = self.tree()
+        tree.sub('docs/QUALIFICATION.md', r'\]\(qualification/', '](qualifications/', count=0)
+        self.assertFails(tree.errors(), 'archived-evidence', NOT_FOUND)
+
+    def test_a_missing_report_fails(self):
+        tree = self.tree()
+        (tree.root / 'docs/qualification/resources-stage2-linux-x86_64.json').unlink()
+        self.assertFails(tree.errors(), 'archived-evidence', 'unreadable')
+
+
+class Stage2Heading(Case):
+    def test_an_unlabelled_heading_fails(self):
+        tree = self.tree()
+        tree.replace('docs/QUALIFICATION.md', '## Historical: Stage 2 record bound to `66b3756`', '## Stage 2 local integration record')
+        self.assertFails(tree.errors(), 'stage2-heading', 'Historical')
+
+    def test_a_heading_bound_to_another_commit_fails(self):
+        tree = self.tree()
+        tree.replace('docs/QUALIFICATION.md', '## Historical: Stage 2 record bound to `66b3756`', '## Historical: Stage 2 record bound to `699d9ff`')
+        self.assertFails(tree.errors(), 'stage2-heading', '699d9ff')
+
+    def test_a_missing_stage2_section_is_not_found(self):
+        tree = self.tree()
+        tree.replace('docs/QUALIFICATION.md', '## Historical: Stage 2 record bound to `66b3756`', '## Archived record')
+        self.assertFails(tree.errors(), 'stage2-heading', NOT_FOUND)
+
+
+class WindowsRun(Case):
+    def test_a_claim_without_a_run_fails(self):
+        tree = self.tree()
+        tree.sub('docs/QUALIFICATION.md', r'\[Verify run 36702475819\]\([^)]*\)', 'a hosted run')
+        self.assertFails(tree.errors(), 'windows-run', 'Verify run N')
+
+    def test_a_label_that_differs_from_the_link_fails(self):
+        tree = self.tree()
+        tree.replace('docs/QUALIFICATION.md', '[Verify run 36702475819]', '[Verify run 36702475818]')
+        self.assertFails(tree.errors(), 'windows-run', 'matching actions/runs/N')
+
+    def test_a_claim_without_the_commit_fails(self):
+        tree = self.tree()
+        tree.replace('docs/QUALIFICATION.md', 'dc23bc81bebacef95f2b84d29dfd20031fdcd44c', 'dc23bc8')
+        self.assertFails(tree.errors(), 'windows-run', 'full commit')
+
+    def test_no_windows_sentence_is_not_found(self):
+        tree = self.tree()
+        tree.replace('docs/QUALIFICATION.md', 'windows-engines', 'windows', count=0)
+        self.assertFails(tree.errors(), 'windows-run', NOT_FOUND)
+
+
+ABSENT = (
+    # (rule, document, regex matching the text the rule reads, replacement without the fact)
+    ('release-set', 'docs/RELEASE.md', r'The release set is six crates', 'The release set has crates'),
+    ('release-set', 'docs/QUALIFICATION.md', r'Six Cargo-verified archives', 'Cargo-verified archives'),
+    ('release-set', 'docs/QUALIFICATION.md', r'all six downloadable archives', 'the downloadable archives'),
+    ('workspace-version', 'docs/RELEASE.md', r'PurRAssist 0\.1\.0 has an implemented scope', 'PurRAssist has an implemented scope'),
+    ('workspace-version', 'docs/IMPLEMENTATION.md', r'Workspace version 0\.1\.0;', 'Workspace version:'),
+    ('workspace-version', 'docs/QUALIFICATION.md', r'implemented 0\.1\.0 capability', 'implemented capability'),
+    ('workspace-version', 'README.md', r'not yet tagged\s+`rust-v0\.1\.0`', 'untagged'),
+    ('workspace-version', 'SECURITY.md', r'not yet tagged\s+`rust-v0\.1\.0`', 'untagged'),
+    ('workspace-version', 'docs/IMPLEMENTATION.md', r'not yet tagged\s+`rust-v0\.1\.0`', 'untagged'),
+    ('workspace-version', 'docs/QUALIFICATION.md', r'not yet tagged\s+`rust-v0\.1\.0`', 'untagged'),
+    ('workspace-version', 'docs/RELEASE.md', r'not yet tagged\s+`rust-v0\.1\.0`', 'untagged'),
+    ('fuzz-targets', 'docs/FUZZING.md', r'across\s+ten\s+`purrassist-core`\s+targets', 'across the targets'),
+    ('fuzz-targets', 'docs/FUZZING.md', r'all ten targets', 'every target'),
+    ('fuzz-targets', 'docs/QUALIFICATION.md', r'Ten targets \(including', 'Targets, including'),
+    ('fuzz-targets', 'docs/QUALIFICATION.md', r'the ten mutation targets', 'the mutation targets'),
+    ('fuzz-targets', 'README.md', r'ten coverage-guided targets', 'coverage-guided probes'),
+    ('fuzz-targets', 'Makefile', r'for target in', 'for each in'),
+    ('fuzz-targets', 'Makefile', r'TARGET selects one of', 'TARGET selects'),
+    ('fuzz-targets', 'Makefile', r'across all ten targets', 'across the targets'),
+    ('receipt-version', 'docs/QUALIFICATION.md', r'receipt wire v3', 'receipt wire format'),
+    ('receipt-version', 'crates/core/src/contract.rs', r'RECEIPT_VERSION: u32 = 3;', 'RECEIPT_REVISION: u32 = 3;'),
+    ('dialect-count', 'README.md', r'Twelve dialects ship', 'These dialects ship'),
+    ('fuzz-baseline-table', 'docs/FUZZING.md', r'### Recorded 10,000-mutation baselines', '### Baselines'),
+    ('fuzz-row-limits', 'docs/QUALIFICATION.md', r'`make fuzz`', '`make  fuzz`'),
+)
+
+
+class FactSentencesAreRequired(Case):
+    def test_every_fact_fails_when_its_sentence_is_absent(self):
+        for rule, name, pattern, replacement in ABSENT:
+            with self.subTest(rule=rule, name=name, pattern=pattern):
+                tree = self.tree()
+                tree.sub(name, pattern, replacement, count=0)
+                self.assertFails(tree.errors(), rule, NOT_FOUND)
+
+    def test_a_fact_sentence_wrapped_across_lines_is_still_read(self):
+        tree = self.tree()
+        tree.sub('docs/RELEASE.md', r'The release set is six crates', 'The release set is\nfive\ncrates')
+        self.assertFails(tree.errors(), 'release-set', "'five'")
+
+
+if __name__ == '__main__':
+    unittest.main()

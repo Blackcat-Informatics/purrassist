@@ -251,6 +251,30 @@ def check_evaluation_manifest(root):
     return errors
 
 
+# Tracked Markdown under these prefixes is upstream or generated test data and carries no header.
+MARKDOWN_ATTRIBUTION_EXEMPT = ('crates/core/tests/data/',)
+
+
+def has_attribution(text):
+    """Whether the first five lines carry both SPDX tags (comment syntax is not prescribed)."""
+    header = '\n'.join(text.splitlines()[:5])
+    return 'SPDX-License-Identifier:' in header and 'SPDX-FileCopyrightText:' in header
+
+
+def tracked_markdown(root):
+    """Every tracked `*.md` file (git's index, so `.stage/` and ignored files are out) except
+    the exempt test-data prefixes, as sorted repository-relative names."""
+    listing = subprocess.check_output(['git', 'ls-files', '-z', '--', '*.md'], cwd=root, text=True)
+    return sorted(name for name in listing.split('\0')
+                  if name and not name.startswith(MARKDOWN_ATTRIBUTION_EXEMPT))
+
+
+def check_markdown_attribution(root, names):
+    """Report each named Markdown file that lacks the SPDX header."""
+    return [f'{name}: missing attribution' for name in names
+            if not has_attribution((root / name).read_text())]
+
+
 DERIVE_EXAMPLE_COPIES = ['README.md', 'crates/purrassist/README.md']
 DERIVE_EXAMPLE_DOCTESTED = 'crates/purrassist/README.md'
 DERIVE_EXAMPLE_BEGIN = '<!-- derive-example:begin -->\n'
@@ -306,9 +330,9 @@ def main():
                 continue
             if '/tests/data/' in str(path) or '/schema/metaschemas/' in str(path):
                 continue
-            header = '\n'.join(path.read_text().splitlines()[:5])
-            if 'SPDX-License-Identifier:' not in header or 'SPDX-FileCopyrightText:' not in header:
+            if not has_attribution(path.read_text()):
                 errors.append(f'{path.relative_to(ROOT)}: missing attribution')
+    errors.extend(check_markdown_attribution(ROOT, tracked_markdown(ROOT)))
 
     for directory in ['crates/core/src/schema/metaschemas', 'crates/core/tests/data/json-schema', 'crates/core/tests/data/markdown', 'crates/core/tests/data/test262']:
         root = ROOT / directory

@@ -2,7 +2,9 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Security
 
-PurRAssist is pre-release and has no supported published release yet.
+PurRAssist 0.1.0 is merged to `main` and not yet tagged `rust-v0.1.0`. Only
+`0.0.0` name reservations exist on crates.io, so there is no supported published
+release yet.
 
 Report vulnerabilities privately to <security@blackcatinformatics.ca>, with
 `SECURITY` and `PurRAssist` in the subject. Include affected crates, revisions,

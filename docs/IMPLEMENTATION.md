@@ -2,9 +2,10 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
-Status: accepted implementation delivered on the issue branch. Executable
+Status: merged to `main` (PR #2, `699d9ff`); tool-call recovery (#3, #8) and
+`purrassist-derive` (#15) merged since; not yet tagged `rust-v0.1.0`. Executable
 qualification and its limits are recorded in `QUALIFICATION.md`; registry
-publication acceptance follows review and merge as specified in `RELEASE.md`.
+publication acceptance follows the procedure in `RELEASE.md`.
 
 PurRAssist recovers intent from imperfect AI output and requests. Every result
 combines its answer with evidence, provenance, losses, and explicit inferences.
@@ -99,11 +100,17 @@ Core operations are synchronous and resumable around supplied helper responses.
 ## Required delivery sequence
 
 1. Foundation: contracts, evidence, budgets, repository/dependency gates, fixtures.
+   Delivered.
 2. Recovery: JSON/schema, matching, semantics, candidate search and effort.
+   Delivered.
 3. Documents/files: Markdown, syntax, edit planning/application, recovery, undo.
+   Delivered.
 4. Unified surfaces: helpers, CLI, MCP, executable end-to-end examples.
+   Delivered.
 5. Qualification: conformance, fuzzing, portability, performance, packaging,
-   documentation, registry setup, and verified publication.
+   documentation, registry setup, and verified publication. Qualification
+   evidence is recorded in `QUALIFICATION.md`; registry setup is partly done
+   (see `RELEASE.md`); verified publication is open, as 0.1.0 is not yet tagged.
 
 Every stage remains required. A passing subset does not qualify the release.
 
