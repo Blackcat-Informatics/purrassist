@@ -14,8 +14,7 @@ No changes yet.
 ## [0.1.0] - unreleased
 
 The first release: six crates, one recovery engine, and three ways to use it.
-It is not yet tagged `rust-v0.1.0`; the date above is set when it is tagged. The
-[release procedure](docs/RELEASE.md) records the publication gates.
+The [release procedure](docs/RELEASE.md) records the publication gates.
 
 ### Highlights
 
@@ -38,7 +37,7 @@ It is not yet tagged `rust-v0.1.0`; the date above is set when it is tagged. The
 
 ### Crates
 
-Published in this order:
+Release order:
 
 | Crate | Role |
 |---|---|
@@ -60,8 +59,9 @@ Published in this order:
   Soundex, alias and contextual path matching, explicit semantic domain rules,
   and caller-supplied embedding similarity. No model is required, loaded or
   contacted by default.
-- **Evidence receipts**: every result carries its sources, spans, transforms,
-  alternatives, losses and inferences. The receipt wire format is described by
+- **Evidence receipts**: every recovery, matching, Markdown and edit-plan
+  result carries its sources, spans, transforms, alternatives, losses and
+  inferences. The receipt wire format is described by
   [receipt.schema.json](docs/schema/receipt.schema.json).
 - **Markdown and edits**: source-preserving CommonMark/GFM parsing and
   rendering, structural section, list, table and reference operations, bounded

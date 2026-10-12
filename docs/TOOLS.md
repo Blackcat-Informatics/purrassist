@@ -20,7 +20,8 @@ read no file. Arguments are validated against the tool's input schema before
 its handler runs; the result is validated against its output schema in the
 tests. The CLI and MCP results of every tool are the same, as the test
 `every_registry_entry_has_a_fixture_validated_through_cli_and_mcp` runs each
-tool through both with a fixture and compares the output byte for byte. The
+tool through both with a fixture and compares their JSON serializations for
+equality. The
 convenience commands `decode`, `validate`, `match` and `recover-tool-calls` are
 documented under the tool each is related to.
 

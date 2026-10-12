@@ -2,7 +2,7 @@
   "assets": [
     {
       "name": "social-preview",
-      "purpose": "GitHub social preview image (1280x640), uploaded manually in the repository settings; never built or used at build or runtime.",
+      "purpose": "GitHub social preview image (1280x640), for manual upload in the repository settings; never built or used at build or runtime.",
       "source": {
         "path": "docs/social-preview.svg",
         "sha256": "c72409460953bdc75d580f82b72d171cbb8131f0b3fc7d80e38c4164097cac26"
