@@ -98,10 +98,10 @@ that can obtain a `purrassist-derive` publishing token. Without an environment,
 any job that a later edit of `publish.yml` grants `id-token: write` could too.
 `scripts/check-release.py` therefore holds `publish.yml` to a closed shape:
 exactly the `gate` and `publish` jobs, no YAML anchors or aliases, no backslash
-escapes, no `!!`, verbatim or named YAML tags, no block-scalar permissions, no
-`write-all` anywhere outside a comment, and every `id-token` key (block, inline
-or quoted) inside the `publish` job. Changing that shape needs a matching change
-to the check.
+escapes, no `!!`, verbatim or letter-named YAML tags, no block-scalar
+permissions, no `write-all` anywhere outside a comment, and every `id-token` key
+(block, inline or quoted) inside the `publish` job. Changing that shape needs a
+matching change to the check.
 
 Because a repository, workflow or environment rename would silently break
 trusted publishing, re-confirm all six through the crates.io API immediately
