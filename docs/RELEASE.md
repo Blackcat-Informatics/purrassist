@@ -96,9 +96,11 @@ The owner decided to keep it without an environment. Today only the `publish`
 job, which runs in `crates-io`, has `id-token: write`, so it is the only job
 that can obtain a `purrassist-derive` publishing token. Without an environment,
 any job that a later edit of `publish.yml` grants `id-token: write` could too,
-so review that permission whenever `publish.yml` changes. Because a repository, workflow or environment rename would
-silently break trusted publishing, re-confirm all six through the crates.io API
-immediately before tagging.
+so review that permission whenever `publish.yml` changes.
+
+Because a repository, workflow or environment rename would silently break
+trusted publishing, re-confirm all six through the crates.io API immediately
+before tagging.
 
 A trusted publisher lets `publish.yml`'s `publish` job mint a short-lived
 registry token via GitHub OIDC (`permissions: id-token: write`) instead of a stored
