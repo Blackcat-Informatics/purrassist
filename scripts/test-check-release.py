@@ -156,6 +156,14 @@ class WorkflowValidation(unittest.TestCase):
         self.check_copy(anchored, 'must not use YAML anchors or aliases')
         self.check_copy(self.gate_with('    permissions: *oidc\n'), 'must not use YAML anchors or aliases')
 
+    def test_escapes_tags_and_block_scalar_permissions_fail(self):
+        for permissions in ('    permissions:\n      "id\\x2dtoken": write\n',
+                            '    permissions: !!str write-all\n',
+                            '    permissions: >-\n      write-all\n'):
+            with self.subTest(permissions=permissions):
+                self.check_copy(self.gate_with(permissions),
+                                'must not use escapes, YAML tags or block-scalar permissions')
+
     def test_shell_redirections_are_not_anchors(self):
         self.check_copy(self.gate_with('    # echo done >&2 && true\n'))
 
