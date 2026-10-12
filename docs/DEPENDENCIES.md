@@ -321,3 +321,15 @@ library directly. The harness depends on core; core has no dependency on the
 harness. Adding its `rlib` output beside the browser `cdylib` adds no third-party
 or published-package dependency. Artifact reports retain the tested engine's
 logical `purrassist-core` label while recording the measured module identity.
+
+The repository social-preview image `docs/social-preview.png` is rendered by hand
+from `docs/social-preview.svg`; `docs/assets.json` registers both digests, the
+exact render command, the `rsvg-convert` (librsvg, `LGPL-2.1-or-later`) version
+and the Noto Sans (`OFL-1.1`) font version, upstream project and font-file
+digests. Both tools are registered in `vendor/tooling.json` with vendored
+license notices. They are justified only as manual asset-rendering tools: the
+PNG is a committed binary, so neither tool is invoked at build or runtime,
+by `make check`, or by any workflow, and neither is linked or packaged into any
+crate. Rendering is byte-reproducible only under the recorded versions, so a
+re-render must reproduce the registered PNG digest. The PNG's license is
+recorded by the REUSE-style sidecar `docs/social-preview.png.license`.

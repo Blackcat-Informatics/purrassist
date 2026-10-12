@@ -275,6 +275,35 @@ def check_markdown_attribution(root, names):
             if not has_attribution((root / name).read_text())]
 
 
+# Binary artifacts cannot carry a comment header, so each one is attributed by a
+# REUSE-style `<name>.license` sidecar holding the same two SPDX tags. Tracked
+# binaries under the exempt test-data prefixes are upstream data and carry none.
+BINARY_SUFFIXES = ('.png', '.jpg', '.jpeg', '.gif', '.ico', '.pdf', '.wasm', '.gz', '.zip', '.tar')
+BINARY_ATTRIBUTION_EXEMPT = ('crates/core/tests/data/',)
+REQUIRED_BINARY_ATTRIBUTION = ('docs/social-preview.png',)
+
+
+def tracked_binaries(root):
+    """Every tracked binary artifact (git's index) outside the exempt prefixes, plus the
+    binaries that must always be attributed, as sorted repository-relative names."""
+    listing = subprocess.check_output(['git', 'ls-files', '-z'], cwd=root, text=True)
+    tracked = {name for name in listing.split('\0')
+               if name.endswith(BINARY_SUFFIXES) and not name.startswith(BINARY_ATTRIBUTION_EXEMPT)}
+    return sorted(tracked | set(REQUIRED_BINARY_ATTRIBUTION))
+
+
+def check_binary_attribution(root, names):
+    """Report each named binary whose `.license` sidecar is missing or lacks the SPDX tags."""
+    errors = []
+    for name in names:
+        sidecar = root / f'{name}.license'
+        if not sidecar.is_file():
+            errors.append(f'{name}: missing attribution sidecar {name}.license')
+        elif not has_attribution(sidecar.read_text()):
+            errors.append(f'{name}: sidecar {name}.license lacks the SPDX tags')
+    return errors
+
+
 # Blocks that a README repeats byte for byte from the doctested facade README.
 # `three-interfaces-rust` is the Rust snippet inside the root README's
 # `three-interfaces` block (the rest of that block is not a copy).
@@ -339,6 +368,7 @@ def main():
             if not has_attribution(path.read_text()):
                 errors.append(f'{path.relative_to(ROOT)}: missing attribution')
     errors.extend(check_markdown_attribution(ROOT, tracked_markdown(ROOT)))
+    errors.extend(check_binary_attribution(ROOT, tracked_binaries(ROOT)))
 
     for directory in ['crates/core/src/schema/metaschemas', 'crates/core/tests/data/json-schema', 'crates/core/tests/data/markdown', 'crates/core/tests/data/test262']:
         root = ROOT / directory

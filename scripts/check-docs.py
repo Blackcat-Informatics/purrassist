@@ -42,6 +42,7 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import struct
 import subprocess
 import sys
 import tomllib
@@ -105,6 +106,9 @@ INTERFACES_END = '<!-- three-interfaces:end -->\n'
 INTERFACE_HEADINGS = ('### Rust crate', '### MCP server', '### CLI')
 CLI_PACKAGE = 'purrassist-cli'
 REGISTRY_PROJECT = 'purrassist'
+PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
+SOCIAL_WIDTH, SOCIAL_HEIGHT, SOCIAL_MAX_BYTES = 1280, 640, 1_000_000
+SOCIAL_FONT = 'Noto Sans'
 # The test that backs the sentence "the CLI and MCP results are identical".
 EQUIVALENCE_TEST = 'every_registry_entry_has_a_fixture_validated_through_cli_and_mcp'
 PROTOCOL_TESTS = 'crates/cli/tests/protocol.rs'
@@ -1002,6 +1006,35 @@ def check_cli_package(docs, report, token_owner, packages):
                                f'(the owner comes from the workspace repository URL)')
 
 
+def check_social_preview(root, report):
+    """The social preview asset: PNG dimensions and size, registry digests, one font family."""
+    rule = 'social-preview'
+    registry = 'docs/assets.json'
+    entries = json.loads((root / registry).read_text())['assets']
+    entry = next((item for item in entries if item.get('name') == 'social-preview'), None)
+    if entry is None:
+        report.add(rule, registry, 'no "social-preview" asset is registered')
+        return
+    source, output = entry['source']['path'], entry['output']['path']
+    svg, png = (root / source).read_bytes(), (root / output).read_bytes()
+    header = struct.unpack('>II', png[16:24]) if png[:8] == PNG_SIGNATURE and png[12:16] == b'IHDR' else None
+    if header != (SOCIAL_WIDTH, SOCIAL_HEIGHT):
+        report.add(rule, output, f'IHDR is {header}, expected a PNG of {SOCIAL_WIDTH}x{SOCIAL_HEIGHT}')
+    if len(png) >= SOCIAL_MAX_BYTES:
+        report.add(rule, output, f'{len(png)} bytes is not under {SOCIAL_MAX_BYTES}')
+    for path, data, recorded in ((source, svg, entry['source']['sha256']), (output, png, entry['output']['sha256'])):
+        if hashlib.sha256(data).hexdigest() != recorded:
+            report.add(rule, path, f'sha256 differs from {registry}; re-render and re-register it')
+    text = svg.decode()
+    families = [a or b for a, b in re.findall(r'font-family\s*=\s*(?:"([^"]*)"|\'([^\']*)\')', text)]
+    families += [value.strip().strip('"\'') if re.fullmatch(r'\s*(["\']).*\1\s*', value) else value.strip()
+                 for value in re.findall(r'font-family\s*:\s*([^;}<]*)', text)]
+    if not families or any(family != SOCIAL_FONT for family in families):
+        report.add(rule, source, f'font-family must be exactly {SOCIAL_FONT!r} with no fallback list; found {families}')
+    if entry['font']['family'] != SOCIAL_FONT:
+        report.add(rule, registry, f'font family must be {SOCIAL_FONT!r}')
+
+
 def markdown_names(root):
     """Tracked `*.md` files in scope, from git's index."""
     listing = subprocess.check_output(['git', 'ls-files', '-z', '--', '*.md'], cwd=root, text=True)
@@ -1044,6 +1077,7 @@ def check(root, names):
         lambda: check_release_reservations(docs, report, release.RELEASE_ORDER),
         lambda: check_release_qualification(docs, report),
         lambda: check_readme_changelog(docs, report),
+        lambda: check_social_preview(root, report),
     )
     if packages is not None:
         rules += (

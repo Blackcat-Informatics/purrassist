@@ -1124,6 +1124,82 @@ class DocumentHelpers(Case):
         self.assertEqual(CD.tool_names('- **`a_b`**: x\n  - **`no`**\n- **`c`**: y\n'), ['a_b', 'c'])
 
 
+class SocialPreview(Case):
+    RULE = 'social-preview'
+
+    def tree(self):
+        tree = Tree(self)
+        for name in ('docs/assets.json', 'docs/social-preview.svg', 'docs/social-preview.png'):
+            tree.detach(name)
+        return tree
+
+    def registry(self, tree, mutate):
+        data = json.loads(tree.read('docs/assets.json'))
+        mutate(data['assets'][0])
+        tree.write('docs/assets.json', json.dumps(data))
+
+    def png(self, tree, data):
+        (tree.root / 'docs/social-preview.png').write_bytes(data)
+
+    def test_the_committed_asset_passes(self):
+        self.assertNoRule(self.tree().errors(), self.RULE)
+
+    def test_wrong_dimensions_fail(self):
+        tree = self.tree()
+        png = bytearray((tree.root / 'docs/social-preview.png').read_bytes())
+        png[16:24] = (1200).to_bytes(4, 'big') + (630).to_bytes(4, 'big')
+        self.png(tree, bytes(png))
+        self.assertFails(tree.errors(), self.RULE, 'IHDR is (1200, 630)')
+
+    def test_a_non_png_fails(self):
+        tree = self.tree()
+        self.png(tree, b'not a png at all, but long enough to hold a header')
+        self.assertFails(tree.errors(), self.RULE, 'IHDR is None')
+
+    def test_an_oversize_png_fails(self):
+        tree = self.tree()
+        png = (tree.root / 'docs/social-preview.png').read_bytes()
+        self.png(tree, png + b'\0' * CD.SOCIAL_MAX_BYTES)
+        self.assertFails(tree.errors(), self.RULE, 'is not under 1000000')
+
+    def test_a_changed_svg_fails_the_registry_digest(self):
+        tree = self.tree()
+        tree.append('docs/social-preview.svg', '<!-- changed -->\n')
+        self.assertFails(tree.errors(), self.RULE, 'docs/social-preview.svg', 'sha256 differs')
+
+    def test_a_changed_png_fails_the_registry_digest(self):
+        tree = self.tree()
+        png = bytearray((tree.root / 'docs/social-preview.png').read_bytes())
+        png[-1] ^= 1
+        self.png(tree, bytes(png))
+        self.assertFails(tree.errors(), self.RULE, 'docs/social-preview.png', 'sha256 differs')
+
+    def test_a_fallback_font_list_fails(self):
+        tree = self.tree()
+        tree.replace('docs/social-preview.svg', 'font-family="Noto Sans"', 'font-family="Noto Sans, sans-serif"')
+        self.assertFails(tree.errors(), self.RULE, 'no fallback list')
+
+    def test_another_font_family_fails(self):
+        tree = self.tree()
+        tree.replace('docs/social-preview.svg', 'font-family="Noto Sans"', "font-family='Arial'")
+        self.assertFails(tree.errors(), self.RULE, 'no fallback list')
+
+    def test_a_css_font_family_with_a_fallback_fails(self):
+        tree = self.tree()
+        tree.append('docs/social-preview.svg', '<style>t { font-family: "Noto Sans", serif; }</style>\n')
+        self.assertFails(tree.errors(), self.RULE, 'no fallback list')
+
+    def test_a_missing_font_family_fails(self):
+        tree = self.tree()
+        tree.replace('docs/social-preview.svg', 'font-family="Noto Sans"', '')
+        self.assertFails(tree.errors(), self.RULE, 'found []')
+
+    def test_an_unregistered_asset_fails(self):
+        tree = self.tree()
+        self.registry(tree, lambda entry: entry.update(name='other'))
+        self.assertFails(tree.errors(), self.RULE, 'no "social-preview" asset')
+
+
 ABSENT = (
     # (rule, document, regex matching the text the rule reads, replacement without the fact)
     ('release-set', 'docs/RELEASE.md', r'The release set is six crates', 'The release set has crates'),

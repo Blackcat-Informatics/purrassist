@@ -314,6 +314,53 @@ class MarkdownAttribution(unittest.TestCase):
         self.assertEqual(AUDIT.check_markdown_attribution(root, names), [])
 
 
+class BinaryAttribution(unittest.TestCase):
+    SIDECAR = ('SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.\n'
+               'SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0\n')
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        (self.root / 'docs').mkdir()
+        (self.root / 'docs/a.png').write_bytes(b'\x89PNG')
+
+    def test_binary_with_a_sidecar_passes(self):
+        (self.root / 'docs/a.png.license').write_text(self.SIDECAR)
+        self.assertEqual(AUDIT.check_binary_attribution(self.root, ['docs/a.png']), [])
+
+    def test_binary_without_a_sidecar_fails_naming_it(self):
+        self.assertEqual(AUDIT.check_binary_attribution(self.root, ['docs/a.png']),
+                         ['docs/a.png: missing attribution sidecar docs/a.png.license'])
+
+    def test_sidecar_missing_a_tag_fails(self):
+        (self.root / 'docs/a.png.license').write_text('SPDX-License-Identifier: MIT\n')
+        self.assertEqual(AUDIT.check_binary_attribution(self.root, ['docs/a.png']),
+                         ['docs/a.png: sidecar docs/a.png.license lacks the SPDX tags'])
+
+    def test_tracked_binaries_are_the_index_minus_test_data_plus_the_required_ones(self):
+        subprocess.run(['git', 'init', '--quiet'], cwd=self.root, check=True)
+        (self.root / 'crates/core/tests/data').mkdir(parents=True)
+        (self.root / 'crates/core/tests/data/x.png').write_bytes(b'x')
+        (self.root / 'docs/notes.md').write_text('x')
+        subprocess.run(['git', 'add', '.'], cwd=self.root, check=True)
+        self.assertEqual(AUDIT.tracked_binaries(self.root),
+                         sorted(['docs/a.png', *AUDIT.REQUIRED_BINARY_ATTRIBUTION]))
+
+    def test_the_social_preview_must_be_attributed_even_when_untracked(self):
+        subprocess.run(['git', 'init', '--quiet'], cwd=self.root, check=True)
+        names = AUDIT.tracked_binaries(self.root)
+        self.assertIn('docs/social-preview.png', names)
+        self.assertEqual(AUDIT.check_binary_attribution(self.root, ['docs/social-preview.png']),
+                         ['docs/social-preview.png: missing attribution sidecar docs/social-preview.png.license'])
+
+    def test_current_repository_binaries_are_attributed(self):
+        root = Path(__file__).resolve().parent.parent
+        names = AUDIT.tracked_binaries(root)
+        self.assertIn('docs/social-preview.png', names)
+        self.assertEqual(AUDIT.check_binary_attribution(root, names), [])
+
+
 class EvaluationManifest(unittest.TestCase):
     """`check_evaluation_manifest` over a synthetic repository tree."""
 
