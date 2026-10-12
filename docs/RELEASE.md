@@ -59,7 +59,7 @@ crates.io (HTTP 200 is required for every crate) or when the release set is
 not owned identically. The preflight cannot see trusted-publisher
 configuration, which is not verifiable unauthenticated; confirming it stays a
 manual step. Re-confirm all six through the crates.io API immediately before
-tagging, and do not tag until `purrassist-derive` is configured.
+tagging; each must match the values recorded in "Trusted publishing".
 
 ## Publish preflight
 
@@ -96,7 +96,8 @@ The owner decided to keep it without an environment. Today only the `publish`
 job, which runs in `crates-io`, has `id-token: write`, so it is the only job
 that can obtain a `purrassist-derive` publishing token. Without an environment,
 any job that a later edit of `publish.yml` grants `id-token: write` could too,
-so review that permission whenever `publish.yml` changes.
+so `scripts/check-release.py` rejects an `id-token` permission anywhere in
+`publish.yml` outside the `publish` job.
 
 Because a repository, workflow or environment rename would silently break
 trusted publishing, re-confirm all six through the crates.io API immediately

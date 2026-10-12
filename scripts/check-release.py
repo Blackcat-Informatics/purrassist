@@ -143,6 +143,14 @@ def validate_publish_workflow(path=None):
         if not re.search(r'^\s*needs:\s*gate\s*$', publish_job_body, re.M):
             errors.append('publish job must depend on a gate job that checks release qualification')
 
+    # The purrassist-derive trusted publisher names no environment (an owner
+    # decision recorded in docs/RELEASE.md), so the only thing keeping its
+    # registry token inside the crates-io job is that no other job, and not
+    # the workflow as a whole, may request an OIDC token.
+    id_tokens = len(re.findall(r'^\s*id-token:', text, re.M))
+    if id_tokens != len(re.findall(r'^\s*id-token:', publish_job_body, re.M)):
+        errors.append('only the publish job may declare an id-token permission')
+
     if 'release-qualification.yml' not in text:
         errors.append('publish.yml must gate on release-qualification.yml for the same commit')
 

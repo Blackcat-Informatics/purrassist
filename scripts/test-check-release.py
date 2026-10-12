@@ -91,6 +91,22 @@ class WorkflowValidation(unittest.TestCase):
         CR.validate_publish_workflow()
         self.check_copy(PUBLISH.read_text(encoding='utf-8'))
 
+    def test_id_token_in_another_job_fails(self):
+        text = PUBLISH.read_text(encoding='utf-8')
+        gate = '\n  gate:\n'
+        self.assertIn(gate, text)
+        head, _, rest = text.partition(gate)
+        line, _, body = rest.partition('\n')
+        self.check_copy(head + gate + line + '\n    permissions:\n      id-token: write\n' + body,
+                        'only the publish job may declare an id-token permission')
+
+    def test_workflow_wide_id_token_fails(self):
+        text = PUBLISH.read_text(encoding='utf-8')
+        self.assertIn('permissions:\n  contents: read\n', text)
+        self.check_copy(text.replace('permissions:\n  contents: read\n',
+                                     'permissions:\n  contents: read\n  id-token: write\n', 1),
+                        'only the publish job may declare an id-token permission')
+
     def test_preflight_removed_fails(self):
         before, _, after = _split_preflight(PUBLISH.read_text(encoding='utf-8'))
         self.check_copy(before + after, f'must have a "{CR.PREFLIGHT_STEP}" step')
