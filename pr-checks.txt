@@ -1,0 +1,10 @@
+$ stagectl pr-checks 20
+SUCCESS    native (macos-14)
+SUCCESS    native (ubuntu-24.04)
+SUCCESS    msrv
+FAILURE    windows-engines
+SUCCESS    wasm
+FAILURE    fuzz
+SUCCESS    corpus
+SUCCESS    qualification
+state: fail

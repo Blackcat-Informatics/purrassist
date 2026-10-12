@@ -1,0 +1,2630 @@
+{
+  "paths": [
+    {
+      "ref": "docs/IMPLEMENTATION.md",
+      "path": "/home/paudley/Active/purrassist/docs/IMPLEMENTATION.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 145,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "534f862e3 build(release): register purrassist-derive for packaging, audit and docs (#15)",
+        "5398ba175 fix(tool_call): report every length stop as finish_reason \"length\"",
+        "ce66b7baf docs(tool_call): tighten the public surface and finish the doc wiring",
+        "b3e16ab46 feat(tool_call): bare-json.v1 dialect",
+        "937091368 feat(tool_call): harmony.v1 dialect",
+        "e8c8072ed feat(tool_call): anthropic-tool-use.v1 dialect",
+        "33a6ce87b feat(tool_call): kimi-k2.v1 dialect",
+        "cf75220d6 feat(tool_call): deepseek-v3.v1 dialect",
+        "0ec3f3a53 feat(tool_call): deepseek-v3.1.v1 dialect",
+        "ca1123604 feat(tool_call): mistral-v11.v1 dialect"
+      ]
+    },
+    {
+      "ref": "docs/QUALIFICATION.md",
+      "path": "/home/paudley/Active/purrassist/docs/QUALIFICATION.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 251,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "6cbb6282f docs(derive): near-miss nested keys, patch compatibility rule, qualification evidence (#15)",
+        "534f862e3 build(release): register purrassist-derive for packaging, audit and docs (#15)",
+        "381306500 fix(tool-call): closers inside values are judged by what follows, never by layout (adversary pass 6, F14, F19)",
+        "fecda8934 test: split make check into focused tests; corpus and fuzz get their own lanes",
+        "75c8f1134 fix(tool-call): keep stray closers and call bodies out of values and content (adversary pass 5, F13\u2013F18)",
+        "396133344 feat(tool-call): weigh closer text and call markup inside values by evidence",
+        "73e6a137c fix(tool-call): never let a repair override a reading that needs none",
+        "b605ce55a fix(tool_call): resynchronize past any failing call, read misspelled tokens, cut calls at opening reasoning markers",
+        "7a5a6c2d5 fix(tool_call): read written markup, resynchronize groups, keep rejected fences out of prose",
+        "7c919c9bc feat(tool_call): type unmodeled-schema XML text by the exact schema"
+      ]
+    },
+    {
+      "ref": "README.md",
+      "path": "/home/paudley/Active/purrassist/README.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 431,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "d0a99e991 test(derive): close remaining evidence and doc gaps (#15)",
+        "534f862e3 build(release): register purrassist-derive for packaging, audit and docs (#15)",
+        "69c6b5cd7 fix(tool-call): strict choice counts rejected attempts and survives reading merges (#8)",
+        "28b2b3a05 feat(tool-call): strict forced tool choice \u2014 exactly one call, no content, no reasoning (#8)",
+        "5398ba175 fix(tool_call): report every length stop as finish_reason \"length\"",
+        "ce66b7baf docs(tool_call): tighten the public surface and finish the doc wiring",
+        "4d1592023 fix(cli): derive the recover-tool-calls exit code from what is usable",
+        "efa99f1d1 feat(tool_call): report unparsed call markup from unsupported or disallowed dialects",
+        "b3e16ab46 feat(tool_call): bare-json.v1 dialect",
+        "937091368 feat(tool_call): harmony.v1 dialect"
+      ]
+    },
+    {
+      "ref": "crates/core/src/matching.rs",
+      "path": "/home/paudley/Active/purrassist/crates/core/src/matching.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 1260,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "227d4ebcb feat(contract): receipt v3 with byte-exact sources and wire-value results",
+        "3246d6579 refactor: consolidate duplicate helpers and enforce strict census",
+        "23caff46d feat: derive every tool surface from one operation registry",
+        "8e360f3c1 fix: make scratch charges independent of pointer width",
+        "974ccac6e feat: publish receipts from a provenance derivation forest",
+        "48d4e942c feat: enforce scratch accounting through budgeted containers",
+        "2e286923d feat: resolve strings through a refinement lattice with protected tokens",
+        "be82a33d2 feat: select strings with explicit ambiguity and evidence",
+        "a95c9b7b8 feat: expose governed alias-aware string matching",
+        "d0fa500e2 feat: propagate caller-owned cancellation through governed engines and tools"
+      ]
+    },
+    {
+      "ref": "crates/core/tests/string_selection.rs",
+      "path": "/home/paudley/Active/purrassist/crates/core/tests/string_selection.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 326,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "227d4ebcb feat(contract): receipt v3 with byte-exact sources and wire-value results",
+        "2e286923d feat: resolve strings through a refinement lattice with protected tokens",
+        "be82a33d2 feat: select strings with explicit ambiguity and evidence"
+      ]
+    },
+    {
+      "ref": "crates/core/tests/matching_quality.rs",
+      "path": "/home/paudley/Active/purrassist/crates/core/tests/matching_quality.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 379,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "2e286923d feat: resolve strings through a refinement lattice with protected tokens"
+      ]
+    },
+    {
+      "ref": "AGENTS.md",
+      "path": "/home/paudley/Active/purrassist/AGENTS.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 32,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "46e9d1a6e feat: establish intent recovery workspace and verification foundation"
+      ]
+    },
+    {
+      "ref": "verify.yml",
+      "path": "/home/paudley/Active/purrassist/verify.yml",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "check-repository.py",
+      "path": "/home/paudley/Active/purrassist/check-repository.py",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "check-release.py",
+      "path": "/home/paudley/Active/purrassist/check-release.py",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "package-workspace.py",
+      "path": "/home/paudley/Active/purrassist/package-workspace.py",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "measure-resources.py",
+      "path": "/home/paudley/Active/purrassist/measure-resources.py",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "fuzz-json.py",
+      "path": "/home/paudley/Active/purrassist/fuzz-json.py",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "check-wasm.py",
+      "path": "/home/paudley/Active/purrassist/check-wasm.py",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "vendor/tooling.json",
+      "path": "/home/paudley/Active/purrassist/vendor/tooling.json",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 166,
+      "licence": "\"license\": \"MIT\",",
+      "commits": [
+        "c1fa81dac build(tooling): repin Node to v26.11.1",
+        "300f7cffe test: make profiling prerequisites explicit and retain startup diagnostics",
+        "22d33135e test: preserve malformed HTML and correct independent email retries",
+        "53f23662a test: generalize guided fuzzing and preserve strict differential evidence",
+        "095776765 build: enforce qualification tooling and archive provenance",
+        "788270396 build: add trusted-publishing release workflow and published-package verification",
+        "24787e1a3 test: compare helper transcripts and browser WASM with native output",
+        "ea50c8965 test: add dependency-free coverage-guided JSON qualification",
+        "b2c9cba01 docs: record clean-commit resource measurements and runtime provenance",
+        "c2f5d18f2 test: measure allocation and memory costs with external profilers"
+      ]
+    },
+    {
+      "ref": "src/lib.rs",
+      "path": "/home/paudley/Active/purrassist/src/lib.rs",
+      "where": "not here; exists in sibling(s): lillith_defense, lillith_draws, nyarlathotep, nyarlathotep-campaign-controller, nyarlathotep-campaign-controller-current (+2 more)",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "publish.yml",
+      "path": "/home/paudley/Active/purrassist/publish.yml",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "docs/MATCHING-QUALITY.md",
+      "path": "/home/paudley/Active/purrassist/docs/MATCHING-QUALITY.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 475,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "e93eaf883 fix(tool-call): $ref and anyOf scopes declare their schema's member names (#8)",
+        "c168175df feat(tool-call): read arrays of objects written as repeated nested parameters (#8)",
+        "381306500 fix(tool-call): closers inside values are judged by what follows, never by layout (adversary pass 6, F14, F19)",
+        "75c8f1134 fix(tool-call): keep stray closers and call bodies out of values and content (adversary pass 5, F13\u2013F18)",
+        "396133344 feat(tool-call): weigh closer text and call markup inside values by evidence",
+        "73e6a137c fix(tool-call): never let a repair override a reading that needs none",
+        "b605ce55a fix(tool_call): resynchronize past any failing call, read misspelled tokens, cut calls at opening reasoning markers",
+        "7a5a6c2d5 fix(tool_call): read written markup, resynchronize groups, keep rejected fences out of prose",
+        "7c919c9bc feat(tool_call): type unmodeled-schema XML text by the exact schema",
+        "3415a3b14 feat(tool_call): tolerate JSON syntax slips in call envelopes"
+      ]
+    },
+    {
+      "ref": "matching_quality.rs",
+      "path": "/home/paudley/Active/purrassist/matching_quality.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/core/src/contract.rs",
+      "path": "/home/paudley/Active/purrassist/crates/core/src/contract.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 1895,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "c2f191658 perf(provenance): derivation and forest indexes stay logarithmic (#8)",
+        "e93eaf883 fix(tool-call): $ref and anyOf scopes declare their schema's member names (#8)",
+        "e7a301968 fix(tool_call): size candidates to the turn and charge validation memory",
+        "b35ec82a7 feat(json): push-based tolerant JSON, byte-step patterns, linear extraction",
+        "2d9183c7f refactor(search): extract a generic best-first search engine",
+        "227d4ebcb feat(contract): receipt v3 with byte-exact sources and wire-value results",
+        "3246d6579 refactor: consolidate duplicate helpers and enforce strict census",
+        "61d6986de fix: release scratch meter handles when retaining charges",
+        "23caff46d feat: derive every tool surface from one operation registry",
+        "de8e8fda0 docs: shorten the ScratchString summary line for stable clippy"
+      ]
+    },
+    {
+      "ref": "schema/compile.rs",
+      "path": "/home/paudley/Active/purrassist/schema/compile.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "build.rs",
+      "path": "/home/paudley/Active/purrassist/build.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "pattern.rs",
+      "path": "/home/paudley/Active/purrassist/pattern.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "schema/recovery.rs",
+      "path": "/home/paudley/Active/purrassist/schema/recovery.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "recovery/proposals.rs",
+      "path": "/home/paudley/Active/purrassist/recovery/proposals.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "schema/evaluate.rs",
+      "path": "/home/paudley/Active/purrassist/schema/evaluate.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "helpers.rs",
+      "path": "/home/paudley/Active/purrassist/helpers.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/core/tests/allocation_oracle.rs",
+      "path": "/home/paudley/Active/purrassist/crates/core/tests/allocation_oracle.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 1511,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "e7a301968 fix(tool_call): size candidates to the turn and charge validation memory",
+        "2e2365d26 feat(tool_call): correction evaluation, published cost bound, and bench",
+        "b35ec82a7 feat(json): push-based tolerant JSON, byte-step patterns, linear extraction",
+        "66b375677 fix(pattern): govern compilation and witness storage",
+        "7e8f7f5a9 test: count oracle allocations per thread",
+        "48d4e942c feat: enforce scratch accounting through budgeted containers"
+      ]
+    },
+    {
+      "ref": "crates/core/src/provenance.rs",
+      "path": "/home/paudley/Active/purrassist/crates/core/src/provenance.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 855,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "c2f191658 perf(provenance): derivation and forest indexes stay logarithmic (#8)",
+        "b7fe57c39 feat(grammar): weighted grammar engine and tool-call recognizer",
+        "3246d6579 refactor: consolidate duplicate helpers and enforce strict census",
+        "2b43d223a fix: restore rustdoc and syntax-oracle gates",
+        "23caff46d feat: derive every tool surface from one operation registry",
+        "974ccac6e feat: publish receipts from a provenance derivation forest"
+      ]
+    },
+    {
+      "ref": "crates/core/src/wire.rs",
+      "path": "/home/paudley/Active/purrassist/crates/core/src/wire.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 472,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "1fbe235e4 feat(tool_call): tool_call.recover.v1 recovery operation",
+        "227d4ebcb feat(contract): receipt v3 with byte-exact sources and wire-value results",
+        "3246d6579 refactor: consolidate duplicate helpers and enforce strict census",
+        "23caff46d feat: derive every tool surface from one operation registry",
+        "974ccac6e feat: publish receipts from a provenance derivation forest",
+        "b87ac5404 fix: bind ambiguous JSON recovery evidence to each alternative",
+        "46e9d1a6e feat: establish intent recovery workspace and verification foundation"
+      ]
+    },
+    {
+      "ref": "edits/fuzzy.rs:123",
+      "path": "/home/paudley/Active/purrassist/edits/fuzzy.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "edits/unified.rs:85",
+      "path": "/home/paudley/Active/purrassist/edits/unified.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/syntax/src/lib.rs:340",
+      "path": "/home/paudley/Active/purrassist/crates/syntax/src/lib.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 912,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "3246d6579 refactor: consolidate duplicate helpers and enforce strict census",
+        "2bd5d02d1 fix: preserve governed resource outcomes through host operations",
+        "23caff46d feat: derive every tool surface from one operation registry",
+        "65ef9081e feat: bound tree-sitter allocations through the governor",
+        "974ccac6e feat: publish receipts from a provenance derivation forest",
+        "d0fa500e2 feat: propagate caller-owned cancellation through governed engines and tools",
+        "46e9d1a6e feat: establish intent recovery workspace and verification foundation"
+      ]
+    },
+    {
+      "ref": "docs/schema/receipt.schema.json",
+      "path": "/home/paudley/Active/purrassist/docs/schema/receipt.schema.json",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 246,
+      "licence": "",
+      "commits": [
+        "227d4ebcb feat(contract): receipt v3 with byte-exact sources and wire-value results",
+        "23caff46d feat: derive every tool surface from one operation registry",
+        "974ccac6e feat: publish receipts from a provenance derivation forest"
+      ]
+    },
+    {
+      "ref": "receipt.schema.json",
+      "path": "/home/paudley/Active/purrassist/receipt.schema.json",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/syntax/Cargo.toml",
+      "path": "/home/paudley/Active/purrassist/crates/syntax/Cargo.toml",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 35,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "ed9f9ddf2 perf: measure and enforce source-bound resource limits",
+        "46e9d1a6e feat: establish intent recovery workspace and verification foundation"
+      ]
+    },
+    {
+      "ref": "crates/syntax/src/alloc.rs",
+      "path": "/home/paudley/Active/purrassist/crates/syntax/src/alloc.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 602,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "2bd5d02d1 fix: preserve governed resource outcomes through host operations",
+        "65ef9081e feat: bound tree-sitter allocations through the governor"
+      ]
+    },
+    {
+      "ref": "malloc/calloc/realloc/free",
+      "path": "/home/paudley/Active/purrassist/malloc/calloc/realloc/free",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "allocation.rs",
+      "path": "/home/paudley/Active/purrassist/allocation.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "docs/RESOURCES.md",
+      "path": "/home/paudley/Active/purrassist/docs/RESOURCES.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 1154,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "534f862e3 build(release): register purrassist-derive for packaging, audit and docs (#15)",
+        "8bca69ee4 test(fuzz): reach nested-parameter array items and scope graphs; pin the strict trailer claim (#8)",
+        "3743aedf3 perf(grammar): Mistral v3 call arrays cost linear, charged time (#8)",
+        "bdb102a30 perf(grammar): consecutive chained calls segment incrementally (#8)",
+        "8fb63a424 perf(tool-call)!: raise the published per-byte recovery budget to cover dense markup (#8)",
+        "3a19a2d47 perf(tool-call): repeated parameters cost linear time and scratch (#8)",
+        "381306500 fix(tool-call): closers inside values are judged by what follows, never by layout (adversary pass 6, F14, F19)",
+        "fecda8934 test: split make check into focused tests; corpus and fuzz get their own lanes",
+        "75c8f1134 fix(tool-call): keep stray closers and call bodies out of values and content (adversary pass 5, F13\u2013F18)",
+        "396133344 feat(tool-call): weigh closer text and call markup inside values by evidence"
+      ]
+    },
+    {
+      "ref": "scripts/generate-unicode.py",
+      "path": "/home/paudley/Active/purrassist/scripts/generate-unicode.py",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 501,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "3ed24fc2f feat: evaluate every JSON Schema format and report unsupported vocabularies",
+        "4dfd1b432 feat: match ECMA-262 patterns with a symbolic derivative engine",
+        "2e286923d feat: resolve strings through a refinement lattice with protected tokens",
+        "46e9d1a6e feat: establish intent recovery workspace and verification foundation"
+      ]
+    },
+    {
+      "ref": "vendor/dependencies.json",
+      "path": "/home/paudley/Active/purrassist/vendor/dependencies.json",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 597,
+      "licence": "",
+      "commits": [
+        "534f862e3 build(release): register purrassist-derive for packaging, audit and docs (#15)",
+        "2e2365d26 feat(tool_call): correction evaluation, published cost bound, and bench",
+        "34e8ac54d feat(schema): draft-07 dialect for validation, witnesses, and recovery",
+        "a2da56a81 build: port structural helper census and strict ledger tooling",
+        "095776765 build: enforce qualification tooling and archive provenance",
+        "3ed24fc2f feat: evaluate every JSON Schema format and report unsupported vocabularies",
+        "4dfd1b432 feat: match ECMA-262 patterns with a symbolic derivative engine",
+        "b53ce9fbd feat: qualify filesystem durability on Windows",
+        "2e286923d feat: resolve strings through a refinement lattice with protected tokens",
+        "fa30c00ee feat: decode Markdown entities from pinned standards data"
+      ]
+    },
+    {
+      "ref": "crates/core/src/pattern/",
+      "path": "/home/paudley/Active/purrassist/crates/core/src/pattern",
+      "where": "repo",
+      "exists": true,
+      "kind": "dir",
+      "lines": null,
+      "licence": "",
+      "commits": [
+        "9a47d3c02 fix(grammar): read multi-byte terminals after class runs from their first byte",
+        "8496413da test(fuzz): tool-call fuzz target and WASM parity for every dialect",
+        "b7fe57c39 feat(grammar): weighted grammar engine and tool-call recognizer",
+        "b35ec82a7 feat(json): push-based tolerant JSON, byte-step patterns, linear extraction",
+        "66b375677 fix(pattern): govern compilation and witness storage",
+        "a3b361e04 fix(pattern): preserve assertion context during witness search",
+        "3246d6579 refactor: consolidate duplicate helpers and enforce strict census",
+        "856d2ecdb docs: qualify bounded search and allocation scale evidence",
+        "bd1b656f0 fix: repair Markdown structure and anchored pattern semantics",
+        "a45e2c8d0 feat: generate JSON Schema witnesses with an algebraic pipeline"
+      ]
+    },
+    {
+      "ref": "built-ins/RegExp/property-escapes/generated",
+      "path": "/home/paudley/Active/purrassist/built-ins/RegExp/property-escapes/generated",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/core/src/schema/format/",
+      "path": "/home/paudley/Active/purrassist/crates/core/src/schema/format",
+      "where": "repo",
+      "exists": true,
+      "kind": "dir",
+      "lines": null,
+      "licence": "",
+      "commits": [
+        "3246d6579 refactor: consolidate duplicate helpers and enforce strict census",
+        "a45e2c8d0 feat: generate JSON Schema witnesses with an algebraic pipeline",
+        "3ed24fc2f feat: evaluate every JSON Schema format and report unsupported vocabularies"
+      ]
+    },
+    {
+      "ref": "vocabularies.rs",
+      "path": "/home/paudley/Active/purrassist/vocabularies.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "schema_conformance.rs",
+      "path": "/home/paudley/Active/purrassist/schema_conformance.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "optional/format/",
+      "path": "/home/paudley/Active/purrassist/optional/format",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "optional/format-assertion.json",
+      "path": "/home/paudley/Active/purrassist/optional/format-assertion.json",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "formats.rs",
+      "path": "/home/paudley/Active/purrassist/formats.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/core/src/schema/algebra/",
+      "path": "/home/paudley/Active/purrassist/crates/core/src/schema/algebra",
+      "where": "repo",
+      "exists": true,
+      "kind": "dir",
+      "lines": null,
+      "licence": "",
+      "commits": [
+        "34e8ac54d feat(schema): draft-07 dialect for validation, witnesses, and recovery",
+        "d982fb755 fix(schema): honor format vocabularies during witness search",
+        "1e94beaeb fix(schema): scope witness constraints to applicable types",
+        "3246d6579 refactor: consolidate duplicate helpers and enforce strict census",
+        "2b43d223a fix: restore rustdoc and syntax-oracle gates",
+        "a45e2c8d0 feat: generate JSON Schema witnesses with an algebraic pipeline"
+      ]
+    },
+    {
+      "ref": "if/then/else",
+      "path": "/home/paudley/Active/purrassist/if/then/else",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "unevaluatedProperties/Items",
+      "path": "/home/paudley/Active/purrassist/unevaluatedProperties/Items",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "tests/recursive_schemas.rs",
+      "path": "/home/paudley/Active/purrassist/tests/recursive_schemas.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "tests/corruption_oracle.rs",
+      "path": "/home/paudley/Active/purrassist/tests/corruption_oracle.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/core/src/patch.rs",
+      "path": "/home/paudley/Active/purrassist/crates/core/src/patch.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 593,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "3246d6579 refactor: consolidate duplicate helpers and enforce strict census",
+        "7690c4a66 feat: unify edits as a patch algebra with structural Markdown operations"
+      ]
+    },
+    {
+      "ref": "patch_laws.rs",
+      "path": "/home/paudley/Active/purrassist/patch_laws.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "markdown_structure.rs",
+      "path": "/home/paudley/Active/purrassist/markdown_structure.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "markdown_sections.rs:246-258",
+      "path": "/home/paudley/Active/purrassist/markdown_sections.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/host/src/tools/registry.rs",
+      "path": "/home/paudley/Active/purrassist/crates/host/src/tools/registry.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 423,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "69c6b5cd7 fix(tool-call): strict choice counts rejected attempts and survives reading merges (#8)",
+        "248d07a0b feat(tool-call): marker-free reasoning blocks beside the reasoning ranges (#8)",
+        "28b2b3a05 feat(tool-call): strict forced tool choice \u2014 exactly one call, no content, no reasoning (#8)",
+        "b65687e31 feat(tool_call): publish a usability verdict beside the reading's status",
+        "347cb0e24 fix(tool_call): read caller declarations byte-exact on CLI and MCP",
+        "efa99f1d1 feat(tool_call): report unparsed call markup from unsupported or disallowed dialects",
+        "b3e16ab46 feat(tool_call): bare-json.v1 dialect",
+        "937091368 feat(tool_call): harmony.v1 dialect",
+        "e8c8072ed feat(tool_call): anthropic-tool-use.v1 dialect",
+        "33a6ce87b feat(tool_call): kimi-k2.v1 dialect"
+      ]
+    },
+    {
+      "ref": "tools/list",
+      "path": "/home/paudley/Active/purrassist/tools/list",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/cli/tests/protocol.rs",
+      "path": "/home/paudley/Active/purrassist/crates/cli/tests/protocol.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 898,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "32ceb6442 feat(host): recover_tool_calls MCP tool and recover-tool-calls CLI",
+        "e4bda6e78 fix: preserve and report multiline setext heading edits",
+        "ba2a35cc3 feat: expose witness generation as a tool",
+        "23caff46d feat: derive every tool surface from one operation registry",
+        "be82a33d2 feat: select strings with explicit ambiguity and evidence",
+        "a95c9b7b8 feat: expose governed alias-aware string matching",
+        "4103c50a0 feat: apply source-bound edit plans through shared tools",
+        "ad69fbda9 feat: service live MCP cancellation with bounded tool workers",
+        "cf8433858 feat: inspect and edit source-bound Markdown reference definitions",
+        "97f69cdae feat: edit nested Markdown table columns with structural validation"
+      ]
+    },
+    {
+      "ref": "crates/core/tests/preservation_properties.rs",
+      "path": "/home/paudley/Active/purrassist/crates/core/tests/preservation_properties.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 1497,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "227d4ebcb feat(contract): receipt v3 with byte-exact sources and wire-value results",
+        "4f055c5c8 test: qualify edit preservation with generated adversarial documents"
+      ]
+    },
+    {
+      "ref": "scripts/fuzz-json.py",
+      "path": "/home/paudley/Active/purrassist/scripts/fuzz-json.py",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/core/Cargo.toml",
+      "path": "/home/paudley/Active/purrassist/crates/core/Cargo.toml",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 121,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "fecda8934 test: split make check into focused tests; corpus and fuzz get their own lanes",
+        "8496413da test(fuzz): tool-call fuzz target and WASM parity for every dialect",
+        "2e2365d26 feat(tool_call): correction evaluation, published cost bound, and bench",
+        "3246d6579 refactor: consolidate duplicate helpers and enforce strict census",
+        "53f23662a test: generalize guided fuzzing and preserve strict differential evidence",
+        "ed9f9ddf2 perf: measure and enforce source-bound resource limits",
+        "ea50c8965 test: add dependency-free coverage-guided JSON qualification",
+        "c2f5d18f2 test: measure allocation and memory costs with external profilers",
+        "46e9d1a6e feat: establish intent recovery workspace and verification foundation"
+      ]
+    },
+    {
+      "ref": ".cache/",
+      "path": "/home/paudley/Active/purrassist/.cache",
+      "where": "repo",
+      "exists": true,
+      "kind": "dir",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "scripts/test-fuzz.py",
+      "path": "/home/paudley/Active/purrassist/scripts/test-fuzz.py",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 1345,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "8bca69ee4 test(fuzz): reach nested-parameter array items and scope graphs; pin the strict trailer claim (#8)",
+        "69c6b5cd7 fix(tool-call): strict choice counts rejected attempts and survives reading merges (#8)",
+        "8496413da test(fuzz): tool-call fuzz target and WASM parity for every dialect",
+        "22d33135e test: preserve malformed HTML and correct independent email retries",
+        "53f23662a test: generalize guided fuzzing and preserve strict differential evidence"
+      ]
+    },
+    {
+      "ref": "docs/FUZZING.md",
+      "path": "/home/paudley/Active/purrassist/docs/FUZZING.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 1076,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "8bca69ee4 test(fuzz): reach nested-parameter array items and scope graphs; pin the strict trailer claim (#8)",
+        "69c6b5cd7 fix(tool-call): strict choice counts rejected attempts and survives reading merges (#8)",
+        "248d07a0b feat(tool-call): marker-free reasoning blocks beside the reasoning ranges (#8)",
+        "28b2b3a05 feat(tool-call): strict forced tool choice \u2014 exactly one call, no content, no reasoning (#8)",
+        "fcbab863e fix(tool-call): cover call bodies after markup debris in rejected attempts (fuzz)",
+        "fb522afce ci: gate pull requests on the published-transcript replay (adversary pass 6, F20)",
+        "75c8f1134 fix(tool-call): keep stray closers and call bodies out of values and content (adversary pass 5, F13\u2013F18)",
+        "396133344 feat(tool-call): weigh closer text and call markup inside values by evidence",
+        "73e6a137c fix(tool-call): never let a repair override a reading that needs none",
+        "b605ce55a fix(tool_call): resynchronize past any failing call, read misspelled tokens, cut calls at opening reasoning markers"
+      ]
+    },
+    {
+      "ref": "crates/core/tests/data/evaluation/",
+      "path": "/home/paudley/Active/purrassist/crates/core/tests/data/evaluation",
+      "where": "repo",
+      "exists": true,
+      "kind": "dir",
+      "lines": null,
+      "licence": "",
+      "commits": [
+        "e93eaf883 fix(tool-call): $ref and anyOf scopes declare their schema's member names (#8)",
+        "c168175df feat(tool-call): read arrays of objects written as repeated nested parameters (#8)",
+        "381306500 fix(tool-call): closers inside values are judged by what follows, never by layout (adversary pass 6, F14, F19)",
+        "75c8f1134 fix(tool-call): keep stray closers and call bodies out of values and content (adversary pass 5, F13\u2013F18)",
+        "396133344 feat(tool-call): weigh closer text and call markup inside values by evidence",
+        "73e6a137c fix(tool-call): never let a repair override a reading that needs none",
+        "b605ce55a fix(tool_call): resynchronize past any failing call, read misspelled tokens, cut calls at opening reasoning markers",
+        "7a5a6c2d5 fix(tool_call): read written markup, resynchronize groups, keep rejected fences out of prose",
+        "7c919c9bc feat(tool_call): type unmodeled-schema XML text by the exact schema",
+        "3415a3b14 feat(tool_call): tolerate JSON syntax slips in call envelopes"
+      ]
+    },
+    {
+      "ref": "tests/correction_evaluation.rs",
+      "path": "/home/paudley/Active/purrassist/tests/correction_evaluation.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "docs/qualification/resources-linux-x86_64.json",
+      "path": "/home/paudley/Active/purrassist/docs/qualification/resources-linux-x86_64.json",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 585,
+      "licence": "",
+      "commits": [
+        "3246d6579 refactor: consolidate duplicate helpers and enforce strict census",
+        "300f7cffe test: make profiling prerequisites explicit and retain startup diagnostics",
+        "79e5d3705 test: record final frozen-source resource qualification",
+        "4ca11dcec test: bind final resource measurements to repaired qualification inputs",
+        "275de19db test: refresh source-bound portable resource qualification",
+        "ed9f9ddf2 perf: measure and enforce source-bound resource limits",
+        "b2c9cba01 docs: record clean-commit resource measurements and runtime provenance"
+      ]
+    },
+    {
+      "ref": "crates/host/tests/crash_recovery.rs",
+      "path": "/home/paudley/Active/purrassist/crates/host/tests/crash_recovery.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 374,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "1af659394 test(files): qualify conditional undo after every crash checkpoint",
+        "9b493b33e fix(files): preserve temporary artifacts without proven ownership",
+        "b1034e488 fix: flush retried journal pieces through writable handles",
+        "0b7c7de05 fix: make Windows durability code lint-clean and fail explicitly",
+        "b53ce9fbd feat: qualify filesystem durability on Windows"
+      ]
+    },
+    {
+      "ref": "prepared.json",
+      "path": "/home/paudley/Active/purrassist/prepared.json",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/host/examples/portable.rs",
+      "path": "/home/paudley/Active/purrassist/crates/host/examples/portable.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 72,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "24787e1a3 test: compare helper transcripts and browser WASM with native output"
+      ]
+    },
+    {
+      "ref": "crates/host/tests/helpers.rs",
+      "path": "/home/paudley/Active/purrassist/crates/host/tests/helpers.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 231,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "227d4ebcb feat(contract): receipt v3 with byte-exact sources and wire-value results",
+        "2bd5d02d1 fix: preserve governed resource outcomes through host operations",
+        "974ccac6e feat: publish receipts from a provenance derivation forest",
+        "48d4e942c feat: enforce scratch accounting through budgeted containers",
+        "46e9d1a6e feat: establish intent recovery workspace and verification foundation"
+      ]
+    },
+    {
+      "ref": "crates/wasm-harness",
+      "path": "/home/paudley/Active/purrassist/crates/wasm-harness",
+      "where": "repo",
+      "exists": true,
+      "kind": "dir",
+      "lines": null,
+      "licence": "",
+      "commits": [
+        "5398ba175 fix(tool_call): report every length stop as finish_reason \"length\"",
+        "ccd54b1ee test(fuzz): guard the F5/F7 verdict contract in the tool-call probe",
+        "b3e16ab46 feat(tool_call): bare-json.v1 dialect",
+        "937091368 feat(tool_call): harmony.v1 dialect",
+        "e8c8072ed feat(tool_call): anthropic-tool-use.v1 dialect",
+        "33a6ce87b feat(tool_call): kimi-k2.v1 dialect",
+        "cf75220d6 feat(tool_call): deepseek-v3.v1 dialect",
+        "0ec3f3a53 feat(tool_call): deepseek-v3.1.v1 dialect",
+        "ca1123604 feat(tool_call): mistral-v11.v1 dialect",
+        "1f80b3bb7 feat(tool_call): mistral-v3.v1 dialect"
+      ]
+    },
+    {
+      "ref": "scripts/run-wasm.mjs",
+      "path": "/home/paudley/Active/purrassist/scripts/run-wasm.mjs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 24,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "24787e1a3 test: compare helper transcripts and browser WASM with native output"
+      ]
+    },
+    {
+      "ref": "scripts/check-wasm.py",
+      "path": "/home/paudley/Active/purrassist/scripts/check-wasm.py",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 93,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "3246d6579 refactor: consolidate duplicate helpers and enforce strict census",
+        "51ed930ab ci: enforce complete qualification and exact tool identities",
+        "24787e1a3 test: compare helper transcripts and browser WASM with native output",
+        "46e9d1a6e feat: establish intent recovery workspace and verification foundation"
+      ]
+    },
+    {
+      "ref": ".mjs",
+      "path": "/home/paudley/Active/purrassist/.mjs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "docs/DEPENDENCIES.md",
+      "path": "/home/paudley/Active/purrassist/docs/DEPENDENCIES.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 323,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "534f862e3 build(release): register purrassist-derive for packaging, audit and docs (#15)",
+        "34e8ac54d feat(schema): draft-07 dialect for validation, witnesses, and recovery",
+        "f218e8401 feat(audit): enforce a dependency-free, network-free, ambient-free core",
+        "3246d6579 refactor: consolidate duplicate helpers and enforce strict census",
+        "300f7cffe test: make profiling prerequisites explicit and retain startup diagnostics",
+        "22d33135e test: preserve malformed HTML and correct independent email retries",
+        "53f23662a test: generalize guided fuzzing and preserve strict differential evidence",
+        "a2da56a81 build: port structural helper census and strict ledger tooling",
+        "095776765 build: enforce qualification tooling and archive provenance",
+        "788270396 build: add trusted-publishing release workflow and published-package verification"
+      ]
+    },
+    {
+      "ref": "check-resource-limits.py",
+      "path": "/home/paudley/Active/purrassist/check-resource-limits.py",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": ".github/workflows/publish.yml",
+      "path": "/home/paudley/Active/purrassist/.github/workflows/publish.yml",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 118,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "8d8d9a25a ci(release): publish.yml header names the derive crate and the preflight (#15)",
+        "b7475b4fd build(release): publish preflight checks crate names and owners before publishing (#15)",
+        "e97a97367 feat(derive): zero-dependency #[derive(ToolDefinition)] and #[derive(ToolEnum)] (#15)",
+        "51ed930ab ci: enforce complete qualification and exact tool identities",
+        "788270396 build: add trusted-publishing release workflow and published-package verification"
+      ]
+    },
+    {
+      "ref": "rust-lang/crates-io-auth-action",
+      "path": "/home/paudley/Active/purrassist/rust-lang/crates-io-auth-action",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "scripts/verify-published.py",
+      "path": "/home/paudley/Active/purrassist/scripts/verify-published.py",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 614,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "534f862e3 build(release): register purrassist-derive for packaging, audit and docs (#15)",
+        "ed81ffe5f fix: bound installed acceptance and prove file transaction undo",
+        "095776765 build: enforce qualification tooling and archive provenance",
+        "868d19613 fix: locate packaged archives wherever cargo writes them and keep lockfiles",
+        "788270396 build: add trusted-publishing release workflow and published-package verification"
+      ]
+    },
+    {
+      "ref": "release-qualification.yml",
+      "path": "/home/paudley/Active/purrassist/release-qualification.yml",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "docs/RELEASE.md",
+      "path": "/home/paudley/Active/purrassist/docs/RELEASE.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 226,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "4d8a48e82 docs(derive): scope the nested near-miss rule to the matching policy (#15)",
+        "6cbb6282f docs(derive): near-miss nested keys, patch compatibility rule, qualification evidence (#15)",
+        "d0a99e991 test(derive): close remaining evidence and doc gaps (#15)",
+        "b7475b4fd build(release): publish preflight checks crate names and owners before publishing (#15)",
+        "534f862e3 build(release): register purrassist-derive for packaging, audit and docs (#15)",
+        "fb522afce ci: gate pull requests on the published-transcript replay (adversary pass 6, F20)",
+        "1a8509cbf fix: isolate release archive verification from shared Cargo caches",
+        "42b44609c docs: reconcile implemented capabilities and qualification contracts",
+        "788270396 build: add trusted-publishing release workflow and published-package verification",
+        "a68beebbc build: isolate same-version package verification"
+      ]
+    },
+    {
+      "ref": "scripts/check-packages.py",
+      "path": "/home/paudley/Active/purrassist/scripts/check-packages.py",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 98,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "534f862e3 build(release): register purrassist-derive for packaging, audit and docs (#15)",
+        "095776765 build: enforce qualification tooling and archive provenance",
+        "788270396 build: add trusted-publishing release workflow and published-package verification",
+        "0a8412b78 build: reject unsafe crate archive entries",
+        "de8db9d7b build: qualify release archives and publish order",
+        "fa30c00ee feat: decode Markdown entities from pinned standards data",
+        "46e9d1a6e feat: establish intent recovery workspace and verification foundation"
+      ]
+    },
+    {
+      "ref": "scripts/test-verify-published.py",
+      "path": "/home/paudley/Active/purrassist/scripts/test-verify-published.py",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 501,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "534f862e3 build(release): register purrassist-derive for packaging, audit and docs (#15)",
+        "ed81ffe5f fix: bound installed acceptance and prove file transaction undo",
+        "868d19613 fix: locate packaged archives wherever cargo writes them and keep lockfiles",
+        "788270396 build: add trusted-publishing release workflow and published-package verification"
+      ]
+    },
+    {
+      "ref": "docs/HELPERS.md",
+      "path": "/home/paudley/Active/purrassist/docs/HELPERS.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 65,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "2bd5d02d1 fix: preserve governed resource outcomes through host operations",
+        "23caff46d feat: derive every tool surface from one operation registry",
+        "46e9d1a6e feat: establish intent recovery workspace and verification foundation"
+      ]
+    },
+    {
+      "ref": "docs/EDIT-APPLICATION.md",
+      "path": "/home/paudley/Active/purrassist/docs/EDIT-APPLICATION.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 232,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "1af659394 test(files): qualify conditional undo after every crash checkpoint",
+        "9b493b33e fix(files): preserve temporary artifacts without proven ownership",
+        "bd1b656f0 fix: repair Markdown structure and anchored pattern semantics",
+        "42b44609c docs: reconcile implemented capabilities and qualification contracts",
+        "7690c4a66 feat: unify edits as a patch algebra with structural Markdown operations",
+        "9994d4d61 fix: open Windows replacement handles with delete access",
+        "b53ce9fbd feat: qualify filesystem durability on Windows",
+        "4103c50a0 feat: apply source-bound edit plans through shared tools"
+      ]
+    },
+    {
+      "ref": "docs/CANCELLATION.md",
+      "path": "/home/paudley/Active/purrassist/docs/CANCELLATION.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 112,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "1fbe235e4 feat(tool_call): tool_call.recover.v1 recovery operation",
+        "42b44609c docs: reconcile implemented capabilities and qualification contracts",
+        "ad69fbda9 feat: service live MCP cancellation with bounded tool workers",
+        "d0fa500e2 feat: propagate caller-owned cancellation through governed engines and tools"
+      ]
+    },
+    {
+      "ref": ".worktrees/1-release-qualification",
+      "path": "/home/paudley/Active/purrassist/.worktrees/1-release-qualification",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "/api/v1/trusted_publishing/github_configs",
+      "path": "/api/v1/trusted_publishing/github_configs",
+      "where": "absolute",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "MATCHING-QUALITY.md",
+      "path": "/home/paudley/Active/purrassist/MATCHING-QUALITY.md",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": ".git/hooks",
+      "path": "/home/paudley/Active/purrassist/.git/hooks",
+      "where": "repo",
+      "exists": true,
+      "kind": "dir",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "SECURITY.md",
+      "path": "/home/paudley/Active/purrassist/SECURITY.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 50,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "b08161e66 docs: state unsafe exception and allocator evidence scope precisely",
+        "b53ce9fbd feat: qualify filesystem durability on Windows",
+        "65ef9081e feat: bound tree-sitter allocations through the governor",
+        "46e9d1a6e feat: establish intent recovery workspace and verification foundation"
+      ]
+    },
+    {
+      "ref": "property-escapes/generated",
+      "path": "/home/paudley/Active/purrassist/property-escapes/generated",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "format-assertion.json",
+      "path": "/home/paudley/Active/purrassist/format-assertion.json",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "verify-published.py",
+      "path": "/home/paudley/Active/purrassist/verify-published.py",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "Cargo.lock",
+      "path": "/home/paudley/Active/purrassist/Cargo.lock",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 326,
+      "licence": "",
+      "commits": [
+        "4085bf31a feat(purrassist): re-export the tool derives through the facade (#15)",
+        "e97a97367 feat(derive): zero-dependency #[derive(ToolDefinition)] and #[derive(ToolEnum)] (#15)",
+        "a2da56a81 build: port structural helper census and strict ledger tooling",
+        "24787e1a3 test: compare helper transcripts and browser WASM with native output",
+        "b53ce9fbd feat: qualify filesystem durability on Windows",
+        "46e9d1a6e feat: establish intent recovery workspace and verification foundation"
+      ]
+    },
+    {
+      "ref": "paudley/1-release-qualification",
+      "path": "/home/paudley/Active/purrassist/paudley/1-release-qualification",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "CONSTITUTION.md",
+      "path": "/home/paudley/Active/purrassist/CONSTITUTION.md",
+      "where": "not here; exists in sibling(s): gmeow-ontology, lillith_decodes, lillith_memetics",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "paudley/366-centralize-overlapping-helpers-one-home",
+      "path": "/home/paudley/Active/purrassist/paudley/366-centralize-overlapping-helpers-one-home",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "UPSTREAM.json",
+      "path": "/home/paudley/Active/purrassist/UPSTREAM.json",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": ".cache/package-archives/1a8509cbfb2e-v9bmb44g",
+      "path": "/home/paudley/Active/purrassist/.cache/package-archives/1a8509cbfb2e-v9bmb44g",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "a.txt",
+      "path": "/home/paudley/Active/purrassist/a.txt",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "scripts/check-release.py",
+      "path": "/home/paudley/Active/purrassist/scripts/check-release.py",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 251,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "b7475b4fd build(release): publish preflight checks crate names and owners before publishing (#15)",
+        "e97a97367 feat(derive): zero-dependency #[derive(ToolDefinition)] and #[derive(ToolEnum)] (#15)",
+        "788270396 build: add trusted-publishing release workflow and published-package verification",
+        "de8db9d7b build: qualify release archives and publish order"
+      ]
+    },
+    {
+      "ref": "prior-art-assessment.md",
+      "path": "/home/paudley/Active/purrassist/prior-art-assessment.md",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "docs/tool-calls/RULES.md",
+      "path": "/home/paudley/Active/purrassist/docs/tool-calls/RULES.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 158,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "e93eaf883 fix(tool-call): $ref and anyOf scopes declare their schema's member names (#8)",
+        "c168175df feat(tool-call): read arrays of objects written as repeated nested parameters (#8)",
+        "381306500 fix(tool-call): closers inside values are judged by what follows, never by layout (adversary pass 6, F14, F19)",
+        "75c8f1134 fix(tool-call): keep stray closers and call bodies out of values and content (adversary pass 5, F13\u2013F18)",
+        "396133344 feat(tool-call): weigh closer text and call markup inside values by evidence",
+        "73e6a137c fix(tool-call): never let a repair override a reading that needs none",
+        "b605ce55a fix(tool_call): resynchronize past any failing call, read misspelled tokens, cut calls at opening reasoning markers",
+        "7a5a6c2d5 fix(tool_call): read written markup, resynchronize groups, keep rejected fences out of prose",
+        "749f53d76 fix(tool_call): keep calls around a malformed one, read misspelled closers, cut calls at reasoning markers",
+        "7c919c9bc feat(tool_call): type unmodeled-schema XML text by the exact schema"
+      ]
+    },
+    {
+      "ref": "crates/core/tests/tool_call_rules.rs",
+      "path": "/home/paudley/Active/purrassist/crates/core/tests/tool_call_rules.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 2264,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "917553ef1 fix(tool-call): reasoning markers inside JSON strings of repeated parameters stay value text (#8)",
+        "31115823b fix(tool-call): linear item numbering keyed by canonical name; decode evidence by span (#8)",
+        "e93eaf883 fix(tool-call): $ref and anyOf scopes declare their schema's member names (#8)",
+        "c168175df feat(tool-call): read arrays of objects written as repeated nested parameters (#8)",
+        "381306500 fix(tool-call): closers inside values are judged by what follows, never by layout (adversary pass 6, F14, F19)",
+        "396133344 feat(tool-call): weigh closer text and call markup inside values by evidence",
+        "b605ce55a fix(tool_call): resynchronize past any failing call, read misspelled tokens, cut calls at opening reasoning markers",
+        "749f53d76 fix(tool_call): keep calls around a malformed one, read misspelled closers, cut calls at reasoning markers",
+        "7c919c9bc feat(tool_call): type unmodeled-schema XML text by the exact schema",
+        "a539e96ce fix(tool_call): keep calls whose arguments hold invalid UTF-8"
+      ]
+    },
+    {
+      "ref": "CONTRIBUTING.md",
+      "path": "/home/paudley/Active/purrassist/CONTRIBUTING.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 24,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "46e9d1a6e feat: establish intent recovery workspace and verification foundation"
+      ]
+    },
+    {
+      "ref": "CONTRIBUTING.md:20",
+      "path": "/home/paudley/Active/purrassist/CONTRIBUTING.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 24,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "46e9d1a6e feat: establish intent recovery workspace and verification foundation"
+      ]
+    },
+    {
+      "ref": "scripts/fuzz.py",
+      "path": "/home/paudley/Active/purrassist/scripts/fuzz.py",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 2598,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "8bca69ee4 test(fuzz): reach nested-parameter array items and scope graphs; pin the strict trailer claim (#8)",
+        "69c6b5cd7 fix(tool-call): strict choice counts rejected attempts and survives reading merges (#8)",
+        "4b80ade59 fix(tool-call): reasoning text never reverses; redacted thinking is opaque (#8)",
+        "28b2b3a05 feat(tool-call): strict forced tool choice \u2014 exactly one call, no content, no reasoning (#8)",
+        "fcbab863e fix(tool-call): cover call bodies after markup debris in rejected attempts (fuzz)",
+        "75c8f1134 fix(tool-call): keep stray closers and call bodies out of values and content (adversary pass 5, F13\u2013F18)",
+        "396133344 feat(tool-call): weigh closer text and call markup inside values by evidence",
+        "73e6a137c fix(tool-call): never let a repair override a reading that needs none",
+        "b605ce55a fix(tool_call): resynchronize past any failing call, read misspelled tokens, cut calls at opening reasoning markers",
+        "7a5a6c2d5 fix(tool_call): read written markup, resynchronize groups, keep rejected fences out of prose"
+      ]
+    },
+    {
+      "ref": "validation.md",
+      "path": "/home/paudley/Active/purrassist/validation.md",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": ".stage/",
+      "path": "/home/paudley/Active/purrassist/.stage",
+      "where": "not here; exists in sibling(s): katamari, lillith_browser, lillith_decodes, purrdf",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "vendor/",
+      "path": "/home/paudley/Active/purrassist/vendor",
+      "where": "repo",
+      "exists": true,
+      "kind": "dir",
+      "lines": null,
+      "licence": "",
+      "commits": [
+        "534f862e3 build(release): register purrassist-derive for packaging, audit and docs (#15)",
+        "c1fa81dac build(tooling): repin Node to v26.11.1",
+        "2e2365d26 feat(tool_call): correction evaluation, published cost bound, and bench",
+        "34e8ac54d feat(schema): draft-07 dialect for validation, witnesses, and recovery",
+        "300f7cffe test: make profiling prerequisites explicit and retain startup diagnostics",
+        "22d33135e test: preserve malformed HTML and correct independent email retries",
+        "53f23662a test: generalize guided fuzzing and preserve strict differential evidence",
+        "a2da56a81 build: port structural helper census and strict ledger tooling",
+        "095776765 build: enforce qualification tooling and archive provenance",
+        "788270396 build: add trusted-publishing release workflow and published-package verification"
+      ]
+    },
+    {
+      "ref": "crates/core/tests/data/",
+      "path": "/home/paudley/Active/purrassist/crates/core/tests/data",
+      "where": "repo",
+      "exists": true,
+      "kind": "dir",
+      "lines": null,
+      "licence": "",
+      "commits": [
+        "a49e81bc5 feat(tool-call): project a root $ref declaration's parameters (#8)",
+        "7136da715 test(receipt): refresh the invalid-UTF-8 tool-call receipt's usage (#8)",
+        "917553ef1 fix(tool-call): reasoning markers inside JSON strings of repeated parameters stay value text (#8)",
+        "31115823b fix(tool-call): linear item numbering keyed by canonical name; decode evidence by span (#8)",
+        "69c6b5cd7 fix(tool-call): strict choice counts rejected attempts and survives reading merges (#8)",
+        "4b80ade59 fix(tool-call): reasoning text never reverses; redacted thinking is opaque (#8)",
+        "e93eaf883 fix(tool-call): $ref and anyOf scopes declare their schema's member names (#8)",
+        "248d07a0b feat(tool-call): marker-free reasoning blocks beside the reasoning ranges (#8)",
+        "28b2b3a05 feat(tool-call): strict forced tool choice \u2014 exactly one call, no content, no reasoning (#8)",
+        "c168175df feat(tool-call): read arrays of objects written as repeated nested parameters (#8)"
+      ]
+    },
+    {
+      "ref": "crates/core/tests/tool_call_dialects.rs",
+      "path": "/home/paudley/Active/purrassist/crates/core/tests/tool_call_dialects.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 1154,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "dd95ec822 test: make fixture path matching portable to Windows",
+        "b3e16ab46 feat(tool_call): bare-json.v1 dialect",
+        "937091368 feat(tool_call): harmony.v1 dialect",
+        "e8c8072ed feat(tool_call): anthropic-tool-use.v1 dialect",
+        "33a6ce87b feat(tool_call): kimi-k2.v1 dialect",
+        "cf75220d6 feat(tool_call): deepseek-v3.v1 dialect",
+        "0ec3f3a53 feat(tool_call): deepseek-v3.1.v1 dialect",
+        "ca1123604 feat(tool_call): mistral-v11.v1 dialect",
+        "1f80b3bb7 feat(tool_call): mistral-v3.v1 dialect",
+        "1ba176c97 feat(tool_call): llama3-json.v1 dialect"
+      ]
+    },
+    {
+      "ref": "check-docs.py",
+      "path": "/home/paudley/Active/purrassist/check-docs.py",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "docs/known-limitations.json",
+      "path": "/home/paudley/Active/purrassist/docs/known-limitations.json",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "docs/TOOLS.md",
+      "path": "/home/paudley/Active/purrassist/docs/TOOLS.md",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "tools/call",
+      "path": "/home/paudley/Active/purrassist/tools/call",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "temperature.schema.json",
+      "path": "/home/paudley/Active/purrassist/temperature.schema.json",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "temperature.input.txt",
+      "path": "/home/paudley/Active/purrassist/temperature.input.txt",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/purrassist/README.md",
+      "path": "/home/paudley/Active/purrassist/crates/purrassist/README.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 80,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "d0a99e991 test(derive): close remaining evidence and doc gaps (#15)",
+        "534f862e3 build(release): register purrassist-derive for packaging, audit and docs (#15)",
+        "ce66b7baf docs(tool_call): tighten the public surface and finish the doc wiring",
+        "42b44609c docs: reconcile implemented capabilities and qualification contracts",
+        "46e9d1a6e feat: establish intent recovery workspace and verification foundation"
+      ]
+    },
+    {
+      "ref": ".purrassist/",
+      "path": "/home/paudley/Active/purrassist/.purrassist",
+      "where": "repo",
+      "exists": true,
+      "kind": "dir",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "docs.rs/.../latest",
+      "path": "/home/paudley/Active/purrassist/docs.rs/.../latest",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/cli/README.md",
+      "path": "/home/paudley/Active/purrassist/crates/cli/README.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 88,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "28b2b3a05 feat(tool-call): strict forced tool choice \u2014 exactly one call, no content, no reasoning (#8)",
+        "b65687e31 feat(tool_call): publish a usability verdict beside the reading's status",
+        "347cb0e24 fix(tool_call): read caller declarations byte-exact on CLI and MCP",
+        "4d1592023 fix(cli): derive the recover-tool-calls exit code from what is usable",
+        "20b380b07 fix(tool_call): scope default call ids to the turn",
+        "32ceb6442 feat(host): recover_tool_calls MCP tool and recover-tool-calls CLI",
+        "cf8433858 feat: inspect and edit source-bound Markdown reference definitions",
+        "97f69cdae feat: edit nested Markdown table columns with structural validation",
+        "c68140502 feat: insert and remove nested Markdown table body rows",
+        "e54dce716 feat: plan source-preserving nested Markdown table cell edits"
+      ]
+    },
+    {
+      "ref": ".github/workflows/release-qualification.yml",
+      "path": "/home/paudley/Active/purrassist/.github/workflows/release-qualification.yml",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 51,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "fecda8934 test: split make check into focused tests; corpus and fuzz get their own lanes",
+        "51ed930ab ci: enforce complete qualification and exact tool identities",
+        "788270396 build: add trusted-publishing release workflow and published-package verification",
+        "de8db9d7b build: qualify release archives and publish order"
+      ]
+    },
+    {
+      "ref": "CHANGELOG.md",
+      "path": "/home/paudley/Active/purrassist/CHANGELOG.md",
+      "where": "not here; exists in sibling(s): HA, cf-config, gmeow-gts, llama-cpp-rs-logit-loom, logit-loom (+5 more)",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "docs/social-preview.svg",
+      "path": "/home/paudley/Active/purrassist/docs/social-preview.svg",
+      "where": "not here; exists in sibling(s): gmeow-gts, gmeow-ontology, logit-loom, purrdf, purrdf-408-wip-source (+1 more)",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "docs/social-preview.png",
+      "path": "/home/paudley/Active/purrassist/docs/social-preview.png",
+      "where": "not here; exists in sibling(s): gmeow-gts, gmeow-ontology, logit-loom, purrdf, purrdf-408-wip-source (+1 more)",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "docs/assets.json",
+      "path": "/home/paudley/Active/purrassist/docs/assets.json",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "docs/social-preview.png.license",
+      "path": "/home/paudley/Active/purrassist/docs/social-preview.png.license",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "tasks/T5-repo-settings.md",
+      "path": "/home/paudley/Active/purrassist/tasks/T5-repo-settings.md",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "check-packages.py",
+      "path": "/home/paudley/Active/purrassist/check-packages.py",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "server.json",
+      "path": "/home/paudley/Active/purrassist/server.json",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "test-check-release.py",
+      "path": "/home/paudley/Active/purrassist/test-check-release.py",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "scripts/check-docs.py",
+      "path": "/home/paudley/Active/purrassist/scripts/check-docs.py",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "scripts/test-check-docs.py",
+      "path": "/home/paudley/Active/purrassist/scripts/test-check-docs.py",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "SECURITY.md:5",
+      "path": "/home/paudley/Active/purrassist/SECURITY.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 50,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "b08161e66 docs: state unsafe exception and allocator evidence scope precisely",
+        "b53ce9fbd feat: qualify filesystem durability on Windows",
+        "65ef9081e feat: bound tree-sitter allocations through the governor",
+        "46e9d1a6e feat: establish intent recovery workspace and verification foundation"
+      ]
+    },
+    {
+      "ref": "docs/QUALIFICATION.md#known-limitations",
+      "path": "/home/paudley/Active/purrassist/docs/QUALIFICATION.md#known-limitations",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "scripts/check-repository.py",
+      "path": "/home/paudley/Active/purrassist/scripts/check-repository.py",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 390,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "d0a99e991 test(derive): close remaining evidence and doc gaps (#15)",
+        "534f862e3 build(release): register purrassist-derive for packaging, audit and docs (#15)",
+        "2e2365d26 feat(tool_call): correction evaluation, published cost bound, and bench",
+        "f218e8401 feat(audit): enforce a dependency-free, network-free, ambient-free core",
+        "095776765 build: enforce qualification tooling and archive provenance",
+        "24787e1a3 test: compare helper transcripts and browser WASM with native output",
+        "4dfd1b432 feat: match ECMA-262 patterns with a symbolic derivative engine",
+        "2e286923d feat: resolve strings through a refinement lattice with protected tokens",
+        "fa30c00ee feat: decode Markdown entities from pinned standards data",
+        "6788ccb9e feat: index Markdown containers and source-bound context"
+      ]
+    },
+    {
+      "ref": "vendor/licenses/",
+      "path": "/home/paudley/Active/purrassist/vendor/licenses",
+      "where": "repo",
+      "exists": true,
+      "kind": "dir",
+      "lines": null,
+      "licence": "",
+      "commits": [
+        "c1fa81dac build(tooling): repin Node to v26.11.1",
+        "300f7cffe test: make profiling prerequisites explicit and retain startup diagnostics",
+        "a2da56a81 build: port structural helper census and strict ledger tooling",
+        "095776765 build: enforce qualification tooling and archive provenance",
+        "788270396 build: add trusted-publishing release workflow and published-package verification",
+        "24787e1a3 test: compare helper transcripts and browser WASM with native output",
+        "b53ce9fbd feat: qualify filesystem durability on Windows",
+        "ea50c8965 test: add dependency-free coverage-guided JSON qualification",
+        "c2f5d18f2 test: measure allocation and memory costs with external profilers",
+        "46e9d1a6e feat: establish intent recovery workspace and verification foundation"
+      ]
+    },
+    {
+      "ref": "tasks/T5-review.md",
+      "path": "/home/paudley/Active/purrassist/tasks/T5-review.md",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "test-check-docs.py",
+      "path": "/home/paudley/Active/purrassist/test-check-docs.py",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "test-repository-audit.py",
+      "path": "/home/paudley/Active/purrassist/test-repository-audit.py",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "examples/",
+      "path": "/home/paudley/Active/purrassist/examples",
+      "where": "repo",
+      "exists": true,
+      "kind": "dir",
+      "lines": null,
+      "licence": "",
+      "commits": [
+        "be82a33d2 feat: select strings with explicit ambiguity and evidence",
+        "a95c9b7b8 feat: expose governed alias-aware string matching",
+        "4103c50a0 feat: apply source-bound edit plans through shared tools",
+        "922b36fa9 feat: plan source-preserving Markdown list item edits",
+        "4bd905573 feat: inspect and replace nested Markdown section bodies",
+        "cf8433858 feat: inspect and edit source-bound Markdown reference definitions",
+        "97f69cdae feat: edit nested Markdown table columns with structural validation",
+        "c68140502 feat: insert and remove nested Markdown table body rows",
+        "e54dce716 feat: plan source-preserving nested Markdown table cell edits",
+        "792cd882e feat: add governed caller-owned embedding matching"
+      ]
+    },
+    {
+      "ref": "OFL.txt",
+      "path": "/home/paudley/Active/purrassist/OFL.txt",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "io.github.Blackcat-Informatics/purrassist",
+      "path": "/home/paudley/Active/purrassist/io.github.Blackcat-Informatics/purrassist",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    }
+  ],
+  "identifiers": [
+    {
+      "name": "main",
+      "files": 254
+    },
+    {
+      "name": "be82a33",
+      "files": 0
+    },
+    {
+      "name": "resolve_string",
+      "files": 7
+    },
+    {
+      "name": "ghprsq",
+      "files": 0
+    },
+    {
+      "name": "unsafe",
+      "files": 20
+    },
+    {
+      "name": "xtask",
+      "files": 0
+    },
+    {
+      "name": "std::fs::rename",
+      "files": 0
+    },
+    {
+      "name": "sleep",
+      "files": 4
+    },
+    {
+      "name": "not",
+      "files": 756
+    },
+    {
+      "name": "resolve",
+      "files": 737
+    },
+    {
+      "name": "rank",
+      "files": 54
+    },
+    {
+      "name": "match_strings",
+      "files": 8
+    },
+    {
+      "name": "charge",
+      "files": 221
+    },
+    {
+      "name": "release_scratch",
+      "files": 6
+    },
+    {
+      "name": "resolve_governed",
+      "files": 16
+    },
+    {
+      "name": "Resolved",
+      "files": 273
+    },
+    {
+      "name": "CancellationToken",
+      "files": 32
+    },
+    {
+      "name": "ScratchString",
+      "files": 5
+    },
+    {
+      "name": "try_reserve",
+      "files": 3
+    },
+    {
+      "name": "Drop",
+      "files": 39
+    },
+    {
+      "name": "ScratchLease",
+      "files": 10
+    },
+    {
+      "name": "Pattern::compile_governed",
+      "files": 13
+    },
+    {
+      "name": "to_json",
+      "files": 114
+    },
+    {
+      "name": "finish",
+      "files": 576
+    },
+    {
+      "name": "Violation",
+      "files": 6
+    },
+    {
+      "name": "active",
+      "files": 27
+    },
+    {
+      "name": "retain_source",
+      "files": 15
+    },
+    {
+      "name": "with",
+      "files": 805
+    },
+    {
+      "name": "and",
+      "files": 1148
+    },
+    {
+      "name": "Pattern::is_match",
+      "files": 6
+    },
+    {
+      "name": "usage.scratch",
+      "files": 0
+    },
+    {
+      "name": "BudgetExceeded",
+      "files": 90
+    },
+    {
+      "name": "AlternativeReceipt",
+      "files": 6
+    },
+    {
+      "name": "output",
+      "files": 282
+    },
+    {
+      "name": "EditPlan",
+      "files": 37
+    },
+    {
+      "name": "AppliedEdit",
+      "files": 6
+    },
+    {
+      "name": "tree_sitter::set_allocator",
+      "files": 4
+    },
+    {
+      "name": "ParseOptions",
+      "files": 1
+    },
+    {
+      "name": "std::alloc::System",
+      "files": 3
+    },
+    {
+      "name": "Tree",
+      "files": 82
+    },
+    {
+      "name": "Send",
+      "files": 10
+    },
+    {
+      "name": "std::sync::Once",
+      "files": 4
+    },
+    {
+      "name": "Parser::new",
+      "files": 2
+    },
+    {
+      "name": "Language",
+      "files": 21
+    },
+    {
+      "name": "inspect",
+      "files": 40
+    },
+    {
+      "name": "apply_checked_governed",
+      "files": 5
+    },
+    {
+      "name": "QueryCursor",
+      "files": 2
+    },
+    {
+      "name": "Cancelled",
+      "files": 47
+    },
+    {
+      "name": "peak_scratch_bytes",
+      "files": 29
+    },
+    {
+      "name": "parse",
+      "files": 255
+    },
+    {
+      "name": "ast",
+      "files": 261
+    },
+    {
+      "name": "derive",
+      "files": 214
+    },
+    {
+      "name": "backtrack",
+      "files": 31
+    },
+    {
+      "name": "generate",
+      "files": 148
+    },
+    {
+      "name": "unicode",
+      "files": 496
+    },
+    {
+      "name": "avoid",
+      "files": 26
+    },
+    {
+      "name": "NoCandidate",
+      "files": 28
+    },
+    {
+      "name": "date",
+      "files": 812
+    },
+    {
+      "name": "time",
+      "files": 174
+    },
+    {
+      "name": "true",
+      "files": 460
+    },
+    {
+      "name": "false",
+      "files": 410
+    },
+    {
+      "name": "Schema::compile",
+      "files": 52
+    },
+    {
+      "name": "pattern",
+      "files": 135
+    },
+    {
+      "name": "patternProperties",
+      "files": 29
+    },
+    {
+      "name": "propertyNames",
+      "files": 16
+    },
+    {
+      "name": "additionalProperties",
+      "files": 71
+    },
+    {
+      "name": "dependentSchemas",
+      "files": 19
+    },
+    {
+      "name": "contains",
+      "files": 186
+    },
+    {
+      "name": "Ambiguous",
+      "files": 96
+    },
+    {
+      "name": "Patch",
+      "files": 12
+    },
+    {
+      "name": "apply",
+      "files": 148
+    },
+    {
+      "name": "invert",
+      "files": 21
+    },
+    {
+      "name": "compose",
+      "files": 35
+    },
+    {
+      "name": "commute",
+      "files": 9
+    },
+    {
+      "name": "Stale",
+      "files": 6
+    },
+    {
+      "name": "apply_edit",
+      "files": 9
+    },
+    {
+      "name": "apply_file",
+      "files": 14
+    },
+    {
+      "name": "rebase_from",
+      "files": 7
+    },
+    {
+      "name": "insert_section",
+      "files": 10
+    },
+    {
+      "name": "remove_section",
+      "files": 10
+    },
+    {
+      "name": "move_section",
+      "files": 10
+    },
+    {
+      "name": "rename_heading",
+      "files": 11
+    },
+    {
+      "name": "renumber_list",
+      "files": 8
+    },
+    {
+      "name": "TableRowEdit::Move",
+      "files": 7
+    },
+    {
+      "name": "TableColumnEdit::Move",
+      "files": 7
+    },
+    {
+      "name": "add_reference",
+      "files": 7
+    },
+    {
+      "name": "relabel_reference",
+      "files": 8
+    },
+    {
+      "name": "remove_reference",
+      "files": 8
+    },
+    {
+      "name": "unlink_reference",
+      "files": 7
+    },
+    {
+      "name": "call",
+      "files": 807
+    },
+    {
+      "name": "plan_markdown_structure",
+      "files": 9
+    },
+    {
+      "name": "plan_markdown_section",
+      "files": 8
+    },
+    {
+      "name": "recover_files",
+      "files": 8
+    },
+    {
+      "name": "commit_files",
+      "files": 6
+    },
+    {
+      "name": "effort",
+      "files": 70
+    },
+    {
+      "name": "plan_replacement",
+      "files": 7
+    },
+    {
+      "name": "plan_diff",
+      "files": 6
+    },
+    {
+      "name": "inspect_code",
+      "files": 10
+    },
+    {
+      "name": "node",
+      "files": 168
+    },
+    {
+      "name": "CARGO_TARGET_DIR",
+      "files": 4
+    },
+    {
+      "name": "FlushFileBuffers",
+      "files": 6
+    },
+    {
+      "name": "FILE_FLAG_BACKUP_SEMANTICS",
+      "files": 2
+    },
+    {
+      "name": "Busy",
+      "files": 5
+    },
+    {
+      "name": "NotApplied",
+      "files": 5
+    },
+    {
+      "name": "Pending",
+      "files": 13
+    },
+    {
+      "name": "cdylib",
+      "files": 2
+    },
+    {
+      "name": "portable_main",
+      "files": 2
+    },
+    {
+      "name": "qualification",
+      "files": 35
+    },
+    {
+      "name": "CARGO_HOME",
+      "files": 5
+    },
+    {
+      "name": "mcp",
+      "files": 46
+    },
+    {
+      "name": "success",
+      "files": 73
+    },
+    {
+      "name": "purrassist",
+      "files": 321
+    },
+    {
+      "name": "rank_governed",
+      "files": 9
+    },
+    {
+      "name": "paths",
+      "files": 75
+    },
+    {
+      "name": "match_paths",
+      "files": 6
+    },
+    {
+      "name": "matching_quality",
+      "files": 3
+    },
+    {
+      "name": "string_selection",
+      "files": 5
+    },
+    {
+      "name": "numeric_identity_guard_is_explicit_and_budgeted",
+      "files": 1
+    },
+    {
+      "name": "ScratchMeter",
+      "files": 8
+    },
+    {
+      "name": "ScratchVec",
+      "files": 24
+    },
+    {
+      "name": "ScratchMap",
+      "files": 14
+    },
+    {
+      "name": "total_scratch_charged",
+      "files": 17
+    },
+    {
+      "name": "usage",
+      "files": 91
+    },
+    {
+      "name": "prepare_helper",
+      "files": 8
+    },
+    {
+      "name": "complete_helper",
+      "files": 6
+    },
+    {
+      "name": "distinguishing",
+      "files": 24
+    },
+    {
+      "name": "RECEIPT_VERSION",
+      "files": 5
+    },
+    {
+      "name": "usage.total_scratch_charged",
+      "files": 6
+    },
+    {
+      "name": "Usage::merge",
+      "files": 0
+    },
+    {
+      "name": "core.hooksPath",
+      "files": 0
+    },
+    {
+      "name": "wasm",
+      "files": 38
+    },
+    {
+      "name": "size_of",
+      "files": 25
+    },
+    {
+      "name": "ScratchCharge",
+      "files": 21
+    },
+    {
+      "name": "de8e8fd",
+      "files": 0
+    },
+    {
+      "name": "Pattern::generate",
+      "files": 8
+    },
+    {
+      "name": "b53ce9f",
+      "files": 0
+    },
+    {
+      "name": "b1034e4",
+      "files": 0
+    },
+    {
+      "name": "MoveFileExW",
+      "files": 6
+    },
+    {
+      "name": "DELETE",
+      "files": 7
+    },
+    {
+      "name": "ERROR_ACCESS_DENIED",
+      "files": 3
+    },
+    {
+      "name": "Bidi_Class",
+      "files": 3
+    },
+    {
+      "name": "Joining_Type",
+      "files": 3
+    },
+    {
+      "name": "Guess",
+      "files": 101
+    },
+    {
+      "name": "decode",
+      "files": 156
+    },
+    {
+      "name": "validate_json",
+      "files": 11
+    },
+    {
+      "name": "oracle_pattern_match",
+      "files": 1
+    },
+    {
+      "name": "Patch::invert",
+      "files": 4
+    },
+    {
+      "name": "TextEdit",
+      "files": 27
+    },
+    {
+      "name": "diff",
+      "files": 205
+    },
+    {
+      "name": "rebase",
+      "files": 14
+    }
+  ],
+  "packages": [
+    "purrassist",
+    "purrassist-cli",
+    "purrassist-core",
+    "purrassist-derive",
+    "purrassist-helper-census",
+    "purrassist-host",
+    "purrassist-syntax",
+    "wasm-harness"
+  ],
+  "urls": [
+    "https://github.com/Blackcat-Informatics/purrassist/blob/main/.goals",
+    "https://github.com/Blackcat-Informatics/purrassist/blob/main/docs/IMPLEMENTATION.md",
+    "https://github.com/Blackcat-Informatics/purrassist/blob/main/docs/QUALIFICATION.md",
+    "https://github.com/",
+    "https://crates.io/api/v1/crates/",
+    "https://crates.io/api/v1/crates/$c/0.0.0",
+    "https://json-schema.org/draft/2020-12/vocab/format-assertion",
+    "https://example.invalid/vocab/x",
+    "https://crates.io/api/v1/crates/$c/0.1.0",
+    "https://github.com/Blackcat-Informatics/purrassist/actions/runs/36702475819",
+    "https://github.com/Blackcat-Informatics/purrassist/actions/runs/36707816916",
+    "https://github.com/Blackcat-Informatics/purrassist/actions/runs/36732604500",
+    "https://github.com/Blackcat-Informatics/purrassist/actions/runs/36734534499",
+    "https://github.com/Blackcat-Informatics/purrassist/pull/2",
+    "https://github.com/Blackcat-Informatics/purrassist",
+    "https://github.com/Blackcat-Informatics/purrassist#readme"
+  ],
+  "truncated": [
+    "paths",
+    "identifiers"
+  ]
+}

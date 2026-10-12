@@ -1,0 +1,901 @@
+{
+  "rows": [
+    {
+      "id": "B1",
+      "line": 13,
+      "rules": [
+        "modal"
+      ],
+      "text": "- Complete resource accounting across candidate generation, receipts, schema compilation, helpers, and external syntax parser allocations. Exhaustion and cancellation must be explicit and must not yield partial successes.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B2",
+      "line": 20,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Run the official JSON Schema and CommonMark/GFM suites, independent syntax oracles, preservation/replay/ledger properties, bounded fuzzing, portability checks, and the full `make check` gate with warnings as errors. Keep focused tests distinct from the full gate.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B3",
+      "line": 21,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Audit the final five crate archives and license/source notices; verify installed CLI/MCP behavior from actually downloaded packages, not only a local path install.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B4",
+      "line": 22,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Confirm hosted CI on the final commit, set up registry/trusted publishing in dependency order, verify publication and downloads, then make the release. Do not describe the current qualification-only workflow as a publish workflow.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B5",
+      "line": 23,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Keep `purrassist-core` free of third-party runtime dependencies and ambient I/O; register and justify every other dependency, including tooling/test/build/vendor components.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B6",
+      "line": 27,
+      "rules": [
+        "modal"
+      ],
+      "text": "Use an issue branch and reviewable PR for further changes; do not push implementation commits directly to `main`. Preserve the current uncommitted work until it is reviewed. Never bypass commit hooks. For any GitHub PR/branch merge, use the repository owner's required `ghprsq` workflow.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "C1.1",
+      "line": 62,
+      "rules": [
+        "modal"
+      ],
+      "text": "| R1 explicit unsupported-vocabulary behavior (required \u2192 compile error naming the URI; optional \u2192 schema compiles and every compile and recovery receipt carries evidence naming the ignored vocabulary URI and its unevaluated keywords; the rest of the schema is still validated) | 7 |",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-09-28T19:06:22Z"
+    },
+    {
+      "id": "C1.2",
+      "line": 117,
+      "rules": [
+        "modal"
+      ],
+      "text": "https://crates.io/api/v1/crates/<name>` must print `404`. Any `200` owned by someone else \u2192 STOP, AskUserQuestion.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-09-28T19:06:22Z"
+    },
+    {
+      "id": "C1.3",
+      "line": 121,
+      "rules": [
+        "modal"
+      ],
+      "text": "`cargo package --list` must show the license files.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-09-28T19:06:22Z"
+    },
+    {
+      "id": "C1.4",
+      "line": 257,
+      "rules": [
+        "modal"
+      ],
+      "text": "`SchemaError(\"unsupported required vocabulary: <uri>\")`; an unknown entry with `false` compiles, and every",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-09-28T19:06:22Z"
+    },
+    {
+      "id": "C1.5",
+      "line": 430,
+      "rules": [
+        "modal"
+      ],
+      "text": "purrassist-core`; `grep -nE \"remains open|not complete|still required|remain open\" docs/QUALIFICATION.md` returns",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-09-28T19:06:22Z"
+    },
+    {
+      "id": "C1.6",
+      "line": 434,
+      "rules": [
+        "scope-out"
+      ],
+      "text": "`git diff origin/main...HEAD | grep -nE 'TODO|FIXME|XXX|unimplemented!|todo!|future work|follow-up|for now|phase 2|out of scope|later PR|not yet|\\bstub\\b|placeholder'`",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-09-28T19:06:22Z"
+    },
+    {
+      "id": "C1.7",
+      "line": 438,
+      "rules": [
+        "modal"
+      ],
+      "text": "1. Verify all committed and pushed. The latest `verify.yml` run on HEAD must be green; if not, fix, commit, push,",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-09-28T19:06:22Z"
+    },
+    {
+      "id": "C1.8",
+      "line": 444,
+      "rules": [
+        "modal"
+      ],
+      "text": "should?\" to the PR and issue #1.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-09-28T19:06:22Z"
+    },
+    {
+      "id": "C4.1",
+      "line": 18,
+      "rules": [
+        "modal"
+      ],
+      "text": "**Wiring check:** fully wired. One doc nit remains: `MATCHING-QUALITY.md` should also name `match_paths` as inheriting the guard. It is scheduled in Task 19.",
+      "source": "comment 4",
+      "author": "paudley",
+      "date": "2026-09-28T19:38:38Z"
+    },
+    {
+      "id": "C5.1",
+      "line": 15,
+      "rules": [
+        "modal"
+      ],
+      "text": "The oracle uses a counting global allocator. It runs 22 workloads at 2\u00d7 and 32\u00d7 input scale, with one constant slack per operation that must hold at both scales. It found three uncharged allocations that grew with input size, all now fixed:",
+      "source": "comment 5",
+      "author": "paudley",
+      "date": "2026-09-28T20:55:04Z"
+    },
+    {
+      "id": "C9.1",
+      "line": 18,
+      "rules": [
+        "modal"
+      ],
+      "text": "- An unknown required vocabulary fails compilation.",
+      "source": "comment 9",
+      "author": "paudley",
+      "date": "2026-09-29T01:30:56Z"
+    },
+    {
+      "id": "C10.1",
+      "line": 33,
+      "rules": [
+        "modal"
+      ],
+      "text": "Patch, rebase, journal and accounting are fully wired. The 12 new Markdown operations are currently reachable from Rust only, which is documented. Task 10's `plan_markdown_structure` exposes them through CLI/MCP, and a fixture per operation is required.",
+      "source": "comment 10",
+      "author": "paudley",
+      "date": "2026-09-29T01:50:09Z"
+    },
+    {
+      "id": "C11.1",
+      "line": 34,
+      "rules": [
+        "modal"
+      ],
+      "text": "- **Task 8:** closing the last 5 official-suite exhaustions (430/430 required).",
+      "source": "comment 11",
+      "author": "paudley",
+      "date": "2026-09-29T03:01:59Z"
+    },
+    {
+      "id": "C12.1",
+      "line": 6,
+      "rules": [
+        "modal"
+      ],
+      "text": "- **430/430** official-suite schema groups that have a valid instance get a witness, with 0 exhausted and 0 falsely reported unsatisfiable. Closing the last five required:",
+      "source": "comment 12",
+      "author": "paudley",
+      "date": "2026-09-29T03:56:54Z"
+    },
+    {
+      "id": "C16.1",
+      "line": 7,
+      "rules": [
+        "modal"
+      ],
+      "text": "Validation: host helper/schema tests (9), cancellation regression (1), host doctests (5), parser allocation tests (4), and host/syntax Clippy with warnings denied passed. These are focused checks; the full final gate remains required.",
+      "source": "comment 16",
+      "author": "paudley",
+      "date": "2026-09-30T00:54:18Z"
+    },
+    {
+      "id": "C19.1",
+      "line": 5,
+      "rules": [
+        "modal"
+      ],
+      "text": "Regression tests cover both contention codes and rename mechanisms, bounded attempts, eventual success, immediate access-denied errors and unsupported POSIX fallback. All 16 native filesystem/crash tests passed. Native and Windows-target all-target Clippy passed with warnings denied; the Windows tests compiled. Actual Windows execution remains the required final hosted Windows lane and is not inferred from cross-compilation.",
+      "source": "comment 19",
+      "author": "paudley",
+      "date": "2026-09-30T02:02:05Z"
+    },
+    {
+      "id": "C21.1",
+      "line": 9,
+      "rules": [
+        "modal"
+      ],
+      "text": "Fresh resources completed all declared workloads and limits, but the production repair changes their measured source identity; the report is being regenerated. Final-source campaigns, archives, full gates and exact-commit hosted Verify remain required before the non-draft PR. Publication follows the previously approved review/merge and separately authorized tag sequence.",
+      "source": "comment 21",
+      "author": "paudley",
+      "date": "2026-09-30T03:46:25Z"
+    },
+    {
+      "id": "C22.1",
+      "line": 7,
+      "rules": [
+        "modal"
+      ],
+      "text": "Qualification remains active: the normal Markdown campaign retained a failure at 5,233 completed inputs caused by the pinned reference accepting an escaped terminal title delimiter. The core preserves the required literal paragraph. A precise pre-execution source certificate and guarded independent comparison passed the retained case plus 27 actual delimiter/line-ending/escape controls. A complete diagnostic run is checking all remaining cases together; it does not substitute for the required clean normal 10,000-mutation campaign. All eight final smoke campaigns, qualification/report commits, verified packaging, exact-head hosted CI and PR creation remain in the active plan.",
+      "source": "comment 22",
+      "author": "paudley",
+      "date": "2026-09-30T05:24:18Z"
+    },
+    {
+      "id": "C23.1",
+      "line": 3,
+      "rules": [
+        "modal"
+      ],
+      "text": "Completed actual allocator/RSS observations for all 9 native profiles, 25 core latency operations, 5 syntax grammars and 6 recovery cases, plus all 5 required native/WASM artifacts. The standalone recovery report exactly equals the embedded measurement.",
+      "source": "comment 23",
+      "author": "paudley",
+      "date": "2026-09-30T05:34:14Z"
+    },
+    {
+      "id": "C24.1",
+      "line": 9,
+      "rules": [
+        "modal"
+      ],
+      "text": "Commit: `51ed930abb6f43fe1f491d6af7de11dcd969c0ed` (signed; normal hooks passed; pushed). Workflow wiring and permissions were independently reviewed; Python compilation and release-workflow hygiene passed. The exact pinned Node guards were exercised by the successful independent syntax and WASM runs. Final hosted verification on the complete committed candidate is still required before PR creation.",
+      "source": "comment 24",
+      "author": "paudley",
+      "date": "2026-09-30T05:35:09Z"
+    },
+    {
+      "id": "C27.1",
+      "line": 7,
+      "rules": [
+        "modal"
+      ],
+      "text": "The user-requested detector's actual initial census found 6 normalized-body and 8 forwarding groups across 1,429 units, including independently inspected duplicated evidence serialization, percent-escape parsing and Markdown helpers. Structural matches are review candidates, not semantic-equivalence proofs. Tool verification and fail-closed traversal are being completed. Final normal campaigns, fresh full gate/resources, archives, hosted CI and PR remain required.",
+      "source": "comment 27",
+      "author": "paudley",
+      "date": "2026-09-30T07:54:21Z"
+    },
+    {
+      "id": "C28.1",
+      "line": 11,
+      "rules": [
+        "modal"
+      ],
+      "text": "The committed census records 1,438 function/constant units, six duplicate-body groups and eight forwarding groups, plus one hex-table candidate and two large constants. Useful inspected findings include independently maintained identical evidence serialization in core and host, URI percent-escape parsing, Markdown helpers, and 23 integer-conversion copies. These are review candidates, not automatic proof that every pair should merge.",
+      "source": "comment 28",
+      "author": "paudley",
+      "date": "2026-09-30T08:32:59Z"
+    },
+    {
+      "id": "C29.1",
+      "line": 11,
+      "rules": [
+        "modal"
+      ],
+      "text": "Final Markdown qualification and the default all-eight-target smoke campaign remain in progress. Packaging, final-head hosted verification, and PR creation remain required; no publication occurred.",
+      "source": "comment 29",
+      "author": "paudley",
+      "date": "2026-09-30T08:35:21Z"
+    },
+    {
+      "id": "C30.1",
+      "line": 5,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Security documents two production unsafe-code exceptions and four confined qualification/test/benchmark exceptions, rather than claiming only two workspace-wide exceptions.",
+      "source": "comment 30",
+      "author": "paudley",
+      "date": "2026-09-30T08:43:56Z"
+    },
+    {
+      "id": "C30.2",
+      "line": 6,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- The allocation oracle covers 22 representative workloads at two scales. Fixed slack increases sensitivity but does not guarantee detection of every proportional allocation; the documented inequality fails only when measured excess crosses the fixed slack at a tested scale.",
+      "source": "comment 30",
+      "author": "paudley",
+      "date": "2026-09-30T08:43:56Z"
+    },
+    {
+      "id": "C30.3",
+      "line": 7,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Pattern generation's no-candidate Rustdoc distinguishes proven regular-language emptiness from bounded search without a witness. Backtracking search does not prove impossibility. Lookaround over regular components remains regular; the implementation uses bounded exploration for it. Schema witness generation already requires a regular-engine emptiness proof before returning unsatisfiable, otherwise reports exhaustion.",
+      "source": "comment 30",
+      "author": "paudley",
+      "date": "2026-09-30T08:43:56Z"
+    },
+    {
+      "id": "C31.1",
+      "line": 5,
+      "rules": [
+        "modal"
+      ],
+      "text": "The report records its actual phase: commit `856d2ecdbc5835e561d70c7bb85ceb717c29f568`, dirty state, and engine digest `84dd440f8e1f88e4d0c4a8a5cf3520d0b1378a55d87ab22a0fc3a319d5ec6282`. Before/after/current bindings agree. Every required workload and artifact inventory completed; source identities were not retroactively changed.",
+      "source": "comment 31",
+      "author": "paudley",
+      "date": "2026-09-30T08:58:27Z"
+    },
+    {
+      "id": "C31.2",
+      "line": 9,
+      "rules": [
+        "modal"
+      ],
+      "text": "The full final-source `make check` exited successfully. Native/WASI/browser comparisons and all 15 syntax probes passed. The new normal Markdown 10,000-mutation campaign is still running, followed by the all-eight default smoke gate. Five-archive packaging, final-head hosted verification and PR creation remain required.",
+      "source": "comment 31",
+      "author": "paudley",
+      "date": "2026-09-30T08:58:27Z"
+    },
+    {
+      "id": "C32.1",
+      "line": 11,
+      "rules": [
+        "modal"
+      ],
+      "text": "The fresh normal default-seed 10,000-mutation Markdown campaign is still running; the final all-eight default 1,000-mutation smoke campaign follows it. These are distinct final qualification gates and are not represented as completed by this implementation commit. Packaging, final-head hosted CI, and the non-draft PR remain required; no publication occurred.",
+      "source": "comment 32",
+      "author": "paudley",
+      "date": "2026-09-30T09:03:19Z"
+    },
+    {
+      "id": "C33.1",
+      "line": 9,
+      "rules": [
+        "modal"
+      ],
+      "text": "The stricter default-seed 10,000-mutation Markdown campaign is still running. Its original start identities remain unchanged; this commit does not reconstruct campaign metadata or claim its completion. Final all-eight smoke, fresh resources, clean packaging, exact-HEAD hosted verification and the non-draft PR remain required workflow gates.",
+      "source": "comment 33",
+      "author": "paudley",
+      "date": "2026-09-30T09:53:05Z"
+    },
+    {
+      "id": "C34.1",
+      "line": 11,
+      "rules": [
+        "modal"
+      ],
+      "text": "The stricter Markdown 10,000-mutation campaign, full local gate and portable checks have passed. Final all-eight smoke, clean package verification, exact-HEAD hosted Verify and the non-draft PR remain required workflow gates.",
+      "source": "comment 34",
+      "author": "paudley",
+      "date": "2026-09-30T10:03:47Z"
+    },
+    {
+      "id": "C36.1",
+      "line": 5,
+      "rules": [
+        "modal"
+      ],
+      "text": "Hosted macOS qualification found a fixture construction failure: APFS refused to create a non-UTF-8 filename with `EILSEQ`, before the detector could inspect it. The fixture now checks that specific filesystem refusal. On filesystems that admit the filename, the scanner must still reject it with its non-UTF-8 directory-entry diagnostic. Permission/storage errors, scanner acceptance and unrelated scanner failures cannot pass the control; created entries are cleaned up.",
+      "source": "comment 36",
+      "author": "paudley",
+      "date": "2026-09-30T10:27:56Z"
+    },
+    {
+      "id": "C36.2",
+      "line": 9,
+      "rules": [
+        "modal"
+      ],
+      "text": "Only the Python detector fixture and its documentation changed. The measured engines, fuzz harnesses, runner and registered tooling bytes remain identical, preserving the actual final campaign/resource evidence. Clean packaging and all six hosted Verify lanes have been started again on this exact commit. Actual repaired macOS execution remains a required hosted gate; no PR is being opened on the failed earlier run.",
+      "source": "comment 36",
+      "author": "paudley",
+      "date": "2026-09-30T10:27:56Z"
+    },
+    {
+      "id": "C38.1",
+      "line": 9,
+      "rules": [
+        "modal"
+      ],
+      "text": "The repair registers and verifies the matching public loader debug artifact, retains profiler stdout/stderr/tool logs on failure, adds early strict profiler checks, and supplies the two WASM artifact targets. Full measurements, the local gate and a new exact-head hosted run are required before the non-draft PR. No profiler flags, workload coverage or resource limits are relaxed. Issue #1 remains open; no merge, tag or publication occurred.",
+      "source": "comment 38",
+      "author": "paudley",
+      "date": "2026-09-30T11:12:14Z"
+    },
+    {
+      "id": "C39.1",
+      "line": 5,
+      "rules": [
+        "modal"
+      ],
+      "text": "The profiling runtime now verifies and records the exact matching public loader debug artifact. Profiler exit 1 and memory-error exit 97 both fail with retained stdout, stderr and tool logs. Real native/Memcheck/Massif startup checks run before qualification; Verify provisions the required WASM targets and registered extractor, logging its actual distribution revision. Strict profiler flags, workload coverage and resource limits are unchanged.",
+      "source": "comment 39",
+      "author": "paudley",
+      "date": "2026-09-30T11:20:05Z"
+    },
+    {
+      "id": "C39.2",
+      "line": 11,
+      "rules": [
+        "modal"
+      ],
+      "text": "Exact-head [Verify run 36707816916](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36707816916) is dispatched and pending; clean five-package verification is running. All six lanes must succeed and their complete logs be reviewed before the non-draft PR. No merge, tag, publication or issue closure occurred.",
+      "source": "comment 39",
+      "author": "paudley",
+      "date": "2026-09-30T11:20:05Z"
+    },
+    {
+      "id": "C41.1",
+      "line": 18,
+      "rules": [
+        "modal"
+      ],
+      "text": "Package verification and exact-head hosted Verify run [36732604500](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36732604500) are in progress. No hosted or packaging pass is claimed here. No PR, tag, merge or publication has been performed; the final-head hosted gate remains required before Stage 1 PR creation.",
+      "source": "comment 41",
+      "author": "paudley",
+      "date": "2026-09-30T14:54:56Z"
+    },
+    {
+      "id": "C45.1",
+      "line": 13,
+      "rules": [
+        "modal"
+      ],
+      "text": "| G5: Hosted verification for the branch head did not execute. | HIGH, external blocker | All six jobs in run 36750521007 have no steps and no assigned runner. GitHub annotations identify failed recent account payments or a spending limit; macOS additionally reports arm64 capacity. Preserve the full required workflow. Re-fetch final-head checks and report this blocker unless hosted execution becomes available. | Evidence updates only; no billing, credential, workflow-bypass or account-control changes. |",
+      "source": "comment 45",
+      "author": "paudley",
+      "date": "2026-09-30T17:29:33Z"
+    },
+    {
+      "id": "C47.1",
+      "line": 5,
+      "rules": [
+        "modal"
+      ],
+      "text": "G8 (HIGH): after a valid `a.txt` transaction, placing unrelated bytes in `other/.purrassist-<transaction-id>.tmp` makes `recover` delete that unrelated file and report `OrphanRemoved`. Matching the basename alone does not establish ownership or validate the temporary bytes. Repair will require a validated journal, its exact expected target-directory temporary path, and compatible recorded replacement bytes; unknown/conflicting/corrupt artifacts must remain intact and observable. Dedicated recovery and interruption controls will precede a separate normal-hook commit and branch push. This is additional required remediation, not an accepted limitation.",
+      "source": "comment 47",
+      "author": "paudley",
+      "date": "2026-09-30T17:38:39Z"
+    },
+    {
+      "id": "C49.1",
+      "line": 4,
+      "rules": [
+        "modal"
+      ],
+      "text": "- Admit those allocations before they occur, retain reservations for their actual lifetimes, and release temporary search storage when ownership ends. Test output-size scaling, frontier growth, insufficient budgets, and cancellation through the public API. Resource exhaustion must remain `BudgetExceeded(ScratchBytes)`, never success or an emptiness claim.",
+      "source": "comment 49",
+      "author": "paudley",
+      "date": "2026-09-30T18:07:59Z"
+    },
+    {
+      "id": "C55.1",
+      "line": 1,
+      "rules": [
+        "modal"
+      ],
+      "text": "**G9 (HIGH) repaired** in 2a7dccb: reference relabeling changes the reference label while preserving visible link text and image alt text. Shortcut and collapsed uses materialize an explicit second label. Both CommonMark and GFM rendering must remain identical; conflicting labels and newly activated unrelated references are rejected before returning a plan.",
+      "source": "comment 55",
+      "author": "paudley",
+      "date": "2026-09-30T18:15:44Z"
+    },
+    {
+      "id": "C57.1",
+      "line": 1,
+      "rules": [
+        "modal"
+      ],
+      "text": "**G2 (HIGH) repaired** in d982fb7: witness generation constrains `format` only when the applicable resource dialect enables the format-assertion vocabulary. Annotation-only formats still produce observations, including under `not`, without excluding valid witnesses or manufacturing refutations. Required and optional supported assertion vocabularies retain enforcement.",
+      "source": "comment 57",
+      "author": "paudley",
+      "date": "2026-09-30T19:19:56Z"
+    },
+    {
+      "id": "C63.1",
+      "line": 14,
+      "rules": [
+        "modal"
+      ],
+      "text": "- R11-R14: isolated issue branch, signed commits, preserved unrelated main work, no commit-hook bypass, and final merge exclusively through the required ghprsq tool.",
+      "source": "comment 63",
+      "author": "paudley",
+      "date": "2026-09-30T21:35:17Z"
+    },
+    {
+      "id": "C64.1",
+      "line": 14,
+      "rules": [
+        "scope-out"
+      ],
+      "text": "- Hosted CI is out of scope for this stage.",
+      "source": "comment 64",
+      "author": "paudley",
+      "date": "2026-10-12T18:35:44Z"
+    },
+    {
+      "id": "C64.2",
+      "line": 30,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Rust-first, maximal utility and portability.",
+      "source": "comment 64",
+      "author": "paudley",
+      "date": "2026-10-12T18:35:44Z"
+    },
+    {
+      "id": "C64.3",
+      "line": 31,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Hard fails, and low or no optionality, including in non-code work.",
+      "source": "comment 64",
+      "author": "paudley",
+      "date": "2026-10-12T18:35:44Z"
+    },
+    {
+      "id": "C64.4",
+      "line": 32,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- `purrassist-core` has no third-party runtime dependencies.",
+      "source": "comment 64",
+      "author": "paudley",
+      "date": "2026-10-12T18:35:44Z"
+    },
+    {
+      "id": "C64.5",
+      "line": 33,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Every dependency and tool is registered and justified. Each `vendor/tooling.json` entry needs `notices`.",
+      "source": "comment 64",
+      "author": "paudley",
+      "date": "2026-10-12T18:35:44Z"
+    },
+    {
+      "id": "C64.6",
+      "line": 34,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Every source file has an SPDX header.",
+      "source": "comment 64",
+      "author": "paudley",
+      "date": "2026-10-12T18:35:44Z"
+    },
+    {
+      "id": "C64.7",
+      "line": 35,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Capability claims need executable evidence.",
+      "source": "comment 64",
+      "author": "paudley",
+      "date": "2026-10-12T18:35:44Z"
+    },
+    {
+      "id": "C64.8",
+      "line": 36,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Docs distinguish implemented behaviour from plans.",
+      "source": "comment 64",
+      "author": "paudley",
+      "date": "2026-10-12T18:35:44Z"
+    },
+    {
+      "id": "C64.9",
+      "line": 37,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- No user-specific services, credentials or private infrastructure.",
+      "source": "comment 64",
+      "author": "paudley",
+      "date": "2026-10-12T18:35:44Z"
+    },
+    {
+      "id": "C64.10",
+      "line": 38,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Hooks are never bypassed.",
+      "source": "comment 64",
+      "author": "paudley",
+      "date": "2026-10-12T18:35:44Z"
+    },
+    {
+      "id": "C64.11",
+      "line": 39,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- `make check` is the local gate; packaging needs its own evidence.",
+      "source": "comment 64",
+      "author": "paudley",
+      "date": "2026-10-12T18:35:44Z"
+    },
+    {
+      "id": "C64.12",
+      "line": 143,
+      "rules": [
+        "modal"
+      ],
+      "text": "| Restated facts are sourced, not hand-maintained; stale facts corrected | 1 | `python3 scripts/check-docs.py` exits 0. `python3 scripts/test-check-docs.py` has, for every rule, a fixture copy that violates it and must fail with that rule's named error, plus a fixture where the sentence the rule reads is absent, which must fail (\"fact sentence not found\"; every fact regex fails on zero matches). Rules: release set and order from `RELEASE_ORDER`; workspace version; fuzz-target count from `scripts/fuzz.py` `TARGETS`; receipt version from `RECEIPT_VERSION`; dialect ids from the `docs/tool-calls/dialects/*.md` stems in every file that lists them; relative links resolve; SPDX on tracked `*.md` (extending the existing scan in `check-repository.py`); no `.stage` references in public docs; a case-insensitive banned-phrase list, matched after collapsing all whitespace runs (including newlines) to one space, with a fixture where a phrase wraps across lines, covering these regexes, applied to the collapsed text: `issue branch`, `nine (mutation \\|coverage-guided )?targets`, `wire v2`, `reviewed merge commit`, `follows? (the )?review and merge`, `after review and merge`, `no placeholder record`, `not yet done`, `five of six`, `Pre-release`, `stage report`, `proved by the [^.]*hosted`. **One-time baseline check (Task 1 focused check, recorded in `validation.md`, not in `make check`):** run the rule over the `f11b45e` versions of README, RELEASE, QUALIFICATION, IMPLEMENTATION and FUZZING (via `git show` into a temp directory). It must flag every stale site in the inventory, including the wrapped sites RELEASE 6\u20137, QUALIFICATION 7\u20138, 142\u2013143 and 226\u2013227. Scope: all tracked `*.md` outside `.stage/`, `vendor/` and `crates/core/tests/data/`. |",
+      "source": "comment 64",
+      "author": "paudley",
+      "date": "2026-10-12T18:35:44Z"
+    },
+    {
+      "id": "C64.13",
+      "line": 146,
+      "rules": [
+        "modal"
+      ],
+      "text": "| Tool reference is a generated projection of the registry | 2 | The new test `tools_reference_matches_registry` in `crates/cli/tests/protocol.rs` renders, from `Tools::definitions()` (name, description, input properties with type and required, output top-level properties) in registry order, the block between `<!-- tools-reference:begin -->` and `<!-- tools-reference:end -->` in `docs/TOOLS.md`. It asserts byte equality and prints a diff on failure; `PURRASSIST_BLESS=1` rewrites it and panics if `CI` is set, following the `recovery_goldens` precedent. Each generated entry shows the MCP `tools/call` name, `purrassist call NAME --root DIR < args.json`, and its example file when one exists. Hand-written per-tool narrative (moved from the README) sits outside the block, under `### <tool>` headings. `check-docs.py` counts the hand-written `### <tool>` headings outside the generated block, against the tool names inside it (the block itself is byte-pinned by the Rust test). There must be exactly one heading per name, and no headings for unknown names. |",
+      "source": "comment 64",
+      "author": "paudley",
+      "date": "2026-10-12T18:35:44Z"
+    },
+    {
+      "id": "C64.14",
+      "line": 149,
+      "rules": [
+        "modal"
+      ],
+      "text": "| No README claim is lost in the move | 2 | Task 2 runs a one-time migration check as a focused check and records it in `validation.md`; there is no `git` in `make check`. It extracts every backticked token and link target from `git show f11b45e:README.md` and asserts that each appears in the new README \u222a `docs/TOOLS.md`, or is listed in a deliberate-removal table in `validation.md`, each entry with its reason (for example a stale count). The Task 2 reviewer must accept every removal. The command and its output are recorded in the Task 2 review. |",
+      "source": "comment 64",
+      "author": "paudley",
+      "date": "2026-10-12T18:35:44Z"
+    },
+    {
+      "id": "C64.15",
+      "line": 156,
+      "rules": [
+        "modal"
+      ],
+      "text": "| Social preview image | 4 | `docs/social-preview.svg` (SPDX, 1280\u00d7640, logo inlined, single font \"Noto Sans\" with no fallback) and `docs/social-preview.png` are registered in the new `docs/assets.json`: SVG sha256, PNG sha256, render command, `rsvg-convert` version, the font file sha256, and the license. The PNG license is recorded by a REUSE-style `docs/social-preview.png.license` sidecar, and the SPDX scan accepts sidecars for binaries. `rsvg-convert` (`LGPL-2.1-or-later`) and Noto Sans (`OFL-1.1`, recorded by upstream URL, version and file sha256, not a local path) are registered in `vendor/tooling.json` with vendored notices and justified in `docs/DEPENDENCIES.md` as manual asset-rendering tools only. `check-docs.py` checks that the PNG IHDR is 1280\u00d7640, that the size is under 1,000,000 bytes, and that both digests equal the registry; there are failing fixtures for each. Not in `make check`: a fresh render under the recorded tool and font must reproduce the PNG sha256. The logo's `feDropShadow` rendering is verified visually. |",
+      "source": "comment 64",
+      "author": "paudley",
+      "date": "2026-10-12T18:35:44Z"
+    },
+    {
+      "id": "C65.1",
+      "line": 8,
+      "rules": [
+        "modal"
+      ],
+      "text": "- Every rule has a fixture in `scripts/test-check-docs.py` that must fail (87 tests).",
+      "source": "comment 65",
+      "author": "paudley",
+      "date": "2026-10-12T18:56:32Z"
+    }
+  ],
+  "silent_comments": [
+    {
+      "comment": 2,
+      "author": "paudley",
+      "date": "2026-09-28T19:07:06Z"
+    },
+    {
+      "comment": 3,
+      "author": "paudley",
+      "date": "2026-09-28T19:24:20Z"
+    },
+    {
+      "comment": 6,
+      "author": "paudley",
+      "date": "2026-09-28T21:42:25Z"
+    },
+    {
+      "comment": 7,
+      "author": "paudley",
+      "date": "2026-09-28T22:22:58Z"
+    },
+    {
+      "comment": 8,
+      "author": "paudley",
+      "date": "2026-09-29T00:33:10Z"
+    },
+    {
+      "comment": 13,
+      "author": "paudley",
+      "date": "2026-09-30T00:33:54Z"
+    },
+    {
+      "comment": 14,
+      "author": "paudley",
+      "date": "2026-09-30T00:44:02Z"
+    },
+    {
+      "comment": 15,
+      "author": "paudley",
+      "date": "2026-09-30T00:49:16Z"
+    },
+    {
+      "comment": 17,
+      "author": "paudley",
+      "date": "2026-09-30T00:59:56Z"
+    },
+    {
+      "comment": 18,
+      "author": "paudley",
+      "date": "2026-09-30T01:16:30Z"
+    },
+    {
+      "comment": 20,
+      "author": "paudley",
+      "date": "2026-09-30T02:02:42Z"
+    },
+    {
+      "comment": 25,
+      "author": "paudley",
+      "date": "2026-09-30T07:41:36Z"
+    },
+    {
+      "comment": 26,
+      "author": "paudley",
+      "date": "2026-09-30T07:42:33Z"
+    },
+    {
+      "comment": 35,
+      "author": "paudley",
+      "date": "2026-09-30T10:14:11Z"
+    },
+    {
+      "comment": 37,
+      "author": "paudley",
+      "date": "2026-09-30T10:30:26Z"
+    },
+    {
+      "comment": 40,
+      "author": "paudley",
+      "date": "2026-09-30T11:22:55Z"
+    },
+    {
+      "comment": 42,
+      "author": "paudley",
+      "date": "2026-09-30T15:03:07Z"
+    },
+    {
+      "comment": 43,
+      "author": "paudley",
+      "date": "2026-09-30T15:10:34Z"
+    },
+    {
+      "comment": 44,
+      "author": "paudley",
+      "date": "2026-09-30T17:19:52Z"
+    },
+    {
+      "comment": 46,
+      "author": "paudley",
+      "date": "2026-09-30T17:31:09Z"
+    },
+    {
+      "comment": 48,
+      "author": "paudley",
+      "date": "2026-09-30T17:49:34Z"
+    },
+    {
+      "comment": 50,
+      "author": "paudley",
+      "date": "2026-09-30T18:09:01Z"
+    },
+    {
+      "comment": 51,
+      "author": "paudley",
+      "date": "2026-09-30T18:10:39Z"
+    },
+    {
+      "comment": 52,
+      "author": "paudley",
+      "date": "2026-09-30T18:11:48Z"
+    },
+    {
+      "comment": 53,
+      "author": "paudley",
+      "date": "2026-09-30T18:13:33Z"
+    },
+    {
+      "comment": 54,
+      "author": "paudley",
+      "date": "2026-09-30T18:14:42Z"
+    },
+    {
+      "comment": 56,
+      "author": "paudley",
+      "date": "2026-09-30T18:16:37Z"
+    },
+    {
+      "comment": 58,
+      "author": "paudley",
+      "date": "2026-09-30T19:22:50Z"
+    },
+    {
+      "comment": 59,
+      "author": "paudley",
+      "date": "2026-09-30T19:37:03Z"
+    },
+    {
+      "comment": 60,
+      "author": "paudley",
+      "date": "2026-09-30T19:44:10Z"
+    },
+    {
+      "comment": 61,
+      "author": "paudley",
+      "date": "2026-09-30T21:06:20Z"
+    },
+    {
+      "comment": 62,
+      "author": "paudley",
+      "date": "2026-09-30T21:26:55Z"
+    },
+    {
+      "comment": 66,
+      "author": "paudley",
+      "date": "2026-10-12T19:15:41Z"
+    },
+    {
+      "comment": 67,
+      "author": "paudley",
+      "date": "2026-10-12T19:23:03Z"
+    },
+    {
+      "comment": 68,
+      "author": "paudley",
+      "date": "2026-10-12T19:31:33Z"
+    },
+    {
+      "comment": 69,
+      "author": "paudley",
+      "date": "2026-10-12T19:39:23Z"
+    }
+  ]
+}

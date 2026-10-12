@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 1,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "auth-required",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/1-complete-purrassist-0-1-0-plan-and",
+  "branch": "paudley/1-complete-purrassist-0-1-0-plan-and",
+  "slug": "complete-purrassist-0-1-0-plan-and",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/1-complete-purrassist-0-1-0-plan-and/.stage/complete-purrassist-0-1-0-plan-and",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "f11b45ece8dbf8b83f9d427fb4949d0ca2f02350",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/1-complete-purrassist-0-1-0-plan-and",
+    "branch:paudley/1-complete-purrassist-0-1-0-plan-and",
+    "stage:/home/paudley/Active/purrassist/.worktrees/1-complete-purrassist-0-1-0-plan-and/.stage/complete-purrassist-0-1-0-plan-and",
+    "issue:/home/paudley/Active/purrassist/.worktrees/1-complete-purrassist-0-1-0-plan-and/.stage/complete-purrassist-0-1-0-plan-and/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-12T12:03:40-0600"
+}

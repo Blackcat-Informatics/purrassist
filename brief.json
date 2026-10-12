@@ -1,0 +1,122 @@
+{
+  "issue": 1,
+  "repo": "Blackcat-Informatics/purrassist",
+  "forge": "github",
+  "title": "Complete PurRAssist 0.1.0 plan and release qualification",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {
+    "1": "Complete PurRAssist 0.1.0 plan and release qualification",
+    "2": "feat(1): complete 0.1.0 scope and release qualification",
+    "3": "Tool-call recovery: typed tool definitions, multi-dialect parsing, schema-guided repair, streaming",
+    "8": "Tool-call recovery: arrays of nested-parameter objects, strict forced cardinality, marker-free reasoning range",
+    "15": "purrassist-derive: zero-dependency #[derive(ToolDefinition)] and #[derive(ToolEnum)]",
+    "6": "Tool-call fuzz: finish the rejected-span oracle failures left at the #3 merge",
+    "7": "Audit the unreviewed #3 stage-3 commits and close the F14/F19 rule's known limits",
+    "10": "Tool-call recovery: restarted DeepSeek-V3.1 sections cost quadratic work and super-quadratic time",
+    "11": "Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes)",
+    "12": "Tool-call recovery: add the pythonic.v1 dialect and pythonic codec",
+    "13": "Tool-call recovery: add the glm-4.5.v1 dialect and kv-pairs codec",
+    "14": "Tool-call recovery: add the gemma3-tool-code.v1 dialect",
+    "16": "Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress)",
+    "17": "Tool-call recovery: reassemble provider streaming events (Anthropic SSE tool_use, OpenAI tool_calls deltas)",
+    "18": "Tool-call recovery: special-token-stripped dialect variants (*-stripped.v1)",
+    "5": "feat(3): tool-call recovery \u2014 typed definitions, grammar-driven parsing (12 dialects), schema-guided repair",
+    "4": "Tool-call recovery, part 2: streaming recognizer, remaining dialects, purrassist-derive",
+    "9": "Tool-call recovery: arrays of nested-parameter objects, strict forced choice, marker-free reasoning blocks"
+  },
+  "link_relations": {
+    "1": "closes",
+    "2": "mentions",
+    "3": "mentions",
+    "8": "mentions",
+    "15": "mentions",
+    "6": "mentions",
+    "7": "mentions",
+    "10": "mentions",
+    "11": "mentions",
+    "12": "mentions",
+    "13": "mentions",
+    "14": "mentions",
+    "16": "mentions",
+    "17": "mentions",
+    "18": "mentions",
+    "5": "2-hop",
+    "4": "2-hop",
+    "9": "2-hop"
+  },
+  "related": [
+    {
+      "number": 15,
+      "title": "purrassist-derive: zero-dependency #[derive(ToolDefinition)] and #[derive(ToolEnum)]",
+      "state": "CLOSED"
+    },
+    {
+      "number": 8,
+      "title": "Tool-call recovery: arrays of nested-parameter objects, strict forced cardinality, marker-free reasoning range",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "none": 1,
+    "performance": 1
+  },
+  "prior_attempts": {
+    "commits": [
+      "1a8509cbf fix: isolate release archive verification from shared Cargo caches",
+      "3246d6579 refactor: consolidate duplicate helpers and enforce strict census",
+      "61d6986de fix: release scratch meter handles when retaining charges",
+      "ba2a35cc3 feat: expose witness generation as a tool",
+      "2b43d223a fix: restore rustdoc and syntax-oracle gates",
+      "23caff46d feat: derive every tool surface from one operation registry",
+      "a45e2c8d0 feat: generate JSON Schema witnesses with an algebraic pipeline",
+      "868d19613 fix: locate packaged archives wherever cargo writes them and keep lockfiles",
+      "788270396 build: add trusted-publishing release workflow and published-package verification",
+      "24787e1a3 test: compare helper transcripts and browser WASM with native output",
+      "4f055c5c8 test: qualify edit preservation with generated adversarial documents",
+      "7690c4a66 feat: unify edits as a patch algebra with structural Markdown operations",
+      "7e8f7f5a9 test: count oracle allocations per thread",
+      "3ed24fc2f feat: evaluate every JSON Schema format and report unsupported vocabularies",
+      "de8e8fda0 docs: shorten the ScratchString summary line for stable clippy",
+      "b1034e488 fix: flush retried journal pieces through writable handles",
+      "4dfd1b432 feat: match ECMA-262 patterns with a symbolic derivative engine",
+      "9994d4d61 fix: open Windows replacement handles with delete access",
+      "58bcb73f9 fix: release the writer lock synchronously on every platform",
+      "0b7c7de05 fix: make Windows durability code lint-clean and fail explicitly",
+      "b53ce9fbd feat: qualify filesystem durability on Windows",
+      "65ef9081e feat: bound tree-sitter allocations through the governor",
+      "8e360f3c1 fix: make scratch charges independent of pointer width",
+      "974ccac6e feat: publish receipts from a provenance derivation forest",
+      "48d4e942c feat: enforce scratch accounting through budgeted containers",
+      "2e286923d feat: resolve strings through a refinement lattice with protected tokens"
+    ],
+    "branches": [],
+    "prs": [
+      {
+        "number": 20,
+        "title": "docs(release): release-ready 0.1.0 documentation and three-interface presentation",
+        "state": "OPEN",
+        "url": "https://github.com/Blackcat-Informatics/purrassist/pull/20",
+        "this_stage": true
+      },
+      {
+        "number": 2,
+        "title": "feat(1): complete 0.1.0 scope and release qualification",
+        "state": "MERGED",
+        "url": "https://github.com/Blackcat-Informatics/purrassist/pull/2",
+        "this_stage": false
+      }
+    ],
+    "own_branch": "paudley/1-complete-purrassist-0-1-0-plan-and"
+  },
+  "coverage": [
+    "issue #1 + 69 comment(s) via github",
+    "link crawl: 18 issue(s) within 2 hop(s) of `#N` references",
+    "forge search on ['Complete', 'PurRAssist', '0.1.0']: 2 other item(s)",
+    "GhpRsq-Defect-Class trailers: 2 distinct class(es) in the last 200 commits",
+    "prior attempts: 26 commit(s) citing #1 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #1: 2",
+    "requirement candidates: 65 line(s); 36 comment(s) matched no rule",
+    "referenced artifacts: 150 path(s) (68 on disk), 150 identifier(s), 8 workspace package(s), 16 URL(s); TRUNCATED (paths, identifiers): only the first entries of those kinds were checked"
+  ]
+}
