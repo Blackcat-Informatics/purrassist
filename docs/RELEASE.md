@@ -95,9 +95,11 @@ the crates.io API with the same repository and workflow but no environment.
 The owner decided to keep it without an environment. Today only the `publish`
 job, which runs in `crates-io`, has `id-token: write`, so it is the only job
 that can obtain a `purrassist-derive` publishing token. Without an environment,
-any job that a later edit of `publish.yml` grants `id-token: write` could too,
-so `scripts/check-release.py` rejects an `id-token` permission anywhere in
-`publish.yml` outside the `publish` job.
+any job that a later edit of `publish.yml` grants `id-token: write` could too.
+`scripts/check-release.py` therefore holds `publish.yml` to a closed shape:
+exactly the `gate` and `publish` jobs, no YAML anchors or aliases, no
+`write-all` grant, and every `id-token` key (block, inline or quoted) inside
+the `publish` job. Changing that shape needs a matching change to the check.
 
 Because a repository, workflow or environment rename would silently break
 trusted publishing, re-confirm all six through the crates.io API immediately

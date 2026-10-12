@@ -135,6 +135,30 @@ class WorkflowValidation(unittest.TestCase):
                  '    steps:\n      - run: true\n')
         self.check_copy(text + extra, 'only the publish job may declare an id-token permission')
 
+    def test_a_job_beyond_gate_and_publish_fails_however_it_is_spelled(self):
+        text = PUBLISH.read_text(encoding='utf-8').rstrip('\n') + '\n'
+        for header in ('  extra:', '  extra: # helper', '  extra: ', '  "extra":', "  'job2':"):
+            with self.subTest(header=header):
+                extra = header + '\n    runs-on: ubuntu-24.04\n    steps:\n      - run: true\n'
+                self.check_copy(text + extra, 'must define exactly the jobs gate and publish')
+
+    def test_an_id_token_in_a_trailing_commented_job_header_fails(self):
+        text = PUBLISH.read_text(encoding='utf-8').rstrip('\n') + '\n'
+        extra = ('  extra: # helper\n    runs-on: ubuntu-24.04\n    permissions:\n      id-token: write\n'
+                 '    steps:\n      - run: true\n')
+        self.check_copy(text + extra, 'only the publish job may declare an id-token permission')
+
+    def test_anchors_and_aliases_fail(self):
+        text = PUBLISH.read_text(encoding='utf-8')
+        self.assertIn('    permissions:\n      id-token: write\n', text)
+        anchored = text.replace('    permissions:\n      id-token: write\n',
+                                '    permissions: &oidc\n      id-token: write\n', 1)
+        self.check_copy(anchored, 'must not use YAML anchors or aliases')
+        self.check_copy(self.gate_with('    permissions: *oidc\n'), 'must not use YAML anchors or aliases')
+
+    def test_shell_redirections_are_not_anchors(self):
+        self.check_copy(self.gate_with('    # echo done >&2 && true\n'))
+
     def test_a_commented_id_token_is_ignored(self):
         self.check_copy(self.gate_with('    # id-token: write is reserved for the publish job\n'))
 
