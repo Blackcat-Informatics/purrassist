@@ -20,7 +20,7 @@ use crate::json::{Member, Node, Value};
 
 /// Everything [`super::evaluate::run`] collects while walking one instance
 /// against one schema: hard assertion failures, plus the always-on
-/// evidence requirement 1 (`format`) and the Task 6 pattern-engine wiring
+/// `format` annotation evidence and the pattern-engine wiring
 /// check both require, regardless of which branch's assertions passed.
 pub(super) struct EvalResult {
     pub violations: Vec<Violation>,
@@ -88,10 +88,10 @@ struct Evaluation {
     properties_held: Held,
     /// Array positions evaluated at this instance scope (may repeat).
     items: ScratchVec<usize>,
-    /// Requirement 1: format annotation results, always recorded regardless
+    /// Format annotation results, always recorded regardless
     /// of whether the enclosing branch's assertions passed.
     format_evidence: ScratchVec<Validation>,
-    /// Task 6 wiring: `(location id, "pattern" | "patternProperties/<name>")`
+    /// Pattern-engine wiring: `(location id, "pattern" | "patternProperties/<name>")`
     /// for every compiled pattern this evaluation actually exercised, each
     /// once.
     pattern_ids: ScratchVec<(usize, String)>,
@@ -586,7 +586,7 @@ impl Evaluator<'_, '_> {
         }
         Ok(())
     }
-    /// Requirement 1: `format` is always evaluated and always reported as
+    /// `format` is always evaluated and always reported as
     /// annotation evidence (`schema.format.<name>-v1`, pass/fail, per
     /// instance location); it becomes an assertion `Violation` only when
     /// this location's dialect declared the format-assertion vocabulary

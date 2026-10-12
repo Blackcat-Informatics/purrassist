@@ -6,6 +6,11 @@ Explicit host boundaries for `PurRAssist`: root-scoped UTF-8 files, journaled
 replacement, conditional undo, shared tools, stdio MCP, and resumable helper
 request/response adapters.
 
+**Status: 0.1.0.** This crate is the filesystem and helper integration behind
+two of the three equal interfaces of `PurRAssist`: the CLI and the MCP server
+(`purrassist-cli`) both serve its tool registry. Rust users reach the engines
+through the `purrassist` crate.
+
 File transactions coordinate cooperating writers. Each replacement is atomic
 for one file; batches report independent outcomes. The portable path checks are
 not a sandbox against malicious concurrent directory replacement. Durable host
@@ -38,6 +43,6 @@ assert_eq!(node.pointer("/value/finish").and_then(Node::as_str), Some("calls"));
 assert_eq!(node.pointer("/value/calls/0/dialect").and_then(Node::as_str), Some("hermes.v1"));
 ```
 
-Pre-release implementation. See the
-[repository](https://github.com/Blackcat-Informatics/purrassist) for the complete
-contract. First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0.
+Version 0.1.0. Capabilities, known limitations and verification are recorded in
+the [qualification record](https://github.com/Blackcat-Informatics/purrassist/blob/rust-v0.1.0/docs/QUALIFICATION.md).
+First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0.

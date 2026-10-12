@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -164,9 +165,9 @@ class Ambient(unittest.TestCase):
         self.addCleanup(shutil.rmtree, root)
         for source in ('crates/core/src', 'crates/derive/src'):
             (root / source).mkdir(parents=True)
-            (root / source / 'lib.rs').write_text('fn ok() {}\n')
+            (root / source / 'lib.rs').write_text('fn ok() {}\n', encoding='utf-8')
         self.assertEqual(AUDIT.check_ambient_access(root), [])
-        (root / 'crates/derive/src/parse.rs').write_text('fn a() {\n    let _ = std::env::var("X");\n}\n')
+        (root / 'crates/derive/src/parse.rs').write_text('fn a() {\n    let _ = std::env::var("X");\n}\n', encoding='utf-8')
         errors = AUDIT.check_ambient_access(root)
         self.assertEqual(len(errors), 1)
         self.assertTrue(errors[0].startswith('crates/derive/src/parse.rs:2:'))
@@ -199,46 +200,206 @@ class Inventory(unittest.TestCase):
         self.assertIn('maintainer approval', errors[0])
 
 
-class DeriveExample(unittest.TestCase):
-    """`check_derive_example` over a synthetic pair of READMEs."""
+class MarkerCopies(unittest.TestCase):
+    """`check_marker_copies` over a synthetic pair of READMEs, for each marker."""
 
     BLOCK = '```rust\nlet x = 1;\n```\n'
+    NAMES = ['derive-example', 'three-interfaces-rust']
 
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.root)
         (self.root / 'crates/purrassist').mkdir(parents=True)
-        self.write('README.md', self.BLOCK)
-        self.write('crates/purrassist/README.md', self.BLOCK)
+        for name in ('README.md', 'crates/purrassist/README.md'):
+            self.write(name)
 
-    def write(self, name, block, begin='<!-- derive-example:begin -->\n',
-              end='<!-- derive-example:end -->\n'):
-        (self.root / name).write_text(f'# title\n\n{begin}{block}{end}\ntext\n')
+    def write(self, name, blocks=None, omit=None):
+        """Write `name` with a marked block per marker name; `omit` leaves out the begin marker of one."""
+        blocks = blocks or {}
+        text = '# title\n\n'
+        for marker in self.NAMES:
+            begin = '' if marker == omit else f'<!-- {marker}:begin -->\n'
+            text += f'{begin}{blocks.get(marker, self.BLOCK)}<!-- {marker}:end -->\n\ntext\n\n'
+        (self.root / name).write_text(text, encoding='utf-8')
 
     def test_identical_copies_pass(self):
-        self.assertEqual(AUDIT.check_derive_example(self.root), [])
+        self.assertEqual(AUDIT.check_marker_copies(self.root), [])
+
+    def test_the_checkout_declares_both_markers(self):
+        self.assertEqual(AUDIT.MARKER_COPY_NAMES, self.NAMES)
+        self.assertEqual(AUDIT.check_marker_copies(AUDIT.ROOT), [])
 
     def test_drifted_root_copy_fails_naming_both_files(self):
-        self.write('README.md', self.BLOCK.replace('1', '2'))
-        errors = AUDIT.check_derive_example(self.root)
-        self.assertEqual(len(errors), 1)
-        self.assertTrue(errors[0].startswith('README.md: derive example differs'))
-        self.assertIn('crates/purrassist/README.md', errors[0])
+        for marker in self.NAMES:
+            with self.subTest(marker=marker):
+                self.write('README.md', {marker: self.BLOCK.replace('1', '2')})
+                errors = AUDIT.check_marker_copies(self.root)
+                self.assertEqual(len(errors), 1)
+                self.assertTrue(errors[0].startswith(f'README.md: {marker} block differs'))
+                self.assertIn('crates/purrassist/README.md', errors[0])
 
     def test_one_byte_of_whitespace_fails(self):
-        self.write('README.md', self.BLOCK.replace('let x', 'let  x'))
-        self.assertEqual(len(AUDIT.check_derive_example(self.root)), 1)
+        for marker in self.NAMES:
+            with self.subTest(marker=marker):
+                self.write('README.md', {marker: self.BLOCK.replace('let x', 'let  x')})
+                self.assertEqual(len(AUDIT.check_marker_copies(self.root)), 1)
 
     def test_missing_marker_fails(self):
-        self.write('README.md', self.BLOCK, begin='')
-        errors = AUDIT.check_derive_example(self.root)
-        self.assertEqual(len(errors), 1)
-        self.assertTrue(errors[0].startswith('README.md: needs exactly one'))
+        for marker in self.NAMES:
+            with self.subTest(marker=marker):
+                self.write('README.md', omit=marker)
+                errors = AUDIT.check_marker_copies(self.root)
+                self.assertEqual(len(errors), 1)
+                self.assertTrue(errors[0].startswith('README.md: needs exactly one'))
+                self.assertIn(f'{marker}:begin', errors[0])
 
-    def test_missing_file_fails(self):
+    def test_reversed_markers_fail(self):
+        (self.root / 'README.md').write_text(
+            '<!-- derive-example:end -->\n<!-- derive-example:begin -->\n'
+            + ''.join(f'<!-- {m}:begin -->\n{self.BLOCK}<!-- {m}:end -->\n' for m in self.NAMES[1:]), encoding='utf-8')
+        errors = AUDIT.check_marker_copies(self.root)
+        self.assertEqual(errors, ['README.md: derive-example end marker precedes the begin marker'])
+
+    def test_missing_file_fails_for_every_marker(self):
         (self.root / 'README.md').unlink()
-        self.assertEqual(AUDIT.check_derive_example(self.root),
-                         ['README.md: derive example copy is missing'])
+        self.assertEqual(AUDIT.check_marker_copies(self.root),
+                         [f'README.md: {marker} copy is missing' for marker in self.NAMES])
+
+    def test_a_marker_missing_from_the_doctested_file_is_reported(self):
+        self.write('crates/purrassist/README.md', omit='three-interfaces-rust')
+        errors = AUDIT.check_marker_copies(self.root)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith('crates/purrassist/README.md: needs exactly one'))
+
+
+class MarkdownAttribution(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+
+    def write(self, name, text):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding='utf-8')
+
+    HEADER = ('<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. -->\n'
+              '<!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->\n')
+
+    def test_headed_markdown_passes(self):
+        self.write('docs/A.md', self.HEADER + '# A\n')
+        self.assertEqual(AUDIT.check_markdown_attribution(self.root, ['docs/A.md']), [])
+
+    def test_unheaded_markdown_fails_naming_the_file(self):
+        self.write('docs/B.md', '# B\n')
+        self.assertEqual(AUDIT.check_markdown_attribution(self.root, ['docs/B.md']),
+                         ['docs/B.md: missing attribution'])
+
+    def test_one_missing_tag_fails(self):
+        self.write('C.md', '<!-- SPDX-License-Identifier: MIT -->\n# C\n')
+        self.assertEqual(len(AUDIT.check_markdown_attribution(self.root, ['C.md'])), 1)
+
+    def test_tracked_markdown_is_the_git_index_minus_test_data(self):
+        subprocess.run(['git', 'init', '--quiet'], cwd=self.root, check=True)
+        for name in ['README.md', 'docs/A.md', 'crates/core/tests/data/x/README.md', 'untracked.md']:
+            self.write(name, self.HEADER)
+        subprocess.run(['git', 'add', 'README.md', 'docs/A.md', 'crates/core/tests/data/x/README.md'],
+                       cwd=self.root, check=True)
+        self.assertEqual(AUDIT.tracked_markdown(self.root), ['README.md', 'docs/A.md'])
+
+    def test_current_repository_markdown_is_attributed(self):
+        root = Path(__file__).resolve().parent.parent
+        names = AUDIT.tracked_markdown(root)
+        self.assertIn('README.md', names)
+        self.assertEqual(AUDIT.check_markdown_attribution(root, names), [])
+
+
+# Real binary content: the PNG signature followed by a NUL-bearing IHDR chunk header.
+# Git classifies it `i/-text` through the NUL byte, not through any file name.
+BINARY = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01'
+
+
+class BinaryAttribution(unittest.TestCase):
+    SIDECAR = ('SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.\n'
+               'SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0\n')
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        (self.root / 'docs').mkdir()
+        (self.root / 'docs/a.png').write_bytes(BINARY)
+
+    def test_binary_with_a_sidecar_passes(self):
+        (self.root / 'docs/a.png.license').write_text(self.SIDECAR, encoding='utf-8')
+        self.assertEqual(AUDIT.check_binary_attribution(self.root, ['docs/a.png']), [])
+
+    def test_binary_without_a_sidecar_fails_naming_it(self):
+        self.assertEqual(AUDIT.check_binary_attribution(self.root, ['docs/a.png']),
+                         ['docs/a.png: missing attribution sidecar docs/a.png.license'])
+
+    def test_sidecar_missing_a_tag_fails(self):
+        (self.root / 'docs/a.png.license').write_text('SPDX-License-Identifier: MIT\n', encoding='utf-8')
+        self.assertEqual(AUDIT.check_binary_attribution(self.root, ['docs/a.png']),
+                         ['docs/a.png: sidecar docs/a.png.license lacks the SPDX tags'])
+
+    def test_tracked_binaries_are_the_index_minus_test_data_plus_the_required_ones(self):
+        subprocess.run(['git', 'init', '--quiet'], cwd=self.root, check=True)
+        (self.root / 'crates/core/tests/data').mkdir(parents=True)
+        (self.root / 'crates/core/tests/data/x.png').write_bytes(BINARY)
+        (self.root / 'docs/notes.md').write_text('x', encoding='utf-8')
+        subprocess.run(['git', 'add', '.'], cwd=self.root, check=True)
+        self.assertEqual(AUDIT.tracked_binaries(self.root),
+                         sorted(['docs/a.png', *AUDIT.REQUIRED_BINARY_ATTRIBUTION]))
+
+    def track(self, files):
+        """Replace the tree with `files` (name -> bytes), index it, and return the selected binaries."""
+        subprocess.run(['git', 'init', '--quiet'], cwd=self.root, check=True)
+        (self.root / 'docs/a.png').unlink()
+        for name, data in files.items():
+            (self.root / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / name).write_bytes(data)
+        subprocess.run(['git', 'add', '.'], cwd=self.root, check=True)
+        return AUDIT.tracked_binaries(self.root)
+
+    def test_binaries_are_selected_by_content_whatever_their_name(self):
+        names = ['docs/b.PNG', 'docs/c.webp', 'docs/d.ttf', 'docs/e.dat', 'docs/noextension']
+        selected = self.track({name: BINARY for name in names})
+        for name in names:
+            with self.subTest(name=name):
+                self.assertIn(name, selected)
+                self.assertEqual(AUDIT.check_binary_attribution(self.root, [name]),
+                                 [f'{name}: missing attribution sidecar {name}.license'])
+
+    def test_a_sidecar_satisfies_a_binary_selected_by_content(self):
+        selected = self.track({'docs/b.PNG': BINARY, 'docs/c.webp': BINARY})
+        (self.root / 'docs/b.PNG.license').write_text(self.SIDECAR, encoding='utf-8')
+        errors = AUDIT.check_binary_attribution(self.root, selected)
+        self.assertEqual(errors, ['docs/c.webp: missing attribution sidecar docs/c.webp.license',
+                                  'docs/social-preview.png: missing attribution sidecar docs/social-preview.png.license'])
+
+    def test_text_files_are_not_selected_whatever_their_name(self):
+        selected = self.track({'docs/logo.svg': b'<svg xmlns="http://www.w3.org/2000/svg"/>\n',
+                               'docs/notes.md': b'# notes\n', 'docs/fake.png': b'text, not a PNG\n'})
+        self.assertEqual(selected, sorted(AUDIT.REQUIRED_BINARY_ATTRIBUTION))
+
+    def test_the_exemption_is_only_the_test_data_prefix(self):
+        selected = self.track({'crates/core/tests/data/x.webp': BINARY, 'vendor/pkg/font.ttf': BINARY})
+        self.assertEqual(selected, sorted(['vendor/pkg/font.ttf', *AUDIT.REQUIRED_BINARY_ATTRIBUTION]))
+        self.assertEqual(AUDIT.BINARY_ATTRIBUTION_EXEMPT, ('crates/core/tests/data/',))
+
+    def test_the_social_preview_must_be_attributed_even_when_untracked(self):
+        subprocess.run(['git', 'init', '--quiet'], cwd=self.root, check=True)
+        names = AUDIT.tracked_binaries(self.root)
+        self.assertIn('docs/social-preview.png', names)
+        self.assertEqual(AUDIT.check_binary_attribution(self.root, ['docs/social-preview.png']),
+                         ['docs/social-preview.png: missing attribution sidecar docs/social-preview.png.license'])
+
+    def test_current_repository_binaries_are_attributed(self):
+        root = Path(__file__).resolve().parent.parent
+        names = AUDIT.tracked_binaries(root)
+        self.assertIn('docs/social-preview.png', names)
+        self.assertEqual(AUDIT.check_binary_attribution(root, names), [])
 
 
 class EvaluationManifest(unittest.TestCase):
@@ -249,16 +410,16 @@ class EvaluationManifest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.root)
         evaluation = self.root / 'crates/core/tests/data/evaluation'
         evaluation.mkdir(parents=True)
-        (self.root / 'input.txt').write_text('input\n')
-        (evaluation / 'generate.py').write_text('# generator\n')
-        (evaluation / 'cases.json').write_text(json.dumps([{'id': 'a', 'query': 'x'}]))
+        (self.root / 'input.txt').write_text('input\n', encoding='utf-8')
+        (evaluation / 'generate.py').write_text('# generator\n', encoding='utf-8')
+        (evaluation / 'cases.json').write_text(json.dumps([{'id': 'a', 'query': 'x'}]), encoding='utf-8')
         source = self.root / 'crates/core/examples/corpus.rs'
         source.parent.mkdir(parents=True)
-        source.write_text('fn main() {}\n')
+        source.write_text('fn main() {}\n', encoding='utf-8')
         lines = [{'id': 'a', 'category': 'c', 'input': 'x', 'truth': 'Unresolved'},
                  {'id': 'b', 'category': 'd', 'input': 'x', 'truth': []},
                  {'id': 'c', 'category': 'c', 'input': 'y', 'truth': []}]
-        (evaluation / 'corpus.jsonl').write_text(''.join(json.dumps(line) + '\n' for line in lines))
+        (evaluation / 'corpus.jsonl').write_text(''.join(json.dumps(line) + '\n' for line in lines), encoding='utf-8')
         digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
         self.manifest = {
             'generator': 'crates/core/tests/data/evaluation/generate.py',
@@ -274,14 +435,14 @@ class EvaluationManifest(unittest.TestCase):
 
     def write(self):
         path = self.root / 'crates/core/tests/data/evaluation/manifest.json'
-        path.write_text(json.dumps(self.manifest, indent=2) + '\n')
+        path.write_text(json.dumps(self.manifest, indent=2) + '\n', encoding='utf-8')
 
     def test_consistent_manifest_passes(self):
         self.assertEqual(AUDIT.check_evaluation_manifest(self.root), [])
 
     def test_changed_corpus_fails(self):
         path = self.root / 'crates/core/tests/data/evaluation/corpus.jsonl'
-        path.write_text(path.read_text().replace('"y"', '"z"'))
+        path.write_text(path.read_text(encoding='utf-8').replace('"y"', '"z"'), encoding='utf-8')
         errors = AUDIT.check_evaluation_manifest(self.root)
         self.assertEqual(errors, ['evaluation/corpus.jsonl: corpus digest or census mismatch'])
 
@@ -292,7 +453,7 @@ class EvaluationManifest(unittest.TestCase):
                          ['evaluation/corpus.jsonl: corpus digest or census mismatch'])
 
     def test_changed_generator_source_fails(self):
-        (self.root / 'crates/core/examples/corpus.rs').write_text('fn main() { changed() }\n')
+        (self.root / 'crates/core/examples/corpus.rs').write_text('fn main() { changed() }\n', encoding='utf-8')
         self.assertEqual(AUDIT.check_evaluation_manifest(self.root), [
             'evaluation/corpus.jsonl: generator source digest mismatch: crates/core/examples/corpus.rs'])
 

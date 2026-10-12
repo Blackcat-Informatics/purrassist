@@ -3,7 +3,7 @@
 //! `generate_json_witness`: governed, reachable access to
 //! [`purrassist_core::schema::Schema::generate_witness_governed`] — before
 //! this tool, `Schema::generate_witness`/`generate_witness_governed` had
-//! only `crate::schema::recovery` as a production consumer (Task 10's
+//! only `crate::schema::recovery` as a production consumer (the
 //! witness-generation surface). Compilation (including any caller-supplied
 //! `resources`) and generation share exactly one governor call; a governor
 //! hard stop (`BudgetExceeded`/`Cancelled`) is reported as `"exhausted"`

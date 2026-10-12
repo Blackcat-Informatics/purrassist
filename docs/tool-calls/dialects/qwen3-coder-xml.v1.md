@@ -234,7 +234,7 @@ the value's text:
   and never assistant text.
 - **Layout carries no meaning.** Where a closer sits on its line (after a
   newline, mid-line, indented), and whether the value is framed by
-  newlines, never decides how it is read (maintainer, adversary pass 6:
+  newlines, never decides how it is read (maintainer, issue #3 review:
   "Newlines have zero meaning here"). Trimming one framing newline on each
   side of a value is value normalization, not closer semantics.
 - **Paired markup.** A closer that closes an element the value opened

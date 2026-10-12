@@ -3,16 +3,16 @@
 
 [package]
 name = "purrassist-cli"
-description = "PurRAssist command-line and MCP tools"
+description = "PurRAssist CLI and stdio MCP server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-keywords = ["ai", "json", "recovery", "matching", "agents"]
-categories = ["parsing", "text-processing"]
+keywords = ["mcp", "cli", "json", "recovery", "agents"]
+categories = ["command-line-utilities", "development-tools"]
 authors.workspace = true
 repository.workspace = true
-documentation = "https://docs.rs/purrassist-cli"
+documentation = "https://github.com/Blackcat-Informatics/purrassist/blob/rust-v0.1.0/docs/TOOLS.md"
 
 [lints]
 workspace = true

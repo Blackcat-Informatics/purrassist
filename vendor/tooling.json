@@ -162,5 +162,27 @@
     "notices": {
       "vendor/licenses/cmake/LICENSE": "1e0d48f16c60f400838a96989684ae12cec35cb96688db11e8cb0204058cf4b8"
     }
+  },
+  {
+    "name": "rsvg-convert",
+    "version": "2.63.2",
+    "license": "LGPL-2.1-or-later",
+    "source": "https://gitlab.gnome.org/GNOME/librsvg/-/tree/2.63.2",
+    "scope": "librsvg's rsvg-convert command-line renderer. Used only to manually render the docs/social-preview.png asset from docs/social-preview.svg (recorded in docs/assets.json); never invoked at build or runtime, by `make check`, or by any workflow, and never linked or packaged into any crate. The executable is an installed system package, not vendored, and is invoked as a separate process, so the LGPL does not extend to this project's sources.",
+    "notices": {
+      "vendor/licenses/librsvg-2.63.2/LGPL-2.1-or-later.txt": "5749785c8bdefafcb5d798270ed0a967036fe2ca63dcedade1627565dfef81d2"
+    },
+    "notice_normalization": "None; the LGPL-2.1 text is byte-identical to the copy already vendored at vendor/licenses/profiling-glibc/LGPL-2.1-or-later.txt, because the installed package ships no license file."
+  },
+  {
+    "name": "noto-sans",
+    "version": "2.015",
+    "license": "OFL-1.1",
+    "source": "https://github.com/notofonts/latin-greek-cyrillic",
+    "scope": "The Noto Sans family (NotoSans-Regular.ttf and NotoSans-Bold.ttf, font Version 2.015) as the only font the social-preview SVG names. Used only to manually render the docs/social-preview.png asset from docs/social-preview.svg (recorded in docs/assets.json); never invoked at build or runtime, by `make check`, or by any workflow, and never linked or packaged into any crate. The font is not embedded in the SVG or PNG as a font file; only rendered glyph shapes appear in the PNG, which the OFL permits. Font file digests are recorded in docs/assets.json.",
+    "notices": {
+      "vendor/licenses/noto-sans-2.015/OFL.txt": "cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a"
+    },
+    "notice_normalization": "Unmodified upstream OFL.txt from https://github.com/notofonts/latin-greek-cyrillic at commit 71cf6f3ca9c185d809dd800ce9a9e58e1c16f1b1. The Arch noto-fonts package used for rendering ships an Apache-2.0 LICENSE file rather than this OFL text; the font files' own name table declares the SIL Open Font License 1.1, which is the license recorded here."
   }
 ]

@@ -672,6 +672,33 @@ fn dialect_ids_round_trip() {
     assert_ne!(DialectId::custom(custom), DialectId::Hermes);
 }
 
+/// The dialect reference pages are the one list that prose restates:
+/// `docs/tool-calls/dialects/<id>.md` exists for exactly the built-in ids,
+/// and `scripts/check-docs.py` reads the same directory to check every
+/// document that lists dialects.
+#[test]
+fn built_in_ids_equal_the_documented_dialect_pages() {
+    let pages = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/tool-calls/dialects");
+    let mut documented: Vec<String> = std::fs::read_dir(&pages)
+        .expect("dialect reference directory")
+        .map(|entry| entry.expect("directory entry").path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
+        .map(|path| {
+            path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .expect("UTF-8 page name")
+                .to_owned()
+        })
+        .collect();
+    documented.sort();
+    let mut built_in: Vec<String> = DialectId::BUILT_IN
+        .iter()
+        .map(|dialect| dialect.id().to_owned())
+        .collect();
+    built_in.sort();
+    assert_eq!(built_in, documented, "docs/tool-calls/dialects/*.md stems");
+}
+
 #[test]
 fn reasoning_markers_are_declared() {
     for dialect in [

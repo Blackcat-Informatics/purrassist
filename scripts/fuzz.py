@@ -205,7 +205,7 @@ def _tool_call_conformance_markup():
     read in sorted path order from
     `crates/core/tests/data/tool-calls/conformance/<dialect>/*.json`."""
     directory = ROOT / 'crates/core/tests/data/tool-calls/conformance'
-    return [json.loads(path.read_text())['markup'].encode()
+    return [json.loads(path.read_text(encoding='utf-8'))['markup'].encode()
             for path in sorted(directory.glob('*/*.json'))]
 
 
@@ -1183,7 +1183,7 @@ def node_pattern_test(pattern, subject, timeout, counts=None):
     try:
         result = subprocess.run(
             ['node', '-e', _NODE_PATTERN_SCRIPT, '--', pattern, subject],
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True, encoding='utf-8', timeout=timeout,
         )
     except subprocess.TimeoutExpired:
         if counts is not None:
@@ -1329,7 +1329,7 @@ def ensure_cmark_gfm(*, corrected_backticks=False, corrected_emphasis=False, cor
     into a persistent `.cache/tools/` location, reused across runs."""
     corrected = corrected_backticks or corrected_emphasis or corrected_destinations or corrected_emails
     if corrected:
-        inventory = json.loads((ROOT / 'vendor/tooling.json').read_text())
+        inventory = json.loads((ROOT / 'vendor/tooling.json').read_text(encoding='utf-8'))
         entry = next(item for item in inventory if item['name'] == 'cmark-gfm')
         if (entry.get('source_sha256') != CMARK_GFM_SOURCE_SHA256
                 or (corrected_backticks and entry.get('backtick_cache_patch_sha256') != CMARK_BACKTICK_PATCH_SHA256)
@@ -1352,14 +1352,14 @@ def ensure_cmark_gfm(*, corrected_backticks=False, corrected_emphasis=False, cor
     if corrected_emails:
         patch_identity['email_patch_sha256'] = CMARK_EMAIL_PATCH_SHA256
     if binary.is_file():
-        version = subprocess.run([str(binary), '--version'], capture_output=True, text=True, timeout=10).stdout
+        version = subprocess.run([str(binary), '--version'], capture_output=True, encoding='utf-8', timeout=10).stdout
         if CMARK_GFM_VERSION in version:
             if not corrected:
                 return binary
             inlines = tools_root / 'src' / 'src' / 'inlines.c'
             autolink = tools_root / 'src' / 'extensions' / 'autolink.c'
             autolink_identity = {'corrected_autolink_sha256': hashlib.sha256(autolink.read_bytes()).hexdigest()} if corrected_emails and autolink.is_file() else {}
-            if identity_path.is_file() and inlines.is_file() and (not corrected_emails or autolink.is_file()) and json.loads(identity_path.read_text()) == {
+            if identity_path.is_file() and inlines.is_file() and (not corrected_emails or autolink.is_file()) and json.loads(identity_path.read_text(encoding='utf-8')) == {
                     'source_sha256': CMARK_GFM_SOURCE_SHA256,
                     **patch_identity,
                     **autolink_identity,
@@ -1391,27 +1391,27 @@ def ensure_cmark_gfm(*, corrected_backticks=False, corrected_emphasis=False, cor
         tar.extractall(source, members=[member for member in members if member.name], filter='data')
     if corrected:
         inlines = source / 'src' / 'inlines.c'
-        patched = patch_reference_backtick_cache(inlines.read_text()) if corrected_backticks else inlines.read_text()
+        patched = patch_reference_backtick_cache(inlines.read_text(encoding='utf-8')) if corrected_backticks else inlines.read_text(encoding='utf-8')
         if corrected_emphasis:
             patched = patch_reference_emphasis_floors(patched)
         if corrected_destinations:
             patched = patch_reference_destination_balance(patched)
-        inlines.write_text(patched)
+        inlines.write_text(patched, encoding='utf-8')
         if corrected_emails:
             autolink = source / 'extensions' / 'autolink.c'
-            autolink.write_text(patch_reference_email_counter(autolink.read_text()))
+            autolink.write_text(patch_reference_email_counter(autolink.read_text(encoding='utf-8')), encoding='utf-8')
     build_dir = tools_root / 'build'
     configure = subprocess.run(
         ['cmake', '-S', str(source), '-B', str(build_dir), '-DCMAKE_BUILD_TYPE=Release',
          '-DCMARK_TESTS=OFF', '-DCMARK_SHARED=OFF', '-DCMARK_STATIC=ON',
          '-DCMAKE_POLICY_VERSION_MINIMUM=3.5'],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True, encoding='utf-8', timeout=120,
     )
     if configure.returncode != 0:
         raise ValueError(f'cmark-gfm configure failed:\n{configure.stdout}\n{configure.stderr}')
     build = subprocess.run(
         ['cmake', '--build', str(build_dir), '--target', 'cmark-gfm', '-j', str(os.cpu_count() or 1)],
-        capture_output=True, text=True, timeout=300,
+        capture_output=True, encoding='utf-8', timeout=300,
     )
     if build.returncode != 0:
         raise ValueError(f'cmark-gfm build failed:\n{build.stdout}\n{build.stderr}')
@@ -1426,7 +1426,7 @@ def ensure_cmark_gfm(*, corrected_backticks=False, corrected_emphasis=False, cor
             **patch_identity,
             **({'corrected_autolink_sha256': hashlib.sha256(autolink.read_bytes()).hexdigest()} if corrected_emails else {}),
             'corrected_inlines_sha256': hashlib.sha256(inlines.read_bytes()).hexdigest(),
-            'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest()}, sort_keys=True) + '\n')
+            'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest()}, sort_keys=True) + '\n', encoding='utf-8')
     return binary
 
 
@@ -1644,7 +1644,7 @@ def verify_reference_backtick_correction(original, corrected):
             if actual != wanted:
                 raise ValueError(f'cmark-gfm backtick correction control failed: source={source!r} '
                                  f'expected={wanted!r} actual={actual!r}')
-    corpus = json.loads((ROOT / 'crates/core/tests/data/markdown/gfm-0.29.0.gfm.13.json').read_text())
+    corpus = json.loads((ROOT / 'crates/core/tests/data/markdown/gfm-0.29.0.gfm.13.json').read_text(encoding='utf-8'))
     gold_disagreements = []
     for case in corpus:
         raw = cmark_gfm_render(original, case['markdown'], 10)
@@ -1704,7 +1704,7 @@ def verify_reference_emphasis_correction(backticks, combined):
         if raw != case['gfm_0_29'] or corrected != case['commonmark_0_31_1']:
             raise ValueError(f'cmark-gfm emphasis correction control failed: {case!r} raw={raw!r} corrected={corrected!r}')
         disagreements += int(raw != corrected)
-    corpus = json.loads((ROOT / 'crates/core/tests/data/markdown/gfm-0.29.0.gfm.13.json').read_text())
+    corpus = json.loads((ROOT / 'crates/core/tests/data/markdown/gfm-0.29.0.gfm.13.json').read_text(encoding='utf-8'))
     gold_disagreements = []
     for case in corpus:
         raw = cmark_gfm_render(backticks, case['markdown'], 10)
@@ -1733,7 +1733,7 @@ def verify_reference_destination_correction(previous, corrected):
             if raw != case['raw_html'] or fixed != case['corrected_html']:
                 raise ValueError(f'cmark-gfm destination correction control failed: {source!r} raw={raw!r} corrected={fixed!r}')
             disagreements += int(raw != fixed)
-    corpus = json.loads((ROOT / 'crates/core/tests/data/markdown/gfm-0.29.0.gfm.13.json').read_text())
+    corpus = json.loads((ROOT / 'crates/core/tests/data/markdown/gfm-0.29.0.gfm.13.json').read_text(encoding='utf-8'))
     gold_disagreements = []
     for case in corpus:
         raw = cmark_gfm_render(previous, case['markdown'], 10)
@@ -1762,7 +1762,7 @@ def verify_reference_email_correction(previous, corrected):
             if raw != case['previous_html'] or fixed != case['corrected_html']:
                 raise ValueError(f'cmark-gfm email correction control failed: {source!r} raw={raw!r} corrected={fixed!r}')
             disagreements += int(raw != fixed)
-    corpus = json.loads((ROOT / 'crates/core/tests/data/markdown/gfm-0.29.0.gfm.13.json').read_text())
+    corpus = json.loads((ROOT / 'crates/core/tests/data/markdown/gfm-0.29.0.gfm.13.json').read_text(encoding='utf-8'))
     gold_disagreements = []
     for case in corpus:
         raw = cmark_gfm_render(previous, case['markdown'], 10)
@@ -2159,8 +2159,8 @@ def rustc_sysroot_tool(name):
     from the exact same LLVM revision as `rustc` itself, which a
     coincidentally version-matched system package is not guaranteed to be.
     """
-    sysroot = Path(subprocess.check_output(['rustc', '--print', 'sysroot'], text=True).strip())
-    info = subprocess.check_output(['rustc', '-vV'], text=True)
+    sysroot = Path(subprocess.check_output(['rustc', '--print', 'sysroot'], encoding='utf-8').strip())
+    info = subprocess.check_output(['rustc', '-vV'], encoding='utf-8')
     host = re.search(r'^host:\s+(\S+)$', info, re.MULTILINE)
     if not host:
         raise ValueError('could not determine the rustc host triple')
@@ -2171,14 +2171,14 @@ def rustc_sysroot_tool(name):
 
 
 def tool_identity(target):
-    rustc = subprocess.check_output(['rustc', '-vV'], text=True)
-    inventory = json.loads((ROOT / 'vendor/tooling.json').read_text())
+    rustc = subprocess.check_output(['rustc', '-vV'], encoding='utf-8')
+    inventory = json.loads((ROOT / 'vendor/tooling.json').read_text(encoding='utf-8'))
     expected = next(entry['version'] for entry in inventory if entry['name'] == 'llvm-coverage')
     versions = {'rustc': rustc.strip()}
     tool_paths = {}
     for tool in ('llvm-cov', 'llvm-profdata'):
         tool_paths[tool] = rustc_sysroot_tool(tool)
-        versions[tool] = subprocess.check_output([str(tool_paths[tool]), '--version'], text=True).strip()
+        versions[tool] = subprocess.check_output([str(tool_paths[tool]), '--version'], encoding='utf-8').strip()
     for tool, text in versions.items():
         match = re.search(r'LLVM version:?\s+(\S+)', text)
         # The bundled `llvm-tools` component reports "<version>-rust-<rustc
@@ -2191,14 +2191,14 @@ def tool_identity(target):
     oracle = {}
     if kind == 'pattern':
         node_expected = next(entry['version'] for entry in inventory if entry['name'] == 'node')
-        node_version = subprocess.check_output(['node', '--version'], text=True).strip()
+        node_version = subprocess.check_output(['node', '--version'], encoding='utf-8').strip()
         if node_version != f'v{node_expected}':
             raise ValueError(f'node version differs from inventory {node_expected}')
         versions['node'] = node_version
     if kind == 'markdown':
         cmark_expected = next(entry['version'] for entry in inventory if entry['name'] == 'cmark-gfm')
         binary = ensure_cmark_gfm()
-        cmark_version_output = subprocess.check_output([str(binary), '--version'], text=True).strip()
+        cmark_version_output = subprocess.check_output([str(binary), '--version'], encoding='utf-8').strip()
         if cmark_expected not in cmark_version_output:
             raise ValueError(f'cmark-gfm version differs from inventory {cmark_expected}')
         versions['cmark-gfm'] = cmark_version_output
@@ -2206,7 +2206,7 @@ def tool_identity(target):
         corrected = ensure_cmark_gfm(corrected_backticks=True)
         compatibility = verify_reference_backtick_correction(binary, corrected)
         versions['cmark-gfm-backtick-correction'] = {
-            'version': subprocess.check_output([str(corrected), '--version'], text=True).strip(),
+            'version': subprocess.check_output([str(corrected), '--version'], encoding='utf-8').strip(),
             'source_sha256': CMARK_GFM_SOURCE_SHA256,
             'patch_sha256': CMARK_BACKTICK_PATCH_SHA256,
             'patch_preimage': CMARK_BACKTICK_BEFORE,
@@ -2220,7 +2220,7 @@ def tool_identity(target):
         combined = ensure_cmark_gfm(corrected_backticks=True, corrected_emphasis=True)
         emphasis_compatibility = verify_reference_emphasis_correction(corrected, combined)
         versions['cmark-gfm-emphasis-correction'] = {
-            'version': subprocess.check_output([str(combined), '--version'], text=True).strip(),
+            'version': subprocess.check_output([str(combined), '--version'], encoding='utf-8').strip(),
             'source_sha256': CMARK_GFM_SOURCE_SHA256,
             'backtick_patch_sha256': CMARK_BACKTICK_PATCH_SHA256,
             'emphasis_patch_sha256': CMARK_EMPHASIS_PATCH_SHA256,
@@ -2234,7 +2234,7 @@ def tool_identity(target):
         destinations = ensure_cmark_gfm(corrected_backticks=True, corrected_emphasis=True, corrected_destinations=True)
         destination_compatibility = verify_reference_destination_correction(combined, destinations)
         versions['cmark-gfm-destination-correction'] = {
-            'version': subprocess.check_output([str(destinations), '--version'], text=True).strip(),
+            'version': subprocess.check_output([str(destinations), '--version'], encoding='utf-8').strip(),
             'source_sha256': CMARK_GFM_SOURCE_SHA256,
             'backtick_patch_sha256': CMARK_BACKTICK_PATCH_SHA256,
             'emphasis_patch_sha256': CMARK_EMPHASIS_PATCH_SHA256,
@@ -2251,7 +2251,7 @@ def tool_identity(target):
         emails = ensure_cmark_gfm(corrected_backticks=True, corrected_emphasis=True, corrected_destinations=True, corrected_emails=True)
         email_compatibility = verify_reference_email_correction(destinations, emails)
         versions['cmark-gfm-email-correction'] = {
-            'version': subprocess.check_output([str(emails), '--version'], text=True).strip(),
+            'version': subprocess.check_output([str(emails), '--version'], encoding='utf-8').strip(),
             'source_sha256': CMARK_GFM_SOURCE_SHA256,
             'backtick_patch_sha256': CMARK_BACKTICK_PATCH_SHA256,
             'emphasis_patch_sha256': CMARK_EMPHASIS_PATCH_SHA256,
@@ -2295,8 +2295,8 @@ def build(directory, target):
                '--config', 'profile.dev.opt-level=1', '--config', 'profile.dev.debug=1',
                '--config', 'profile.dev.strip=false', '--config', 'profile.dev.debug-assertions=true',
                '--config', 'profile.dev.overflow-checks=true', '--message-format=json']
-    result = subprocess.run(command, cwd=ROOT, env=environment, capture_output=True, text=True)
-    (directory / 'build.log').write_text(result.stderr)
+    result = subprocess.run(command, cwd=ROOT, env=environment, capture_output=True, encoding='utf-8')
+    (directory / 'build.log').write_text(result.stderr, encoding='utf-8')
     result.check_returncode()
     if input_identity(target) != sources_before:
         raise ValueError('fuzz build source changed during compilation; rerun on stable inputs')
@@ -2497,7 +2497,7 @@ def main():
     tools, oracle, tool_paths = tool_identity(target)
     binary, build_identity = build(directory, target)
     report = {'format': 'purrassist.fuzz.v1', 'target': target, 'status': 'running', 'tools': tools,
-              'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+              'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, encoding='utf-8').strip(),
               'source_dirty': bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT)),
               'nonignored_file_tree_sha256': source_digest(),
               'build': build_identity, 'seed': args.seed, 'requested_mutations': args.iterations,
@@ -2543,7 +2543,7 @@ def main():
                     binary, data, directory, args.timeout, target, oracle, tool_paths, report
                 )
             except subprocess.CalledProcessError:
-                name = known_failure((directory / 'probe.stderr').read_text(errors='replace')) \
+                name = known_failure((directory / 'probe.stderr').read_text(encoding='utf-8', errors='replace')) \
                     if args.continue_on_known else None
                 if name is None:
                     raise
@@ -2582,12 +2582,12 @@ def main():
         report['failure_type'] = type(error).__name__
         if isinstance(error, DifferentialMismatch):
             report['differential_mismatches'] += 1
-        (directory / 'failure.txt').write_text(repr(error) + '\n')
+        (directory / 'failure.txt').write_text(repr(error) + '\n', encoding='utf-8')
         print(f'Failure retained in {directory / "current.bin"}', flush=True)
         raise
     finally:
-        (directory / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
-        (directory / 'regions.json').write_text(json.dumps(sorted(seen), indent=2) + '\n')
+        (directory / 'report.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
+        (directory / 'regions.json').write_text(json.dumps(sorted(seen), indent=2) + '\n', encoding='utf-8')
     if report['known_failures']:
         print(f'{len(report["known_failures"])} inputs hit a known issue #6 panic; retained in '
               f'{directory / "known-6"} for base replay', flush=True)

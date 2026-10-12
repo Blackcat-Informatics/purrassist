@@ -25,7 +25,7 @@
 //! - [`WitnessOutcome::Unsatisfiable`]: a closed-form refutation — an
 //!   empty merged `TypeSet`, a crossed numeric/length/count bound,
 //!   an incompatible literal, or a pattern proven empty by the derivative
-//!   automaton (Task 6's `Pattern::generate`) exhausting every reachable
+//!   automaton (`Pattern::generate` of the derivative pattern engine) exhausting every reachable
 //!   state — never a claim inferred from search exhaustion.
 //! - [`WitnessOutcome::Exhausted`]: this stage's bounded, deliberately
 //!   incomplete search (a fixed-size numeric/string candidate scan, or a

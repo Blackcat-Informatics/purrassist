@@ -118,7 +118,7 @@ def validate_publish_workflow(path=None):
     freeform structure for.
     """
     path = Path(path) if path else ROOT / '.github/workflows/publish.yml'
-    text = path.read_text()
+    text = path.read_text(encoding='utf-8')
     errors = []
 
     if not re.search(r"^\s*tags:\s*\['?rust-v\*'?\]\s*$", text, re.M):
@@ -157,7 +157,7 @@ def validate_publish_workflow(path=None):
     if len(auth_actions) != 1:
         errors.append('publish.yml must authenticate with exactly one pinned rust-lang/crates-io-auth-action step')
     else:
-        tooling = json.loads((ROOT / 'vendor/tooling.json').read_text())
+        tooling = json.loads((ROOT / 'vendor/tooling.json').read_text(encoding='utf-8'))
         registered = {entry['version'] for entry in tooling if entry['name'] == 'crates-io-auth-action'}
         if auth_actions[0] not in registered:
             errors.append('publish.yml crates-io-auth-action SHA is not registered in vendor/tooling.json')
@@ -213,7 +213,7 @@ def main():
         return
     metadata = json.loads(subprocess.check_output(
         ['cargo', 'metadata', '--no-deps', '--format-version', '1', '--locked', '--offline'],
-        text=True))
+        encoding='utf-8'))
     packages = {package['name']: package for package in metadata['packages']}
     publishable = {name for name, package in packages.items() if package.get('publish') != []}
     if publishable != set(RELEASE_ORDER):

@@ -3,7 +3,7 @@
 
 [package]
 name = "purrassist"
-description = "Intent-aware assistance for imperfect AI output"
+description = "Rust interface to PurRAssist intent recovery for imperfect AI output"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

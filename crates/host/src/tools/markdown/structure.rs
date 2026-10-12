@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-//! `plan_markdown_structure`: every Task 9 structural Markdown operation
+//! `plan_markdown_structure`: every structural Markdown operation
 //! (section insert/remove/move/rename, list move/renumber, table row/column
 //! move, reference add/relabel/remove/unlink) behind one typed `op` selector,
 //! sharing `plan_markdown_section`'s source-preserving, digest-bound plan

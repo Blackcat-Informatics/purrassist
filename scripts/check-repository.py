@@ -170,7 +170,7 @@ def check_ambient_access(root):
     errors = []
     for source, crate in AMBIENT_FREE_SOURCES:
         for path in sorted((root / source).rglob('*.rs')):
-            errors.extend(scan_ambient_source(str(path.relative_to(root)), path.read_text(), crate))
+            errors.extend(scan_ambient_source(str(path.relative_to(root)), path.read_text(encoding='utf-8'), crate))
     return errors
 
 
@@ -214,11 +214,11 @@ def check_evaluation_manifest(root):
     its digest."""
     errors = []
     evaluation_root = root / 'crates/core/tests/data/evaluation'
-    evaluation_manifest = json.loads((evaluation_root / 'manifest.json').read_text())
+    evaluation_manifest = json.loads((evaluation_root / 'manifest.json').read_text(encoding='utf-8'))
     for name, entry in evaluation_manifest['outputs'].items():
         path = evaluation_root / name
         if (hashlib.sha256(path.read_bytes()).hexdigest() != entry['sha256']
-                or len(json.loads(path.read_text())) != entry['cases']):
+                or len(json.loads(path.read_text(encoding='utf-8'))) != entry['cases']):
             errors.append(f'evaluation/{name}: corpus digest or census mismatch')
     for name, value in evaluation_manifest['inputs'].items():
         if name.endswith('_sha256'):
@@ -251,49 +251,114 @@ def check_evaluation_manifest(root):
     return errors
 
 
-DERIVE_EXAMPLE_COPIES = ['README.md', 'crates/purrassist/README.md']
-DERIVE_EXAMPLE_DOCTESTED = 'crates/purrassist/README.md'
-DERIVE_EXAMPLE_BEGIN = '<!-- derive-example:begin -->\n'
-DERIVE_EXAMPLE_END = '<!-- derive-example:end -->\n'
+# Tracked Markdown under these prefixes is upstream or generated test data and carries no header.
+MARKDOWN_ATTRIBUTION_EXEMPT = ('crates/core/tests/data/',)
 
 
-def check_derive_example(root):
-    """The root README derive example must equal the doctested facade README copy.
+def has_attribution(text):
+    """Whether the first five lines carry both SPDX tags (comment syntax is not prescribed)."""
+    header = '\n'.join(text.splitlines()[:5])
+    return 'SPDX-License-Identifier:' in header and 'SPDX-FileCopyrightText:' in header
+
+
+def tracked_markdown(root):
+    """Every tracked `*.md` file (git's index, so `.stage/` and ignored files are out) except
+    the exempt test-data prefixes, as sorted repository-relative names."""
+    listing = subprocess.check_output(['git', 'ls-files', '-z', '--', '*.md'], cwd=root, encoding='utf-8')
+    return sorted(name for name in listing.split('\0')
+                  if name and not name.startswith(MARKDOWN_ATTRIBUTION_EXEMPT))
+
+
+def check_markdown_attribution(root, names):
+    """Report each named Markdown file that lacks the SPDX header."""
+    return [f'{name}: missing attribution' for name in names
+            if not has_attribution((root / name).read_text(encoding='utf-8'))]
+
+
+# Binary artifacts cannot carry a comment header, so each one is attributed by a
+# REUSE-style `<name>.license` sidecar holding the same two SPDX tags. A tracked
+# file is a binary when git classifies its indexed content as `-text` (a NUL
+# byte, a lone CR or mostly non-printable bytes), whatever its name. Tracked
+# binaries under the exempt test-data prefixes are upstream data and carry none.
+BINARY_ATTRIBUTION_EXEMPT = ('crates/core/tests/data/',)
+REQUIRED_BINARY_ATTRIBUTION = ('docs/social-preview.png',)
+
+
+def tracked_binaries(root):
+    """Every tracked binary artifact outside the exempt prefixes, plus the binaries that
+    must always be attributed, as sorted repository-relative names. Binary means the
+    `i/-text` column of `git ls-files --eol`: git's own classification of the indexed
+    content, not a suffix list and not the `.gitattributes` column."""
+    listing = subprocess.check_output(['git', 'ls-files', '-z', '--eol'], cwd=root, encoding='utf-8')
+    tracked = set()
+    for entry in listing.split('\0'):
+        columns, _, name = entry.partition('\t')
+        if name and columns.split()[0] == 'i/-text' and not name.startswith(BINARY_ATTRIBUTION_EXEMPT):
+            tracked.add(name)
+    return sorted(tracked | set(REQUIRED_BINARY_ATTRIBUTION))
+
+
+def check_binary_attribution(root, names):
+    """Report each named binary whose `.license` sidecar is missing or lacks the SPDX tags."""
+    errors = []
+    for name in names:
+        sidecar = root / f'{name}.license'
+        if not sidecar.is_file():
+            errors.append(f'{name}: missing attribution sidecar {name}.license')
+        elif not has_attribution(sidecar.read_text(encoding='utf-8')):
+            errors.append(f'{name}: sidecar {name}.license lacks the SPDX tags')
+    return errors
+
+
+# Blocks that a README repeats byte for byte from the doctested facade README.
+# `three-interfaces-rust` is the Rust snippet inside the root README's
+# `three-interfaces` block (the rest of that block is not a copy).
+MARKER_COPY_FILES = ['README.md', 'crates/purrassist/README.md']
+MARKER_COPY_DOCTESTED = 'crates/purrassist/README.md'
+MARKER_COPY_NAMES = ['derive-example', 'three-interfaces-rust']
+
+
+def check_marker_copies(root, names=MARKER_COPY_NAMES, copies=MARKER_COPY_FILES,
+                        doctested=MARKER_COPY_DOCTESTED):
+    """Each marked block of a README must equal the doctested facade README copy.
 
     `crates/purrassist/README.md` is the crate documentation of the facade, so
-    its example runs as a doctest; the root README carries a byte copy that no
-    test executes. Both copies sit between the `derive-example` markers.
+    its examples run as doctests; the root README carries byte copies that no
+    test executes. For every marker name, each copy sits between
+    `<!-- NAME:begin -->` and `<!-- NAME:end -->` lines and must be identical
+    to the block in the doctested file.
     """
     errors = []
-    blocks = {}
-    for name in DERIVE_EXAMPLE_COPIES:
-        path = root / name
-        if not path.is_file():
-            errors.append(f'{name}: derive example copy is missing')
-            continue
-        text = path.read_text()
-        if text.count(DERIVE_EXAMPLE_BEGIN) != 1 or text.count(DERIVE_EXAMPLE_END) != 1:
-            errors.append(f'{name}: needs exactly one {DERIVE_EXAMPLE_BEGIN.strip()} and one '
-                          f'{DERIVE_EXAMPLE_END.strip()} marker line')
-            continue
-        start = text.index(DERIVE_EXAMPLE_BEGIN) + len(DERIVE_EXAMPLE_BEGIN)
-        end = text.index(DERIVE_EXAMPLE_END)
-        if end < start:
-            errors.append(f'{name}: derive-example end marker precedes the begin marker')
-            continue
-        blocks[name] = text[start:end]
-    doctested = blocks.get(DERIVE_EXAMPLE_DOCTESTED)
-    if doctested is not None:
-        for name, block in blocks.items():
-            if block != doctested:
-                errors.append(f'{name}: derive example differs from the doctested copy in '
-                              f'{DERIVE_EXAMPLE_DOCTESTED}; copy it over byte for byte')
+    for marker in names:
+        begin, end = f'<!-- {marker}:begin -->\n', f'<!-- {marker}:end -->\n'
+        blocks = {}
+        for name in copies:
+            path = root / name
+            if not path.is_file():
+                errors.append(f'{name}: {marker} copy is missing')
+                continue
+            text = path.read_text(encoding='utf-8')
+            if text.count(begin) != 1 or text.count(end) != 1:
+                errors.append(f'{name}: needs exactly one {begin.strip()} and one {end.strip()} marker line')
+                continue
+            start = text.index(begin) + len(begin)
+            stop = text.index(end)
+            if stop < start:
+                errors.append(f'{name}: {marker} end marker precedes the begin marker')
+                continue
+            blocks[name] = text[start:stop]
+        reference = blocks.get(doctested)
+        if reference is not None:
+            for name, block in blocks.items():
+                if block != reference:
+                    errors.append(f'{name}: {marker} block differs from the doctested copy in '
+                                  f'{doctested}; copy it over byte for byte')
     return errors
 
 
 def main():
     errors = []
-    core = tomllib.loads((ROOT / 'crates/core/Cargo.toml').read_text())
+    core = tomllib.loads((ROOT / 'crates/core/Cargo.toml').read_text(encoding='utf-8'))
     if core.get('dependencies'):
         errors.append('purrassist-core must have zero external or workspace runtime dependencies')
     for target in core.get('target', {}).values():
@@ -306,20 +371,21 @@ def main():
                 continue
             if '/tests/data/' in str(path) or '/schema/metaschemas/' in str(path):
                 continue
-            header = '\n'.join(path.read_text().splitlines()[:5])
-            if 'SPDX-License-Identifier:' not in header or 'SPDX-FileCopyrightText:' not in header:
+            if not has_attribution(path.read_text(encoding='utf-8')):
                 errors.append(f'{path.relative_to(ROOT)}: missing attribution')
+    errors.extend(check_markdown_attribution(ROOT, tracked_markdown(ROOT)))
+    errors.extend(check_binary_attribution(ROOT, tracked_binaries(ROOT)))
 
     for directory in ['crates/core/src/schema/metaschemas', 'crates/core/tests/data/json-schema', 'crates/core/tests/data/markdown', 'crates/core/tests/data/test262']:
         root = ROOT / directory
-        manifest = json.loads((root / 'manifest.json').read_text())
+        manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
         entries = manifest.get('files', manifest)
         for name, entry in entries.items():
             expected = entry['sha256'] if isinstance(entry, dict) else entry
             path = root / name
             if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
                 errors.append(f'{directory}/{name}: frozen source digest mismatch')
-    unicode_manifest = json.loads((ROOT / 'vendor/unicode/manifest.json').read_text())
+    unicode_manifest = json.loads((ROOT / 'vendor/unicode/manifest.json').read_text(encoding='utf-8'))
     fixture = ROOT / 'crates/core/tests/data/unicode/NormalizationTest.txt'
     if hashlib.sha256(fixture.read_bytes()).hexdigest() != unicode_manifest['NormalizationTest.txt']['sha256']:
         errors.append('Unicode normalization fixture differs from its pinned upstream source')
@@ -327,30 +393,30 @@ def main():
     if hashlib.sha256(confusables_fixture.read_bytes()).hexdigest() != unicode_manifest['confusables.txt']['sha256']:
         errors.append('UTS #39 confusables fixture differs from its pinned upstream source')
     generated = ROOT / 'vendor/unicode/generated.json'
-    for name, expected in json.loads(generated.read_text()).items():
+    for name, expected in json.loads(generated.read_text(encoding='utf-8')).items():
         if hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != expected:
             errors.append(f'{name}: generated Unicode artifact digest mismatch; regenerate and review')
 
-    entity_manifest = json.loads((ROOT / 'vendor/entities/manifest.json').read_text())
+    entity_manifest = json.loads((ROOT / 'vendor/entities/manifest.json').read_text(encoding='utf-8'))
     for name, entry in entity_manifest['files'].items():
         if hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != entry['sha256']:
             errors.append(f'{name}: entity source or notice digest mismatch')
-    for name, expected in json.loads((ROOT / 'vendor/entities/generated.json').read_text()).items():
+    for name, expected in json.loads((ROOT / 'vendor/entities/generated.json').read_text(encoding='utf-8')).items():
         if hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != expected:
             errors.append(f'{name}: generated entity table digest mismatch')
 
     metadata = json.loads(subprocess.check_output(
-        ['cargo', 'metadata', '--format-version', '1', '--locked'], cwd=ROOT, text=True))
+        ['cargo', 'metadata', '--format-version', '1', '--locked'], cwd=ROOT, encoding='utf-8'))
     full_metadata = json.loads(subprocess.check_output(
-        ['cargo', 'metadata', '--format-version', '1', '--locked', '--all-features'], cwd=ROOT, text=True))
+        ['cargo', 'metadata', '--format-version', '1', '--locked', '--all-features'], cwd=ROOT, encoding='utf-8'))
     errors.extend(check_core_closure(full_metadata))
     errors.extend(check_derive_closure(full_metadata))
     errors.extend(check_network_denylist(full_metadata))
     errors.extend(check_ambient_access(ROOT))
     errors.extend(check_core_dev_dependencies(core))
     errors.extend(check_dependency_baseline(
-        metadata, json.loads((ROOT / BASELINE).read_text())['third_party_packages']))
-    inventory = json.loads((ROOT / 'vendor/dependencies.json').read_text())
+        metadata, json.loads((ROOT / BASELINE).read_text(encoding='utf-8'))['third_party_packages']))
+    inventory = json.loads((ROOT / 'vendor/dependencies.json').read_text(encoding='utf-8'))
     actual = {f"{package['name']}@{package['version']}" for package in metadata['packages'] if package['source'] is not None}
     if actual != set(inventory['cargo_packages']):
         errors.append(f'dependency inventory differs: added={sorted(actual-set(inventory["cargo_packages"]))}, removed={sorted(set(inventory["cargo_packages"])-actual)}')
@@ -365,13 +431,13 @@ def main():
             if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != entry.get('notice_sha256', {}).get(name):
                 errors.append(f'{identity}: license notice missing or changed: {name}')
     errors.extend(check_evaluation_manifest(ROOT))
-    errors.extend(check_derive_example(ROOT))
+    errors.extend(check_marker_copies(ROOT))
     for crate_name, notices in inventory['packaged_notices'].items():
         for name, expected in notices.items():
             path = ROOT / 'crates' / crate_name / name
             if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
                 errors.append(f'{crate_name}: registered package notice missing or changed: {name}')
-    for entry in json.loads((ROOT / 'vendor/tooling.json').read_text()):
+    for entry in json.loads((ROOT / 'vendor/tooling.json').read_text(encoding='utf-8')):
         for name, expected in entry['notices'].items():
             if hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != expected:
                 errors.append(f'tooling notice changed: {name}')

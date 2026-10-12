@@ -8,6 +8,10 @@ a unit enum. The generated code is the same typed builder calls as a
 hand-built `ToolDefinition`, plus an exact, single-pass `FromNode` conversion,
 so the recovered arguments of a tool call can be read as the struct.
 
+**Status: 0.1.0.** This crate is one of the shared engines of `PurRAssist`, one
+engine with three equal interfaces; Rust users reach it through the
+`purrassist` crate (`purrassist::ToolDefinition`, `purrassist::ToolEnum`).
+
 The crate is a procedural macro that uses only the built-in `proc_macro` crate:
 a first-party token parser and code writer, with no `syn` and no `quote`. It
 has no Cargo dependencies (`purrassist-core` is a dev-dependency used by its
@@ -86,9 +90,9 @@ integer-range and recursion limits, and every rejected input.
 - **Convert only usable calls.** `from_node` reads arguments exactly but does
   not decide whether a call may run. Call it only on the arguments of calls
   that recovery reports as usable or resolved:
-  [`ToolCalls::usable`](https://docs.rs/purrassist-core/latest/purrassist_core/tool_call/recover/struct.ToolCalls.html#method.usable)
+  [`ToolCalls::usable`](https://docs.rs/purrassist-core/0.1.0/purrassist_core/tool_call/recover/struct.ToolCalls.html#method.usable)
   (`CallOutcome::Resolved`), or
-  [`ToolCalls::usable_accepting_guesses`](https://docs.rs/purrassist-core/latest/purrassist_core/tool_call/recover/struct.ToolCalls.html#method.usable_accepting_guesses)
+  [`ToolCalls::usable_accepting_guesses`](https://docs.rs/purrassist-core/0.1.0/purrassist_core/tool_call/recover/struct.ToolCalls.html#method.usable_accepting_guesses)
   (which also lists best guesses of read-only tools). The arguments of an
   unresolved call are only the best tree reached, and a mutating tool's best
   guess never runs.

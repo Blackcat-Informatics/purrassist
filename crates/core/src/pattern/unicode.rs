@@ -190,7 +190,7 @@ pub(super) fn script_names() -> std::collections::BTreeSet<&'static str> {
 /// gap-free partition of the whole scalar range, including the explicit
 /// `Unknown` default the generator computes for every codepoint no
 /// `Scripts.txt` range claims. Exposed crate-wide (via `pattern::script_of`)
-/// for the Task 7 idn-hostname format validator's RFC 5892 Appendix A
+/// for the idn-hostname format validator's RFC 5892 Appendix A
 /// CONTEXTO rules (Greek/Hebrew/Hiragana/Katakana/Han membership checks).
 pub(super) fn script_of(code: u32) -> &'static str {
     let position = unicode_data::SCRIPTS.partition_point(|(_, end, _)| *end < code);

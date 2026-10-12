@@ -41,7 +41,7 @@ struct Recovery<'a> {
     schema: &'a Schema,
     request: RecoveryRequest,
     receipt: Receipt,
-    /// Task 6 wiring: deduplicated by destination (one distinct compiled
+    /// Pattern-engine wiring: deduplicated by destination (one distinct compiled
     /// pattern), across every candidate this search actually validated.
     pattern_evidence: BTreeMap<String, Evidence>,
 }
@@ -167,7 +167,7 @@ impl Schema {
             }
         };
         drop(search);
-        // Task 6 wiring: every distinct pattern actually validated during
+        // Pattern-engine wiring: every distinct pattern actually validated during
         // this search, regardless of which candidate (if any) was accepted.
         recovery
             .receipt
@@ -181,7 +181,7 @@ impl Schema {
     }
 }
 impl Recovery<'_> {
-    /// Requirement 5: every recovery receipt carries an
+    /// Every recovery receipt carries an
     /// `unsupported-vocabulary` evidence entry for each optional (`false`)
     /// `$vocabulary` URI this schema's dialects did not recognize, naming
     /// the declaring resource's own keywords left unevaluated.
@@ -248,8 +248,8 @@ impl Recovery<'_> {
         governor.charge(Resource::ScratchBytes, diagnostic_bytes)?;
         let validation = self.receipt.validations.len();
         self.receipt.validations.push(report.to_validation());
-        // Requirement 1 / Task 6 wiring: format annotation evidence and
-        // pattern-engine evidence are search-time signals, not tied to
+        // Format annotation evidence and pattern-engine evidence are
+        // search-time signals, not tied to
         // any one alternative, so they are retained unconditionally
         // (after the index captured above) rather than routed through
         // the derivation forest's per-alternative ledgers.

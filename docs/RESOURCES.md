@@ -210,7 +210,7 @@ the measured excess exceeds that same `K` at either tested scale. Smaller
 uncharged allocations can remain within the slack or be absorbed by other
 conservative charges; two tested scales cannot establish a universal bound.
 This oracle caught and
-led to fixing three such regressions during this task, each confirmed fixed
+led to fixing three such regressions during development, each confirmed fixed
 by measuring the per-unit gap across four to five scales, not just the two
 the committed test asserts:
 
@@ -1070,7 +1070,7 @@ recorded above (never below one); a limit failing here means measured
 resource use grew past a deliberately generous ceiling, not that it
 regressed by any amount. `make hygiene` uses `--schema-only` against the *committed*
 `qualification/resources-linux-x86_64.json` (complete inventories, valid types,
-digests, uncached-build evidence and correctness observations); Task 17's CI `qualification` job runs `make resources` fresh and
+digests, uncached-build evidence and correctness observations); the CI `qualification` job runs `make resources` fresh and
 checks that output instead.
 
 Rationale per category:

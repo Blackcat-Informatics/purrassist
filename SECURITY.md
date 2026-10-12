@@ -2,12 +2,27 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Security
 
-PurRAssist is pre-release and has no supported published release yet.
+## Supported versions
 
-Report vulnerabilities privately to <security@blackcatinformatics.ca>, with
-`SECURITY` and `PurRAssist` in the subject. Include affected crates, revisions,
-reproduction inputs, and observed impact. Do not include confidential input in a
-public issue. Maintainers will coordinate validation, remediation, and disclosure.
+| Version | Supported |
+|---|---|
+| 0.1.x | Yes, once published. 0.1.0 is not yet tagged `rust-v0.1.0`. |
+| 0.0.0 | No. These are name reservations on crates.io and contain no code. |
+
+## Reporting a vulnerability
+
+Report vulnerabilities privately through either channel:
+
+- Email <security@blackcatinformatics.ca>, with `SECURITY` and `PurRAssist` in
+  the subject.
+- GitHub private vulnerability reporting: [open a private
+  advisory](https://github.com/Blackcat-Informatics/purrassist/security/advisories/new).
+
+Include affected crates, revisions, reproduction inputs, and observed impact. Do
+not include confidential input in a public issue. Maintainers will coordinate
+validation, remediation, and disclosure.
+
+## Scope
 
 Relevant surfaces include untrusted parsers, regex/schema evaluation, recovery
 budgets, misleading correction receipts, file transactions, MCP framing, and

@@ -1297,8 +1297,9 @@ impl<'t> Reader<'_, 't, '_> {
                 }
                 between |= spelling == Spelling::Canonical;
                 // A misspelled closer held by the value is text of it (no
-                // repair reads it as one: T5/F9), and so is one closing an
-                // element the value opened; other exact spellings are markup.
+                // repair reads it as one, so a value holding a near-closer
+                // keeps it), and so is one closing an element the value
+                // opened; other exact spellings are markup.
                 if spelling == Spelling::Misspelled || (verbatim && self.paired(at, &mut held)?) {
                     held.mark(at);
                 } else {

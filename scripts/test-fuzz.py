@@ -126,20 +126,20 @@ class Coverage(unittest.TestCase):
             (root / 'crates/core/src').mkdir(parents=True)
             (root / 'crates/core/examples').mkdir()
             for filename in ('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/core/Cargo.toml', 'crates/core/README.md'):
-                (root / filename).write_text('fixed input')
+                (root / filename).write_text('fixed input', encoding='utf-8')
             source = root / 'crates/core/src/lib.rs'
-            source.write_text('first engine')
+            source.write_text('first engine', encoding='utf-8')
             harness = root / 'crates/core/examples/fuzz_patch.rs'
-            harness.write_text('first harness')
+            harness.write_text('first harness', encoding='utf-8')
             with patch.object(FUZZ, 'ROOT', root):
                 initial = FUZZ.input_identity('patch')
-                (root / 'README.md').write_text('new documentation')
+                (root / 'README.md').write_text('new documentation', encoding='utf-8')
                 self.assertEqual(FUZZ.input_identity('patch'), initial)
-                source.write_text('second engine')
+                source.write_text('second engine', encoding='utf-8')
                 changed = FUZZ.input_identity('patch')
                 self.assertNotEqual(changed['engine_source_sha256'], initial['engine_source_sha256'])
                 self.assertEqual(changed['harness_source_sha256'], initial['harness_source_sha256'])
-                harness.write_text('second harness')
+                harness.write_text('second harness', encoding='utf-8')
                 self.assertNotEqual(FUZZ.input_identity('patch')['harness_source_sha256'], initial['harness_source_sha256'])
 
     def test_every_target_seed_is_within_the_probe_bound(self):
@@ -148,7 +148,7 @@ class Coverage(unittest.TestCase):
                 self.assertLessEqual(len(seed), 4096, f'{target}: a committed seed exceeds 4096 bytes')
 
     def test_every_target_has_a_registered_harness_source(self):
-        manifest = (FUZZ.ROOT / 'crates/core/Cargo.toml').read_text()
+        manifest = (FUZZ.ROOT / 'crates/core/Cargo.toml').read_text(encoding='utf-8')
         for target in FUZZ.TARGETS:
             self.assertTrue(FUZZ.harness_source(target).is_file(), f'{target}: no probe source')
             self.assertIn(f'name = "fuzz-{FUZZ.example_name(target)}"', manifest, f'{target}: no [[example]] entry')
@@ -194,11 +194,11 @@ class Coverage(unittest.TestCase):
         root = FUZZ.ROOT
         build = subprocess.run(
             ['cargo', 'build', '-q', '-p', 'purrassist-core', '--example', 'fuzz-tool-call'],
-            cwd=root, capture_output=True, text=True)
+            cwd=root, capture_output=True, encoding='utf-8')
         self.assertEqual(build.returncode, 0, build.stderr)
         metadata = subprocess.run(
             ['cargo', 'metadata', '--format-version', '1', '--no-deps'],
-            cwd=root, capture_output=True, text=True, check=True)
+            cwd=root, capture_output=True, encoding='utf-8', check=True)
         probe = Path(json.loads(metadata.stdout)['target_directory']) / 'debug/examples/fuzz-tool-call'
         self.assertTrue(probe.is_file(), probe)
         for index, seed in enumerate(FUZZ.TOOL_CALL_STRICT):
@@ -239,12 +239,12 @@ class Coverage(unittest.TestCase):
         self.assertEqual(FUZZ.example_name('tool-call-ref'), 'tool-call')
         self.assertEqual(FUZZ.probe_arguments('tool-call-ref'), ['--tools', 'ref'])
         self.assertEqual(config['input'], 'bytes')
-        makefile = (FUZZ.ROOT / 'Makefile').read_text()
+        makefile = (FUZZ.ROOT / 'Makefile').read_text(encoding='utf-8')
         loop = next(line for line in makefile.splitlines() if 'for target in' in line)
         self.assertIn('tool-call-ref', loop.replace(';', ' ').split())
         self.assertNotIn('continue-on-known', ''.join(
             line for line in makefile.splitlines() if 'scripts/fuzz.py' in line))
-        documentation = (FUZZ.ROOT / 'docs/FUZZING.md').read_text()
+        documentation = (FUZZ.ROOT / 'docs/FUZZING.md').read_text(encoding='utf-8')
         for needle in ('tool-call-ref', '--tools ref', '--continue-on-known'):
             self.assertIn(needle, documentation)
 
@@ -276,11 +276,11 @@ class Coverage(unittest.TestCase):
         root = FUZZ.ROOT
         build = subprocess.run(
             ['cargo', 'build', '-q', '-p', 'purrassist-core', '--example', 'fuzz-tool-call'],
-            cwd=root, capture_output=True, text=True)
+            cwd=root, capture_output=True, encoding='utf-8')
         self.assertEqual(build.returncode, 0, build.stderr)
         metadata = subprocess.run(
             ['cargo', 'metadata', '--format-version', '1', '--no-deps'],
-            cwd=root, capture_output=True, text=True, check=True)
+            cwd=root, capture_output=True, encoding='utf-8', check=True)
         probe = Path(json.loads(metadata.stdout)['target_directory']) / 'debug/examples/fuzz-tool-call'
         for arguments in (FUZZ.probe_arguments('tool-call-ref'), []):
             for index, seed in enumerate(FUZZ.TARGETS['tool-call-ref']['seeds']):
@@ -331,7 +331,7 @@ class Coverage(unittest.TestCase):
 
         def fake_probe(binary, data, where, timeout, target, oracle, tool_paths, counts=None):
             stderr = outcomes[seeds.index(data)]
-            (where / 'probe.stderr').write_text(stderr or '')
+            (where / 'probe.stderr').write_text(stderr or '', encoding='utf-8')
             if stderr is not None:
                 counts['crashes'] += 1
                 raise subprocess.CalledProcessError(101, ['probe'])
@@ -359,26 +359,26 @@ class Coverage(unittest.TestCase):
     def test_continue_on_known_retains_every_issue_6_input_and_continues(self):
         directory, error = self._campaign(['--continue-on-known'], [self.KNOWN, None, self.KNOWN])
         self.assertIsNone(error)
-        report = json.loads((directory / 'report.json').read_text())
+        report = json.loads((directory / 'report.json').read_text(encoding='utf-8'))
         self.assertEqual((report['status'], report['executions'], report['crashes']), ('passed', 3, 0))
         self.assertTrue(report['continue_on_known'])
         self.assertEqual([entry['execution'] for entry in report['known_failures']], [0, 2])
         for entry in report['known_failures']:
             self.assertTrue((directory / 'known-6' / f'{entry["sha256"]}.bin').is_file())
             self.assertIn('runs past where it failed',
-                          (directory / 'known-6' / f'{entry["sha256"]}.stderr').read_text())
+                          (directory / 'known-6' / f'{entry["sha256"]}.stderr').read_text(encoding='utf-8'))
 
     def test_without_continue_on_known_the_first_issue_6_panic_stops_the_campaign(self):
         directory, error = self._campaign([], [self.KNOWN, None])
         self.assertIsInstance(error, subprocess.CalledProcessError)
-        report = json.loads((directory / 'report.json').read_text())
+        report = json.loads((directory / 'report.json').read_text(encoding='utf-8'))
         self.assertEqual((report['status'], report['crashes'], report['known_failures']), ('failed', 1, []))
         self.assertFalse((directory / 'known-6').exists())
 
     def test_continue_on_known_still_stops_at_any_other_failure(self):
         directory, error = self._campaign(['--continue-on-known'], [self.KNOWN, 'assertion failed: overlap'])
         self.assertIsInstance(error, subprocess.CalledProcessError)
-        report = json.loads((directory / 'report.json').read_text())
+        report = json.loads((directory / 'report.json').read_text(encoding='utf-8'))
         self.assertEqual((report['status'], report['crashes']), ('failed', 1))
         self.assertEqual(len(report['known_failures']), 1)
 
@@ -789,7 +789,7 @@ class DifferentialNormalization(unittest.TestCase):
                          'backtick_cache_patch_sha256': FUZZ.CMARK_BACKTICK_PATCH_SHA256}
                 if digest != 'missing':
                     entry['emphasis_floors_patch_sha256'] = digest
-                (root / 'vendor/tooling.json').write_text(json.dumps([entry]))
+                (root / 'vendor/tooling.json').write_text(json.dumps([entry]), encoding='utf-8')
                 with patch.object(FUZZ, 'ROOT', root), patch.object(FUZZ.subprocess, 'run') as run:
                     with self.assertRaises(ValueError):
                         FUZZ.ensure_cmark_gfm(corrected_backticks=True, corrected_emphasis=True)
@@ -842,7 +842,7 @@ class DifferentialNormalization(unittest.TestCase):
                                        (FUZZ.CMARK_GFM_SOURCE_SHA256, 'wrong')]:
                 (root / 'vendor/tooling.json').write_text(json.dumps([{
                     'name': 'cmark-gfm', 'source_sha256': source,
-                    'backtick_cache_patch_sha256': correction}]))
+                    'backtick_cache_patch_sha256': correction}]), encoding='utf-8')
                 with patch.object(FUZZ, 'ROOT', root), patch.object(FUZZ.subprocess, 'run') as run:
                     with self.assertRaises(ValueError):
                         FUZZ.ensure_cmark_gfm(corrected_backticks=True)
@@ -891,7 +891,7 @@ class DifferentialNormalization(unittest.TestCase):
                        FUZZ.CMARK_DESTINATION_BEFORE.replace('size_t nb_p = 0;', 'size_t nb_p = 1;')):
             with self.assertRaises(ValueError):
                 FUZZ.patch_reference_destination_balance(source)
-        inventory = json.loads((FUZZ.ROOT / 'vendor/tooling.json').read_text())
+        inventory = json.loads((FUZZ.ROOT / 'vendor/tooling.json').read_text(encoding='utf-8'))
         entry = next(item for item in inventory if item['name'] == 'cmark-gfm')
         self.assertEqual(entry['destination_balance_patch_sha256'], FUZZ.CMARK_DESTINATION_PATCH_SHA256)
         for source in ('> [x]: a(b', '> > [x]: a(b)', '> [x]: a\\(b', '> [x]: <a(b>',
@@ -985,7 +985,7 @@ class DifferentialNormalization(unittest.TestCase):
         for source in ('', FUZZ.CMARK_EMAIL_BEFORE * 2, FUZZ.CMARK_EMAIL_BEFORE.replace('rewind = 0', 'rewind = 1')):
             with self.assertRaises(ValueError):
                 FUZZ.patch_reference_email_counter(source)
-        inventory = json.loads((FUZZ.ROOT / 'vendor/tooling.json').read_text())
+        inventory = json.loads((FUZZ.ROOT / 'vendor/tooling.json').read_text(encoding='utf-8'))
         entry = next(item for item in inventory if item['name'] == 'cmark-gfm')
         self.assertEqual(entry['email_counter_patch_sha256'], FUZZ.CMARK_EMAIL_PATCH_SHA256)
         bad = [dict(item, email_counter_patch_sha256='bad') if item['name'] == 'cmark-gfm' else item for item in inventory]

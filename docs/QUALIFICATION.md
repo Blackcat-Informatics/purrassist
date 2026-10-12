@@ -4,8 +4,11 @@
 
 This record describes the implemented 0.1.0 capability and its executable
 qualification. Registry name records at 0.0.0 are distinct from a published
-0.1.0 release. Publication and downloaded-package acceptance follow the review
-and merge sequence in [RELEASE.md](RELEASE.md).
+0.1.0 release. Status: merged to `main` (PR #2, `699d9ff`); tool-call recovery
+(#3, #8) and `purrassist-derive` (#15) merged since; not yet tagged
+`rust-v0.1.0`. Publication and downloaded-package acceptance follow the
+procedure in [RELEASE.md](RELEASE.md). Open limitations are listed under
+[Known limitations](#known-limitations).
 
 ## Capability and evidence
 
@@ -20,7 +23,7 @@ and merge sequence in [RELEASE.md](RELEASE.md).
 | Markdown parsing/rendering | `markdown_corpus`, `markdown_render` | All 652 CommonMark and 672 GFM examples; source partitions and focused regressions |
 | Structural document edits | `markdown_structure`, `markdown_relabel_preservation`, `markdown_renumber_preservation` and section/list/table/reference tests | Section insert/remove/move/rename; list move/renumber with body preservation; table edits/moves/padding; reference add/relabel/remove/unlink with display/alt preservation |
 | Patch algebra and preservation | `patch_laws`, `preservation_properties`, `fuzzy_patch` | Invert/apply, composition, commute/rebase, independent splice oracle, unchanged bytes and loss spans |
-| Alternative-specific ledgers | `provenance`, `edit_ambiguity`, `recovery_validation_binding`, `receipt_wire`, syntax tests | Digest-bound candidates and whole-schema validations, shared-node deduplication, ranked ambiguity, atomic ledger exhaustion; receipt wire v2 |
+| Alternative-specific ledgers | `provenance`, `edit_ambiguity`, `recovery_validation_binding`, `receipt_wire`, syntax tests | Digest-bound candidates and whole-schema validations, shared-node deduplication, ranked ambiguity, atomic ledger exhaustion; receipt wire v3 |
 | Resource boundaries | `resource_accounting`, `schema_budgets`, `allocation_oracle`, syntax `allocation`, host `helpers` | Charge-before-allocation, cancellation, helper admission, measured allocator comparisons including zero-slack pattern compilation and generation, external parser accounts |
 | Filesystem transaction boundaries | host `files`, `crash_recovery`, `journal_limits`, `orphan_preservation`, `edit_tools` | Eight crash checkpoints; bounded escaped journals, retry/recovery, temporary ownership checks, stale plans, locks, conditional undo and explicit batch outcomes |
 | Shared Rust/CLI/MCP surface | host tests and CLI `protocol` | Single registry; every tool has CLI/MCP equivalence fixtures and schema-checked output |
@@ -30,9 +33,9 @@ and merge sequence in [RELEASE.md](RELEASE.md).
 | Tool-call surfaces | host `tool_call_tools`, CLI `tool_calls_cli` and `protocol` | `recover_tool_calls` MCP tool and `recover-tool-calls` command equal direct core recovery; raw-byte input with invalid UTF-8 recorded; exit codes |
 | Independent syntax | `make syntax-oracles` | 15 positive/negative Python, Rust, JavaScript/JSX, TypeScript/TSX compiler probes |
 | Correction quality | `correction_evaluation`, `matching_oracle` | Four provenance-bound corpora, risk/coverage sweeps, exact distance and path oracles |
-| Coverage-guided/differential probes | `make fuzz` | Nine targets (including `tool-call`), retained source-region novelty, exact failure replay, V8/cmark-gfm comparisons |
+| Coverage-guided/differential probes | `make fuzz` (see [Known limitations](#known-limitations)) | Ten targets (including `tool-call` and `tool-call-ref`), retained source-region novelty, exact failure replay, V8/cmark-gfm comparisons. The default `make fuzz` stops on the #11 and #6 signatures, so it is not a passing result for the two tool-call targets |
 | Typed tool definitions (`purrassist-derive`) | `crates/derive/tests/derive.rs`, `crates/derive/tests/crate_override.rs`, the `compile_fail` doctests in `crates/derive/src/lib.rs` (each rejected construct with a passing twin) and the derive README doctest, `crates/derive/src/{model,write,parse}.rs` unit tests (including the default-number agreement test against core's JSON parser), `crates/purrassist/tests/derive_facade.rs`, `crates/host/tests/derive_facade.rs`, core `tool_call::derive_support` unit tests and doctests, and `scripts/check-repository.py`'s README derive-example drift check | Derived definitions equal hand-built ones; recovery through `hermes.v1` and `qwen3-coder-xml.v1` converts to the struct with exact `FromNodeError` pointers; single-pass member classification (duplicate vs. missing vs. unknown); defaults, naming, `extra`, hygiene against shadowed names, recursion and every rejected input; nested undeclared members dropped with a recorded loss unless the nested struct declares `unknown`; `f32` and `Box<T>` fields; the `#[tool(crate = ..)]` override; the `__DERIVE_ABI_<major>_<minor>` marker; facade derives work with no direct core dependency; the crate has no dependencies (`make hygiene` audit) |
-| Tool-call fuzzing | `make fuzz` (`TARGET=tool-call` alone) | Raw-byte model turns over every built-in dialect with fuzzed policy, stop, reasoning, tool choice, effort, ambiguity and chunking; no panic, budget respected, mutating-guess guards and span invariants hold; see [FUZZING.md](FUZZING.md) |
+| Tool-call fuzzing | `make fuzz` (`TARGET=tool-call` alone; see [Known limitations](#known-limitations)) | Raw-byte model turns over every built-in dialect with fuzzed policy, stop, reasoning, tool choice, effort, ambiguity and chunking. The probe checks for panics, budget overruns, mutating-guess guards and span invariants, but the default `make fuzz` stops on the #11 and #6 signatures and has no 10,000-mutation baseline for either tool-call target; see [FUZZING.md](FUZZING.md) |
 | Resource/performance observations | `make resources`, resource-limit checker | Latency, real allocations, heap/RSS, artifact hashes/sizes, cache-disabled cold build |
 | Structural helper detector | `make helper-test`, `make helper-census`, `make helper-check` | syn-based normalized body/shim/constant/table census, strict ledger validity and exact group enforcement; repository tooling only |
 | Local release artifacts | `make package` | Six Cargo-verified archives in dependency order; source identity and registered notice audit |
@@ -139,8 +142,11 @@ Windows replacement uses write-through handles, POSIX rename semantics when
 accepted by the filesystem, an explicit write-through fallback, bounded sharing
 violation retries, and evidence for directory-flush access denial. Crash tests
 abort a subprocess at each journal/replacement checkpoint and verify exact
-version recovery, retry, and undo. Real Windows execution is proved by the
-`windows-engines` hosted lane; a cross-compile alone does not prove durability.
+version recovery, retry, and undo. A cross-compile alone does not prove durability. The `windows-engines` lane of
+[Verify run 36702475819](https://github.com/Blackcat-Informatics/purrassist/actions/runs/36702475819)
+ran the engine, host and CLI tests (including the host file and crash-recovery
+tests) on Windows at `dc23bc81bebacef95f2b84d29dfd20031fdcd44c`, before PR #2
+merged; that run does not cover later changes to `main`.
 File transactions admit JSON escaping when bounding journal metadata and derive
 parsing budgets from the admitted serialized size. Resource errors remain typed
 errors in the Rust store; CLI/MCP handlers retain their explanations as tool
@@ -165,7 +171,7 @@ cases are not independent production samples; the interval cannot be interpreted
 as a production error guarantee. The independent distance oracle exhausts all
 14,641 ordered pairs of three-symbol strings up to length four.
 
-[FUZZING.md](FUZZING.md) describes the nine mutation targets, qualification
+[FUZZING.md](FUZZING.md) describes the ten mutation targets, qualification
 counts, retained coverage regions, independent-oracle scope, compilation
 rejections/timeouts, and replay. Reports live in `docs/qualification/` and retain
 the source/tool identities and deterministic seed. A bounded campaign establishes
@@ -202,6 +208,30 @@ implementation each. The portable core fixture belongs to the unpublished
 harness Cargo library. See [HELPER-CENSUS.md](HELPER-CENSUS.md) and its actual
 consolidation report for the source-bound census and review decisions.
 
+## Known limitations
+
+These issues were open on 2026-10-12. None blocks the 0.1.0 release. The list
+matches its single source, [known-limitations.json](known-limitations.json);
+`scripts/check-docs.py` compares the two.
+
+- [#6](https://github.com/Blackcat-Informatics/purrassist/issues/6) Tool-call fuzz: finish the rejected-span oracle failures left at the #3 merge. A plain tool-call fuzz campaign stops at the first rejected-span oracle panic, so the default `make fuzz` fails there.
+- [#7](https://github.com/Blackcat-Informatics/purrassist/issues/7) Audit the unreviewed #3 stage-3 commits and close the F14/F19 rule's known limits. Some commits of the #3 tool-call work were merged without an audit, and the known limits of the F14/F19 rule remain open.
+- [#10](https://github.com/Blackcat-Informatics/purrassist/issues/10) Tool-call recovery: restarted DeepSeek-V3.1 sections cost quadratic work and super-quadratic time. A turn with many restarted DeepSeek-V3.1 sections costs quadratic work and super-quadratic time.
+- [#11](https://github.com/Blackcat-Informatics/purrassist/issues/11) Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes). One 192-byte mutated turn takes about 5 s in a release build, so the default `make fuzz` exceeds its timeout on `tool-call-ref`; the CLI and MCP sized budget ends it explicitly in 0.3 s.
+- [#12](https://github.com/Blackcat-Informatics/purrassist/issues/12) Tool-call recovery: add the pythonic.v1 dialect and pythonic codec. `pythonic.v1` is not built in, so its call markup is not recovered as a tool call.
+- [#13](https://github.com/Blackcat-Informatics/purrassist/issues/13) Tool-call recovery: add the glm-4.5.v1 dialect and kv-pairs codec. `glm-4.5.v1` is not built in, so its call markup is not recovered as a tool call.
+- [#14](https://github.com/Blackcat-Informatics/purrassist/issues/14) Tool-call recovery: add the gemma3-tool-code.v1 dialect. `gemma3-tool-code.v1` is not built in, so its call markup is not recovered as a tool call.
+- [#16](https://github.com/Blackcat-Informatics/purrassist/issues/16) Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress). There is no `ToolCallStream`, no stable-prefix events, no CLI `--stream` option and no MCP progress reporting for recovery.
+- [#17](https://github.com/Blackcat-Informatics/purrassist/issues/17) Tool-call recovery: reassemble provider streaming events (Anthropic SSE tool_use, OpenAI tool_calls deltas). Anthropic SSE `tool_use` and OpenAI `tool_calls` delta streams are not reassembled into a turn.
+- [#18](https://github.com/Blackcat-Informatics/purrassist/issues/18) Tool-call recovery: special-token-stripped dialect variants (*-stripped.v1). Dialect variants for output whose special tokens were stripped (`*-stripped.v1`) are not built in.
+
+The default `make fuzz` stops on the #11 and #6 signatures: the `tool-call-ref`
+campaign exceeds the default 10 s `--timeout` at execution 682 (#11), and the
+`tool-call` and `tool-call-ref` campaigns stop at the first rejected-span oracle
+panic (#6). A target's invariants are therefore not claimed to hold for the
+default `make fuzz` run on these two targets; [FUZZING.md](FUZZING.md) records
+how to isolate and attribute each stop.
+
 ## Qualification commands
 
 ```sh
@@ -221,10 +251,10 @@ qualification. Exact commit and run evidence is recorded in issue #1 and the PR;
 a green run applies to its commit only. The trusted-publishing workflow is
 separate from qualification and uses the registered publisher identity.
 
-## Release acceptance after review and merge
+## Release acceptance
 
-The established issue #1 sequence reserves publication for the reviewed merge
-commit. It requires the full gate and hosted CI on that commit, verified
+The established issue #1 sequence reserves publication for the exact `main`
+commit to be tagged. It requires the full gate and hosted CI on that commit, verified
 trusted-publisher settings, explicit release-tag authorization, dependency-order
 publication, all six downloadable archives, installed CLI/MCP transcripts from
 crates.io, and the GitHub release. The verifier's offline local-registry tests
@@ -237,9 +267,13 @@ flooding. Until the real acceptance steps execute, 0.1.0 is not
 claimed as published and issue #1 remains open.
 
 
-## Stage 2 local integration record
+## Historical: Stage 2 record bound to `66b3756`
 
-The repaired engines passed the normal `make check`, `make syntax-oracles`,
+This section records the local integration at `66b3756`, which predates tool-call
+recovery and `purrassist-derive`; it is not evidence for current `main`.
+The recovery measurements report records no source commit, so it is bound to
+`66b3756` by this record only; the other two reports record that commit. The
+repaired engines passed the normal `make check`, `make syntax-oracles`,
 `make wasm-test` and all-target `make fuzz` commands. Fresh source-bound
 [smoke reports](qualification/fuzz-stage2-linux-x86_64.json),
 [resource measurements](qualification/resources-stage2-linux-x86_64.json) and

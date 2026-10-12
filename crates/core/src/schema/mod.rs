@@ -41,7 +41,7 @@ struct Index {
     by_route: BTreeMap<(usize, Vec<usize>), usize>,
     resources: BTreeMap<String, usize>,
     anchors: BTreeMap<String, usize>,
-    /// Requirement 5: unsupported optional (`$vocabulary` ... `false`)
+    /// Unsupported optional (`$vocabulary` ... `false`)
     /// vocabulary URIs discovered during compilation, mapped to the
     /// declaring schema resource's own keywords this engine does not
     /// otherwise recognize.
@@ -85,7 +85,7 @@ impl fmt::Display for SchemaError {
 }
 impl std::error::Error for SchemaError {}
 
-/// Requirement 5: one unsupported, optional (`$vocabulary` ... `false`)
+/// One unsupported, optional (`$vocabulary` ... `false`)
 /// vocabulary URI, naming the keywords its declaring schema resource used
 /// that this engine leaves otherwise unevaluated.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -127,7 +127,7 @@ pub struct ValidationReport {
     /// Each entry identifies its format validator and instance JSON Pointer;
     /// evaluating several schemas at one instance can produce several entries.
     pub format_evidence: Vec<crate::contract::Validation>,
-    /// Task 6 wiring: which pattern-matching engine
+    /// Pattern-engine wiring: which pattern-matching engine
     /// (`pattern.engine.derivative-v1`/`pattern.engine.backtrack-v1`)
     /// evaluated each distinct `pattern`/`patternProperties` keyword this
     /// validation actually exercised.
@@ -309,7 +309,7 @@ impl Schema {
         self.digest
     }
 
-    /// Requirement 5: every unsupported optional vocabulary this schema's
+    /// Every unsupported optional vocabulary this schema's
     /// dialects declared, with the keywords left unevaluated because of it.
     /// Empty when every declared vocabulary is either required-and-known
     /// (compilation would otherwise have failed) or fully supported.
