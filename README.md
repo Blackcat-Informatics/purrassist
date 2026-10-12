@@ -102,7 +102,7 @@ output, not the tools' output. `purrassist validate` prints exactly the
 
 ## Crate map
 
-Six crates are published, in this release order:
+Six crates make up the release set, published in this order:
 
 | Crate | Role |
 |---|---|

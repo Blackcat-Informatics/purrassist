@@ -210,7 +210,7 @@ the measured excess exceeds that same `K` at either tested scale. Smaller
 uncharged allocations can remain within the slack or be absorbed by other
 conservative charges; two tested scales cannot establish a universal bound.
 This oracle caught and
-led to fixing three such regressions during this task, each confirmed fixed
+led to fixing three such regressions during development, each confirmed fixed
 by measuring the per-unit gap across four to five scales, not just the two
 the committed test asserts:
 

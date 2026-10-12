@@ -983,7 +983,7 @@ The `tool-call-ref` campaign at the default seed reaches, at execution 682, a
 192-byte turn (free-form-object items with mutated closers) on which the repair
 search spends about 240 to 280 ns per charged work unit, several times the
 ordinary rate. With the probe's request it takes about 5 s in a release build,
-on `main` as on this branch, so under the coverage build it exceeds the default
+on `main`, so under the coverage build it exceeds the default
 10 s `--timeout` and `make fuzz` fails there. Under the CLI and MCP sized budget
 the same turn ends explicitly (`BudgetExceeded`) in 0.3 s. Issue #11 tracks the
 fix. Until then, run `tool-call-ref` campaigns with a larger `--timeout`; the #8
