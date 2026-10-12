@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-//! `regex`: the value must compile as an ECMA-262 pattern (Task 6's
-//! derivative/backtracking engine), never evaluated against any instance.
+//! `regex`: the value must compile as an ECMA-262 pattern (the derivative/backtracking
+//! pattern engine), never evaluated against any instance.
 use crate::contract::{Governor, Resource, StopReason};
 use crate::pattern::Pattern;
 

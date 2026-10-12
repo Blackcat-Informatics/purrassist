@@ -328,7 +328,7 @@ fn check_keywords(
             }
             "format" => match value {
                 Value::String(name) => {
-                    // Requirement 3: an unrecognized format under an active
+                    // An unrecognized format under an active
                     // format-assertion vocabulary is a compile-time error;
                     // annotation-only use never rejects an unknown name.
                     if vocabularies.format_assert && !super::format::known(name) {
@@ -416,7 +416,7 @@ fn check_keywords(
 /// Every keyword this engine gives defined behavior to (core linkage,
 /// applicators, validation, unevaluated, content, format, and the
 /// meta-data annotations); anything else is a keyword an unsupported
-/// optional vocabulary might own, and requirement 5's evidence names it.
+/// optional vocabulary might own, and the unsupported-vocabulary evidence names it.
 fn is_known_keyword(key: &str) -> bool {
     matches!(
         key,
@@ -480,7 +480,7 @@ fn is_known_keyword(key: &str) -> bool {
     )
 }
 
-/// Requirement 5: an unknown, optional (`false`) `$vocabulary` entry still
+/// An unknown, optional (`false`) `$vocabulary` entry still
 /// compiles, but every compile/recovery receipt must name the URI and the
 /// keywords left unevaluated because of it. Scoped to the exact schema
 /// resource that declared the dialect (the only schema object whose member

@@ -34,6 +34,13 @@ sentence that restates it:
   configuration, and the MCP Registry name in the cli README, derived from the
   workspace `repository` URL.
 
+It also scans the Rust sources the published crates ship: the `src/` tree of
+every publishable workspace package (from `cargo metadata`) must not carry
+process jargon of the form "task N" or "requirement N", with the same task pattern as the
+Markdown ban; a reference wrapped across comment lines is found.
+`tests/`, `benches/` and `examples/` are outside that rule, because only
+`src/` renders on docs.rs.
+
 Every fact is found by a regular expression over the whitespace-collapsed text,
 and a regular expression that matches nothing is itself an error ("fact
 sentence not found"), so rewording a sentence cannot silently disable a check.
@@ -61,6 +68,16 @@ NUMBER_WORDS = {word: number for number, word in enumerate((
     'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty'))}
 NUMBER = '|'.join(NUMBER_WORDS)
 
+# A numbered reference to a work item ("Task 12"). Shared by the Markdown ban and
+# the published-source rule, so the two cannot drift.
+TASK_NUMBER = r'\btask \d+\b'
+
+# A numbered reference to a requirement of a plan that the shipped sources never
+# define ("requirement 2"). Banned in published sources with `TASK_NUMBER`.
+REQUIREMENT_NUMBER = r'\brequirements? \d+\b'
+SOURCE_JARGON = (TASK_NUMBER, REQUIREMENT_NUMBER)
+COMMENT_LINE = re.compile(r'\s*//[/!]?(.*)$')
+
 # Phrases that mark stale or process-bound wording. Matched case-insensitively
 # after every run of whitespace is collapsed to one space, so a phrase wrapped
 # across a line break is still found.
@@ -80,7 +97,7 @@ BANNED_PHRASES = (
     r'uploaded manually',
     r'compares the output byte for byte',
     r'every result carries',
-    r'\btask \d+\b',
+    TASK_NUMBER,
 )
 
 # The `[X.Y.Z]` changelog section is also the body of the GitHub release, so it must not
@@ -542,6 +559,46 @@ def banned_matches(collapsed):
     """The (start, matched text, phrase) of every banned phrase in collapsed text."""
     return tuple((match.start(), match.group(0), phrase) for phrase in BANNED_PHRASES
                  for match in re.finditer(phrase, collapsed, re.IGNORECASE))
+
+
+_source_cache = {}
+
+
+def source_jargon(path):
+    """The (line, matched text, pattern) of every numbered reference in the Rust file `path`.
+
+    A run of consecutive comment lines is collapsed to one text with the markers stripped, so
+    a reference wrapped across two comment lines is found and reported at its first line.
+    The result is cached by the file's identity (device and inode, which a link shares with its target), mtime
+    and size, so the many trees that link the same sources are read once per process."""
+    stat = path.stat()
+    key = (stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size)
+    if key not in _source_cache:
+        units = []  # (first line, text) of each comment run or code line
+        for number, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
+            comment = COMMENT_LINE.match(line)
+            if comment and units and units[-1][2]:
+                units[-1][1].append(comment.group(1).strip())
+            else:
+                units.append([number, [comment.group(1).strip() if comment else line], bool(comment)])
+        found = []
+        for number, parts, _ in units:
+            text = ' '.join(parts)
+            found.extend((number, match.group(0), pattern) for pattern in SOURCE_JARGON
+                         for match in re.finditer(pattern, text, re.IGNORECASE))
+        _source_cache[key] = tuple(found)
+    return _source_cache[key]
+
+
+def check_source_jargon(root, report, packages):
+    """No numbered work-item or requirement reference in the `src/` of a publishable crate."""
+    for package in publishable(packages):
+        source = Path(root) / package['directory'] / 'src'
+        for path in sorted(source.rglob('*.rs')):
+            for number, matched, pattern in source_jargon(path):
+                report.add('source-jargon', f"{path.relative_to(root).as_posix()}:{number}",
+                           f'process wording {matched!r} in a published crate source (/{pattern}/); '
+                           'name the feature or state the requirement instead')
 
 
 def check_banned_phrases(docs, report):
@@ -1294,6 +1351,7 @@ def check(root, names):
             lambda: check_pinned_links(docs, report, version, repository, packages),
             lambda: check_workspace_boundaries(docs, report, packages),
             lambda: check_cli_package(docs, report, owner, packages),
+            lambda: check_source_jargon(root, report, packages),
         )
     for rule in rules:
         try:

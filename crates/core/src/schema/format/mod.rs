@@ -99,8 +99,8 @@ pub(super) fn evaluate(
 }
 
 /// Whether recovery may attempt a normalization repair for a failing
-/// `format`; only `date`, `date-time`, and `time` admit one (requirement 4:
-/// every other format violation stays an explicit no-candidate proposal).
+/// `format`; only `date`, `date-time`, and `time` admit one (every other
+/// format violation stays an explicit no-candidate proposal).
 pub(super) fn repairable(name: &str) -> bool {
     matches!(name, "date" | "date-time" | "time")
 }
@@ -116,7 +116,7 @@ pub(super) fn repair(
     datetime::repair(name, value, governor)
 }
 
-/// The witness-generation algebra's (Task 8) canonical example value for
+/// The witness-generation algebra's canonical example value for
 /// one known `format` name: always re-checked with [`evaluate`] before use,
 /// so an imprecise guess here can only cost a fallback attempt, never an
 /// incorrect witness.

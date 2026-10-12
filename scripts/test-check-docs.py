@@ -498,7 +498,7 @@ BANNED_SAMPLES = {
     r'uploaded manually': 'The image is uploaded manually.',
     r'compares the output byte for byte': 'The test compares the output byte for byte.',
     r'every result carries': 'Every result carries its evidence.',
-    r'\btask \d+\b': 'See Task 12.',
+    CD.TASK_NUMBER: 'See Task 12.',
 }
 
 
@@ -559,6 +559,55 @@ class BannedPhrases(Case):
         tree.append('README.md', '\nThe release set, published in this order:\n')
         self.assertNoRule(tree.errors(), 'banned-phrase')
         self.assertNoRule(tree.errors(), 'changelog')
+
+
+class SourceJargon(Case):
+    def test_the_pattern_is_shared_with_the_markdown_ban(self):
+        self.assertIn(CD.TASK_NUMBER, CD.BANNED_PHRASES)
+
+    def test_a_task_number_in_a_published_crate_source_fails(self):
+        tree = self.tree()
+        tree.write('crates/host/src/zz_jargon.rs', '//! Wired in Task 12.\n')
+        self.assertFails(tree.errors(), 'source-jargon', 'crates/host/src/zz_jargon.rs:1', 'Task 12')
+
+    def test_a_nested_source_and_any_case_fail(self):
+        tree = self.tree()
+        tree.write('crates/core/src/text/zz_jargon.rs', 'fn f() {}\n// see TASK 7\n')
+        self.assertFails(tree.errors(), 'source-jargon', 'crates/core/src/text/zz_jargon.rs:2', 'TASK 7')
+
+    def test_the_same_text_outside_published_sources_passes(self):
+        tree = self.tree()
+        tree.write('crates/host/tests/zz_jargon.rs', '//! Wired in Task 12.\n')
+        (tree.root / 'crates/host/benches').mkdir()
+        tree.write('crates/host/benches/zz_jargon.rs', '//! Wired in Task 12.\n')
+        tree.write('crates/helper-census/src/zz_jargon.rs', '//! Wired in Task 12.\n')
+        self.assertNoRule(tree.errors(), 'source-jargon')
+
+    def test_a_requirement_number_fails_and_the_word_alone_passes(self):
+        tree = self.tree()
+        tree.write('crates/core/src/zz_jargon.rs', '/// Requirement 5: x.\n')
+        self.assertFails(tree.errors(), 'source-jargon', 'crates/core/src/zz_jargon.rs:1', 'Requirement 5')
+        tree.write('crates/core/src/zz_jargon.rs', '/// Each requirement is stated; requirements 1x, a requirement list.\n')
+        self.assertNoRule(tree.errors(), 'source-jargon')
+
+    def test_a_reference_wrapped_across_comment_lines_fails_at_its_first_line(self):
+        for first, second, needle in (('/// See Task', '/// 12 for it.', 'Task 12'),
+                                      ('    // the requirement', '    // 3 of it', 'requirement 3'),
+                                      ('//! A Task', '//!     7.', 'Task 7')):
+            with self.subTest(needle=needle):
+                tree = self.tree()
+                tree.write('crates/host/src/zz_jargon.rs', f'fn f() {{}}\n{first}\n{second}\n')
+                self.assertFails(tree.errors(), 'source-jargon', 'crates/host/src/zz_jargon.rs:2', needle)
+
+    def test_a_number_on_a_code_line_after_a_comment_is_not_joined(self):
+        tree = self.tree()
+        tree.write('crates/host/src/zz_jargon.rs', '/// the task\nlet x = 12;\n')
+        self.assertNoRule(tree.errors(), 'source-jargon')
+
+    def test_ordinary_words_pass(self):
+        tree = self.tree()
+        tree.write('crates/host/src/zz_jargon.rs', '//! The tasks run; the task list and a task 1x are fine.\n')
+        self.assertNoRule(tree.errors(), 'source-jargon')
 
 
 class KnownLimitationsSource(Case):

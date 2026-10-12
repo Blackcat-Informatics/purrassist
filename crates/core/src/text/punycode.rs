@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-//! RFC 3492 Punycode, for the Task 7 idn-hostname format validator's
+//! RFC 3492 Punycode, for the idn-hostname format validator's
 //! A-label decode/encode and round-trip check (RFC 5891 section 5).
 const BASE: u32 = 36;
 const TMIN: u32 = 1;

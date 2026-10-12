@@ -73,7 +73,7 @@ pub(crate) fn name_cost(
 impl Walk<'_, '_> {
     /// Walk the schema alongside `node`, proposing local repairs and
     /// recursing into every applicator this engine gives generation
-    /// semantics to (Task 8 requirement 2): `$ref`/`$dynamicRef` (the
+    /// semantics to (witness-generation algebra): `$ref`/`$dynamicRef` (the
     /// latter resolved against the live `scope` dynamic-scope stack, the
     /// same as the evaluator and the witness algebra), `allOf`/`anyOf`/
     /// `oneOf`, `properties`/`patternProperties`/`additionalProperties`/
@@ -200,7 +200,7 @@ impl Walk<'_, '_> {
         }
         Ok(target)
     }
-    /// `if`/`then`/`else` (Task 8 requirement 2): recurse into whichever of
+    /// `if`/`then`/`else` (witness-generation algebra): recurse into whichever of
     /// `then`/`else` currently applies to `node`, so nested local repairs
     /// inside that branch are still explored.
     fn if_then_else_proposal(
@@ -236,7 +236,7 @@ impl Walk<'_, '_> {
     }
     /// A member whose key fails `propertyNames`: propose renaming just that
     /// key to a witness of the `propertyNames` schema's own `pattern`
-    /// (Task 6's regex generation), keeping the member's value untouched.
+    /// (the pattern engine's regex generation), keeping the member's value untouched.
     /// Every other shape of `propertyNames` (no `pattern`, or a failing key
     /// this pattern's generator cannot reach) is left an explicit
     /// no-candidate for this rule rather than fabricating an unrelated key.
@@ -290,7 +290,7 @@ impl Walk<'_, '_> {
         }
         Ok(())
     }
-    /// Requirement 4: a `date`/`date-time`/`time` violation under an active
+    /// A `date`/`date-time`/`time` violation under an active
     /// format-assertion vocabulary is repaired as a labeled `Guess`
     /// inference (normalization only); every other failing format yields no
     /// proposal here, leaving it an explicit no-candidate for this rule
@@ -610,7 +610,7 @@ impl Walk<'_, '_> {
         Ok(())
     }
     /// `patternProperties`/`additionalProperties`/`unevaluatedProperties`
-    /// (Task 8 requirement 2): recurse into every matching sub-schema for
+    /// (witness-generation algebra): recurse into every matching sub-schema for
     /// this member's *value*, independently of the key-typo repairs above.
     #[expect(
         clippy::too_many_arguments,
@@ -679,8 +679,8 @@ impl Walk<'_, '_> {
         }
         Ok(())
     }
-    /// `dependentSchemas` or schema-form Draft-07 `dependencies` (Task 8
-    /// requirement 2): when a trigger key is
+    /// `dependentSchemas` or schema-form Draft-07 `dependencies` (witness-generation
+    /// algebra): when a trigger key is
     /// present, the dependent schema's own constraints apply to the whole
     /// object, so it is followed at the object's own route/path rather than
     /// one member's.
@@ -801,7 +801,7 @@ impl Walk<'_, '_> {
         Ok(())
     }
     /// `prefixItems`/`items`/`contains`/`unevaluatedItems`, or Draft-07
-    /// tuple `items`/`additionalItems` (Task 8 requirement 2), each followed
+    /// tuple `items`/`additionalItems` (witness-generation algebra), each followed
     /// for every element it applies to.
     fn array_proposals(
         &mut self,

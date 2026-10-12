@@ -80,7 +80,7 @@ pub(super) struct Vocabularies {
     unevaluated: bool,
     content: bool,
     /// Whether the dialect's `$vocabulary` declared the format-assertion
-    /// vocabulary URI at all (`true` or `false` both count: requirement 1
+    /// vocabulary URI at all (`true` or `false` both count: the dialect
     /// treats either boolean as "known vocabulary", since we recognize it
     /// either way; only its *absence* leaves `format` annotation-only).
     pub format_assert: bool,

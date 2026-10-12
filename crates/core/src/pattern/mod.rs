@@ -473,7 +473,7 @@ impl Pattern {
     }
 }
 
-/// The Unicode `Script` value of one code point, for the Task 7
+/// The Unicode `Script` value of one code point, for the
 /// idn-hostname format validator's RFC 5892 Appendix A CONTEXTO rules; not
 /// part of the public API.
 pub(crate) fn script_of(code: u32) -> &'static str {

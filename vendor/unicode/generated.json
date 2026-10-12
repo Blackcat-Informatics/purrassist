@@ -1,5 +1,5 @@
 {
   "crates/core/src/text/unicode_data.rs": "364e7d8c89e5598cbb6715f7553ee81eab1388064bcb3b9d86975873fe583240",
   "crates/core/src/pattern/unicode/unicode_data.rs": "dd5940c89d6fd52f278665a4d249f5229b7e6128ef08f4e3ade3dc3a4d8b81cd",
-  "crates/core/src/text/idna_data.rs": "ae3f0615030573e5e17955ac197ecbeeb69b9b7ac64bc59660e915cd2f403fd0"
+  "crates/core/src/text/idna_data.rs": "dd3001c188b881e81f8c4791562b8b84be1250f6ec778ced8a5ff8f1e2dd3f27"
 }
