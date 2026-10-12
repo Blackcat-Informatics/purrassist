@@ -6,6 +6,10 @@ Isolated Tree-sitter grammar integration for Python, Rust, JavaScript/JSX,
 TypeScript, and TSX. Inspection retains source ranges; editing validates the
 whole proposed buffer and can repair uniquely indicated missing punctuation.
 
+**Status: 0.1.0.** This crate is one of the shared engines of `PurRAssist`, one
+engine with three equal interfaces: the Rust crates (`purrassist`), the MCP
+server and the CLI (`purrassist-cli`) all run it.
+
 ```rust
 use purrassist_core::{Budget, Governor};
 use purrassist_syntax::{Language, inspect};

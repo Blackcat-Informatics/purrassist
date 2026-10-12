@@ -9,7 +9,8 @@
 PurRAssist recovers intent from imperfect JSON, names, paths, and text. Give a
 decoder a schema and an effort level: it searches composed corrections, validates
 the complete result, and returns evidence of what changed. A schema-valid guess
-is still a guess. Ambiguous alternatives remain visible.
+is still a guess. Ambiguous alternatives remain visible. Use it as a
+[Rust crate, an MCP server, or a CLI](#one-engine-three-interfaces).
 
 **Version 0.1.0.** Merged to `main` (PR #2, `699d9ff`); tool-call recovery (#3,
 #8) and `purrassist-derive` (#15) merged since; not yet tagged `rust-v0.1.0`. The
@@ -17,9 +18,155 @@ accepted scope is in [the implementation contract](docs/IMPLEMENTATION.md), with
 executable evidence and limits in [the qualification record](docs/QUALIFICATION.md);
 its [known limitations](docs/QUALIFICATION.md#known-limitations) are not release
 blockers. Publication follows the release procedure; 0.1.0 is not claimed as
-published.
+published, so the `cargo add` and `cargo install` commands below work once it is
+and, until then, you can build from [a checkout](#use-the-checkout).
 
 The [release procedure](docs/RELEASE.md) records the package and registry gates.
+
+<!-- three-interfaces:begin -->
+## One engine, three interfaces
+
+One recovery engine, three equal ways to use it: as a Rust crate, as an MCP
+server, and as a command-line tool. They share the same engines and the same
+evidence receipts.
+
+### Rust crate
+
+```sh
+cargo add purrassist
+```
+
+<!-- three-interfaces-rust:begin -->
+```rust
+use purrassist::{Outcome, RecoveryRequest, Schema};
+
+let schema = Schema::compile(r#"{
+  "type": "object",
+  "required": ["temperature"],
+  "properties": {"temperature": {"type": "number"}},
+  "additionalProperties": false
+}"#)?;
+
+let answer = schema.recover("[[{temperatur: '42',}]]", RecoveryRequest::default());
+match answer.outcome {
+    Outcome::Resolved(value) => assert_eq!(value.to_json(), r#"{"temperature":42}"#),
+    Outcome::BestGuess(value) => println!("inferred: {}", value.to_json()),
+    Outcome::Ambiguous(values) => println!("{} interpretations", values.len()),
+    Outcome::Unresolved => println!("{}", answer.receipt.stopped),
+}
+# Ok::<(), purrassist::schema::SchemaError>(())
+```
+<!-- three-interfaces-rust:end -->
+
+The [`purrassist` crate](crates/purrassist/README.md) is the Rust interface:
+it re-exports the pure engines, the syntax integration and the derives.
+
+### MCP server
+
+```sh
+cargo install purrassist-cli
+purrassist mcp --root /path/to/workspace
+```
+
+Add the server to any MCP client that launches stdio servers:
+
+```json
+{
+  "mcpServers": {
+    "purrassist": {
+      "command": "purrassist",
+      "args": ["mcp", "--root", "/path/to/workspace"]
+    }
+  }
+}
+```
+
+The server speaks newline-delimited JSON-RPC over stdio. Every tool is listed in
+the [tool reference](docs/TOOLS.md). Starting the server creates a `.purrassist/`
+directory in the root, where the file tools keep their transaction journals; the
+`call` command below does the same.
+
+### CLI
+
+```sh
+purrassist decode --schema schema.json --input response.txt
+purrassist call match_strings --root DIR < args.json
+```
+
+`purrassist call TOOL --root DIR` reads a JSON argument object from stdin and
+invokes the same operation used by MCP: for every registered tool the CLI and
+MCP results are identical, which the test
+`every_registry_entry_has_a_fixture_validated_through_cli_and_mcp` checks tool by
+tool. The convenience commands `decode` and `match` are shortcuts with their own
+output, not the tools' output. `purrassist validate` prints exactly the
+`validate_json` tool's output.
+<!-- three-interfaces:end -->
+
+## Crate map
+
+Six crates are published, in this release order:
+
+| Crate | Role |
+|---|---|
+| `purrassist-core` | Shared engine: the pure recovery, matching, schema, Markdown and tool-call engines, with zero third-party runtime dependencies. |
+| `purrassist-derive` | Shared engine: zero-dependency `#[derive(ToolDefinition)]` and `#[derive(ToolEnum)]` for typed tool definitions. |
+| `purrassist-syntax` | Shared engine: isolated Tree-sitter grammar integration for source inspection and validated repairs. |
+| `purrassist` | The Rust interface: the facade that re-exports the engines and the derives. |
+| `purrassist-host` | Filesystem and helper integration behind both the CLI and the MCP server: root-scoped files, journaled replacement, the shared tool registry. |
+| `purrassist-cli` | The CLI and stdio MCP server: the `purrassist` executable. |
+
+Two workspace crates are internal and not published: `wasm-harness` (native,
+WASI and browser-WASM acceptance transcripts) and `purrassist-helper-census`
+(the duplicate-functionality census).
+
+## Capabilities
+
+The pure core owns its JSON parser, exact decimal arithmetic, schema validator,
+Unicode normalization, edit distances, phonetic matching, semantic rules, recovery
+search, and receipts. It has **zero third-party runtime dependencies**. The
+isolated syntax crate uses the pinned Tree-sitter grammar family; see the
+[dependency inventory](docs/DEPENDENCIES.md). Each tool is described in the
+[tool reference](docs/TOOLS.md).
+
+Current surfaces include:
+
+- JSON recovery with nested unwrapping, syntax repair, approximate keys/enums,
+  stringified values, whole-schema validation, and invented values (required
+  properties, `patternProperties`/`additionalProperties`/`dependentSchemas`
+  fills, `propertyNames`-conformant key repairs) produced by a first-party
+  witness-generation algebra rather than a schema-blind heuristic.
+- Unicode, lexical, Levenshtein, unrestricted Damerau-Levenshtein, English
+  Soundex, aliases, and contextual path matching.
+- Explicit semantic domain rules and caller-supplied embedding similarity.
+- Source-bound text edits, bounded fuzzy replacement, relocatable unified diffs,
+  overlap checks, exact-byte undo, and a Markdown
+  editing index and structural section/list/table/reference operations. All
+  1,324 pinned CommonMark/GFM examples have exact rendering checks, alongside
+  generated preservation properties and independent differential campaigns.
+- Python, Rust, JavaScript/JSX, TypeScript/TSX grammar inspection and validated
+  punctuation repairs. Grammar acceptance does not prove program correctness.
+- Journaled single-file replacement and conditional undo for coordinated writers.
+- Tool-call recovery from raw model output: weighted, invertible dialect
+  grammars with best-first markup repair, resolution against typed tools or
+  lossless `OpenAI`/MCP/Anthropic declarations (Draft 2020-12 or Draft-07
+  schemas), per-call outcomes with itemized repairs, conservative guards for
+  mutating tools, and re-emission as any dialect or the `OpenAI` `tool_calls`
+  array. Call markup of a dialect that is not built in yet, or not in the
+  request's allow-list, is reported as a rejected attempt
+  (`unsupported_dialect`), never silent content. Twelve dialects ship: `qwen3-coder-xml.v1`, `hermes.v1`,
+  `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`,
+  `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`,
+  `anthropic-tool-use.v1`, `harmony.v1`, and `bare-json.v1`; callers add
+  their own with the grammar DSL. Typed tool definitions derive from Rust
+  structs and enums with `#[derive(ToolDefinition)]` and `#[derive(ToolEnum)]`
+  (the zero-dependency `purrassist-derive` crate, re-exported by the facade;
+  see the example below). Still tracked: the `pythonic.v1` (#12), `glm-4.5.v1`
+  (#13) and `gemma3-tool-code.v1` (#14) dialects, the `*-stripped` variants
+  (#18), streaming recognition (#16), and provider streaming events (#17). See
+  [tool-call recovery](docs/tool-calls/README.md).
+- CLI, stdio MCP, and resumable helper request/response adapters
+  (`prepare_helper` and `complete_helper`; see [helpers](docs/HELPERS.md)). No
+  model is required, loaded, or contacted by default.
 
 A tool's schema and its typed arguments can come from one Rust struct:
 
@@ -55,87 +202,6 @@ assert_eq!(
 ```
 <!-- derive-example:end -->
 
-```rust
-use purrassist::{Outcome, RecoveryRequest, Schema};
-
-let schema = Schema::compile(r#"{
-  "type": "object",
-  "required": ["temperature"],
-  "properties": {"temperature": {"type": "number"}},
-  "additionalProperties": false
-}"#)?;
-
-let answer = schema.recover("[[{temperatur: '42',}]]", RecoveryRequest::default());
-match answer.outcome {
-    Outcome::Resolved(value) => assert_eq!(value.to_json(), r#"{"temperature":42}"#),
-    Outcome::BestGuess(value) => println!("inferred: {}", value.to_json()),
-    Outcome::Ambiguous(values) => println!("{} interpretations", values.len()),
-    Outcome::Unresolved => println!("{}", answer.receipt.stopped),
-}
-# Ok::<(), purrassist::schema::SchemaError>(())
-```
-
-The pure core owns its JSON parser, exact decimal arithmetic, schema validator,
-Unicode normalization, edit distances, phonetic matching, semantic rules, recovery
-search, and receipts. It has **zero third-party runtime dependencies**. The
-isolated syntax crate uses the pinned Tree-sitter grammar family; see the
-[dependency inventory](docs/DEPENDENCIES.md).
-
-Current surfaces include:
-
-- JSON recovery with nested unwrapping, syntax repair, approximate keys/enums,
-  stringified values, whole-schema validation, and invented values (required
-  properties, `patternProperties`/`additionalProperties`/`dependentSchemas`
-  fills, `propertyNames`-conformant key repairs) produced by a first-party
-  witness-generation algebra rather than a schema-blind heuristic.
-- Unicode, lexical, Levenshtein, unrestricted Damerau-Levenshtein, English
-  Soundex, aliases, and contextual path matching.
-- Explicit semantic domain rules and caller-supplied embedding similarity.
-- Source-bound text edits, bounded fuzzy replacement, relocatable unified diffs,
-  overlap checks, exact-byte undo, and a Markdown
-  editing index and structural section/list/table/reference operations. All
-  1,324 pinned CommonMark/GFM examples have exact rendering checks, alongside
-  generated preservation properties and independent differential campaigns.
-- Python, Rust, JavaScript/JSX, TypeScript/TSX grammar inspection and validated
-  punctuation repairs. Grammar acceptance does not prove program correctness.
-- Journaled single-file replacement and conditional undo for coordinated writers.
-- Tool-call recovery from raw model output: weighted, invertible dialect
-  grammars with best-first markup repair, resolution against typed tools or
-  lossless `OpenAI`/MCP/Anthropic declarations (Draft 2020-12 or Draft-07
-  schemas), per-call outcomes with itemized repairs, conservative guards for
-  mutating tools, and re-emission as any dialect or the `OpenAI` `tool_calls`
-  array. Call markup of a dialect that is not built in yet, or not in the
-  request's allow-list, is reported as a rejected attempt
-  (`unsupported_dialect`), never silent content. Twelve dialects ship: `qwen3-coder-xml.v1`, `hermes.v1`,
-  `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`,
-  `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`,
-  `anthropic-tool-use.v1`, `harmony.v1`, and `bare-json.v1`; callers add
-  their own with the grammar DSL. Typed tool definitions derive from Rust
-  structs and enums with `#[derive(ToolDefinition)]` and `#[derive(ToolEnum)]`
-  (the zero-dependency `purrassist-derive` crate, re-exported by the facade;
-  see the example above). Still tracked: the `pythonic.v1` (#12), `glm-4.5.v1`
-  (#13) and `gemma3-tool-code.v1` (#14) dialects, the `*-stripped` variants
-  (#18), streaming recognition (#16), and provider streaming events (#17). See
-  [tool-call recovery](docs/tool-calls/README.md).
-- CLI, stdio MCP, and resumable helper request/response adapters. No model is
-  required, loaded, or contacted by default.
-
-## Use the checkout
-
-```sh
-cargo run -p purrassist-cli -- --help
-cargo run -p purrassist-cli -- match raeder reader writer
-cargo run -p purrassist-cli -- call match_strings --root . < examples/match-strings.json
-cargo run -p purrassist-cli -- call resolve_string --root . < examples/resolve-string.json
-cargo run -p purrassist-cli -- decode --schema examples/temperature.schema.json \
-  --input examples/temperature.input.txt
-cargo run -p purrassist-cli -- recover-tool-calls --tools tools.json --emit openai turn.txt
-cargo run -p purrassist-cli -- mcp --root /path/to/workspace
-```
-
-`decode` returns the answer and receipt as JSON. `Exact` performs no recovery;
-`Quick`, `Standard`, `Deep`, and `Maximum` increase finite search budgets.
-Exhaustion is explicit and never proves that a schema is unsatisfiable.
 `Schema::generate_witness`/`generate_witness_governed` separately implement a
 witness-generation algebra (canonicalize, eliminate `not` by De Morgan duality,
 merge `allOf` constraints, and generate a type-directed value, recursing over
@@ -146,198 +212,7 @@ algebra. `Schema::compile_governed` and `with_resources_governed` return typed
 `CompilationError` values separating invalid schemas from resource failures.
 Pass the same governor to `recover_governed` to share the total preparation and
 recovery budget. The `decode_json` tool does this automatically. The convenience
-compilation methods use the default finite budget. `validate_json` exposes
-whole-instance validation itself: given `schema` and `instance`, it returns
-`valid`, every `violations` entry, always-evaluated format/pattern evidence,
-and any unsupported-vocabulary evidence, alongside a receipt. The shipped CLI's
-`purrassist validate` command emits exactly this tool's output. `generate_json_witness`
-exposes the same witness-generation algebra: given `schema` and optional
-`resources`, it returns `outcome` (`witness`, `unsatisfiable`, or `exhausted`),
-the generated `witness` value or non-empty `refutation` evidence, and a
-receipt; a governor hard stop while generating is reported as `exhausted`
-with `budget_exceeded` in the receipt's termination, never as `unsatisfiable`.
-
-`recover-tool-calls` reads one model turn as raw bytes from a file or stdin
-and recovers its tool calls against the declarations in `--tools`
-(`--tools-format openai`, `mcp`, or `anthropic`). It prints the same result as
-the `recover_tool_calls` MCP tool: per-call outcomes, itemized repairs and
-losses, rejected attempts, the tool-choice check, the turn's finish and its
-`OpenAI` `finish_reason`, an optional `--emit` re-emission (`openai` for the
-`tool_calls` array, or a dialect id), and a receipt. It never executes a call.
-The `finish_reason` is `"length"` whenever the caller's stop reason is a length stop (whatever the
-finish: a length stop is never reported as a clean finish, and the usable
-calls are still emitted), otherwise `"tool_calls"` exactly when the `OpenAI`
-emission holds a call, and `"stop"` otherwise;
-neither says whether anything else went wrong, so read `finish`, `verdict`
-and `rejected` as well. The command exits 0 when at least one call is usable (`usable_accepting_guesses`) and the
-tool-choice check passed, even if other attempts in the turn were rejected or
-are unparsed call markup (the JSON itemizes them, so a script keyed on the
-exit code never discards good calls because of one stray opener), and for
-clean content (finish `content_only`). It exits 3 when nothing is usable and
-the operation or a call is ambiguous, and 4 when nothing is usable (unresolved
-calls, only rejected or unparsed call markup, a `truncated` turn, only guesses
-that may not be used, such as a mutating tool's, or an `Unresolved` operation:
-an exhausted budget, invalid input) or the tool-choice check failed, even with
-usable calls: a violated tool choice is a contract failure the caller must
-see. Invocation errors exit 1. The printed JSON is the same whatever the exit
-code; the code only summarizes it. `--tool-choice NAME` forces a tool; with
-`--tool-choice-exactly-one`, `--tool-choice-no-content` and
-`--tool-choice-no-reasoning` (a usage error without `--tool-choice NAME`) the
-turn must hold exactly one call, no content other than ASCII whitespace, and
-no reasoning block, or the tool-choice check fails like any violated choice.
-A rejected call attempt of any reason counts as a call beyond the one and as
-content, and `--tool-choice-no-reasoning` with `--reasoning content` (where
-reasoning is never recognized) is invalid input.
-The [integration guide](docs/tool-calls/INTEGRATION.md)
-lists every option, the integrator guarantees, and the evidence for each.
-
-`prepare_helper`/`complete_helper` expose optional external-model helper
-proposals (see [helpers](docs/HELPERS.md)) as a two-call tool pair: the first
-returns the exact request to send and an opaque, tamper-evident `pending`
-string with no network I/O performed here; the second resumes with the
-caller-observed HTTP status/body once the caller's own transport has sent it.
-
-`call TOOL --root DIRECTORY` reads a JSON argument object from stdin and invokes
-the same operation used by MCP. `match_strings` accepts plain candidate strings
-or objects with stable `id`, `text`, and caller-declared `aliases`. Optional
-`effort`, `english_phonetics`, and `limit` control ranking. Its results retain
-each identity, score, aliases, and comparison signals; scores are ranking units,
-not proof of semantic equivalence. See [the example](examples/match-strings.json).
-`resolve_string` applies caller-adjustable `minimum_score` and `minimum_margin`
-thresholds to all candidates, even when ranking would normally return only its
-first ten. A unique byte-exact spelling is `resolved`; a unique accepted
-approximation is `best_guess`; close alternatives remain `ambiguous` with
-separate digest-bound inference ledgers; weak matches and exhaustion are
-`unresolved`. Normalization equivalence is an explicit lattice — NFC,
-case-fold, width/compatibility-fold, diacritic-strip, UTS-39 confusable
-skeleton, and depunctuation, each a named ranking signal — resolving a query
-at the finest level where it has a unique acceptable candidate. Protected
-token classes (decimal digit runs, negation markers, semver components, ISO
-dates, hex digests, and units) must match for automatic selection unless a
-caller-declared alias matches the query exactly; a discarded protected-class
-mismatch appears in the receipt. Aliases count as guesses when selected.
-Thresholds are policy on ranking units, not calibrated confidence.
-The [curated quality set](docs/MATCHING-QUALITY.md) records correction and
-abstention outcomes across the full lattice and every protected class.
-`match_paths` takes a `query`, caller-supplied `paths`,
-optional directory `context`, effort, and score/margin thresholds. It returns
-`resolved`, `best_guess`, `ambiguous`, or `unresolved` with methods and a receipt.
-Ambiguous paths carry separate evidence and inference ledgers bound to each
-serialized alternative.
-It matches names only; choosing a path does not grant file access. `resolve_intent`
-takes `input`, an explicit `domain` (identity, phrase rules, ignored words), and
-`concepts` (identities, labels, attribute maps). It applies the declared rules,
-retains the request, and returns concept interpretations with evidence. Unknown
-words are errors; effort bounds work without changing domain meanings.
-Ambiguous semantic answers carry separate ordered receipt ledgers with output
-digests, supporting rules, derived values, and validation references. Duplicate
-outputs retain the first supporting rule derivation; rejected branches do not
-contribute evidence to accepted answers.
-
-`match_embeddings` takes a caller-declared `space`, a numeric `query` vector,
-and `candidates` containing unique `id`/`vector` pairs. No model is loaded.
-`minimum_score` defaults to `0.75`; `minimum_margin` defaults to `0.05`.
-A unique qualifying cosine winner is a best guess, ties/near ties remain
-ambiguous, and weak matches remain unresolved. Scores are not probabilities.
-Vectors must be finite, nonzero, and dimensionally consistent. JSON decimals are
-converted to binary64; overflow and nonzero underflow are rejected. Admitted
-requests retain their structured JSON input in receipts, with separate ledgers
-for ambiguous alternatives. Admission failures can return a tool error before
-retention. `embeddings::EmbeddingIndex` provides reusable normalized vectors to
-Rust callers. See `examples/match-embeddings.json` for an illustrative input.
-
-`render_markdown` takes `source`, optional `dialect` (`commonmark` by default or
-`gfm`), optional `extensions`, and `effort`. Omitting extensions uses the dialect's
-default profile; an explicit array replaces it, including `[]` to disable all.
-Names are `autolinks`, `strikethrough`, `tables`, `task_lists`, and `tag_filter`.
-Results include HTML, source/output digests, renderer/specification identities,
-effective extensions, and a receipt retaining the original source. Tag filtering
-is not a general HTML or URL sanitizer. For example:
-
-```sh
-purrassist call render_markdown --root . < examples/render-markdown.json
-```
-
-`inspect_markdown` returns nested blocks, original line maps, root sections, nested `section_sites`, and
-reference-definition occurrences with original field spans. `markdown_context`
-takes UTF-8 byte offsets `start`/`end` and optional neighboring-block count.
-`plan_markdown_section` selects either a root `heading` index or a nested `path`
-from `section_sites`. Root bodies are inserted verbatim. Nested bodies omit outer
-container markers; new lines receive quote prefixes and list-continuation spaces.
-Reparsing preserves the heading, section boundary, ancestors, and outside blocks.
-Supply line endings and separators explicitly. Bodies that capture following
-sections, introduce peer headings, or change structure under container prefixes
-are rejected. A trailing blank body line and a leading tab are layout-recovered
-(reindented to the container level, or to the number of spaces the tab would
-occupy from column zero) rather than rejected. Identical logical bodies preserve
-original prefix spelling and yield empty plans. See `examples/markdown-section.json`.
-`plan_markdown_task` sets the supplied `checked` state using either a root
-`block` index or a nested `path` from inspection (for example `[0,0,1]`).
-Exactly one selector is required; paths follow successive child indices.
-`plan_markdown_list_item` selects an item by `path` and accepts `before`, `after`,
-`replace`, or `remove`. Insertions require an explicit `marker` (`-`, `+`, `*`,
-`1.`, or `1)` through nine-digit ordinals) and logical `body`; replacement uses
-`body` and retains the selected marker. Existing items are never renumbered.
-New lines receive container prefixes and continuation indentation; required
-separators follow the anchor's newline style and EOF convention. Removing the
-only item can leave an empty container line. Every plan reparses the intended
-item and checks outside siblings and ancestors. See `examples/markdown-list-item.json`.
-`plan_markdown_table_cell` selects a table by `path`, with zero-based `row` and
-`column` (row zero is the header). Its `markdown` replaces one explicitly present
-cell; surrounding whitespace, pipes, container prefixes, and line endings remain
-exact. Leading/trailing replacement whitespace is trimmed. Escape literal pipes
-as `\|`; line breaks and proposals that change table structure are rejected after
-reparsing. Columns beyond the header width are not editable through this
-operation, but editing an implicit padded cell of a body row shorter than the
-header materializes every implicit cell up to it instead of refusing.
-For an executable nested-table example:
-
-```sh
-purrassist call plan_markdown_table_cell --root . < examples/markdown-table-cell.json
-```
-
-These operations take exact `source` and optional `effort`, retain admitted source, and
-return receipts. Edit plans in `value` bind to the source digest and do not write
-files. Block indices come from inspection of the same source version.
-Markdown editing operations retain the original source and support exact undo.
-
-Pass one selected plan to `apply_edit` with the original `source` to obtain the
-edited text and a source-bound inverse. `apply_file` also accepts a `plan` instead
-of a full replacement buffer, with its expected digest and journaled undo checks.
-See [plan application](docs/EDIT-APPLICATION.md) and `examples/apply-edit.json`.
-`recover_files` reconciles prepared journals against actual file versions
-without overwriting anything, reporting each transaction's exact outcome and
-removing evidence-bearing orphan temporaries. `commit_files` independently
-journals and commits several file replacements in one call — never as one
-atomic multi-file transaction; each entry reports its own commit or error.
-`plan_replacement`, `plan_diff`, and `inspect_code` each also accept an
-`effort` argument selecting their search/traversal budget preset.
-`inspect_code` reports each JSX/TSX rename issue's repair options and the
-governed parse's allocator accounting (retained/peak/overshoot bytes).
-`plan_markdown_table_row` inserts or removes body rows. Supply a table `path`,
-`action` (`insert` or `remove`), and zero-based body `index`; insertion also requires
-`cells` with exactly the header width. Inserting at the row count appends.
-New rows use canonical `| cell |` spacing, the delimiter line's container prefix
-and newline style, and preserve EOF's final-newline convention. Existing bytes
-outside the edit remain exact. Cell and row plans include structural validation
-in their receipts.
-`plan_markdown_table_column` takes a table `path`, zero-based column `index`, and
-`action` (`insert`, `remove`, or `align`). Insertion requires `header`, `alignment`
-(`default`, `left`, `right`, or `center`), and one `cells` value per body row;
-alignment changes require only `alignment`. Removing the final column is rejected.
-Insert/remove preserves existing cell spelling, makes implicit padding explicit,
-keeps ignored extra cells beyond the new header width, and adds outer pipes when
-absent. Alignment changes preserve delimiter margins. Every proposal is reparsed
-and supports exact conditional undo. See `examples/markdown-table-column.json`.
-`plan_markdown_reference` selects a definition by its inspection `path` and
-`occurrence`, including shadowed duplicate labels. Supply decoded `destination`
-and an explicit `title` (string or `null` to remove it). The plan encodes these
-values safely for Markdown syntax, preserves label spelling and surrounding
-source, and reparses every definition to check that unselected values stay exact.
-Multiline destination/title regions can collapse to one physical line; newline
-and tab values use entities. NUL values are rejected because Markdown cannot
-retain them. Equal decoded fields produce an empty plan. See
-`examples/markdown-reference.json`.
+compilation methods use the default finite budget.
 
 `purrassist_core::patch::Patch` (an ordered, non-overlapping, source-digest-
 bound set of byte-range replacements) is the crate's single edit
@@ -377,6 +252,33 @@ File tools reject stale versions and record transaction identities for undo. The
 cooperating writers; it is not a sandbox against malicious directory replacement
 or an atomic multi-file transaction.
 
+Governed engines and host tools accept [caller-owned cancellation](docs/CANCELLATION.md),
+with explicit transaction boundaries. The stdio MCP server handles cancellation
+while tools run and admits at most four active tool calls.
+
+## Use the checkout
+
+```sh
+cargo run -p purrassist-cli -- --help
+cargo run -p purrassist-cli -- match raeder reader writer
+cargo run -p purrassist-cli -- call match_strings --root . < examples/match-strings.json
+cargo run -p purrassist-cli -- call resolve_string --root . < examples/resolve-string.json
+cargo run -p purrassist-cli -- decode --schema examples/temperature.schema.json \
+  --input examples/temperature.input.txt
+cargo run -p purrassist-cli -- recover-tool-calls --tools tools.json --emit openai turn.txt
+cargo run -p purrassist-cli -- mcp --root /path/to/workspace
+```
+
+`decode` returns the answer and receipt as JSON. `Exact` performs no recovery;
+`Quick`, `Standard`, `Deep`, and `Maximum` increase finite search budgets.
+Exhaustion is explicit and never proves that a schema is unsatisfiable.
+`recover-tool-calls` prints the same result as the `recover_tool_calls` MCP tool
+and never executes a call. Every example request under `examples/` is run
+through both the CLI and MCP by the test suite. The [tool reference](docs/TOOLS.md)
+describes each tool, its arguments, and its example; the
+[integration guide](docs/tool-calls/INTEGRATION.md) lists every
+`recover-tool-calls` option.
+
 ## Develop and verify
 
 Rust edition 2024, MSRV 1.98. Development uses nightly Rust with Clippy and
@@ -391,6 +293,16 @@ make fuzz       # ten coverage-guided targets and independent pattern/Markdown o
 make resources  # allocations, heap/RSS, latency, artifact size, and uncached build cost
 make package    # Cargo verification and registered source/license archive audit
 ```
+
+Resource profiling is available with `make resources`; see [measurement scope and prerequisites](docs/RESOURCES.md). It uses external profilers and adds no crate runtime dependencies.
+
+Coverage-guided campaigns for each of the ten targets are available with
+`make fuzz TARGET=<target>` (for example `TARGET=json`); see
+[properties, replay, and qualification limits](docs/FUZZING.md). The default
+`make fuzz` currently stops on the issue #11 and #6 signatures, listed under
+[known limitations](docs/QUALIFICATION.md#known-limitations).
+
+## Conformance
 
 JSON Schema validation implements two dialects, selected by `$schema`: Draft
 2020-12 (the default) and Draft-07 (`http://json-schema.org/draft-07/schema#`,
@@ -420,18 +332,9 @@ requires the exact-commit gates and registry acceptance described in the
 ## License and family
 
 First-party code is available under **MIT OR Apache-2.0 OR MulanPSL-2.0**, at your
-choice. Third-party data and grammar dependencies retain their own notices.
+choice ([MIT](LICENSE-MIT), [Apache-2.0](LICENSE-APACHE), [MulanPSL-2.0](LICENSE-MULAN)).
+GitHub's sidebar shows only one of the three licenses; the SPDX expression in
+`Cargo.toml` is authoritative. Third-party data and grammar dependencies retain
+their own notices.
 PurRAssist shares Blackcat Informatics' cat silhouette and palette with PurRDF;
 the braces and validation mark are this crate's service emblem.
-
-Resource profiling is available with `make resources`; see [measurement scope and prerequisites](docs/RESOURCES.md). It uses external profilers and adds no crate runtime dependencies.
-
-Coverage-guided campaigns for each of the ten targets are available with
-`make fuzz TARGET=<target>` (for example `TARGET=json`); see
-[properties, replay, and qualification limits](docs/FUZZING.md). The default
-`make fuzz` currently stops on the issue #11 and #6 signatures, listed under
-[known limitations](docs/QUALIFICATION.md#known-limitations).
-
-Governed engines and host tools accept [caller-owned cancellation](docs/CANCELLATION.md),
-with explicit transaction boundaries. The stdio MCP server handles cancellation
-while tools run and admits at most four active tool calls.

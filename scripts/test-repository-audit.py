@@ -200,46 +200,76 @@ class Inventory(unittest.TestCase):
         self.assertIn('maintainer approval', errors[0])
 
 
-class DeriveExample(unittest.TestCase):
-    """`check_derive_example` over a synthetic pair of READMEs."""
+class MarkerCopies(unittest.TestCase):
+    """`check_marker_copies` over a synthetic pair of READMEs, for each marker."""
 
     BLOCK = '```rust\nlet x = 1;\n```\n'
+    NAMES = ['derive-example', 'three-interfaces-rust']
 
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.root)
         (self.root / 'crates/purrassist').mkdir(parents=True)
-        self.write('README.md', self.BLOCK)
-        self.write('crates/purrassist/README.md', self.BLOCK)
+        for name in ('README.md', 'crates/purrassist/README.md'):
+            self.write(name)
 
-    def write(self, name, block, begin='<!-- derive-example:begin -->\n',
-              end='<!-- derive-example:end -->\n'):
-        (self.root / name).write_text(f'# title\n\n{begin}{block}{end}\ntext\n')
+    def write(self, name, blocks=None, omit=None):
+        """Write `name` with a marked block per marker name; `omit` leaves out the begin marker of one."""
+        blocks = blocks or {}
+        text = '# title\n\n'
+        for marker in self.NAMES:
+            begin = '' if marker == omit else f'<!-- {marker}:begin -->\n'
+            text += f'{begin}{blocks.get(marker, self.BLOCK)}<!-- {marker}:end -->\n\ntext\n\n'
+        (self.root / name).write_text(text)
 
     def test_identical_copies_pass(self):
-        self.assertEqual(AUDIT.check_derive_example(self.root), [])
+        self.assertEqual(AUDIT.check_marker_copies(self.root), [])
+
+    def test_the_checkout_declares_both_markers(self):
+        self.assertEqual(AUDIT.MARKER_COPY_NAMES, self.NAMES)
+        self.assertEqual(AUDIT.check_marker_copies(AUDIT.ROOT), [])
 
     def test_drifted_root_copy_fails_naming_both_files(self):
-        self.write('README.md', self.BLOCK.replace('1', '2'))
-        errors = AUDIT.check_derive_example(self.root)
-        self.assertEqual(len(errors), 1)
-        self.assertTrue(errors[0].startswith('README.md: derive example differs'))
-        self.assertIn('crates/purrassist/README.md', errors[0])
+        for marker in self.NAMES:
+            with self.subTest(marker=marker):
+                self.write('README.md', {marker: self.BLOCK.replace('1', '2')})
+                errors = AUDIT.check_marker_copies(self.root)
+                self.assertEqual(len(errors), 1)
+                self.assertTrue(errors[0].startswith(f'README.md: {marker} block differs'))
+                self.assertIn('crates/purrassist/README.md', errors[0])
 
     def test_one_byte_of_whitespace_fails(self):
-        self.write('README.md', self.BLOCK.replace('let x', 'let  x'))
-        self.assertEqual(len(AUDIT.check_derive_example(self.root)), 1)
+        for marker in self.NAMES:
+            with self.subTest(marker=marker):
+                self.write('README.md', {marker: self.BLOCK.replace('let x', 'let  x')})
+                self.assertEqual(len(AUDIT.check_marker_copies(self.root)), 1)
 
     def test_missing_marker_fails(self):
-        self.write('README.md', self.BLOCK, begin='')
-        errors = AUDIT.check_derive_example(self.root)
-        self.assertEqual(len(errors), 1)
-        self.assertTrue(errors[0].startswith('README.md: needs exactly one'))
+        for marker in self.NAMES:
+            with self.subTest(marker=marker):
+                self.write('README.md', omit=marker)
+                errors = AUDIT.check_marker_copies(self.root)
+                self.assertEqual(len(errors), 1)
+                self.assertTrue(errors[0].startswith('README.md: needs exactly one'))
+                self.assertIn(f'{marker}:begin', errors[0])
 
-    def test_missing_file_fails(self):
+    def test_reversed_markers_fail(self):
+        (self.root / 'README.md').write_text(
+            '<!-- derive-example:end -->\n<!-- derive-example:begin -->\n'
+            + ''.join(f'<!-- {m}:begin -->\n{self.BLOCK}<!-- {m}:end -->\n' for m in self.NAMES[1:]))
+        errors = AUDIT.check_marker_copies(self.root)
+        self.assertEqual(errors, ['README.md: derive-example end marker precedes the begin marker'])
+
+    def test_missing_file_fails_for_every_marker(self):
         (self.root / 'README.md').unlink()
-        self.assertEqual(AUDIT.check_derive_example(self.root),
-                         ['README.md: derive example copy is missing'])
+        self.assertEqual(AUDIT.check_marker_copies(self.root),
+                         [f'README.md: {marker} copy is missing' for marker in self.NAMES])
+
+    def test_a_marker_missing_from_the_doctested_file_is_reported(self):
+        self.write('crates/purrassist/README.md', omit='three-interfaces-rust')
+        errors = AUDIT.check_marker_copies(self.root)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith('crates/purrassist/README.md: needs exactly one'))
 
 
 class MarkdownAttribution(unittest.TestCase):

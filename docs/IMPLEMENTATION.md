@@ -94,8 +94,13 @@ Core operations are synchronous and resumable around supplied helper responses.
   with `purrassist-core` as a dev-dependency only. Core never depends on it.
 - `purrassist-syntax`: isolated syntax grammar integration.
 - `purrassist`: standard public facade; re-exports the derives.
-- `purrassist-host`: filesystem and model transport facilities.
+- `purrassist-host`: filesystem and helper integration behind both the CLI and
+  the MCP server.
 - `purrassist-cli`: executable and stdio MCP server.
+- `wasm-harness`: internal, unpublished native, WASI and browser-WASM core
+  acceptance transcript harness.
+- `purrassist-helper-census`: internal, unpublished structural duplicate
+  functionality census and helper ledger checks.
 
 ## Required delivery sequence
 

@@ -63,6 +63,13 @@ class Tree:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / name, target)
 
+    def detach(self, name):
+        """Replace the link to a tracked file with a private copy that a test may edit."""
+        target = self.root / name
+        if target.is_symlink():
+            target.unlink()
+        self.copy(name)
+
     def read(self, name):
         return (self.root / name).read_text()
 
@@ -647,6 +654,293 @@ class WindowsRun(Case):
         tree = self.tree()
         tree.replace('docs/QUALIFICATION.md', 'windows-engines', 'windows', count=0)
         self.assertFails(tree.errors(), 'windows-run', NOT_FOUND)
+
+
+class ToolHeadings(Case):
+    def test_a_tool_without_a_heading_fails(self):
+        tree = self.tree()
+        tree.replace('docs/TOOLS.md', '### `match_paths`', '#### `match_paths`')
+        self.assertFails(tree.errors(), 'tools-headings', "'match_paths'", 'found 0')
+
+    def test_a_duplicate_heading_fails(self):
+        tree = self.tree()
+        tree.append('docs/TOOLS.md', '\n### `read_file`\n\nAgain.\n')
+        self.assertFails(tree.errors(), 'tools-headings', "'read_file'", 'found 2')
+
+    def test_an_unknown_heading_fails(self):
+        tree = self.tree()
+        tree.append('docs/TOOLS.md', '\n### `read_files`\n\nA name that is not a tool.\n')
+        self.assertFails(tree.errors(), 'tools-headings', "'read_files'", 'names no tool')
+
+    def test_a_tool_added_to_the_block_needs_a_heading(self):
+        tree = self.tree()
+        tree.replace('docs/TOOLS.md', '<!-- tools-reference:end -->', '- **`new_tool`**: x\n<!-- tools-reference:end -->')
+        self.assertFails(tree.errors(), 'tools-headings', "'new_tool'", 'found 0')
+
+    def test_headings_inside_a_code_fence_do_not_count(self):
+        tree = self.tree()
+        tree.append('docs/TOOLS.md', '\n```\n### `not_a_tool`\n```\n')
+        self.assertNoRule(tree.errors(), 'tools-headings')
+
+    def test_a_missing_marker_fails(self):
+        tree = self.tree()
+        tree.replace('docs/TOOLS.md', '<!-- tools-reference:begin -->', '<!-- tools-reference:start -->')
+        self.assertFails(tree.errors(), 'tools-headings', 'tools-reference:begin')
+
+    def test_an_empty_block_is_not_found(self):
+        tree = self.tree()
+        tree.sub('docs/TOOLS.md', r'(?m)^- \*\*`', '- **no tool', count=0)
+        self.assertFails(tree.errors(), 'tools-headings', NOT_FOUND)
+
+
+class CrateMap(Case):
+    def test_a_reordered_map_fails(self):
+        tree = self.tree()
+        rows = re.findall(r'^\| `purrassist-(?:syntax|derive)` \|[^\n]*\n', tree.read('README.md'), re.MULTILINE)
+        tree.replace('README.md', rows[0] + rows[1], rows[1] + rows[0])
+        self.assertFails(tree.errors(), 'crate-map', 'RELEASE_ORDER')
+
+    def test_a_missing_crate_fails(self):
+        tree = self.tree()
+        tree.sub('README.md', r'(?m)^\| `purrassist-host` \|[^\n]*\n', '')
+        self.assertFails(tree.errors(), 'crate-map', 'RELEASE_ORDER', 'purrassist-host')
+
+    def test_an_extra_crate_fails(self):
+        tree = self.tree()
+        tree.replace('README.md', '| `purrassist-cli` |', '| `purrassist-extra` | x |\n| `purrassist-cli` |')
+        self.assertFails(tree.errors(), 'crate-map', 'purrassist-extra')
+
+    def test_an_internal_crate_must_be_named(self):
+        tree = self.tree()
+        tree.replace('README.md', '`wasm-harness`', 'the wasm harness')
+        self.assertFails(tree.errors(), 'crate-map', "'wasm-harness'", 'internal')
+
+    def test_the_order_comes_from_check_release(self):
+        tree = self.tree()
+        tree.replace('scripts/check-release.py', "    'purrassist-core',\n", "    'purrassist-core',\n    'purrassist-extra',\n")
+        self.assertFails(tree.errors(), 'crate-map', 'purrassist-extra')
+
+    def test_no_crate_map_is_not_found(self):
+        tree = self.tree()
+        tree.replace('README.md', '## Crate map', '## Crates')
+        self.assertFails(tree.errors(), 'crate-map', NOT_FOUND)
+
+
+class ThreeInterfaces(Case):
+    def test_a_missing_interface_heading_fails(self):
+        tree = self.tree()
+        tree.replace('README.md', '### MCP server', '### Servers')
+        self.assertFails(tree.errors(), 'three-interfaces', 'headings')
+
+    def test_headings_out_of_order_fail(self):
+        tree = self.tree()
+        tree.replace('README.md', '### CLI', '### Rust crate again')
+        self.assertFails(tree.errors(), 'three-interfaces', 'headings')
+
+    def test_a_missing_marker_fails(self):
+        tree = self.tree()
+        tree.replace('README.md', '<!-- three-interfaces:end -->', '')
+        self.assertFails(tree.errors(), 'three-interfaces', 'three-interfaces:end')
+
+    def test_each_command_must_be_shown(self):
+        for command in ('cargo add purrassist', 'cargo install purrassist-cli', 'purrassist mcp --root /path',
+                        'purrassist decode', 'purrassist call'):
+            with self.subTest(command=command):
+                tree = self.tree()
+                tree.replace('README.md', command, 'something else', count=0)
+                self.assertFails(tree.errors(), 'three-interfaces', NOT_FOUND)
+
+    def test_the_journal_directory_must_be_mentioned(self):
+        tree = self.tree()
+        tree.replace('README.md', '`.purrassist/`', 'a directory', count=0)
+        self.assertFails(tree.errors(), 'three-interfaces', NOT_FOUND, '.purrassist/')
+
+    def test_the_equivalence_sentence_must_name_its_test(self):
+        tree = self.tree()
+        tree.replace('README.md', '`every_registry_entry_has_a_fixture_validated_through_cli_and_mcp`', 'a test')
+        self.assertFails(tree.errors(), 'three-interfaces', NOT_FOUND, 'every_registry_entry')
+
+    def test_the_named_test_must_exist(self):
+        tree = self.tree()
+        tree.detach('crates/cli/tests/protocol.rs')
+        tree.replace('crates/cli/tests/protocol.rs', 'fn every_registry_entry_has_a_fixture_validated_through_cli_and_mcp',
+                     'fn renamed_test')
+        self.assertFails(tree.errors(), 'three-interfaces', 'does not exist')
+
+
+class McpConfig(Case):
+    def with_config(self, config):
+        tree = self.tree()
+        tree.sub('README.md', r'```json\n.*?\n```', '```json\n' + config + '\n```')
+        return tree
+
+    def test_the_checkout_config_passes(self):
+        self.assertNoRule(self.tree().errors(), 'mcp-config')
+
+    def test_invalid_json_fails(self):
+        self.assertFails(self.with_config('{"mcpServers": ').errors(), 'mcp-config', 'not valid JSON')
+
+    def test_a_wrong_command_fails(self):
+        config = '{"mcpServers": {"p": {"command": "purr", "args": ["mcp", "--root", "/w"]}}}'
+        self.assertFails(self.with_config(config).errors(), 'mcp-config', "'purr'")
+
+    def test_wrong_args_fail(self):
+        for args in ('["mcp"]', '["--root", "/w", "mcp"]', '["mcp", "--root"]', '["mcp", "--root", ""]',
+                     '["mcp", "--root", "/w", "--extra"]', '"mcp --root /w"'):
+            with self.subTest(args=args):
+                config = '{"mcpServers": {"p": {"command": "purrassist", "args": %s}}}' % args
+                self.assertFails(self.with_config(config).errors(), 'mcp-config', 'args')
+
+    def test_no_server_fails(self):
+        self.assertFails(self.with_config('{"mcpServers": {}}').errors(), 'mcp-config', 'exactly one server')
+
+    def test_no_configuration_fails(self):
+        tree = self.tree()
+        tree.sub('README.md', r'```json\n.*?\n```', '```text\nnone\n```')
+        self.assertFails(tree.errors(), 'mcp-config', 'found 0')
+
+
+class PackagedReadmes(Case):
+    def test_the_packaged_readmes_come_from_cargo_metadata(self):
+        packages = CD.publishable(CD.workspace_packages(ROOT))
+        self.assertEqual([package['name'] for package in packages], list(CD.load_module(
+            ROOT / 'scripts/check-release.py', 'purrassist_test_release').RELEASE_ORDER))
+        self.assertEqual(sorted(package['readme'] for package in packages),
+                         sorted(f'crates/{name}/README.md' for name in
+                                ('core', 'derive', 'syntax', 'purrassist', 'host', 'cli')))
+
+    def test_a_banned_phrase_in_a_packaged_readme_fails(self):
+        tree = self.tree()
+        tree.append('crates/host/README.md', '\nThis crate is on the issue branch.\n')
+        self.assertFails(tree.errors(), 'packaged-readmes', 'crates/host/README.md', 'issue branch')
+
+    def test_a_banned_phrase_wrapped_across_lines_fails(self):
+        tree = self.tree()
+        tree.append('crates/core/README.md', '\nNot yet\ndone.\n')
+        self.assertFails(tree.errors(), 'packaged-readmes', 'crates/core/README.md')
+
+    def test_a_latest_link_fails(self):
+        tree = self.tree()
+        tree.append('crates/derive/README.md', '\nSee https://docs.rs/purrassist-core/latest/purrassist_core/.\n')
+        self.assertFails(tree.errors(), 'packaged-readmes', 'crates/derive/README.md', 'latest')
+
+    def test_a_pinned_docs_rs_link_passes(self):
+        tree = self.tree()
+        tree.append('crates/derive/README.md', '\nSee https://docs.rs/purrassist-core/0.1.0/purrassist_core/.\n')
+        self.assertNoRule(tree.errors(), 'packaged-readmes')
+
+    def test_a_missing_readme_fails(self):
+        tree = self.tree()
+        tree.drop('crates/syntax/README.md')
+        self.assertFails(tree.errors(), 'packaged-readmes', 'crates/syntax/README.md', 'missing')
+
+    def test_a_package_that_becomes_publishable_is_found_by_metadata(self):
+        tree = self.tree()
+        tree.detach('crates/helper-census/Cargo.toml')
+        tree.replace('crates/helper-census/Cargo.toml', 'publish = false\n', '')
+        self.assertFails(tree.errors(), 'packaged-readmes', 'purrassist-helper-census', 'RELEASE_ORDER')
+
+
+class WorkspaceBoundaries(Case):
+    def test_a_missing_member_fails(self):
+        tree = self.tree()
+        tree.sub('docs/IMPLEMENTATION.md', r'- `purrassist-syntax`: [^\n]*\n', '')
+        self.assertFails(tree.errors(), 'workspace-boundaries', 'purrassist-syntax')
+
+    def test_an_unknown_crate_fails(self):
+        tree = self.tree()
+        tree.replace('docs/IMPLEMENTATION.md', '- `purrassist-cli`:', '- `purrassist-extra`: extra.\n- `purrassist-cli`:')
+        self.assertFails(tree.errors(), 'workspace-boundaries', 'purrassist-extra')
+
+    def test_an_unpublished_member_must_say_internal(self):
+        tree = self.tree()
+        tree.replace('docs/IMPLEMENTATION.md', '`wasm-harness`: internal, unpublished', '`wasm-harness`: unpublished')
+        self.assertFails(tree.errors(), 'workspace-boundaries', 'wasm-harness', 'internal')
+
+    def test_a_new_workspace_member_fails(self):
+        tree = self.tree()
+        (tree.root / 'crates/extra/src').mkdir(parents=True)
+        tree.write('crates/extra/Cargo.toml', '[package]\nname = "purrassist-extra"\nversion = "0.1.0"\nedition = "2024"\npublish = false\n')
+        tree.write('crates/extra/src/lib.rs', '')
+        tree.replace('Cargo.toml', '"crates/helper-census"]', '"crates/helper-census", "crates/extra"]')
+        self.assertFails(tree.errors(), 'workspace-boundaries', 'purrassist-extra')
+
+    def test_no_boundaries_section_is_not_found(self):
+        tree = self.tree()
+        tree.replace('docs/IMPLEMENTATION.md', '## Workspace boundaries', '## Crates')
+        self.assertFails(tree.errors(), 'workspace-boundaries', NOT_FOUND)
+
+
+class RegistryName(Case):
+    TOKEN = '`mcp-name: io.github.Blackcat-Informatics/purrassist`'
+
+    def test_the_checkout_passes(self):
+        errors = self.tree().errors()
+        self.assertNoRule(errors, 'registry-name')
+        self.assertNoRule(errors, 'cli-documentation')
+
+    def test_a_missing_token_fails(self):
+        tree = self.tree()
+        tree.sub('crates/cli/README.md', r'- MCP Registry name:[^\n]*\n?', '')
+        self.assertFails(tree.errors(), 'registry-name', 'crates/cli/README.md', 'visible')
+
+    def test_a_commented_out_token_fails(self):
+        tree = self.tree()
+        tree.replace('crates/cli/README.md', '- MCP Registry name: ' + self.TOKEN,
+                     '<!-- - MCP Registry name: ' + self.TOKEN + ' -->')
+        self.assertFails(tree.errors(), 'registry-name', 'visible')
+
+    def test_a_fenced_token_fails(self):
+        tree = self.tree()
+        tree.replace('crates/cli/README.md', '- MCP Registry name: ' + self.TOKEN,
+                     '```\n- MCP Registry name: ' + self.TOKEN + '\n```')
+        self.assertFails(tree.errors(), 'registry-name', 'visible')
+
+    def test_a_token_outside_the_links_section_fails(self):
+        tree = self.tree()
+        tree.replace('crates/cli/README.md', '## Links', '## References')
+        self.assertFails(tree.errors(), 'registry-name', 'visible')
+
+    def test_the_owner_is_case_sensitive(self):
+        tree = self.tree()
+        tree.replace('crates/cli/README.md', 'io.github.Blackcat-Informatics/', 'io.github.blackcat-informatics/')
+        self.assertFails(tree.errors(), 'registry-name', 'io.github.Blackcat-Informatics/purrassist')
+
+    def test_the_owner_comes_from_the_repository_url(self):
+        tree = self.tree()
+        tree.replace('Cargo.toml', 'repository = "https://github.com/Blackcat-Informatics/purrassist"',
+                     'repository = "https://github.com/Another-Owner/purrassist"')
+        self.assertFails(tree.errors(), 'registry-name', 'io.github.Another-Owner/purrassist')
+        tree.replace('crates/cli/README.md', 'io.github.Blackcat-Informatics/', 'io.github.Another-Owner/')
+        self.assertNoRule(tree.errors(), 'registry-name')
+
+    def test_a_docs_rs_documentation_link_fails(self):
+        tree = self.tree()
+        tree.detach('crates/cli/Cargo.toml')
+        tree.sub('crates/cli/Cargo.toml', r'documentation = "[^"]*"', 'documentation = "https://docs.rs/purrassist-cli"')
+        self.assertFails(tree.errors(), 'cli-documentation', 'docs.rs')
+
+    def test_a_missing_documentation_link_fails(self):
+        tree = self.tree()
+        tree.detach('crates/cli/Cargo.toml')
+        tree.sub('crates/cli/Cargo.toml', r'documentation = "[^"]*"\n', '')
+        self.assertFails(tree.errors(), 'cli-documentation')
+
+
+class DocumentHelpers(Case):
+    def test_strip_hidden_blanks_comments_and_fences_only(self):
+        text = 'a\n<!-- b\nc -->\n```\nd\n```\ne\n'
+        stripped = CD.strip_hidden(text)
+        self.assertEqual(stripped.count('\n'), text.count('\n'))
+        self.assertEqual(stripped.split(), ['a', 'e'])
+
+    def test_marked_block_needs_each_marker_once_in_order(self):
+        self.assertEqual(CD.marked_block('x\n<b>\ny\n<e>\n', '<b>\n', '<e>\n'), 'y\n')
+        self.assertIsNone(CD.marked_block('<e>\n<b>\n', '<b>\n', '<e>\n'))
+        self.assertIsNone(CD.marked_block('<b>\n<b>\n<e>\n', '<b>\n', '<e>\n'))
+
+    def test_tool_names_are_read_from_list_items(self):
+        self.assertEqual(CD.tool_names('- **`a_b`**: x\n  - **`no`**\n- **`c`**: y\n'), ['a_b', 'c'])
 
 
 ABSENT = (

@@ -9,6 +9,7 @@ use purrassist::{
 };
 use purrassist_host::{files::Store, tools::Tools};
 use std::{
+    fmt::Write as _,
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -895,4 +896,453 @@ fn generate_json_witness_agrees_across_cli_and_mcp_for_every_outcome() {
         fs::remove_dir_all(&dir_a).unwrap();
         fs::remove_dir_all(&dir_b).unwrap();
     }
+}
+
+/// What an `examples/` file is for.
+enum Example {
+    /// A complete argument object for the tool, run as written.
+    Request(&'static str),
+    /// An input a request for the tool is assembled from (the temperature
+    /// schema and the model reply that `decode_json` recovers against it).
+    Input(&'static str),
+}
+
+/// Every file under `examples/` and the tool it is for. A file that is not
+/// listed here, or a listed file that does not exist, fails
+/// `examples_run_through_cli_and_mcp`; the generated tool reference lists the
+/// files of each tool from this table.
+const EXAMPLES: &[(&str, Example)] = &[
+    ("apply-edit.json", Example::Request("apply_edit")),
+    (
+        "markdown-list-item.json",
+        Example::Request("plan_markdown_list_item"),
+    ),
+    (
+        "markdown-reference.json",
+        Example::Request("plan_markdown_reference"),
+    ),
+    (
+        "markdown-section.json",
+        Example::Request("plan_markdown_section"),
+    ),
+    (
+        "markdown-table-cell.json",
+        Example::Request("plan_markdown_table_cell"),
+    ),
+    (
+        "markdown-table-column.json",
+        Example::Request("plan_markdown_table_column"),
+    ),
+    (
+        "markdown-table-row.json",
+        Example::Request("plan_markdown_table_row"),
+    ),
+    (
+        "match-embeddings.json",
+        Example::Request("match_embeddings"),
+    ),
+    ("match-strings.json", Example::Request("match_strings")),
+    ("render-markdown.json", Example::Request("render_markdown")),
+    ("resolve-string.json", Example::Request("resolve_string")),
+    ("temperature.input.txt", Example::Input("decode_json")),
+    ("temperature.schema.json", Example::Input("decode_json")),
+];
+
+fn examples_directory() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples")
+}
+
+fn read_example(name: &str) -> String {
+    let path = examples_directory().join(name);
+    fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+}
+
+/// The compiled output schema of the registered tool `name`.
+fn output_schema_of(name: &str) -> Schema {
+    let definitions = Tools::definitions().unwrap();
+    let Value::Array(tools) = &definitions.value else {
+        panic!("definitions must be an array")
+    };
+    let tool = tools
+        .iter()
+        .find(|tool| tool.get("name").and_then(Node::as_str) == Some(name))
+        .unwrap_or_else(|| panic!("{name}: not a registered tool"));
+    Schema::compile(&tool.get("outputSchema").unwrap().to_json()).unwrap()
+}
+
+/// Run `arguments` through the CLI and MCP in fresh roots; both results must be
+/// identical and valid against the tool's registered output schema.
+fn run_both_transports(label: &str, tool: &str, arguments: &str) -> Node {
+    let directory_cli = fresh_dir("example-cli");
+    let directory_mcp = fresh_dir("example-mcp");
+    let direct = run_cli(tool, arguments, &directory_cli);
+    let via_mcp = run_mcp(tool, arguments, &directory_mcp);
+    assert_eq!(
+        direct.to_json(),
+        via_mcp.to_json(),
+        "{label}: CLI and MCP results diverged"
+    );
+    let report = output_schema_of(tool).validate(&direct).unwrap();
+    assert!(
+        report.valid,
+        "{label}: output violates the {tool} output schema: {:?}",
+        report.violations
+    );
+    fs::remove_dir_all(&directory_cli).unwrap();
+    fs::remove_dir_all(&directory_mcp).unwrap();
+    direct
+}
+
+/// Every file under `examples/` is a listed request or a listed input, and
+/// every request runs: through the CLI `call` command and through MCP
+/// `tools/call`, each against its own fresh root, with identical results that
+/// validate against the tool's registered output schema. The temperature
+/// schema and reply are assembled into a `decode_json` request.
+#[test]
+fn examples_run_through_cli_and_mcp() {
+    let mut on_disk: Vec<String> = fs::read_dir(examples_directory())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    on_disk.sort_unstable();
+    let mut listed: Vec<String> = EXAMPLES
+        .iter()
+        .map(|(name, _)| (*name).to_owned())
+        .collect();
+    listed.sort_unstable();
+    assert_eq!(
+        on_disk, listed,
+        "every examples/ file must be listed in EXAMPLES, and every listed file must exist"
+    );
+    let definitions = Tools::definitions().unwrap();
+    let Value::Array(tools) = &definitions.value else {
+        panic!("definitions must be an array")
+    };
+    let registered: Vec<&str> = tools
+        .iter()
+        .map(|tool| tool.get("name").and_then(Node::as_str).unwrap())
+        .collect();
+    for (name, example) in EXAMPLES {
+        let (Example::Request(tool) | Example::Input(tool)) = example;
+        assert!(
+            registered.contains(tool),
+            "{name}: {tool} is not a registered tool"
+        );
+        if let Example::Request(tool) = example {
+            let arguments = json::parse(&read_example(name))
+                .unwrap_or_else(|error| panic!("{name}: {error}"))
+                .to_json();
+            run_both_transports(name, tool, &arguments);
+        }
+    }
+    let schema = json::parse(&read_example("temperature.schema.json")).unwrap();
+    let reply = read_example("temperature.input.txt");
+    let arguments = object([("input", string(reply)), ("schema", schema)]).to_json();
+    let decoded = run_both_transports("temperature", "decode_json", &arguments);
+    assert_eq!(
+        decoded.pointer("/value").unwrap().to_json(),
+        r#"{"temperature":42}"#
+    );
+}
+
+/// Run the executable with `arguments`, writing `stdin`; its exit code and stdout.
+fn run_cli_command(arguments: &[&str], stdin: &str) -> (i32, String) {
+    let mut cli = Command::new(env!("CARGO_BIN_EXE_purrassist"))
+        .args(arguments)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    cli.stdin
+        .take()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
+    let output = cli.wait_with_output().unwrap();
+    (
+        output.status.code().unwrap(),
+        String::from_utf8(output.stdout).unwrap(),
+    )
+}
+
+/// `purrassist validate` prints exactly the `validate_json` tool's output for
+/// the same schema and instance, whether the instance is valid (exit 0) or
+/// not (exit 4); the `call` command exits 0 either way.
+#[test]
+fn validate_command_prints_validate_json_output() {
+    let directory = fresh_dir("validate-command");
+    let schema = r#"{"type":"object","required":["n"],"properties":{"n":{"type":"integer","minimum":3}},"additionalProperties":false}"#;
+    let schema_path = directory.join("schema.json");
+    fs::write(&schema_path, schema).unwrap();
+    for (instance, valid, exit) in [
+        (r#"{"n": 7}"#, true, 0),
+        (r#"{"n": 1, "extra": true}"#, false, 4),
+    ] {
+        let instance_path = directory.join("instance.json");
+        fs::write(&instance_path, instance).unwrap();
+        let (code, printed) = run_cli_command(
+            &[
+                "validate",
+                "--schema",
+                schema_path.to_str().unwrap(),
+                "--input",
+                instance_path.to_str().unwrap(),
+            ],
+            "",
+        );
+        let arguments = format!(r#"{{"schema":{schema},"instance":{instance}}}"#);
+        let (call_code, tool_output) = run_cli_command(
+            &[
+                "call",
+                "validate_json",
+                "--root",
+                directory.to_str().unwrap(),
+            ],
+            &arguments,
+        );
+        assert_eq!(call_code, 0, "call validate_json exits 0 for {instance}");
+        assert_eq!(
+            printed, tool_output,
+            "validate must print the validate_json output for {instance}"
+        );
+        assert_eq!(code, exit, "validate exit code for {instance}");
+        let node = json::parse(&printed).unwrap();
+        assert_eq!(
+            node.get("valid").map(|node| &node.value),
+            Some(&Value::Bool(valid))
+        );
+    }
+    fs::remove_dir_all(directory).unwrap();
+}
+
+const TOOLS_REFERENCE_BEGIN: &str = "<!-- tools-reference:begin -->\n";
+const TOOLS_REFERENCE_END: &str = "<!-- tools-reference:end -->\n";
+
+fn tools_document() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/TOOLS.md")
+}
+
+/// A short, deterministic description of one JSON Schema node.
+fn describe_schema(schema: &Node) -> String {
+    match &schema.value {
+        Value::Bool(true) => return "any".into(),
+        Value::Bool(false) => return "never".into(),
+        _ => {}
+    }
+    match schema.get("type").map(|node| &node.value) {
+        Some(Value::String(kind)) if kind == "array" => {
+            return schema
+                .get("items")
+                .and_then(|items| items.get("type"))
+                .and_then(Node::as_str)
+                .map_or_else(|| "array".into(), |item| format!("array of {item}"));
+        }
+        Some(Value::String(kind)) => return kind.clone(),
+        Some(Value::Array(kinds)) => {
+            return kinds
+                .iter()
+                .filter_map(Node::as_str)
+                .collect::<Vec<_>>()
+                .join(" or ");
+        }
+        _ => {}
+    }
+    if let Some(Node {
+        value: Value::Array(values),
+        ..
+    }) = schema.get("enum")
+    {
+        let values: Vec<String> = values.iter().map(Node::to_json).collect();
+        return format!("one of {}", values.join(", "));
+    }
+    if let Some(value) = schema.get("const") {
+        return format!("always {}", value.to_json());
+    }
+    if schema.get("oneOf").is_some() || schema.get("anyOf").is_some() {
+        return "one of several shapes".into();
+    }
+    if schema.get("$ref").is_some() {
+        return "a shared definition".into();
+    }
+    "any".into()
+}
+
+/// The top-level members of `properties`, as `name: type[, required]` lines
+/// at `indent`; "none" when the schema declares none.
+fn property_lines(schema: &Node, indent: &str) -> String {
+    let required: Vec<&str> = match schema.get("required").map(|node| &node.value) {
+        Some(Value::Array(names)) => names.iter().filter_map(Node::as_str).collect(),
+        _ => Vec::new(),
+    };
+    let Some(Node {
+        value: Value::Object(members),
+        ..
+    }) = schema.get("properties")
+    else {
+        return format!("{indent}- none\n");
+    };
+    let mut lines = String::new();
+    for member in members {
+        let needed = if required.contains(&member.key.as_str()) {
+            ", required"
+        } else {
+            ""
+        };
+        writeln!(
+            lines,
+            "{indent}- `{}`: {}{needed}",
+            member.key,
+            describe_schema(&member.value)
+        )
+        .unwrap();
+    }
+    if members.is_empty() {
+        writeln!(lines, "{indent}- none").unwrap();
+    }
+    lines
+}
+
+/// The generated reference: one entry per registered tool, in registry order.
+fn render_tools_reference() -> String {
+    let definitions = Tools::definitions().unwrap();
+    let Value::Array(tools) = &definitions.value else {
+        panic!("definitions must be an array")
+    };
+    let mut block = String::from(concat!(
+        "Generated from `Tools::definitions()` by the test `tools_reference_matches_registry`; ",
+        "do not edit by hand. Regenerate with\n",
+        "`PURRASSIST_BLESS=1 cargo test -p purrassist-cli --test protocol tools_reference_matches_registry`.\n",
+        "`required` is the schema's top-level `required` list; requirements that depend on another ",
+        "argument (`oneOf`) are in the tool's input schema, which `tools/list` returns.\n\n",
+    ));
+    for tool in tools {
+        let name = tool.get("name").and_then(Node::as_str).unwrap();
+        let description = tool.get("description").and_then(Node::as_str).unwrap();
+        let input = tool.get("inputSchema").unwrap();
+        let output = tool.get("outputSchema").unwrap();
+        let writes = tool
+            .pointer("/annotations/readOnlyHint")
+            .is_some_and(|hint| hint.value == Value::Bool(false));
+        writeln!(block, "- **`{name}`**: {description}").unwrap();
+        writeln!(block, "  - MCP: `tools/call` with name `{name}`").unwrap();
+        writeln!(
+            block,
+            "  - CLI: `purrassist call {name} --root DIR < args.json`"
+        )
+        .unwrap();
+        writeln!(
+            block,
+            "  - Writes files under the root: {}",
+            if writes { "yes" } else { "no" }
+        )
+        .unwrap();
+        block.push_str("  - Input:\n");
+        block.push_str(&property_lines(input, "    "));
+        if output.get("properties").is_none()
+            && output.get("type").and_then(Node::as_str) == Some("array")
+        {
+            let items = output.get("items").unwrap();
+            block.push_str("  - Output: an array of objects with:\n");
+            block.push_str(&property_lines(items, "    "));
+        } else {
+            block.push_str("  - Output:\n");
+            block.push_str(&property_lines(output, "    "));
+        }
+        let files: Vec<&str> = EXAMPLES
+            .iter()
+            .filter(|(_, example)| {
+                let (Example::Request(tool) | Example::Input(tool)) = example;
+                *tool == name
+            })
+            .map(|(file, _)| *file)
+            .collect();
+        if !files.is_empty() {
+            let links: Vec<String> = files
+                .iter()
+                .map(|file| format!("[`examples/{file}`](../examples/{file})"))
+                .collect();
+            let label = if files.len() == 1 {
+                "Example"
+            } else {
+                "Examples"
+            };
+            writeln!(block, "  - {label}: {}", links.join(", ")).unwrap();
+        }
+    }
+    block
+}
+
+/// The first lines at which `actual` differs from `expected`, as a diff.
+fn line_diff(expected: &str, actual: &str) -> String {
+    let (expected, actual): (Vec<&str>, Vec<&str>) =
+        (expected.lines().collect(), actual.lines().collect());
+    let mut diff = String::new();
+    let mut shown = 0;
+    for index in 0..expected.len().max(actual.len()) {
+        let (wanted, found) = (expected.get(index), actual.get(index));
+        if wanted == found {
+            continue;
+        }
+        shown += 1;
+        if shown > 20 {
+            diff.push_str("... more differences follow\n");
+            break;
+        }
+        writeln!(diff, "line {}:", index + 1).unwrap();
+        if let Some(line) = found {
+            writeln!(diff, "- docs/TOOLS.md: {line}").unwrap();
+        }
+        if let Some(line) = wanted {
+            writeln!(diff, "+ registry:      {line}").unwrap();
+        }
+    }
+    diff
+}
+
+/// The block of `docs/TOOLS.md` between the `tools-reference` markers is the
+/// registry rendered in registry order (name, description, input properties
+/// with type and required, output properties, the MCP and CLI forms, and the
+/// example files). `PURRASSIST_BLESS=1` rewrites the block (and panics when
+/// `CI` is set, since blessing must never run unattended).
+#[test]
+fn tools_reference_matches_registry() {
+    let bless = std::env::var("PURRASSIST_BLESS").as_deref() == Ok("1");
+    assert!(
+        !(bless && std::env::var("CI").is_ok()),
+        "PURRASSIST_BLESS=1 must never run with CI set"
+    );
+    let path = tools_document();
+    let document = fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        document.matches(TOOLS_REFERENCE_BEGIN).count(),
+        1,
+        "docs/TOOLS.md needs exactly one {} line",
+        TOOLS_REFERENCE_BEGIN.trim_end()
+    );
+    assert_eq!(
+        document.matches(TOOLS_REFERENCE_END).count(),
+        1,
+        "docs/TOOLS.md needs exactly one {} line",
+        TOOLS_REFERENCE_END.trim_end()
+    );
+    let start = document.find(TOOLS_REFERENCE_BEGIN).unwrap() + TOOLS_REFERENCE_BEGIN.len();
+    let end = document.find(TOOLS_REFERENCE_END).unwrap();
+    assert!(
+        start <= end,
+        "the tools-reference end marker precedes its begin marker"
+    );
+    let expected = render_tools_reference();
+    if bless {
+        let blessed = format!("{}{expected}{}", &document[..start], &document[end..]);
+        fs::write(&path, blessed).unwrap();
+        return;
+    }
+    let actual = &document[start..end];
+    assert!(
+        actual == expected,
+        "the generated block of docs/TOOLS.md differs from the registry; regenerate it with \
+         PURRASSIST_BLESS=1 cargo test -p purrassist-cli --test protocol tools_reference_matches_registry\n{}",
+        line_diff(&expected, actual)
+    );
 }

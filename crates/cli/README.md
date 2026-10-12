@@ -5,12 +5,21 @@
 The `purrassist` executable exposes schema-guided JSON recovery, validation,
 matching, shared tool calls, and a newline-delimited stdio MCP server.
 
+**Status: 0.1.0.** This crate is the CLI and MCP interface of `PurRAssist`, one
+engine with three equal interfaces (the Rust crates, the MCP server and the
+CLI): `cargo install purrassist-cli` installs the `purrassist` executable.
+
 ```sh
 purrassist decode --schema schema.json --input response.txt
 purrassist match raeder reader writer
 purrassist recover-tool-calls --tools tools.json --emit openai turn.txt
 purrassist mcp --root /path/to/workspace
 ```
+
+To use the server from an MCP client that launches stdio servers, configure the
+command `purrassist` with the arguments `mcp`, `--root` and the workspace
+directory. `mcp` and `call` create a `.purrassist/` journal directory in that
+root.
 
 `recover-tool-calls` reads one model turn as raw bytes from `FILE` or stdin
 (16 MiB limit; invalid UTF-8 is kept and recorded as a
@@ -86,3 +95,9 @@ unselected definitions, with a structural-validation receipt and conditional und
 Version 0.1.0. Capabilities, known limitations and verification are recorded in
 the [qualification record](https://github.com/Blackcat-Informatics/purrassist/blob/main/docs/QUALIFICATION.md).
 First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0.
+
+## Links
+
+- Tool reference: [docs/TOOLS.md](https://github.com/Blackcat-Informatics/purrassist/blob/main/docs/TOOLS.md)
+- Repository: <https://github.com/Blackcat-Informatics/purrassist>
+- MCP Registry name: `mcp-name: io.github.Blackcat-Informatics/purrassist`

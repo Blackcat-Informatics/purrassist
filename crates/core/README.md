@@ -6,6 +6,10 @@ Pure Rust intent recovery with zero third-party Cargo dependencies. Includes
 schema-guided JSON repair, exact decimal arithmetic, Unicode matching, semantic
 domain rules, source-bound edits, and evidence receipts.
 
+**Status: 0.1.0.** This crate is one of the shared engines of `PurRAssist`, one
+engine with three equal interfaces: the Rust crates (`purrassist`), the MCP
+server and the CLI (`purrassist-cli`) all run it.
+
 ```rust
 use purrassist_core::{Outcome, schema::{Schema, recovery::RecoveryRequest}};
 let schema = Schema::compile(r#"{"type":"integer"}"#).unwrap();

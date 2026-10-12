@@ -5,13 +5,31 @@
 Assistance for AIs that get the details almost right. This facade exposes the
 pure recovery engines and isolated syntax integration.
 
+**Status: 0.1.0.** This crate is the Rust interface of `PurRAssist`, one engine
+with three equal interfaces: the Rust crates (this one), the MCP server and the
+CLI (`purrassist-cli`).
+
+<!-- three-interfaces-rust:begin -->
 ```rust
 use purrassist::{Outcome, RecoveryRequest, Schema};
-let schema = Schema::compile(r#"{"type":"object","required":["temperature"],"properties":{"temperature":{"type":"number"}},"additionalProperties":false}"#).unwrap();
+
+let schema = Schema::compile(r#"{
+  "type": "object",
+  "required": ["temperature"],
+  "properties": {"temperature": {"type": "number"}},
+  "additionalProperties": false
+}"#)?;
+
 let answer = schema.recover("[[{temperatur: '42',}]]", RecoveryRequest::default());
-let Outcome::Resolved(value) = answer.outcome else { panic!("unexpected outcome") };
-assert_eq!(value.to_json(), r#"{"temperature":42}"#);
+match answer.outcome {
+    Outcome::Resolved(value) => assert_eq!(value.to_json(), r#"{"temperature":42}"#),
+    Outcome::BestGuess(value) => println!("inferred: {}", value.to_json()),
+    Outcome::Ambiguous(values) => println!("{} interpretations", values.len()),
+    Outcome::Unresolved => println!("{}", answer.receipt.stopped),
+}
+# Ok::<(), purrassist::schema::SchemaError>(())
 ```
+<!-- three-interfaces-rust:end -->
 
 ## Tool-call recovery
 

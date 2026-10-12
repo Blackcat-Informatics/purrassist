@@ -14,7 +14,14 @@ sentence that restates it:
   the `Makefile`;
 * the receipt wire version from `RECEIPT_VERSION` in `crates/core/src/contract.rs`;
 * the dialect ids from the stems of `docs/tool-calls/dialects/*.md`;
-* the known limitations from `docs/known-limitations.json`.
+* the known limitations from `docs/known-limitations.json`;
+* the tool names from the generated block of `docs/TOOLS.md` (the Rust test
+  `tools_reference_matches_registry` pins that block to the registry);
+* the crate map, the workspace boundaries and the packaged READMEs from the
+  workspace members and `cargo metadata`;
+* the three-interfaces block of the README, including its MCP client
+  configuration, and the MCP Registry name in the cli README, derived from the
+  workspace `repository` URL.
 
 Every fact is found by a regular expression over the whitespace-collapsed text,
 and a regular expression that matches nothing is itself an error ("fact
@@ -24,6 +31,7 @@ The scope is every tracked `*.md` file outside `.stage/`, `vendor/` and
 brackets.
 """
 import functools
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -75,6 +83,18 @@ DIALECT_COUNT_DOCS = (
     'README.md', 'crates/core/README.md', 'crates/purrassist/README.md', 'crates/host/README.md',
     'docs/QUALIFICATION.md', 'docs/IMPLEMENTATION.md', 'docs/RESOURCES.md',
     'docs/tool-calls/README.md', 'docs/tool-calls/GRAMMAR.md', 'docs/tool-calls/dialects/bare-json.v1.md')
+TOOLS_DOC = 'docs/TOOLS.md'
+TOOLS_BEGIN = '<!-- tools-reference:begin -->\n'
+TOOLS_END = '<!-- tools-reference:end -->\n'
+INTERFACES_BEGIN = '<!-- three-interfaces:begin -->\n'
+INTERFACES_END = '<!-- three-interfaces:end -->\n'
+INTERFACE_HEADINGS = ('### Rust crate', '### MCP server', '### CLI')
+CLI_PACKAGE = 'purrassist-cli'
+REGISTRY_PROJECT = 'purrassist'
+# The test that backs the sentence "the CLI and MCP results are identical".
+EQUIVALENCE_TEST = 'every_registry_entry_has_a_fixture_validated_through_cli_and_mcp'
+PROTOCOL_TESTS = 'crates/cli/tests/protocol.rs'
+
 # Documents that restate the status line "not yet tagged `rust-vX.Y.Z`".
 STATUS_DOCS = ('README.md', 'SECURITY.md', 'docs/IMPLEMENTATION.md', 'docs/QUALIFICATION.md', 'docs/RELEASE.md')
 
@@ -659,6 +679,234 @@ def check_windows_run(docs, report):
         report.add(rule, name, 'fact sentence not found: no sentence about the windows-engines lane')
 
 
+
+def strip_hidden(text):
+    """`text` with HTML comments and fenced code blocks blanked (newlines kept), so that
+    what remains is what a reader of the rendered page sees."""
+    def blank(match):
+        return re.sub(r'[^\n]', ' ', match.group(0))
+    text = re.sub(r'<!--.*?-->', blank, text, flags=re.DOTALL)
+    return re.sub(r'^(```|~~~).*?^\1[^\n]*$', blank, text, flags=re.MULTILINE | re.DOTALL)
+
+
+def marked_block(text, begin, end):
+    """The text between the `begin` and `end` marker lines, or None unless each occurs once, in order."""
+    if text.count(begin) != 1 or text.count(end) != 1:
+        return None
+    start = text.index(begin) + len(begin)
+    stop = text.index(end)
+    return text[start:stop] if start <= stop else None
+
+
+_metadata_cache = {}
+
+
+def workspace_packages(root):
+    """The workspace packages of the tree at `root`, from `cargo metadata`: for each, its
+    name, `publish` list (None when publishable), `documentation`, and the repository-relative
+    paths of its directory and README. Results are cached by the manifests' content."""
+    root = Path(root)
+    manifest = tomllib.loads((root / 'Cargo.toml').read_text())
+    members = manifest['workspace']['members']
+    key = hashlib.sha256()
+    for path in ['Cargo.toml', *(f'{member}/Cargo.toml' for member in members)]:
+        key.update((root / path).read_bytes())
+    key = key.hexdigest()
+    if key not in _metadata_cache:
+        run = subprocess.run(['cargo', 'metadata', '--no-deps', '--format-version', '1', '--offline'],
+                             cwd=root, capture_output=True, text=True)
+        if run.returncode != 0:
+            raise OSError(f'cargo metadata failed: {run.stderr.strip()}')
+        directories = {tomllib.loads((root / member / 'Cargo.toml').read_text())['package']['name']: member
+                       for member in members}
+        packages = []
+        for package in json.loads(run.stdout)['packages']:
+            directory = directories[package['name']]
+            readme = package['readme'] or 'README.md'
+            packages.append({'name': package['name'], 'publish': package['publish'],
+                             'documentation': package['documentation'], 'directory': directory,
+                             'readme': f'{directory}/{readme}'})
+        _metadata_cache[key] = packages
+    return _metadata_cache[key]
+
+
+def publishable(packages):
+    """The packages `cargo publish` accepts: `publish` is unset or lists a registry."""
+    return [package for package in packages if package['publish'] is None or package['publish']]
+
+
+def tool_names(block):
+    """The tool names a generated tools-reference block lists, in order."""
+    return re.findall(r'^- \*\*`([a-z0-9_]+)`\*\*:', block, re.MULTILINE)
+
+
+def check_tool_headings(docs, report):
+    rule = 'tools-headings'
+    text = docs.text(TOOLS_DOC)
+    block = marked_block(text, TOOLS_BEGIN, TOOLS_END)
+    if block is None:
+        report.add(rule, TOOLS_DOC, f'needs exactly one {TOOLS_BEGIN.strip()} and one {TOOLS_END.strip()} line, in order')
+        return
+    expected = tool_names(block)
+    if not expected:
+        report.add(rule, TOOLS_DOC, 'fact sentence not found: the generated block lists no tool')
+    if len(set(expected)) != len(expected):
+        report.add(rule, TOOLS_DOC, 'the generated block lists a tool twice')
+    outside = text.replace(block, '')
+    headings = []
+    for number, line in enumerate(strip_hidden(outside).splitlines(), 1):
+        if line.startswith('### '):
+            headings.append((number, line[4:].strip().strip('`')))
+    seen = [name for _, name in headings]
+    for name in expected:
+        if seen.count(name) != 1:
+            report.add(rule, TOOLS_DOC, f'tool {name!r} needs exactly one "### {name}" heading outside the '
+                                        f'generated block, found {seen.count(name)}')
+    for number, name in headings:
+        if name not in expected:
+            report.add(rule, f'{TOOLS_DOC}:{number}', f'heading {name!r} names no tool in the generated block')
+
+
+def check_crate_map(docs, report, release_order, packages):
+    rule = 'crate-map'
+    body = sections(docs.text('README.md')).get('## Crate map')
+    if body is None:
+        report.add(rule, 'README.md', 'fact sentence not found: no "## Crate map" heading')
+        return
+    listed = re.findall(r'^\|\s*`([^`]+)`', body, re.MULTILINE)
+    if listed != list(release_order):
+        report.add(rule, 'README.md', f'crate map lists {listed} but RELEASE_ORDER is {list(release_order)}')
+    flat = collapse(body)
+    for package in packages:
+        if package['publish'] is not None and not package['publish'] and f"`{package['name']}`" not in flat:
+            report.add(rule, 'README.md', f"the unpublished workspace crate {package['name']!r} is not named as internal")
+    if not re.search(r'\binternal\b', flat):
+        report.add(rule, 'README.md', 'fact sentence not found: the crate map does not say which crates are internal')
+
+
+def check_three_interfaces(docs, report, tests):
+    rule = 'three-interfaces'
+    block = marked_block(docs.text('README.md'), INTERFACES_BEGIN, INTERFACES_END)
+    if block is None:
+        report.add(rule, 'README.md', f'needs exactly one {INTERFACES_BEGIN.strip()} and one {INTERFACES_END.strip()} line, in order')
+        return
+    lines = block.splitlines()
+    positions = [lines.index(heading) if heading in lines else -1 for heading in INTERFACE_HEADINGS]
+    if -1 in positions or positions != sorted(positions):
+        report.add(rule, 'README.md', f'the block needs the headings {list(INTERFACE_HEADINGS)}, in that order')
+    flat = collapse(block)
+    for needle in ('cargo add purrassist', 'cargo install purrassist-cli', 'purrassist mcp --root',
+                   'purrassist decode', 'purrassist call'):
+        if needle not in block:
+            report.add(rule, 'README.md', f'fact sentence not found: the block never shows `{needle}`')
+    if '`.purrassist/`' not in flat:
+        report.add(rule, 'README.md', 'fact sentence not found: the block does not say the server creates `.purrassist/`')
+    if EQUIVALENCE_TEST not in flat:
+        report.add(rule, 'README.md', f'fact sentence not found: the block never names the test {EQUIVALENCE_TEST}')
+    elif not re.search(rf'\bfn {EQUIVALENCE_TEST}\b', tests):
+        report.add(rule, 'README.md', f'the test {EQUIVALENCE_TEST} named by the block does not exist in {PROTOCOL_TESTS}')
+    check_mcp_config(report, block)
+
+
+def config_servers(node):
+    """Every object in a parsed JSON document that has a `command` member."""
+    found = []
+    if isinstance(node, dict):
+        if 'command' in node:
+            found.append(node)
+        for value in node.values():
+            found.extend(config_servers(value))
+    elif isinstance(node, list):
+        for value in node:
+            found.extend(config_servers(value))
+    return found
+
+
+def check_mcp_config(report, block):
+    rule = 'mcp-config'
+    configs = re.findall(r'^```json\n(.*?)^```', block, re.MULTILINE | re.DOTALL)
+    if len(configs) != 1:
+        report.add(rule, 'README.md', f'the three-interfaces block needs exactly one json MCP client configuration, found {len(configs)}')
+        return
+    try:
+        servers = config_servers(json.loads(configs[0]))
+    except ValueError as error:
+        report.add(rule, 'README.md', f'the MCP client configuration is not valid JSON ({error})')
+        return
+    if len(servers) != 1:
+        report.add(rule, 'README.md', f'the MCP client configuration needs exactly one server with a command, found {len(servers)}')
+        return
+    server = servers[0]
+    args = server.get('args')
+    if server['command'] != 'purrassist':
+        report.add(rule, 'README.md', f"the MCP client command is {server['command']!r}, expected 'purrassist'")
+    if (not isinstance(args, list) or len(args) != 3 or args[:2] != ['mcp', '--root']
+            or not isinstance(args[2], str) or not args[2]):
+        report.add(rule, 'README.md', f'the MCP client args are {args!r}, expected ["mcp", "--root", DIRECTORY]')
+
+
+def check_packaged_readmes(docs, report, release_order, packages):
+    rule = 'packaged-readmes'
+    published = publishable(packages)
+    if sorted(package['name'] for package in published) != sorted(release_order):
+        report.add(rule, 'Cargo.toml', f"publishable packages {sorted(package['name'] for package in published)} "
+                                       f'differ from RELEASE_ORDER {sorted(release_order)}')
+    for package in published:
+        name = package['readme']
+        if not (docs.root / name).is_file():
+            report.add(rule, name, f"the README of {package['name']} is missing")
+            continue
+        for start, matched, phrase in banned_matches(docs.collapsed(name) if name in docs.names else collapse(docs.text(name))):
+            report.add(rule, name, f'packaged README has stale or process-bound wording {matched!r} (/{phrase}/)')
+        for match in re.finditer(r'docs\.rs/[^/\s)>"]+/latest\b', docs.text(name)):
+            report.add(rule, f'{name}:{docs.text(name).count(chr(10), 0, match.start()) + 1}',
+                       f'packaged README links {match.group(0)!r}; pin the version, since the page outlives the release')
+
+
+def check_workspace_boundaries(docs, report, packages):
+    rule = 'workspace-boundaries'
+    name = 'docs/IMPLEMENTATION.md'
+    body = sections(docs.text(name)).get('## Workspace boundaries')
+    if body is None:
+        report.add(rule, name, 'fact sentence not found: no "## Workspace boundaries" heading')
+        return
+    items = re.split(r'^- ', body, flags=re.MULTILINE)[1:]
+    listed = {}
+    for item in items:
+        match = re.match(r'`([^`]+)`', item)
+        if match is None:
+            report.add(rule, name, f'list item {collapse(item)[:40]!r} does not start with a backticked crate name')
+            continue
+        listed[match.group(1)] = collapse(item)
+    expected = {package['name']: package for package in packages}
+    if sorted(listed) != sorted(expected):
+        report.add(rule, name, f'lists {sorted(listed)} but the workspace members are {sorted(expected)}')
+    for crate, package in expected.items():
+        unpublished = package['publish'] is not None and not package['publish']
+        if crate in listed and unpublished and not re.search(r'\binternal\b', listed[crate]):
+            report.add(rule, name, f'{crate} is not published, so its item must say it is internal')
+
+
+def check_cli_package(docs, report, token_owner, packages):
+    rule = 'registry-name'
+    cli = next((package for package in packages if package['name'] == CLI_PACKAGE), None)
+    if cli is None:
+        report.add(rule, 'Cargo.toml', f'the workspace has no {CLI_PACKAGE} package')
+        return
+    documentation = cli['documentation'] or ''
+    if not documentation or urllib.parse.urlparse(documentation).hostname == 'docs.rs':
+        report.add('cli-documentation', f"{cli['directory']}/Cargo.toml",
+                   f'the documentation link {documentation!r} must point at the tool reference, not docs.rs')
+    name = cli['readme']
+    expected = f'mcp-name: io.github.{token_owner}/{REGISTRY_PROJECT}'
+    links = sections(strip_hidden(docs.text(name))).get('## Links', '')
+    bullets = [line for line in links.splitlines() if re.match(r'[-*] ', line)]
+    wanted = f'- MCP Registry name: `{expected}`'
+    if wanted not in [line.rstrip() for line in bullets]:
+        report.add(rule, name, f'needs a visible "## Links" bullet {wanted!r}, outside any HTML comment or code fence '
+                               f'(the owner comes from the workspace repository URL)')
+
+
 def markdown_names(root):
     """Tracked `*.md` files in scope, from git's index."""
     listing = subprocess.check_output(['git', 'ls-files', '-z', '--', '*.md'], cwd=root, text=True)
@@ -675,6 +923,13 @@ def check(root, names):
     fuzz = load_module(root / 'scripts/fuzz.py', 'purrassist_docs_fuzz')
     version = tomllib.loads((root / 'Cargo.toml').read_text())['workspace']['package']['version']
     stems = [path.stem for path in (root / DIALECT_PAGES).glob('*.md')]
+    repository = tomllib.loads((root / 'Cargo.toml').read_text())['workspace']['package']['repository']
+    owner = urllib.parse.urlparse(repository).path.strip('/').split('/')[0]
+    try:
+        packages = workspace_packages(root)
+    except OSError as error:
+        report.add('cargo-metadata', 'Cargo.toml', str(error))
+        packages = None
     rules = (
         lambda: check_release_set(docs, report, release.RELEASE_ORDER),
         lambda: check_workspace_version(docs, report, version),
@@ -687,7 +942,16 @@ def check(root, names):
         lambda: check_archived_evidence(docs, report),
         lambda: check_stage2_heading(docs, report),
         lambda: check_windows_run(docs, report),
+        lambda: check_tool_headings(docs, report),
+        lambda: check_three_interfaces(docs, report, (root / PROTOCOL_TESTS).read_text()),
     )
+    if packages is not None:
+        rules += (
+            lambda: check_crate_map(docs, report, release.RELEASE_ORDER, packages),
+            lambda: check_packaged_readmes(docs, report, release.RELEASE_ORDER, packages),
+            lambda: check_workspace_boundaries(docs, report, packages),
+            lambda: check_cli_package(docs, report, owner, packages),
+        )
     for rule in rules:
         try:
             rule()
