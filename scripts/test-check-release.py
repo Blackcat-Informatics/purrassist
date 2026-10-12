@@ -107,6 +107,37 @@ class WorkflowValidation(unittest.TestCase):
                                      'permissions:\n  contents: read\n  id-token: write\n', 1),
                         'only the publish job may declare an id-token permission')
 
+    def gate_with(self, permissions):
+        text = PUBLISH.read_text(encoding='utf-8')
+        head, gate, rest = text.partition('\n  gate:\n')
+        self.assertTrue(gate)
+        line, _, body = rest.partition('\n')
+        return head + gate + line + '\n' + permissions + body
+
+    def test_other_id_token_forms_fail(self):
+        for permissions in ('    permissions:\n      "id-token": write\n',
+                            "    permissions:\n      'id-token': write\n",
+                            '    permissions: { contents: read, id-token: write }\n'):
+            with self.subTest(permissions=permissions):
+                self.check_copy(self.gate_with(permissions),
+                                'only the publish job may declare an id-token permission')
+
+    def test_write_all_fails(self):
+        self.check_copy(self.gate_with('    permissions: write-all\n'),
+                        'must not grant permissions: write-all')
+        text = PUBLISH.read_text(encoding='utf-8')
+        self.check_copy(text.replace('permissions:\n  contents: read\n', 'permissions: write-all\n', 1),
+                        'must not grant permissions: write-all')
+
+    def test_id_token_in_a_job_named_with_a_digit_after_publish_fails(self):
+        text = PUBLISH.read_text(encoding='utf-8').rstrip('\n') + '\n'
+        extra = ('  job2:\n    runs-on: ubuntu-24.04\n    permissions:\n      id-token: write\n'
+                 '    steps:\n      - run: true\n')
+        self.check_copy(text + extra, 'only the publish job may declare an id-token permission')
+
+    def test_a_commented_id_token_is_ignored(self):
+        self.check_copy(self.gate_with('    # id-token: write is reserved for the publish job\n'))
+
     def test_preflight_removed_fails(self):
         before, _, after = _split_preflight(PUBLISH.read_text(encoding='utf-8'))
         self.check_copy(before + after, f'must have a "{CR.PREFLIGHT_STEP}" step')

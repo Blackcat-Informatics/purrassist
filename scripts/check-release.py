@@ -132,7 +132,7 @@ def validate_publish_workflow(path=None):
         publish_job_body = ''
     else:
         # Bound the job body to the next top-level (2-space-indented) job key.
-        match = re.search(r'\n  [A-Za-z_-]+:\n', publish_job[1])
+        match = re.search(r'\n  [A-Za-z_][A-Za-z0-9_-]*:\n', publish_job[1])
         publish_job_body = publish_job[1][:match.start()] if match else publish_job[1]
         if not re.search(r'^\s*environment:\s*crates-io\s*$', publish_job_body, re.M):
             errors.append('publish job must run in the crates-io environment')
@@ -147,9 +147,12 @@ def validate_publish_workflow(path=None):
     # decision recorded in docs/RELEASE.md), so the only thing keeping its
     # registry token inside the crates-io job is that no other job, and not
     # the workflow as a whole, may request an OIDC token.
-    id_tokens = len(re.findall(r'^\s*id-token:', text, re.M))
-    if id_tokens != len(re.findall(r'^\s*id-token:', publish_job_body, re.M)):
+    # Block and inline forms, quoted or not; comments are skipped.
+    id_token = re.compile(r'^[^#\n]*["\']?\bid-token["\']?\s*:', re.M)
+    if len(id_token.findall(text)) != len(id_token.findall(publish_job_body)):
         errors.append('only the publish job may declare an id-token permission')
+    if re.search(r'^[^#\n]*\bpermissions:\s*["\']?write-all\b', text, re.M):
+        errors.append('publish.yml must not grant permissions: write-all')
 
     if 'release-qualification.yml' not in text:
         errors.append('publish.yml must gate on release-qualification.yml for the same commit')
