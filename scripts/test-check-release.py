@@ -123,8 +123,10 @@ class WorkflowValidation(unittest.TestCase):
                                 'only the publish job may declare an id-token permission')
 
     def test_write_all_fails(self):
-        self.check_copy(self.gate_with('    permissions: write-all\n'),
-                        'must not grant permissions: write-all')
+        for permissions in ('    permissions: write-all\n', '    permissions: ! write-all\n',
+                            '    permissions: !1 write-all\n'):
+            with self.subTest(permissions=permissions):
+                self.check_copy(self.gate_with(permissions), 'must not grant permissions: write-all')
         text = PUBLISH.read_text(encoding='utf-8')
         self.check_copy(text.replace('permissions:\n  contents: read\n', 'permissions: write-all\n', 1),
                         'must not grant permissions: write-all')

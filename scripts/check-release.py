@@ -167,7 +167,8 @@ def validate_publish_workflow(path=None):
     id_token = re.compile(r'^[^#\n]*["\']?\bid-token["\']?\s*:', re.M)
     if len(id_token.findall(text)) != len(id_token.findall(publish_job_body)):
         errors.append('only the publish job may declare an id-token permission')
-    if re.search(r'^[^#\n]*\bpermissions:\s*["\']?write-all\b', text, re.M):
+    # Any write-all outside a comment, whatever tag, quote or layout precedes it.
+    if re.search(r'^[^#\n]*\bwrite-all\b', text, re.M):
         errors.append('publish.yml must not grant permissions: write-all')
 
     if 'release-qualification.yml' not in text:
