@@ -21,7 +21,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCES = ('Cargo.toml', 'Makefile', 'scripts/check-release.py', 'scripts/fuzz.py',
-           'crates/core/src/contract.rs', 'docs/known-limitations.json')
+           'crates/core/src/contract.rs', 'docs/known-limitations.json',
+           '.github/workflows/release-qualification.yml')
 NOT_FOUND = 'fact sentence not found'
 
 
@@ -523,6 +524,186 @@ class KnownLimitationsSection(Case):
         tree.write('CHANGELOG.md', '<!-- SPDX-FileCopyrightText: x -->\n# Changelog\n\n## Known limitations\n\n- [#6](x)\n')
         tree.names.append('CHANGELOG.md')
         self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md')
+
+
+class KnownLimitationsChangelog(Case):
+    def test_a_missing_heading_fails(self):
+        tree = self.tree()
+        tree.replace('CHANGELOG.md', '## Known limitations', '## Open items')
+        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'exactly one')
+
+    def test_a_dropped_issue_fails(self):
+        tree = self.tree()
+        tree.sub('CHANGELOG.md', r'- \[#18\][^\n]*\n', '')
+        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'differs')
+
+    def test_an_extra_issue_in_the_source_fails(self):
+        tree = self.tree()
+        data = tree.limitations()
+        data['limitations'].append({'issue': 99, 'title': 'New', 'impact': 'New impact.', 'blocks_release': False})
+        tree.save_limitations(data)
+        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md')
+
+    def test_a_changed_impact_fails(self):
+        tree = self.tree()
+        data = tree.limitations()
+        tree.replace('CHANGELOG.md', data['limitations'][3]['impact'], 'It is fine.')
+        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', '#11 impact')
+
+    def test_a_changed_title_in_the_source_fails(self):
+        tree = self.tree()
+        data = tree.limitations()
+        data['limitations'][0]['title'] = 'A different title'
+        tree.save_limitations(data)
+        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', '#6 title')
+
+    def test_a_missing_changelog_fails(self):
+        tree = self.tree()
+        tree.drop('CHANGELOG.md')
+        self.assertFails(tree.errors(), 'missing-file', 'CHANGELOG.md')
+
+
+class Changelog(Case):
+    def test_a_workspace_version_bump_fails(self):
+        tree = self.tree()
+        tree.replace('Cargo.toml', 'version = "0.1.0"', 'version = "0.2.0"', count=0)
+        self.assertFails(tree.errors(), 'changelog', '[0.1.0]', 'workspace version is 0.2.0')
+
+    def test_a_changelog_version_that_differs_fails(self):
+        tree = self.tree()
+        tree.replace('CHANGELOG.md', '## [0.1.0] - unreleased', '## [0.0.9] - unreleased')
+        self.assertFails(tree.errors(), 'changelog', '[0.0.9]', 'workspace version is 0.1.0')
+
+    def test_a_newer_unreleased_version_above_fails(self):
+        tree = self.tree()
+        tree.replace('CHANGELOG.md', '## [0.1.0] - unreleased', '## [0.2.0] - unreleased\n\n## [0.1.0] - unreleased')
+        self.assertFails(tree.errors(), 'changelog', '[0.2.0]')
+
+    def test_a_crate_that_is_not_named_fails(self):
+        release = CD.load_module(ROOT / 'scripts/check-release.py', 'purrassist_test_release')
+        for crate in release.RELEASE_ORDER:
+            with self.subTest(crate=crate):
+                tree = self.tree()
+                tree.replace('CHANGELOG.md', f'`{crate}`', crate, count=0)
+                self.assertFails(tree.errors(), 'changelog', f'`{crate}`')
+
+    def test_an_interface_that_is_not_highlighted_fails(self):
+        for label in CD.CHANGELOG_INTERFACES:
+            with self.subTest(label=label):
+                tree = self.tree()
+                tree.replace('CHANGELOG.md', label, label.strip('*'), count=0)
+                self.assertFails(tree.errors(), 'changelog', label)
+
+    def test_no_version_heading_is_not_found(self):
+        tree = self.tree()
+        tree.sub('CHANGELOG.md', r'## \[0\.1\.0\]', '## Version 0.1.0')
+        self.assertFails(tree.errors(), 'changelog', NOT_FOUND)
+
+    def test_a_missing_unreleased_heading_still_needs_the_version(self):
+        tree = self.tree()
+        tree.sub('CHANGELOG.md', r'## \[Unreleased\]\n\nNo changes yet\.\n\n', '')
+        self.assertNoRule(tree.errors(), 'changelog')
+
+
+class SecurityPolicy(Case):
+    def test_a_version_bump_without_a_table_row_fails(self):
+        tree = self.tree()
+        tree.replace('Cargo.toml', 'version = "0.1.0"', 'version = "0.2.0"', count=0)
+        self.assertFails(tree.errors(), 'security-policy', '0.2.x')
+
+    def test_a_missing_table_row_is_not_found(self):
+        tree = self.tree()
+        tree.sub('SECURITY.md', r'\| 0\.1\.x \|[^\n]*\n', '')
+        self.assertFails(tree.errors(), 'security-policy', NOT_FOUND, '0.1.x')
+
+    def test_a_row_for_another_minor_does_not_count(self):
+        tree = self.tree()
+        tree.replace('SECURITY.md', '| 0.1.x |', '| 0.2.x |')
+        self.assertFails(tree.errors(), 'security-policy', '0.1.x')
+
+    def test_a_missing_email_channel_fails(self):
+        tree = self.tree()
+        tree.replace('SECURITY.md', 'security@blackcatinformatics.ca', 'the maintainers', count=0)
+        self.assertFails(tree.errors(), 'security-policy', 'security@blackcatinformatics.ca')
+
+    def test_a_missing_private_reporting_channel_fails(self):
+        tree = self.tree()
+        tree.replace('SECURITY.md', '/security/advisories/new', '/security', count=0)
+        self.assertFails(tree.errors(), 'security-policy', '/security/advisories/new')
+
+
+class ReleaseReservations(Case):
+    def test_a_missing_crate_row_fails(self):
+        tree = self.tree()
+        tree.sub('docs/RELEASE.md', r'\| `purrassist-derive` \|[^\n]*\n', '')
+        self.assertFails(tree.errors(), 'release-reservations', 'purrassist-derive')
+
+    def test_an_unknown_crate_row_fails(self):
+        tree = self.tree()
+        tree.replace('docs/RELEASE.md', '| `purrassist-cli` | `0.0.0`', '| `purrassist-extra` | `0.0.0`')
+        self.assertFails(tree.errors(), 'release-reservations', 'purrassist-extra')
+
+    def test_a_reordered_table_fails(self):
+        tree = self.tree()
+        text = tree.read('docs/RELEASE.md')
+        core = re.search(r'\| `purrassist-core` \|[^\n]*\n', text).group(0)
+        derive = re.search(r'\| `purrassist-derive` \|[^\n]*\n', text).group(0)
+        tree.write('docs/RELEASE.md', text.replace(core + derive, derive + core))
+        self.assertFails(tree.errors(), 'release-reservations', 'RELEASE_ORDER')
+
+    def test_a_missing_heading_is_not_found(self):
+        tree = self.tree()
+        tree.replace('docs/RELEASE.md', '## Name reservations', '## Placeholders')
+        self.assertFails(tree.errors(), 'release-reservations', NOT_FOUND)
+
+    def test_a_section_without_rows_is_not_found(self):
+        tree = self.tree()
+        tree.sub('docs/RELEASE.md', r'\| `purrassist[^\n]*\| `0\.0\.0`[^\n]*\n', '', count=0)
+        self.assertFails(tree.errors(), 'release-reservations', NOT_FOUND)
+
+
+class ReleaseQualificationSteps(Case):
+    def test_the_steps_are_read_from_the_workflow(self):
+        names = CD.workflow_step_names((ROOT / '.github/workflows/release-qualification.yml').read_text())
+        self.assertIn('Verify workspace', names)
+        self.assertNotIn('Release qualification', names)
+
+    def test_only_job_steps_are_read(self):
+        self.assertEqual(CD.workflow_step_names(
+            "name: Top\non: push\njobs:\n  a:\n    name: Job\n    steps:\n"
+            "      - uses: x\n      - name: 'One'\n        run: y\n      - name: Two # c\n"), ['One', 'Two # c'])
+
+    def test_every_step_must_be_named(self):
+        names = CD.workflow_step_names((ROOT / '.github/workflows/release-qualification.yml').read_text())
+        for step in names:
+            with self.subTest(step=step):
+                tree = self.tree()
+                tree.replace('docs/RELEASE.md', f'`{step}`', step, count=0)
+                self.assertFails(tree.errors(), 'release-qualification-steps', f'`{step}`')
+
+    def test_a_new_workflow_step_fails(self):
+        tree = self.tree()
+        tree.detach('.github/workflows/release-qualification.yml')
+        tree.append('.github/workflows/release-qualification.yml', '      - name: Verify something new\n        run: true\n')
+        self.assertFails(tree.errors(), 'release-qualification-steps', 'Verify something new')
+
+    def test_a_workflow_without_steps_fails(self):
+        tree = self.tree()
+        tree.detach('.github/workflows/release-qualification.yml')
+        tree.write('.github/workflows/release-qualification.yml', 'jobs:\n  a:\n    steps: []\n')
+        self.assertFails(tree.errors(), 'release-qualification-steps', 'no named step')
+
+    def test_a_missing_heading_is_not_found(self):
+        tree = self.tree()
+        tree.replace('docs/RELEASE.md', '## Qualification workflow (release-qualification.yml)', '## Qualification')
+        self.assertFails(tree.errors(), 'release-qualification-steps', NOT_FOUND)
+
+
+class ReadmeChangelog(Case):
+    def test_a_missing_link_fails(self):
+        tree = self.tree()
+        tree.replace('README.md', '[changelog](CHANGELOG.md)', 'changelog')
+        self.assertFails(tree.errors(), 'readme-changelog', NOT_FOUND)
 
 
 class FuzzRows(Case):

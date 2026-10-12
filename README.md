@@ -12,16 +12,14 @@ the complete result, and returns evidence of what changed. A schema-valid guess
 is still a guess. Ambiguous alternatives remain visible. Use it as a
 [Rust crate, an MCP server, or a CLI](#one-engine-three-interfaces).
 
-**Version 0.1.0.** Merged to `main` (PR #2, `699d9ff`); tool-call recovery (#3,
-#8) and `purrassist-derive` (#15) merged since; not yet tagged `rust-v0.1.0`. The
-accepted scope is in [the implementation contract](docs/IMPLEMENTATION.md), with
-executable evidence and limits in [the qualification record](docs/QUALIFICATION.md);
-its [known limitations](docs/QUALIFICATION.md#known-limitations) are not release
-blockers. Publication follows the release procedure; 0.1.0 is not claimed as
-published, so the `cargo add` and `cargo install` commands below work once it is
-and, until then, you can build from [a checkout](#use-the-checkout).
-
-The [release procedure](docs/RELEASE.md) records the package and registry gates.
+**Version 0.1.0.** Merged to `main`, not yet tagged `rust-v0.1.0`. The
+`cargo add` and `cargo install` commands below work once 0.1.0 is published;
+until then, build from [a checkout](#use-the-checkout). Read the
+[changelog](CHANGELOG.md), the [implementation contract](docs/IMPLEMENTATION.md)
+for the accepted scope, and the [qualification record](docs/QUALIFICATION.md)
+for executable evidence. Its [known limitations](docs/QUALIFICATION.md#known-limitations)
+are not release blockers. The [release procedure](docs/RELEASE.md) records the
+package and registry gates.
 
 <!-- three-interfaces:begin -->
 ## One engine, three interfaces

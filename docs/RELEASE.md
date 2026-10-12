@@ -3,11 +3,13 @@
 # Rust release procedure
 
 PurRAssist 0.1.0 has an implemented scope and executable qualification record
-in `QUALIFICATION.md`. Status: merged to `main` (PR #2, `699d9ff`); tool-call
-recovery (#3, #8) and `purrassist-derive` (#15) merged since; not yet tagged
-`rust-v0.1.0`. Publication acceptance is performed on the exact `main` commit
-to be tagged, using the steps below. A published 0.1.0 is not claimed before
-registry downloads and installed CLI/MCP behavior are verified.
+in `QUALIFICATION.md`. Status: merged to `main`, including tool-call recovery
+and `purrassist-derive`; not yet tagged `rust-v0.1.0`. This procedure is run
+against the exact `main` commit to be tagged: every check below, and the tag
+itself, name that one commit. A published 0.1.0 is not claimed before registry
+downloads and installed CLI/MCP behavior are verified.
+
+## Release set
 
 The release set is six crates, in this order: `purrassist-core`,
 `purrassist-derive`, `purrassist-syntax`, `purrassist`, `purrassist-host`, then
@@ -32,28 +34,32 @@ must not remove or change a `#[doc(hidden)]` support item that same-minor
 derive output uses. The core unit test fails if the workspace major or minor
 version moves without renaming the marker.
 
-## Placeholder name records (already minted)
+## Name reservations
 
 One-time, irreversible `0.0.0` name-reservation records exist on crates.io for
-all six crates in the release set. The original five (`purrassist-core`,
-`purrassist-syntax`, `purrassist`, `purrassist-host`, `purrassist-cli`) were
-minted first; `purrassist-derive` was minted on 2026-10-12, with ownership
-identical to the other five. Each is a minimal `lib` package,
-`version = "0.0.0"`, no dependencies, `//! Reserved name.`; see the issue #1
-comment recording this for the exact mechanics (the derive record is a
-proc-macro crate in the workspace, but its placeholder only holds the name).
-These are **not** the `0.1.0` release; they only hold the names and let a
-trusted publisher be configured before the first real publication.
+all six crates in the release set, with identical ownership. Each is a minimal
+`lib` package, `version = "0.0.0"`, no dependencies, `//! Reserved name.`; the
+`purrassist-derive` placeholder only holds the name, although the workspace
+crate is a proc-macro crate. They are **not** the `0.1.0` release; they hold the
+names and let a trusted publisher be configured before the first real
+publication.
+
+| Crate | Reservation | Trusted publisher |
+|---|---|---|
+| `purrassist-core` | `0.0.0`, minted first | confirmed 2026-09-28 |
+| `purrassist-derive` | `0.0.0`, minted 2026-10-12 | pending owner configuration (as of 2026-10-12) |
+| `purrassist-syntax` | `0.0.0`, minted first | confirmed 2026-09-28 |
+| `purrassist` | `0.0.0`, minted first | confirmed 2026-09-28 |
+| `purrassist-host` | `0.0.0`, minted first | confirmed 2026-09-28 |
+| `purrassist-cli` | `0.0.0`, minted first | confirmed 2026-09-28 |
 
 `publish.yml` has a preflight step (see below) that fails before
 `purrassist-core` is published when any release crate name is absent from
 crates.io (HTTP 200 is required for every crate) or when the release set is
 not owned identically. The preflight cannot see trusted-publisher
-configuration, which is not verifiable unauthenticated; confirming it stays the
-manual step. The `purrassist-derive` trusted publisher is pending owner
-configuration (repository, workflow and environment below). Re-confirm all six
-through the crates.io API immediately before tagging, and do not tag until
-`purrassist-derive` is configured.
+configuration, which is not verifiable unauthenticated; confirming it stays a
+manual step. Re-confirm all six through the crates.io API immediately before
+tagging, and do not tag until `purrassist-derive` is configured.
 
 ## Publish preflight
 
@@ -74,43 +80,61 @@ The preflight does **not** verify trusted-publisher configuration: that state
 is not visible to an unauthenticated request. Confirming that each crate's
 trusted publisher is configured stays the manual pre-tag step below.
 
-## Trusted publishing (original five confirmed; derive pending)
+## Trusted publishing
 
-Observed on 2026-09-28: each of the original five crates (all except
-`purrassist-derive`) has a crates.io trusted publisher configured against:
+This section records observations, not standing guarantees. On 2026-09-28 each
+of the original five crates (all except `purrassist-derive`) was confirmed to
+have a crates.io trusted publisher configured against:
 
 - Repository: `Blackcat-Informatics/purrassist`
 - Workflow: `publish.yml`
 - Environment: `crates-io`
 
 As of 2026-10-12 the `purrassist-derive` trusted publisher is pending owner
-configuration against the same three values; re-confirm it through the API
-before tagging.
+configuration against the same three values. Because a repository, workflow or
+environment rename would silently break trusted publishing, re-confirm all six
+through the crates.io API immediately before tagging.
 
 A trusted publisher lets `publish.yml`'s `publish` job mint a short-lived
 registry token via GitHub OIDC (`permissions: id-token: write`) instead of a stored
 `CARGO_REGISTRY_TOKEN` secret. No registry credential is stored in this
 repository or its CI configuration at any point.
 
-## Qualification (release-qualification.yml): qualification only
+## Qualification workflow (release-qualification.yml)
 
-On `rust-vVERSION` tags, `release-qualification.yml` checks the tag against the
-workspace, runs the full local gate on stable Rust 1.98.0, packages all six
-crates with Cargo verification enabled, and audits the archives and license
-notices. Every package attempt also runs the packaging isolation and failure
-regressions before creating archives. Packaging resolves the real toolchain Cargo through rustup and uses
-fresh Cargo home, target and intermediate directories for each invocation.
-Both compiler wrapper layers are disabled for these verification builds;
-previously packaged same-version crates and build artifacts cannot satisfy them.
-The verified archives are retained in a unique ignored `package-archives`
-run directory printed by the command, after the complete source/license audit.
+`release-qualification.yml` runs on pushes of `rust-v*` tags and on manual
+dispatch. Its single `package` job (90-minute allowance, Rust 1.98.0) runs these
+steps in order:
+
+1. `Install release toolchain`: stable Rust 1.98.0 with Clippy and rustfmt.
+2. `Install pinned coverage-feedback toolchain`: the registered nightly
+   compiler and its LLVM tools, used only by the isolated coverage probe.
+3. `Verify release set and version`: `scripts/check-release.py --tag` on a tag
+   run (the tag must match the workspace version), plain
+   `scripts/check-release.py` on a manual run.
+4. `Verify workspace`: `make check`, the full local gate.
+5. `Verify corpus suites`: `make corpus`.
+6. `Verify coverage-feedback corpus growth`:
+   `scripts/test-fuzz-feedback.py`.
+7. `Verify the published-crate verifier`: `scripts/test-verify-published.py`.
+8. `Verify crate archives and notices`: `make package`.
+
+`make package` packages all six crates with Cargo verification enabled and
+audits the archives and license notices. Every package attempt also runs the
+packaging isolation and failure regressions before creating archives.
+Packaging resolves the real toolchain Cargo through rustup and uses fresh Cargo
+home, target and intermediate directories for each invocation. Both compiler
+wrapper layers are disabled for these verification builds; previously packaged
+same-version crates and build artifacts cannot satisfy them. The verified
+archives are retained in a unique ignored `package-archives` run directory
+printed by the command, after the complete source/license audit.
+
 This workflow **never publishes, attests, or creates a GitHub release**, and it
 holds no `id-token` permission and no registry credential. `verify.yml`'s
 `qualification` job gathers the same class of evidence (independent syntax
 oracles, coverage-guided/differential fuzzing, packaging, resource
 measurement against the documented limits) on main pushes, pull requests, and
-manual runs, so
-regressions are visible long before a tag is cut.
+manual runs, so regressions are visible long before a tag is cut.
 
 ## Publishing (publish.yml): the only workflow that publishes
 
@@ -178,8 +202,8 @@ on checkout.
   and the exact stdout `purrassist` produced for them, compared byte-for-byte
   by `verify-published.py`'s ordinary (non-capture) run. Whenever the tool
   registry changes shape (a tool is added, removed, or its output changes —
-  e.g. Task 10's registry replacement, or a new `generate_json_witness`
-  tool), the committed responses go stale and must be regenerated by hand:
+  e.g. a replaced registry, or a new `generate_json_witness` tool), the
+  committed responses go stale and must be regenerated by hand:
 
   ```sh
   python3 scripts/verify-published.py --capture
@@ -206,18 +230,37 @@ on checkout.
 
 ## Release step
 
-Before a first publication, verify hosted CI for the exact `main` commit to be tagged, run
-the portability, conformance, syntax-oracle, fuzz, performance, and package
-checks listed in `QUALIFICATION.md`, and re-confirm the trusted-publisher
-settings above via the crates.io API immediately before tagging (a repository
-rename, workflow rename, or environment rename would silently break trusted
-publishing). The `purrassist-derive` trusted publisher is pending owner
-configuration and must exist first (see "Placeholder name records"). Tagging
-`rust-vVERSION` is irreversible and requires explicit authorization;
-`publish.yml` then does the rest. After it succeeds, create
-the GitHub release and link the `verify-published.py` output in the release
-notes.
+For the exact `main` commit to be tagged:
 
-After publication, install `purrassist-cli` from crates.io into a clean root
-and run the documented decode, plan/application, and MCP examples against that
-download. A local `cargo install --path` proves only the checkout build.
+1. Set the date of the `[0.1.0]` heading in `CHANGELOG.md` (it reads
+   `unreleased` until now) to the tagging date and merge that change; the
+   resulting `main` commit is the one every following step names.
+2. Verify hosted CI (`verify.yml`) for that commit, and run the portability,
+   conformance, syntax-oracle, fuzz, performance, and package checks listed
+   in `QUALIFICATION.md`.
+3. Re-confirm all six trusted publishers through the crates.io API (see
+   "Trusted publishing"); `purrassist-derive` must be configured first.
+4. Tag `rust-vVERSION`. Tagging is irreversible and requires explicit
+   authorization; `publish.yml` then does the rest.
+5. After `publish.yml` succeeds, create the GitHub release. Its body is the
+   `[0.1.0]` section of `CHANGELOG.md` plus the output of
+   `scripts/verify-published.py`.
+
+## After publication
+
+- Install `purrassist-cli` from crates.io into a clean root and run the
+  documented decode, plan/application, and MCP examples against that download.
+  A local `cargo install --path` proves only the checkout build.
+- Update the status lines that read "not yet tagged" to the published state.
+- Write an MCP Registry `server.json` for
+  `io.github.Blackcat-Informatics/purrassist` and submit it to the MCP
+  Registry. Its package entry has `registryType` `cargo`, `identifier`
+  `purrassist-cli`, the published `version`, and an stdio `transport`; the
+  file's top-level `version` is the same release. The
+  registry verifies ownership of a Cargo package from the
+  `mcp-name: io.github.Blackcat-Informatics/purrassist` line that
+  `crates/cli/README.md` carries, so the published `purrassist-cli` README must
+  contain it. Validate the file with the registry's publisher tooling against
+  its current schema when submitting.
+- Switch the GitHub repository homepage to the docs.rs page once the 0.1.0
+  documentation has been built there.

@@ -1,0 +1,115 @@
+<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. -->
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
+# Changelog
+
+All notable changes to PurRAssist are recorded here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html). All six published
+crates share one version.
+
+## [Unreleased]
+
+No changes yet.
+
+## [0.1.0] - unreleased
+
+The first release: six crates, one recovery engine, and three ways to use it.
+It is not yet tagged `rust-v0.1.0`; the date above is set when it is tagged. The
+[release procedure](docs/RELEASE.md) records the publication gates.
+
+### Highlights
+
+- **Rust crate**: `purrassist` is the Rust interface. It re-exports the pure
+  engines, the syntax integration and the derives, so
+  `Schema::compile(..).recover(..)` returns an outcome (resolved, best guess,
+  ambiguous or unresolved) with a receipt of what changed. Typed tool
+  definitions derive from Rust structs and enums with
+  `#[derive(ToolDefinition)]` and `#[derive(ToolEnum)]`. See the
+  [crate README](crates/purrassist/README.md).
+- **MCP server**: `purrassist mcp --root DIR` serves every tool over
+  newline-delimited JSON-RPC on stdio. It handles cancellation while tools run
+  and admits at most four active tool calls. See the
+  [tool reference](docs/TOOLS.md).
+- **CLI**: the `purrassist` executable offers `decode`, `validate`, `match`,
+  `recover-tool-calls`, `call` and `mcp`. `purrassist call TOOL --root DIR`
+  invokes the same operation as MCP, and a test checks that the CLI and MCP
+  results are identical for every registered tool. See the
+  [README](README.md#one-engine-three-interfaces).
+
+### Crates
+
+Published in this order:
+
+| Crate | Role |
+|---|---|
+| `purrassist-core` | The pure recovery, matching, schema, Markdown and tool-call engines, with zero third-party runtime dependencies. |
+| `purrassist-derive` | Zero-dependency `#[derive(ToolDefinition)]` and `#[derive(ToolEnum)]`. |
+| `purrassist-syntax` | Isolated Tree-sitter grammar integration for source inspection and validated repairs. |
+| `purrassist` | The Rust facade that re-exports the engines and the derives. |
+| `purrassist-host` | Root-scoped files, journaled replacement and the shared tool registry behind the CLI and the MCP server. |
+| `purrassist-cli` | The `purrassist` executable: the CLI and the stdio MCP server. |
+
+### Capability areas
+
+- **JSON recovery**: nested unwrapping, syntax repair, approximate keys and
+  enums, stringified values and whole-schema validation against Draft 2020-12
+  (the default) or Draft-07, with invented values produced by a first-party
+  witness-generation algebra. See the
+  [implementation contract](docs/IMPLEMENTATION.md).
+- **Matching**: Unicode, lexical, Levenshtein, Damerau-Levenshtein, English
+  Soundex, alias and contextual path matching, explicit semantic domain rules,
+  and caller-supplied embedding similarity. No model is required, loaded or
+  contacted by default.
+- **Evidence receipts**: every result carries its sources, spans, transforms,
+  alternatives, losses and inferences. The receipt wire format is described by
+  [receipt.schema.json](docs/schema/receipt.schema.json).
+- **Markdown and edits**: source-preserving CommonMark/GFM parsing and
+  rendering, structural section, list, table and reference operations, bounded
+  fuzzy replacement, relocatable unified diffs and exact-byte undo. See
+  [plan application](docs/EDIT-APPLICATION.md).
+- **Syntax inspection**: Python, Rust, JavaScript/JSX and TypeScript/TSX
+  grammar inspection and validated punctuation repairs. Grammar acceptance does
+  not prove program correctness.
+- **Files**: root-scoped, journaled single-file replacement and conditional
+  undo for cooperating writers, with explicit multi-file outcomes. It is not a
+  sandbox against hostile processes.
+- **Tool-call recovery**: recovery of the tool calls of one model turn from raw
+  output, across twelve built-in dialects, with itemized repairs and
+  conservative guards for mutating tools. See
+  [tool-call recovery](docs/tool-calls/README.md).
+- **Helpers and limits**: resumable helper request/response adapters
+  ([helpers](docs/HELPERS.md)), caller-owned cancellation
+  ([cancellation](docs/CANCELLATION.md)) and finite, explicit resource budgets
+  ([resources](docs/RESOURCES.md)). Exhaustion is reported, never a success.
+
+Executable evidence and its limits are in the
+[qualification record](docs/QUALIFICATION.md).
+
+### Compatibility
+
+- Rust edition 2024, minimum supported Rust version (MSRV) 1.98.
+- `purrassist-derive` and `purrassist-core` must share a `major.minor` version;
+  their patch versions may differ. Generated code references
+  `purrassist_core::tool_call::__DERIVE_ABI_<major>_<minor>`, so a patch release
+  must not change what generated code needs from core: such a change requires a
+  minor version bump, which renames the marker. See the
+  [release procedure](docs/RELEASE.md).
+- JSON Schema Draft 2019-09, draft-06 and earlier dialects are rejected at
+  compilation.
+
+## Known limitations
+
+These issues were open on 2026-10-12. None blocks the 0.1.0 release. The list
+matches its single source, [known-limitations.json](docs/known-limitations.json);
+`scripts/check-docs.py` compares the two.
+
+- [#6](https://github.com/Blackcat-Informatics/purrassist/issues/6) Tool-call fuzz: finish the rejected-span oracle failures left at the #3 merge. A plain tool-call fuzz campaign stops at the first rejected-span oracle panic, so the default `make fuzz` fails there.
+- [#7](https://github.com/Blackcat-Informatics/purrassist/issues/7) Audit the unreviewed #3 stage-3 commits and close the F14/F19 rule's known limits. Some stage-3 commits of the tool-call work were merged without an audit, and the known limits of the F14/F19 rule remain open.
+- [#10](https://github.com/Blackcat-Informatics/purrassist/issues/10) Tool-call recovery: restarted DeepSeek-V3.1 sections cost quadratic work and super-quadratic time. A turn with many restarted DeepSeek-V3.1 sections costs quadratic work and super-quadratic time.
+- [#11](https://github.com/Blackcat-Informatics/purrassist/issues/11) Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes). One 192-byte mutated turn takes about 5 s in a release build, so the default `make fuzz` exceeds its timeout on `tool-call-ref`; the CLI and MCP sized budget ends it explicitly in 0.3 s.
+- [#12](https://github.com/Blackcat-Informatics/purrassist/issues/12) Tool-call recovery: add the pythonic.v1 dialect and pythonic codec. `pythonic.v1` is not built in, so its call markup is not recovered as a tool call.
+- [#13](https://github.com/Blackcat-Informatics/purrassist/issues/13) Tool-call recovery: add the glm-4.5.v1 dialect and kv-pairs codec. `glm-4.5.v1` is not built in, so its call markup is not recovered as a tool call.
+- [#14](https://github.com/Blackcat-Informatics/purrassist/issues/14) Tool-call recovery: add the gemma3-tool-code.v1 dialect. `gemma3-tool-code.v1` is not built in, so its call markup is not recovered as a tool call.
+- [#16](https://github.com/Blackcat-Informatics/purrassist/issues/16) Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress). There is no `ToolCallStream`, no stable-prefix events, no CLI `--stream` option and no MCP progress reporting for recovery.
+- [#17](https://github.com/Blackcat-Informatics/purrassist/issues/17) Tool-call recovery: reassemble provider streaming events (Anthropic SSE tool_use, OpenAI tool_calls deltas). Anthropic SSE `tool_use` and OpenAI `tool_calls` delta streams are not reassembled into a turn.
+- [#18](https://github.com/Blackcat-Informatics/purrassist/issues/18) Tool-call recovery: special-token-stripped dialect variants (*-stripped.v1). Dialect variants for output whose special tokens were stripped (`*-stripped.v1`) are not built in.

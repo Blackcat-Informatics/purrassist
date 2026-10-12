@@ -14,7 +14,13 @@ sentence that restates it:
   the `Makefile`;
 * the receipt wire version from `RECEIPT_VERSION` in `crates/core/src/contract.rs`;
 * the dialect ids from the stems of `docs/tool-calls/dialects/*.md`;
-* the known limitations from `docs/known-limitations.json`;
+* the known limitations from `docs/known-limitations.json`, in the
+  qualification record, the fuzzing guide and the changelog;
+* the changelog version, crates and interfaces, the supported-versions table
+  and reporting channels of `SECURITY.md`, the reservation table and the
+  qualification-workflow summary of `docs/RELEASE.md` (from the `name:` of every
+  step of `.github/workflows/release-qualification.yml`), and the README link
+  to the changelog;
 * the tool names from the generated block of `docs/TOOLS.md` (the Rust test
   `tools_reference_matches_registry` pins that block to the registry);
 * the crate map, the workspace boundaries and the packaged READMEs from the
@@ -83,6 +89,14 @@ DIALECT_COUNT_DOCS = (
     'README.md', 'crates/core/README.md', 'crates/purrassist/README.md', 'crates/host/README.md',
     'docs/QUALIFICATION.md', 'docs/IMPLEMENTATION.md', 'docs/RESOURCES.md',
     'docs/tool-calls/README.md', 'docs/tool-calls/GRAMMAR.md', 'docs/tool-calls/dialects/bare-json.v1.md')
+CHANGELOG = 'CHANGELOG.md'
+SECURITY = 'SECURITY.md'
+SECURITY_EMAIL = 'security@blackcatinformatics.ca'
+RELEASE_DOC = 'docs/RELEASE.md'
+RESERVATIONS_HEADING = '## Name reservations'
+QUALIFICATION_HEADING = '## Qualification workflow (release-qualification.yml)'
+QUALIFICATION_WORKFLOW = '.github/workflows/release-qualification.yml'
+CHANGELOG_INTERFACES = ('**Rust crate**', '**MCP server**', '**CLI**')
 TOOLS_DOC = 'docs/TOOLS.md'
 TOOLS_BEGIN = '<!-- tools-reference:begin -->\n'
 TOOLS_END = '<!-- tools-reference:end -->\n'
@@ -534,13 +548,94 @@ def load_limitations(docs, report):
     return data if len(report.errors) == problems else None
 
 
+def check_changelog(docs, report, version, release_order):
+    rule = 'changelog'
+    text = docs.text(CHANGELOG)
+    versions = re.findall(r'^## \[(\d+\.\d+\.\d+)\]', text, re.MULTILINE)
+    if not versions:
+        report.add(rule, CHANGELOG, 'fact sentence not found: no "## [X.Y.Z]" version heading')
+        return
+    if versions[0] != version:
+        report.add(rule, CHANGELOG, f'the newest version heading is [{versions[0]}] but the workspace version is {version}')
+    bodies = [body for heading, body in sections(text).items() if heading.startswith(f'## [{version}]')]
+    if not bodies:
+        report.add(rule, CHANGELOG, f'has no "## [{version}]" section')
+        return
+    body = bodies[0]
+    for crate in release_order:
+        if f'`{crate}`' not in body:
+            report.add(rule, CHANGELOG, f'the [{version}] section does not name the crate `{crate}`')
+    for label in CHANGELOG_INTERFACES:
+        if label not in body:
+            report.add(rule, CHANGELOG, f'the [{version}] section does not highlight the interface {label}')
+
+
+def check_security_policy(docs, report, version, repository):
+    rule = 'security-policy'
+    major_minor = '.'.join(version.split('.')[:2])
+    text = docs.text(SECURITY)
+    rows = [line for line in text.splitlines() if re.match(rf'\|\s*{re.escape(major_minor)}\.', line)]
+    if not rows:
+        report.add(rule, SECURITY, f'fact sentence not found: no supported-versions table row for {major_minor}.x')
+    for channel in (SECURITY_EMAIL, f'{repository}/security/advisories/new'):
+        if channel not in text:
+            report.add(rule, SECURITY, f'does not name the reporting channel {channel}')
+
+
+def check_release_reservations(docs, report, release_order):
+    rule = 'release-reservations'
+    text = docs.text(RELEASE_DOC)
+    if text.splitlines().count(RESERVATIONS_HEADING) != 1:
+        report.add(rule, RELEASE_DOC, f'fact sentence not found: needs exactly one {RESERVATIONS_HEADING!r} heading')
+        return
+    rows = [re.match(r'\|\s*`([^`]+)`', line) for line in sections(text)[RESERVATIONS_HEADING].splitlines()]
+    listed = [row.group(1) for row in rows if row]
+    if not listed:
+        report.add(rule, RELEASE_DOC, 'fact sentence not found: the reservation table has no crate rows')
+    elif listed != list(release_order):
+        report.add(rule, RELEASE_DOC, f'the reservation table lists {listed} but RELEASE_ORDER is {list(release_order)}')
+
+
+def workflow_step_names(workflow):
+    """The `name:` of every step of the jobs of a workflow file, read as text (the
+    standard library has no YAML parser)."""
+    names, in_jobs = [], False
+    for line in workflow.splitlines():
+        if re.match(r'jobs:\s*$', line):
+            in_jobs = True
+        elif in_jobs:
+            step = re.match(r'\s+-\s+name:\s*(.+?)\s*$', line)
+            if step:
+                names.append(step.group(1).strip('\'"'))
+    return names
+
+
+def check_release_qualification(docs, report):
+    rule = 'release-qualification-steps'
+    steps = workflow_step_names(docs.text(QUALIFICATION_WORKFLOW))
+    if not steps:
+        report.add(rule, QUALIFICATION_WORKFLOW, 'no named step found in the jobs')
+        return
+    text = docs.text(RELEASE_DOC)
+    if text.splitlines().count(QUALIFICATION_HEADING) != 1:
+        report.add(rule, RELEASE_DOC, f'fact sentence not found: needs exactly one {QUALIFICATION_HEADING!r} heading')
+        return
+    section = collapse(sections(text)[QUALIFICATION_HEADING])
+    for step in steps:
+        if f'`{step}`' not in section:
+            report.add(rule, RELEASE_DOC, f'the qualification summary does not name the workflow step `{step}`')
+
+
+def check_readme_changelog(docs, report):
+    if not re.search(r'\]\(CHANGELOG\.md(?:#[^)]*)?\)', docs.text('README.md')):
+        report.add('readme-changelog', 'README.md', 'fact sentence not found: no link to CHANGELOG.md')
+
+
 def check_known_limitations(docs, report, data, targets):
     rule = 'known-limitations-section'
     entries = data['limitations']
     expected = {entry['issue'] for entry in entries}
-    holders = ['docs/QUALIFICATION.md', 'docs/FUZZING.md']
-    if 'CHANGELOG.md' in docs.names:
-        holders.append('CHANGELOG.md')
+    holders = ['docs/QUALIFICATION.md', 'docs/FUZZING.md', CHANGELOG]
     for name in holders:
         text = docs.text(name)
         if text.splitlines().count(KNOWN_LIMITATIONS_HEADING) != 1:
@@ -559,7 +654,7 @@ def check_known_limitations(docs, report, data, targets):
             report.add(rule, name, f'issue set {sorted(referenced)} differs from {KNOWN_LIMITATIONS_JSON} '
                                    f'{sorted(expected)}')
         stop = re.search(r'default `make fuzz` stops on the #(\d+) and #(\d+) signatures', section)
-        if name != 'CHANGELOG.md':
+        if name != CHANGELOG:
             if stop is None:
                 report.add(rule, name, 'fact sentence not found: the default `make fuzz` stop on the #N and #N signatures')
             elif not {int(stop.group(1)), int(stop.group(2))} <= expected:
@@ -944,6 +1039,11 @@ def check(root, names):
         lambda: check_windows_run(docs, report),
         lambda: check_tool_headings(docs, report),
         lambda: check_three_interfaces(docs, report, (root / PROTOCOL_TESTS).read_text()),
+        lambda: check_changelog(docs, report, version, release.RELEASE_ORDER),
+        lambda: check_security_policy(docs, report, version, repository),
+        lambda: check_release_reservations(docs, report, release.RELEASE_ORDER),
+        lambda: check_release_qualification(docs, report),
+        lambda: check_readme_changelog(docs, report),
     )
     if packages is not None:
         rules += (
