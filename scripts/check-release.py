@@ -131,8 +131,9 @@ def validate_publish_workflow(path=None):
         errors.append('publish.yml must define a `publish` job')
         publish_job_body = ''
     else:
-        # Bound the job body to the next top-level (2-space-indented) job key.
-        match = re.search(r'\n  [A-Za-z_-]+:\n', publish_job[1])
+        # Bound the job body at the next non-comment line indented two spaces:
+        # under `jobs:` that is the next job, however its key is spelled.
+        match = re.search(r'\n  [^\s#]', publish_job[1])
         publish_job_body = publish_job[1][:match.start()] if match else publish_job[1]
         if not re.search(r'^\s*environment:\s*crates-io\s*$', publish_job_body, re.M):
             errors.append('publish job must run in the crates-io environment')
@@ -142,6 +143,33 @@ def validate_publish_workflow(path=None):
             errors.append('publish job must declare permissions: contents: read')
         if not re.search(r'^\s*needs:\s*gate\s*$', publish_job_body, re.M):
             errors.append('publish job must depend on a gate job that checks release qualification')
+
+    # The purrassist-derive trusted publisher names no environment (an owner
+    # decision recorded in docs/RELEASE.md), so the only thing keeping its
+    # registry token inside the crates-io job is that no other job, and not
+    # the workflow as a whole, may request an OIDC token. Text matching cannot
+    # follow every YAML spelling, so the workflow is held to a closed shape:
+    # exactly the `gate` and `publish` jobs, no anchors or aliases (which could
+    # copy a permissions block between jobs), no write-all, and every id-token
+    # key, in block, inline or quoted form, inside the publish job.
+    jobs = text.split('\njobs:\n', 1)
+    names = [re.sub(r'\s*#.*$', '', line[2:]).strip().strip('\'"').rstrip(':').strip('\'"')
+             for line in (jobs[1].splitlines() if len(jobs) == 2 else [])
+             if re.match(r'  [^\s#]', line)]
+    if names != ['gate', 'publish']:
+        errors.append(f'publish.yml must define exactly the jobs gate and publish, found {names}')
+    if re.search(r'^[^#\n]*(?:^\s*|[:\[{,-]\s*)[&*][A-Za-z0-9_]', text, re.M):
+        errors.append('publish.yml must not use YAML anchors or aliases')
+    # Escapes, explicit tags and block scalars can spell a grant the patterns
+    # above do not read; none has a use in this workflow.
+    if re.search(r'\\|^[^#\n]*(?:^|[\s:\[{,-])!(?:!|<|[A-Za-z])|^[^#\n]*\bpermissions:\s*[|>]', text, re.M):
+        errors.append('publish.yml must not use escapes, YAML tags or block-scalar permissions')
+    id_token = re.compile(r'^[^#\n]*["\']?\bid-token["\']?\s*:', re.M)
+    if len(id_token.findall(text)) != len(id_token.findall(publish_job_body)):
+        errors.append('only the publish job may declare an id-token permission')
+    # Any write-all outside a comment, whatever tag, quote or layout precedes it.
+    if re.search(r'^[^#\n]*\bwrite-all\b', text, re.M):
+        errors.append('publish.yml must not grant permissions: write-all')
 
     if 'release-qualification.yml' not in text:
         errors.append('publish.yml must gate on release-qualification.yml for the same commit')

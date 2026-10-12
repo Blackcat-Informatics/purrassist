@@ -91,6 +91,89 @@ class WorkflowValidation(unittest.TestCase):
         CR.validate_publish_workflow()
         self.check_copy(PUBLISH.read_text(encoding='utf-8'))
 
+    def test_id_token_in_another_job_fails(self):
+        text = PUBLISH.read_text(encoding='utf-8')
+        gate = '\n  gate:\n'
+        self.assertIn(gate, text)
+        head, _, rest = text.partition(gate)
+        line, _, body = rest.partition('\n')
+        self.check_copy(head + gate + line + '\n    permissions:\n      id-token: write\n' + body,
+                        'only the publish job may declare an id-token permission')
+
+    def test_workflow_wide_id_token_fails(self):
+        text = PUBLISH.read_text(encoding='utf-8')
+        self.assertIn('permissions:\n  contents: read\n', text)
+        self.check_copy(text.replace('permissions:\n  contents: read\n',
+                                     'permissions:\n  contents: read\n  id-token: write\n', 1),
+                        'only the publish job may declare an id-token permission')
+
+    def gate_with(self, permissions):
+        text = PUBLISH.read_text(encoding='utf-8')
+        head, gate, rest = text.partition('\n  gate:\n')
+        self.assertTrue(gate)
+        line, _, body = rest.partition('\n')
+        return head + gate + line + '\n' + permissions + body
+
+    def test_other_id_token_forms_fail(self):
+        for permissions in ('    permissions:\n      "id-token": write\n',
+                            "    permissions:\n      'id-token': write\n",
+                            '    permissions: { contents: read, id-token: write }\n'):
+            with self.subTest(permissions=permissions):
+                self.check_copy(self.gate_with(permissions),
+                                'only the publish job may declare an id-token permission')
+
+    def test_write_all_fails(self):
+        for permissions in ('    permissions: write-all\n', '    permissions: ! write-all\n',
+                            '    permissions: !1 write-all\n'):
+            with self.subTest(permissions=permissions):
+                self.check_copy(self.gate_with(permissions), 'must not grant permissions: write-all')
+        text = PUBLISH.read_text(encoding='utf-8')
+        self.check_copy(text.replace('permissions:\n  contents: read\n', 'permissions: write-all\n', 1),
+                        'must not grant permissions: write-all')
+
+    def test_id_token_in_a_job_named_with_a_digit_after_publish_fails(self):
+        text = PUBLISH.read_text(encoding='utf-8').rstrip('\n') + '\n'
+        extra = ('  job2:\n    runs-on: ubuntu-24.04\n    permissions:\n      id-token: write\n'
+                 '    steps:\n      - run: true\n')
+        self.check_copy(text + extra, 'only the publish job may declare an id-token permission')
+
+    def test_a_job_beyond_gate_and_publish_fails_however_it_is_spelled(self):
+        text = PUBLISH.read_text(encoding='utf-8').rstrip('\n') + '\n'
+        for header in ('  extra:', '  extra: # helper', '  extra: ', '  "extra":', "  'job2':"):
+            with self.subTest(header=header):
+                extra = header + '\n    runs-on: ubuntu-24.04\n    steps:\n      - run: true\n'
+                self.check_copy(text + extra, 'must define exactly the jobs gate and publish')
+
+    def test_an_id_token_in_a_trailing_commented_job_header_fails(self):
+        text = PUBLISH.read_text(encoding='utf-8').rstrip('\n') + '\n'
+        extra = ('  extra: # helper\n    runs-on: ubuntu-24.04\n    permissions:\n      id-token: write\n'
+                 '    steps:\n      - run: true\n')
+        self.check_copy(text + extra, 'only the publish job may declare an id-token permission')
+
+    def test_anchors_and_aliases_fail(self):
+        text = PUBLISH.read_text(encoding='utf-8')
+        self.assertIn('    permissions:\n      id-token: write\n', text)
+        anchored = text.replace('    permissions:\n      id-token: write\n',
+                                '    permissions: &oidc\n      id-token: write\n', 1)
+        self.check_copy(anchored, 'must not use YAML anchors or aliases')
+        self.check_copy(self.gate_with('    permissions: *oidc\n'), 'must not use YAML anchors or aliases')
+
+    def test_escapes_tags_and_block_scalar_permissions_fail(self):
+        for permissions in ('    permissions:\n      "id\\x2dtoken": write\n',
+                            '    permissions: !!str write-all\n',
+                            '    permissions: !<tag:yaml.org,2002:str> write-all\n',
+                            '    permissions: !str write-all\n',
+                            '    permissions: >-\n      write-all\n'):
+            with self.subTest(permissions=permissions):
+                self.check_copy(self.gate_with(permissions),
+                                'must not use escapes, YAML tags or block-scalar permissions')
+
+    def test_shell_redirections_are_not_anchors(self):
+        self.check_copy(self.gate_with('    # echo done >&2 && true\n'))
+
+    def test_a_commented_id_token_is_ignored(self):
+        self.check_copy(self.gate_with('    # id-token: write is reserved for the publish job\n'))
+
     def test_preflight_removed_fails(self):
         before, _, after = _split_preflight(PUBLISH.read_text(encoding='utf-8'))
         self.check_copy(before + after, f'must have a "{CR.PREFLIGHT_STEP}" step')

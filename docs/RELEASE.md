@@ -47,7 +47,7 @@ publication.
 | Crate | Reservation | Trusted publisher |
 |---|---|---|
 | `purrassist-core` | `0.0.0`, minted first | confirmed 2026-09-28 |
-| `purrassist-derive` | `0.0.0`, minted 2026-10-12 | pending owner configuration (as of 2026-10-12) |
+| `purrassist-derive` | `0.0.0`, minted 2026-10-12 | confirmed 2026-10-12, no environment (owner decision) |
 | `purrassist-syntax` | `0.0.0`, minted first | confirmed 2026-09-28 |
 | `purrassist` | `0.0.0`, minted first | confirmed 2026-09-28 |
 | `purrassist-host` | `0.0.0`, minted first | confirmed 2026-09-28 |
@@ -59,7 +59,7 @@ crates.io (HTTP 200 is required for every crate) or when the release set is
 not owned identically. The preflight cannot see trusted-publisher
 configuration, which is not verifiable unauthenticated; confirming it stays a
 manual step. Re-confirm all six through the crates.io API immediately before
-tagging, and do not tag until `purrassist-derive` is configured.
+tagging; each must match the values recorded in "Trusted publishing".
 
 ## Publish preflight
 
@@ -90,10 +90,22 @@ have a crates.io trusted publisher configured against:
 - Workflow: `publish.yml`
 - Environment: `crates-io`
 
-As of 2026-10-12 the `purrassist-derive` trusted publisher is pending owner
-configuration against the same three values. Because a repository, workflow or
-environment rename would silently break trusted publishing, re-confirm all six
-through the crates.io API immediately before tagging.
+On 2026-10-12 the `purrassist-derive` trusted publisher was observed through
+the crates.io API with the same repository and workflow but no environment.
+The owner decided to keep it without an environment. Today only the `publish`
+job, which runs in `crates-io`, has `id-token: write`, so it is the only job
+that can obtain a `purrassist-derive` publishing token. Without an environment,
+any job that a later edit of `publish.yml` grants `id-token: write` could too.
+`scripts/check-release.py` therefore holds `publish.yml` to a closed shape:
+exactly the `gate` and `publish` jobs, no YAML anchors or aliases, no backslash
+escapes, no `!!`, verbatim or letter-named YAML tags, no block-scalar
+permissions, no `write-all` anywhere outside a comment, and every `id-token` key
+(block, inline or quoted) inside the `publish` job. Changing that shape needs a
+matching change to the check.
+
+Because a repository, workflow or environment rename would silently break
+trusted publishing, re-confirm all six through the crates.io API immediately
+before tagging.
 
 A trusted publisher lets `publish.yml`'s `publish` job mint a short-lived
 registry token via GitHub OIDC (`permissions: id-token: write`) instead of a stored
@@ -239,7 +251,7 @@ For the exact `main` commit to be tagged:
    conformance, syntax-oracle, fuzz, performance, and package checks listed
    in `QUALIFICATION.md`.
 3. Re-confirm all six trusted publishers through the crates.io API (see
-   "Trusted publishing"); `purrassist-derive` must be configured first.
+   "Trusted publishing"); each must still match the values recorded there.
 4. Tag `rust-vVERSION`. Tagging is irreversible and requires explicit
    authorization; `publish.yml` then does the rest.
 5. After `publish.yml` succeeds, create the GitHub release. Its body is the
