@@ -15,16 +15,21 @@ sentence that restates it:
 * the receipt wire version from `RECEIPT_VERSION` in `crates/core/src/contract.rs`;
 * the dialect ids from the stems of `docs/tool-calls/dialects/*.md`;
 * the known limitations from `docs/known-limitations.json`, in the
-  qualification record, the fuzzing guide and the changelog;
+  qualification record, the fuzzing guide and the `### Known limitations`
+  subsection of the current version's changelog section (the release body),
+  and the targets on which the default `make fuzz` stops from the entries'
+  `fuzz_stop_targets`;
 * the changelog version, crates and interfaces, the supported-versions table
   and reporting channels of `SECURITY.md`, the reservation table and the
   qualification-workflow summary of `docs/RELEASE.md` (from the `name:` of every
-  step of `.github/workflows/release-qualification.yml`), and the README link
-  to the changelog;
+  named step of `.github/workflows/release-qualification.yml`, where a `run:`
+  step without a `name:` is an error), and the README link to the changelog;
 * the tool names from the generated block of `docs/TOOLS.md` (the Rust test
   `tools_reference_matches_registry` pins that block to the registry);
 * the crate map, the workspace boundaries and the packaged READMEs from the
-  workspace members and `cargo metadata`;
+  workspace members and `cargo metadata`, and the repository links of those
+  READMEs and of each `documentation` field, which must name `rust-v<version>`
+  and resolve in the tree;
 * the three-interfaces block of the README, including its MCP client
   configuration, and the MCP Registry name in the cli README, derived from the
   workspace `repository` URL.
@@ -69,13 +74,25 @@ BANNED_PHRASES = (
     r'no placeholder record',
     r'not yet done',
     r'five of six',
-    r'Pre-release',
+    r'Pre-release implementation',
     r'stage report',
     r'proved by the [^.]*hosted',
+    r'uploaded manually',
+    r'compares the output byte for byte',
+    r'every result carries',
+    r'\btask \d+\b',
 )
+
+# The `[X.Y.Z]` changelog section is also the body of the GitHub release, so it must not
+# carry pre-tag status or claim a publication that has not happened. The `- unreleased`
+# in its heading is the status and is not part of the body.
+RELEASE_BODY_BANNED = (r'not yet tagged', r'unreleased', r'published in this order')
 
 KNOWN_LIMITATIONS_JSON = 'docs/known-limitations.json'
 KNOWN_LIMITATIONS_HEADING = '## Known limitations'
+CHANGELOG_LIMITATIONS_HEADING = '### Known limitations'
+LIMITATION_KEYS = {'issue', 'title', 'impact', 'blocks_release'}
+STOP_TARGETS_KEY = 'fuzz_stop_targets'
 BASELINE_HEADING = '### Recorded 10,000-mutation baselines'
 DIALECT_PAGES = 'docs/tool-calls/dialects'
 
@@ -113,8 +130,12 @@ SOCIAL_FONT = 'Noto Sans'
 EQUIVALENCE_TEST = 'every_registry_entry_has_a_fixture_validated_through_cli_and_mcp'
 PROTOCOL_TESTS = 'crates/cli/tests/protocol.rs'
 
-# Documents that restate the status line "not yet tagged `rust-vX.Y.Z`".
+# Documents that restate the status line "not yet tagged `rust-vX.Y.Z`" (or, once the
+# tag is published, "published as `rust-vX.Y.Z`"). All of them use the same form.
 STATUS_DOCS = ('README.md', 'SECURITY.md', 'docs/IMPLEMENTATION.md', 'docs/QUALIFICATION.md', 'docs/RELEASE.md')
+STATUS_FORMS = ('not yet tagged', 'published as')
+# What a document says when no known limitation stops the default `make fuzz`.
+NO_STOP_SENTENCE = 'stops on no known signature'
 
 DIALECT_ID = r'[a-z][a-z0-9.-]*\.v\d+'
 DIALECT_TOKEN = rf'(?:\[`{DIALECT_ID}`\]\([^)]*\)|`{DIALECT_ID}`)'
@@ -274,12 +295,12 @@ class Docs:
     def anchors_of(self, path):
         """The anchors of the Markdown file at `path`, read once."""
         if path not in self._anchors:
-            self._anchors[path] = anchors(path.read_text())
+            self._anchors[path] = anchors(path.read_text(encoding='utf-8'))
         return self._anchors[path]
 
     def text(self, name):
         if name not in self._text:
-            self._text[name] = (self.root / name).read_text()
+            self._text[name] = (self.root / name).read_text(encoding='utf-8')
         return self._text[name]
 
     def collapsed(self, name):
@@ -343,12 +364,23 @@ def check_workspace_version(docs, report, version):
     singles = (('docs/RELEASE.md', r'PurRAssist (\d+\.\d+\.\d+) has an implemented scope'),
                ('docs/IMPLEMENTATION.md', r'Workspace version (\d+\.\d+\.\d+);'),
                ('docs/QUALIFICATION.md', r'implemented (\d+\.\d+\.\d+) capability'))
-    patterns = list(singles) + [(name, r'not yet tagged `rust-v(\d+\.\d+\.\d+)`') for name in STATUS_DOCS]
-    for name, pattern in patterns:
+    for name, pattern in singles:
         for match in report.fact(docs, rule, name, pattern):
             if match.group(1) != version:
                 report.add(rule, f'{name}:{docs.line(name, match.start(1))}',
                            f'states version {match.group(1)} but the workspace version is {version}')
+    status = rf'({"|".join(STATUS_FORMS)}) `rust-v(\d+\.\d+\.\d+)`'
+    forms = {}
+    for name in STATUS_DOCS:
+        for match in report.fact(docs, rule, name, status, re.IGNORECASE):
+            forms.setdefault(name, set()).add(match.group(1).lower())
+            if match.group(2) != version:
+                report.add(rule, f'{name}:{docs.line(name, match.start(2))}',
+                           f'states version {match.group(2)} but the workspace version is {version}')
+    if len(set().union(*forms.values())) > 1:
+        report.add(rule, ', '.join(STATUS_DOCS),
+                   'the status lines mix forms, but all must read the same one: '
+                   + '; '.join(f'{name} says {sorted(found)}' for name, found in sorted(forms.items())))
 
 
 def check_fuzz_targets(docs, report, targets, makefile):
@@ -519,8 +551,9 @@ def check_banned_phrases(docs, report):
                        f'stale or process-bound wording {matched!r} (/{phrase}/)')
 
 
-def load_limitations(docs, report):
-    """The validated issue records of `docs/known-limitations.json`, or None."""
+def load_limitations(docs, report, targets):
+    """The validated issue records of `docs/known-limitations.json`, or None. `targets` are
+    the fuzz targets an entry's optional `fuzz_stop_targets` may name."""
     rule = 'known-limitations-source'
     try:
         data = json.loads(docs.text(KNOWN_LIMITATIONS_JSON))
@@ -534,8 +567,8 @@ def load_limitations(docs, report):
     seen = set()
     for entry in entries:
         label = f'{KNOWN_LIMITATIONS_JSON} entry {entry.get("issue") if isinstance(entry, dict) else entry!r}'
-        if not isinstance(entry, dict) or set(entry) != {'issue', 'title', 'impact', 'blocks_release'}:
-            report.add(rule, label, 'needs exactly issue, title, impact and blocks_release')
+        if not isinstance(entry, dict) or set(entry) not in (LIMITATION_KEYS, LIMITATION_KEYS | {STOP_TARGETS_KEY}):
+            report.add(rule, label, f'needs exactly issue, title, impact and blocks_release, and optionally {STOP_TARGETS_KEY}')
             continue
         if not isinstance(entry['issue'], int) or isinstance(entry['issue'], bool) or entry['issue'] <= 0:
             report.add(rule, label, 'issue must be a positive integer')
@@ -547,9 +580,47 @@ def load_limitations(docs, report):
                 report.add(rule, label, f'{key} must be one non-empty line')
         if entry['blocks_release'] is not False:
             report.add(rule, label, 'blocks_release must be false: a blocking issue is not a known limitation of 0.1.0')
+        stops = entry.get(STOP_TARGETS_KEY, [])
+        if not isinstance(stops, list) or not all(isinstance(stop, str) for stop in stops):
+            report.add(rule, label, f'{STOP_TARGETS_KEY} must be a list of fuzz target names')
+        else:
+            for stop in stops:
+                if stop not in targets:
+                    report.add(rule, label, f'{STOP_TARGETS_KEY} names {stop!r}, which is not a target of '
+                                            f'scripts/fuzz.py TARGETS {list(targets)}')
+            if len(set(stops)) != len(stops):
+                report.add(rule, label, f'{STOP_TARGETS_KEY} lists a target twice')
     if not entries:
         report.add(rule, KNOWN_LIMITATIONS_JSON, 'lists no limitations')
     return data if len(report.errors) == problems else None
+
+
+def changelog_section(text, version):
+    """The (line number of the first body line, body lines) of the `## [version]` section of
+    a changelog, found by heading position: from its heading to the next `## ` heading. None
+    when there is no such heading."""
+    lines = text.splitlines()
+    start = next((index for index, line in enumerate(lines) if re.match(rf'## \[{re.escape(version)}\]', line)), None)
+    if start is None:
+        return None
+    end = next((index for index in range(start + 1, len(lines)) if lines[index].startswith('## ')), len(lines))
+    return start + 2, lines[start + 1:end]
+
+
+def subsection(lines, heading):
+    """The text under the one `heading` line (a `##` or `###` line) of `lines`, up to the next
+    heading of the same or a higher level; None unless the heading occurs exactly once."""
+    starts = [index for index, line in enumerate(lines) if line == heading]
+    if len(starts) != 1:
+        return None
+    level = len(heading) - len(heading.lstrip('#'))
+    body = []
+    for line in lines[starts[0] + 1:]:
+        later = re.match(r'(#{1,6}) ', line)
+        if later and len(later.group(1)) <= level:
+            break
+        body.append(line)
+    return '\n'.join(body)
 
 
 def check_changelog(docs, report, version, release_order):
@@ -561,11 +632,18 @@ def check_changelog(docs, report, version, release_order):
         return
     if versions[0] != version:
         report.add(rule, CHANGELOG, f'the newest version heading is [{versions[0]}] but the workspace version is {version}')
-    bodies = [body for heading, body in sections(text).items() if heading.startswith(f'## [{version}]')]
-    if not bodies:
+    found = changelog_section(text, version)
+    if found is None:
         report.add(rule, CHANGELOG, f'has no "## [{version}]" section')
         return
-    body = bodies[0]
+    first, lines = found
+    body = '\n'.join(lines)
+    flat, offsets = collapse(body), collapse_offsets(body)
+    for phrase in RELEASE_BODY_BANNED:
+        for match in re.finditer(phrase, flat, re.IGNORECASE):
+            report.add(rule, f'{CHANGELOG}:{first + body.count(chr(10), 0, offsets[match.start()])}',
+                       f'the [{version}] section is the release body, which must not contain {match.group(0)!r} '
+                       f'(the heading carries the status)')
     for crate in release_order:
         if f'`{crate}`' not in body:
             report.add(rule, CHANGELOG, f'the [{version}] section does not name the crate `{crate}`')
@@ -600,23 +678,70 @@ def check_release_reservations(docs, report, release_order):
         report.add(rule, RELEASE_DOC, f'the reservation table lists {listed} but RELEASE_ORDER is {list(release_order)}')
 
 
-def workflow_step_names(workflow):
-    """The `name:` of every step of the jobs of a workflow file, read as text (the
-    standard library has no YAML parser)."""
-    names, in_jobs = [], False
-    for line in workflow.splitlines():
-        if re.match(r'jobs:\s*$', line):
+def workflow_steps(workflow):
+    """The steps of the jobs of a workflow file as (line number, name or None, has `run:`), read
+    as text (the standard library has no YAML parser). A step is an item of a job's block
+    `steps:` list, found by indentation: the lines indented deeper than `steps:` form the
+    block, the items are the `- ` lines at the indentation of the first one, and a step's keys
+    are those at the column after its `- `. A `run: |` body is indented deeper still, so a line
+    of it that starts with `- ` is no item; a `name:` may precede or follow the `run:`; and
+    items outside `steps:` (a matrix `include`) are not steps."""
+    lines = workflow.splitlines()
+    steps, in_jobs, index = [], False, 0
+    while index < len(lines):
+        opener = re.match(r'(\s*)steps:\s*(?:#.*)?$', lines[index]) if in_jobs else None
+        if re.match(r'jobs:\s*$', lines[index]):
             in_jobs = True
-        elif in_jobs:
-            step = re.match(r'\s+-\s+name:\s*(.+?)\s*$', line)
-            if step:
-                names.append(step.group(1).strip('\'"'))
-    return names
+        index += 1
+        if opener is None:
+            continue
+        block = []
+        while index < len(lines):
+            line = lines[index]
+            stripped = line.lstrip()
+            if stripped and not stripped.startswith('#') and len(line) - len(stripped) <= len(opener.group(1)):
+                break
+            block.append((index + 1, line))
+            index += 1
+        steps.extend(block_steps(block))
+    return steps
+
+
+def block_steps(block):
+    """The (line number, name or None, has `run:`) of each item of a `steps:` block's lines."""
+    steps, item, item_column, key_column = [], None, 0, 0
+    for number, line in block:
+        opening = re.match(r'(\s*)-\s+', line)
+        if opening and (item is None or len(opening.group(1)) == item_column):
+            if item is None:
+                item_column = len(opening.group(1))
+            key_column = len(opening.group(0))
+            item = [number, None, False]
+            steps.append(item)
+            line = ' ' * key_column + line[key_column:]
+        if item is None:
+            continue
+        key = re.match(rf'\s{{{key_column}}}([A-Za-z_][\w-]*):\s*(.*?)\s*$', line)
+        if key and key.group(1) == 'name':
+            item[1] = key.group(2).strip('\'"') or None
+        elif key and key.group(1) == 'run':
+            item[2] = True
+    return [tuple(step) for step in steps]
+
+
+def workflow_step_names(workflow):
+    """The `name:` of every named step of the jobs of a workflow file."""
+    return [name for _, name, _ in workflow_steps(workflow) if name is not None]
 
 
 def check_release_qualification(docs, report):
     rule = 'release-qualification-steps'
-    steps = workflow_step_names(docs.text(QUALIFICATION_WORKFLOW))
+    workflow = docs.text(QUALIFICATION_WORKFLOW)
+    for number, name, runs in workflow_steps(workflow):
+        if runs and name is None:
+            report.add(rule, f'{QUALIFICATION_WORKFLOW}:{number}', 'a step that runs a command needs a `name:`, '
+                                                                   'which the RELEASE.md summary then names')
+    steps = workflow_step_names(workflow)
     if not steps:
         report.add(rule, QUALIFICATION_WORKFLOW, 'no named step found in the jobs')
         return
@@ -635,17 +760,51 @@ def check_readme_changelog(docs, report):
         report.add('readme-changelog', 'README.md', 'fact sentence not found: no link to CHANGELOG.md')
 
 
-def check_known_limitations(docs, report, data, targets):
+def stop_issues(text, prefix=''):
+    """The issues a collapsed `text` says the default `make fuzz` stops on, or None when it says
+    nothing about a stop. Two forms are read:
+
+    * "[prefix]stops on the #A signatures", "... the #A and #B signatures" or "... the #A, #B,
+      and #C signatures" (an Oxford comma is accepted): the issues named;
+    * "[prefix]stops on no known signature": the empty set, which is the sentence a document
+      must carry when no entry of `docs/known-limitations.json` has a non-empty
+      `fuzz_stop_targets`. A document then must not name a stop issue, and one that names stops
+      must not claim there is none.
+    """
+    stop = re.search(re.escape(prefix) + r'stops on the ((?:#\d+, )*#\d+(?:,? and #\d+)?) signatures', text)
+    if stop is not None:
+        return {int(number) for number in re.findall(r'#(\d+)', stop.group(1))}
+    return set() if re.search(re.escape(prefix + NO_STOP_SENTENCE), text) else None
+
+
+def states_both_stop_forms(text, prefix=''):
+    """Whether a collapsed `text` both names stop issues and says there is no stop: a
+    contradiction `stop_issues` cannot report, because it returns the first form it reads."""
+    return bool(re.search(re.escape(prefix) + r'stops on the (?:#\d+, )*#\d+(?:,? and #\d+)? signatures', text)
+                and re.search(re.escape(prefix + NO_STOP_SENTENCE), text))
+
+
+def check_known_limitations(docs, report, data, targets, version):
     rule = 'known-limitations-section'
     entries = data['limitations']
     expected = {entry['issue'] for entry in entries}
+    stops = {entry['issue'] for entry in entries if entry.get(STOP_TARGETS_KEY)}
     holders = ['docs/QUALIFICATION.md', 'docs/FUZZING.md', CHANGELOG]
     for name in holders:
         text = docs.text(name)
-        if text.splitlines().count(KNOWN_LIMITATIONS_HEADING) != 1:
+        if name == CHANGELOG:
+            found = changelog_section(text, version)
+            body = None if found is None else subsection(found[1], CHANGELOG_LIMITATIONS_HEADING)
+            if body is None:
+                report.add(rule, name, f'needs exactly one {CHANGELOG_LIMITATIONS_HEADING!r} heading inside the '
+                                       f'[{version}] section')
+                continue
+        elif text.splitlines().count(KNOWN_LIMITATIONS_HEADING) != 1:
             report.add(rule, name, f'needs exactly one {KNOWN_LIMITATIONS_HEADING!r} heading')
             continue
-        section = collapse(sections(text)[KNOWN_LIMITATIONS_HEADING])
+        else:
+            body = sections(text)[KNOWN_LIMITATIONS_HEADING]
+        section = collapse(body)
         remainder = section
         for entry in entries:
             for key in ('title', 'impact'):
@@ -657,17 +816,33 @@ def check_known_limitations(docs, report, data, targets):
         if referenced != expected:
             report.add(rule, name, f'issue set {sorted(referenced)} differs from {KNOWN_LIMITATIONS_JSON} '
                                    f'{sorted(expected)}')
-        stop = re.search(r'default `make fuzz` stops on the #(\d+) and #(\d+) signatures', section)
         if name != CHANGELOG:
-            if stop is None:
-                report.add(rule, name, 'fact sentence not found: the default `make fuzz` stop on the #N and #N signatures')
-            elif not {int(stop.group(1)), int(stop.group(2))} <= expected:
-                report.add(rule, name, 'the `make fuzz` stop cites an issue that is not a known limitation')
-    check_fuzz_rows(docs, report, expected)
+            stated = stop_issues(section, 'default `make fuzz` ')
+            if states_both_stop_forms(section, 'default `make fuzz` '):
+                report.add(rule, name, f'the default `make fuzz` stop both names issues and says "{NO_STOP_SENTENCE}"')
+            if stated is None:
+                report.add(rule, name, f'fact sentence not found: the default `make fuzz` stop on the #N and #N signatures, '
+                                       f'or "{NO_STOP_SENTENCE}" when {KNOWN_LIMITATIONS_JSON} names no stop')
+            else:
+                report_stop_set(report, rule, name, stated, stops, expected)
+    check_fuzz_rows(docs, report, expected, stops)
     check_baseline_table(docs, report, targets)
 
 
-def check_fuzz_rows(docs, report, expected):
+def report_stop_set(report, rule, where, stated, stops, expected):
+    """Compare the issues a document says the default `make fuzz` stops on with the issues whose
+    `fuzz_stop_targets` name a stop in `docs/known-limitations.json`."""
+    if stated - expected:
+        report.add(rule, where, f'the `make fuzz` stop cites {sorted(stated - expected)}, which '
+                                f'is not a known limitation')
+        stated = stated & expected
+    if stated != stops:
+        report.add(rule, where, f'the `make fuzz` stop names issues {sorted(stated)} but {KNOWN_LIMITATIONS_JSON} '
+                                f'gives {STOP_TARGETS_KEY} to {sorted(stops)}: missing {sorted(stops - stated)}, '
+                                f'extra {sorted(stated - stops)}')
+
+
+def check_fuzz_rows(docs, report, expected, stops):
     rule = 'fuzz-row-limits'
     name = 'docs/QUALIFICATION.md'
     rows = [(number, line) for number, line in enumerate(docs.text(name).splitlines(), 1)
@@ -677,10 +852,15 @@ def check_fuzz_rows(docs, report, expected):
     for number, line in rows:
         if '](#known-limitations)' not in line:
             report.add(rule, f'{name}:{number}', 'a `make fuzz` row must link to #known-limitations')
-        stop = re.search(r'stops on the #(\d+) and #(\d+) signatures', line)
-        if stop is None or not {int(stop.group(1)), int(stop.group(2))} <= expected:
+        stated = stop_issues(line)
+        if states_both_stop_forms(line):
+            report.add(rule, f'{name}:{number}', f'a `make fuzz` row both names stop issues and says "{NO_STOP_SENTENCE}"')
+        if stated is None:
             report.add(rule, f'{name}:{number}',
-                       'a `make fuzz` row must state that the default run stops on the #N and #N signatures')
+                       'a `make fuzz` row must state that the default run stops on the #N and #N signatures, '
+                       f'or "{NO_STOP_SENTENCE}" when {KNOWN_LIMITATIONS_JSON} names no stop')
+        else:
+            report_stop_set(report, rule, f'{name}:{number}', stated, stops, expected)
 
 
 def check_baseline_table(docs, report, targets):
@@ -724,7 +904,7 @@ def check_archived_evidence(docs, report):
         flat = collapse(block)
         for path in reports:
             try:
-                commits = report_commits(json.loads((docs.root / 'docs' / path).read_text()))
+                commits = report_commits(json.loads((docs.root / 'docs' / path).read_text(encoding='utf-8')))
             except (OSError, ValueError) as error:
                 report.add(rule, f'{name}:{line}', f'{path} is unreadable ({type(error).__name__})')
                 continue
@@ -753,7 +933,7 @@ def check_stage2_heading(docs, report):
             report.add(rule, name, f'{heading!r} must read "## Historical: Stage 2 record bound to `<commit>`"')
             continue
         for path in re.findall(r'\]\((qualification/[^)#\s]+\.json)\)', sections(text)[heading]):
-            for commit in report_commits(json.loads((docs.root / 'docs' / path).read_text())):
+            for commit in report_commits(json.loads((docs.root / 'docs' / path).read_text(encoding='utf-8'))):
                 if not commit.startswith(match.group(1)):
                     report.add(rule, name, f'heading commit {match.group(1)} is not the commit {path} is bound to')
 
@@ -805,7 +985,7 @@ def workspace_packages(root):
     name, `publish` list (None when publishable), `documentation`, and the repository-relative
     paths of its directory and README. Results are cached by the manifests' content."""
     root = Path(root)
-    manifest = tomllib.loads((root / 'Cargo.toml').read_text())
+    manifest = tomllib.loads((root / 'Cargo.toml').read_text(encoding='utf-8'))
     members = manifest['workspace']['members']
     key = hashlib.sha256()
     for path in ['Cargo.toml', *(f'{member}/Cargo.toml' for member in members)]:
@@ -813,10 +993,10 @@ def workspace_packages(root):
     key = key.hexdigest()
     if key not in _metadata_cache:
         run = subprocess.run(['cargo', 'metadata', '--no-deps', '--format-version', '1', '--offline'],
-                             cwd=root, capture_output=True, text=True)
+                             cwd=root, capture_output=True, encoding='utf-8')
         if run.returncode != 0:
             raise OSError(f'cargo metadata failed: {run.stderr.strip()}')
-        directories = {tomllib.loads((root / member / 'Cargo.toml').read_text())['package']['name']: member
+        directories = {tomllib.loads((root / member / 'Cargo.toml').read_text(encoding='utf-8'))['package']['name']: member
                        for member in members}
         packages = []
         for package in json.loads(run.stdout)['packages']:
@@ -962,6 +1142,34 @@ def check_packaged_readmes(docs, report, release_order, packages):
                        f'packaged README links {match.group(0)!r}; pin the version, since the page outlives the release')
 
 
+def check_pinned_links(docs, report, version, repository, packages):
+    """Every `blob`/`tree`/`raw` link into the repository in a packaged README, and in the
+    `documentation` of a publishable package, names the tag `rust-v<version>` (the page outlives
+    `main`), and its path, and the `#fragment` of a Markdown target, resolve in the tree. Links to
+    the repository root, `issues/` and `security/` are not matched."""
+    rule = 'pinned-links'
+    tag = f'rust-v{version}'
+    pattern = re.compile('(?i:' + re.escape(repository) + ')' + r'/(blob|tree|raw)/([^/\s)>"\'`]+)((?:/[^\s)>"\'`#]*)?)(?:#([^\s)>"\'`]*))?')
+    for package in publishable(packages):
+        sources = [(package['readme'], docs.text(package['readme']) if (docs.root / package['readme']).is_file() else '')]
+        sources.append((f"{package['directory']}/Cargo.toml", package['documentation'] or ''))
+        for where, text in sources:
+            for match in pattern.finditer(text):
+                line = text.count('\n', 0, match.start()) + 1
+                at = f'{where}:{line}' if where.endswith('.md') else where
+                kind, ref, path, fragment = match.groups()
+                path = urllib.parse.unquote(path.rstrip('.,;:')).strip('/')
+                if ref != tag:
+                    report.add(rule, at, f'{match.group(0)!r} names {ref!r}, but a published crate page must link {tag}')
+                    continue
+                target = docs.root / path
+                if not target.exists():
+                    report.add(rule, at, f'{match.group(0)!r} names {path!r}, which does not exist in the tree')
+                elif fragment and target.suffix == '.md' and target.is_file():
+                    if urllib.parse.unquote(fragment.rstrip('.,;:')) not in docs.anchors_of(target):
+                        report.add(rule, at, f'{match.group(0)!r} names a heading that does not exist in {path}')
+
+
 def check_workspace_boundaries(docs, report, packages):
     rule = 'workspace-boundaries'
     name = 'docs/IMPLEMENTATION.md'
@@ -1010,7 +1218,7 @@ def check_social_preview(root, report):
     """The social preview asset: PNG dimensions and size, registry digests, one font family."""
     rule = 'social-preview'
     registry = 'docs/assets.json'
-    entries = json.loads((root / registry).read_text())['assets']
+    entries = json.loads((root / registry).read_text(encoding='utf-8'))['assets']
     entry = next((item for item in entries if item.get('name') == 'social-preview'), None)
     if entry is None:
         report.add(rule, registry, 'no "social-preview" asset is registered')
@@ -1037,7 +1245,7 @@ def check_social_preview(root, report):
 
 def markdown_names(root):
     """Tracked `*.md` files in scope, from git's index."""
-    listing = subprocess.check_output(['git', 'ls-files', '-z', '--', '*.md'], cwd=root, text=True)
+    listing = subprocess.check_output(['git', 'ls-files', '-z', '--', '*.md'], cwd=root, encoding='utf-8')
     return [name for name in listing.split('\0') if name and not name.startswith(EXCLUDED_PREFIXES)]
 
 
@@ -1049,9 +1257,9 @@ def check(root, names):
     report = Report()
     release = load_module(root / 'scripts/check-release.py', 'purrassist_docs_check_release')
     fuzz = load_module(root / 'scripts/fuzz.py', 'purrassist_docs_fuzz')
-    version = tomllib.loads((root / 'Cargo.toml').read_text())['workspace']['package']['version']
+    version = tomllib.loads((root / 'Cargo.toml').read_text(encoding='utf-8'))['workspace']['package']['version']
     stems = [path.stem for path in (root / DIALECT_PAGES).glob('*.md')]
-    repository = tomllib.loads((root / 'Cargo.toml').read_text())['workspace']['package']['repository']
+    repository = tomllib.loads((root / 'Cargo.toml').read_text(encoding='utf-8'))['workspace']['package']['repository']
     owner = urllib.parse.urlparse(repository).path.strip('/').split('/')[0]
     try:
         packages = workspace_packages(root)
@@ -1061,8 +1269,8 @@ def check(root, names):
     rules = (
         lambda: check_release_set(docs, report, release.RELEASE_ORDER),
         lambda: check_workspace_version(docs, report, version),
-        lambda: check_fuzz_targets(docs, report, list(fuzz.TARGETS), (root / 'Makefile').read_text()),
-        lambda: check_receipt_version(docs, report, (root / 'crates/core/src/contract.rs').read_text()),
+        lambda: check_fuzz_targets(docs, report, list(fuzz.TARGETS), (root / 'Makefile').read_text(encoding='utf-8')),
+        lambda: check_receipt_version(docs, report, (root / 'crates/core/src/contract.rs').read_text(encoding='utf-8')),
         lambda: check_dialects(docs, report, stems),
         lambda: check_links(docs, report),
         lambda: check_stage_references(docs, report),
@@ -1071,7 +1279,7 @@ def check(root, names):
         lambda: check_stage2_heading(docs, report),
         lambda: check_windows_run(docs, report),
         lambda: check_tool_headings(docs, report),
-        lambda: check_three_interfaces(docs, report, (root / PROTOCOL_TESTS).read_text()),
+        lambda: check_three_interfaces(docs, report, (root / PROTOCOL_TESTS).read_text(encoding='utf-8')),
         lambda: check_changelog(docs, report, version, release.RELEASE_ORDER),
         lambda: check_security_policy(docs, report, version, repository),
         lambda: check_release_reservations(docs, report, release.RELEASE_ORDER),
@@ -1083,6 +1291,7 @@ def check(root, names):
         rules += (
             lambda: check_crate_map(docs, report, release.RELEASE_ORDER, packages),
             lambda: check_packaged_readmes(docs, report, release.RELEASE_ORDER, packages),
+            lambda: check_pinned_links(docs, report, version, repository, packages),
             lambda: check_workspace_boundaries(docs, report, packages),
             lambda: check_cli_package(docs, report, owner, packages),
         )
@@ -1092,9 +1301,9 @@ def check(root, names):
         except FileNotFoundError as error:
             report.add('missing-file', error.filename, 'a file that a rule reads is missing')
     try:
-        data = load_limitations(docs, report)
+        data = load_limitations(docs, report, list(fuzz.TARGETS))
         if data is not None:
-            check_known_limitations(docs, report, data, list(fuzz.TARGETS))
+            check_known_limitations(docs, report, data, list(fuzz.TARGETS), version)
     except FileNotFoundError as error:
         report.add('missing-file', error.filename, 'a file that a rule reads is missing')
     return report.errors

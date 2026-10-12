@@ -9,13 +9,13 @@ fmt:
 	cargo fmt --all --check
 
 hygiene:
-	python3 scripts/check-repository.py
-	python3 scripts/test-repository-audit.py
+	python3 -X warn_default_encoding -W error::EncodingWarning scripts/check-repository.py
+	python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-repository-audit.py
 	python3 scripts/check-release.py
-	python3 scripts/test-check-release.py
-	python3 scripts/check-docs.py
-	python3 scripts/test-check-docs.py
-	python3 scripts/test-fuzz.py
+	python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-check-release.py
+	python3 -X warn_default_encoding -W error::EncodingWarning scripts/check-docs.py
+	python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-check-docs.py
+	python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-fuzz.py
 	python3 scripts/test-resource-report.py
 	python3 scripts/check-resource-limits.py --schema-only docs/qualification/resources-linux-x86_64.json
 
@@ -58,7 +58,7 @@ resources:
 # documented smoke count (scripts/fuzz.py's default of 1,000 mutations),
 # ignoring FUZZ_ARGS, so the gate stays deterministic across all ten targets. `--continue-on-known` (issue #6 isolation) is never passed here.
 fuzz:
-	python3 scripts/test-fuzz.py
+	python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-fuzz.py
 	python3 scripts/test-fuzz-feedback.py
 	@if [ -z "$(TARGET)" ]; then \
 		for target in json markdown schema pattern unified fuzzy matching patch tool-call tool-call-ref; do \

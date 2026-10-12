@@ -10,14 +10,17 @@ in which the sentence the rule reads is absent, which must fail with "fact
 sentence not found", and a phrase wrapped across a line break must still be
 found. Nothing here touches the network or the checkout.
 """
+import ast
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCES = ('Cargo.toml', 'Makefile', 'scripts/check-release.py', 'scripts/fuzz.py',
@@ -37,7 +40,16 @@ def _load():
 
 
 CD = _load()
-TRACKED = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT, text=True).split('\0')[:-1]
+TRACKED = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT, encoding='utf-8').split('\0')[:-1]
+
+
+def link_or_copy(source, target):
+    """Make `target` a link to `source`, or a copy of it where the platform refuses links
+    (Windows without the symlink privilege raises OSError)."""
+    try:
+        os.symlink(source, target)
+    except OSError:
+        shutil.copy2(source, target)
 
 
 class Tree:
@@ -51,13 +63,14 @@ class Tree:
         for name in [*self.names, *SOURCES]:
             self.copy(name)
         shutil.copytree(ROOT / 'docs/qualification', self.root / 'docs/qualification')
-        # Every other tracked file is linked in, so that relative links to it resolve. A
-        # test only ever writes a copied or a new file, never one of these links.
+        # Every other tracked file is linked in (copied where links are refused), so that
+        # relative links to it resolve. A test only ever writes a copied or a new file, never
+        # one of these links.
         for name in TRACKED:
             target = self.root / name
             if not target.exists() and not target.is_symlink():
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.symlink_to(ROOT / name)
+                link_or_copy(ROOT / name, target)
 
     def copy(self, name):
         target = self.root / name
@@ -67,15 +80,15 @@ class Tree:
     def detach(self, name):
         """Replace the link to a tracked file with a private copy that a test may edit."""
         target = self.root / name
-        if target.is_symlink():
+        if target.is_symlink() or target.exists():
             target.unlink()
         self.copy(name)
 
     def read(self, name):
-        return (self.root / name).read_text()
+        return (self.root / name).read_text(encoding='utf-8')
 
     def write(self, name, text):
-        (self.root / name).write_text(text)
+        (self.root / name).write_text(text, encoding='utf-8')
 
     def sub(self, name, pattern, replacement, count=1):
         """Replace the regex `pattern` in `name`, which must occur `count` times (0 = any)."""
@@ -133,7 +146,7 @@ class Checkout(Case):
                      '.stage/p/plan.md', 'untracked.md', 'notes.txt']
             for name in names:
                 (root / name).parent.mkdir(parents=True, exist_ok=True)
-                (root / name).write_text('x\n')
+                (root / name).write_text('x\n', encoding='utf-8')
             subprocess.run(['git', 'add', '-f', *names[:5], 'notes.txt'], cwd=root, check=True)
             self.assertEqual(sorted(CD.markdown_names(root)), ['README.md', 'docs/A.md'])
 
@@ -166,6 +179,50 @@ class Helpers(Case):
 
     def test_number_value(self):
         self.assertEqual((CD.number_value('Twelve'), CD.number_value('12'), CD.number_value('many')), (12, 12, None))
+
+
+class Portability(Case):
+    def test_the_tree_builder_copies_where_symlinks_are_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source, target = Path(directory) / 'source.txt', Path(directory) / 'target.txt'
+            source.write_text('content\n', encoding='utf-8')
+            with mock.patch.object(os, 'symlink', side_effect=OSError('privilege not held')) as symlink:
+                link_or_copy(source, target)
+            symlink.assert_called_once()
+            self.assertFalse(target.is_symlink())
+            self.assertEqual(target.read_text(encoding='utf-8'), 'content\n')
+
+    def test_the_tree_builder_links_where_symlinks_work(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source, target = Path(directory) / 'source.txt', Path(directory) / 'target.txt'
+            source.write_text('content\n', encoding='utf-8')
+            link_or_copy(source, target)
+            self.assertEqual(target.read_text(encoding='utf-8'), 'content\n')
+
+    def test_a_tree_still_checks_clean_when_every_symlink_is_refused(self):
+        with mock.patch.object(os, 'symlink', side_effect=OSError('privilege not held')):
+            tree = Tree(self)
+        self.assertEqual(tree.errors(), [])
+        self.assertFalse((tree.root / 'Cargo.lock').is_symlink())
+
+    def test_text_is_read_and_written_with_an_explicit_encoding(self):
+        """Without `encoding=`, Windows decodes with its locale code page. A call that names none
+        is an error under `-X warn_default_encoding -W error::EncodingWarning` on every OS, which
+        is how `make hygiene` runs these scripts; this finds the same calls without running them."""
+        names = ('check-docs.py', 'test-check-docs.py', 'check-repository.py', 'test-repository-audit.py',
+                 'check-release.py', 'fuzz.py', 'test-check-release.py', 'test-fuzz.py')
+        for name in names:
+            tree = ast.parse((ROOT / 'scripts' / name).read_text(encoding='utf-8'), name)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                function = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, 'id', '')
+                keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+                with self.subTest(script=name, line=node.lineno):
+                    if function in ('read_text', 'write_text') or (function == 'open' and isinstance(node.func, ast.Name)):
+                        self.assertIn('encoding', keywords)
+                    for flag in ('text', 'universal_newlines'):
+                        self.assertNotIn(flag, keywords)
 
 
 class ReleaseSet(Case):
@@ -202,6 +259,61 @@ class WorkspaceVersion(Case):
         tree = self.tree()
         tree.sub('SECURITY.md', r'rust-v0\.1\.0', 'rust-v0.0.9')
         self.assertFails(tree.errors(), 'workspace-version', 'SECURITY.md', '0.0.9')
+
+    PUBLISHED = 'published as `rust-v0.1.0`'
+
+    def publish(self, tree, names):
+        for name in names:
+            tree.sub(name, r'not yet tagged\s+`rust-v0\.1\.0`', self.PUBLISHED, count=0)
+
+    def test_the_published_form_in_every_status_doc_passes(self):
+        tree = self.tree()
+        self.publish(tree, CD.STATUS_DOCS)
+        self.assertNoRule(tree.errors(), 'workspace-version')
+
+    def test_each_form_is_accepted_for_the_workspace_version_only(self):
+        for old in ('not yet tagged', 'published as'):
+            with self.subTest(form=old):
+                tree = self.tree()
+                if old == 'published as':
+                    self.publish(tree, CD.STATUS_DOCS)
+                tree.sub('SECURITY.md', rf'{old}\s+`rust-v0\.1\.0`', f'{old} `rust-v0.0.9`')
+                self.assertFails(tree.errors(), 'workspace-version', 'SECURITY.md', '0.0.9')
+
+    def test_a_status_line_in_neither_form_is_not_found(self):
+        tree = self.tree()
+        tree.sub('README.md', r'not yet tagged\s+`rust-v0\.1\.0`', 'out as `rust-v0.1.0`')
+        self.assertFails(tree.errors(), 'workspace-version', 'README.md', NOT_FOUND)
+
+    def test_a_mix_of_published_and_unpublished_status_lines_fails(self):
+        for published in (('SECURITY.md',), ('README.md', 'docs/RELEASE.md'), CD.STATUS_DOCS[:-1]):
+            with self.subTest(published=published):
+                tree = self.tree()
+                self.publish(tree, published)
+                self.assertFails(tree.errors(), 'workspace-version', 'mix forms', 'not yet tagged', 'published as')
+
+    def test_the_status_forms_are_read_case_insensitively_but_the_version_exactly(self):
+        for form in ('Published as', 'PUBLISHED AS', 'Not yet tagged', 'not Yet tagged'):
+            with self.subTest(form=form):
+                tree = self.tree()
+                self.publish(tree, CD.STATUS_DOCS)
+                tree.sub('README.md', r'published as `rust-v0\.1\.0`', f'{form} `rust-v0.1.0`')
+                errors = tree.errors()
+                if form.lower().startswith('published'):
+                    self.assertNoRule(errors, 'workspace-version')
+                else:
+                    self.assertFails(errors, 'workspace-version', 'mix forms')
+                tree.sub('README.md', r'`rust-v0\.1\.0`', '`rust-v0.1.1`')
+                self.assertFails(tree.errors(), 'workspace-version', 'README.md', '0.1.1')
+
+    def test_a_capitalised_status_line_at_a_sentence_start_passes_unpublished(self):
+        tree = self.tree()
+        tree.sub('SECURITY.md', r'not yet tagged', 'Not yet tagged', count=0)
+        self.assertNoRule(tree.errors(), 'workspace-version')
+
+    def test_the_release_procedure_documents_the_published_form(self):
+        text = CD.collapse((ROOT / 'docs/RELEASE.md').read_text(encoding='utf-8'))
+        self.assertIn('read "published as `rust-vX.Y.Z`"', text)
 
 
 class FuzzTargets(Case):
@@ -380,9 +492,13 @@ BANNED_SAMPLES = {
     r'no placeholder record': 'There is no placeholder record.',
     r'not yet done': 'That is not yet done.',
     r'five of six': 'Configured for five of six crates.',
-    r'Pre-release': 'This is a pre-release build.',
+    r'Pre-release implementation': 'This is a pre-release implementation.',
     r'stage report': 'See its stage report.',
     r'proved by the [^.]*hosted': 'Windows is proved by the windows-engines hosted lane.',
+    r'uploaded manually': 'The image is uploaded manually.',
+    r'compares the output byte for byte': 'The test compares the output byte for byte.',
+    r'every result carries': 'Every result carries its evidence.',
+    r'\btask \d+\b': 'See Task 12.',
 }
 
 
@@ -417,8 +533,32 @@ class BannedPhrases(Case):
 
     def test_matching_ignores_case(self):
         tree = self.tree()
-        tree.append('CONTRIBUTING.md', '\nPRE-RELEASE\n')
-        self.assertFails(tree.errors(), 'banned-phrase', 'PRE-RELEASE')
+        tree.append('CONTRIBUTING.md', '\nPRE-RELEASE IMPLEMENTATION\n')
+        self.assertFails(tree.errors(), 'banned-phrase', 'PRE-RELEASE IMPLEMENTATION')
+
+    def test_a_pre_release_version_is_not_a_pre_release_implementation(self):
+        tree = self.tree()
+        tree.append('CONTRIBUTING.md', '\nA pre-release version such as `0.2.0-alpha.1` is a SemVer pre-release.\n')
+        self.assertNoRule(tree.errors(), 'banned-phrase')
+
+    def test_task_numbers_are_banned_but_ordinary_words_are_not(self):
+        tree = self.tree()
+        tree.append('CONTRIBUTING.md', '\nThe task list has 12 items; tasks 12 and 13 pass 2 arguments.\n')
+        self.assertNoRule(tree.errors(), 'banned-phrase')
+        tree.append('CONTRIBUTING.md', '\nSee task\n7 for the rest.\n')
+        self.assertFails(tree.errors(), 'banned-phrase', 'CONTRIBUTING.md', 'task 7')
+
+    def test_a_task_number_in_a_packaged_readme_fails(self):
+        tree = self.tree()
+        tree.append('crates/host/README.md', '\nSee Task 12.\n')
+        self.assertFails(tree.errors(), 'packaged-readmes', 'crates/host/README.md', 'Task 12')
+
+    def test_published_in_this_order_is_not_a_global_ban(self):
+        self.assertNotIn('published in this order', CD.BANNED_PHRASES)
+        tree = self.tree()
+        tree.append('README.md', '\nThe release set, published in this order:\n')
+        self.assertNoRule(tree.errors(), 'banned-phrase')
+        self.assertNoRule(tree.errors(), 'changelog')
 
 
 class KnownLimitationsSource(Case):
@@ -461,7 +601,7 @@ class KnownLimitationsSource(Case):
         self.assertFails(tree.errors(), 'missing-file', 'known-limitations.json')
 
     def test_the_real_set_is_the_agreed_one(self):
-        data = json.loads((ROOT / 'docs/known-limitations.json').read_text())
+        data = json.loads((ROOT / 'docs/known-limitations.json').read_text(encoding='utf-8'))
         self.assertEqual([entry['issue'] for entry in data['limitations']], [6, 7, 10, 11, 12, 13, 14, 16, 17, 18])
 
 
@@ -521,16 +661,228 @@ class KnownLimitationsSection(Case):
 
     def test_a_changelog_is_held_to_the_same_source(self):
         tree = self.tree()
-        tree.write('CHANGELOG.md', '<!-- SPDX-FileCopyrightText: x -->\n# Changelog\n\n## Known limitations\n\n- [#6](x)\n')
+        tree.write('CHANGELOG.md', '<!-- SPDX-FileCopyrightText: x -->\n# Changelog\n\n## [0.1.0] - unreleased\n\n'
+                                   '### Known limitations\n\n- [#6](x)\n')
         tree.names.append('CHANGELOG.md')
         self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md')
 
 
+class FuzzStopTargets(Case):
+    """The issues on which the default `make fuzz` stops come from `fuzz_stop_targets`."""
+
+    def stops(self, tree):
+        return [entry['issue'] for entry in tree.limitations()['limitations'] if entry.get('fuzz_stop_targets')]
+
+    def set_stop(self, tree, issue, value):
+        data = tree.limitations()
+        entry = next(entry for entry in data['limitations'] if entry['issue'] == issue)
+        if value is None:
+            entry.pop('fuzz_stop_targets', None)
+        else:
+            entry['fuzz_stop_targets'] = value
+        tree.save_limitations(data)
+
+    def test_the_documented_stops_are_the_json_stops(self):
+        self.assertEqual(self.stops(self.tree()), [6, 11])
+
+    def test_a_stop_named_by_the_json_but_omitted_by_the_documents_fails(self):
+        tree = self.tree()
+        self.set_stop(tree, 10, ['json'])
+        errors = tree.errors()
+        for name in ('docs/QUALIFICATION.md', 'docs/FUZZING.md'):
+            self.assertFails(errors, 'known-limitations-section', name, 'missing [10]')
+        self.assertFails(errors, 'fuzz-row-limits', 'docs/QUALIFICATION.md', 'missing [10]')
+
+    def test_a_stop_named_by_the_documents_but_not_the_json_fails(self):
+        tree = self.tree()
+        self.set_stop(tree, 6, None)
+        errors = tree.errors()
+        for name in ('docs/QUALIFICATION.md', 'docs/FUZZING.md'):
+            self.assertFails(errors, 'known-limitations-section', name, 'extra [6]')
+        self.assertFails(errors, 'fuzz-row-limits', 'docs/QUALIFICATION.md', 'extra [6]')
+
+    def test_an_empty_list_is_no_stop(self):
+        tree = self.tree()
+        self.set_stop(tree, 11, [])
+        self.assertFails(tree.errors(), 'known-limitations-section', 'docs/FUZZING.md', 'extra [11]')
+
+    def test_documents_and_json_that_agree_on_three_stops_pass(self):
+        tree = self.tree()
+        self.set_stop(tree, 10, ['json'])
+        tree.replace('docs/QUALIFICATION.md', 'stops on the #11 and #6 signatures', 'stops on the #11, #6 and #10 signatures', count=0)
+        tree.replace('docs/FUZZING.md', 'stops on the #11 and #6 signatures', 'stops on the #11, #6 and #10 signatures')
+        errors = tree.errors()
+        self.assertNoRule(errors, 'known-limitations-section')
+        self.assertNoRule(errors, 'fuzz-row-limits')
+
+    def test_a_single_stop_is_read_in_its_own_form(self):
+        tree = self.tree()
+        self.set_stop(tree, 6, None)
+        tree.replace('docs/QUALIFICATION.md', 'stops on the #11 and #6 signatures', 'stops on the #11 signatures', count=0)
+        tree.replace('docs/FUZZING.md', 'stops on the #11 and #6 signatures', 'stops on the #11 signatures')
+        errors = tree.errors()
+        self.assertNoRule(errors, 'known-limitations-section')
+        self.assertNoRule(errors, 'fuzz-row-limits')
+
+    def test_an_oxford_comma_is_accepted(self):
+        tree = self.tree()
+        self.set_stop(tree, 10, ['json'])
+        tree.replace('docs/QUALIFICATION.md', 'stops on the #11 and #6 signatures', 'stops on the #11, #6, and #10 signatures', count=0)
+        tree.replace('docs/FUZZING.md', 'stops on the #11 and #6 signatures', 'stops on the #11, #6, and #10 signatures')
+        errors = tree.errors()
+        self.assertNoRule(errors, 'known-limitations-section')
+        self.assertNoRule(errors, 'fuzz-row-limits')
+
+    def test_an_oxford_comma_before_a_second_issue_is_accepted(self):
+        tree = self.tree()
+        tree.replace('docs/FUZZING.md', 'stops on the #11 and #6 signatures', 'stops on the #11, and #6 signatures')
+        self.assertNoRule(tree.errors(), 'known-limitations-section')
+
+    NO_STOP = 'stops on no known signature'
+
+    def without_stops(self, tree):
+        self.set_stop(tree, 6, None)
+        self.set_stop(tree, 11, [])
+
+    def say_no_stop(self, tree, names=('docs/QUALIFICATION.md', 'docs/FUZZING.md')):
+        for name in names:
+            tree.replace(name, 'stops on the #11 and #6 signatures', self.NO_STOP, count=0)
+
+    def test_no_stop_in_the_json_requires_the_documents_to_say_so(self):
+        tree = self.tree()
+        self.without_stops(tree)
+        self.say_no_stop(tree)
+        errors = tree.errors()
+        self.assertNoRule(errors, 'known-limitations-section')
+        self.assertNoRule(errors, 'fuzz-row-limits')
+
+    def test_no_stop_in_the_json_fails_documents_that_still_name_stops(self):
+        tree = self.tree()
+        self.without_stops(tree)
+        errors = tree.errors()
+        for name in ('docs/QUALIFICATION.md', 'docs/FUZZING.md'):
+            self.assertFails(errors, 'known-limitations-section', name, 'extra [6, 11]')
+        self.assertFails(errors, 'fuzz-row-limits', 'docs/QUALIFICATION.md', 'extra [6, 11]')
+
+    def test_no_stop_in_the_json_does_not_demand_a_stop_sentence_but_a_no_stop_one(self):
+        tree = self.tree()
+        self.without_stops(tree)
+        self.say_no_stop(tree)
+        tree.replace('docs/FUZZING.md', self.NO_STOP, 'passes')
+        self.assertFails(tree.errors(), 'known-limitations-section', 'docs/FUZZING.md', NOT_FOUND, self.NO_STOP)
+
+    def test_a_document_that_claims_no_stop_while_the_json_names_one_fails(self):
+        tree = self.tree()
+        self.say_no_stop(tree)
+        errors = tree.errors()
+        for name in ('docs/QUALIFICATION.md', 'docs/FUZZING.md'):
+            self.assertFails(errors, 'known-limitations-section', name, 'missing [6, 11]')
+        self.assertFails(errors, 'fuzz-row-limits', 'docs/QUALIFICATION.md', 'missing [6, 11]')
+
+    def test_a_document_that_states_both_stop_forms_fails(self):
+        tree = self.tree()
+        tree.replace('docs/FUZZING.md', 'stops on the #11 and #6 signatures.',
+                     f'stops on the #11 and #6 signatures. The default `make fuzz` {self.NO_STOP}.')
+        tree.replace('docs/QUALIFICATION.md', 'stops on the #11 and #6 signatures, so it',
+                     f'stops on the #11 and #6 signatures and {self.NO_STOP}, so it')
+        errors = tree.errors()
+        self.assertFails(errors, 'known-limitations-section', 'docs/FUZZING.md', 'both names issues')
+        self.assertFails(errors, 'fuzz-row-limits', 'docs/QUALIFICATION.md', 'both names stop issues')
+
+    def test_an_unknown_target_fails(self):
+        tree = self.tree()
+        self.set_stop(tree, 6, ['tool-call', 'no-such-target'])
+        self.assertFails(tree.errors(), 'known-limitations-source', 'entry 6', "'no-such-target'", 'TARGETS')
+
+    def test_a_target_that_scripts_fuzz_gains_is_known(self):
+        tree = self.tree()
+        self.set_stop(tree, 10, ['extra'])
+        tree.replace('scripts/fuzz.py', "    'tool-call-ref': {", "    'extra': {},\n    'tool-call-ref': {")
+        self.assertNoRule(tree.errors(), 'known-limitations-source')
+
+    def test_a_malformed_value_fails(self):
+        for value in ('tool-call', [1], [['tool-call']], {'tool-call': True}, None):
+            with self.subTest(value=value):
+                tree = self.tree()
+                data = tree.limitations()
+                data['limitations'][0]['fuzz_stop_targets'] = value
+                tree.save_limitations(data)
+                self.assertFails(tree.errors(), 'known-limitations-source', 'entry 6', 'fuzz_stop_targets must be a list')
+
+    def test_a_target_listed_twice_fails(self):
+        tree = self.tree()
+        self.set_stop(tree, 6, ['tool-call', 'tool-call'])
+        self.assertFails(tree.errors(), 'known-limitations-source', 'entry 6', 'twice')
+
+    def test_the_exact_key_check_is_not_loosened(self):
+        tree = self.tree()
+        data = tree.limitations()
+        data['limitations'][0]['stop_targets'] = ['tool-call']
+        tree.save_limitations(data)
+        self.assertFails(tree.errors(), 'known-limitations-source', 'entry 6', 'exactly issue, title, impact')
+
+    def test_the_stop_sentence_is_still_required(self):
+        tree = self.tree()
+        tree.replace('docs/FUZZING.md', 'The default `make fuzz` stops on the #11 and #6 signatures.', 'The default `make fuzz` passes.')
+        self.assertFails(tree.errors(), 'known-limitations-section', 'docs/FUZZING.md', NOT_FOUND)
+
+
 class KnownLimitationsChangelog(Case):
+    HEADING = '### Known limitations'
+
+    def limitations_block(self, tree):
+        text = tree.read('CHANGELOG.md')
+        return text[text.index(self.HEADING):]
+
+    def test_the_known_limitations_are_part_of_the_release_body(self):
+        text = (ROOT / 'CHANGELOG.md').read_text(encoding='utf-8')
+        _, body = CD.changelog_section(text, '0.1.0')
+        self.assertIn(self.HEADING, body)
+        self.assertNotIn('\n## Known limitations', text)
+
     def test_a_missing_heading_fails(self):
         tree = self.tree()
-        tree.replace('CHANGELOG.md', '## Known limitations', '## Open items')
+        tree.replace('CHANGELOG.md', self.HEADING, '### Open items')
         self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'exactly one')
+
+    def test_a_sibling_level_two_section_is_outside_the_release_body(self):
+        tree = self.tree()
+        tree.replace('CHANGELOG.md', self.HEADING, '## Known limitations')
+        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'exactly one', '[0.1.0]')
+
+    def test_the_subsection_outside_the_version_section_fails(self):
+        tree = self.tree()
+        block = self.limitations_block(tree)
+        tree.replace('CHANGELOG.md', block.rstrip('\n'), '')
+        tree.replace('CHANGELOG.md', '## [0.1.0] - unreleased', block.rstrip('\n') + '\n\n## [0.1.0] - unreleased')
+        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'exactly one', '[0.1.0]')
+
+    def test_a_second_subsection_in_the_version_section_fails(self):
+        tree = self.tree()
+        tree.append('CHANGELOG.md', '\n' + self.limitations_block(tree))
+        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'exactly one')
+
+    def test_each_version_has_its_own_subsection_and_only_the_current_one_is_compared(self):
+        newer = '## [0.2.0] - 2027-01-01\n\nMore.\n\n### Known limitations\n\n- [#99](x) A later issue.\n\n'
+        older = '\n## [0.0.9] - 2020-01-01\n\nEarlier.\n\n### Known limitations\n\n- [#98](x) An earlier issue.\n'
+        tree = self.tree()
+        tree.replace('CHANGELOG.md', '## [0.1.0] - unreleased', newer + '## [0.1.0] - unreleased')
+        tree.append('CHANGELOG.md', older)
+        errors = tree.errors()
+        self.assertNoRule(errors, 'known-limitations-section')
+        self.assertFails(errors, 'changelog', '[0.2.0]', 'workspace version is 0.1.0')
+
+    def test_another_versions_subsection_does_not_satisfy_the_current_one(self):
+        tree = self.tree()
+        block = self.limitations_block(tree)
+        tree.sub('CHANGELOG.md', r'- \[#18\][^\n]*\n', '')
+        tree.append('CHANGELOG.md', '\n## [0.0.9] - 2020-01-01\n\n' + block)
+        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'differs')
+
+    def test_a_workspace_version_without_a_section_fails(self):
+        tree = self.tree()
+        tree.replace('Cargo.toml', 'version = "0.1.0"', 'version = "0.2.0"', count=0)
+        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', '[0.2.0]')
 
     def test_a_dropped_issue_fails(self):
         tree = self.tree()
@@ -599,6 +951,38 @@ class Changelog(Case):
         tree.sub('CHANGELOG.md', r'## \[0\.1\.0\]', '## Version 0.1.0')
         self.assertFails(tree.errors(), 'changelog', NOT_FOUND)
 
+    SENTENCE = 'It is not yet tagged `rust-v0.1.0`; the date above is set when it is tagged.'
+
+    def test_the_heading_carries_the_status_and_the_checkout_body_is_clean(self):
+        self.assertRegex((ROOT / 'CHANGELOG.md').read_text(encoding='utf-8'), r'(?m)^## \[0\.1\.0\] - unreleased$')
+        self.assertNoRule(self.tree().errors(), 'changelog')
+
+    def test_the_release_body_must_not_say_it_is_not_yet_tagged(self):
+        tree = self.tree()
+        tree.replace('CHANGELOG.md', 'Release order:', self.SENTENCE + '\n\nRelease order:')
+        self.assertFails(tree.errors(), 'changelog', 'release body', "'not yet tagged'")
+
+    def test_the_sentence_wrapped_across_lines_is_still_found_with_its_line(self):
+        tree = self.tree()
+        tree.replace('CHANGELOG.md', 'Release order:', 'It is not yet\ntagged.\n\nRelease order:')
+        line = tree.read('CHANGELOG.md').splitlines().index('It is not yet') + 1
+        self.assertFails(tree.errors(), 'changelog', f'CHANGELOG.md:{line}', "'not yet tagged'")
+
+    def test_the_release_body_must_not_say_unreleased(self):
+        tree = self.tree()
+        tree.replace('CHANGELOG.md', 'Release order:', 'This Unreleased version follows.\n\nRelease order:')
+        self.assertFails(tree.errors(), 'changelog', 'release body', "'Unreleased'")
+
+    def test_the_release_body_must_not_claim_a_publication_order(self):
+        tree = self.tree()
+        tree.replace('CHANGELOG.md', 'Release order:', 'The crates are published in this order:')
+        self.assertFails(tree.errors(), 'changelog', 'release body', "'published in this order'")
+
+    def test_another_section_may_say_unreleased(self):
+        tree = self.tree()
+        tree.replace('CHANGELOG.md', 'No changes yet.', 'Unreleased changes are not yet tagged.')
+        self.assertNoRule(tree.errors(), 'changelog')
+
     def test_a_missing_unreleased_heading_still_needs_the_version(self):
         tree = self.tree()
         tree.sub('CHANGELOG.md', r'## \[Unreleased\]\n\nNo changes yet\.\n\n', '')
@@ -664,7 +1048,7 @@ class ReleaseReservations(Case):
 
 class ReleaseQualificationSteps(Case):
     def test_the_steps_are_read_from_the_workflow(self):
-        names = CD.workflow_step_names((ROOT / '.github/workflows/release-qualification.yml').read_text())
+        names = CD.workflow_step_names((ROOT / '.github/workflows/release-qualification.yml').read_text(encoding='utf-8'))
         self.assertIn('Verify workspace', names)
         self.assertNotIn('Release qualification', names)
 
@@ -673,8 +1057,62 @@ class ReleaseQualificationSteps(Case):
             "name: Top\non: push\njobs:\n  a:\n    name: Job\n    steps:\n"
             "      - uses: x\n      - name: 'One'\n        run: y\n      - name: Two # c\n"), ['One', 'Two # c'])
 
+    WORKFLOW = '.github/workflows/release-qualification.yml'
+    UNNAMED = 'a step that runs a command needs a `name:`'
+
+    def test_the_real_workflow_keeps_its_unnamed_checkout_and_passes(self):
+        steps = CD.workflow_steps((ROOT / self.WORKFLOW).read_text(encoding='utf-8'))
+        self.assertEqual(steps[0][1:], (None, False))
+        self.assertTrue(all(name is not None for _, name, runs in steps if runs))
+        self.assertNoRule(self.tree().errors(), 'release-qualification-steps')
+
+    def test_a_step_that_runs_without_a_name_fails(self):
+        tree = self.tree()
+        tree.detach(self.WORKFLOW)
+        tree.append(self.WORKFLOW, '      - run: make wasm-test\n')
+        line = tree.read(self.WORKFLOW).count('\n')
+        self.assertFails(tree.errors(), 'release-qualification-steps', f'{self.WORKFLOW}:{line}', self.UNNAMED)
+
+    def test_an_unnamed_uses_step_is_not_a_qualification_step(self):
+        tree = self.tree()
+        tree.detach(self.WORKFLOW)
+        tree.append(self.WORKFLOW, '      - uses: actions/cache@abc\n        with:\n          path: x\n')
+        self.assertNoRule(tree.errors(), 'release-qualification-steps')
+
+    def test_a_name_after_the_run_names_that_step(self):
+        text = 'jobs:\n  a:\n    steps:\n      - run: x\n        name: Late\n      - uses: y\n'
+        self.assertEqual(CD.workflow_steps(text), [(4, 'Late', True), (6, None, False)])
+        tree = self.tree()
+        tree.detach(self.WORKFLOW)
+        tree.append(self.WORKFLOW, '      - run: make wasm-test\n        name: Verify wasm\n')
+        errors = tree.errors()
+        self.assertFails(errors, 'release-qualification-steps', 'Verify wasm')
+        self.assertFalse([error for error in errors if self.UNNAMED in error], errors)
+
+    def test_a_run_body_line_that_starts_with_a_dash_is_not_a_step(self):
+        text = ('jobs:\n  a:\n    steps:\n      - name: One\n        run: |\n          - name: Fake\n'
+                '          - run: nothing\n        shell: bash\n      - name: Two\n')
+        self.assertEqual(CD.workflow_steps(text), [(4, 'One', True), (9, 'Two', False)])
+        tree = self.tree()
+        tree.detach(self.WORKFLOW)
+        tree.append(self.WORKFLOW, '      - name: Verify body\n        run: |\n          - name: Fake\n          - run: x\n')
+        errors = tree.errors()
+        self.assertFails(errors, 'release-qualification-steps', 'Verify body')
+        self.assertFalse([error for error in errors if 'Fake' in error or self.UNNAMED in error], errors)
+
+    def test_items_outside_steps_are_not_steps(self):
+        text = ('jobs:\n  a:\n    strategy:\n      matrix:\n        include:\n          - name: windows\n'
+                '            os: windows-latest\n          - run: not-a-step\n    steps:\n      - name: One\n'
+                '        run: y\n  b:\n    steps: []\n    needs: [a]\n')
+        self.assertEqual(CD.workflow_steps(text), [(10, 'One', True)])
+
+    def test_steps_of_each_job_are_read_and_a_comment_does_not_end_a_block(self):
+        text = ('jobs:\n  a:\n    steps:\n      - name: One\n        run: y\n# comment\n'
+                '  b:\n    steps:\n      # note\n      - name: Two\n        run: z\n')
+        self.assertEqual(CD.workflow_step_names(text), ['One', 'Two'])
+
     def test_every_step_must_be_named(self):
-        names = CD.workflow_step_names((ROOT / '.github/workflows/release-qualification.yml').read_text())
+        names = CD.workflow_step_names((ROOT / '.github/workflows/release-qualification.yml').read_text(encoding='utf-8'))
         for step in names:
             with self.subTest(step=step):
                 tree = self.tree()
@@ -1020,6 +1458,71 @@ class PackagedReadmes(Case):
         tree.detach('crates/helper-census/Cargo.toml')
         tree.replace('crates/helper-census/Cargo.toml', 'publish = false\n', '')
         self.assertFails(tree.errors(), 'packaged-readmes', 'purrassist-helper-census', 'RELEASE_ORDER')
+
+
+class PinnedLinks(Case):
+    BASE = 'https://github.com/Blackcat-Informatics/purrassist'
+
+    def test_the_checkout_passes(self):
+        self.assertNoRule(self.tree().errors(), 'pinned-links')
+
+    def test_a_pinned_link_to_an_existing_path_and_anchor_passes(self):
+        tree = self.tree()
+        tree.append('crates/host/README.md', f'\nSee {self.BASE}/blob/rust-v0.1.0/docs/QUALIFICATION.md#known-limitations,'
+                                             f' {self.BASE}/tree/rust-v0.1.0/docs and {self.BASE}/issues/6 and {self.BASE}.\n')
+        self.assertNoRule(tree.errors(), 'pinned-links')
+
+    def test_a_main_link_in_a_crate_readme_fails(self):
+        tree = self.tree()
+        tree.append('crates/core/README.md', f'\nSee [x]({self.BASE}/blob/main/docs/QUALIFICATION.md).\n')
+        self.assertFails(tree.errors(), 'pinned-links', 'crates/core/README.md', "'main'", 'rust-v0.1.0')
+
+    def test_another_tag_fails(self):
+        tree = self.tree()
+        tree.append('crates/core/README.md', f'\nSee {self.BASE}/blob/rust-v0.0.9/docs/QUALIFICATION.md.\n')
+        self.assertFails(tree.errors(), 'pinned-links', 'crates/core/README.md', "'rust-v0.0.9'")
+
+    def test_a_pinned_link_to_a_missing_path_fails(self):
+        tree = self.tree()
+        tree.append('crates/syntax/README.md', f'\nSee {self.BASE}/blob/rust-v0.1.0/docs/NOPE.md.\n')
+        self.assertFails(tree.errors(), 'pinned-links', 'crates/syntax/README.md', 'docs/NOPE.md', 'does not exist')
+
+    def test_a_pinned_link_to_a_missing_anchor_fails(self):
+        tree = self.tree()
+        tree.append('crates/cli/README.md', f'\nSee {self.BASE}/blob/rust-v0.1.0/docs/QUALIFICATION.md#no-such-heading.\n')
+        self.assertFails(tree.errors(), 'pinned-links', 'crates/cli/README.md', 'heading that does not exist')
+
+    def test_a_main_documentation_link_fails(self):
+        tree = self.tree()
+        tree.detach('crates/cli/Cargo.toml')
+        tree.replace('crates/cli/Cargo.toml', '/blob/rust-v0.1.0/docs/TOOLS.md', '/blob/main/docs/TOOLS.md')
+        self.assertFails(tree.errors(), 'pinned-links', 'crates/cli/Cargo.toml', "'main'")
+
+    def test_a_pinned_documentation_link_to_a_missing_path_fails(self):
+        tree = self.tree()
+        tree.detach('crates/cli/Cargo.toml')
+        tree.replace('crates/cli/Cargo.toml', 'docs/TOOLS.md"', 'docs/NOPE.md"')
+        self.assertFails(tree.errors(), 'pinned-links', 'crates/cli/Cargo.toml', 'docs/NOPE.md')
+
+    def test_the_tag_follows_the_workspace_version(self):
+        tree = self.tree()
+        tree.replace('Cargo.toml', 'version = "0.1.0"', 'version = "0.2.0"', count=0)
+        self.assertFails(tree.errors(), 'pinned-links', 'crates/cli/README.md', "'rust-v0.1.0'", 'rust-v0.2.0')
+
+    def test_the_repository_owner_and_name_match_in_any_case(self):
+        tree = self.tree()
+        tree.append('crates/core/README.md',
+                    '\nSee https://github.com/blackcat-informatics/PurRAssist/blob/main/docs/QUALIFICATION.md.\n')
+        self.assertFails(tree.errors(), 'pinned-links', 'crates/core/README.md', "'main'")
+        tree = self.tree()
+        tree.append('crates/core/README.md',
+                    '\nSee https://github.com/blackcat-informatics/PurRAssist/blob/rust-v0.1.0/docs/QUALIFICATION.md.\n')
+        self.assertNoRule(tree.errors(), 'pinned-links')
+
+    def test_the_root_readme_may_link_main(self):
+        tree = self.tree()
+        tree.append('README.md', f'\nSee {self.BASE}/blob/main/docs/QUALIFICATION.md.\n')
+        self.assertNoRule(tree.errors(), 'pinned-links')
 
 
 class WorkspaceBoundaries(Case):

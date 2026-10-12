@@ -6,7 +6,8 @@
       "issue": 6,
       "title": "Tool-call fuzz: finish the rejected-span oracle failures left at the #3 merge",
       "impact": "A plain tool-call fuzz campaign stops at the first rejected-span oracle panic, so the default `make fuzz` fails there.",
-      "blocks_release": false
+      "blocks_release": false,
+      "fuzz_stop_targets": ["tool-call", "tool-call-ref"]
     },
     {
       "issue": 7,
@@ -24,7 +25,8 @@
       "issue": 11,
       "title": "Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes)",
       "impact": "One 192-byte mutated turn takes about 5 s in a release build, so the default `make fuzz` exceeds its timeout on `tool-call-ref`; the CLI and MCP sized budget ends it explicitly in 0.3 s.",
-      "blocks_release": false
+      "blocks_release": false,
+      "fuzz_stop_targets": ["tool-call-ref"]
     },
     {
       "issue": 12,

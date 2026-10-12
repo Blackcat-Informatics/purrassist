@@ -79,7 +79,7 @@ class WorkflowValidation(unittest.TestCase):
     def check_copy(self, text, expect=None):
         with tempfile.TemporaryDirectory(prefix='test-check-release-') as scratch:
             copy = Path(scratch) / 'publish.yml'
-            copy.write_text(text)
+            copy.write_text(text, encoding='utf-8')
             if expect is None:
                 CR.validate_publish_workflow(copy)
                 return
@@ -89,20 +89,20 @@ class WorkflowValidation(unittest.TestCase):
 
     def test_real_workflow_passes(self):
         CR.validate_publish_workflow()
-        self.check_copy(PUBLISH.read_text())
+        self.check_copy(PUBLISH.read_text(encoding='utf-8'))
 
     def test_preflight_removed_fails(self):
-        before, _, after = _split_preflight(PUBLISH.read_text())
+        before, _, after = _split_preflight(PUBLISH.read_text(encoding='utf-8'))
         self.check_copy(before + after, f'must have a "{CR.PREFLIGHT_STEP}" step')
 
     def test_preflight_after_auth_fails(self):
-        before, block, after = _split_preflight(PUBLISH.read_text())
+        before, block, after = _split_preflight(PUBLISH.read_text(encoding='utf-8'))
         auth_end = after.index('      - name: Publish core')
         moved = before + after[:auth_end] + block + after[auth_end:]
         self.check_copy(moved, f'must precede the "{CR.AUTH_STEP}" step')
 
     def test_preflight_after_publish_fails(self):
-        before, block, after = _split_preflight(PUBLISH.read_text())
+        before, block, after = _split_preflight(PUBLISH.read_text(encoding='utf-8'))
         verify = after.index('      - name: Verify published packages')
         moved = before + after[:verify] + block + after[verify:]
         self.check_copy(moved, 'must precede the first cargo publish')
@@ -111,23 +111,23 @@ class WorkflowValidation(unittest.TestCase):
     def failure_of(self, text):
         with tempfile.TemporaryDirectory(prefix='test-check-release-') as scratch:
             copy = Path(scratch) / 'publish.yml'
-            copy.write_text(text)
+            copy.write_text(text, encoding='utf-8')
             with self.assertRaises(SystemExit) as raised:
                 CR.validate_publish_workflow(copy)
             return str(raised.exception)
 
     def test_owners_check_removed_fails(self):
-        text = PUBLISH.read_text().replace(' --preflight-owners', '', 1)
+        text = PUBLISH.read_text(encoding='utf-8').replace(' --preflight-owners', '', 1)
         self.check_copy(text, 'must run scripts/check-release.py --preflight-owners')
 
     def test_user_agent_removed_fails(self):
-        text = PUBLISH.read_text()
+        text = PUBLISH.read_text(encoding='utf-8')
         start = text.index(' --user-agent', text.index(STEP_START))
         end = text.index('\n', start)
         self.check_copy(text[:start] + text[end:], 'purrassist-release user agent')
 
     def test_unverifiable_trusted_publisher_note_required(self):
-        text = PUBLISH.read_text().replace('Trusted-publisher state', 'Something else')
+        text = PUBLISH.read_text(encoding='utf-8').replace('Trusted-publisher state', 'Something else')
         self.check_copy(text, 'trusted-publisher state is not verifiable')
 
 

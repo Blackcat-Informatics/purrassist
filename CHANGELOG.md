@@ -97,7 +97,7 @@ Executable evidence and its limits are in the
 - JSON Schema Draft 2019-09, draft-06 and earlier dialects are rejected at
   compilation.
 
-## Known limitations
+### Known limitations
 
 These issues were open on 2026-10-12. None blocks the 0.1.0 release. The list
 matches its single source, [known-limitations.json](docs/known-limitations.json);

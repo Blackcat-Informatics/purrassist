@@ -243,15 +243,20 @@ For the exact `main` commit to be tagged:
 4. Tag `rust-vVERSION`. Tagging is irreversible and requires explicit
    authorization; `publish.yml` then does the rest.
 5. After `publish.yml` succeeds, create the GitHub release. Its body is the
-   `[0.1.0]` section of `CHANGELOG.md` plus the output of
-   `scripts/verify-published.py`.
+   `[0.1.0]` section of `CHANGELOG.md`, including its `### Known limitations`
+   subsection, plus the output of `scripts/verify-published.py`.
 
 ## After publication
 
 - Install `purrassist-cli` from crates.io into a clean root and run the
   documented decode, plan/application, and MCP examples against that download.
   A local `cargo install --path` proves only the checkout build.
-- Update the status lines that read "not yet tagged" to the published state.
+- Update the status lines that read "not yet tagged `rust-vX.Y.Z`" to read
+  "published as `rust-vX.Y.Z`", with the same version, in all five documents
+  that carry one (`README.md`, `SECURITY.md`, `docs/IMPLEMENTATION.md`,
+  `docs/QUALIFICATION.md` and this file). `scripts/check-docs.py` accepts
+  either form, requires the workspace version in it, and rejects a mix of the
+  two.
 - Write an MCP Registry `server.json` for
   `io.github.Blackcat-Informatics/purrassist` and submit it to the MCP
   Registry. Its package entry has `registryType` `cargo`, `identifier`
