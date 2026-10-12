@@ -47,7 +47,7 @@ publication.
 | Crate | Reservation | Trusted publisher |
 |---|---|---|
 | `purrassist-core` | `0.0.0`, minted first | confirmed 2026-09-28 |
-| `purrassist-derive` | `0.0.0`, minted 2026-10-12 | pending owner configuration (as of 2026-10-12) |
+| `purrassist-derive` | `0.0.0`, minted 2026-10-12 | observed 2026-10-12, environment not yet restricted |
 | `purrassist-syntax` | `0.0.0`, minted first | confirmed 2026-09-28 |
 | `purrassist` | `0.0.0`, minted first | confirmed 2026-09-28 |
 | `purrassist-host` | `0.0.0`, minted first | confirmed 2026-09-28 |
@@ -90,10 +90,14 @@ have a crates.io trusted publisher configured against:
 - Workflow: `publish.yml`
 - Environment: `crates-io`
 
-As of 2026-10-12 the `purrassist-derive` trusted publisher is pending owner
-configuration against the same three values. Because a repository, workflow or
-environment rename would silently break trusted publishing, re-confirm all six
-through the crates.io API immediately before tagging.
+On 2026-10-12 the `purrassist-derive` trusted publisher was observed through
+the crates.io API with the same repository and workflow but no environment.
+Today only the `publish` job, which runs in `crates-io`, has `id-token: write`.
+An entry without an environment would also accept a token from any job a later
+edit of `publish.yml` grants that permission, so set its environment to
+`crates-io` before tagging, matching the other five. Because a repository, workflow or environment rename would
+silently break trusted publishing, re-confirm all six through the crates.io API
+immediately before tagging.
 
 A trusted publisher lets `publish.yml`'s `publish` job mint a short-lived
 registry token via GitHub OIDC (`permissions: id-token: write`) instead of a stored
@@ -239,7 +243,7 @@ For the exact `main` commit to be tagged:
    conformance, syntax-oracle, fuzz, performance, and package checks listed
    in `QUALIFICATION.md`.
 3. Re-confirm all six trusted publishers through the crates.io API (see
-   "Trusted publishing"); `purrassist-derive` must be configured first.
+   "Trusted publishing"); all six must name the `crates-io` environment.
 4. Tag `rust-vVERSION`. Tagging is irreversible and requires explicit
    authorization; `publish.yml` then does the rest.
 5. After `publish.yml` succeeds, create the GitHub release. Its body is the
