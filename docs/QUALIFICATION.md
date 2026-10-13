@@ -247,13 +247,20 @@ make fuzz-hosted
 make resources
 python3 scripts/check-resource-limits.py .cache/resource-report.json
 make package
+RUSTUP_TOOLCHAIN=1.98.0 make release-gate
 ```
 
-The `Verify` workflow additionally runs native Linux/macOS gates, stable MSRV
-workspace tests, Windows engines/files/CLI, executed WASM comparisons, and Linux
-qualification. Exact commit and run evidence is recorded in issue #1 and the PR;
-a green run applies to its commit only. The trusted-publishing workflow is
-separate from qualification and uses the registered publisher identity.
+The last command reproduces release qualification locally: it runs the same
+`make release-gate` on the release toolchain that `release-qualification.yml`
+and the `Verify` workflow's `release-gate` job run.
+
+The `Verify` workflow additionally runs native Linux/macOS gates, the
+`release-gate` job (`make release-gate` on the release toolchain, Rust 1.98.0,
+which is also the MSRV 1.98 build-and-test evidence), Windows engines/files/CLI,
+executed WASM comparisons, and Linux qualification. Exact commit and run
+evidence is recorded in issue #1 and the PR; a green run applies to its commit
+only. The trusted-publishing workflow is separate from qualification and uses
+the registered publisher identity.
 
 ## Release acceptance
 

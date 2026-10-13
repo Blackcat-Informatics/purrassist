@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 MAKEFLAGS += --no-print-directory
-.PHONY: check corpus fmt lint test doc hygiene wasm-test benchmark package syntax-oracles resources fuzz fuzz-hosted helper-test helper-census helper-check
+.PHONY: check corpus fmt lint test doc hygiene wasm-test benchmark package syntax-oracles resources fuzz fuzz-hosted helper-test helper-census helper-check release-gate
 
 check: fmt hygiene helper-test helper-check lint test doc
 
@@ -20,7 +20,7 @@ hygiene:
 	python3 scripts/check-resource-limits.py --schema-only docs/qualification/resources-linux-x86_64.json
 
 lint:
-	cargo clippy --workspace --all-targets -- -D warnings
+	cargo clippy --workspace --all-targets --locked -- -D warnings
 
 test:
 	RUSTFLAGS="$${RUSTFLAGS:-} -D warnings" cargo test --workspace --locked
@@ -47,6 +47,17 @@ syntax-oracles:
 package:
 	python3 scripts/check-release.py
 	python3 scripts/package-workspace.py
+
+# The one release gate (docs/RELEASE.md): release qualification and the `Verify`
+# workflow's `release-gate` job both run exactly this, on the release toolchain.
+# No prerequisites, so the recipe lines run in this order even under `make -j`;
+# scripts/check-release.py pins the lines and their order.
+release-gate:
+	$(MAKE) check
+	$(MAKE) corpus
+	python3 scripts/test-fuzz-feedback.py
+	python3 scripts/test-verify-published.py
+	$(MAKE) package
 
 resources:
 	python3 scripts/test-resource-report.py

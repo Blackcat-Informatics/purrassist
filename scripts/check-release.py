@@ -4,6 +4,7 @@
 """Check the complete publish set and dependency order without publishing."""
 
 import http.client
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -235,6 +236,236 @@ def validate_publish_workflow(path=None):
           'qualification gate, SHA-pinned actions, dependency order, and verify-published step.')
 
 
+WORKFLOW_FILES = ('verify.yml', 'release-qualification.yml', 'publish.yml')
+RELEASE_STEPS = ('Install release toolchain', 'Install pinned coverage-feedback toolchain',
+                 'Verify release set and version', 'Verify the release gate')
+GATE_STEP = 'Verify the release gate'
+GATE_RECIPE = ('$(MAKE) check', '$(MAKE) corpus', 'python3 scripts/test-fuzz-feedback.py',
+               'python3 scripts/test-verify-published.py', '$(MAKE) package')
+LINT_RECIPE = ('cargo clippy --workspace --all-targets --locked -- -D warnings',)
+STABLE_COMPONENTS = 'clippy,rustfmt'
+NIGHTLY_COMPONENTS = 'llvm-tools'
+# The pin extractors read only the toolchain name; profile and components follow it.
+ENV_PIN = re.compile(r'^\s*RUSTUP_TOOLCHAIN:\s*[\'"]?([^\s\'"#]+)')
+INSTALL_PIN = re.compile(r'\brustup\s+toolchain\s+install\s+([^\s\'"]+)(.*)$')
+
+
+def _load_check_docs():
+    """Import scripts/check-docs.py (its name is no module name) for its `workflow_steps` reader."""
+    path = ROOT / 'scripts/check-docs.py'
+    spec = importlib.util.spec_from_file_location('purrassist_check_docs', path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f'could not load module spec for {path}')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _code_lines(text):
+    """The (line number, line) pairs of `text` that are not whole-line comments."""
+    return [(number, line) for number, line in enumerate(text.splitlines(), 1)
+            if not line.lstrip().startswith('#')]
+
+
+def _job_text(text, job):
+    """The lines of the job `job` of a workflow, from its key to the next two-space key, or None."""
+    lines = text.splitlines()
+    start = next((index for index, line in enumerate(lines) if line.rstrip() == f'  {job}:'), None)
+    if start is None:
+        return None
+    end = next((index for index in range(start + 1, len(lines))
+                if re.match(r'  [^\s#]', lines[index])), len(lines))
+    return '\n'.join(lines[start:end]) + '\n'
+
+
+def _job_env(job_text):
+    """The `env:` mapping of a job as a dict, read by indentation."""
+    lines = job_text.splitlines()
+    env = {}
+    for index, line in enumerate(lines):
+        if re.fullmatch(r'    env:\s*', line):
+            for entry in lines[index + 1:]:
+                if entry.strip() and not entry.lstrip().startswith('#'):
+                    if len(entry) - len(entry.lstrip()) <= 4:
+                        break
+                    key, _, value = entry.strip().partition(':')
+                    env[key.strip()] = value.strip()
+            break
+    return env
+
+
+def _job_installs(job_text):
+    """Each toolchain install of a job as (toolchain name, components or None)."""
+    installs = []
+    for _, line in _code_lines(job_text):
+        match = INSTALL_PIN.search(line)
+        if match:
+            components = re.search(r'--component\s+(\S+)', match[2])
+            installs.append((match[1], components[1] if components else None))
+    return installs
+
+
+def _make_recipe(makefile, target):
+    """(prerequisites, recipe lines) of the single Makefile rule for `target`, or None when it
+    is absent or defined more than once."""
+    lines = makefile.splitlines()
+    heads = [index for index, line in enumerate(lines) if re.match(rf'{re.escape(target)}\s*:(?!=)', line)]
+    if len(heads) != 1:
+        return None
+    prerequisites = lines[heads[0]].partition(':')[2].split('#', 1)[0].split()
+    recipe = []
+    for line in lines[heads[0] + 1:]:
+        if line.startswith('\t'):
+            recipe.append(line[1:].strip())
+        elif line.strip() and not line.startswith('#'):
+            break
+    return prerequisites, tuple(recipe)
+
+
+def validate_release_gate(root=None):
+    """Check gate identity: release qualification and the pull-request `Verify` workflow run the
+    same `make release-gate`, on the same two toolchains, in the same environment.
+
+    * release-qualification.yml's `package` job has exactly the steps in `RELEASE_STEPS` plus
+      the unnamed checkout, and only `Verify the release gate` runs `make`, as
+      `make release-gate`, so no release-only step can sit beside the shared gate.
+    * verify.yml's `release-gate` job runs `make release-gate`.
+    * Both jobs install the same stable toolchain with `clippy,rustfmt` and the same nightly
+      with `llvm-tools`, and their `env` blocks are identical.
+    * The Makefile `release-gate` target has no prerequisites and exactly the `GATE_RECIPE`
+      lines in order, and `lint` is exactly the `LINT_RECIPE` Clippy command.
+
+    verify.yml gets none of publish.yml's closed-shape rules. Returns nothing; raises
+    `SystemExit` listing every failure.
+    """
+    root = Path(root) if root else ROOT
+    workflows = root / '.github/workflows'
+    errors = []
+    release_text = (workflows / 'release-qualification.yml').read_text(encoding='utf-8')
+    verify_text = (workflows / 'verify.yml').read_text(encoding='utf-8')
+    release = _job_text(release_text, 'package')
+    verify = _job_text(verify_text, 'release-gate')
+    if release is None:
+        errors.append('release-qualification.yml must define a `package` job')
+    if verify is None:
+        errors.append('verify.yml must define a `release-gate` job')
+
+    if release is not None:
+        steps = _load_check_docs().workflow_steps('jobs:\n' + release)
+        names = [name for _, name, _ in steps if name is not None]
+        unnamed = [step for step in steps if step[1] is None]
+        if names != list(RELEASE_STEPS):
+            errors.append(f'release-qualification.yml package job must have exactly the named steps '
+                          f'{list(RELEASE_STEPS)} (no release-only step outside the shared gate), found {names}')
+        if len(unnamed) != 1 or unnamed[0][2] or steps[0][1] is not None:
+            errors.append('release-qualification.yml package job must have exactly one unnamed step, '
+                          'the checkout, first and running no command')
+        code = [(number, line) for number, line in _code_lines(release) if re.search(r'\bmake\b', line)]
+        if [line.strip() for _, line in code] != ['run: make release-gate']:
+            errors.append('release-qualification.yml must run `make` exactly once, as `make release-gate`; '
+                          f'found {[line.strip() for _, line in code]}')
+        else:
+            # `steps` count the prepended `jobs:` line, so job line N is step line N + 1.
+            owner = [name for number, name, _ in steps if number <= code[0][0] + 1][-1:]
+            if owner != [GATE_STEP]:
+                errors.append(f'`make release-gate` must run in the `{GATE_STEP}` step, not {owner}')
+    if verify is not None:
+        runs = [line.strip() for _, line in _code_lines(verify) if re.search(r'\bmake\b', line)]
+        if runs != ['- run: make release-gate']:
+            errors.append('verify.yml release-gate job must run `make release-gate` as its only make '
+                          f'command; found {runs}')
+
+    if release is not None and verify is not None:
+        if _job_env(release) != _job_env(verify):
+            errors.append(f'the release-gate job env {_job_env(verify)} must equal release '
+                          f'qualification\'s package job env {_job_env(release)}')
+        for label, text in (('release-qualification.yml package', release), ('verify.yml release-gate', verify)):
+            installs = _job_installs(text)
+            stable = [i for i in installs if not i[0].startswith('nightly')]
+            nightly = [i for i in installs if i[0].startswith('nightly')]
+            if len(stable) != 1 or stable[0][1] != STABLE_COMPONENTS:
+                errors.append(f'{label} job must install one stable toolchain with --component '
+                              f'{STABLE_COMPONENTS}, found {stable}')
+            if len(nightly) != 1 or nightly[0][1] != NIGHTLY_COMPONENTS:
+                errors.append(f'{label} job must install one nightly toolchain with --component '
+                              f'{NIGHTLY_COMPONENTS}, found {nightly}')
+        if _job_installs(release) != _job_installs(verify):
+            errors.append(f'the release-gate job must install the same toolchains as release '
+                          f'qualification: {_job_installs(verify)} differs from {_job_installs(release)}')
+
+    makefile = (root / 'Makefile').read_text(encoding='utf-8')
+    gate_rule = _make_recipe(makefile, 'release-gate')
+    if gate_rule is None:
+        errors.append('Makefile must define the `release-gate` target exactly once')
+    else:
+        if gate_rule[0]:
+            errors.append(f'Makefile release-gate must have no prerequisites, found {gate_rule[0]}')
+        if gate_rule[1] != GATE_RECIPE:
+            errors.append(f'Makefile release-gate recipe must be exactly {list(GATE_RECIPE)} in order, '
+                          f'found {list(gate_rule[1])}')
+    lint_rule = _make_recipe(makefile, 'lint')
+    if lint_rule is None or lint_rule[1] != LINT_RECIPE:
+        errors.append(f'Makefile lint recipe must be exactly {list(LINT_RECIPE)}, '
+                      f'found {list(lint_rule[1]) if lint_rule else None}')
+
+    if errors:
+        raise SystemExit('\n'.join(errors))
+    print('Release gate identity verified: release qualification and the Verify release-gate job '
+          'both run `make release-gate` on the same toolchains and environment.')
+
+
+def toolchain_pins(text):
+    """Every toolchain pin of a workflow as (line number, toolchain name): each
+    `RUSTUP_TOOLCHAIN:` value and each toolchain install line's name, ignoring profile and
+    components."""
+    pins = []
+    for number, line in _code_lines(text):
+        for pattern in (ENV_PIN, INSTALL_PIN):
+            match = pattern.search(line)
+            if match:
+                pins.append((number, match[1]))
+    return pins
+
+
+def validate_toolchain_pins(root=None):
+    """Check that each toolchain pin has one source across verify.yml, release-qualification.yml
+    and publish.yml. A name starting with `nightly` is a nightly occurrence; any other is stable.
+    Every stable occurrence is identical and its major.minor equals Cargo.toml's `rust-version`;
+    every nightly occurrence equals rust-toolchain.toml's `channel`. Raises `SystemExit` listing
+    every failure."""
+    root = Path(root) if root else ROOT
+    errors = []
+    rust_version = re.search(r'^rust-version\s*=\s*"([^"]+)"', (root / 'Cargo.toml').read_text(encoding='utf-8'), re.M)
+    channel = re.search(r'^channel\s*=\s*"([^"]+)"', (root / 'rust-toolchain.toml').read_text(encoding='utf-8'), re.M)
+    if rust_version is None:
+        errors.append('Cargo.toml has no rust-version')
+    if channel is None:
+        errors.append('rust-toolchain.toml has no channel')
+    stable, nightly = [], []
+    for workflow in WORKFLOW_FILES:
+        text = (root / '.github/workflows' / workflow).read_text(encoding='utf-8')
+        for number, name in toolchain_pins(text):
+            (nightly if name.startswith('nightly') else stable).append((f'{workflow}:{number}', name))
+    if not stable:
+        errors.append('no stable toolchain pin found in the workflows')
+    distinct = sorted({name for _, name in stable})
+    if len(distinct) > 1:
+        errors.append(f'stable toolchain pins differ: {[f"{where} {name}" for where, name in stable]}')
+    if rust_version is not None:
+        for where, name in stable:
+            major_minor = re.match(r'\d+\.\d+', name)
+            if major_minor is None or major_minor[0] != rust_version[1]:
+                errors.append(f'{where}: stable pin {name} does not match Cargo.toml rust-version {rust_version[1]}')
+    if channel is not None:
+        for where, name in nightly:
+            if name != channel[1]:
+                errors.append(f'{where}: nightly pin {name} does not match rust-toolchain.toml channel {channel[1]}')
+    if errors:
+        raise SystemExit('\n'.join(errors))
+    print(f'Toolchain pins verified: {len(stable)} stable occurrences match rust-version {rust_version[1]}, '
+          f'{len(nightly)} nightly occurrences match {channel[1]}.')
+
+
 def main():
     if len(sys.argv) == 4 and sys.argv[1] == '--preflight-owners' and sys.argv[2] == '--user-agent':
         run_preflight(sys.argv[3])
@@ -273,6 +504,8 @@ def main():
     print(f'Release set and dependency order verified for {version}: '
           + ', '.join(RELEASE_ORDER))
     validate_publish_workflow()
+    validate_release_gate()
+    validate_toolchain_pins()
 
 
 if __name__ == '__main__':

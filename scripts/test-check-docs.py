@@ -1121,7 +1121,7 @@ class ReleaseReservations(Case):
 class ReleaseQualificationSteps(Case):
     def test_the_steps_are_read_from_the_workflow(self):
         names = CD.workflow_step_names((ROOT / '.github/workflows/release-qualification.yml').read_text(encoding='utf-8'))
-        self.assertIn('Verify workspace', names)
+        self.assertIn('Verify the release gate', names)
         self.assertNotIn('Release qualification', names)
 
     def test_only_job_steps_are_read(self):
