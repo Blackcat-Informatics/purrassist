@@ -40,8 +40,11 @@ be a literal version, never a `${{ }}` expression or a shell variable; every
 stable pin is identical and matches the workspace `rust-version`; and every
 nightly pin matches `rust-toolchain.toml`. `scripts/check-docs.py` holds every
 `RUSTUP_TOOLCHAIN=` value and patch-form Rust version in this document, the
-README and `docs/QUALIFICATION.md` to the stable pin. These checks run in
-`make check` and `make package`.
+README and `docs/QUALIFICATION.md` to the stable pin. `check-release.py` also
+rejects Makefile lines that would change the toolchain or ignore failures
+(`RUSTUP_TOOLCHAIN`, `unexport`, `.IGNORE`, or `-i` in `MAKEFLAGS`).
+`check-release.py` runs in `make check` and `make package`; `check-docs.py`
+runs in `make check`.
 
 **Derive/core compatibility within a minor series.** Generated code references
 `purrassist_core::tool_call::__DERIVE_ABI_<major>_<minor>`, so the derive and

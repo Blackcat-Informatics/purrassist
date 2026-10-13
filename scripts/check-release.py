@@ -663,6 +663,19 @@ def validate_release_gate(root=None):
             if required not in check_rule[0]:
                 errors.append(f'Makefile check must depend on `{required}` (Clippy and the tests are '
                               f'part of the gate), found prerequisites {check_rule[0]}')
+    # The Makefile must not change the toolchain or ignore failures behind the workflows'
+    # backs: `unexport RUSTUP_TOOLCHAIN` would silently fall back to rust-toolchain.toml's
+    # nightly in both lanes, and `.IGNORE` or `-i` in MAKEFLAGS would let a failing gate pass.
+    for number, line in enumerate(makefile.splitlines(), 1):
+        code = line.split('#', 1)[0]
+        if 'RUSTUP_TOOLCHAIN' in code or re.search(r'\bunexport\b', code):
+            errors.append(f'Makefile:{number}: must not set, export or unexport RUSTUP_TOOLCHAIN; the '
+                          f'toolchain comes from the workflows')
+        if re.match(r'\s*\.IGNORE\b', code):
+            errors.append(f'Makefile:{number}: must not declare .IGNORE; a failing gate target must fail')
+        if re.match(r'\s*(?:override\s+)?(?:export\s+)?MAKEFLAGS\b', code) and \
+                re.search(r'(?:^|\s|=)(?:-[a-zA-Z]*i[a-zA-Z]*|--ignore-errors)\b', code.split('=', 1)[-1]):
+            errors.append(f'Makefile:{number}: MAKEFLAGS must not ignore errors (-i/--ignore-errors)')
     lint_rule = _make_recipe(makefile, 'lint')
     if lint_rule is None or lint_rule[1] != LINT_RECIPE:
         errors.append(f'Makefile lint recipe must be exactly {list(LINT_RECIPE)}, '

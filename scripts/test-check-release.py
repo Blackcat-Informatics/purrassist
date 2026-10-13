@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 """Offline tests for scripts/check-release.py.
 
-Two groups, neither of which touches the network or this checkout:
+Three groups, none of which touches the network; the gate and pin groups read
+scratch copies of this checkout's Makefile, workflows and manifests:
 
 * `validate_publish_workflow()` passes on the real publish.yml and fails, with
   a specific message, on modified copies (preflight removed, moved after auth
@@ -16,7 +17,9 @@ Two groups, neither of which touches the network or this checkout:
   differing environments or installs, a weakened `lint` recipe or `CORPUS_SUITES` list, and every kind
   of toolchain pin drift (install line, env, publish.yml, rust-version, nightly).
   The gate jobs' allowlists (workflow, job, env, step, checkout and trigger shapes, each with
-  its must-fail and must-pass fixtures) and the Makefile `check` prerequisites `lint` and `test`.
+  its must-fail and must-pass fixtures), the Makefile `check` prerequisites `lint` and `test`,
+  and Makefile lines that would change the toolchain or ignore failures (`RUSTUP_TOOLCHAIN`,
+  `unexport`, `.IGNORE`, `-i` in `MAKEFLAGS`).
   Pin extraction is tested on flags before the name, line continuations, the real workflows,
   and (must fail) `${{ }}` and `$VAR` pins, `cargo +X`, inline `RUSTUP_TOOLCHAIN=`, a pin in a
   new workflow file and a malformed pin.
@@ -599,6 +602,34 @@ class GateAllowlist(ScratchTree):
     def test_check_without_test_fails(self):
         self.edit('Makefile', 'helper-check lint test doc', 'helper-check lint doc')
         self.fails('Makefile check must depend on `test`')
+
+
+    def test_a_makefile_that_unexports_the_toolchain_fails(self):
+        self.edit('Makefile', 'MAKEFLAGS += --no-print-directory\n',
+                  'MAKEFLAGS += --no-print-directory\nunexport RUSTUP_TOOLCHAIN\n')
+        self.fails('must not set, export or unexport RUSTUP_TOOLCHAIN')
+
+    def test_a_makefile_that_sets_the_toolchain_fails(self):
+        self.edit('Makefile', 'MAKEFLAGS += --no-print-directory\n',
+                  'MAKEFLAGS += --no-print-directory\nexport RUSTUP_TOOLCHAIN := 1.98.0\n')
+        self.fails('must not set, export or unexport RUSTUP_TOOLCHAIN')
+
+    def test_an_ignore_target_fails(self):
+        self.edit('Makefile', 'MAKEFLAGS += --no-print-directory\n',
+                  'MAKEFLAGS += --no-print-directory\n.IGNORE: lint\n')
+        self.fails('must not declare .IGNORE')
+
+    def test_makeflags_that_ignore_errors_fail(self):
+        for flag in ('-i', '--ignore-errors', '-ki'):
+            with self.subTest(flag=flag):
+                self.setUp()
+                self.edit('Makefile', 'MAKEFLAGS += --no-print-directory\n',
+                          f'MAKEFLAGS += --no-print-directory {flag}\n')
+                self.fails('MAKEFLAGS must not ignore errors')
+
+    def test_the_real_makeflags_line_passes(self):
+        self.assertIn('MAKEFLAGS += --no-print-directory\n', (self.root / 'Makefile').read_text(encoding='utf-8'))
+        CR.validate_release_gate(self.root)
 
 
 class ToolchainPins(ScratchTree):
