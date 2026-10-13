@@ -52,6 +52,12 @@ def link_or_copy(source, target):
         shutil.copy2(source, target)
 
 
+
+# The checkout's 0.1.0 changelog heading, whose status is `unreleased` until the
+# release commit replaces it with the tagging date.
+CHANGELOG_HEADING = re.search(r'(?m)^## \[0\.1\.0\] - .+$',
+                              (ROOT / 'CHANGELOG.md').read_text(encoding='utf-8')).group(0)
+
 class Tree:
     """A temporary copy of the documents and fact sources."""
 
@@ -908,7 +914,7 @@ class KnownLimitationsChangelog(Case):
         tree = self.tree()
         block = self.limitations_block(tree)
         tree.replace('CHANGELOG.md', block.rstrip('\n'), '')
-        tree.replace('CHANGELOG.md', '## [0.1.0] - unreleased', block.rstrip('\n') + '\n\n## [0.1.0] - unreleased')
+        tree.replace('CHANGELOG.md', CHANGELOG_HEADING, block.rstrip('\n') + '\n\n' + CHANGELOG_HEADING)
         self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'exactly one', '[0.1.0]')
 
     def test_a_second_subsection_in_the_version_section_fails(self):
@@ -920,7 +926,7 @@ class KnownLimitationsChangelog(Case):
         newer = '## [0.2.0] - 2027-01-01\n\nMore.\n\n### Known limitations\n\n- [#99](x) A later issue.\n\n'
         older = '\n## [0.0.9] - 2020-01-01\n\nEarlier.\n\n### Known limitations\n\n- [#98](x) An earlier issue.\n'
         tree = self.tree()
-        tree.replace('CHANGELOG.md', '## [0.1.0] - unreleased', newer + '## [0.1.0] - unreleased')
+        tree.replace('CHANGELOG.md', CHANGELOG_HEADING, newer + CHANGELOG_HEADING)
         tree.append('CHANGELOG.md', older)
         errors = tree.errors()
         self.assertNoRule(errors, 'known-limitations-section')
@@ -977,12 +983,12 @@ class Changelog(Case):
 
     def test_a_changelog_version_that_differs_fails(self):
         tree = self.tree()
-        tree.replace('CHANGELOG.md', '## [0.1.0] - unreleased', '## [0.0.9] - unreleased')
+        tree.replace('CHANGELOG.md', CHANGELOG_HEADING, '## [0.0.9] - unreleased')
         self.assertFails(tree.errors(), 'changelog', '[0.0.9]', 'workspace version is 0.1.0')
 
     def test_a_newer_unreleased_version_above_fails(self):
         tree = self.tree()
-        tree.replace('CHANGELOG.md', '## [0.1.0] - unreleased', '## [0.2.0] - unreleased\n\n## [0.1.0] - unreleased')
+        tree.replace('CHANGELOG.md', CHANGELOG_HEADING, '## [0.2.0] - unreleased\n\n## [0.1.0] - unreleased')
         self.assertFails(tree.errors(), 'changelog', '[0.2.0]')
 
     def test_a_crate_that_is_not_named_fails(self):
@@ -1008,7 +1014,8 @@ class Changelog(Case):
     SENTENCE = 'It is not yet tagged `rust-v0.1.0`; the date above is set when it is tagged.'
 
     def test_the_heading_carries_the_status_and_the_checkout_body_is_clean(self):
-        self.assertRegex((ROOT / 'CHANGELOG.md').read_text(encoding='utf-8'), r'(?m)^## \[0\.1\.0\] - unreleased$')
+        # `unreleased` until the release commit sets the tagging date.
+        self.assertRegex(CHANGELOG_HEADING, r'^## \[0\.1\.0\] - (unreleased|\d{4}-\d{2}-\d{2})$')
         self.assertNoRule(self.tree().errors(), 'changelog')
 
     def test_the_release_body_must_not_say_it_is_not_yet_tagged(self):

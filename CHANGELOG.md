@@ -11,7 +11,7 @@ crates share one version.
 
 No changes yet.
 
-## [0.1.0] - unreleased
+## [0.1.0] - 2026-10-13
 
 The first release: six crates, one recovery engine, and three ways to use it.
 The [release procedure](docs/RELEASE.md) records the publication gates.
