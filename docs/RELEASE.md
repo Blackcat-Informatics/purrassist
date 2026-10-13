@@ -144,7 +144,9 @@ steps in order:
 
 `verify.yml`'s `release-gate` job runs the same `make release-gate` with the
 same two toolchains and environment on every pull request, so a lint or test
-that fails only on the release toolchain fails before the tag, not at it.
+that fails only on the release toolchain fails before the tag, not at it. The
+job is not yet a required status check on `main`, so a red run does not by
+itself block a merge; making it required is a repository-owner setting.
 Reproduce it locally with `RUSTUP_TOOLCHAIN=1.98.0 make release-gate`.
 
 `make package` packages all six crates with Cargo verification enabled and

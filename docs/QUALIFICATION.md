@@ -231,10 +231,11 @@ campaign exceeds the default 10 s `--timeout` at execution 682 (#11), and the
 panic (#6). A target's invariants are therefore not claimed to hold for the
 default `make fuzz` run on these two targets; [FUZZING.md](FUZZING.md) records
 how to isolate and attribute each stop. The 10,000-mutation baseline
-qualification runs in FUZZING.md stay strict. `make fuzz-hosted`, which the CI `fuzz`
-job and the release gate run, completes both campaigns instead: it retains and
-names each #6 panic with `--continue-on-known` and gives `tool-call-ref` a
-120 s timeout for #11, while any other failure still fails it.
+qualification runs in FUZZING.md stay strict. `make fuzz-hosted`, which the CI
+`fuzz` job runs and the pre-tag checklist in [RELEASE.md](RELEASE.md) runs
+locally (it is not part of `make release-gate`), completes both campaigns
+instead: it retains and names each #6 panic with `--continue-on-known` and gives
+`tool-call-ref` a 120 s timeout for #11, while any other failure still fails it.
 
 ## Qualification commands
 

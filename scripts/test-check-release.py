@@ -327,6 +327,15 @@ class ReleaseGateIdentity(ScratchTree):
         self.edit(VERIFY, '--component clippy,rustfmt\n', '--component clippy\n')
         self.fails('job must install one stable toolchain with --component clippy,rustfmt')
 
+    def test_a_different_stable_install_in_the_pr_job_fails(self):
+        self.edit(VERIFY, f'{INSTALL} 1.98.0 --profile minimal --component clippy,rustfmt\n',
+                  f'{INSTALL} 1.98.1 --profile minimal --component clippy,rustfmt\n')
+        self.fails('the release-gate job must install the same toolchains as release')
+
+    def test_a_missing_release_package_job_fails(self):
+        self.edit(RELEASE, '\n  package:\n', '\n  build:\n')
+        self.fails('release-qualification.yml must define a `package` job')
+
     def test_a_missing_nightly_install_fails(self):
         self.edit(VERIFY, f'      - run: {INSTALL} nightly-2026-09-14 --profile minimal --component llvm-tools\n'
                   '      - run: make release-gate', '      - run: make release-gate')
