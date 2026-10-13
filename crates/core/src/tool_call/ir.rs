@@ -598,7 +598,9 @@ impl RawCall {
 }
 
 /// A recognized call or tool result: one or more equal-cost readings of
-/// the same span, ranked by [`Forest::rank`](crate::provenance::Forest::rank).
+/// the same span.
+///
+/// Readings are ranked by [`Forest::rank`](crate::provenance::Forest::rank).
 /// Several readings are a local, per-call ambiguity: they never multiply
 /// the turn's readings.
 #[derive(Clone, Debug, PartialEq, Eq)]

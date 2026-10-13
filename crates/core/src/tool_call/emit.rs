@@ -1128,8 +1128,10 @@ pub fn render_tool_result(
 }
 
 /// Print a tool result with `dialect`'s `result` production against a
-/// caller-owned governor; recognizing the bytes gives back a result segment
-/// with the same content (and id, where the dialect carries one).
+/// caller-owned governor.
+///
+/// Recognizing the bytes gives back a result segment with the same content
+/// (and id, where the dialect carries one).
 ///
 /// # Errors
 /// [`EmitError::Unsupported`] when the production needs a value the result
