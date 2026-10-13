@@ -92,10 +92,13 @@ have a crates.io trusted publisher configured against:
 
 On 2026-10-12 the `purrassist-derive` trusted publisher was observed through
 the crates.io API with the same repository and workflow but no environment.
-The owner decided to keep it without an environment. Today only the `publish`
-job, which runs in `crates-io`, has `id-token: write`, so it is the only job
-that can obtain a `purrassist-derive` publishing token. Without an environment,
-any job that a later edit of `publish.yml` grants `id-token: write` could too.
+The owner decided to keep it without an environment. crates.io accepts a token
+only from the workflow file it names, `publish.yml` (it reads the filename from
+the OIDC `workflow_ref` claim), so no other workflow, including the MCP Registry
+one, can obtain a crates.io publishing token. Within `publish.yml` only the
+`publish` job, which runs in `crates-io`, has `id-token: write`. Without an
+environment, any job that a later edit of `publish.yml` grants
+`id-token: write` could obtain a `purrassist-derive` token too.
 `scripts/check-release.py` therefore holds `publish.yml` to a closed shape:
 exactly the `gate` and `publish` jobs, no YAML anchors or aliases, no backslash
 escapes, no `!!`, verbatim or letter-named YAML tags, no block-scalar
@@ -148,7 +151,7 @@ oracles, coverage-guided/differential fuzzing, packaging, resource
 measurement against the documented limits) on main pushes, pull requests, and
 manual runs, so regressions are visible long before a tag is cut.
 
-## Publishing (publish.yml): the only workflow that publishes
+## Publishing (publish.yml): the only workflow that publishes crates
 
 `.github/workflows/publish.yml` triggers only on push of tags matching
 `rust-v*` (no `workflow_dispatch`, so it can never be triggered without a tag).

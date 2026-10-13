@@ -6,8 +6,10 @@
 # Actions OIDC token from this repository, so no personal credential is
 # involved. Run it manually after a release whose purrassist-cli README carries
 # the visible `mcp-name:` line (see docs/RELEASE.md, "After publication").
-# This workflow's id-token permission cannot publish crates: the crates.io
-# trusted publishers name publish.yml only.
+# This workflow's id-token permission cannot publish crates: crates.io reads
+# the workflow filename from the OIDC workflow_ref claim, and its trusted
+# publishers name publish.yml only. mcp-publisher is pinned here and in
+# vendor/tooling.json by the same sha256.
 name: MCP Registry
 
 on:
@@ -16,9 +18,16 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: mcp-registry
+  cancel-in-progress: false
+
 jobs:
   submit:
+    # Submit only what main says; a dispatch on another branch does nothing.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: read
       id-token: write
