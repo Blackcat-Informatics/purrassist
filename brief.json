@@ -1,0 +1,77 @@
+{
+  "issue": 26,
+  "repo": "Blackcat-Informatics/purrassist",
+  "forge": "github",
+  "title": "CI: lint the whole workspace with the release toolchain on pull requests",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {
+    "24": "test(core): compare the double-rounding result by bits",
+    "26": "CI: lint the whole workspace with the release toolchain on pull requests",
+    "1": "Complete PurRAssist 0.1.0 plan and release qualification",
+    "28": "ci: one release gate for pull requests and release qualification",
+    "29": "probe(#26): deliberate float_cmp failure, do not merge"
+  },
+  "link_relations": {
+    "24": "mentions",
+    "26": "closes",
+    "1": "mentions",
+    "28": "mentions",
+    "29": "mentions"
+  },
+  "related": [
+    {
+      "number": 4,
+      "title": "Tool-call recovery, part 2: streaming recognizer, remaining dialects, purrassist-derive",
+      "state": "CLOSED"
+    },
+    {
+      "number": 1,
+      "title": "Complete PurRAssist 0.1.0 plan and release qualification",
+      "state": "CLOSED"
+    },
+    {
+      "number": 3,
+      "title": "Tool-call recovery: typed tool definitions, multi-dialect parsing, schema-guided repair, streaming",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "none": 6,
+    "documentation-drift": 2,
+    "performance": 1
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [
+      "origin/probe/26-float-cmp"
+    ],
+    "prs": [
+      {
+        "number": 29,
+        "title": "probe(#26): deliberate float_cmp failure, do not merge",
+        "state": "CLOSED",
+        "url": "https://github.com/Blackcat-Informatics/purrassist/pull/29",
+        "this_stage": false
+      },
+      {
+        "number": 28,
+        "title": "ci: one release gate for pull requests and release qualification",
+        "state": "OPEN",
+        "url": "https://github.com/Blackcat-Informatics/purrassist/pull/28",
+        "this_stage": true
+      }
+    ],
+    "own_branch": "paudley/26-lint-the-whole-workspace-with-the"
+  },
+  "coverage": [
+    "issue #26 + 3 comment(s) via github",
+    "link crawl: 5 issue(s) within 2 hop(s) of `#N` references",
+    "forge search on ['whole', 'workspace', 'release']: 3 other item(s)",
+    "GhpRsq-Defect-Class trailers: 3 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #26 (second parents walked), 1 other branch(es) named for it",
+    "PRs citing #26: 2",
+    "requirement candidates: 22 line(s); 0 comment(s) matched no rule",
+    "referenced artifacts: 30 path(s) (16 on disk), 26 identifier(s), 3 workspace package(s), 4 URL(s)"
+  ]
+}

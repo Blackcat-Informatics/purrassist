@@ -1,0 +1,28 @@
+{
+  "issue": 26,
+  "branch": "paudley/26-lint-the-whole-workspace-with-the",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "fdd10ffcf403d1fd86cd9ef72b3b25403727766e",
+      "subject": "docs(qualification): make fuzz-hosted is not part of the release gate (#26)",
+      "date": "2026-10-13"
+    },
+    {
+      "oid": "22128449080bb2193d31037cd6657640101e9b91",
+      "subject": "ci: one release gate for pull requests and release qualification (#26)",
+      "date": "2026-10-13"
+    }
+  ],
+  "files": [
+    ".github/workflows/release-qualification.yml",
+    ".github/workflows/verify.yml",
+    "Makefile",
+    "docs/QUALIFICATION.md",
+    "docs/RELEASE.md",
+    "scripts/check-release.py",
+    "scripts/test-check-docs.py",
+    "scripts/test-check-release.py"
+  ],
+  "adrs_touched": []
+}

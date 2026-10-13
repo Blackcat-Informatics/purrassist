@@ -1,0 +1,535 @@
+{
+  "paths": [
+    {
+      "ref": "CONSTITUTION.md",
+      "path": "/home/paudley/Active/purrassist/CONSTITUTION.md",
+      "where": "not here; exists in sibling(s): gmeow-ontology, lillith_decodes, lillith_memetics",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "CLAUDE.md",
+      "path": "/home/paudley/Active/purrassist/CLAUDE.md",
+      "where": "not here; exists in sibling(s): cf-config, fenris, gmeow-extensions, gmeow-ontology, katamari (+9 more)",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "PRECOMMIT_GUIDANCE.md",
+      "path": "/home/paudley/Active/purrassist/PRECOMMIT_GUIDANCE.md",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "AGENTS.md",
+      "path": "/home/paudley/Active/purrassist/AGENTS.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 32,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "46e9d1a6e feat: establish intent recovery workspace and verification foundation"
+      ]
+    },
+    {
+      "ref": "release-qualification.yml",
+      "path": "/home/paudley/Active/purrassist/release-qualification.yml",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "scripts/test-fuzz-feedback.py",
+      "path": "/home/paudley/Active/purrassist/scripts/test-fuzz-feedback.py",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 55,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "53f23662a test: generalize guided fuzzing and preserve strict differential evidence"
+      ]
+    },
+    {
+      "ref": "scripts/test-verify-published.py",
+      "path": "/home/paudley/Active/purrassist/scripts/test-verify-published.py",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 501,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "534f862e3 build(release): register purrassist-derive for packaging, audit and docs (#15)",
+        "ed81ffe5f fix: bound installed acceptance and prove file transaction undo",
+        "868d19613 fix: locate packaged archives wherever cargo writes them and keep lockfiles",
+        "788270396 build: add trusted-publishing release workflow and published-package verification"
+      ]
+    },
+    {
+      "ref": "verify.yml",
+      "path": "/home/paudley/Active/purrassist/verify.yml",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "publish.yml",
+      "path": "/home/paudley/Active/purrassist/publish.yml",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "rust-toolchain.toml",
+      "path": "/home/paudley/Active/purrassist/rust-toolchain.toml",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 6,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "46e9d1a6e feat: establish intent recovery workspace and verification foundation"
+      ]
+    },
+    {
+      "ref": "scripts/check-release.py",
+      "path": "/home/paudley/Active/purrassist/scripts/check-release.py",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 279,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "e34c66542 build(release): reject write-all anywhere in publish.yml (#1)",
+        "edcc413ec build(release): reject every YAML tag form in publish.yml (#1)",
+        "afc180a7d build(release): reject escapes, tags and block-scalar permissions in publish.yml (#1)",
+        "b1c964563 build(release): hold publish.yml to a closed shape (#1)",
+        "44e5dd1b5 build(release): catch every form of OIDC grant outside the publish job (#1)",
+        "f6283b907 build(release): only the publish job may request an OIDC token (#1)",
+        "feefaaebc build(docs): harden the documentation and attribution checks (#1)",
+        "b7475b4fd build(release): publish preflight checks crate names and owners before publishing (#15)",
+        "e97a97367 feat(derive): zero-dependency #[derive(ToolDefinition)] and #[derive(ToolEnum)] (#15)",
+        "788270396 build: add trusted-publishing release workflow and published-package verification"
+      ]
+    },
+    {
+      "ref": "prior-art-assessment.md",
+      "path": "/home/paudley/Active/purrassist/prior-art-assessment.md",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "issue-analysis.md",
+      "path": "/home/paudley/Active/purrassist/issue-analysis.md",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "Cargo.lock",
+      "path": "/home/paudley/Active/purrassist/Cargo.lock",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 326,
+      "licence": "",
+      "commits": [
+        "4085bf31a feat(purrassist): re-export the tool derives through the facade (#15)",
+        "e97a97367 feat(derive): zero-dependency #[derive(ToolDefinition)] and #[derive(ToolEnum)] (#15)",
+        "a2da56a81 build: port structural helper census and strict ledger tooling",
+        "24787e1a3 test: compare helper transcripts and browser WASM with native output",
+        "b53ce9fbd feat: qualify filesystem durability on Windows",
+        "46e9d1a6e feat: establish intent recovery workspace and verification foundation"
+      ]
+    },
+    {
+      "ref": "crates/core/src/tool_call/from_node.rs",
+      "path": "/home/paudley/Active/purrassist/crates/core/src/tool_call/from_node.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 364,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "fac0d98fb test(core): compare the double-rounding result by bits (#1)",
+        "d46b996d2 refactor(tool-call): harden the derive support surface before first publish (#15)",
+        "0fb045418 feat(tool-call): core support for derived tool definitions (#15)",
+        "fcf234265 feat(tool_call): typed tool definitions, governed ToolSet, FromNode"
+      ]
+    },
+    {
+      "ref": "crates/host/src/files/windows.rs",
+      "path": "/home/paudley/Active/purrassist/crates/host/src/files/windows.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 372,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "f8d8cd3d2 fix: report exhausted Windows rename contention as busy",
+        "9994d4d61 fix: open Windows replacement handles with delete access",
+        "0b7c7de05 fix: make Windows durability code lint-clean and fail explicitly",
+        "b53ce9fbd feat: qualify filesystem durability on Windows"
+      ]
+    },
+    {
+      "ref": "check-release.py",
+      "path": "/home/paudley/Active/purrassist/check-release.py",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "validation.md",
+      "path": "/home/paudley/Active/purrassist/validation.md",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "check-docs.py",
+      "path": "/home/paudley/Active/purrassist/check-docs.py",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "scripts/test-check-release.py",
+      "path": "/home/paudley/Active/purrassist/scripts/test-check-release.py",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 281,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "e34c66542 build(release): reject write-all anywhere in publish.yml (#1)",
+        "edcc413ec build(release): reject every YAML tag form in publish.yml (#1)",
+        "afc180a7d build(release): reject escapes, tags and block-scalar permissions in publish.yml (#1)",
+        "b1c964563 build(release): hold publish.yml to a closed shape (#1)",
+        "44e5dd1b5 build(release): catch every form of OIDC grant outside the publish job (#1)",
+        "f6283b907 build(release): only the publish job may request an OIDC token (#1)",
+        "feefaaebc build(docs): harden the documentation and attribution checks (#1)",
+        "b7475b4fd build(release): publish preflight checks crate names and owners before publishing (#15)"
+      ]
+    },
+    {
+      "ref": "docs/QUALIFICATION.md:252-253",
+      "path": "/home/paudley/Active/purrassist/docs/QUALIFICATION.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 289,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "f58736a5d docs(release): record the published 0.1.0 and add the MCP Registry manifest (#1)",
+        "8ce1ca6f7 test(fuzz): keep mocked campaign findings out of CI logs (#1)",
+        "7e30c67c2 ci(fuzz): a hosted fuzz gate that completes every target (#1)",
+        "d6fb1e0fa docs: version-pinned crate links and no internal process references (#1)",
+        "dbdc64dcc docs(release): source restated documentation facts and disclose known limits (#1)",
+        "6cbb6282f docs(derive): near-miss nested keys, patch compatibility rule, qualification evidence (#15)",
+        "534f862e3 build(release): register purrassist-derive for packaging, audit and docs (#15)",
+        "381306500 fix(tool-call): closers inside values are judged by what follows, never by layout (adversary pass 6, F14, F19)",
+        "fecda8934 test: split make check into focused tests; corpus and fuzz get their own lanes",
+        "75c8f1134 fix(tool-call): keep stray closers and call bodies out of values and content (adversary pass 5, F13\u2013F18)"
+      ]
+    },
+    {
+      "ref": "docs/RELEASE.md",
+      "path": "/home/paudley/Active/purrassist/docs/RELEASE.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 336,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "03be6d5d8 ci(mcp-registry): main-only, bounded runs; state the real crates.io control (#1)",
+        "798104f2e ci(mcp-registry): submit server.json through GitHub OIDC (#1)",
+        "e19c8d842 docs(release): publication, not the tag, is what cannot be undone (#1)",
+        "f58736a5d docs(release): record the published 0.1.0 and add the MCP Registry manifest (#1)",
+        "cbecc8c1b docs(fuzz): describe the hosted gate and keep base attribution for its #6 inputs (#1)",
+        "7e30c67c2 ci(fuzz): a hosted fuzz gate that completes every target (#1)",
+        "f07b15b16 ci(verify): install pinned Node for fuzzing; define the release fuzz gate (#1)",
+        "2ce68e5c7 docs(release): name the YAML tag forms the release check rejects (#1)",
+        "e34c66542 build(release): reject write-all anywhere in publish.yml (#1)",
+        "edcc413ec build(release): reject every YAML tag form in publish.yml (#1)"
+      ]
+    },
+    {
+      "ref": ".github/workflows/release-qualification.yml",
+      "path": "/home/paudley/Active/purrassist/.github/workflows/release-qualification.yml",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 51,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "fecda8934 test: split make check into focused tests; corpus and fuzz get their own lanes",
+        "51ed930ab ci: enforce complete qualification and exact tool identities",
+        "788270396 build: add trusted-publishing release workflow and published-package verification",
+        "de8db9d7b build: qualify release archives and publish order"
+      ]
+    },
+    {
+      "ref": ".github/workflows/verify.yml",
+      "path": "/home/paudley/Active/purrassist/.github/workflows/verify.yml",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 139,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "7e30c67c2 ci(fuzz): a hosted fuzz gate that completes every target (#1)",
+        "f07b15b16 ci(verify): install pinned Node for fuzzing; define the release fuzz gate (#1)",
+        "b7475b4fd build(release): publish preflight checks crate names and owners before publishing (#15)",
+        "4085bf31a feat(purrassist): re-export the tool derives through the facade (#15)",
+        "fb522afce ci: gate pull requests on the published-transcript replay (adversary pass 6, F20)",
+        "fecda8934 test: split make check into focused tests; corpus and fuzz get their own lanes",
+        "8496413da test(fuzz): tool-call fuzz target and WASM parity for every dialect",
+        "300f7cffe test: make profiling prerequisites explicit and retain startup diagnostics",
+        "51ed930ab ci: enforce complete qualification and exact tool identities",
+        "788270396 build: add trusted-publishing release workflow and published-package verification"
+      ]
+    },
+    {
+      "ref": "scripts/test-check-docs.py",
+      "path": "/home/paudley/Active/purrassist/scripts/test-check-docs.py",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 1822,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "f58736a5d docs(release): record the published 0.1.0 and add the MCP Registry manifest (#1)",
+        "2fb4c3b76 docs(release): first-release wording for shipped Rustdoc and the release-body rule (#1)",
+        "04be6e023 release: date the 0.1.0 changelog section (#1)",
+        "cbecc8c1b docs(fuzz): describe the hosted gate and keep base attribution for its #6 inputs (#1)",
+        "7e30c67c2 ci(fuzz): a hosted fuzz gate that completes every target (#1)",
+        "93c02b3a5 docs(core): describe features, not internal task and requirement numbers (#1)",
+        "feefaaebc build(docs): harden the documentation and attribution checks (#1)",
+        "f0d978a37 docs(assets): reproducible 1280x640 social preview for the repository (#1)",
+        "f11912e6f docs(release): 0.1.0 changelog, current release procedure and security policy (#1)",
+        "871af5187 docs(readme): one engine, three interfaces, and a registry-pinned tool reference (#1)"
+      ]
+    },
+    {
+      "ref": "probe/26-float-cmp",
+      "path": "/home/paudley/Active/purrassist/probe/26-float-cmp",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "tasks/T2-review.md",
+      "path": "/home/paudley/Active/purrassist/tasks/T2-review.md",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "test-check-docs.py",
+      "path": "/home/paudley/Active/purrassist/test-check-docs.py",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/core/src/tool_call/from_node.rs:336:9",
+      "path": "/home/paudley/Active/purrassist/crates/core/src/tool_call/from_node.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 364,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "fac0d98fb test(core): compare the double-rounding result by bits (#1)",
+        "d46b996d2 refactor(tool-call): harden the derive support surface before first publish (#15)",
+        "0fb045418 feat(tool-call): core support for derived tool definitions (#15)",
+        "fcf234265 feat(tool_call): typed tool definitions, governed ToolSet, FromNode"
+      ]
+    },
+    {
+      "ref": "docs/QUALIFICATION.md",
+      "path": "/home/paudley/Active/purrassist/docs/QUALIFICATION.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 289,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "f58736a5d docs(release): record the published 0.1.0 and add the MCP Registry manifest (#1)",
+        "8ce1ca6f7 test(fuzz): keep mocked campaign findings out of CI logs (#1)",
+        "7e30c67c2 ci(fuzz): a hosted fuzz gate that completes every target (#1)",
+        "d6fb1e0fa docs: version-pinned crate links and no internal process references (#1)",
+        "dbdc64dcc docs(release): source restated documentation facts and disclose known limits (#1)",
+        "6cbb6282f docs(derive): near-miss nested keys, patch compatibility rule, qualification evidence (#15)",
+        "534f862e3 build(release): register purrassist-derive for packaging, audit and docs (#15)",
+        "381306500 fix(tool-call): closers inside values are judged by what follows, never by layout (adversary pass 6, F14, F19)",
+        "fecda8934 test: split make check into focused tests; corpus and fuzz get their own lanes",
+        "75c8f1134 fix(tool-call): keep stray closers and call bodies out of values and content (adversary pass 5, F13\u2013F18)"
+      ]
+    }
+  ],
+  "identifiers": [
+    {
+      "name": "msrv",
+      "files": 1
+    },
+    {
+      "name": "clippy::float_cmp",
+      "files": 0
+    },
+    {
+      "name": "env.RUSTUP_TOOLCHAIN",
+      "files": 0
+    },
+    {
+      "name": "major.minor",
+      "files": 8
+    },
+    {
+      "name": "channel",
+      "files": 53
+    },
+    {
+      "name": "float_cmp",
+      "files": 1
+    },
+    {
+      "name": "de8e8fd",
+      "files": 0
+    },
+    {
+      "name": "too_long_first_doc_paragraph",
+      "files": 0
+    },
+    {
+      "name": "pull_request",
+      "files": 1
+    },
+    {
+      "name": "main",
+      "files": 260
+    },
+    {
+      "name": "cfg",
+      "files": 74
+    },
+    {
+      "name": "success",
+      "files": 75
+    },
+    {
+      "name": "failure",
+      "files": 135
+    },
+    {
+      "name": "native",
+      "files": 138
+    },
+    {
+      "name": "Makefile",
+      "files": 6
+    },
+    {
+      "name": "package",
+      "files": 76
+    },
+    {
+      "name": "make",
+      "files": 155
+    },
+    {
+      "name": "env",
+      "files": 180
+    },
+    {
+      "name": "lint",
+      "files": 19
+    },
+    {
+      "name": "workflow_steps",
+      "files": 2
+    },
+    {
+      "name": "nightly",
+      "files": 40
+    },
+    {
+      "name": "RUSTFLAGS",
+      "files": 3
+    },
+    {
+      "name": "fdd10ff",
+      "files": 0
+    },
+    {
+      "name": "f32",
+      "files": 33
+    },
+    {
+      "name": "f64",
+      "files": 40
+    },
+    {
+      "name": "PATH",
+      "files": 12
+    }
+  ],
+  "packages": [
+    "purrassist-cli",
+    "purrassist-core",
+    "purrassist-host"
+  ],
+  "urls": [
+    "https://github.com/Blackcat-Informatics/purrassist/issues/1#issuecomment-6139102863",
+    "https://github.com/Blackcat-Informatics/purrassist/actions/runs/38376755652",
+    "https://github.com/Blackcat-Informatics/purrassist/actions/runs/38382758016",
+    "https://github.com/Blackcat-Informatics/purrassist/actions/runs/38377011106"
+  ],
+  "truncated": []
+}

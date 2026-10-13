@@ -1,0 +1,250 @@
+{
+  "rows": [
+    {
+      "id": "C1.1",
+      "line": 28,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Rust-first, hard fails, maximal utility.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-13T08:54:53Z"
+    },
+    {
+      "id": "C1.2",
+      "line": 29,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Every tool is registered.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-13T08:54:53Z"
+    },
+    {
+      "id": "C1.3",
+      "line": 30,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- SPDX headers on sources.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-13T08:54:53Z"
+    },
+    {
+      "id": "C1.4",
+      "line": 31,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Capability claims need executable evidence.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-13T08:54:53Z"
+    },
+    {
+      "id": "C1.5",
+      "line": 32,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- `make check` is the local gate.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-13T08:54:53Z"
+    },
+    {
+      "id": "C1.6",
+      "line": 33,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Hooks are never bypassed, including through alternative commit paths.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-13T08:54:53Z"
+    },
+    {
+      "id": "C1.7",
+      "line": 34,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- No agent attribution.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-13T08:54:53Z"
+    },
+    {
+      "id": "C1.8",
+      "line": 73,
+      "rules": [
+        "scope-out",
+        "modal"
+      ],
+      "text": "| Required check? | Out of scope. It's an owner ruleset setting, and the `main` ruleset has no required status checks. Recorded in the PR as an owner option. |",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-13T08:54:53Z"
+    },
+    {
+      "id": "C1.9",
+      "line": 104,
+      "rules": [
+        "modal"
+      ],
+      "text": "- **Make the job a required status check:** declined. It's an owner ruleset setting. The cost: a red `release-gate` job does not block a merge, so it relies on review discipline until the owner makes it required.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-13T08:54:53Z"
+    },
+    {
+      "id": "C1.10",
+      "line": 143,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "1. On a branch `probe/26-float-cmp` from the Task 1 head, restore the pre-#24 runtime comparison in `crates/core/src/tool_call/from_node.rs`.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-13T08:54:53Z"
+    },
+    {
+      "id": "C1.11",
+      "line": 144,
+      "rules": [
+        "modal",
+        "list-under-requirement-heading"
+      ],
+      "text": "2. Commit it normally, with no attribution, and with a message saying it is a deliberate failing probe for #26 that must not merge. Then push the branch.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-13T08:54:53Z"
+    },
+    {
+      "id": "C1.12",
+      "line": 145,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "3. Local supporting evidence: 1.98.0 Clippy reports `float_cmp` at that line.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-13T08:54:53Z"
+    },
+    {
+      "id": "C1.13",
+      "line": 146,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "4. Open a **draft** PR titled `probe(#26): deliberate float_cmp failure, do not merge`, with no closing keyword.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-13T08:54:53Z"
+    },
+    {
+      "id": "C1.14",
+      "line": 147,
+      "rules": [
+        "modal",
+        "list-under-requirement-heading"
+      ],
+      "text": "5. Required: its hosted `release-gate` job fails with `clippy::float_cmp` at the probe line, while `native` passes.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-13T08:54:53Z"
+    },
+    {
+      "id": "C1.15",
+      "line": 148,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "6. Record the run URL and log excerpt in `validation.md` and on issue #26.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-13T08:54:53Z"
+    },
+    {
+      "id": "C1.16",
+      "line": 149,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "7. Close the probe PR unmerged and delete only its branch.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-13T08:54:53Z"
+    },
+    {
+      "id": "C1.17",
+      "line": 150,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "8. Task review: `tasks/T2-review.md` checks the evidence.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-13T08:54:53Z"
+    },
+    {
+      "id": "C1.18",
+      "line": 197,
+      "rules": [
+        "modal"
+      ],
+      "text": "- The item 4 residual and the cost of the required-check decline are recorded.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-13T08:54:53Z"
+    },
+    {
+      "id": "C1.19",
+      "line": 226,
+      "rules": [
+        "modal"
+      ],
+      "text": "- B2: the MSRV-evidence sentence is required.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-13T08:54:53Z"
+    },
+    {
+      "id": "C2.1",
+      "line": 24,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- **`release-gate` failed:** `error: strict comparison of f32 or f64` at `crates/core/src/tool_call/from_node.rs:336:9`, `-D clippy::float-cmp`.",
+      "source": "comment 2",
+      "author": "paudley",
+      "date": "2026-10-13T10:13:34Z"
+    },
+    {
+      "id": "C2.2",
+      "line": 25,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- **Every other job passed**, including both nightly `native` jobs.",
+      "source": "comment 2",
+      "author": "paudley",
+      "date": "2026-10-13T10:13:34Z"
+    },
+    {
+      "id": "C3.1",
+      "line": 33,
+      "rules": [
+        "modal"
+      ],
+      "text": "- **Not a required check:** `release-gate` isn't a required status check (`main`'s ruleset has none), so a red run doesn't block a merge. Making it required is your setting.",
+      "source": "comment 3",
+      "author": "paudley",
+      "date": "2026-10-13T11:03:34Z"
+    }
+  ],
+  "silent_comments": []
+}
