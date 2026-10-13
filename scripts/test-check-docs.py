@@ -267,10 +267,17 @@ class WorkspaceVersion(Case):
         self.assertFails(tree.errors(), 'workspace-version', 'SECURITY.md', '0.0.9')
 
     PUBLISHED = 'published as `rust-v0.1.0`'
+    UNPUBLISHED = 'not yet tagged `rust-v0.1.0`'
+    # Either status form, so the fixtures hold before and after publication.
+    EITHER = r'(?i:not yet tagged|published as)\s+`rust-v0\.1\.0`'
 
     def publish(self, tree, names):
         for name in names:
-            tree.sub(name, r'not yet tagged\s+`rust-v0\.1\.0`', self.PUBLISHED, count=0)
+            tree.sub(name, self.EITHER, self.PUBLISHED, count=0)
+
+    def unpublish(self, tree, names):
+        for name in names:
+            tree.sub(name, self.EITHER, self.UNPUBLISHED, count=0)
 
     def test_the_published_form_in_every_status_doc_passes(self):
         tree = self.tree()
@@ -283,18 +290,21 @@ class WorkspaceVersion(Case):
                 tree = self.tree()
                 if old == 'published as':
                     self.publish(tree, CD.STATUS_DOCS)
+                else:
+                    self.unpublish(tree, CD.STATUS_DOCS)
                 tree.sub('SECURITY.md', rf'{old}\s+`rust-v0\.1\.0`', f'{old} `rust-v0.0.9`')
                 self.assertFails(tree.errors(), 'workspace-version', 'SECURITY.md', '0.0.9')
 
     def test_a_status_line_in_neither_form_is_not_found(self):
         tree = self.tree()
-        tree.sub('README.md', r'not yet tagged\s+`rust-v0\.1\.0`', 'out as `rust-v0.1.0`')
+        tree.sub('README.md', self.EITHER, 'out as `rust-v0.1.0`')
         self.assertFails(tree.errors(), 'workspace-version', 'README.md', NOT_FOUND)
 
     def test_a_mix_of_published_and_unpublished_status_lines_fails(self):
         for published in (('SECURITY.md',), ('README.md', 'docs/RELEASE.md'), CD.STATUS_DOCS[:-1]):
             with self.subTest(published=published):
                 tree = self.tree()
+                self.unpublish(tree, CD.STATUS_DOCS)
                 self.publish(tree, published)
                 self.assertFails(tree.errors(), 'workspace-version', 'mix forms', 'not yet tagged', 'published as')
 
@@ -314,6 +324,7 @@ class WorkspaceVersion(Case):
 
     def test_a_capitalised_status_line_at_a_sentence_start_passes_unpublished(self):
         tree = self.tree()
+        self.unpublish(tree, CD.STATUS_DOCS)
         tree.sub('SECURITY.md', r'not yet tagged', 'Not yet tagged', count=0)
         self.assertNoRule(tree.errors(), 'workspace-version')
 
@@ -1772,11 +1783,11 @@ ABSENT = (
     ('workspace-version', 'docs/RELEASE.md', r'PurRAssist 0\.1\.0 has an implemented scope', 'PurRAssist has an implemented scope'),
     ('workspace-version', 'docs/IMPLEMENTATION.md', r'Workspace version 0\.1\.0;', 'Workspace version:'),
     ('workspace-version', 'docs/QUALIFICATION.md', r'implemented 0\.1\.0 capability', 'implemented capability'),
-    ('workspace-version', 'README.md', r'not yet tagged\s+`rust-v0\.1\.0`', 'untagged'),
-    ('workspace-version', 'SECURITY.md', r'not yet tagged\s+`rust-v0\.1\.0`', 'untagged'),
-    ('workspace-version', 'docs/IMPLEMENTATION.md', r'not yet tagged\s+`rust-v0\.1\.0`', 'untagged'),
-    ('workspace-version', 'docs/QUALIFICATION.md', r'not yet tagged\s+`rust-v0\.1\.0`', 'untagged'),
-    ('workspace-version', 'docs/RELEASE.md', r'not yet tagged\s+`rust-v0\.1\.0`', 'untagged'),
+    ('workspace-version', 'README.md', r'(?i:not yet tagged|published as)\s+`rust-v0\.1\.0`', 'untagged'),
+    ('workspace-version', 'SECURITY.md', r'(?i:not yet tagged|published as)\s+`rust-v0\.1\.0`', 'untagged'),
+    ('workspace-version', 'docs/IMPLEMENTATION.md', r'(?i:not yet tagged|published as)\s+`rust-v0\.1\.0`', 'untagged'),
+    ('workspace-version', 'docs/QUALIFICATION.md', r'(?i:not yet tagged|published as)\s+`rust-v0\.1\.0`', 'untagged'),
+    ('workspace-version', 'docs/RELEASE.md', r'(?i:not yet tagged|published as)\s+`rust-v0\.1\.0`', 'untagged'),
     ('fuzz-targets', 'docs/FUZZING.md', r'across\s+ten\s+`purrassist-core`\s+targets', 'across the targets'),
     ('fuzz-targets', 'docs/FUZZING.md', r'all\s+ten\s+targets', 'every target'),
     ('fuzz-targets', 'docs/QUALIFICATION.md', r'Ten targets \(including', 'Targets, including'),
