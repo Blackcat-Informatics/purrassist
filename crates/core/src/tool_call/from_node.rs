@@ -334,8 +334,8 @@ mod tests {
             Ok(f32::from_bits(1.0_f32.to_bits() + 1))
         );
         assert_eq!(
-            (above_midpoint.parse::<f64>().unwrap() as f32).to_bits(),
-            1.0_f32.to_bits(),
+            above_midpoint.parse::<f64>().unwrap() as f32,
+            1.0,
             "the double-rounding path would differ"
         );
         // Underflow rounds to zero rather than failing.
