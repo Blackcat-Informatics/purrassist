@@ -263,8 +263,10 @@ For the exact `main` commit to be tagged:
    still stops on those limitations.
 3. Re-confirm all six trusted publishers through the crates.io API (see
    "Trusted publishing"); each must still match the values recorded there.
-4. Tag `rust-vVERSION`. Tagging is irreversible and requires explicit
-   authorization; `publish.yml` then does the rest.
+4. Tag `rust-vVERSION`. Tagging requires explicit authorization, because
+   `publish.yml` then publishes, and a published version cannot be undone or
+   overwritten. A tag whose release qualification fails publishes nothing and
+   may be moved to the fixed commit.
 5. After `publish.yml` succeeds, create the GitHub release. Its body is the
    `[0.1.0]` section of `CHANGELOG.md`, including its `### Known limitations`
    subsection, plus the output of `scripts/verify-published.py`.
