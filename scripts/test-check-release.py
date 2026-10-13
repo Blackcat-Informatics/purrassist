@@ -3,12 +3,26 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 """Offline tests for scripts/check-release.py.
 
-Two groups, neither of which touches the network or this checkout:
+Three groups, none of which touches the network; the gate and pin groups read
+scratch copies of this checkout's Makefile, workflows and manifests:
 
 * `validate_publish_workflow()` passes on the real publish.yml and fails, with
   a specific message, on modified copies (preflight removed, moved after auth
   and after `cargo publish`, owners check removed, user agent removed, comment
   removed).
+* `validate_release_gate()` and `validate_toolchain_pins()` pass on the real
+  Makefile and workflows and fail, naming their error, on copies in a scratch
+  tree: a missing or reordered `release-gate` recipe line, an added
+  prerequisite, an extra step beside the shared gate in release qualification,
+  differing environments or installs, a weakened `lint` recipe or `CORPUS_SUITES` list, and every kind
+  of toolchain pin drift (install line, env, publish.yml, rust-version, nightly).
+  The gate jobs' allowlists (workflow, job, env, step, checkout and trigger shapes, each with
+  its must-fail and must-pass fixtures), the Makefile `check` prerequisites `lint` and `test`,
+  and Makefile lines that would change the toolchain or ignore failures (`RUSTUP_TOOLCHAIN`,
+  `unexport`, `.IGNORE`, any `MAKEFLAGS` line but the allowed one).
+  Pin extraction is tested on flags before the name, line continuations, the real workflows,
+  and (must fail) `${{ }}` and `$VAR` pins, `cargo +X`, inline `RUSTUP_TOOLCHAIN=`, a pin in a
+  new workflow file and a malformed pin.
 * `preflight_owners()` is driven by fake fetchers and fixture registry
   responses: success, a 404 crate, mismatched owners, network errors,
   non-JSON and malformed responses.
@@ -16,6 +30,8 @@ Two groups, neither of which touches the network or this checkout:
 import importlib.util
 import json
 from pathlib import Path
+import re
+import shutil
 import tempfile
 import unittest
 
@@ -212,6 +228,523 @@ class WorkflowValidation(unittest.TestCase):
     def test_unverifiable_trusted_publisher_note_required(self):
         text = PUBLISH.read_text(encoding='utf-8').replace('Trusted-publisher state', 'Something else')
         self.check_copy(text, 'trusted-publisher state is not verifiable')
+
+
+INSTALL = 'rustup toolchain install'
+MEMBERS = ('core', 'derive', 'syntax', 'purrassist', 'host', 'cli', 'wasm-harness', 'helper-census')
+TREE_FILES = ('Makefile', 'Cargo.toml', 'rust-toolchain.toml',
+              *(f'crates/{member}/Cargo.toml' for member in MEMBERS), '.github/workflows/verify.yml',
+              '.github/workflows/release-qualification.yml', '.github/workflows/publish.yml')
+VERIFY = '.github/workflows/verify.yml'
+RELEASE = '.github/workflows/release-qualification.yml'
+PUBLISH_FILE = '.github/workflows/publish.yml'
+
+
+class ScratchTree(unittest.TestCase):
+    """The files the gate and pin rules read, copied to a scratch directory and edited there."""
+
+    check = None
+
+    def setUp(self):
+        scratch = tempfile.TemporaryDirectory(prefix='test-check-release-')
+        self.addCleanup(scratch.cleanup)
+        self.root = Path(scratch.name)
+        for name in TREE_FILES:
+            (self.root / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name, self.root / name)
+
+    def edit(self, name, old, new, count=1):
+        path = self.root / name
+        text = path.read_text(encoding='utf-8')
+        self.assertIn(old, text, f'fixture precondition: {name} no longer contains {old!r}')
+        path.write_text(text.replace(old, new, count), encoding='utf-8')
+
+    def append(self, name, extra):
+        path = self.root / name
+        path.write_text(path.read_text(encoding='utf-8') + extra, encoding='utf-8')
+
+    def fails(self, expect):
+        with self.assertRaises(SystemExit) as raised:
+            type(self).check(self.root)
+        self.assertIn(expect, str(raised.exception))
+
+
+class ReleaseGateIdentity(ScratchTree):
+    check = staticmethod(CR.validate_release_gate)
+
+    def test_real_files_pass(self):
+        CR.validate_release_gate()
+        CR.validate_release_gate(self.root)
+
+    def test_a_missing_package_line_fails(self):
+        self.edit('Makefile', '\t$(MAKE) package\n', '')
+        self.fails('Makefile release-gate recipe must be exactly')
+
+    def test_a_reordered_recipe_fails(self):
+        self.edit('Makefile', '\t$(MAKE) check\n\t$(MAKE) corpus\n', '\t$(MAKE) corpus\n\t$(MAKE) check\n')
+        self.fails('Makefile release-gate recipe must be exactly')
+
+    def test_an_added_prerequisite_fails(self):
+        self.edit('Makefile', '\nrelease-gate:\n', '\nrelease-gate: lint\n')
+        self.fails('Makefile release-gate must have no prerequisites')
+
+    def test_a_missing_release_gate_target_fails(self):
+        self.edit('Makefile', '\nrelease-gate:\n', '\nrelease-gates:\n')
+        self.fails('Makefile must define the `release-gate` target exactly once')
+
+    def test_a_weakened_lint_recipe_fails(self):
+        self.edit('Makefile', 'all-targets --locked -- -D warnings', 'all-targets -- -D warnings')
+        self.fails('Makefile lint recipe must be exactly')
+
+    LINT_SECOND = ('cargo clippy -p purrassist-core --locked $(foreach suite,$(CORPUS_SUITES),--test $(suite))'
+                   ' -- -D warnings')
+
+    def test_real_files_lint_the_corpus_suites(self):
+        self.assertIn('\t' + self.LINT_SECOND + '\n', (ROOT / 'Makefile').read_text(encoding='utf-8'))
+
+    def test_a_corpus_lint_line_without_deny_warnings_fails(self):
+        self.edit('Makefile', self.LINT_SECOND, self.LINT_SECOND.removesuffix(' -- -D warnings'))
+        self.fails('Makefile lint recipe must be exactly')
+
+    def test_a_corpus_lint_line_with_or_true_fails(self):
+        self.edit('Makefile', self.LINT_SECOND, self.LINT_SECOND + ' || true')
+        self.fails('Makefile lint recipe must be exactly')
+
+    def test_a_leading_dash_on_a_lint_line_fails(self):
+        self.edit('Makefile', '\t' + self.LINT_SECOND, '\t-' + self.LINT_SECOND)
+        self.fails('Makefile lint recipe must be exactly')
+
+    def test_a_missing_corpus_lint_line_fails(self):
+        self.edit('Makefile', '\t' + self.LINT_SECOND + '\n', '')
+        self.fails('Makefile lint recipe must be exactly')
+
+    def test_a_suite_removed_from_corpus_suites_fails(self):
+        self.edit('Makefile', 'CORPUS_SUITES := correction_evaluation ', 'CORPUS_SUITES := ')
+        self.fails("missing ['correction_evaluation']")
+
+    def test_a_new_test_false_target_missing_from_corpus_suites_fails(self):
+        self.append('crates/core/Cargo.toml', '\n[[test]]\nname = "new_suite"\npath = "tests/new_suite.rs"\ntest = false\n')
+        self.fails("missing ['new_suite']")
+
+    def test_a_test_true_target_is_not_a_corpus_suite(self):
+        self.append('crates/core/Cargo.toml', '\n[[test]]\nname = "plain"\npath = "tests/plain.rs"\n')
+        CR.validate_release_gate(self.root)
+
+    def test_an_unknown_suite_in_corpus_suites_fails(self):
+        self.edit('Makefile', 'CORPUS_SUITES := ', 'CORPUS_SUITES := ghost ')
+        self.fails("unknown ['ghost']")
+
+    def test_a_corpus_suites_append_fails(self):
+        self.append('Makefile', 'CORPUS_SUITES += extra\n')
+        self.fails('Makefile must define CORPUS_SUITES exactly once')
+
+    def test_a_second_corpus_suites_definition_fails(self):
+        self.append('Makefile', 'CORPUS_SUITES := correction_evaluation\n')
+        self.fails('Makefile must define CORPUS_SUITES exactly once')
+
+    def test_a_corpus_suites_override_or_default_fails(self):
+        for line in ('override CORPUS_SUITES := x\n', 'CORPUS_SUITES ?= x\n'):
+            with self.subTest(line=line):
+                self.setUp()
+                self.append('Makefile', line)
+                self.fails('Makefile must define CORPUS_SUITES exactly once')
+
+    def test_an_extra_make_step_in_release_qualification_fails(self):
+        self.append(RELEASE, '      - name: Verify the corpus again\n        run: make corpus\n')
+        self.fails('must have exactly the named steps')
+        self.fails('must run `make` exactly once, as `make release-gate`')
+
+    def test_an_extra_non_make_named_step_in_release_qualification_fails(self):
+        self.append(RELEASE, '      - name: Say hello\n        run: echo hello\n')
+        self.fails('must have exactly the named steps')
+
+    def test_an_extra_unnamed_step_in_release_qualification_fails(self):
+        self.append(RELEASE, '      - uses: actions/cache@v4\n')
+        self.fails('exactly one unnamed step')
+
+    def test_the_old_split_steps_fail(self):
+        self.edit(RELEASE, '      - name: Verify the release gate\n        run: make release-gate\n',
+                  '      - name: Verify workspace\n        run: make check\n')
+        self.fails('must have exactly the named steps')
+
+    def test_the_gate_outside_its_step_fails(self):
+        self.edit(RELEASE, '      - name: Verify the release gate\n', '      - name: Verify something\n')
+        self.fails('must run in the `Verify the release gate` step')
+
+    def test_a_verify_job_without_the_gate_fails(self):
+        self.edit(VERIFY, '      - run: make release-gate\n', '      - run: make check\n')
+        self.fails('verify.yml release-gate job must run `make release-gate`')
+
+    def test_a_missing_verify_release_gate_job_fails(self):
+        self.edit(VERIFY, '\n  release-gate:\n', '\n  msrv:\n')
+        self.fails('verify.yml must define a `release-gate` job')
+
+    def test_a_release_gate_env_difference_fails(self):
+        text = (self.root / VERIFY).read_text(encoding='utf-8')
+        job = text.index('\n  release-gate:\n')
+        marker = 'RUSTUP_TOOLCHAIN: 1.98.0\n'
+        at = text.index(marker, job) + len(marker)
+        (self.root / VERIFY).write_text(text[:at] + '      RUSTFLAGS: -D warnings\n' + text[at:], encoding='utf-8')
+        self.fails('must equal release qualification')
+
+    def test_differing_components_fail(self):
+        self.edit(VERIFY, '--component clippy,rustfmt\n', '--component clippy\n')
+        self.fails('job must install one stable toolchain with --component clippy,rustfmt')
+
+    def test_a_different_stable_install_in_the_pr_job_fails(self):
+        self.edit(VERIFY, f'{INSTALL} 1.98.0 --profile minimal --component clippy,rustfmt\n',
+                  f'{INSTALL} 1.98.1 --profile minimal --component clippy,rustfmt\n')
+        self.fails('the release-gate job must install the same toolchains as release')
+
+    def test_a_missing_release_package_job_fails(self):
+        self.edit(RELEASE, '\n  package:\n', '\n  build:\n')
+        self.fails('release-qualification.yml must define a `package` job')
+
+    def test_a_missing_nightly_install_fails(self):
+        self.edit(VERIFY, f'      - run: {INSTALL} nightly-2026-09-14 --profile minimal --component llvm-tools\n'
+                  '      - run: make release-gate', '      - run: make release-gate')
+        self.fails('job must install one nightly toolchain with --component llvm-tools')
+
+
+GATES = ((VERIFY, 'release-gate'), (RELEASE, 'package'))
+SHA = '11d5960a326750d5838078e36cf38b85af677262'
+CHECKOUT_LINE = f'      - uses: actions/checkout@{SHA} # v4\n        with:\n          persist-credentials: false\n'
+
+
+class GateAllowlist(ScratchTree):
+    """The gate jobs are allowlisted: anything not explicitly allowed fails with its own error."""
+
+    check = staticmethod(CR.validate_release_gate)
+
+    def edit_job(self, name, job, old, new):
+        path = self.root / name
+        text = path.read_text(encoding='utf-8')
+        start = text.index(f'\n  {job}:\n') + 1
+        following = re.search(r'\n  [^\s#]', text[start:])
+        end = start + following.start() + 1 if following else len(text)
+        self.assertIn(old, text[start:end], f'fixture precondition: job {job} lacks {old!r}')
+        path.write_text(text[:start] + text[start:end].replace(old, new, 1) + text[end:], encoding='utf-8')
+
+    def both(self, old, new):
+        for name, job in GATES:
+            self.edit_job(name, job, old, new)
+
+    def passes(self):
+        CR.validate_release_gate(self.root)
+
+    # Env
+    def test_env_removed_from_both_jobs_fails(self):
+        self.both('    env:\n      RUSTUP_TOOLCHAIN: 1.98.0\n', '')
+        self.fails('job must set `env`')
+        self.fails('job env must be exactly RUSTUP_TOOLCHAIN, found []')
+
+    def test_nightly_env_in_both_jobs_fails(self):
+        self.both('RUSTUP_TOOLCHAIN: 1.98.0', 'RUSTUP_TOOLCHAIN: nightly-2026-09-14')
+        self.fails('RUSTUP_TOOLCHAIN must be the stable release toolchain, not nightly-2026-09-14')
+
+    def test_env_differing_from_the_stable_install_fails(self):
+        for name, job in GATES:
+            with self.subTest(job=job):
+                self.setUp()
+                self.edit_job(name, job, 'RUSTUP_TOOLCHAIN: 1.98.0', 'RUSTUP_TOOLCHAIN: 1.98.1')
+                self.fails('RUSTUP_TOOLCHAIN 1.98.1 must equal its stable install 1.98.0')
+
+    def test_job_level_rustflags_in_both_jobs_fails(self):
+        self.both('RUSTUP_TOOLCHAIN: 1.98.0\n', 'RUSTUP_TOOLCHAIN: 1.98.0\n      RUSTFLAGS: --cap-lints=warn\n')
+        self.fails("job env must be exactly RUSTUP_TOOLCHAIN, found ['RUSTFLAGS', 'RUSTUP_TOOLCHAIN']")
+
+    def test_step_level_env_fails(self):
+        for name, job in GATES:
+            with self.subTest(job=job):
+                self.setUp()
+                self.edit_job(name, job, 'run: make release-gate\n',
+                              'run: make release-gate\n        env:\n          CARGO_ENCODED_RUSTFLAGS: --cap-lints=warn\n')
+                self.fails('may not set `env`')
+
+    # Keys and modifiers
+    def test_workflow_level_env_or_defaults_fails(self):
+        for name in (VERIFY, RELEASE):
+            for key, body in (('env', 'env:\n  RUSTFLAGS: --cap-lints=warn\n'),
+                              ('defaults', 'defaults:\n  run:\n    shell: "true {0}"\n')):
+                with self.subTest(workflow=name, key=key):
+                    self.setUp()
+                    self.edit(name, 'jobs:\n', body + 'jobs:\n')
+                    self.fails(f'may not set the top-level key `{key}`')
+
+    def test_job_level_defaults_fails(self):
+        for name, job in GATES:
+            with self.subTest(job=job):
+                self.setUp()
+                self.edit_job(name, job, '    steps:\n', '    defaults:\n      run:\n        shell: "true {0}"\n    steps:\n')
+                self.fails('job may not set `defaults`')
+
+    def test_continue_on_error_on_a_job_fails(self):
+        for name, job in GATES:
+            with self.subTest(job=job):
+                self.setUp()
+                self.edit_job(name, job, '    steps:\n', '    continue-on-error: true\n    steps:\n')
+                self.fails('job may not set `continue-on-error`')
+
+    def test_continue_on_error_on_a_step_fails(self):
+        for name, job in GATES:
+            with self.subTest(job=job):
+                self.setUp()
+                self.edit_job(name, job, 'run: make release-gate\n',
+                              'run: make release-gate\n        continue-on-error: true\n')
+                self.fails('may not set `continue-on-error`')
+
+    def test_if_on_the_gate_step_fails(self):
+        for name, job in GATES:
+            with self.subTest(job=job):
+                self.setUp()
+                self.edit_job(name, job, '      - run: make release-gate\n' if job == 'release-gate'
+                              else '        run: make release-gate\n',
+                              '      - if: false\n        run: make release-gate\n' if job == 'release-gate'
+                              else '        if: false\n        run: make release-gate\n')
+                self.fails('may not set `if`')
+
+    def test_shell_on_the_gate_step_fails(self):
+        for name, job in GATES:
+            with self.subTest(job=job):
+                self.setUp()
+                self.edit_job(name, job, 'run: make release-gate\n', 'run: make release-gate\n        shell: true {0}\n')
+                self.fails('may not set `shell`')
+
+    def test_shell_bash_is_allowed_only_on_the_version_step(self):
+        self.edit_job(RELEASE, 'package', '        run: make release-gate\n',
+                      '        shell: bash\n        run: make release-gate\n')
+        self.fails('may not set `shell`')
+
+    # Steps
+    def test_an_extra_step_in_the_verify_gate_job_fails(self):
+        self.edit(VERIFY, '      - run: make release-gate\n',
+                  "      - run: printf '[build]\\nrustflags = [\"--cap-lints=warn\"]\\n' > .cargo/config.toml\n"
+                  '      - run: make release-gate\n')
+        self.fails('verify.yml release-gate job must have exactly the steps')
+
+    def test_a_github_env_write_fails(self):
+        self.edit(VERIFY, '      - run: make release-gate\n',
+                  '      - run: echo RUSTFLAGS=--cap-lints=warn >> "$GITHUB_ENV"\n      - run: make release-gate\n')
+        self.fails('verify.yml release-gate job must not write GITHUB_ENV or GITHUB_PATH')
+        self.fails('verify.yml release-gate job must have exactly the steps')
+
+    def test_a_github_path_write_in_the_version_step_fails(self):
+        self.edit(RELEASE, '          set -euo pipefail\n', '          set -euo pipefail\n          echo . >> "$GITHUB_PATH"\n')
+        self.fails('release-qualification.yml package job must not write GITHUB_ENV or GITHUB_PATH')
+
+    # Trigger
+    def test_the_pull_request_trigger_removed_fails(self):
+        self.edit(VERIFY, '  pull_request:\n', '')
+        self.fails('`on:` must contain a bare `pull_request:` trigger')
+
+    def test_a_paths_filter_on_the_pull_request_trigger_fails(self):
+        self.edit(VERIFY, '  pull_request:\n', "  pull_request:\n    paths: ['docs/**']\n")
+        self.fails('`pull_request:` trigger must have no filters')
+
+    def test_flow_spellings_of_the_trigger_fail(self):
+        self.edit(VERIFY, '  pull_request:\n', '  pull_request: {paths: [x]}\n')
+        self.fails('flow spelling such as `pull_request: {paths: [x]}` is unsupported')
+        self.setUp()
+        self.edit(VERIFY, 'on:\n  push:\n    branches: [main]\n  pull_request:\n  workflow_dispatch:\n',
+                  'on: [push, pull_request]\n')
+        self.fails('must have a block `on:` mapping')
+
+    def test_a_bare_trigger_with_a_comment_passes(self):
+        self.edit(VERIFY, '  pull_request:\n', '  pull_request: # every pull request\n')
+        self.passes()
+
+    # Checkout
+    def test_a_ref_on_the_checkout_fails(self):
+        for name, job in GATES:
+            with self.subTest(job=job):
+                self.setUp()
+                self.edit_job(name, job, '          persist-credentials: false\n',
+                              '          persist-credentials: false\n          ref: main\n')
+                self.fails('step 1 `with:` must be exactly persist-credentials: false')
+
+    def test_a_different_checkout_action_fails(self):
+        for replacement in ('actions/checkout@v4', 'actions/cache@' + SHA, 'actions/checkout@' + SHA[:39]):
+            for name, job in GATES:
+                with self.subTest(job=job, uses=replacement):
+                    self.setUp()
+                    self.edit_job(name, job, f'actions/checkout@{SHA}', replacement)
+                    self.fails('step 1 must `uses:` actions/checkout@<40-hex commit SHA>')
+
+    def test_uses_or_with_on_a_later_step_fails(self):
+        self.edit(VERIFY, '      - run: make release-gate\n',
+                  '      - uses: actions/cache@' + SHA + '\n      - run: make release-gate\n')
+        self.fails('may not set `uses`')
+
+    # Must pass
+    def test_a_named_verify_gate_step_passes(self):
+        self.edit(VERIFY, '      - run: make release-gate\n', '      - name: Verify the release gate\n        run: make release-gate\n')
+        self.passes()
+
+    def test_a_quoted_env_value_passes(self):
+        self.both('RUSTUP_TOOLCHAIN: 1.98.0', 'RUSTUP_TOOLCHAIN: "1.98.0"')
+        self.passes()
+
+    def test_a_trailing_comment_on_the_env_value_passes(self):
+        self.both('RUSTUP_TOOLCHAIN: 1.98.0', 'RUSTUP_TOOLCHAIN: 1.98.0 # the release toolchain')
+        self.passes()
+
+    def test_swapped_install_order_passes(self):
+        stable = f'      - run: {INSTALL} 1.98.0 --profile minimal --component clippy,rustfmt\n'
+        nightly = f'      - run: {INSTALL} nightly-2026-09-14 --profile minimal --component llvm-tools\n'
+        self.edit_job(VERIFY, 'release-gate', stable + nightly, nightly + stable)
+        self.passes()
+
+    # The Makefile check target
+    def test_check_without_lint_fails(self):
+        self.edit('Makefile', 'helper-check lint test doc', 'helper-check test doc')
+        self.fails('Makefile check must depend on `lint`')
+
+    def test_check_without_test_fails(self):
+        self.edit('Makefile', 'helper-check lint test doc', 'helper-check lint doc')
+        self.fails('Makefile check must depend on `test`')
+
+
+    def test_a_makefile_that_unexports_the_toolchain_fails(self):
+        self.edit('Makefile', 'MAKEFLAGS += --no-print-directory\n',
+                  'MAKEFLAGS += --no-print-directory\nunexport RUSTUP_TOOLCHAIN\n')
+        self.fails('must not set, export or unexport RUSTUP_TOOLCHAIN')
+
+    def test_a_makefile_that_sets_the_toolchain_fails(self):
+        self.edit('Makefile', 'MAKEFLAGS += --no-print-directory\n',
+                  'MAKEFLAGS += --no-print-directory\nexport RUSTUP_TOOLCHAIN := 1.98.0\n')
+        self.fails('must not set, export or unexport RUSTUP_TOOLCHAIN')
+
+    def test_an_ignore_target_fails(self):
+        self.edit('Makefile', 'MAKEFLAGS += --no-print-directory\n',
+                  'MAKEFLAGS += --no-print-directory\n.IGNORE: lint\n')
+        self.fails('must not declare .IGNORE')
+
+    def test_makeflags_that_ignore_errors_fail(self):
+        for line in ('MAKEFLAGS += --no-print-directory -i', 'MAKEFLAGS += --no-print-directory --ignore-errors',
+                     'MAKEFLAGS += --no-print-directory -ki', 'MAKEFLAGS = i --no-print-directory',
+                     'IGN := -i\nMAKEFLAGS += $(IGN)\nMAKEFLAGS += --no-print-directory'):
+            with self.subTest(line=line):
+                self.setUp()
+                self.edit('Makefile', 'MAKEFLAGS += --no-print-directory\n', line + '\n')
+                self.fails('MAKEFLAGS may only be set by')
+
+    def test_the_real_makeflags_line_passes(self):
+        self.assertIn('MAKEFLAGS += --no-print-directory\n', (self.root / 'Makefile').read_text(encoding='utf-8'))
+        CR.validate_release_gate(self.root)
+
+
+class ToolchainPins(ScratchTree):
+    check = staticmethod(CR.validate_toolchain_pins)
+
+    def test_real_files_pass(self):
+        CR.validate_toolchain_pins()
+        CR.validate_toolchain_pins(self.root)
+
+    def test_publish_install_without_components_still_matches(self):
+        text = PUBLISH.read_text(encoding='utf-8')
+        self.assertIn(f'{INSTALL} 1.98.0 --profile minimal\n', text)
+        self.assertEqual([name for _, name in CR.toolchain_pins(text)], ['1.98.0', '1.98.0'])
+        CR.validate_toolchain_pins(self.root)
+
+    def test_pins_ignore_profile_and_components(self):
+        self.assertEqual(CR.toolchain_pins(f'  run: {INSTALL} nightly-x --profile minimal --component a,b'),
+                         [(1, 'nightly-x')])
+
+    def test_an_install_line_bumped_alone_fails(self):
+        self.edit(VERIFY, f'{INSTALL} 1.98.0', f'{INSTALL} 1.98.1')
+        self.fails('stable toolchain pins differ')
+
+    def test_an_env_bumped_alone_fails(self):
+        self.edit(RELEASE, 'RUSTUP_TOOLCHAIN: 1.98.0', 'RUSTUP_TOOLCHAIN: 1.98.1')
+        self.fails('stable toolchain pins differ')
+
+    def test_a_publish_only_bump_fails(self):
+        self.edit(PUBLISH_FILE, '1.98.0', '1.98.1', count=2)
+        self.fails('stable toolchain pins differ')
+
+    def test_a_rust_version_mismatch_fails(self):
+        self.edit('Cargo.toml', 'rust-version = "1.98"', 'rust-version = "1.99"')
+        self.fails('does not match Cargo.toml rust-version 1.99')
+
+    def test_a_nightly_drift_in_one_verify_job_fails(self):
+        self.edit(VERIFY, 'RUSTUP_TOOLCHAIN: nightly-2026-09-14', 'RUSTUP_TOOLCHAIN: nightly-2026-09-15')
+        self.fails('does not match rust-toolchain.toml channel nightly-2026-09-14')
+
+    def test_a_channel_change_fails(self):
+        self.edit('rust-toolchain.toml', 'nightly-2026-09-14', 'nightly-2026-09-15')
+        self.fails('does not match rust-toolchain.toml channel nightly-2026-09-15')
+
+    def pins(self, command):
+        return [name for _, name in CR.toolchain_pins(f'      - run: {command}\n')]
+
+    def add_step(self, command, name='verify.yml'):
+        self.append(f'.github/workflows/{name}', f'      - run: {command}\n')
+
+    def test_flags_before_the_name_pass(self):
+        self.assertEqual(self.pins(f'{INSTALL} --profile minimal --component clippy,rustfmt 1.98.0'), ['1.98.0'])
+        self.assertEqual(self.pins(f'{INSTALL} -t wasm32-wasip1 --no-self-update --profile=minimal 1.98.0'),
+                         ['1.98.0'])
+        self.add_step(f'{INSTALL} --profile minimal 1.98.0')
+        CR.validate_toolchain_pins(self.root)
+
+    def test_a_line_continuation_passes(self):
+        text = f'      - run: {INSTALL} \\\n          --profile minimal \\\n          --component clippy \\\n          1.98.0\n'
+        self.assertEqual(CR.toolchain_pins(text), [(1, '1.98.0')])
+        self.append(VERIFY, text)
+        CR.validate_toolchain_pins(self.root)
+
+    def test_a_continued_pin_is_still_checked(self):
+        self.append(VERIFY, f'      - run: {INSTALL} \\\n          --profile minimal \\\n          1.97.0\n')
+        self.fails('stable toolchain pins differ')
+
+    def test_every_positional_is_a_pin(self):
+        self.assertEqual(self.pins(f'{INSTALL} --profile minimal 1.98.0 1.97.0'), ['1.98.0', '1.97.0'])
+
+    def test_other_installers_are_never_pins(self):
+        self.assertEqual(self.pins('sudo apt-get install --yes libarchive-tools'), [])
+        self.assertEqual(self.pins('python3 scripts/install-qualification-tool.py node >> "$GITHUB_PATH"'), [])
+        self.assertEqual(self.pins('cargo install cargo-fuzz'), [])
+        CR.validate_toolchain_pins(self.root)
+
+    def test_the_other_selecting_commands_are_read(self):
+        self.assertEqual(self.pins('rustup default 1.97.0'), ['1.97.0'])
+        self.assertEqual(self.pins('rustup override set 1.97.0'), ['1.97.0'])
+        self.assertEqual(self.pins('cargo +1.97.0 test'), ['1.97.0'])
+        self.assertEqual(self.pins('RUSTUP_TOOLCHAIN=1.97.0 make check'), ['1.97.0'])
+        self.assertEqual(self.pins(f'rustup install 1.97.0; {INSTALL} 1.96.0'), ['1.97.0', '1.96.0'])
+
+    def test_a_matrix_pin_fails(self):
+        self.add_step(f'{INSTALL} ${{{{ matrix.rust }}}}')
+        self.fails('toolchain pins must be literal')
+
+    def test_a_variable_pin_fails(self):
+        self.add_step(f'{INSTALL} "$TC"')
+        self.fails('toolchain pins must be literal')
+
+    def test_a_cargo_plus_pin_fails(self):
+        self.add_step('cargo +1.97.0 test')
+        self.fails('stable toolchain pins differ')
+
+    def test_an_inline_assignment_fails(self):
+        self.add_step('RUSTUP_TOOLCHAIN=1.97.0 cargo test')
+        self.fails('stable toolchain pins differ')
+
+    def test_a_default_or_override_pin_fails(self):
+        self.add_step('rustup default 1.97.0')
+        self.fails('stable toolchain pins differ')
+
+    def test_a_pin_in_a_new_workflow_file_fails(self):
+        (self.root / '.github/workflows/extra.yml').write_text(
+            f'name: Extra\njobs:\n  x:\n    steps:\n      - run: {INSTALL} 1.97.0\n', encoding='utf-8')
+        self.fails('extra.yml:5')
+
+    def test_a_malformed_pin_fails(self):
+        self.add_step(f'{INSTALL} stable')
+        self.fails("toolchain pin 'stable' must be nightly-YYYY-MM-DD or X.Y.Z")
+
+    def test_a_non_literal_env_pin_fails(self):
+        self.edit(VERIFY, 'RUSTUP_TOOLCHAIN: 1.98.0', 'RUSTUP_TOOLCHAIN: ${{ matrix.rust }}')
+        self.fails('toolchain pins must be literal')
 
 
 class Preflight(unittest.TestCase):

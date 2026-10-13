@@ -287,9 +287,10 @@ make wasm-test   # compare native/WASI recovery, matching, embeddings, Markdown,
 make syntax-oracles  # compare fixed syntax probes to independent compilers
 make benchmark  # recovery quality assertions and latency baseline
 make fuzz       # ten coverage-guided targets and independent pattern/Markdown oracles
-make fuzz-hosted  # the CI and release fuzz gate (known #6/#11 limitations handled)
+make fuzz-hosted  # the CI and pre-tag fuzz gate (known #6/#11 limitations handled)
 make resources  # allocations, heap/RSS, latency, artifact size, and uncached build cost
 make package    # Cargo verification and registered source/license archive audit
+make release-gate  # the one release gate, run on the release toolchain by pull requests and release qualification
 ```
 
 Resource profiling is available with `make resources`; see [measurement scope and prerequisites](docs/RESOURCES.md). It uses external profilers and adds no crate runtime dependencies.

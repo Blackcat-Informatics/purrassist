@@ -1121,7 +1121,7 @@ class ReleaseReservations(Case):
 class ReleaseQualificationSteps(Case):
     def test_the_steps_are_read_from_the_workflow(self):
         names = CD.workflow_step_names((ROOT / '.github/workflows/release-qualification.yml').read_text(encoding='utf-8'))
-        self.assertIn('Verify workspace', names)
+        self.assertIn('Verify the release gate', names)
         self.assertNotIn('Release qualification', names)
 
     def test_only_job_steps_are_read(self):
@@ -1207,6 +1207,57 @@ class ReleaseQualificationSteps(Case):
         tree = self.tree()
         tree.replace('docs/RELEASE.md', '## Qualification workflow (release-qualification.yml)', '## Qualification')
         self.assertFails(tree.errors(), 'release-qualification-steps', NOT_FOUND)
+
+
+class ReleaseToolchain(Case):
+    WORKFLOW = '.github/workflows/release-qualification.yml'
+    RULE = 'release-toolchain'
+
+    def test_the_real_files_pass(self):
+        self.assertNoRule(self.tree().errors(), self.RULE)
+
+    def test_a_workflow_pin_bump_without_the_docs_fails(self):
+        tree = self.tree()
+        tree.replace(self.WORKFLOW, '1.98.0', '1.98.1', count=0)
+        errors = tree.errors()
+        self.assertFails(errors, self.RULE, 'docs/RELEASE.md', 'names toolchain 1.98.0', 'pins 1.98.1')
+        self.assertFails(errors, self.RULE, 'docs/QUALIFICATION.md', 'names toolchain 1.98.0')
+
+    def test_a_stale_env_assignment_in_the_readme_fails(self):
+        tree = self.tree()
+        tree.append('README.md', '\nReproduce with `RUSTUP_' + 'TOOLCHAIN=1.97.0 make release-gate`.\n')
+        self.assertFails(tree.errors(), self.RULE, 'README.md', 'names toolchain 1.97.0')
+
+    def test_a_stale_patch_form_mention_fails(self):
+        tree = self.tree()
+        tree.replace('docs/RELEASE.md', 'stable Rust 1.98.0 with Clippy', 'stable Rust 1.97.0 with Clippy')
+        self.assertFails(tree.errors(), self.RULE, 'docs/RELEASE.md', 'names toolchain 1.97.0')
+
+    def test_the_publication_record_is_ignored(self):
+        tree = self.tree()
+        record = tree.read('docs/RELEASE.md').split('## 0.1.0 publication record', 1)[1]
+        self.assertNotIn('Rust 1.97.3', record)
+        tree.replace('docs/RELEASE.md', 'stable Rust 1.98 Clippy', 'stable Rust 1.97.3 Clippy and RUSTUP_'
+                     + 'TOOLCHAIN=1.97.3')
+        self.assertNoRule(tree.errors(), self.RULE)
+
+    def test_a_mention_just_after_the_record_is_read(self):
+        tree = self.tree()
+        tree.append('docs/RELEASE.md', '\n## After\n\nRust 1.97.3\n')
+        self.assertFails(tree.errors(), self.RULE, 'docs/RELEASE.md', 'names toolchain 1.97.3')
+
+    def test_a_missing_mention_is_not_found(self):
+        tree = self.tree()
+        for name in CD.TOOLCHAIN_DOCS:
+            text = re.sub(r'RUSTUP_TOOLCHAIN=|Rust (?=\d+\.\d+\.\d+)', 'toolchain ', tree.read(name))
+            tree.write(name, text)
+        self.assertFails(tree.errors(), self.RULE, NOT_FOUND)
+
+    def test_ambiguous_workflow_pins_fail(self):
+        tree = self.tree()
+        tree.replace(self.WORKFLOW, 'rustup toolchain install nightly-2026-09-14',
+                     'rustup toolchain install 1.97.0', count=0)
+        self.assertFails(tree.errors(), self.RULE, 'expected exactly one stable toolchain pin')
 
 
 class ReadmeChangelog(Case):

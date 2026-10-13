@@ -20,7 +20,32 @@ workspace, all versions match, internal version requirements match, normal and
 dev dependencies precede their users, and (see
 below) that `.github/workflows/publish.yml` has the required trigger,
 environment, permissions, qualification gate, SHA-pinned actions, publish
-order, and verification step. It runs in `make check` and `make package`.
+order, and verification step. It also proves gate identity. Both gate jobs
+(release qualification's `package` job and `verify.yml`'s `release-gate` job)
+are held to allowlists, so anything not explicitly allowed fails: only the
+listed workflow and job keys, an `env` of exactly `RUSTUP_TOOLCHAIN` equal to
+the job's stable install, the allowed step keys, a SHA-pinned checkout, and no
+`GITHUB_ENV` or `GITHUB_PATH` write. `verify.yml` must keep an unfiltered
+`pull_request:` trigger, so no pull request skips the gate. Release
+qualification's `package` job has only the install, version-check and
+`Verify the release gate` steps, `verify.yml`'s `release-gate` job runs the
+same `make release-gate` with the same installs and environment, the Makefile
+`release-gate` target has no prerequisites and exactly its five gates in order,
+and `check` depends on `lint` and `test`. `make lint` is the two `--locked`
+Clippy commands: the workspace, and the `test = false` corpus suites named in
+`CORPUS_SUITES`, which must equal the workspace's `test = false` test targets.
+It checks the toolchain pins as well: it reads every file in
+`.github/workflows/`, so a pin in a new workflow is checked too; every pin must
+be a literal version, never a `${{ }}` expression or a shell variable; every
+stable pin is identical and matches the workspace `rust-version`; and every
+nightly pin matches `rust-toolchain.toml`. `scripts/check-docs.py` holds every
+`RUSTUP_TOOLCHAIN=` value and patch-form Rust version in this document, the
+README and `docs/QUALIFICATION.md` to the stable pin. `check-release.py` also
+rejects Makefile lines that would change the toolchain or ignore failures
+(`RUSTUP_TOOLCHAIN`, `unexport`, `.IGNORE`, or any `MAKEFLAGS` setting other than
+`MAKEFLAGS += --no-print-directory`).
+`check-release.py` runs in `make check` and `make package`; `check-docs.py`
+runs in `make check`.
 
 **Derive/core compatibility within a minor series.** Generated code references
 `purrassist_core::tool_call::__DERIVE_ABI_<major>_<minor>`, so the derive and
@@ -127,12 +152,20 @@ steps in order:
 3. `Verify release set and version`: `scripts/check-release.py --tag` on a tag
    run (the tag must match the workspace version), plain
    `scripts/check-release.py` on a manual run.
-4. `Verify workspace`: `make check`, the full local gate.
-5. `Verify corpus suites`: `make corpus`.
-6. `Verify coverage-feedback corpus growth`:
-   `scripts/test-fuzz-feedback.py`.
-7. `Verify the published-crate verifier`: `scripts/test-verify-published.py`.
-8. `Verify crate archives and notices`: `make package`.
+4. `Verify the release gate`: `make release-gate`, the one gate. It runs
+   `make check` (the full local gate; its `make lint` runs workspace Clippy
+   with `--workspace --all-targets --locked -- -D warnings` plus Clippy over the
+   `test = false` corpus suites), `make corpus`,
+   `scripts/test-fuzz-feedback.py` (coverage-feedback corpus growth),
+   `scripts/test-verify-published.py` (the published-crate verifier) and
+   `make package`, in that order.
+
+`verify.yml`'s `release-gate` job runs the same `make release-gate` with the
+same two toolchains and environment on every pull request, so a lint or test
+that fails only on the release toolchain fails before the tag, not at it. The
+job is not yet a required status check on `main`, so a red run does not by
+itself block a merge; making it required is a repository-owner setting.
+Reproduce it locally with `RUSTUP_TOOLCHAIN=1.98.0 make release-gate`.
 
 `make package` packages all six crates with Cargo verification enabled and
 audits the archives and license notices. Every package attempt also runs the

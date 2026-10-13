@@ -32,17 +32,22 @@ jobs:
         run: python3 scripts/install-qualification-tool.py node >> "$GITHUB_PATH"
       - if: runner.os == 'Linux'
         run: make syntax-oracles
-  msrv:
+  release-gate:
+    # The release gate on the release toolchain pinned in
+    # release-qualification.yml (which is also the MSRV evidence), with the
+    # pinned nightly for the coverage probe: the same `make release-gate` that
+    # release qualification runs.
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     env:
       RUSTUP_TOOLCHAIN: 1.98.0
-      RUSTFLAGS: -D warnings
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - run: rustup toolchain install 1.98.0 --profile minimal
-      - run: cargo test --workspace --locked
+      - run: rustup toolchain install 1.98.0 --profile minimal --component clippy,rustfmt
+      - run: rustup toolchain install nightly-2026-09-14 --profile minimal --component llvm-tools
+      - run: make release-gate
   windows-engines:
     runs-on: windows-2025
     env:
