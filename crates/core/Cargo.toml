@@ -64,6 +64,8 @@ path = "examples/tool_call_corpus.rs"
 # Corpus suites: vendored conformance corpora, generated evaluation corpora,
 # exhaustive oracles and 1 MiB scale runs. `make corpus` (the CI `corpus`
 # job) runs them; `test = false` keeps them out of `cargo test` and `make check`.
+# `make lint` still lints them through `CORPUS_SUITES` in the Makefile, which
+# `scripts/check-release.py` holds equal to the `test = false` targets below.
 [[test]]
 name = "correction_evaluation"
 path = "tests/correction_evaluation.rs"

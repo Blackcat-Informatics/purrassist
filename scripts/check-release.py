@@ -1,7 +1,32 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-"""Check the complete publish set and dependency order without publishing."""
+"""Check the release set, the publish workflow, gate identity and toolchain pins, offline.
+
+Run with no argument (`make check`, and the release-qualification workflow), it reads
+`cargo metadata` and the repository and checks, without publishing anything:
+
+* the release set: `RELEASE_ORDER` is exactly the publishable workspace, all versions and
+  internal version requirements match, and normal and dev dependencies precede their users
+  (`--tag rust-vVERSION` also checks the tag against the version);
+* the publish workflow: `validate_publish_workflow()` holds `.github/workflows/publish.yml` to a
+  closed shape (tag trigger, `crates-io` environment, OIDC permission only in the publish job,
+  SHA-pinned actions, the preflight step, the dependency-ordered publish loop);
+* gate identity: `validate_release_gate()` holds the release-qualification `package` job and the
+  pull-request `Verify` workflow's `release-gate` job to allowlists (workflow and job keys, an
+  `env` of exactly `RUSTUP_TOOLCHAIN`, step keys, a SHA-pinned checkout, an unfiltered
+  `pull_request:` trigger, no `GITHUB_ENV` or `GITHUB_PATH` write) so both run the same
+  `make release-gate` on the same toolchains; it also checks the Makefile `release-gate`,
+  `check` (depends on `lint` and `test`) and `lint` recipes, and the corpus-suite rule:
+  `make lint` lints every `test = false` suite, named once in `CORPUS_SUITES`;
+* toolchain pins: `validate_toolchain_pins()` reads every file in `.github/workflows/` (install
+  lines, `rustup default`, `rustup override set`, `cargo +X`, inline `RUSTUP_TOOLCHAIN=` and
+  `RUSTUP_TOOLCHAIN:` keys). Each pin must be a literal `nightly-YYYY-MM-DD` or `X.Y.Z`; every
+  stable pin is identical and matches `rust-version`; every nightly pin matches
+  `rust-toolchain.toml`.
+
+`--preflight-owners --user-agent AGENT` is the one networked mode: the publish preflight.
+"""
 
 import http.client
 import importlib.util
@@ -237,7 +262,6 @@ def validate_publish_workflow(path=None):
           'qualification gate, SHA-pinned actions, dependency order, and verify-published step.')
 
 
-WORKFLOW_FILES = ('verify.yml', 'release-qualification.yml', 'publish.yml')
 RELEASE_STEPS = ('Install release toolchain', 'Install pinned coverage-feedback toolchain',
                  'Verify release set and version', 'Verify the release gate')
 GATE_STEP = 'Verify the release gate'
@@ -256,9 +280,11 @@ PLAIN_INSTALL = re.compile(r'rustup\s+toolchain\s+install\s+[^\s;&|$`()<>]+(?:\s
 ENV_FILES = re.compile(r'\bGITHUB_(?:ENV|PATH)\b')
 STABLE_COMPONENTS = 'clippy,rustfmt'
 NIGHTLY_COMPONENTS = 'llvm-tools'
-# The pin extractors read only the toolchain name; profile and components follow it.
-ENV_PIN = re.compile(r'^\s*RUSTUP_TOOLCHAIN:\s*[\'"]?([^\s\'"#]+)')
-INSTALL_PIN = re.compile(r'\brustup\s+toolchain\s+install\s+([^\s\'"]+)(.*)$')
+# The pin extractors: `RUSTUP_TOOLCHAIN:` keys, plus the commands `_rustup_pins` tokenises.
+ENV_PIN = re.compile(r'^\s*RUSTUP_TOOLCHAIN:\s*(.*)$')
+SHELL_TOKEN = re.compile(r'\$\{\{.*?\}\}|"[^"]*"|\'[^\']*\'|[;&|]+|[^\s;&|]+')
+VALUE_FLAGS = ('--profile', '--component', '-c', '--target', '-t')
+PIN_FORMAT = re.compile(r'nightly-\d{4}-\d{2}-\d{2}|\d+\.\d+\.\d+')
 
 
 def _load_check_docs():
@@ -468,13 +494,8 @@ def _gate_job_errors(label, job_text):
 
 def _job_installs(job_text):
     """Each toolchain install of a job as (toolchain name, components or None)."""
-    installs = []
-    for _, line in _code_lines(job_text):
-        match = INSTALL_PIN.search(line)
-        if match:
-            components = re.search(r'--component\s+(\S+)', match[2])
-            installs.append((match[1], components[1] if components else None))
-    return installs
+    return [(name, options.get('--component', options.get('-c')))
+            for _, kind, name, options in _rustup_pins(job_text) if kind == 'install']
 
 
 def _make_recipe(makefile, target):
@@ -539,7 +560,8 @@ def validate_release_gate(root=None):
       command lints the corpus suites, so `CORPUS_SUITES` must be defined once and equal the set
       of `test = false` test targets of the workspace members.
 
-    verify.yml gets none of publish.yml's closed-shape rules. Returns nothing; raises
+    verify.yml gets none of publish.yml's closed-shape rules. Toolchain pins across every
+    workflow are checked separately by `validate_toolchain_pins`. Returns nothing; raises
     `SystemExit` listing every failure.
     """
     root = Path(root) if root else ROOT
@@ -661,24 +683,105 @@ def validate_release_gate(root=None):
           'both run `make release-gate` on the same toolchains and environment.')
 
 
-def toolchain_pins(text):
-    """Every toolchain pin of a workflow as (line number, toolchain name): each
-    `RUSTUP_TOOLCHAIN:` value and each toolchain install line's name, ignoring profile and
-    components."""
+def _logical_lines(text):
+    """The (first line number, text) pairs of the non-comment lines of `text`, with backslash
+    continuations joined and trailing ` #` comments removed."""
+    logical, pending = [], None
+    for number, line in enumerate(text.splitlines(), 1):
+        if pending is None and line.lstrip().startswith('#'):
+            continue
+        line = re.sub(r'\s+#.*$', '', line)
+        if pending is None:
+            pending = (number, '')
+        joined = pending[1] + ' ' + line.rstrip().removesuffix('\\').strip()
+        if line.rstrip().endswith('\\'):
+            pending = (pending[0], joined)
+            continue
+        logical.append((pending[0], joined.strip()))
+        pending = None
+    if pending is not None:
+        logical.append((pending[0], pending[1].strip()))
+    return logical
+
+
+def _unquote(token):
+    return token.strip('\'"')
+
+
+def _rustup_pins(text):
+    """The toolchain names that the commands of `text` select, as (line number, kind, name,
+    options) with `kind` one of `install`, `default`, `override`, `cargo` or `inline` and
+    `options` the flags of an install (`{'--component': 'clippy,rustfmt'}`).
+
+    A toolchain install (`rustup toolchain install` or `rustup install`) is read only after the
+    `rustup` token: `apt-get install` and other installers are not. A value-taking flag in
+    `VALUE_FLAGS` consumes the next argument, `--opt=value` and boolean flags consume nothing,
+    and every remaining positional argument of an install is a pin. Also read are
+    `rustup default X`, `rustup override set X`, `cargo +X` and an inline `RUSTUP_TOOLCHAIN=X`."""
     pins = []
-    for number, line in _code_lines(text):
-        for pattern in (ENV_PIN, INSTALL_PIN):
-            match = pattern.search(line)
-            if match:
-                pins.append((number, match[1]))
+    for number, line in _logical_lines(text):
+        tokens = SHELL_TOKEN.findall(line)
+        for index, token in enumerate(tokens):
+            rest = tokens[index + 1:]
+            if token.startswith('RUSTUP_TOOLCHAIN='):
+                pins.append((number, 'inline', _unquote(token.partition('=')[2]), {}))
+            elif token == 'cargo' and rest[:1] and rest[0].startswith('+'):
+                pins.append((number, 'cargo', _unquote(rest[0][1:]), {}))
+            elif token == 'rustup':
+                verb = rest[:2] if rest[:1] == ['toolchain'] else rest[:1]
+                after = rest[len(verb):]
+                if verb in (['toolchain', 'install'], ['install']):
+                    options, position = {}, 0
+                    while position < len(after) and not re.fullmatch(r'[;&|]+', after[position]):
+                        argument = after[position]
+                        if argument in VALUE_FLAGS:
+                            options[argument] = _unquote(after[position + 1]) if position + 1 < len(after) else ''
+                            position += 2
+                            continue
+                        if argument.startswith('-'):
+                            flag, _, value = argument.partition('=')
+                            if value:
+                                options[flag] = _unquote(value)
+                        else:
+                            pins.append((number, 'install', _unquote(argument), options))
+                        position += 1
+                elif verb == ['default'] and after:
+                    pins.append((number, 'default', _unquote(after[0]), {}))
+                elif verb == ['override'] and after[:1] == ['set'] and after[1:2]:
+                    pins.append((number, 'override', _unquote(after[1]), {}))
     return pins
 
 
+def toolchain_pins(text):
+    """Every toolchain pin of a workflow as (line number, toolchain name): each
+    `RUSTUP_TOOLCHAIN:` value and every pin `_rustup_pins` reads, ignoring profile and
+    components. The names are returned as written; `validate_toolchain_pins` judges them."""
+    pins = []
+    for number, line in _code_lines(text):
+        match = ENV_PIN.search(line)
+        if match:
+            pins.append((number, _plain_value(match[1])))
+    pins.extend((number, name) for number, _, name, _ in _rustup_pins(text))
+    return sorted(pins, key=lambda pin: pin[0])
+
+
+def stable_pins(text):
+    """The distinct stable (not `nightly`) toolchain names of a workflow, sorted."""
+    return sorted({name for _, name in toolchain_pins(text) if not name.startswith('nightly')})
+
+
+def workflow_files(root):
+    """Every workflow file of `root`, sorted: a new workflow cannot hide a pin."""
+    directory = Path(root) / '.github/workflows'
+    return sorted(path for path in directory.iterdir() if path.suffix in ('.yml', '.yaml'))
+
+
 def validate_toolchain_pins(root=None):
-    """Check that each toolchain pin has one source across verify.yml, release-qualification.yml
-    and publish.yml. A name starting with `nightly` is a nightly occurrence; any other is stable.
-    Every stable occurrence is identical and its major.minor equals Cargo.toml's `rust-version`;
-    every nightly occurrence equals rust-toolchain.toml's `channel`. Raises `SystemExit` listing
+    """Check that each toolchain pin has one source across every file in `.github/workflows/`.
+    A pin must be literal (`${{ ... }}` and `$VAR` are errors) and match `PIN_FORMAT`. A name
+    starting with `nightly` is a nightly occurrence; any other is stable. Every stable
+    occurrence is identical and its major.minor equals Cargo.toml's `rust-version`; every
+    nightly occurrence equals rust-toolchain.toml's `channel`. Raises `SystemExit` listing
     every failure."""
     root = Path(root) if root else ROOT
     errors = []
@@ -689,10 +792,16 @@ def validate_toolchain_pins(root=None):
     if channel is None:
         errors.append('rust-toolchain.toml has no channel')
     stable, nightly = [], []
-    for workflow in WORKFLOW_FILES:
-        text = (root / '.github/workflows' / workflow).read_text(encoding='utf-8')
+    for path in workflow_files(root):
+        text = path.read_text(encoding='utf-8')
         for number, name in toolchain_pins(text):
-            (nightly if name.startswith('nightly') else stable).append((f'{workflow}:{number}', name))
+            where = f'{path.name}:{number}'
+            if '$' in name:
+                errors.append(f'{where}: toolchain pins must be literal, found {name!r}')
+            elif not PIN_FORMAT.fullmatch(name):
+                errors.append(f'{where}: toolchain pin {name!r} must be nightly-YYYY-MM-DD or X.Y.Z')
+            else:
+                (nightly if name.startswith('nightly') else stable).append((where, name))
     if not stable:
         errors.append('no stable toolchain pin found in the workflows')
     distinct = sorted({name for _, name in stable})

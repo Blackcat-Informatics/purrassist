@@ -24,6 +24,10 @@ sentence that restates it:
   qualification-workflow summary of `docs/RELEASE.md` (from the `name:` of every
   named step of `.github/workflows/release-qualification.yml`, where a `run:`
   step without a `name:` is an error), and the README link to the changelog;
+* the release toolchain: every `RUSTUP_TOOLCHAIN=<x>` and every patch-form `Rust <x.y.z>` in
+  `README.md`, `docs/RELEASE.md` (except its dated `## 0.1.0 publication record`) and
+  `docs/QUALIFICATION.md` equals the stable pin of `release-qualification.yml`, read through
+  the extractor of `scripts/check-release.py`;
 * the tool names from the generated block of `docs/TOOLS.md` (the Rust test
   `tools_reference_matches_registry` pins that block to the registry);
 * the crate map, the workspace boundaries and the packaged READMEs from the
@@ -131,6 +135,9 @@ RELEASE_DOC = 'docs/RELEASE.md'
 RESERVATIONS_HEADING = '## Name reservations'
 QUALIFICATION_HEADING = '## Qualification workflow (release-qualification.yml)'
 QUALIFICATION_WORKFLOW = '.github/workflows/release-qualification.yml'
+TOOLCHAIN_DOCS = ('README.md', RELEASE_DOC, 'docs/QUALIFICATION.md')
+PUBLICATION_RECORD_HEADING = '## 0.1.0 publication record'
+TOOLCHAIN_MENTION = re.compile(r'RUSTUP_TOOLCHAIN=([^\s`\'")]+)|\bRust\s+(\d+\.\d+\.\d+)\b')
 CHANGELOG_INTERFACES = ('**Rust crate**', '**MCP server**', '**CLI**')
 TOOLS_DOC = 'docs/TOOLS.md'
 TOOLS_BEGIN = '<!-- tools-reference:begin -->\n'
@@ -812,6 +819,39 @@ def check_release_qualification(docs, report):
             report.add(rule, RELEASE_DOC, f'the qualification summary does not name the workflow step `{step}`')
 
 
+def without_section(text, heading):
+    """`text` with the `##` section headed `heading` blanked (newlines kept, so offsets and line
+    numbers survive): a dated historical record is not a statement about the current state."""
+    blanked, inside = [], False
+    for line in text.splitlines(keepends=True):
+        if line.startswith('## '):
+            inside = line.rstrip() == heading
+        blanked.append(re.sub(r'[^\n]', ' ', line) if inside else line)
+    return ''.join(blanked)
+
+
+def check_release_toolchain(docs, report, pins):
+    """Every `RUSTUP_TOOLCHAIN=<x>` and patch-form `Rust <x.y.z>` in `TOOLCHAIN_DOCS` equals the
+    stable pin; `pins` are the stable pins of the release-qualification workflow."""
+    rule = 'release-toolchain'
+    if len(pins) != 1:
+        report.add(rule, QUALIFICATION_WORKFLOW, f'expected exactly one stable toolchain pin, found {pins}')
+        return
+    found = 0
+    for name in TOOLCHAIN_DOCS:
+        text = docs.text(name)
+        if name == RELEASE_DOC:
+            text = without_section(text, PUBLICATION_RECORD_HEADING)
+        for match in TOOLCHAIN_MENTION.finditer(text):
+            found += 1
+            value = match[1] or match[2]
+            if value != pins[0]:
+                report.add(rule, f'{name}:{text.count(chr(10), 0, match.start()) + 1}',
+                           f'names toolchain {value} but {QUALIFICATION_WORKFLOW} pins {pins[0]}')
+    if not found:
+        report.add(rule, ', '.join(TOOLCHAIN_DOCS), 'fact sentence not found: no RUSTUP_TOOLCHAIN=<x> or Rust x.y.z')
+
+
 def check_readme_changelog(docs, report):
     if not re.search(r'\]\(CHANGELOG\.md(?:#[^)]*)?\)', docs.text('README.md')):
         report.add('readme-changelog', 'README.md', 'fact sentence not found: no link to CHANGELOG.md')
@@ -1341,6 +1381,7 @@ def check(root, names):
         lambda: check_security_policy(docs, report, version, repository),
         lambda: check_release_reservations(docs, report, release.RELEASE_ORDER),
         lambda: check_release_qualification(docs, report),
+        lambda: check_release_toolchain(docs, report, release.stable_pins(docs.text(QUALIFICATION_WORKFLOW))),
         lambda: check_readme_changelog(docs, report),
         lambda: check_social_preview(root, report),
     )

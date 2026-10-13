@@ -28,7 +28,9 @@ test:
 
 # Corpus suites (`test = false` in crates/core/Cargo.toml): vendored
 # conformance corpora, generated evaluation corpora, exhaustive oracles and
-# 1 MiB scale runs. CI runs them in the `corpus` job; `make check` does not.
+# 1 MiB scale runs. The list has two users: `make corpus` runs the suites (CI
+# runs it in the `corpus` job; `make check` does not), and `make lint` lints
+# them with Clippy, so `make check` lints them although it does not run them.
 CORPUS_SUITES := correction_evaluation corruption_oracle markdown_corpus matching_oracle pattern_corpus schema_conformance tool_call_scale unicode_conformance
 corpus:
 	RUSTFLAGS="$${RUSTFLAGS:-} -D warnings" cargo test -p purrassist-core --locked $(foreach suite,$(CORPUS_SUITES),--test $(suite))
@@ -81,7 +83,7 @@ fuzz:
 		python3 scripts/fuzz.py --target $(TARGET) $(FUZZ_ARGS); \
 	fi
 
-# The hosted and release fuzz gate (docs/RELEASE.md): every target at the smoke
+# The CI and pre-tag fuzz gate (docs/RELEASE.md): every target at the smoke
 # count, with the accepted 0.1.0 limitations handled rather than ending the
 # run. The tool-call targets pass --continue-on-known, which retains and names
 # each issue #6 panic while any other failure still stops the campaign, and

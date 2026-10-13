@@ -17,6 +17,9 @@ Two groups, neither of which touches the network or this checkout:
   of toolchain pin drift (install line, env, publish.yml, rust-version, nightly).
   The gate jobs' allowlists (workflow, job, env, step, checkout and trigger shapes, each with
   its must-fail and must-pass fixtures) and the Makefile `check` prerequisites `lint` and `test`.
+  Pin extraction is tested on flags before the name, line continuations, the real workflows,
+  and (must fail) `${{ }}` and `$VAR` pins, `cargo +X`, inline `RUSTUP_TOOLCHAIN=`, a pin in a
+  new workflow file and a malformed pin.
 * `preflight_owners()` is driven by fake fetchers and fixture registry
   responses: success, a 404 crate, mismatched owners, network errors,
   non-JSON and malformed responses.
@@ -638,6 +641,78 @@ class ToolchainPins(ScratchTree):
     def test_a_channel_change_fails(self):
         self.edit('rust-toolchain.toml', 'nightly-2026-09-14', 'nightly-2026-09-15')
         self.fails('does not match rust-toolchain.toml channel nightly-2026-09-15')
+
+    def pins(self, command):
+        return [name for _, name in CR.toolchain_pins(f'      - run: {command}\n')]
+
+    def add_step(self, command, name='verify.yml'):
+        self.append(f'.github/workflows/{name}', f'      - run: {command}\n')
+
+    def test_flags_before_the_name_pass(self):
+        self.assertEqual(self.pins(f'{INSTALL} --profile minimal --component clippy,rustfmt 1.98.0'), ['1.98.0'])
+        self.assertEqual(self.pins(f'{INSTALL} -t wasm32-wasip1 --no-self-update --profile=minimal 1.98.0'),
+                         ['1.98.0'])
+        self.add_step(f'{INSTALL} --profile minimal 1.98.0')
+        CR.validate_toolchain_pins(self.root)
+
+    def test_a_line_continuation_passes(self):
+        text = f'      - run: {INSTALL} \\\n          --profile minimal \\\n          --component clippy \\\n          1.98.0\n'
+        self.assertEqual(CR.toolchain_pins(text), [(1, '1.98.0')])
+        self.append(VERIFY, text)
+        CR.validate_toolchain_pins(self.root)
+
+    def test_a_continued_pin_is_still_checked(self):
+        self.append(VERIFY, f'      - run: {INSTALL} \\\n          --profile minimal \\\n          1.97.0\n')
+        self.fails('stable toolchain pins differ')
+
+    def test_every_positional_is_a_pin(self):
+        self.assertEqual(self.pins(f'{INSTALL} --profile minimal 1.98.0 1.97.0'), ['1.98.0', '1.97.0'])
+
+    def test_other_installers_are_never_pins(self):
+        self.assertEqual(self.pins('sudo apt-get install --yes libarchive-tools'), [])
+        self.assertEqual(self.pins('python3 scripts/install-qualification-tool.py node >> "$GITHUB_PATH"'), [])
+        self.assertEqual(self.pins('cargo install cargo-fuzz'), [])
+        CR.validate_toolchain_pins(self.root)
+
+    def test_the_other_selecting_commands_are_read(self):
+        self.assertEqual(self.pins('rustup default 1.97.0'), ['1.97.0'])
+        self.assertEqual(self.pins('rustup override set 1.97.0'), ['1.97.0'])
+        self.assertEqual(self.pins('cargo +1.97.0 test'), ['1.97.0'])
+        self.assertEqual(self.pins('RUSTUP_TOOLCHAIN=1.97.0 make check'), ['1.97.0'])
+        self.assertEqual(self.pins(f'rustup install 1.97.0; {INSTALL} 1.96.0'), ['1.97.0', '1.96.0'])
+
+    def test_a_matrix_pin_fails(self):
+        self.add_step(f'{INSTALL} ${{{{ matrix.rust }}}}')
+        self.fails('toolchain pins must be literal')
+
+    def test_a_variable_pin_fails(self):
+        self.add_step(f'{INSTALL} "$TC"')
+        self.fails('toolchain pins must be literal')
+
+    def test_a_cargo_plus_pin_fails(self):
+        self.add_step('cargo +1.97.0 test')
+        self.fails('stable toolchain pins differ')
+
+    def test_an_inline_assignment_fails(self):
+        self.add_step('RUSTUP_TOOLCHAIN=1.97.0 cargo test')
+        self.fails('stable toolchain pins differ')
+
+    def test_a_default_or_override_pin_fails(self):
+        self.add_step('rustup default 1.97.0')
+        self.fails('stable toolchain pins differ')
+
+    def test_a_pin_in_a_new_workflow_file_fails(self):
+        (self.root / '.github/workflows/extra.yml').write_text(
+            f'name: Extra\njobs:\n  x:\n    steps:\n      - run: {INSTALL} 1.97.0\n', encoding='utf-8')
+        self.fails('extra.yml:5')
+
+    def test_a_malformed_pin_fails(self):
+        self.add_step(f'{INSTALL} stable')
+        self.fails("toolchain pin 'stable' must be nightly-YYYY-MM-DD or X.Y.Z")
+
+    def test_a_non_literal_env_pin_fails(self):
+        self.edit(VERIFY, 'RUSTUP_TOOLCHAIN: 1.98.0', 'RUSTUP_TOOLCHAIN: ${{ matrix.rust }}')
+        self.fails('toolchain pins must be literal')
 
 
 class Preflight(unittest.TestCase):
