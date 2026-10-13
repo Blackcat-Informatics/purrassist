@@ -83,9 +83,9 @@ impl CancellationToken {
 ///   `evidence`/`losses`/`inferences` ledgers instead of being duplicated
 ///   into each alternative (see `crate::provenance`). Callers that assumed
 ///   an alternative's ledgers were self-contained must also read the
-///   top-level ledgers to see shared transformations. Unreleased addition
-///   within version `2` (no new version number, since nothing has shipped
-///   yet): `alternatives` (in every Rust and wire form; see
+///   top-level ledgers to see shared transformations. Added within version
+///   `2` before the first release, so without a new version number:
+///   `alternatives` (in every Rust and wire form; see
 ///   `crate::provenance::Published::order`) is ordered by ascending
 ///   `crate::provenance::Forest::rank`, and a receipt with two or more
 ///   alternatives carries a top-level `ambiguity` object (`derivations`,

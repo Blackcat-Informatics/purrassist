@@ -52,11 +52,11 @@ def link_or_copy(source, target):
         shutil.copy2(source, target)
 
 
-
 # The checkout's 0.1.0 changelog heading, whose status is `unreleased` until the
 # release commit replaces it with the tagging date.
 CHANGELOG_HEADING = re.search(r'(?m)^## \[0\.1\.0\] - .+$',
                               (ROOT / 'CHANGELOG.md').read_text(encoding='utf-8')).group(0)
+
 
 class Tree:
     """A temporary copy of the documents and fact sources."""

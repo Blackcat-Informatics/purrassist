@@ -101,8 +101,8 @@ BANNED_PHRASES = (
 )
 
 # The `[X.Y.Z]` changelog section is also the body of the GitHub release, so it must not
-# carry pre-tag status or claim a publication that has not happened. The `- unreleased`
-# in its heading is the status and is not part of the body.
+# carry pre-tag status or claim a publication that has not happened. The heading's
+# status (`- unreleased`, or the release date) is not part of the body.
 RELEASE_BODY_BANNED = (r'not yet tagged', r'unreleased', r'published in this order')
 
 KNOWN_LIMITATIONS_JSON = 'docs/known-limitations.json'
