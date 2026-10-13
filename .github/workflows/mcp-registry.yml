@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# Submits server.json to the MCP Registry as io.github.Blackcat-Informatics/purrassist.
+# The registry grants the io.github.<repository owner> namespace to a GitHub
+# Actions OIDC token from this repository, so no personal credential is
+# involved. Run it manually after a release whose purrassist-cli README carries
+# the visible `mcp-name:` line (see docs/RELEASE.md, "After publication").
+# This workflow's id-token permission cannot publish crates: crates.io reads
+# the workflow filename from the OIDC workflow_ref claim, and its trusted
+# publishers name publish.yml only. mcp-publisher is pinned here and in
+# vendor/tooling.json by the same sha256.
+name: MCP Registry
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcp-registry
+  cancel-in-progress: false
+
+jobs:
+  submit:
+    # Submit only what main says; a dispatch on another branch does nothing.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      MCP_PUBLISHER_VERSION: 1.8.1
+      MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install pinned mcp-publisher
+        run: |
+          set -euo pipefail
+          archive=mcp-publisher_linux_amd64.tar.gz
+          curl -fsSL -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/modelcontextprotocol/registry/releases/download/v${MCP_PUBLISHER_VERSION}/${archive}"
+          echo "${MCP_PUBLISHER_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/mcp-publisher"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/mcp-publisher" mcp-publisher
+          echo "$RUNNER_TEMP/mcp-publisher" >> "$GITHUB_PATH"
+      - name: Validate server.json
+        run: mcp-publisher validate
+      - name: Authenticate with GitHub OIDC
+        run: mcp-publisher login github-oidc
+      - name: Publish server.json
+        run: mcp-publisher publish

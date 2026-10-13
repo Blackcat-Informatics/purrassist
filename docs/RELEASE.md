@@ -92,10 +92,13 @@ have a crates.io trusted publisher configured against:
 
 On 2026-10-12 the `purrassist-derive` trusted publisher was observed through
 the crates.io API with the same repository and workflow but no environment.
-The owner decided to keep it without an environment. Today only the `publish`
-job, which runs in `crates-io`, has `id-token: write`, so it is the only job
-that can obtain a `purrassist-derive` publishing token. Without an environment,
-any job that a later edit of `publish.yml` grants `id-token: write` could too.
+The owner decided to keep it without an environment. crates.io accepts a token
+only from the workflow file it names, `publish.yml` (it reads the filename from
+the OIDC `workflow_ref` claim), so no other workflow, including the MCP Registry
+one, can obtain a crates.io publishing token. Within `publish.yml` only the
+`publish` job, which runs in `crates-io`, has `id-token: write`. Without an
+environment, any job that a later edit of `publish.yml` grants
+`id-token: write` could obtain a `purrassist-derive` token too.
 `scripts/check-release.py` therefore holds `publish.yml` to a closed shape:
 exactly the `gate` and `publish` jobs, no YAML anchors or aliases, no backslash
 escapes, no `!!`, verbatim or letter-named YAML tags, no block-scalar
@@ -148,7 +151,7 @@ oracles, coverage-guided/differential fuzzing, packaging, resource
 measurement against the documented limits) on main pushes, pull requests, and
 manual runs, so regressions are visible long before a tag is cut.
 
-## Publishing (publish.yml): the only workflow that publishes
+## Publishing (publish.yml): the only workflow that publishes crates
 
 `.github/workflows/publish.yml` triggers only on push of tags matching
 `rust-v*` (no `workflow_dispatch`, so it can never be triggered without a tag).
@@ -290,8 +293,10 @@ For the exact `main` commit to be tagged:
   registry verifies ownership of a Cargo package from the
   `mcp-name: io.github.Blackcat-Informatics/purrassist` line that
   `crates/cli/README.md` carries, so the published `purrassist-cli` README must
-  contain it. Validate the file with the registry's publisher tooling against
-  its current schema when submitting.
+  contain it. Submit it by running the `MCP Registry` workflow
+  (`.github/workflows/mcp-registry.yml`), which validates the file with the
+  pinned `mcp-publisher`, authenticates with the workflow's GitHub OIDC token
+  and publishes it. Bump the file's versions to the new release first.
 - Switch the GitHub repository homepage to the docs.rs page once the 0.1.0
   documentation has been built there.
 
@@ -321,6 +326,11 @@ Observed on 2026-10-13:
   [rust-v0.1.0](https://github.com/Blackcat-Informatics/purrassist/releases/tag/rust-v0.1.0)
   carries the `[0.1.0]` CHANGELOG section and the verification output.
 - [`server.json`](../server.json) validates against the MCP Registry
-  `2025-12-11` server schema. Submitting it needs a GitHub sign-in by an owner
-  of the `Blackcat-Informatics` namespace:
-  `mcp-publisher login github`, then `mcp-publisher publish`.
+  `2025-12-11` server schema, and `mcp-publisher validate` accepts it. A
+  personal device-flow login could not publish it: the registry learns org
+  ownership from the login token's own memberships, and the organization's
+  third-party application restrictions hide `Blackcat-Informatics` from the
+  registry's OAuth app. It is submitted instead by the manually triggered
+  [MCP Registry workflow](../.github/workflows/mcp-registry.yml), whose GitHub
+  OIDC token the registry maps to the `io.github.Blackcat-Informatics`
+  namespace.

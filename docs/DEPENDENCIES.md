@@ -333,3 +333,11 @@ by `make check`, or by any workflow, and neither is linked or packaged into any
 crate. Rendering is byte-reproducible only under the recorded versions, so a
 re-render must reproduce the registered PNG digest. The PNG's license is
 recorded by the REUSE-style sidecar `docs/social-preview.png.license`.
+
+The MCP Registry publisher `mcp-publisher` 1.8.1 (`Apache-2.0 AND MIT`) is
+downloaded by `.github/workflows/mcp-registry.yml`, pinned by version and the
+release archive's sha256, and is registered in `vendor/tooling.json` with its
+vendored license notice. It is justified only for submitting `server.json` to
+the MCP Registry from that manually triggered workflow, which authenticates
+with the workflow's GitHub OIDC token. It is never invoked at build or runtime
+or by `make check`, and it is never linked or packaged into any crate.
