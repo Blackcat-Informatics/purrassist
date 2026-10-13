@@ -1,0 +1,10 @@
+$ stagectl pr-checks 27
+IN_PROGRESS native (macos-14)
+IN_PROGRESS native (ubuntu-24.04)
+IN_PROGRESS msrv
+IN_PROGRESS windows-engines
+IN_PROGRESS corpus
+IN_PROGRESS fuzz
+IN_PROGRESS qualification
+IN_PROGRESS wasm
+state: pending
