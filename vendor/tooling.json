@@ -184,5 +184,16 @@
       "vendor/licenses/noto-sans-2.015/OFL.txt": "cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a"
     },
     "notice_normalization": "Unmodified upstream OFL.txt from https://github.com/notofonts/latin-greek-cyrillic at commit 71cf6f3ca9c185d809dd800ce9a9e58e1c16f1b1. The Arch noto-fonts package used for rendering ships an Apache-2.0 LICENSE file rather than this OFL text; the font files' own name table declares the SIL Open Font License 1.1, which is the license recorded here."
+  },
+  {
+    "name": "mcp-publisher",
+    "version": "1.8.1",
+    "license": "Apache-2.0 AND MIT",
+    "source": "https://github.com/modelcontextprotocol/registry/tree/v1.8.1",
+    "scope": "The MCP Registry publisher CLI (`mcp-publisher_linux_amd64.tar.gz` from the v1.8.1 release, sha256 a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc, pinned in .github/workflows/mcp-registry.yml). Used only by that manually triggered workflow to validate server.json, authenticate with the workflow's GitHub OIDC token and submit server.json to the MCP Registry; never invoked at build or runtime, by `make check`, or by any other workflow, and never linked or packaged into any crate. It runs as a separate downloaded executable.",
+    "notices": {
+      "vendor/licenses/mcp-publisher-1.8.1/LICENSE": "0382b0057770ca05e9c350a50aa3b1c1fea84da0bc81d723bf00b9aa841be58a"
+    },
+    "notice_normalization": "None; the LICENSE file is copied unmodified from the v1.8.1 release archive. It records the project's transition from MIT to Apache-2.0: contributions are Apache-2.0 where relicensing consent was obtained and otherwise remain MIT, and documentation is CC-BY-4.0."
   }
 ]

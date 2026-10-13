@@ -290,8 +290,10 @@ For the exact `main` commit to be tagged:
   registry verifies ownership of a Cargo package from the
   `mcp-name: io.github.Blackcat-Informatics/purrassist` line that
   `crates/cli/README.md` carries, so the published `purrassist-cli` README must
-  contain it. Validate the file with the registry's publisher tooling against
-  its current schema when submitting.
+  contain it. Submit it by running the `MCP Registry` workflow
+  (`.github/workflows/mcp-registry.yml`), which validates the file with the
+  pinned `mcp-publisher`, authenticates with the workflow's GitHub OIDC token
+  and publishes it. Bump the file's versions to the new release first.
 - Switch the GitHub repository homepage to the docs.rs page once the 0.1.0
   documentation has been built there.
 
@@ -321,6 +323,11 @@ Observed on 2026-10-13:
   [rust-v0.1.0](https://github.com/Blackcat-Informatics/purrassist/releases/tag/rust-v0.1.0)
   carries the `[0.1.0]` CHANGELOG section and the verification output.
 - [`server.json`](../server.json) validates against the MCP Registry
-  `2025-12-11` server schema. Submitting it needs a GitHub sign-in by an owner
-  of the `Blackcat-Informatics` namespace:
-  `mcp-publisher login github`, then `mcp-publisher publish`.
+  `2025-12-11` server schema, and `mcp-publisher validate` accepts it. A
+  personal device-flow login could not publish it: the registry learns org
+  ownership from the login token's own memberships, and the organization's
+  third-party application restrictions hide `Blackcat-Informatics` from the
+  registry's OAuth app. It is submitted instead by the manually triggered
+  [MCP Registry workflow](../.github/workflows/mcp-registry.yml), whose GitHub
+  OIDC token the registry maps to the `io.github.Blackcat-Informatics`
+  namespace.
