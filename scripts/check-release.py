@@ -243,6 +243,13 @@ GATE_STEP = 'Verify the release gate'
 GATE_RECIPE = ('$(MAKE) check', '$(MAKE) corpus', 'python3 scripts/test-fuzz-feedback.py',
                'python3 scripts/test-verify-published.py', '$(MAKE) package')
 LINT_RECIPE = ('cargo clippy --workspace --all-targets --locked -- -D warnings',)
+WORKFLOW_KEYS = ('name', 'on', 'permissions', 'jobs', 'concurrency')
+GATE_JOB_KEYS = ('runs-on', 'timeout-minutes', 'env', 'steps')
+STEP_KEYS = ('name', 'uses', 'with', 'run')
+SHELL_STEP = 'Verify release set and version'
+CHECKOUT_USES = re.compile(r'actions/checkout@[0-9a-f]{40}')
+PLAIN_INSTALL = re.compile(r'rustup\s+toolchain\s+install\s+[^\s;&|$`()<>]+(?:\s+--?[A-Za-z-]+\s+[^\s;&|$`()<>]+)*')
+ENV_FILES = re.compile(r'\bGITHUB_(?:ENV|PATH)\b')
 STABLE_COMPONENTS = 'clippy,rustfmt'
 NIGHTLY_COMPONENTS = 'llvm-tools'
 # The pin extractors read only the toolchain name; profile and components follow it.
@@ -289,9 +296,170 @@ def _job_env(job_text):
                     if len(entry) - len(entry.lstrip()) <= 4:
                         break
                     key, _, value = entry.strip().partition(':')
-                    env[key.strip()] = value.strip()
+                    env[key.strip()] = _plain_value(value)
             break
     return env
+
+
+def _plain_value(value):
+    """A YAML plain or quoted scalar without its trailing comment or quotes."""
+    return re.sub(r'\s+#.*$', '', value.strip()).strip().strip('\'"')
+
+
+def _job_keys(job_text):
+    """The keys of a job at its own indentation, as {key: inline value}; unrecognised lines at
+    that indentation appear as the key `<unparsed>`."""
+    keys = {}
+    for _, line in _code_lines(job_text):
+        if re.match(r'    \S', line):
+            match = re.match(r'    (["\']?)([A-Za-z_][\w-]*)\1\s*:\s*(.*)$', line)
+            keys[match[2] if match else '<unparsed>'] = _plain_value(match[3]) if match else line.strip()
+    return keys
+
+
+def _job_steps(job_text):
+    """The steps of a job's block `steps:` list, read by indentation, as dicts with `keys`
+    ({key: inline value}) and `body` ({key: deeper lines}); None when the job has no `steps:`
+    line. Unrecognised lines at a step's key column appear as the key `<unparsed>`."""
+    lines = job_text.splitlines()
+    start = next((index for index, line in enumerate(lines)
+                  if re.fullmatch(r'    steps:\s*(?:#.*)?', line)), None)
+    if start is None:
+        return None
+    steps, item_column, key_column, current, current_key = [], None, 0, None, None
+    for line in lines[start + 1:]:
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#'):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent <= 4:
+            break
+        opening = re.match(r'(\s*)-\s+', line)
+        if opening and (item_column is None or len(opening.group(1)) == item_column):
+            item_column, key_column = len(opening.group(1)), len(opening.group(0))
+            current = {'keys': {}, 'body': {}}
+            steps.append(current)
+            current_key = None
+            line = ' ' * key_column + line[key_column:]
+            indent = key_column
+        if current is None:
+            continue
+        key = re.match(rf' {{{key_column}}}(["\']?)([A-Za-z_][\w-]*)\1\s*:\s*(.*?)\s*$', line)
+        if key and indent == key_column:
+            current_key = key[2]
+            current['keys'][current_key] = _plain_value(key[3])
+            current['body'][current_key] = []
+        elif indent > key_column and current_key is not None:
+            current['body'][current_key].append(stripped)
+        else:
+            current['keys']['<unparsed>'] = stripped
+    return steps
+
+
+def _step_run(step):
+    """The command text of a step's `run:`, or None."""
+    inline = step['keys'].get('run')
+    if inline is None:
+        return None
+    body = step['body'].get('run', [])
+    return '\n'.join(body) if inline[:1] in ('|', '>') else ' '.join([inline, *body]).strip()
+
+
+def _step_with(step):
+    """The `with:` mapping of a step as {key: value}."""
+    return {key.strip(): _plain_value(value)
+            for key, _, value in (line.partition(':') for line in step['body'].get('with', []))}
+
+
+def _workflow_shape_errors(name, text):
+    """Errors for top-level keys of a workflow outside `WORKFLOW_KEYS`: a workflow-wide `env` or
+    `defaults` reaches the gate job without appearing in it."""
+    errors = []
+    for _, line in _code_lines(text):
+        if not line.strip() or line[0] in ' \t' or line.startswith('---'):
+            continue
+        match = re.match(r'(["\']?)([A-Za-z_][\w-]*)\1\s*:', line)
+        key = match[2] if match else line.strip()
+        if key not in WORKFLOW_KEYS:
+            errors.append(f'{name} may not set the top-level key `{key}` (allowed: {list(WORKFLOW_KEYS)}); '
+                          'a workflow-wide setting reaches the gate job without appearing in it')
+    return errors
+
+
+def _pull_request_errors(name, text):
+    """Errors unless `on:` is a block mapping holding a bare `pull_request:`: nothing after the
+    colon but a comment, and no filter keys under it. Flow spellings are unsupported."""
+    lines = text.splitlines()
+    start = next((index for index, line in enumerate(lines)
+                  if re.fullmatch(r'(["\']?)on\1:\s*(?:#.*)?', line)), None)
+    if start is None:
+        return [f'{name} must have a block `on:` mapping (a flow spelling such as '
+                '`on: [push, pull_request]` is unsupported)']
+    block = []
+    for line in lines[start + 1:]:
+        if line.strip() and not line.lstrip().startswith('#'):
+            if line[0] not in ' \t':
+                break
+            block.append(line)
+    bare = [index for index, line in enumerate(block) if re.fullmatch(r'  pull_request:\s*(?:#.*)?', line)]
+    if len(bare) != 1:
+        return [f'{name} `on:` must contain a bare `pull_request:` trigger with nothing after the colon '
+                '(a flow spelling such as `pull_request: {paths: [x]}` is unsupported)']
+    if bare[0] + 1 < len(block) and len(block[bare[0] + 1]) - len(block[bare[0] + 1].lstrip()) > 2:
+        return [f'{name} `pull_request:` trigger must have no filters (branches, paths, types ...): '
+                'a filtered trigger skips the gate on some pull requests']
+    return []
+
+
+def _gate_job_errors(label, job_text):
+    """Errors for a gate job that is not exactly the allowlisted shape: job keys, env, step keys,
+    the checkout step, and the absence of `GITHUB_ENV` and `GITHUB_PATH` writes. Step order
+    and names are checked by the caller."""
+    errors = []
+    keys = _job_keys(job_text)
+    for key in sorted(set(keys) - set(GATE_JOB_KEYS)):
+        errors.append(f'{label} job may not set `{key}` (allowed: {list(GATE_JOB_KEYS)})')
+    for key in sorted(set(GATE_JOB_KEYS) - set(keys)):
+        errors.append(f'{label} job must set `{key}`')
+    if keys.get('env'):
+        errors.append(f'{label} job `env:` must be a block mapping')
+    env = _job_env(job_text)
+    if set(env) != {'RUSTUP_TOOLCHAIN'}:
+        errors.append(f'{label} job env must be exactly RUSTUP_TOOLCHAIN, found {sorted(env)}')
+    else:
+        stable = [i[0] for i in _job_installs(job_text) if not i[0].startswith('nightly')]
+        if env['RUSTUP_TOOLCHAIN'].startswith('nightly'):
+            errors.append(f'{label} job RUSTUP_TOOLCHAIN must be the stable release toolchain, '
+                          f'not {env["RUSTUP_TOOLCHAIN"]}')
+        elif len(stable) == 1 and env['RUSTUP_TOOLCHAIN'] != stable[0]:
+            errors.append(f'{label} job RUSTUP_TOOLCHAIN {env["RUSTUP_TOOLCHAIN"]} must equal its '
+                          f'stable install {stable[0]}')
+    if ENV_FILES.search('\n'.join(line for _, line in _code_lines(job_text))):
+        errors.append(f'{label} job must not write GITHUB_ENV or GITHUB_PATH')
+    steps = _job_steps(job_text)
+    if steps is None:
+        errors.append(f'{label} job must have a block `steps:` list')
+        return errors
+    for index, step in enumerate(steps):
+        where = f'{label} step {index + 1}'
+        step_name = step['keys'].get('name')
+        for key in step['keys']:
+            if key == 'shell' and step_name == SHELL_STEP and step['keys']['shell'] == 'bash':
+                continue
+            if key == 'uses' and index == 0 or key == 'with' and index == 0:
+                continue
+            if key not in STEP_KEYS or key in ('uses', 'with'):
+                errors.append(f'{where} may not set `{key}` (allowed: {list(STEP_KEYS)}, `uses` and '
+                              f'`with` only on the checkout step, `shell: bash` only on `{SHELL_STEP}`)')
+    if steps:
+        first = steps[0]
+        if not CHECKOUT_USES.fullmatch(first['keys'].get('uses', '').split(' ', 1)[0]):
+            errors.append(f'{label} step 1 must `uses:` actions/checkout@<40-hex commit SHA>, '
+                          f'found {first["keys"].get("uses")!r}')
+        if _step_with(first) != {'persist-credentials': 'false'} or len(first['body'].get('with', [])) != 1:
+            errors.append(f'{label} step 1 `with:` must be exactly persist-credentials: false, '
+                          f'found {_step_with(first)}')
+    return errors
 
 
 def _job_installs(job_text):
@@ -331,7 +499,12 @@ def validate_release_gate(root=None):
       `make release-gate`, so no release-only step can sit beside the shared gate.
     * verify.yml's `release-gate` job runs `make release-gate`.
     * Both jobs install the same stable toolchain with `clippy,rustfmt` and the same nightly
-      with `llvm-tools`, and their `env` blocks are identical.
+      with `llvm-tools` (in either order), and their `env` blocks are identical.
+    * Both are held to an allowlist: workflow top-level keys, job keys, an `env` of exactly
+      `RUSTUP_TOOLCHAIN` equal to the job's stable install, step keys, an `actions/checkout`
+      pinned by commit SHA with only `persist-credentials: false`, and no `GITHUB_ENV` or
+      `GITHUB_PATH` write; verify.yml keeps a bare `pull_request:` trigger and a closed step list.
+    * The Makefile `check` target depends on `lint` and `test`.
     * The Makefile `release-gate` target has no prerequisites and exactly the `GATE_RECIPE`
       lines in order, and `lint` is exactly the `LINT_RECIPE` Clippy command.
 
@@ -350,8 +523,22 @@ def validate_release_gate(root=None):
     if verify is None:
         errors.append('verify.yml must define a `release-gate` job')
 
+    for name, text in (('release-qualification.yml', release_text), ('verify.yml', verify_text)):
+        errors.extend(_workflow_shape_errors(name, text))
+    errors.extend(_pull_request_errors('verify.yml', verify_text))
+    if release is not None:
+        errors.extend(_gate_job_errors('release-qualification.yml package', release))
+    if verify is not None:
+        errors.extend(_gate_job_errors('verify.yml release-gate', verify))
+
     if release is not None:
         steps = _load_check_docs().workflow_steps('jobs:\n' + release)
+        for step in _job_steps(release) or []:
+            if step['keys'].get('name') in RELEASE_STEPS[:2]:
+                run = _step_run(step)
+                if not (run and PLAIN_INSTALL.fullmatch(run)):
+                    errors.append(f'release-qualification.yml step `{step["keys"]["name"]}` must run only '
+                                  f'a toolchain install, found {run!r}')
         names = [name for _, name, _ in steps if name is not None]
         unnamed = [step for step in steps if step[1] is None]
         if names != list(RELEASE_STEPS):
@@ -370,10 +557,18 @@ def validate_release_gate(root=None):
             if owner != [GATE_STEP]:
                 errors.append(f'`make release-gate` must run in the `{GATE_STEP}` step, not {owner}')
     if verify is not None:
-        runs = [line.strip() for _, line in _code_lines(verify) if re.search(r'\bmake\b', line)]
-        if runs != ['- run: make release-gate']:
+        runs = [re.sub(r'^-\s+', '', line.strip()) for _, line in _code_lines(verify)
+                if re.search(r'\bmake\b', line)]
+        if runs != ['run: make release-gate']:
             errors.append('verify.yml release-gate job must run `make release-gate` as its only make '
                           f'command; found {runs}')
+        verify_steps = _job_steps(verify) or []
+        runs = [_step_run(step) for step in verify_steps]
+        if (len(verify_steps) != 4 or runs[0] is not None or runs[3] != 'make release-gate'
+                or not all(run and PLAIN_INSTALL.fullmatch(run) for run in runs[1:3])):
+            errors.append('verify.yml release-gate job must have exactly the steps: checkout, one stable '
+                          'toolchain install, one nightly toolchain install, `make release-gate` '
+                          f'(a gate step may be named or unnamed); found commands {runs}')
 
     if release is not None and verify is not None:
         if _job_env(release) != _job_env(verify):
@@ -389,7 +584,11 @@ def validate_release_gate(root=None):
             if len(nightly) != 1 or nightly[0][1] != NIGHTLY_COMPONENTS:
                 errors.append(f'{label} job must install one nightly toolchain with --component '
                               f'{NIGHTLY_COMPONENTS}, found {nightly}')
-        if _job_installs(release) != _job_installs(verify):
+        def by_kind(text):
+            installs = _job_installs(text)
+            return {kind: sorted(i for i in installs if i[0].startswith('nightly') == (kind == 'nightly'))
+                    for kind in ('stable', 'nightly')}
+        if by_kind(release) != by_kind(verify):
             errors.append(f'the release-gate job must install the same toolchains as release '
                           f'qualification: {_job_installs(verify)} differs from {_job_installs(release)}')
 
@@ -403,6 +602,14 @@ def validate_release_gate(root=None):
         if gate_rule[1] != GATE_RECIPE:
             errors.append(f'Makefile release-gate recipe must be exactly {list(GATE_RECIPE)} in order, '
                           f'found {list(gate_rule[1])}')
+    check_rule = _make_recipe(makefile, 'check')
+    if check_rule is None:
+        errors.append('Makefile must define the `check` target exactly once')
+    else:
+        for required in ('lint', 'test'):
+            if required not in check_rule[0]:
+                errors.append(f'Makefile check must depend on `{required}` (Clippy and the tests are '
+                              f'part of the gate), found prerequisites {check_rule[0]}')
     lint_rule = _make_recipe(makefile, 'lint')
     if lint_rule is None or lint_rule[1] != LINT_RECIPE:
         errors.append(f'Makefile lint recipe must be exactly {list(LINT_RECIPE)}, '

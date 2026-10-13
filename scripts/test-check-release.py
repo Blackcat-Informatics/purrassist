@@ -15,6 +15,8 @@ Two groups, neither of which touches the network or this checkout:
   prerequisite, an extra step beside the shared gate in release qualification,
   differing environments or installs, a weakened `lint` recipe, and every kind
   of toolchain pin drift (install line, env, publish.yml, rust-version, nightly).
+  The gate jobs' allowlists (workflow, job, env, step, checkout and trigger shapes, each with
+  its must-fail and must-pass fixtures) and the Makefile `check` prerequisites `lint` and `test`.
 * `preflight_owners()` is driven by fake fetchers and fixture registry
   responses: success, a 404 crate, mismatched owners, network errors,
   non-JSON and malformed responses.
@@ -22,6 +24,7 @@ Two groups, neither of which touches the network or this checkout:
 import importlib.util
 import json
 from pathlib import Path
+import re
 import shutil
 import tempfile
 import unittest
@@ -340,6 +343,204 @@ class ReleaseGateIdentity(ScratchTree):
         self.edit(VERIFY, f'      - run: {INSTALL} nightly-2026-09-14 --profile minimal --component llvm-tools\n'
                   '      - run: make release-gate', '      - run: make release-gate')
         self.fails('job must install one nightly toolchain with --component llvm-tools')
+
+
+GATES = ((VERIFY, 'release-gate'), (RELEASE, 'package'))
+SHA = '11d5960a326750d5838078e36cf38b85af677262'
+CHECKOUT_LINE = f'      - uses: actions/checkout@{SHA} # v4\n        with:\n          persist-credentials: false\n'
+
+
+class GateAllowlist(ScratchTree):
+    """The gate jobs are allowlisted: anything not explicitly allowed fails with its own error."""
+
+    check = staticmethod(CR.validate_release_gate)
+
+    def edit_job(self, name, job, old, new):
+        path = self.root / name
+        text = path.read_text(encoding='utf-8')
+        start = text.index(f'\n  {job}:\n') + 1
+        following = re.search(r'\n  [^\s#]', text[start:])
+        end = start + following.start() + 1 if following else len(text)
+        self.assertIn(old, text[start:end], f'fixture precondition: job {job} lacks {old!r}')
+        path.write_text(text[:start] + text[start:end].replace(old, new, 1) + text[end:], encoding='utf-8')
+
+    def both(self, old, new):
+        for name, job in GATES:
+            self.edit_job(name, job, old, new)
+
+    def passes(self):
+        CR.validate_release_gate(self.root)
+
+    # Env
+    def test_env_removed_from_both_jobs_fails(self):
+        self.both('    env:\n      RUSTUP_TOOLCHAIN: 1.98.0\n', '')
+        self.fails('job must set `env`')
+        self.fails('job env must be exactly RUSTUP_TOOLCHAIN, found []')
+
+    def test_nightly_env_in_both_jobs_fails(self):
+        self.both('RUSTUP_TOOLCHAIN: 1.98.0', 'RUSTUP_TOOLCHAIN: nightly-2026-09-14')
+        self.fails('RUSTUP_TOOLCHAIN must be the stable release toolchain, not nightly-2026-09-14')
+
+    def test_env_differing_from_the_stable_install_fails(self):
+        for name, job in GATES:
+            with self.subTest(job=job):
+                self.setUp()
+                self.edit_job(name, job, 'RUSTUP_TOOLCHAIN: 1.98.0', 'RUSTUP_TOOLCHAIN: 1.98.1')
+                self.fails('RUSTUP_TOOLCHAIN 1.98.1 must equal its stable install 1.98.0')
+
+    def test_job_level_rustflags_in_both_jobs_fails(self):
+        self.both('RUSTUP_TOOLCHAIN: 1.98.0\n', 'RUSTUP_TOOLCHAIN: 1.98.0\n      RUSTFLAGS: --cap-lints=warn\n')
+        self.fails("job env must be exactly RUSTUP_TOOLCHAIN, found ['RUSTFLAGS', 'RUSTUP_TOOLCHAIN']")
+
+    def test_step_level_env_fails(self):
+        for name, job in GATES:
+            with self.subTest(job=job):
+                self.setUp()
+                self.edit_job(name, job, 'run: make release-gate\n',
+                              'run: make release-gate\n        env:\n          CARGO_ENCODED_RUSTFLAGS: --cap-lints=warn\n')
+                self.fails('may not set `env`')
+
+    # Keys and modifiers
+    def test_workflow_level_env_or_defaults_fails(self):
+        for name in (VERIFY, RELEASE):
+            for key, body in (('env', 'env:\n  RUSTFLAGS: --cap-lints=warn\n'),
+                              ('defaults', 'defaults:\n  run:\n    shell: "true {0}"\n')):
+                with self.subTest(workflow=name, key=key):
+                    self.setUp()
+                    self.edit(name, 'jobs:\n', body + 'jobs:\n')
+                    self.fails(f'may not set the top-level key `{key}`')
+
+    def test_job_level_defaults_fails(self):
+        for name, job in GATES:
+            with self.subTest(job=job):
+                self.setUp()
+                self.edit_job(name, job, '    steps:\n', '    defaults:\n      run:\n        shell: "true {0}"\n    steps:\n')
+                self.fails('job may not set `defaults`')
+
+    def test_continue_on_error_on_a_job_fails(self):
+        for name, job in GATES:
+            with self.subTest(job=job):
+                self.setUp()
+                self.edit_job(name, job, '    steps:\n', '    continue-on-error: true\n    steps:\n')
+                self.fails('job may not set `continue-on-error`')
+
+    def test_continue_on_error_on_a_step_fails(self):
+        for name, job in GATES:
+            with self.subTest(job=job):
+                self.setUp()
+                self.edit_job(name, job, 'run: make release-gate\n',
+                              'run: make release-gate\n        continue-on-error: true\n')
+                self.fails('may not set `continue-on-error`')
+
+    def test_if_on_the_gate_step_fails(self):
+        for name, job in GATES:
+            with self.subTest(job=job):
+                self.setUp()
+                self.edit_job(name, job, '      - run: make release-gate\n' if job == 'release-gate'
+                              else '        run: make release-gate\n',
+                              '      - if: false\n        run: make release-gate\n' if job == 'release-gate'
+                              else '        if: false\n        run: make release-gate\n')
+                self.fails('may not set `if`')
+
+    def test_shell_on_the_gate_step_fails(self):
+        for name, job in GATES:
+            with self.subTest(job=job):
+                self.setUp()
+                self.edit_job(name, job, 'run: make release-gate\n', 'run: make release-gate\n        shell: true {0}\n')
+                self.fails('may not set `shell`')
+
+    def test_shell_bash_is_allowed_only_on_the_version_step(self):
+        self.edit_job(RELEASE, 'package', '        run: make release-gate\n',
+                      '        shell: bash\n        run: make release-gate\n')
+        self.fails('may not set `shell`')
+
+    # Steps
+    def test_an_extra_step_in_the_verify_gate_job_fails(self):
+        self.edit(VERIFY, '      - run: make release-gate\n',
+                  "      - run: printf '[build]\\nrustflags = [\"--cap-lints=warn\"]\\n' > .cargo/config.toml\n"
+                  '      - run: make release-gate\n')
+        self.fails('verify.yml release-gate job must have exactly the steps')
+
+    def test_a_github_env_write_fails(self):
+        self.edit(VERIFY, '      - run: make release-gate\n',
+                  '      - run: echo RUSTFLAGS=--cap-lints=warn >> "$GITHUB_ENV"\n      - run: make release-gate\n')
+        self.fails('verify.yml release-gate job must not write GITHUB_ENV or GITHUB_PATH')
+        self.fails('verify.yml release-gate job must have exactly the steps')
+
+    def test_a_github_path_write_in_the_version_step_fails(self):
+        self.edit(RELEASE, '          set -euo pipefail\n', '          set -euo pipefail\n          echo . >> "$GITHUB_PATH"\n')
+        self.fails('release-qualification.yml package job must not write GITHUB_ENV or GITHUB_PATH')
+
+    # Trigger
+    def test_the_pull_request_trigger_removed_fails(self):
+        self.edit(VERIFY, '  pull_request:\n', '')
+        self.fails('`on:` must contain a bare `pull_request:` trigger')
+
+    def test_a_paths_filter_on_the_pull_request_trigger_fails(self):
+        self.edit(VERIFY, '  pull_request:\n', "  pull_request:\n    paths: ['docs/**']\n")
+        self.fails('`pull_request:` trigger must have no filters')
+
+    def test_flow_spellings_of_the_trigger_fail(self):
+        self.edit(VERIFY, '  pull_request:\n', '  pull_request: {paths: [x]}\n')
+        self.fails('flow spelling such as `pull_request: {paths: [x]}` is unsupported')
+        self.setUp()
+        self.edit(VERIFY, 'on:\n  push:\n    branches: [main]\n  pull_request:\n  workflow_dispatch:\n',
+                  'on: [push, pull_request]\n')
+        self.fails('must have a block `on:` mapping')
+
+    def test_a_bare_trigger_with_a_comment_passes(self):
+        self.edit(VERIFY, '  pull_request:\n', '  pull_request: # every pull request\n')
+        self.passes()
+
+    # Checkout
+    def test_a_ref_on_the_checkout_fails(self):
+        for name, job in GATES:
+            with self.subTest(job=job):
+                self.setUp()
+                self.edit_job(name, job, '          persist-credentials: false\n',
+                              '          persist-credentials: false\n          ref: main\n')
+                self.fails('step 1 `with:` must be exactly persist-credentials: false')
+
+    def test_a_different_checkout_action_fails(self):
+        for replacement in ('actions/checkout@v4', 'actions/cache@' + SHA, 'actions/checkout@' + SHA[:39]):
+            for name, job in GATES:
+                with self.subTest(job=job, uses=replacement):
+                    self.setUp()
+                    self.edit_job(name, job, f'actions/checkout@{SHA}', replacement)
+                    self.fails('step 1 must `uses:` actions/checkout@<40-hex commit SHA>')
+
+    def test_uses_or_with_on_a_later_step_fails(self):
+        self.edit(VERIFY, '      - run: make release-gate\n',
+                  '      - uses: actions/cache@' + SHA + '\n      - run: make release-gate\n')
+        self.fails('may not set `uses`')
+
+    # Must pass
+    def test_a_named_verify_gate_step_passes(self):
+        self.edit(VERIFY, '      - run: make release-gate\n', '      - name: Verify the release gate\n        run: make release-gate\n')
+        self.passes()
+
+    def test_a_quoted_env_value_passes(self):
+        self.both('RUSTUP_TOOLCHAIN: 1.98.0', 'RUSTUP_TOOLCHAIN: "1.98.0"')
+        self.passes()
+
+    def test_a_trailing_comment_on_the_env_value_passes(self):
+        self.both('RUSTUP_TOOLCHAIN: 1.98.0', 'RUSTUP_TOOLCHAIN: 1.98.0 # the release toolchain')
+        self.passes()
+
+    def test_swapped_install_order_passes(self):
+        stable = f'      - run: {INSTALL} 1.98.0 --profile minimal --component clippy,rustfmt\n'
+        nightly = f'      - run: {INSTALL} nightly-2026-09-14 --profile minimal --component llvm-tools\n'
+        self.edit_job(VERIFY, 'release-gate', stable + nightly, nightly + stable)
+        self.passes()
+
+    # The Makefile check target
+    def test_check_without_lint_fails(self):
+        self.edit('Makefile', 'helper-check lint test doc', 'helper-check test doc')
+        self.fails('Makefile check must depend on `lint`')
+
+    def test_check_without_test_fails(self):
+        self.edit('Makefile', 'helper-check lint test doc', 'helper-check lint doc')
+        self.fails('Makefile check must depend on `test`')
 
 
 class ToolchainPins(ScratchTree):
