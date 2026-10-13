@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 """Verify coverage novelty boundaries, differential-oracle normalization, and
 fail-closed campaign behavior for `scripts/fuzz.py`."""
+import contextlib
 import importlib.util
 import io
 import json
@@ -346,7 +347,14 @@ class Coverage(unittest.TestCase):
              patch.object(FUZZ.tempfile, 'mkdtemp', return_value=str(directory)), \
              patch.object(FUZZ.subprocess, 'check_output', return_value=''), \
              patch.object(FUZZ, 'source_digest', return_value='digest'), \
-             patch('sys.argv', ['fuzz.py', '--target', 'tool-call', '--iterations', '0', *arguments]):
+             patch('sys.argv', ['fuzz.py', '--target', 'tool-call', '--iterations', '0', *arguments]), \
+             contextlib.ExitStack() as quiet:
+            # A mocked campaign's crash and known-panic lines would read as real
+            # findings in a CI log; keep them out unless a test captures them.
+            if sys.stdout is sys.__stdout__:
+                quiet.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            if sys.stderr is sys.__stderr__:
+                quiet.enter_context(contextlib.redirect_stderr(io.StringIO()))
             try:
                 FUZZ.main()
                 error = None
