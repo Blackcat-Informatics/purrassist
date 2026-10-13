@@ -249,7 +249,12 @@ For the exact `main` commit to be tagged:
    resulting `main` commit is the one every following step names.
 2. Verify hosted CI (`verify.yml`) for that commit, and run the portability,
    conformance, syntax-oracle, fuzz, performance, and package checks listed
-   in `QUALIFICATION.md`.
+   in `QUALIFICATION.md`. Every job must pass except `fuzz`, which cannot
+   pass while the known limitations it stops on are open. Its log must show
+   every target before `tool-call` completing, then a stop only on a known
+   issue #6 panic signature in `tool-call` or the issue #11 timeout in
+   `tool-call-ref`, as described in [FUZZING.md](FUZZING.md#known-limitations).
+   Any other `fuzz` failure blocks the tag.
 3. Re-confirm all six trusted publishers through the crates.io API (see
    "Trusted publishing"); each must still match the values recorded there.
 4. Tag `rust-vVERSION`. Tagging is irreversible and requires explicit
