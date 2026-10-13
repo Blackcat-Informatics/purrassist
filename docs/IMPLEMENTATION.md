@@ -3,9 +3,9 @@
 # Accepted implementation contract
 
 Status: merged to `main` (PR #2, `699d9ff`); tool-call recovery (#3, #8) and
-`purrassist-derive` (#15) merged since; not yet tagged `rust-v0.1.0`. Executable
-qualification and its limits are recorded in `QUALIFICATION.md`; registry
-publication acceptance follows the procedure in `RELEASE.md`.
+`purrassist-derive` (#15) merged since; published as `rust-v0.1.0`. Executable
+qualification and its limits are recorded in `QUALIFICATION.md`; publication
+followed the procedure in `RELEASE.md`.
 
 PurRAssist recovers intent from imperfect AI output and requests. Every result
 combines its answer with evidence, provenance, losses, and explicit inferences.
@@ -114,8 +114,8 @@ Core operations are synchronous and resumable around supplied helper responses.
    Delivered.
 5. Qualification: conformance, fuzzing, portability, performance, packaging,
    documentation, registry setup, and verified publication. Qualification
-   evidence is recorded in `QUALIFICATION.md`; registry setup is partly done
-   (see `RELEASE.md`); verified publication is open, as 0.1.0 is not yet tagged.
+   evidence is recorded in `QUALIFICATION.md`; 0.1.0 is published, with the
+   downloaded packages and installed CLI/MCP verified (see `RELEASE.md`).
 
 Every stage remains required. A passing subset does not qualify the release.
 

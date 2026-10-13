@@ -4,7 +4,7 @@
 
 PurRAssist 0.1.0 has an implemented scope and executable qualification record
 in `QUALIFICATION.md`. Status: merged to `main`, including tool-call recovery
-and `purrassist-derive`; not yet tagged `rust-v0.1.0`. This procedure is run
+and `purrassist-derive`; published as `rust-v0.1.0`. This procedure is run
 against the exact `main` commit to be tagged: every check below, and the tag
 itself, name that one commit. A published 0.1.0 is not claimed before registry
 downloads and installed CLI/MCP behavior are verified.
@@ -292,3 +292,33 @@ For the exact `main` commit to be tagged:
   its current schema when submitting.
 - Switch the GitHub repository homepage to the docs.rs page once the 0.1.0
   documentation has been built there.
+
+## 0.1.0 publication record
+
+Observed on 2026-10-13:
+
+- `rust-v0.1.0` (signed) names `main` commit
+  `598d059f956aa46315b6a4890577684e536c04c8`. An earlier `rust-v0.1.0` on
+  `464306c` failed release qualification (stable Rust 1.98 Clippy
+  `float_cmp` in a core test), so the publish gate stopped before any
+  `cargo publish`. The tag was moved to the fixed commit, and nothing had been
+  published from it.
+- Release qualification [run 38356797286](https://github.com/Blackcat-Informatics/purrassist/actions/runs/38356797286)
+  passed. The [publish run 38356797476](https://github.com/Blackcat-Informatics/purrassist/actions/runs/38356797476)
+  published all six crates at `0.1.0` through trusted publishing, and its
+  `verify-published.py` step reported: installed CLI and MCP transcripts match
+  the committed fixtures, and all six downloaded archives match freshly
+  packaged copies.
+- `purrassist-cli 0.1.0` was installed from crates.io into a clean root. The
+  documented `decode`, `call match_strings`, `call apply_edit` and MCP
+  `initialize`/`tools/list` (31 tools)/`tools/call` examples succeeded against
+  that download.
+- docs.rs built 0.1.0 for the five library crates, and the repository homepage
+  now points to <https://docs.rs/purrassist>.
+- The GitHub release
+  [rust-v0.1.0](https://github.com/Blackcat-Informatics/purrassist/releases/tag/rust-v0.1.0)
+  carries the `[0.1.0]` CHANGELOG section and the verification output.
+- [`server.json`](../server.json) validates against the MCP Registry
+  `2025-12-11` server schema. Submitting it needs a GitHub sign-in by an owner
+  of the `Blackcat-Informatics` namespace:
+  `mcp-publisher login github`, then `mcp-publisher publish`.

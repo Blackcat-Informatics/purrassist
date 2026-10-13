@@ -12,9 +12,8 @@ the complete result, and returns evidence of what changed. A schema-valid guess
 is still a guess. Ambiguous alternatives remain visible. Use it as a
 [Rust crate, an MCP server, or a CLI](#one-engine-three-interfaces).
 
-**Version 0.1.0.** Merged to `main`, not yet tagged `rust-v0.1.0`. The
-`cargo add` and `cargo install` commands below work once 0.1.0 is published;
-until then, build from [a checkout](#use-the-checkout). Read the
+**Version 0.1.0.** Published as `rust-v0.1.0` on crates.io, with
+[documentation on docs.rs](https://docs.rs/purrassist). Read the
 [changelog](CHANGELOG.md), the [implementation contract](docs/IMPLEMENTATION.md)
 for the accepted scope, and the [qualification record](docs/QUALIFICATION.md)
 for executable evidence. Its [known limitations](docs/QUALIFICATION.md#known-limitations)
