@@ -894,8 +894,10 @@ Exact discovery counts are tied to compiler, flags, and source mapping; they
 are not comparable coverage percentages across toolchain versions.
 
 **Smoke** (`verify.yml` on pull requests, main-branch pushes, and manual
-runs): `make fuzz` runs the corpus-feedback test once and all ten targets
-with the runner's default 1,000 mutations each. `TARGET` and `FUZZ_ARGS`
+runs): `make fuzz-hosted` runs the corpus-feedback test once and all ten
+targets with the runner's default 1,000 mutations each, passing
+`--continue-on-known` to the two tool-call targets and `--timeout 120` to
+`tool-call-ref` (see "Isolating issue #6" and "Known slow input (issue #11)"). `TARGET` and `FUZZ_ARGS`
 apply only to a selected-target invocation. **Qualification** (evidence committed under `docs/qualification/`): 10,000
 iterations for each target that has a recorded baseline, matching the sample size
 of the existing
@@ -917,8 +919,10 @@ start, before subsequent accounting and Markdown corrections. Their source hash
 fields are never reconstructed retrospectively. New Markdown reports
 add guarded engine/harness/runner hashes and a private executable snapshot.
 The full local gate and hosted smoke campaigns on the exact final commit
-provide separate final-integration evidence; hosted smoke must execute
-1,000 mutations for each of all ten targets.
+provide separate final-integration evidence; hosted smoke (`make fuzz-hosted`)
+must execute 1,000 mutations for each of all ten targets, retaining and naming
+issue #6 panics with `--continue-on-known` on the two tool-call targets and
+giving `tool-call-ref` the 120 s timeout below for issue #11.
 
 ### Isolating issue #6 (`--continue-on-known`)
 
@@ -935,8 +939,12 @@ parent corpus index, size), and is not counted in `crashes`. It is not
 retained in the novelty corpus (a panicking run supplies no coverage), except
 that a fixed seed stays a mutation parent. Any other failure, a timeout,
 or a coverage diagnostic still stops the campaign and counts as a crash. The
-option is never used by `make fuzz`, the smoke gate, or a qualification
-run; they stay strict.
+default `make fuzz` and qualification runs never use the option and stay
+strict. `make fuzz-hosted`, the CI smoke gate, uses it on the two tool-call
+targets and names each retained panic in its log (`Known issue #6 panic at
+execution N (signature)`). Those inputs are subject to the attribution
+procedure below before the run counts as clean; campaigns are seeded, so
+running `make fuzz-hosted` locally on the same commit retains the same inputs.
 
 Attribution procedure (run after any campaign that used the option, and for
 a campaign that failed any other way). Every retained input, matching a
@@ -1061,8 +1069,8 @@ independent checks.
 The lightweight runner tests (`scripts/test-fuzz.py`) run in `make check`
 via `make hygiene`, including coverage-region admission and differential normalization tests;
 `scripts/test-fuzz-feedback.py` proves that the retained corpus grows from new
-coverage on the real `patch` target end to end. `make fuzz` (the CI `fuzz`
-job) runs this feedback test before the campaigns, and release qualification
+coverage on the real `patch` target end to end. `make fuzz` and
+`make fuzz-hosted` (the CI `fuzz` job) run this feedback test before the campaigns, and release qualification
 runs it too. The feedback test reads the
 pinned nightly channel from `rust-toolchain.toml` and sets the child process
 `RUSTUP_TOOLCHAIN` explicitly; a stable parent gate therefore uses the same

@@ -97,9 +97,14 @@ jobs:
       # nightly's own LLVM revision, which scripts/fuzz.py resolves via
       # `rustc --print sysroot` (see vendor/tooling.json's llvm-coverage entry).
       - run: rustup toolchain install nightly-2026-09-14 --profile minimal --component llvm-tools
+      # The pattern target's differential oracle runs Node, and scripts/fuzz.py
+      # requires the version pinned in vendor/tooling.json.
+      - name: Install pinned Node for the pattern differential oracle
+        run: python3 scripts/install-qualification-tool.py node >> "$GITHUB_PATH"
       - name: Coverage-guided and differential fuzzing (smoke counts)
-        # Deterministic default: all nine targets, 1,000 mutations each.
-        run: make fuzz
+        # All ten targets, 1,000 mutations each, with the accepted issue #6
+        # and #11 limitations handled as docs/RELEASE.md describes.
+        run: make fuzz-hosted
   qualification:
     # Independent oracles, archive audits, and fresh resource measurements
     # for this exact branch head.

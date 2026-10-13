@@ -49,8 +49,8 @@ checks. It runs the focused tests only. The corpus suites (`correction_evaluatio
 `schema_conformance`, `tool_call_scale`, `unicode_conformance`) are
 `test = false` targets that `make corpus` runs, in the CI `corpus` job and in
 release qualification; the coverage-guided and differential fuzzing campaign
-and its corpus-feedback self-test run under `make fuzz`, in the CI `fuzz`
-job. The table's corpus counts, conformance totals and 1 MiB measurements
+and its corpus-feedback self-test run under `make fuzz` locally and
+`make fuzz-hosted` in the CI `fuzz` job. The table's corpus counts, conformance totals and 1 MiB measurements
 come from those lanes. Focused test results establish their listed
 contracts; they do not replace these gates.
 
@@ -230,7 +230,11 @@ campaign exceeds the default 10 s `--timeout` at execution 682 (#11), and the
 `tool-call` and `tool-call-ref` campaigns stop at the first rejected-span oracle
 panic (#6). A target's invariants are therefore not claimed to hold for the
 default `make fuzz` run on these two targets; [FUZZING.md](FUZZING.md) records
-how to isolate and attribute each stop.
+how to isolate and attribute each stop. The 10,000-mutation baseline
+qualification runs in FUZZING.md stay strict. `make fuzz-hosted`, which the CI `fuzz`
+job and the release gate run, completes both campaigns instead: it retains and
+names each #6 panic with `--continue-on-known` and gives `tool-call-ref` a
+120 s timeout for #11, while any other failure still fails it.
 
 ## Qualification commands
 
@@ -239,7 +243,7 @@ make check
 make corpus
 make syntax-oracles
 make wasm-test
-make fuzz
+make fuzz-hosted
 make resources
 python3 scripts/check-resource-limits.py .cache/resource-report.json
 make package

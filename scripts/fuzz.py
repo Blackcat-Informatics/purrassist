@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import urllib.request
@@ -2458,6 +2459,10 @@ KNOWN_FAILURES = {
 }
 
 
+# Lines of a crashed probe's stderr printed to the campaign log.
+PANIC_TAIL_LINES = 40
+
+
 def known_failure(stderr):
     """The name of the known (#6) failure `stderr` carries, or `None`."""
     return next((name for name, pattern in KNOWN_FAILURES.items() if pattern.search(stderr)), None)
@@ -2483,7 +2488,8 @@ def main():
     parser.add_argument('--continue-on-known', action='store_true',
                         help='keep running past a probe panic matching a known issue #6 signature '
                              '(rejected-span oracle) and retain each such input under known-6/; '
-                             'any other failure still stops the campaign; never used by `make fuzz`')
+                             'any other failure still stops the campaign; never used by `make fuzz`, '
+                             'used by `make fuzz-hosted` for the two tool-call targets')
     args = parser.parse_args()
     if args.iterations < 0 or not 0 <= args.seed < 1 << 64 or not 0 < args.timeout <= 3600:
         parser.error('invalid iteration, seed, or timeout bound')
@@ -2543,10 +2549,17 @@ def main():
                     binary, data, directory, args.timeout, target, oracle, tool_paths, report
                 )
             except subprocess.CalledProcessError:
-                name = known_failure((directory / 'probe.stderr').read_text(encoding='utf-8', errors='replace')) \
-                    if args.continue_on_known else None
+                stderr = (directory / 'probe.stderr').read_text(encoding='utf-8', errors='replace')
+                name = known_failure(stderr) if args.continue_on_known else None
                 if name is None:
+                    # The probe's panic is otherwise only in a temporary file a
+                    # hosted job does not keep; print its end and its known-issue
+                    # classification so the job log identifies the failure.
+                    print(f'Probe crashed at execution {index}; known issue signature: '
+                          f'{known_failure(stderr) or "none"}', file=sys.stderr, flush=True)
+                    print('\n'.join(stderr.splitlines()[-PANIC_TAIL_LINES:]), file=sys.stderr, flush=True)
                     raise
+                print(f'Known issue #6 panic at execution {index} ({name}); input retained', flush=True)
                 digest = hashlib.sha256(data).hexdigest()
                 (directory / 'known-6').mkdir(exist_ok=True)
                 (directory / 'known-6' / f'{digest}.bin').write_bytes(data)

@@ -249,7 +249,18 @@ For the exact `main` commit to be tagged:
    resulting `main` commit is the one every following step names.
 2. Verify hosted CI (`verify.yml`) for that commit, and run the portability,
    conformance, syntax-oracle, fuzz, performance, and package checks listed
-   in `QUALIFICATION.md`.
+   in `QUALIFICATION.md`. Every job must pass. The hosted `fuzz` job runs
+   `make fuzz-hosted`: all ten targets at the smoke count, with the
+   `tool-call` targets passing `--continue-on-known` so each issue #6 panic is
+   retained and named in the log (`Known issue #6 panic at execution N`)
+   while any other failure still fails the job, and `tool-call-ref` using the
+   120 s probe timeout for the issue #11 slow input
+   ([FUZZING.md](FUZZING.md#known-limitations)). Before tagging, run
+   `make fuzz-hosted` locally on the same commit (campaigns are seeded, so it
+   retains the same inputs) and replay every retained issue #6 input through
+   the base-commit probe as FUZZING.md's attribution procedure describes;
+   each must reproduce its #6 signature on the base. The default `make fuzz`
+   still stops on those limitations.
 3. Re-confirm all six trusted publishers through the crates.io API (see
    "Trusted publishing"); each must still match the values recorded there.
 4. Tag `rust-vVERSION`. Tagging is irreversible and requires explicit
