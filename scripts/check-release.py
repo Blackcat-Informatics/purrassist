@@ -540,6 +540,10 @@ def corpus_targets(root):
     return names
 
 
+# The Makefile's only allowed MAKEFLAGS line.
+ALLOWED_MAKEFLAGS = 'MAKEFLAGS += --no-print-directory'
+
+
 def validate_release_gate(root=None):
     """Check gate identity: release qualification and the pull-request `Verify` workflow run the
     same `make release-gate`, on the same two toolchains, in the same environment.
@@ -673,9 +677,12 @@ def validate_release_gate(root=None):
                           f'toolchain comes from the workflows')
         if re.match(r'\s*\.IGNORE\b', code):
             errors.append(f'Makefile:{number}: must not declare .IGNORE; a failing gate target must fail')
-        if re.match(r'\s*(?:override\s+)?(?:export\s+)?MAKEFLAGS\b', code) and \
-                re.search(r'(?:^|\s|=)(?:-[a-zA-Z]*i[a-zA-Z]*|--ignore-errors)\b', code.split('=', 1)[-1]):
-            errors.append(f'Makefile:{number}: MAKEFLAGS must not ignore errors (-i/--ignore-errors)')
+        # Any MAKEFLAGS setting other than the one allowed line could ignore errors
+        # (`-i`, the POSIX bare-letter `i`, or a flag hidden in a variable), so only that
+        # exact line is allowed.
+        if re.search(r'\bMAKEFLAGS\b', code) and code.strip() != ALLOWED_MAKEFLAGS:
+            errors.append(f'Makefile:{number}: MAKEFLAGS may only be set by `{ALLOWED_MAKEFLAGS}`, '
+                          f'so the gate cannot ignore errors')
     lint_rule = _make_recipe(makefile, 'lint')
     if lint_rule is None or lint_rule[1] != LINT_RECIPE:
         errors.append(f'Makefile lint recipe must be exactly {list(LINT_RECIPE)}, '

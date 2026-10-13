@@ -19,7 +19,7 @@ scratch copies of this checkout's Makefile, workflows and manifests:
   The gate jobs' allowlists (workflow, job, env, step, checkout and trigger shapes, each with
   its must-fail and must-pass fixtures), the Makefile `check` prerequisites `lint` and `test`,
   and Makefile lines that would change the toolchain or ignore failures (`RUSTUP_TOOLCHAIN`,
-  `unexport`, `.IGNORE`, `-i` in `MAKEFLAGS`).
+  `unexport`, `.IGNORE`, any `MAKEFLAGS` line but the allowed one).
   Pin extraction is tested on flags before the name, line continuations, the real workflows,
   and (must fail) `${{ }}` and `$VAR` pins, `cargo +X`, inline `RUSTUP_TOOLCHAIN=`, a pin in a
   new workflow file and a malformed pin.
@@ -620,12 +620,13 @@ class GateAllowlist(ScratchTree):
         self.fails('must not declare .IGNORE')
 
     def test_makeflags_that_ignore_errors_fail(self):
-        for flag in ('-i', '--ignore-errors', '-ki'):
-            with self.subTest(flag=flag):
+        for line in ('MAKEFLAGS += --no-print-directory -i', 'MAKEFLAGS += --no-print-directory --ignore-errors',
+                     'MAKEFLAGS += --no-print-directory -ki', 'MAKEFLAGS = i --no-print-directory',
+                     'IGN := -i\nMAKEFLAGS += $(IGN)\nMAKEFLAGS += --no-print-directory'):
+            with self.subTest(line=line):
                 self.setUp()
-                self.edit('Makefile', 'MAKEFLAGS += --no-print-directory\n',
-                          f'MAKEFLAGS += --no-print-directory {flag}\n')
-                self.fails('MAKEFLAGS must not ignore errors')
+                self.edit('Makefile', 'MAKEFLAGS += --no-print-directory\n', line + '\n')
+                self.fails('MAKEFLAGS may only be set by')
 
     def test_the_real_makeflags_line_passes(self):
         self.assertIn('MAKEFLAGS += --no-print-directory\n', (self.root / 'Makefile').read_text(encoding='utf-8'))

@@ -42,7 +42,8 @@ nightly pin matches `rust-toolchain.toml`. `scripts/check-docs.py` holds every
 `RUSTUP_TOOLCHAIN=` value and patch-form Rust version in this document, the
 README and `docs/QUALIFICATION.md` to the stable pin. `check-release.py` also
 rejects Makefile lines that would change the toolchain or ignore failures
-(`RUSTUP_TOOLCHAIN`, `unexport`, `.IGNORE`, or `-i` in `MAKEFLAGS`).
+(`RUSTUP_TOOLCHAIN`, `unexport`, `.IGNORE`, or any `MAKEFLAGS` setting other than
+`MAKEFLAGS += --no-print-directory`).
 `check-release.py` runs in `make check` and `make package`; `check-docs.py`
 runs in `make check`.
 
