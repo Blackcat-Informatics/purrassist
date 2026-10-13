@@ -13,7 +13,7 @@ Two groups, neither of which touches the network or this checkout:
   Makefile and workflows and fail, naming their error, on copies in a scratch
   tree: a missing or reordered `release-gate` recipe line, an added
   prerequisite, an extra step beside the shared gate in release qualification,
-  differing environments or installs, a weakened `lint` recipe, and every kind
+  differing environments or installs, a weakened `lint` recipe or `CORPUS_SUITES` list, and every kind
   of toolchain pin drift (install line, env, publish.yml, rust-version, nightly).
   The gate jobs' allowlists (workflow, job, env, step, checkout and trigger shapes, each with
   its must-fail and must-pass fixtures) and the Makefile `check` prerequisites `lint` and `test`.
@@ -225,7 +225,9 @@ class WorkflowValidation(unittest.TestCase):
 
 
 INSTALL = 'rustup toolchain install'
-TREE_FILES = ('Makefile', 'Cargo.toml', 'rust-toolchain.toml', '.github/workflows/verify.yml',
+MEMBERS = ('core', 'derive', 'syntax', 'purrassist', 'host', 'cli', 'wasm-harness', 'helper-census')
+TREE_FILES = ('Makefile', 'Cargo.toml', 'rust-toolchain.toml',
+              *(f'crates/{member}/Cargo.toml' for member in MEMBERS), '.github/workflows/verify.yml',
               '.github/workflows/release-qualification.yml', '.github/workflows/publish.yml')
 VERIFY = '.github/workflows/verify.yml'
 RELEASE = '.github/workflows/release-qualification.yml'
@@ -287,6 +289,59 @@ class ReleaseGateIdentity(ScratchTree):
     def test_a_weakened_lint_recipe_fails(self):
         self.edit('Makefile', 'all-targets --locked -- -D warnings', 'all-targets -- -D warnings')
         self.fails('Makefile lint recipe must be exactly')
+
+    LINT_SECOND = ('cargo clippy -p purrassist-core --locked $(foreach suite,$(CORPUS_SUITES),--test $(suite))'
+                   ' -- -D warnings')
+
+    def test_real_files_lint_the_corpus_suites(self):
+        self.assertIn('\t' + self.LINT_SECOND + '\n', (ROOT / 'Makefile').read_text(encoding='utf-8'))
+
+    def test_a_corpus_lint_line_without_deny_warnings_fails(self):
+        self.edit('Makefile', self.LINT_SECOND, self.LINT_SECOND.removesuffix(' -- -D warnings'))
+        self.fails('Makefile lint recipe must be exactly')
+
+    def test_a_corpus_lint_line_with_or_true_fails(self):
+        self.edit('Makefile', self.LINT_SECOND, self.LINT_SECOND + ' || true')
+        self.fails('Makefile lint recipe must be exactly')
+
+    def test_a_leading_dash_on_a_lint_line_fails(self):
+        self.edit('Makefile', '\t' + self.LINT_SECOND, '\t-' + self.LINT_SECOND)
+        self.fails('Makefile lint recipe must be exactly')
+
+    def test_a_missing_corpus_lint_line_fails(self):
+        self.edit('Makefile', '\t' + self.LINT_SECOND + '\n', '')
+        self.fails('Makefile lint recipe must be exactly')
+
+    def test_a_suite_removed_from_corpus_suites_fails(self):
+        self.edit('Makefile', 'CORPUS_SUITES := correction_evaluation ', 'CORPUS_SUITES := ')
+        self.fails("missing ['correction_evaluation']")
+
+    def test_a_new_test_false_target_missing_from_corpus_suites_fails(self):
+        self.append('crates/core/Cargo.toml', '\n[[test]]\nname = "new_suite"\npath = "tests/new_suite.rs"\ntest = false\n')
+        self.fails("missing ['new_suite']")
+
+    def test_a_test_true_target_is_not_a_corpus_suite(self):
+        self.append('crates/core/Cargo.toml', '\n[[test]]\nname = "plain"\npath = "tests/plain.rs"\n')
+        CR.validate_release_gate(self.root)
+
+    def test_an_unknown_suite_in_corpus_suites_fails(self):
+        self.edit('Makefile', 'CORPUS_SUITES := ', 'CORPUS_SUITES := ghost ')
+        self.fails("unknown ['ghost']")
+
+    def test_a_corpus_suites_append_fails(self):
+        self.append('Makefile', 'CORPUS_SUITES += extra\n')
+        self.fails('Makefile must define CORPUS_SUITES exactly once')
+
+    def test_a_second_corpus_suites_definition_fails(self):
+        self.append('Makefile', 'CORPUS_SUITES := correction_evaluation\n')
+        self.fails('Makefile must define CORPUS_SUITES exactly once')
+
+    def test_a_corpus_suites_override_or_default_fails(self):
+        for line in ('override CORPUS_SUITES := x\n', 'CORPUS_SUITES ?= x\n'):
+            with self.subTest(line=line):
+                self.setUp()
+                self.append('Makefile', line)
+                self.fails('Makefile must define CORPUS_SUITES exactly once')
 
     def test_an_extra_make_step_in_release_qualification_fails(self):
         self.append(RELEASE, '      - name: Verify the corpus again\n        run: make corpus\n')

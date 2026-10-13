@@ -21,6 +21,7 @@ hygiene:
 
 lint:
 	cargo clippy --workspace --all-targets --locked -- -D warnings
+	cargo clippy -p purrassist-core --locked $(foreach suite,$(CORPUS_SUITES),--test $(suite)) -- -D warnings
 
 test:
 	RUSTFLAGS="$${RUSTFLAGS:-} -D warnings" cargo test --workspace --locked

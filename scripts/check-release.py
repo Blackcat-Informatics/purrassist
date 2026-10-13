@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tomllib
 import urllib.error
 import urllib.request
 
@@ -242,7 +243,10 @@ RELEASE_STEPS = ('Install release toolchain', 'Install pinned coverage-feedback 
 GATE_STEP = 'Verify the release gate'
 GATE_RECIPE = ('$(MAKE) check', '$(MAKE) corpus', 'python3 scripts/test-fuzz-feedback.py',
                'python3 scripts/test-verify-published.py', '$(MAKE) package')
-LINT_RECIPE = ('cargo clippy --workspace --all-targets --locked -- -D warnings',)
+LINT_RECIPE = ('cargo clippy --workspace --all-targets --locked -- -D warnings',
+               'cargo clippy -p purrassist-core --locked $(foreach suite,$(CORPUS_SUITES),--test $(suite)) -- -D warnings')
+CORPUS_ASSIGNMENT = re.compile(r'^(?!\t)\s*(?:(?:override|export|private)\s+)*CORPUS_SUITES\s*[:+?!]*=')
+CORPUS_DEFINITION = re.compile(r'^CORPUS_SUITES :=(.*)$')
 WORKFLOW_KEYS = ('name', 'on', 'permissions', 'jobs', 'concurrency')
 GATE_JOB_KEYS = ('runs-on', 'timeout-minutes', 'env', 'steps')
 STEP_KEYS = ('name', 'uses', 'with', 'run')
@@ -490,6 +494,31 @@ def _make_recipe(makefile, target):
     return prerequisites, tuple(recipe)
 
 
+def corpus_suites(makefile):
+    """(suite names, errors) of the Makefile's `CORPUS_SUITES`: exactly one plain
+    `CORPUS_SUITES :=` definition and no other assignment, so the checked text is what Make
+    expands."""
+    assignments = [line for line in makefile.splitlines() if CORPUS_ASSIGNMENT.match(line)]
+    definitions = [match for match in map(CORPUS_DEFINITION.match, assignments) if match]
+    if len(assignments) != 1 or len(definitions) != 1:
+        return [], [f'Makefile must define CORPUS_SUITES exactly once, as a plain `CORPUS_SUITES :=` line '
+                    f'with no `+=`, `?=`, `override` or other assignment, found {assignments}']
+    value = definitions[0][1].split('#', 1)[0]
+    if value.rstrip().endswith('\\'):
+        return [], ['Makefile CORPUS_SUITES must be a single line without a continuation']
+    return value.split(), []
+
+
+def corpus_targets(root):
+    """The names of the `test = false` `[[test]]` targets of every workspace member's Cargo.toml."""
+    members = tomllib.loads((root / 'Cargo.toml').read_text(encoding='utf-8'))['workspace']['members']
+    names = set()
+    for member in members:
+        manifest = tomllib.loads((root / member / 'Cargo.toml').read_text(encoding='utf-8'))
+        names.update(target['name'] for target in manifest.get('test', []) if target.get('test') is False)
+    return names
+
+
 def validate_release_gate(root=None):
     """Check gate identity: release qualification and the pull-request `Verify` workflow run the
     same `make release-gate`, on the same two toolchains, in the same environment.
@@ -506,7 +535,9 @@ def validate_release_gate(root=None):
       `GITHUB_PATH` write; verify.yml keeps a bare `pull_request:` trigger and a closed step list.
     * The Makefile `check` target depends on `lint` and `test`.
     * The Makefile `release-gate` target has no prerequisites and exactly the `GATE_RECIPE`
-      lines in order, and `lint` is exactly the `LINT_RECIPE` Clippy command.
+      lines in order, and `lint` is exactly the two `LINT_RECIPE` Clippy commands. Its second
+      command lints the corpus suites, so `CORPUS_SUITES` must be defined once and equal the set
+      of `test = false` test targets of the workspace members.
 
     verify.yml gets none of publish.yml's closed-shape rules. Returns nothing; raises
     `SystemExit` listing every failure.
@@ -614,6 +645,15 @@ def validate_release_gate(root=None):
     if lint_rule is None or lint_rule[1] != LINT_RECIPE:
         errors.append(f'Makefile lint recipe must be exactly {list(LINT_RECIPE)}, '
                       f'found {list(lint_rule[1]) if lint_rule else None}')
+    suites, suite_errors = corpus_suites(makefile)
+    errors.extend(suite_errors)
+    if not suite_errors:
+        declared = corpus_targets(root)
+        if len(suites) != len(set(suites)) or set(suites) != declared:
+            errors.append(f'Makefile CORPUS_SUITES must equal the `test = false` test targets of the '
+                          f'workspace crates (they are linted by `make lint` and run by `make corpus`): '
+                          f'missing {sorted(declared - set(suites))}, unknown {sorted(set(suites) - declared)}, '
+                          f'duplicated {sorted(s for s in set(suites) if suites.count(s) > 1)}')
 
     if errors:
         raise SystemExit('\n'.join(errors))
