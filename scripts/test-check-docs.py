@@ -1771,7 +1771,7 @@ ABSENT = (
     ('workspace-version', 'docs/QUALIFICATION.md', r'not yet tagged\s+`rust-v0\.1\.0`', 'untagged'),
     ('workspace-version', 'docs/RELEASE.md', r'not yet tagged\s+`rust-v0\.1\.0`', 'untagged'),
     ('fuzz-targets', 'docs/FUZZING.md', r'across\s+ten\s+`purrassist-core`\s+targets', 'across the targets'),
-    ('fuzz-targets', 'docs/FUZZING.md', r'all ten targets', 'every target'),
+    ('fuzz-targets', 'docs/FUZZING.md', r'all\s+ten\s+targets', 'every target'),
     ('fuzz-targets', 'docs/QUALIFICATION.md', r'Ten targets \(including', 'Targets, including'),
     ('fuzz-targets', 'docs/QUALIFICATION.md', r'the ten mutation targets', 'the mutation targets'),
     ('fuzz-targets', 'README.md', r'ten coverage-guided targets', 'coverage-guided probes'),

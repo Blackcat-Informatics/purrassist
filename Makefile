@@ -56,7 +56,7 @@ resources:
 # (see docs/FUZZING.md); FUZZ_ARGS forwards to scripts/fuzz.py (--iterations,
 # --seed, --timeout, --replay). With no TARGET, every target runs once at the
 # documented smoke count (scripts/fuzz.py's default of 1,000 mutations),
-# ignoring FUZZ_ARGS, so the gate stays deterministic across all ten targets. `--continue-on-known` (issue #6 isolation) is never passed here.
+# ignoring FUZZ_ARGS, so the run stays deterministic across all ten targets. `--continue-on-known` (issue #6 isolation) is never passed here.
 fuzz:
 	python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-fuzz.py
 	python3 scripts/test-fuzz-feedback.py
@@ -84,7 +84,7 @@ fuzz-hosted:
 			tool-call-ref) args='--continue-on-known --timeout 120' ;; \
 			*) args='' ;; \
 		esac; \
-		echo "== fuzz target: $$target $$args =="; \
+		echo "== fuzz target: $$target$${args:+ $$args} =="; \
 		python3 scripts/fuzz.py --target $$target $$args || exit 1; \
 	done
 

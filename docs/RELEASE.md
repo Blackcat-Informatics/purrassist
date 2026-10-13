@@ -255,7 +255,11 @@ For the exact `main` commit to be tagged:
    retained and named in the log (`Known issue #6 panic at execution N`)
    while any other failure still fails the job, and `tool-call-ref` using the
    120 s probe timeout for the issue #11 slow input
-   ([FUZZING.md](FUZZING.md#known-limitations)). The default `make fuzz`
+   ([FUZZING.md](FUZZING.md#known-limitations)). Before tagging, run
+   `make fuzz-hosted` locally on the same commit (campaigns are seeded, so it
+   retains the same inputs) and replay every retained issue #6 input through
+   the base-commit probe as FUZZING.md's attribution procedure describes;
+   each must reproduce its #6 signature on the base. The default `make fuzz`
    still stops on those limitations.
 3. Re-confirm all six trusted publishers through the crates.io API (see
    "Trusted publishing"); each must still match the values recorded there.
