@@ -338,7 +338,12 @@ class FuzzTargets(Case):
 
     def test_the_makefile_loop_must_run_every_target(self):
         tree = self.tree()
-        tree.replace('Makefile', ' tool-call-ref; do', '; do')
+        tree.replace('Makefile', ' tool-call-ref; do', '; do', count=0)
+        self.assertFails(tree.errors(), 'fuzz-targets', 'Makefile', 'fuzz loop')
+
+    def test_the_hosted_fuzz_loop_must_run_every_target_too(self):
+        tree = self.tree()
+        tree.replace('Makefile', 'tool-call tool-call-ref; do \\\n\t\tcase', 'tool-call; do \\\n\t\tcase')
         self.assertFails(tree.errors(), 'fuzz-targets', 'Makefile', 'fuzz loop')
 
     def test_the_makefile_comment_must_list_every_target(self):

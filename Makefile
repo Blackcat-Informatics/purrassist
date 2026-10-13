@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 MAKEFLAGS += --no-print-directory
-.PHONY: check corpus fmt lint test doc hygiene wasm-test benchmark package syntax-oracles resources fuzz helper-test helper-census helper-check
+.PHONY: check corpus fmt lint test doc hygiene wasm-test benchmark package syntax-oracles resources fuzz fuzz-hosted helper-test helper-census helper-check
 
 check: fmt hygiene helper-test helper-check lint test doc
 
@@ -68,6 +68,25 @@ fuzz:
 	else \
 		python3 scripts/fuzz.py --target $(TARGET) $(FUZZ_ARGS); \
 	fi
+
+# The hosted and release fuzz gate (docs/RELEASE.md): every target at the smoke
+# count, with the accepted 0.1.0 limitations handled rather than ending the
+# run. The tool-call targets pass --continue-on-known, which retains and names
+# each issue #6 panic while any other failure still stops the campaign, and
+# tool-call-ref gets the 120 s probe timeout docs/FUZZING.md prescribes for the
+# issue #11 slow input.
+fuzz-hosted:
+	python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-fuzz.py
+	python3 scripts/test-fuzz-feedback.py
+	@for target in json markdown schema pattern unified fuzzy matching patch tool-call tool-call-ref; do \
+		case $$target in \
+			tool-call) args='--continue-on-known' ;; \
+			tool-call-ref) args='--continue-on-known --timeout 120' ;; \
+			*) args='' ;; \
+		esac; \
+		echo "== fuzz target: $$target $$args =="; \
+		python3 scripts/fuzz.py --target $$target $$args || exit 1; \
+	done
 
 # Detector self-tests and strict clone enforcement are mandatory; the strict
 # helper-check validates the ledger too (--validate-ledger is its report-only

@@ -4,6 +4,7 @@
 """Verify coverage novelty boundaries, differential-oracle normalization, and
 fail-closed campaign behavior for `scripts/fuzz.py`."""
 import importlib.util
+import io
 import json
 import shutil
 import subprocess
@@ -381,6 +382,31 @@ class Coverage(unittest.TestCase):
         report = json.loads((directory / 'report.json').read_text(encoding='utf-8'))
         self.assertEqual((report['status'], report['crashes']), ('failed', 1))
         self.assertEqual(len(report['known_failures']), 1)
+
+    def test_a_crash_prints_its_panic_and_classification_to_the_log(self):
+        stderr = io.StringIO()
+        with patch('sys.stderr', stderr):
+            _, error = self._campaign([], [self.KNOWN, None])
+        self.assertIsInstance(error, subprocess.CalledProcessError)
+        self.assertIn('Probe crashed at execution 0; known issue signature: '
+                      'issue-6-rejected-span-runs-past-failure', stderr.getvalue())
+        self.assertIn('runs past where it failed', stderr.getvalue())
+
+    def test_an_unknown_crash_is_classified_as_none_in_the_log(self):
+        stderr = io.StringIO()
+        with patch('sys.stderr', stderr):
+            _, error = self._campaign(['--continue-on-known'], ['assertion failed: overlap'])
+        self.assertIsInstance(error, subprocess.CalledProcessError)
+        self.assertIn('known issue signature: none', stderr.getvalue())
+        self.assertIn('assertion failed: overlap', stderr.getvalue())
+
+    def test_a_retained_known_panic_is_named_in_the_log(self):
+        stdout = io.StringIO()
+        with patch('sys.stdout', stdout):
+            _, error = self._campaign(['--continue-on-known'], [self.KNOWN, None])
+        self.assertIsNone(error)
+        self.assertIn('Known issue #6 panic at execution 0 (issue-6-rejected-span-runs-past-failure)',
+                      stdout.getvalue())
 
     def test_byte_input_probe_completes_with_ok_on_invalid_utf8(self):
         document = Coverage().document()

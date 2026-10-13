@@ -917,8 +917,10 @@ start, before subsequent accounting and Markdown corrections. Their source hash
 fields are never reconstructed retrospectively. New Markdown reports
 add guarded engine/harness/runner hashes and a private executable snapshot.
 The full local gate and hosted smoke campaigns on the exact final commit
-provide separate final-integration evidence; hosted smoke must execute
-1,000 mutations for each of all ten targets.
+provide separate final-integration evidence; hosted smoke (`make fuzz-hosted`)
+must execute 1,000 mutations for each of all ten targets, retaining and naming
+issue #6 panics with `--continue-on-known` on the two tool-call targets and
+giving `tool-call-ref` the 120 s timeout below for issue #11.
 
 ### Isolating issue #6 (`--continue-on-known`)
 
