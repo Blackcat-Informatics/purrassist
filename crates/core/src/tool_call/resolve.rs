@@ -3640,8 +3640,7 @@ fn reading_digests(
     let blocker = reading
         .blocker
         .as_ref()
-        .map(ToString::to_string)
-        .unwrap_or_default();
+        .map_or_else(String::new, ToString::to_string);
     let mut builder = DigestBuilder::new();
     let mut encoded = 0_usize;
     let mut spans = 0_usize;

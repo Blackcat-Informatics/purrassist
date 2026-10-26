@@ -196,12 +196,8 @@ fn extract(source: &str, name: &str) -> Option<Extracted> {
     let start = source.find(&marker)? + marker.len();
     let end = start + source[start..].find("});")?;
     let body = &source[start..end];
-    let lone = extract_array(body, "loneCodePoints:")
-        .map(parse_hex_list)
-        .unwrap_or_default();
-    let ranges = extract_array(body, "ranges:")
-        .map(parse_ranges)
-        .unwrap_or_default();
+    let lone = extract_array(body, "loneCodePoints:").map_or_else(Vec::new, parse_hex_list);
+    let ranges = extract_array(body, "ranges:").map_or_else(Vec::new, parse_ranges);
     Some(Extracted { lone, ranges })
 }
 fn extract_array<'a>(body: &'a str, key: &str) -> Option<&'a str> {

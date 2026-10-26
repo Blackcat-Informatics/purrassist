@@ -134,8 +134,7 @@ fn busy_turn_resolves_every_call_by_default() {
         "{}",
         actual
             .pointer("/receipt/termination")
-            .map(Node::to_json)
-            .unwrap_or_default()
+            .map_or_else(String::new, Node::to_json)
     );
     for index in 0..64 {
         assert_eq!(

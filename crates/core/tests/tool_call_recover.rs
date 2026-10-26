@@ -1054,9 +1054,7 @@ fn ids_never_collide_each_policy() {
         .effects(Effects::ReadOnly)
         .param("city", Param::string().required())]);
     let element = |id: Option<&str>| {
-        let id = id
-            .map(|id| format!(r#""id": "{id}", "#))
-            .unwrap_or_default();
+        let id = id.map_or_else(String::new, |id| format!(r#""id": "{id}", "#));
         format!(
             r#"{{{id}"type": "function", "function": {{"name": "get_weather", "arguments": "{{\"city\": \"Lima\"}}"}}}}"#
         )
@@ -1218,9 +1216,7 @@ fn default_ids_preserve_model_ids_and_repair_duplicates() {
         .effects(Effects::ReadOnly)
         .param("city", Param::string().required())]);
     let element = |id: Option<&str>, city: &str| {
-        let id = id
-            .map(|id| format!(r#""id": "{id}", "#))
-            .unwrap_or_default();
+        let id = id.map_or_else(String::new, |id| format!(r#""id": "{id}", "#));
         format!(
             r#"{{{id}"type": "function", "function": {{"name": "get_weather", "arguments": "{{\"city\": \"{city}\"}}"}}}}"#
         )
