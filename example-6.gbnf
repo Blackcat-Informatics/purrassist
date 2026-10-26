@@ -1,0 +1,9 @@
+root ::= query | edit
+query ::= "<tool_call>\n{\"name\":\"query_customer_orders\",\"arguments\":{" ws "\"customer_id\":" ws customer ws "," ws "\"limit\":" ws limit ws "}}\n</tool_call>"
+edit ::= "<tool_call>\n{\"name\":\"edit_file\",\"arguments\":{" ws "\"path\":" ws string ws "," ws "\"text\":" ws string ws "}}\n</tool_call>"
+customer ::= "\"customer-" [0-9]+ "\""
+limit ::= [1-9] | [1-9] [0-9] | "100"
+string ::= "\"" character* "\""
+character ::= [^"\\\x00-\x1f] | "\\" (["\\/bfnrt] | "u" hex hex hex hex)
+hex ::= [0-9a-fA-F]
+ws ::= [ \t\n\r]*

@@ -1,0 +1,89 @@
+@prefix pa: <https://example.org/toolgraph#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix fno: <https://w3id.org/function/ontology#> .
+pa:ToolShape a sh:NodeShape ; sh:targetClass pa:Tool ;
+ sh:property [ sh:path pa:name ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ; sh:pattern "^[A-Za-z0-9_.:-]+$" ] ;
+ sh:property [ sh:path pa:subtool ; sh:class pa:Tool ] ;
+ sh:property [ sh:path pa:description ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+ sh:property [ sh:path pa:inputShape ; sh:minCount 1 ; sh:maxCount 1 ; sh:class sh:NodeShape ] ;
+ sh:property [ sh:path pa:outputShape ; sh:minCount 1 ; sh:maxCount 1 ; sh:class sh:NodeShape ] ;
+ sh:property [ sh:path pa:executionProfile ; sh:minCount 1 ; sh:maxCount 1 ; sh:node pa:ExecutionShape ] ;
+ sh:property [ sh:path pa:contextManagement ; sh:minCount 1 ; sh:maxCount 1 ; sh:node pa:ContextShape ] ;
+ sh:property [ sh:path pa:parameterConstraints ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+ sh:property [ sh:path pa:title ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+ sh:property [ sh:path pa:readOnlyHint ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:boolean ] ;
+ sh:property [ sh:path pa:destructiveHint ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:boolean ] ;
+ sh:property [ sh:path pa:idempotentHint ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:boolean ] ;
+ sh:property [ sh:path pa:openWorldHint ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:boolean ] ;
+ sh:property [ sh:path fno:expects ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:BlankNodeOrIRI ] ;
+ sh:property [ sh:path fno:returns ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:BlankNodeOrIRI ] .
+pa:ExecutionShape a sh:NodeShape ; sh:targetClass pa:ExecutionProfile ;
+ sh:property [ sh:path pa:confinementMode ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ( "aa-exec" "change_hat" ) ] ;
+ sh:property [ sh:path pa:profileName ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+ sh:property [ sh:path pa:hatName ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+ sh:property [ sh:path pa:egressAllowed ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:boolean ] ;
+ sh:property [ sh:path pa:addressSpaceBytes ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:positiveInteger ] ;
+ sh:property [ sh:path pa:fileSizeBytes ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:positiveInteger ] ;
+ sh:property [ sh:path pa:processCount ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:positiveInteger ] ;
+ sh:property [ sh:path pa:cpuSeconds ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:positiveInteger ] ;
+ sh:property [ sh:path pa:openFileCount ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:positiveInteger ] ;
+ sh:property [ sh:path pa:rule ; sh:nodeKind sh:BlankNodeOrIRI ] ;
+ sh:property [ sh:path pa:subprofile ; sh:node pa:ExecutionShape ] ;
+ sh:property [ sh:path pa:waiver ; sh:node pa:WaiverShape ] .
+pa:WaiverShape a sh:NodeShape ; sh:targetClass pa:Waiver ;
+ sh:property [ sh:path pa:waivedRule ; sh:minCount 1 ; sh:maxCount 1 ; sh:class pa:FileRule ] ;
+ sh:property [ sh:path pa:reviewer ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ; sh:minLength 1 ] ;
+ sh:property [ sh:path pa:rationale ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ; sh:minLength 1 ] ;
+ sh:property [ sh:path pa:waiverSource ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:anyURI ] .
+pa:ContextShape a sh:NodeShape ; sh:targetClass pa:Context ;
+ sh:property [ sh:path pa:outputProjectionJq ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+ sh:property [ sh:path pa:maxOutputTokens ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:positiveInteger ] ;
+ sh:property [ sh:path pa:historyRetentionTurns ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:nonNegativeInteger ] ;
+ sh:property [ sh:path pa:intentTags ; sh:datatype xsd:string ] ;
+ sh:property [ sh:path pa:loadingStrategy ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ( "always" "on_demand" ) ] .
+pa:HintShape a sh:NodeShape ; sh:targetClass pa:Hint ;
+ sh:property [ sh:path pa:maxEditDistance ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:nonNegativeInteger ] ;
+ sh:property [ sh:path pa:alias ; sh:datatype xsd:string ] ;
+ sh:property [ sh:path pa:typeCoercion ; sh:minCount 1 ; sh:in ( "none" "string-to-integer" "integer-to-string" ) ] ;
+ sh:property [ sh:path pa:caseFold ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:boolean ] ;
+ sh:property [ sh:path pa:unicodeFold ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:boolean ] ;
+ sh:property [ sh:path pa:taint ; sh:datatype xsd:string ] ;
+ sh:property [ sh:path pa:sessionBinding ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] .
+pa:NetworkShape a sh:NodeShape ; sh:targetClass pa:NetworkRule ;
+ sh:property [ sh:path pa:domain ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ( "inet" "inet6" ) ] ;
+ sh:xone (
+  [ sh:property [ sh:path pa:socketType ; sh:minCount 1 ; sh:maxCount 1 ] ; sh:property [ sh:path pa:protocol ; sh:maxCount 0 ] ]
+  [ sh:property [ sh:path pa:protocol ; sh:minCount 1 ; sh:maxCount 1 ] ; sh:property [ sh:path pa:socketType ; sh:maxCount 0 ] ]
+ ) ;
+ sh:property [ sh:path pa:access ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+ sh:property [ sh:path pa:peerIp ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+ sh:property [ sh:path pa:peerPort ; sh:maxCount 1 ; sh:datatype xsd:string ] .
+pa:FileShape a sh:NodeShape ; sh:targetClass pa:FileRule ;
+ sh:property [ sh:path pa:pathGlob ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+ sh:property [ sh:path pa:filePermissions ; sh:maxCount 1 ; sh:datatype xsd:string ; sh:pattern "^[rwaklm]*$" ] ;
+ sh:property [ sh:path pa:execTransition ; sh:maxCount 1 ; sh:in ( "ix" "px" "cx" "ux" "Ux" "Pix" "Cix" ) ] ;
+ sh:property [ sh:path pa:transitionTarget ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+ sh:property [ sh:path pa:owner ; sh:maxCount 1 ; sh:datatype xsd:boolean ] .
+pa:RuleShape a sh:NodeShape ; sh:targetClass pa:Rule ;
+ sh:property [ sh:path pa:audit ; sh:maxCount 1 ; sh:datatype xsd:boolean ] ;
+ sh:property [ sh:path pa:deny ; sh:maxCount 1 ; sh:datatype xsd:boolean ] .
+pa:CapabilityShape a sh:NodeShape ; sh:targetClass pa:CapabilityRule ;
+ sh:property [ sh:path pa:capability ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] .
+pa:UnixShape a sh:NodeShape ; sh:targetClass pa:UnixRule ;
+ sh:property [ sh:path pa:access ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+ sh:property [ sh:path pa:socketType ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+ sh:property [ sh:path pa:address ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+ sh:property [ sh:path pa:peerAddress ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+ sh:property [ sh:path pa:peerLabel ; sh:maxCount 1 ; sh:datatype xsd:string ] .
+pa:SignalShape a sh:NodeShape ; sh:targetClass pa:SignalRule ;
+ sh:property [ sh:path pa:access ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+ sh:property [ sh:path pa:signalSet ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+ sh:property [ sh:path pa:peerLabel ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] .
+pa:PtraceShape a sh:NodeShape ; sh:targetClass pa:PtraceRule ;
+ sh:property [ sh:path pa:access ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+ sh:property [ sh:path pa:peerLabel ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] .
+pa:MountShape a sh:NodeShape ; sh:targetClass pa:MountRule ;
+ sh:property [ sh:path pa:mountOperation ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ( "mount" "remount" "umount" "pivot_root" ) ] ;
+ sh:property [ sh:path pa:deny ; sh:hasValue true ; sh:minCount 1 ; sh:maxCount 1 ] .

@@ -1,0 +1,9 @@
+PREFIX pa: <https://example.org/toolgraph#>
+PREFIX ex: <https://example.org/tools/>
+RULE ex:editPermit { ?call pa:permits ex:edit_file }
+WHERE {
+ ?call pa:tool ex:edit_file . ?call pa:session ?session .
+ ?session pa:tenant ?tenant . ?tenant pa:active true .
+}
+RULE ex:editDeny { ?call pa:denies ex:edit_file }
+WHERE { ?call pa:tool ex:edit_file . NOT { ?call pa:permits ex:edit_file } }

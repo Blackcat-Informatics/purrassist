@@ -1,0 +1,13 @@
+PREFIX pa: <https://example.org/toolgraph#>
+PREFIX ex: <https://example.org/tools/>
+RULE ex:queryPermit { ?call pa:permits ex:query_customer_orders }
+WHERE {
+ ?call pa:tool ex:query_customer_orders . ?call pa:session ?session .
+ ?call pa:customerId ?user . ?session pa:userId ?user .
+ ?session pa:tenant ?tenant . ?tenant pa:active true .
+}
+RULE ex:queryDeny { ?call pa:denies ex:query_customer_orders }
+WHERE {
+ ?call pa:tool ex:query_customer_orders .
+ NOT { ?call pa:permits ex:query_customer_orders }
+}

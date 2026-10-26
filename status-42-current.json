@@ -1,0 +1,122 @@
+{
+  "issue": 32,
+  "pr_number": 42,
+  "branch": "paudley/32-tool-graph-phase-2-specification-docs",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/32-tool-graph-phase-2-specification-docs/.stage/tool-graph-phase-2-specification-docs",
+  "observed_at": "2026-10-26T22:54:27.857650+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews"
+  ],
+  "blocked": [
+    {
+      "code": "artifacts",
+      "message": "Required merge artifacts are missing or have invalid fields/verdicts"
+    }
+  ],
+  "unavailable": [],
+  "next_actions": [
+    "Complete: review-debt.md, validation.md"
+  ],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/32-tool-graph-phase-2-specification-docs/.stage/tool-graph-phase-2-specification-docs/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/32-tool-graph-phase-2-specification-docs/.stage/tool-graph-phase-2-specification-docs/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/32-tool-graph-phase-2-specification-docs/.stage/tool-graph-phase-2-specification-docs/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/32-tool-graph-phase-2-specification-docs/.stage/tool-graph-phase-2-specification-docs/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/32-tool-graph-phase-2-specification-docs/.stage/tool-graph-phase-2-specification-docs/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "92aa3274cb0aa24619d4696aac20643bc0f1042b",
+    "headRefName": "paudley/32-tool-graph-phase-2-specification-docs",
+    "headRefOid": "2e9eeb46f29bd223fdfee0b544b4d37429fa024f",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 42,
+    "state": "OPEN",
+    "title": "Specify tool-graph contracts and repair Clippy failures",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/42"
+  },
+  "checks": {
+    "state": "pass",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/40410623961/job/121880102477",
+        "name": "windows-engines",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/40410623961/job/121880102547",
+        "name": "native (ubuntu-24.04)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/40410623961/job/121880102814",
+        "name": "native (macos-14)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/40410623961/job/121880102476",
+        "name": "release-gate",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/40410623961/job/121880102151",
+        "name": "wasm",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/40410623961/job/121880102550",
+        "name": "corpus",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/40410623961/job/121880102697",
+        "name": "fuzz",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/40410623961/job/121880102649",
+        "name": "qualification",
+        "state": "SUCCESS"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "2e9eeb46f29bd223fdfee0b544b4d37429fa024f",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "2e9eeb46f29bd223fdfee0b544b4d37429fa024f",
+    "branch": "paudley/32-tool-graph-phase-2-specification-docs",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 42,
+    "jobs": [],
+    "ok": true,
+    "summary": "# PR #42 failed CI logs\n\nNo failed checks in this snapshot.\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "missing_artifacts": [
+    "review-debt.md",
+    "validation.md"
+  ],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  }
+}

@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+[workspace]
+[package]
+name="toolgraph-dependency-probe"
+version="0.0.0"
+edition="2024"
+[lib]
+path="probe.rs"
+[dependencies]
+purrdf-core = { path = "/home/paudley/Active/purrdf/crates/rdf-core" }
+purrdf-rdf = { path = "/home/paudley/Active/purrdf/crates/rdf" }
+purrdf-shapes = { path = "/home/paudley/Active/purrdf/crates/shapes" }
+purrdf-datalog = { path = "/home/paudley/Active/purrdf/crates/datalog" }
+purrdf-text = { path = "/home/paudley/Active/purrdf/crates/text" }
+purrdf-gts = { path = "/home/paudley/Active/purrdf/crates/gts" }
+purrdf-validate = { path = "/home/paudley/Active/purrdf/crates/validate" }
+regex-syntax = "=0.8.11"

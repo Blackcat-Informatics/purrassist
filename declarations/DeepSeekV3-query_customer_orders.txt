@@ -1,0 +1,3 @@
+```json
+{"type":"function","function":{"name":"query_customer_orders","description":"Query customer orders.","parameters":{"type":"object","properties":{"customer_id":{"type":"string","pattern":"^customer-[0-9]+$"},"limit":{"type":"integer","minimum":1,"maximum":100}},"required":["customer_id","limit"],"additionalProperties":false}}}
+```

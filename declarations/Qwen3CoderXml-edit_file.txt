@@ -1,0 +1,5 @@
+<function>
+<name>edit_file</name>
+<description>Edit a workspace file.</description>
+<parameters>{"type":"object","properties":{"path":{"type":"string"},"text":{"type":"string"}},"required":["path","text"],"additionalProperties":false}</parameters>
+</function>

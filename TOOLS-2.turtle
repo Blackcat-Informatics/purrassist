@@ -1,0 +1,118 @@
+@prefix pa: <https://example.org/toolgraph#> .
+@prefix ex: <https://example.org/tools/> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix fno: <https://w3id.org/function/ontology#> .
+@prefix fnom: <https://w3id.org/function/vocabulary/mapping#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+
+ex:QueryArguments a rdfs:Class .
+ex:EditArguments a rdfs:Class .
+ex:QueryResult a rdfs:Class .
+ex:EditResult a rdfs:Class .
+ex:catalog a owl:Ontology ; dcterms:isPartOf <https://example.org/toolgraph#> ;
+ rdfs:label "Worked tool catalog" ; rdfs:comment "Reviewed tool profile catalog for this example." .
+
+ex:query_customer_orders a pa:Tool, fno:Function ; rdfs:label "query_customer_orders" ;
+ pa:name "query_customer_orders" ; pa:description "Query customer orders." ;
+ pa:title "Customer orders" ; pa:readOnlyHint true ; pa:destructiveHint false ;
+ pa:idempotentHint true ; pa:openWorldHint false ;
+ fno:expects ( ex:customerParam ex:limitParam ) ; fno:returns ( ex:ordersOutput ) ;
+ pa:inputShape ex:QueryInput ; pa:outputShape ex:QueryOutput ;
+ pa:executionProfile ex:DatabaseProfile ; pa:contextManagement ex:QueryContext ;
+ pa:parameterConstraints """PREFIX pa: <https://example.org/toolgraph#>
+PREFIX ex: <https://example.org/tools/>
+RULE ex:queryPermit { ?call pa:permits ex:query_customer_orders }
+WHERE {
+ ?call pa:tool ex:query_customer_orders . ?call pa:session ?session .
+ ?call pa:customerId ?user . ?session pa:userId ?user .
+ ?session pa:tenant ?tenant . ?tenant pa:active true .
+}
+RULE ex:queryDeny { ?call pa:denies ex:query_customer_orders }
+WHERE {
+ ?call pa:tool ex:query_customer_orders .
+ NOT { ?call pa:permits ex:query_customer_orders }
+}""" .
+ex:edit_file a pa:Tool, fno:Function ; rdfs:label "edit_file" ;
+ pa:name "edit_file" ; pa:description "Edit a workspace file." ;
+ pa:title "Edit file" ; pa:readOnlyHint false ; pa:destructiveHint true ;
+ pa:idempotentHint false ; pa:openWorldHint false ;
+ fno:expects ( ex:pathParam ex:textParam ) ; fno:returns ( ex:editOutput ) ;
+ pa:inputShape ex:EditInput ; pa:outputShape ex:EditOutput ;
+ pa:executionProfile ex:FileProfile ; pa:contextManagement ex:EditContext ;
+ pa:parameterConstraints """PREFIX pa: <https://example.org/toolgraph#>
+PREFIX ex: <https://example.org/tools/>
+RULE ex:editPermit { ?call pa:permits ex:edit_file }
+WHERE {
+ ?call pa:tool ex:edit_file . ?call pa:session ?session .
+ ?session pa:tenant ?tenant . ?tenant pa:active true .
+}
+RULE ex:editDeny { ?call pa:denies ex:edit_file }
+WHERE { ?call pa:tool ex:edit_file . NOT { ?call pa:permits ex:edit_file } }""" .
+ex:customerParam a fno:Parameter ; fno:predicate ex:customer_id ; fno:type xsd:string ; fno:required true .
+ex:pathParam a fno:Parameter ; fno:predicate ex:path ; fno:type xsd:string ; fno:required true .
+ex:textParam a fno:Parameter ; fno:predicate ex:text ; fno:type xsd:string ; fno:required true .
+ex:limitParam a fno:Parameter ; fno:predicate ex:limit ; fno:type xsd:integer ; fno:required true .
+ex:ordersOutput a fno:Output ; fno:predicate ex:orders ; fno:type xsd:string .
+ex:editOutput a fno:Output ; fno:predicate ex:version ; fno:type xsd:string .
+_:queryMapping a fno:Mapping ; rdfs:label "query implementation binding" ; fno:function ex:query_customer_orders ; fno:implementation ex:queryImplementation ; fno:parameterMapping _:customerMap, _:limitMap ; fno:returnMapping _:ordersMap .
+ex:queryImplementation a fno:Implementation ; dcterms:format "application/vnd.purrassist.host-tool" ; rdfs:seeAlso <urn:purrassist:host:query_customer_orders> .
+_:editMapping a fno:Mapping ; rdfs:label "edit implementation binding" ; fno:function ex:edit_file ; fno:implementation ex:editImplementation ; fno:parameterMapping _:pathMap, _:textMap ; fno:returnMapping _:versionMap .
+ex:editImplementation a fno:Implementation ; dcterms:format "application/vnd.purrassist.host-tool" ; rdfs:seeAlso <urn:purrassist:host:edit_file> .
+_:customerMap a fnom:PropertyParameterMapping ; rdfs:label "customer binding" ; fnom:functionParameter ex:customerParam ; fnom:implementationProperty "customer_id" .
+_:limitMap a fnom:PropertyParameterMapping ; rdfs:label "limit binding" ; fnom:functionParameter ex:limitParam ; fnom:implementationProperty "limit" .
+_:pathMap a fnom:PropertyParameterMapping ; rdfs:label "path binding" ; fnom:functionParameter ex:pathParam ; fnom:implementationProperty "path" .
+_:textMap a fnom:PropertyParameterMapping ; rdfs:label "text binding" ; fnom:functionParameter ex:textParam ; fnom:implementationProperty "text" .
+_:ordersMap a fnom:DefaultReturnMapping ; rdfs:label "orders binding" ; fnom:functionOutput ex:ordersOutput ; fnom:implementationProperty "orders" .
+_:versionMap a fnom:DefaultReturnMapping ; rdfs:label "version binding" ; fnom:functionOutput ex:editOutput ; fnom:implementationProperty "version" .
+ex:QueryInput a sh:NodeShape ; sh:targetClass ex:QueryArguments ; sh:closed true ;
+ sh:property ex:customerIdShape, ex:limitShape .
+ex:customerIdShape a sh:PropertyShape ; sh:path ex:customer_id ; sh:datatype xsd:string ; sh:pattern "^customer-[0-9]+$" ; sh:minCount 1 ; sh:maxCount 1 .
+<< ex:customerIdShape sh:path ex:customer_id ~ ex:customerClaim >> .
+ex:customerClaim a pa:Hint ; pa:maxEditDistance 0 ; pa:alias "customer" ;
+ pa:typeCoercion "none" ; pa:caseFold false ; pa:unicodeFold false ;
+ pa:taint "personal-data" ; pa:sessionBinding pa:userId .
+ex:limitShape a sh:PropertyShape ; sh:path ex:limit ; sh:datatype xsd:integer ; sh:minInclusive 1 ; sh:maxInclusive 100 ; sh:minCount 1 ; sh:maxCount 1 .
+<< ex:limitShape sh:path ex:limit ~ ex:limitClaim >> .
+ex:limitClaim a pa:Hint ; pa:maxEditDistance 0 ; pa:typeCoercion "string-to-integer" ; pa:caseFold false ; pa:unicodeFold false .
+ex:EditInput a sh:NodeShape ; sh:targetClass ex:EditArguments ; sh:closed true ; sh:property ex:pathShape, ex:textShape .
+ex:pathShape a sh:PropertyShape ; sh:path ex:path ; sh:datatype xsd:string ; sh:minCount 1 ; sh:maxCount 1 .
+ex:textShape a sh:PropertyShape ; sh:path ex:text ; sh:datatype xsd:string ; sh:minCount 1 ; sh:maxCount 1 .
+<< ex:pathShape sh:path ex:path ~ ex:pathClaim >> .
+ex:pathClaim a pa:Hint ; pa:maxEditDistance 0 ; pa:typeCoercion "none" ;
+ pa:caseFold false ; pa:unicodeFold false ; pa:taint "untrusted-path" .
+ex:QueryOutput a sh:NodeShape ; sh:targetClass ex:QueryResult ; sh:closed true ;
+ sh:property [ sh:path ex:orders ; sh:datatype xsd:string ; sh:minCount 1 ; sh:maxCount 1 ] .
+ex:EditOutput a sh:NodeShape ; sh:targetClass ex:EditResult ; sh:closed true ;
+ sh:property [ sh:path ex:version ; sh:datatype xsd:string ; sh:minCount 1 ; sh:maxCount 1 ] .
+ex:QueryContext a pa:Context ; pa:outputProjectionJq ".orders" ; pa:maxOutputTokens 4096 ;
+ pa:historyRetentionTurns 2 ; pa:intentTags "customer", "orders" ; pa:loadingStrategy "on_demand" .
+ex:EditContext a pa:Context ; pa:outputProjectionJq ".version" ; pa:maxOutputTokens 1024 ;
+ pa:historyRetentionTurns 1 ; pa:intentTags "edit", "file" ; pa:loadingStrategy "always" .
+ex:DatabaseProfile a pa:ExecutionProfile ; pa:confinementMode "change_hat" ;
+ pa:profileName "purrassist.tool.query_customer_orders" ; pa:hatName "query_customer_orders" ;
+ pa:egressAllowed true ; pa:addressSpaceBytes 268435456 ; pa:fileSizeBytes 1048576 ;
+ pa:processCount 16 ; pa:cpuSeconds 5 ; pa:openFileCount 64 ;
+ pa:rule ex:DatabaseNetwork, ex:TemporaryRead, ex:SshDeny, ex:EnvDeny,
+ ex:SignalRule, ex:PtraceRule, ex:UnixRule, ex:MountDeny, ex:RemountDeny, ex:UmountDeny, ex:PivotDeny .
+ex:FileProfile a pa:ExecutionProfile ; pa:confinementMode "aa-exec" ;
+ pa:profileName "purrassist.tool.edit_file" ; pa:hatName "edit_file" ;
+ pa:egressAllowed false ; pa:addressSpaceBytes 268435456 ; pa:fileSizeBytes 1048576 ;
+ pa:processCount 16 ; pa:cpuSeconds 5 ; pa:openFileCount 64 ;
+ pa:rule ex:WorkspaceFile, ex:TemporaryFile, ex:SshDeny, ex:EnvDeny,
+ ex:SignalRule, ex:PtraceRule, ex:UnixRule, ex:MountDeny, ex:RemountDeny, ex:UmountDeny, ex:PivotDeny .
+ex:WorkspaceFile a pa:FileRule ; pa:pathGlob "@{WORKSPACE_ROOT}/**" ; pa:filePermissions "rwkl" ; pa:owner true .
+ex:TemporaryRead a pa:FileRule ; pa:pathGlob "@{TOOL_TMP}/**" ; pa:filePermissions "r" ; pa:owner true .
+ex:TemporaryFile a pa:FileRule ; pa:pathGlob "@{TOOL_TMP}/**" ; pa:filePermissions "rwk" ; pa:owner true .
+ex:SshDeny a pa:FileRule ; pa:pathGlob "@{HOME}/.ssh/**" ; pa:filePermissions "rw" ; pa:execTransition "ix" ; pa:deny true ; pa:audit true .
+ex:EnvDeny a pa:FileRule ; pa:pathGlob "/**/.env*" ; pa:filePermissions "rw" ; pa:execTransition "ix" ; pa:deny true ; pa:audit true .
+ex:DatabaseNetwork a pa:NetworkRule ; pa:domain "inet" ; pa:socketType "stream" ; pa:access "connect" ; pa:peerIp "10.0.0.7" ; pa:peerPort "5432" .
+ex:UnixRule a pa:UnixRule ; pa:access "send,receive" ; pa:socketType "stream" ; pa:address "@{TOOL_TMP}/ipc" ; pa:peerLabel "purrassist.tools" ; pa:peerAddress "@{TOOL_TMP}/host" .
+ex:SignalRule a pa:SignalRule ; pa:access "receive" ; pa:signalSet "term,int" ; pa:peerLabel "purrassist.tools" .
+ex:PtraceRule a pa:PtraceRule ; pa:access "trace,read,readby,tracedby" ; pa:peerLabel "**" ; pa:deny true .
+ex:MountDeny a pa:MountRule ; pa:mountOperation "mount" ; pa:deny true .
+ex:RemountDeny a pa:MountRule ; pa:mountOperation "remount" ; pa:deny true .
+ex:UmountDeny a pa:MountRule ; pa:mountOperation "umount" ; pa:deny true .
+ex:PivotDeny a pa:MountRule ; pa:mountOperation "pivot_root" ; pa:deny true .

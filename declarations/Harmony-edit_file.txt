@@ -1,0 +1,2 @@
+// Edit a workspace file.
+type edit_file = (_: {"type":"object","properties":{"path":{"type":"string"},"text":{"type":"string"}},"required":["path","text"],"additionalProperties":false}) => any;

@@ -1,0 +1,4 @@
+### edit_file
+Description: Edit a workspace file.
+
+Parameters: {"type":"object","properties":{"path":{"type":"string"},"text":{"type":"string"}},"required":["path","text"],"additionalProperties":false}

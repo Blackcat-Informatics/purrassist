@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+[package]
+name = "toolgraph-spec-probe"
+version = "0.0.0"
+edition = "2024"
+[workspace]
+[dependencies]
+purrdf-rdf = { path = "/home/paudley/Active/purrdf/crates/rdf" }
+purrdf-shapes = { path = "/home/paudley/Active/purrdf/crates/shapes" }
+purrassist-core = { path = "../../../crates/core" }

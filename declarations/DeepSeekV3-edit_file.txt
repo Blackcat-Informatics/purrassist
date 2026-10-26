@@ -1,0 +1,3 @@
+```json
+{"type":"function","function":{"name":"edit_file","description":"Edit a workspace file.","parameters":{"type":"object","properties":{"path":{"type":"string"},"text":{"type":"string"}},"required":["path","text"],"additionalProperties":false}}}
+```

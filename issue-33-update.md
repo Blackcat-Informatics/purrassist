@@ -1,0 +1,5 @@
+New verified prerequisite G7 from the #32 specification review: current `purrdf_shapes::json_schema::compile` emits JSON-LD schemas, including compacted predicate keys, RDF value carriers and class-root definitions. It cannot directly produce the planned plain MCP argument objects. Simple property-key rewriting would leave other semantics incorrect.
+
+Before this loader/codec delivery, upstream must provide a caller-selected plain FnO argument projection profile with explicit shape/class roots, complete predicate-to-implementation-property bindings, exact scalar/object/array/cardinality/closedness semantics, resource limits, and preservation of all schema constraints and loss entries. The specification plan proposes `compile_tool_arguments` for this contract. It is not implemented, and no local replacement schema compiler is planned. Acceptance must exercise that actual upstream API and retain complete original SHACL validation.
+
+Existing upstream prerequisites #747, #748 and #749 are closed. G7 and the recorded maintainer approval of #32 remain prerequisites; this comment preserves the original behavior rather than substituting JSON-LD arguments.

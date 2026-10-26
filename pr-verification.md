@@ -1,0 +1,7 @@
+Final qualification for `2e9eeb4`: the full local `make check` exited 0, and all eight hosted CI jobs passed in run 40410623961. Independent specification review passed with the reported corrections addressed.
+
+Specification evidence: three Turtle blocks and the manifest's embedded dataset parsed with `purrdf_rdf::parse_dataset`; two SRL programs passed `srl::check` at stratified level. The probe used PurRDF source `e1ad49f83789b479aeb0cdefbddf668b4d9cb099` (3.0.1). Five JSON blocks passed strict decoding. The complete AppArmor policy passed parser 4.1.7 with `-QK`, without kernel loading. The GBNF passed the actual llama.cpp parser at `f87067841bac583bc089a225382248d857791ca8`; `llama-grammar.cpp` SHA-256 was `096c37bdcb68ddeb71808ac903bf5237f132c6121fef9081bbc1be0190c883c4`. Eight explicit declaration payloads matched the existing renderers. Both documents passed `prose-check` and the repository documentation checker.
+
+The merge will retain the focused probe sources, fixtures, dependency captures and review/CI evidence in the selected evidence archive. Disposable compiler products were removed; raw logs remain local and are excluded by the merge helper's archive policy.
+
+This delivers the Phase 2 specification. Maintainer approval must still be recorded verbatim on #32 before Phase 3 implementation or dependency adoption; no approval is inferred from this qualification or merge.

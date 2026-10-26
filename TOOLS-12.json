@@ -1,0 +1,1 @@
+{"name":"edit_file","description":"Edit a workspace file.","input_schema":{"type":"object","properties":{"path":{"type":"string"},"text":{"type":"string"}},"required":["path","text"],"additionalProperties":false}}

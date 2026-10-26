@@ -1,0 +1,101 @@
+@prefix pa: <https://example.org/toolgraph#> .
+@prefix ex: <https://example.org/tools/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix fno: <https://w3id.org/function/ontology#> .
+@prefix fnom: <https://w3id.org/function/vocabulary/mapping#> .
+
+pa:Node a rdfs:Class ; rdfs:comment "A tool-graph vocabulary node." .
+pa:Tool a rdfs:Class ; rdfs:subClassOf fno:Function, pa:Node ; rdfs:comment "A callable FnO function with security and context bindings." .
+pa:ExecutionProfile a rdfs:Class ; rdfs:subClassOf pa:Node ; rdfs:comment "One complete confinement contract." .
+pa:Context a rdfs:Class ; rdfs:subClassOf pa:Node ; rdfs:comment "Output projection and prompt loading contract." .
+pa:Hint a rdfs:Class ; rdfs:subClassOf pa:Node ; rdfs:comment "RDF 1.2 reifier annotating a parameter property shape's sh:path triple." .
+pa:Rule a rdfs:Class ; rdfs:subClassOf pa:Node ; rdfs:comment "One typed AppArmor rule; omitted permissions are not granted." .
+pa:FileRule a rdfs:Class ; rdfs:subClassOf pa:Rule ; rdfs:comment "AppArmor pathname glob and access or execution transition." .
+pa:CapabilityRule a rdfs:Class ; rdfs:subClassOf pa:Rule ; rdfs:comment "One named Linux capability allow or deny." .
+pa:NetworkRule a rdfs:Class ; rdfs:subClassOf pa:Rule ; rdfs:comment "AppArmor 4.1 network rule with exact address scope." .
+pa:UnixRule a rdfs:Class ; rdfs:subClassOf pa:Rule ; rdfs:comment "Unix socket access and peer mediation." .
+pa:SignalRule a rdfs:Class ; rdfs:subClassOf pa:Rule ; rdfs:comment "Signal access, signal set and peer label." .
+pa:PtraceRule a rdfs:Class ; rdfs:subClassOf pa:Rule ; rdfs:comment "Ptrace access and peer label." .
+pa:MountRule a rdfs:Class ; rdfs:subClassOf pa:Rule ; rdfs:comment "A denied mount, remount, umount or pivot_root operation." .
+pa:Waiver a rdfs:Class ; rdfs:subClassOf pa:Node ; rdfs:comment "A host-authenticated narrowly scoped exception for one unconfined exec transition." .
+pa:Call a rdfs:Class ; rdfs:subClassOf pa:Node ; rdfs:comment "A request-scoped immutable call identity." .
+pa:Session a rdfs:Class ; rdfs:subClassOf pa:Node ; rdfs:comment "Authenticated facts supplied by the trusted host." .
+fnom:Mapping a rdfs:Class ; owl:equivalentClass fno:Mapping ; rdfs:comment "Caller alias normalized to the upstream FnO Mapping class." .
+
+pa:name a rdf:Property ; rdfs:domain pa:Tool ; rdfs:range xsd:string ; rdfs:comment "Unique core tool name, independent of display title." .
+pa:description a rdf:Property ; rdfs:domain pa:Tool ; rdfs:range xsd:string ; rdfs:comment "Model-visible description." .
+pa:inputShape a rdf:Property ; rdfs:domain pa:Tool ; rdfs:range sh:NodeShape ; rdfs:comment "Complete argument SHACL shape." .
+pa:outputShape a rdf:Property ; rdfs:domain pa:Tool ; rdfs:range sh:NodeShape ; rdfs:comment "Complete result SHACL shape." .
+pa:title a rdf:Property ; rdfs:domain pa:Tool ; rdfs:range xsd:string ; rdfs:comment "MCP annotations.title, verbatim." .
+pa:readOnlyHint a rdf:Property ; rdfs:domain pa:Tool ; rdfs:range xsd:boolean ; rdfs:comment "MCP annotations.readOnlyHint, a hint checked against actual declared effects." .
+pa:destructiveHint a rdf:Property ; rdfs:domain pa:Tool ; rdfs:range xsd:boolean ; rdfs:comment "MCP annotations.destructiveHint, verbatim." .
+pa:idempotentHint a rdf:Property ; rdfs:domain pa:Tool ; rdfs:range xsd:boolean ; rdfs:comment "MCP annotations.idempotentHint, verbatim." .
+pa:openWorldHint a rdf:Property ; rdfs:domain pa:Tool ; rdfs:range xsd:boolean ; rdfs:comment "MCP annotations.openWorldHint, verbatim; not a permission." .
+pa:waiver a rdf:Property ; rdfs:domain pa:ExecutionProfile ; rdfs:range pa:Waiver ; rdfs:comment "Audited transition waiver honored only when the host registry matches its source and exact rule." .
+pa:waivedRule a rdf:Property ; rdfs:domain pa:Waiver ; rdfs:range pa:FileRule ; rdfs:comment "Exactly one unconfined exec rule covered by this waiver." .
+pa:reviewer a rdf:Property ; rdfs:domain pa:Waiver ; rdfs:range xsd:string ; rdfs:comment "Authenticated reviewer verified by caller trust registry." .
+pa:rationale a rdf:Property ; rdfs:domain pa:Waiver ; rdfs:range xsd:string ; rdfs:comment "Nonempty explicit security exception rationale." .
+pa:waiverSource a rdf:Property ; rdfs:domain pa:Waiver ; rdfs:range xsd:anyURI ; rdfs:comment "Immutable review source bound by host approval record." .
+pa:subtool a rdf:Property ; rdfs:domain pa:Tool ; rdfs:range pa:Tool ; rdfs:comment "An explicit potential nested call edge; included transitively in static security closure and independently authorized at runtime." .
+pa:executionProfile a rdf:Property ; rdfs:domain pa:Tool ; rdfs:range pa:ExecutionProfile ; rdfs:comment "Mandatory confinement contract." .
+pa:contextManagement a rdf:Property ; rdfs:domain pa:Tool ; rdfs:range pa:Context ; rdfs:comment "Mandatory context management contract." .
+pa:parameterConstraints a rdf:Property ; rdfs:domain pa:Tool ; rdfs:range xsd:string ; rdfs:comment "Complete SPARQL 1.2 RL document, never executable host code." .
+pa:maxEditDistance a rdf:Property ; rdfs:domain pa:Hint ; rdfs:range xsd:nonNegativeInteger ; rdfs:comment "Maximum admitted name or value edit-distance inference; zero forbids it." .
+pa:alias a rdf:Property ; rdfs:domain pa:Hint ; rdfs:range xsd:string ; rdfs:comment "Explicit parameter-name alias projected to ParameterSpec::alias." .
+pa:typeCoercion a rdf:Property ; rdfs:domain pa:Hint ; rdfs:range xsd:string ; rdfs:comment "Allowed conversion name: string-to-integer, integer-to-string or none." .
+pa:caseFold a rdf:Property ; rdfs:domain pa:Hint ; rdfs:range xsd:boolean ; rdfs:comment "Permission for labeled case-folding inferences, never validation normalization." .
+pa:unicodeFold a rdf:Property ; rdfs:domain pa:Hint ; rdfs:range xsd:boolean ; rdfs:comment "Permission for labeled Unicode-folding inferences." .
+pa:taint a rdf:Property ; rdfs:domain pa:Hint ; rdfs:range xsd:string ; rdfs:comment "A label copied to the candidate's policy facts; not model-controlled." .
+pa:sessionBinding a rdf:Property ; rdfs:domain pa:Hint ; rdfs:range rdf:Property ; rdfs:comment "Trusted session predicate to which the argument must be equal." .
+pa:confinementMode a rdf:Property ; rdfs:domain pa:ExecutionProfile ; rdfs:range xsd:string ; rdfs:comment "aa-exec or change_hat; no unenforced mode." .
+pa:profileName a rdf:Property ; rdfs:domain pa:ExecutionProfile ; rdfs:range xsd:string ; rdfs:comment "Exact standalone AppArmor profile name." .
+pa:hatName a rdf:Property ; rdfs:domain pa:ExecutionProfile ; rdfs:range xsd:string ; rdfs:comment "Exact hat inside purrassist.tools." .
+pa:egressAllowed a rdf:Property ; rdfs:domain pa:ExecutionProfile ; rdfs:range xsd:boolean ; rdfs:comment "Whether the profile may grant outbound network access." .
+pa:rule a rdf:Property ; rdfs:domain pa:ExecutionProfile ; rdfs:range pa:Rule ; rdfs:comment "A granular AppArmor rule; order is canonicalized." .
+pa:addressSpaceBytes a rdf:Property ; rdfs:domain pa:ExecutionProfile ; rdfs:range xsd:positiveInteger ; rdfs:comment "set rlimit as in exact bytes." .
+pa:fileSizeBytes a rdf:Property ; rdfs:domain pa:ExecutionProfile ; rdfs:range xsd:positiveInteger ; rdfs:comment "set rlimit fsize in exact bytes." .
+pa:processCount a rdf:Property ; rdfs:domain pa:ExecutionProfile ; rdfs:range xsd:positiveInteger ; rdfs:comment "set rlimit nproc count." .
+pa:cpuSeconds a rdf:Property ; rdfs:domain pa:ExecutionProfile ; rdfs:range xsd:positiveInteger ; rdfs:comment "set rlimit cpu in whole seconds, never fractional seconds." .
+pa:openFileCount a rdf:Property ; rdfs:domain pa:ExecutionProfile ; rdfs:range xsd:positiveInteger ; rdfs:comment "set rlimit nofile count." .
+pa:subprofile a rdf:Property ; rdfs:domain pa:ExecutionProfile ; rdfs:range pa:ExecutionProfile ; rdfs:comment "A named child profile for a cx or Cix transition." .
+pa:pathGlob a rdf:Property ; rdfs:domain pa:FileRule ; rdfs:range xsd:string ; rdfs:comment "First-party parsed AppArmor glob including brace alternatives and declared @{VAR}." .
+pa:filePermissions a rdf:Property ; rdfs:domain pa:FileRule ; rdfs:range xsd:string ; rdfs:comment "Unique letters from r w a k l m; a and w are mutually exclusive." .
+pa:execTransition a rdf:Property ; rdfs:domain pa:FileRule ; rdfs:range xsd:string ; rdfs:comment "Exactly one of ix px cx ux Ux Pix Cix; unsafe ux requires explicit admission." .
+pa:transitionTarget a rdf:Property ; rdfs:domain pa:FileRule ; rdfs:range xsd:string ; rdfs:comment "Exact -> profile target where the transition permits it." .
+pa:owner a rdf:Property ; rdfs:domain pa:FileRule ; rdfs:range xsd:boolean ; rdfs:comment "Emit the owner qualifier." .
+pa:audit a rdf:Property ; rdfs:domain pa:Rule ; rdfs:range xsd:boolean ; rdfs:comment "Emit the audit qualifier." .
+pa:deny a rdf:Property ; rdfs:domain pa:Rule ; rdfs:range xsd:boolean ; rdfs:comment "Emit a deny rule; otherwise an allow rule." .
+pa:capability a rdf:Property ; rdfs:domain pa:CapabilityRule ; rdfs:range xsd:string ; rdfs:comment "Exact Linux capability name without CAP_." .
+pa:domain a rdf:Property ; rdfs:domain pa:NetworkRule ; rdfs:range xsd:string ; rdfs:comment "AppArmor address family such as inet or inet6." .
+pa:socketType a rdf:Property ; rdfs:domain pa:Rule ; rdfs:range xsd:string ; rdfs:comment "Socket type such as stream; exclusive with network protocol." .
+pa:protocol a rdf:Property ; rdfs:domain pa:NetworkRule ; rdfs:range xsd:string ; rdfs:comment "Protocol such as tcp, exclusive with socketType in AppArmor 4.1." .
+pa:access a rdf:Property ; rdfs:domain pa:Rule ; rdfs:range xsd:string ; rdfs:comment "Typed rule access set, comma-separated using grammar-approved tokens." .
+pa:localIp a rdf:Property ; rdfs:domain pa:NetworkRule ; rdfs:range xsd:string ; rdfs:comment "One exact local address, without CIDR syntax." .
+pa:localPort a rdf:Property ; rdfs:domain pa:NetworkRule ; rdfs:range xsd:string ; rdfs:comment "Port number or inclusive N-M range, within 0 through 65535." .
+pa:peerIp a rdf:Property ; rdfs:domain pa:NetworkRule ; rdfs:range xsd:string ; rdfs:comment "One exact peer address, without CIDR syntax." .
+pa:peerPort a rdf:Property ; rdfs:domain pa:NetworkRule ; rdfs:range xsd:string ; rdfs:comment "Peer port or inclusive range." .
+pa:address a rdf:Property ; rdfs:domain pa:UnixRule ; rdfs:range xsd:string ; rdfs:comment "Unix addr expression in the supported AppArmor glob language." .
+pa:peerAddress a rdf:Property ; rdfs:domain pa:UnixRule ; rdfs:range xsd:string ; rdfs:comment "Unix peer addr expression." .
+pa:peerLabel a rdf:Property ; rdfs:domain pa:Rule ; rdfs:range xsd:string ; rdfs:comment "Unix, signal or ptrace peer label expression." .
+pa:signalSet a rdf:Property ; rdfs:domain pa:SignalRule ; rdfs:range xsd:string ; rdfs:comment "Comma-separated AppArmor signal names." .
+pa:mountOperation a rdf:Property ; rdfs:domain pa:MountRule ; rdfs:range xsd:string ; rdfs:comment "mount, remount, umount or pivot_root; deny is mandatory." .
+pa:outputProjectionJq a rdf:Property ; rdfs:domain pa:Context ; rdfs:range xsd:string ; rdfs:comment "Only the D6 field-mask language, not arbitrary jq." .
+pa:maxOutputTokens a rdf:Property ; rdfs:domain pa:Context ; rdfs:range xsd:positiveInteger ; rdfs:comment "Maximum output token count, bounded conservatively by bytes." .
+pa:historyRetentionTurns a rdf:Property ; rdfs:domain pa:Context ; rdfs:range xsd:nonNegativeInteger ; rdfs:comment "Number of completed turns retained; zero retains none." .
+pa:intentTags a rdf:Property ; rdfs:domain pa:Context ; rdfs:range xsd:string ; rdfs:comment "Repeated BM25F intent field values." .
+pa:loadingStrategy a rdf:Property ; rdfs:domain pa:Context ; rdfs:range xsd:string ; rdfs:comment "always or on_demand; retrieval never authorizes a call." .
+pa:tool a rdf:Property ; rdfs:domain pa:Call ; rdfs:range pa:Tool ; rdfs:comment "Canonical resolved tool identity." .
+pa:session a rdf:Property ; rdfs:domain pa:Call ; rdfs:range pa:Session ; rdfs:comment "Trusted immutable session identity." .
+pa:userId a rdf:Property ; rdfs:domain pa:Session ; rdfs:range xsd:string ; rdfs:comment "Authenticated user identifier, never read from model output." .
+pa:tenant a rdf:Property ; rdfs:domain pa:Node ; rdfs:range pa:Node ; rdfs:comment "Trusted session or customer tenant identity." .
+pa:active a rdf:Property ; rdfs:domain pa:Node ; rdfs:range xsd:boolean ; rdfs:comment "Trusted active-tenant status." .
+pa:customerId a rdf:Property ; rdfs:domain pa:Call ; rdfs:range xsd:string ; rdfs:comment "Validated customer_id argument projected as a call fact." .
+pa:candidateAllowed a rdf:Property ; rdfs:domain pa:Call ; rdfs:range pa:Tool ; rdfs:comment "Untrusted tool-rule intermediate proposal, never sufficient to authorize." .
+pa:candidateDenied a rdf:Property ; rdfs:domain pa:Call ; rdfs:range pa:Tool ; rdfs:comment "Untrusted tool-rule intermediate refusal proposal, consumed only by trusted gate rules." .
+pa:permits a rdf:Property ; rdfs:domain pa:Call ; rdfs:range pa:Tool ; rdfs:comment "Derived authorization for this exact call and tool." .
+pa:denies a rdf:Property ; rdfs:domain pa:Call ; rdfs:range pa:Tool ; rdfs:comment "Derived refusal overriding permits." .
+pa:conflict a rdf:Property ; rdfs:domain pa:Node ; rdfs:range xsd:string ; rdfs:comment "Derived static or dynamic contradiction with stable diagnostic code." .
