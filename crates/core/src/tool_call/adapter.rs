@@ -556,7 +556,7 @@ impl ToolSet {
     /// ));
     /// ```
     pub fn from_openai_governed(json: &str, governor: &mut Governor) -> Result<Self, ToolSetError> {
-        adapt(json, DeclarationForm::OpenAi, governor)
+        adapt(json, DeclarationForm::OpenAi, &[], governor)
     }
 
     /// Adapt MCP tools under a fresh governor.
@@ -593,7 +593,30 @@ impl ToolSet {
     /// ));
     /// ```
     pub fn from_mcp_governed(json: &str, governor: &mut Governor) -> Result<Self, ToolSetError> {
-        adapt(json, DeclarationForm::Mcp, governor)
+        Self::from_mcp_with_metadata_governed(json, &[], governor)
+    }
+
+    /// Import exact MCP declarations with explicit caller-owned recovery metadata.
+    ///
+    /// Applies [`super::DeclarationMetadata`] before normal set compilation;
+    /// declarations, schema text, unknown-parameter handling and validators stay
+    /// unchanged. Tool annotations do not supply this metadata. An empty slice
+    /// behaves exactly like [`Self::from_mcp_governed`].
+    ///
+    /// See [`super::DeclarationMetadata`] for an executable alias and byte-exact
+    /// rendering example.
+    ///
+    /// # Errors
+    /// Returns the ordinary import errors plus [`ToolSetError::InvalidDefinition`]
+    /// for unknown tools, empty/unknown/non-object paths or duplicate metadata;
+    /// [`ToolSetError::Collision`] for aliases that collide in their object scope;
+    /// and [`ToolSetError::Resource`] on cancellation or exhausted work/storage.
+    pub fn from_mcp_with_metadata_governed(
+        json: &str,
+        metadata: &[super::DeclarationMetadata],
+        governor: &mut Governor,
+    ) -> Result<Self, ToolSetError> {
+        adapt(json, DeclarationForm::Mcp, metadata, governor)
     }
 
     /// Adapt Anthropic tools under a fresh governor.
@@ -631,7 +654,7 @@ impl ToolSet {
         json: &str,
         governor: &mut Governor,
     ) -> Result<Self, ToolSetError> {
-        adapt(json, DeclarationForm::Anthropic, governor)
+        adapt(json, DeclarationForm::Anthropic, &[], governor)
     }
 }
 
@@ -693,6 +716,7 @@ pub(super) fn render_canonical(
 fn adapt(
     input: &str,
     form: DeclarationForm,
+    metadata: &[super::DeclarationMetadata],
     governor: &mut Governor,
 ) -> Result<ToolSet, ToolSetError> {
     governor.check().map_err(ToolSetError::Resource)?;
@@ -713,6 +737,7 @@ fn adapt(
             .push(declare(input, form, index, node, governor)?)
             .map_err(ToolSetError::Resource)?;
     }
+    super::metadata::apply(pending.as_mut_slice(), metadata, governor)?;
     ToolSet::assemble(pending, governor)
 }
 

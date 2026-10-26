@@ -57,6 +57,7 @@ mod dialect;
 pub mod emit;
 mod from_node;
 mod ir;
+mod metadata;
 mod recognizer;
 pub mod recover;
 pub mod resolve;
@@ -87,6 +88,7 @@ pub use ir::{
     CollectedMember, LEAF_CHARGE, Piece, ProductionKind, RawCall, ReasoningClosure,
     ReasoningSegment, Rejection, Segment, Spanned, UnresolvedArgument,
 };
+pub use metadata::{DeclarationMetadata, ParameterAliases};
 pub use recognizer::{GenerationStop, ReasoningPolicy, RecognizedTurn, Recognizer};
 pub use recover::{
     AmbiguityPolicy, DEFAULT_ID_PREFIX, Finish, IdGenerator, IdPolicy, KeywordUse,

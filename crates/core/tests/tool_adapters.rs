@@ -4,14 +4,14 @@
 //! schemas, unmodeled keyword reporting, typed projection, hard errors,
 //! budgets, order independence, and cross-form rendering.
 use purrassist_core::{
-    Budget, CancellationToken, Governor, StopReason,
+    Budget, CancellationToken, Effort, Governor, Outcome, StopReason,
     contract::Resource,
     json,
     schema::Schema,
     tool_call::{
-        CompiledTool, DeclarationForm, Effects, Nesting, Param, RepairPolicy, ToolDeclaration,
-        ToolDefinition, ToolRecoveryRequest, ToolSet, ToolSetError, ToolSource, UnknownParameters,
-        ValueShape,
+        CompiledTool, DeclarationForm, DeclarationMetadata, Effects, Nesting, Param,
+        ParameterAliases, RepairPolicy, ToolDeclaration, ToolDefinition, ToolRecoveryRequest,
+        ToolSet, ToolSetError, ToolSource, UnknownParameters, ValueShape,
     },
 };
 
@@ -1856,5 +1856,270 @@ fn root_union_call_recovery_cost_is_linear() {
     assert!(
         to_large * 150 * 12 >= to_middle * 450 * 10,
         "{small} {middle} {large}"
+    );
+}
+
+const METADATA_MCP: &str = r#"{"name":"search","annotations":{"readOnlyHint":false},"inputSchema":{
+ "type":"object","properties":{"query":{"type":"string"},"note":{"type":"string"}},
+ "required":["query"],"dependentRequired":{"query":["note"]},"additionalProperties":false}}"#;
+
+fn metadata_for(path: &[&str], aliases: &[&str]) -> DeclarationMetadata {
+    DeclarationMetadata {
+        tool_name: "search".into(),
+        effects: Effects::ReadOnly,
+        policy: RepairPolicy::Tolerant,
+        parameter_aliases: vec![ParameterAliases {
+            property_path: path.iter().map(|name| (*name).to_owned()).collect(),
+            aliases: aliases.iter().map(|name| (*name).to_owned()).collect(),
+        }],
+    }
+}
+
+#[test]
+fn metadata_alias_recovery_keeps_exact_schema_and_declaration() {
+    let plain = ToolSet::from_mcp(METADATA_MCP, Budget::default()).unwrap();
+    let empty = ToolSet::from_mcp_with_metadata_governed(
+        METADATA_MCP,
+        &[],
+        &mut Governor::new(Budget::default()),
+    )
+    .unwrap();
+    assert_eq!(observable(&plain), observable(&empty));
+    let tools = ToolSet::from_mcp_with_metadata_governed(
+        METADATA_MCP,
+        &[metadata_for(&["query"], &["q"])],
+        &mut Governor::new(Budget::default()),
+    )
+    .unwrap();
+    let tool = tools.tool("search").unwrap();
+    let original = plain.tool("search").unwrap();
+    assert_eq!(tool.schema().digest(), original.schema().digest());
+    assert_eq!(tool.json_schema(), original.json_schema());
+    assert_eq!(tool.unmodeled_keywords(), original.unmodeled_keywords());
+    assert!(
+        tool.unmodeled_keywords()
+            .iter()
+            .any(|(_, key)| key == "dependentRequired")
+    );
+    assert_eq!(
+        tool.render_declaration(DeclarationForm::Mcp).unwrap(),
+        METADATA_MCP
+    );
+    assert_eq!(tool.effects(), Effects::ReadOnly);
+    assert_eq!(tool.policy(), RepairPolicy::Tolerant);
+    assert_eq!(tool.unknown_parameters(), UnknownParameters::Error);
+    let valid = json::parse(r#"{"query":"needle","note":"source"}"#).unwrap();
+    let invalid = json::parse(r#"{"query":"needle"}"#).unwrap();
+    assert!(tool.schema().validate(&valid).unwrap().valid);
+    assert!(!tool.schema().validate(&invalid).unwrap().valid);
+    let request = ToolRecoveryRequest::new(Effort::Exact);
+    let result = tools.recover(
+        br#"<tool_call>{"name":"search","arguments":{"q":"needle","note":"source"}}</tool_call>"#,
+        &request,
+    );
+    let Outcome::Resolved(calls) = result.outcome else {
+        panic!("{:?}", result.outcome)
+    };
+    assert_eq!(calls.usable().len(), 1);
+    assert!(calls.calls[0].arguments.equivalent(&valid));
+    let result = tools.recover(
+        br#"<tool_call>{"name":"search","arguments":{"q":"needle"}}</tool_call>"#,
+        &request,
+    );
+    match result.outcome {
+        Outcome::Resolved(calls) | Outcome::BestGuess(calls) => {
+            assert_eq!(calls.usable_accepting_guesses().len(), 0);
+        }
+        Outcome::Unresolved => {}
+        other @ Outcome::Ambiguous(_) => {
+            panic!("invalid exact-schema call must not become an answer: {other:?}");
+        }
+    }
+}
+
+#[test]
+fn metadata_aliases_reach_array_members_and_preserve_unmodeled_values() {
+    let source = r#"{"name":"search","inputSchema":{"type":"object","properties":{
+        "rows":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}},
+        "payload":{"oneOf":[{"type":"integer"},{"type":"string"}]}
+    },"required":["rows","payload"],"additionalProperties":false}}"#;
+    let mut metadata = metadata_for(&["rows", "name"], &["label"]);
+    metadata.parameter_aliases.push(ParameterAliases {
+        property_path: vec!["payload".into()],
+        aliases: vec!["body".into()],
+    });
+    let tools = ToolSet::from_mcp_with_metadata_governed(
+        source,
+        &[metadata],
+        &mut Governor::new(Budget::default()),
+    )
+    .unwrap();
+    let result = tools.recover(
+        br#"<tool_call>{"name":"search","arguments":{"rows":[{"label":"Ada"}],"body":7}}</tool_call>"#,
+        &ToolRecoveryRequest::new(Effort::Exact),
+    );
+    let Outcome::Resolved(calls) = result.outcome else {
+        panic!("{:?}", result.outcome)
+    };
+    assert_eq!(calls.usable().len(), 1);
+    assert_eq!(
+        calls.calls[0]
+            .arguments
+            .pointer("/rows/0/name")
+            .and_then(json::Node::as_str),
+        Some("Ada")
+    );
+    assert_eq!(
+        calls.calls[0].arguments.get("payload").unwrap().to_json(),
+        "7"
+    );
+    let bad = metadata_for(&["payload", "child"], &["alias"]);
+    let (tool, reason) = invalid_reason(ToolSet::from_mcp_with_metadata_governed(
+        source,
+        &[bad],
+        &mut Governor::new(Budget::default()),
+    ));
+    assert_eq!(tool, "search");
+    assert!(
+        reason.contains("payload") && reason.contains("unmodeled"),
+        "{reason}"
+    );
+}
+
+#[test]
+fn metadata_refuses_unknown_duplicate_and_colliding_hints() {
+    let valid = metadata_for(&["query"], &["q"]);
+    let mut unknown_tool = valid.clone();
+    unknown_tool.tool_name = "absent".into();
+    let mut duplicate_path = valid.clone();
+    duplicate_path
+        .parameter_aliases
+        .push(duplicate_path.parameter_aliases[0].clone());
+    for (metadata, expected_tool, needle) in [
+        (vec![unknown_tool], "absent", "unknown tool"),
+        (vec![metadata_for(&[], &["q"])], "search", "empty"),
+        (
+            vec![metadata_for(&["absent"], &["q"])],
+            "search",
+            "unknown metadata property",
+        ),
+        (
+            vec![metadata_for(&["query", "child"], &["q"])],
+            "search",
+            "non-object",
+        ),
+        (
+            vec![valid.clone(), valid.clone()],
+            "search",
+            "duplicate metadata record",
+        ),
+        (
+            vec![duplicate_path],
+            "search",
+            "duplicate metadata property path",
+        ),
+        (
+            vec![metadata_for(&["query"], &["bad name"])],
+            "search",
+            "must match",
+        ),
+    ] {
+        let (tool, reason) = invalid_reason(ToolSet::from_mcp_with_metadata_governed(
+            METADATA_MCP,
+            &metadata,
+            &mut Governor::new(Budget::default()),
+        ));
+        assert_eq!(tool, expected_tool);
+        assert!(reason.contains(needle), "{reason}");
+    }
+    let error = ToolSet::from_mcp_with_metadata_governed(
+        METADATA_MCP,
+        &[metadata_for(&["query"], &["note"])],
+        &mut Governor::new(Budget::default()),
+    )
+    .unwrap_err();
+    let ToolSetError::Collision { first, second, .. } = error else {
+        panic!("{error:?}")
+    };
+    assert!(first.contains("search") && second.contains("search"));
+    assert!(
+        ToolSet::from_mcp_with_metadata_governed(
+            METADATA_MCP,
+            &[valid],
+            &mut Governor::new(Budget::default()),
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn metadata_work_storage_and_cancellation_are_governed() {
+    // Even an unknown name against an empty set must admit the error payload
+    // before copying caller-owned text into a diagnostic.
+    let mut unknown = metadata_for(&["query"], &["q"]);
+    unknown.tool_name = "x".repeat(4096);
+    for resource in [Resource::Work, Resource::ScratchBytes] {
+        let mut budget = Budget::default();
+        match resource {
+            Resource::Work => budget.work = 2048,
+            _ => budget.scratch_bytes = 2048,
+        }
+        assert_eq!(
+            ToolSet::from_mcp_with_metadata_governed(
+                "[]",
+                &[unknown.clone()],
+                &mut Governor::new(budget),
+            )
+            .unwrap_err(),
+            ToolSetError::Resource(StopReason::BudgetExceeded(resource)),
+        );
+    }
+    // An early unknown segment must not format a large, unvisited suffix
+    // without first admitting the complete diagnostic.
+    let suffix = "x".repeat(4096);
+    let invalid_path = [metadata_for(&["absent", &suffix], &[])];
+    let mut baseline = Governor::new(Budget::default());
+    ToolSet::from_mcp_governed(METADATA_MCP, &mut baseline).unwrap();
+    let budget = Budget {
+        work: baseline.usage().work + 2048,
+        ..Budget::default()
+    };
+    assert_eq!(
+        ToolSet::from_mcp_with_metadata_governed(
+            METADATA_MCP,
+            &invalid_path,
+            &mut Governor::new(budget),
+        )
+        .unwrap_err(),
+        ToolSetError::Resource(StopReason::BudgetExceeded(Resource::Work)),
+    );
+    let metadata = [metadata_for(&["query"], &["q"])];
+    let mut governor = Governor::new(Budget::default());
+    ToolSet::from_mcp_with_metadata_governed(METADATA_MCP, &metadata, &mut governor).unwrap();
+    let usage = governor.usage();
+    for (resource, needed) in [
+        (Resource::Work, usage.work),
+        (Resource::ScratchBytes, usage.peak_scratch_bytes),
+    ] {
+        let mut budget = Budget::default();
+        match resource {
+            Resource::Work => budget.work = needed - 1,
+            _ => budget.scratch_bytes = needed - 1,
+        }
+        let mut governor = Governor::new(budget);
+        assert_eq!(
+            ToolSet::from_mcp_with_metadata_governed(METADATA_MCP, &metadata, &mut governor)
+                .unwrap_err(),
+            ToolSetError::Resource(StopReason::BudgetExceeded(resource))
+        );
+        assert_eq!(governor.check(), Err(StopReason::BudgetExceeded(resource)));
+    }
+    let token = CancellationToken::new();
+    token.cancel();
+    let mut governor = Governor::with_cancellation(Budget::default(), token);
+    assert_eq!(
+        ToolSet::from_mcp_with_metadata_governed(METADATA_MCP, &metadata, &mut governor)
+            .unwrap_err(),
+        ToolSetError::Resource(StopReason::Cancelled)
     );
 }
