@@ -1,0 +1,165 @@
+{
+  "description": "Issue #6, 93w72lo6: a broken Anthropic id string and a reasoning closer in the tool name leave a call body that belongs to the rejected attempt rather than assistant content.",
+  "tools": [
+    {
+      "name": "read_file",
+      "effects": "read_only",
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true,
+          "aliases": [
+            "file"
+          ]
+        },
+        "limit": {
+          "type": "integer"
+        }
+      }
+    },
+    {
+      "name": "list_dir",
+      "effects": "read_only",
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    {
+      "name": "current_time",
+      "effects": "read_only",
+      "params": {
+        "zone": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "get_weather",
+      "effects": "read_only",
+      "params": {
+        "city": {
+          "type": "string",
+          "required": true
+        },
+        "unit": {
+          "type": "enum",
+          "values": [
+            "celsius",
+            "fahrenheit"
+          ]
+        }
+      }
+    },
+    {
+      "name": "write_file",
+      "effects": "mutating",
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "content": {
+          "type": "string",
+          "required": true
+        },
+        "mode": {
+          "type": "enum",
+          "values": [
+            "create",
+            "overwrite"
+          ]
+        },
+        "ratio": {
+          "type": "number"
+        },
+        "count": {
+          "type": "integer"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "options": {
+          "type": "object",
+          "params": {
+            "backup": {
+              "type": "boolean"
+            },
+            "retries": {
+              "type": "integer"
+            },
+            "owner": {
+              "type": "object",
+              "params": {
+                "name": {
+                  "type": "string"
+                },
+                "uid": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "delete_path",
+      "effects": "mutating",
+      "aliases": [
+        "rm"
+      ],
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true,
+          "repeatable": true
+        }
+      }
+    }
+  ],
+  "policy": "per_tool",
+  "stop": "stop",
+  "reasoning": "separate",
+  "tool_choice": "auto",
+  "effort": "standard",
+  "ambiguity": "report",
+  "input": "{\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"Checking both.\"}, {\"type\": \"tool_use\", \"id\": \"too> \"name\": \"read</think>_file\", \"input\": {\"path\": \"notes.txt\", \"lt\", \"limit\": 10}}]}",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        78,
+        190
+      ],
+      "dialect": "anthropic-tool-use.v1",
+      "candidate_dialects": [
+        "anthropic-tool-use.v1"
+      ],
+      "reason": "Malformed { at: 109 }",
+      "raw": "{\"type\": \"tool_use\", \"id\": \"too> \"name\": \"read</think>_file\", \"input\": {\"path\": \"notes.txt\", \"lt\", \"limit\": 10}}"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "{\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"Checking both.\"}, ",
+    "]}"
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

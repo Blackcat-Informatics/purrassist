@@ -3717,13 +3717,14 @@ pub(crate) struct Boundary {
     /// its terminal began.
     pc: u32,
     failed: usize,
+    reason: Rejection,
     entry: usize,
 }
 
 impl ScratchCharge for Boundary {
     const CHARGE: usize = {
-        assert!(core::mem::size_of::<Self>() <= 48);
-        48
+        assert!(core::mem::size_of::<Self>() <= 72);
+        72
     };
 }
 
@@ -4958,6 +4959,7 @@ impl<'s> Engine<'s> {
                             cost,
                             pc: failure.thread.pc,
                             failed: failure.at,
+                            reason: failure.reason,
                             entry: failure.thread.entry,
                         };
                         let better = best.is_none_or(|known| {
@@ -4993,6 +4995,7 @@ impl<'s> Engine<'s> {
                 // was read before it stands; where it failed moves on.
                 known.pc = best.pc;
                 known.failed = best.failed;
+                known.reason = best.reason;
                 known.entry = best.entry;
             }
         } else {
@@ -5211,7 +5214,7 @@ impl<'s> Engine<'s> {
         record: &Attempt,
         end: usize,
         governor: &mut Governor,
-    ) -> Result<Option<Salvaged>, StopReason> {
+    ) -> Result<Option<(Salvaged, Rejection)>, StopReason> {
         let Some(boundary) = self.take_boundary(table, record.id) else {
             return Ok(None);
         };
@@ -5255,11 +5258,14 @@ impl<'s> Engine<'s> {
             .scratch_meter()
             .total_charged()
             .saturating_sub(before);
-        Ok(Some(Salvaged {
-            at: boundary.at,
-            charged: if segmentations.len() == 1 { charged } else { 0 },
-            segmentations,
-        }))
+        Ok(Some((
+            Salvaged {
+                at: boundary.at,
+                charged: if segmentations.len() == 1 { charged } else { 0 },
+                segmentations,
+            },
+            boundary.reason,
+        )))
     }
 
     /// Retire the attempts `live` no longer holds a configuration of.
@@ -5323,7 +5329,9 @@ impl<'s> Engine<'s> {
                     Some(read) if !record.completed => end.max(read),
                     _ => end,
                 };
-                let salvage = self.salvage(table, &record, end, governor)?;
+                let salvaged = self.salvage(table, &record, end, governor)?;
+                let tail_reason = salvaged.as_ref().map(|(_, reason)| *reason);
+                let salvage = salvaged.map(|(parts, _)| parts);
                 let whole = record.completed || salvage.is_some();
                 let ended = Event::Ended {
                     table: index_u32(table),
@@ -5331,7 +5339,7 @@ impl<'s> Engine<'s> {
                     start: record.start,
                     at: end,
                     completed: record.completed,
-                    reason: match (eof, record.failure) {
+                    reason: tail_reason.unwrap_or_else(|| match (eof, record.failure) {
                         (_, Some(reason @ Rejection::InvalidUtf8 { .. }))
                         | (None, Some(reason)) => reason,
                         (Some(_), Some(reason @ Rejection::Malformed { .. }))
@@ -5342,7 +5350,7 @@ impl<'s> Engine<'s> {
                         (Some(_), Some(reason)) if !record.completed && record.stuck => reason,
                         (Some(_), _) => Rejection::Unterminated,
                         (None, None) => Rejection::Overlapped { at },
-                    },
+                    }),
                     salvage,
                     outread: false,
                 };

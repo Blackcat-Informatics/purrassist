@@ -4954,3 +4954,42 @@ fn xml_repeated_json_array_items_reasoning_marker_in_json_string() {
     assert_eq!(calls.reasoning_blocks, []);
     assert_eq!(rule_count(call, "tool_call.reasoning.marker-cut"), 0);
 }
+
+/// A reasoning marker cannot give an already failed call ownership of the
+/// unread gap before it (issue #6, `_zlypfm8`).
+#[test]
+fn issue6_rejected_marker_does_not_claim_unread_gap() {
+    let (golden, result) = golden("xml_rejection_stops_before_unread_marker_gap");
+    let calls = reading(&result);
+    assert_eq!(calls.rejected.len(), 1);
+    assert_eq!(calls.rejected[0].span, 4..35);
+    assert_eq!(
+        calls.rejected[0].reason,
+        purrassist_core::tool_call::Rejection::Malformed { at: 35 }
+    );
+    assert!(calls.content.contains(&(35..70)));
+    assert_eq!(
+        &golden.input[35..70],
+        b"<function=read_file><parameter=path"
+    );
+    assert_eq!(calls.reasoning[0].start, 70);
+}
+
+/// Splitting a resynchronized group retains the final call's own failure,
+/// while the earlier skipped call keeps its failure (issue #6).
+#[test]
+fn issue6_resynced_rejected_tail_reports_own_failure() {
+    let (_, result) = golden("deepseek31_resynced_tail_has_own_failure");
+    let calls = reading(&result);
+    assert_eq!(calls.rejected.len(), 2);
+    for (part, span, failed) in [
+        (&calls.rejected[0], 122..218, 159),
+        (&calls.rejected[1], 218..322, 322),
+    ] {
+        assert_eq!(part.span, span);
+        assert_eq!(
+            part.reason,
+            purrassist_core::tool_call::Rejection::Malformed { at: failed }
+        );
+    }
+}

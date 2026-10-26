@@ -328,8 +328,8 @@ targets' mutation tokens so mutation can create or move field boundaries).
   every seed of `tool-call-ref` completes with `ok` in the built probe under
   both tool sets. Coverage evidence that mutated executions reach the item
   branches of `pop` and `nesting` in `crates/core/src/grammar/codec/xml.rs`
-  and the scope-graph paths comes from the llvm-cov procedure under "Isolating
-  issue #6" below.
+  and the scope-graph paths comes from the llvm-cov procedure under "Replaying
+  coverage evidence" below.
 
 ## Differential probes
 
@@ -850,11 +850,11 @@ HTML answers. Mandatory campaign acceptance remains unchanged.
 
 ## Known limitations
 
-These issues were open on 2026-10-12. None blocks the 0.1.0 release. The list
+These remaining limitations were recorded on 2026-10-26. The 0.1.0 release
+accepted them without blocking publication. The list
 matches its single source, [known-limitations.json](known-limitations.json);
 `scripts/check-docs.py` compares the two.
 
-- [#6](https://github.com/Blackcat-Informatics/purrassist/issues/6) Tool-call fuzz: finish the rejected-span oracle failures left at the #3 merge. A plain tool-call fuzz campaign stops at the first rejected-span oracle panic, so the default `make fuzz` fails there.
 - [#7](https://github.com/Blackcat-Informatics/purrassist/issues/7) Audit the unreviewed #3 stage-3 commits and close the F14/F19 rule's known limits. Some commits of the #3 tool-call work were merged without an audit, and the known limits of the F14/F19 rule remain open.
 - [#10](https://github.com/Blackcat-Informatics/purrassist/issues/10) Tool-call recovery: restarted DeepSeek-V3.1 sections cost quadratic work and super-quadratic time. A turn with many restarted DeepSeek-V3.1 sections costs quadratic work and super-quadratic time.
 - [#11](https://github.com/Blackcat-Informatics/purrassist/issues/11) Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes). One 192-byte mutated turn takes about 5 s in a release build, so the default `make fuzz` exceeds its timeout on `tool-call-ref`; the CLI and MCP sized budget ends it explicitly in 0.3 s.
@@ -865,10 +865,10 @@ matches its single source, [known-limitations.json](known-limitations.json);
 - [#17](https://github.com/Blackcat-Informatics/purrassist/issues/17) Tool-call recovery: reassemble provider streaming events (Anthropic SSE tool_use, OpenAI tool_calls deltas). Anthropic SSE `tool_use` and OpenAI `tool_calls` delta streams are not reassembled into a turn.
 - [#18](https://github.com/Blackcat-Informatics/purrassist/issues/18) Tool-call recovery: special-token-stripped dialect variants (*-stripped.v1). Dialect variants for output whose special tokens were stripped (`*-stripped.v1`) are not built in.
 
-The default `make fuzz` stops on the #11 and #6 signatures. The sections
-"Isolating issue #6" and "Known slow input (issue #11)" below record how to
-isolate and attribute each stop, and the baseline table records `none` for the two
-tool-call targets, which have no 10,000-mutation baseline.
+The default `make fuzz` stops on the #11 signatures. "Known slow input
+(issue #11)" below records the historical timeout and its request. The
+baseline table records `none` for the two tool-call targets, which have no
+10,000-mutation baseline. Rejected-span oracle panics fail every campaign.
 
 ## Running a campaign
 
@@ -896,8 +896,8 @@ are not comparable coverage percentages across toolchain versions.
 **Smoke** (`verify.yml` on pull requests, main-branch pushes, and manual
 runs): `make fuzz-hosted` runs the corpus-feedback test once and all ten
 targets with the runner's default 1,000 mutations each, passing
-`--continue-on-known` to the two tool-call targets and `--timeout 120` to
-`tool-call-ref` (see "Isolating issue #6" and "Known slow input (issue #11)"). `TARGET` and `FUZZ_ARGS`
+`--timeout 120` to `tool-call-ref` (see "Known slow input (issue #11)").
+Every probe panic stops the campaign. `TARGET` and `FUZZ_ARGS`
 apply only to a selected-target invocation. **Qualification** (evidence committed under `docs/qualification/`): 10,000
 iterations for each target that has a recorded baseline, matching the sample size
 of the existing
@@ -920,50 +920,16 @@ fields are never reconstructed retrospectively. New Markdown reports
 add guarded engine/harness/runner hashes and a private executable snapshot.
 The full local gate and hosted smoke campaigns on the exact final commit
 provide separate final-integration evidence; hosted smoke (`make fuzz-hosted`)
-must execute 1,000 mutations for each of all ten targets, retaining and naming
-issue #6 panics with `--continue-on-known` on the two tool-call targets and
-giving `tool-call-ref` the 120 s timeout below for issue #11.
+must execute 1,000 mutations for each of all ten targets, failing on every
+probe panic and giving `tool-call-ref` the 120 s timeout below for issue #11.
 
-### Isolating issue #6 (`--continue-on-known`)
+### Replaying coverage evidence
 
-Issue #6 tracks `fuzz-tool-call` failing on the rejected-span oracle (the F4
-clauses) at the `tool-call` target's merge: a plain campaign stops at the
-first such panic, which can hide a new failure behind it. For campaigns that
-need to look past it, `scripts/fuzz.py` has `--continue-on-known`. A probe
-panic whose message matches one of two signatures, `rejected attempt ... runs
-past where it failed` or `rejected attempt ... beyond a literal past its
-end`, does not stop the campaign. The input is retained, never dropped, as
-`known-6/<sha256>.bin` beside the panic output `known-6/<sha256>.stderr`, is
-listed in the report's `known_failures` (execution, digest, signature,
-parent corpus index, size), and is not counted in `crashes`. It is not
-retained in the novelty corpus (a panicking run supplies no coverage), except
-that a fixed seed stays a mutation parent. Any other failure, a timeout,
-or a coverage diagnostic still stops the campaign and counts as a crash. The
-default `make fuzz` and qualification runs never use the option and stay
-strict. `make fuzz-hosted`, the CI smoke gate, uses it on the two tool-call
-targets and names each retained panic in its log (`Known issue #6 panic at
-execution N (signature)`). Those inputs are subject to the attribution
-procedure below before the run counts as clean; campaigns are seeded, so
-running `make fuzz-hosted` locally on the same commit retains the same inputs.
-
-Attribution procedure (run after any campaign that used the option, and for
-a campaign that failed any other way). Every retained input, matching a
-signature or not, is replayed through a probe built from the base commit
-`943fa04`: create a temporary git worktree of that commit outside the
-repository (`git worktree add /tmp/base-943fa04 943fa04`), build
-`--example fuzz-tool-call` in it, locate the binary through
-`cargo metadata --format-version 1 --no-deps` run inside that worktree (a
-cargo wrapper may remap target directories), pipe each `known-6/*.bin` (and
-the failing `current.bin` of an aborted campaign) to it, and compare the
-panic. An input that panics on the base with the same signature is #6's. An
-input that passes on the base, or panics differently, is branch-only and must
-be fixed before the campaign is called clean. The base has no `--tools`
-argument and no strict-forced trailer, so for `tool-call-ref` the base probe
-replays the same bytes against its fixed tool set: it reproduces the oracle
-signature (the oracle is the rejected-span clauses, which do not depend on the
-tool set) or does not; the report says which, and a `tool-call-ref` input that
-the base cannot parse into the same shape is judged by whether the same
-signature fires on the branch's fixed-set probe. Remove the worktree after.
+Historical campaigns before the issue #6 repair could retain rejected-span
+oracle panics under `known-6/` and list them in `known_failures`. Those reports
+remain observations of their original source; they do not qualify the repaired
+engine. Current campaigns stop at every probe panic and retain the failing
+`current.bin` and diagnostic output for replay.
 
 Coverage evidence: the campaign directory keeps no per-input profile (each is
 deleted after its novelty decision), so to count the executions that reached
@@ -987,7 +953,7 @@ its executions reach none of them, which is why `tool-call-ref` exists.
 
 ### Known slow input (issue #11)
 
-The `tool-call-ref` campaign at the default seed reaches, at execution 682, a
+The recorded `tool-call-ref` campaign at the default seed reached, at execution 682, a
 192-byte turn (free-form-object items with mutated closers) on which the repair
 search spends about 240 to 280 ns per charged work unit, several times the
 ordinary rate. With the probe's request it takes about 5 s in a release build,

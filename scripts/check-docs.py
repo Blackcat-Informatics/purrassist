@@ -16,7 +16,7 @@ sentence that restates it:
 * the dialect ids from the stems of `docs/tool-calls/dialects/*.md`;
 * the known limitations from `docs/known-limitations.json`, in the
   qualification record, the fuzzing guide and the `### Known limitations`
-  subsection of the current version's changelog section (the release body),
+  subsection of the Unreleased changelog section,
   and the targets on which the default `make fuzz` stops from the entries'
   `fuzz_stop_targets`;
 * the changelog version, crates and interfaces, the supported-versions table
@@ -890,11 +890,11 @@ def check_known_limitations(docs, report, data, targets, version):
     for name in holders:
         text = docs.text(name)
         if name == CHANGELOG:
-            found = changelog_section(text, version)
+            found = changelog_section(text, 'Unreleased')
             body = None if found is None else subsection(found[1], CHANGELOG_LIMITATIONS_HEADING)
             if body is None:
                 report.add(rule, name, f'needs exactly one {CHANGELOG_LIMITATIONS_HEADING!r} heading inside the '
-                                       f'[{version}] section')
+                                       f'[Unreleased] section')
                 continue
         elif text.splitlines().count(KNOWN_LIMITATIONS_HEADING) != 1:
             report.add(rule, name, f'needs exactly one {KNOWN_LIMITATIONS_HEADING!r} heading')
