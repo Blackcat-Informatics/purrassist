@@ -184,13 +184,11 @@ pub(crate) fn recover_region(
         containers: parser
             .containers
             .take()
-            .map(ScratchVec::into_vec)
-            .unwrap_or_default(),
+            .map_or_else(Vec::new, ScratchVec::into_vec),
         orphans: parser
             .orphans
             .take()
-            .map(ScratchVec::into_vec)
-            .unwrap_or_default(),
+            .map_or_else(Vec::new, ScratchVec::into_vec),
         brackets: parser.brackets,
     })
 }

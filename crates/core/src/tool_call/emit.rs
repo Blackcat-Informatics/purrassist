@@ -1423,8 +1423,7 @@ fn splice_call(
     let slot = printer.arguments_slot(grammar.call());
     let xml = slot.is_some_and(|(codec, _)| codec == CodecKind::XmlParams);
     let mut risky: Vec<&[u8]> = slot
-        .map(|(_, delimiters)| grammar.delimiters(delimiters))
-        .unwrap_or_default()
+        .map_or(&[][..], |(_, delimiters)| grammar.delimiters(delimiters))
         .iter()
         .map(Vec::as_slice)
         .collect();

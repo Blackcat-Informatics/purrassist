@@ -122,13 +122,12 @@ fn flag(node: &Node, key: &str) -> bool {
 }
 
 fn strings_of(node: Option<&Node>) -> Vec<String> {
-    node.map(|node| {
+    node.map_or_else(Vec::new, |node| {
         items(node)
             .iter()
             .map(|item| item.as_str().expect("string item").to_owned())
             .collect()
     })
-    .unwrap_or_default()
 }
 
 fn effects_of(code: &str) -> Effects {
@@ -173,7 +172,7 @@ fn parameter(node: &Node) -> ParameterSpec {
         "array" => Param::array(parameter(node.get("items").expect("array items"))),
         "object" => {
             let mut object = ObjectSpec::new();
-            for member in node.get("params").map(members).unwrap_or_default() {
+            for member in node.get("params").map_or(&[][..], members) {
                 object = object.param(member.key.clone(), parameter(&member.value));
             }
             if let Some(mode) = node.get("unknown").and_then(Node::as_str) {
@@ -211,7 +210,7 @@ fn definition(node: &Node) -> ToolDefinition {
     for alias in strings_of(node.get("aliases")) {
         tool = tool.alias(alias);
     }
-    for member in node.get("params").map(members).unwrap_or_default() {
+    for member in node.get("params").map_or(&[][..], members) {
         tool = tool.param(member.key.clone(), parameter(&member.value));
     }
     tool
@@ -379,7 +378,7 @@ fn request(golden: &Node, path: &Path, input: &[u8], dialects: DialectSet) -> To
             policy => PolicySelection::All(policy_of(policy)),
         });
     }
-    for member in golden.get("effects").map(members).unwrap_or_default() {
+    for member in golden.get("effects").map_or(&[][..], members) {
         request = request.effects(
             member.key.clone(),
             effects_of(member.value.as_str().expect("effects code")),
