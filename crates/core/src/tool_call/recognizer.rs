@@ -1502,15 +1502,29 @@ impl<'s> Recognizer<'s> {
             Rejection::Overlapped { at } => Rejection::Overlapped { at: at.min(marker) },
             other => other,
         };
+        // A blocked marker cuts the attempt; it does not prove the bytes
+        // after an earlier failure were read. Recovery extends this span
+        // only over demonstrated markup before the reasoning boundary.
+        let end = match reason {
+            Rejection::Malformed { at }
+            | Rejection::InvalidUtf8 { at }
+            | Rejection::Overlapped { at } => at.clamp(ended.start, marker),
+            _ => marker,
+        };
         let segment = Segment::Rejected {
-            span: ended.start..marker,
+            span: ended.start..end,
             dialect,
             reason,
         };
         let index = self.turn.store(segment, governor)?;
         for &interp in interps {
             if let Interp::Top(base) = interp {
-                let (cost, hist) = self.turn.append(base, index, REJECT, marker, governor)?;
+                let (cost, mut hist) = self.turn.append(base, index, REJECT, end, governor)?;
+                if end < marker {
+                    hist = self
+                        .turn
+                        .push(hist, marker, TurnKind::Content(end), governor)?;
+                }
                 let think = Think {
                     cost,
                     hist,

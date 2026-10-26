@@ -1813,3 +1813,52 @@ fn main() {
     check_exhaustion(&tools, output, &request);
     println!("ok");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// F4 must reject an overlong span even when F16 admits the real body
+    /// after a broken string. This injects the span-extension bug into the
+    /// actual recovery result rather than weakening the oracle's exception.
+    #[test]
+    fn fresh_body_oracle_rejects_span_extended_over_prose() {
+        let seed = b"[\x05\x91Let me check both.\x0a[TOOL_CALLS][{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Oslo\"}, \"id\": \"Wq7kP2xZr\"}, {\"id\": \"m4N8: {\"path\": \"notes.txt\", \"limit\": 10}, \"name\": \"read_file\"}]]";
+        let mut output = seed[2..].to_vec();
+        output.extend_from_slice(b" This is independent prose.");
+        let tools = fixed_tools();
+        let request = request(seed[0], seed[1], None, &output);
+        let result = tools.recover(&output, &request);
+        let (Outcome::Resolved(mut calls) | Outcome::BestGuess(mut calls)) = result.outcome else {
+            panic!("the regression has one recoverable reading");
+        };
+        let rejected = calls
+            .rejected
+            .iter()
+            .find(|part| part.span.start == 108)
+            .expect("the malformed second call is rejected");
+        assert_eq!(rejected.span, 108..178);
+        assert!(call_body(&output, 108, 121, 178));
+        let read = [(
+            rejected.span.clone(),
+            rejected.dialect.clone().expect("parsed dialect"),
+        )];
+        assert!(
+            std::panic::catch_unwind(|| check_rejected_extension(&output, &calls, &read)).is_ok(),
+            "the actual span must pass before injecting the overrun"
+        );
+        let rejected = calls
+            .rejected
+            .iter_mut()
+            .find(|part| part.span.start == 108)
+            .expect("the same rejected part");
+        rejected.span.end = output.len();
+        rejected.raw = output[rejected.span.clone()].to_vec();
+        let panic = std::panic::catch_unwind(|| check_rejected_extension(&output, &calls, &read))
+            .expect_err("the injected overrun must fail");
+        let message = panic
+            .downcast_ref::<String>()
+            .expect("oracle panic message");
+        assert!(message.contains("runs past where it failed"));
+    }
+}

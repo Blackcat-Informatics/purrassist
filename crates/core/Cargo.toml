@@ -56,6 +56,7 @@ path = "examples/fuzz_patch.rs"
 [[example]]
 name = "fuzz-tool-call"
 path = "examples/fuzz_tool_call.rs"
+test = true
 
 [[example]]
 name = "tool-call-corpus"

@@ -873,6 +873,18 @@ TOOL_CALL_REGRESSIONS = [
     # spelling begins a call body wherever it is written (a campaign
     # failure; the golden llama3_rejection_covers_call_member_after_broken_string).
     b'[\xe6#Let me check both.\n{"name": "get_weather", "parameters": {"city": "Oslo"}}; {"name": "read_file", "parameters": {"path": "notes.txt", "limit": 10}}\n{"parameters": {"city": "Bergen", "unit": "celsius"}, "name": rgen", "unit": "celsius"}, "name": "get_weather"}ius"}, "name": "get_weather"}]',
+    # Issue #6: m397meud (mistral3_rejection_fresh_body_after_broken_string).
+    b'[\x05\x91Let me check both.\n[TOOL_CALLS][{"name": "get_weather", "arguments": {"city": "Oslo"}, "id": "Wq7kP2xZr"}, {"id": "m4N8: {"path": "notes.txt", "limit": 10}, "name": "read_file"}]]',
+    # Issue #6: 93w72lo6 (anthropic_rejection_body_after_cut_reasoning_close).
+    b'\x00R{"role": "assistant", "content": [{"type": "text", "text": "Checking both."}, {"type": "tool_use", "id": "too> "name": "read</think>_file", "input": {"path": "notes.txt", "lt", "limit": 10}}]}',
+    # Issue #6: mg1yu79s (anthropic_rejection_fresh_body_after_broken_key).
+    b'J^{"type":\t\t"tool_use"\t,\t"input"\t:{"pa"input"\t:{"path":"tab\\tseparated \\n  block\\n"},"name"\t:"read_file"\t\t,"id":"call_0f4d3872"\t\t}',
+    # Issue #6: mp5p9l8g (openai_rejection_fresh_body_after_cut_arguments).
+    b'[\x05\x91[\n  {\n    "id": "call_a1",\n    "type": "function",\n    "function": {\n      "name": "write_file",\n      "arguments": "{\\"path\\": \\"src/main.rs\\", \\"content\\": \\"fn main() {\\\\n    println!(\\\\\\"hi\\\\\\");\\\\n\\\\n\\\\tlet  x = 1;  \\\\n}\\\\n\\", \\"mode\\": \\"create\\", \\"ratio\\": 2.50[TOOL_CALLS], \\"count\\": 1e3, \\"tags\\": [], \\"options\\": {\\"backup\\": false, \\"retries\\": 0, \\"owner\\": {\\"name\\": \\"ops\\"  "function": {\n      "name": "list_d<\xef\xbd\x9ctool\xe2\x96\x81calls\xe2\x96\x81end\xef\xbd\x9c> 1;  \\\\n}\\\\n\\", \\"mode\\": \\"create\\", \\"ratio\\": 2.50[TOOL_CALLS], \\"count\\": 1e3, \\"tags\\": [], \\"options\\": {\\"backup\\": false, \\"retries\\": 0, \\"owner\\": {\\"name\\": \\"ops\\"  "function": {\n      "name": "list_dir",\n      "arguments": "{\\"path\\": \\"src\\"}"\n    }\n  }\n]]',
+    # Issue #6: _zlypfm8 (xml_rejection_stops_before_unread_marker_gap).
+    b'\x00Rpre <tool_call><function=read_file><function=read_file><parameter=path<think>ter></function></tool_call> p"t',
+    # Issue #6: 75h_s59q (deepseek31_resynced_tail_has_own_failure).
+    b'\x00RHi <\xef\xbd\x9ctool\xe2\x96\x81calls\xe2\x96\x81begin\xef\xbd\x9c><\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begin\xef\xbd\x9c>read_file<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>{"path":"a"}<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c><\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begin\xef\xbd\x9c>read_file oops<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>{"path":"b"}<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c><\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begin\xef\xbd\x9c>read_fil\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>{"path":"c"}<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c>\xef\xbd\x9c> done',
 ]
 
 # Strict forced tool choice: header `\xe6\x23` (forced `read_file`) plus a
@@ -2442,30 +2454,8 @@ def probe(binary, data, directory, timeout, target, oracle, tool_paths, counts=N
     return covered_regions(json.loads(exported.stdout)), invalid, checked
 
 
-# Issue #6: the rejected-span oracle of `fuzz_tool_call.rs` (the F4 clauses)
-# fails on inputs that also fail on the base `943fa04`. `--continue-on-known`
-# lets a bounded campaign run past these panics, retaining each such input
-# (never silently dropping it) so it can be replayed on a base probe; any
-# other failure still stops the campaign. `make fuzz` never passes it.
-KNOWN_FAILURES = {
-    # Anchored to the probe's own panic line, so the text cannot match
-    # elsewhere in the output (an echoed input, another panic's message).
-    'issue-6-rejected-span-runs-past-failure': re.compile(
-        r'panicked at [^\n]*fuzz_tool_call\.rs:\d+:\d+:\n'
-        r'rejected attempt \d+\.\.\d+ runs past where it failed \(\d+\)'),
-    'issue-6-failure-beyond-literal-past-its-end': re.compile(
-        r'panicked at [^\n]*fuzz_tool_call\.rs:\d+:\d+:\n'
-        r'rejected attempt \d+\.\.\d+ fails at \d+, beyond a literal past its end'),
-}
-
-
 # Lines of a crashed probe's stderr printed to the campaign log.
 PANIC_TAIL_LINES = 40
-
-
-def known_failure(stderr):
-    """The name of the known (#6) failure `stderr` carries, or `None`."""
-    return next((name for name, pattern in KNOWN_FAILURES.items() if pattern.search(stderr)), None)
 
 
 def source_digest():
@@ -2485,11 +2475,6 @@ def main():
     parser.add_argument('--seed', type=int, default=0x5A1727EE614D934B)
     parser.add_argument('--timeout', type=float, default=10, help='seconds per probe, LLVM, or oracle command')
     parser.add_argument('--replay', type=Path, help='execute one saved input instead of a campaign')
-    parser.add_argument('--continue-on-known', action='store_true',
-                        help='keep running past a probe panic matching a known issue #6 signature '
-                             '(rejected-span oracle) and retain each such input under known-6/; '
-                             'any other failure still stops the campaign; never used by `make fuzz`, '
-                             'used by `make fuzz-hosted` for the two tool-call targets')
     args = parser.parse_args()
     if args.iterations < 0 or not 0 <= args.seed < 1 << 64 or not 0 < args.timeout <= 3600:
         parser.error('invalid iteration, seed, or timeout bound')
@@ -2527,7 +2512,6 @@ def main():
               'backtick_reference_cases': [],
               'destination_reference_checks': 0, 'destination_reference_disagreements': 0,
               'destination_reference_cases': [],
-              'continue_on_known': args.continue_on_known, 'known_failures': [],
               'retained': [], 'regions': 0}
     corpus, seen = [], set()
     random = Random(args.seed)
@@ -2550,27 +2534,11 @@ def main():
                 )
             except subprocess.CalledProcessError:
                 stderr = (directory / 'probe.stderr').read_text(encoding='utf-8', errors='replace')
-                name = known_failure(stderr) if args.continue_on_known else None
-                if name is None:
-                    # The probe's panic is otherwise only in a temporary file a
-                    # hosted job does not keep; print its end and its known-issue
-                    # classification so the job log identifies the failure.
-                    print(f'Probe crashed at execution {index}; known issue signature: '
-                          f'{known_failure(stderr) or "none"}', file=sys.stderr, flush=True)
-                    print('\n'.join(stderr.splitlines()[-PANIC_TAIL_LINES:]), file=sys.stderr, flush=True)
-                    raise
-                print(f'Known issue #6 panic at execution {index} ({name}); input retained', flush=True)
-                digest = hashlib.sha256(data).hexdigest()
-                (directory / 'known-6').mkdir(exist_ok=True)
-                (directory / 'known-6' / f'{digest}.bin').write_bytes(data)
-                (directory / 'known-6' / f'{digest}.stderr').write_bytes((directory / 'probe.stderr').read_bytes())
-                report['crashes'] -= 1
-                report['known_failures'].append({'execution': index, 'sha256': digest, 'signature': name,
-                                                 'parent_corpus_index': parent, 'bytes': len(data)})
-                report['executions'] += 1
-                if index < len(seeds):
-                    corpus.append(data)
-                continue
+                # Keep the probe's diagnostic visible in hosted logs as well
+                # as the retained input. Every probe failure stops the run.
+                print(f'Probe crashed at execution {index}', file=sys.stderr, flush=True)
+                print('\n'.join(stderr.splitlines()[-PANIC_TAIL_LINES:]), file=sys.stderr, flush=True)
+                raise
             report['differential_checks'] += checked
             novel = regions - seen
             seen.update(regions)
@@ -2601,9 +2569,6 @@ def main():
     finally:
         (directory / 'report.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
         (directory / 'regions.json').write_text(json.dumps(sorted(seen), indent=2) + '\n', encoding='utf-8')
-    if report['known_failures']:
-        print(f'{len(report["known_failures"])} inputs hit a known issue #6 panic; retained in '
-              f'{directory / "known-6"} for base replay', flush=True)
     print(f'Passed {report["executions"]} inputs; report: {directory / "report.json"}', flush=True)
 
 

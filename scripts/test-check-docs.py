@@ -673,7 +673,7 @@ class KnownLimitationsSource(Case):
 
     def test_the_real_set_is_the_agreed_one(self):
         data = json.loads((ROOT / 'docs/known-limitations.json').read_text(encoding='utf-8'))
-        self.assertEqual([entry['issue'] for entry in data['limitations']], [6, 7, 10, 11, 12, 13, 14, 16, 17, 18])
+        self.assertEqual([entry['issue'] for entry in data['limitations']], [7, 10, 11, 12, 13, 14, 16, 17, 18])
 
 
 class KnownLimitationsSection(Case):
@@ -701,8 +701,8 @@ class KnownLimitationsSection(Case):
 
     def test_an_issue_outside_the_source_fails(self):
         tree = self.tree()
-        tree.replace('docs/FUZZING.md', 'The default `make fuzz` stops on the #11 and #6 signatures.',
-                     'The default `make fuzz` stops on the #11 and #6 signatures (see #3).')
+        tree.replace('docs/FUZZING.md', 'The default `make fuzz` stops on the #11 signatures.',
+                     'The default `make fuzz` stops on the #11 signatures (see #3).')
         self.assertFails(tree.errors(), 'known-limitations-section', 'docs/FUZZING.md', '3')
 
     def test_a_changed_title_in_the_source_fails(self):
@@ -710,24 +710,24 @@ class KnownLimitationsSection(Case):
         data = tree.limitations()
         data['limitations'][0]['title'] = 'A different title'
         tree.save_limitations(data)
-        self.assertFails(tree.errors(), 'known-limitations-section', 'docs/QUALIFICATION.md', '#6 title')
+        self.assertFails(tree.errors(), 'known-limitations-section', 'docs/QUALIFICATION.md', '#7 title')
 
     def test_a_changed_impact_in_the_document_fails(self):
         tree = self.tree()
         data = tree.limitations()
-        tree.replace('docs/FUZZING.md', data['limitations'][3]['impact'], 'It is fine.')
+        tree.replace('docs/FUZZING.md', next(entry['impact'] for entry in data['limitations'] if entry['issue'] == 11), 'It is fine.')
         self.assertFails(tree.errors(), 'known-limitations-section', 'docs/FUZZING.md', '#11 impact')
 
     def test_a_missing_stop_sentence_is_not_found(self):
         for name in ('docs/QUALIFICATION.md', 'docs/FUZZING.md'):
             with self.subTest(name=name):
                 tree = self.tree()
-                tree.replace(name, '`make fuzz` stops on the #11 and #6 signatures', '`make fuzz` passes', count=0 if name.endswith('QUALIFICATION.md') else 1)
+                tree.replace(name, '`make fuzz` stops on the #11 signatures', '`make fuzz` passes', count=0 if name.endswith('QUALIFICATION.md') else 1)
                 self.assertFails(tree.errors(), 'known-limitations-section', name, NOT_FOUND)
 
     def test_a_stop_citing_an_unlisted_issue_fails(self):
         tree = self.tree()
-        tree.replace('docs/FUZZING.md', 'stops on the #11 and #6 signatures.', 'stops on the #11 and #8 signatures.')
+        tree.replace('docs/FUZZING.md', 'stops on the #11 signatures.', 'stops on the #11 and #8 signatures.')
         self.assertFails(tree.errors(), 'known-limitations-section', 'docs/FUZZING.md')
 
     def test_a_changelog_is_held_to_the_same_source(self):
@@ -754,7 +754,7 @@ class FuzzStopTargets(Case):
         tree.save_limitations(data)
 
     def test_the_documented_stops_are_the_json_stops(self):
-        self.assertEqual(self.stops(self.tree()), [6, 11])
+        self.assertEqual(self.stops(self.tree()), [11])
 
     def test_a_stop_named_by_the_json_but_omitted_by_the_documents_fails(self):
         tree = self.tree()
@@ -766,11 +766,11 @@ class FuzzStopTargets(Case):
 
     def test_a_stop_named_by_the_documents_but_not_the_json_fails(self):
         tree = self.tree()
-        self.set_stop(tree, 6, None)
+        self.set_stop(tree, 11, None)
         errors = tree.errors()
         for name in ('docs/QUALIFICATION.md', 'docs/FUZZING.md'):
-            self.assertFails(errors, 'known-limitations-section', name, 'extra [6]')
-        self.assertFails(errors, 'fuzz-row-limits', 'docs/QUALIFICATION.md', 'extra [6]')
+            self.assertFails(errors, 'known-limitations-section', name, 'extra [11]')
+        self.assertFails(errors, 'fuzz-row-limits', 'docs/QUALIFICATION.md', 'extra [11]')
 
     def test_an_empty_list_is_no_stop(self):
         tree = self.tree()
@@ -780,17 +780,15 @@ class FuzzStopTargets(Case):
     def test_documents_and_json_that_agree_on_three_stops_pass(self):
         tree = self.tree()
         self.set_stop(tree, 10, ['json'])
-        tree.replace('docs/QUALIFICATION.md', 'stops on the #11 and #6 signatures', 'stops on the #11, #6 and #10 signatures', count=0)
-        tree.replace('docs/FUZZING.md', 'stops on the #11 and #6 signatures', 'stops on the #11, #6 and #10 signatures')
+        self.set_stop(tree, 7, ['tool-call'])
+        tree.replace('docs/QUALIFICATION.md', 'stops on the #11 signatures', 'stops on the #11, #7 and #10 signatures', count=0)
+        tree.replace('docs/FUZZING.md', 'stops on the #11 signatures', 'stops on the #11, #7 and #10 signatures')
         errors = tree.errors()
         self.assertNoRule(errors, 'known-limitations-section')
         self.assertNoRule(errors, 'fuzz-row-limits')
 
     def test_a_single_stop_is_read_in_its_own_form(self):
         tree = self.tree()
-        self.set_stop(tree, 6, None)
-        tree.replace('docs/QUALIFICATION.md', 'stops on the #11 and #6 signatures', 'stops on the #11 signatures', count=0)
-        tree.replace('docs/FUZZING.md', 'stops on the #11 and #6 signatures', 'stops on the #11 signatures')
         errors = tree.errors()
         self.assertNoRule(errors, 'known-limitations-section')
         self.assertNoRule(errors, 'fuzz-row-limits')
@@ -798,26 +796,28 @@ class FuzzStopTargets(Case):
     def test_an_oxford_comma_is_accepted(self):
         tree = self.tree()
         self.set_stop(tree, 10, ['json'])
-        tree.replace('docs/QUALIFICATION.md', 'stops on the #11 and #6 signatures', 'stops on the #11, #6, and #10 signatures', count=0)
-        tree.replace('docs/FUZZING.md', 'stops on the #11 and #6 signatures', 'stops on the #11, #6, and #10 signatures')
+        self.set_stop(tree, 7, ['tool-call'])
+        tree.replace('docs/QUALIFICATION.md', 'stops on the #11 signatures', 'stops on the #11, #7, and #10 signatures', count=0)
+        tree.replace('docs/FUZZING.md', 'stops on the #11 signatures', 'stops on the #11, #7, and #10 signatures')
         errors = tree.errors()
         self.assertNoRule(errors, 'known-limitations-section')
         self.assertNoRule(errors, 'fuzz-row-limits')
 
     def test_an_oxford_comma_before_a_second_issue_is_accepted(self):
         tree = self.tree()
-        tree.replace('docs/FUZZING.md', 'stops on the #11 and #6 signatures', 'stops on the #11, and #6 signatures')
+        self.set_stop(tree, 7, ['tool-call'])
+        for name in ('docs/FUZZING.md', 'docs/QUALIFICATION.md'):
+            tree.replace(name, 'stops on the #11 signatures', 'stops on the #11, and #7 signatures', count=0)
         self.assertNoRule(tree.errors(), 'known-limitations-section')
 
     NO_STOP = 'stops on no known signature'
 
     def without_stops(self, tree):
-        self.set_stop(tree, 6, None)
         self.set_stop(tree, 11, [])
 
     def say_no_stop(self, tree, names=('docs/QUALIFICATION.md', 'docs/FUZZING.md')):
         for name in names:
-            tree.replace(name, 'stops on the #11 and #6 signatures', self.NO_STOP, count=0)
+            tree.replace(name, 'stops on the #11 signatures', self.NO_STOP, count=0)
 
     def test_no_stop_in_the_json_requires_the_documents_to_say_so(self):
         tree = self.tree()
@@ -832,8 +832,8 @@ class FuzzStopTargets(Case):
         self.without_stops(tree)
         errors = tree.errors()
         for name in ('docs/QUALIFICATION.md', 'docs/FUZZING.md'):
-            self.assertFails(errors, 'known-limitations-section', name, 'extra [6, 11]')
-        self.assertFails(errors, 'fuzz-row-limits', 'docs/QUALIFICATION.md', 'extra [6, 11]')
+            self.assertFails(errors, 'known-limitations-section', name, 'extra [11]')
+        self.assertFails(errors, 'fuzz-row-limits', 'docs/QUALIFICATION.md', 'extra [11]')
 
     def test_no_stop_in_the_json_does_not_demand_a_stop_sentence_but_a_no_stop_one(self):
         tree = self.tree()
@@ -847,23 +847,23 @@ class FuzzStopTargets(Case):
         self.say_no_stop(tree)
         errors = tree.errors()
         for name in ('docs/QUALIFICATION.md', 'docs/FUZZING.md'):
-            self.assertFails(errors, 'known-limitations-section', name, 'missing [6, 11]')
-        self.assertFails(errors, 'fuzz-row-limits', 'docs/QUALIFICATION.md', 'missing [6, 11]')
+            self.assertFails(errors, 'known-limitations-section', name, 'missing [11]')
+        self.assertFails(errors, 'fuzz-row-limits', 'docs/QUALIFICATION.md', 'missing [11]')
 
     def test_a_document_that_states_both_stop_forms_fails(self):
         tree = self.tree()
-        tree.replace('docs/FUZZING.md', 'stops on the #11 and #6 signatures.',
-                     f'stops on the #11 and #6 signatures. The default `make fuzz` {self.NO_STOP}.')
-        tree.replace('docs/QUALIFICATION.md', 'stops on the #11 and #6 signatures, so it',
-                     f'stops on the #11 and #6 signatures and {self.NO_STOP}, so it')
+        tree.replace('docs/FUZZING.md', 'stops on the #11 signatures.',
+                     f'stops on the #11 signatures. The default `make fuzz` {self.NO_STOP}.')
+        tree.replace('docs/QUALIFICATION.md', 'stops on the #11 signatures, so',
+                     f'stops on the #11 signatures and {self.NO_STOP}, so')
         errors = tree.errors()
         self.assertFails(errors, 'known-limitations-section', 'docs/FUZZING.md', 'both names issues')
         self.assertFails(errors, 'fuzz-row-limits', 'docs/QUALIFICATION.md', 'both names stop issues')
 
     def test_an_unknown_target_fails(self):
         tree = self.tree()
-        self.set_stop(tree, 6, ['tool-call', 'no-such-target'])
-        self.assertFails(tree.errors(), 'known-limitations-source', 'entry 6', "'no-such-target'", 'TARGETS')
+        self.set_stop(tree, 7, ['tool-call', 'no-such-target'])
+        self.assertFails(tree.errors(), 'known-limitations-source', 'entry 7', "'no-such-target'", 'TARGETS')
 
     def test_a_target_that_scripts_fuzz_gains_is_known(self):
         tree = self.tree()
@@ -878,23 +878,23 @@ class FuzzStopTargets(Case):
                 data = tree.limitations()
                 data['limitations'][0]['fuzz_stop_targets'] = value
                 tree.save_limitations(data)
-                self.assertFails(tree.errors(), 'known-limitations-source', 'entry 6', 'fuzz_stop_targets must be a list')
+                self.assertFails(tree.errors(), 'known-limitations-source', 'entry 7', 'fuzz_stop_targets must be a list')
 
     def test_a_target_listed_twice_fails(self):
         tree = self.tree()
-        self.set_stop(tree, 6, ['tool-call', 'tool-call'])
-        self.assertFails(tree.errors(), 'known-limitations-source', 'entry 6', 'twice')
+        self.set_stop(tree, 7, ['tool-call', 'tool-call'])
+        self.assertFails(tree.errors(), 'known-limitations-source', 'entry 7', 'twice')
 
     def test_the_exact_key_check_is_not_loosened(self):
         tree = self.tree()
         data = tree.limitations()
         data['limitations'][0]['stop_targets'] = ['tool-call']
         tree.save_limitations(data)
-        self.assertFails(tree.errors(), 'known-limitations-source', 'entry 6', 'exactly issue, title, impact')
+        self.assertFails(tree.errors(), 'known-limitations-source', 'entry 7', 'exactly issue, title, impact')
 
     def test_the_stop_sentence_is_still_required(self):
         tree = self.tree()
-        tree.replace('docs/FUZZING.md', 'The default `make fuzz` stops on the #11 and #6 signatures.', 'The default `make fuzz` passes.')
+        tree.replace('docs/FUZZING.md', 'The default `make fuzz` stops on the #11 signatures.', 'The default `make fuzz` passes.')
         self.assertFails(tree.errors(), 'known-limitations-section', 'docs/FUZZING.md', NOT_FOUND)
 
 
@@ -903,34 +903,38 @@ class KnownLimitationsChangelog(Case):
 
     def limitations_block(self, tree):
         text = tree.read('CHANGELOG.md')
-        return text[text.index(self.HEADING):]
+        _, lines = CD.changelog_section(text, 'Unreleased')
+        return self.HEADING + '\n\n' + CD.subsection(lines, self.HEADING) + '\n'
 
-    def test_the_known_limitations_are_part_of_the_release_body(self):
+    def test_current_limitations_are_in_unreleased_and_release_history_is_preserved(self):
         text = (ROOT / 'CHANGELOG.md').read_text(encoding='utf-8')
-        _, body = CD.changelog_section(text, '0.1.0')
+        _, body = CD.changelog_section(text, 'Unreleased')
         self.assertIn(self.HEADING, body)
+        _, released = CD.changelog_section(text, '0.1.0')
+        self.assertIn('- [#6]', '\n'.join(released))
+        self.assertNotIn('- [#6]', '\n'.join(body))
         self.assertNotIn('\n## Known limitations', text)
 
     def test_a_missing_heading_fails(self):
         tree = self.tree()
-        tree.replace('CHANGELOG.md', self.HEADING, '### Open items')
+        tree.replace('CHANGELOG.md', self.HEADING, '### Open items', count=0)
         self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'exactly one')
 
     def test_a_sibling_level_two_section_is_outside_the_release_body(self):
         tree = self.tree()
-        tree.replace('CHANGELOG.md', self.HEADING, '## Known limitations')
-        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'exactly one', '[0.1.0]')
+        tree.replace('CHANGELOG.md', self.HEADING, '## Known limitations', count=0)
+        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'exactly one', '[Unreleased]')
 
     def test_the_subsection_outside_the_version_section_fails(self):
         tree = self.tree()
         block = self.limitations_block(tree)
         tree.replace('CHANGELOG.md', block.rstrip('\n'), '')
-        tree.replace('CHANGELOG.md', CHANGELOG_HEADING, block.rstrip('\n') + '\n\n' + CHANGELOG_HEADING)
-        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'exactly one', '[0.1.0]')
+        tree.replace('CHANGELOG.md', '## [Unreleased]', block.rstrip('\n') + '\n\n## [Unreleased]')
+        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'exactly one', '[Unreleased]')
 
     def test_a_second_subsection_in_the_version_section_fails(self):
         tree = self.tree()
-        tree.append('CHANGELOG.md', '\n' + self.limitations_block(tree))
+        tree.replace('CHANGELOG.md', CHANGELOG_HEADING, self.limitations_block(tree) + '\n' + CHANGELOG_HEADING)
         self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'exactly one')
 
     def test_each_version_has_its_own_subsection_and_only_the_current_one_is_compared(self):
@@ -946,18 +950,18 @@ class KnownLimitationsChangelog(Case):
     def test_another_versions_subsection_does_not_satisfy_the_current_one(self):
         tree = self.tree()
         block = self.limitations_block(tree)
-        tree.sub('CHANGELOG.md', r'- \[#18\][^\n]*\n', '')
+        tree.sub('CHANGELOG.md', r'- \[#18\][^\n]*\n', '', count=0)
         tree.append('CHANGELOG.md', '\n## [0.0.9] - 2020-01-01\n\n' + block)
         self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'differs')
 
-    def test_a_workspace_version_without_a_section_fails(self):
+    def test_a_missing_unreleased_section_fails(self):
         tree = self.tree()
-        tree.replace('Cargo.toml', 'version = "0.1.0"', 'version = "0.2.0"', count=0)
-        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', '[0.2.0]')
+        tree.replace('CHANGELOG.md', '## [Unreleased]', '## Current source')
+        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', '[Unreleased]')
 
     def test_a_dropped_issue_fails(self):
         tree = self.tree()
-        tree.sub('CHANGELOG.md', r'- \[#18\][^\n]*\n', '')
+        tree.sub('CHANGELOG.md', r'- \[#18\][^\n]*\n', '', count=0)
         self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'differs')
 
     def test_an_extra_issue_in_the_source_fails(self):
@@ -970,7 +974,7 @@ class KnownLimitationsChangelog(Case):
     def test_a_changed_impact_fails(self):
         tree = self.tree()
         data = tree.limitations()
-        tree.replace('CHANGELOG.md', data['limitations'][3]['impact'], 'It is fine.')
+        tree.replace('CHANGELOG.md', next(entry['impact'] for entry in data['limitations'] if entry['issue'] == 11), 'It is fine.', count=0)
         self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', '#11 impact')
 
     def test_a_changed_title_in_the_source_fails(self):
@@ -978,7 +982,7 @@ class KnownLimitationsChangelog(Case):
         data = tree.limitations()
         data['limitations'][0]['title'] = 'A different title'
         tree.save_limitations(data)
-        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', '#6 title')
+        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', '#7 title')
 
     def test_a_missing_changelog_fails(self):
         tree = self.tree()
@@ -1052,12 +1056,12 @@ class Changelog(Case):
 
     def test_another_section_may_say_unreleased(self):
         tree = self.tree()
-        tree.replace('CHANGELOG.md', 'No changes yet.', 'Unreleased changes are not yet tagged.')
+        tree.replace('CHANGELOG.md', '### Fixed', 'Unreleased changes are not yet tagged.\n\n### Fixed')
         self.assertNoRule(tree.errors(), 'changelog')
 
     def test_a_missing_unreleased_heading_still_needs_the_version(self):
         tree = self.tree()
-        tree.sub('CHANGELOG.md', r'## \[Unreleased\]\n\nNo changes yet\.\n\n', '')
+        tree.sub('CHANGELOG.md', r'## \[Unreleased\].*?(?=## \[0\.1\.0\])', '')
         self.assertNoRule(tree.errors(), 'changelog')
 
 
@@ -1275,12 +1279,12 @@ class FuzzRows(Case):
 
     def test_a_row_without_the_stop_fails(self):
         tree = self.tree()
-        tree.sub('docs/QUALIFICATION.md', r'\. The default `make fuzz` stops on the #11 and #6 signatures, so it is not a passing result for the two tool-call targets', '')
+        tree.sub('docs/QUALIFICATION.md', r'\. The default `make fuzz` stops on the #11 signatures, so the historical reports do not establish a passing default run for `tool-call-ref`', '')
         self.assertFails(tree.errors(), 'fuzz-row-limits', 'stops on the #N and #N signatures')
 
     def test_the_tool_call_row_must_also_state_the_stop(self):
         tree = self.tree()
-        tree.sub('docs/QUALIFICATION.md', r'but the default `make fuzz` stops on the #11 and #6 signatures and has no', 'and has no')
+        tree.sub('docs/QUALIFICATION.md', r'but the default `make fuzz` stops on the #11 signatures and neither', 'and neither')
         self.assertFails(tree.errors(), 'fuzz-row-limits', 'stops on the #N and #N signatures')
 
     def test_no_make_fuzz_row_is_not_found(self):

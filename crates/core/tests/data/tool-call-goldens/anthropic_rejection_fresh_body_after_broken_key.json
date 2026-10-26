@@ -1,0 +1,162 @@
+{
+  "description": "Issue #6, mg1yu79s: a broken input key flips the quote state before a later name member. Rejection ownership follows the fresh call-body reading rather than counting quotes from the attempt opener.",
+  "tools": [
+    {
+      "name": "read_file",
+      "effects": "read_only",
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true,
+          "aliases": [
+            "file"
+          ]
+        },
+        "limit": {
+          "type": "integer"
+        }
+      }
+    },
+    {
+      "name": "list_dir",
+      "effects": "read_only",
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    {
+      "name": "current_time",
+      "effects": "read_only",
+      "params": {
+        "zone": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "get_weather",
+      "effects": "read_only",
+      "params": {
+        "city": {
+          "type": "string",
+          "required": true
+        },
+        "unit": {
+          "type": "enum",
+          "values": [
+            "celsius",
+            "fahrenheit"
+          ]
+        }
+      }
+    },
+    {
+      "name": "write_file",
+      "effects": "mutating",
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "content": {
+          "type": "string",
+          "required": true
+        },
+        "mode": {
+          "type": "enum",
+          "values": [
+            "create",
+            "overwrite"
+          ]
+        },
+        "ratio": {
+          "type": "number"
+        },
+        "count": {
+          "type": "integer"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "options": {
+          "type": "object",
+          "params": {
+            "backup": {
+              "type": "boolean"
+            },
+            "retries": {
+              "type": "integer"
+            },
+            "owner": {
+              "type": "object",
+              "params": {
+                "name": {
+                  "type": "string"
+                },
+                "uid": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "delete_path",
+      "effects": "mutating",
+      "aliases": [
+        "rm"
+      ],
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true,
+          "repeatable": true
+        }
+      }
+    }
+  ],
+  "policy": "tolerant",
+  "stop": "tool_calls",
+  "reasoning": "separate",
+  "tool_choice": "none",
+  "effort": "standard",
+  "ambiguity": "reject",
+  "input": "{\"type\":\t\t\"tool_use\"\t,\t\"input\"\t:{\"pa\"input\"\t:{\"path\":\"tab\\tseparated \\n  block\\n\"},\"name\"\t:\"read_file\"\t\t,\"id\":\"call_0f4d3872\"\t\t}",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        0,
+        128
+      ],
+      "dialect": "anthropic-tool-use.v1",
+      "candidate_dialects": [
+        "anthropic-tool-use.v1"
+      ],
+      "reason": "Malformed { at: 44 }",
+      "raw": "{\"type\":\t\t\"tool_use\"\t,\t\"input\"\t:{\"pa\"input\"\t:{\"path\":\"tab\\tseparated \\n  block\\n\"},\"name\"\t:\"read_file\"\t\t,\"id\":\"call_0f4d3872\"\t\t}"
+    }
+  ],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

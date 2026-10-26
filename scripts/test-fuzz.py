@@ -247,7 +247,7 @@ class Coverage(unittest.TestCase):
         self.assertNotIn('continue-on-known', ''.join(
             line for line in makefile.splitlines() if 'scripts/fuzz.py' in line))
         documentation = (FUZZ.ROOT / 'docs/FUZZING.md').read_text(encoding='utf-8')
-        for needle in ('tool-call-ref', '--tools ref', '--continue-on-known'):
+        for needle in ('tool-call-ref', '--tools ref'):
             self.assertIn(needle, documentation)
 
     def test_tool_call_ref_seeds_cover_every_nested_shape(self):
@@ -306,23 +306,6 @@ class Coverage(unittest.TestCase):
                         FUZZ.probe(Path('probe'), b'\x00\x00', Path(directory), 1, target, {}, {})
             self.assertEqual(seen[-1], expected)
 
-    def test_known_failure_signatures_are_only_the_issue_6_panics(self):
-        runs_past = ('thread \'main\' (24424) panicked at crates/core/examples/fuzz_tool_call.rs:1156:9:\n'
-                     'rejected attempt 1..190 runs past where it failed (39) without its closer: "x"\n')
-        beyond = ('thread \'main\' (154968) panicked at crates/core/examples/fuzz_tool_call.rs:495:9:\n'
-                  'rejected attempt 218..322 fails at 159, beyond a literal past its end\n')
-        self.assertEqual(FUZZ.known_failure(runs_past), 'issue-6-rejected-span-runs-past-failure')
-        self.assertEqual(FUZZ.known_failure(beyond), 'issue-6-failure-beyond-literal-past-its-end')
-        echoed = ('input: rejected attempt 1..2 runs past where it failed (3)\n'
-                  'thread \'main\' panicked at crates/core/examples/fuzz_tool_call.rs:7:9:\n'
-                  'assertion failed: reasoning blocks overlap\n')
-        for other in ('assertion failed: reasoning blocks overlap',
-                      'a rejected attempt\'s raw bytes are not its range',
-                      'rejected attempt without either phrase', '',
-                      'rejected attempt 1..190 runs past where it failed (39) without a panic line',
-                      echoed):
-            self.assertIsNone(FUZZ.known_failure(other), other)
-
     def _campaign(self, arguments, outcomes):
         """Run `FUZZ.main` over a two-seed fake target whose probe gives
         `outcomes` (a stderr string for a crash, `None` for a pass)."""
@@ -333,6 +316,7 @@ class Coverage(unittest.TestCase):
 
         def fake_probe(binary, data, where, timeout, target, oracle, tool_paths, counts=None):
             stderr = outcomes[seeds.index(data)]
+            (where / 'current.bin').write_bytes(data)
             (where / 'probe.stderr').write_text(stderr or '', encoding='utf-8')
             if stderr is not None:
                 counts['crashes'] += 1
@@ -365,56 +349,22 @@ class Coverage(unittest.TestCase):
     KNOWN = ('thread \'main\' (1) panicked at crates/core/examples/fuzz_tool_call.rs:1156:9:\n'
              'rejected attempt 0..3 runs past where it failed (3) without its closer: ""\n')
 
-    def test_continue_on_known_retains_every_issue_6_input_and_continues(self):
-        directory, error = self._campaign(['--continue-on-known'], [self.KNOWN, None, self.KNOWN])
-        self.assertIsNone(error)
-        report = json.loads((directory / 'report.json').read_text(encoding='utf-8'))
-        self.assertEqual((report['status'], report['executions'], report['crashes']), ('passed', 3, 0))
-        self.assertTrue(report['continue_on_known'])
-        self.assertEqual([entry['execution'] for entry in report['known_failures']], [0, 2])
-        for entry in report['known_failures']:
-            self.assertTrue((directory / 'known-6' / f'{entry["sha256"]}.bin').is_file())
-            self.assertIn('runs past where it failed',
-                          (directory / 'known-6' / f'{entry["sha256"]}.stderr').read_text(encoding='utf-8'))
+    def test_every_probe_panic_stops_the_campaign(self):
+        for diagnostic in (self.KNOWN, 'assertion failed: overlap'):
+            with self.subTest(diagnostic=diagnostic):
+                directory, error = self._campaign([], [diagnostic, None])
+                self.assertIsInstance(error, subprocess.CalledProcessError)
+                report = json.loads((directory / 'report.json').read_text(encoding='utf-8'))
+                self.assertEqual((report['status'], report['executions'], report['crashes']), ('failed', 0, 1))
+                self.assertEqual((directory / 'current.bin').read_bytes(), bytes([0]) * 3)
 
-    def test_without_continue_on_known_the_first_issue_6_panic_stops_the_campaign(self):
-        directory, error = self._campaign([], [self.KNOWN, None])
-        self.assertIsInstance(error, subprocess.CalledProcessError)
-        report = json.loads((directory / 'report.json').read_text(encoding='utf-8'))
-        self.assertEqual((report['status'], report['crashes'], report['known_failures']), ('failed', 1, []))
-        self.assertFalse((directory / 'known-6').exists())
-
-    def test_continue_on_known_still_stops_at_any_other_failure(self):
-        directory, error = self._campaign(['--continue-on-known'], [self.KNOWN, 'assertion failed: overlap'])
-        self.assertIsInstance(error, subprocess.CalledProcessError)
-        report = json.loads((directory / 'report.json').read_text(encoding='utf-8'))
-        self.assertEqual((report['status'], report['crashes']), ('failed', 1))
-        self.assertEqual(len(report['known_failures']), 1)
-
-    def test_a_crash_prints_its_panic_and_classification_to_the_log(self):
+    def test_a_crash_prints_its_panic_to_the_log(self):
         stderr = io.StringIO()
         with patch('sys.stderr', stderr):
             _, error = self._campaign([], [self.KNOWN, None])
         self.assertIsInstance(error, subprocess.CalledProcessError)
-        self.assertIn('Probe crashed at execution 0; known issue signature: '
-                      'issue-6-rejected-span-runs-past-failure', stderr.getvalue())
+        self.assertIn('Probe crashed at execution 0', stderr.getvalue())
         self.assertIn('runs past where it failed', stderr.getvalue())
-
-    def test_an_unknown_crash_is_classified_as_none_in_the_log(self):
-        stderr = io.StringIO()
-        with patch('sys.stderr', stderr):
-            _, error = self._campaign(['--continue-on-known'], ['assertion failed: overlap'])
-        self.assertIsInstance(error, subprocess.CalledProcessError)
-        self.assertIn('known issue signature: none', stderr.getvalue())
-        self.assertIn('assertion failed: overlap', stderr.getvalue())
-
-    def test_a_retained_known_panic_is_named_in_the_log(self):
-        stdout = io.StringIO()
-        with patch('sys.stdout', stdout):
-            _, error = self._campaign(['--continue-on-known'], [self.KNOWN, None])
-        self.assertIsNone(error)
-        self.assertIn('Known issue #6 panic at execution 0 (issue-6-rejected-span-runs-past-failure)',
-                      stdout.getvalue())
 
     def test_byte_input_probe_completes_with_ok_on_invalid_utf8(self):
         document = Coverage().document()

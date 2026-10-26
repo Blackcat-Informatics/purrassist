@@ -287,7 +287,7 @@ make wasm-test   # compare native/WASI recovery, matching, embeddings, Markdown,
 make syntax-oracles  # compare fixed syntax probes to independent compilers
 make benchmark  # recovery quality assertions and latency baseline
 make fuzz       # ten coverage-guided targets and independent pattern/Markdown oracles
-make fuzz-hosted  # the CI and pre-tag fuzz gate (known #6/#11 limitations handled)
+make fuzz-hosted  # the CI and pre-tag fuzz gate (longer timeout for issue #11)
 make resources  # allocations, heap/RSS, latency, artifact size, and uncached build cost
 make package    # Cargo verification and registered source/license archive audit
 make release-gate  # the one release gate, run on the release toolchain by pull requests and release qualification
@@ -297,10 +297,9 @@ Resource profiling is available with `make resources`; see [measurement scope an
 
 Coverage-guided campaigns for each of the ten targets are available with
 `make fuzz TARGET=<target>` (for example `TARGET=json`); see
-[properties, replay, and qualification limits](docs/FUZZING.md). The default
-`make fuzz` currently stops on the issue #11 and #6 signatures, listed under
+[properties, replay, and qualification limits](docs/FUZZING.md). The issue #11 slow input is listed under
 [known limitations](docs/QUALIFICATION.md#known-limitations); `make fuzz-hosted`
-completes every target with those limitations retained and named.
+gives `tool-call-ref` a longer timeout. Every probe panic fails the campaign.
 
 ## Conformance
 

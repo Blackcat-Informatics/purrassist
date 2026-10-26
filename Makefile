@@ -70,7 +70,7 @@ resources:
 # (see docs/FUZZING.md); FUZZ_ARGS forwards to scripts/fuzz.py (--iterations,
 # --seed, --timeout, --replay). With no TARGET, every target runs once at the
 # documented smoke count (scripts/fuzz.py's default of 1,000 mutations),
-# ignoring FUZZ_ARGS, so the run stays deterministic across all ten targets. `--continue-on-known` (issue #6 isolation) is never passed here.
+# ignoring FUZZ_ARGS, so the run stays deterministic across all ten targets.
 fuzz:
 	python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-fuzz.py
 	python3 scripts/test-fuzz-feedback.py
@@ -84,18 +84,14 @@ fuzz:
 	fi
 
 # The CI and pre-tag fuzz gate (docs/RELEASE.md): every target at the smoke
-# count, with the accepted 0.1.0 limitations handled rather than ending the
-# run. The tool-call targets pass --continue-on-known, which retains and names
-# each issue #6 panic while any other failure still stops the campaign, and
-# tool-call-ref gets the 120 s probe timeout docs/FUZZING.md prescribes for the
-# issue #11 slow input.
+# count, stopping at every probe panic. tool-call-ref gets the 120 s probe
+# timeout docs/FUZZING.md prescribes for the issue #11 slow input.
 fuzz-hosted:
 	python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-fuzz.py
 	python3 scripts/test-fuzz-feedback.py
 	@for target in json markdown schema pattern unified fuzzy matching patch tool-call tool-call-ref; do \
 		case $$target in \
-			tool-call) args='--continue-on-known' ;; \
-			tool-call-ref) args='--continue-on-known --timeout 120' ;; \
+			tool-call-ref) args='--timeout 120' ;; \
 			*) args='' ;; \
 		esac; \
 		echo "== fuzz target: $$target$${args:+ $$args} =="; \
