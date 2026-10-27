@@ -1217,6 +1217,15 @@ impl Governor {
         Ok(())
     }
 
+    /// Preserve a first resource/cancellation refusal for an internal hard bound.
+    pub(crate) fn stop_resource(&mut self, resource: Resource) -> StopReason {
+        let reason = self
+            .check()
+            .err()
+            .unwrap_or(StopReason::BudgetExceeded(resource));
+        self.stopped.get_or_insert(reason).clone()
+    }
+
     /// Charge before performing work or allocating reserved storage.
     /// `InputBytes` and `Depth` check a single admission, rather than accumulate.
     ///
@@ -1243,9 +1252,7 @@ impl Governor {
             Resource::ScratchBytes => unreachable!("handled above"),
         };
         let Some(next) = current.checked_add(amount).filter(|next| *next <= limit) else {
-            let reason = StopReason::BudgetExceeded(resource);
-            self.stopped = Some(reason.clone());
-            return Err(reason);
+            return Err(self.stop_resource(resource));
         };
         match resource {
             Resource::Work => self.usage.work = next,
@@ -1631,6 +1638,14 @@ pub fn format_output_governed(
     arguments: fmt::Arguments<'_>,
     governor: &mut Governor,
 ) -> Result<String, StopReason> {
+    format_scratch_governed(arguments, governor).map(ScratchString::into_string)
+}
+
+/// Keep formatter output transient until its actual publication boundary.
+pub(crate) fn format_scratch_governed(
+    arguments: fmt::Arguments<'_>,
+    governor: &mut Governor,
+) -> Result<ScratchString, StopReason> {
     struct Writer<'a> {
         output: ScratchString,
         governor: &'a mut Governor,
@@ -1677,7 +1692,7 @@ pub fn format_output_governed(
         return Err(StopReason::InvalidInput(message.into_string()));
     }
     governor.check()?;
-    Ok(output.into_string())
+    Ok(output)
 }
 
 #[cfg(test)]

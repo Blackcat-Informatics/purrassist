@@ -538,6 +538,21 @@ bounded containment, full policy synthesis or confinement. Those requirements
 remain under #34/#35; no security decision may use string-prefix comparison as
 a substitute. See [RESOURCES.md](../RESOURCES.md) for the resource model.
 
+## Prepared canonical printing — implemented
+
+`grammar::print::canonical_governed` accepts a caller-prepared `CompiledGrammar`,
+call/result/declaration root, borrowed `Values` and grouped bindings. It reuses
+the existing canonical walker and retained derivative automata; existing emitter
+callers use this operation after their preparation. Complete bytes and capture
+metadata publish together, with typed semantic/resource refusals and no partial
+output. The `canonical_print` example executes the public operation.
+
+Cold grammar parsing/compilation, full higher-level emitter and seeded/witness
+value preparation, GBNF, CompactSignature, family projection, routing, ledgers
+and tool-graph/CLI integration remain under #36. This prerequisite does not
+close that issue or establish governed native pattern parsing. See
+[RESOURCES.md](../RESOURCES.md) for the prepared-operation contract.
+
 ## Governed JSON emission — implemented
 
 The core's `Node::to_json_governed` and `json::quote_governed` provide the

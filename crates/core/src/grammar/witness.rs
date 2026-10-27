@@ -69,10 +69,10 @@
 //! ```
 use super::codec::CodecKind;
 use super::cost::K_WITNESS;
-use super::print::{Fill, PrintError, Printer, Repetition, fits, unsupported};
+use super::print::{Fill, PrintError, Printer, Repetition, ScratchPrintError, fits, unsupported};
 use super::{CaptureKind, ClassId, CompiledGrammar, DelimiterSetId, Expr};
 use crate::contract::saturating_size as size;
-use crate::contract::{Governor, Resource};
+use crate::contract::{Governor, Resource, ScratchString, format_scratch_governed};
 use crate::json::{Member, Node, Number, Value, quote};
 use crate::pattern::{GenerateOptions, GenerateOutcome};
 use crate::tool_call::{ArgumentShape, ObjectShape, ParameterShape, ValueShape};
@@ -178,7 +178,7 @@ pub fn generate(
     options: WitnessOptions,
     governor: &mut Governor,
 ) -> Result<Witness, WitnessError> {
-    let mut printer = Printer::new(grammar);
+    let mut printer = Printer::new(grammar, governor);
     let mut fill = Seeded {
         options,
         rng: SplitMix64(options.seed),
@@ -190,12 +190,12 @@ pub fn generate(
     };
     let carrier = Carrier {
         codec: printer
-            .arguments_slot(grammar.call())
+            .arguments_slot(grammar.call(), governor)?
             .map(|(codec, _)| codec),
-        pairs: printer.holds(grammar.call()).parameters,
+        pairs: printer.holds(grammar.call(), governor)?.parameters,
     };
     let mut calls = Vec::with_capacity(shapes.len());
-    let grouped = printer.holds(grammar.call()).next;
+    let grouped = printer.holds(grammar.call(), governor)?.next;
     if grouped {
         // The production separates calls with `next`: every call is printed
         // in one instance of it.
@@ -241,9 +241,10 @@ pub fn generate(
         };
         calls.push(plan.finish(carrier, governor)?);
     }
-    let text = String::from_utf8(printer.out).map_err(|error| PrintError::Unrepresentable {
-        text: String::from_utf8_lossy(error.as_bytes()).into_owned(),
-    })?;
+    let text =
+        String::from_utf8(printer.out.into_vec()).map_err(|error| PrintError::Unrepresentable {
+            text: String::from_utf8_lossy(error.as_bytes()).into_owned(),
+        })?;
     Ok(Witness { text, calls })
 }
 
@@ -543,6 +544,10 @@ impl<'g> Seeded<'g> {
     }
 }
 
+fn seeded_unsupported(reason: impl Into<String>) -> ScratchPrintError {
+    unsupported(reason).into()
+}
+
 impl Fill for Seeded<'_> {
     fn name(&self) -> Option<&str> {
         self.call.as_ref().map(|plan| plan.name.as_str())
@@ -550,17 +555,22 @@ impl Fill for Seeded<'_> {
 
     /// By the seed, among the alternatives holding the most call captures
     /// (a name first).
-    fn choose(&mut self, printer: &Printer<'_>, alternatives: &[Expr]) -> usize {
+    fn choose(
+        &mut self,
+        printer: &Printer<'_>,
+        alternatives: &[&Expr],
+        governor: &mut Governor,
+    ) -> Result<usize, ScratchPrintError> {
         let holds: Vec<_> = alternatives
             .iter()
-            .map(|item| printer.holds(item))
-            .collect();
+            .map(|item| printer.holds(item, governor))
+            .collect::<Result<Vec<_>, _>>()?;
         // A repaired form (one that always holds `insert`) is never a
         // witness's choice when a well-formed alternative exists.
         let repaired: Vec<bool> = alternatives
             .iter()
-            .map(|item| printer.repaired(item))
-            .collect();
+            .map(|item| printer.repaired(item, governor))
+            .collect::<Result<Vec<_>, _>>()?;
         let clean = repaired.iter().any(|repaired| !repaired);
         let allowed = |index: usize| !(clean && repaired[index]);
         let best = (0..alternatives.len())
@@ -571,7 +581,7 @@ impl Fill for Seeded<'_> {
         let candidates: Vec<usize> = (0..alternatives.len())
             .filter(|&index| allowed(index) && (holds[index].name, holds[index].count) == best)
             .collect();
-        candidates[self.rng.below(candidates.len())]
+        Ok(candidates[self.rng.below(candidates.len())])
     }
 
     fn repetition(
@@ -580,13 +590,14 @@ impl Fill for Seeded<'_> {
         inner: &Expr,
         min: u32,
         max: Option<u32>,
-    ) -> Result<Repetition, WitnessError> {
-        let holds = printer.holds(inner);
+        governor: &mut Governor,
+    ) -> Result<Repetition, ScratchPrintError> {
+        let holds = printer.holds(inner, governor)?;
         if holds.next {
             // Once per further call of the group.
             let count = self.group.len();
             if !fits(count, min, max) {
-                return Err(unsupported(format!(
+                return Err(seeded_unsupported(format!(
                     "{count} further calls do not fit a repetition of {min}..{max:?}"
                 )));
             }
@@ -607,7 +618,7 @@ impl Fill for Seeded<'_> {
                 })
                 .collect();
             if !fits(occurrences.len(), min, max) {
-                return Err(unsupported(format!(
+                return Err(seeded_unsupported(format!(
                     "{} parameter occurrences do not fit a repetition of {min}..{max:?}",
                     occurrences.len()
                 )));
@@ -616,7 +627,7 @@ impl Fill for Seeded<'_> {
             self.occurrences = occurrences;
             return Ok(Repetition::Parameters(count));
         }
-        let count = if holds.dropped || printer.bare_slot(inner) {
+        let count = if holds.dropped || printer.bare_slot(inner, governor)? {
             // Text a call drops is never part of a well-formed call, and a
             // slot no capture holds has no value to print.
             min
@@ -627,18 +638,18 @@ impl Fill for Seeded<'_> {
             min + extra
         };
         if !fits(count as usize, min, max) {
-            return Err(unsupported(format!(
+            return Err(seeded_unsupported(format!(
                 "a repetition of {min}..{max:?} cannot hold its captures"
             )));
         }
         Ok(Repetition::Times(count))
     }
 
-    fn next_call(&mut self, governor: &mut Governor) -> Result<(), WitnessError> {
+    fn next_call(&mut self, governor: &mut Governor) -> Result<(), ScratchPrintError> {
         let shape = self
             .group
             .pop()
-            .ok_or_else(|| unsupported("a `next` with no further call to print"))?;
+            .ok_or_else(|| seeded_unsupported("a `next` with no further call to print"))?;
         let done = self.call.take().expect("printing a call");
         self.printed.push(done);
         let parameters = self.object_parameters(&shape.arguments, governor)?;
@@ -652,12 +663,17 @@ impl Fill for Seeded<'_> {
         Ok(())
     }
 
-    fn ordinal(&mut self) -> String {
-        self.printed.len().to_string()
+    fn ordinal(&mut self, governor: &mut Governor) -> Result<ScratchString, ScratchPrintError> {
+        governor.charge(Resource::Work, u64::from(usize::BITS))?;
+        Ok(format_scratch_governed(
+            format_args!("{}", self.printed.len()),
+            governor,
+        )?)
     }
 
-    fn composite_id(&mut self, text: &str) {
+    fn composite_id(&mut self, text: &str, _: &mut Governor) -> Result<(), ScratchPrintError> {
         self.call.as_mut().expect("printing a call").id = Some(text.to_owned());
+        Ok(())
     }
 
     fn occurrence(&mut self, occurrence: Option<usize>) {
@@ -671,12 +687,18 @@ impl Fill for Seeded<'_> {
         });
     }
 
-    fn literal(&mut self, capture: CaptureKind, bytes: &[u8]) -> Result<(), WitnessError> {
+    fn literal(
+        &mut self,
+        capture: CaptureKind,
+        bytes: &[u8],
+        _: &mut Governor,
+    ) -> Result<(), ScratchPrintError> {
         let plan = self.plan();
         if capture == CaptureKind::Name && bytes != plan.name.as_bytes() {
             return Err(PrintError::Unrepresentable {
                 text: plan.name.clone(),
-            });
+            }
+            .into());
         }
         Ok(())
     }
@@ -687,26 +709,36 @@ impl Fill for Seeded<'_> {
         id: ClassId,
         capture: Option<CaptureKind>,
         governor: &mut Governor,
-    ) -> Result<String, WitnessError> {
-        Ok(match capture {
-            Some(CaptureKind::Name) => self.plan().name.clone(),
-            Some(CaptureKind::ParamName) => self.current()?.0.name.clone(),
+    ) -> Result<ScratchString, ScratchPrintError> {
+        match capture {
+            Some(CaptureKind::Name) => {
+                prepared_text(&self.plan().name, governor).map_err(Into::into)
+            }
+            Some(CaptureKind::ParamName) => {
+                prepared_text(&self.current()?.0.name, governor).map_err(Into::into)
+            }
             Some(CaptureKind::Id) => {
-                let candidate = format!("call_{:08x}", self.rng.next() & 0xFFFF_FFFF);
-                let text = if printer.accepts(id, candidate.as_bytes(), governor)? {
+                governor.charge(Resource::Work, 13)?;
+                let candidate = format_scratch_governed(
+                    format_args!("call_{:08x}", self.rng.next() & 0xFFFF_FFFF),
+                    governor,
+                )?;
+                let text = if printer.accepts(id, candidate.as_str().as_bytes(), governor)? {
                     candidate
                 } else {
                     let min_len = 4 + self.rng.below(4);
                     printer.generate_class(id, min_len, governor)?
                 };
-                self.call.as_mut().expect("printing a call").id = Some(text.clone());
-                text
+                // The generated plan is witness value preparation, outside the
+                // complete caller-owned canonical printing operation.
+                self.call.as_mut().expect("printing a call").id = Some(text.as_str().to_owned());
+                Ok(text)
             }
             _ => {
                 let min_len = self.rng.below(3);
-                printer.generate_class(id, min_len, governor)?
+                printer.generate_class(id, min_len, governor)
             }
-        })
+        }
     }
 
     fn slot(
@@ -715,8 +747,9 @@ impl Fill for Seeded<'_> {
         codec: CodecKind,
         _delimiters: DelimiterSetId,
         capture: Option<CaptureKind>,
-    ) -> Result<String, WitnessError> {
-        match (capture, codec) {
+        governor: &mut Governor,
+    ) -> Result<ScratchString, ScratchPrintError> {
+        let text: Result<String, WitnessError> = match (capture, codec) {
             (Some(CaptureKind::Arguments), CodecKind::Json | CodecKind::JsonArgs) => {
                 let object = self
                     .plan()
@@ -745,12 +778,26 @@ impl Fill for Seeded<'_> {
                 codec.name(),
                 capture.map(CaptureKind::name)
             ))),
-        }
+        };
+        prepared_text(&text?, governor).map_err(Into::into)
     }
 
-    fn until(&mut self, _capture: Option<CaptureKind>) -> Result<String, WitnessError> {
-        Ok(String::new())
+    fn until(
+        &mut self,
+        _capture: Option<CaptureKind>,
+        governor: &mut Governor,
+    ) -> Result<ScratchString, ScratchPrintError> {
+        Ok(ScratchString::new(governor))
     }
+}
+
+// Reuse admitted transient output for the shared walk. Shape/value production
+// above remains witness preparation, with its unchanged interleaved RNG order.
+fn prepared_text(text: &str, governor: &mut Governor) -> Result<ScratchString, WitnessError> {
+    governor.charge(Resource::Work, size(text.len()))?;
+    let mut output = ScratchString::new(governor);
+    output.push_str(text)?;
+    Ok(output)
 }
 
 /// The value of one occurrence of a (possibly repeatable) parameter.

@@ -53,7 +53,7 @@ fn materialize_prefix(
     mut index: usize,
     prefixes: &ScratchVec<Prefix>,
     governor: &mut Governor,
-) -> Result<String, StopReason> {
+) -> Result<ScratchString, StopReason> {
     let bytes = if index == EMPTY_PREFIX {
         0
     } else {
@@ -73,7 +73,7 @@ fn materialize_prefix(
         text.push(character)?;
     }
     governor.check()?;
-    Ok(text.into_string())
+    Ok(text)
 }
 
 fn copy_text(text: &str, governor: &mut Governor) -> Result<Text, StopReason> {
@@ -109,10 +109,40 @@ impl fmt::Write for EvidenceWriter<'_> {
     }
 }
 
+/// Internal generator results keep their exact buffer reservations until the
+/// actual public pattern boundary or an internal consumer drops them.
+pub(super) enum Generated {
+    Witness(ScratchString),
+    NoCandidate {
+        rule: ScratchString,
+        explanation: ScratchString,
+    },
+}
+impl Generated {
+    fn into_public(self) -> GenerateOutcome {
+        match self {
+            Self::Witness(text) => GenerateOutcome::Witness(text.into_string()),
+            Self::NoCandidate { rule, explanation } => GenerateOutcome::NoCandidate(Evidence {
+                rule: rule.into_string(),
+                explanation: explanation.into_string(),
+                span: None,
+                destination: String::new(),
+            }),
+        }
+    }
+}
+
 fn no_candidate(
     explanation: fmt::Arguments<'_>,
     governor: &mut Governor,
 ) -> Result<GenerateOutcome, StopReason> {
+    no_candidate_scratch(explanation, governor).map(Generated::into_public)
+}
+
+fn no_candidate_scratch(
+    explanation: fmt::Arguments<'_>,
+    governor: &mut Governor,
+) -> Result<Generated, StopReason> {
     governor.check()?;
     let rule = copy_text("pattern.generate.no-candidate-v1", governor)?;
     let mut writer = EvidenceWriter {
@@ -126,12 +156,10 @@ fn no_candidate(
             .expect("only a scratch failure stops this writer"));
     }
     writer.governor.check()?;
-    Ok(GenerateOutcome::NoCandidate(Evidence {
-        rule: rule.0.into_string(),
-        explanation: writer.text.into_string(),
-        span: None,
-        destination: String::new(),
-    }))
+    Ok(Generated::NoCandidate {
+        rule: rule.0,
+        explanation: writer.text,
+    })
 }
 
 pub(super) fn generate(
@@ -148,7 +176,15 @@ pub(super) fn generate(
     if backtracking {
         return generate_backtrack(pattern, governor, options);
     }
-    generate_derivative(pattern, governor, options)
+    generate_compiled(
+        pattern
+            .compiled
+            .as_ref()
+            .expect("derivative pattern has an automaton"),
+        governor,
+        options,
+    )
+    .map(Generated::into_public)
 }
 
 /// One automaton participating in the product search: its compiled
@@ -172,6 +208,13 @@ fn lane_of<'c>(pattern: &'c Pattern, governor: &mut Governor) -> Result<Lane<'c>
         .compiled
         .as_ref()
         .expect("Engine::Derivative has a compiled automaton");
+    lane_of_compiled(compiled, governor)
+}
+
+fn lane_of_compiled<'c>(
+    compiled: &'c derive::Compiled,
+    governor: &mut Governor,
+) -> Result<Lane<'c>, StopReason> {
     Ok(Lane {
         compiled,
         session: derive::Session::new(compiled, governor)?,
@@ -316,12 +359,13 @@ fn step_lanes(
     }))
 }
 
-fn generate_derivative(
-    pattern: &Pattern,
+pub(super) fn generate_compiled(
+    compiled: &derive::Compiled,
     governor: &mut Governor,
     options: GenerateOptions<'_>,
-) -> Result<GenerateOutcome, StopReason> {
-    let mut target = lane_of(pattern, governor)?;
+) -> Result<Generated, StopReason> {
+    governor.check()?;
+    let mut target = lane_of_compiled(compiled, governor)?;
     let mut avoids = ScratchVec::new(governor);
     for avoid in options.avoid {
         avoids.push(lane_of(avoid, governor)?)?;
@@ -387,7 +431,7 @@ fn generate_derivative(
                     }
                 }
                 if !forbidden {
-                    return Ok(GenerateOutcome::Witness(materialize_prefix(
+                    return Ok(Generated::Witness(materialize_prefix(
                         *witness, &prefixes, governor,
                     )?));
                 }
@@ -400,7 +444,7 @@ fn generate_derivative(
             current_set.values.sort_unstable();
             current_set.values.dedup();
             if seen_state_sets.get(&current_set).is_some() {
-                return no_candidate(
+                return no_candidate_scratch(
                     format_args!(
                         "the language is empty within these bounds: the reachable state set has cycled back to one already checked for acceptance without ever satisfying it, so no longer witness can ever satisfy it either"
                     ),
@@ -410,7 +454,7 @@ fn generate_derivative(
             seen_state_sets.insert(current_set, ())?;
         }
         if options.max_len.is_some_and(|max| length >= max) {
-            return no_candidate(
+            return no_candidate_scratch(
                 format_args!(
                     "no witness of length <= {} exists: the search of the product automaton (this pattern and its {} `avoid` pattern(s)) exhausted every reachable state without ever satisfying the acceptance condition",
                     options.max_len.unwrap_or_default(),
@@ -428,7 +472,7 @@ fn generate_derivative(
             governor,
         )?;
         if next_frontier.values.is_empty() {
-            return no_candidate(
+            return no_candidate_scratch(
                 format_args!(
                     "the language is empty: the product automaton (this pattern and every `avoid` pattern) has no reachable accepting state"
                 ),

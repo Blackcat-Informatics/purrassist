@@ -1272,8 +1272,36 @@ publish no partial string.
 
 Caller-owned source/tool preparation is separate. No intermediate quoted or
 concatenated strings are created by this wire-output path. Prompt-dialect
-printing retains its existing narrower contract; this change does not govern
-its temporary storage or cold built-in grammar preparation.
+printing has the separate prepared-operation contract below; cold built-in
+grammar preparation remains caller-owned.
+
+## Prepared canonical grammar printing
+
+`grammar::print::canonical_governed` accepts a compiled grammar, one root and
+borrowed `Values`/group bindings. It admits each original text and recursive
+parameter value under this governor before walking. `InputBytes` checks each
+individual input size. Expression and metadata visits charge `K_PRINT` work and
+check depth; all traversals share a fixed aggregate ceiling of 128 in addition
+to the caller's depth budget. Crossing either limit returns the original sticky
+`BudgetExceeded(Depth)` cause.
+
+Borrowed choice selections and group storage, JSON serialization/quoting,
+delimiter guards, ordinal formatting, composite ids, diagnostics, generated
+class members and final output use admitted fallible storage. Transient owners
+release their exact reservations on failure or after copying; only published
+output or an escaping diagnostic retains its reservation. Cancellation and
+resource failures publish no partial output. Internal emitter probes retain
+scratch ownership until final publication.
+
+Uncaptured classes use the retained automaton through the existing derivative
+BFS. Length bounds count Unicode scalars: attempts use the requested minimum,
+then zero, each with a maximum sixteen scalars larger. Empty candidates remain
+rejected; bounded failure remains `PrintError::NoCandidate`.
+
+Cold grammar/parser/automaton preparation, existing higher-level emitter request
+preparation and seeded/witness value generation remain outside this operation.
+The shared seeded walker preserves its existing random consumption order; this
+does not establish complete governed witness generation or close #36.
 
 ## Standalone file fragments
 

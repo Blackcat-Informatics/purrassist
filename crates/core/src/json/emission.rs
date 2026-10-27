@@ -171,8 +171,12 @@ impl<'g> Governed<'g> {
 
     /// Publish only the complete output after the final cancellation check.
     pub(crate) fn finish(self) -> Result<String, StopReason> {
+        self.finish_scratch().map(ScratchString::into_string)
+    }
+
+    pub(crate) fn finish_scratch(self) -> Result<ScratchString, StopReason> {
         self.governor.check()?;
-        Ok(self.output.into_string())
+        Ok(self.output)
     }
 }
 
@@ -254,6 +258,13 @@ pub(super) fn quote(input: &str, output: &mut String) {
 }
 
 pub(super) fn to_json_governed(node: &Node, governor: &mut Governor) -> Result<String, StopReason> {
+    to_json_scratch(node, governor).map(ScratchString::into_string)
+}
+
+pub(super) fn to_json_scratch(
+    node: &Node,
+    governor: &mut Governor,
+) -> Result<ScratchString, StopReason> {
     governor.charge(Resource::Depth, 0)?;
     let output = ScratchString::new(governor);
     let mut frames = ScratchVec::new(governor);
@@ -280,15 +291,22 @@ pub(super) fn to_json_governed(node: &Node, governor: &mut Governor) -> Result<S
             }
         }
     }
-    sink.finish()
+    sink.finish_scratch()
 }
 
 pub(super) fn quote_governed(input: &str, governor: &mut Governor) -> Result<String, StopReason> {
+    quote_scratch(input, governor).map(ScratchString::into_string)
+}
+
+pub(super) fn quote_scratch(
+    input: &str,
+    governor: &mut Governor,
+) -> Result<ScratchString, StopReason> {
     governor.charge(Resource::Depth, 0)?;
     governor.charge(Resource::Work, 1)?;
     let mut sink = Governed::new(governor)?;
     sink.quoted(input)?;
-    sink.finish()
+    sink.finish_scratch()
 }
 
 #[cfg(test)]
