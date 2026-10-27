@@ -159,3 +159,28 @@ signal/ptrace mediation metadata, without attesting host configuration or the
 other process's permission. Run `cargo run -p purrassist-toolgraph --example
 ipc_rules` for the actual consumer. Graph admission, conflicts, complete
 synthesis, trust and host confinement remain original #34/#35 requirements.
+
+`CapabilityRule` and `MountRule` render standalone governed privilege fragments
+from original borrowed field text. Capability names use the closed ABI `3.0`
+forty-name table. Single safe grants and all named denials retain audit/deny
+qualifiers; all fourteen normative dangerous grants are refused.
+`dangerous_capability_denials` emits that complete explicit deny baseline in
+normative order with an empty allow set. `checkpoint_restore` is a typed
+unsupported-target refusal: native ABI compatibility lowering to `sys_admin`
+must never broaden the requested permission.
+
+Mount rules accept exactly `mount`, `remount`, `umount` and `pivot_root` and
+require explicit denial. Requested allows and unknown text are refused; no
+path, option or transition semantics are accepted and discarded. Each operation
+readmits original rule and field inputs under the current governor, admits
+bounded table/formatter computation and fallible writes, and checks final
+cancellation before complete publication. Artifacts retain original identities
+and explicit `3.0`/`caps` or `3.0`/`mount` target metadata. This is no running-kernel
+or loaded-policy attestation.
+
+Run `cargo run -p purrassist-toolgraph --example privilege_rules` for the actual
+consumer: all named denials, every safe grant, the complete dangerous-capability
+baseline and all four mount denials. The executable owns its offline fixture
+envelopes. Graph-wide baseline composition, static admission, full v3/v4 synthesis,
+authenticated trust and host confinement remain under #34/#35. Rlimit and import
+families remain required by the parent contract.

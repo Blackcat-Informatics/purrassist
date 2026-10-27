@@ -12,6 +12,7 @@ mod file_rule;
 mod glob_language;
 mod internet;
 mod ipc;
+mod privilege_rule;
 mod socket_access;
 mod unix;
 mod vocab;
@@ -53,4 +54,9 @@ pub use file_rule::{
 pub use ipc::{
     IpcError, IpcFragment, IpcRequirement, PtraceAccessSet, PtraceRule, SignalAccessSet,
     SignalRule, SignalSet,
+};
+
+pub use privilege_rule::{
+    CapabilityBaseline, CapabilityFragment, CapabilityRule, MountFragment, MountRule,
+    PrivilegeError, PrivilegeRequirement, dangerous_capability_denials,
 };
