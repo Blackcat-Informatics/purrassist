@@ -6,6 +6,29 @@ The computational core has no third-party Cargo dependencies. JSON parsing,
 exact decimals, schema evaluation, regex matching, normalization algorithms,
 edit distances, phonetics, recovery search, and receipts are first-party Rust.
 
+The unpublished `purrassist-toolgraph` foundation uses `purrdf-core` for native
+IRI validation and the shared loss registry, and `purrdf-shapes` for its one
+namespace table. Both use exact Git revision
+`2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26` of the public PurRDF repository.
+The resolved all-target normal/build closure adds 19 PurRDF packages and
+41 registry packages to this workspace's existing inventory. Every resolved
+package and its shortest dependency path is registered in
+`vendor/dependencies.json` and `scripts/data/dependency-baseline.json`, with
+byte-preserved license notices under `vendor/licenses/`.
+
+The three PurRDF first-party grants are retained alongside Unicode-3.0 notices
+for embedded Unicode data. The lexical crate additionally retains the original
+libyaml/unsafe-libyaml MIT and WHATWG BSD notices for its incorporated emitter
+rules and character-reference data. `r-efi`'s `AUTHORS` file contains its original
+MIT permission and copyright notice and is retained verbatim. These inherited
+notices are not replaced by the local first-party licenses.
+
+The graph crate stays outside the publishable release set until upstream's
+registry source contains the required APIs and packaging is qualified. The
+six existing release packages do not yet link it. The loader delivery retains
+facade/host integration and registry-resolvable packaging acceptance; no registry
+release or publication is claimed by Git-pinned workspace compilation.
+
 `purrassist-derive`, the procedural-macro crate behind
 `#[derive(ToolDefinition)]` and `#[derive(ToolEnum)]`, also has no third-party
 dependencies, and no `syn`, `quote` or `proc-macro2`: it uses only the
@@ -47,7 +70,7 @@ UTS-46 mapping table (`idna/IdnaMappingTable.txt`) the hostname/
 idn-hostname format validators consume. All are Unicode-3.0, pinned by URL
 and SHA-256 in `vendor/unicode/manifest.json` alongside the other Unicode
 Character Database inputs; the generated Rust tables carry the same license
-header. The pattern engine's test262 RegExp `property-escapes/generated`
+header. The pattern engine's `test262` RegExp `property-escapes/generated`
 conformance fixtures (`crates/core/tests/data/test262/`) are vendored
 verbatim at a pinned commit (`834912b0a6b1d973244a5e8a1baad25d6b9ef238`,
 "Add tests for Unicode 17 property escapes") under their original
@@ -161,7 +184,7 @@ POSIX-semantics rename via `FileRenameInfoEx` on a write-through handle,
 falling back to `MoveFileExW` where the filesystem rejects POSIX semantics,
 and `FlushFileBuffers` for directory metadata flush. No provider SDK, HTTP
 client, TLS stack, async runtime, or model runtime is linked by this
-dependency; it is the narrowest possible surface for the Win32 calls the
+dependency; it is the narrowest possible surface for the `Win32` calls the
 durability contract requires, since `std::fs` exposes no write-through or
 POSIX-rename-semantics primitive.
 
@@ -178,7 +201,7 @@ raw-pointer writes into a manually allocated, correctly aligned buffer (a
 `Vec<u8>` is not guaranteed aligned for a struct containing a `HANDLE`
 field). Every `unsafe` block carries a `SAFETY` comment. No allocator
 wrapper, client request, or profiler library is linked for this; it is
-first-party code calling public, documented Win32 APIs.
+first-party code calling public, documented `Win32` APIs.
 
 Coverage-guided and differential qualification (`scripts/fuzz.py --target
 <json|markdown|schema|pattern|unified|fuzzy|matching|patch>`, see

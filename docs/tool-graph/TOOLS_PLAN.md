@@ -2,12 +2,22 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Tool graph delivery plan
 
-Status: **specified, not implemented**. This document and [TOOLS.md](TOOLS.md)
-are the Phase 2 deliverable for #32. They do not add dependencies or authorize
-Phase 3. The maintainer must approve both documents; that approval must be
-quoted verbatim on #32 before implementation starts. The approved dependency
-closure below is part of that decision, under [DEPENDENCIES.md](../DEPENDENCIES.md).
-No automatic approval follows from a green check or a merged documentation PR.
+Status: **pipeline specified; caller-input foundations implemented**. This document and [TOOLS.md](TOOLS.md)
+are the Phase 2 deliverable completed in #32. Implementation and necessary
+dependency adoption are authorized, without a separate blocking review step.
+Resolve and register the actual dependency closure under
+[DEPENDENCIES.md](../DEPENDENCIES.md), and preserve the executable acceptance
+below throughout delivery.
+
+The unpublished [`purrassist-toolgraph`](../../crates/toolgraph/README.md) crate
+implements complete vocabulary/loss-profile construction and field-mask parsing.
+It builds one upstream namespace table from validated raw prefix declarations,
+so conflicting entries cannot disappear through upstream deduplication.
+`FieldMask` has private validated storage and a borrowed `FieldMaskKind` view;
+the enum below describes its operations rather than permitting unchecked masks.
+Loader, schema bridge, codec, policy, projection and host execution contracts
+remain planned. Facade/host wiring waits for their complete integration and
+registry-resolvable packaging; it is not claimed by the foundation crate.
 
 ## Scope and ownership
 
@@ -41,8 +51,8 @@ alone does not establish that it includes the fixes for upstream #747–#749.
 
 ## Public model and operation contracts
 
-The following Rust signatures specify the intended public surface; they are
-not claims that these types exist. Domain records retain their original graph
+The following Rust signatures specify the intended public surface; except for
+the caller-input foundation above, they are not claims that these types exist. Domain records retain their original graph
 terms, graph scope and source spans. Identity types have validated private
 constructors, preventing callers from fabricating admitted or executable values.
 All ordered collections use canonical identifiers or explicit source order,
@@ -94,7 +104,7 @@ pub struct ResourceLimits { pub address_space_bytes: u64,
                             pub file_size_bytes: u64, pub processes: u64,
                             pub cpu_seconds: u64, pub open_files: u64 }
 pub struct ContextManagement { pub output_projection: FieldMask,
-                               pub max_output_bytes: u64,
+                               pub output_limit: OutputByteLimit,
                                pub history_retention_turns: u64,
                                pub intent_tags: Vec<String>,
                                pub loading: LoadingStrategy }
@@ -207,9 +217,27 @@ from the admitted FnO implementation, not an invented profile field.
 `true` maps to `Ux`. Both require a trusted, audited waiver for the exact rule;
 `Waiver` preserves `pa:waivedRule`, `pa:reviewer`, `pa:rationale` and
 `pa:waiverSource` rather than deriving trust from a model-supplied string.
-`ContextManagement::max_output_bytes` is exactly the numeric value of
-`pa:maxOutputTokens`, enforced as a conservative byte bound; encoding writes
-that same value back to `maxOutputTokens`, without unit conversion.
+`ContextManagement::output_limit` will use the canonical positive
+`OutputByteLimit`. RDF `pa:maxOutputBytes` and MCP `maxOutputBytes` will preserve
+its exact byte value. The MCP context object will additionally require
+`outputEnforcement: "exact-bytes"`; the enclosing security bundle will require
+`format: "purrassist-toolgraph-v2"`. The codec will reject legacy
+`maxOutputTokens`, even alongside the new byte field; missing or unknown modes,
+duplicate or unknown context fields, zero or out-of-range limits, and unsupported
+bundle versions will fail explicitly. A v1 bundle will not be automatically
+migrated. The loss profile identity will remain `purrassist-toolgraph-v1`.
+
+The canonical checker will measure the complete serialized projected result,
+including quotes, escapes and JSON framing, using exact UTF-8 bytes. Its
+success measurement and `OutputOverBudget` failure will carry unit `Bytes`,
+enforcement `ExactBytes`, configured limit and measured quantity. Failure will
+retain the original output and will not release a truncated substitute. Exact
+byte limits will not accept tokenizer evidence as an override. The context
+codec and runtime bridge will call this one implementation; no parallel
+counting or projection implementation will be introduced. The standalone
+checker alone will not prove the full manifest round trip or host result path.
+Those integrations and their executable evidence will remain required before
+#47 closes.
 
 An output artifact is published only after
 all checks finish. `Projection` carries checks as well as the upstream ledger:
@@ -218,7 +246,7 @@ Entries identify their source constraint so repeated codes remain distinguishabl
 
 ```rust
 impl Vocabulary {
-    pub fn new(namespaces: purrdf_shapes::json_schema::Namespaces,
+    pub fn new(primary_prefix: &str,
                prefixes: PrefixTable, terms: TermBindings,
                losses: purrdf_core::loss::LossProfile)
         -> Result<Self, VocabularyError>;
@@ -283,7 +311,7 @@ pub trait RecoveryBridge {
 `ManifestJson`, `PolicyText`, `Gbnf` and `CompactSignature` are validated owned
 UTF-8 byte wrappers. `Arguments` is the existing lossless core JSON document;
 source bytes and duplicate members remain available. `ModelFamily` has variants
-`Claude`, `Qwen25`, `Qwen3`, `Hermes`, `Llama3`, `Llama4`, `MistralV3`,
+`Claude`, `Qwen25`, `Qwen3`, `Qwen3Coder`, `Hermes`, `Llama3`, `Llama4`, `MistralV3`,
 `MistralV11`, `DeepSeekV3`, `DeepSeekV31` and `CompactTypeScript`. `PromptBlock`
 contains placement (`ToolsField` or `SystemPrompt`), declaration bytes, family
 and dialect identity. `Selection` contains ordered tool ids and includes all
@@ -453,9 +481,8 @@ the FnO bindings for original SHACL and policy checking.
 The original compiler and SHACL source remain retained evidence; no local
 keyword/key rewriting, typed-definition reconstruction or alternate schema
 validator substitutes for this prerequisite. The original namespace table is
-still passed to the upstream compiler. The dependency approval described below
-does not pre-approve a changed G7 package closure: resolve its actual source and
-check any closure drift before #33. Phase 3 cannot close #33 until the upstream
+still passed to the upstream compiler. Resolve the actual G7 source and check
+any drift from the inspected dependency closure before #33. Phase 3 cannot close #33 until the upstream
 API exists, its plain-profile consumer tests pass, and the integration is wired.
 
 ## FnO admission view and source ownership
@@ -545,14 +572,25 @@ cannot expose the needed production, extend the existing core grammar API;
 never add a second handwritten envelope implementation. Prompt declarations
 reuse `DeclarationForm`, and compact output reuses the TypeScript lane.
 
-`TokenCounter` is a caller-supplied deterministic tighter bound, not a license to
-exceed the configured byte ceiling without proof about its tokenizer. The default
-uses UTF-8 byte length as a sound upper bound for byte-level BPE. The ceiling
-includes placement framing and selected declarations. Mandatory `Always` tools
-over budget cause failure; omitted optional tools receive named selection losses.
-A UTF-8 truncation never cuts a code point or leaves malformed JSON. Output
-field-mask application and history removal are recorded transformations; byte
-limits apply to the complete returned representation, including JSON framing.
+Prompt projection will distinguish its exact byte measurement from a
+conservative token upper bound. A caller-supplied deterministic `TokenCounter`
+may tighten the latter with recorded tokenizer identity and exact counted
+representation; it will not override an explicit byte ceiling. The byte-length
+fallback will claim a token bound only for an explicitly admitted byte-level
+encoding with at most one token per input byte, no uncounted implicit special
+tokens, and no representation-expanding preprocessing. All added framing will
+be included. Without those assumptions or a verified applicable counter, token
+accounting will fail explicitly. Exact bytes will not depend on a tokenizer.
+The prompt byte ceiling will include placement framing and selected declarations.
+Mandatory `Always` tools over budget will cause failure; omitted optional tools
+will receive named selection losses.
+
+Tool-result handling will instead enforce `OutputByteLimit` exactly, after
+output validation and field-mask application. History removal and field-mask
+application will be recorded transformations. The complete returned serialized
+representation, including JSON framing, must fit; a larger result will be
+refused while its original remains in the receipt. Neither an exact token
+count nor a conservative token upper bound will substitute for this byte check.
 
 The host uses `aa-exec -p purrassist.tool.<name> -- <cmd>` for standalone tools.
 A dedicated worker enters a hat through the documented `/proc/self/attr/current`
@@ -578,14 +616,14 @@ with driver name `purrassist`, built from the public model types rather than the
 PurRDF-specific driver builder. Gated authorization is distinct from successful
 confined execution, and the final receipt records both outcomes.
 
-## Dependency closure submitted for approval
+## Dependency closure to resolve and register
 
 The dependency proposal is seven direct leaf crates: `purrdf-core`, `purrdf-rdf`,
 `purrdf-shapes`, `purrdf-datalog`, `purrdf-text`, `purrdf-gts` and
 `purrdf-validate`, plus a direct `regex-syntax` edge for HIR lowering. The new
 crate also depends on the existing local `purrassist-core`. No provider SDK,
-model runtime, HTTP client or async runtime is proposed. This section is an
-approval request, not an edit to either dependency registry.
+model runtime, HTTP client or async runtime is proposed. This inspected inventory
+guides adoption; implementation must update the actual dependency registries.
 
 The exact inspected graph was resolved offline using a standalone Cargo probe
 with those seven path dependencies at PurRDF commit
@@ -604,7 +642,7 @@ All PurRDF packages below report version `3.0.1`. At implementation intake,
 resolve a published release containing the three upstream fixes, or use one
 consistent exact Git revision across the seven direct leaf dependencies. Do not
 silently resolve the older registry `3.0.1` instead of the inspected source.
-Reresolution that changes the submitted closure requires an updated approval;
+Reresolution must account for changes to the inspected closure;
 publication additionally requires registry-resolvable dependencies and packaging
 evidence, not just a local path build.
 
@@ -734,13 +772,13 @@ tracker until all five children are complete; #40 remains open through #39.
 
 | Issue / prerequisite | Complete behavior | Focused executable acceptance before its full gate |
 |---|---|---|
-| #32 | Reviewed specification and plan | Extract every Turtle/SRL/JSON/GBNF/AppArmor block from TOOLS.md. Parse Turtle through `purrdf_rdf::parse_dataset` as Turtle 1.2, SRL through `srl::check`, JSON through a strict parser, GBNF through llama.cpp's grammar parser or an explicitly recorded equivalent, and AppArmor through parser 4.1.x `apparmor_parser -QK` without loading policy. Record parser version and exact check scope. Both documents pass `prose-check`. Record maintainer approval verbatim on #32 before Phase 3. |
-| #33; approved #32, upstream #747/#748 and G7 | Pure graph loader and bidirectional MCP codec | Worked example loads to exact typed graph and manifest golden; original graph/reifier scopes preserved; `decode(encode(g))` dataset isomorphism modulo exactly the sound registered ledger on example and generated vocabulary corpus; every `LoadError` variant has invalid input plus neighbouring valid input; field-mask refusals and direct production metadata-augmented `ToolSet` caller exercised, including alias recovery, unchanged unmodeled-schema validation and exact declaration render-back; upstream G7 plain-profile caller tests with exact bare input/output scalar/object/array/closedness semantics and retained original SHACL validation; all-target dependency registry audit; `cargo build -p purrassist-toolgraph --target wasm32-unknown-unknown`; add crate to required WASM build list. |
+| #32 | Reviewed specification and plan | Extract every Turtle/SRL/JSON/GBNF/AppArmor block from TOOLS.md. Parse Turtle through `purrdf_rdf::parse_dataset` as Turtle 1.2, SRL through `srl::check`, JSON through a strict parser, GBNF through llama.cpp's grammar parser or an explicitly recorded equivalent, and AppArmor through parser 4.1.x `apparmor_parser -QK` without loading policy. Record parser version and exact check scope. Both documents pass `prose-check`. Specification delivery is complete; implementation is authorized. |
+| #33; completed #32, upstream #747/#748 and G7 | Pure graph loader and bidirectional MCP codec | Worked example loads to exact typed graph and manifest golden; original graph/reifier scopes preserved; `decode(encode(g))` dataset isomorphism modulo exactly the sound registered ledger on example and generated vocabulary corpus; every `LoadError` variant has invalid input plus neighbouring valid input; v2 manifest round trips preserve exact byte units and enforcement mode, while legacy token fields, v1 bundles, absent/unknown modes and duplicate context fields fail explicitly; field-mask refusals and direct production metadata-augmented `ToolSet` caller exercised, including alias recovery, unchanged unmodeled-schema validation and exact declaration render-back; upstream G7 plain-profile caller tests with exact bare input/output scalar/object/array/closedness semantics and retained original SHACL validation; all-target dependency registry audit; `cargo build -p purrassist-toolgraph --target wasm32-unknown-unknown`; add crate to required WASM build list. |
 | #34; #33, upstream #749 | Static security admission and governed authorization | One negative plus valid neighbour per conflict class (read-only/write and mount, forbidden egress including unix peers, unconfined transitions, dangerous capabilities, hat containment); deterministic SARIF including both source rules and proof; matching user/active tenant permit, foreign user/inactive tenant deny; protected decision-head injection refused; missing or mismatched policy trust registry binding refused and matching binding admitted; tiny ceiling and pre-tripped stop exhaust without permit/deny; deterministic proof/usage and explicit-time/entropy paths. |
 | #35; #33/#34 | Deterministic policy synthesis and Linux confined execution | Worked profiles/hats byte-exact, every golden parsed with `apparmor_parser -QK` 4.1.x; absent parser visibly reports named unmet parser evidence; `/8` refusal and exact-host valid neighbour; root containing `{`, `*` and `@{` escaped or refused; each host failure has typed remedy and proves no invocation occurred; operator-loaded smoke test denies SSH secrets and allows root reads/writes; failed restoration poisons worker. |
-| #36; #33 | GBNF, compact/prompt lanes and deterministic routing | Worked goldens for every family and complete registered ledgers; parser accepts every GBNF; generated accepted JSON validates or fails only named ledgered constraints, including `oneOf` overlap and noninteger numeric restrictions; exact current declaration/envelope reuse; fixed-point route order and id tie-break; complete rendered output bytes at most N, mandatory-tool over-budget refusal, named optional omission losses. |
-| #37; #34/#35/#36 | Real recovery → post-check → authorization → confined dispatch path | Misspelled tool/stringified integer recovery stays within hint tolerances; pattern failure caught; foreign customer denied with proof; valid call has pinned receipt; mutating guesses never executable; deleted post-check fails at load; root/path and stale witness failures prevent execution; manifest graph/artifact substitution fails; field masks, output bytes/history losses recorded; graph-backed registry includes metadata; `gate_tool_calls` fixture executes identically through CLI and MCP, and generated `docs/TOOLS.md` still matches registry. |
-| #39; #38 | Cross-cutting conformance qualification | Full vocabulary round trips; remove emitted constraint mutation detected by ledger checks; per-family GBNF goldens and accepted-value property; AppArmor/SARIF static negatives and `/8` refusal; repeated/reordered-triples byte identities; named worked-example artifact transcript in `make wasm-test` equals frozen native bytes; enabled-host AppArmor smoke record and exact environment in `docs/QUALIFICATION.md`. |
+| #36; #33 | GBNF, compact/prompt lanes and deterministic routing | Worked goldens for every family and complete registered ledgers; parser accepts every GBNF; generated accepted JSON validates or fails only named ledgered constraints, including `oneOf` overlap and noninteger numeric restrictions; exact current declaration/envelope reuse; fixed-point route order and id tie-break; complete prompt bytes at most the explicit byte ceiling, distinct exact-byte and conservative-token receipt fields, refusal of token-bound claims without applicable tokenizer assumptions, mandatory-tool over-budget refusal, named optional omission losses. |
+| #37; #34/#35/#36 | Real recovery → post-check → authorization → confined dispatch path | Misspelled tool/stringified integer recovery stays within hint tolerances; pattern failure caught; foreign customer denied with proof; valid call has pinned receipt; mutating guesses never executable; deleted post-check fails at load; root/path and stale witness failures prevent execution; manifest graph/artifact substitution fails; field masks and history losses recorded; complete projected result bytes obey the exact limit with Bytes/ExactBytes/limit/measured receipts; a result exceeding N bytes with deterministic token count at most N is refused, exactly N bytes is accepted by this check, and N + 1 bytes fails without releasing truncated output; graph-backed registry includes metadata; `gate_tool_calls` fixture executes identically through CLI and MCP, and generated `docs/TOOLS.md` still matches registry. |
+| #39; #38 | Cross-cutting conformance qualification | Full vocabulary and v2 byte-policy manifest round trips; legacy-token/mode rejection and result-byte boundary witnesses through the actual host/CLI/MCP path; separate prompt-token assumption evidence; remove emitted constraint mutation detected by ledger checks; per-family GBNF goldens and accepted-value property; AppArmor/SARIF static negatives and `/8` refusal; repeated/reordered-triples byte identities; named worked-example artifact transcript in `make wasm-test` equals frozen native bytes; enabled-host AppArmor smoke record and exact environment in `docs/QUALIFICATION.md`. |
 
 Every implementation child runs the repository's mandatory `make check`, with
 warnings as errors and normal commit hooks/signing. Use focused real-consumer
@@ -765,13 +803,11 @@ that criterion as unmet and obtain the actual eligible-host run before claiming
 #39 complete. Documentation distinguishes parser success, static admission,
 authorization and actual kernel enforcement throughout.
 
-## Completion and approval record
+## Completion record
 
 The acceptance owner records the exact checks, source revisions, tool versions,
 results and remaining limits in the existing queue/PR, without inventing a second
-qualification ceremony. On completion of Phase 2, publish both complete documents
-for review and stop implementation at the explicit #32 approval boundary.
-Maintainer approval must cover these documents and the dependency closure; the
-literal approval comment on #32 is the authority, not this plan. After approved
-implementation and conformance land, verify actual issue closures and preserve
+qualification ceremony. Specification delivery in #32 is complete. Continue
+authorized implementation, resolve substantive findings and run required gates.
+After implementation and conformance land, verify actual issue closures and preserve
 all remaining parent acceptance until it is proved.

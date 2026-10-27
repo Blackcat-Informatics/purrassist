@@ -3,9 +3,11 @@
 
 //! Caller-owned metadata applied before lossless declaration assembly.
 
+use core::fmt::Write;
+
 use super::definition::{Effects, ObjectSpec, ParameterKind, ParameterSpec, RepairPolicy};
 use super::toolset::{Pending, ToolSetError, invalid, retain_text};
-use crate::contract::{Governor, Resource, ScratchVec, saturating_size as size};
+use crate::contract::{Governor, Resource, ScratchVec, reserve_failure, saturating_size as size};
 
 /// Caller-supplied recovery metadata for one imported MCP tool.
 ///
@@ -154,17 +156,28 @@ fn path_error(tool: &str, detail: &str, path: &[String], governor: &mut Governor
     // Debug string escaping uses at most six output bytes per input byte.
     // Admit every segment before formatting, including ones not yet visited.
     let admitted = (|| {
+        let mut capacity = detail.len().saturating_add(3);
         retain_text(governor, tool.len())?;
-        retain_text(governor, detail.len().saturating_add(3))?;
+        retain_text(governor, capacity)?;
         for segment in path {
-            retain_text(governor, segment.len().saturating_mul(6).saturating_add(4))?;
+            let bytes = segment.len().saturating_mul(6).saturating_add(4);
+            retain_text(governor, bytes)?;
+            capacity = capacity.saturating_add(bytes);
         }
-        Ok::<(), ToolSetError>(())
+        let mut reason = String::new();
+        reason
+            .try_reserve_exact(capacity)
+            .map_err(|error| ToolSetError::Resource(reserve_failure(&error)))?;
+        // String's fmt::Write and these built-in Debug implementations cannot
+        // return fmt::Error. The reserved bound prevents formatter growth.
+        write!(&mut reason, "{detail} {path:?}")
+            .expect("formatting built-in values into String cannot fail");
+        Ok::<String, ToolSetError>(reason)
     })();
-    if let Err(error) = admitted {
-        return error;
+    match admitted {
+        Ok(reason) => invalid(tool, reason),
+        Err(error) => error,
     }
-    invalid(tool, format!("{detail} {path:?}"))
 }
 
 fn equal(left: &str, right: &str, governor: &mut Governor) -> Result<bool, ToolSetError> {

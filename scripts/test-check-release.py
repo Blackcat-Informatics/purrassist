@@ -231,7 +231,8 @@ class WorkflowValidation(unittest.TestCase):
 
 
 INSTALL = 'rustup toolchain install'
-MEMBERS = ('core', 'derive', 'syntax', 'purrassist', 'host', 'cli', 'wasm-harness', 'helper-census')
+MEMBERS = ('core', 'derive', 'syntax', 'purrassist', 'host', 'cli', 'wasm-harness',
+           'helper-census', 'toolgraph')
 TREE_FILES = ('Makefile', 'Cargo.toml', 'rust-toolchain.toml',
               *(f'crates/{member}/Cargo.toml' for member in MEMBERS), '.github/workflows/verify.yml',
               '.github/workflows/release-qualification.yml', '.github/workflows/publish.yml')
