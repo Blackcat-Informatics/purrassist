@@ -475,7 +475,7 @@ impl CompiledTool {
     /// same name, description, and exact parameters text.
     ///
     /// # Errors
-    /// See [`Self::render_declaration_governed`]; the wire forms never fail.
+    /// See [`Self::render_declaration_governed`] for output resource failures.
     ///
     /// ```
     /// use purrassist_core::{Budget, tool_call::{DeclarationForm, ToolSet}};
@@ -498,16 +498,37 @@ impl CompiledTool {
     }
 
     /// Render this tool's declaration in `form` against a caller-owned
-    /// governor (see [`Self::render_declaration`]). The wire forms copy
-    /// text already charged when the tool set was compiled and charge
-    /// nothing; the prompt-dialect forms charge their printing.
+    /// governor (see [`Self::render_declaration`]). The `OpenAi`, `Mcp` and
+    /// `Anthropic` wire forms admit escaping scans, emitted-byte work and
+    /// fallible output-buffer growth before processing them. Same-form wire
+    /// output preserves the original declaration bytes; other wire forms retain
+    /// the original schema spelling. Source/tool preparation is separate.
+    ///
+    /// Prompt-dialect forms retain their existing narrower printing charges;
+    /// their temporary buffers and cold grammar preparation are not covered by
+    /// this wire-output contract.
     ///
     /// # Errors
+    /// Wire forms return [`EmitError::Resource`] for work, output storage,
+    /// allocation or cancellation refusal, without publishing partial output.
+    /// The original cause is preserved; budget refusal and cancellation remain
+    /// sticky on the governor.
     /// For a prompt-dialect form: [`EmitError::Unrepresentable`] when the
     /// description or the parameters text would end its element early (a
     /// Qwen3-Coder description containing `</description>`, a schema
     /// containing `</parameters>` or, for Hermes, `</tools>`), and
     /// [`EmitError::Resource`] on exhaustion or cancellation.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, StopReason, contract::Resource};
+    /// use purrassist_core::tool_call::{DeclarationForm, EmitError, ToolSet};
+    /// let source = r#"{ "name":"read", "inputSchema":{"type":"object"} }"#;
+    /// let tools = ToolSet::from_mcp(source, Budget::default()).unwrap();
+    /// let tool = tools.tool("read").unwrap();
+    /// assert_eq!(tool.render_declaration_governed(DeclarationForm::Mcp, &mut Governor::new(Budget::default())).unwrap(), source);
+    /// let mut starved = Governor::new(Budget { work: 0, ..Budget::default() });
+    /// assert_eq!(tool.render_declaration_governed(DeclarationForm::Mcp, &mut starved), Err(EmitError::Resource(StopReason::BudgetExceeded(Resource::Work))));
+    /// ```
     ///
     /// ```
     /// use purrassist_core::{Budget, Governor, tool_call::{DeclarationForm, EmitError, ToolDefinition, ToolSet}};
@@ -529,23 +550,21 @@ impl CompiledTool {
     ) -> Result<String, EmitError> {
         let parameters = match &self.source {
             ToolSource::Declaration(declaration) if declaration.form() == form => {
-                return Ok(declaration.text().to_owned());
+                let mut output = json::JsonOutput::new(governor)?;
+                output.raw(declaration.text())?;
+                return output.finish().map_err(EmitError::Resource);
             }
             ToolSource::Declaration(declaration) => declaration.parameters_text(),
             ToolSource::Builder => Some(self.schema_text.as_str()),
         };
         let description = self.description.as_deref();
-        form.dialect().map_or_else(
-            || {
-                Ok(adapter::render_canonical(
-                    form,
-                    &self.name,
-                    description,
-                    parameters,
-                ))
-            },
-            |dialect| emit::declaration(&dialect, &self.name, description, parameters, governor),
-        )
+        match form.dialect() {
+            Some(dialect) => {
+                emit::declaration(&dialect, &self.name, description, parameters, governor)
+            }
+            None => adapter::render_canonical(form, &self.name, description, parameters, governor)
+                .map_err(EmitError::Resource),
+        }
     }
 }
 

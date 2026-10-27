@@ -200,7 +200,7 @@ use super::toolset::{
     retain_text, sort_factor,
 };
 use crate::contract::{
-    Budget, Governor, Resource, ScratchCharge, ScratchVec, saturating_size as size,
+    Budget, Governor, Resource, ScratchCharge, ScratchVec, StopReason, saturating_size as size,
 };
 use crate::json::{self, Member, Node, ParseFailure, Value, pointer_segment};
 use crate::schema::{Dialect, Schema};
@@ -658,59 +658,40 @@ impl ToolSet {
     }
 }
 
-/// Compact canonical declaration of a wire `form` (the prompt-dialect forms
-/// are printed by their grammars and render as `OpenAI`-shaped JSON here);
-/// `parameters` is embedded verbatim.
+/// Compact canonical declaration of a wire `form`; `parameters` is embedded
+/// verbatim. The caller selects this path only for the three wire forms.
 pub(super) fn render_canonical(
     form: DeclarationForm,
     name: &str,
     description: Option<&str>,
     parameters: Option<&str>,
-) -> String {
-    let mut fields = format!("\"name\":{}", json::quote(name));
+    governor: &mut Governor,
+) -> Result<String, StopReason> {
+    let mut output = json::JsonOutput::new(governor)?;
+    let wrapped = form == DeclarationForm::OpenAi;
+    output.raw(if wrapped {
+        r#"{"type":"function","function":{"name":"#
+    } else {
+        r#"{"name":"#
+    })?;
+    output.quoted(name)?;
     if let Some(description) = description {
-        fields.push_str(",\"description\":");
-        fields.push_str(&json::quote(description));
+        output.raw(r#","description":"#)?;
+        output.quoted(description)?;
     }
-    let schema = match form {
-        DeclarationForm::OpenAi
-        | DeclarationForm::Qwen3CoderXml
-        | DeclarationForm::Hermes
-        | DeclarationForm::Llama3Json
-        | DeclarationForm::MistralV3
-        | DeclarationForm::MistralV11
-        | DeclarationForm::DeepSeekV31
-        | DeclarationForm::DeepSeekV3
-        | DeclarationForm::KimiK2
-        | DeclarationForm::Harmony
-        | DeclarationForm::BareJson => parameters,
-        DeclarationForm::Mcp | DeclarationForm::Anthropic => {
-            Some(parameters.unwrap_or(NO_PARAMETERS))
-        }
+    let schema = if wrapped {
+        parameters
+    } else {
+        Some(parameters.unwrap_or(NO_PARAMETERS))
     };
     if let Some(schema) = schema {
-        fields.push_str(",\"");
-        fields.push_str(form.parameters_key());
-        fields.push_str("\":");
-        fields.push_str(schema);
+        output.raw(",\"")?;
+        output.raw(form.parameters_key())?;
+        output.raw("\":")?;
+        output.raw(schema)?;
     }
-    match form {
-        DeclarationForm::OpenAi
-        | DeclarationForm::Qwen3CoderXml
-        | DeclarationForm::Hermes
-        | DeclarationForm::Llama3Json
-        | DeclarationForm::MistralV3
-        | DeclarationForm::MistralV11
-        | DeclarationForm::DeepSeekV31
-        | DeclarationForm::DeepSeekV3
-        | DeclarationForm::KimiK2
-        | DeclarationForm::Harmony => {
-            format!("{{\"type\":\"function\",\"function\":{{{fields}}}}}")
-        }
-        DeclarationForm::Mcp | DeclarationForm::Anthropic | DeclarationForm::BareJson => {
-            format!("{{{fields}}}")
-        }
-    }
+    output.raw(if wrapped { "}}" } else { "}" })?;
+    output.finish()
 }
 
 fn adapt(

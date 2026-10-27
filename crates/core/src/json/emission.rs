@@ -5,7 +5,7 @@
 
 use std::convert::Infallible;
 
-use super::{Node, Value};
+use super::{JsonOutput as Governed, Node, Value};
 use crate::contract::{
     Governor, Resource, ScratchCharge, ScratchString, ScratchVec, StopReason, saturating_size,
 };
@@ -151,10 +151,31 @@ impl Sink for Plain<'_> {
     }
 }
 
-struct Governed<'g> {
-    governor: &'g mut Governor,
-    output: ScratchString,
+impl<'g> Governed<'g> {
+    /// One fallible output buffer, shared by structural and declaration writers.
+    pub(crate) fn new(governor: &'g mut Governor) -> Result<Self, StopReason> {
+        governor.check()?;
+        let output = ScratchString::new(governor);
+        Ok(Self { governor, output })
+    }
+
+    /// Append already validated text without reinterpreting its spelling.
+    pub(crate) fn raw(&mut self, text: &str) -> Result<(), StopReason> {
+        self.write(text)
+    }
+
+    /// Append a string through the shared JSON escaping authority.
+    pub(crate) fn quoted(&mut self, text: &str) -> Result<(), StopReason> {
+        quoted(text, self)
+    }
+
+    /// Publish only the complete output after the final cancellation check.
+    pub(crate) fn finish(self) -> Result<String, StopReason> {
+        self.governor.check()?;
+        Ok(self.output.into_string())
+    }
 }
+
 impl Sink for Governed<'_> {
     type Error = StopReason;
     fn scan(&mut self, bytes: usize) -> Result<(), StopReason> {
@@ -259,18 +280,15 @@ pub(super) fn to_json_governed(node: &Node, governor: &mut Governor) -> Result<S
             }
         }
     }
-    sink.governor.check()?;
-    Ok(sink.output.into_string())
+    sink.finish()
 }
 
 pub(super) fn quote_governed(input: &str, governor: &mut Governor) -> Result<String, StopReason> {
     governor.charge(Resource::Depth, 0)?;
     governor.charge(Resource::Work, 1)?;
-    let output = ScratchString::new(governor);
-    let mut sink = Governed { governor, output };
-    quoted(input, &mut sink)?;
-    sink.governor.check()?;
-    Ok(sink.output.into_string())
+    let mut sink = Governed::new(governor)?;
+    sink.quoted(input)?;
+    sink.finish()
 }
 
 #[cfg(test)]

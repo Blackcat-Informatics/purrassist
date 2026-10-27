@@ -2144,3 +2144,156 @@ fn metadata_work_storage_and_cancellation_are_governed() {
         ToolSetError::Resource(StopReason::Cancelled)
     );
 }
+
+#[test]
+fn wire_declaration_output_preserves_source_and_canonical_cross_form_bytes() {
+    let schema =
+        r#"{ "type":"object", "properties":{"amount":{"type":"number","minimum":1.00e2}} }"#;
+    let description = r#""snow ☃\n\u0000\"\\\t""#;
+    let forms = wire_forms("wire", schema).map(|(form, text)| {
+        (
+            form,
+            text.replace(
+                r#""description":"d""#,
+                &format!(r#""description":{description}"#),
+            ),
+        )
+    });
+    for (source_form, canonical) in &forms {
+        let original = canonical.replacen('{', "{ \"vendor\" : {\"kept\":true},\n ", 1);
+        let tools = match source_form {
+            DeclarationForm::OpenAi => ToolSet::from_openai(&original, Budget::default()),
+            DeclarationForm::Mcp => ToolSet::from_mcp(&original, Budget::default()),
+            _ => ToolSet::from_anthropic(&original, Budget::default()),
+        }
+        .expect("real wire adapter accepts the source");
+        let tool = tools.tool("wire").expect("source tool");
+        for (target, expected) in &forms {
+            let mut governor = Governor::new(Budget::default());
+            let rendered = tool
+                .render_declaration_governed(*target, &mut governor)
+                .expect("complete governed output");
+            let expected = if target == source_form {
+                &original
+            } else {
+                expected
+            };
+            assert_eq!(&rendered, expected, "{source_form:?} to {target:?}");
+            assert!(governor.usage().work >= u64::try_from(rendered.len()).unwrap());
+            assert!(governor.usage().peak_scratch_bytes >= u64::try_from(rendered.len()).unwrap());
+            assert_eq!(tool.render_declaration(*target).unwrap(), rendered);
+            assert_eq!(tools.render_declaration("wire", *target).unwrap(), rendered);
+        }
+        assert_eq!(declaration(tool).text(), original);
+    }
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("wire")
+            .description("snow ☃\n\0\"\\\t")
+            .param("amount", Param::integer())],
+        Budget::default(),
+    )
+    .expect("actual builder source");
+    let tool = tools.tool("wire").unwrap();
+    for form in [
+        DeclarationForm::OpenAi,
+        DeclarationForm::Mcp,
+        DeclarationForm::Anthropic,
+    ] {
+        let output = tool
+            .render_declaration_governed(form, &mut Governor::new(Budget::default()))
+            .unwrap();
+        let parsed = json::parse(&output).unwrap();
+        let record = parsed.get("function").unwrap_or(&parsed);
+        assert_eq!(
+            record.get("description").and_then(|node| node.as_str()),
+            Some("snow ☃\n\0\"\\\t")
+        );
+        let key = if form == DeclarationForm::Mcp {
+            "inputSchema"
+        } else if form == DeclarationForm::Anthropic {
+            "input_schema"
+        } else {
+            "parameters"
+        };
+        assert_eq!(record.get(key).unwrap().to_json(), tool.json_schema());
+    }
+}
+
+#[test]
+fn wire_declaration_output_obeys_exact_limits_and_cancellation_for_large_copies() {
+    let description = "\0雪\\".repeat(1024);
+    let schema = format!(
+        r#"{{"type":"object","description":"{}"}}"#,
+        "s".repeat(16384)
+    );
+    let original = format!(
+        r#"{{ "name":"wire", "description":{}, "inputSchema":{schema} }}"#,
+        json::quote(&description)
+    );
+    let tools = ToolSet::from_mcp(&original, Budget::default()).unwrap();
+    let tool = tools.tool("wire").unwrap();
+    for form in [
+        DeclarationForm::Mcp,
+        DeclarationForm::OpenAi,
+        DeclarationForm::Anthropic,
+    ] {
+        let mut governor = Governor::new(Budget::default());
+        let complete = tool
+            .render_declaration_governed(form, &mut governor)
+            .unwrap();
+        let usage = governor.usage();
+        let exact = Budget {
+            work: usage.work,
+            scratch_bytes: usage.peak_scratch_bytes,
+            ..Budget::default()
+        };
+        assert_eq!(
+            tool.render_declaration_governed(form, &mut Governor::new(exact))
+                .unwrap(),
+            complete
+        );
+        for (budget, resource) in [
+            (
+                Budget {
+                    work: exact.work - 1,
+                    ..exact
+                },
+                Resource::Work,
+            ),
+            (
+                Budget {
+                    scratch_bytes: exact.scratch_bytes - 1,
+                    ..exact
+                },
+                Resource::ScratchBytes,
+            ),
+        ] {
+            let mut governor = Governor::new(budget);
+            let reason = StopReason::BudgetExceeded(resource);
+            assert_eq!(
+                tool.render_declaration_governed(form, &mut governor),
+                Err(purrassist_core::tool_call::EmitError::Resource(
+                    reason.clone()
+                ))
+            );
+            assert_eq!(governor.check(), Err(reason));
+            assert_eq!(
+                governor.scratch_meter().live(),
+                0,
+                "refused output is dropped"
+            );
+        }
+        let token = CancellationToken::new();
+        token.cancel();
+        let mut governor = Governor::with_cancellation(exact, token);
+        assert_eq!(
+            tool.render_declaration_governed(form, &mut governor),
+            Err(purrassist_core::tool_call::EmitError::Resource(
+                StopReason::Cancelled
+            ))
+        );
+        assert_eq!(governor.usage().work, 0);
+        assert_eq!(governor.usage().peak_scratch_bytes, 0);
+    }
+    assert_eq!(declaration(tool).text(), original);
+}

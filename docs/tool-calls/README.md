@@ -197,6 +197,27 @@ numbers calls exactly as recovery under that policy does.
 
 ## Policy matrix
 
+### Governed wire declaration output
+
+`CompiledTool::render_declaration_governed` admits output work and fallible
+storage for `DeclarationForm::{OpenAi,Mcp,Anthropic}`. Rendering the source form
+retains its exact bytes, including unknown metadata and schema spelling;
+conversion to another wire form preserves the existing canonical bytes and
+embeds the original schema text. The ordinary `CompiledTool` and `ToolSet`
+rendering methods delegate through this path with the default budget.
+
+The shared JSON writer admits escaping scans and emitted bytes before work,
+and actual buffer growth before allocation. A wire-output refusal returns the
+original `EmitError::Resource` cause without partial output. Source parsing and
+tool compilation have their own admission; the output operation does not
+repeat them. Run `cargo run -p purrassist-core --example wire-declarations` for
+a public consumer using the actual MCP adapter and all three wire targets.
+
+Prompt-dialect printing retains its existing narrower charges. This wire-output
+contract does not establish governance for prompt-printer temporary storage or
+cold grammar preparation, nor complete tool-graph family framing, selection,
+token accounting, loss ledgers or routing. Those remain under #36.
+
 ### Effects select the defaults
 
 | Effects | Default `RepairPolicy` | Default `UnknownParameters` |

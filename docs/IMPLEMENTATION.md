@@ -64,6 +64,14 @@ computational engines remain wasmable.
 - Standard helper-provider adapters and caller-managed endpoints. No model is
   required. Bundled small models remain an evaluation track, not a prerequisite.
 
+Wire declaration output for `OpenAi`, `Mcp` and `Anthropic` now uses the shared
+governed JSON writer through `CompiledTool::render_declaration_governed`.
+Same-form bytes and canonical cross-form/schema bytes are preserved, with
+fallible output storage and atomic typed refusals. The `wire-declarations`
+example exercises the actual MCP adapter and all three targets. Source/tool
+preparation and the existing narrower prompt-printer contract remain separate;
+complete tool-graph family projection and routing remain under #36.
+
 The internal tool-graph crate also admits complete callable FnO bindings from
 caller-prepared upstream catalogs. Its governed checker preserves original
 records and declaration order; the `admit_callable` example exercises the actual

@@ -1257,3 +1257,20 @@ rendered regex text or reparsed policy words are introduced. Its filename
 alphabet excludes NUL; explicit byte classes may contain slash. Source models
 are caller-owned. Permission sets, owner/deny semantics and complete hat
 admission are not established by this standalone language proof.
+
+## Wire declaration output
+
+`CompiledTool::render_declaration_governed` writes the existing `OpenAi`, `Mcp`
+and `Anthropic` forms through the shared JSON output sink. The sink uses one
+`ScratchString`: it admits each emitted segment's byte length as work before
+copying it, and admits actual capacity growth before allocation. Quoted name and
+description values additionally admit their input byte length before the shared
+escaping scan. Original same-form declaration bytes and cross-form embedded
+schema text are copied verbatim without parsing or normalization. A final check
+precedes complete-output publication; failures preserve the original cause and
+publish no partial string.
+
+Caller-owned source/tool preparation is separate. No intermediate quoted or
+concatenated strings are created by this wire-output path. Prompt-dialect
+printing retains its existing narrower contract; this change does not govern
+its temporary storage or cold built-in grammar preparation.
