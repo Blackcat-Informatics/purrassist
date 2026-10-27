@@ -81,6 +81,16 @@ output storage, diagnostics and cancellation share the supplied governor. The
 grammar compilation, higher-level emitter preparation and full seeded/witness
 value generation remain separate; #36 retains those integration requirements.
 
+`FramedPrompt::assemble_bytes` now admits complete explicit prompt framing and
+ordered caller-prepared declarations under one governor and an independent exact
+byte ceiling. Success and typed refusals retain the original source/part
+identities. Checked sizing, fallible output storage and final cancellation keep
+publication atomic. The `framed_prompt_bytes` consumer prepares two real wire
+declarations separately, assembles their tools-array bytes and validates the JSON.
+This byte-only operation does not establish token admission, model acceptance,
+family placement/selection, graph loading, routing or complete projection ledgers;
+those requirements remain under #36 and #47.
+
 The internal tool-graph crate also admits complete callable FnO bindings from
 caller-prepared upstream catalogs. Its governed checker preserves original
 records and declaration order; the `admit_callable` example exercises the actual

@@ -13,6 +13,7 @@ mod glob_language;
 mod internet;
 mod ipc;
 mod privilege_rule;
+mod prompt_bytes;
 mod resource_limits;
 mod socket_access;
 mod unix;
@@ -65,4 +66,8 @@ pub use privilege_rule::{
 pub use resource_limits::{
     ResourceLimitError, ResourceLimitField, ResourceLimitFragment, ResourceLimitProblem,
     ResourceLimitRequirement, ResourceLimits,
+};
+
+pub use prompt_bytes::{
+    FramedPrompt, FramedPromptBytes, PromptByteError, PromptByteFailure, PromptBytePart,
 };
