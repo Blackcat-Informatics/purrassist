@@ -2,12 +2,22 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Tool graph delivery plan
 
-Status: **specified, not implemented**. This document and [TOOLS.md](TOOLS.md)
-are the Phase 2 deliverable for #32. They do not add dependencies or authorize
-Phase 3. The maintainer must approve both documents; that approval must be
-quoted verbatim on #32 before implementation starts. The approved dependency
-closure below is part of that decision, under [DEPENDENCIES.md](../DEPENDENCIES.md).
-No automatic approval follows from a green check or a merged documentation PR.
+Status: **pipeline specified; caller-input foundations implemented**. This document and [TOOLS.md](TOOLS.md)
+are the Phase 2 deliverable completed in #32. Implementation and necessary
+dependency adoption are authorized, without a separate blocking review step.
+Resolve and register the actual dependency closure under
+[DEPENDENCIES.md](../DEPENDENCIES.md), and preserve the executable acceptance
+below throughout delivery.
+
+The unpublished [`purrassist-toolgraph`](../../crates/toolgraph/README.md) crate
+implements complete vocabulary/loss-profile construction and field-mask parsing.
+It builds one upstream namespace table from validated raw prefix declarations,
+so conflicting entries cannot disappear through upstream deduplication.
+`FieldMask` has private validated storage and a borrowed `FieldMaskKind` view;
+the enum below describes its operations rather than permitting unchecked masks.
+Loader, schema bridge, codec, policy, projection and host execution contracts
+remain planned. Facade/host wiring waits for their complete integration and
+registry-resolvable packaging; it is not claimed by the foundation crate.
 
 ## Scope and ownership
 
@@ -41,8 +51,8 @@ alone does not establish that it includes the fixes for upstream #747–#749.
 
 ## Public model and operation contracts
 
-The following Rust signatures specify the intended public surface; they are
-not claims that these types exist. Domain records retain their original graph
+The following Rust signatures specify the intended public surface; except for
+the caller-input foundation above, they are not claims that these types exist. Domain records retain their original graph
 terms, graph scope and source spans. Identity types have validated private
 constructors, preventing callers from fabricating admitted or executable values.
 All ordered collections use canonical identifiers or explicit source order,
@@ -218,7 +228,7 @@ Entries identify their source constraint so repeated codes remain distinguishabl
 
 ```rust
 impl Vocabulary {
-    pub fn new(namespaces: purrdf_shapes::json_schema::Namespaces,
+    pub fn new(primary_prefix: &str,
                prefixes: PrefixTable, terms: TermBindings,
                losses: purrdf_core::loss::LossProfile)
         -> Result<Self, VocabularyError>;
@@ -283,7 +293,7 @@ pub trait RecoveryBridge {
 `ManifestJson`, `PolicyText`, `Gbnf` and `CompactSignature` are validated owned
 UTF-8 byte wrappers. `Arguments` is the existing lossless core JSON document;
 source bytes and duplicate members remain available. `ModelFamily` has variants
-`Claude`, `Qwen25`, `Qwen3`, `Hermes`, `Llama3`, `Llama4`, `MistralV3`,
+`Claude`, `Qwen25`, `Qwen3`, `Qwen3Coder`, `Hermes`, `Llama3`, `Llama4`, `MistralV3`,
 `MistralV11`, `DeepSeekV3`, `DeepSeekV31` and `CompactTypeScript`. `PromptBlock`
 contains placement (`ToolsField` or `SystemPrompt`), declaration bytes, family
 and dialect identity. `Selection` contains ordered tool ids and includes all
@@ -453,9 +463,8 @@ the FnO bindings for original SHACL and policy checking.
 The original compiler and SHACL source remain retained evidence; no local
 keyword/key rewriting, typed-definition reconstruction or alternate schema
 validator substitutes for this prerequisite. The original namespace table is
-still passed to the upstream compiler. The dependency approval described below
-does not pre-approve a changed G7 package closure: resolve its actual source and
-check any closure drift before #33. Phase 3 cannot close #33 until the upstream
+still passed to the upstream compiler. Resolve the actual G7 source and check
+any drift from the inspected dependency closure before #33. Phase 3 cannot close #33 until the upstream
 API exists, its plain-profile consumer tests pass, and the integration is wired.
 
 ## FnO admission view and source ownership
@@ -578,14 +587,14 @@ with driver name `purrassist`, built from the public model types rather than the
 PurRDF-specific driver builder. Gated authorization is distinct from successful
 confined execution, and the final receipt records both outcomes.
 
-## Dependency closure submitted for approval
+## Dependency closure to resolve and register
 
 The dependency proposal is seven direct leaf crates: `purrdf-core`, `purrdf-rdf`,
 `purrdf-shapes`, `purrdf-datalog`, `purrdf-text`, `purrdf-gts` and
 `purrdf-validate`, plus a direct `regex-syntax` edge for HIR lowering. The new
 crate also depends on the existing local `purrassist-core`. No provider SDK,
-model runtime, HTTP client or async runtime is proposed. This section is an
-approval request, not an edit to either dependency registry.
+model runtime, HTTP client or async runtime is proposed. This inspected inventory
+guides adoption; implementation must update the actual dependency registries.
 
 The exact inspected graph was resolved offline using a standalone Cargo probe
 with those seven path dependencies at PurRDF commit
@@ -604,7 +613,7 @@ All PurRDF packages below report version `3.0.1`. At implementation intake,
 resolve a published release containing the three upstream fixes, or use one
 consistent exact Git revision across the seven direct leaf dependencies. Do not
 silently resolve the older registry `3.0.1` instead of the inspected source.
-Reresolution that changes the submitted closure requires an updated approval;
+Reresolution must account for changes to the inspected closure;
 publication additionally requires registry-resolvable dependencies and packaging
 evidence, not just a local path build.
 
@@ -734,8 +743,8 @@ tracker until all five children are complete; #40 remains open through #39.
 
 | Issue / prerequisite | Complete behavior | Focused executable acceptance before its full gate |
 |---|---|---|
-| #32 | Reviewed specification and plan | Extract every Turtle/SRL/JSON/GBNF/AppArmor block from TOOLS.md. Parse Turtle through `purrdf_rdf::parse_dataset` as Turtle 1.2, SRL through `srl::check`, JSON through a strict parser, GBNF through llama.cpp's grammar parser or an explicitly recorded equivalent, and AppArmor through parser 4.1.x `apparmor_parser -QK` without loading policy. Record parser version and exact check scope. Both documents pass `prose-check`. Record maintainer approval verbatim on #32 before Phase 3. |
-| #33; approved #32, upstream #747/#748 and G7 | Pure graph loader and bidirectional MCP codec | Worked example loads to exact typed graph and manifest golden; original graph/reifier scopes preserved; `decode(encode(g))` dataset isomorphism modulo exactly the sound registered ledger on example and generated vocabulary corpus; every `LoadError` variant has invalid input plus neighbouring valid input; field-mask refusals and direct production metadata-augmented `ToolSet` caller exercised, including alias recovery, unchanged unmodeled-schema validation and exact declaration render-back; upstream G7 plain-profile caller tests with exact bare input/output scalar/object/array/closedness semantics and retained original SHACL validation; all-target dependency registry audit; `cargo build -p purrassist-toolgraph --target wasm32-unknown-unknown`; add crate to required WASM build list. |
+| #32 | Reviewed specification and plan | Extract every Turtle/SRL/JSON/GBNF/AppArmor block from TOOLS.md. Parse Turtle through `purrdf_rdf::parse_dataset` as Turtle 1.2, SRL through `srl::check`, JSON through a strict parser, GBNF through llama.cpp's grammar parser or an explicitly recorded equivalent, and AppArmor through parser 4.1.x `apparmor_parser -QK` without loading policy. Record parser version and exact check scope. Both documents pass `prose-check`. Specification delivery is complete; implementation is authorized. |
+| #33; completed #32, upstream #747/#748 and G7 | Pure graph loader and bidirectional MCP codec | Worked example loads to exact typed graph and manifest golden; original graph/reifier scopes preserved; `decode(encode(g))` dataset isomorphism modulo exactly the sound registered ledger on example and generated vocabulary corpus; every `LoadError` variant has invalid input plus neighbouring valid input; field-mask refusals and direct production metadata-augmented `ToolSet` caller exercised, including alias recovery, unchanged unmodeled-schema validation and exact declaration render-back; upstream G7 plain-profile caller tests with exact bare input/output scalar/object/array/closedness semantics and retained original SHACL validation; all-target dependency registry audit; `cargo build -p purrassist-toolgraph --target wasm32-unknown-unknown`; add crate to required WASM build list. |
 | #34; #33, upstream #749 | Static security admission and governed authorization | One negative plus valid neighbour per conflict class (read-only/write and mount, forbidden egress including unix peers, unconfined transitions, dangerous capabilities, hat containment); deterministic SARIF including both source rules and proof; matching user/active tenant permit, foreign user/inactive tenant deny; protected decision-head injection refused; missing or mismatched policy trust registry binding refused and matching binding admitted; tiny ceiling and pre-tripped stop exhaust without permit/deny; deterministic proof/usage and explicit-time/entropy paths. |
 | #35; #33/#34 | Deterministic policy synthesis and Linux confined execution | Worked profiles/hats byte-exact, every golden parsed with `apparmor_parser -QK` 4.1.x; absent parser visibly reports named unmet parser evidence; `/8` refusal and exact-host valid neighbour; root containing `{`, `*` and `@{` escaped or refused; each host failure has typed remedy and proves no invocation occurred; operator-loaded smoke test denies SSH secrets and allows root reads/writes; failed restoration poisons worker. |
 | #36; #33 | GBNF, compact/prompt lanes and deterministic routing | Worked goldens for every family and complete registered ledgers; parser accepts every GBNF; generated accepted JSON validates or fails only named ledgered constraints, including `oneOf` overlap and noninteger numeric restrictions; exact current declaration/envelope reuse; fixed-point route order and id tie-break; complete rendered output bytes at most N, mandatory-tool over-budget refusal, named optional omission losses. |
@@ -765,13 +774,11 @@ that criterion as unmet and obtain the actual eligible-host run before claiming
 #39 complete. Documentation distinguishes parser success, static admission,
 authorization and actual kernel enforcement throughout.
 
-## Completion and approval record
+## Completion record
 
 The acceptance owner records the exact checks, source revisions, tool versions,
 results and remaining limits in the existing queue/PR, without inventing a second
-qualification ceremony. On completion of Phase 2, publish both complete documents
-for review and stop implementation at the explicit #32 approval boundary.
-Maintainer approval must cover these documents and the dependency closure; the
-literal approval comment on #32 is the authority, not this plan. After approved
-implementation and conformance land, verify actual issue closures and preserve
+qualification ceremony. Specification delivery in #32 is complete. Continue
+authorized implementation, resolve substantive findings and run required gates.
+After implementation and conformance land, verify actual issue closures and preserve
 all remaining parent acceptance until it is proved.

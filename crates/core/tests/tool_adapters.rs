@@ -2053,6 +2053,27 @@ fn metadata_refuses_unknown_duplicate_and_colliding_hints() {
 }
 
 #[test]
+fn metadata_diagnostic_backing_storage_is_admitted() {
+    let retained = |suffix: &str| {
+        let metadata = [metadata_for(&["absent", suffix], &[])];
+        let mut governor = Governor::new(Budget::default());
+        let error =
+            ToolSet::from_mcp_with_metadata_governed(METADATA_MCP, &metadata, &mut governor)
+                .unwrap_err();
+        let ToolSetError::InvalidDefinition { reason, .. } = error else {
+            panic!("expected a path diagnostic: {error:?}");
+        };
+        (governor.usage().total_scratch_charged, reason.capacity())
+    };
+    let (baseline_charge, baseline_capacity) = retained("");
+    let (charge, capacity) = retained(&"\u{7f}".repeat(1000));
+    assert!(
+        u64::try_from(capacity - baseline_capacity).unwrap() <= charge - baseline_charge,
+        "diagnostic backing growth exceeds its scratch admission",
+    );
+}
+
+#[test]
 fn metadata_work_storage_and_cancellation_are_governed() {
     // Even an unknown name against an empty set must admit the error payload
     // before copying caller-owned text into a diagnostic.

@@ -101,6 +101,10 @@ Core operations are synchronous and resumable around supplied helper responses.
   acceptance transcript harness.
 - `purrassist-helper-census`: internal, unpublished structural duplicate
   functionality census and helper ledger checks.
+- `purrassist-toolgraph`: internal, unpublished pure vocabulary/loss-profile constructors
+  and context field-mask parser. Graph loading, schema projection, codecs,
+  authorization and execution remain planned. Exact upstream Git dependencies
+  keep it outside the publishable facade until registry packaging is qualified.
 
 ## Required delivery sequence
 

@@ -13,6 +13,10 @@ import tarfile
 import urllib.request
 
 ROOT = Path(__file__).resolve().parent.parent
+# Graph vocabulary/context constructors have no target-specific execution path.
+# Compile the pure leaf crate here; native tests own its general semantics.
+subprocess.run(['cargo', 'build', '-p', 'purrassist-toolgraph', '--locked',
+                '--target', 'wasm32-unknown-unknown'], cwd=ROOT, check=True)
 node_version = next(entry['version'] for entry in json.loads(
     (ROOT / 'vendor/tooling.json').read_text()) if entry['name'] == 'node')
 actual_node_version = subprocess.check_output(['node', '--version'], text=True).strip()

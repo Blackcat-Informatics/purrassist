@@ -14,7 +14,8 @@ BASELINE = 'scripts/data/dependency-baseline.json'
 CORE_PACKAGE = 'purrassist-core'
 DERIVE_PACKAGE = 'purrassist-derive'
 # Source trees held to the ambient-access rule, with the crate named in each report.
-AMBIENT_FREE_SOURCES = [('crates/core/src', CORE_PACKAGE), ('crates/derive/src', DERIVE_PACKAGE)]
+AMBIENT_FREE_SOURCES = [('crates/core/src', CORE_PACKAGE), ('crates/derive/src', DERIVE_PACKAGE),
+                        ('crates/toolgraph/src', 'purrassist-toolgraph')]
 NETWORK_DENYLIST = re.compile(
     r'(hyper.*|reqwest|h2|h3.*|http|http-body.*|tokio.*|mio|async-std|async-io|smol|socket2'
     r'|rustls.*|native-tls|openssl.*|ureq|curl.*|isahc|surf|quinn.*|tonic|axum|actix.*|warp)')

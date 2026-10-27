@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrassist-toolgraph"
+publish = false
+description = "Validated caller-owned vocabulary and context contracts for tool graphs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/purrassist-toolgraph"
+keywords = ["rdf", "tools", "mcp", "validation"]
+categories = ["parsing", "data-structures"]
+
+[lints]
+workspace = true
+
+[dependencies]
+purrassist-core.workspace = true
+purrdf-core.workspace = true
+purrdf-shapes.workspace = true

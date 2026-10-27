@@ -112,9 +112,11 @@ Six crates make up the release set, published in this order:
 | `purrassist-host` | Filesystem and helper integration behind both the CLI and the MCP server: root-scoped files, journaled replacement, the shared tool registry. |
 | `purrassist-cli` | The CLI and stdio MCP server: the `purrassist` executable. |
 
-Two workspace crates are internal and not published: `wasm-harness` (native,
-WASI and browser-WASM acceptance transcripts) and `purrassist-helper-census`
-(the duplicate-functionality census).
+Three workspace crates are internal and not published: `wasm-harness` (native,
+WASI and browser-WASM acceptance transcripts), `purrassist-helper-census`
+(the duplicate-functionality census), and `purrassist-toolgraph` (validated
+caller-owned vocabulary, loss profiles and context masks; graph loading and
+execution remain planned).
 
 ## Capabilities
 
@@ -316,7 +318,7 @@ the two dialects applies.
 
 The checked-in main Draft 2020-12 corpus contains 1,301 tests, with another 121
 selected optional cases exercised, plus the complete vendored `optional/format/`
-corpus (878 cases across every 2020-12 format, including RFC 5892/5893 IDNA2008
+corpus (878 cases across every 2020-12 format, including RFC 5892/5893 `IDNA2008`
 contextual and Bidi rules) run under a dialect declaring the format-assertion
 vocabulary. All 929 required Draft-07 cases pass; of 911 Draft-07 `optional/`
 cases (formats judged by their annotation results), 905 pass, and the 6 that

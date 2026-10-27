@@ -614,7 +614,7 @@ fn grown_capacity(len: usize, capacity: usize, additional: usize) -> Option<usiz
     Some(needed.max(capacity.saturating_mul(2)).max(4))
 }
 
-fn reserve_failure(error: &TryReserveError) -> StopReason {
+pub(crate) fn reserve_failure(error: &TryReserveError) -> StopReason {
     StopReason::InvalidInput(format!("scratch allocation failed: {error}"))
 }
 

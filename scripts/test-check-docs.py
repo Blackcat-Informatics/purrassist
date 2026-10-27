@@ -1673,7 +1673,7 @@ class WorkspaceBoundaries(Case):
         (tree.root / 'crates/extra/src').mkdir(parents=True)
         tree.write('crates/extra/Cargo.toml', '[package]\nname = "purrassist-extra"\nversion = "0.1.0"\nedition = "2024"\npublish = false\n')
         tree.write('crates/extra/src/lib.rs', '')
-        tree.replace('Cargo.toml', '"crates/helper-census"]', '"crates/helper-census", "crates/extra"]')
+        tree.replace('Cargo.toml', 'members = [', 'members = ["crates/extra", ')
         self.assertFails(tree.errors(), 'workspace-boundaries', 'purrassist-extra')
 
     def test_no_boundaries_section_is_not_found(self):

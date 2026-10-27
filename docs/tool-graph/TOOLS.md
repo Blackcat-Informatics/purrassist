@@ -2,12 +2,15 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Tool graph specification
 
-Status: **specified, not implemented**. This entire document, including its
-examples and compiler contracts, describes Phase 3 acceptance. The existing
+Status: **pipeline specified; caller-input foundations implemented**. The
+examples and compiler contracts describe Phase 3 acceptance. The existing
 recovery and declaration renderers are implemented; graph loading, authorization,
-projection and confinement are not. Issue #32 is the review stop. The maintainer
-must approve this document and [TOOLS_PLAN.md](TOOLS_PLAN.md), with the approval
-quoted verbatim on #32, before implementation or dependency adoption begins.
+projection and confinement are not. Specification delivery is complete in #32;
+implementation and necessary dependency adoption are authorized. The delivery
+sequence and executable acceptance are in [TOOLS_PLAN.md](TOOLS_PLAN.md).
+The unpublished [`purrassist-toolgraph`](../../crates/toolgraph/README.md) crate
+implements validated vocabulary/loss-profile inputs and the four-form context
+mask parser; it does not yet load or execute a tool graph.
 
 The governing decisions are #40 D1–D10 and the reconnaissance is #31. No
 compiler output authorizes execution. A recovered call passes complete shape
@@ -1107,6 +1110,13 @@ existing `DeclarationForm::CompactTypeScript`. The compact signature alone
 must not be mislabeled as PurRDF's complete TypeScript output. The OpenAI tools
 binding above remains mandatory so the exact schema and recovery envelope are
 shared; a type preamble cannot establish runtime validity.
+
+The combined CompactTypeScript projection uses one target for its tool-graph entries:
+`prompt.compact-typescript/openai-tool-calls.v1`. Its profile registers the
+union of C and P meanings. Each occurrence identifies the original source
+constraint and the affected preamble or declaration component. Original upstream
+ledgers remain unchanged; projectors validate each against its own registered
+source/target pair.
 
 The prompt budget is a sound **byte upper bound**, D5. For every row,
 `bound = UTF8(exact injected content).len()` plus all selected declaration,
