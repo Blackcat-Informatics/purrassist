@@ -6,7 +6,7 @@
 use std::fmt;
 
 use purrassist_core::contract::{Resource, saturating_size as size};
-use purrassist_core::{Budget, Governor, ScratchVec, StopReason};
+use purrassist_core::{Budget, Governor, ScratchString, ScratchVec, StopReason};
 
 /// A validated context mask. Construction accepts only the four documented forms.
 ///
@@ -266,8 +266,8 @@ impl<'a> Parser<'a, '_> {
     }
     fn retain(&mut self, name: &str) -> Result<String, FieldMaskError> {
         self.governor.charge(Resource::Work, size(name.len()))?;
-        self.governor
-            .charge(Resource::ScratchBytes, size(name.len()))?;
-        Ok(name.to_owned())
+        let mut retained = ScratchString::new(self.governor);
+        retained.push_str(name)?;
+        Ok(retained.into_string())
     }
 }
