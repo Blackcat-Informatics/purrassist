@@ -62,6 +62,10 @@ test = true
 name = "tool-call-corpus"
 path = "examples/tool_call_corpus.rs"
 
+[[example]]
+name = "wire-declarations"
+path = "examples/wire_declarations.rs"
+
 # Corpus suites: vendored conformance corpora, generated evaluation corpora,
 # exhaustive oracles and 1 MiB scale runs. `make corpus` (the CI `corpus`
 # job) runs them; `test = false` keeps them out of `cargo test` and `make check`.
