@@ -70,6 +70,12 @@ records and declaration order; the `admit_callable` example exercises the actual
 upstream reader and public API. This does not implement governed RDF/FnO source
 admission, SHACL/G7 integration, graph loading or manifest conversion (#33).
 
+Governed JSON emission shares the existing serializer's structural/escaping
+authority through `Node::to_json_governed` and `json::quote_governed`. The
+`emit_context_json` example exercises context-shaped output with explicit work,
+depth and fallible storage admission. Complete tool-graph context/manifest
+validation and host integration remain outstanding (#47, #33).
+
 ## Shared contracts
 
 Intent + input + context -> candidates -> validation/ranking -> result + receipt.

@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Ordered, source-addressed JSON with exact decimal values.
+mod emission;
 pub mod incremental;
 mod number;
 mod parser;
 use crate::contract::saturating_size as size;
 use crate::contract::{Governor, Resource, ScratchCharge, StopReason};
-use core::fmt::Write;
 use core::ops::Range;
 pub use incremental::recover_syntax;
 pub(crate) use incremental::{Region, recover_region};
@@ -241,13 +241,36 @@ impl Node {
         output
     }
 
+    /// Serialize with governed work, depth and fallible retained output storage.
+    ///
+    /// Emission preserves the bytes of [`Self::to_json`], including duplicate
+    /// members and number spelling. Iterative traversal retains only the active
+    /// ancestor chain. Root depth is zero; member keys do not add a value level.
+    /// Original tree construction is caller-owned. The returned string's backing
+    /// capacity remains charged; no estimate is used to admit its allocation.
+    ///
+    /// # Errors
+    /// Returns resource exhaustion or cancellation without partial successful
+    /// output. The original tree is never modified.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, json};
+    /// let value = json::parse(r#"{"limit":1.00e2,"limit":2}"#).unwrap();
+    /// let mut governor = Governor::new(Budget::default());
+    /// assert_eq!(value.to_json_governed(&mut governor).unwrap(), r#"{"limit":1.00e2,"limit":2}"#);
+    /// ```
+    pub fn to_json_governed(&self, governor: &mut Governor) -> Result<String, StopReason> {
+        emission::to_json_governed(self, governor)
+    }
+
     /// Estimate this value's heap footprint without serializing or cloning it.
     ///
-    /// A conservative upper bound on the bytes a `.clone()` or a `.to_json()`
-    /// call would need, computed by the same O(size) traversal those
-    /// operations perform but without allocating anything: engines charge
-    /// scratch with this estimate *before* cloning or serializing a value
-    /// whose exact size is not otherwise known.
+    /// This traverses the tree without allocating and uses portable storage
+    /// charges. It is not proof of serialized output capacity: JSON escaping
+    /// can expand a string beyond its stored UTF-8 size. Historical callers
+    /// also use this estimate in pre-admission; that usage is not certified by
+    /// this method. Use [`Self::to_json_governed`] for fallible serialization
+    /// that admits its actual retained output and cursor capacity.
     ///
     /// ```
     /// use purrassist_core::json::{Node, Value};
@@ -290,34 +313,7 @@ impl Node {
     }
 
     pub(crate) fn write_json(&self, output: &mut String) {
-        match &self.value {
-            Value::Null => output.push_str("null"),
-            Value::Bool(value) => output.push_str(if *value { "true" } else { "false" }),
-            Value::Number(value) => output.push_str(value.as_str()),
-            Value::String(value) => quote_into(value, output),
-            Value::Array(values) => {
-                output.push('[');
-                for (index, value) in values.iter().enumerate() {
-                    if index > 0 {
-                        output.push(',');
-                    }
-                    value.write_json(output);
-                }
-                output.push(']');
-            }
-            Value::Object(values) => {
-                output.push('{');
-                for (index, member) in values.iter().enumerate() {
-                    if index > 0 {
-                        output.push(',');
-                    }
-                    quote_into(&member.key, output);
-                    output.push(':');
-                    member.value.write_json(output);
-                }
-                output.push('}');
-            }
-        }
+        emission::append(self, output);
     }
 }
 
@@ -330,24 +326,24 @@ pub fn quote(input: &str) -> String {
 }
 
 fn quote_into(input: &str, output: &mut String) {
-    output.push('"');
-    for character in input.chars() {
-        match character {
-            '"' => output.push_str("\\\""),
-            '\\' => output.push_str("\\\\"),
-            '\n' => output.push_str("\\n"),
-            '\r' => output.push_str("\\r"),
-            '\t' => output.push_str("\\t"),
-            '\u{8}' => output.push_str("\\b"),
-            '\u{c}' => output.push_str("\\f"),
-            '\0'..='\u{1f}' => {
-                write!(output, "\\u{:04x}", u32::from(character))
-                    .expect("writing to a String is infallible");
-            }
-            _ => output.push(character),
-        }
-    }
-    output.push('"');
+    emission::quote(input, output);
+}
+
+/// Escape a Unicode string with explicit work, storage and cancellation admission.
+///
+/// Quotes and escapes are identical to [`quote`]. Input construction is caller-owned;
+/// returned output capacity remains charged to the supplied governor.
+///
+/// # Errors
+/// Returns the exact resource/cancellation reason without partial successful output.
+///
+/// ```
+/// use purrassist_core::{Budget, Governor, json};
+/// let mut governor = Governor::new(Budget::default());
+/// assert_eq!(json::quote_governed("line\n", &mut governor).unwrap(), r#""line\n""#);
+/// ```
+pub fn quote_governed(input: &str, governor: &mut Governor) -> Result<String, StopReason> {
+    emission::quote_governed(input, governor)
 }
 
 /// The decoded reference tokens of an RFC 6901 pointer (`None` when it is

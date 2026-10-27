@@ -1152,3 +1152,21 @@ The framework's cold CLI build took 21.671 seconds, built
 35 artifacts and reused 0. Its executable is 9,694,344 bytes
 with SHA-256 `f6621c50e03cc55e0cbf24fe715052eb4b9ebdfc19cfd24a0a230ffbd9be3190`. This is an
 observation of the recorded machine and build conditions, not a speedup claim.
+
+## Governed JSON emission
+
+`json::Node::to_json_governed` and `json::quote_governed` share the existing
+serializer's structural cursor and escaping rules. They charge each cursor
+transition, string scan and emitted byte before work; value depth is checked
+before descent. Root depth is zero and object keys add no value level. A
+fallible `ScratchVec` stores only the active ancestor chain, and `ScratchString`
+admits actual output capacity growth before allocation. Returned string capacity
+remains charged; failure drops temporary storage and exposes no partial success.
+The supplied DOM or input string is caller-owned, outside emission's governance.
+
+Existing convenience and append callers use the same cursor/escaping semantics
+with recursive scheduling and no new heap cursor collection. This preserves
+their bytes and append behavior; it does not certify their historical
+`estimated_bytes` pre-admission assumptions or silently turn them into governed
+operations. No heap-footprint estimate is an output-capacity proof for the new
+APIs, especially when JSON escaping expands control characters.
