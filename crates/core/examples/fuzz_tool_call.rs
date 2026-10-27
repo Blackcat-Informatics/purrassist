@@ -835,13 +835,16 @@ fn check_reemission(tools: &ToolSet, calls: &ToolCalls) {
         }
         let set = DialectSet::new([dialect.clone()], &mut Governor::new(Budget::default()))
             .expect("a one-dialect set");
-        let request = ToolRecoveryRequest::sized_for(Effort::Standard, &printed.output, set);
+        let request = ToolRecoveryRequest::sized_for(Effort::Standard, &printed.output, &set);
         let context = format!(
             "{} re-emission {:?}",
             dialect.id(),
             String::from_utf8_lossy(&printed.output)
         );
-        let again = single(tools.recover(&printed.output, &request).outcome, &context);
+        let again = single(
+            tools.recover(&printed.output, &request, &set).outcome,
+            &context,
+        );
         assert!(again.rejected.is_empty(), "{context}: {:?}", again.rejected);
         assert_eq!(again.calls.len(), printed.calls.len(), "{context}");
         for (index, recovered) in printed.calls.iter().zip(&again.calls) {
@@ -869,7 +872,10 @@ fn check_reemission(tools: &ToolSet, calls: &ToolCalls) {
         if printed.calls.iter().copied().eq(0..printed.calls.len()) {
             assert_eq!(reprinted.output, printed.output, "{context}: unstable");
         }
-        let settled = single(tools.recover(&reprinted.output, &request).outcome, &context);
+        let settled = single(
+            tools.recover(&reprinted.output, &request, &set).outcome,
+            &context,
+        );
         let fixed = emit::emit(tools, &settled, &dialect, &ids).expect("emission settled");
         assert_eq!(fixed.output, reprinted.output, "{context}: no fixed point");
     }
@@ -1014,7 +1020,7 @@ fn read_spans(
     output: &[u8],
     request: &ToolRecoveryRequest,
 ) -> Vec<(Range<usize>, DialectId)> {
-    let Ok(turn) = recognize(tools, request, &[output]).0 else {
+    let Ok(turn) = recognize(tools, request, DialectSet::built_in(), &[output]).0 else {
         return Vec::new();
     };
     let mut spans = Vec::new();
@@ -1473,10 +1479,11 @@ fn slipped(token: &[u8], closer: &[u8]) -> bool {
 fn recognize(
     tools: &ToolSet,
     request: &ToolRecoveryRequest,
+    dialects: &DialectSet,
     chunks: &[&[u8]],
 ) -> (Result<RecognizedTurn, StopReason>, Usage) {
     let mut governor = Governor::new(request.budget);
-    let result = Recognizer::with_tools(&request.dialects, tools, request.reasoning, &mut governor)
+    let result = Recognizer::with_tools(dialects, tools, request.reasoning, &mut governor)
         .and_then(|mut recognizer| {
             for chunk in chunks {
                 recognizer.push(chunk, &mut governor)?;
@@ -1487,12 +1494,17 @@ fn recognize(
 }
 
 fn check_chunking(tools: &ToolSet, output: &[u8], request: &ToolRecoveryRequest, seed: u8) {
-    let whole = recognize(tools, request, &[output]);
+    let whole = recognize(tools, request, DialectSet::built_in(), &[output]);
     let position = usize::from(seed) * (output.len() + 1) / 32;
     let position = position.min(output.len());
-    let halves = recognize(tools, request, &[&output[..position], &output[position..]]);
+    let halves = recognize(
+        tools,
+        request,
+        DialectSet::built_in(),
+        &[&output[..position], &output[position..]],
+    );
     let pieces: Vec<&[u8]> = output.chunks(usize::from(seed % 13) + 1).collect();
-    let chunked = recognize(tools, request, &pieces);
+    let chunked = recognize(tools, request, DialectSet::built_in(), &pieces);
     for (name, other) in [("split", &halves), ("chunked", &chunked)] {
         assert_eq!(other.0, whole.0, "{name} push changed the recognized turn");
         assert_eq!(other.1, whole.1, "{name} push changed the governor usage");
@@ -1505,7 +1517,11 @@ fn check_exhaustion(tools: &ToolSet, output: &[u8], request: &ToolRecoveryReques
         ..Effort::Quick.budget()
     };
     let request = request.clone().budget(tiny);
-    let result = tools.recover(output, &request);
+    let result = tools.recover(
+        output,
+        &request,
+        purrassist_core::tool_call::DialectSet::built_in(),
+    );
     assert_eq!(result.receipt.source, Digest::of(output));
     assert!(result.receipt.usage.work <= tiny.work);
     if output.len() >= 2 {
@@ -1547,6 +1563,7 @@ fn check_reasoning_keeps_calls(
     tools: &ToolSet,
     output: &[u8],
     request: &ToolRecoveryRequest,
+    dialects: &DialectSet,
     result: &AssistResult<ToolCalls>,
 ) {
     if request.reasoning == ReasoningPolicy::AsContent {
@@ -1558,6 +1575,7 @@ fn check_reasoning_keeps_calls(
     let plain = tools.recover(
         output,
         &request.clone().reasoning(ReasoningPolicy::AsContent),
+        dialects,
     );
     let (Outcome::Resolved(plain) | Outcome::BestGuess(plain)) = &plain.outcome else {
         return;
@@ -1568,7 +1586,7 @@ fn check_reasoning_keeps_calls(
     // may end inside the call at its JSON-like closer).
     let mut free: Vec<&[u8]> = Vec::new();
     let mut explicit_openers: Vec<&[u8]> = Vec::new();
-    for dialect in request.dialects.dialects() {
+    for dialect in dialects.dialects() {
         let grammar = dialect.grammar();
         for ((open, close), explicit) in grammar
             .reasoning_markers()
@@ -1616,18 +1634,14 @@ fn check_reasoning_keeps_calls(
 /// with an opener spelling of an allowed dialect) and its closer (it ends
 /// with a closer spelling); no call, embedded call or rejected attempt of
 /// the reading overlaps them.
-fn check_markers_not_calls(
-    output: &[u8],
-    request: &ToolRecoveryRequest,
-    result: &AssistResult<ToolCalls>,
-) {
+fn check_markers_not_calls(output: &[u8], dialects: &DialectSet, result: &AssistResult<ToolCalls>) {
     let readings: Vec<&ToolCalls> = match &result.outcome {
         Outcome::Resolved(calls) | Outcome::BestGuess(calls) => vec![calls],
         Outcome::Ambiguous(values) => values.iter().collect(),
         Outcome::Unresolved => Vec::new(),
     };
     let mut pairs: Vec<(&[u8], &[u8])> = Vec::new();
-    for dialect in request.dialects.dialects() {
+    for dialect in dialects.dialects() {
         for (open, close) in dialect.grammar().reasoning_markers() {
             pairs.push((open, close));
         }
@@ -1686,6 +1700,7 @@ fn check_markers_not_calls(
 fn check_reasoning_blocks(
     output: &[u8],
     request: &ToolRecoveryRequest,
+    dialects: &DialectSet,
     result: &AssistResult<ToolCalls>,
 ) {
     let readings: Vec<&ToolCalls> = match &result.outcome {
@@ -1694,7 +1709,7 @@ fn check_reasoning_blocks(
         Outcome::Unresolved => Vec::new(),
     };
     let mut pairs: Vec<(&[u8], &[u8])> = Vec::new();
-    for dialect in request.dialects.dialects() {
+    for dialect in dialects.dialects() {
         for (open, close) in dialect.grammar().reasoning_markers() {
             pairs.push((open, close));
         }
@@ -1786,7 +1801,11 @@ fn main() {
     let output = bytes.get(2..end).unwrap_or_default();
     let tools = tools();
     let request = request(control, split, strict, output);
-    let result = tools.recover(output, &request);
+    let result = tools.recover(
+        output,
+        &request,
+        purrassist_core::tool_call::DialectSet::built_in(),
+    );
     if let ToolChoice::ForcedStrict(StrictForced {
         allow_reasoning: false,
         ..
@@ -1806,9 +1825,9 @@ fn main() {
         return;
     }
     check_result(&tools, output, &request, &result);
-    check_reasoning_keeps_calls(&tools, output, &request, &result);
-    check_markers_not_calls(output, &request, &result);
-    check_reasoning_blocks(output, &request, &result);
+    check_reasoning_keeps_calls(&tools, output, &request, DialectSet::built_in(), &result);
+    check_markers_not_calls(output, DialectSet::built_in(), &result);
+    check_reasoning_blocks(output, &request, DialectSet::built_in(), &result);
     check_chunking(&tools, output, &request, split >> 3);
     check_exhaustion(&tools, output, &request);
     println!("ok");
@@ -1828,7 +1847,11 @@ mod tests {
         output.extend_from_slice(b" This is independent prose.");
         let tools = fixed_tools();
         let request = request(seed[0], seed[1], None, &output);
-        let result = tools.recover(&output, &request);
+        let result = tools.recover(
+            &output,
+            &request,
+            purrassist_core::tool_call::DialectSet::built_in(),
+        );
         let (Outcome::Resolved(mut calls) | Outcome::BestGuess(mut calls)) = result.outcome else {
             panic!("the regression has one recoverable reading");
         };

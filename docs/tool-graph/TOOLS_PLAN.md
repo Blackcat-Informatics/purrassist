@@ -1078,8 +1078,25 @@ admit work before processing. Trie labels borrow spelling bytes; flat iterative
 storage preserves byte lengths above 128. Temporary JSON flags/counts/renames
 and expanded delimiter bytes release on refusal.
 
-Dense matcher construction/storage and dialect-set sharing, recognizer programs,
+Dense matcher construction/storage now retain exact governed owners. Recognizer programs,
 call metadata/capture analyses and native pattern parsing/automaton preparation
 retain separate contracts. Full cold backend governance, witness, GBNF,
 CompactSignature, projection, routing, ledgers and graph integration remain #36
 acceptance.
+
+## Dense matcher and explicit prepared contexts — implemented prerequisite
+
+Both delimiter and reasoning-marker construction use the same governed dense
+matcher over the existing fallible sparse trie. Exact scratch owners cover
+transitions, depths, match/failure links and the breadth-first queue; checked
+sizes/IDs, admitted scans/rows/searches/growth and final cancellation protect
+complete publication and cleanup. Long byte prefixes remain iterative.
+
+Recovery now accepts an explicit borrowed `DialectSet`. Built-in sets are
+static borrows, custom sets stay caller-owned, and owned cloneable request
+settings contain no set. Actual host/facade/derive/WASM/corpus/golden/fuzzer
+consumers preserve their chosen context through recovery. CLI/MCP selectors,
+results and provenance keep their original contracts. Other set metadata,
+recognizer programs/closures/reachability/insertion alternatives, call metadata
+and capture analyses, native pattern preparation and full remaining generation/
+projection/routing/integration acceptance remain under #36.

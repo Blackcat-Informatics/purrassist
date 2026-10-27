@@ -873,7 +873,7 @@ impl CompiledGrammar {
     /// // A Python-repr envelope with a trailing comma is still a call.
     /// let tools = ToolSet::compile([ToolDefinition::new("ls")], Budget::default()).unwrap();
     /// let output = b"<tool_call>{'name': 'ls', 'arguments': {},}</tool_call>";
-    /// let result = tools.recover(output, &ToolRecoveryRequest::default());
+    /// let result = tools.recover(output, &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in());
     /// let Outcome::Resolved(calls) = &result.outcome else { panic!() };
     /// let call = &calls.calls[0];
     /// assert_eq!(call.outcome, CallOutcome::Resolved);

@@ -113,7 +113,7 @@
 //! use purrassist_core::{Budget, Outcome};
 //! let tools = ToolSet::compile([ToolDefinition::new("read").param("path", Param::string().required())], Budget::default()).unwrap();
 //! let output = b"<tool_call>\n<function=read>\n<parameter=path>\nsrc/a b.rs\n</parameter>\n</function>\n</tool_call>";
-//! let Outcome::Resolved(calls) = tools.recover(output, &ToolRecoveryRequest::default()).outcome else { unreachable!() };
+//! let Outcome::Resolved(calls) = tools.recover(output, &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in()).outcome else { unreachable!() };
 //! let hermes = emit::emit(&tools, &calls, &DialectId::Hermes, &IdPolicy::default())?;
 //! assert_eq!(hermes.output, b"<tool_call>\n{\"name\":\"read\",\"arguments\":{\"path\":\"src/a b.rs\"}}\n</tool_call>");
 //! assert_eq!((hermes.calls.as_slice(), hermes.skipped.len()), (&[0][..], 0));
@@ -296,7 +296,7 @@ pub struct Emitted<T> {
 /// use purrassist_core::{Budget, Outcome};
 /// let tools = ToolSet::compile([ToolDefinition::new("ls")], Budget::default()).unwrap();
 /// let request = ToolRecoveryRequest::default().emit(EmitTarget::Dialect(DialectId::Hermes));
-/// let result = tools.recover(br#"{"id":"c1","type":"function","function":{"name":"ls","arguments":"{}"}}"#, &request);
+/// let result = tools.recover(br#"{"id":"c1","type":"function","function":{"name":"ls","arguments":"{}"}}"#, &request, purrassist_core::tool_call::DialectSet::built_in());
 /// let Outcome::Resolved(calls) = result.outcome else { unreachable!() };
 /// let Some(Emission::Dialect { dialect, emitted }) = &calls.emitted else { unreachable!() };
 /// assert_eq!(dialect, &DialectId::Hermes);
@@ -550,7 +550,7 @@ pub fn emit(
 /// use purrassist_core::{Budget, Governor, Outcome};
 /// let tools = ToolSet::compile([ToolDefinition::new("ls")], Budget::default()).unwrap();
 /// let output = br#"<tool_call>{"name": "ls", "arguments": {}}</tool_call><tool_call>{"name": "rm", "arguments": {}}</tool_call>"#;
-/// let calls = match tools.recover(output, &ToolRecoveryRequest::default()).outcome {
+/// let calls = match tools.recover(output, &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in()).outcome {
 ///     Outcome::Resolved(calls) | Outcome::BestGuess(calls) => calls,
 ///     _ => unreachable!(),
 /// };
@@ -617,7 +617,7 @@ pub fn openai_tool_calls(calls: &ToolCalls, ids: &IdPolicy) -> Result<Emitted<No
 /// impl IdGenerator for Ids { fn id(&self, index: usize) -> String { format!("toolu_{index}") } }
 /// let tools = ToolSet::compile([ToolDefinition::new("pay").param("amount", Param::number())], Budget::default()).unwrap();
 /// let output = br#"<tool_call>{"name": "pay", "arguments": {"amount": 1.50}}</tool_call>"#;
-/// let Outcome::Resolved(calls) = tools.recover(output, &ToolRecoveryRequest::default()).outcome else { unreachable!() };
+/// let Outcome::Resolved(calls) = tools.recover(output, &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in()).outcome else { unreachable!() };
 /// let array = emit::openai_tool_calls_governed(&calls, &IdPolicy::Generator(Arc::new(Ids)), &mut Governor::new(Budget::default()))?;
 /// assert_eq!(
 ///     array.output.to_json(),
@@ -1369,7 +1369,7 @@ impl ToolCalls {
     /// use purrassist_core::{Budget, Outcome};
     /// let tools = ToolSet::compile([ToolDefinition::new("read").param("path", Param::string()).param("limit", Param::integer())], Budget::default()).unwrap();
     /// let output = b"Reading.\n<tool_call>\n<function=read>\n<parameter=path>\na.rs\n</parameter>\n<parameter=limit>\n5\n</parameter>\n</function>\n</tool_call>";
-    /// let Outcome::Resolved(calls) = tools.recover(output, &ToolRecoveryRequest::default()).outcome else { unreachable!() };
+    /// let Outcome::Resolved(calls) = tools.recover(output, &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in()).outcome else { unreachable!() };
     /// let edit = CallEdit::Value { call: 0, pointer: "/path".into(), value: Node::new(Value::String("src/b.rs".into())) };
     /// let edited = calls.reemit_with(output, &[edit])?;
     /// assert_eq!(edited, b"Reading.\n<tool_call>\n<function=read>\n<parameter=path>\nsrc/b.rs\n</parameter>\n<parameter=limit>\n5\n</parameter>\n</function>\n</tool_call>");
@@ -1414,7 +1414,7 @@ impl ToolCalls {
     /// use purrassist_core::{Budget, Governor, Outcome};
     /// let tools = ToolSet::compile([ToolDefinition::new("ls")], Budget::default()).unwrap();
     /// let output = br#"<tool_call>{"name": "ls", "arguments": {}}</tool_call>"#;
-    /// let Outcome::Resolved(calls) = tools.recover(output, &ToolRecoveryRequest::default()).outcome else { unreachable!() };
+    /// let Outcome::Resolved(calls) = tools.recover(output, &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in()).outcome else { unreachable!() };
     /// let missing = CallEdit::Value { call: 0, pointer: "/depth".into(), value: Node::new(Value::Null) };
     /// let error = calls.reemit_with_governed(output, &[missing], &mut Governor::new(Budget::default()));
     /// assert!(matches!(error, Err(EmitError::InvalidEdit { .. })));

@@ -511,10 +511,9 @@ fn recover(grammar_source: &str, output: &[u8]) -> Result<(), Box<dyn std::error
         Budget::default(),
     )?;
     let request = ToolRecoveryRequest::new(Effort::Standard)
-        .dialects(dialects)
         .ids(IdPolicy::Source)
         .emit(EmitTarget::Dialect(acme));
-    let result = tools.recover(output, &request);
+    let result = tools.recover(output, &request, &dialects);
     if let Outcome::Resolved(calls) = &result.outcome {
         for call in calls.usable() {
             println!("{} {:?} {}", call.id, call.tool, call.arguments.to_json());

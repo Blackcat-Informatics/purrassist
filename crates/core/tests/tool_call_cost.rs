@@ -192,6 +192,7 @@ fn closer_text_in_values_is_linear() {
             let result = tools.recover(
                 input.as_bytes(),
                 &ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes()),
+                purrassist_core::tool_call::DialectSet::built_in(),
             );
             let first = &content[..content.find(token).expect("a closer")];
             let calls = match &result.outcome {
@@ -261,7 +262,7 @@ fn push_chunking_identical_work() {
     for chunk in [1, 16, 4096] {
         let mut governor = Governor::new(Budget::default());
         let mut recognizer =
-            Recognizer::with_tools(&set, &tools, ReasoningPolicy::default(), &mut governor)
+            Recognizer::with_tools(set, &tools, ReasoningPolicy::default(), &mut governor)
                 .expect("recognizer");
         for piece in input.as_bytes().chunks(chunk) {
             recognizer.push(piece, &mut governor).expect("push");
@@ -319,6 +320,7 @@ fn busy_turn_resolves_every_call_under_sized() {
     let preset = tools.recover(
         output.as_bytes(),
         &ToolRecoveryRequest::new(Effort::Standard),
+        purrassist_core::tool_call::DialectSet::built_in(),
     );
     assert_eq!(preset.outcome, Outcome::Unresolved);
     assert_eq!(
@@ -331,7 +333,11 @@ fn busy_turn_resolves_every_call_under_sized() {
     assert_eq!(openers, 320);
     let request = ToolRecoveryRequest::sized(Effort::Standard, output.as_bytes());
     assert_eq!(request.budget.candidates, 128 + 16 * 320);
-    let result = tools.recover(output.as_bytes(), &request);
+    let result = tools.recover(
+        output.as_bytes(),
+        &request,
+        purrassist_core::tool_call::DialectSet::built_in(),
+    );
     let Outcome::BestGuess(calls) = &result.outcome else {
         panic!("{:?}", result.receipt.stopped)
     };
@@ -383,6 +389,7 @@ fn per_call_competition_scales_with_calls() {
     let preset = tools.recover(
         output.as_bytes(),
         &ToolRecoveryRequest::new(Effort::Standard),
+        purrassist_core::tool_call::DialectSet::built_in(),
     );
     assert!(
         matches!(preset.receipt.stopped, StopReason::BudgetExceeded(_)),
@@ -394,7 +401,11 @@ fn per_call_competition_scales_with_calls() {
     // candidates, not of anything else.
     let mut candidates_only = ToolRecoveryRequest::new(Effort::Standard);
     candidates_only.budget.work = u64::MAX / 4;
-    let limited = tools.recover(output.as_bytes(), &candidates_only);
+    let limited = tools.recover(
+        output.as_bytes(),
+        &candidates_only,
+        purrassist_core::tool_call::DialectSet::built_in(),
+    );
     assert_eq!(
         limited.receipt.stopped,
         StopReason::BudgetExceeded(Resource::Candidates)
@@ -406,6 +417,7 @@ fn per_call_competition_scales_with_calls() {
     let result = tools.recover(
         output.as_bytes(),
         &ToolRecoveryRequest::sized(Effort::Standard, output.as_bytes()),
+        purrassist_core::tool_call::DialectSet::built_in(),
     );
     let Outcome::BestGuess(calls) = &result.outcome else {
         panic!("{:?}", result.receipt.stopped)
@@ -445,7 +457,11 @@ fn crafted_reading_explosion_exhausts_explicitly() {
         Effort::Maximum,
     ] {
         let request = ToolRecoveryRequest::sized(effort, output.as_bytes());
-        let result = tools.recover(output.as_bytes(), &request);
+        let result = tools.recover(
+            output.as_bytes(),
+            &request,
+            purrassist_core::tool_call::DialectSet::built_in(),
+        );
         assert_eq!(result.outcome, Outcome::Unresolved, "{effort:?}");
         let exhausted = if effort == Effort::Maximum {
             Resource::ScratchBytes
@@ -595,7 +611,11 @@ fn schema_typing_is_uncapped_and_governed() {
     }
     let output = format!("<tool_call>\n<function=wide>\n{body}</function>\n</tool_call>");
     let request = ToolRecoveryRequest::sized(Effort::Standard, output.as_bytes());
-    let result = tools.recover(output.as_bytes(), &request);
+    let result = tools.recover(
+        output.as_bytes(),
+        &request,
+        purrassist_core::tool_call::DialectSet::built_in(),
+    );
     let Outcome::Resolved(calls) = &result.outcome else {
         panic!("{:?} {:?}", result.outcome, result.receipt.stopped)
     };
@@ -623,6 +643,7 @@ fn schema_typing_is_uncapped_and_governed() {
             work: work * 9 / 10,
             ..request.budget
         }),
+        purrassist_core::tool_call::DialectSet::built_in(),
     );
     assert_eq!(starved.outcome, Outcome::Unresolved);
     assert!(
@@ -640,7 +661,11 @@ fn schema_typing_is_uncapped_and_governed() {
     )
     .expect("adapter tools");
     let output = "<tool_call>\n<function=view>\n<parameter=opts>\n<parameter=depth>\n2\n</parameter>\n<parameter=label>\n42\n</parameter>\n</parameter>\n</function>\n</tool_call>";
-    let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+    let result = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        purrassist_core::tool_call::DialectSet::built_in(),
+    );
     let Outcome::Resolved(calls) = &result.outcome else {
         panic!("{:?}", result.outcome)
     };
@@ -709,7 +734,11 @@ fn repeated_parameters_cost_is_linear() {
             let request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
             let n = input.len() as u64;
             let started = std::time::Instant::now();
-            let result = tools.recover(input.as_bytes(), &request);
+            let result = tools.recover(
+                input.as_bytes(),
+                &request,
+                purrassist_core::tool_call::DialectSet::built_in(),
+            );
             let elapsed = started.elapsed();
             assert_eq!(result.receipt.stopped, StopReason::Completed, "{item} {k}");
             let Outcome::Resolved(calls) = &result.outcome else {
@@ -793,7 +822,11 @@ fn repeated_nested_items_with_array_children_cost_is_linear() {
         let request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
         let n = input.len() as u64;
         let started = std::time::Instant::now();
-        let result = tools.recover(input.as_bytes(), &request);
+        let result = tools.recover(
+            input.as_bytes(),
+            &request,
+            purrassist_core::tool_call::DialectSet::built_in(),
+        );
         let elapsed = started.elapsed();
         assert_eq!(result.receipt.stopped, StopReason::Completed, "{k}");
         let Outcome::Resolved(calls) = &result.outcome else {
@@ -871,7 +904,11 @@ fn reasoning_marker_in_every_repeated_item_is_linear() {
             item.repeat(k)
         );
         let request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
-        let result = tools.recover(input.as_bytes(), &request);
+        let result = tools.recover(
+            input.as_bytes(),
+            &request,
+            purrassist_core::tool_call::DialectSet::built_in(),
+        );
         assert_eq!(result.receipt.stopped, StopReason::Completed, "k={k}");
         let Outcome::Resolved(calls) = &result.outcome else {
             panic!("k={k}: {:?}", result.outcome)
@@ -926,7 +963,11 @@ fn chained_mistral_v11_calls_cost_is_linear() {
         for k in [256_usize, 512, 1024, 2048, 4096] {
             let input = unit.repeat(k);
             let request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
-            let result = tools.recover(input.as_bytes(), &request);
+            let result = tools.recover(
+                input.as_bytes(),
+                &request,
+                purrassist_core::tool_call::DialectSet::built_in(),
+            );
             assert_eq!(
                 result.receipt.stopped,
                 StopReason::Completed,
@@ -997,7 +1038,11 @@ fn mistral_v3_call_arrays_cost_is_linear() {
         let elements = vec![unit; k].join(", ");
         let input = format!("[TOOL_CALLS] [{elements}]");
         let request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
-        let result = tools.recover(input.as_bytes(), &request);
+        let result = tools.recover(
+            input.as_bytes(),
+            &request,
+            purrassist_core::tool_call::DialectSet::built_in(),
+        );
         assert_eq!(result.receipt.stopped, StopReason::Completed, "{k}");
         let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = &result.outcome else {
             panic!("{k}: {:?}", result.outcome)
@@ -1073,8 +1118,8 @@ fn whole_segmentation_fallback_is_correct_and_charged() {
         &mut Governor::new(Budget::default()),
     )
     .expect("dialects");
-    let request = ToolRecoveryRequest::sized_for(Effort::Standard, input.as_bytes(), dialects);
-    let result = tools.recover(input.as_bytes(), &request);
+    let request = ToolRecoveryRequest::sized_for(Effort::Standard, input.as_bytes(), &dialects);
+    let result = tools.recover(input.as_bytes(), &request, &dialects);
     assert_eq!(result.receipt.stopped, StopReason::Completed);
     let Outcome::BestGuess(calls) = &result.outcome else {
         panic!("{:?}", result.outcome)

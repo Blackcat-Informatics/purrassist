@@ -2101,11 +2101,10 @@ fn grammar_doc_example_compiles() {
         PolicySelection::All(RepairPolicy::Tolerant),
     ] {
         let request = ToolRecoveryRequest::new(Effort::Standard)
-            .dialects(dialects.clone())
             .ids(IdPolicy::Source)
             .policy(policy)
             .emit(EmitTarget::Dialect(acme.clone()));
-        let result = tools.recover(output.as_bytes(), &request);
+        let result = tools.recover(output.as_bytes(), &request, &dialects);
         let Outcome::Resolved(calls) = &result.outcome else {
             panic!("{policy:?}: {:#?}", result.outcome)
         };
@@ -2156,7 +2155,7 @@ fn grammar_doc_example_compiles() {
         };
         assert_eq!(emitted.output, printed.as_bytes(), "{policy:?}");
 
-        let again = tools.recover(printed.as_bytes(), &request);
+        let again = tools.recover(printed.as_bytes(), &request, &dialects);
         let Outcome::Resolved(reread) = &again.outcome else {
             panic!("{:#?}", again.outcome)
         };

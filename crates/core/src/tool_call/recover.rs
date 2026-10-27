@@ -297,7 +297,7 @@ pub fn turn_id_prefix(turn: &Digest) -> String {
 /// assert!(matches!(IdPolicy::default(), IdPolicy::Turn));
 /// let tools = ToolSet::compile([ToolDefinition::new("ls").effects(Effects::ReadOnly)], Budget::default()).unwrap();
 /// let ids = |output: &[u8]| {
-///     let Outcome::Resolved(calls) = tools.recover(output, &ToolRecoveryRequest::default()).outcome else { unreachable!() };
+///     let Outcome::Resolved(calls) = tools.recover(output, &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in()).outcome else { unreachable!() };
 ///     calls.calls.into_iter().map(|call| call.id).collect::<Vec<_>>()
 /// };
 /// let first = ids(br#"<tool_call>{"name": "ls", "arguments": {}}</tool_call>"#);
@@ -442,11 +442,11 @@ pub enum ToolChoice {
 /// let call = r#"<tool_call>{"name": "ls", "arguments": {}}</tool_call>"#;
 /// // Two calls: the second is unresolved and the turn fails.
 /// let twice = format!("{call}\n{call}");
-/// let Outcome::Resolved(calls) = tools.recover(twice.as_bytes(), &request).outcome else { unreachable!() };
+/// let Outcome::Resolved(calls) = tools.recover(twice.as_bytes(), &request, purrassist_core::tool_call::DialectSet::built_in()).outcome else { unreachable!() };
 /// assert!(!calls.tool_choice.passed);
 /// assert_eq!(calls.finish, Finish::Unresolved);
 /// // One call passes.
-/// let Outcome::Resolved(calls) = tools.recover(call.as_bytes(), &request).outcome else { unreachable!() };
+/// let Outcome::Resolved(calls) = tools.recover(call.as_bytes(), &request, purrassist_core::tool_call::DialectSet::built_in()).outcome else { unreachable!() };
 /// assert!(calls.tool_choice.passed);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -752,7 +752,10 @@ pub enum AmbiguityPolicy {
     Reject,
 }
 
-/// One tool-call recovery request (one field per concept).
+/// Owned tool-call recovery settings (one field per concept).
+///
+/// Prepared dialect sets are passed separately to recovery and stay caller-owned.
+/// Cloning these settings never clones a matcher or selects a different set.
 ///
 /// ```
 /// use purrassist_core::{Effort, tool_call::{AmbiguityPolicy, Effects, GenerationStop, ToolChoice, ToolRecoveryRequest}};
@@ -780,8 +783,6 @@ pub struct ToolRecoveryRequest {
     /// The limits [`ToolSet::recover`] runs under
     /// ([`ToolSet::recover_governed`] uses its governor's instead).
     pub budget: Budget,
-    /// The model's dialect allow-list.
-    pub dialects: DialectSet,
     /// How reasoning markers are treated.
     pub reasoning: ReasoningPolicy,
     /// Why the model stopped generating.
@@ -809,8 +810,7 @@ impl Default for ToolRecoveryRequest {
 }
 
 impl ToolRecoveryRequest {
-    /// A request at `effort` with `budget = effort.budget()`, every built-in
-    /// dialect ([`DialectSet::built_in`]), separate reasoning, a
+    /// Owned settings at `effort` with `budget = effort.budget()`, separate reasoning, a
     /// [`GenerationStop::Stop`], `Auto` tool choice, the default
     /// [`IdPolicy`], per-tool policies, no effects overrides,
     /// [`AmbiguityPolicy::Report`], and no emission.
@@ -821,7 +821,6 @@ impl ToolRecoveryRequest {
         Self {
             effort,
             budget: effort.budget(),
-            dialects: DialectSet::built_in(),
             reasoning: ReasoningPolicy::default(),
             stop: GenerationStop::Stop,
             tool_choice: ToolChoice::Auto,
@@ -847,7 +846,6 @@ impl ToolRecoveryRequest {
     /// // where a Llama 3 JSON, an Anthropic `tool_use` and a bare JSON
     /// // attempt may open.
     /// assert_eq!(request.budget, ToolRecoveryRequest::sized_budget(Effort::Standard, output.len(), 8));
-    /// assert_eq!(request.dialects.dialects(), DialectSet::built_in().dialects());
     /// ```
     #[must_use]
     pub fn sized(effort: Effort, output: &[u8]) -> Self {
@@ -858,24 +856,21 @@ impl ToolRecoveryRequest {
     /// output's length and its call openers under `dialects`
     /// ([`DialectSet::call_openers`]) give [`Self::sized_budget`]. Counting
     /// the openers is a linear, uncharged pre-scan; recovery then runs under
-    /// the sized budget. Use this, not [`Self::sized`], when the request
-    /// restricts or extends the dialect allow-list, so the candidate budget
+    /// the sized budget. Pass this same prepared set explicitly to recovery.
+    /// Use this, not [`Self::sized`], for a restricted or extended allow-list, so the candidate budget
     /// counts the openers of the dialects that actually read the output.
     ///
     /// ```
     /// use purrassist_core::{Budget, Effort, Governor, tool_call::{DialectId, DialectSet, ToolRecoveryRequest}};
     /// let set = DialectSet::new([DialectId::Hermes], &mut Governor::new(Budget::default())).unwrap();
     /// let output = b"<tool_call>\n{\"name\": \"ls\", \"arguments\": {}}\n</tool_call>";
-    /// let request = ToolRecoveryRequest::sized_for(Effort::Standard, output, set);
+    /// let request = ToolRecoveryRequest::sized_for(Effort::Standard, output, &set);
     /// assert_eq!(request.budget, ToolRecoveryRequest::sized_budget(Effort::Standard, output.len(), 1));
-    /// assert_eq!(request.dialects.dialects(), [DialectId::Hermes]);
     /// ```
     #[must_use]
-    pub fn sized_for(effort: Effort, output: &[u8], dialects: DialectSet) -> Self {
+    pub fn sized_for(effort: Effort, output: &[u8], dialects: &DialectSet) -> Self {
         let openers = dialects.call_openers(output);
-        Self::new(effort)
-            .budget(Self::sized_budget(effort, output.len(), openers))
-            .dialects(dialects)
+        Self::new(effort).budget(Self::sized_budget(effort, output.len(), openers))
     }
 
     /// The budget for an output of `input_len` bytes with `openers` call
@@ -944,19 +939,6 @@ impl ToolRecoveryRequest {
     #[must_use]
     pub const fn budget(mut self, budget: Budget) -> Self {
         self.budget = budget;
-        self
-    }
-
-    /// Set the dialect allow-list.
-    ///
-    /// ```
-    /// use purrassist_core::{Budget, Governor, tool_call::{DialectId, DialectSet, ToolRecoveryRequest}};
-    /// let set = DialectSet::new([DialectId::Hermes], &mut Governor::new(Budget::default())).unwrap();
-    /// assert_eq!(ToolRecoveryRequest::default().dialects(set).dialects.dialects(), [DialectId::Hermes]);
-    /// ```
-    #[must_use]
-    pub fn dialects(mut self, dialects: DialectSet) -> Self {
-        self.dialects = dialects;
         self
     }
 
@@ -1182,11 +1164,11 @@ impl Finish {
 /// let tools = ToolSet::compile([ToolDefinition::new("ls")], Budget::default()).unwrap();
 /// let request = ToolRecoveryRequest::default();
 /// // The turn is read with certainty, but the only call names no tool.
-/// let result = tools.recover(br#"<tool_call>{"name": "rm", "arguments": {}}</tool_call>"#, &request);
+/// let result = tools.recover(br#"<tool_call>{"name": "rm", "arguments": {}}</tool_call>"#, &request, purrassist_core::tool_call::DialectSet::built_in());
 /// let Outcome::Resolved(calls) = &result.outcome else { panic!() };
 /// assert_eq!(calls.verdict(), Verdict::NothingUsable);
 /// assert_eq!(calls.verdict().exit_code(), 4);
-/// let result = tools.recover(br#"<tool_call>{"name": "ls", "arguments": {}}</tool_call>"#, &request);
+/// let result = tools.recover(br#"<tool_call>{"name": "ls", "arguments": {}}</tool_call>"#, &request, purrassist_core::tool_call::DialectSet::built_in());
 /// let Outcome::Resolved(calls) = &result.outcome else { panic!() };
 /// assert_eq!((calls.verdict(), calls.verdict().code()), (Verdict::Run, "run"));
 /// ```
@@ -1335,7 +1317,7 @@ pub struct KeywordUse {
 /// use purrassist_core::{Budget, Outcome};
 /// let tools = ToolSet::compile([ToolDefinition::new("read").param("path", Param::string().required())], Budget::default()).unwrap();
 /// let output = b"<tool_call>{\"name\": \"read\", \"arguments\": {\"path\": \"a\"}}</tool_call>\n<tool_call>";
-/// let Outcome::BestGuess(calls) = tools.recover(output, &ToolRecoveryRequest::default()).outcome else { unreachable!() };
+/// let Outcome::BestGuess(calls) = tools.recover(output, &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in()).outcome else { unreachable!() };
 /// assert_eq!(calls.usable().len(), 1);
 /// assert_eq!(calls.rejected.len(), 1);
 /// assert_eq!(calls.rejected[0].candidate_dialects, [DialectId::Hermes, DialectId::Qwen3CoderXml]);
@@ -1351,8 +1333,8 @@ pub struct KeywordUse {
 /// let call = "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\nthat is all</function>\n</tool_call>";
 /// let output = format!("{call} done");
 /// let dialects = DialectSet::new([DialectId::Qwen3CoderXml], &mut Governor::new(Budget::default())).unwrap();
-/// let request = ToolRecoveryRequest::default().dialects(dialects);
-/// let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = tools.recover(output.as_bytes(), &request).outcome else { unreachable!() };
+/// let request = ToolRecoveryRequest::default();
+/// let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = tools.recover(output.as_bytes(), &request, &dialects).outcome else { unreachable!() };
 /// assert_eq!(calls.rejected[0].text(), Some(call));
 /// assert_eq!(calls.content, [call.len()..output.len()]);
 /// ```
@@ -1434,7 +1416,7 @@ impl RejectedCall {
 /// use purrassist_core::tool_call::{Effects, Param, ToolDefinition, ToolRecoveryRequest, ToolSet};
 /// use purrassist_core::{Budget, Outcome};
 /// let tools = ToolSet::compile([ToolDefinition::new("ls").effects(Effects::ReadOnly).param("depth", Param::integer())], Budget::default()).unwrap();
-/// let result = tools.recover(br#"<tool_call>{"name": "ls", "arguments": {"depth": 2}}</tool_call>"#, &ToolRecoveryRequest::default());
+/// let result = tools.recover(br#"<tool_call>{"name": "ls", "arguments": {"depth": 2}}</tool_call>"#, &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in());
 /// let Outcome::Resolved(calls) = result.outcome else { unreachable!() };
 /// let call = &calls.calls[0];
 /// // `call_` + the first 12 hex digits of the output's SHA-256 + `_` + index.
@@ -1508,7 +1490,7 @@ impl ToolCall {
     /// }
     /// let tools = ToolSet::compile([ToolDefinition::new("read").effects(Effects::ReadOnly)
     ///     .param("path", Param::string().required()).param("limit", Param::integer())], Budget::default()).unwrap();
-    /// let result = tools.recover(br#"<tool_call>{"name": "read", "arguments": {"path": "a.rs", "limit": 5}}</tool_call>"#, &ToolRecoveryRequest::default());
+    /// let result = tools.recover(br#"<tool_call>{"name": "read", "arguments": {"path": "a.rs", "limit": 5}}</tool_call>"#, &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in());
     /// let Outcome::Resolved(calls) = result.outcome else { unreachable!() };
     /// let read: Read = calls.calls[0].arguments_as().unwrap();
     /// assert_eq!((read.path.as_str(), read.limit), ("a.rs", Some(5)));
@@ -1561,7 +1543,7 @@ impl ToolCall {
 /// use purrassist_core::tool_call::{Effects, ToolDefinition, ToolRecoveryRequest, ToolSet};
 /// use purrassist_core::{Budget, Outcome};
 /// let tools = ToolSet::compile([ToolDefinition::new("ls").effects(Effects::ReadOnly)], Budget::default()).unwrap();
-/// let result = tools.recover(b"<think>abc</think>Done.", &ToolRecoveryRequest::default());
+/// let result = tools.recover(b"<think>abc</think>Done.", &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in());
 /// let Outcome::Resolved(calls) = result.outcome else { unreachable!() };
 /// let block = &calls.reasoning_blocks[0];
 /// assert_eq!(block.span, 0..18);
@@ -1606,7 +1588,7 @@ pub struct ToolCalls {
     /// use purrassist_core::{Budget, Outcome};
     /// let tools = ToolSet::compile([ToolDefinition::new("ls").effects(Effects::ReadOnly).param("depth", Param::integer())], Budget::default()).unwrap();
     /// let output = br#"<think>maybe <tool_call>{"name": "ls", "arguments": {"depth": 1}}</tool_call></think>No call needed."#;
-    /// let result = tools.recover(output, &ToolRecoveryRequest::default());
+    /// let result = tools.recover(output, &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in());
     /// let Outcome::Resolved(calls) = result.outcome else { unreachable!() };
     /// assert!(calls.calls.is_empty());
     /// assert_eq!(calls.finish, Finish::ContentOnly);
@@ -1635,7 +1617,7 @@ pub struct ToolCalls {
     /// use purrassist_core::{Budget, Outcome};
     /// let tools = ToolSet::compile([ToolDefinition::new("ls").effects(Effects::ReadOnly)], Budget::default()).unwrap();
     /// let output = b"<think>a</think><think>b</think>";
-    /// let result = tools.recover(output, &ToolRecoveryRequest::default());
+    /// let result = tools.recover(output, &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in());
     /// let Outcome::Resolved(calls) = result.outcome else { unreachable!() };
     /// // One merged outer range, two blocks whose text excludes the markers.
     /// assert_eq!(calls.reasoning, vec![0..32]);
@@ -1679,12 +1661,12 @@ impl ToolCalls {
     /// use purrassist_core::{Budget, Outcome};
     /// let tools = ToolSet::compile([ToolDefinition::new("ls"), ToolDefinition::new("cat")], Budget::default()).unwrap();
     /// let output = br#"<tool_call>{"name": "ls", "arguments": {}}</tool_call>"#;
-    /// let result = tools.recover(output, &ToolRecoveryRequest::default());
+    /// let result = tools.recover(output, &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in());
     /// let Outcome::Resolved(calls) = &result.outcome else { panic!() };
     /// assert_eq!(calls.usable().len(), 1);
     /// // Forced to `cat`, the check fails: the call is still `Resolved`, but nothing may run.
     /// let forced = ToolRecoveryRequest::default().tool_choice(ToolChoice::Forced("cat".into()));
-    /// let result = tools.recover(output, &forced);
+    /// let result = tools.recover(output, &forced, purrassist_core::tool_call::DialectSet::built_in());
     /// let Outcome::Resolved(calls) = &result.outcome else { panic!() };
     /// assert!(!calls.tool_choice.passed && calls.usable().is_empty());
     /// ```
@@ -1705,7 +1687,7 @@ impl ToolCalls {
     /// use purrassist_core::tool_call::{Effects, Param, ToolDefinition, ToolRecoveryRequest, ToolSet};
     /// use purrassist_core::{Budget, Outcome};
     /// let tools = ToolSet::compile([ToolDefinition::new("read_file").effects(Effects::ReadOnly)], Budget::default()).unwrap();
-    /// let result = tools.recover(br#"<tool_call>{"name": "read_fiel", "arguments": {}}</tool_call>"#, &ToolRecoveryRequest::default());
+    /// let result = tools.recover(br#"<tool_call>{"name": "read_fiel", "arguments": {}}</tool_call>"#, &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in());
     /// let Outcome::BestGuess(calls) = result.outcome else { unreachable!() };
     /// assert!(calls.usable().is_empty());
     /// assert_eq!(calls.usable_accepting_guesses()[0].tool.as_deref(), Some("read_file"));
@@ -1743,12 +1725,12 @@ impl ToolCalls {
     /// use purrassist_core::{Budget, Outcome};
     /// let tools = ToolSet::compile([ToolDefinition::new("ls"), ToolDefinition::new("cat")], Budget::default()).unwrap();
     /// let output = br#"<tool_call>{"name": "ls", "arguments": {}}</tool_call>"#;
-    /// let result = tools.recover(output, &ToolRecoveryRequest::default());
+    /// let result = tools.recover(output, &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in());
     /// let Outcome::Resolved(calls) = &result.outcome else { panic!() };
     /// assert_eq!(calls.emitted_calls().len(), 1);
     /// // Forced to `cat`, the turn fails its tool choice: nothing runs.
     /// let forced = ToolRecoveryRequest::default().tool_choice(ToolChoice::Forced("cat".into()));
-    /// let result = tools.recover(output, &forced);
+    /// let result = tools.recover(output, &forced, purrassist_core::tool_call::DialectSet::built_in());
     /// let Outcome::Resolved(calls) = &result.outcome else { panic!() };
     /// assert!(calls.emitted_calls().is_empty());
     /// assert_eq!(calls.openai_finish_reason(), "stop");
@@ -2930,7 +2912,9 @@ impl WireValue for ToolCalls {
 
 impl ToolSet {
     /// Recover the tool calls of one model turn under a fresh governor with
-    /// `request.budget`.
+    /// `request.budget`, borrowing the explicit prepared `dialects` set.
+    /// Use [`DialectSet::built_in`] for the default built-in selection; custom
+    /// sets remain owned by their caller and may be reused across settings.
     ///
     /// See the [module documentation](super::recover) for every step and the
     /// outcome rules; [`Self::recover_governed`] has the error semantics.
@@ -2955,7 +2939,7 @@ impl ToolSet {
     /// let request = ToolRecoveryRequest::default();
     ///
     /// let tools = ToolSet::compile([ToolDefinition::new("f").param("path", Param::string())], Budget::default()).unwrap();
-    /// let result = tools.recover(output, &request);
+    /// let result = tools.recover(output, &request, purrassist_core::tool_call::DialectSet::built_in());
     /// assert_eq!(result.receipt.operation, "tool_call.recover.v1");
     /// let Outcome::Resolved(calls) = result.outcome else { unreachable!() };
     /// let call = &calls.calls[0];
@@ -2968,7 +2952,7 @@ impl ToolSet {
     /// assert_eq!(calls.usable().len(), 1);
     ///
     /// let strict = ToolSet::compile([ToolDefinition::new("f").param("path", Param::string().required())], Budget::default()).unwrap();
-    /// let result = strict.recover(output, &request);
+    /// let result = strict.recover(output, &request, purrassist_core::tool_call::DialectSet::built_in());
     /// let Outcome::Resolved(calls) = result.outcome else { unreachable!() };
     /// assert!(matches!(calls.calls[0].outcome, CallOutcome::Unresolved { reason: UnresolvedReason::MissingRequired { .. } }));
     /// assert_eq!(calls.finish, Finish::Unresolved);
@@ -2976,8 +2960,18 @@ impl ToolSet {
     /// assert_eq!(calls.verdict(), purrassist_core::tool_call::Verdict::NothingUsable);
     /// ```
     #[must_use]
-    pub fn recover(&self, output: &[u8], request: &ToolRecoveryRequest) -> AssistResult<ToolCalls> {
-        self.recover_governed(output, request, &mut Governor::new(request.budget))
+    pub fn recover(
+        &self,
+        output: &[u8],
+        request: &ToolRecoveryRequest,
+        dialects: &DialectSet,
+    ) -> AssistResult<ToolCalls> {
+        self.recover_governed(
+            output,
+            request,
+            dialects,
+            &mut Governor::new(request.budget),
+        )
     }
 
     /// Recover the tool calls of one model turn against a caller-owned
@@ -3001,13 +2995,13 @@ impl ToolSet {
     /// let token = CancellationToken::new();
     /// let mut governor = Governor::with_cancellation(Budget::default(), token.clone());
     /// token.cancel();
-    /// let result = tools.recover_governed(b"<tool_call>{\"name\": \"ls\", \"arguments\": {}}</tool_call>", &ToolRecoveryRequest::default(), &mut governor);
+    /// let result = tools.recover_governed(b"<tool_call>{\"name\": \"ls\", \"arguments\": {}}</tool_call>", &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in(), &mut governor);
     /// assert_eq!(result.outcome, Outcome::Unresolved);
     /// assert_eq!(result.receipt.stopped, StopReason::Cancelled);
     /// assert!(result.receipt.sources.is_empty());
     ///
     /// let request = ToolRecoveryRequest::default().effects("rm", Effects::ReadOnly);
-    /// let result = tools.recover_governed(b"", &request, &mut Governor::new(Budget::default()));
+    /// let result = tools.recover_governed(b"", &request, purrassist_core::tool_call::DialectSet::built_in(), &mut Governor::new(Budget::default()));
     /// assert!(matches!(result.receipt.stopped, StopReason::InvalidInput(_)));
     /// assert_eq!(result.receipt.sources.len(), 1);
     /// ```
@@ -3016,6 +3010,7 @@ impl ToolSet {
         &self,
         output: &[u8],
         request: &ToolRecoveryRequest,
+        dialects: &DialectSet,
         governor: &mut Governor,
     ) -> AssistResult<ToolCalls> {
         let mut receipt = Receipt::new(
@@ -3027,6 +3022,7 @@ impl ToolSet {
         let recovery = Recovery {
             tools: self,
             request,
+            dialects,
             output,
             source: receipt.source,
             policies: Policies {
@@ -3469,6 +3465,7 @@ fn label(call: &ToolCall) -> String {
 struct Recovery<'a> {
     tools: &'a ToolSet,
     request: &'a ToolRecoveryRequest,
+    dialects: &'a DialectSet,
     output: &'a [u8],
     source: Digest,
     policies: Policies,
@@ -3514,12 +3511,8 @@ impl Recovery<'_> {
             ));
         }
         let encoding = self.encoding(governor)?;
-        let mut recognizer = Recognizer::with_tools(
-            &self.request.dialects,
-            self.tools,
-            self.request.reasoning,
-            governor,
-        )?;
+        let mut recognizer =
+            Recognizer::with_tools(self.dialects, self.tools, self.request.reasoning, governor)?;
         recognizer.push(self.output, governor)?;
         let turn =
             recognizer.finish_over(self.request.stop.clone(), Some(self.output), governor)?;
@@ -3989,7 +3982,7 @@ impl Recovery<'_> {
         for range in owned {
             remove_range(&mut content, range);
         }
-        let found = detect_unparsed(self.output, &content, &self.request.dialects, governor)?;
+        let found = detect_unparsed(self.output, &content, self.dialects, governor)?;
         if found.is_empty() {
             return Ok(());
         }
@@ -4265,7 +4258,7 @@ impl Recovery<'_> {
             let at = self.after(block);
             let inside = &self.output[block.clone()];
             let mut dialects: Vec<(DialectId, usize)> = Vec::new();
-            for dialect in self.request.dialects.dialects() {
+            for dialect in self.dialects.dialects() {
                 for end in dialect.grammar().call_ends() {
                     governor.charge(Resource::Work, size(inside.len()))?;
                     let open = end
@@ -5603,11 +5596,13 @@ mod tests {
     fn members(
         tools: &ToolSet,
         request: &ToolRecoveryRequest,
+        dialects: &DialectSet,
         governor: &mut Governor,
     ) -> (Reading, Reading) {
         let recovery = Recovery {
             tools,
             request,
+            dialects,
             output: OUTPUT,
             source: Digest::of(OUTPUT),
             policies: Policies {
@@ -5653,19 +5648,19 @@ mod tests {
         let mut governor = Governor::new(Budget::default());
         let dialects = DialectSet::new([DialectId::Hermes], &mut governor).unwrap();
         let request = ToolRecoveryRequest::default()
-            .dialects(dialects)
             .emit(EmitTarget::OpenAiToolCalls)
             .tool_choice(ToolChoice::ForcedStrict(
                 StrictForced::exactly_one("read_file").allow_content(true),
             ));
         let mut merged = Vec::new();
         for failing_first in [true, false] {
-            let (failing, passing) = members(&tools, &request, &mut governor);
+            let (failing, passing) = members(&tools, &request, &dialects, &mut governor);
             assert!(passing.value.tool_choice.passed);
             assert_eq!(printed(passing.value.emitted.as_ref()), Some(1));
             let recovery = Recovery {
                 tools: &tools,
                 request: &request,
+                dialects: &dialects,
                 output: OUTPUT,
                 source: Digest::of(OUTPUT),
                 policies: Policies {
@@ -5709,6 +5704,7 @@ mod tests {
         let recovery = Recovery {
             tools: &tools,
             request: &request,
+            dialects: DialectSet::built_in(),
             output,
             source: Digest::of(output),
             policies: Policies {

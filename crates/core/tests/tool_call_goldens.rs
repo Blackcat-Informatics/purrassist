@@ -89,9 +89,11 @@ struct Golden {
     node: Node,
     tools: ToolSet,
     request: ToolRecoveryRequest,
+    dialects: DialectSet,
     /// The same request under the default allow-list; `None` when the
     /// fixture pins no dialect list (the pinned run is the default run).
     default_request: Option<ToolRecoveryRequest>,
+    default_dialects: Option<DialectSet>,
     input: Vec<u8>,
 }
 
@@ -296,7 +298,10 @@ fn default_dialect_set(golden: &Node, path: &Path) -> DialectSet {
 fn dialect_set(golden: &Node, path: &Path) -> DialectSet {
     let custom = custom_dialect(golden, path);
     let ids: Vec<DialectId> = match golden.get("dialects") {
-        None => return DialectSet::built_in(),
+        None => {
+            return DialectSet::new(DialectId::BUILT_IN, &mut Governor::new(Budget::default()))
+                .expect("built-in fixture dialects");
+        }
         Some(dialects) => items(dialects)
             .iter()
             .map(|id| match id.as_str().expect("dialect id") {
@@ -366,7 +371,7 @@ fn tool_choice(golden: &Node, choice: &Node, path: &Path) -> ToolChoice {
     })
 }
 
-fn request(golden: &Node, path: &Path, input: &[u8], dialects: DialectSet) -> ToolRecoveryRequest {
+fn request(golden: &Node, path: &Path, input: &[u8], dialects: &DialectSet) -> ToolRecoveryRequest {
     let effort = golden
         .get("effort")
         .and_then(Node::as_str)
@@ -431,14 +436,21 @@ fn load(path: &Path) -> Golden {
         std::fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     let node = parse(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     let input = input_bytes(&node, path);
-    let default_request = node
+    let default_dialects = node
         .get("dialects")
-        .map(|_| request(&node, path, &input, default_dialect_set(&node, path)));
+        .map(|_| default_dialect_set(&node, path));
+    let default_request = default_dialects
+        .as_ref()
+        .map(|set| request(&node, path, &input, set));
+    let dialects = dialect_set(&node, path);
+    let prepared = request(&node, path, &input, &dialects);
     Golden {
         path: path.to_owned(),
         tools: tool_set(&node, path),
-        request: request(&node, path, &input, dialect_set(&node, path)),
+        request: prepared,
+        dialects,
         default_request,
+        default_dialects,
         input,
         node,
     }
@@ -446,15 +458,22 @@ fn load(path: &Path) -> Golden {
 
 impl Golden {
     fn run(&self) -> AssistResult<ToolCalls> {
-        self.tools.recover(&self.input, &self.request)
+        self.tools
+            .recover(&self.input, &self.request, &self.dialects)
     }
 
     /// The run under the default allow-list, when it differs from the
     /// pinned request.
     fn run_default(&self) -> Option<AssistResult<ToolCalls>> {
-        self.default_request
-            .as_ref()
-            .map(|request| self.tools.recover(&self.input, request))
+        self.default_request.as_ref().map(|request| {
+            self.tools.recover(
+                &self.input,
+                request,
+                self.default_dialects
+                    .as_ref()
+                    .expect("default dialect context"),
+            )
+        })
     }
 }
 
@@ -1556,7 +1575,9 @@ fn forced_strict_non_ascii_whitespace_is_content() {
     let mut input = golden.input.clone();
     input.truncate(input.len() - 1);
     input.extend_from_slice("\u{a0}".as_bytes());
-    let result = golden.tools.recover(&input, &golden.request);
+    let result = golden
+        .tools
+        .recover(&input, &golden.request, &golden.dialects);
     let calls = reading(&result);
     assert!(!calls.tool_choice.passed, "{calls:#?}");
     assert_eq!(calls.finish, Finish::Unresolved);
@@ -1574,7 +1595,9 @@ fn forced_strict_non_ascii_whitespace_is_content() {
     let mut input = golden.input.clone();
     input.truncate(input.len() - 1);
     input.extend_from_slice(b" \t\r\n\x0c");
-    let result = golden.tools.recover(&input, &golden.request);
+    let result = golden
+        .tools
+        .recover(&input, &golden.request, &golden.dialects);
     assert!(reading(&result).tool_choice.passed);
 }
 
@@ -1585,7 +1608,9 @@ fn forced_strict_tool_result_is_content() {
     let (golden, _) = golden("forced_strict_single_call_passes");
     let mut input = golden.input.clone();
     input.extend_from_slice(b"<tool_response>\n{\"text\":\"a\"}\n</tool_response>\n");
-    let result = golden.tools.recover(&input, &golden.request);
+    let result = golden
+        .tools
+        .recover(&input, &golden.request, &golden.dialects);
     let calls = reading(&result);
     assert_eq!(calls.calls.len(), 1, "{calls:#?}");
     assert!(calls.rejected.is_empty(), "{calls:#?}");
@@ -1944,7 +1969,7 @@ fn xml_array_recursive_ref_items_equal_the_inline_schema() {
         Budget::default(),
     )
     .expect("inline twin");
-    let twin = inline.recover(&golden.input, &golden.request);
+    let twin = inline.recover(&golden.input, &golden.request, &golden.dialects);
     let (call, twin) = (the_call(&result), the_call(&twin));
     assert_eq!(call.arguments.to_json(), twin.arguments.to_json());
     assert_eq!(rules_of(call), rules_of(twin));
@@ -2001,8 +2026,10 @@ fn xml_array_ref_items_and_inline_twin_record_the_same_rules() {
     };
     // Two occurrences, then three: one collect each, at the same place.
     for input in [text, three.as_str()] {
-        let reference = golden.tools.recover(input.as_bytes(), &golden.request);
-        let twin = inline.recover(input.as_bytes(), &golden.request);
+        let reference = golden
+            .tools
+            .recover(input.as_bytes(), &golden.request, &golden.dialects);
+        let twin = inline.recover(input.as_bytes(), &golden.request, &golden.dialects);
         let (reference, twin) = (the_call(&reference), the_call(&twin));
         assert_eq!(reference.outcome, CallOutcome::Resolved, "{reference:#?}");
         assert_eq!(reference.arguments.to_json(), twin.arguments.to_json());
@@ -2154,6 +2181,7 @@ fn xml_unmodeled_opaque_scope_boundary() {
             .request
             .clone()
             .policy(PolicySelection::All(RepairPolicy::Tolerant)),
+        &golden.dialects,
     );
     let tolerant = the_call(&tolerant);
     assert_eq!(tolerant.outcome, CallOutcome::BestGuess, "{tolerant:#?}");
@@ -2208,7 +2236,9 @@ fn xml_array_nested_object_item_missing_required_is_not_resolved() {
     let text = std::str::from_utf8(&golden.input).unwrap();
     let broken = text.replace("<parameter=wearer>\nBob\n</parameter>\n", "");
     assert_ne!(broken, text);
-    let result = golden.tools.recover(broken.as_bytes(), &golden.request);
+    let result = golden
+        .tools
+        .recover(broken.as_bytes(), &golden.request, &golden.dialects);
     for call in &reading(&result).calls {
         assert_ne!(call.outcome, CallOutcome::Resolved, "{call:#?}");
     }
@@ -2230,7 +2260,11 @@ fn xml_array_nested_object_item_fault_names_its_own_item() {
     )
     .unwrap();
     let input = "<tool_call>\n<function=f>\n<parameter=xs>\n<parameter=n>\n1\n</parameter>\n</parameter>\n<parameter=xs>\n<parameter=n>\n{{{ 1 2 zz\n</parameter>\n</parameter>\n</function>\n</tool_call>";
-    let result = tools.recover(input.as_bytes(), &ToolRecoveryRequest::default());
+    let result = tools.recover(
+        input.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        purrassist_core::tool_call::DialectSet::built_in(),
+    );
     let call = the_call(&result);
     match &call.outcome {
         CallOutcome::Unresolved {
@@ -4058,13 +4092,10 @@ fn anthropic_redacted_thinking_closer_overlaps_opener() {
     );
     // A block the turn starts in has no opener to overlap: the same
     // input is recovered with ordered ranges.
-    let request = ToolRecoveryRequest::sized_for(
-        Effort::Standard,
-        &golden.input,
-        dialect_set(&golden.node, &golden.path),
-    )
-    .reasoning(ReasoningPolicy::Separate { starts_open: true });
-    let open = golden.tools.recover(&golden.input, &request);
+    let dialects = dialect_set(&golden.node, &golden.path);
+    let request = ToolRecoveryRequest::sized_for(Effort::Standard, &golden.input, &dialects)
+        .reasoning(ReasoningPolicy::Separate { starts_open: true });
+    let open = golden.tools.recover(&golden.input, &request, &dialects);
     for block in &reading(&open).reasoning_blocks {
         assert!(block.text.start <= block.text.end, "{block:?}");
         assert!(
@@ -4411,7 +4442,11 @@ fn bare_function_markup_is_attempted_or_reported() {
         assert_eq!(found[0].family, MarkupFamily::Qwen3CoderXml, "{input:?}");
         // Allowed, it is the dialect's own attempt, never content.
         let tools = ToolSet::compile([ToolDefinition::new("f")], Budget::default()).unwrap();
-        let result = tools.recover(input.as_bytes(), &ToolRecoveryRequest::default());
+        let result = tools.recover(
+            input.as_bytes(),
+            &ToolRecoveryRequest::default(),
+            purrassist_core::tool_call::DialectSet::built_in(),
+        );
         let calls = reading(&result);
         assert!(
             !calls.calls.is_empty() || !calls.rejected.is_empty(),
@@ -4512,7 +4547,11 @@ fn envelope_json_syntax_is_tolerated() {
         "<tool_call>{'name': 'write_file', 'arguments': {\"path\": \"a\"},}</tool_call>",
         "<tool_call>{\"name\": \"write_file\", \"arguments\": {'path': 'a',}}</tool_call>",
     ] {
-        let result = tools.recover(input.as_bytes(), &ToolRecoveryRequest::default());
+        let result = tools.recover(
+            input.as_bytes(),
+            &ToolRecoveryRequest::default(),
+            purrassist_core::tool_call::DialectSet::built_in(),
+        );
         assert!(matches!(result.outcome, Outcome::Resolved(_)), "{input}");
         assert_eq!(the_call(&result).outcome, CallOutcome::Resolved, "{input}");
     }

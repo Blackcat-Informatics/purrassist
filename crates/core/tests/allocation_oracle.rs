@@ -896,7 +896,11 @@ fn oracle_tool_call_recover() {
         let input = output(n);
         let request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
         let (charged, bytes) = measure(|| {
-            let result = tools.recover(input.as_bytes(), &request);
+            let result = tools.recover(
+                input.as_bytes(),
+                &request,
+                purrassist_core::tool_call::DialectSet::built_in(),
+            );
             let Outcome::Resolved(calls) = &result.outcome else {
                 panic!("{:?}", result.receipt.stopped)
             };

@@ -28,7 +28,7 @@ classification admit work before processing. Trie construction borrows labelled
 spellings; its flat storage preserves literals longer than 128 bytes. Temporary
 JSON flags/renames and delimiter expansions release on every later refusal.
 
-Dense matcher construction/storage and dialect-set sharing, recognizer programs,
+Dense matcher construction/storage now retain exact governed owners. Recognizer programs,
 call metadata/capture analyses and native pattern parsing/automaton preparation
 retain their separate contracts. Full cold backend governance remains #36
 acceptance, alongside witness, GBNF, CompactSignature, projection, routing,

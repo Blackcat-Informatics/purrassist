@@ -37,7 +37,7 @@ let tools = ToolSet::compile(
     Budget::default(),
 ).unwrap();
 let turn = br#"Reading it. <tool_call>{"name": "read_file", "arguments": {"path": "a.rs"}}</tool_call>"#;
-let result = tools.recover(turn, &ToolRecoveryRequest::default());
+let result = tools.recover(turn, &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in());
 let Outcome::Resolved(calls) = result.outcome else { panic!("unexpected outcome") };
 assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
 assert_eq!(calls.calls[0].arguments.to_json(), r#"{"path":"a.rs"}"#);

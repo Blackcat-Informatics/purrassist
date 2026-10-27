@@ -245,7 +245,11 @@ fn golden_tool_call_invalid_utf8_receipt_matches_the_committed_fixture() {
     output.extend_from_slice(
         b"<tool_call>\n{\"name\": \"ls\", \"arguments\": {}}\n</tool_call>\n\xc3",
     );
-    let result = tools.recover(&output, &ToolRecoveryRequest::default());
+    let result = tools.recover(
+        &output,
+        &ToolRecoveryRequest::default(),
+        purrassist_core::tool_call::DialectSet::built_in(),
+    );
     assert!(matches!(result.outcome, Outcome::BestGuess(_)));
     let node = result.receipt.to_node();
     assert!(
@@ -281,12 +285,14 @@ fn tool_call_recovery_receipts_validate_against_the_receipt_schema() {
     let resolved = tools.recover(
         br#"<tool_call>{"name": "read", "arguments": {"path": "a"}}</tool_call>"#,
         &ToolRecoveryRequest::default(),
+        purrassist_core::tool_call::DialectSet::built_in(),
     );
     assert!(matches!(resolved.outcome, Outcome::Resolved(_)));
     assert_valid(&schema, &resolved.receipt.to_node());
     let rejected = tools.recover(
         br#"<tool_call>{"name": "read", "arguments": {"path": "a", "path": "b"}}</tool_call>"#,
         &ToolRecoveryRequest::default().ambiguity(AmbiguityPolicy::Reject),
+        purrassist_core::tool_call::DialectSet::built_in(),
     );
     assert_eq!(rejected.outcome, Outcome::Unresolved);
     assert_eq!(rejected.receipt.alternatives.len(), 2);
@@ -297,6 +303,7 @@ fn tool_call_recovery_receipts_validate_against_the_receipt_schema() {
             work: 3,
             ..Budget::default()
         }),
+        purrassist_core::tool_call::DialectSet::built_in(),
     );
     assert_eq!(exhausted.outcome, Outcome::Unresolved);
     assert_valid(&schema, &exhausted.receipt.to_node());

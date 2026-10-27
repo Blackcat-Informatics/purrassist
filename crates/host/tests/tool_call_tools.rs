@@ -56,7 +56,12 @@ fn final_result_matches_core_recover() {
     let mut governor = Governor::new(request.budget);
     let declarations = json::parse(TOOLS).unwrap().to_json();
     let set = ToolSet::from_openai_governed(&declarations, &mut governor).unwrap();
-    let expected = set.recover_governed(QWEN.as_bytes(), &request, &mut governor);
+    let expected = set.recover_governed(
+        QWEN.as_bytes(),
+        &request,
+        purrassist::tool_call::DialectSet::built_in(),
+        &mut governor,
+    );
 
     assert_eq!(actual.to_json(), expected.to_node().to_json());
     assert_eq!(

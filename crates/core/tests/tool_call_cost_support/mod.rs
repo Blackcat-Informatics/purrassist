@@ -109,7 +109,11 @@ pub fn resolved(
     request: &ToolRecoveryRequest,
     content: &str,
 ) -> AssistResult<ToolCalls> {
-    let result = tools.recover(input.as_bytes(), request);
+    let result = tools.recover(
+        input.as_bytes(),
+        request,
+        purrassist_core::tool_call::DialectSet::built_in(),
+    );
     let Outcome::Resolved(calls) = &result.outcome else {
         panic!("{:?}", result.receipt.stopped)
     };
@@ -164,7 +168,7 @@ pub fn argument_work_bound(small: usize, large: usize) {
                 result.receipt.evidence
             );
             let work = result.receipt.usage.work;
-            let limit = bound(&request.dialects, input.len());
+            let limit = bound(DialectSet::built_in(), input.len());
             println!(
                 "{label} {} bytes: work {work}, published bound {limit}",
                 input.len()
@@ -294,8 +298,8 @@ pub fn work_independent_of_dialect_count(size: usize) {
             let dialects = order[..count].to_vec();
             let set = DialectSet::new(dialects.clone(), &mut Governor::new(Budget::default()))
                 .expect("dialects");
-            let request = ToolRecoveryRequest::sized_for(Effort::Standard, input.as_bytes(), set);
-            let result = tools.recover(input.as_bytes(), &request);
+            let request = ToolRecoveryRequest::sized_for(Effort::Standard, input.as_bytes(), &set);
+            let result = tools.recover(input.as_bytes(), &request, &set);
             assert!(
                 matches!(result.outcome, Outcome::Resolved(_)),
                 "{dialects:?}"
@@ -499,7 +503,7 @@ fn dense_fits_published_budget(label: &str, bytes: usize) {
     let units = (bytes - before.len() - after.len()) / unit.len();
     let input = format!("{before}{}{after}", unit.repeat(units));
     let request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
-    let result = tools.recover(input.as_bytes(), &request);
+    let result = tools.recover(input.as_bytes(), &request, DialectSet::built_in());
     let n = input.len() as u64;
     let usage = result.receipt.usage;
     // Per byte, in thousandths.

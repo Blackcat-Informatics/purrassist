@@ -1836,7 +1836,11 @@ fn root_union_call_recovery_cost_is_linear() {
         let declaration = mcp_tool("t", &format!(r#"{{"anyOf":[{}]}}"#, members.join(",")));
         let tools = ToolSet::from_mcp(&declaration, Budget::default()).unwrap();
         let output = "<tool_call>\n{\"name\": \"t\", \"arguments\": {\"p1\": \"x\"}}\n</tool_call>";
-        let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+        let result = tools.recover(
+            output.as_bytes(),
+            &ToolRecoveryRequest::default(),
+            purrassist_core::tool_call::DialectSet::built_in(),
+        );
         let calls = match &result.outcome {
             purrassist_core::Outcome::Resolved(calls) => calls,
             other => panic!("{branches} branches: {other:?}"),
@@ -1916,6 +1920,7 @@ fn metadata_alias_recovery_keeps_exact_schema_and_declaration() {
     let result = tools.recover(
         br#"<tool_call>{"name":"search","arguments":{"q":"needle","note":"source"}}</tool_call>"#,
         &request,
+        purrassist_core::tool_call::DialectSet::built_in(),
     );
     let Outcome::Resolved(calls) = result.outcome else {
         panic!("{:?}", result.outcome)
@@ -1925,6 +1930,7 @@ fn metadata_alias_recovery_keeps_exact_schema_and_declaration() {
     let result = tools.recover(
         br#"<tool_call>{"name":"search","arguments":{"q":"needle"}}</tool_call>"#,
         &request,
+        purrassist_core::tool_call::DialectSet::built_in(),
     );
     match result.outcome {
         Outcome::Resolved(calls) | Outcome::BestGuess(calls) => {
@@ -1956,8 +1962,7 @@ fn metadata_aliases_reach_array_members_and_preserve_unmodeled_values() {
     .unwrap();
     let result = tools.recover(
         br#"<tool_call>{"name":"search","arguments":{"rows":[{"label":"Ada"}],"body":7}}</tool_call>"#,
-        &ToolRecoveryRequest::new(Effort::Exact),
-    );
+        &ToolRecoveryRequest::new(Effort::Exact), purrassist_core::tool_call::DialectSet::built_in());
     let Outcome::Resolved(calls) = result.outcome else {
         panic!("{:?}", result.outcome)
     };
