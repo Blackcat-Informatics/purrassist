@@ -26,8 +26,7 @@ use super::{
 };
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Governor, Resource, ScratchCharge, ScratchString, ScratchVec, StopReason,
-    format_scratch_governed,
+    Governor, Resource, ScratchCharge, ScratchString, ScratchVec, format_scratch_governed,
 };
 use crate::digest::Digest;
 use crate::pattern::{Pattern, PatternCompileError};
@@ -138,7 +137,7 @@ impl Program {
 
 /// Repair tables of one literal: its declared closer variants and its
 /// confusable spellings, each with a trie over them.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct LiteralTables {
     pub(crate) variants: Spellings,
     pub(crate) confusables: Spellings,
@@ -174,27 +173,40 @@ impl JsonSpelling {
 }
 
 /// A list of spellings and the trie recognizing them (labelled by index).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Spellings {
-    pub(crate) list: Vec<Vec<u8>>,
+    pub(crate) list: ByteList,
     pub(crate) trie: Trie,
 }
 
 impl Spellings {
-    fn build(list: Vec<Vec<u8>>, governor: &mut Governor) -> Result<Self, GrammarError> {
-        let labelled: Vec<(Vec<u8>, u32)> = list
-            .iter()
-            .enumerate()
-            .map(|(index, bytes)| (bytes.clone(), index_u32(index)))
-            .collect();
-        let trie = Trie::build(&labelled, governor)?;
+    fn build(list: ByteList, governor: &mut Governor) -> Result<Self, GrammarError> {
+        symbol_index(list.len(), governor)?;
+        let trie = Trie::build(
+            list.iter()
+                .enumerate()
+                .map(|(index, bytes)| (bytes.as_slice(), index_u32(index))),
+            governor,
+        )?;
+        governor.check()?;
         Ok(Self { list, trie })
     }
 
     fn bytes(&self) -> usize {
-        self.list.iter().map(Vec::len).sum()
+        self.list.iter().map(Bytes::len).sum()
     }
 }
+impl ScratchCharge for LiteralTables {
+    const CHARGE: usize = 400;
+}
+impl ScratchCharge for DelimiterSet {
+    // Includes the existing dense matcher's handle, whose buffers remain separate.
+    const CHARGE: usize = 120;
+}
+const _: () = {
+    assert!(core::mem::size_of::<LiteralTables>() <= LiteralTables::CHARGE);
+    assert!(core::mem::size_of::<DelimiterSet>() <= DelimiterSet::CHARGE);
+};
 
 type Bytes = ScratchVec<u8>;
 type ByteList = ScratchVec<Bytes>;
@@ -990,75 +1002,91 @@ fn committed(
 /// Every confusable spelling of `bytes`: for each non-empty subset of the
 /// confusable pairs occurring in it, replace every occurrence of those pairs'
 /// canonical text by its variant.
+fn contains_bytes(list: &[Bytes], bytes: &[u8], g: &mut Governor) -> Result<bool, GrammarError> {
+    for known in list {
+        if equal(known, bytes, g)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+fn append_bytes(output: &mut Bytes, bytes: &[u8], g: &mut Governor) -> Result<(), GrammarError> {
+    work_for(bytes.len(), 1, 1, g)?;
+    output.extend(bytes.iter().copied())?;
+    Ok(())
+}
 fn confusable_spellings(
     bytes: &[u8],
     confusables: &[(Bytes, Bytes)],
     governor: &mut Governor,
-) -> Result<Vec<Vec<u8>>, GrammarError> {
-    let present: Vec<usize> = (0..confusables.len())
-        .filter(|&index| {
-            let canonical = &confusables[index].0;
-            bytes
-                .windows(canonical.len())
-                .any(|window| window == canonical.as_slice())
-        })
-        .collect();
-    let mut spellings = Vec::new();
+) -> Result<ByteList, GrammarError> {
+    let mut present = ScratchVec::new(governor);
+    for (index, (canonical, _)) in confusables.iter().enumerate() {
+        work_for(bytes.len(), size(canonical.len()).max(1), 1, governor)?;
+        if bytes
+            .windows(canonical.len())
+            .any(|window| window == canonical.as_slice())
+        {
+            present.push(index)?;
+        }
+    }
+    let mut spellings = ScratchVec::new(governor);
     if present.is_empty() {
         return Ok(spellings);
     }
-    let subsets = 1_u64
-        .checked_shl(u32::try_from(present.len()).unwrap_or(u32::MAX))
-        .ok_or(GrammarError::Resource(StopReason::BudgetExceeded(
-            Resource::Work,
-        )))?;
+    let subsets = u32::try_from(present.len())
+        .ok()
+        .and_then(|n| 1_u64.checked_shl(n))
+        .ok_or_else(|| governor.stop_resource(Resource::Work))?;
     for mask in 1..subsets {
-        charge(
-            governor,
-            size(bytes.len()),
-            size(bytes.len()).saturating_mul(2).saturating_add(24),
-        )?;
-        let mut spelling = Vec::with_capacity(bytes.len());
+        governor.charge(Resource::Work, 1)?;
+        let mut spelling = ScratchVec::new(governor);
         let mut index = 0;
         'scan: while index < bytes.len() {
+            governor.charge(Resource::Work, 1)?;
             for (bit, &pair) in present.iter().enumerate() {
+                governor.charge(Resource::Work, 1)?;
                 let (canonical, variant) = &confusables[pair];
-                if mask & (1 << bit) != 0 && bytes[index..].starts_with(canonical) {
-                    spelling.extend_from_slice(variant);
-                    index += canonical.len();
-                    continue 'scan;
+                if mask & (1 << bit) != 0 {
+                    work_for(canonical.len(), 1, 1, governor)?;
+                    if bytes[index..].starts_with(canonical) {
+                        append_bytes(&mut spelling, variant, governor)?;
+                        index += canonical.len();
+                        continue 'scan;
+                    }
                 }
             }
-            spelling.push(bytes[index]);
+            spelling.push(bytes[index])?;
             index += 1;
         }
-        if spelling != bytes && !spellings.contains(&spelling) {
-            spellings.push(spelling);
+        if !equal(&spelling, bytes, governor)? && !contains_bytes(&spellings, &spelling, governor)?
+        {
+            spellings.push(spelling)?;
         }
     }
+    governor.check()?;
     Ok(spellings)
 }
 
-/// The JSON-syntax spellings of `bytes` (see [`JsonSpelling`]): every `"`
-/// as `'` (and, for a lone `"`, a raw control character before or after
-/// it); every `"KEY"` that is a member key (followed by `:` in the literal,
-/// or, when `key_at_end`, ending it) without its quotes; and every `:`
-/// outside quotes left out.
-fn json_spellings(bytes: &[u8], key_at_end: bool) -> [Vec<Vec<u8>>; 3] {
-    let mut string = Vec::new();
+/// Existing JSON-syntax spellings, retaining every temporary until publication.
+fn json_spellings(
+    bytes: &[u8],
+    key_at_end: bool,
+    governor: &mut Governor,
+) -> Result<[ByteList; 3], GrammarError> {
+    // All scans below advance through disjoint words/whitespace runs. This
+    // bound includes quote detection, word tests and every copied byte.
+    work_for(bytes.len(), 8, 1, governor)?;
+    let mut string = ScratchVec::new(governor);
     if bytes.contains(&b'"') {
-        string.push(
-            bytes
-                .iter()
-                .map(|&b| if b == b'"' { b'\'' } else { b })
-                .collect(),
-        );
+        let mut spelling = ScratchVec::new(governor);
+        spelling.extend(bytes.iter().map(|&b| if b == b'"' { b'\'' } else { b }))?;
+        string.push(spelling)?;
     }
-    // Quoted words and colons outside quotes.
-    let mut bare = Vec::with_capacity(bytes.len());
-    let mut keys = 0;
-    let mut colonless = Vec::with_capacity(bytes.len());
-    let mut colons = 0;
+    let mut bare = ScratchVec::new(governor);
+    let mut keys = false;
+    let mut colonless = ScratchVec::new(governor);
+    let mut colons = false;
     let mut index = 0;
     while index < bytes.len() {
         let byte = bytes[index];
@@ -1075,31 +1103,34 @@ fn json_spellings(bytes: &[u8], key_at_end: bool) -> [Vec<Vec<u8>>; 3] {
                     && word.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_')
                     && (colon_follows || (after == bytes.len() && key_at_end));
                 if is_key {
-                    bare.extend_from_slice(word);
-                    keys += 1;
+                    bare.extend(word.iter().copied())?;
+                    keys = true;
                 } else {
-                    bare.extend_from_slice(&bytes[index..after]);
+                    bare.extend(bytes[index..after].iter().copied())?;
                 }
-                colonless.extend_from_slice(&bytes[index..after]);
+                colonless.extend(bytes[index..after].iter().copied())?;
                 index = after;
                 continue;
             }
         }
         if byte == b':' && bytes.len() > 1 {
-            colons += 1;
+            colons = true;
         } else {
-            colonless.push(byte);
+            colonless.push(byte)?;
         }
-        bare.push(byte);
+        bare.push(byte)?;
         index += 1;
     }
-    let bare = if keys > 0 { vec![bare] } else { Vec::new() };
-    let colonless = if colons > 0 && !colonless.is_empty() {
-        vec![colonless]
-    } else {
-        Vec::new()
-    };
-    [string, bare, colonless]
+    let mut bare_list = ScratchVec::new(governor);
+    if keys {
+        bare_list.push(bare)?;
+    }
+    let mut colon_list = ScratchVec::new(governor);
+    if colons && !colonless.is_empty() {
+        colon_list.push(colonless)?;
+    }
+    governor.check()?;
+    Ok([string, bare_list, colon_list])
 }
 
 fn literal_tables(
@@ -1109,34 +1140,42 @@ fn literal_tables(
     json: Option<bool>,
     governor: &mut Governor,
 ) -> Result<LiteralTables, GrammarError> {
-    let mut variants: Vec<Vec<u8>> = Vec::new();
+    let mut variants = ScratchVec::new(governor);
     if let Some(closer) = literal.closer {
         for variant in closers[closer.index()].spellings.iter().skip(1) {
-            if variant.as_slice() != literal.bytes.as_slice()
-                && !variants
-                    .iter()
-                    .any(|value| value.as_slice() == variant.as_slice())
+            if !equal(variant, &literal.bytes, governor)?
+                && !contains_bytes(&variants, variant, governor)?
             {
-                variants.push(variant.as_slice().to_vec());
+                variants.push(owned_bytes(variant, governor)?)?;
             }
         }
     }
-    let spellings: Vec<Vec<u8>> = confusable_spellings(&literal.bytes, confusables, governor)?
-        .into_iter()
-        .filter(|spelling| !variants.contains(spelling))
-        .collect();
-    let mut json_tables = [Vec::new(), Vec::new(), Vec::new()];
+    let mut generated = confusable_spellings(&literal.bytes, confusables, governor)?;
+    work_for(generated.len(), 1, 1, governor)?;
+    generated.as_mut_slice().reverse();
+    let mut spellings = ScratchVec::new(governor);
+    while let Some(spelling) = generated.pop() {
+        if !contains_bytes(&variants, &spelling, governor)? {
+            spellings.push(spelling)?;
+        }
+    }
+    let mut json_tables: [ByteList; 3] = core::array::from_fn(|_| ScratchVec::new(governor));
     if let Some(key_at_end) = json {
-        let mut seen: Vec<Vec<u8>> = variants.iter().chain(&spellings).cloned().collect();
-        seen.push(literal.bytes.as_slice().to_vec());
-        for (table, generated) in json_tables
-            .iter_mut()
-            .zip(json_spellings(&literal.bytes, key_at_end))
+        for (index, mut generated) in json_spellings(&literal.bytes, key_at_end, governor)?
+            .into_iter()
+            .enumerate()
         {
-            for spelling in generated {
-                if !seen.contains(&spelling) {
-                    seen.push(spelling.as_slice().to_vec());
-                    table.push(spelling);
+            work_for(generated.len(), 1, 1, governor)?;
+            generated.as_mut_slice().reverse();
+            while let Some(spelling) = generated.pop() {
+                let mut seen = equal(&literal.bytes, &spelling, governor)?
+                    || contains_bytes(&variants, &spelling, governor)?
+                    || contains_bytes(&spellings, &spelling, governor)?;
+                for table in &json_tables {
+                    seen |= contains_bytes(table, &spelling, governor)?;
+                }
+                if !seen {
+                    json_tables[index].push(spelling)?;
                 }
             }
         }
@@ -1153,12 +1192,36 @@ fn literal_tables(
     })
 }
 
+/// Prepare the same repair-table owners for ordinary and JSON-envelope grammars.
+fn literal_repairs(
+    literals: &[Literal],
+    closers: &[CloserClass],
+    confusables: &[(Bytes, Bytes)],
+    json_keys: Option<&[bool]>,
+    governor: &mut Governor,
+) -> Result<ScratchVec<LiteralTables>, GrammarError> {
+    let mut tables = ScratchVec::new(governor);
+    for (index, literal) in literals.iter().enumerate() {
+        governor.charge(Resource::Work, 1)?;
+        let json = json_keys.map(|keys| keys[index]);
+        tables.push(literal_tables(
+            literal,
+            closers,
+            confusables,
+            json,
+            governor,
+        )?)?;
+    }
+    governor.check()?;
+    Ok(tables)
+}
+
 /// Each literal's key flag, and per program the key uses `(pc, copy)` to
 /// point at a literal's key copy (see `split_keys`).
-type KeySplit = (Vec<bool>, Renames);
+type KeySplit = (ScratchVec<bool>, Renames);
 
 /// Per program, the `Lit` instructions (`pc`) to point at another literal.
-type Renames = Vec<Vec<(u32, u32)>>;
+type Renames = ScratchVec<ScratchVec<(u32, u32)>>;
 
 /// The literal tables of a `json-envelope` grammar, JSON spellings
 /// included, over `literals` with their key copies (see `split_keys`), and
@@ -1169,57 +1232,81 @@ fn json_tables(
     closers: &[CloserClass],
     confusables: &[(Bytes, Bytes)],
     governor: &mut Governor,
-) -> Result<(Vec<LiteralTables>, Renames), GrammarError> {
+) -> Result<(ScratchVec<LiteralTables>, Renames), GrammarError> {
     let (keys, renames) = split_keys(programs, literals, governor)?;
-    charge(governor, size(literals.len()), 0)?;
-    let tables = literals
-        .iter()
-        .zip(&keys)
-        .map(|(literal, &key)| literal_tables(literal, closers, confusables, Some(key), governor))
-        .collect::<Result<Vec<_>, _>>()?;
+    let tables = literal_repairs(literals, closers, confusables, Some(&keys), governor)?;
+    governor.check()?;
     Ok((tables, renames))
 }
 
 /// Each `Lit` use of each program, `(pc, literal, key)`: whether the use
 /// is followed by a literal beginning with `:` (optional class runs, such
 /// as whitespace, between), as a member key is.
-fn key_uses(programs: &[Program], literals: &[Literal]) -> Vec<Vec<(u32, u32, bool)>> {
-    programs
-        .iter()
-        .map(|program| {
-            let mut uses = Vec::new();
-            for (pc, inst) in program.insts.iter().enumerate() {
-                let Inst::Lit { lit, next } = *inst else {
+struct KeyUse {
+    pc: u32,
+    lit: u32,
+    key: bool,
+}
+impl ScratchCharge for KeyUse {
+    const CHARGE: usize = 12;
+}
+struct KeyCopy(Option<u32>);
+impl ScratchCharge for KeyCopy {
+    const CHARGE: usize = 8;
+}
+const _: () = {
+    assert!(core::mem::size_of::<KeyUse>() <= KeyUse::CHARGE);
+    assert!(core::mem::size_of::<KeyCopy>() <= KeyCopy::CHARGE);
+};
+fn key_uses(
+    programs: &[Program],
+    literals: &[Literal],
+    governor: &mut Governor,
+) -> Result<ScratchVec<ScratchVec<KeyUse>>, GrammarError> {
+    let mut per_program = ScratchVec::new(governor);
+    for program in programs {
+        let mut uses = ScratchVec::new(governor);
+        for (pc, inst) in program.insts.iter().enumerate() {
+            governor.charge(Resource::Work, 1)?;
+            let Inst::Lit { lit, next } = *inst else {
+                continue;
+            };
+            let mut colon = true;
+            let mut any = false;
+            work_for(program.insts.len(), 1, 1, governor)?;
+            let mut seen = ScratchVec::new(governor);
+            seen.extend(core::iter::repeat_n(false, program.insts.len()))?;
+            let mut stack = ScratchVec::new(governor);
+            stack.push(next)?;
+            while let Some(pc) = stack.pop() {
+                governor.charge(Resource::Work, 1)?;
+                if core::mem::replace(&mut seen.as_mut_slice()[pc as usize], true) {
                     continue;
-                };
-                let mut colon = true;
-                let mut any = false;
-                let mut seen = vec![false; program.insts.len()];
-                let mut stack = vec![next];
-                while let Some(pc) = stack.pop() {
-                    if core::mem::replace(&mut seen[pc as usize], true) {
-                        continue;
-                    }
-                    match program.insts[pc as usize] {
-                        Inst::Split(first, second) => stack.extend([first, second]),
-                        Inst::Open { next, .. }
-                        | Inst::Close { next, .. }
-                        | Inst::Commit { next }
-                        | Inst::Next { next }
-                        | Inst::Insert { next, .. }
-                        | Inst::Class { next, .. } => stack.push(next),
-                        Inst::Lit { lit, .. } => {
-                            any = true;
-                            colon &= literals[lit as usize].bytes.first() == Some(&b':');
-                        }
-                        Inst::Until { .. } | Inst::Slot { .. } | Inst::Accept => colon = false,
-                    }
                 }
-                uses.push((index_u32(pc), lit, any && colon));
+                match program.insts[pc as usize] {
+                    Inst::Split(first, second) => stack.extend([first, second])?,
+                    Inst::Open { next, .. }
+                    | Inst::Close { next, .. }
+                    | Inst::Commit { next }
+                    | Inst::Next { next }
+                    | Inst::Insert { next, .. }
+                    | Inst::Class { next, .. } => stack.push(next)?,
+                    Inst::Lit { lit, .. } => {
+                        any = true;
+                        colon &= literals[lit as usize].bytes.first() == Some(&b':');
+                    }
+                    Inst::Until { .. } | Inst::Slot { .. } | Inst::Accept => colon = false,
+                }
             }
-            uses
-        })
-        .collect()
+            uses.push(KeyUse {
+                pc: symbol_index(pc, governor)?,
+                lit,
+                key: any && colon,
+            })?;
+        }
+        per_program.push(uses)?;
+    }
+    Ok(per_program)
 }
 
 /// The member-key literals of a `json-envelope` grammar: a literal every
@@ -1233,47 +1320,57 @@ fn split_keys(
     literals: &mut ScratchVec<Literal>,
     governor: &mut Governor,
 ) -> Result<KeySplit, GrammarError> {
-    let uses = key_uses(programs, literals);
-    let mut counts = vec![(0_u32, 0_u32); literals.len()];
-    for &(_, lit, key) in uses.iter().flatten() {
-        let count = &mut counts[lit as usize];
-        count.0 += 1;
-        count.1 += u32::from(key);
-    }
-    let mut keys: Vec<bool> = counts
-        .iter()
-        .map(|&(all, keyed)| all > 0 && all == keyed)
-        .collect();
-    let mut copies: Vec<Option<u32>> = vec![None; literals.len()];
-    let mut per_program = Vec::with_capacity(uses.len());
+    let uses = key_uses(programs, literals, governor)?;
+    work_for(literals.len(), 3, 1, governor)?;
+    let mut counts = ScratchVec::new(governor);
+    counts.extend(core::iter::repeat_n((0_u32, 0_u32), literals.len()))?;
     for program in &uses {
-        let mut moved = Vec::new();
-        for &(pc, lit, key) in program {
+        for key_use in program {
+            governor.charge(Resource::Work, 1)?;
+            let count = &mut counts.as_mut_slice()[key_use.lit as usize];
+            count.0 = count
+                .0
+                .checked_add(1)
+                .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+            count.1 = count
+                .1
+                .checked_add(u32::from(key_use.key))
+                .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+        }
+    }
+    let mut keys = ScratchVec::new(governor);
+    keys.extend(counts.iter().map(|&(all, keyed)| all > 0 && all == keyed))?;
+    let mut copies = ScratchVec::new(governor);
+    copies.extend(core::iter::repeat_with(|| KeyCopy(None)).take(literals.len()))?;
+    let mut per_program = ScratchVec::new(governor);
+    for program in &uses {
+        let mut moved = ScratchVec::new(governor);
+        for &KeyUse { pc, lit, key } in program {
+            governor.charge(Resource::Work, 1)?;
             let (all, keyed) = counts[lit as usize];
             if !key || keyed == all {
                 continue;
             }
-            let copy = if let Some(copy) = copies[lit as usize] {
+            let copy = if let Some(copy) = copies[lit as usize].0 {
                 copy
             } else {
-                charge(governor, 1, size(literals[lit as usize].bytes.len()))?;
-                // Key uses deliberately need a distinct derived table identity;
-                // this is not another source interning path.
+                // Key uses deliberately need a distinct derived table identity.
                 let copy_bytes = owned_bytes(&literals[lit as usize].bytes, governor)?;
                 let copy_closer = literals[lit as usize].closer;
+                let copy = symbol_index(literals.len(), governor)?;
                 literals.push(Literal {
                     bytes: copy_bytes,
                     closer: copy_closer,
                 })?;
-                keys.push(true);
-                let copy = index_u32(literals.len() - 1);
-                copies[lit as usize] = Some(copy);
+                keys.push(true)?;
+                copies.as_mut_slice()[lit as usize].0 = Some(copy);
                 copy
             };
-            moved.push((pc, copy));
+            moved.push((pc, copy))?;
         }
-        per_program.push(moved);
+        per_program.push(moved)?;
     }
+    governor.check()?;
     Ok((keys, per_program))
 }
 
@@ -1418,7 +1515,7 @@ impl Programs<'_> {
         &self,
         literals: &[Literal],
         repairs: &[LiteralTables],
-        renames: &[Vec<(u32, u32)>],
+        renames: &[ScratchVec<(u32, u32)>],
         governor: &mut Governor,
     ) -> Result<[Program; 2], GrammarError> {
         let tables = Tables {
@@ -1434,7 +1531,7 @@ impl Programs<'_> {
                 root,
                 self.offsets[root.index()],
                 &tables,
-                renames.get(index).map_or(&[][..], Vec::as_slice),
+                renames.get(index).map_or(&[][..], ScratchVec::as_slice),
                 governor,
             )
         };
@@ -1601,25 +1698,27 @@ fn stray_spellings(
     productions: &[Production],
     governor: &mut Governor,
 ) -> Result<Spellings, GrammarError> {
-    // An `xml-params` body's own closers (`</parameter>`, `</parameters>`)
-    // left after a call are the call's stray closers too (issue #3 §3:
-    // "repeated or stray closers are all one class").
-    let codec: &[&[u8]] = if productions
-        .iter()
-        .any(|production| xml_params(&production.expr))
-    {
+    // XML parameter-body closers are also stray call closers.
+    let mut xml = false;
+    for production in productions {
+        if xml_params(&production.expr, 0, governor)? {
+            xml = true;
+            break;
+        }
+    }
+    let codec: &[&[u8]] = if xml {
         &[super::codec::XML_CLOSER, super::codec::XML_CLOSER_VARIANT]
     } else {
         &[]
     };
-    let mut list: Vec<Vec<u8>> = Vec::new();
+    let mut list = ScratchVec::new(governor);
     for spelling in closers
         .iter()
         .flat_map(|closer| closer.spellings.iter().map(Bytes::as_slice))
         .chain(codec.iter().copied())
     {
-        if !list.iter().any(|listed| listed == spelling) {
-            list.push(spelling.to_vec());
+        if !contains_bytes(&list, spelling, governor)? {
+            list.push(owned_bytes(spelling, governor)?)?;
         }
     }
     Spellings::build(list, governor)
@@ -1650,40 +1749,56 @@ fn call_markup(
 }
 
 /// Whether `expr` holds an `xml-params` slot.
-fn xml_params(expr: &Expr) -> bool {
-    match expr {
+fn xml_params(expr: &Expr, depth: u64, governor: &mut Governor) -> Result<bool, GrammarError> {
+    visit(depth, governor)?;
+    Ok(match expr {
         Expr::Slot { codec, .. } => *codec == CodecKind::XmlParams,
-        Expr::Capture { inner, .. } | Expr::Repeat { inner, .. } => xml_params(inner),
-        Expr::Sequence(items) | Expr::Choice(items) => items.iter().any(xml_params),
+        Expr::Capture { inner, .. } | Expr::Repeat { inner, .. } => {
+            xml_params(inner, depth + 1, governor)?
+        }
+        Expr::Sequence(items) | Expr::Choice(items) => {
+            let mut found = false;
+            for item in items {
+                if xml_params(item, depth + 1, governor)? {
+                    found = true;
+                    break;
+                }
+            }
+            found
+        }
         _ => false,
-    }
+    })
 }
 
-/// Each delimiter set's matcher, over its literals and their confusable
-/// spellings.
+/// Declared delimiters and governed expansion, around the separately prepared
+/// dense matcher. Dense matcher buffers retain their existing accounting.
 fn delimiter_sets(
     mut sets: ScratchVec<ByteList>,
     confusables: &[(Bytes, Bytes)],
     governor: &mut Governor,
-) -> Result<Vec<DelimiterSet>, GrammarError> {
-    let mut delimiters = Vec::with_capacity(sets.len());
-    governor.charge(Resource::Work, size(sets.len()))?;
+) -> Result<ScratchVec<DelimiterSet>, GrammarError> {
+    let mut delimiters = ScratchVec::new(governor);
+    work_for(sets.len(), 1, 1, governor)?;
     sets.as_mut_slice().reverse();
     while let Some(declared) = sets.pop() {
-        let mut expanded: Vec<Vec<u8>> = declared
-            .iter()
-            .map(|bytes| bytes.as_slice().to_vec())
-            .collect();
+        let mut expanded = ScratchVec::new(governor);
+        for bytes in &declared {
+            expanded.push(owned_bytes(bytes, governor)?)?;
+        }
         for literal in &declared {
-            for spelling in confusable_spellings(literal, confusables, governor)? {
-                if !expanded.contains(&spelling) {
-                    expanded.push(spelling);
+            let mut generated = confusable_spellings(literal, confusables, governor)?;
+            work_for(generated.len(), 1, 1, governor)?;
+            generated.as_mut_slice().reverse();
+            while let Some(spelling) = generated.pop() {
+                if !contains_bytes(&expanded, &spelling, governor)? {
+                    expanded.push(spelling)?;
                 }
             }
         }
-        let matcher = Matcher::build(&expanded, governor)?;
-        delimiters.push(DelimiterSet { declared, matcher });
+        let matcher = Matcher::build(expanded.as_slice(), governor)?;
+        delimiters.push(DelimiterSet { declared, matcher })?;
     }
+    governor.check()?;
     Ok(delimiters)
 }
 
@@ -1709,9 +1824,9 @@ fn longest_literal(
                         .chain(&tables.confusables.list)
                         .chain(tables.json.iter().flat_map(|json| &json.list))
                 })
-                .map(Vec::len),
+                .map(Bytes::len),
         )
-        .chain(stray.list.iter().map(Vec::len))
+        .chain(stray.list.iter().map(Bytes::len))
         .chain(delimiters.iter().map(|set| set.matcher.longest()))
         .chain(
             reasoning
@@ -1790,10 +1905,7 @@ pub(crate) fn compile(
         governor,
     )?;
     let closer_ids = closer_literals(&mut literals, &closers, governor)?;
-    let mut literal_tables = literals
-        .iter()
-        .map(|literal| self::literal_tables(literal, &closers, &confusables, None, governor))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut literal_tables = literal_repairs(&literals, &closers, &confusables, None, governor)?;
     let stray = stray_spellings(&closers, &productions, governor)?;
     let delimiters = delimiter_sets(sets, &confusables, governor)?;
     let source = Programs {
@@ -2050,8 +2162,8 @@ fn call_literals(
     for lit in lits {
         let tables = &tables[lit as usize];
         for spelling in core::iter::once(literals[lit as usize].bytes.as_slice())
-            .chain(tables.variants.list.iter().map(Vec::as_slice))
-            .chain(tables.confusables.list.iter().map(Vec::as_slice))
+            .chain(tables.variants.list.iter().map(Bytes::as_slice))
+            .chain(tables.confusables.list.iter().map(Bytes::as_slice))
         {
             charge(governor, size(spellings.len()), size(spelling.len()))?;
             if !spellings.iter().any(|known| known.as_slice() == spelling) {
@@ -2088,8 +2200,20 @@ fn call_ends(
     let spellings = |lit: u32| {
         let tables = &tables[lit as usize];
         core::iter::once(literals[lit as usize].bytes.as_slice().to_vec())
-            .chain(tables.variants.list.iter().cloned())
-            .chain(tables.confusables.list.iter().cloned())
+            .chain(
+                tables
+                    .variants
+                    .list
+                    .iter()
+                    .map(|bytes| bytes.as_slice().to_vec()),
+            )
+            .chain(
+                tables
+                    .confusables
+                    .list
+                    .iter()
+                    .map(|bytes| bytes.as_slice().to_vec()),
+            )
             .collect::<Vec<_>>()
     };
     // Whether the production completes from each instruction without
@@ -2241,4 +2365,67 @@ fn layouts(
         layouts.as_mut_slice()[index] = Some(owned_bytes(text, builder.governor)?);
     }
     Ok(layouts)
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::{LiteralTables, literal_tables, owned_bytes};
+    use crate::contract::{Budget, CancellationToken, Governor, Resource, ScratchVec, StopReason};
+    use crate::grammar::{GrammarError, Literal};
+
+    fn prepared(g: &mut Governor) -> Result<LiteralTables, GrammarError> {
+        let literal = Literal {
+            bytes: owned_bytes(b"\"key\":X", g)?,
+            closer: None,
+        };
+        let mut pairs = ScratchVec::new(g);
+        pairs.push((owned_bytes(b"X", g)?, owned_bytes(b"expanded", g)?))?;
+        let tables = literal_tables(&literal, &[], &pairs, Some(true), g)?;
+        // A later refusal must drop fully prepared tables as well as temporaries.
+        g.charge(Resource::Work, 1)?;
+        Ok(tables)
+    }
+
+    #[test]
+    fn derived_spelling_refusals_release_partial_and_completed_json_repair_tables() {
+        let mut measured = Governor::new(Budget::default());
+        let tables = prepared(&mut measured).unwrap();
+        let usage = measured.usage();
+        assert!(!tables.confusables.list.is_empty());
+        drop(tables);
+        assert_eq!(measured.scratch_meter().live(), 0);
+        for (budget, resource) in [
+            (
+                Budget {
+                    work: usage.work - 1,
+                    ..Budget::default()
+                },
+                Resource::Work,
+            ),
+            (
+                Budget {
+                    scratch_bytes: usage.peak_scratch_bytes - 1,
+                    ..Budget::default()
+                },
+                Resource::ScratchBytes,
+            ),
+        ] {
+            let mut g = Governor::new(budget);
+            let reason = StopReason::BudgetExceeded(resource);
+            assert_eq!(
+                prepared(&mut g).unwrap_err(),
+                GrammarError::Resource(reason.clone())
+            );
+            assert_eq!(g.check(), Err(reason));
+            assert_eq!(g.scratch_meter().live(), 0);
+        }
+        let token = CancellationToken::new();
+        token.cancel();
+        let mut g = Governor::with_cancellation(Budget::default(), token);
+        assert_eq!(
+            prepared(&mut g).unwrap_err(),
+            GrammarError::Resource(StopReason::Cancelled)
+        );
+        assert_eq!(g.scratch_meter().live(), 0);
+    }
 }
