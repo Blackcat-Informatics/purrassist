@@ -86,3 +86,20 @@ Run `cargo run -p purrassist-toolgraph --example internet_rules` for the actual
 IPv4 CIDR/IPv6 consumer and its offline parser fixture. Graph admission, complete
 permission analysis, v3/v4 policy synthesis, Unix rules and host enforcement
 remain under the original parent contracts.
+
+`UnixRule` renders standalone Unix socket fragments for caller-prepared
+access/type/qualifier/address/peer-label declarations. It reuses the [AppArmor](https://apparmor.net/)
+binding and policy-word printer; the Internet and Unix APIs share the same
+native access parser without changing Internet errors or governance. Explicit
+unconstrained, anonymous (`addr=none`) and abstract addresses remain distinct.
+Abstract patterns require a literal `@` before any variable, retaining the
+correct `@@{TOOL_TMP}` spelling. Filesystem sockets require file-access rules;
+`auto`, unsupported NUL escapes and incompatible peer/local-only accesses are
+refused. One private governed output buffer returns the complete rule atomically.
+Artifacts require standalone ABI `3.0` and `network/af_unix`; offline compilation
+against packaged targets does not attest to the running kernel or loaded policy.
+Run `cargo run -p purrassist-toolgraph --example unix_rules` for the actual
+abstract/anonymous/unconstrained consumer. File-rule `GlobLanguage` matching is
+not Unix-address matching. Admitted-graph synthesis, original v3/v4 integration,
+other IPC families, permission/owner/deny analysis and host confinement remain
+under the original parent contracts.
