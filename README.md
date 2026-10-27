@@ -116,7 +116,8 @@ Three workspace crates are internal and not published: `wasm-harness` (native,
 WASI and browser-WASM acceptance transcripts), `purrassist-helper-census`
 (the duplicate-functionality census), and `purrassist-toolgraph` (validated
 caller-owned vocabulary, loss profiles, context masks and exact output byte
-bounds; graph loading and
+bounds, with a direct consumer of the supported upstream plain FnO schema profile;
+plain-number support, graph loading and
 execution remain planned).
 
 ## Capabilities

@@ -751,7 +751,7 @@
       "name": "purrdf-cdt",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26#2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
@@ -769,7 +769,7 @@
       "name": "purrdf-core",
       "version": "3.0.1",
       "license": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26#2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
@@ -789,7 +789,7 @@
       "name": "purrdf-datalog",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26#2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
@@ -807,7 +807,7 @@
       "name": "purrdf-deflate",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26#2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
@@ -825,7 +825,7 @@
       "name": "purrdf-ed25519",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26#2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
@@ -843,7 +843,7 @@
       "name": "purrdf-events",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26#2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
@@ -861,7 +861,7 @@
       "name": "purrdf-geo-kernel",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26#2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
@@ -879,7 +879,7 @@
       "name": "purrdf-gts",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26#2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
@@ -897,7 +897,7 @@
       "name": "purrdf-hash",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26#2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
@@ -915,7 +915,7 @@
       "name": "purrdf-iri",
       "version": "3.0.1",
       "license": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26#2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
@@ -935,7 +935,7 @@
       "name": "purrdf-lex",
       "version": "3.0.1",
       "license": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND MIT AND Unicode-3.0 AND BSD-3-Clause",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26#2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
@@ -961,7 +961,7 @@
       "name": "purrdf-rdf",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26#2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
@@ -979,7 +979,7 @@
       "name": "purrdf-shapes",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26#2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
@@ -997,7 +997,7 @@
       "name": "purrdf-slice",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26#2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
@@ -1015,7 +1015,7 @@
       "name": "purrdf-sparql-algebra",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26#2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
@@ -1033,7 +1033,7 @@
       "name": "purrdf-sparql-eval",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26#2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
@@ -1051,7 +1051,7 @@
       "name": "purrdf-sparql-results",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26#2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
@@ -1069,7 +1069,7 @@
       "name": "purrdf-stack",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26#2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
@@ -1087,7 +1087,7 @@
       "name": "purrdf-xsd",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26#2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",

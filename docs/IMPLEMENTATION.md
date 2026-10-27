@@ -173,7 +173,11 @@ Core operations are synchronous and resumable around supplied helper responses.
   and a complete caller-owned MCP context fragment codec, including field-mask
   parsing and exact output byte-limit enforcement, plus governed AppArmor glob
   words. Graph loading, full manifests,
-  schema projection, authorization and execution remain planned. Exact upstream Git dependencies
+  production schema bridge, authorization and execution remain planned. The direct
+  `plain_tool_schemas` consumer adopts upstream plain FnO schema compilation and
+  validates exact worked schemas with the core engine (#70). G7's plain-number support
+  remains open under #43; graph loading and original-SHACL integration remain
+  #33. Exact upstream Git dependencies
   keep it outside the publishable facade until registry packaging is qualified.
 
 ## Required delivery sequence
