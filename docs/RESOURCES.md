@@ -1225,3 +1225,35 @@ Policy quoting preserves wildcards rather than literalizing them. Literal host
 paths containing glob/variable metacharacters, quotes, backslashes or controls
 are refused, never interpolated as new syntax. This parser/printer does not
 establish matching, containment, admission or kernel enforcement.
+
+## Exact byte-language containment
+
+`pattern::ByteLanguage` directly compiles postfix instructions through the
+existing derivative term/class arena and actual-capacity retained storage.
+It does not invoke the Unicode regex parser or its estimated syntax lease.
+Leaf expression depth is zero; star and positive n-ary concatenation/alternation
+add one plus their deepest child. Postfix stack width and the internal binary
+term representation do not define logical expression depth.
+
+Byte compilation and sessions opt into admitted fixed-size map comparisons,
+potential shifted entries and class lookups through a temporary arena adapter.
+No flag widens retained Unicode/session layouts or changes their established
+work schedule. Flat full-byte matching never decodes UTF-8, rejoins a search root
+or makes earlier acceptance sticky. Original Unicode behavior remains unchanged.
+
+Inclusion explores the product of the two existing derivative sessions over
+joint byte-class cut points. Visited pairs, session caches and predecessor nodes
+use fallible admitted storage. One representative per interval suffices because
+all predicates in both programs are constant throughout that interval. The
+canonical dead left term is pruned because none of its continuations can witness
+noninclusion. Only an exhausted reachable frontier proves containment. A witness
+is reconstructed fallibly as bytes in shortest-length, ascending-byte order;
+depth bounds each discovered prefix length. Work, storage, depth and cancellation
+refusal return errors, never containment or an unsupported impossibility claim.
+
+`GlobLanguage` lowers the admitted `AppArmorGlob` tokens directly and shares
+literal-binding preparation with its policy-word printer. No brace products,
+rendered regex text or reparsed policy words are introduced. Its filename
+alphabet excludes NUL; explicit byte classes may contain slash. Source models
+are caller-owned. Permission sets, owner/deny semantics and complete hat
+admission are not established by this standalone language proof.

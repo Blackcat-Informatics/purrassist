@@ -345,6 +345,32 @@ impl AppArmorGlob {
         bindings: &[LiteralPathBinding<'_>],
         governor: &mut Governor,
     ) -> Result<String, GlobError> {
+        let positions = self.prepare_bindings(bindings, governor)?;
+        let mut output = ScratchString::new(governor);
+        emit(&mut output, "\"", governor)?;
+        let mut copied = 0;
+        for token in &self.tokens {
+            governor.charge(Resource::Work, 1)?;
+            if let GlobTokenKind::Variable { declaration } = token.kind {
+                let position = positions.as_slice()[declaration];
+                emit(
+                    &mut output,
+                    &self.source[copied..token.span.start],
+                    governor,
+                )?;
+                emit(&mut output, bindings[position].path, governor)?;
+                copied = token.span.end;
+            }
+        }
+        emit(&mut output, &self.source[copied..], governor)?;
+        finish_word(output, governor)
+    }
+    /// Shared exact binding validation/indexing for printing and byte lowering.
+    pub(super) fn prepare_bindings(
+        &self,
+        bindings: &[LiteralPathBinding<'_>],
+        governor: &mut Governor,
+    ) -> Result<ScratchVec<usize>, GlobError> {
         let mut positions = ScratchVec::new(governor);
         for _ in &self.declarations {
             governor.charge(Resource::Work, 1)?;
@@ -380,9 +406,6 @@ impl AppArmorGlob {
             positions.as_mut_slice()[declaration] = index;
             used.push(false)?;
         }
-        let mut output = ScratchString::new(governor);
-        emit(&mut output, "\"", governor)?;
-        let mut copied = 0;
         for token in &self.tokens {
             governor.charge(Resource::Work, 1)?;
             if let GlobTokenKind::Variable { declaration } = token.kind {
@@ -392,13 +415,6 @@ impl AppArmorGlob {
                         offset: token.span.start,
                     });
                 }
-                emit(
-                    &mut output,
-                    &self.source[copied..token.span.start],
-                    governor,
-                )?;
-                emit(&mut output, bindings[position].path, governor)?;
-                copied = token.span.end;
                 used.as_mut_slice()[position] = true;
             }
         }
@@ -408,8 +424,8 @@ impl AppArmorGlob {
                 return Err(binding_error(index, 0, GlobBindingProblem::Unused));
             }
         }
-        emit(&mut output, &self.source[copied..], governor)?;
-        finish_word(output, governor)
+        governor.check()?;
+        Ok(positions)
     }
 }
 

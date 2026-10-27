@@ -508,6 +508,23 @@ Source DOM construction is caller-owned. Full enclosing manifests, original RDF
 source/provenance, loss-ledger integration and host release remain required
 under #33 and #47; this fragment does not establish those acceptance criteria.
 
+## Exact AppArmor byte-language containment — implemented
+
+`GlobLanguage` lowers admitted pathname tokens and complete literal bindings
+through the existing core derivative arena/session, using direct governed
+postfix `ByteLanguage` construction. This full-match byte driver preserves
+arbitrary pathname bytes without routing them through Unicode regex syntax.
+Unions, classes, nested/empty alternatives and literal bindings are structural;
+they do not expand brace products. Existing Unicode pattern/search behavior
+remains unchanged.
+
+Exact inclusion returns `Contained` only after exhausting the reachable product
+frontier, or a shortest deterministic counterexample as original bytes. Resource
+or cancellation refusal is a separate error. The `glob_containment` consumer
+executes this actual production path. Complete permission-set, owner and deny
+analysis, trusted graph admission and hat enforcement remain under #34/#35.
+No exhausted language search can authorize a tool. See [RESOURCES.md](../RESOURCES.md).
+
 ## AppArmor pathname syntax and policy words — implemented
 
 `AppArmorGlob` supplies the first-party byte-oriented syntax model needed by

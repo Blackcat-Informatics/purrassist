@@ -22,14 +22,21 @@
 //!
 //! `pattern` is unanchored search (JSON Schema semantics: found anywhere in
 //! the subject), on both engines.
+//!
+//! [`ByteLanguage`] separately constructs full-match languages over arbitrary
+//! bytes through the same derivative arena/session. Its direct postfix input
+//! needs no Unicode regex parser or syntax-storage estimate; existing `Pattern`
+//! and UTF-8 byte-automaton semantics are unchanged.
 mod ast;
 mod backtrack;
+mod bytes;
 pub(crate) mod derive;
 mod generate;
 mod parse;
 mod storage;
 mod unicode;
 
+pub use bytes::{ByteCompileError, ByteInclusion, ByteInstruction, ByteLanguage};
 pub use derive::{DerivativeDfa, DfaState};
 
 use crate::contract::{

@@ -89,7 +89,15 @@ safe policy words through `AppArmorGlob`. Its flat arena retains exact source,
 byte/range semantics, brace links and caller-declared variable identities without
 expanding alternatives. Literal host binding refuses unsafe syntax explicitly.
 The `apparmor_path_words` example exercises standalone rendered path rules;
-matching, containment, full policy synthesis and confinement remain planned.
+permission analysis, full policy synthesis and confinement remain planned.
+
+`GlobLanguage` now lowers these admitted semantic models and shared literal
+bindings into the core's `ByteLanguage`, a direct postfix/full-byte driver over
+the existing derivative arena/session. It proves exact language inclusion or
+returns a shortest counterexample as bytes, including invalid UTF-8. Exhaustion
+remains an explicit error. The `glob_containment` example exercises actual
+lowering and inclusion; complete permission/owner/deny analysis, hat admission,
+policy synthesis and host enforcement remain outstanding (#34/#35).
 
 ## Shared contracts
 
