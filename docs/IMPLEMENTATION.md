@@ -2,6 +2,18 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+The existing `Grammar::compile_governed` path now admits complete private DSL
+syntax with governed scans/decoding/copies, fallible owned tokens and lists,
+and exact syntax diagnostics/offsets. Unary syntax children use one-element
+scratch vectors. Caller depth and explicit native parser-recursion and AST
+ownership/drop ceilings of 128 include postfix chains. Syntax owners remain
+release-owned through lowering failures; the grammar identity is retained only
+after remaining fallible construction and final cancellation checks. The actual
+`canonical_print` consumer exercises this compiler path. Full cold lowering,
+compiled public `Expr`/`Box` storage, table/intern allocations and native pattern
+preparation remain uncompleted #36 acceptance, alongside witness, GBNF,
+CompactSignature, projection, routing, ledgers and graph integration.
+
 Status: merged to `main` (PR #2, `699d9ff`); tool-call recovery (#3, #8) and
 `purrassist-derive` (#15) merged since; published as `rust-v0.1.0`. Executable
 qualification and its limits are recorded in `QUALIFICATION.md`; publication

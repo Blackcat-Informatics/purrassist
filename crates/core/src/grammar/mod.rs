@@ -549,11 +549,17 @@ pub struct Grammar;
 impl Grammar {
     /// Compile a grammar under a caller-owned governor.
     ///
-    /// Charges `InputBytes` for the source; `Work` per source byte, syntax
-    /// node, instruction, and compiled table entry (see [`cost::K_COMPILE`]);
-    /// `Depth` per nesting level; and `ScratchBytes` for every retained table
-    /// (literal tries, Aho–Corasick matchers, class automata), which stay
-    /// charged for the life of the operation like other compiled artifacts.
+    /// Private DSL syntax admission governs original source input, scans,
+    /// decoding, copies, diagnostics and fallible token/tree storage. Syntax
+    /// owners release their reservations after lowering or on failure; only
+    /// the grammar identity is retained with the successful public artifact.
+    /// Parser recursion and AST ownership height each have a native ceiling
+    /// of 128 in addition to caller `Depth`, including postfix nesting.
+    ///
+    /// Later resolution, instruction and table construction also charge work
+    /// and storage (see [`cost::K_COMPILE`]), but their allocations and native
+    /// pattern preparation are not completely governed. This syntax phase
+    /// does not establish complete cold compiler governance.
     ///
     /// # Errors
     /// Returns a typed [`GrammarError`] with the source offset for malformed

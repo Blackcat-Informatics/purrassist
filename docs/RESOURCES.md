@@ -2,6 +2,33 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Resource measurements
 
+## Private grammar DSL syntax admission
+
+`Grammar::compile_governed` uses one private lexer/parser with the current
+governor. Original input is admitted first. A checked 64 work units per source
+byte reserve covers trivia/identifier/literal/class scans, UTF-8 and escape
+decoding, copies and fixed keyword comparisons. Node processing and list-height
+scans charge separately. Diagnostic formatting pre-admits bounded computation
+and uses the shared governed sink for actual bytes and fallible storage.
+
+Tokens move their owned payloads into fallible `ScratchString`/`ScratchVec`
+syntax storage. The positioned AST has no private `Box` allocation: a checked
+one-element scratch vector owns each unary child. Cached heights admit each
+parent before construction. Parser recursion and ownership/drop height each
+have native ceilings of 128 as well as caller depth, including repeated postfix
+operators. Refused inputs never construct a deeper tree. Partial syntax and
+temporary diagnostics release exact owned reservations; escaping syntax errors
+retain their admitted messages and exact offsets.
+
+Syntax owners remain live throughout lowering and drop on its failures. Only
+the grammar ID is published after remaining fallible construction and a final
+cancellation check. The actual compiler consumer and existing syntax/grammar
+cases exercise this path. Later public `Expr`/`Box` allocations, intern/table
+construction and native pattern parsing remain outside complete governance;
+their existing coarser charges do not establish full cold compiler admission.
+Parent #36 retains those requirements and the remaining generation/integration
+work.
+
 `make resources` builds an assertion-backed resource benchmark and the release
 CLI, then profiles nine fixed workloads and measures core and syntax latency,
 allocation, RSS, artifact sizes and an uncached release build. It requires Linux,
