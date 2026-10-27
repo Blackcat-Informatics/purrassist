@@ -4,6 +4,7 @@
 //! Validated caller-owned tool-graph vocabulary and context contracts.
 #![doc = include_str!("../README.md")]
 
+mod binding;
 mod context;
 mod field_mask;
 mod vocab;
@@ -17,3 +18,5 @@ pub use vocab::{
     SOURCE_REPRESENTATION, TERM_NAMES, TermBindings, Vocabulary, VocabularyError,
     register_loss_profile,
 };
+
+pub use binding::{BindingError, CallableBinding, ParameterBinding, ReturnBinding};

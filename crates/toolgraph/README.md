@@ -20,3 +20,18 @@ meanings, the bounded four-form field-mask parser, and the governed
 serialized results intact; it makes no token-count claim. Graph loading, schema
 projection, manifest codecs, authorization and execution remain specified in
 the repository's tool-graph documents; this crate does not yet provide them.
+
+`CallableBinding::admit` validates a selected mapping from an already admitted
+upstream `FnO` catalog. It requires complete unique parameter/return bindings and
+input predicates/properties, retains declaration order and borrows original
+native identities and literal facets. Catalog lookup is binary; ambiguity checks
+are explicitly quadratic in the selected callable's arity and charged before
+each comparison. A fallible retained index supports direct parameter access.
+Run `cargo run -p purrassist-toolgraph --example admit_callable` for an executed
+consumer using the actual upstream reader. Catalog preparation is caller-owned;
+this operation does not govern RDF parsing or upstream catalog construction.
+
+Graph source ownership, precise occurrence spans, SHACL/G7 compilation, manifest
+round trips, authorization and execution remain required under issue #33 and
+its dependent deliveries. A complete callable binding is no graph-load success
+or permission to dispatch.

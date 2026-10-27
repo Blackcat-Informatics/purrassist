@@ -64,6 +64,12 @@ computational engines remain wasmable.
 - Standard helper-provider adapters and caller-managed endpoints. No model is
   required. Bundled small models remain an evaluation track, not a prerequisite.
 
+The internal tool-graph crate also admits complete callable FnO bindings from
+caller-prepared upstream catalogs. Its governed checker preserves original
+records and declaration order; the `admit_callable` example exercises the actual
+upstream reader and public API. This does not implement governed RDF/FnO source
+admission, SHACL/G7 integration, graph loading or manifest conversion (#33).
+
 ## Shared contracts
 
 Intent + input + context -> candidates -> validation/ranking -> result + receipt.

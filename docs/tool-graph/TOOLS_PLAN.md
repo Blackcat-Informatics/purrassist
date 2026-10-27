@@ -485,6 +485,31 @@ still passed to the upstream compiler. Resolve the actual G7 source and check
 any drift from the inspected dependency closure before #33. Phase 3 cannot close #33 until the upstream
 API exists, its plain-profile consumer tests pass, and the integration is wired.
 
+## Callable-binding admission — implemented
+
+`CallableBinding::admit` accepts an explicit caller-prepared upstream
+`FnoCatalog`, selected mapping index and core `Governor`. It requires a
+predicate for each callable parameter/output, exactly one mapping per declared
+parameter and exactly one return mapping. Input predicates and implementation
+properties must be distinct; input and output occupy separate scopes. JSON
+property names are not limited to identifiers or nonempty strings. The admitted
+value borrows the original catalog, retaining native blank scopes, literal
+facets and implementation identities. A fallible caller-order index supports
+direct parameter retrieval and iteration without repeated lookup or cloning.
+
+Catalog lookup uses governed binary search over upstream canonical IRI order.
+Pairwise mapping and ambiguity checks are local to one callable's arity and
+explicitly quadratic; every scan/comparison and retained index growth is
+admitted before work or allocation. Invalid selection, missing predicates,
+incomplete/ambiguous mappings, collisions, cancellation and exhaustion return
+typed failures without partial successful bindings.
+
+The actual upstream reader is exercised by the `admit_callable` consumer, but
+caller preparation and catalog construction are outside this checker's resource
+governance. This is neither a second FnO reader nor a loaded graph. Issue #33
+retains the complete source admission/ownership contract below, exact occurrence
+locations, SHACL/G7 integration, manifest codec and production caller wiring.
+
 ## FnO admission view and source ownership
 
 `FnoCatalog::from_dataset` admits its strict default-graph FnO profile, not an
