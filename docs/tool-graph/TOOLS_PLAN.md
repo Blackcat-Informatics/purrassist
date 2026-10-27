@@ -929,3 +929,21 @@ qualification ceremony. Specification delivery in #32 is complete. Continue
 authorized implementation, resolve substantive findings and run required gates.
 After implementation and conformance land, verify actual issue closures and preserve
 all remaining parent acceptance until it is proved.
+
+## Standalone file fragments — implemented
+
+`FileRule` admits the complete standalone subset documented by its public API:
+unique `rwaklm` access (write excludes append), optional `ix`/`px`/`cx`/`Pix`/`Cix`,
+literal ASCII directed targets where permitted, and audit/deny/owner qualifiers.
+Denied `ix` canonicalizes to native bare `x`, retaining the original request and
+source identity. Targets on deny rules, other denied transitions and unconfined
+`ux`/`Ux` are explicit refusals; an unauthenticated caller cannot waive them.
+Path admission uses the original parsed lexical prefix and existing exact
+absolute bindings. The public binding renderer and shared governed formatter
+produce one atomic native fragment. `file_rules` is its executed consumer.
+
+The selected ABI/file-mediation requirement is not host attestation. This
+standalone component does not establish graph admission, permission/owner/deny
+interaction analysis, hat containment, complete native profile-name handling,
+trusted scoped waiver admission, full synthesis or actual confinement. Original
+#34/#35 acceptance remains required.

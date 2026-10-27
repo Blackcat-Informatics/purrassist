@@ -103,3 +103,24 @@ abstract/anonymous/unconstrained consumer. File-rule `GlobLanguage` matching is
 not Unix-address matching. Admitted-graph synthesis, original v3/v4 integration,
 other IPC families, permission/owner/deny analysis and host confinement remain
 under the original parent contracts.
+
+`FileRule` renders standalone file permission and execution fragments from an
+existing `AppArmorGlob` and its exact literal bindings. It admits unique
+`rwaklm` permissions, refuses write with append, and supports `ix`, `px`, `cx`,
+`Pix` and `Cix`. Directed targets use the explicit literal ASCII subset
+`[A-Za-z_][A-Za-z0-9_.-]*`. Native attachment-based transitions remain available
+without a target. Audit, deny and owner qualifiers retain their independent
+meanings; denied `ix` emits bare `x` with explicit canonicalization metadata.
+Targets on deny rules and other denied transition requests are refused.
+Unconfined `ux`/`Ux` always require unavailable authenticated waiver admission;
+no caller flag or self-asserted record can authorize them here.
+
+Paths must start with an unescaped literal slash or an explicitly bound absolute
+variable. Relative, brace/class-leading and escaped-leading forms are refused
+before output. Existing binding validation and policy-word emission preserve
+original glob/binding identities and errors. The complete governed artifact
+records the selected `3.0`/`file` requirement without attesting host mediation.
+Run `cargo run -p purrassist-toolgraph --example file_rules` for the real bound
+path, named transition and canonical denial consumer. Graph admission, complete
+permission/hat analysis, broader native target names, authenticated waiver
+handling, policy synthesis and host enforcement remain parent requirements.

@@ -229,3 +229,13 @@ Rust edition 2024, stable MSRV 1.98, nightly development analysis, stable releas
 builds. Workspace version 0.1.0; release tags `rust-v*`. Publish in dependency
 order with trusted publishing after registry setup. Verify actual downloadable
 packages and CLI/MCP behavior before declaring completion.
+
+Standalone `FileRule` renders the documented native permission/execute subset
+over caller-prepared `AppArmorGlob` values and exact literal bindings. It
+preserves audit/deny/owner conditions and original source identities, records
+denied `ix` becoming native `x`, and refuses ambiguous targets or unsupported
+unconfined requests. Its `file_rules` consumer exercises actual binding and
+shared governed formatting. The selected `3.0` file-mediation requirement is
+an offline target contract, without a running-kernel or loaded-policy claim.
+Full permission/hat analysis, authenticated waivers, graph admission, policy
+synthesis and host confinement remain under #34 and #35.

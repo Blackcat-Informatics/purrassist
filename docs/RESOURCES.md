@@ -1274,3 +1274,29 @@ Caller-owned source/tool preparation is separate. No intermediate quoted or
 concatenated strings are created by this wire-output path. Prompt-dialect
 printing retains its existing narrower contract; this change does not govern
 its temporary storage or cold built-in grammar preparation.
+
+## Standalone file fragments
+
+`FilePermissions`, `FileExecution` and `FileTarget` borrow their source or store
+bounded typed values. Parsing admits the field input and an eight-times-byte
+plus eight work bound covering one scan and the closed spelling comparisons.
+Overflow is an explicit work refusal. Permission output performs exactly six
+bounded tests, pre-admitted separately from emitted-byte work.
+
+`FileRule::render` admits its source identity and rule checks, and checks each
+borrowed path/target input against this governor even if preparation used a
+different governor. Input admission checks the maximum individual input size,
+not a cumulative byte sum. It then reuses the existing complete binding validator before inspecting the parsed first unit.
+Only an unescaped literal slash or an absolute first-variable binding admits
+the path. That prefix proves every branch absolute without building a language
+or scanning a rendered word. The existing `bind_literal_paths` operation then
+validates and renders the exact word. This deliberately reuses the public path,
+including its retained intermediate-string charge. No second escaping,
+substitution or matching implementation is introduced.
+
+The shared `format_output_governed` sink admits final output copies and actual
+capacity growth. A final check precedes artifact publication; semantic and
+resource refusals expose no partial fragment. Source globs/bindings and targets
+remain caller-owned; parsing or constructing those inputs is a separate
+admission. The artifact preserves their identities and the denied-execution
+canonicalization without asserting waiver, graph or host authority.

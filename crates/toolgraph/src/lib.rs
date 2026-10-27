@@ -8,6 +8,7 @@ mod apparmor_glob;
 mod binding;
 mod context;
 mod field_mask;
+mod file_rule;
 mod glob_language;
 mod internet;
 mod socket_access;
@@ -41,4 +42,9 @@ pub use internet::{
 pub use unix::{
     UnixAccessSet, UnixAddress, UnixAddressProblem, UnixError, UnixField, UnixFragment, UnixLabel,
     UnixPattern, UnixPeer, UnixRequirement, UnixRule, UnixSocketType,
+};
+
+pub use file_rule::{
+    FileCanonicalization, FileExecution, FileFragment, FilePermissions, FileRequirement, FileRule,
+    FileRuleError, FileTarget,
 };
