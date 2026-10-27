@@ -73,17 +73,22 @@ const fn is_word(character: char) -> bool {
 }
 
 /// A compiled pattern; no ambient regex engine or platform-dependent dialect.
-#[derive(Clone, Debug)]
+///
+/// Patterns own their admitted storage and do not implement `Clone`. Borrow a
+/// prepared pattern for matching/generation and pass borrowed exclusions through
+/// [`GenerateOptions`].
+#[derive(Debug)]
 pub struct Pattern {
     ast: ast::Node,
     captures: usize,
     engine: Engine,
     compiled: Option<derive::Compiled>,
+    _syntax_lease: crate::contract::ScratchLease,
 }
 
 /// A derivative-engine pattern's compiled automaton, detached from the
 /// pattern's syntax tree by [`Pattern::into_automaton`].
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ByteAutomaton {
     compiled: derive::Compiled,
 }
@@ -150,8 +155,8 @@ impl fmt::Display for PatternError {
 }
 impl std::error::Error for PatternError {}
 
-/// Governed pattern compilation failure: either the pattern itself is
-/// malformed, or compiling it exceeded the caller's resource limits.
+/// Governed pattern compilation failure: invalid syntax or an explicit caller
+/// budget, native resource/encoding limit, or cancellation refusal.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PatternCompileError {
     /// The pattern's syntax is invalid or uses an unsupported construct.
@@ -187,9 +192,9 @@ pub struct GenerateOptions<'a> {
     /// Maximum witness length; `None` searches without an upper bound
     /// (bounded in practice by the governor's `Work`/`Depth` budget).
     pub max_len: Option<usize>,
-    /// Patterns the witness must not match anywhere (unanchored, exactly
-    /// like [`Pattern::is_match`]).
-    pub avoid: &'a [Pattern],
+    /// Borrowed patterns the witness must not match anywhere (unanchored,
+    /// exactly like [`Pattern::is_match`]); no compiled pattern is cloned.
+    pub avoid: &'a [&'a Pattern],
 }
 
 /// The result of [`Pattern::generate`].
@@ -236,12 +241,14 @@ impl Pattern {
     /// identifier tables. Returned diagnostic strings retain their admission.
     ///
     /// AST/interval/Box/Rc storage still uses the separate conservative
-    /// `source.len() * 48 + 256` estimate. Derivative arena terms, index entries,
-    /// unique class copies and cut storage admit actual capacities. Successful
-    /// AST and derivative artifact charges remain permanent; their ownership,
-    /// Unicode class expansion, AST classification and clone paths are separate
-    /// contracts. Parsing charges `Depth` for nesting; translation and canonical
-    /// union charge `Work` for visited terms, copied intervals and chain heads.
+    /// `source.len() * 48 + 256` estimate, retained as a lease until syntax drops.
+    /// Derivative term/index, class and cut buffers retain their actual admitted
+    /// owners until the pattern or detached automaton drops. Native translation
+    /// admits lookup/shift, traversal, comparison/copy and canonical union work,
+    /// plus caller `Depth` and a native recursion ceiling of 128: the root is
+    /// depth one and each AST child adds one. Final cancellation is checked
+    /// before publication. Actual AST allocation, Unicode expansion and AST
+    /// classification remain separate; parsing retains its own depth contract.
     /// Full ECMA-262 `u`-mode syntax
     /// is supported: named groups, `\k<name>`, `\u{...}`, surrogate-pair
     /// combination, and `\p{...}`/`\P{...}` for `General_Category`,
@@ -255,6 +262,8 @@ impl Pattern {
     /// [`PatternCompileError::Resource`] for governor or cancellation refusal.
     /// Temporary parser buffers admit storage before allocation; the remaining
     /// AST and Unicode class expansion retain the estimate boundary above.
+    /// A finite repetition maximum whose `max + 1` encoding exceeds `u64`
+    /// returns sticky `BudgetExceeded(Work)` rather than changing the bound.
     ///
     /// ```
     /// use purrassist_core::{Budget, Governor, pattern::{Pattern, PatternCompileError}};
@@ -281,12 +290,13 @@ impl Pattern {
         } else {
             (Engine::Derivative, Some(derive::compile(&ast, governor)?))
         };
-        syntax_lease.retain();
+        governor.check()?;
         Ok(Self {
             ast,
             captures,
             engine,
             compiled,
+            _syntax_lease: syntax_lease,
         })
     }
 
@@ -357,7 +367,8 @@ impl Pattern {
     ///
     /// The automaton owns only the compiled, read-only term arena and class
     /// tables (already charged by [`Pattern::compile_governed`] and retained
-    /// as-is, with no copy), so unlike [`Pattern`] it is `Send + Sync` and
+    /// as-is, with no copy). Discarding syntax releases its estimate lease;
+    /// dropping the automaton releases its own buffers. Unlike [`Pattern`] it is `Send + Sync` and
     /// can live in shared, compiled artifacts.
     ///
     /// ```
@@ -483,7 +494,7 @@ impl Pattern {
     /// let digits = Pattern::compile(r"^\d{3}$").unwrap();
     /// let avoid = Pattern::compile("000").unwrap();
     /// let outcome = digits
-    ///     .generate(&mut governor, GenerateOptions { min_len: 0, max_len: Some(5), avoid: &[avoid] })
+    ///     .generate(&mut governor, GenerateOptions { min_len: 0, max_len: Some(5), avoid: &[&avoid] })
     ///     .unwrap();
     /// let GenerateOutcome::Witness(text) = outcome else { panic!("expected a witness") };
     /// assert_eq!(digits.is_match(&text, &mut governor), Ok(true));
@@ -491,7 +502,7 @@ impl Pattern {
     /// let empty = Pattern::compile("abc").unwrap();
     /// let avoid_self = Pattern::compile("abc").unwrap();
     /// let outcome = empty
-    ///     .generate(&mut governor, GenerateOptions { min_len: 0, max_len: Some(3), avoid: &[avoid_self] })
+    ///     .generate(&mut governor, GenerateOptions { min_len: 0, max_len: Some(3), avoid: &[&avoid_self] })
     ///     .unwrap();
     /// assert!(matches!(outcome, GenerateOutcome::NoCandidate(_)));
     /// ```
@@ -592,5 +603,145 @@ mod tests {
             pattern.is_match(&text, &mut Governor::new(Budget::default())),
             Ok(false)
         );
+    }
+}
+
+impl crate::contract::ScratchCharge for &Pattern {
+    const CHARGE: usize = 8;
+}
+const _: () = assert!(
+    core::mem::size_of::<&Pattern>() <= <&Pattern as crate::contract::ScratchCharge>::CHARGE
+);
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::{ByteInstruction, ByteLanguage, Pattern, PatternCompileError};
+    use crate::contract::{Budget, CancellationToken, Governor, Resource, StopReason};
+
+    /// Compiled term/class owners and the existing syntax estimate follow the
+    /// artifact lifetime, including detachment and later compiler refusal.
+    #[test]
+    fn compiled_artifacts_release_on_drop_detachment_and_refusal() {
+        for source in ["^(a|b)+$", r"\p{Script=Greek}+", r"(a)\1"] {
+            let mut governor = Governor::new(Budget::default());
+            let pattern = Pattern::compile_governed(source, &mut governor).unwrap();
+            assert!(governor.scratch_meter().live() > 0);
+            drop(pattern);
+            assert_eq!(governor.scratch_meter().live(), 0);
+        }
+        let source = "^(a|b)+$";
+        let mut governor = Governor::new(Budget::default());
+        let pattern = Pattern::compile_governed(source, &mut governor).unwrap();
+        let usage = governor.usage();
+        let before = governor.scratch_meter().live();
+        let automaton = pattern.into_automaton().unwrap();
+        assert!(governor.scratch_meter().live() > 0);
+        assert!(governor.scratch_meter().live() < before);
+        drop(automaton);
+        assert_eq!(governor.scratch_meter().live(), 0);
+        for (budget, resource) in [
+            (
+                Budget {
+                    work: usage.work / 2,
+                    ..Budget::default()
+                },
+                Resource::Work,
+            ),
+            (
+                Budget {
+                    work: usage.work - 1,
+                    ..Budget::default()
+                },
+                Resource::Work,
+            ),
+            (
+                Budget {
+                    scratch_bytes: usage.peak_scratch_bytes - 1,
+                    ..Budget::default()
+                },
+                Resource::ScratchBytes,
+            ),
+        ] {
+            let mut governor = Governor::new(budget);
+            let reason = StopReason::BudgetExceeded(resource);
+            assert_eq!(
+                Pattern::compile_governed(source, &mut governor).unwrap_err(),
+                PatternCompileError::Resource(reason.clone())
+            );
+            assert_eq!(governor.check(), Err(reason));
+            assert_eq!(governor.scratch_meter().live(), 0);
+        }
+        let token = CancellationToken::new();
+        token.cancel();
+        let mut governor = Governor::with_cancellation(Budget::default(), token);
+        assert!(matches!(
+            Pattern::compile_governed(source, &mut governor),
+            Err(PatternCompileError::Resource(StopReason::Cancelled))
+        ));
+        assert_eq!(governor.scratch_meter().live(), 0);
+        // A finite upper bound uses max+1; the unbounded sentinel is zero.
+        let source = format!("a{{0,{}}}", usize::MAX);
+        let mut governor = Governor::new(Budget::default());
+        let result = Pattern::compile_governed(&source, &mut governor);
+        if usize::BITS == 64 {
+            let reason = StopReason::BudgetExceeded(Resource::Work);
+            assert_eq!(
+                result.unwrap_err(),
+                PatternCompileError::Resource(reason.clone())
+            );
+            assert_eq!(governor.check(), Err(reason));
+        } else {
+            drop(result.unwrap());
+        }
+        assert_eq!(governor.scratch_meter().live(), 0);
+        let mut governor = Governor::new(Budget::default());
+        let language = ByteLanguage::compile(
+            &[ByteInstruction::Literal(b'a'), ByteInstruction::Star],
+            &mut governor,
+        )
+        .unwrap();
+        assert!(governor.scratch_meter().live() > 0);
+        drop(language);
+        assert_eq!(governor.scratch_meter().live(), 0);
+    }
+
+    /// Parser group nesting and derivative AST translation have independent
+    /// depth contracts: root depth one and a native lowering ceiling of 128.
+    #[test]
+    fn translation_native_depth_boundary_is_sticky_and_releases_owners() {
+        for (groups, allowed) in [(127, true), (128, false)] {
+            let source = format!("{}a{}", "(".repeat(groups), ")".repeat(groups));
+            let mut governor = Governor::new(Budget {
+                depth: 256,
+                ..Budget::default()
+            });
+            let result = Pattern::compile_governed(&source, &mut governor);
+            if allowed {
+                drop(result.unwrap());
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(PatternCompileError::Resource(StopReason::BudgetExceeded(
+                        Resource::Depth
+                    )))
+                ));
+                assert_eq!(
+                    governor.check(),
+                    Err(StopReason::BudgetExceeded(Resource::Depth))
+                );
+            }
+            assert_eq!(governor.scratch_meter().live(), 0);
+        }
+        let mut governor = Governor::new(Budget {
+            depth: 0,
+            ..Budget::default()
+        });
+        assert!(matches!(
+            Pattern::compile_governed("a", &mut governor),
+            Err(PatternCompileError::Resource(StopReason::BudgetExceeded(
+                Resource::Depth
+            )))
+        ));
+        assert_eq!(governor.scratch_meter().live(), 0);
     }
 }

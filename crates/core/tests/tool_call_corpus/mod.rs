@@ -674,7 +674,7 @@ enum Form {
 
 /// One witness call and what the mutations need to know about it.
 #[derive(Clone, Debug)]
-struct Base {
+struct Base<'t> {
     dialect: DialectId,
     tool: usize,
     seed: u64,
@@ -683,19 +683,19 @@ struct Base {
     call: Call,
     form: Form,
     /// The declared parameters, in declaration order.
-    params: Vec<Declared>,
+    params: Vec<Declared<'t>>,
 }
 
 /// A declared parameter's name, shape, requiredness and alias.
 #[derive(Clone, Debug)]
-struct Declared {
+struct Declared<'t> {
     name: String,
-    shape: ValueShape,
+    shape: &'t ValueShape,
     required: bool,
     alias: Option<String>,
 }
 
-impl Base {
+impl Base<'_> {
     fn members(&self) -> &[Member] {
         match &self.call.arguments.value {
             Value::Object(members) => members,
@@ -703,7 +703,7 @@ impl Base {
         }
     }
 
-    fn declared(&self, name: &str) -> &Declared {
+    fn declared(&self, name: &str) -> &Declared<'_> {
         self.params
             .iter()
             .find(|param| param.name == name)
@@ -756,7 +756,7 @@ const DIALECTS: [DialectId; 12] = [
 /// stringified and object arguments by seed; Hermes, Llama 3 JSON and
 /// Mistral v3 print objects for the first [`SEEDS`] seeds (so stringifying them is a
 /// mutation) and alternate for the supplementary seeds.
-fn base(tools: &ToolSet, dialect: &DialectId, tool: usize, seed: u64) -> Base {
+fn base<'t>(tools: &'t ToolSet, dialect: &DialectId, tool: usize, seed: u64) -> Base<'t> {
     let compiled = &tools.tools()[tool];
     let shape = tools
         .argument_shape(compiled.name())
@@ -808,7 +808,7 @@ fn base(tools: &ToolSet, dialect: &DialectId, tool: usize, seed: u64) -> Base {
         .iter()
         .map(|param| Declared {
             name: param.name.clone(),
-            shape: param.value.clone(),
+            shape: &param.value,
             required: param.required,
             alias: param.aliases.first().cloned(),
         })
@@ -829,7 +829,7 @@ fn base(tools: &ToolSet, dialect: &DialectId, tool: usize, seed: u64) -> Base {
 }
 
 /// The base calls: every tool in every dialect for seeds `0..SEEDS`.
-fn bases(tools: &ToolSet) -> Vec<Base> {
+fn bases(tools: &ToolSet) -> Vec<Base<'_>> {
     let mut bases = Vec::new();
     for dialect in &DIALECTS {
         for tool in 0..tools.tools().len() {
@@ -893,13 +893,13 @@ fn xml_body(elements: &[(String, String, bool)]) -> String {
     body
 }
 
-impl Base {
+impl Base<'_> {
     /// The canonical XML elements of the arguments.
     fn xml_elements(&self) -> Vec<(String, String, bool)> {
         self.members()
             .iter()
             .map(|member| {
-                let shape = &self.declared(&member.key).shape;
+                let shape = self.declared(&member.key).shape;
                 (member.key.clone(), raw(&member.value, shape), true)
             })
             .collect()
@@ -995,7 +995,7 @@ impl Base {
     }
 
     /// The members (by index) whose declared shape satisfies `test`.
-    fn members_where(&self, test: impl Fn(&Declared, &Node) -> bool) -> Vec<usize> {
+    fn members_where(&self, test: impl Fn(&Declared<'_>, &Node) -> bool) -> Vec<usize> {
         self.members()
             .iter()
             .enumerate()
@@ -1159,7 +1159,7 @@ fn bare_safe(text: &str) -> bool {
 
 /// Every single-call mutation of `base`.
 #[allow(clippy::too_many_lines)] // one flat list of independent mutations
-fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
+fn mutations(base: &Base<'_>, random: &mut XorShift) -> Vec<Mutant> {
     let mut out = Vec::new();
     let text = &base.text;
     // A bare JSON object has no closer to repair: it is a call only when
@@ -1244,7 +1244,7 @@ fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
         Need::Unknown,
     ));
     let strings = base.members_where(|declared, value| {
-        is_string_shape(&declared.shape) && matches!(value.value, Value::String(_))
+        is_string_shape(declared.shape) && matches!(value.value, Value::String(_))
     });
     if let Some(&index) = strings.first() {
         let key = members[index].key.clone();
@@ -1512,7 +1512,7 @@ fn mutations(base: &Base, random: &mut XorShift) -> Vec<Mutant> {
 /// The closer spellings of `base`'s witness a misspelling mutates: every
 /// multi-byte literal ending a call of its dialect that the witness writes,
 /// and Qwen3-Coder XML's `</parameter>`.
-fn misspellable(base: &Base) -> Vec<String> {
+fn misspellable(base: &Base<'_>) -> Vec<String> {
     let mut spellings: Vec<String> = base
         .dialect
         .grammar()
@@ -1547,7 +1547,7 @@ fn misspell(spelling: &str) -> Option<String> {
 
 /// `tool_call.markup.closer-misspelled`: the last occurrence of each closer
 /// the witness writes, with one slip.
-fn closer_misspelled_mutations(base: &Base, out: &mut Vec<Mutant>) {
+fn closer_misspelled_mutations(base: &Base<'_>, out: &mut Vec<Mutant>) {
     for spelling in misspellable(base) {
         let (Some(at), Some(slipped)) = (base.text.rfind(&spelling), misspell(&spelling)) else {
             continue;
@@ -1574,7 +1574,7 @@ fn closer_misspelled_mutations(base: &Base, out: &mut Vec<Mutant>) {
 /// literal of its dialect's `call` production: the attempt's own opener,
 /// an argument separator, `<function=`, `<parameter=`, `[ARGS]`), with one
 /// slip.
-fn token_misspelled_mutations(base: &Base, out: &mut Vec<Mutant>) {
+fn token_misspelled_mutations(base: &Base<'_>, out: &mut Vec<Mutant>) {
     let closers: Vec<Vec<u8>> = base
         .dialect
         .grammar()
@@ -1639,7 +1639,7 @@ fn token_misspelled_mutations(base: &Base, out: &mut Vec<Mutant>) {
 /// case variant, one slip, an over-long spelling, or, inside a JSON string,
 /// the closer itself), rotating by seed over the closers and the kinds: the
 /// value keeps its whole text, needing no repair (`canonical` cases).
-fn near_closer_mutations(base: &Base, out: &mut Vec<Mutant>) {
+fn near_closer_mutations(base: &Base<'_>, out: &mut Vec<Mutant>) {
     let json = match base.dialect {
         DialectId::Qwen3CoderXml => false,
         DialectId::Hermes | DialectId::KimiK2 | DialectId::DeepSeekV31 | DialectId::DeepSeekV3 => {
@@ -1728,7 +1728,7 @@ fn holds_closer_text(shape: &ValueShape, value: &str) -> bool {
 /// A `tool_call.value.closer-in-value` case: `text` holds member `index`'s
 /// string value as `value` (closer text read into it), which a correct
 /// answer recovers.
-fn closer_text(base: &Base, index: usize, variant: &str, text: String, value: &str) -> Mutant {
+fn closer_text(base: &Base<'_>, index: usize, variant: &str, text: String, value: &str) -> Mutant {
     let mut arguments = base.members().to_vec();
     arguments[index].value = string(value);
     let mut held = mutant(
@@ -1786,7 +1786,7 @@ fn closer_text(base: &Base, index: usize, variant: &str, text: String, value: &s
 ///   pass 6, F19): the same with the closers written inline after the value
 ///   (`v</parameter></function></tool_call>`): newlines have zero meaning,
 ///   so it reads as `closers-then-call` does, the same truth.
-fn closer_in_value_mutations(base: &Base, out: &mut Vec<Mutant>) {
+fn closer_in_value_mutations(base: &Base<'_>, out: &mut Vec<Mutant>) {
     if base.dialect != DialectId::Qwen3CoderXml || base.form != Form::Xml {
         return;
     }
@@ -1885,7 +1885,7 @@ fn closer_in_value_mutations(base: &Base, out: &mut Vec<Mutant>) {
 /// and prose after an arguments object left unclosed. No parameter name is
 /// invented and no free text is read as an argument, so the call cannot be
 /// read: abstain (`json.syntax.bare-key` cases, `Unresolved` truth).
-fn bare_word_mutations(base: &Base, out: &mut Vec<Mutant>) {
+fn bare_word_mutations(base: &Base<'_>, out: &mut Vec<Mutant>) {
     if base.form != Form::Object {
         return;
     }
@@ -1920,7 +1920,7 @@ fn bare_word_mutations(base: &Base, out: &mut Vec<Mutant>) {
 /// `tool_call.value.invalid-utf8`: the first byte of a string value the
 /// witness writes once, as plain ASCII, replaced by `0xFF`; the value is
 /// read with U+FFFD for it, a data loss.
-fn invalid_value_mutations(base: &Base, out: &mut Vec<Mutant>) {
+fn invalid_value_mutations(base: &Base<'_>, out: &mut Vec<Mutant>) {
     let members = base.members();
     let Some((index, value)) = members.iter().enumerate().find_map(|(index, member)| {
         let Value::String(value) = &member.value.value else {
@@ -1959,7 +1959,7 @@ fn invalid_value_mutations(base: &Base, out: &mut Vec<Mutant>) {
 /// `tool_call.parameter.repeated-choice`: a typed parameter written a
 /// second time with a value its type rejects; the reading that keeps the
 /// valid occurrence is chosen on evidence, a guess.
-fn repeated_choice_mutations(base: &Base, xml: bool, out: &mut Vec<Mutant>) {
+fn repeated_choice_mutations(base: &Base<'_>, xml: bool, out: &mut Vec<Mutant>) {
     let typed = base.members_where(|declared, _| {
         matches!(
             declared.shape,
@@ -1989,7 +1989,7 @@ fn repeated_choice_mutations(base: &Base, xml: bool, out: &mut Vec<Mutant>) {
 /// `tool_call.reasoning.marker-cut`: a Mistral v11 call with no `[ARGS]`
 /// running into a reasoning block's closing `[/THINK]` (cut there, so never
 /// usable) before the witness call.
-fn marker_cut_mutations(base: &Base, out: &mut Vec<Mutant>) {
+fn marker_cut_mutations(base: &Base<'_>, out: &mut Vec<Mutant>) {
     let mut cut = mutant(
         "tool_call.reasoning.marker-cut",
         "name-only",
@@ -2081,7 +2081,7 @@ fn unquote_keys(text: &str) -> String {
 /// witness, chosen by tool and seed so each dialect meets every slip: the
 /// arguments text is untouched. Each is a non-guess single-reading repair
 /// (`Need::Exact`).
-fn envelope_mutations(base: &Base, out: &mut Vec<Mutant>) {
+fn envelope_mutations(base: &Base<'_>, out: &mut Vec<Mutant>) {
     let split = base.split();
     let arguments = base.arguments_text();
     let (prefix, suffix) = (split.prefix.as_str(), split.suffix.as_str());
@@ -2146,7 +2146,7 @@ const DEEPSEEK_CALL_BEGIN: &str = "<｜tool▁call▁begin｜>";
 
 /// DeepSeek-V3.1 and V3: the special tokens spelled with ASCII `|` and `_`
 /// (a detokenizer's rendering), and the section opener left out.
-fn deepseek31_mutations(base: &Base, out: &mut Vec<Mutant>) {
+fn deepseek31_mutations(base: &Base<'_>, out: &mut Vec<Mutant>) {
     out.push(mutant(
         "tool_call.markup.terminal-confusable",
         "ascii",
@@ -2166,7 +2166,7 @@ fn deepseek31_mutations(base: &Base, out: &mut Vec<Mutant>) {
 /// DeepSeek-V3: the fenced arguments block with a fence line missing, bare
 /// (no `json` info string), naming another language, or repeated, and the
 /// call's `function` type missing or replaced.
-fn deepseek3_mutations(base: &Base, out: &mut Vec<Mutant>) {
+fn deepseek3_mutations(base: &Base<'_>, out: &mut Vec<Mutant>) {
     let split = base.split();
     let arguments = base.arguments_text();
     let (Some(open), Some(close)) = (split.prefix.rfind("```json"), split.suffix.find("```"))
@@ -2236,7 +2236,7 @@ fn deepseek3_mutations(base: &Base, out: &mut Vec<Mutant>) {
 /// in an assistant message, in a whole API response; without their type
 /// (an id beginning `toolu_` is the evidence); and with `"arguments"` or
 /// `"parameters"` written for `"input"`.
-fn anthropic_mutations(base: &Base, out: &mut Vec<Mutant>) {
+fn anthropic_mutations(base: &Base<'_>, out: &mut Vec<Mutant>) {
     let text = &base.text;
     for (variant, wrapped) in [
         (
@@ -2297,7 +2297,7 @@ const HARMONY_CALL: &str = "<|call|>";
 /// with `<|end|>` for `<|call|>`, a `<|channel>` spelling, the recipient
 /// without `functions.`, text after the arguments, and the recipient after
 /// `<|message|>`.
-fn harmony_mutations(base: &Base, out: &mut Vec<Mutant>) {
+fn harmony_mutations(base: &Base<'_>, out: &mut Vec<Mutant>) {
     let name = &base.call.name;
     let arguments = base.arguments_text();
     let documented = format!(
@@ -2371,7 +2371,7 @@ fn harmony_mutations(base: &Base, out: &mut Vec<Mutant>) {
 /// Bare JSON: the call object among prose, in a `json` code fence, as the
 /// element of an array (with a second element that is not a call), with its
 /// members in the other order, and with a trailing id.
-fn bare_mutations(base: &Base, out: &mut Vec<Mutant>) {
+fn bare_mutations(base: &Base<'_>, out: &mut Vec<Mutant>) {
     let text = &base.text;
     let name = json::quote(&base.call.name);
     let arguments = base.arguments_text();
@@ -2419,7 +2419,7 @@ const KIMI_SECTION_BEGIN: &str = "<|tool_calls_section_begin|>";
 /// Kimi-K2: the section opener left out, the singular section-token
 /// spellings, the id without its `functions.` prefix, and the id without
 /// its `:IDX`.
-fn kimi_mutations(base: &Base, out: &mut Vec<Mutant>) {
+fn kimi_mutations(base: &Base<'_>, out: &mut Vec<Mutant>) {
     let text = &base.text;
     if let Some(rest) = text.strip_prefix(KIMI_SECTION_BEGIN) {
         out.push(mutant(
@@ -2470,7 +2470,7 @@ fn kimi_mutations(base: &Base, out: &mut Vec<Mutant>) {
 
 /// Mistral v11: the `[ARGS]` token left out between the name (or id) and
 /// an arguments object, read as inserted.
-fn mistral11_mutations(base: &Base, out: &mut Vec<Mutant>) {
+fn mistral11_mutations(base: &Base<'_>, out: &mut Vec<Mutant>) {
     let split = base.split();
     if base.form == Form::Object
         && let Some(at) = split.prefix.rfind("[ARGS]")
@@ -2492,7 +2492,7 @@ fn mistral11_mutations(base: &Base, out: &mut Vec<Mutant>) {
 
 /// The parts of a bracketed Mistral v3 witness: the text through the token,
 /// the array's inside, and the text after the array.
-fn mistral_array(base: &Base) -> Option<(&str, &str, &str)> {
+fn mistral_array<'b>(base: &'b Base<'_>) -> Option<(&'b str, &'b str, &'b str)> {
     let text = &base.text;
     let after = text.find("[TOOL_CALLS]")? + "[TOOL_CALLS]".len();
     if !text[after..].trim_start().starts_with('[') || base.closer() != "]" {
@@ -2505,7 +2505,7 @@ fn mistral_array(base: &Base) -> Option<(&str, &str, &str)> {
 
 /// Mistral v3: the call array written without its brackets, read as the
 /// same call with each omitted bracket recorded as inserted.
-fn mistral_mutations(base: &Base, out: &mut Vec<Mutant>) {
+fn mistral_mutations(base: &Base<'_>, out: &mut Vec<Mutant>) {
     if let Some((head, inside, tail)) = mistral_array(base) {
         out.push(mutant(
             "tool_call.markup.missing-token",
@@ -2517,7 +2517,7 @@ fn mistral_mutations(base: &Base, out: &mut Vec<Mutant>) {
 }
 
 /// Rename member `index` to `key`.
-fn rename_member(base: &Base, index: usize, key: &str) -> String {
+fn rename_member(base: &Base<'_>, index: usize, key: &str) -> String {
     if base.form == Form::Xml {
         let mut elements = base.xml_elements();
         key.clone_into(&mut elements[index].0);
@@ -2530,7 +2530,7 @@ fn rename_member(base: &Base, index: usize, key: &str) -> String {
 }
 
 /// Append a member `key` with value text `value` (XML text or JSON).
-fn add_member(base: &Base, key: &str, value: &str) -> String {
+fn add_member(base: &Base<'_>, key: &str, value: &str) -> String {
     if base.form == Form::Xml {
         let mut elements = base.xml_elements();
         elements.push((key.to_owned(), value.to_owned(), true));
@@ -2545,7 +2545,7 @@ fn add_member(base: &Base, key: &str, value: &str) -> String {
     }
 }
 
-fn remove_member(base: &Base, index: usize) -> String {
+fn remove_member(base: &Base<'_>, index: usize) -> String {
     if base.form == Form::Xml {
         let mut elements = base.xml_elements();
         elements.remove(index);
@@ -2559,7 +2559,7 @@ fn remove_member(base: &Base, index: usize) -> String {
 
 /// Replace member `index`'s string value with `text` (verbatim in XML,
 /// quoted in JSON).
-fn replace_value(base: &Base, index: usize, text: &str) -> String {
+fn replace_value(base: &Base<'_>, index: usize, text: &str) -> String {
     if base.form == Form::Xml {
         let mut elements = base.xml_elements();
         text.clone_into(&mut elements[index].1);
@@ -2573,7 +2573,7 @@ fn replace_value(base: &Base, index: usize, text: &str) -> String {
 
 /// Mutations of the `xml-params` body (Qwen3-Coder XML).
 #[allow(clippy::too_many_lines)] // one flat list of independent mutations
-fn xml_mutations(base: &Base, random: &mut XorShift, out: &mut Vec<Mutant>) {
+fn xml_mutations(base: &Base<'_>, random: &mut XorShift, out: &mut Vec<Mutant>) {
     let text = &base.text;
     let elements = base.xml_elements();
     let members = base.members();
@@ -2631,7 +2631,7 @@ fn xml_mutations(base: &Base, random: &mut XorShift, out: &mut Vec<Mutant>) {
         ));
         // Text between a string value's closer and a second closer: the
         // value may end at either, so its boundary is ambiguous.
-        let strings = base.members_where(|declared, _| is_string_shape(&declared.shape));
+        let strings = base.members_where(|declared, _| is_string_shape(declared.shape));
         if let Some(&index) = strings.first() {
             let mut body = xml_body(&elements);
             let closer = nth_parameter_close(&body, index) + "</parameter>\n".len();
@@ -2748,7 +2748,7 @@ fn xml_mutations(base: &Base, random: &mut XorShift, out: &mut Vec<Mutant>) {
         ));
     }
     // Typed values padded with whitespace.
-    let typed = base.members_where(|declared, _| is_typed_scalar(&declared.shape));
+    let typed = base.members_where(|declared, _| is_typed_scalar(declared.shape));
     if !typed.is_empty() {
         let index = typed[random.below(typed.len())];
         let mut padded = elements.clone();
@@ -2947,7 +2947,7 @@ fn nth_parameter_close(body: &str, index: usize) -> usize {
 
 /// Mutations of JSON arguments (Hermes and `OpenAI`).
 #[allow(clippy::too_many_lines)] // one flat list of independent mutations
-fn json_mutations(base: &Base, random: &mut XorShift, out: &mut Vec<Mutant>) {
+fn json_mutations(base: &Base<'_>, random: &mut XorShift, out: &mut Vec<Mutant>) {
     let printed = base.printed();
     let members = base.members();
     let object_text = Base::json_text(&printed);
@@ -3055,7 +3055,7 @@ fn json_mutations(base: &Base, random: &mut XorShift, out: &mut Vec<Mutant>) {
     }
     // Bare string tokens (a guess).
     let tokens = base.members_where(|declared, value| {
-        is_string_shape(&declared.shape) && value.as_str().is_some_and(bare_safe)
+        is_string_shape(declared.shape) && value.as_str().is_some_and(bare_safe)
     });
     if let Some(&index) = tokens.first() {
         let mut unquoted = printed.clone();
@@ -3084,7 +3084,7 @@ fn json_mutations(base: &Base, random: &mut XorShift, out: &mut Vec<Mutant>) {
         ));
     }
     // Values of the wrong JSON type are never coerced.
-    let integers = base.members_where(|declared, _| declared.shape == ValueShape::Integer);
+    let integers = base.members_where(|declared, _| declared.shape == &ValueShape::Integer);
     if let Some(&index) = integers.first() {
         let mut quoted = printed.clone();
         quoted[index].value = json::quote(&printed[index].value);
@@ -3095,7 +3095,7 @@ fn json_mutations(base: &Base, random: &mut XorShift, out: &mut Vec<Mutant>) {
             Need::Never,
         ));
     }
-    let free = base.members_where(|declared, _| declared.shape == ValueShape::String(None));
+    let free = base.members_where(|declared, _| declared.shape == &ValueShape::String(None));
     if let Some(&index) = free.first() {
         let mut number = printed.clone();
         "12345".clone_into(&mut number[index].value);
@@ -3157,7 +3157,7 @@ fn json_mutations(base: &Base, random: &mut XorShift, out: &mut Vec<Mutant>) {
 }
 
 /// Mutations of the Hermes wrapper's inside.
-fn hermes_mutations(base: &Base, out: &mut Vec<Mutant>) {
+fn hermes_mutations(base: &Base<'_>, out: &mut Vec<Mutant>) {
     let text = &base.text;
     let open = text.find('{').expect("the call object");
     let end = base.wrapper_end();
@@ -3200,7 +3200,7 @@ fn hermes_mutations(base: &Base, out: &mut Vec<Mutant>) {
 
 /// Two calls of a section dialect (DeepSeek-V3.1, DeepSeek-V3, Kimi-K2) in
 /// one section, and the same with the first call's closer left out.
-fn section_pair(first: &Base, second: &Base, out: &mut Vec<Mutant>) {
+fn section_pair(first: &Base<'_>, second: &Base<'_>, out: &mut Vec<Mutant>) {
     let (end, begin, call_end, sep) = match first.dialect {
         DialectId::DeepSeekV31 => (
             DEEPSEEK_SECTION_END,
@@ -3280,7 +3280,7 @@ fn section_pair(first: &Base, second: &Base, out: &mut Vec<Mutant>) {
 
 /// The `tool_call.markup.group-split` mutations of a Mistral v3 list of
 /// two calls: a malformed element between them, first, and left open.
-fn mistral_list_pair(first: &Base, second: &Base, out: &mut Vec<Mutant>) {
+fn mistral_list_pair(first: &Base<'_>, second: &Base<'_>, out: &mut Vec<Mutant>) {
     if let (Some((head, first_inside, tail)), Some((_, second_inside, _))) =
         (mistral_array(first), mistral_array(second))
         && let Some(bad) = break_name(second_inside.trim(), &second.call.name)
@@ -3327,7 +3327,7 @@ fn mistral_list_pair(first: &Base, second: &Base, out: &mut Vec<Mutant>) {
 /// its last value, then the second call, then stray closers: two calls,
 /// never one call holding the other (as at 72f34f7), whatever the layout
 /// ("Newlines have zero meaning here").
-fn inline_closers_pair(first: &Base, second: &Base, out: &mut Vec<Mutant>) {
+fn inline_closers_pair(first: &Base<'_>, second: &Base<'_>, out: &mut Vec<Mutant>) {
     let closers = "</parameter></function></tool_call>";
     if first.dialect == DialectId::Qwen3CoderXml
         && let Some(at) = first.text.rfind("</parameter>")
@@ -3353,7 +3353,7 @@ fn inline_closers_pair(first: &Base, second: &Base, out: &mut Vec<Mutant>) {
 }
 
 /// Mutations of a two-call turn in one dialect (`first` then `second`).
-fn pair_mutations(first: &Base, second: &Base) -> Vec<Mutant> {
+fn pair_mutations(first: &Base<'_>, second: &Base<'_>) -> Vec<Mutant> {
     let joined = format!("{}\n{}", first.text, second.text);
     let mut out = vec![mutant("canonical", "pair", joined, Need::Exact)];
     if first.dialect == DialectId::OpenAiToolCalls {
@@ -3477,7 +3477,7 @@ const ALL_DIALECTS: &str = "anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,
 /// with `under`, only those of categories with fewer than [`TARGET`] cases
 /// (counted as they are added).
 fn single_cases(
-    base: &Base,
+    base: &Base<'_>,
     mut under: Option<&mut BTreeMap<String, usize>>,
     cases: &mut Vec<Case>,
 ) {
@@ -3526,12 +3526,12 @@ fn single_cases(
 /// DeepSeek-V3.1 and V3 sections in one turn, appended to `cases`: the two
 /// dialects share their section and call tokens, so each section must be
 /// read by its own dialect alone.
-fn deepseek_mixed_cases(bases: &[Base], cases: &mut Vec<Case>) {
-    let v31: Vec<&Base> = bases
+fn deepseek_mixed_cases(bases: &[Base<'_>], cases: &mut Vec<Case>) {
+    let v31: Vec<&Base<'_>> = bases
         .iter()
         .filter(|base| base.dialect == DialectId::DeepSeekV31)
         .collect();
-    let v3: Vec<&Base> = bases
+    let v3: Vec<&Base<'_>> = bases
         .iter()
         .filter(|base| base.dialect == DialectId::DeepSeekV3)
         .collect();
@@ -3625,11 +3625,11 @@ pub fn generate() -> Vec<Case> {
         }
     }
     // Mixed Qwen3-Coder XML and Hermes calls in one turn.
-    let qwen: Vec<&Base> = bases
+    let qwen: Vec<&Base<'_>> = bases
         .iter()
         .filter(|base| base.dialect == DialectId::Qwen3CoderXml)
         .collect();
-    let hermes: Vec<&Base> = bases
+    let hermes: Vec<&Base<'_>> = bases
         .iter()
         .filter(|base| base.dialect == DialectId::Hermes)
         .collect();

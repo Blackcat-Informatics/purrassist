@@ -23,7 +23,7 @@ use crate::pattern::Pattern;
 /// assert_eq!(shape.tool, "read");
 /// assert_eq!(shape.arguments.required, ["path"]);
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct ArgumentShape {
     /// Canonical tool name.
     pub tool: String,
@@ -47,7 +47,7 @@ pub struct ArgumentShape {
 /// assert_eq!(object.unknown_parameters, UnknownParameters::Error);
 /// assert!(object.parameter("path").is_some());
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct ObjectShape {
     /// Parameters in declaration order.
     pub parameters: Vec<ParameterShape>,
@@ -130,7 +130,7 @@ pub struct NameLiteral {
 /// assert!(limit.required && !limit.repeatable);
 /// assert_eq!(limit.default.as_ref().unwrap().to_json(), "5");
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct ParameterShape {
     /// Canonical name.
     pub name: String,
@@ -167,7 +167,7 @@ pub struct ParameterShape {
 /// assert_eq!(value, &ValueShape::Array(Box::new(ValueShape::Boolean)));
 /// assert_eq!(value.type_name(), Some("array"));
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ValueShape {
     /// A verbatim string, optionally constrained by a compiled pattern.
     String(Option<PatternConstraint>),
@@ -256,7 +256,7 @@ impl ValueShape {
 /// assert_eq!(constraint.source, "^[0-9]+$");
 /// assert_eq!(constraint.pattern.is_match("42", &mut Governor::new(Budget::default())), Ok(true));
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct PatternConstraint {
     /// The ECMA-262 pattern source, exactly as declared.
     pub source: String,

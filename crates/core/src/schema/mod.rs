@@ -28,14 +28,17 @@ pub const DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 pub const DRAFT_07: &str = "http://json-schema.org/draft-07/schema";
 
 /// A compiled schema plus caller-supplied external resources. Compilation does no I/O.
-#[derive(Clone, Debug)]
+///
+/// The schema owns prepared pattern storage and does not implement `Clone`.
+/// Borrow it for validation, generation, recovery and host helper lifetimes.
+#[derive(Debug)]
 pub struct Schema {
     documents: Vec<Node>,
     index: Index,
     root: usize,
     digest: Digest,
 }
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 struct Index {
     locations: Vec<Location>,
     by_route: BTreeMap<(usize, Vec<usize>), usize>,
@@ -52,7 +55,7 @@ struct Index {
     /// documents default to Draft 2020-12).
     document_dialects: BTreeMap<usize, Vocabularies>,
 }
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct Location {
     vocabularies: Vocabularies,
     document: usize,

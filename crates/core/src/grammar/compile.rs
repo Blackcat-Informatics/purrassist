@@ -264,8 +264,8 @@ impl ScratchCharge for CloserClass {
     const CHARGE: usize = 80;
 }
 impl ScratchCharge for ClassTerminal {
-    // Source owner (40), two compile-arena vectors (48), root/padding (8), two vectors (48).
-    const CHARGE: usize = 144;
+    // Source owner (40), two arena owners (80), root/padding (8), class/cut owners (80).
+    const CHARGE: usize = 208;
 }
 impl ScratchCharge for Production {
     const CHARGE: usize = 104;

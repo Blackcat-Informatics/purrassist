@@ -220,7 +220,7 @@ fn generate_witness_always_matches_and_never_matches_avoid() {
                 GenerateOptions {
                     min_len: 0,
                     max_len: Some(8),
-                    avoid: &avoid,
+                    avoid: &avoid.iter().collect::<Vec<_>>(),
                 },
             )
             .expect("generation should not fail the governor");
@@ -253,7 +253,7 @@ fn generate_proves_emptiness_for_a_pattern_intersected_with_its_own_complement()
             GenerateOptions {
                 min_len: 0,
                 max_len: Some(6),
-                avoid: &[avoid],
+                avoid: &[&avoid],
             },
         )
         .expect("governed search must complete");

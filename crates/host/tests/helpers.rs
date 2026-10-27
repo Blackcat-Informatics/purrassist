@@ -6,7 +6,7 @@ use purrassist::{
 };
 use purrassist_host::helpers::{Pending, Provider};
 
-fn prepare(provider: Provider) -> Pending {
+fn prepare(provider: Provider, schema: &Schema) -> Pending<'_> {
     let mut governor = Governor::new(Budget {
         helper_calls: 1,
         ..Budget::default()
@@ -15,7 +15,7 @@ fn prepare(provider: Provider) -> Pending {
         provider,
         "caller-selected-model",
         "forty two",
-        &Schema::compile(r#"{"type":"integer","minimum":40}"#).unwrap(),
+        schema,
         512,
         &mut governor,
     )
@@ -23,6 +23,7 @@ fn prepare(provider: Provider) -> Pending {
 }
 #[test]
 fn public_wire_formats_produce_locally_validated_explicit_guesses() {
+    let schema = Schema::compile(r#"{"type":"integer","minimum":40}"#).unwrap();
     for (provider, response) in [
         (
             Provider::OpenAiResponses,
@@ -37,7 +38,7 @@ fn public_wire_formats_produce_locally_validated_explicit_guesses() {
             r#"{"choices":[{"finish_reason":"stop","message":{"content":"42"}}]}"#,
         ),
     ] {
-        let pending = prepare(provider);
+        let pending = prepare(provider, &schema);
         assert!(json::parse(&pending.request().body).is_ok());
         let result = pending.complete(200, response);
         let Outcome::BestGuess(value) = result.outcome else {
@@ -59,7 +60,8 @@ fn completed_usage_includes_every_phase_scratch_and_candidates() {
     // in, not dropped; likewise `total_scratch_charged` (a monotone sum,
     // unlike the high-water `peak_scratch_bytes` also asserted elsewhere)
     // must reflect real charges from more than one phase.
-    let result = prepare(Provider::AnthropicMessages).complete(
+    let schema = Schema::compile(r#"{"type":"integer","minimum":40}"#).unwrap();
+    let result = prepare(Provider::AnthropicMessages, &schema).complete(
         200,
         r#"{"stop_reason":"end_turn","content":[{"type":"text","text":"42"}]}"#,
     );
@@ -132,11 +134,12 @@ fn helper_ledger_admission_is_atomic_and_never_yields_partial_success() {
         evidence_entries: 2,
         ..Budget::default()
     });
+    let schema = Schema::compile("true").unwrap();
     let pending = Pending::prepare(
         Provider::AnthropicMessages,
         "example-model",
         "42",
-        &Schema::compile("true").unwrap(),
+        &schema,
         16,
         &mut governor,
     )
@@ -169,21 +172,22 @@ fn helpers_are_disabled_by_default_and_refusals_are_not_reinterpreted() {
         )
         .is_err()
     );
+    let schema = Schema::compile(r#"{"type":"integer","minimum":40}"#).unwrap();
     let refusal = r#"{"status":"completed","output":[{"type":"message","content":[{"type":"refusal","refusal":"declined"}]}]}"#;
     assert_eq!(
-        prepare(Provider::OpenAiResponses)
+        prepare(Provider::OpenAiResponses, &schema)
             .complete(200, refusal)
             .outcome,
         Outcome::Unresolved
     );
     assert_eq!(
-        prepare(Provider::AnthropicMessages)
+        prepare(Provider::AnthropicMessages, &schema)
             .complete(429, "{}")
             .outcome,
         Outcome::Unresolved
     );
     assert_eq!(
-        prepare(Provider::ChatCompletions)
+        prepare(Provider::ChatCompletions, &schema)
             .complete(
                 200,
                 r#"{"choices":[{"finish_reason":"length","message":{"content":"42"}}]}"#
@@ -202,11 +206,12 @@ fn helper_preparation_exhaustion_yields_budget_exceeded_and_no_request() {
         scratch_bytes: 4,
         ..Budget::default()
     });
+    let schema = Schema::compile(r#"{"type":"integer","minimum":40}"#).unwrap();
     let outcome = Pending::prepare(
         Provider::AnthropicMessages,
         "caller-selected-model",
         "forty two",
-        &Schema::compile(r#"{"type":"integer","minimum":40}"#).unwrap(),
+        &schema,
         512,
         &mut governor,
     );

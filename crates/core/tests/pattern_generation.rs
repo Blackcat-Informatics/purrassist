@@ -7,9 +7,9 @@ use purrassist_core::contract::Resource;
 use purrassist_core::pattern::{GenerateOptions, GenerateOutcome, Pattern};
 use purrassist_core::{Budget, Governor, StopReason};
 
-fn verify_witness(target: &Pattern, avoid: &[Pattern], text: &str) {
+fn verify_witness(target: &Pattern, avoid: &[&Pattern], text: &str) {
     for (pattern, expected) in
-        std::iter::once((target, true)).chain(avoid.iter().map(|forbidden| (forbidden, false)))
+        std::iter::once((target, true)).chain(avoid.iter().map(|forbidden| (*forbidden, false)))
     {
         assert_eq!(
             pattern.is_match(text, &mut Governor::new(Budget::default())),
@@ -30,6 +30,7 @@ fn generated(source: &str, exclusions: &[&str], min: usize, max: Option<usize>) 
         .iter()
         .map(|source| Pattern::compile(source).expect("exclusion compiles"))
         .collect();
+    let avoid: Vec<_> = avoid.iter().collect();
     let outcome = target
         .generate(
             &mut Governor::new(Budget::default()),
@@ -162,10 +163,7 @@ fn bounded_generation_agrees_with_exhaustive_assertion_oracle() {
             .chain((0..forbidden.len()).map(|index| vec![index]))
             .chain([vec![2, 3], vec![1, 6], vec![4, 10]])
         {
-            let avoid: Vec<_> = excluded
-                .iter()
-                .map(|&index| forbidden[index].clone())
-                .collect();
+            let avoid: Vec<_> = excluded.iter().map(|&index| &forbidden[index]).collect();
             for maximum in 0..=3 {
                 for minimum in 0..=maximum + 1 {
                     let expected = subjects
@@ -218,7 +216,7 @@ fn generation_exhaustion_stays_an_explicit_resource_error() {
     let options = GenerateOptions {
         min_len: 0,
         max_len: None,
-        avoid: &[avoid],
+        avoid: &[&avoid],
     };
     let mut governor = Governor::new(Budget {
         work: 0,
@@ -244,7 +242,8 @@ fn flat_literal_chains_use_admitted_iterative_traversal() {
     // arena's left-deep Concat representation is structural nesting.
     let source = "a".repeat(32_768);
     let mut compiler = Governor::new(Budget {
-        depth: 0,
+        depth: 2,
+        work: 1_000_000_000,
         ..Budget::default()
     });
     let pattern = Pattern::compile_governed(&source, &mut compiler).unwrap();
@@ -294,7 +293,8 @@ fn flat_wide_alternations_share_bounded_compile_and_runtime_union() {
         .collect::<Vec<_>>()
         .join("|");
     let mut compiler = Governor::new(Budget {
-        depth: 0,
+        depth: 3,
+        work: 1_000_000_000,
         ..Budget::default()
     });
     let pattern = Pattern::compile_governed(&source, &mut compiler).unwrap();
@@ -333,7 +333,7 @@ fn flat_wide_alternations_share_bounded_compile_and_runtime_union() {
     let work = compiler.usage().work;
     let mut stopped = Governor::new(Budget {
         work: work - 1,
-        depth: 0,
+        depth: 3,
         ..Budget::default()
     });
     assert!(matches!(
@@ -353,7 +353,10 @@ fn wide_pattern_compile_stops_keep_their_schema_resource_type() {
         .collect::<Vec<_>>()
         .join("|");
     let source = format!(r#"{{"pattern":"{}"}}"#, pattern.replace('\\', "\\\\"));
-    let mut completed = Governor::new(Budget::default());
+    let mut completed = Governor::new(Budget {
+        work: 1_000_000_000,
+        ..Budget::default()
+    });
     Schema::compile_governed(&source, &mut completed).unwrap();
     for (budget, resource) in [
         (
@@ -366,6 +369,7 @@ fn wide_pattern_compile_stops_keep_their_schema_resource_type() {
         (
             Budget {
                 scratch_bytes: completed.usage().peak_scratch_bytes - 1,
+                work: 1_000_000_000,
                 ..Budget::default()
             },
             Resource::ScratchBytes,

@@ -202,12 +202,8 @@ fn compile_children(
     index: &mut Index,
     context: &mut Context<'_>,
 ) -> Result<(), CompilationError> {
-    let location = clone_location(&index.locations[id], context)?;
-    let document = location.document;
-    let route = location.route;
-    let pointer = location.pointer;
-    let base = location.base;
-    let vocabularies = location.vocabularies;
+    let (vocabularies, document, route, pointer, base) =
+        parent_snapshot(&index.locations[id], context)?;
     let fail = failure(&base, &pointer);
     let Value::Object(members) = &node.value else {
         return Ok(());
@@ -589,10 +585,10 @@ fn admit_location(
     Ok(())
 }
 
-fn clone_location(
+fn parent_snapshot(
     location: &Location,
     context: &mut Context<'_>,
-) -> Result<Location, CompilationError> {
+) -> Result<(Vocabularies, usize, Vec<usize>, String, String), CompilationError> {
     context.charge(
         Resource::ScratchBytes,
         location
@@ -602,7 +598,13 @@ fn clone_location(
             .saturating_add(location.route.len().saturating_mul(8))
             .saturating_add(256),
     )?;
-    Ok(location.clone())
+    Ok((
+        location.vocabularies,
+        location.document,
+        location.route.clone(),
+        location.pointer.clone(),
+        location.base.clone(),
+    ))
 }
 
 fn schema_array<'a>(

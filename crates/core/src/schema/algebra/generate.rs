@@ -84,7 +84,7 @@ struct Gen<'s, 'g> {
     active: BTreeSet<(usize, String, bool)>,
 }
 
-impl Gen<'_, '_> {
+impl<'s> Gen<'s, '_> {
     /// Enter one schema location under the non-progressing-cycle guard and
     /// dynamic-scope stack, build its [`Canon`], and search it.
     fn attempt(&mut self, id: usize, path: &str, depth: u32) -> Result<Attempt, StopReason> {
@@ -603,12 +603,12 @@ impl Gen<'_, '_> {
             }
         } else {
             let primary = req.patterns[0].clone();
-            let pattern = self.pattern_of(&primary).clone();
-            let avoid: Vec<Pattern> = req
-                .avoid_patterns
-                .iter()
-                .map(|reference| self.pattern_of(reference).clone())
-                .collect();
+            let pattern = self.pattern_of(&primary);
+            let mut avoid = crate::contract::ScratchVec::new(self.governor);
+            for reference in &req.avoid_patterns {
+                self.governor.charge(Resource::Work, 1)?;
+                avoid.push(self.pattern_of(reference))?;
+            }
             let min_len = usize::try_from(req.min_length).unwrap_or(usize::MAX);
             let max_len = req
                 .max_length
@@ -663,7 +663,7 @@ impl Gen<'_, '_> {
         }
         Ok(Attempt::Exhausted)
     }
-    fn pattern_of(&self, reference: &PatternRef) -> &Pattern {
+    fn pattern_of(&self, reference: &PatternRef) -> &'s Pattern {
         &self.schema.index.locations[reference.owner].patterns[&reference.keyword]
     }
     fn build_number(&mut self, req: &Requirements) -> Result<Attempt, StopReason> {
@@ -913,7 +913,7 @@ impl Gen<'_, '_> {
                 .map(|(_, id)| *id)
                 .collect();
             for (pattern, id) in &req.pattern_properties {
-                let compiled = self.pattern_of(pattern).clone();
+                let compiled = self.pattern_of(pattern);
                 if compiled.is_match(name, self.governor)? {
                     ids.push(*id);
                 }
@@ -1131,13 +1131,13 @@ impl Gen<'_, '_> {
             return Ok(Some("longer than maxLength"));
         }
         for reference in &req.patterns {
-            let compiled = self.pattern_of(reference).clone();
+            let compiled = self.pattern_of(reference);
             if !compiled.is_match(text, self.governor)? {
                 return Ok(Some("does not match pattern"));
             }
         }
         for reference in &req.avoid_patterns {
-            let compiled = self.pattern_of(reference).clone();
+            let compiled = self.pattern_of(reference);
             if compiled.is_match(text, self.governor)? {
                 return Ok(Some("matches an avoided pattern"));
             }

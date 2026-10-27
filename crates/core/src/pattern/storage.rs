@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Temporary pattern-engine ownership of shared admitted collections.
+//! Pattern-engine ownership of shared admitted collections.
 use crate::contract::{Governor, ScratchCharge, ScratchLease, ScratchMap, ScratchVec, StopReason};
 use std::cmp::Ordering;
 
@@ -25,13 +25,6 @@ impl<T: ScratchCharge> Buffer<T> {
             values,
             lease: governor.scratch_lease_for(bytes),
         }
-    }
-
-    /// Transfer already-admitted storage to a caller-retained artifact.
-    /// No allocation occurs, and the existing charge becomes permanent.
-    pub(super) fn into_retained(self) -> Vec<T> {
-        self.lease.retain();
-        self.values
     }
 }
 

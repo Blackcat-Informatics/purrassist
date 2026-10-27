@@ -198,7 +198,7 @@ impl std::error::Error for ToolSetError {}
 /// assert_eq!(compiled.unknown_parameters(), UnknownParameters::Error);
 /// assert!(compiled.schema().validate(&json::parse(r#"{"path":"a"}"#).unwrap()).unwrap().valid);
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct CompiledTool {
     name: String,
     aliases: Vec<String>,
@@ -584,7 +584,7 @@ impl CompiledTool {
 /// assert_eq!(tools.lookup_exact("cat").unwrap().name(), "read");
 /// assert!(tools.tool("cat").is_none());
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ToolSet {
     tools: Vec<CompiledTool>,
     index: Vec<(String, usize)>,
