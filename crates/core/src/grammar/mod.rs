@@ -619,9 +619,14 @@ impl Grammar {
     /// borrows labels, admitting searches and insertion shifts before processing;
     /// its iterative storage preserves byte lengths beyond 128. Temporary
     /// delimiter expansions release after the existing dense matcher call.
-    /// Dense matcher construction/storage and dialect-set sharing, recognizer
-    /// programs, call metadata/capture analyses and native pattern/automaton
-    /// preparation retain separate contracts; full cold governance remains #36.
+    /// Recognizer Program instructions/control tables and all choice, closure,
+    /// reverse-edge and traversal temporaries use fallible retained owners.
+    /// Scans, sorting, renames, checked PCs/bounds and recursive caller/native
+    /// depth admit work before processing through the same ordinary/JSON path.
+    /// Dense matcher construction/storage also retain governed owners. Other
+    /// dialect-set metadata, public call metadata, capture memo, closer-ID
+    /// preparation, longest metadata and native pattern preparation remain
+    /// separate; full cold governance remains #36.
     ///
     /// # Errors
     /// Returns a typed [`GrammarError`] with the source offset for malformed

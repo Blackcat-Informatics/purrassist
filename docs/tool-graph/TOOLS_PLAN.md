@@ -1078,9 +1078,17 @@ admit work before processing. Trie labels borrow spelling bytes; flat iterative
 storage preserves byte lengths above 128. Temporary JSON flags/counts/renames
 and expanded delimiter bytes release on refusal.
 
-Dense matcher construction/storage now retain exact governed owners. Recognizer programs,
-call metadata/capture analyses and native pattern parsing/automaton preparation
-retain separate contracts. Full cold backend governance, witness, GBNF,
+Recognizer Program construction/storage now governs every retained instruction
+and control table, including nested insertion alternatives. Choice, closure,
+reverse-edge and traversal temporaries admit work and fallible growth before
+processing. Checked PCs, fixed-width bounds and recursive caller/native depth
+admission preserve the same ordinary/JSON compiler and instruction identities.
+Completed Program owners release on later compiler failure and grammar drop.
+
+Dense matcher construction/storage also retain governed owners. Other dialect-set
+metadata, public call-byte metadata, capture memo, closer-ID input preparation,
+longest metadata and native pattern preparation retain separate contracts.
+Full cold backend governance, witness, GBNF,
 CompactSignature, projection, routing, ledgers and graph integration remain #36
 acceptance.
 
@@ -1097,6 +1105,5 @@ static borrows, custom sets stay caller-owned, and owned cloneable request
 settings contain no set. Actual host/facade/derive/WASM/corpus/golden/fuzzer
 consumers preserve their chosen context through recovery. CLI/MCP selectors,
 results and provenance keep their original contracts. Other set metadata,
-recognizer programs/closures/reachability/insertion alternatives, call metadata
-and capture analyses, native pattern preparation and full remaining generation/
-projection/routing/integration acceptance remain under #36.
+call metadata and capture analyses, native pattern preparation and the remaining
+generation/projection/routing/integration acceptance remain under #36.

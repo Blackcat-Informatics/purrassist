@@ -28,9 +28,18 @@ classification admit work before processing. Trie construction borrows labelled
 spellings; its flat storage preserves literals longer than 128 bytes. Temporary
 JSON flags/renames and delimiter expansions release on every later refusal.
 
-Dense matcher construction/storage now retain exact governed owners. Recognizer programs,
-call metadata/capture analyses and native pattern parsing/automaton preparation
-retain their separate contracts. Full cold backend governance remains #36
+Recognizer Program instructions and all retained control tables now use fallible
+scratch owners through the same ordinary/JSON-envelope compiler. Choice buffers,
+closures, reverse edges, traversal stacks and insertion alternatives admit scans,
+comparisons, sorting and growth before processing. Recursive emission preserves
+caller/native depth admission; checked PCs and fixed-width bound sums refuse
+resource overflow. Completed Program owners release on later compiler refusal
+or when the compiled grammar drops.
+
+Dense matcher construction/storage also retain governed owners. Other dialect-set
+metadata, public call-byte metadata, capture memo, closer-ID input preparation,
+longest metadata and native pattern preparation retain separate contracts.
+Full cold backend governance remains #36
 acceptance, alongside witness, GBNF, CompactSignature, projection, routing,
 ledgers and graph integration.
 

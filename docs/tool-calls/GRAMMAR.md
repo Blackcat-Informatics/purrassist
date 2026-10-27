@@ -408,9 +408,18 @@ borrows labelled spellings; its flat iterative storage admits one depth frame
 and preserves literal byte lengths greater than 128. Temporary JSON flags and
 renames and delimiter expansions release on later failure.
 
-Dense matcher construction/storage and dialect-set sharing, recognizer programs,
-call metadata/capture analyses and native pattern parsing/automaton preparation
-remain separate #36 requirements. These implemented phases do not establish
+Recognizer Program instructions, opener/commit/grouping tables and nested
+insertion alternatives also retain fallible scratch owners. Choice temporaries,
+closures, reverse edges and traversal flags/stacks admit work and growth before
+processing, including renames and checked configuration-bound scans. Recursive
+emission preserves caller/native depth limits. Ordinary and JSON-envelope
+programs use the same compiler and stable instruction identities; later failures
+release completed Program owners.
+
+Dense matcher construction/storage also retain governed owners. Other dialect-set
+metadata, public call-byte metadata, capture memo, closer-ID input preparation,
+longest metadata and native pattern preparation remain separate #36 requirements.
+These implemented phases do not establish
 complete cold compiler governance.
 
 ## Print a prepared grammar
