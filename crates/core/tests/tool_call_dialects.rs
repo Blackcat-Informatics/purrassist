@@ -762,7 +762,16 @@ fn reasoning_markers_are_declared() {
             .map(|(open, close)| (open.as_slice().to_vec(), close.as_slice().to_vec())),
     );
     expected.sort();
-    assert_eq!(set.reasoning_markers(), expected);
+    assert_eq!(
+        set.reasoning_markers()
+            .iter()
+            .map(|(open, close)| (open.as_slice(), close.as_slice()))
+            .collect::<Vec<_>>(),
+        expected
+            .iter()
+            .map(|(open, close)| (open.as_slice(), close.as_slice()))
+            .collect::<Vec<_>>()
+    );
 }
 
 fn results(turn: &RecognizedTurn) -> Vec<&RawCall> {

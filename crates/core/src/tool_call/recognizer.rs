@@ -1164,7 +1164,7 @@ impl<'s> Recognizer<'s> {
                 .set
                 .markers
                 .get(think.pair.unwrap_or(0) as usize)
-                .map_or_else(Vec::new, |(_, close)| close.clone()),
+                .map_or_else(Vec::new, |(_, close)| close.as_slice().to_vec()),
         };
         let segment = self.turn.reasoning(
             think,

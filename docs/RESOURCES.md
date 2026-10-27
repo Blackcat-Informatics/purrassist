@@ -139,8 +139,9 @@ byte lists; closer IDs, capture memo and traversal temporaries release after use
 Capture/next queries and longest-spelling scans admit each visited entry.
 Borrowed `CallEnd` getters, `call_literals` and `CodecContext` expose the same
 read-only owners. Recovery's existing runtime byte copies remain explicit.
-Other dialect-set metadata, native pattern preparation and engine/recovery
-runtime allocation governance retain separate contracts.
+Dialect-set metadata preparation also uses retained fallible owners and
+admitted scans. Native pattern preparation and engine/recovery runtime
+allocation governance retain separate contracts.
 Delimiter expansion feeds the same governed dense matcher. Complete cold
 compiler governance and the remaining #36 capabilities are still required.
 
@@ -1530,6 +1531,30 @@ contains owned cloneable policy/budget settings, while `ToolSet::recover` and
 set through `sized_for`. The host retains custom preparation through recovery
 under its original shared governor; CLI/MCP selectors and outcome/provenance
 contracts are unchanged. Derived call metadata and compiler queries also retain
-governed owners and admitted scans. Other existing dialect-set metadata, native
-pattern preparation and engine/recovery runtime allocation governance remain
+governed owners and admitted scans. Dialect-set metadata also uses governed
+retained owners. Native pattern preparation and engine/recovery runtime
+allocation governance remain
 outside these completed compiler phases under parent #36.
+
+
+## Prepared dialect metadata admission
+
+`DialectSet::new` admits collection, canonical `(id, digest)` comparisons,
+duplicate diagnostics, marker-byte copies, lexical ordering/deduplication and
+explicit-marker scans before processing. Dialects, marker pairs and flags retain
+fallible scratch owners through errors and set lifetime; temporary storage
+releases on refusal. A returned duplicate diagnostic retains its admitted
+String charge. Shared pairs are explicit
+only when every declaration is explicit. Fallible borrowed byte-view handles feed
+the existing matcher in flattened opener/closer order without cloning marker
+buffers. Temporary handles end before the completed set moves its owners.
+
+Lookbehind arithmetic and the aggregate configuration bound are checked before
+publication, followed by cancellation admission. `reasoning_markers` borrows the
+same read-only byte owners. Existing recognizer runtime copies remain explicit.
+Caller-prepared custom grammar/Arc construction and the input iterator belong to
+the caller; lazy built-in grammar/cache preparation keeps its own default
+governor. Native pattern preparation, engine/recovery runtime governance and full
+#36 witness, GBNF, signature, projection, routing, ledger and graph integration
+remain separate required capabilities. No set-owned disallowed-signature table
+exists: detection filters static family rules at runtime through its allow-list.

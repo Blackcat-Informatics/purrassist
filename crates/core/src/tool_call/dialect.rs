@@ -14,7 +14,9 @@
 //! order the allow-list named them in, so permuting an allow-list never
 //! changes a recognition result.
 use crate::contract::saturating_size as size;
-use crate::contract::{Budget, Governor, Resource, StopReason};
+use crate::contract::{
+    Budget, Governor, Resource, ScratchCharge, ScratchString, ScratchVec, StopReason,
+};
 use crate::digest::Digest;
 use crate::grammar::automaton::Matcher;
 use crate::grammar::cost::K_COMPILE;
@@ -406,13 +408,14 @@ impl From<StopReason> for DialectSetError {
 /// A compiled, canonical dialect allow-list for one model.
 #[derive(Debug)]
 pub struct DialectSet {
-    pub(crate) dialects: Vec<DialectId>,
-    pub(crate) markers: Vec<(Vec<u8>, Vec<u8>)>,
+    pub(crate) dialects: ScratchVec<DialectId>,
+    pub(crate) markers: ScratchVec<(ScratchVec<u8>, ScratchVec<u8>)>,
     /// Per marker pair, whether every dialect declaring it declares it
     /// `explicit` (see [`CompiledGrammar::reasoning_explicit`](crate::grammar::CompiledGrammar::reasoning_explicit)).
-    pub(crate) explicit: Vec<bool>,
+    pub(crate) explicit: ScratchVec<bool>,
     pub(crate) marker_matcher: Option<Matcher>,
     pub(crate) lookbehind: usize,
+    configuration_bound: u64,
 }
 
 impl DialectSet {
@@ -420,8 +423,15 @@ impl DialectSet {
     /// combined reasoning-marker matcher (the union of the dialects'
     /// declared reasoning markers).
     ///
-    /// Charges `Work` per dialect and per marker-matcher entry, and the
-    /// matcher's retained `ScratchBytes`.
+    /// Admits collection, identity comparisons, duplicate diagnostics, marker
+    /// copies/order/deduplication, explicit-marker scans, matcher preparation and
+    /// checked lookbehind/configuration bounds before processing. All retained
+    /// lists and byte buffers release their scratch charge when the set drops;
+    /// temporaries also release on refusal. A returned duplicate diagnostic is
+    /// an owned String with a retained admission charge. The input iterator and custom
+    /// grammar/Arc preparation belong to the caller. Lazy built-in grammars
+    /// retain their separate default governor; native pattern preparation and
+    /// recognizer/recovery runtime allocations are separate contracts.
     ///
     /// # Errors
     /// [`DialectSetError::Empty`] for an empty list,
@@ -451,86 +461,38 @@ impl DialectSet {
         dialects: impl IntoIterator<Item = DialectId>,
         governor: &mut Governor,
     ) -> Result<Self, DialectSetError> {
-        let mut dialects: Vec<DialectId> = dialects.into_iter().collect();
-        if dialects.is_empty() {
+        governor.check()?;
+        let mut collected = ScratchVec::new(governor);
+        for dialect in dialects {
+            governor.charge(Resource::Work, K_COMPILE)?;
+            collected.push(dialect)?;
+        }
+        if collected.is_empty() {
             return Err(DialectSetError::Empty);
         }
-        governor.charge(
-            Resource::Work,
-            size(dialects.len()).saturating_mul(K_COMPILE),
-        )?;
-        dialects.sort();
-        if let Some(pair) = dialects.windows(2).find(|pair| pair[0] == pair[1]) {
-            return Err(DialectSetError::Duplicate {
-                id: pair[0].name().to_owned(),
-            });
-        }
-        let mut markers: Vec<(Vec<u8>, Vec<u8>)> = dialects
-            .iter()
-            .flat_map(|dialect| {
-                dialect
-                    .grammar()
-                    .reasoning
-                    .iter()
-                    .map(|(open, close)| (open.as_slice().to_vec(), close.as_slice().to_vec()))
-            })
-            .collect();
-        markers.sort();
-        markers.dedup();
-        // A pair any dialect declares without `explicit` may close a block
-        // the turn starts in.
-        let explicit: Vec<bool> = markers
-            .iter()
-            .map(|pair| {
-                dialects.iter().all(|dialect| {
-                    let grammar = dialect.grammar();
-                    grammar
-                        .reasoning
-                        .iter()
-                        .zip(&grammar.explicit_reasoning)
-                        .all(|(declared, explicit)| {
-                            declared.0.as_slice() != pair.0.as_slice()
-                                || declared.1.as_slice() != pair.1.as_slice()
-                                || *explicit
-                        })
-                })
-            })
-            .collect();
+        canonical_dialects(collected.as_mut_slice(), governor)?;
+        let markers = marker_pairs(&collected, governor)?;
+        let explicit = marker_flags(&collected, &markers, governor)?;
         let marker_matcher = if markers.is_empty() {
             None
         } else {
-            let literals: Vec<Vec<u8>> = markers
-                .iter()
-                .flat_map(|(open, close)| [open.clone(), close.clone()])
-                .collect();
+            let mut literals = ScratchVec::new(governor);
+            for (open, close) in &markers {
+                governor.charge(Resource::Work, 2)?;
+                literals.push(open.as_slice())?;
+                literals.push(close.as_slice())?;
+            }
             Some(Matcher::build(&literals, governor)?)
         };
-        let lookbehind = dialects
-            .iter()
-            .map(|dialect| {
-                let grammar = dialect.grammar();
-                // A completed call waits for whitespace and a stray closer.
-                let gap = if grammar.closers.is_empty() {
-                    0
-                } else {
-                    crate::grammar::cost::STRAY_CLOSER_GAP
-                };
-                grammar.longest_literal() + gap
-            })
-            .chain(
-                markers
-                    .iter()
-                    .flat_map(|(open, close)| [open.len(), close.len()]),
-            )
-            .max()
-            .unwrap_or(0)
-            + 1;
+        let (lookbehind, configuration_bound) = set_bounds(&collected, &markers, governor)?;
+        governor.check()?;
         Ok(Self {
-            dialects,
+            dialects: collected,
             markers,
             explicit,
             marker_matcher,
             lookbehind,
+            configuration_bound,
         })
     }
 
@@ -575,10 +537,11 @@ impl DialectSet {
     /// let text = "grammar \"g\"; reasoning \"<think>\" \"</think>\"; call = \"<c>\"; result = \"<r>\"; declaration = \"<d>\";";
     /// let dialect = DialectId::custom(Grammar::compile_governed(text, &mut governor).unwrap());
     /// let set = DialectSet::new([dialect], &mut governor).unwrap();
-    /// assert_eq!(set.reasoning_markers(), [(b"<think>".to_vec(), b"</think>".to_vec())]);
+    /// assert_eq!(set.reasoning_markers()[0].0.as_slice(), b"<think>");
+    /// assert_eq!(set.reasoning_markers()[0].1.as_slice(), b"</think>");
     /// ```
     #[must_use]
-    pub fn reasoning_markers(&self) -> &[(Vec<u8>, Vec<u8>)] {
+    pub fn reasoning_markers(&self) -> &[(ScratchVec<u8>, ScratchVec<u8>)] {
         &self.markers
     }
 
@@ -618,11 +581,8 @@ impl DialectSet {
     /// assert_eq!(DialectSet::new([dialect], &mut governor).unwrap().configuration_bound(), bound);
     /// ```
     #[must_use]
-    pub fn configuration_bound(&self) -> u64 {
-        self.dialects
-            .iter()
-            .map(|dialect| dialect.grammar().configuration_bound())
-            .sum()
+    pub const fn configuration_bound(&self) -> u64 {
+        self.configuration_bound
     }
 
     /// The call openers of `output` summed over the dialects
@@ -651,5 +611,332 @@ impl DialectSet {
             .iter()
             .map(|dialect| dialect.grammar().call_openers(output))
             .fold(0, u64::saturating_add)
+    }
+}
+
+impl ScratchCharge for DialectId {
+    const CHARGE: usize = 16;
+}
+impl ScratchCharge for &[u8] {
+    const CHARGE: usize = 16;
+}
+const _: () = assert!(core::mem::size_of::<DialectId>() <= DialectId::CHARGE);
+const _: () = assert!(core::mem::size_of::<&[u8]>() <= <&[u8] as ScratchCharge>::CHARGE);
+
+type MarkerPair = (ScratchVec<u8>, ScratchVec<u8>);
+
+fn compare_bytes(
+    left: &[u8],
+    right: &[u8],
+    governor: &mut Governor,
+) -> Result<Ordering, StopReason> {
+    governor.charge(
+        Resource::Work,
+        size(left.len().min(right.len())).saturating_add(1),
+    )?;
+    Ok(left.cmp(right))
+}
+
+fn compare_dialects(
+    left: &DialectId,
+    right: &DialectId,
+    governor: &mut Governor,
+) -> Result<Ordering, StopReason> {
+    let order = compare_bytes(left.name().as_bytes(), right.name().as_bytes(), governor)?;
+    if order.is_eq() {
+        governor.charge(Resource::Work, 33)?;
+        Ok(left.grammar().digest().cmp(&right.grammar().digest()))
+    } else {
+        Ok(order)
+    }
+}
+
+fn canonical_dialects(
+    dialects: &mut [DialectId],
+    governor: &mut Governor,
+) -> Result<(), DialectSetError> {
+    for index in 1..dialects.len() {
+        let mut at = index;
+        while at > 0 {
+            if !compare_dialects(&dialects[at - 1], &dialects[at], governor)?.is_gt() {
+                break;
+            }
+            governor.charge(Resource::Work, 1)?;
+            dialects.swap(at - 1, at);
+            at -= 1;
+        }
+    }
+    for pair in dialects.windows(2) {
+        if compare_dialects(&pair[0], &pair[1], governor)?.is_eq() {
+            let name = pair[0].name();
+            governor.charge(Resource::InputBytes, size(name.len()))?;
+            governor.charge(Resource::Work, size(name.len()).saturating_add(1))?;
+            let mut id = ScratchString::new(governor);
+            id.push_str(name)?;
+            governor.check()?;
+            return Err(DialectSetError::Duplicate {
+                id: id.into_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn copy_marker(bytes: &[u8], governor: &mut Governor) -> Result<ScratchVec<u8>, StopReason> {
+    governor.charge(Resource::InputBytes, size(bytes.len()))?;
+    governor.charge(Resource::Work, size(bytes.len()).saturating_add(1))?;
+    let mut owned = ScratchVec::new(governor);
+    owned.extend(bytes.iter().copied())?;
+    Ok(owned)
+}
+
+fn compare_markers(
+    left: &MarkerPair,
+    right: &MarkerPair,
+    governor: &mut Governor,
+) -> Result<Ordering, StopReason> {
+    let order = compare_bytes(&left.0, &right.0, governor)?;
+    if order.is_eq() {
+        compare_bytes(&left.1, &right.1, governor)
+    } else {
+        Ok(order)
+    }
+}
+
+fn marker_pairs(
+    dialects: &[DialectId],
+    governor: &mut Governor,
+) -> Result<ScratchVec<MarkerPair>, StopReason> {
+    let mut markers = ScratchVec::new(governor);
+    for dialect in dialects {
+        governor.charge(Resource::Work, 1)?;
+        for (open, close) in &dialect.grammar().reasoning {
+            governor.charge(Resource::Work, 1)?;
+            markers.push((copy_marker(open, governor)?, copy_marker(close, governor)?))?;
+        }
+    }
+    for index in 1..markers.len() {
+        let mut at = index;
+        while at > 0 {
+            if !compare_markers(&markers[at - 1], &markers[at], governor)?.is_gt() {
+                break;
+            }
+            governor.charge(Resource::Work, 1)?;
+            markers.as_mut_slice().swap(at - 1, at);
+            at -= 1;
+        }
+    }
+    let mut unique = 0;
+    for read in 0..markers.len() {
+        governor.charge(Resource::Work, 1)?;
+        if unique == 0 || !compare_markers(&markers[unique - 1], &markers[read], governor)?.is_eq()
+        {
+            governor.charge(Resource::Work, 1)?;
+            markers.as_mut_slice().swap(unique, read);
+            unique += 1;
+        }
+    }
+    while markers.len() > unique {
+        governor.charge(Resource::Work, 1)?;
+        markers.pop();
+    }
+    Ok(markers)
+}
+
+fn marker_flags(
+    dialects: &[DialectId],
+    markers: &[MarkerPair],
+    governor: &mut Governor,
+) -> Result<ScratchVec<bool>, StopReason> {
+    let mut flags = ScratchVec::new(governor);
+    for pair in markers {
+        governor.charge(Resource::Work, 1)?;
+        let mut all_explicit = true;
+        for dialect in dialects {
+            governor.charge(Resource::Work, 1)?;
+            let grammar = dialect.grammar();
+            for (declared, explicit) in grammar.reasoning.iter().zip(&grammar.explicit_reasoning) {
+                governor.charge(Resource::Work, 1)?;
+                if compare_markers(declared, pair, governor)?.is_eq() && !explicit {
+                    all_explicit = false;
+                    break;
+                }
+            }
+            if !all_explicit {
+                break;
+            }
+        }
+        flags.push(all_explicit)?;
+    }
+    Ok(flags)
+}
+
+fn set_bounds(
+    dialects: &[DialectId],
+    markers: &[MarkerPair],
+    governor: &mut Governor,
+) -> Result<(usize, u64), StopReason> {
+    let mut lookbehind = 0;
+    let mut bound = 0_u64;
+    for dialect in dialects {
+        governor.charge(Resource::Work, 1)?;
+        let grammar = dialect.grammar();
+        let gap = if grammar.closers.is_empty() {
+            0
+        } else {
+            crate::grammar::cost::STRAY_CLOSER_GAP
+        };
+        let reach = grammar
+            .longest_literal()
+            .checked_add(gap)
+            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+        lookbehind = lookbehind.max(reach);
+        bound = bound
+            .checked_add(grammar.configuration_bound())
+            .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+    }
+    for (open, close) in markers {
+        governor.charge(Resource::Work, 1)?;
+        lookbehind = lookbehind.max(open.len()).max(close.len());
+    }
+    let lookbehind = lookbehind
+        .checked_add(1)
+        .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+    Ok((lookbehind, bound))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DialectId, DialectSet, DialectSetError};
+    use crate::contract::{Budget, CancellationToken, Governor, Resource, StopReason};
+    use crate::grammar::Grammar;
+
+    fn prepared(name: &str, explicit: bool) -> DialectId {
+        let mode = if explicit { " explicit" } else { "" };
+        let source = format!(
+            "grammar \"{name}\"; reasoning \"<t>\" \"</t>\"{mode}; reasoning \"[t]\" \"[/t]\" explicit; call = \"<c>\"; result = \"<r>\"; declaration = \"<d>\";"
+        );
+        DialectId::custom(
+            Grammar::compile_governed(&source, &mut Governor::new(Budget::default())).unwrap(),
+        )
+    }
+
+    /// Constructor refusal releases partial and completed buffers; successful
+    /// sets retain their own preparation charges until dropped.
+    #[test]
+    fn set_preparation_retains_owners_and_releases_every_refused_stage() {
+        let dialects = [prepared("b", false), prepared("a", true)];
+        let mut measured = Governor::new(Budget::default());
+        let set = DialectSet::new(dialects.clone(), &mut measured).unwrap();
+        let usage = measured.usage();
+        assert!(measured.scratch_meter().live() > 0);
+        drop(set);
+        assert_eq!(measured.scratch_meter().live(), 0);
+        let exact = Budget {
+            work: usage.work,
+            input_bytes: 4,
+            scratch_bytes: usage.peak_scratch_bytes,
+            ..Budget::default()
+        };
+        let mut governor = Governor::new(exact);
+        drop(DialectSet::new(dialects.clone(), &mut governor).unwrap());
+        assert_eq!(governor.scratch_meter().live(), 0);
+        for (budget, resource) in [
+            (Budget { work: 0, ..exact }, Resource::Work),
+            (
+                Budget {
+                    work: usage.work / 2,
+                    ..exact
+                },
+                Resource::Work,
+            ),
+            (
+                Budget {
+                    work: usage.work - 1,
+                    ..exact
+                },
+                Resource::Work,
+            ),
+            (
+                Budget {
+                    scratch_bytes: 0,
+                    ..exact
+                },
+                Resource::ScratchBytes,
+            ),
+            (
+                Budget {
+                    scratch_bytes: usage.peak_scratch_bytes - 1,
+                    ..exact
+                },
+                Resource::ScratchBytes,
+            ),
+            (
+                Budget {
+                    input_bytes: 3,
+                    ..exact
+                },
+                Resource::InputBytes,
+            ),
+            (Budget { depth: 0, ..exact }, Resource::Depth),
+        ] {
+            let mut governor = Governor::new(budget);
+            let reason = StopReason::BudgetExceeded(resource);
+            assert_eq!(
+                DialectSet::new(dialects.clone(), &mut governor).unwrap_err(),
+                DialectSetError::Resource(reason.clone())
+            );
+            assert_eq!(governor.check(), Err(reason));
+            assert_eq!(governor.scratch_meter().live(), 0);
+        }
+        // The iterator cancels after yielding a prepared dialect: construction
+        // cannot publish even when iteration ends without another item.
+        let token = CancellationToken::new();
+        let mut governor = Governor::with_cancellation(exact, token.clone());
+        let mut emitted = false;
+        let input = core::iter::from_fn(|| {
+            if emitted {
+                token.cancel();
+                None
+            } else {
+                emitted = true;
+                Some(dialects[0].clone())
+            }
+        });
+        assert_eq!(
+            DialectSet::new(input, &mut governor).unwrap_err(),
+            DialectSetError::Resource(StopReason::Cancelled)
+        );
+        assert_eq!(governor.scratch_meter().live(), 0);
+    }
+
+    /// Deduplication combines declaration policy and preserves the flattened
+    /// open/close labels the recognizer uses to pair reasoning blocks.
+    #[test]
+    fn shared_marker_policy_and_matcher_pair_labels_survive_canonicalization() {
+        for dialects in [
+            [prepared("b", false), prepared("a", true)],
+            [prepared("a", true), prepared("b", false)],
+        ] {
+            let set = DialectSet::new(dialects, &mut Governor::new(Budget::default())).unwrap();
+            assert_eq!(set.markers.len(), 2);
+            assert_eq!(set.explicit.as_slice(), [false, true]);
+            let matcher = set.marker_matcher.as_ref().unwrap();
+            for (pair, (open, close)) in set.markers.iter().enumerate() {
+                for (offset, marker) in [open, close].into_iter().enumerate() {
+                    let mut state = 0;
+                    for &byte in marker {
+                        state = matcher.step(state, byte);
+                    }
+                    assert_eq!(
+                        matcher.found(state),
+                        Some((
+                            u32::try_from(pair * 2 + offset).unwrap(),
+                            u32::try_from(marker.len()).unwrap()
+                        ))
+                    );
+                }
+            }
+        }
     }
 }
