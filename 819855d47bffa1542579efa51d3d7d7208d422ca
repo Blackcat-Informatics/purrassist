@@ -1,0 +1,19 @@
+ghprsq source head backlink metadata
+
+parent_hashes: 819855d47bffa1542579efa51d3d7d7208d422ca
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash-head-backlink
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrassist
+GhpRsq-GitHub-Pull-Request: 75
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrassist/pull/75
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 3c8435478d48bdfefafef952d8d562b2629e4507
+GhpRsq-Head-Ref: paudley/71-tool-graph-governed-signal-and-ptrace
+GhpRsq-Head-OID: 819855d47bffa1542579efa51d3d7d7208d422ca
+GhpRsq-Result-Tree: 23146d26aa9cb5b20c4acd84196958e5be16aa92
+GhpRsq-Result-Commit: b85df619d2ba3bb7eee4073261e82fe8c54a0add
+GhpRsq-Parent-Hashes: 819855d47bffa1542579efa51d3d7d7208d422ca
+GhpRsq-Squash-Notes-SHA256: f9b757e5cd255d3a2acf28563ed3428aabbf9c928fad899cdd0e6c0e3a3612bc
+GhpRsq-Defect-Class: none
+GhpRsq-Stage-Evidence: none
