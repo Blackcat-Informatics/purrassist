@@ -129,6 +129,13 @@ isolated syntax crate uses the pinned Tree-sitter grammar family; see the
 [dependency inventory](docs/DEPENDENCIES.md). Each tool is described in the
 [tool reference](docs/TOOLS.md).
 
+Prepared grammars also support `grammar::print::canonical_governed` for complete
+canonical call, result and declaration output with borrowed bindings. The
+[`canonical_print` example](crates/core/examples/canonical_print.rs) prepares its
+grammar separately and exercises semantic and resource refusals. Cold grammar
+compilation, higher-level emitter preparation and full seeded/witness generation
+remain outside this operation; tool-graph integration remains under #36.
+
 Current surfaces include:
 
 - JSON recovery with nested unwrapping, syntax repair, approximate keys/enums,

@@ -385,6 +385,27 @@ caller. The per-byte recognition cost of a dialect is `K_THREAD` times its
 `configuration_bound()`; the published bound and the built-in values are in
 [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound).
 
+## Print a prepared grammar
+
+`grammar::print::canonical_governed` accepts a caller-prepared
+`CompiledGrammar`, `Root::Call`, `Root::Result` or `Root::Declaration`, borrowed
+`Values`, further group bindings and a `Governor`. It returns complete bytes
+and capture metadata. Canonical choices, layouts, repetition, codecs and
+delimiter refusals use the same walker as existing emitters. Uncaptured classes
+reuse retained derivative automata with Unicode-scalar bounds.
+
+All work, recursive scans, temporary/output storage, diagnostics and
+cancellation inside this operation are governed. Traversals also enforce an
+aggregate depth ceiling of 128. Semantic failures preserve `PrintError` payloads;
+resource failures preserve the native sticky cause and publish no partial
+output. See the [public consumer](../../crates/core/examples/canonical_print.rs)
+and [resource contract](../RESOURCES.md#prepared-canonical-grammar-printing).
+
+Grammar preparation is a separate operation. This printing contract does not
+establish complete governance of cold grammar/native pattern parsing,
+higher-level emitter request preparation or full seeded/witness generation.
+Tool-graph integration and the remaining #36 requirements stay open.
+
 ## Add a custom dialect
 
 This walkthrough defines a dialect for a model that writes each call between

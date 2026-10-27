@@ -269,6 +269,13 @@ impl Node {
         emission::to_json_governed(self, governor)
     }
 
+    pub(crate) fn to_json_scratch(
+        &self,
+        governor: &mut Governor,
+    ) -> Result<crate::contract::ScratchString, StopReason> {
+        emission::to_json_scratch(self, governor)
+    }
+
     /// Estimate this value's heap footprint without serializing or cloning it.
     ///
     /// This traverses the tree without allocating and uses portable storage
@@ -350,6 +357,13 @@ fn quote_into(input: &str, output: &mut String) {
 /// ```
 pub fn quote_governed(input: &str, governor: &mut Governor) -> Result<String, StopReason> {
     emission::quote_governed(input, governor)
+}
+
+pub(crate) fn quote_scratch(
+    input: &str,
+    governor: &mut Governor,
+) -> Result<crate::contract::ScratchString, StopReason> {
+    emission::quote_scratch(input, governor)
 }
 
 /// The decoded reference tokens of an RFC 6901 pointer (`None` when it is

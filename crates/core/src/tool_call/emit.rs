@@ -130,11 +130,14 @@ use super::{
     ToolSet, UnresolvedReason, ValueShape,
 };
 use crate::contract::saturating_size as size;
-use crate::contract::{Budget, Governor, Resource, StopReason};
+use crate::contract::{
+    Budget, Governor, Resource, ScratchCharge, ScratchString, ScratchVec, StopReason,
+};
 use crate::grammar::codec::{Codec, CodecContext, CodecEnd, CodecKind, XmlParamsCodec};
 use crate::grammar::edit::EditOperator;
 use crate::grammar::print::{
-    Canonical, PrintError, Printer, Values, contains_any, guard_json, unsupported,
+    Canonical, PrintError, Printer, Root, ScratchPrintError, ScratchPrinted, Values,
+    canonical_scratch, contains_any, guard_json, unsupported,
 };
 use crate::grammar::{CaptureKind, DelimiterSetId};
 use crate::json::{self, Member, Node, Value};
@@ -474,6 +477,12 @@ impl From<StopReason> for EmitError {
     }
 }
 
+impl From<ScratchPrintError> for EmitError {
+    fn from(error: ScratchPrintError) -> Self {
+        Self::from(PrintError::from(error))
+    }
+}
+
 impl From<PrintError> for EmitError {
     fn from(error: PrintError) -> Self {
         match error {
@@ -711,6 +720,17 @@ fn ordered(mut skipped: Vec<(usize, Skipped)>) -> Vec<Skipped> {
     skipped.into_iter().map(|(_, skipped)| skipped).collect()
 }
 
+// Newly governed skip details stay transient until the whole envelope succeeds.
+struct PendingDiagnostic {
+    position: usize,
+    detail: ScratchString,
+}
+impl ScratchCharge for PendingDiagnostic {
+    // 64-bit position (8), String (24), meter handle (8), reservation (8).
+    const CHARGE: usize = 48;
+}
+const _: () = assert!(core::mem::size_of::<PendingDiagnostic>() <= PendingDiagnostic::CHARGE);
+
 fn dialect_markup<S: AsRef<str>>(
     tools: Option<&ToolSet>,
     calls: &ToolCalls,
@@ -719,9 +739,10 @@ fn dialect_markup<S: AsRef<str>>(
     governor: &mut Governor,
 ) -> Result<Emitted<Vec<u8>>, StopReason> {
     let (selected, mut skipped) = selection(calls);
-    let mut printer = Printer::new(dialect.grammar());
+    let mut pending = ScratchVec::new(governor);
+    let mut printer = Printer::new(dialect.grammar(), governor);
     let mut emitted = Vec::with_capacity(selected.len());
-    let grouped = printer.holds(dialect.grammar().call()).next;
+    let grouped = printer.holds(dialect.grammar().call(), governor)?.next;
     let mut group: Vec<(&ToolCall, Prepared<'_>)> = Vec::new();
     for call in selected {
         let mark = printer.out.len();
@@ -735,71 +756,135 @@ fn dialect_markup<S: AsRef<str>>(
         // A production that separates calls with `next` prints the whole
         // group in one instance; each call is first printed alone, so a
         // call it cannot carry is skipped rather than failing the group.
-        let outcome = prepare(&printer, call, id, shape, dialect, governor).and_then(|prepared| {
-            let production = printer.grammar.call();
-            if grouped {
-                let mut alone = Printer::new(printer.grammar);
-                alone.walk(
-                    &mut Canonical::new(prepared.values()),
-                    production,
-                    None,
+        let outcome = prepare(&printer, call, id, shape, dialect, governor)
+            .map_err(ScratchPrintError::from)
+            .and_then(|prepared| {
+                let rendered = canonical_scratch(
+                    printer.grammar,
+                    Root::Call,
+                    prepared.values(),
+                    &[],
                     governor,
                 )?;
-                group.push((call, prepared));
+                if grouped {
+                    group.push((call, prepared));
+                } else {
+                    printer.emit(rendered.bytes.as_slice(), governor)?;
+                }
                 Ok(())
-            } else {
-                printer.walk(
-                    &mut Canonical::new(prepared.values()),
-                    production,
-                    None,
-                    governor,
-                )
-            }
-        });
+            });
         match outcome {
             Ok(()) => {
                 if !grouped {
                     emitted.push(call.index);
                 }
             }
-            Err(PrintError::Resource(reason)) => return Err(reason),
+            Err(ScratchPrintError::Resource(reason)) => return Err(reason),
             Err(error) => {
-                printer.out.truncate(mark);
+                while printer.out.len() > mark {
+                    printer.out.pop();
+                }
+                pending.push(PendingDiagnostic {
+                    position: skipped.len(),
+                    detail: error.into_detail(governor)?,
+                })?;
                 skipped.push((
                     call.span.start,
                     Skipped::Call {
                         index: call.index,
                         reason: SkipReason::Unrepresentable {
-                            detail: error.to_string(),
+                            detail: String::new(),
                         },
                     },
                 ));
             }
         }
     }
+    print_group(
+        &mut printer,
+        &group,
+        &mut emitted,
+        &mut skipped,
+        &mut pending,
+        governor,
+    )?;
+    governor.check()?;
+    while let Some(PendingDiagnostic { position, detail }) = pending.pop() {
+        let (
+            _,
+            Skipped::Call {
+                reason: SkipReason::Unrepresentable { detail: target },
+                ..
+            },
+        ) = &mut skipped[position]
+        else {
+            unreachable!("pending details refer to their canonical skip entries")
+        };
+        *target = detail.into_string();
+    }
+    Ok(Emitted {
+        output: printer.out.into_vec(),
+        calls: emitted,
+        skipped: ordered(skipped),
+    })
+}
+
+fn print_group(
+    printer: &mut Printer<'_>,
+    group: &[(&ToolCall, Prepared<'_>)],
+    emitted: &mut Vec<usize>,
+    skipped: &mut Vec<(usize, Skipped)>,
+    pending: &mut ScratchVec<PendingDiagnostic>,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
     if let Some(((_, first), rest)) = group.split_first() {
-        let mut fill = Canonical::group(
+        let mut values = ScratchVec::new(governor);
+        governor.charge(Resource::Work, size(rest.len()))?;
+        values.extend(rest.iter().map(|(_, prepared)| prepared.values()))?;
+        match canonical_scratch(
+            printer.grammar,
+            Root::Call,
             first.values(),
-            rest.iter().map(|(_, prepared)| prepared.values()).collect(),
-        );
-        match printer.walk(&mut fill, printer.grammar.call(), None, governor) {
-            Ok(()) if fill.finished() => emitted.extend(group.iter().map(|(call, _)| call.index)),
-            Err(PrintError::Resource(reason)) => return Err(reason),
-            result => {
-                // Every call printed alone, but the production cannot hold
-                // them together: none of them is printed.
-                let detail = result.err().map_or_else(
-                    || "the production prints fewer calls than the group holds".to_owned(),
-                    |error| error.to_string(),
-                );
+            values.as_slice(),
+            governor,
+        ) {
+            Ok(rendered) => {
+                printer.emit(rendered.bytes.as_slice(), governor)?;
+                emitted.extend(group.iter().map(|(call, _)| call.index));
+            }
+            Err(ScratchPrintError::Resource(reason)) => return Err(reason),
+            Err(error) => {
+                let detail = match error {
+                    ScratchPrintError::Unsupported { reason }
+                        if reason.as_str()
+                            == "the production prints fewer calls than the group holds" =>
+                    {
+                        reason
+                    }
+                    error => error.into_detail(governor)?,
+                };
                 printer.out.clear();
-                for (call, _) in &group {
+                let mut detail = Some(detail);
+                for (position, (call, _)) in group.iter().enumerate() {
+                    let item = if position + 1 == group.len() {
+                        detail.take().expect("final grouped diagnostic")
+                    } else {
+                        let original = detail.as_ref().expect("grouped diagnostic");
+                        governor.charge(Resource::Work, size(original.as_str().len()))?;
+                        let mut copy = ScratchString::new(governor);
+                        copy.push_str(original.as_str())?;
+                        copy
+                    };
+                    pending.push(PendingDiagnostic {
+                        position: skipped.len(),
+                        detail: item,
+                    })?;
                     skipped.push((
                         call.span.start,
                         Skipped::Call {
                             index: call.index,
                             reason: SkipReason::Unrepresentable {
-                                detail: detail.clone(),
+                                detail: String::new(),
                             },
                         },
                     ));
@@ -807,11 +892,7 @@ fn dialect_markup<S: AsRef<str>>(
             }
         }
     }
-    Ok(Emitted {
-        output: printer.out,
-        calls: emitted,
-        skipped: ordered(skipped),
-    })
+    Ok(())
 }
 
 /// Whether `dialect`'s `json` argument slot carries stringified arguments
@@ -861,14 +942,14 @@ fn prepare<'c>(
         arguments: None,
         parameters: None,
     };
-    if printer.holds(production).parameters {
+    if printer.holds(production, governor)?.parameters {
         let Value::Object(members) = &call.arguments.value else {
             return Err(unsupported(
                 "parameter pairs carry only an arguments object",
             ));
         };
         prepared.parameters = Some(members);
-    } else if let Some((codec, delimiters)) = printer.arguments_slot(production) {
+    } else if let Some((codec, delimiters)) = printer.arguments_slot(production, governor)? {
         prepared.arguments = Some(arguments_text(
             printer,
             codec,
@@ -1156,24 +1237,28 @@ pub fn render_tool_result_governed(
     governor: &mut Governor,
 ) -> Result<RenderedResult, EmitError> {
     let grammar = dialect.grammar();
-    let mut printer = Printer::new(grammar);
-    let mut fill = Canonical::new(Values {
-        name: result.name,
-        id: result.id,
-        content: Some(result.content),
-        ..Values::default()
-    });
-    printer.walk(&mut fill, grammar.result(), None, governor)?;
+    let rendered = canonical_scratch(
+        grammar,
+        Root::Result,
+        Values {
+            name: result.name,
+            id: result.id,
+            content: Some(result.content),
+            ..Values::default()
+        },
+        &[],
+        governor,
+    )?;
     let omitted = [
         (result.id, CaptureKind::Id),
         (result.name, CaptureKind::Name),
     ]
     .into_iter()
-    .filter(|(value, kind)| value.is_some() && !fill.printed(*kind))
+    .filter(|(value, kind)| value.is_some() && !rendered.printed(*kind))
     .map(|(_, kind)| kind)
     .collect();
     Ok(RenderedResult {
-        bytes: printer.out,
+        bytes: rendered.bytes.into_vec(),
         omitted,
     })
 }
@@ -1190,18 +1275,19 @@ pub(crate) fn declaration(
     governor: &mut Governor,
 ) -> Result<String, EmitError> {
     let grammar = dialect.grammar();
-    let mut printer = Printer::new(grammar);
+    let printer = Printer::new(grammar, governor);
     let mut values = Values {
         name: Some(name),
         content: description,
         arguments: parameters,
         ..Values::default()
     };
-    if parameters.is_none() && !Canonical::new(values).printable(&printer, grammar.declaration()) {
+    if parameters.is_none()
+        && !Canonical::new(values).printable(&printer, grammar.declaration(), governor)?
+    {
         values.arguments = Some(NO_PARAMETERS);
     }
-    let mut fill = Canonical::new(values);
-    printer.walk(&mut fill, grammar.declaration(), None, governor)?;
+    let rendered = canonical_scratch(grammar, Root::Declaration, values, &[], governor)?;
     for (given, kind, what) in [
         (description.is_some(), CaptureKind::Content, "description"),
         (
@@ -1210,7 +1296,7 @@ pub(crate) fn declaration(
             "parameters schema",
         ),
     ] {
-        if given && !fill.printed(kind) {
+        if given && !rendered.printed(kind) {
             return Err(unsupported(format!(
                 "the `{}` declaration production cannot carry the {what}",
                 grammar.id()
@@ -1218,9 +1304,7 @@ pub(crate) fn declaration(
             .into());
         }
     }
-    String::from_utf8(printer.out).map_err(|error| EmitError::Unrepresentable {
-        text: String::from_utf8_lossy(error.as_bytes()).into_owned(),
-    })
+    rendered.into_string(governor).map_err(EmitError::from)
 }
 
 /// One edit [`ToolCalls::reemit_with`] applies.
@@ -1374,7 +1458,7 @@ impl ToolCalls {
             governor.charge(Resource::ScratchBytes, value.estimated_bytes())?;
             *target = value.clone();
         }
-        let mut splices: Vec<(Range<usize>, String)> = Vec::new();
+        let mut splices: Vec<(Range<usize>, SpliceText)> = Vec::new();
         for (index, arguments) in &edited {
             splice_call(
                 &self.calls[*index],
@@ -1391,7 +1475,7 @@ impl ToolCalls {
             size(source.len()).saturating_add(
                 splices
                     .iter()
-                    .map(|(_, text)| size(text.len()))
+                    .map(|(_, text)| size(text.as_bytes().len()))
                     .sum::<u64>(),
             ),
         )?;
@@ -1410,17 +1494,32 @@ impl ToolCalls {
     }
 }
 
+// Existing lens preparation and newly governed canonical chunks have distinct
+// ownership until the complete source edit is assembled.
+enum SpliceText {
+    Prepared(String),
+    Canonical(ScratchPrinted),
+}
+impl SpliceText {
+    fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Prepared(text) => text.as_bytes(),
+            Self::Canonical(rendered) => rendered.bytes.as_slice(),
+        }
+    }
+}
+
 /// The splices that turn `call`'s recovered arguments into `arguments`.
 fn splice_call(
     call: &ToolCall,
     source: &[u8],
     arguments: &Node,
-    splices: &mut Vec<(Range<usize>, String)>,
+    splices: &mut Vec<(Range<usize>, SpliceText)>,
     governor: &mut Governor,
 ) -> Result<(), EmitError> {
     let grammar = call.dialect.grammar();
-    let printer = Printer::new(grammar);
-    let slot = printer.arguments_slot(grammar.call());
+    let printer = Printer::new(grammar, governor);
+    let slot = printer.arguments_slot(grammar.call(), governor)?;
     let xml = slot.is_some_and(|(codec, _)| codec == CodecKind::XmlParams);
     let mut risky: Vec<&[u8]> = slot
         .map_or(&[][..], |(_, delimiters)| grammar.delimiters(delimiters))
@@ -1443,16 +1542,19 @@ fn splice_call(
     };
     let mut own = Vec::new();
     if spelling.diff(&call.arguments, arguments, &mut own, governor)? {
-        splices.extend(own);
+        splices.extend(
+            own.into_iter()
+                .map(|(range, text)| (range, SpliceText::Prepared(text))),
+        );
         return Ok(());
     }
     if let Some(span) = call.arguments.span.clone().filter(|_| xml) {
         // The whole body, as one JSON object.
         let text = guard_json(arguments.to_json(), &spelling.risky);
-        splices.push((span, text));
+        splices.push((span, SpliceText::Prepared(text)));
         return Ok(());
     }
-    if printer.holds(grammar.call()).next {
+    if printer.holds(grammar.call(), governor)?.next {
         // A call that shares its production instance with other calls is
         // never reprinted whole (its span holds the group's framing): its
         // arguments value is replaced in place.
@@ -1469,11 +1571,11 @@ fn splice_call(
         } else {
             json
         };
-        splices.push((span, text));
+        splices.push((span, SpliceText::Prepared(text)));
         return Ok(());
     }
     // Reprint the whole call in its dialect's canonical form.
-    let mut printer = Printer::new(grammar);
+    let printer = Printer::new(grammar, governor);
     let reprinted = ToolCall {
         arguments: arguments.clone(),
         ..call.clone()
@@ -1487,16 +1589,9 @@ fn splice_call(
         &call.dialect,
         governor,
     )?;
-    printer.walk(
-        &mut Canonical::new(prepared.values()),
-        grammar.call(),
-        None,
-        governor,
-    )?;
-    let text = String::from_utf8(printer.out).map_err(|error| EmitError::Unrepresentable {
-        text: String::from_utf8_lossy(error.as_bytes()).into_owned(),
-    })?;
-    splices.push((call.span.clone(), text));
+    let rendered = canonical_scratch(grammar, Root::Call, prepared.values(), &[], governor)?;
+    rendered.check_utf8(governor)?;
+    splices.push((call.span.clone(), SpliceText::Canonical(rendered)));
     Ok(())
 }
 

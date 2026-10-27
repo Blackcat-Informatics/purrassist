@@ -69,8 +69,17 @@ governed JSON writer through `CompiledTool::render_declaration_governed`.
 Same-form bytes and canonical cross-form/schema bytes are preserved, with
 fallible output storage and atomic typed refusals. The `wire-declarations`
 example exercises the actual MCP adapter and all three targets. Source/tool
-preparation and the existing narrower prompt-printer contract remain separate;
-complete tool-graph family projection and routing remain under #36.
+preparation remains separate; complete tool-graph family projection and routing
+remain under #36.
+
+`grammar::print::canonical_governed` prints call, result and declaration roots
+over a caller-prepared `CompiledGrammar` with borrowed values and grouped calls.
+Existing canonical emitters use the same walker after their request preparation.
+Input admission, recursive scans, retained-automaton generation, temporary and
+output storage, diagnostics and cancellation share the supplied governor. The
+`canonical_print` consumer exercises complete output and typed refusals. Cold
+grammar compilation, higher-level emitter preparation and full seeded/witness
+value generation remain separate; #36 retains those integration requirements.
 
 The internal tool-graph crate also admits complete callable FnO bindings from
 caller-prepared upstream catalogs. Its governed checker preserves original

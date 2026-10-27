@@ -126,3 +126,7 @@ harness = false
 [[bench]]
 name = "tool_calls"
 harness = false
+
+[[example]]
+name = "canonical_print"
+path = "examples/canonical_print.rs"

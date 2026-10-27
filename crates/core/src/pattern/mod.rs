@@ -89,6 +89,29 @@ pub struct ByteAutomaton {
 }
 
 impl ByteAutomaton {
+    // The same scalar/context/product search used by Pattern::generate. Grammar
+    // classes already retain this exact anchored compiled arena; no syntax
+    // reparse or second witness engine is needed during canonical printing.
+    pub(crate) fn generate_member(
+        &self,
+        min_len: usize,
+        max_len: usize,
+        governor: &mut Governor,
+    ) -> Result<Option<crate::contract::ScratchString>, StopReason> {
+        match generate::generate_compiled(
+            &self.compiled,
+            governor,
+            GenerateOptions {
+                min_len,
+                max_len: Some(max_len),
+                avoid: &[],
+            },
+        )? {
+            generate::Generated::Witness(text) => Ok(Some(text)),
+            generate::Generated::NoCandidate { .. } => Ok(None),
+        }
+    }
+
     /// A resumable byte-level automaton over this pattern, with exactly
     /// [`Pattern::byte_dfa`]'s semantics and resource contract.
     ///
