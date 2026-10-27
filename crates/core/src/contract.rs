@@ -376,6 +376,7 @@ impl ScratchMeter {
     ///
     /// # Errors
     /// Returns `BudgetExceeded(ScratchBytes)` without changing the live amount.
+    #[inline(never)]
     pub fn charge(&self, amount: u64) -> Result<(), StopReason> {
         if self.0.exhausted.load(Ordering::Relaxed) {
             return Err(StopReason::BudgetExceeded(Resource::ScratchBytes));
@@ -410,6 +411,7 @@ impl ScratchMeter {
     /// # Errors
     /// Rejects an unbalanced release (more bytes than are currently live),
     /// leaving the live amount unchanged.
+    #[inline(never)]
     pub fn release(&self, amount: u64) -> Result<(), StopReason> {
         let mut current = self.0.live.load(Ordering::Relaxed);
         loop {
@@ -614,6 +616,8 @@ fn grown_capacity(len: usize, capacity: usize, additional: usize) -> Option<usiz
     Some(needed.max(capacity.saturating_mul(2)).max(4))
 }
 
+#[cold]
+#[inline(never)]
 pub(crate) fn reserve_failure(error: &TryReserveError) -> StopReason {
     StopReason::InvalidInput(format!("scratch allocation failed: {error}"))
 }
