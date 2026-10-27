@@ -115,7 +115,8 @@ Six crates make up the release set, published in this order:
 Three workspace crates are internal and not published: `wasm-harness` (native,
 WASI and browser-WASM acceptance transcripts), `purrassist-helper-census`
 (the duplicate-functionality census), and `purrassist-toolgraph` (validated
-caller-owned vocabulary, loss profiles and context masks; graph loading and
+caller-owned vocabulary, loss profiles, context masks and exact output byte
+bounds; graph loading and
 execution remain planned).
 
 ## Capabilities

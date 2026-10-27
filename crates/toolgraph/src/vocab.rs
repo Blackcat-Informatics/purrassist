@@ -68,7 +68,7 @@ pub const TERM_NAMES: &[&str] = &[
     "localIp",
     "localPort",
     "maxEditDistance",
-    "maxOutputTokens",
+    "maxOutputBytes",
     "mountOperation",
     "name",
     "openFileCount",

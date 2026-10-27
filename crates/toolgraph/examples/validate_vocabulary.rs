@@ -3,8 +3,10 @@
 
 //! Complete caller construction; run with `cargo run -p purrassist-toolgraph --example validate_vocabulary`.
 
+use purrassist_core::{Budget, Governor};
 use purrassist_toolgraph::{
-    FieldMask, PrefixTable, TERM_NAMES, TermBindings, Vocabulary, register_loss_profile,
+    FieldMask, OutputByteLimit, PrefixTable, TERM_NAMES, TermBindings, Vocabulary,
+    register_loss_profile,
 };
 use purrdf_core::loss::LossProfile;
 
@@ -29,5 +31,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("https://example.org/tool-vocabulary#Tool")
     );
     assert_eq!(context.to_string(), ".orders[]?");
+    let output_limit = OutputByteLimit::new(4)?;
+    let measurement = output_limit.check(b"null", &mut Governor::new(Budget::default()))?;
+    assert_eq!(measurement.measured, 4);
     Ok(())
 }
