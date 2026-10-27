@@ -228,16 +228,21 @@ impl Pattern {
 
     /// Compile the pattern against a caller-owned governor.
     ///
-    /// Charges `InputBytes` for the pattern's length and leases a conservative,
-    /// source-dependent syntax-storage estimate before parsing. Derivative
-    /// arena terms, index entries, unique class copies, and cut storage admit
-    /// their actual capacities before allocation. Parsing charges `Depth` for
-    /// nesting and `Work` for its operations; translation and canonical union
-    /// also charge `Work` for visited terms, copied intervals, and chain heads.
-    /// Compilation failures release temporary owners and the syntax lease.
-    /// A successful pattern is retained by the caller, so its storage charges
-    /// are never released, matching other permanently retained
-    /// compiled artifacts (schemas, receipts). Full ECMA-262 `u`-mode syntax
+    /// Charges `InputBytes` for the pattern's length. Decoded characters,
+    /// named capture indices/alternative paths, pending numeric references and
+    /// lexical text use fallible temporary scratch owners and release on every
+    /// exit. Source/name/path scans, lookahead, numeric conversion and syntax
+    /// diagnostics admit work before processing; names borrow fixed Unicode
+    /// identifier tables. Returned diagnostic strings retain their admission.
+    ///
+    /// AST/interval/Box/Rc storage still uses the separate conservative
+    /// `source.len() * 48 + 256` estimate. Derivative arena terms, index entries,
+    /// unique class copies and cut storage admit actual capacities. Successful
+    /// AST and derivative artifact charges remain permanent; their ownership,
+    /// Unicode class expansion, AST classification and clone paths are separate
+    /// contracts. Parsing charges `Depth` for nesting; translation and canonical
+    /// union charge `Work` for visited terms, copied intervals and chain heads.
+    /// Full ECMA-262 `u`-mode syntax
     /// is supported: named groups, `\k<name>`, `\u{...}`, surrogate-pair
     /// combination, and `\p{...}`/`\P{...}` for `General_Category`,
     /// `Script`, `Script_Extensions`, and every ECMA-262 binary Unicode
@@ -247,8 +252,9 @@ impl Pattern {
     ///
     /// # Errors
     /// Returns [`PatternCompileError::Syntax`] for malformed patterns and
-    /// [`PatternCompileError::Resource`] before any allocation once the
-    /// governor's limits (or a shared cancellation token) would be exceeded.
+    /// [`PatternCompileError::Resource`] for governor or cancellation refusal.
+    /// Temporary parser buffers admit storage before allocation; the remaining
+    /// AST and Unicode class expansion retain the estimate boundary above.
     ///
     /// ```
     /// use purrassist_core::{Budget, Governor, pattern::{Pattern, PatternCompileError}};
@@ -265,13 +271,8 @@ impl Pattern {
     ) -> Result<Self, PatternCompileError> {
         let length = u64::try_from(source.len()).unwrap_or(u64::MAX);
         governor.charge(Resource::InputBytes, length)?;
-        let scalars = u64::try_from(source.chars().count()).unwrap_or(u64::MAX);
-        let syntax_lease = governor.lease_scratch(
-            scalars
-                .saturating_mul(4) // the retained `chars: Vec<char>` buffer.
-                .saturating_add(length.saturating_mul(48)) // an estimated AST.
-                .saturating_add(256),
-        )?;
+        // AST nodes and interval owners retain the existing separate estimate.
+        let syntax_lease = governor.lease_scratch(length.saturating_mul(48).saturating_add(256))?;
         let (ast, captures) = parse::parse(source, governor)?;
         governor.check()?;
         let backtracking = ast.requires_backtracking();

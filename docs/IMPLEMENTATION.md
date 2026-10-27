@@ -45,6 +45,19 @@ read-only owners. Recovery's existing runtime byte copies remain explicit.
 Dialect-set metadata preparation also uses retained fallible owners and
 admitted scans. Native pattern preparation and engine/recovery runtime
 allocation governance retain separate contracts.
+
+Native pattern parsing now separately admits decoded characters, capture
+names/indices/alternative paths, pending numeric references and lexical text
+through fallible temporary scratch owners. Source/name/path scans, lookahead,
+numeric conversion, escape/property-name scans and exact syntax diagnostics
+admit work before processing. Capture-name validation borrows immutable Unicode
+identifier ranges; missing generated fixed properties fail explicitly. Temporary
+metadata releases on every exit; returned diagnostic strings retain admission.
+The old uncharged scalar-count pass is removed. AST/interval/Box/Rc storage
+retains the separate `source.len() * 48 + 256` estimate; Unicode class expansion,
+AST classification, derivative artifact ownership/cloning and runtime allocation
+governance remain separate contracts. Public Clone behavior is unchanged.
+
 Full cold backend governance remains #36
 acceptance, alongside witness, GBNF, CompactSignature, projection, routing,
 ledgers and graph integration.

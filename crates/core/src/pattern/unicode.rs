@@ -240,6 +240,27 @@ fn binary_property_alias(name: &str) -> Option<&'static str> {
         .map(|index| unicode_data::BINARY_PROPERTY_ALIASES[index].1)
 }
 
+const _: () = assert!(unicode_data::BINARY_PROPERTIES.len() <= 128);
+const _: () = assert!(unicode_data::BINARY_PROPERTY_ALIASES.len() <= 128);
+
+/// Borrow the required generated identifier-start property without copying.
+pub(super) fn identifier_start() -> &'static [(u32, u32)] {
+    binary_property_intervals("ID_Start")
+        .expect("generated Unicode data contains required ID_Start property")
+}
+/// Borrow the required generated identifier-continue property without copying.
+pub(super) fn identifier_continue() -> &'static [(u32, u32)] {
+    binary_property_intervals("ID_Continue")
+        .expect("generated Unicode data contains required ID_Continue property")
+}
+fn binary_property_intervals(name: &str) -> Option<&'static [(u32, u32)]> {
+    let canonical = binary_property_alias(name)?;
+    unicode_data::BINARY_PROPERTIES
+        .binary_search_by_key(&canonical, |(prop, _)| *prop)
+        .ok()
+        .map(|index| unicode_data::BINARY_PROPERTIES[index].1)
+}
+
 /// Every ECMA-262 binary Unicode property (`22.2.2.9`): `ASCII`,
 /// `ASCII_Hex_Digit`, `Alphabetic`, `Any`, `Assigned`, `Bidi_Control`,
 /// `Bidi_Mirrored`, `Case_Ignorable`, `Cased`, the six `Changes_When_*`
@@ -255,11 +276,7 @@ fn binary_property_alias(name: &str) -> Option<&'static str> {
 /// `XID_Continue`, and `XID_Start`, plus every property alias
 /// (`PropertyAliases.txt`).
 pub(super) fn binary_property_ranges(name: &str) -> Option<Vec<(u32, u32)>> {
-    let canonical = binary_property_alias(name)?;
-    unicode_data::BINARY_PROPERTIES
-        .binary_search_by_key(&canonical, |(prop, _)| *prop)
-        .ok()
-        .map(|index| unicode_data::BINARY_PROPERTIES[index].1.to_vec())
+    binary_property_intervals(name).map(<[_]>::to_vec)
 }
 
 /// A bare `\p{Name}`/`\P{Name}`: a recognized binary property, or (per

@@ -10,68 +10,87 @@
 //! anything but a `SyntaxCharacter` or `/` are all `u`-mode `SyntaxError`s.
 use super::ast::{Node, Repetition};
 use super::unicode;
-use crate::contract::{Governor, Resource};
-use std::collections::BTreeMap;
+use crate::contract::{
+    Governor, Resource, ScratchCharge, ScratchString, ScratchVec, StopReason,
+    format_scratch_governed, saturating_size as size,
+};
 use std::rc::Rc;
 
 use super::{PatternCompileError, PatternError};
 
+struct NamedGroup {
+    name: ScratchString,
+    indices: ScratchVec<usize>,
+    paths: ScratchVec<ScratchVec<(u32, u32)>>,
+}
+impl ScratchCharge for NamedGroup {
+    const CHARGE: usize = {
+        assert!(core::mem::size_of::<Self>() <= 120);
+        120
+    };
+}
+
 struct Parser<'g> {
-    chars: Vec<char>,
+    chars: ScratchVec<char>,
     position: usize,
     captures: usize,
     governor: &'g mut Governor,
-    /// Every capturing group's index, in source order, grouped by name.
-    /// More than one entry for a name only when it is legitimately
-    /// duplicated across mutually exclusive alternatives (checked as an
-    /// early error at each definition; see `name_paths`); `\k<name>`
-    /// resolves to this whole set, and the backtracking evaluator picks
-    /// whichever one actually participated at match time (ECMA-262).
-    name_indices: BTreeMap<String, Vec<usize>>,
-    name_paths: BTreeMap<String, Vec<Vec<(u32, u32)>>>,
-    path: Vec<(u32, u32)>,
+    /// Source-ordered capture indices and mutually exclusive definition paths.
+    names: ScratchVec<NamedGroup>,
+    path: ScratchVec<(u32, u32)>,
     next_alt_id: u32,
-    backrefs: Vec<(usize, usize)>,
+    backrefs: ScratchVec<(usize, usize)>,
+}
+
+fn syntax<T>(
+    offset: usize,
+    message: core::fmt::Arguments<'_>,
+    governor: &mut Governor,
+) -> Result<T, PatternCompileError> {
+    // Fixed formatter dispatch and numeric conversions; variable text scans
+    // are admitted at their call sites before constructing these arguments.
+    governor.charge(Resource::Work, 128)?;
+    let message = format_scratch_governed(message, governor)?;
+    governor.check()?;
+    Err(PatternCompileError::Syntax(PatternError {
+        offset,
+        message: message.into_string(),
+    }))
 }
 
 pub(super) fn parse(
     source: &str,
     governor: &mut Governor,
 ) -> Result<(Node, usize), PatternCompileError> {
-    let chars: Vec<char> = source.chars().collect();
-    let names = scan_group_names(&chars)?;
-    let mut name_indices: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-    for (position, name) in names.iter().enumerate() {
-        if let Some(name) = name {
-            name_indices
-                .entry(name.clone())
-                .or_default()
-                .push(position + 1);
-        }
-    }
+    governor.charge(Resource::Work, size(source.len()))?;
+    let mut chars = ScratchVec::new(governor);
+    chars.extend(source.chars())?;
+    let names = scan_group_names(&chars, governor)?;
     let mut parser = Parser {
         chars,
         position: 0,
         captures: 0,
-        governor,
-        name_indices,
-        name_paths: BTreeMap::new(),
-        path: Vec::new(),
+        names,
+        path: ScratchVec::new(governor),
         next_alt_id: 0,
-        backrefs: Vec::new(),
+        backrefs: ScratchVec::new(governor),
+        governor,
     };
     let node = parser.alternate(0)?;
     if parser.position != parser.chars.len() {
         return parser.fail("unexpected closing group");
     }
     for (offset, index) in &parser.backrefs {
+        parser.governor.charge(Resource::Work, 1)?;
         if *index > parser.captures {
-            return Err(PatternCompileError::Syntax(PatternError {
-                offset: *offset,
-                message: format!("backreference to non-existent group {index}"),
-            }));
+            return syntax(
+                *offset,
+                format_args!("backreference to non-existent group {index}"),
+                parser.governor,
+            );
         }
     }
+    parser.governor.check()?;
     Ok((node, parser.captures))
 }
 
@@ -136,15 +155,17 @@ fn class_from_ranges(ranges: Vec<(u32, u32)>, negated: bool) -> Node {
     }
 }
 
-/// Find every capturing group's name (or `None` if unnamed) in source-text
-/// order, by scanning the raw character stream (skipping escapes and
-/// character-class contents) rather than a full parse, so `\k<name>` can
-/// resolve a forward reference during the one real parse below.
-fn scan_group_names(chars: &[char]) -> Result<Vec<Option<String>>, PatternError> {
-    let mut names = Vec::new();
+/// Scan names before parsing so references can resolve forward capture indices.
+fn scan_group_names(
+    chars: &[char],
+    governor: &mut Governor,
+) -> Result<ScratchVec<NamedGroup>, PatternCompileError> {
+    let mut names: ScratchVec<NamedGroup> = ScratchVec::new(governor);
+    let mut captures = 0_usize;
     let mut in_class = false;
     let mut index = 0;
     while index < chars.len() {
+        governor.charge(Resource::Work, 1)?;
         match chars[index] {
             '\\' => index += 2,
             '[' if !in_class => {
@@ -163,23 +184,41 @@ fn scan_group_names(chars: &[char]) -> Result<Vec<Option<String>>, PatternError>
                         let start = index + 3;
                         let mut end = start;
                         while chars.get(end).is_some_and(|c| *c != '>') {
+                            governor.charge(Resource::Work, 1)?;
                             end += 1;
                         }
                         if chars.get(end) != Some(&'>') {
-                            return Err(PatternError {
-                                offset: start,
-                                message: "unterminated group name".into(),
-                            });
+                            return syntax(
+                                start,
+                                format_args!("unterminated group name"),
+                                governor,
+                            );
                         }
-                        let name: String = chars[start..end].iter().collect();
-                        validate_group_name(&name, start)?;
-                        names.push(Some(name));
+                        let name = copy_chars(&chars[start..end], governor)?;
+                        validate_group_name(name.as_str(), start, governor)?;
+                        captures = captures
+                            .checked_add(1)
+                            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+                        let existing = find_name(&names, name.as_str(), governor)?;
+                        if let Some(existing) = existing {
+                            names.as_mut_slice()[existing].indices.push(captures)?;
+                        } else {
+                            let mut indices = ScratchVec::new(governor);
+                            indices.push(captures)?;
+                            names.push(NamedGroup {
+                                name,
+                                indices,
+                                paths: ScratchVec::new(governor),
+                            })?;
+                        }
                         index = end + 1;
                     } else {
                         index += 1;
                     }
                 } else {
-                    names.push(None);
+                    captures = captures
+                        .checked_add(1)
+                        .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
                     index += 1;
                 }
             }
@@ -189,80 +228,156 @@ fn scan_group_names(chars: &[char]) -> Result<Vec<Option<String>>, PatternError>
     Ok(names)
 }
 
-fn validate_group_name(name: &str, offset: usize) -> Result<(), PatternError> {
+fn copy_chars(chars: &[char], governor: &mut Governor) -> Result<ScratchString, StopReason> {
+    governor.charge(Resource::Work, size(chars.len()).saturating_add(1))?;
+    let mut text = ScratchString::new(governor);
+    for &character in chars {
+        text.push(character)?;
+    }
+    Ok(text)
+}
+
+fn find_name(
+    names: &[NamedGroup],
+    name: &str,
+    governor: &mut Governor,
+) -> Result<Option<usize>, StopReason> {
+    for (index, group) in names.iter().enumerate() {
+        governor.charge(
+            Resource::Work,
+            size(group.name.len().min(name.len())).saturating_add(1),
+        )?;
+        if group.name.as_str() == name {
+            return Ok(Some(index));
+        }
+    }
+    Ok(None)
+}
+
+fn validate_group_name(
+    name: &str,
+    offset: usize,
+    governor: &mut Governor,
+) -> Result<(), PatternCompileError> {
+    governor.charge(Resource::Work, size(name.len()).saturating_add(1))?;
     let mut chars = name.chars();
-    let fail = || PatternError {
-        offset,
-        message: format!("invalid group name {name:?}"),
+    let Some(first) = chars.next() else {
+        governor.charge(
+            Resource::Work,
+            size(name.len()).saturating_mul(16).saturating_add(64),
+        )?;
+        return syntax(
+            offset,
+            format_args!("invalid group name {name:?}"),
+            governor,
+        );
     };
-    let first = chars.next().ok_or_else(fail)?;
-    let id_start = unicode::binary_property_ranges("ID_Start").unwrap_or_default();
-    let id_continue = unicode::binary_property_ranges("ID_Continue").unwrap_or_default();
+    // Four binary searches: two fixed aliases and two property lookups.
+    // Each generated table has at most 128 entries and fixed names have
+    // at most 11 bytes: at most 4 * 9 * 12 comparison/read units, below 512.
+    governor.charge(Resource::Work, 512)?;
+    let id_start = unicode::identifier_start();
+    let id_continue = unicode::identifier_continue();
+    // Each membership query is logarithmic in one fixed generated table.
+    governor.charge(
+        Resource::Work,
+        u64::from(id_start.len().checked_ilog2().unwrap_or(0) + 2),
+    )?;
     let starts =
-        first == '$' || first == '_' || unicode::interval_contains(&id_start, u32::from(first));
+        first == '$' || first == '_' || unicode::interval_contains(id_start, u32::from(first));
     if !starts {
-        return Err(fail());
+        governor.charge(
+            Resource::Work,
+            size(name.len()).saturating_mul(16).saturating_add(64),
+        )?;
+        return syntax(
+            offset,
+            format_args!("invalid group name {name:?}"),
+            governor,
+        );
     }
     for character in chars {
-        let continues =
-            character == '$' || unicode::interval_contains(&id_continue, u32::from(character));
-        if !continues {
-            return Err(fail());
+        governor.charge(
+            Resource::Work,
+            u64::from(id_continue.len().checked_ilog2().unwrap_or(0) + 2),
+        )?;
+        if character != '$' && !unicode::interval_contains(id_continue, u32::from(character)) {
+            governor.charge(
+                Resource::Work,
+                size(name.len()).saturating_mul(16).saturating_add(64),
+            )?;
+            return syntax(
+                offset,
+                format_args!("invalid group name {name:?}"),
+                governor,
+            );
         }
     }
     Ok(())
 }
 
-/// `p` and `q` (two definitions' alternation-branch paths) may share a name
-/// only if they diverge at a common `Alternate` ancestor into different
-/// branches — see `pattern/mod.rs`'s module documentation for why this
-/// mirrors ECMA-262's duplicate-named-capturing-group rule.
-fn paths_diverge(p: &[(u32, u32)], q: &[(u32, u32)]) -> bool {
+fn paths_diverge(
+    p: &[(u32, u32)],
+    q: &[(u32, u32)],
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
     for index in 0..p.len().min(q.len()) {
+        governor.charge(Resource::Work, 1)?;
         if p[index] != q[index] {
-            return p[index].0 == q[index].0 && p[index].1 != q[index].1;
+            return Ok(p[index].0 == q[index].0 && p[index].1 != q[index].1);
         }
     }
-    false
+    Ok(false)
 }
 
 impl Parser<'_> {
     fn current(&self) -> Option<char> {
         self.chars.get(self.position).copied()
     }
-    fn next(&mut self) -> Option<char> {
-        let character = self.current()?;
-        self.position += 1;
-        Some(character)
+    fn advance(&mut self, count: usize) -> Result<(), StopReason> {
+        self.governor.charge(Resource::Work, size(count))?;
+        self.position = self
+            .position
+            .checked_add(count)
+            .ok_or_else(|| self.governor.stop_resource(Resource::Work))?;
+        Ok(())
     }
-    fn fail<T>(&self, message: &str) -> Result<T, PatternCompileError> {
-        Err(PatternCompileError::Syntax(PatternError {
-            offset: self.position,
-            message: message.into(),
-        }))
+    fn next(&mut self) -> Result<Option<char>, StopReason> {
+        let Some(character) = self.current() else {
+            return Ok(None);
+        };
+        self.advance(1)?;
+        Ok(Some(character))
     }
-    fn fail_at<T>(offset: usize, message: &str) -> Result<T, PatternCompileError> {
-        Err(PatternCompileError::Syntax(PatternError {
-            offset,
-            message: message.into(),
-        }))
+    fn fail<T>(&mut self, message: &str) -> Result<T, PatternCompileError> {
+        self.fail_at(self.position, message)
+    }
+    fn fail_at<T>(&mut self, offset: usize, message: &str) -> Result<T, PatternCompileError> {
+        self.governor
+            .charge(Resource::Work, size(message.len()).saturating_add(1))?;
+        syntax(offset, format_args!("{message}"), self.governor)
     }
     fn alternate(&mut self, depth: usize) -> Result<Node, PatternCompileError> {
         self.governor
             .charge(Resource::Depth, u64::try_from(depth).unwrap_or(u64::MAX))?;
         self.governor.charge(Resource::Work, 1)?;
         let alt_id = self.next_alt_id;
-        self.next_alt_id += 1;
+        self.next_alt_id = self
+            .next_alt_id
+            .checked_add(1)
+            .ok_or_else(|| self.governor.stop_resource(Resource::Work))?;
         let mut choices = Vec::new();
         let mut branch = 0u32;
         loop {
-            self.path.push((alt_id, branch));
+            self.path.push((alt_id, branch))?;
             let choice = self.sequence(depth);
             self.path.pop();
             choices.push(choice?);
             if self.current() == Some('|') {
-                self.position += 1;
-                branch += 1;
+                self.advance(1)?;
+                branch = branch
+                    .checked_add(1)
+                    .ok_or_else(|| self.governor.stop_resource(Resource::Work))?;
             } else {
                 break;
             }
@@ -280,22 +395,22 @@ impl Parser<'_> {
             let atom = self.atom(depth)?;
             let repeat = match self.current() {
                 Some('*') => {
-                    self.position += 1;
+                    self.advance(1)?;
                     Some((0, None))
                 }
                 Some('+') => {
-                    self.position += 1;
+                    self.advance(1)?;
                     Some((1, None))
                 }
                 Some('?') => {
-                    self.position += 1;
+                    self.advance(1)?;
                     Some((0, Some(1)))
                 }
-                Some('{') if self.looks_like_quantifier() => {
-                    self.position += 1;
+                Some('{') if self.looks_like_quantifier()? => {
+                    self.advance(1)?;
                     let min = self.count()?;
                     let max = if self.current() == Some(',') {
-                        self.position += 1;
+                        self.advance(1)?;
                         if self.current() == Some('}') {
                             None
                         } else {
@@ -304,7 +419,7 @@ impl Parser<'_> {
                     } else {
                         Some(min)
                     };
-                    if self.next() != Some('}') || max.is_some_and(|max| max < min) {
+                    if self.next()? != Some('}') || max.is_some_and(|max| max < min) {
                         return self.fail("invalid repetition range");
                     }
                     Some((min, max))
@@ -319,7 +434,7 @@ impl Parser<'_> {
                     greedy: self.current() != Some('?'),
                 })));
                 if self.current() == Some('?') {
-                    self.position += 1;
+                    self.advance(1)?;
                 }
             } else {
                 items.push(atom);
@@ -334,30 +449,34 @@ impl Parser<'_> {
     /// A lone `{` (not the start of a valid `{n}`/`{n,}`/`{n,m}` quantifier)
     /// is a `u`-mode `SyntaxError`, not a literal — checked by lookahead so
     /// `sequence` never has to backtrack over a partially consumed `{`.
-    fn looks_like_quantifier(&self) -> bool {
+    fn looks_like_quantifier(&mut self) -> Result<bool, StopReason> {
+        self.governor.charge(Resource::Work, 1)?;
         let mut index = self.position + 1;
         if !self.chars.get(index).is_some_and(char::is_ascii_digit) {
-            return false;
+            return Ok(false);
         }
         while self.chars.get(index).is_some_and(char::is_ascii_digit) {
+            self.governor.charge(Resource::Work, 1)?;
             index += 1;
         }
         if self.chars.get(index) == Some(&'}') {
-            return true;
+            return Ok(true);
         }
         if self.chars.get(index) != Some(&',') {
-            return false;
+            return Ok(false);
         }
         index += 1;
         while self.chars.get(index).is_some_and(char::is_ascii_digit) {
+            self.governor.charge(Resource::Work, 1)?;
             index += 1;
         }
-        self.chars.get(index) == Some(&'}')
+        Ok(self.chars.get(index) == Some(&'}'))
     }
     fn count(&mut self) -> Result<usize, PatternCompileError> {
         let mut count = 0_usize;
         let start = self.position;
         while let Some(digit) = self.current().and_then(|character| character.to_digit(10)) {
+            self.governor.charge(Resource::Work, 1)?;
             let Some(next) = count
                 .checked_mul(10)
                 .and_then(|value| value.checked_add(usize::try_from(digit).ok()?))
@@ -365,7 +484,7 @@ impl Parser<'_> {
                 return self.fail("repetition exceeds address space");
             };
             count = next;
-            self.position += 1;
+            self.advance(1)?;
         }
         if start == self.position {
             return self.fail("expected a repetition count");
@@ -373,7 +492,8 @@ impl Parser<'_> {
         Ok(count)
     }
     fn atom(&mut self, depth: usize) -> Result<Node, PatternCompileError> {
-        match self.next() {
+        self.governor.charge(Resource::Work, 1)?;
+        match self.next()? {
             Some('^') => Ok(Node::Start),
             Some('$') => Ok(Node::End),
             Some('.') => Ok(class_from_ranges(dot_ranges(), false)),
@@ -390,29 +510,29 @@ impl Parser<'_> {
         let mut look = None;
         let mut name = None;
         if self.current() == Some('?') {
-            self.position += 1;
+            self.advance(1)?;
             capture = false;
-            match self.next() {
+            match self.next()? {
                 Some(':') => {}
                 Some('=') => look = Some((true, false)),
                 Some('!') => look = Some((false, false)),
                 Some('<') => match self.current() {
                     Some('=') => {
-                        self.position += 1;
+                        self.advance(1)?;
                         look = Some((true, true));
                     }
                     Some('!') => {
-                        self.position += 1;
+                        self.advance(1)?;
                         look = Some((false, true));
                     }
                     _ => {
                         capture = true;
                         let start = self.position;
-                        let mut text = String::new();
+                        let mut text = ScratchString::new(self.governor);
                         while self.current().is_some_and(|c| c != '>') {
-                            text.push(self.next().expect("checked by while"));
+                            text.push(self.next()?.expect("checked by while"))?;
                         }
-                        if self.next() != Some('>') {
+                        if self.next()? != Some('>') {
                             return self.fail("unterminated group name");
                         }
                         name = Some((text, start));
@@ -422,25 +542,37 @@ impl Parser<'_> {
             }
         }
         let index = if capture {
-            self.captures += 1;
+            self.captures = self
+                .captures
+                .checked_add(1)
+                .ok_or_else(|| self.governor.stop_resource(Resource::ScratchBytes))?;
             self.captures
         } else {
             0
         };
         if let Some((group_name, start)) = &name {
-            let paths = self.name_paths.entry(group_name.clone()).or_default();
-            for prior in paths.iter() {
-                if !paths_diverge(prior, &self.path) {
-                    return Self::fail_at(
+            let record = find_name(&self.names, group_name.as_str(), self.governor)?
+                .expect("preliminary scan records every named capturing group");
+            for prior in &self.names[record].paths {
+                self.governor.charge(Resource::Work, 1)?;
+                if !paths_diverge(prior, &self.path, self.governor)? {
+                    return self.fail_at(
                         *start,
                         "duplicate capturing group name outside mutually exclusive alternatives",
                     );
                 }
             }
-            paths.push(self.path.clone());
+            self.governor
+                .charge(Resource::Work, size(self.path.len()))?;
+            let mut path = ScratchVec::new(self.governor);
+            path.extend(self.path.iter().copied())?;
+            self.names.as_mut_slice()[record].paths.push(path)?;
         }
-        let inner = self.alternate(depth + 1)?;
-        if self.next() != Some(')') {
+        let depth = depth
+            .checked_add(1)
+            .ok_or_else(|| self.governor.stop_resource(Resource::Depth))?;
+        let inner = self.alternate(depth)?;
+        if self.next()? != Some(')') {
             return self.fail("unterminated group");
         }
         if let Some((positive, behind)) = look {
@@ -457,7 +589,7 @@ impl Parser<'_> {
     }
     fn escape(&mut self, in_class: bool) -> Result<Node, PatternCompileError> {
         let escape_start = self.position - 1;
-        match self.next() {
+        match self.next()? {
             Some('d') => Ok(class_from_ranges(ascii_digit_ranges(), false)),
             Some('D') => Ok(class_from_ranges(ascii_digit_ranges(), true)),
             Some('w') => Ok(class_from_ranges(ascii_word_ranges(), false)),
@@ -486,101 +618,107 @@ impl Parser<'_> {
                 let mut index = usize::try_from(u32::from(character) - u32::from('0')).unwrap_or(0);
                 while let Some(digit) = self.current().and_then(|character| character.to_digit(10))
                 {
-                    index = index
+                    self.governor.charge(Resource::Work, 1)?;
+                    let Some(next) = index
                         .checked_mul(10)
                         .and_then(|index| index.checked_add(usize::try_from(digit).ok()?))
-                        .ok_or_else(|| {
-                            PatternCompileError::Syntax(PatternError {
-                                offset: self.position,
-                                message: "backreference too large".into(),
-                            })
-                        })?;
-                    self.position += 1;
+                    else {
+                        return self.fail("backreference too large");
+                    };
+                    index = next;
+                    self.advance(1)?;
                 }
-                self.backrefs.push((start, index));
+                self.backrefs.push((start, index))?;
+                self.governor.charge(Resource::Work, 1)?;
                 Ok(Node::Backref(vec![index]))
             }
             Some(kind @ ('p' | 'P')) => self.property_escape(kind == 'p'),
             Some('c') => {
-                let letter = self
-                    .next()
-                    .filter(char::is_ascii_alphabetic)
-                    .ok_or_else(|| {
-                        PatternCompileError::Syntax(PatternError {
-                            offset: self.position,
-                            message: "control escape requires an ASCII letter".into(),
-                        })
-                    })?;
+                let Some(letter) = self.next()?.filter(char::is_ascii_alphabetic) else {
+                    return self.fail("control escape requires an ASCII letter");
+                };
                 Ok(literal(char::from(
                     u8::try_from(u32::from(letter)).expect("ASCII letter") % 32,
                 )))
             }
             Some(character) if identity_escape_allowed(character) => Ok(literal(character)),
-            _ => Self::fail_at(escape_start, "invalid identity escape under Unicode mode"),
+            _ => self.fail_at(escape_start, "invalid identity escape under Unicode mode"),
         }
     }
     fn named_backref(&mut self) -> Result<Node, PatternCompileError> {
-        if self.next() != Some('<') {
+        if self.next()? != Some('<') {
             return self.fail("expected a group name after \\k");
         }
         let start = self.position;
-        let mut name = String::new();
+        let mut name = ScratchString::new(self.governor);
         while self.current().is_some_and(|c| c != '>') {
-            name.push(self.next().expect("checked by while"));
+            name.push(self.next()?.expect("checked by while"))?;
         }
-        if self.next() != Some('>') {
+        if self.next()? != Some('>') {
             return self.fail("unterminated group name");
         }
         // Existence is checked here directly (by name, not by index), so
         // there is nothing to add to `self.backrefs`'s numeric-index range
         // check. When the name is duplicated (only possible across
-        // mutually exclusive alternatives; see `name_paths`/`paths_diverge`
+        // mutually exclusive alternatives; see `paths_diverge`
         // in `group`), every index sharing it is a candidate: the
         // backtracking evaluator resolves this at match time to whichever
         // one actually participated (ECMA-262; at most one can, since they
         // are mutually exclusive), matching empty if none did.
-        let Some(indices) = self.name_indices.get(&name).cloned() else {
-            return Self::fail_at(start, &format!("no capturing group named {name:?}"));
+        let Some(record) = find_name(&self.names, name.as_str(), self.governor)? else {
+            self.governor.charge(
+                Resource::Work,
+                size(name.len()).saturating_mul(16).saturating_add(64),
+            )?;
+            return syntax(
+                start,
+                format_args!("no capturing group named {:?}", name.as_str()),
+                self.governor,
+            );
         };
-        Ok(Node::Backref(indices))
+        let indices = &self.names[record].indices;
+        self.governor
+            .charge(Resource::Work, size(indices.len()).saturating_add(1))?;
+        // The retained AST copy stays under the existing syntax estimate.
+        Ok(Node::Backref(indices.as_slice().to_vec()))
     }
     fn hex_escape(&mut self, count: usize) -> Result<Node, PatternCompileError> {
         let start = self.position;
         let mut value = 0u32;
         for _ in 0..count {
-            let Some(digit) = self.next().and_then(|character| character.to_digit(16)) else {
-                return Self::fail_at(start, "invalid hexadecimal escape");
+            let Some(digit) = self.next()?.and_then(|character| character.to_digit(16)) else {
+                return self.fail_at(start, "invalid hexadecimal escape");
             };
             value = (value << 4) | digit;
         }
-        Self::finish_code_point(value, start)
+        self.finish_code_point(value, start)
     }
     fn unicode_escape(&mut self) -> Result<Node, PatternCompileError> {
         if self.current() == Some('{') {
-            self.position += 1;
+            self.advance(1)?;
             let start = self.position;
             let mut value = 0u32;
             let mut any = false;
             while let Some(digit) = self.current().and_then(|character| character.to_digit(16)) {
                 any = true;
-                value = value
+                self.governor.charge(Resource::Work, 1)?;
+                let Some(next) = value
                     .checked_mul(16)
                     .and_then(|value| value.checked_add(digit))
-                    .ok_or_else(|| {
-                        PatternCompileError::Syntax(PatternError {
-                            offset: start,
-                            message: "code point escape out of range".into(),
-                        })
-                    })?;
-                self.position += 1;
+                else {
+                    return self.fail_at(start, "code point escape out of range");
+                };
+                value = next;
+                self.advance(1)?;
             }
-            if !any || self.next() != Some('}') {
-                return Self::fail_at(start, "invalid Unicode code point escape");
+            if !any || self.next()? != Some('}') {
+                return self.fail_at(start, "invalid Unicode code point escape");
             }
-            Self::finish_code_point(value, start)
+            self.finish_code_point(value, start)
         } else {
             let start = self.position;
             let high = self.read_hex4(start)?;
+            self.governor.charge(Resource::Work, 8)?;
             if (0xD800..=0xDBFF).contains(&high)
                 && self.chars.get(self.position) == Some(&'\\')
                 && self.chars.get(self.position + 1) == Some(&'u')
@@ -590,78 +728,83 @@ impl Parser<'_> {
                     .is_some_and(|digits| digits.iter().all(char::is_ascii_hexdigit))
             {
                 let low_start = self.position + 2;
-                let low = u32::from_str_radix(
-                    &self.chars[low_start..low_start + 4]
-                        .iter()
-                        .collect::<String>(),
-                    16,
-                )
-                .unwrap_or(0);
+                self.governor.charge(Resource::Work, 4)?;
+                let mut low = 0_u32;
+                for character in &self.chars[low_start..low_start + 4] {
+                    low = (low << 4)
+                        | character
+                            .to_digit(16)
+                            .expect("lookahead verified four hex digits");
+                }
                 if (0xDC00..=0xDFFF).contains(&low) {
-                    self.position += 6;
+                    self.advance(6)?;
                     let combined = 0x10000 + (high - 0xD800) * 0x400 + (low - 0xDC00);
-                    return Self::finish_code_point(combined, start);
+                    return self.finish_code_point(combined, start);
                 }
             }
-            Self::finish_code_point(high, start)
+            self.finish_code_point(high, start)
         }
     }
     fn read_hex4(&mut self, start: usize) -> Result<u32, PatternCompileError> {
         let mut value = 0u32;
         for _ in 0..4 {
-            let Some(digit) = self.next().and_then(|character| character.to_digit(16)) else {
-                return Self::fail_at(start, "invalid hexadecimal escape");
+            let Some(digit) = self.next()?.and_then(|character| character.to_digit(16)) else {
+                return self.fail_at(start, "invalid hexadecimal escape");
             };
             value = (value << 4) | digit;
         }
         Ok(value)
     }
-    fn finish_code_point(value: u32, start: usize) -> Result<Node, PatternCompileError> {
-        char::from_u32(value).map(literal).ok_or_else(|| {
-            PatternCompileError::Syntax(PatternError {
-                offset: start,
-                message: "escape names an unpaired surrogate, not a Unicode scalar value".into(),
-            })
-        })
+    fn finish_code_point(&mut self, value: u32, start: usize) -> Result<Node, PatternCompileError> {
+        char::from_u32(value).map_or_else(
+            || {
+                self.fail_at(
+                    start,
+                    "escape names an unpaired surrogate, not a Unicode scalar value",
+                )
+            },
+            |character| Ok(literal(character)),
+        )
     }
+
     fn property_escape(&mut self, positive: bool) -> Result<Node, PatternCompileError> {
-        if self.next() != Some('{') {
+        if self.next()? != Some('{') {
             return self.fail("property escape requires braces");
         }
         let start = self.position;
         while self.current().is_some_and(|c| c != '}') {
-            self.position += 1;
+            self.advance(1)?;
         }
-        let text: String = self.chars[start..self.position].iter().collect();
-        if self.next() != Some('}') {
+        let text = copy_chars(&self.chars[start..self.position], self.governor)?;
+        self.governor
+            .charge(Resource::Work, size(text.len()).saturating_add(1))?;
+        if self.next()? != Some('}') {
             return self.fail("unterminated property escape");
         }
-        let ranges = if let Some((name, value)) = text.split_once('=') {
+        let ranges = if let Some((name, value)) = text.as_str().split_once('=') {
             match name {
                 "General_Category" | "gc" => unicode::category_ranges(value),
                 "Script" | "sc" => unicode::script_ranges(value),
                 "Script_Extensions" | "scx" => unicode::script_extension_ranges(value),
                 _ => None,
             }
-            .ok_or_else(|| {
-                PatternCompileError::Syntax(PatternError {
-                    offset: start,
-                    message: format!("unsupported Unicode property: {text}"),
-                })
-            })?
         } else {
-            unicode::lone_property_ranges(&text).ok_or_else(|| {
-                PatternCompileError::Syntax(PatternError {
-                    offset: start,
-                    message: format!("unsupported Unicode property: {text}"),
-                })
-            })?
+            unicode::lone_property_ranges(text.as_str())
+        };
+        let Some(ranges) = ranges else {
+            self.governor
+                .charge(Resource::Work, size(text.len()).saturating_add(1))?;
+            return syntax(
+                start,
+                format_args!("unsupported Unicode property: {}", text.as_str()),
+                self.governor,
+            );
         };
         Ok(class_from_ranges(ranges, !positive))
     }
     fn class_atom(&mut self) -> Result<ClassAtom, PatternCompileError> {
         if self.current() == Some('\\') {
-            self.position += 1;
+            self.advance(1)?;
             let node = self.escape(true)?;
             return Ok(match node {
                 Node::Class(intervals)
@@ -674,18 +817,15 @@ impl Parser<'_> {
                 _ => return self.fail("invalid character class atom"),
             });
         }
-        let character = self.next().ok_or_else(|| {
-            PatternCompileError::Syntax(PatternError {
-                offset: self.position,
-                message: "unterminated character class".into(),
-            })
-        })?;
+        let Some(character) = self.next()? else {
+            return self.fail("unterminated character class");
+        };
         Ok(ClassAtom::Literal(u32::from(character)))
     }
     fn class(&mut self) -> Result<Node, PatternCompileError> {
         let negative = self.current() == Some('^');
         if negative {
-            self.position += 1;
+            self.advance(1)?;
         }
         let mut ranges = Vec::new();
         while self.current() != Some(']') {
@@ -695,20 +835,17 @@ impl Parser<'_> {
             let dash_offset = self.position;
             let first = self.class_atom()?;
             if self.current() == Some('-') && self.chars.get(self.position + 1) != Some(&']') {
-                self.position += 1;
+                self.advance(1)?;
                 let second = self.class_atom()?;
                 match (first, second) {
                     (ClassAtom::Literal(start), ClassAtom::Literal(end)) => {
                         if start > end {
-                            return Self::fail_at(
-                                dash_offset,
-                                "character class range out of order",
-                            );
+                            return self.fail_at(dash_offset, "character class range out of order");
                         }
                         ranges.push((start, end));
                     }
                     _ => {
-                        return Self::fail_at(
+                        return self.fail_at(
                             dash_offset,
                             "a character class range cannot end in a class escape",
                         );
@@ -721,7 +858,7 @@ impl Parser<'_> {
                 }
             }
         }
-        self.position += 1;
+        self.advance(1)?;
         Ok(class_from_ranges(ranges, negative))
     }
 }
@@ -729,4 +866,120 @@ impl Parser<'_> {
 fn literal(character: char) -> Node {
     let code = u32::from(character);
     Node::Class(Rc::new(vec![(code, code)]))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::contract::{Budget, CancellationToken, Governor, Resource, StopReason};
+    use crate::pattern::{Pattern, PatternCompileError};
+
+    /// Temporary names, branch paths and references release on early, partial
+    /// and final parser refusal; the existing retained AST estimate is separate.
+    #[test]
+    fn parser_metadata_refusals_release_partial_owners() {
+        let source = r"^(?:(?<α>a)|(?<α>b))(?<tail>c)\k<α>\k<tail>\1$";
+        let mut measured = Governor::new(Budget::default());
+        Pattern::compile_governed(source, &mut measured).unwrap();
+        let usage = measured.usage();
+        assert!(usage.peak_scratch_bytes > measured.scratch_meter().live());
+        let exact = Budget {
+            work: usage.work,
+            input_bytes: u64::try_from(source.len()).unwrap(),
+            scratch_bytes: usage.peak_scratch_bytes,
+            ..Budget::default()
+        };
+        Pattern::compile_governed(source, &mut Governor::new(exact)).unwrap();
+        for (budget, resource) in [
+            (Budget { work: 0, ..exact }, Resource::Work),
+            (
+                Budget {
+                    work: usage.work / 2,
+                    ..exact
+                },
+                Resource::Work,
+            ),
+            (
+                Budget {
+                    work: usage.work - 1,
+                    ..exact
+                },
+                Resource::Work,
+            ),
+            (
+                Budget {
+                    scratch_bytes: 0,
+                    ..exact
+                },
+                Resource::ScratchBytes,
+            ),
+            (
+                Budget {
+                    scratch_bytes: usage.peak_scratch_bytes - 1,
+                    ..exact
+                },
+                Resource::ScratchBytes,
+            ),
+            (
+                Budget {
+                    input_bytes: u64::try_from(source.len()).unwrap() - 1,
+                    ..exact
+                },
+                Resource::InputBytes,
+            ),
+        ] {
+            let mut governor = Governor::new(budget);
+            let reason = StopReason::BudgetExceeded(resource);
+            assert_eq!(
+                Pattern::compile_governed(source, &mut governor).unwrap_err(),
+                PatternCompileError::Resource(reason.clone())
+            );
+            assert_eq!(governor.check(), Err(reason));
+            assert_eq!(governor.scratch_meter().live(), 0);
+        }
+        let token = CancellationToken::new();
+        let mut governor = Governor::with_cancellation(exact, token.clone());
+        token.cancel();
+        assert_eq!(
+            Pattern::compile_governed(source, &mut governor).unwrap_err(),
+            PatternCompileError::Resource(StopReason::Cancelled)
+        );
+        assert_eq!(governor.scratch_meter().live(), 0);
+    }
+
+    /// Dynamic diagnostics retain their original text and character offsets;
+    /// refusal while constructing them remains typed and cleans temporaries.
+    #[test]
+    fn metadata_diagnostics_preserve_character_offsets_and_admit_publication() {
+        for (source, offset, message) in [
+            ("(?<1>a)", 3, "invalid group name \"1\""),
+            ("α\\k<missing>", 4, "no capturing group named \"missing\""),
+            (
+                "(?<x>a)(?<x>b)",
+                10,
+                "duplicate capturing group name outside mutually exclusive alternatives",
+            ),
+            ("(a)\\2", 4, "backreference to non-existent group 2"),
+            (
+                "\\p{Not_A_Property}",
+                3,
+                "unsupported Unicode property: Not_A_Property",
+            ),
+        ] {
+            let mut measured = Governor::new(Budget::default());
+            let error = Pattern::compile_governed(source, &mut measured).unwrap_err();
+            let PatternCompileError::Syntax(error) = error else {
+                panic!("expected syntax error");
+            };
+            assert_eq!((error.offset, error.message.as_str()), (offset, message));
+            let mut governor = Governor::new(Budget {
+                work: measured.usage().work - 1,
+                ..Budget::default()
+            });
+            assert_eq!(
+                Pattern::compile_governed(source, &mut governor).unwrap_err(),
+                PatternCompileError::Resource(StopReason::BudgetExceeded(Resource::Work))
+            );
+            assert_eq!(governor.scratch_meter().live(), 0);
+        }
+    }
 }
