@@ -253,3 +253,13 @@ literal bindings. ABI `3.0` signal/ptrace metadata is an offline target contract
 it establishes no peer permission, authenticated admission or loaded policy.
 Full #34/#35 graph, conflict, synthesis, trust and confinement acceptance remains
 open, along with the separate mount/capability/rlimit/import rule families.
+
+Standalone `CapabilityRule` and `MountRule` now render governed named capability
+and unscoped mount-denial fragments. The explicit ABI `3.0` vocabulary admits
+forty names, refuses all fourteen normative dangerous grants, and refuses
+`checkpoint_restore` because native compatibility lowering would broaden it to
+`sys_admin`. The complete governed dangerous-capability baseline grants nothing.
+Mount requests admit only explicit denials for the four graph operations. The
+`privilege_rules` consumer uses these actual public operations. Full graph-wide
+baseline composition, static admission, v3/v4 synthesis, trust and host
+confinement remain #34/#35; rlimit and import families remain required.

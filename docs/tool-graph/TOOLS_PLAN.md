@@ -962,3 +962,35 @@ running-kernel/loaded-policy evidence. `ipc_rules` is the public consumer.
 Full #34/#35 graph admission, static conflicts, permission/hat analysis, complete
 synthesis, trust and host confinement remain required. Mount/capability/rlimit
 and import handling remain separate original requirements.
+
+## Named capabilities and mount denials — standalone fragments
+
+`CapabilityRule` validates original borrowed field text against the exact
+forty-name ABI `3.0` table during every governed render. It preserves audit and
+deny qualifiers, rejects every normative dangerous grant, and returns a typed
+unsupported-target refusal for `checkpoint_restore`. Native compatibility
+lowering to `sys_admin` is broader than that request and is never accepted as
+an equivalent emission. `dangerous_capability_denials` renders the complete
+fourteen-denial baseline in normative order with an empty allow set.
+
+`MountRule` accepts exactly the four graph operation spellings and requires an
+explicit denial. It emits complete unscoped `deny mount`, `deny remount`,
+`deny umount` and `deny pivot_root` rules, optionally audited. Requested allows
+and unsupported operation text are refused; this fragment admits no path,
+option or transition fields. Both families retain original rule/field identities,
+use the existing governed formatter and fallible storage, admit current inputs
+and bounded lookup/formatter computation, and check cancellation before atomic
+complete publication. Artifacts declare ABI `3.0` and `caps`/`mount` mediation.
+
+The actual `privilege_rules` consumer emits offline native fixtures for every
+supported capability denial and safe grant, the full baseline and all four
+mount denials. Native qualification must inspect complete low/high grant,
+audit and quiet words and mount DFA effects, including explicitly test-only
+overlapping allow baselines. Parser success alone is insufficient: strict ABI
+`3.0` parsing accepts `checkpoint_restore` while silently lowering it to
+`sys_admin`. Offline target evidence never establishes loaded-kernel enforcement.
+
+These standalone fragments do not complete #35. Admitted-graph synthesis, full
+baseline composition, permission/owner/deny/hat analysis, authenticated policy
+trust, original v3/v4 integration and actual confinement remain #34/#35
+requirements. Rlimit and import families remain separate original requirements.
