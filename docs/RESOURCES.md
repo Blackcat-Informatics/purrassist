@@ -1300,3 +1300,23 @@ resource refusals expose no partial fragment. Source globs/bindings and targets
 remain caller-owned; parsing or constructing those inputs is a separate
 admission. The artifact preserves their identities and the denied-execution
 canonicalization without asserting waiver, graph or host authority.
+
+## Standalone signal and ptrace fragments
+
+IPC set parsing admits each complete original field and a checked work bound
+before splitting or comparing names. The bound covers the actual closed table
+plus ASCII splitting/trimming and bounded RT digit scans. Each set fits a fixed
+`u128`; no list buffer, ambient signal-number query or expansion is used.
+Leading zeros are removed from a borrowed slice before a maximum two-digit
+standard integer parse. Signals outside the declared 0–32 RT range are refused.
+
+Rendering rechecks the current governor's individual input ceiling for borrowed
+peer and original signal-set text, even when preparation used another governor.
+Canonical set traversal has a fixed, pre-admitted table cost. The existing
+policy `emit` function admits each byte write and fallible `ScratchString`
+growth; peer bindings and quoted output use `append_bound_policy_word` directly.
+There is no intermediate word copy or second escaping/matching implementation.
+The private partial buffer is discarded on refusal and a final cancellation
+check precedes complete artifact publication. Source/field/peer identities and
+original binding offsets or governor causes remain available on typed errors.
+Original source preparation and actual host mediation are separate contracts.

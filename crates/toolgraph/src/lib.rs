@@ -11,6 +11,7 @@ mod field_mask;
 mod file_rule;
 mod glob_language;
 mod internet;
+mod ipc;
 mod socket_access;
 mod unix;
 mod vocab;
@@ -47,4 +48,9 @@ pub use unix::{
 pub use file_rule::{
     FileCanonicalization, FileExecution, FileFragment, FilePermissions, FileRequirement, FileRule,
     FileRuleError, FileTarget,
+};
+
+pub use ipc::{
+    IpcError, IpcFragment, IpcRequirement, PtraceAccessSet, PtraceRule, SignalAccessSet,
+    SignalRule, SignalSet,
 };
