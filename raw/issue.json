@@ -1,0 +1,27 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Objective\n\nDeliver the core adapter prerequisite of #33: import an exact MCP declaration while applying caller-supplied effects, repair policy and parameter aliases before normal tool-set compilation. The tool graph's admitted metadata must reach the existing recovery engine without rebuilding its narrower typed schema subset.\n\nThis is a complete public adapter capability split from the larger loader/codec delivery to keep implementation, qualification and landing within four hours. #33 retains every original loader, codec and integration requirement.\n\n## Contract\n\n- Add `DeclarationMetadata` and `ParameterAliases`, and `ToolSet::from_mcp_with_metadata_governed`, using the signatures in `docs/tool-graph/TOOLS_PLAN.md` as the starting contract.\n- Apply metadata at the existing pending-definition assembly point. Preserve exact original declaration bytes, schema text, compiled schema, unmodeled keywords and validation semantics.\n- Keep existing imports conservative with empty metadata. MCP annotations never become trusted effects authority automatically; metadata is an explicit typed caller input.\n- Resolve canonical object-member paths, including members of array-item objects. Refuse unknown tools/paths, duplicate records, invalid aliases, collisions and unmodeled hint paths. Use existing typed `ToolSetError` failures and preserve resource exhaustion/cancellation.\n- Govern metadata traversal and retained aliases through the existing governor. Core retains its empty dependency closure and deterministic behavior.\n\n## Acceptance\n\n- A real consumer imports a schema with a constraint outside the typed subset, attaches an alias and recovers a valid call through that alias. The original schema still refuses its invalid neighbor, and same-form render-back is byte-exact.\n- Nested and array-item aliases use their canonical paths; ambiguous/colliding/unknown metadata fails with tool/path context. Empty metadata preserves existing behavior.\n- Tiny budgets and pre-tripped cancellation return explicit resource outcomes. Existing adapter and recovery cases remain valid.\n- Meaningful Rustdoc documents the public API and errors. Focused adapter checks and mandatory `make check` pass with normal hooks and signing.\n\nClosing this issue does not close #33; the latter must wire the capability through the complete graph loader and MCP codec.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-26T23:30:13Z",
+  "labels": [
+    {
+      "id": "LA_kwDOUvgSo88AAAAC490QjQ",
+      "name": "enhancement",
+      "description": "New feature or request",
+      "color": "a2eeef"
+    }
+  ],
+  "milestone": null,
+  "number": 44,
+  "state": "OPEN",
+  "title": "Tool graph foundation: apply admitted metadata without losing exact MCP schemas",
+  "updatedAt": "2026-10-26T23:30:13Z",
+  "url": "https://github.com/Blackcat-Informatics/purrassist/issues/44"
+}

@@ -1,0 +1,129 @@
+{
+  "issue": 44,
+  "pr_number": 45,
+  "branch": "paudley/44-tool-graph-foundation-apply-admitted",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/44-tool-graph-foundation-apply-admitted/.stage/tool-graph-foundation-apply-admitted",
+  "observed_at": "2026-10-27T00:44:09.520491+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews"
+  ],
+  "blocked": [
+    {
+      "code": "ci_pending",
+      "message": "CI state is pending"
+    },
+    {
+      "code": "artifacts",
+      "message": "Required merge artifacts are missing or have invalid fields/verdicts"
+    }
+  ],
+  "unavailable": [],
+  "next_actions": [
+    "Wait for CI changes",
+    "Complete: review-debt.md, validation.md, pr-checks.txt"
+  ],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/44-tool-graph-foundation-apply-admitted/.stage/tool-graph-foundation-apply-admitted/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/44-tool-graph-foundation-apply-admitted/.stage/tool-graph-foundation-apply-admitted/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/44-tool-graph-foundation-apply-admitted/.stage/tool-graph-foundation-apply-admitted/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/44-tool-graph-foundation-apply-admitted/.stage/tool-graph-foundation-apply-admitted/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/44-tool-graph-foundation-apply-admitted/.stage/tool-graph-foundation-apply-admitted/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "f9600647e199499dbb712dac99f489084b07e48c",
+    "headRefName": "paudley/44-tool-graph-foundation-apply-admitted",
+    "headRefOid": "621cfefa305d4978146102244774fb78cfcea8c2",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 45,
+    "state": "OPEN",
+    "title": "Preserve exact MCP schemas while applying recovery metadata",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/45"
+  },
+  "checks": {
+    "state": "pending",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/40423223198/job/121922488436",
+        "name": "windows-engines",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/40423223198/job/121922488530",
+        "name": "fuzz",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/40423223198/job/121922488471",
+        "name": "corpus",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/40423223198/job/121922488364",
+        "name": "native (macos-14)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/40423223198/job/121922488450",
+        "name": "native (ubuntu-24.04)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/40423223198/job/121922488292",
+        "name": "release-gate",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/40423223198/job/121922488442",
+        "name": "wasm",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/40423223198/job/121922488476",
+        "name": "qualification",
+        "state": "SUCCESS"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "621cfefa305d4978146102244774fb78cfcea8c2",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "621cfefa305d4978146102244774fb78cfcea8c2",
+    "branch": "paudley/44-tool-graph-foundation-apply-admitted",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 45,
+    "jobs": [],
+    "ok": true,
+    "summary": "# PR #45 failed CI logs\n\nNo failed checks in this snapshot.\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "missing_artifacts": [
+    "review-debt.md",
+    "validation.md",
+    "pr-checks.txt"
+  ],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  },
+  "watch": "timeout"
+}

@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 44,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/44-tool-graph-foundation-apply-admitted",
+  "branch": "paudley/44-tool-graph-foundation-apply-admitted",
+  "slug": "tool-graph-foundation-apply-admitted",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/44-tool-graph-foundation-apply-admitted/.stage/tool-graph-foundation-apply-admitted",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "f9600647e199499dbb712dac99f489084b07e48c",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/44-tool-graph-foundation-apply-admitted",
+    "branch:paudley/44-tool-graph-foundation-apply-admitted",
+    "stage:/home/paudley/Active/purrassist/.worktrees/44-tool-graph-foundation-apply-admitted/.stage/tool-graph-foundation-apply-admitted",
+    "issue:/home/paudley/Active/purrassist/.worktrees/44-tool-graph-foundation-apply-admitted/.stage/tool-graph-foundation-apply-admitted/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-26T17:31:32-0600"
+}
