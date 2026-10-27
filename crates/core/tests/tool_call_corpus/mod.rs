@@ -1518,9 +1518,9 @@ fn misspellable(base: &Base) -> Vec<String> {
         .grammar()
         .call_ends()
         .iter()
-        .flat_map(|end| end.call_closers.iter())
+        .flat_map(|end| end.call_closers().iter())
         .filter(|spelling| spelling.len() > 1)
-        .filter_map(|spelling| String::from_utf8(spelling.clone()).ok())
+        .filter_map(|spelling| String::from_utf8(spelling.as_slice().to_vec()).ok())
         .filter(|spelling| base.text.contains(spelling.as_str()))
         .collect();
     if base.dialect == DialectId::Qwen3CoderXml && base.text.contains("</parameter>") {
@@ -1580,7 +1580,11 @@ fn token_misspelled_mutations(base: &Base, out: &mut Vec<Mutant>) {
         .grammar()
         .call_ends()
         .iter()
-        .flat_map(|end| end.call_closers.iter().cloned())
+        .flat_map(|end| {
+            end.call_closers()
+                .iter()
+                .map(|bytes| bytes.as_slice().to_vec())
+        })
         .collect();
     let mut tokens: Vec<String> = base
         .dialect
@@ -1588,9 +1592,13 @@ fn token_misspelled_mutations(base: &Base, out: &mut Vec<Mutant>) {
         .call_literals()
         .iter()
         .filter(|spelling| {
-            spelling.len() > 1 && matches!(spelling[0], b'<' | b'[') && !closers.contains(spelling)
+            spelling.len() > 1
+                && matches!(spelling[0], b'<' | b'[')
+                && !closers
+                    .iter()
+                    .any(|closer| closer.as_slice() == spelling.as_slice())
         })
-        .filter_map(|spelling| String::from_utf8(spelling.clone()).ok())
+        .filter_map(|spelling| String::from_utf8(spelling.as_slice().to_vec()).ok())
         .collect();
     if base.dialect == DialectId::Qwen3CoderXml {
         tokens.push("<parameter=".to_owned());
@@ -1654,9 +1662,9 @@ fn near_closer_mutations(base: &Base, out: &mut Vec<Mutant>) {
         .grammar()
         .call_ends()
         .iter()
-        .flat_map(|end| end.call_closers.iter())
+        .flat_map(|end| end.call_closers().iter())
         .filter(|spelling| spelling.len() > 1)
-        .filter_map(|spelling| String::from_utf8(spelling.clone()).ok())
+        .filter_map(|spelling| String::from_utf8(spelling.as_slice().to_vec()).ok())
         .collect();
     if !json {
         closers.push("</parameter>".to_owned());

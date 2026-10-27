@@ -8,8 +8,9 @@
 //! (the framing layer is regular, so context-free structure belongs in a
 //! codec); and the `call` and `result` productions are compiled, with every
 //! reference inlined, into programs of terminal instructions. Program buffers
-//! and control-flow preparation admit work and fallible retained storage;
-//! derived call-byte metadata and native pattern preparation remain separate.
+//! and control-flow preparation, derived call-byte metadata and compiler
+//! queries admit work and fallible storage. Native pattern preparation and
+//! engine/recovery runtime allocation governance remain separate.
 // `unreachable_pub` and `redundant_pub_crate` disagree on the right
 // visibility for items of a crate-private module
 // (https://github.com/rust-lang/rust-clippy/issues/6188); these items are
@@ -247,6 +248,12 @@ struct Layout<'a> {
 impl ScratchCharge for Layout<'_> {
     const CHARGE: usize = 40;
 }
+impl ScratchCharge for Option<bool> {
+    const CHARGE: usize = 8;
+}
+impl ScratchCharge for CallEnd {
+    const CHARGE: usize = 128;
+}
 impl ScratchCharge for Option<Bytes> {
     const CHARGE: usize = 48;
 }
@@ -265,6 +272,8 @@ impl ScratchCharge for Production {
 }
 const _: () = {
     assert!(core::mem::size_of::<Symbol>() <= Symbol::CHARGE);
+    assert!(core::mem::size_of::<Option<bool>>() <= <Option<bool> as ScratchCharge>::CHARGE);
+    assert!(core::mem::size_of::<CallEnd>() <= CallEnd::CHARGE);
     assert!(core::mem::size_of::<Literal>() <= Literal::CHARGE);
     assert!(core::mem::size_of::<CloserClass>() <= CloserClass::CHARGE);
     assert!(core::mem::size_of::<ClassTerminal>() <= ClassTerminal::CHARGE);
@@ -285,12 +294,6 @@ enum Name {
     Closer(u32),
 }
 
-// Later backend tables retain their existing coarser accounting contract.
-fn charge(governor: &mut Governor, work: u64, scratch: u64) -> Result<(), GrammarError> {
-    governor.charge(Resource::Work, work.saturating_mul(K_COMPILE))?;
-    governor.charge(Resource::ScratchBytes, scratch)?;
-    Ok(())
-}
 fn visit(depth: u64, governor: &mut Governor) -> Result<(), GrammarError> {
     if depth > 128 {
         return Err(governor.stop_resource(Resource::Depth).into());
@@ -645,25 +648,31 @@ fn references(
 fn holds_next(
     productions: &[Production],
     expr: &Expr,
+    depth: u64,
     governor: &mut Governor,
 ) -> Result<bool, GrammarError> {
-    charge(governor, 1, 0)?;
+    visit(depth, governor)?;
     Ok(match expr {
         Expr::Next => true,
         Expr::Capture { inner, .. } | Expr::Repeat { inner, .. } => {
-            holds_next(productions, inner, governor)?
+            holds_next(productions, inner, depth + 1, governor)?
         }
         Expr::Sequence(items) | Expr::Choice(items) => {
             let mut found = false;
             for item in items {
-                if holds_next(productions, item, governor)? {
+                if holds_next(productions, item, depth + 1, governor)? {
                     found = true;
                     break;
                 }
             }
             found
         }
-        Expr::Reference(id) => holds_next(productions, &productions[id.index()].expr, governor)?,
+        Expr::Reference(id) => holds_next(
+            productions,
+            &productions[id.index()].expr,
+            depth + 1,
+            governor,
+        )?,
         Expr::Literal(_)
         | Expr::Closer(_)
         | Expr::Class(_)
@@ -686,15 +695,17 @@ fn check_next(
     fn captures_next(
         productions: &[Production],
         expr: &Expr,
+        depth: u64,
         governor: &mut Governor,
     ) -> Result<bool, GrammarError> {
+        visit(depth, governor)?;
         Ok(match expr {
-            Expr::Capture { inner, .. } => holds_next(productions, inner, governor)?,
-            Expr::Repeat { inner, .. } => captures_next(productions, inner, governor)?,
+            Expr::Capture { inner, .. } => holds_next(productions, inner, depth + 1, governor)?,
+            Expr::Repeat { inner, .. } => captures_next(productions, inner, depth + 1, governor)?,
             Expr::Sequence(items) | Expr::Choice(items) => {
                 let mut found = false;
                 for item in items {
-                    if captures_next(productions, item, governor)? {
+                    if captures_next(productions, item, depth + 1, governor)? {
                         found = true;
                         break;
                     }
@@ -705,10 +716,10 @@ fn check_next(
         })
     }
     for (index, production) in productions.iter().enumerate() {
-        charge(governor, 1, 0)?;
+        work_for(single.len(), 1, 1, governor)?;
         let single = single.iter().any(|id| id.index() == index);
-        if (single && holds_next(productions, &production.expr, governor)?)
-            || captures_next(productions, &production.expr, governor)?
+        if (single && holds_next(productions, &production.expr, 0, governor)?)
+            || captures_next(productions, &production.expr, 0, governor)?
         {
             return Err(GrammarError::MisplacedNext {
                 offset: offsets[index],
@@ -719,30 +730,52 @@ fn check_next(
     Ok(())
 }
 
-/// Whether a call of `root` can capture `kind`: some path through the
-/// production, following references, holds a `kind:` capture. Linear in the
-/// resolved syntax tree (each production is walked once), which compiling
-/// has already charged node by node; productions are acyclic.
-fn captures(productions: &[Production], root: ProductionId, kind: CaptureKind) -> bool {
+/// Whether a call of `root` can capture `kind`, memoizing referenced
+/// productions. Every visited node and memo initialization is admitted.
+fn captures(
+    productions: &[Production],
+    root: ProductionId,
+    kind: CaptureKind,
+    governor: &mut Governor,
+) -> Result<bool, GrammarError> {
     fn walk(
         productions: &[Production],
         expr: &Expr,
         kind: CaptureKind,
         memo: &mut [Option<bool>],
-    ) -> bool {
-        match expr {
+        depth: u64,
+        governor: &mut Governor,
+    ) -> Result<bool, GrammarError> {
+        visit(depth, governor)?;
+        Ok(match expr {
             Expr::Capture { kind: found, inner } => {
-                *found == kind || walk(productions, inner, kind, memo)
+                *found == kind || walk(productions, inner, kind, memo, depth + 1, governor)?
             }
-            Expr::Repeat { inner, .. } => walk(productions, inner, kind, memo),
+            Expr::Repeat { inner, .. } => {
+                walk(productions, inner, kind, memo, depth + 1, governor)?
+            }
             Expr::Sequence(items) | Expr::Choice(items) => {
-                items.iter().any(|item| walk(productions, item, kind, memo))
+                let mut found = false;
+                for item in items {
+                    if walk(productions, item, kind, memo, depth + 1, governor)? {
+                        found = true;
+                        break;
+                    }
+                }
+                found
             }
             Expr::Reference(id) => {
                 if let Some(known) = memo[id.index()] {
-                    return known;
+                    return Ok(known);
                 }
-                let found = walk(productions, &productions[id.index()].expr, kind, memo);
+                let found = walk(
+                    productions,
+                    &productions[id.index()].expr,
+                    kind,
+                    memo,
+                    depth + 1,
+                    governor,
+                )?;
                 memo[id.index()] = Some(found);
                 found
             }
@@ -754,15 +787,21 @@ fn captures(productions: &[Production], root: ProductionId, kind: CaptureKind) -
             | Expr::Commit
             | Expr::Next
             | Expr::Insert(_) => false,
-        }
+        })
     }
-    let mut memo = vec![None; productions.len()];
-    walk(
+    work_for(productions.len(), 1, 1, governor)?;
+    let mut memo = ScratchVec::new(governor);
+    memo.extend(core::iter::repeat_n(None, productions.len()))?;
+    let found = walk(
         productions,
         &productions[root.index()].expr,
         kind,
-        &mut memo,
-    )
+        memo.as_mut_slice(),
+        0,
+        governor,
+    )?;
+    governor.check()?;
+    Ok(found)
 }
 
 /// Refuse a production reachable from itself.
@@ -1747,17 +1786,19 @@ fn closer_literals(
     literals: &mut ScratchVec<Literal>,
     closers: &[CloserClass],
     governor: &mut Governor,
-) -> Result<Vec<u32>, GrammarError> {
-    let mut ids = Vec::with_capacity(closers.len());
+) -> Result<ScratchVec<u32>, GrammarError> {
+    let mut ids = ScratchVec::new(governor);
     for (index, closer) in closers.iter().enumerate() {
+        governor.charge(Resource::Work, 1)?;
         let id = Some(CloserId(symbol_index(index, governor)?));
         ids.push(intern_literal(
             literals,
             &closer.spellings[0],
             id,
             governor,
-        )?);
+        )?)?;
     }
+    governor.check()?;
     Ok(ids)
 }
 
@@ -1799,23 +1840,56 @@ fn stray_spellings(
 fn call_markup(
     call_ends: &[CallEnd],
     governor: &mut Governor,
-) -> Result<[Vec<Vec<u8>>; 2], GrammarError> {
-    let spelled: usize = call_ends
-        .iter()
-        .flat_map(|end| end.openers.iter().chain(&end.call_closers))
-        .map(|spelling| spelling.len() + 24)
-        .sum();
-    charge(governor, size(spelled), size(spelled))?;
-    let mut markup: [Vec<Vec<u8>>; 2] = [Vec::new(), Vec::new()];
+) -> Result<[ByteList; 2], GrammarError> {
+    let mut markup: [ByteList; 2] = core::array::from_fn(|_| ScratchVec::new(governor));
     for end in call_ends {
-        markup[0].extend(end.openers.iter().cloned());
-        markup[1].extend(end.call_closers.iter().cloned());
+        governor.charge(Resource::Work, 1)?;
+        for (into, spellings) in markup.iter_mut().zip([end.openers(), end.call_closers()]) {
+            for spelling in spellings {
+                governor.charge(Resource::Work, 1)?;
+                if !contains_bytes(into, spelling, governor)? {
+                    into.push(owned_bytes(spelling, governor)?)?;
+                }
+            }
+        }
     }
     for spellings in &mut markup {
-        spellings.sort();
-        spellings.dedup();
+        sort_spellings(spellings.as_mut_slice(), false, governor)?;
     }
+    governor.check()?;
     Ok(markup)
+}
+
+/// Sort owned spellings in place without allocating comparator scratch.
+/// Each comparison and move is admitted before it happens.
+fn sort_spellings(
+    spellings: &mut [Bytes],
+    longest_first: bool,
+    governor: &mut Governor,
+) -> Result<(), GrammarError> {
+    for index in 1..spellings.len() {
+        let mut at = index;
+        while at > 0 {
+            let (left, right) = (&spellings[at - 1], &spellings[at]);
+            work_for(left.len().min(right.len()), 1, 1, governor)?;
+            let order = if longest_first {
+                right
+                    .len()
+                    .cmp(&left.len())
+                    .then_with(|| left.as_slice().cmp(right))
+            } else {
+                left.as_slice().cmp(right)
+            };
+            if !order.is_gt() {
+                break;
+            }
+            governor.charge(Resource::Work, 1)?;
+            spellings.swap(at - 1, at);
+            at -= 1;
+        }
+    }
+    governor.check()?;
+    Ok(())
 }
 
 /// Whether `expr` holds an `xml-params` slot.
@@ -1878,32 +1952,40 @@ fn longest_literal(
     stray: &Spellings,
     delimiters: &[DelimiterSet],
     reasoning: &[(Bytes, Bytes)],
-) -> usize {
-    literals
-        .iter()
-        .map(|literal| literal.bytes.len())
-        .chain(
-            repairs
-                .iter()
-                .flat_map(|tables| {
-                    tables
-                        .variants
-                        .list
-                        .iter()
-                        .chain(&tables.confusables.list)
-                        .chain(tables.json.iter().flat_map(|json| &json.list))
-                })
-                .map(Bytes::len),
-        )
-        .chain(stray.list.iter().map(Bytes::len))
-        .chain(delimiters.iter().map(|set| set.matcher.longest()))
-        .chain(
-            reasoning
-                .iter()
-                .flat_map(|(open, close)| [open.len(), close.len()]),
-        )
-        .max()
-        .unwrap_or(0)
+    governor: &mut Governor,
+) -> Result<usize, GrammarError> {
+    let mut longest = 0;
+    for literal in literals {
+        governor.charge(Resource::Work, 1)?;
+        longest = longest.max(literal.bytes.len());
+    }
+    for tables in repairs {
+        governor.charge(Resource::Work, 1)?;
+        for spellings in [&tables.variants, &tables.confusables]
+            .into_iter()
+            .chain(&tables.json)
+        {
+            governor.charge(Resource::Work, 1)?;
+            for bytes in &spellings.list {
+                governor.charge(Resource::Work, 1)?;
+                longest = longest.max(bytes.len());
+            }
+        }
+    }
+    for bytes in &stray.list {
+        governor.charge(Resource::Work, 1)?;
+        longest = longest.max(bytes.len());
+    }
+    for set in delimiters {
+        governor.charge(Resource::Work, 1)?;
+        longest = longest.max(set.matcher.longest());
+    }
+    for (open, close) in reasoning {
+        governor.charge(Resource::Work, 1)?;
+        longest = longest.max(open.len()).max(close.len());
+    }
+    governor.check()?;
+    Ok(longest)
 }
 
 fn resolve_productions(
@@ -1921,6 +2003,20 @@ fn resolve_productions(
         productions.push(Production { name, expr })?;
     }
     Ok(productions)
+}
+
+/// Resolve one required production with admitted name comparisons.
+fn required_production(
+    productions: &[Production],
+    name: &'static str,
+    governor: &mut Governor,
+) -> Result<ProductionId, GrammarError> {
+    for (index, production) in productions.iter().enumerate() {
+        if equal(production.name.as_bytes(), name.as_bytes(), governor)? {
+            return Ok(ProductionId(symbol_index(index, governor)?));
+        }
+    }
+    Err(GrammarError::MissingProduction { name })
 }
 
 /// Resolve, check and compile a parsed document.
@@ -1943,21 +2039,9 @@ pub(crate) fn compile(
     let productions = resolve_productions(&mut builder, bodies)?;
     check_acyclic(&productions, &builder.production_offsets, builder.governor)?;
     let layouts = layouts(&mut builder, &productions, &declared_layouts)?;
-    let mut required = |name: &'static str| -> Result<ProductionId, GrammarError> {
-        for (index, production) in productions.iter().enumerate() {
-            if equal(
-                production.name.as_bytes(),
-                name.as_bytes(),
-                builder.governor,
-            )? {
-                return Ok(ProductionId(symbol_index(index, builder.governor)?));
-            }
-        }
-        Err(GrammarError::MissingProduction { name })
-    };
-    let call = required("call")?;
-    let result = required("result")?;
-    let declaration = required("declaration")?;
+    let call = required_production(&productions, "call", builder.governor)?;
+    let result = required_production(&productions, "result", builder.governor)?;
+    let declaration = required_production(&productions, "declaration", builder.governor)?;
     let Builder {
         governor,
         mut literals,
@@ -1995,11 +2079,18 @@ pub(crate) fn compile(
             json_tables(&programs, &mut literals, &closers, &confusables, governor)?;
         programs = source.compile(&literals, &literal_tables, &renames, governor)?;
     }
-    let longest = longest_literal(&literals, &literal_tables, &stray, &delimiters, &reasoning);
+    let longest = longest_literal(
+        &literals,
+        &literal_tables,
+        &stray,
+        &delimiters,
+        &reasoning,
+        governor,
+    )?;
     let call_ends = call_ends(&programs[0], &literals, &literal_tables, governor)?;
     let call_literals = call_literals(&programs[0], &literals, &literal_tables, governor)?;
     // An optional-id grammar reads model-added ids absent from its markup.
-    let call_ids = !optional_id && captures(&productions, call, CaptureKind::Id);
+    let call_ids = !optional_id && captures(&productions, call, CaptureKind::Id, governor)?;
     let call_markup = call_markup(&call_ends, governor)?;
     governor.check()?;
     Ok(CompiledGrammar {
@@ -2189,7 +2280,7 @@ fn insert_alternatives(
 }
 
 /// The instructions `inst` continues at.
-pub(crate) fn successors(inst: &Inst) -> Vec<u32> {
+pub(crate) fn successors(inst: &Inst) -> impl Iterator<Item = u32> {
     match *inst {
         Inst::Lit { next, .. }
         | Inst::Class { next, .. }
@@ -2199,10 +2290,12 @@ pub(crate) fn successors(inst: &Inst) -> Vec<u32> {
         | Inst::Close { next, .. }
         | Inst::Commit { next }
         | Inst::Next { next }
-        | Inst::Insert { next, .. } => vec![next],
-        Inst::Split(first, second) => vec![first, second],
-        Inst::Accept => Vec::new(),
+        | Inst::Insert { next, .. } => [Some(next), None],
+        Inst::Split(first, second) => [Some(first), Some(second)],
+        Inst::Accept => [None, None],
     }
+    .into_iter()
+    .flatten()
 }
 
 /// Per instruction of `program`, whether an instruction `seed` holds for
@@ -2257,79 +2350,48 @@ fn call_literals(
     literals: &[Literal],
     tables: &[LiteralTables],
     governor: &mut Governor,
-) -> Result<Vec<Vec<u8>>, GrammarError> {
-    charge(governor, size(program.insts.len()), 0)?;
-    let mut lits: Vec<u32> = program
-        .insts
-        .iter()
-        .filter_map(|inst| match *inst {
-            Inst::Lit { lit, .. } => Some(lit),
-            _ => None,
-        })
-        .collect();
-    lits.sort_unstable();
-    lits.dedup();
-    let mut spellings: Vec<Vec<u8>> = Vec::new();
-    for lit in lits {
-        let tables = &tables[lit as usize];
-        for spelling in core::iter::once(literals[lit as usize].bytes.as_slice())
-            .chain(tables.variants.list.iter().map(Bytes::as_slice))
-            .chain(tables.confusables.list.iter().map(Bytes::as_slice))
-        {
-            charge(governor, size(spellings.len()), size(spelling.len()))?;
-            if !spellings.iter().any(|known| known.as_slice() == spelling) {
-                spellings.push(spelling.to_vec());
+) -> Result<ByteList, GrammarError> {
+    let mut lits = ScratchVec::new(governor);
+    for inst in &program.insts {
+        governor.charge(Resource::Work, 1)?;
+        if let Inst::Lit { lit, .. } = *inst {
+            include_id(&mut lits, lit, governor)?;
+        }
+    }
+    let mut spellings = ScratchVec::new(governor);
+    for &lit in &lits {
+        for spelling in literal_spellings(lit, literals, tables) {
+            if !contains_bytes(&spellings, spelling, governor)? {
+                spellings.push(owned_bytes(spelling, governor)?)?;
             }
         }
     }
-    spellings.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+    sort_spellings(spellings.as_mut_slice(), true, governor)?;
+    governor.check()?;
     Ok(spellings)
 }
 
-/// Per opener alternative of the `call` production, the spellings of its
-/// opener and of the literals that can end it (a literal from which the
-/// production completes without further input: the wrapper or section
-/// closer, the final brace of a bare object), each with its declared
-/// closer variants and confusable spellings. A rejected attempt's markup
-/// runs to its alternative's end literal (see
-/// `ToolSet::recover`).
+/// Canonical, declared-variant and confusable spellings, in that order.
+/// JSON repair spellings are deliberately outside this metadata contract.
+fn literal_spellings<'a>(
+    lit: u32,
+    literals: &'a [Literal],
+    tables: &'a [LiteralTables],
+) -> impl Iterator<Item = &'a [u8]> {
+    let tables = &tables[lit as usize];
+    core::iter::once(literals[lit as usize].bytes.as_slice())
+        .chain(tables.variants.list.iter().map(Bytes::as_slice))
+        .chain(tables.confusables.list.iter().map(Bytes::as_slice))
+}
+
+/// Per opener alternative, retain its opener, completion and call-completion
+/// spellings in their original encounter order, including chained openers.
 fn call_ends(
     program: &Program,
     literals: &[Literal],
     tables: &[LiteralTables],
     governor: &mut Governor,
-) -> Result<Vec<CallEnd>, GrammarError> {
-    // One walk of the call program per opener alternative, and two
-    // backward walks (production and call completion).
-    charge(
-        governor,
-        size(program.openers.len())
-            .saturating_add(2)
-            .saturating_mul(size(program.insts.len())),
-        size(program.insts.len()).saturating_mul(16),
-    )?;
-    let spellings = |lit: u32| {
-        let tables = &tables[lit as usize];
-        core::iter::once(literals[lit as usize].bytes.as_slice().to_vec())
-            .chain(
-                tables
-                    .variants
-                    .list
-                    .iter()
-                    .map(|bytes| bytes.as_slice().to_vec()),
-            )
-            .chain(
-                tables
-                    .confusables
-                    .list
-                    .iter()
-                    .map(|bytes| bytes.as_slice().to_vec()),
-            )
-            .collect::<Vec<_>>()
-    };
-    // Whether the production completes from each instruction without
-    // input, and whether one call ends there (the production completes or
-    // the next call of the attempt begins, a `next`).
+) -> Result<ScratchVec<CallEnd>, GrammarError> {
     let completing = reach_back(
         &program.insts,
         |inst| matches!(inst, Inst::Accept),
@@ -2342,62 +2404,64 @@ fn call_ends(
         false,
         governor,
     )?;
-    let completes = |pc: u32| completing[pc as usize];
-    let ends_call = |pc: u32| ending[pc as usize];
-    Ok(program
-        .openers
-        .iter()
-        .filter_map(|&opener| {
-            let Inst::Lit { lit, .. } = program.insts[opener as usize] else {
-                return None;
-            };
-            let mut seen = vec![false; program.insts.len()];
-            let mut stack = vec![opener];
-            let mut ends: Vec<Vec<u8>> = Vec::new();
-            let mut call_closers: Vec<Vec<u8>> = Vec::new();
-            let mut chained = false;
-            while let Some(pc) = stack.pop() {
-                if core::mem::replace(&mut seen[pc as usize], true) {
-                    if pc == opener {
-                        chained = true;
-                    }
-                    continue;
-                }
-                let inst = &program.insts[pc as usize];
-                if let Inst::Lit { lit: again, .. } = *inst
-                    && pc != opener
-                    && again == lit
-                {
+    let mut alternatives = ScratchVec::new(governor);
+    for &opener in &program.openers {
+        governor.charge(Resource::Work, 1)?;
+        let Inst::Lit { lit, .. } = program.insts[opener as usize] else {
+            continue;
+        };
+        let mut seen = flags(program.insts.len(), governor)?;
+        let mut stack = ScratchVec::new(governor);
+        stack.push(opener)?;
+        let mut ends = ScratchVec::new(governor);
+        let mut call_closers = ScratchVec::new(governor);
+        let mut chained = false;
+        while let Some(pc) = stack.pop() {
+            governor.charge(Resource::Work, 1)?;
+            if core::mem::replace(&mut seen.as_mut_slice()[pc as usize], true) {
+                if pc == opener {
                     chained = true;
                 }
-                if let Inst::Lit { lit, next } = *inst
-                    && pc != opener
-                {
-                    if completes(next) {
-                        for spelling in spellings(lit) {
-                            if !ends.contains(&spelling) {
-                                ends.push(spelling);
-                            }
-                        }
-                    }
-                    if ends_call(next) {
-                        for spelling in spellings(lit) {
-                            if !call_closers.contains(&spelling) {
-                                call_closers.push(spelling);
+                continue;
+            }
+            let inst = &program.insts[pc as usize];
+            if let Inst::Lit { lit: again, .. } = *inst
+                && pc != opener
+                && again == lit
+            {
+                chained = true;
+            }
+            if let Inst::Lit { lit, next } = *inst
+                && pc != opener
+            {
+                for (include, into) in [
+                    (completing[next as usize], &mut ends),
+                    (ending[next as usize], &mut call_closers),
+                ] {
+                    if include {
+                        for spelling in literal_spellings(lit, literals, tables) {
+                            if !contains_bytes(into, spelling, governor)? {
+                                into.push(owned_bytes(spelling, governor)?)?;
                             }
                         }
                     }
                 }
-                stack.extend(successors(inst));
             }
-            Some(CallEnd {
-                openers: spellings(lit),
-                closers: ends,
-                call_closers,
-                chained,
-            })
-        })
-        .collect())
+            stack.extend(successors(inst))?;
+        }
+        let mut openers = ScratchVec::new(governor);
+        for spelling in literal_spellings(lit, literals, tables) {
+            openers.push(owned_bytes(spelling, governor)?)?;
+        }
+        alternatives.push(CallEnd {
+            openers,
+            closers: ends,
+            call_closers,
+            chained,
+        })?;
+    }
+    governor.check()?;
+    Ok(alternatives)
 }
 
 /// Each production's printing layout: the text a `layout` statement gives
@@ -2486,9 +2550,13 @@ fn layouts(
 
 #[cfg(test)]
 mod admission_tests {
-    use super::{LiteralTables, Program, Tables, compile_program, literal_tables, owned_bytes};
+    use super::{
+        LiteralTables, Program, Tables, call_ends, call_literals, call_markup, captures,
+        check_next, closer_literals, compile_program, literal_tables, longest_literal, owned_bytes,
+        stray_spellings,
+    };
     use crate::contract::{Budget, CancellationToken, Governor, Resource, ScratchVec, StopReason};
-    use crate::grammar::{Grammar, GrammarError, Literal};
+    use crate::grammar::{CaptureKind, Grammar, GrammarError, Literal};
 
     fn prepared(g: &mut Governor) -> Result<LiteralTables, GrammarError> {
         let literal = Literal {
@@ -2610,6 +2678,138 @@ result = "<r>"; declaration = "<d>";"#;
             prepare(&mut g).unwrap_err(),
             GrammarError::Resource(StopReason::Cancelled)
         );
+        assert_eq!(g.scratch_meter().live(), 0);
+    }
+
+    fn prepared_call_metadata(
+        grammar: &crate::grammar::CompiledGrammar,
+        g: &mut Governor,
+    ) -> Result<
+        (
+            ScratchVec<crate::grammar::CallEnd>,
+            super::ByteList,
+            [super::ByteList; 2],
+        ),
+        GrammarError,
+    > {
+        let mut closer_bytes = ScratchVec::new(g);
+        let _ids = closer_literals(&mut closer_bytes, &grammar.closers, g)?;
+        check_next(
+            &grammar.productions,
+            &[0; 4],
+            [grammar.result, grammar.declaration],
+            g,
+        )?;
+        let ends = call_ends(
+            &grammar.programs[0],
+            &grammar.literals,
+            &grammar.literal_tables,
+            g,
+        )?;
+        let literals = call_literals(
+            &grammar.programs[0],
+            &grammar.literals,
+            &grammar.literal_tables,
+            g,
+        )?;
+        let markup = call_markup(&ends, g)?;
+        assert!(captures(
+            &grammar.productions,
+            grammar.call,
+            CaptureKind::Id,
+            g
+        )?);
+        let stray = stray_spellings(&grammar.closers, &grammar.productions, g)?;
+        assert_eq!(
+            longest_literal(
+                &grammar.literals,
+                &grammar.literal_tables,
+                &stray,
+                &grammar.delimiters,
+                &grammar.reasoning,
+                g
+            )?,
+            5
+        );
+        // A later refusal must release completed public metadata as well.
+        g.charge(Resource::Work, 1)?;
+        Ok((ends, literals, markup))
+    }
+
+    #[test]
+    fn call_metadata_refusals_release_partial_tables_and_retain_completed_owners() {
+        let source = r#"grammar "metadata";
+confusable "c" "C";
+closer end = "</c>" | "</cc>";
+item = id:"i";
+call = "<c>" item ("x" next "<c>" item)? end | "<b>" end;
+result = "<r>"; declaration = "<d>";"#;
+        let grammar =
+            Grammar::compile_governed(source, &mut Governor::new(Budget::default())).unwrap();
+        let mut measured = Governor::new(Budget::default());
+        let metadata = prepared_call_metadata(&grammar, &mut measured).unwrap();
+        assert!(metadata.0.iter().any(|end| end.chained));
+        let usage = measured.usage();
+        assert!(measured.scratch_meter().live() > 0);
+        drop(metadata);
+        assert_eq!(measured.scratch_meter().live(), 0);
+        let exact = Budget {
+            work: usage.work,
+            scratch_bytes: usage.peak_scratch_bytes,
+            input_bytes: 5,
+            ..Budget::default()
+        };
+        let mut g = Governor::new(exact);
+        drop(prepared_call_metadata(&grammar, &mut g).unwrap());
+        assert_eq!(g.scratch_meter().live(), 0);
+        for (budget, resource) in [
+            (
+                Budget {
+                    work: usage.work - 1,
+                    ..exact
+                },
+                Resource::Work,
+            ),
+            (
+                Budget {
+                    work: usage.work / 2,
+                    ..exact
+                },
+                Resource::Work,
+            ),
+            (
+                Budget {
+                    scratch_bytes: usage.peak_scratch_bytes - 1,
+                    ..exact
+                },
+                Resource::ScratchBytes,
+            ),
+            (
+                Budget {
+                    input_bytes: 4,
+                    ..exact
+                },
+                Resource::InputBytes,
+            ),
+            (Budget { depth: 0, ..exact }, Resource::Depth),
+        ] {
+            let mut g = Governor::new(budget);
+            let reason = StopReason::BudgetExceeded(resource);
+            assert_eq!(
+                prepared_call_metadata(&grammar, &mut g).unwrap_err(),
+                GrammarError::Resource(reason.clone())
+            );
+            assert_eq!(g.check(), Err(reason));
+            assert_eq!(g.scratch_meter().live(), 0);
+        }
+        let token = CancellationToken::new();
+        token.cancel();
+        let mut g = Governor::with_cancellation(exact, token);
+        assert_eq!(
+            prepared_call_metadata(&grammar, &mut g).unwrap_err(),
+            GrammarError::Resource(StopReason::Cancelled)
+        );
+        assert_eq!(g.check(), Err(StopReason::Cancelled));
         assert_eq!(g.scratch_meter().live(), 0);
     }
 }

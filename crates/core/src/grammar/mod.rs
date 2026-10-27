@@ -623,10 +623,11 @@ impl Grammar {
     /// reverse-edge and traversal temporaries use fallible retained owners.
     /// Scans, sorting, renames, checked PCs/bounds and recursive caller/native
     /// depth admit work before processing through the same ordinary/JSON path.
-    /// Dense matcher construction/storage also retain governed owners. Other
-    /// dialect-set metadata, public call metadata, capture memo, closer-ID
-    /// preparation, longest metadata and native pattern preparation remain
-    /// separate; full cold governance remains #36.
+    /// Dense matcher construction/storage and derived call metadata retain
+    /// governed owners. Closer IDs, capture memo and metadata query scans admit
+    /// fallible storage/work; [`CallEnd`] getters borrow read-only byte owners.
+    /// Other dialect-set metadata, native pattern preparation and engine/recovery
+    /// runtime allocations remain separate; full cold governance remains #36.
     ///
     /// # Errors
     /// Returns a typed [`GrammarError`] with the source offset for malformed
@@ -714,22 +715,49 @@ pub(crate) struct Production {
 
 /// One opener alternative of a grammar's `call` production (see
 /// [`CompiledGrammar::call_ends`]).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct CallEnd {
-    /// The spellings of its opener literal.
-    pub openers: Vec<Vec<u8>>,
-    /// The spellings of the literals that can end it.
-    pub closers: Vec<Vec<u8>>,
+    openers: crate::contract::ScratchVec<crate::contract::ScratchVec<u8>>,
+    closers: crate::contract::ScratchVec<crate::contract::ScratchVec<u8>>,
     /// The spellings of the literals that can end one call of it: the
     /// literals that can end it, and those after which the next call of an
     /// attempt reading several calls begins (Kimi-K2's
     /// `<|tool_call_end|>` inside a section). A superset of `closers`.
-    pub call_closers: Vec<Vec<u8>>,
+    call_closers: crate::contract::ScratchVec<crate::contract::ScratchVec<u8>>,
     /// Whether its opener literal recurs inside one call (an attempt that
     /// reads several calls chained with no separator, each opening with
     /// it, as Kimi-K2's `<|tool_call_begin|>` elements): a repeated opener
     /// then continues the attempt rather than nesting a level.
     pub chained: bool,
+}
+
+impl CallEnd {
+    /// Borrow its opener spellings, canonical first, without copying storage.
+    ///
+    /// These read-only bytes retain their compiler admission for the grammar's
+    /// lifetime. See [`CompiledGrammar::call_ends`] for an example.
+    #[must_use]
+    pub fn openers(&self) -> &[crate::contract::ScratchVec<u8>] {
+        &self.openers
+    }
+
+    /// Borrow the spellings that can end this alternative, in encounter order.
+    ///
+    /// No allocation or resource admission occurs when borrowing. See
+    /// [`CompiledGrammar::call_ends`] for an example.
+    #[must_use]
+    pub fn closers(&self) -> &[crate::contract::ScratchVec<u8>] {
+        &self.closers
+    }
+
+    /// Borrow the spellings that can end one call, including chained calls.
+    ///
+    /// This is a superset of [`Self::closers`]; borrowing never clones the
+    /// retained owners. See [`CompiledGrammar::call_ends`] for an example.
+    #[must_use]
+    pub fn call_closers(&self) -> &[crate::contract::ScratchVec<u8>] {
+        &self.call_closers
+    }
 }
 
 /// A compiled, invertible dialect grammar.
@@ -765,12 +793,12 @@ pub struct CompiledGrammar {
     /// Per `reasoning` pair, whether it is declared `explicit`.
     pub(crate) explicit_reasoning: crate::contract::ScratchVec<bool>,
     /// See [`Self::call_ends`].
-    pub(crate) call_ends: Vec<CallEnd>,
+    pub(crate) call_ends: crate::contract::ScratchVec<CallEnd>,
     /// See [`Self::call_literals`].
-    pub(crate) call_literals: Vec<Vec<u8>>,
+    pub(crate) call_literals: crate::contract::ScratchVec<crate::contract::ScratchVec<u8>>,
     /// Every spelling of a call opener, then of a literal ending a call,
     /// of any alternative (see `CodecContext::openers`).
-    pub(crate) call_markup: [Vec<Vec<u8>>; 2],
+    pub(crate) call_markup: [crate::contract::ScratchVec<crate::contract::ScratchVec<u8>>; 2],
     pub(crate) programs: [Program; 2],
     pub(crate) stray: automaton::Trie,
     pub(crate) longest: usize,
@@ -1151,16 +1179,16 @@ impl CompiledGrammar {
     /// ```
     /// use purrassist_core::tool_call::DialectId;
     /// let ends = DialectId::Hermes.grammar().call_ends();
-    /// assert!(ends[0].openers.contains(&b"<tool_call>".to_vec()));
-    /// assert!(ends[0].closers.contains(&b"</tool_call>".to_vec()));
+    /// assert!(ends[0].openers().iter().any(|bytes| bytes.as_slice() == b"<tool_call>"));
+    /// assert!(ends[0].closers().iter().any(|bytes| bytes.as_slice() == b"</tool_call>"));
     /// assert!(!ends[0].chained);
-    /// assert!(ends[0].call_closers.contains(&b"</tool_call>".to_vec()));
+    /// assert!(ends[0].call_closers().iter().any(|bytes| bytes.as_slice() == b"</tool_call>"));
     /// // A section-less Kimi-K2 attempt chains its calls.
     /// let kimi = DialectId::KimiK2.grammar().call_ends();
-    /// let bare = kimi.iter().find(|end| end.openers.contains(&b"<|tool_call_begin|>".to_vec())).unwrap();
+    /// let bare = kimi.iter().find(|end| end.openers().iter().any(|bytes| bytes.as_slice() == b"<|tool_call_begin|>")).unwrap();
     /// assert!(bare.chained);
     /// // Each chained call ends at its own closer.
-    /// assert!(bare.call_closers.contains(&b"<|tool_call_end|>".to_vec()));
+    /// assert!(bare.call_closers().iter().any(|bytes| bytes.as_slice() == b"<|tool_call_end|>"));
     /// ```
     #[must_use]
     pub fn call_ends(&self) -> &[CallEnd] {
@@ -1170,16 +1198,17 @@ impl CompiledGrammar {
     /// Every spelling (canonical, declared closer variant, confusable) of
     /// every literal the `call` production matches, longest first. A
     /// rejected attempt's span never ends inside one of them that began
-    /// in the span.
+    /// in the span. The returned slice borrows read-only retained owners;
+    /// it does not allocate or clone their compiler admission.
     ///
     /// ```
     /// use purrassist_core::tool_call::DialectId;
     /// let literals = DialectId::Qwen3CoderXml.grammar().call_literals();
-    /// assert!(literals.contains(&b"</function>".to_vec()));
+    /// assert!(literals.iter().any(|bytes| bytes.as_slice() == b"</function>"));
     /// assert!(literals.windows(2).all(|pair| pair[0].len() >= pair[1].len()));
     /// ```
     #[must_use]
-    pub fn call_literals(&self) -> &[Vec<u8>] {
+    pub fn call_literals(&self) -> &[crate::contract::ScratchVec<u8>] {
         &self.call_literals
     }
 
