@@ -943,3 +943,22 @@ standalone component does not establish graph admission, permission/owner/deny
 interaction analysis, hat containment, complete native profile-name handling,
 trusted scoped waiver admission, full synthesis or actual confinement. Original
 #34/#35 acceptance remains required.
+
+## Standalone signal and ptrace fragments — implemented
+
+`SignalRule` and `PtraceRule` admit explicit closed access sets and mandatory
+peer globs/bindings, preserving independent audit/deny qualifiers. Signal sets
+cover the documented 33-name table plus inclusive `rtmin+0` through `rtmin+32`;
+canonical ordering, deduplication and leading-zero RT normalization retain the
+original field text. Unknown names and native aliases outside the frozen table
+are refused. Output always includes the requested accesses, signal set where
+applicable, and the quoted peer through the shared native policy-word writer.
+
+These labels use native AARE semantics, without file slash normalization or
+Unix-address interpretation. Explicit broad or nullable expressions remain
+caller requests, never defaults. The atomic artifact carries ABI `3.0` and its
+signal/ptrace mediation requirement; it is neither a peer authorization nor
+running-kernel/loaded-policy evidence. `ipc_rules` is the public consumer.
+Full #34/#35 graph admission, static conflicts, permission/hat analysis, complete
+synthesis, trust and host confinement remain required. Mount/capability/rlimit
+and import handling remain separate original requirements.

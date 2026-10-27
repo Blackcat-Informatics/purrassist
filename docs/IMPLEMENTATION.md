@@ -243,3 +243,13 @@ shared governed formatting. The selected `3.0` file-mediation requirement is
 an offline target contract, without a running-kernel or loaded-policy claim.
 Full permission/hat analysis, authenticated waivers, graph admission, policy
 synthesis and host confinement remain under #34 and #35.
+
+Standalone `SignalRule` and `PtraceRule` now render explicit closed access/signal
+sets and mandatory native peer labels through the existing governed policy-word
+writer. Signal membership retains its original field text alongside canonical
+ordering and RT spelling. Shared label output applies no filename normalization
+or Unix-address interpretation. The `ipc_rules` consumer exercises both APIs and
+literal bindings. ABI `3.0` signal/ptrace metadata is an offline target contract;
+it establishes no peer permission, authenticated admission or loaded policy.
+Full #34/#35 graph, conflict, synthesis, trust and confinement acceptance remains
+open, along with the separate mount/capability/rlimit/import rule families.

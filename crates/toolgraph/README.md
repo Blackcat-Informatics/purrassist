@@ -139,3 +139,23 @@ Run `cargo run -p purrassist-toolgraph --example file_rules` for the real bound
 path, named transition and canonical denial consumer. Graph admission, complete
 permission/hat analysis, broader native target names, authenticated waiver
 handling, policy synthesis and host enforcement remain parent requirements.
+
+`SignalRule` and `PtraceRule` render governed standalone IPC fragments with an
+explicit peer `AppArmorGlob` and its complete literal bindings. Access sets are
+nonempty and closed: send/receive for signals, trace/read/readby/tracedby for
+ptrace. Native aliases outside these sets are refused. Signals admit the
+33 documented names (including `stp` and `exists`) and `rtmin+0` through
+`rtmin+32`; bounded leading-zero RT inputs render canonically while the original
+field remains in the artifact. Unknown names, OS numbers, `rtmax`, malformed
+lists and out-of-range RT offsets are explicit failures.
+
+Both rule types preserve independent audit/deny conditions, always print the
+peer and access set, and use the existing bound-word writer without file path
+normalization, Unix address markers, reparsing or label matching. An explicit
+`**` is broad by request; an omitted peer has no representation. Empty source
+remains an existing glob refusal, while nullable admitted expressions retain
+their native meaning. The complete artifact carries selected ABI `3.0` and
+signal/ptrace mediation metadata, without attesting host configuration or the
+other process's permission. Run `cargo run -p purrassist-toolgraph --example
+ipc_rules` for the actual consumer. Graph admission, conflicts, complete
+synthesis, trust and host confinement remain original #34/#35 requirements.
