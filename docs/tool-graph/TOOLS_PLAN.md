@@ -485,6 +485,21 @@ still passed to the upstream compiler. Resolve the actual G7 source and check
 any drift from the inspected dependency closure before #33. Phase 3 cannot close #33 until the upstream
 API exists, its plain-profile consumer tests pass, and the integration is wired.
 
+## Governed JSON emission — implemented
+
+The core's `Node::to_json_governed` and `json::quote_governed` provide the
+shared governed emission needed by context and manifest codecs. Their structural
+cursor and escaping authority also serve existing convenience/append callers;
+the governed driver is iterative and uses fallible ancestor/output storage.
+The `emit_context_json` example executes context-shaped JSON emission, without
+claiming context-field validation or a complete codec.
+
+Context decoding, numeric parsing/conversion/construction and canonical mask
+formatting still require governed production paths through their existing
+implementations. G7, source ownership, full manifest round trips and host result
+release remain parent acceptance. Issue #47 remains open until that integration
+is verified. See [RESOURCES.md](../RESOURCES.md) for the emission resource model.
+
 ## Callable-binding admission — implemented
 
 `CallableBinding::admit` accepts an explicit caller-prepared upstream
