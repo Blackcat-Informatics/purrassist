@@ -297,6 +297,7 @@ impl<'a> CallableBinding<'a> {
     }
 
     /// Iterate in declaration order, with no searches, cloning or allocation.
+    #[must_use = "consume the iterator to inspect the admitted parameter bindings"]
     pub fn parameters(&self) -> impl ExactSizeIterator<Item = ParameterBinding<'a>> + '_ {
         self.parameters
             .iter()
