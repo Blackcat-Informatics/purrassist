@@ -1,0 +1,19 @@
+ghprsq source head backlink metadata
+
+parent_hashes: eff6a742919709820fcaa85215340a98324ed529
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash-head-backlink
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrassist
+GhpRsq-GitHub-Pull-Request: 83
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrassist/pull/83
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: b58ce900c19603f4616530a6dcca04b9f07c436d
+GhpRsq-Head-Ref: paudley/77-tool-graph-governed-canonical-printing
+GhpRsq-Head-OID: eff6a742919709820fcaa85215340a98324ed529
+GhpRsq-Result-Tree: 919517fc5db0ab24d73067ff9923156217325318
+GhpRsq-Result-Commit: e0eb34da4ebd9eed54605653f76d0641e0b7c768
+GhpRsq-Parent-Hashes: eff6a742919709820fcaa85215340a98324ed529
+GhpRsq-Squash-Notes-SHA256: 749156ad4195fb0d10f50b990e2cd2900d2a01311c384b5128d9c9beea475ad1
+GhpRsq-Defect-Class: artifact-size-regression
+GhpRsq-Stage-Evidence: none
