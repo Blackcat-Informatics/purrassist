@@ -29,6 +29,20 @@ their existing coarser charges do not establish full cold compiler admission.
 Parent #36 retains those requirements and the remaining generation/integration
 work.
 
+## Native pattern parser metadata admission
+
+Native pattern parsing now separately admits decoded characters, capture
+names/indices/alternative paths, pending numeric references and lexical text
+through fallible temporary scratch owners. Source/name/path scans, lookahead,
+numeric conversion, escape/property-name scans and exact syntax diagnostics
+admit work before processing. Capture-name validation borrows immutable Unicode
+identifier ranges; missing generated fixed properties fail explicitly. Temporary
+metadata releases on every exit; returned diagnostic strings retain admission.
+The old uncharged scalar-count pass is removed. AST/interval/Box/Rc storage
+retains the separate `source.len() * 48 + 256` estimate; Unicode class expansion,
+AST classification, derivative artifact ownership/cloning and runtime allocation
+governance remain separate contracts. Public Clone behavior is unchanged.
+
 `make resources` builds an assertion-backed resource benchmark and the release
 CLI, then profiles nine fixed workloads and measures core and syntax latency,
 allocation, RSS, artifact sizes and an uncached release build. It requires Linux,

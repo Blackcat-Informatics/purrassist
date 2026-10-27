@@ -1098,6 +1098,20 @@ Full cold backend governance, witness, GBNF,
 CompactSignature, projection, routing, ledgers and graph integration remain #36
 acceptance.
 
+## Native pattern parser metadata — implemented prerequisite
+
+Native pattern parsing now separately admits decoded characters, capture
+names/indices/alternative paths, pending numeric references and lexical text
+through fallible temporary scratch owners. Source/name/path scans, lookahead,
+numeric conversion, escape/property-name scans and exact syntax diagnostics
+admit work before processing. Capture-name validation borrows immutable Unicode
+identifier ranges; missing generated fixed properties fail explicitly. Temporary
+metadata releases on every exit; returned diagnostic strings retain admission.
+The old uncharged scalar-count pass is removed. AST/interval/Box/Rc storage
+retains the separate `source.len() * 48 + 256` estimate; Unicode class expansion,
+AST classification, derivative artifact ownership/cloning and runtime allocation
+governance remain separate contracts. Public Clone behavior is unchanged.
+
 ## Dense matcher and explicit prepared contexts — implemented prerequisite
 
 Both delimiter and reasoning-marker construction use the same governed dense
