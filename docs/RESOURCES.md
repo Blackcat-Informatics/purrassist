@@ -24,8 +24,9 @@ Syntax owners remain live throughout lowering and drop on its failures. Only
 the grammar ID is published after remaining fallible construction and a final
 cancellation check. The actual compiler consumer and existing syntax/grammar
 cases exercise this path. Later backend table
-construction and native pattern parsing remain outside complete governance;
-their existing coarser charges do not establish full cold compiler admission.
+construction has its own admitted phases below; native pattern construction
+also admits actual AST/Unicode owners. Runtime and graph integration remain
+separate contracts.
 Parent #36 retains those requirements and the remaining generation/integration
 work.
 
@@ -38,11 +39,10 @@ numeric conversion, escape/property-name scans and exact syntax diagnostics
 admit work before processing. Capture-name validation borrows immutable Unicode
 identifier ranges; missing generated fixed properties fail explicitly. Temporary
 metadata releases on every exit; returned diagnostic strings retain admission.
-The old uncharged scalar-count pass is removed. AST/interval/Box/Rc storage
-retains the separate `source.len() * 48 + 256` estimate; Unicode class expansion,
-AST classification and runtime allocation governance remain separate contracts.
-Derivative artifacts now retain release-owned buffers and actual consumers borrow
-prepared patterns, as described below.
+The old uncharged scalar-count pass is removed. Native AST, Unicode and
+classification construction now use actual admitted owners, as described below.
+Derivative artifacts retain release-owned buffers and actual consumers borrow
+prepared patterns.
 
 `make resources` builds an assertion-backed resource benchmark and the release
 CLI, then profiles nine fixed workloads and measures core and syntax latency,
@@ -155,8 +155,7 @@ Capture/next queries and longest-spelling scans admit each visited entry.
 Borrowed `CallEnd` getters, `call_literals` and `CodecContext` expose the same
 read-only owners. Recovery's existing runtime byte copies remain explicit.
 Dialect-set metadata preparation also uses retained fallible owners and
-admitted scans. Native pattern preparation and engine/recovery runtime
-allocation governance retain separate contracts.
+admitted scans. Engine/recovery runtime allocation governance retains its separate contract.
 Delimiter expansion feeds the same governed dense matcher. Complete cold
 compiler governance and the remaining #36 capabilities are still required.
 
@@ -480,8 +479,8 @@ alternation chains with compilation and generation Work boundaries.
 
 Compilation has two additional zero-slack allocator controls for wide alternations
 with 8, 64 and 128 branches. Compile terms, their sorted lookup index, classes,
-and predicate cuts own admitted capacities; the syntax estimate is leased and
-released on failure or when syntax drops. Controls cover the formerly undercharged
+and predicate cuts own admitted capacities; actual AST/interval buffers also
+release on failure or when syntax drops. Controls cover the formerly undercharged
 128-branch arena under a 140,000-byte budget, exact scratch and Work boundaries,
 and cancellation at initial, intermediate and final allocation checkpoints.
 The complete allocator oracle contains 32 controls.
@@ -1356,7 +1355,7 @@ establish matching, containment, admission or kernel enforcement.
 
 `pattern::ByteLanguage` directly compiles postfix instructions through the
 existing derivative term/class arena and actual-capacity retained storage.
-It does not invoke the Unicode regex parser or its estimated syntax lease.
+It does not invoke the Unicode regex parser or its syntax AST.
 Leaf expression depth is zero; star and positive n-ary concatenation/alternation
 add one plus their deepest child. Postfix stack width and the internal binary
 term representation do not define logical expression depth.
@@ -1547,9 +1546,7 @@ set through `sized_for`. The host retains custom preparation through recovery
 under its original shared governor; CLI/MCP selectors and outcome/provenance
 contracts are unchanged. Derived call metadata and compiler queries also retain
 governed owners and admitted scans. Dialect-set metadata also uses governed
-retained owners. Native pattern preparation and engine/recovery runtime
-allocation governance remain
-outside these completed compiler phases under parent #36.
+retained owners. Engine/recovery runtime allocation governance remains outside these completed compiler phases under parent #36.
 
 
 ## Prepared dialect metadata admission
@@ -1569,7 +1566,7 @@ publication, followed by cancellation admission. `reasoning_markers` borrows the
 same read-only byte owners. Existing recognizer runtime copies remain explicit.
 Caller-prepared custom grammar/Arc construction and the input iterator belong to
 the caller; lazy built-in grammar/cache preparation keeps its own default
-governor. Native pattern preparation, engine/recovery runtime governance and full
+governor. Engine/recovery runtime governance and full
 #36 witness, GBNF, signature, projection, routing, ledger and graph integration
 remain separate required capabilities. No set-owned disallowed-signature table
 exists: detection filters static family rules at runtime through its allow-list.
@@ -1587,13 +1584,12 @@ root depth is one; each AST child adds one. Caller depth and a native recursive
 translation ceiling of 128 both apply and refuse with sticky typed exhaustion.
 Term IDs and finite repetition counts use checked encoding; an unrepresentable
 finite `max + 1` returns sticky work exhaustion without changing its language.
-The parser and earlier AST classification retain their separate boundaries.
+Parser construction now admits actual AST/Unicode owners and accumulates classification, as described below.
 
-`Pattern` owns the existing `source.len() * 48 + 256` syntax-estimate lease.
-Dropping syntax, including `into_automaton`, releases it; the detached automaton
-keeps its original derivative owners until drop. Actual AST/interval/Box/Rc
-allocation, Unicode class expansion and AST classification remain unfinished.
-Runtime sessions retain their existing admitted mutable copies and contracts.
+`Pattern` owns its actual AST/interval scratch storage. Dropping syntax,
+including `into_automaton`, releases those owners; a detached automaton keeps
+its original derivative owners until drop. Runtime sessions retain their
+existing admitted mutable copies and contracts.
 
 Infallible `Clone` is removed from patterns/automata, schemas, compiled tools,
 tool sets and their pattern-bearing shape owners. Schema child preparation
@@ -1604,7 +1600,30 @@ reference storage. Host `Pending` borrows the caller's schema through completion
 Actual callers, examples and tests retain their schemas and exclusions in scope;
 request/provenance and language semantics are preserved.
 
-This prerequisite does not establish complete native compiler or runtime
-allocation governance. Lazy built-ins retain their separate governor. Full #36
+These construction phases do not establish runtime allocation governance. Lazy built-ins retain their separate governor. Full #36
 witness, GBNF, signature, projection, routing, ledger and graph integration remain
-required, alongside the remaining AST/range/classification preparation.
+required.
+
+
+## Native pattern AST and Unicode construction
+
+Native pattern construction retains actual AST lists, one-element unary
+children, resolved backreference indices and canonical interval sets in fallible
+scratch owners. Unicode aliases/table scans, copies, concrete interval heapsort,
+coalescing, complement and scalar clipping admit work and storage before
+processing. Generated Unicode tables and the separate IDNA runtime lookup are
+unchanged. Unsupported properties remain distinct from resource refusal.
+
+Temporary parser results accumulate height and backtracking classification;
+each parent is admitted before construction. Leaves have height one, parents add
+one to their tallest child, and caller depth plus a native AST/drop ceiling of
+128 apply. Source-parser nesting is independently capped at 128, including
+collapsed noncapturing groups. Flat widths remain shallow. The AST estimate,
+lease, recursive classification pass and infallible AST sharing are removed.
+Actual AST/range owners release on refusal, pattern drop and detachment; the
+detached automaton retains its own derivative buffers. Exact syntax diagnostics
+and governed metadata keep their existing contracts.
+
+Runtime/backtracking allocation governance, lazy built-ins under their separate
+governor and full #36 witness, GBNF, signature, projection, routing, ledger and
+graph integration remain separate requirements.

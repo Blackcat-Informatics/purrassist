@@ -86,6 +86,17 @@ fn property_escapes_match_their_sets_and_complements() {
         }
     }
     assert!(Pattern::compile("\\p{Not_A_Property}").is_err());
+    // A singleton property remains a class escape, not a scalar range endpoint.
+    assert_eq!(
+        Pattern::compile(r"[a-\u2028]")
+            .unwrap()
+            .is_match("\u{2028}", &mut Governor::new(Budget::default())),
+        Ok(true)
+    );
+    assert!(matches!(
+        Pattern::compile_governed(r"[a-\p{gc=Zl}]", &mut Governor::new(Budget::default())),
+        Err(purrassist_core::pattern::PatternCompileError::Syntax(_))
+    ));
 }
 
 #[test]

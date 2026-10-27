@@ -25,7 +25,7 @@
 //!
 //! [`ByteLanguage`] separately constructs full-match languages over arbitrary
 //! bytes through the same derivative arena/session. Its direct postfix input
-//! needs no Unicode regex parser or syntax-storage estimate; existing `Pattern`
+//! needs no Unicode regex parser or syntax AST; existing `Pattern`
 //! and UTF-8 byte-automaton semantics are unchanged.
 mod ast;
 mod backtrack;
@@ -83,7 +83,6 @@ pub struct Pattern {
     captures: usize,
     engine: Engine,
     compiled: Option<derive::Compiled>,
-    _syntax_lease: crate::contract::ScratchLease,
 }
 
 /// A derivative-engine pattern's compiled automaton, detached from the
@@ -240,28 +239,36 @@ impl Pattern {
     /// diagnostics admit work before processing; names borrow fixed Unicode
     /// identifier tables. Returned diagnostic strings retain their admission.
     ///
-    /// AST/interval/Box/Rc storage still uses the separate conservative
-    /// `source.len() * 48 + 256` estimate, retained as a lease until syntax drops.
-    /// Derivative term/index, class and cut buffers retain their actual admitted
-    /// owners until the pattern or detached automaton drops. Native translation
-    /// admits lookup/shift, traversal, comparison/copy and canonical union work,
-    /// plus caller `Depth` and a native recursion ceiling of 128: the root is
-    /// depth one and each AST child adds one. Final cancellation is checked
-    /// before publication. Actual AST allocation, Unicode expansion and AST
-    /// classification remain separate; parsing retains its own depth contract.
+    /// AST lists, one-element unary children, resolved backreference indices,
+    /// interval sets and derivative term/index/class/cut buffers retain actual
+    /// fallible owners until pattern drop or automaton detachment. Unicode
+    /// aliases, table scans, interval copies, sorting, coalescing, complement
+    /// and scalar clipping admit work/storage before processing. No AST estimate
+    /// or infallible AST sharing/copy path remains.
+    ///
+    /// Temporary parser results accumulate height and engine classification.
+    /// A leaf has height one; each parent adds one to its tallest child. Caller
+    /// depth and a native AST/drop ceiling of 128 admit each parent before it
+    /// is constructed. Source-parser nesting has an independent ceiling of 128,
+    /// including noncapturing groups whose AST collapses. Native derivative
+    /// translation preserves the same root-one depth law and checked counts.
+    /// Final cancellation precedes publication. Lazy built-ins retain their
+    /// separate preparation governor; runtime allocation governance is separate.
     /// Full ECMA-262 `u`-mode syntax
     /// is supported: named groups, `\k<name>`, `\u{...}`, surrogate-pair
     /// combination, and `\p{...}`/`\P{...}` for `General_Category`,
     /// `Script`, `Script_Extensions`, and every ECMA-262 binary Unicode
-    /// property. A pattern containing neither a backreference nor a
+    /// property. Class escapes, including singleton Unicode properties, cannot
+    /// serve as character-class range endpoints; scalar escapes can.
+    /// A pattern containing neither a backreference nor a
     /// lookaround compiles a derivative automaton up front (charged here);
     /// see the module documentation for engine selection.
     ///
     /// # Errors
     /// Returns [`PatternCompileError::Syntax`] for malformed patterns and
     /// [`PatternCompileError::Resource`] for governor or cancellation refusal.
-    /// Temporary parser buffers admit storage before allocation; the remaining
-    /// AST and Unicode class expansion retain the estimate boundary above.
+    /// Construction admits temporary and retained storage before allocation;
+    /// resource failures release partial owners rather than publishing a tree.
     /// A finite repetition maximum whose `max + 1` encoding exceeds `u64`
     /// returns sticky `BudgetExceeded(Work)` rather than changing the bound.
     ///
@@ -280,11 +287,8 @@ impl Pattern {
     ) -> Result<Self, PatternCompileError> {
         let length = u64::try_from(source.len()).unwrap_or(u64::MAX);
         governor.charge(Resource::InputBytes, length)?;
-        // AST nodes and interval owners retain the existing separate estimate.
-        let syntax_lease = governor.lease_scratch(length.saturating_mul(48).saturating_add(256))?;
-        let (ast, captures) = parse::parse(source, governor)?;
+        let (ast, captures, backtracking) = parse::parse(source, governor)?;
         governor.check()?;
-        let backtracking = ast.requires_backtracking();
         let (engine, compiled) = if backtracking {
             (Engine::Backtrack, None)
         } else {
@@ -296,7 +300,6 @@ impl Pattern {
             captures,
             engine,
             compiled,
-            _syntax_lease: syntax_lease,
         })
     }
 
@@ -367,8 +370,8 @@ impl Pattern {
     ///
     /// The automaton owns only the compiled, read-only term arena and class
     /// tables (already charged by [`Pattern::compile_governed`] and retained
-    /// as-is, with no copy). Discarding syntax releases its estimate lease;
-    /// dropping the automaton releases its own buffers. Unlike [`Pattern`] it is `Send + Sync` and
+    /// as-is, with no copy). Discarding syntax releases its actual AST/interval
+    /// owners; dropping the automaton releases its own buffers. The automaton
     /// can live in shared, compiled artifacts.
     ///
     /// ```
@@ -618,7 +621,7 @@ mod ownership_tests {
     use super::{ByteInstruction, ByteLanguage, Pattern, PatternCompileError};
     use crate::contract::{Budget, CancellationToken, Governor, Resource, StopReason};
 
-    /// Compiled term/class owners and the existing syntax estimate follow the
+    /// Compiled term/class and actual AST owners follow the
     /// artifact lifetime, including detachment and later compiler refusal.
     #[test]
     fn compiled_artifacts_release_on_drop_detachment_and_refusal() {
@@ -705,8 +708,8 @@ mod ownership_tests {
         assert_eq!(governor.scratch_meter().live(), 0);
     }
 
-    /// Parser group nesting and derivative AST translation have independent
-    /// depth contracts: root depth one and a native lowering ceiling of 128.
+    /// Actual AST ownership and derivative translation share root depth one
+    /// and a native ceiling of 128, independently of source-parser nesting.
     #[test]
     fn translation_native_depth_boundary_is_sticky_and_releases_owners() {
         for (groups, allowed) in [(127, true), (128, false)] {
@@ -743,5 +746,115 @@ mod ownership_tests {
             )))
         ));
         assert_eq!(governor.scratch_meter().live(), 0);
+    }
+    /// Unicode expansion and each AST owner release on partial/later refusal,
+    /// including backtracking trees that never build a derivative artifact.
+    #[test]
+    fn native_ast_and_unicode_refusals_release_partial_owners() {
+        for source in [
+            r"(?<x>[\p{gc=LC}\P{ASCII}]+)(?=x)\k<x>",
+            r"^(?:\p{Script=Greek}{1,3}|[\p{scx=Grek}\d])$",
+        ] {
+            let mut measured = Governor::new(Budget::default());
+            let pattern = Pattern::compile_governed(source, &mut measured).unwrap();
+            let usage = measured.usage();
+            assert!(measured.scratch_meter().live() > 0);
+            drop(pattern);
+            assert_eq!(measured.scratch_meter().live(), 0);
+            for (budget, resource) in [
+                (
+                    Budget {
+                        work: usage.work / 2,
+                        ..Budget::default()
+                    },
+                    Resource::Work,
+                ),
+                (
+                    Budget {
+                        work: usage.work - 1,
+                        ..Budget::default()
+                    },
+                    Resource::Work,
+                ),
+                (
+                    Budget {
+                        scratch_bytes: usage.peak_scratch_bytes / 2,
+                        ..Budget::default()
+                    },
+                    Resource::ScratchBytes,
+                ),
+                (
+                    Budget {
+                        scratch_bytes: usage.peak_scratch_bytes - 1,
+                        ..Budget::default()
+                    },
+                    Resource::ScratchBytes,
+                ),
+                (
+                    Budget {
+                        depth: 1,
+                        ..Budget::default()
+                    },
+                    Resource::Depth,
+                ),
+            ] {
+                let mut governor = Governor::new(budget);
+                let reason = StopReason::BudgetExceeded(resource);
+                assert_eq!(
+                    Pattern::compile_governed(source, &mut governor).unwrap_err(),
+                    PatternCompileError::Resource(reason.clone())
+                );
+                assert_eq!(governor.check(), Err(reason));
+                assert_eq!(governor.scratch_meter().live(), 0);
+            }
+        }
+    }
+
+    /// Collapsed noncapturing syntax still has a native parser boundary;
+    /// backtracking ASTs have the same safe ownership height as regular trees.
+    #[test]
+    fn parser_nesting_and_backtracking_drop_height_are_independent() {
+        for (groups, allowed) in [(128, true), (129, false)] {
+            let source = format!("{}a{}", "(?:".repeat(groups), ")".repeat(groups));
+            let mut governor = Governor::new(Budget {
+                depth: 256,
+                ..Budget::default()
+            });
+            let result = Pattern::compile_governed(&source, &mut governor);
+            if allowed {
+                drop(result.unwrap());
+            } else {
+                assert_eq!(
+                    result.unwrap_err(),
+                    PatternCompileError::Resource(StopReason::BudgetExceeded(Resource::Depth))
+                );
+                assert_eq!(
+                    governor.check(),
+                    Err(StopReason::BudgetExceeded(Resource::Depth))
+                );
+            }
+            assert_eq!(governor.scratch_meter().live(), 0);
+        }
+        for (groups, allowed) in [(126, true), (127, false)] {
+            let source = format!("{}(?=a){}", "(".repeat(groups), ")".repeat(groups));
+            let mut governor = Governor::new(Budget {
+                depth: 256,
+                ..Budget::default()
+            });
+            let result = Pattern::compile_governed(&source, &mut governor);
+            if allowed {
+                drop(result.unwrap());
+            } else {
+                assert_eq!(
+                    result.unwrap_err(),
+                    PatternCompileError::Resource(StopReason::BudgetExceeded(Resource::Depth))
+                );
+                assert_eq!(
+                    governor.check(),
+                    Err(StopReason::BudgetExceeded(Resource::Depth))
+                );
+            }
+            assert_eq!(governor.scratch_meter().live(), 0);
+        }
     }
 }

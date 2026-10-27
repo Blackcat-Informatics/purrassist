@@ -163,7 +163,7 @@ fn evaluate(
             Ok(Buffer::from_scratch(results, governor))
         }
         Node::Group(index, inner) => {
-            let mut results = evaluate(inner, text, state, governor, depth + 1)?;
+            let mut results = evaluate(&inner[0], text, state, governor, depth + 1)?;
             for result in &mut results.values {
                 result.captures.values[*index] = Some((position, result.position));
             }
@@ -195,8 +195,15 @@ fn evaluate(
             inner,
             positive,
             behind,
-        } => assertion(inner, (*positive, *behind), text, state, governor, depth),
-        Node::Repeat(repetition) => repeat(repetition, text, state, governor, depth),
+        } => assertion(
+            &inner[0],
+            (*positive, *behind),
+            text,
+            state,
+            governor,
+            depth,
+        ),
+        Node::Repeat(owned) => repeat(&owned[0], text, state, governor, depth),
     }
 }
 fn assertion(
