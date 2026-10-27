@@ -121,6 +121,17 @@ host-enforcement evidence. Admitted-graph synthesis, original v3/v4 targets,
 Unix-rule synthesis, complete permission analysis and host confinement remain
 required under #34/#35.
 
+The standalone `UnixRule` path now emits governed Unix socket fragments from
+caller-prepared declarations. Abstract, anonymous and unconstrained scopes remain
+explicit; peer-access restrictions and exact safe bindings are validated. It
+shares the existing AppArmor policy-word authority and common native socket
+access implementation, with Internet API/error/governance behavior preserved.
+The `unix_rules` consumer assembles an offline fixture with the returned ABI
+requirement. Fine-grained `network/af_unix` is required; no coarse network
+fallback, file-language matcher or host authority is implied. Complete admitted-
+graph synthesis, original v3/v4 integration, static permission/owner/deny
+analysis, other IPC families and host confinement remain under #34/#35.
+
 ## Shared contracts
 
 Intent + input + context -> candidates -> validation/ranking -> result + receipt.

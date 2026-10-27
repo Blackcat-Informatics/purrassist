@@ -13,6 +13,8 @@ use purrassist_core::{
     contract::{Resource, format_output_governed, saturating_size as size},
 };
 
+use crate::socket_access;
+
 /// Endpoint whose declaration failed admission or exceeded an enumeration ceiling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InternetSide {
@@ -255,12 +257,6 @@ impl InternetSelector {
     }
 }
 
-const ACCESSES: [&str; 12] = [
-    "create", "bind", "listen", "accept", "connect", "shutdown", "getattr", "setattr", "getopt",
-    "setopt", "send", "receive",
-];
-const PEER_ACCESSES: u16 = (1 << 3) | (1 << 4) | (1 << 10) | (1 << 11);
-
 /// Admitted nonempty access set; duplicates and aliases have one canonical order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InternetAccessSet(u16);
@@ -274,32 +270,12 @@ impl InternetAccessSet {
     /// See [`InternetRule`] for a successful use and peer compatibility semantics.
     pub fn parse<'a>(source: &'a str, governor: &mut Governor) -> Result<Self, InternetError<'a>> {
         admit(source, governor)?;
-        let invalid = || InternetError::Field {
-            field: "access",
-            source,
-        };
-        let mut bits = 0;
-        for segment in source.split(',') {
-            if segment.trim_ascii().is_empty() {
-                return Err(invalid());
-            }
-            for word in segment.split_ascii_whitespace() {
-                let value = match word {
-                    "r" => 1 << 11,
-                    "w" => 1 << 10,
-                    "rw" => (1 << 10) | (1 << 11),
-                    _ => {
-                        let index = ACCESSES
-                            .iter()
-                            .position(|candidate| *candidate == word)
-                            .ok_or_else(invalid)?;
-                        1 << index
-                    }
-                };
-                bits |= value;
-            }
-        }
-        Ok(Self(bits))
+        socket_access::parse(source)
+            .map(Self)
+            .map_err(|socket_access::InvalidAccess| InternetError::Field {
+                field: "access",
+                source,
+            })
     }
 }
 
@@ -557,15 +533,13 @@ impl<'a> InternetRule<'a> {
                 limit: limits.rules,
             });
         }
-        if self.peer.constrained() {
-            for (index, access) in ACCESSES.iter().enumerate() {
-                if self.accesses.0 & !PEER_ACCESSES & (1 << index) != 0 {
-                    return Err(InternetError::PeerAccess {
-                        source: self.source,
-                        access,
-                    });
-                }
-            }
+        if self.peer.constrained()
+            && let Some(access) = socket_access::incompatible_peer(self.accesses.0)
+        {
+            return Err(InternetError::PeerAccess {
+                source: self.source,
+                access,
+            });
         }
         let rules = u64::try_from(required).map_err(|_| InternetError::Rules {
             source: self.source,
@@ -677,11 +651,9 @@ impl fmt::Display for FragmentDisplay<'_> {
                 }
                 f.write_str("network (")?;
                 let mut separator = "";
-                for (index, access) in ACCESSES.iter().enumerate() {
-                    if self.rule.accesses.0 & (1 << index) != 0 {
-                        write!(f, "{separator}{access}")?;
-                        separator = ", ";
-                    }
+                for access in socket_access::names(self.rule.accesses.0) {
+                    write!(f, "{separator}{access}")?;
+                    separator = ", ";
                 }
                 write!(
                     f,

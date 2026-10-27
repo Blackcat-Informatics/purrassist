@@ -346,25 +346,34 @@ impl AppArmorGlob {
         bindings: &[LiteralPathBinding<'_>],
         governor: &mut Governor,
     ) -> Result<String, GlobError> {
-        let positions = self.prepare_bindings(bindings, governor)?;
         let mut output = ScratchString::new(governor);
-        emit(&mut output, "\"", governor)?;
+        self.append_bound_policy_word(bindings, &mut output, governor)?;
+        Ok(output.into_string())
+    }
+
+    // Appends may fail after writing; the owning operation must discard its
+    // private output on error. Both public bound words and Unix rules use this
+    // exact binding/quoting authority, with no JSON escaping or reparsing.
+    pub(super) fn append_bound_policy_word(
+        &self,
+        bindings: &[LiteralPathBinding<'_>],
+        output: &mut ScratchString,
+        governor: &mut Governor,
+    ) -> Result<(), GlobError> {
+        let positions = self.prepare_bindings(bindings, governor)?;
+        emit(output, "\"", governor)?;
         let mut copied = 0;
         for token in &self.tokens {
             governor.charge(Resource::Work, 1)?;
             if let GlobTokenKind::Variable { declaration } = token.kind {
                 let position = positions.as_slice()[declaration];
-                emit(
-                    &mut output,
-                    &self.source[copied..token.span.start],
-                    governor,
-                )?;
-                emit(&mut output, bindings[position].path, governor)?;
+                emit(output, &self.source[copied..token.span.start], governor)?;
+                emit(output, bindings[position].path, governor)?;
                 copied = token.span.end;
             }
         }
-        emit(&mut output, &self.source[copied..], governor)?;
-        finish_word(output, governor)
+        emit(output, &self.source[copied..], governor)?;
+        finish_policy_word(output, governor)
     }
     /// Shared exact binding validation/indexing for printing and byte lowering.
     pub(super) fn prepare_bindings(
@@ -468,15 +477,31 @@ fn compare_work(left: &str, right: &str, governor: &mut Governor) -> Result<(), 
     )
 }
 
-fn emit(output: &mut ScratchString, text: &str, governor: &mut Governor) -> Result<(), StopReason> {
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "Shared policy emission must remain crate-private; pub conflicts with unreachable_pub."
+)]
+pub(super) fn emit(
+    output: &mut ScratchString,
+    text: &str,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
     governor.charge(Resource::Work, size(text.len()).saturating_add(1))?;
     output.push_str(text)
 }
 
 fn finish_word(mut output: ScratchString, governor: &mut Governor) -> Result<String, GlobError> {
-    emit(&mut output, "\"", governor)?;
-    governor.check()?;
+    finish_policy_word(&mut output, governor)?;
     Ok(output.into_string())
+}
+
+fn finish_policy_word(
+    output: &mut ScratchString,
+    governor: &mut Governor,
+) -> Result<(), GlobError> {
+    emit(output, "\"", governor)?;
+    governor.check()?;
+    Ok(())
 }
 
 const fn binding_error(index: usize, offset: usize, problem: GlobBindingProblem) -> GlobError {

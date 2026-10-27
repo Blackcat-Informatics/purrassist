@@ -10,6 +10,8 @@ mod context;
 mod field_mask;
 mod glob_language;
 mod internet;
+mod socket_access;
+mod unix;
 mod vocab;
 
 pub use context::{
@@ -34,4 +36,9 @@ pub use internet::{
     InternetAccessSet, InternetEndpoint, InternetError, InternetFamily, InternetFragment,
     InternetLimits, InternetPorts, InternetRequirement, InternetRule, InternetScope,
     InternetSelector, InternetSide,
+};
+
+pub use unix::{
+    UnixAccessSet, UnixAddress, UnixAddressProblem, UnixError, UnixField, UnixFragment, UnixLabel,
+    UnixPattern, UnixPeer, UnixRequirement, UnixRule, UnixSocketType,
 };
