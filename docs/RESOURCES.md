@@ -121,10 +121,22 @@ storage admits one caller depth frame; byte-prefix length has no recursive
 128-byte ceiling. Temporary JSON key-use flags/counts/copies/renames and expanded
 delimiter spellings remain governed until use completes and release on refusal.
 
-Dense matcher construction/storage now retain exact governed owners. Recognizer programs,
-call metadata/capture analyses and native pattern parsing/automaton preparation
-retain their separate existing contracts. Other dialect-set metadata preparation
-also remains separate. Delimiter expansion feeds the same governed dense matcher. Complete cold
+Recognizer Program construction now retains fallible owners for instructions,
+entry openers, committed flags, grouped-call opener/closer locations and nested
+insertion alternatives. Emission choices, closures, reverse edges, reachability
+flags and traversal stacks remain release-owned through construction and later
+compiler failures. Work admission precedes scans, initialization, comparison,
+sorting, renames and growth. Recursive emission preserves caller depth and the
+existing native aggregate ceiling; iterative queue length adds no recursion.
+Program counters and fixed-width repair-byte/configuration-bound sums are checked;
+refusal keeps the original sticky resource cause. Ordinary and JSON-envelope
+recompilation share the same path and instruction identities. Shared backward
+reachability also admits its actual call-metadata callers.
+
+Dense matcher construction/storage also retain governed owners. Other dialect-set
+metadata, public call-byte metadata, capture memo, closer-ID input preparation,
+longest metadata and native pattern preparation retain separate contracts.
+Delimiter expansion feeds the same governed dense matcher. Complete cold
 compiler governance and the remaining #36 capabilities are still required.
 
 ## Type-enforced scratch accounting
@@ -1490,6 +1502,5 @@ contains owned cloneable policy/budget settings, while `ToolSet::recover` and
 set through `sized_for`. The host retains custom preparation through recovery
 under its original shared governor; CLI/MCP selectors and outcome/provenance
 contracts are unchanged. Other existing dialect-set metadata preparation,
-program/closure/reachability/insertion tables, call metadata/capture analyses
-and native pattern preparation remain outside this completed dense phase and
-under parent #36.
+call metadata/capture analyses and native pattern preparation remain outside
+these completed dense and Program phases under parent #36.

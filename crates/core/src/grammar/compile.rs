@@ -7,8 +7,9 @@
 //! classes; captures, codecs and classes are checked; recursion is refused
 //! (the framing layer is regular, so context-free structure belongs in a
 //! codec); and the `call` and `result` productions are compiled, with every
-//! reference inlined, into programs of terminal instructions. Every table
-//! entry charges [`K_COMPILE`] `Work` and its retained `ScratchBytes`.
+//! reference inlined, into programs of terminal instructions. Program buffers
+//! and control-flow preparation admit work and fallible retained storage;
+//! derived call-byte metadata and native pattern preparation remain separate.
 // `unreachable_pub` and `redundant_pub_crate` disagree on the right
 // visibility for items of a crate-private module
 // (https://github.com/rust-lang/rust-clippy/issues/6188); these items are
@@ -71,13 +72,13 @@ impl ScratchCharge for Inst {
 }
 
 /// The recognizer program of one production.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Program {
-    pub(crate) insts: Vec<Inst>,
+    pub(crate) insts: ScratchVec<Inst>,
     /// The program's entry location.
     pub(crate) start: u32,
     /// The literal instructions reachable from the start without input.
-    pub(crate) openers: Vec<u32>,
+    pub(crate) openers: ScratchVec<u32>,
     /// Bytes that can begin an opener (any spelling), as a 256-bit set.
     pub(crate) first: [u64; 4],
     /// The configuration bound (see `CompiledGrammar::configuration_bound`).
@@ -86,7 +87,7 @@ pub(crate) struct Program {
     /// committed attempt reaches (every path from the start to them passes
     /// a `commit`); empty for a program without one, whose attempts open
     /// at their opener literal.
-    pub(crate) committed: Vec<bool>,
+    pub(crate) committed: ScratchVec<bool>,
     /// Whether a zero-width instruction other than a split (an `insert`, a
     /// capture, a commit, a `next`) lies between the start and an opener:
     /// a new attempt then follows the start's closure instead of starting
@@ -101,19 +102,24 @@ pub(crate) struct Program {
     /// ends (the production completes or the next call begins, without
     /// input): where an attempt that could not read a call resynchronizes
     /// (see the engine's resynchronization); empty otherwise.
-    pub(crate) call_closers: Vec<u32>,
+    pub(crate) call_closers: ScratchVec<u32>,
     /// For a grouped program, the literal instructions a call after a
     /// `next` begins with (reached from the `next` without input): where an
     /// attempt resynchronizes at the next call when the call it could not
     /// read has no closer; empty otherwise.
-    pub(crate) call_openers: Vec<u32>,
+    pub(crate) call_openers: ScratchVec<u32>,
     /// Per `insert` instruction's literal, the literals the program reads
     /// at the same input position instead (the alternatives of the
     /// insertion: the token written, an optional segment's literal before
     /// it); the engine never reads a token as omitted where one of them is
     /// written.
-    pub(crate) insert_alternatives: Vec<(u32, Vec<u32>)>,
+    pub(crate) insert_alternatives: ScratchVec<(u32, ScratchVec<u32>)>,
 }
+
+const _: () = assert!(
+    core::mem::size_of::<(u32, ScratchVec<u32>)>()
+        <= <(u32, ScratchVec<u32>) as ScratchCharge>::CHARGE
+);
 
 impl Program {
     /// Whether the program's attempts open at a `commit` rather than at
@@ -192,8 +198,15 @@ impl Spellings {
         Ok(Self { list, trie })
     }
 
-    fn bytes(&self) -> usize {
-        self.list.iter().map(Bytes::len).sum()
+    fn bytes(&self, governor: &mut Governor) -> Result<u64, GrammarError> {
+        work_for(self.list.len(), 1, 1, governor)?;
+        self.list.iter().try_fold(0_u64, |total, bytes| {
+            let length =
+                u64::try_from(bytes.len()).map_err(|_| governor.stop_resource(Resource::Work))?;
+            total
+                .checked_add(length)
+                .ok_or_else(|| governor.stop_resource(Resource::Work).into())
+        })
     }
 }
 impl ScratchCharge for LiteralTables {
@@ -861,19 +874,22 @@ fn check_acyclic(
 struct Emitter<'a, 'g> {
     productions: &'a [Production],
     closer_literals: &'a [u32],
-    insts: Vec<Inst>,
+    insts: ScratchVec<Inst>,
     governor: &'g mut Governor,
 }
 
 impl Emitter<'_, '_> {
     fn push(&mut self, inst: Inst) -> Result<u32, GrammarError> {
-        charge(self.governor, 1, size(<Inst as ScratchCharge>::CHARGE))?;
-        self.insts.push(inst);
-        Ok(index_u32(self.insts.len() - 1))
+        self.governor.charge(Resource::Work, K_COMPILE)?;
+        let pc = symbol_index(self.insts.len(), self.governor)?;
+        self.insts.push(inst)?;
+        Ok(pc)
     }
 
     /// Compile `expr` so that it continues at `next`; returns its entry.
-    fn emit(&mut self, expr: &Expr, next: u32) -> Result<u32, GrammarError> {
+    fn emit(&mut self, expr: &Expr, next: u32, depth: u64) -> Result<u32, GrammarError> {
+        visit(depth, self.governor)?;
+        let child = depth + 1;
         Ok(match expr {
             Expr::Literal(id) => self.push(Inst::Lit { lit: id.0, next })?,
             Expr::Closer(id) => self.push(Inst::Lit {
@@ -889,7 +905,7 @@ impl Emitter<'_, '_> {
             })?,
             Expr::Capture { kind, inner } => {
                 let close = self.push(Inst::Close { kind: *kind, next })?;
-                let body = self.emit(inner, close)?;
+                let body = self.emit(inner, close, child)?;
                 self.push(Inst::Open {
                     kind: *kind,
                     next: body,
@@ -898,14 +914,14 @@ impl Emitter<'_, '_> {
             Expr::Sequence(items) => {
                 let mut entry = next;
                 for item in items.iter().rev() {
-                    entry = self.emit(item, entry)?;
+                    entry = self.emit(item, entry, child)?;
                 }
                 entry
             }
             Expr::Choice(items) => {
-                let mut entries = Vec::with_capacity(items.len());
+                let mut entries = ScratchVec::new(self.governor);
                 for item in items {
-                    entries.push(self.emit(item, next)?);
+                    entries.push(self.emit(item, next, child)?)?;
                 }
                 let mut entry = entries.pop().expect("a choice has alternatives");
                 while let Some(other) = entries.pop() {
@@ -915,21 +931,18 @@ impl Emitter<'_, '_> {
             }
             Expr::Repeat { inner, min, max } => match (min, max) {
                 (0, Some(1)) => {
-                    let body = self.emit(inner, next)?;
+                    let body = self.emit(inner, next, child)?;
                     self.push(Inst::Split(body, next))?
                 }
                 (min, None) => {
                     let split = self.push(Inst::Split(next, next))?;
-                    let body = self.emit(inner, split)?;
-                    self.insts[split as usize] = Inst::Split(body, next);
+                    let body = self.emit(inner, split, child)?;
+                    self.insts.as_mut_slice()[split as usize] = Inst::Split(body, next);
                     if *min == 0 { split } else { body }
                 }
                 _ => unreachable!("the DSL only builds `*`, `+` and `?`"),
             },
-            Expr::Reference(id) => {
-                let expr = &self.productions[id.index()].expr;
-                self.emit(expr, next)?
-            }
+            Expr::Reference(id) => self.emit(&self.productions[id.index()].expr, next, child)?,
             Expr::Commit => self.push(Inst::Commit { next })?,
             Expr::Next => self.push(Inst::Next { next })?,
             Expr::Insert(id) => self.push(Inst::Insert { lit: id.0, next })?,
@@ -937,50 +950,64 @@ impl Emitter<'_, '_> {
     }
 }
 
+fn flags(count: usize, governor: &mut Governor) -> Result<ScratchVec<bool>, GrammarError> {
+    work_for(count, 1, 1, governor)?;
+    let mut flags = ScratchVec::new(governor);
+    flags.extend(core::iter::repeat_n(false, count))?;
+    Ok(flags)
+}
+
 /// Every pc reachable from `start` without consuming input.
-fn epsilon_closure(insts: &[Inst], start: u32) -> Vec<u32> {
-    let mut seen = vec![false; insts.len()];
-    let mut stack = vec![start];
-    let mut reached = Vec::new();
+fn epsilon_closure(
+    insts: &[Inst],
+    start: u32,
+    governor: &mut Governor,
+) -> Result<ScratchVec<u32>, GrammarError> {
+    let mut seen = flags(insts.len(), governor)?;
+    let mut stack = ScratchVec::new(governor);
+    stack.push(start)?;
+    let mut reached = ScratchVec::new(governor);
     while let Some(pc) = stack.pop() {
-        if core::mem::replace(&mut seen[pc as usize], true) {
+        governor.charge(Resource::Work, 1)?;
+        if core::mem::replace(&mut seen.as_mut_slice()[pc as usize], true) {
             continue;
         }
         match insts[pc as usize] {
             Inst::Split(first, second) => {
-                stack.push(second);
-                stack.push(first);
+                stack.push(second)?;
+                stack.push(first)?;
             }
             Inst::Open { next, .. }
             | Inst::Close { next, .. }
             | Inst::Commit { next }
             | Inst::Next { next }
-            | Inst::Insert { next, .. } => {
-                stack.push(next);
-            }
-            _ => reached.push(pc),
+            | Inst::Insert { next, .. } => stack.push(next)?,
+            _ => reached.push(pc)?,
         }
     }
-    reached.sort_unstable();
-    reached
+    // A conservative comparison bound, admitted before allocation-free sorting.
+    work_for(reached.len(), size(reached.len()), 1, governor)?;
+    reached.as_mut_slice().sort_unstable();
+    governor.check()?;
+    Ok(reached)
 }
 
-/// The locations only a committed attempt reaches: those not reachable
-/// from `start` without passing a `commit` instruction. Empty when the
-/// program has no `commit`. Charges one `Work` unit per instruction.
+/// Locations reached only after a commit, empty for an uncommitted program.
 fn committed(
     insts: &[Inst],
     start: u32,
     governor: &mut Governor,
-) -> Result<Vec<bool>, GrammarError> {
+) -> Result<ScratchVec<bool>, GrammarError> {
+    work_for(insts.len(), 1, 1, governor)?;
     if !insts.iter().any(|inst| matches!(inst, Inst::Commit { .. })) {
-        return Ok(Vec::new());
+        return Ok(ScratchVec::new(governor));
     }
-    charge(governor, size(insts.len()), size(insts.len()))?;
-    let mut reached = vec![false; insts.len()];
-    let mut stack = vec![start];
+    let mut reached = flags(insts.len(), governor)?;
+    let mut stack = ScratchVec::new(governor);
+    stack.push(start)?;
     while let Some(pc) = stack.pop() {
-        if core::mem::replace(&mut reached[pc as usize], true) {
+        governor.charge(Resource::Work, 1)?;
+        if core::mem::replace(&mut reached.as_mut_slice()[pc as usize], true) {
             continue;
         }
         match insts[pc as usize] {
@@ -991,12 +1018,16 @@ fn committed(
             | Inst::Open { next, .. }
             | Inst::Close { next, .. }
             | Inst::Next { next }
-            | Inst::Insert { next, .. } => stack.push(next),
-            Inst::Split(first, second) => stack.extend([first, second]),
+            | Inst::Insert { next, .. } => stack.push(next)?,
+            Inst::Split(first, second) => stack.extend([first, second])?,
             Inst::Commit { .. } | Inst::Accept => {}
         }
     }
-    Ok(reached.into_iter().map(|reached| !reached).collect())
+    work_for(reached.len(), 1, 1, governor)?;
+    for reached in reached.as_mut_slice() {
+        *reached = !*reached;
+    }
+    Ok(reached)
 }
 
 /// Every confusable spelling of `bytes`: for each non-empty subset of the
@@ -1386,22 +1417,24 @@ fn compile_program(
     let mut emitter = Emitter {
         productions,
         closer_literals,
-        insts: Vec::new(),
+        insts: ScratchVec::new(governor),
         governor,
     };
     let accept = emitter.push(Inst::Accept)?;
-    let start = emitter.emit(&productions[root.index()].expr, accept)?;
+    let start = emitter.emit(&productions[root.index()].expr, accept, 0)?;
     let mut insts = emitter.insts;
-    // Emission does not depend on the tables, so a use found at `pc` by an
-    // earlier compile of the same productions is at `pc` again.
+    // Recompilation uses the same emitter and therefore the same literal PCs.
     for &(pc, copy) in renames {
-        if let Inst::Lit { lit, .. } = &mut insts[pc as usize] {
-            *lit = copy;
-        }
+        governor.charge(Resource::Work, 1)?;
+        let Inst::Lit { lit, .. } = &mut insts.as_mut_slice()[pc as usize] else {
+            unreachable!("JSON key renames target the same emitter's literal instructions");
+        };
+        *lit = copy;
     }
-    let openers = epsilon_closure(&insts, start);
+    let openers = epsilon_closure(&insts, start, governor)?;
     let mut first = [0_u64; 4];
     for &pc in &openers {
+        governor.charge(Resource::Work, 1)?;
         let Inst::Lit { lit, .. } = insts[pc as usize] else {
             return Err(GrammarError::InvalidOpener {
                 offset,
@@ -1418,59 +1451,19 @@ fn compile_program(
             .chain(repairs.confusables.trie.first_bytes())
             .chain(repairs.json.iter().flat_map(|json| json.trie.first_bytes()))
         {
+            governor.charge(Resource::Work, 1)?;
             mark(byte);
         }
     }
-    let mut arguments = false;
-    let mut parameters = false;
-    let mut bound = 0_u64;
-    for inst in &insts {
-        bound = bound.saturating_add(match inst {
-            Inst::Lit { lit, .. } => size(tables.literals[*lit as usize].bytes.len())
-                .saturating_add(size(tables.repairs[*lit as usize].trie_nodes()))
-                .saturating_add(size(tables.stray_nodes)),
-            Inst::Class { .. } | Inst::Until { .. } | Inst::Slot { .. } => 1,
-            Inst::Open { kind, .. } => {
-                arguments |= *kind == CaptureKind::Arguments;
-                parameters |= *kind == CaptureKind::ParamName;
-                0
-            }
-            Inst::Split(..)
-            | Inst::Close { .. }
-            | Inst::Commit { .. }
-            | Inst::Next { .. }
-            | Inst::Insert { .. }
-            | Inst::Accept => 0,
-        });
-    }
-    if arguments && parameters {
-        return Err(GrammarError::ConflictingArguments { offset });
-    }
+    let bound = program_bound(&insts, offset, tables, governor)?;
     let committed = committed(&insts, start, governor)?;
+    work_for(insts.len(), 1, 1, governor)?;
     let grouped = insts.iter().any(|inst| matches!(inst, Inst::Next { .. }));
-    let start_closure = {
-        let mut seen = vec![false; insts.len()];
-        let mut stack = vec![start];
-        let mut effects = false;
-        while let Some(pc) = stack.pop() {
-            if core::mem::replace(&mut seen[pc as usize], true) {
-                continue;
-            }
-            match insts[pc as usize] {
-                Inst::Split(first, second) => stack.extend([first, second]),
-                Inst::Open { .. }
-                | Inst::Close { .. }
-                | Inst::Commit { .. }
-                | Inst::Next { .. }
-                | Inst::Insert { .. } => effects = true,
-                _ => {}
-            }
-        }
-        effects
-    };
+    let start_closure = start_closure(&insts, start, governor)?;
     let call_closers = call_closer_lits(&insts, grouped, governor)?;
     let call_openers = call_opener_lits(&insts, governor)?;
     let insert_alternatives = insert_alternatives(&insts, governor)?;
+    governor.check()?;
     Ok(Program {
         insts,
         start,
@@ -1486,18 +1479,87 @@ fn compile_program(
     })
 }
 
+fn program_bound(
+    insts: &[Inst],
+    offset: usize,
+    tables: &Tables<'_>,
+    governor: &mut Governor,
+) -> Result<u64, GrammarError> {
+    let mut arguments = false;
+    let mut parameters = false;
+    let mut bound = 0_u64;
+    for inst in insts {
+        governor.charge(Resource::Work, 1)?;
+        let amount = match inst {
+            Inst::Lit { lit, .. } => u64::try_from(tables.literals[*lit as usize].bytes.len())
+                .map_err(|_| governor.stop_resource(Resource::Work))?
+                .checked_add(tables.repairs[*lit as usize].trie_nodes(governor)?)
+                .and_then(|n| n.checked_add(tables.stray_nodes))
+                .ok_or_else(|| governor.stop_resource(Resource::Work))?,
+            Inst::Class { .. } | Inst::Until { .. } | Inst::Slot { .. } => 1,
+            Inst::Open { kind, .. } => {
+                arguments |= *kind == CaptureKind::Arguments;
+                parameters |= *kind == CaptureKind::ParamName;
+                0
+            }
+            _ => 0,
+        };
+        bound = bound
+            .checked_add(amount)
+            .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+    }
+    if arguments && parameters {
+        return Err(GrammarError::ConflictingArguments { offset });
+    }
+    Ok(bound)
+}
+
+fn start_closure(
+    insts: &[Inst],
+    start: u32,
+    governor: &mut Governor,
+) -> Result<bool, GrammarError> {
+    let mut seen = flags(insts.len(), governor)?;
+    let mut stack = ScratchVec::new(governor);
+    stack.push(start)?;
+    let mut effects = false;
+    while let Some(pc) = stack.pop() {
+        governor.charge(Resource::Work, 1)?;
+        if core::mem::replace(&mut seen.as_mut_slice()[pc as usize], true) {
+            continue;
+        }
+        match insts[pc as usize] {
+            Inst::Split(first, second) => stack.extend([first, second])?,
+            Inst::Open { .. }
+            | Inst::Close { .. }
+            | Inst::Commit { .. }
+            | Inst::Next { .. }
+            | Inst::Insert { .. } => effects = true,
+            _ => {}
+        }
+    }
+    Ok(effects)
+}
+
 impl LiteralTables {
-    fn trie_nodes(&self) -> usize {
-        self.variants.bytes()
-            + self.confusables.bytes()
-            + self.json.iter().map(Spellings::bytes).sum::<usize>()
+    fn trie_nodes(&self, governor: &mut Governor) -> Result<u64, GrammarError> {
+        let mut count = 0_u64;
+        for spellings in [&self.variants, &self.confusables]
+            .into_iter()
+            .chain(&self.json)
+        {
+            count = count
+                .checked_add(spellings.bytes(governor)?)
+                .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+        }
+        Ok(count)
     }
 }
 
 struct Tables<'a> {
     literals: &'a [Literal],
     repairs: &'a [LiteralTables],
-    stray_nodes: usize,
+    stray_nodes: u64,
 }
 
 /// What the `call` and `result` programs are compiled from, over literal
@@ -1506,7 +1568,7 @@ struct Programs<'p> {
     productions: &'p [Production],
     closer_ids: &'p [u32],
     offsets: &'p [usize],
-    stray_nodes: usize,
+    stray_nodes: u64,
     roots: [ProductionId; 2],
 }
 
@@ -1535,7 +1597,15 @@ impl Programs<'_> {
                 governor,
             )
         };
-        Ok([program(0)?, program(1)?])
+        let programs = [program(0)?, program(1)?];
+        // The public configuration bound sums both retained program bounds.
+        governor.charge(Resource::Work, 1)?;
+        programs[0]
+            .bound
+            .checked_add(programs[1].bound)
+            .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+        governor.check()?;
+        Ok(programs)
     }
 }
 
@@ -1911,7 +1981,7 @@ pub(crate) fn compile(
         productions: &productions,
         closer_ids: &closer_ids,
         offsets: &production_offsets,
-        stray_nodes: stray.bytes(),
+        stray_nodes: stray.bytes(governor)?,
         roots: [call, result],
     };
     let mut programs = source.compile(&literals, &literal_tables, &[], governor)?;
@@ -1963,28 +2033,40 @@ pub(crate) fn compile(
 /// The literal instructions a call after a `next` of `insts` begins with:
 /// those reached from each `next` over zero-width instructions (not an
 /// insertion).
-fn call_opener_lits(insts: &[Inst], governor: &mut Governor) -> Result<Vec<u32>, GrammarError> {
-    let mut openers: Vec<u32> = Vec::new();
+fn include_id(
+    ids: &mut ScratchVec<u32>,
+    id: u32,
+    governor: &mut Governor,
+) -> Result<(), GrammarError> {
+    work_for(ids.len(), 1, 1, governor)?;
+    if !ids.contains(&id) {
+        ids.push(id)?;
+    }
+    Ok(())
+}
+fn call_opener_lits(
+    insts: &[Inst],
+    governor: &mut Governor,
+) -> Result<ScratchVec<u32>, GrammarError> {
+    let mut openers = ScratchVec::new(governor);
     for inst in insts {
+        governor.charge(Resource::Work, 1)?;
         let Inst::Next { next } = *inst else {
             continue;
         };
-        charge(governor, size(insts.len()), 0)?;
-        let mut seen = vec![false; insts.len()];
-        let mut stack = vec![next];
+        let mut seen = flags(insts.len(), governor)?;
+        let mut stack = ScratchVec::new(governor);
+        stack.push(next)?;
         while let Some(pc) = stack.pop() {
-            if core::mem::replace(&mut seen[pc as usize], true) {
+            governor.charge(Resource::Work, 1)?;
+            if core::mem::replace(&mut seen.as_mut_slice()[pc as usize], true) {
                 continue;
             }
             match insts[pc as usize] {
-                Inst::Lit { .. } => {
-                    if !openers.contains(&pc) {
-                        openers.push(pc);
-                    }
-                }
-                Inst::Split(first, second) => stack.extend([first, second]),
+                Inst::Lit { .. } => include_id(&mut openers, pc, governor)?,
+                Inst::Split(first, second) => stack.extend([first, second])?,
                 Inst::Open { next, .. } | Inst::Close { next, .. } | Inst::Commit { next } => {
-                    stack.push(next);
+                    stack.push(next)?;
                 }
                 _ => {}
             }
@@ -1993,95 +2075,114 @@ fn call_opener_lits(insts: &[Inst], governor: &mut Governor) -> Result<Vec<u32>,
     Ok(openers)
 }
 
-/// For a grouped program, the literal instructions after which one call
-/// ends without input (the production completes, or a `next` begins the
-/// next call); empty for a program without `next`.
+/// For a grouped program, literal locations immediately preceding a call end.
 fn call_closer_lits(
     insts: &[Inst],
     grouped: bool,
     governor: &mut Governor,
-) -> Result<Vec<u32>, GrammarError> {
+) -> Result<ScratchVec<u32>, GrammarError> {
+    let mut closers = ScratchVec::new(governor);
     if !grouped {
-        return Ok(Vec::new());
+        governor.check()?;
+        return Ok(closers);
     }
-    charge(governor, size(insts.len()), 0)?;
     let ending = reach_back(
         insts,
         |inst| matches!(inst, Inst::Accept | Inst::Next { .. }),
         false,
-    );
-    Ok(insts
-        .iter()
-        .enumerate()
-        .filter_map(|(pc, inst)| match *inst {
-            Inst::Lit { next, .. } if ending[next as usize] => Some(index_u32(pc)),
-            _ => None,
-        })
-        .collect())
+        governor,
+    )?;
+    for (pc, inst) in insts.iter().enumerate() {
+        governor.charge(Resource::Work, 1)?;
+        if let Inst::Lit { next, .. } = *inst
+            && ending[next as usize]
+        {
+            closers.push(symbol_index(pc, governor)?)?;
+        }
+    }
+    Ok(closers)
 }
 
-/// Per literal an `insert` instruction of `insts` inserts, the literals read
-/// at the same input position as the insertion: a backward walk from each
-/// such instruction over the zero-width instructions (not `next`, not
-/// another insertion) and a forward walk over them from every instruction
-/// reached, collecting the literals met.
+/// Zero-width continuations used specifically by insertion alternatives;
+/// `next` and another insertion deliberately stop this walk.
+fn insertion_successors(inst: &Inst) -> impl Iterator<Item = u32> {
+    match *inst {
+        Inst::Split(first, second) => [Some(first), Some(second)],
+        Inst::Open { next, .. } | Inst::Close { next, .. } | Inst::Commit { next } => {
+            [Some(next), None]
+        }
+        _ => [None, None],
+    }
+    .into_iter()
+    .flatten()
+}
+
+/// Per inserted literal, the literals read at the same input position instead.
 fn insert_alternatives(
     insts: &[Inst],
     governor: &mut Governor,
-) -> Result<Vec<(u32, Vec<u32>)>, GrammarError> {
+) -> Result<ScratchVec<(u32, ScratchVec<u32>)>, GrammarError> {
     let count = insts.len();
-    let zero_width = |inst: &Inst| match *inst {
-        Inst::Split(first, second) => vec![first, second],
-        Inst::Open { next, .. } | Inst::Close { next, .. } | Inst::Commit { next } => vec![next],
-        _ => Vec::new(),
-    };
-    let mut before: Vec<Vec<u32>> = vec![Vec::new(); count];
+    work_for(count, 1, 1, governor)?;
+    let mut before = ScratchVec::new(governor);
+    before.extend(core::iter::repeat_with(|| ScratchVec::new(governor)).take(count))?;
     for (pc, inst) in insts.iter().enumerate() {
-        for next in zero_width(inst) {
-            before[next as usize].push(index_u32(pc));
+        governor.charge(Resource::Work, 1)?;
+        let pc = symbol_index(pc, governor)?;
+        for next in insertion_successors(inst) {
+            before.as_mut_slice()[next as usize].push(pc)?;
         }
     }
-    let mut found: Vec<(u32, Vec<u32>)> = Vec::new();
+    let mut found: ScratchVec<(u32, ScratchVec<u32>)> = ScratchVec::new(governor);
     for (pc, inst) in insts.iter().enumerate() {
+        governor.charge(Resource::Work, 1)?;
         let Inst::Insert { lit, .. } = *inst else {
             continue;
         };
-        charge(governor, size(count), 0)?;
-        let mut back = vec![false; count];
-        let mut stack = vec![index_u32(pc)];
+        let mut back = flags(count, governor)?;
+        let mut stack = ScratchVec::new(governor);
+        stack.push(symbol_index(pc, governor)?)?;
         while let Some(at) = stack.pop() {
-            if !core::mem::replace(&mut back[at as usize], true) {
-                stack.extend(before[at as usize].iter().copied());
+            governor.charge(Resource::Work, 1)?;
+            if !core::mem::replace(&mut back.as_mut_slice()[at as usize], true) {
+                work_for(before[at as usize].len(), 1, 1, governor)?;
+                stack.extend(before[at as usize].iter().copied())?;
             }
         }
-        let mut seen = vec![false; count];
-        let mut stack: Vec<u32> = (0..count)
-            .filter(|&at| back[at] && at != pc)
-            .map(index_u32)
-            .collect();
-        let mut lits = vec![lit];
+        let mut seen = flags(count, governor)?;
+        let mut stack = ScratchVec::new(governor);
+        for at in 0..count {
+            governor.charge(Resource::Work, 1)?;
+            if back[at] && at != pc {
+                stack.push(symbol_index(at, governor)?)?;
+            }
+        }
+        let mut lits = ScratchVec::new(governor);
+        lits.push(lit)?;
         while let Some(at) = stack.pop() {
-            if core::mem::replace(&mut seen[at as usize], true) {
+            governor.charge(Resource::Work, 1)?;
+            if core::mem::replace(&mut seen.as_mut_slice()[at as usize], true) {
                 continue;
             }
             match insts[at as usize] {
-                Inst::Lit { lit, .. } => {
-                    if !lits.contains(&lit) {
-                        lits.push(lit);
-                    }
-                }
-                ref inst => stack.extend(zero_width(inst)),
+                Inst::Lit { lit, .. } => include_id(&mut lits, lit, governor)?,
+                ref inst => stack.extend(insertion_successors(inst))?,
             }
         }
-        match found.iter_mut().find(|(known, _)| *known == lit) {
+        work_for(found.len(), 1, 1, governor)?;
+        match found
+            .as_mut_slice()
+            .iter_mut()
+            .find(|(known, _)| *known == lit)
+        {
             Some((_, known)) => {
-                for lit in lits {
-                    if !known.contains(&lit) {
-                        known.push(lit);
-                    }
+                work_for(lits.len(), 1, 1, governor)?;
+                lits.as_mut_slice().reverse();
+                while let Some(lit) = lits.pop() {
+                    include_id(known, lit, governor)?;
                 }
             }
-            None => found.push((lit, lits)),
+            None => found.push((lit, lits))?,
         }
     }
     Ok(found)
@@ -2107,35 +2208,46 @@ pub(crate) fn successors(inst: &Inst) -> Vec<u32> {
 /// Per instruction of `program`, whether an instruction `seed` holds for
 /// is reachable from it without input: one backward walk over the epsilon
 /// instructions (`next` among them only when `through_next`).
-fn reach_back(insts: &[Inst], seed: impl Fn(&Inst) -> bool, through_next: bool) -> Vec<bool> {
+fn reach_back(
+    insts: &[Inst],
+    seed: impl Fn(&Inst) -> bool,
+    through_next: bool,
+    governor: &mut Governor,
+) -> Result<ScratchVec<bool>, GrammarError> {
     let count = insts.len();
-    let mut before: Vec<Vec<u32>> = vec![Vec::new(); count];
-    let mut stack = Vec::new();
+    work_for(count, 1, 1, governor)?;
+    let mut before = ScratchVec::new(governor);
+    before.extend(core::iter::repeat_with(|| ScratchVec::new(governor)).take(count))?;
+    let mut stack = ScratchVec::new(governor);
     for (pc, inst) in insts.iter().enumerate() {
-        let pc = index_u32(pc);
+        governor.charge(Resource::Work, 1)?;
+        let pc = symbol_index(pc, governor)?;
         if seed(inst) {
-            stack.push(pc);
+            stack.push(pc)?;
         }
         match *inst {
             Inst::Split(first, second) => {
-                before[first as usize].push(pc);
-                before[second as usize].push(pc);
+                before.as_mut_slice()[first as usize].push(pc)?;
+                before.as_mut_slice()[second as usize].push(pc)?;
             }
-            Inst::Next { next } if through_next => before[next as usize].push(pc),
+            Inst::Next { next } if through_next => before.as_mut_slice()[next as usize].push(pc)?,
             Inst::Open { next, .. }
             | Inst::Close { next, .. }
             | Inst::Commit { next }
-            | Inst::Insert { next, .. } => before[next as usize].push(pc),
+            | Inst::Insert { next, .. } => before.as_mut_slice()[next as usize].push(pc)?,
             _ => {}
         }
     }
-    let mut reached = vec![false; count];
+    let mut reached = flags(count, governor)?;
     while let Some(pc) = stack.pop() {
-        if !core::mem::replace(&mut reached[pc as usize], true) {
-            stack.extend(before[pc as usize].iter().copied());
+        governor.charge(Resource::Work, 1)?;
+        if !core::mem::replace(&mut reached.as_mut_slice()[pc as usize], true) {
+            work_for(before[pc as usize].len(), 1, 1, governor)?;
+            stack.extend(before[pc as usize].iter().copied())?;
         }
     }
-    reached
+    governor.check()?;
+    Ok(reached)
 }
 
 /// Every spelling (canonical, declared variant, confusable) of every
@@ -2218,12 +2330,18 @@ fn call_ends(
     // Whether the production completes from each instruction without
     // input, and whether one call ends there (the production completes or
     // the next call of the attempt begins, a `next`).
-    let completing = reach_back(&program.insts, |inst| matches!(inst, Inst::Accept), true);
+    let completing = reach_back(
+        &program.insts,
+        |inst| matches!(inst, Inst::Accept),
+        true,
+        governor,
+    )?;
     let ending = reach_back(
         &program.insts,
         |inst| matches!(inst, Inst::Accept | Inst::Next { .. }),
         false,
-    );
+        governor,
+    )?;
     let completes = |pc: u32| completing[pc as usize];
     let ends_call = |pc: u32| ending[pc as usize];
     Ok(program
@@ -2368,9 +2486,9 @@ fn layouts(
 
 #[cfg(test)]
 mod admission_tests {
-    use super::{LiteralTables, literal_tables, owned_bytes};
+    use super::{LiteralTables, Program, Tables, compile_program, literal_tables, owned_bytes};
     use crate::contract::{Budget, CancellationToken, Governor, Resource, ScratchVec, StopReason};
-    use crate::grammar::{GrammarError, Literal};
+    use crate::grammar::{Grammar, GrammarError, Literal};
 
     fn prepared(g: &mut Governor) -> Result<LiteralTables, GrammarError> {
         let literal = Literal {
@@ -2423,6 +2541,73 @@ mod admission_tests {
         let mut g = Governor::with_cancellation(Budget::default(), token);
         assert_eq!(
             prepared(&mut g).unwrap_err(),
+            GrammarError::Resource(StopReason::Cancelled)
+        );
+        assert_eq!(g.scratch_meter().live(), 0);
+    }
+
+    #[test]
+    fn program_refusals_release_partial_control_tables_and_completed_retained_buffers() {
+        let source = r#"grammar "program";
+call = "<c>" commit ("a" | "b") ("x" next "y")? insert("</c>") "</c>";
+result = "<r>"; declaration = "<d>";"#;
+        let grammar =
+            Grammar::compile_governed(source, &mut Governor::new(Budget::default())).unwrap();
+        let tables = Tables {
+            literals: &grammar.literals,
+            repairs: &grammar.literal_tables,
+            stray_nodes: 0,
+        };
+        let prepare = |g: &mut Governor| -> Result<Program, GrammarError> {
+            let program =
+                compile_program(&grammar.productions, &[], grammar.call, 0, &tables, &[], g)?;
+            // Refusal after construction must still drop all retained Program owners.
+            g.charge(Resource::Work, 1)?;
+            Ok(program)
+        };
+        let mut measured = Governor::new(Budget::default());
+        let program = prepare(&mut measured).unwrap();
+        assert!(program.grouped && program.deferred() && !program.insert_alternatives.is_empty());
+        let usage = measured.usage();
+        drop(program);
+        assert_eq!(measured.scratch_meter().live(), 0);
+        for (budget, resource) in [
+            (
+                Budget {
+                    work: usage.work - 1,
+                    ..Budget::default()
+                },
+                Resource::Work,
+            ),
+            (
+                Budget {
+                    scratch_bytes: usage.peak_scratch_bytes - 1,
+                    ..Budget::default()
+                },
+                Resource::ScratchBytes,
+            ),
+            (
+                Budget {
+                    depth: 0,
+                    ..Budget::default()
+                },
+                Resource::Depth,
+            ),
+        ] {
+            let mut g = Governor::new(budget);
+            let reason = StopReason::BudgetExceeded(resource);
+            assert_eq!(
+                prepare(&mut g).unwrap_err(),
+                GrammarError::Resource(reason.clone())
+            );
+            assert_eq!(g.check(), Err(reason));
+            assert_eq!(g.scratch_meter().live(), 0);
+        }
+        let token = CancellationToken::new();
+        token.cancel();
+        let mut g = Governor::with_cancellation(Budget::default(), token);
+        assert_eq!(
+            prepare(&mut g).unwrap_err(),
             GrammarError::Resource(StopReason::Cancelled)
         );
         assert_eq!(g.scratch_meter().live(), 0);
