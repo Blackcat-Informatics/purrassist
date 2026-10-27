@@ -4,13 +4,15 @@
 //! Validated caller-owned tool-graph vocabulary and context contracts.
 #![doc = include_str!("../README.md")]
 
+mod apparmor_glob;
 mod binding;
 mod context;
 mod field_mask;
 mod vocab;
 
 pub use context::{
-    OutputByteLimit, OutputEnforcement, OutputLimitError, OutputMeasurement, OutputUnit,
+    ContextCodecError, ContextManagement, LoadingStrategy, MCP_CONTEXT_FORMAT, OutputByteLimit,
+    OutputEnforcement, OutputLimitError, OutputMeasurement, OutputUnit,
 };
 pub use field_mask::{FieldMask, FieldMaskError, FieldMaskKind};
 pub use vocab::{
@@ -19,4 +21,8 @@ pub use vocab::{
     register_loss_profile,
 };
 
+pub use apparmor_glob::{
+    AppArmorGlob, GlobBindingProblem, GlobError, GlobToken, GlobTokenKind, LiteralPathBinding,
+    literal_path_word,
+};
 pub use binding::{BindingError, CallableBinding, ParameterBinding, ReturnBinding};

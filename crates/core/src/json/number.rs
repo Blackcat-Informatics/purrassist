@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Exact decimal JSON numbers, including exponents outside machine ranges.
+use crate::contract::{
+    Governor, Resource, ScratchString, StopReason, format_output_governed, saturating_size,
+};
 use core::{cmp::Ordering, fmt, str::FromStr};
 
 /// An RFC 8259 number retaining its exact lexical spelling.
@@ -14,6 +17,61 @@ impl Number {
     pub fn from_unsigned(value: u64) -> Self {
         Self(value.to_string())
     }
+    /// Construct a portable unsigned integer using the existing standard formatter.
+    ///
+    /// # Errors
+    /// Returns resource/cancellation failure before formatting work or storage.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, json::Number};
+    /// assert_eq!(Number::from_unsigned_governed(u64::MAX, &mut Governor::new(Budget::default())).unwrap().as_str(), "18446744073709551615");
+    /// ```
+    pub fn from_unsigned_governed(value: u64, governor: &mut Governor) -> Result<Self, StopReason> {
+        // The standard u64 formatter produces at most 20 decimal digits,
+        // without allocating its own intermediate string.
+        governor.charge(Resource::Work, 20)?;
+        format_output_governed(format_args!("{value}"), governor).map(Self)
+    }
+
+    /// Validate and retain an exact numeric spelling with fallible storage.
+    ///
+    /// # Errors
+    /// Distinguishes invalid numeric syntax from resource/cancellation failure.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, json::Number};
+    /// let value = Number::parse_governed("1.00e2", &mut Governor::new(Budget::default())).unwrap();
+    /// assert_eq!(value.as_str(), "1.00e2");
+    /// ```
+    pub fn parse_governed(input: &str, governor: &mut Governor) -> Result<Self, NumberParseError> {
+        governor
+            .charge(Resource::InputBytes, saturating_size(input.len()))
+            .map_err(NumberParseError::Resource)?;
+        Self::retain_governed(input, governor)
+    }
+
+    pub(super) fn retain_governed(
+        input: &str,
+        governor: &mut Governor,
+    ) -> Result<Self, NumberParseError> {
+        governor
+            .charge(
+                Resource::Work,
+                saturating_size(input.len()).saturating_add(1),
+            )
+            .map_err(NumberParseError::Resource)?;
+        validate(input).map_err(NumberParseError::Syntax)?;
+        governor
+            .charge(Resource::Work, saturating_size(input.len()))
+            .map_err(NumberParseError::Resource)?;
+        let mut retained = ScratchString::new(governor);
+        retained
+            .push_str(input)
+            .map_err(NumberParseError::Resource)?;
+        governor.check().map_err(NumberParseError::Resource)?;
+        Ok(Self(retained.into_string()))
+    }
+
     /// Construct the exact decimal spelling of a target-sized count.
     ///
     /// This accepts `usize`, whereas [`Self::from_unsigned`] accepts the full
@@ -129,30 +187,32 @@ impl Number {
     /// ```
     #[must_use]
     pub fn integer_magnitude(&self) -> IntegerReading {
-        let parts = self.parts();
-        if parts.digits == "0" {
-            return IntegerReading::Exact {
-                negative: false,
-                magnitude: 0,
-            };
+        match read_integer(&self.0, |_| Ok::<(), core::convert::Infallible>(())) {
+            Ok(reading) => reading,
+            Err(never) => match never {},
         }
-        if parts.exponent.negative {
-            return IntegerReading::Fractional;
-        }
-        let magnitude = parts
-            .exponent
-            .digits
-            .parse::<u32>()
-            .ok()
-            .and_then(|exponent| 10_u128.checked_pow(exponent))
-            .zip(parts.digits.parse::<u128>().ok())
-            .and_then(|(scale, digits)| digits.checked_mul(scale));
-        magnitude.map_or(IntegerReading::OutOfRange, |magnitude| {
-            IntegerReading::Exact {
-                negative: parts.negative,
-                magnitude,
-            }
-        })
+    }
+
+    /// Read the existing exact integer contract with admitted allocation-free scans.
+    ///
+    /// # Errors
+    /// Returns the original work/cancellation failure. No exponent-sized storage
+    /// is allocated, even when a huge exponent cancels a long mantissa suffix.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, json::{Number, IntegerReading}};
+    /// let number: Number = "100e-2".parse().unwrap();
+    /// assert_eq!(number.integer_magnitude_governed(&mut Governor::new(Budget::default())).unwrap(), IntegerReading::Exact { negative: false, magnitude: 1 });
+    /// ```
+    pub fn integer_magnitude_governed(
+        &self,
+        governor: &mut Governor,
+    ) -> Result<IntegerReading, StopReason> {
+        let reading = read_integer(&self.0, |bytes| {
+            governor.charge(Resource::Work, saturating_size(bytes).saturating_add(1))
+        })?;
+        governor.check()?;
+        Ok(reading)
     }
 
     /// Test exact mathematical divisibility without allocating exponent-sized integers.
@@ -247,45 +307,142 @@ impl Number {
 impl FromStr for Number {
     type Err = NumberError;
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        let bytes = input.as_bytes();
-        let mut position = usize::from(bytes.first() == Some(&b'-'));
-        match bytes.get(position) {
-            Some(b'0') => position += 1,
-            Some(b'1'..=b'9') => {
-                position += 1;
-                while bytes.get(position).is_some_and(u8::is_ascii_digit) {
-                    position += 1;
-                }
-            }
-            _ => return Err(NumberError),
-        }
-        if bytes.get(position) == Some(&b'.') {
+        validate(input)?;
+        Ok(Self(input.into()))
+    }
+}
+
+fn validate(input: &str) -> Result<(), NumberError> {
+    let bytes = input.as_bytes();
+    let mut position = usize::from(bytes.first() == Some(&b'-'));
+    match bytes.get(position) {
+        Some(b'0') => position += 1,
+        Some(b'1'..=b'9') => {
             position += 1;
-            let start = position;
             while bytes.get(position).is_some_and(u8::is_ascii_digit) {
                 position += 1;
             }
-            if position == start {
-                return Err(NumberError);
-            }
         }
-        if matches!(bytes.get(position), Some(b'e' | b'E')) {
+        _ => return Err(NumberError),
+    }
+    if bytes.get(position) == Some(&b'.') {
+        position += 1;
+        let start = position;
+        while bytes.get(position).is_some_and(u8::is_ascii_digit) {
             position += 1;
-            if matches!(bytes.get(position), Some(b'+' | b'-')) {
-                position += 1;
-            }
-            let start = position;
-            while bytes.get(position).is_some_and(u8::is_ascii_digit) {
-                position += 1;
-            }
-            if position == start {
-                return Err(NumberError);
-            }
         }
-        if position != bytes.len() {
+        if position == start {
             return Err(NumberError);
         }
-        Ok(Self(input.into()))
+    }
+    if matches!(bytes.get(position), Some(b'e' | b'E')) {
+        position += 1;
+        if matches!(bytes.get(position), Some(b'+' | b'-')) {
+            position += 1;
+        }
+        let start = position;
+        while bytes.get(position).is_some_and(u8::is_ascii_digit) {
+            position += 1;
+        }
+        if position == start {
+            return Err(NumberError);
+        }
+    }
+    if position != bytes.len() {
+        return Err(NumberError);
+    }
+    Ok(())
+}
+
+fn read_integer<E>(
+    input: &str,
+    mut scan: impl FnMut(usize) -> Result<(), E>,
+) -> Result<IntegerReading, E> {
+    scan(input.len())?;
+    let (mantissa, exponent) = input.split_once(['e', 'E']).unwrap_or((input, "0"));
+    scan(mantissa.len())?;
+    let Some(first) = mantissa
+        .bytes()
+        .position(|byte| byte.is_ascii_digit() && byte != b'0')
+    else {
+        return Ok(IntegerReading::Exact {
+            negative: false,
+            magnitude: 0,
+        });
+    };
+    scan(mantissa.len())?;
+    let last = mantissa
+        .bytes()
+        .rposition(|byte| byte.is_ascii_digit() && byte != b'0')
+        .expect("INVARIANT: first nonzero digit exists");
+    scan(mantissa.len())?;
+    let fraction = mantissa
+        .split_once('.')
+        .map_or(0, |(_, digits)| digits.len());
+    scan(mantissa.len() - last - 1)?;
+    let trailing = mantissa[last + 1..]
+        .bytes()
+        .filter(u8::is_ascii_digit)
+        .count();
+    scan(exponent.len())?;
+    let scale = integer_scale(exponent, trailing, fraction);
+    let scale = match scale {
+        Ok(scale) if scale <= 38 => scale,
+        Ok(_) => return Ok(IntegerReading::OutOfRange),
+        Err(reading) => return Ok(reading),
+    };
+    scan(last - first + 1)?;
+    let coefficient = mantissa[first..=last]
+        .bytes()
+        .filter(u8::is_ascii_digit)
+        .try_fold(0_u128, |value, digit| {
+            value.checked_mul(10)?.checked_add(u128::from(digit - b'0'))
+        });
+    let value = coefficient.and_then(|value| {
+        value.checked_mul(
+            10_u128.checked_pow(u32::try_from(scale).expect("INVARIANT: scale is at most 38"))?,
+        )
+    });
+    Ok(value.map_or(IntegerReading::OutOfRange, |magnitude| {
+        IntegerReading::Exact {
+            negative: input.starts_with('-'),
+            magnitude,
+        }
+    }))
+}
+
+fn integer_scale(exponent: &str, trailing: usize, fraction: usize) -> Result<u128, IntegerReading> {
+    let negative = exponent.starts_with('-');
+    // A cancellation offset is bounded by the allocated mantissa's length,
+    // hence by isize::MAX. An exponent exceeding u128 cannot be canceled into
+    // the representable range on any supported pointer width (at most 128).
+    let magnitude = exponent
+        .trim_start_matches(['+', '-'])
+        .parse::<u128>()
+        .map_err(|_| {
+            if negative {
+                IntegerReading::Fractional
+            } else {
+                IntegerReading::OutOfRange
+            }
+        })?;
+    let trailing = trailing as u128;
+    let fraction = fraction as u128;
+    if negative {
+        if trailing < fraction {
+            return Err(IntegerReading::Fractional);
+        }
+        (trailing - fraction)
+            .checked_sub(magnitude)
+            .ok_or(IntegerReading::Fractional)
+    } else if trailing >= fraction {
+        magnitude
+            .checked_add(trailing - fraction)
+            .ok_or(IntegerReading::OutOfRange)
+    } else {
+        magnitude
+            .checked_sub(fraction - trailing)
+            .ok_or(IntegerReading::Fractional)
     }
 }
 
@@ -321,6 +478,36 @@ pub enum IntegerReading {
     Fractional,
     /// An integral value whose magnitude exceeds `u128::MAX`.
     OutOfRange,
+}
+
+/// Numeric syntax and resource failures remain separate.
+///
+/// Numeric syntax holds [`NumberError`], while
+/// [`crate::pattern::PatternCompileError`] holds source-addressed pattern errors.
+/// Each nominal result type delegates display to its own inner error, preserving
+/// the corresponding syntax and resource contract.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NumberParseError {
+    /// The input is not an RFC 8259 numeric spelling.
+    Syntax(NumberError),
+    /// Admission or cancellation refused processing.
+    Resource(StopReason),
+}
+impl fmt::Display for NumberParseError {
+    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Syntax(error) => error.fmt(output),
+            Self::Resource(reason) => reason.fmt(output),
+        }
+    }
+}
+impl std::error::Error for NumberParseError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Syntax(error) => Some(error),
+            Self::Resource(reason) => Some(reason),
+        }
+    }
 }
 
 /// Invalid JSON numeric spelling.

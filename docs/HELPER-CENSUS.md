@@ -6,7 +6,7 @@ The unpublished `purrassist-helper-census` workspace tool finds repeated Rust
 implementations and reports the source locations that need review. Structural
 similarity is a candidate for consolidation, not a proof that two functions have
 identical contracts. Real implementation copies are consolidated;
-`helpers-ledger.toml` retains only two documented exact groups of distinct
+`helpers-ledger.toml` retains only documented exact groups of distinct
 public typed APIs.
 
 ## Commands and enforcement
@@ -94,7 +94,7 @@ rejected rather than silently skipped or recursively followed.
 The invalid-filename disk fixture has two explicit outcomes. On filesystems
 that admit the byte spelling `invalid-\xff.rs`, the real scanner must report
 `non-UTF-8 directory entry`; accepting it or failing for an unrelated reason
-fails the control. The macOS 14 arm64 qualification lane on APFS rejected
+fails the control. The macOS 14 `arm64` qualification lane on APFS rejected
 creation with `EILSEQ` before the scanner ran. That specific creation refusal
 is now a checked filesystem outcome. Unexpected creation errors propagate;
 write and cleanup errors are not classified as filesystem refusal. Five
@@ -189,10 +189,13 @@ Every real implementation duplicate in the initial census now has one home:
 - The core acceptance transcript has one unpublished Cargo home, used by all
   three execution environments.
 
-Strict checking accepts only two exact, documented typed API groups: the
-`u64`/`usize` exact JSON number constructors, and the three distinct public
-error-type conversions from `StopReason`. Neither is shared resource or
-classification logic. Their Rustdoc anchors state their differing contracts;
+Strict checking accepts only exact, documented typed API groups: the
+`u64`/`usize` exact JSON number constructors, distinct public error-type
+conversions from `StopReason`, numeric/pattern error delegation to standard
+`Display`, and the `Option<T>`/`Box<T>` parameter wrappers. These retain their
+different input domains, syntax diagnostics or required/absent behavior; they
+do not duplicate validation, resource or classification algorithms.
+Their Rustdoc anchors state their differing contracts;
 adding a member or losing an anchor invalidates the exception. No blanket
 baseline or unenforced clone job is used.
 

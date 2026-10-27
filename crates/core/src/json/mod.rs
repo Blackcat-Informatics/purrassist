@@ -11,7 +11,7 @@ use crate::contract::{Governor, Resource, ScratchCharge, StopReason};
 use core::ops::Range;
 pub use incremental::recover_syntax;
 pub(crate) use incremental::{Region, recover_region};
-pub use number::{IntegerReading, Number, NumberError};
+pub use number::{IntegerReading, Number, NumberError, NumberParseError};
 pub use parser::{ParseError, ParseFailure, parse, parse_with};
 
 /// One source edit made by tolerant syntax recovery

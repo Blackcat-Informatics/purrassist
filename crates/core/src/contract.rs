@@ -554,7 +554,7 @@ macro_rules! scratch_charge {
 // (directly, or as a tuple component) anywhere in this crate's production
 // code, its tests, or its doctests. Each charge is that type's `size_of` on
 // a 64-bit target, so these constants never change even when this crate is
-// compiled for wasm32.
+// compiled for `wasm32`.
 scratch_charge!((), 0);
 scratch_charge!(bool, 1);
 scratch_charge!(u8, 1);
@@ -1609,6 +1609,75 @@ pub struct AssistResult<T> {
     pub outcome: Outcome<T>,
     /// Source provenance, corrections, losses, inferences, and validation.
     pub receipt: Receipt,
+}
+
+/// Format into fallible scratch storage, admitting writes before copying.
+///
+/// This governs output storage and emitted-byte work. The caller must separately
+/// admit the computation performed by each `Display` implementation; arbitrary
+/// formatter callbacks are not resource-governed by this sink.
+///
+/// # Errors
+/// Preserves the first writer resource/cancellation failure. A formatter refusing
+/// without a writer failure returns `InvalidInput` with an admitted diagnostic.
+/// No partial output is returned.
+///
+/// ```
+/// use purrassist_core::{Budget, Governor, contract::format_output_governed};
+/// let mut governor = Governor::new(Budget::default());
+/// assert_eq!(format_output_governed(format_args!("{}", 42), &mut governor).unwrap(), "42");
+/// ```
+pub fn format_output_governed(
+    arguments: fmt::Arguments<'_>,
+    governor: &mut Governor,
+) -> Result<String, StopReason> {
+    struct Writer<'a> {
+        output: ScratchString,
+        governor: &'a mut Governor,
+        cause: Option<StopReason>,
+    }
+    impl fmt::Write for Writer<'_> {
+        fn write_str(&mut self, text: &str) -> fmt::Result {
+            if self.cause.is_some() {
+                return Err(fmt::Error);
+            }
+            let result = self
+                .governor
+                .charge(Resource::Work, saturating_size(text.len()))
+                .and_then(|()| self.output.push_str(text));
+            result.map_err(|reason| {
+                self.cause = Some(reason);
+                fmt::Error
+            })
+        }
+    }
+    governor.check()?;
+    let output = ScratchString::new(governor);
+    let mut writer = Writer {
+        output,
+        governor,
+        cause: None,
+    };
+    let result = fmt::write(&mut writer, arguments);
+    let Writer {
+        output,
+        governor,
+        cause,
+    } = writer;
+    if let Some(reason) = cause {
+        drop(output);
+        return Err(reason);
+    }
+    if result.is_err() {
+        const MESSAGE: &str = "formatter rejected output without an admission failure";
+        drop(output);
+        governor.charge(Resource::Work, saturating_size(MESSAGE.len()))?;
+        let mut message = ScratchString::new(governor);
+        message.push_str(MESSAGE)?;
+        return Err(StopReason::InvalidInput(message.into_string()));
+    }
+    governor.check()?;
+    Ok(output.into_string())
 }
 
 #[cfg(test)]

@@ -178,6 +178,28 @@ impl FieldMask {
         Ok(Self { kind })
     }
 
+    /// Render canonical spacing through the existing display implementation.
+    ///
+    /// # Errors
+    /// Returns the original work/storage/cancellation failure without partial text.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor};
+    /// use purrassist_toolgraph::FieldMask;
+    /// let mask = FieldMask::parse("{a,b}").unwrap();
+    /// assert_eq!(mask.render_governed(&mut Governor::new(Budget::default())).unwrap(), "{a, b}");
+    /// ```
+    pub fn render_governed(&self, governor: &mut Governor) -> Result<String, FieldMaskError> {
+        governor.charge(Resource::Work, 1)?;
+        let members = match &self.kind {
+            Mask::Path(names) | Mask::Fields(names) => names.len(),
+            Mask::Elements | Mask::OptionalElements(_) => 1,
+        };
+        governor.charge(Resource::Work, size(members))?;
+        purrassist_core::contract::format_output_governed(format_args!("{self}"), governor)
+            .map_err(FieldMaskError::Resource)
+    }
+
     /// Inspect the validated operation; the type example shows field access.
     #[must_use]
     pub fn kind(&self) -> FieldMaskKind<'_> {
