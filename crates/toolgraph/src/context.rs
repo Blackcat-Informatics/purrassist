@@ -3,6 +3,9 @@
 
 //! Exact output byte bounds, separate from prompt token estimates.
 
+mod codec;
+pub use codec::{ContextCodecError, ContextManagement, LoadingStrategy, MCP_CONTEXT_FORMAT};
+
 use std::{fmt, num::NonZeroU64};
 
 use purrassist_core::{Governor, StopReason, contract::Resource};

@@ -1170,3 +1170,58 @@ their bytes and append behavior; it does not certify their historical
 `estimated_bytes` pre-admission assumptions or silently turn them into governed
 operations. No heap-footprint estimate is an output-capacity proof for the new
 APIs, especially when JSON escaping expands control characters.
+
+## Context fragment and numeric primitives
+
+`ContextManagement::decode_mcp` takes an immutable caller-owned JSON DOM. Its
+encoder constructs a governed DOM and delegates JSON output to the existing
+shared writer. Both require the explicit enclosing v2 format and check logical
+value depth: root zero, field values one, tag items two. Closed-field searches,
+comparisons, masks, quantities, strings and retained collection growth are
+admitted before work/storage. No full-manifest or raw-parser governance claim
+follows from this fragment codec.
+
+`Number::integer_magnitude` and its governed variant share one allocation-free
+reader. It preserves exact integer/fractional classification, negative zero and
+arbitrary exponent semantics. Exponent cancellation is bounded by the actual mantissa's
+length before an exponent is classified as beyond the representable range; no
+exponent-sized storage is created. The governed variant admits every bounded
+scan before executing it. Numeric lexical retention shares validation with
+`FromStr` and uses fallible scratch storage. The actual JSON parser's numeric
+copy uses the same retained-source helper without re-admitting its source input.
+Other parser paths remain outside this delivery's governance claims.
+JSON recovery receipts include the admitted numeric validation/copy work and
+retained numeric capacity in their existing usage counters.
+
+`format_output_governed` admits emitted-byte work and actual output capacity,
+preserving the first writer failure even if a formatter ignores it. It does not
+govern arbitrary formatter computation. The numeric constructor pre-admits the
+standard unsigned formatter's bounded digit work; `FieldMask::render_governed`
+admits its member traversal and uses its original display implementation. Tags
+are copied fallibly without normalization, deduplication or reordering. Returned
+owned buffers retain their core scratch charges; counters can conservatively
+retain admitted storage after owned intermediate values are dropped.
+
+## Governed AppArmor glob words
+
+`AppArmorGlob::parse` admits input, caller declaration names, work and logical
+group/class depth before use. `ScratchString` retains original input and declared
+names; `ScratchVec` stores a flat semantic arena and an iterative brace stack.
+Tokens charge a portable 48 bytes, declaration spans and brace frames 16 bytes,
+with compile-time layout assertions. Literal runs are coalesced; alternatives
+and variables are never expanded. Storage grows linearly with source and
+declarations, including deeply nested inputs, and destruction never recurses.
+Declaration uniqueness and binding-name lookup use explicitly charged linear
+comparisons; declaration admission can be quadratic in declaration count.
+
+Policy-word rendering and literal binding admit actual output capacity before
+allocation and work before copies, validation or comparisons. Returned strings
+and model storage remain charged; failures expose no partial successful output.
+Host canonicalization and variable trust are caller-owned. No filesystem,
+environment, clock or kernel access occurs in these library operations.
+
+The byte grammar and contextual escape refusals are documented on `AppArmorGlob`.
+Policy quoting preserves wildcards rather than literalizing them. Literal host
+paths containing glob/variable metacharacters, quotes, backslashes or controls
+are refused, never interpolated as new syntax. This parser/printer does not
+establish matching, containment, admission or kernel enforcement.

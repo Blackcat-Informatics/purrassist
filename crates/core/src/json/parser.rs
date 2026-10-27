@@ -166,14 +166,15 @@ impl Parser<'_, '_> {
             self.advance(1)?;
         }
         let lexical = &self.input[start..self.position];
-        self.governor
-            .charge(Resource::ScratchBytes, size(lexical.len()))?;
-        lexical.parse().map(Value::Number).map_err(|_| {
-            ParseFailure::Syntax(ParseError {
-                offset: start,
-                message: "invalid JSON number".into(),
+        super::Number::retain_governed(lexical, self.governor)
+            .map(Value::Number)
+            .map_err(|failure| match failure {
+                super::NumberParseError::Syntax(_) => ParseFailure::Syntax(ParseError {
+                    offset: start,
+                    message: "invalid JSON number".into(),
+                }),
+                super::NumberParseError::Resource(reason) => ParseFailure::Resource(reason),
             })
-        })
     }
     fn string(&mut self) -> Result<String, ParseFailure> {
         self.expect(b'"')?;

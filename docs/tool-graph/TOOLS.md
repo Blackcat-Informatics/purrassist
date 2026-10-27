@@ -33,9 +33,10 @@ or releasing it, retaining the original output for the receipt.
 The MCP Extended bundle format will be `purrassist-toolgraph-v2`. Every tool's
 context metadata will require `outputEnforcement: "exact-bytes"` beside
 `maxOutputBytes`; the RDF vocabulary's byte property will have that fixed
-meaning. The future codec will reject an unsupported bundle version, an absent
-or unknown enforcement mode, duplicate fields, and unknown context fields.
-It will reject legacy `maxOutputTokens` wherever a context limit is expected,
+meaning. The implemented standalone context codec rejects an unsupported supplied bundle
+format, an absent or unknown enforcement mode, duplicate fields, and unknown
+context fields. The full manifest decoder remains planned. The context codec
+rejects legacy `maxOutputTokens` wherever a context limit is expected,
 even when `maxOutputBytes` also appears. An imported v1 bundle will fail with
 `UnsupportedVersion`; no number will be silently renamed or converted. The
 loss profile will remain `purrassist-toolgraph-v1`, because this wire change

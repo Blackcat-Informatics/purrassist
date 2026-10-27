@@ -10,12 +10,16 @@ Resolve and register the actual dependency closure under
 below throughout delivery.
 
 The unpublished [`purrassist-toolgraph`](../../crates/toolgraph/README.md) crate
-implements complete vocabulary/loss-profile construction and field-mask parsing.
+implements complete vocabulary/loss-profile construction, field-mask parsing
+the complete caller-owned MCP context fragment codec and governed AppArmor glob
+syntax/policy words.
 It builds one upstream namespace table from validated raw prefix declarations,
 so conflicting entries cannot disappear through upstream deduplication.
 `FieldMask` has private validated storage and a borrowed `FieldMaskKind` view;
 the enum below describes its operations rather than permitting unchecked masks.
-Loader, schema bridge, codec, policy, projection and host execution contracts
+`ContextManagement` likewise has private validated storage and read-only getters;
+its record below describes the data contract rather than unchecked construction.
+Loader, schema bridge, full-manifest codec, policy, projection and host execution contracts
 remain planned. Facade/host wiring waits for their complete integration and
 registry-resolvable packaging; it is not claimed by the foundation crate.
 
@@ -485,6 +489,42 @@ still passed to the upstream compiler. Resolve the actual G7 source and check
 any drift from the inspected dependency closure before #33. Phase 3 cannot close #33 until the upstream
 API exists, its plain-profile consumer tests pass, and the integration is wired.
 
+## MCP context fragment — implemented
+
+`ContextManagement::{decode_mcp,encode_mcp,encode_json}` implements all six context
+fields, requiring the explicit enclosing `purrassist-toolgraph-v2` argument on
+both directions. The component uses caller-owned source DOM values, the
+validated `FieldMask` and `OutputByteLimit`, portable unsigned quantities and
+ordered duplicate-preserving tags. It rejects legacy token fields, unsupported
+versions/modes, unknown/duplicate/missing fields, wrong types, invalid quantities
+and unsupported masks. All four masks and both loading strategies round trip
+with fixed canonical bytes; mathematical integer spellings are not narrowed to
+plain decimal lexical forms on import.
+
+The actual `roundtrip_context` example uses this one codec and the shared
+governed JSON writer. Numeric retention, exact integer reading/construction and
+mask rendering extend existing engines with fallible storage and admitted work.
+Source DOM construction is caller-owned. Full enclosing manifests, original RDF
+source/provenance, loss-ledger integration and host release remain required
+under #33 and #47; this fragment does not establish those acceptance criteria.
+
+## AppArmor pathname syntax and policy words — implemented
+
+`AppArmorGlob` supplies the first-party byte-oriented syntax model needed by
+future synthesis and containment. It retains source, literal/escaped byte
+semantics, explicit classes/ranges and brace links, and caller-declared variable
+identities. Its governed parser never expands products; deterministic printing
+uses one quoted policy word. Literal host binding explicitly refuses unsafe
+metacharacters instead of relying on policy quoting as literalization.
+Context-sensitive class escapes are refused where the installed AppArmor parser
+would reinterpret them; the public Rustdoc defines the admitted subset.
+
+The `apparmor_path_words` consumer emits standalone path rules through this
+component. Parser-only qualification does not prove graph admission, matching,
+bounded containment, full policy synthesis or confinement. Those requirements
+remain under #34/#35; no security decision may use string-prefix comparison as
+a substitute. See [RESOURCES.md](../RESOURCES.md) for the resource model.
+
 ## Governed JSON emission — implemented
 
 The core's `Node::to_json_governed` and `json::quote_governed` provide the
@@ -494,9 +534,8 @@ the governed driver is iterative and uses fallible ancestor/output storage.
 The `emit_context_json` example executes context-shaped JSON emission, without
 claiming context-field validation or a complete codec.
 
-Context decoding, numeric parsing/conversion/construction and canonical mask
-formatting still require governed production paths through their existing
-implementations. G7, source ownership, full manifest round trips and host result
+The context-fragment implementation above uses governed numeric and mask paths
+through their existing implementations. G7, source ownership, full manifest round trips and host result
 release remain parent acceptance. Issue #47 remains open until that integration
 is verified. See [RESOURCES.md](../RESOURCES.md) for the emission resource model.
 

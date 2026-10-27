@@ -527,10 +527,12 @@ impl Store {
     }
     const fn journal_budget(serialized_bytes: u64) -> Budget {
         Budget {
-            // Parsing charges every consumed byte exactly once. The fixed
-            // journal structure and geometric decoded-string capacity fit the
-            // actual serialized length plus this fixed structural allowance.
-            work: serialized_bytes,
+            // Consuming n source bytes costs n work. Each numeric spelling of
+            // length m adds m + 1 validation work and m retained-copy work.
+            // Numeric spellings are nonempty and disjoint, so the total is at
+            // most n + 3n. The fixed journal shape and geometric string buffers
+            // fit the scratch allowance below.
+            work: serialized_bytes.saturating_mul(4),
             candidates: 1,
             input_bytes: serialized_bytes,
             scratch_bytes: serialized_bytes.saturating_mul(4).saturating_add(16_384),
@@ -763,7 +765,7 @@ impl Store {
         fire(CrashPoint::BeforeRename);
         #[cfg(windows)]
         let method = windows::replace(file, &temporary, &target)?;
-        // Every other platform, including wasm32-wasip1, uses the portable
+        // Every other platform, including `wasm32-wasip1`, uses the portable
         // `rename(2)`-equivalent; only directory durability (`sync_directory`
         // below) is unproven off Unix/Windows and stays an explicit error there.
         #[cfg(not(windows))]

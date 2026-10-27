@@ -73,8 +73,23 @@ admission, SHACL/G7 integration, graph loading or manifest conversion (#33).
 Governed JSON emission shares the existing serializer's structural/escaping
 authority through `Node::to_json_governed` and `json::quote_governed`. The
 `emit_context_json` example exercises context-shaped output with explicit work,
-depth and fallible storage admission. Complete tool-graph context/manifest
+depth and fallible storage admission. Full tool-graph manifest
 validation and host integration remain outstanding (#47, #33).
+
+The tool-graph `ContextManagement` codec now validates and emits the complete
+MCP context fragment under an explicit enclosing v2 format. It uses the existing
+mask/output-limit engines and shared JSON writer, with governed numeric retention,
+exact integer reading and formatting. Its `roundtrip_context` example exercises
+canonical bidirectional conversion. Source DOM construction is caller-owned; this
+does not establish governed raw JSON parsing, full manifests, RDF loading or
+host result release. Those integration requirements remain under #33 and #47.
+
+The internal tool-graph crate also provides governed AppArmor glob syntax and
+safe policy words through `AppArmorGlob`. Its flat arena retains exact source,
+byte/range semantics, brace links and caller-declared variable identities without
+expanding alternatives. Literal host binding refuses unsafe syntax explicitly.
+The `apparmor_path_words` example exercises standalone rendered path rules;
+matching, containment, full policy synthesis and confinement remain planned.
 
 ## Shared contracts
 
@@ -114,9 +129,10 @@ Core operations are synchronous and resumable around supplied helper responses.
 - `purrassist-helper-census`: internal, unpublished structural duplicate
   functionality census and helper ledger checks.
 - `purrassist-toolgraph`: internal, unpublished pure vocabulary/loss-profile constructors
-  and context field-mask parser, plus exact output byte-limit enforcement.
-  Graph loading, schema projection, codecs,
-  authorization and execution remain planned. Exact upstream Git dependencies
+  and a complete caller-owned MCP context fragment codec, including field-mask
+  parsing and exact output byte-limit enforcement, plus governed AppArmor glob
+  words. Graph loading, full manifests,
+  schema projection, authorization and execution remain planned. Exact upstream Git dependencies
   keep it outside the publishable facade until registry packaging is qualified.
 
 ## Required delivery sequence
