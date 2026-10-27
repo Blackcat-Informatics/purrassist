@@ -17,9 +17,24 @@ Run the executable caller example with
 Implemented: validated vocabulary construction, registered projection loss
 meanings, the complete caller-owned MCP context fragment codec, the bounded
 four-form field-mask parser, and the governed `OutputByteLimit` checker. The checker records exact bytes and refuses oversized
-serialized results intact; it makes no token-count claim. Graph loading, schema
-projection, manifest codecs, authorization and execution remain specified in
+serialized results intact; it makes no token-count claim. Graph loading, the
+production schema bridge, manifest codecs, authorization and execution remain specified in
 the repository's tool-graph documents; this crate does not yet provide them.
+
+The direct `plain_tool_schemas` example adopts the supported upstream profile of
+`purrdf_shapes::json_schema::compile_tool_arguments` at
+`8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77` (`PurRDF` #788 / PR #806).
+Run `cargo run -p purrassist-toolgraph --example plain_tool_schemas` to compile
+the four worked input/output schemas and validate bare instances and invalid
+neighbors with the full first-party core validator. Focused tests cover nested
+input/output bindings, exact constraints, source-located losses and native typed
+refusals. Source/profile preparation is caller-owned. Native work/bytes/nodes
+ceilings are logical bounds; they do not provide complete process heap or
+cancellation governance. This supported-profile adoption is delivered under #70; #33 still owns production
+loader/codec wiring and its complete original contract. The original G7 plain
+number requirement remains open under #43 and #33: the adopted API refuses
+`xsd:decimal`, `xsd:double` and `xsd:float` with source-bearing native typed
+errors. This supported-profile consumer does not complete G7.
 
 `CallableBinding::admit` validates a selected mapping from an already admitted
 upstream `FnO` catalog. It requires complete unique parameter/return bindings and

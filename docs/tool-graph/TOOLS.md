@@ -768,32 +768,34 @@ no random, filesystem or process access. `aa-exec` must select the exact profile
 refuse an unconfined result, close unadmitted descriptors and return typed launch,
 label or mediation failures. Neither mode can silently fall back to the other.
 
-**New prerequisite G7, specified and not implemented:** the existing
-`purrdf_shapes::json_schema::compile` emits a JSON-LD instance surface with
-CURIE property keys, class-root `$defs`, `@id`/`@type` carrier rules and typed
-literal alternatives. It does not emit the plain tool-argument schemas below.
-A key-only rewrite is insufficient. Before #33 can deliver its plain JSON
-contract, PurRDF needs an explicit caller-supplied tool-argument projection
-profile with root-shape/class selection and the FnO predicate-to-argument-name
-map. The upstream extension must reuse the existing constraint compiler,
-accept explicit input/output root identities, lower string/integer/number/
-boolean/array/object values to their plain JSON semantics, preserve all SHACL
-constraint projections and losses, and return a normal `CompiledSchema` with
-the registered `LossLedger`. It must explicitly exclude JSON-LD transport
-carriers while retaining RDF identity semantics as source-located losses and
-mandatory original-shape checks wherever relevant. Field binding must be
-bijective and collisions or unsupported semantic lowering must be typed
-errors. No namespace literal belongs in upstream library code.
+**G7 supported profile adopted in #70; plain numbers and loader integration remain open:** upstream
+PurRDF issue #788 closed through PR #806, adopted at exact revision
+`8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77`. The public
+`purrdf_shapes::json_schema::compile_tool_arguments` accepts caller-owned
+root-shape/class identities and parent-scoped FnO predicate/member bindings.
+It uses the shared constraint compiler for bare string/integer/boolean, object
+and array schemas, requiredness, cardinality and closedness. Unsupported RDF
+representations and invalid bindings return typed errors. The original plain
+number requirement is unresolved: this revision refuses `xsd:decimal`,
+`xsd:double` and `xsd:float` as native `sh:datatype` representation errors with
+the original predicate and bound member. #43 remains open until exact number
+semantics are available upstream and qualified downstream. Complete losses keep
+their original source; original SHACL checking remains mandatory where the
+projection loses semantics. The original `compile` API retains JSON-LD output.
 
-The worked shape roots below carry explicit `sh:targetClass` identities.
-The expected schemas and declaration bytes in this document are the proposed
-G7 profile's acceptance fixtures, not current emitter output. Local
-reimplementation, post-hoc JSON-LD schema surgery, and reconstruction from
-core's partial typed schema model are forbidden alternatives. The exact
-proposed upstream signatures and its executable acceptance are in
-TOOLS_PLAN.md. G7 must land and the resulting API be verified before the
-loader claims these schemas are implemented. Existing #747–#749 availability
-does not satisfy this newly identified prerequisite.
+The four worked input/output schemas below are direct downstream acceptance
+fixtures for that adopted API, exercised by the `plain_tool_schemas` example
+with exact schema comparison and the existing first-party validator. The native
+QueryInput regular expression, after JSON string decoding, is
+`^customer\u{2d}(?:[0-9])+$`.
+The manifest/declaration bytes below remain specified #33 acceptance, including
+its production graph loading and declaration emission. These consumer fixtures
+do not establish those behaviors. #33 retains
+its full loader/codec, original source, FnO mapping, SHACL/policy checking,
+facade/host and packaging contract. Local reimplementation, post-hoc JSON-LD
+schema surgery and reconstruction through core's partial typed schema model
+remain forbidden. Native logical work/bytes/nodes limits and their explicit
+accounting/cancellation limits are documented in [the G7 plan](TOOLS_PLAN.md#g7-upstream-plain-tool-schema-projection-prerequisite).
 
 ### MCP Extended Tool Manifest — specified
 

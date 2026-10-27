@@ -428,66 +428,62 @@ caller-owned document table, never fetched from the network.
 
 ## G7: upstream plain tool-schema projection prerequisite
 
-Current `json_schema::compile(&Shapes, &Namespaces)` is a JSON-LD projection.
-Its named property keys are namespace-compacted CURIEs, class targets select
-root definitions, and its node/scalar carriers may contain `@id`, `@type` and
-typed-literal alternatives. It cannot directly produce the bare FnO argument
-objects in TOOLS.md. Renaming `ex:customer_id` to `customer_id` locally would
-leave these other semantics wrong. This is a newly verified upstream gap G7,
-not implemented behavior and not permission to write a second schema compiler.
+The supported plain profile is adopted in #70, a subdivision of #43. Upstream issue
+[PurRDF #788](https://github.com/Blackcat-Informatics/purrdf/issues/788) closed
+through [PR #806](https://github.com/Blackcat-Informatics/purrdf/pull/806), pinned
+here at `8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77`. The existing
+`json_schema::compile` retains its JSON-LD surface; the public
+`purrdf_shapes::json_schema::compile_tool_arguments` uses the shared constraint
+compiler with an explicit caller-owned `ToolArgumentProfile`.
 
-Following D3, #33 requires an upstream explicit caller-supplied plain argument
-profile using the existing schema compiler. The desired upstream API is:
+The adopted profile names both `root_shape_iri` and `root_class_iri` and carries
+`ToolFieldBinding` records with `parent_shape_iri`, `predicate_iri` and
+`implementation_property`. Input and output profiles each contain their own
+used transitive binding closure, including shared nested shapes. Missing,
+duplicate, colliding, reserved and unused bindings are native typed refusals.
+The same predicate can have different member names under different parents.
 
-```rust
-pub struct ToolArgumentProfile {
-    pub root_shape_iri: String,
-    pub root_class_iri: String,
-    pub fields: Vec<ToolFieldBinding>,
-}
-pub struct ToolFieldBinding {
-    pub parent_shape_iri: String,
-    pub predicate_iri: String,
-    pub implementation_property: String,
-}
-pub struct ToolSchemaLimits { pub work: u64, pub bytes: u64, pub nodes: u64 }
-pub enum ToolSchemaError {
-    InvalidRoot, IncompleteBinding, DuplicateBinding, AmbiguousBinding,
-    UnsupportedConstruct, Exhausted, ArithmeticOverflow,
-}
-pub fn compile_tool_arguments(
-    shapes: &Shapes, namespaces: &Namespaces,
-    profile: &ToolArgumentProfile, limits: &ToolSchemaLimits,
-) -> Result<CompiledSchema, ToolSchemaError>;
-```
+The upstream compiler emits bare strings, integers, booleans, objects and
+arrays, with exact constraints, requiredness, cardinality and closedness.
+The original G7 contract also requires plain JSON numbers. This revision
+refuses `xsd:decimal`, `xsd:double` and `xsd:float` with native
+`UnsupportedConstruct` / `ToolRepresentationError::Constraint("sh:datatype")`,
+retaining the bound member and original predicate. That numeric requirement
+remains open under #43 and #33; supported-profile adoption does not complete G7.
+Other unsupported RDF representations are likewise explicit refusals.
+`CompiledSchema` retains schema/OpenAPI text and the complete source-located
+loss ledger. Constraints beyond JSON Schema still require checks against the
+retained original SHACL graph. There is no local compiler, JSON-LD rewriting
+or reconstruction through the narrower typed tool parameter model.
 
-These names belong to proposed `purrdf_shapes::json_schema` API. Error variants
-carry the source shape/predicate, usage and underlying typed cause where
-applicable; `Exhausted` identifies resource, ceiling and consumption. Root shape
-and class are both explicit and must agree with SHACL/FnO. Field bindings come
-from complete FnO parameter/return mappings (`fnom:implementationProperty`) and
-are scoped by parent shape, so nested names cannot alias unrelated properties.
-Every callable property needs one binding; duplicate, incomplete or ambiguous
-bindings are refused. The same profile mechanism handles input and output roots.
+`ToolSchemaLimits { work, bytes, nodes }` supplies deterministic logical
+ceilings. Bytes combine cumulative resident logical charges and native admitted
+storage; released resident charges are not refunded. This is not allocator
+overhead or complete retained process heap accounting. Preparation remains
+caller-owned; this API has no cancellation interface and does not establish
+complete core `Governor` governance. Native errors distinguish root/binding and
+representation refusals, compilation/model/pattern causes, storage, stack margin,
+resource exhaustion and checked arithmetic overflow; refusal returns no artifact.
 
-The profile defines plain JSON scalar, object and array representations,
-requiredness, cardinality and closedness directly in the upstream compiler.
-It preserves exact schema constraints and references, and returns the existing
-`CompiledSchema` with complete propagated losses. It never introduces JSON-LD
-`@id`/`@type` members or typed-literal wrappers into the MCP call contract.
-RDF-only constructs without an admitted plain representation are typed refusals,
-not silent loss or invented coercion. Constraints deliberately outside JSON
-Schema's expressiveness require source-specific ledger entries and mandatory
-checks against the retained original SHACL graph. Core recovery still validates
-the exact emitted schema, and the bridge maps validated arguments back through
-the FnO bindings for original SHACL and policy checking.
+Run `cargo run -p purrassist-toolgraph --example plain_tool_schemas` for the direct
+public consumer. Its shared worked fixtures compare complete expected schemas
+for the four worked tools and validate them with the full first-party core
+schema engine. The upstream compiler's decoded QueryInput regular expression is
+`^customer\u{2d}(?:[0-9])+$`; the proposed manifest bytes remain #33 acceptance. Focused downstream
+cases also cover nested input/output objects and arrays, scoped bindings,
+required/optional members, closedness, exact integer `xone`/`not`/`someValue`,
+loss source subjects, typed refusals and tiny logical ceilings. The legacy
+JSON-LD schema/OpenAPI goldens are retained from the previous pin; compiling
+plain profiles also preserves the neighboring original JSON-LD schema and
+OpenAPI artifacts.
 
-The original compiler and SHACL source remain retained evidence; no local
-keyword/key rewriting, typed-definition reconstruction or alternate schema
-validator substitutes for this prerequisite. The original namespace table is
-still passed to the upstream compiler. Resolve the actual G7 source and check
-any drift from the inspected dependency closure before #33. Phase 3 cannot close #33 until the upstream
-API exists, its plain-profile consumer tests pass, and the integration is wired.
+This adopts the supported upstream profile only. Full G7 qualification still
+requires exact plain-number semantics upstream and downstream executable
+evidence; no local compiler or schema rewriting can satisfy that requirement.
+#43 stays open. #33 still owns the actual loader and bidirectional MCP codec, retained source and occurrence spans,
+FnO mappings, original-SHACL and policy checking, exact core validation,
+facade/host wiring and registry-resolvable packaging. Its complete original
+contract stays open until those behaviors are delivered.
 
 ## MCP context fragment — implemented
 

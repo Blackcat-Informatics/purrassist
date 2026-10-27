@@ -7,9 +7,16 @@ exact decimals, schema evaluation, regex matching, normalization algorithms,
 edit distances, phonetics, recovery search, and receipts are first-party Rust.
 
 The unpublished `purrassist-toolgraph` foundation uses `purrdf-core` for native
-IRI validation and the shared loss registry, and `purrdf-shapes` for its one
-namespace table. Both use exact Git revision
-`2ed9845b0ca3d38fe74f71b19320f0d46dcaeb26` of the public PurRDF repository.
+IRI validation and the shared loss registry, and `purrdf-shapes` for its shared
+namespace table, FnO reader and public plain argument-schema compiler. Both use
+exact Git revision `8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77` of the public
+PurRDF repository. This adopts upstream issue #788 through merged PR #806.
+Default and all-feature metadata at adoption contain the same 99 package
+identities as the previous pin: all 19 PurRDF Git packages change source
+revision, with no registry package/version or core dependency drift. The
+registered name/version baseline therefore stays unchanged. License notices
+remain byte-identical; their existing `purrdf-2ed9845` storage paths are retained,
+while each package's source registration identifies the adopted revision.
 The resolved all-target normal/build closure adds 19 PurRDF packages and
 41 registry packages to this workspace's existing inventory. Every resolved
 package and its shortest dependency path is registered in
