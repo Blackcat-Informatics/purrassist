@@ -21,6 +21,18 @@ serialized results intact; it makes no token-count claim. Graph loading, the
 production schema bridge, manifest codecs, authorization and execution remain specified in
 the repository's tool-graph documents; this crate does not yet provide them.
 
+`FramedPrompt::assemble_bytes` assembles explicit prefix, separator and suffix
+with ordered caller-prepared declarations. It preserves original source/part
+identities and all supplied bytes, enforces a separate exact prompt byte ceiling,
+and publishes complete output only after governed sizing, copying, storage and
+cancellation checks. Run
+`cargo run -p purrassist-toolgraph --example framed_prompt_bytes` for a consumer
+that prepares real wire declarations separately and validates the complete array.
+This operation accepts no token limit and reports no token count. Tokenizer
+qualification, model-family placement/selection, graph loading, routing and
+complete projection ledgers remain under #36 and #47. Tool-result byte limits
+remain the separate `OutputByteLimit` contract.
+
 The direct `plain_tool_schemas` example adopts the supported upstream profile of
 `purrdf_shapes::json_schema::compile_tool_arguments` at
 `8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77` (`PurRDF` #788 / PR #806).

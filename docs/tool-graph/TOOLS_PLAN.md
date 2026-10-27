@@ -553,6 +553,21 @@ and tool-graph/CLI integration remain under #36. This prerequisite does not
 close that issue or establish governed native pattern parsing. See
 [RESOURCES.md](../RESOURCES.md) for the prepared-operation contract.
 
+## Exact framed prompt bytes — implemented
+
+`FramedPrompt::assemble_bytes` admits caller-prepared declaration bytes with
+explicit prefix, separator and suffix. It preserves original named occurrences
+and source identity, uses checked complete sizing, enforces an independent exact
+byte ceiling and publishes output atomically under the core governor. The
+`framed_prompt_bytes` consumer prepares real wire declarations through the
+existing renderer and validates the complete tools array.
+
+This prerequisite accepts no token limit and reports no token count. Tokenizer
+qualification, exact external accounting, actual model-family placement and
+selection, graph loading, routing and complete lane ledgers remain original
+#36/#47 acceptance. Arbitrary supplied framing is not a graph projection and
+receives no invented empty ledger. See [RESOURCES.md](../RESOURCES.md).
+
 ## Governed JSON emission — implemented
 
 The core's `Node::to_json_governed` and `json::quote_governed` provide the

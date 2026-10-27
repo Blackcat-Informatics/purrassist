@@ -1369,3 +1369,33 @@ No native parser runs in production. Parser acceptance can mask saturation or
 overflow, so qualification checks serialized values rather than exit status
 alone. These are selected representation limits; host enforcement and graph/
 policy admission remain separate requirements.
+
+## Exact framed prompt bytes
+
+`FramedPrompt::assemble_bytes` accepts explicit prefix, separator and suffix
+text, ordered borrowed `PromptBytePart` occurrences, an opaque source identity,
+a semantic byte ceiling and one core governor. It emits the prefix, every
+original declaration separated exactly once, then the suffix. An empty list
+still emits both framing strings. It preserves order, duplicate identities,
+whitespace, Unicode and escaping; it performs no normalization or omission.
+
+Each original framing, identity and declaration string admits its individual
+`InputBytes` length and constant sizing work before processing. Declarations'
+byte lengths, every separator occurrence and framing totals use checked integer
+arithmetic. Overflow is a typed sizing refusal. The independent ceiling compares
+the exact full requirement before output allocation; zero admits only a completely
+empty representation. A ceiling error retains both required and allowed bytes
+without exhausting an otherwise usable governor.
+
+Output-copy work is admitted before allocation/copying. One `ScratchString`
+reserves the complete output fallibly, and per-part work/checks remain under the
+same governor. Resource refusals release unpublished output and preserve the
+native cause. A final cancellation check precedes complete String publication;
+no partial prompt or successful measurement escapes on failure. Both outcomes
+retain the original borrowed source, named parts and framing.
+
+Caller preparation and actual model-family framing/placement selection remain
+separate. This operation accepts no token ceiling, reports no token count and
+manufactures no graph projection or ledger. Qualified tokenizer evidence, exact
+external token accounting, selection, routing and complete lane ledgers remain
+under #36 and #47. Tool-result `OutputByteLimit` remains its separate contract.
