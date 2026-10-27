@@ -103,6 +103,16 @@ escaped class comma are refused because native conversion changes their semantic
 Complete permission/owner/deny analysis, hat admission,
 policy synthesis and host enforcement remain outstanding (#34/#35).
 
+The standalone `InternetRule` path validates caller-prepared Internet declarations
+and emits atomic governed fragments with explicit fine-grained ABI requirements.
+CIDRs remain symbolic until checked endpoint/product ceilings admit complete
+numeric enumeration. Hostnames, family/access/port mismatches and excessive
+expansion are typed refusals. The `internet_rules` consumer emits an IPv4 CIDR
+and IPv6 fixture with the required ABI; offline parser/DFA qualification is no
+host-enforcement evidence. Admitted-graph synthesis, original v3/v4 targets,
+Unix-rule synthesis, complete permission analysis and host confinement remain
+required under #34/#35.
+
 ## Shared contracts
 
 Intent + input + context -> candidates -> validation/ranking -> result + receipt.
