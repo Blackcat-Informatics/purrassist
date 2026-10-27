@@ -820,6 +820,36 @@ impl<T: ScratchCharge> ScratchVec<T> {
     }
 }
 
+// Borrowed views preserve content semantics without cloning scratch ownership.
+impl<T: ScratchCharge> core::ops::Deref for ScratchVec<T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        self.as_slice()
+    }
+}
+impl<T: ScratchCharge> AsRef<[T]> for ScratchVec<T> {
+    fn as_ref(&self) -> &[T] {
+        self.as_slice()
+    }
+}
+impl<'a, T: ScratchCharge> IntoIterator for &'a ScratchVec<T> {
+    type Item = &'a T;
+    type IntoIter = core::slice::Iter<'a, T>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_slice().iter()
+    }
+}
+impl<T: ScratchCharge + PartialEq> PartialEq for ScratchVec<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+impl<T: ScratchCharge + Eq> Eq for ScratchVec<T> {}
+impl<T> ScratchCharge for ScratchVec<T> {
+    const CHARGE: usize = 40;
+}
+const _: () = assert!(core::mem::size_of::<ScratchVec<u8>>() <= 40);
+
 impl<T> Drop for ScratchVec<T> {
     fn drop(&mut self) {
         let _ = self.meter.release(self.reserved);
@@ -931,6 +961,23 @@ impl ScratchString {
         inner
     }
 }
+
+impl core::ops::Deref for ScratchString {
+    type Target = str;
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+impl PartialEq for ScratchString {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+impl Eq for ScratchString {}
+impl ScratchCharge for ScratchString {
+    const CHARGE: usize = 40;
+}
+const _: () = assert!(core::mem::size_of::<ScratchString>() <= 40);
 
 impl Drop for ScratchString {
     fn drop(&mut self) {

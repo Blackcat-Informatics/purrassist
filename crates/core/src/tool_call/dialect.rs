@@ -467,7 +467,13 @@ impl DialectSet {
         }
         let mut markers: Vec<(Vec<u8>, Vec<u8>)> = dialects
             .iter()
-            .flat_map(|dialect| dialect.grammar().reasoning.iter().cloned())
+            .flat_map(|dialect| {
+                dialect
+                    .grammar()
+                    .reasoning
+                    .iter()
+                    .map(|(open, close)| (open.as_slice().to_vec(), close.as_slice().to_vec()))
+            })
             .collect();
         markers.sort();
         markers.dedup();
@@ -482,7 +488,11 @@ impl DialectSet {
                         .reasoning
                         .iter()
                         .zip(&grammar.explicit_reasoning)
-                        .all(|(declared, explicit)| declared != pair || *explicit)
+                        .all(|(declared, explicit)| {
+                            declared.0.as_slice() != pair.0.as_slice()
+                                || declared.1.as_slice() != pair.1.as_slice()
+                                || *explicit
+                        })
                 })
             })
             .collect();

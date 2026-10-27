@@ -117,7 +117,7 @@ impl<'a, 's> RepairState<'a, 's> {
                 return None;
             };
             let consumed = node == 0
-                && matches!(stop, GenerationStop::StopSequence(sequence) if *sequence == literal.bytes);
+                && matches!(stop, GenerationStop::StopSequence(sequence) if sequence.as_slice() == literal.bytes.as_slice());
             return (opened && (literal.closer.is_some() || consumed))
                 .then(|| make(thread, Status::Stuck));
         }
@@ -560,13 +560,13 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
                 if let Some(operator) =
                     json_punctuation(&literal.bytes).filter(|_| grammar.json_envelope)
                 {
-                    let separator = literal.bytes.clone();
+                    let separator = literal.bytes.as_slice().to_vec();
                     self.insert(
                         context, proposals, operator, separator, next, true, governor,
                     )?;
                 }
                 if !respell && context.opened && literal.closer.is_some() {
-                    let replacement = literal.bytes.clone();
+                    let replacement = literal.bytes.as_slice().to_vec();
                     // A closer missing mid-message: the wrapper's when it
                     // ends the production, an inner element's otherwise.
                     let wrapper = completes(program, next, governor)?;
@@ -603,7 +603,7 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
                 };
                 let suffix = literal.bytes[node as usize..].to_vec();
                 if node == 0
-                    && matches!(&context.eof, Some(GenerationStop::StopSequence(sequence)) if *sequence == literal.bytes)
+                    && matches!(&context.eof, Some(GenerationStop::StopSequence(sequence)) if sequence.as_slice() == literal.bytes.as_slice())
                 {
                     let replacement = suffix.clone();
                     self.insert(

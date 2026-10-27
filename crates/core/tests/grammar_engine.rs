@@ -137,8 +137,11 @@ fn dsl_parses_and_compiles() {
     );
     assert_eq!(mini.reasoning(), Some((&b"<think>"[..], &b"</think>"[..])));
     assert_eq!(
-        mini.confusables(),
-        [("｜".as_bytes().to_vec(), b"|".to_vec())]
+        mini.confusables()
+            .iter()
+            .map(|(left, right)| (left.as_slice(), right.as_slice()))
+            .collect::<Vec<_>>(),
+        [("｜".as_bytes(), &b"|"[..])]
     );
     assert!(mini.configuration_bound() > 0);
     assert_eq!(mini.longest_literal(), "<｜/result｜>".len());
@@ -183,10 +186,10 @@ fn dsl_parses_and_compiles() {
         panic!("closer expected");
     };
     assert_eq!(mini.closer_name(arg_end), "arg-end");
-    assert_eq!(
-        mini.closer_spellings(arg_end),
-        [b"</arg>".to_vec(), b"</args>".to_vec()]
-    );
+    let spellings = mini.closer_spellings(arg_end);
+    assert_eq!(spellings.len(), 2);
+    assert_eq!(spellings[0].as_slice(), b"</arg>");
+    assert_eq!(spellings[1].as_slice(), b"</args>");
 
     // Call, result and declaration are all retained for printing.
     let Expr::Sequence(call) = mini.call() else {

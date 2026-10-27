@@ -4985,6 +4985,10 @@ fn apply_folds(
     let mut calls: BTreeMap<(usize, usize), &BTreeSet<DialectId>> = BTreeMap::new();
     for fold in folds {
         for (&start, dialects) in &fold.attempts {
+            #[expect(
+                clippy::mutable_key_type,
+                reason = "DialectId Eq/Ord use only immutable grammar name and digest; scratch-meter atomics never participate in key identity"
+            )]
             let known = reading.attempts.entry(start).or_default();
             governor.charge(Resource::Work, size(dialects.len()).saturating_add(1))?;
             for dialect in dialects {
@@ -5085,6 +5089,10 @@ fn union_call_dialects(
 ) -> Result<(), StopReason> {
     for (index, call) in calls.iter_mut().enumerate() {
         let identity = call_identity(call).to_json();
+        #[expect(
+            clippy::mutable_key_type,
+            reason = "DialectId Eq/Ord use only immutable grammar name and digest; scratch-meter atomics never participate in key identity"
+        )]
         let mut dialects: BTreeSet<DialectId> = call.candidate_dialects.iter().cloned().collect();
         for other in others.iter().filter_map(|calls| calls.get(index)) {
             let same = call_identity(other).to_json();
@@ -5255,6 +5263,10 @@ fn merge(
             .collect();
         union_call_dialects(&mut reading.value.embedded, &embedded, governor)?;
         for rejected in &mut reading.value.rejected {
+            #[expect(
+                clippy::mutable_key_type,
+                reason = "DialectId Eq/Ord use only immutable grammar name and digest; scratch-meter atomics never participate in key identity"
+            )]
             let candidates = &attempts[&rejected.span.start];
             governor.charge(
                 Resource::ScratchBytes,

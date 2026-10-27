@@ -9,9 +9,21 @@ scratch vectors. Caller depth and explicit native parser-recursion and AST
 ownership/drop ceilings of 128 include postfix chains. Syntax owners remain
 release-owned through lowering failures; the grammar identity is retained only
 after remaining fallible construction and final cancellation checks. The actual
-`canonical_print` consumer exercises this compiler path. Full cold lowering,
-compiled public `Expr`/`Box` storage, table/intern allocations and native pattern
-preparation remain uncompleted #36 acceptance, alongside witness, GBNF,
+`canonical_print` consumer exercises this compiler path.
+
+First-party declaration, name resolution and retained expression ownership now
+share that governor. Declared literals, closers, delimiters, marker pairs, names,
+layouts and expression lists/children use fallible release-owned storage.
+Public `ExprChild`/`ExprItems` provide read-only borrowed views; unused deep
+`Clone` implementations were removed, while dialects continue sharing grammars
+through `Arc`. The existing cycle check runs before layout traversal and caches
+expanded production heights, including finished DAG tails. Caller depth and an
+aggregate native ceiling of 128 refuse excessive reference expansion; cyclic
+layouts return a typed recursive-production error.
+
+Native pattern/automaton preparation and later matcher, repair-table and
+recognizer-program allocations retain their existing separate contracts. Full
+cold backend governance remains #36 acceptance, alongside witness, GBNF,
 CompactSignature, projection, routing, ledgers and graph integration.
 
 Status: merged to `main` (PR #2, `699d9ff`); tool-call recovery (#3, #8) and

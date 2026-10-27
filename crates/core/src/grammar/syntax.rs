@@ -108,11 +108,6 @@ impl ScratchCharge for PExpr {
     const CHARGE: usize = 112;
 }
 const _: () = assert!(core::mem::size_of::<PExpr>() <= PExpr::CHARGE);
-impl ScratchCharge for ScratchVec<u8> {
-    const CHARGE: usize = 40;
-}
-const _: () =
-    assert!(core::mem::size_of::<ScratchVec<u8>>() <= <ScratchVec<u8> as ScratchCharge>::CHARGE);
 
 #[derive(Debug)]
 #[expect(

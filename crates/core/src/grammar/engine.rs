@@ -725,7 +725,7 @@ impl<'s> Step<'_, 's> {
                             .program
                             .insert_alternatives
                             .iter()
-                            .filter(|(lit, _)| &literals[*lit as usize].bytes == token)
+                            .filter(|(lit, _)| literals[*lit as usize].bytes.as_slice() == token)
                             .flat_map(|(_, alternatives)| alternatives)
                             .any(|lit| spells(&literals[*lit as usize].bytes));
                 }
@@ -843,7 +843,7 @@ impl<'s> Step<'_, 's> {
             replacement: if deleted {
                 Vec::new()
             } else {
-                canonical.clone()
+                canonical.as_slice().to_vec()
             },
         };
         thread.hist = self.arena.edit(thread.hist, edit, governor)?;
@@ -1150,7 +1150,7 @@ impl<'s> Step<'_, 's> {
                 operator: EditOperator::TokenMisspelled,
                 span: thread.entry..end,
                 original: token.to_vec(),
-                replacement: literal.bytes.clone(),
+                replacement: literal.bytes.as_slice().to_vec(),
             };
             thread.hist = self.arena.edit(thread.hist, edit, governor)?;
             return self.finish_literal(thread, next, end, stack, out, governor);
@@ -1173,7 +1173,7 @@ impl<'s> Step<'_, 's> {
             operator: EditOperator::CloserMisspelled,
             span: thread.entry..end,
             original: token.to_vec(),
-            replacement: literal.bytes.clone(),
+            replacement: literal.bytes.as_slice().to_vec(),
         };
         thread.hist = self.arena.edit(thread.hist, edit, governor)?;
         self.finish_literal(thread, next, end, stack, out, governor)
@@ -2035,7 +2035,10 @@ impl<'s> Step<'_, 's> {
                         operator: EditOperator::MissingToken,
                         span: at..at,
                         original: Vec::new(),
-                        replacement: self.grammar.literals[lit as usize].bytes.clone(),
+                        replacement: self.grammar.literals[lit as usize]
+                            .bytes
+                            .as_slice()
+                            .to_vec(),
                     };
                     let node = self.arena.edit(hist, edit, governor)?;
                     let cost = cost.saturating_add(EditOperator::MissingToken.rule().cost);
@@ -5800,7 +5803,12 @@ impl<'s> Engine<'s> {
         let closers: Vec<&[u8]> = grammar
             .closers
             .iter()
-            .flat_map(|class| class.spellings.iter().map(Vec::as_slice))
+            .flat_map(|class| {
+                class
+                    .spellings
+                    .iter()
+                    .map(crate::contract::ScratchVec::as_slice)
+            })
             .collect();
         // A reasoning block's opening marker: the block's bytes belong to
         // the block, never to the wrapper (see `Recognizer::ended`).

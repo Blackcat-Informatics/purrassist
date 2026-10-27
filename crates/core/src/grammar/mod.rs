@@ -129,7 +129,10 @@
 //! let Expr::Sequence(items) = grammar.call() else { unreachable!() };
 //! assert!(matches!(&items[1], Expr::Capture { kind: CaptureKind::Name, .. }));
 //! let Expr::Closer(end) = items[2] else { unreachable!() };
-//! assert_eq!(grammar.closer_spellings(end), [b"</c>".to_vec(), b"</cs>".to_vec()]);
+//! let spellings = grammar.closer_spellings(end);
+//! assert_eq!(spellings.len(), 2);
+//! assert_eq!(spellings[0].as_slice(), b"</c>");
+//! assert_eq!(spellings[1].as_slice(), b"</cs>");
 //! # Ok::<(), purrassist_core::grammar::GrammarError>(())
 //! ```
 pub(crate) mod automaton;
@@ -265,9 +268,55 @@ table_id!(
     ProductionId
 );
 
+/// Read-only, fallibly allocated expression items retained by their grammar.
+///
+/// Equality compares expressions, independent of the admitting governor.
+/// Construction belongs to [`Grammar::compile_governed`]; borrowing items
+/// never clones their storage or changes their admission.
+///
+/// ```
+/// use purrassist_core::{Budget, Governor, grammar::{Grammar, Expr}};
+/// let source = r#"grammar "items"; call = "<c>" ("a" | "b")?; result = "<r>"; declaration = "<d>";"#;
+/// let grammar = Grammar::compile_governed(source, &mut Governor::new(Budget::default())).unwrap();
+/// let Expr::Sequence(items) = grammar.call() else { unreachable!() };
+/// let Expr::Repeat { inner, .. } = &items[1] else { unreachable!() };
+/// assert!(matches!(&**inner, Expr::Choice(alternatives) if alternatives.len() == 2));
+/// ```
+#[derive(Debug, PartialEq, Eq)]
+pub struct ExprItems(crate::contract::ScratchVec<Expr>);
+impl core::ops::Deref for ExprItems {
+    type Target = [Expr];
+    fn deref(&self) -> &[Expr] {
+        self.0.as_slice()
+    }
+}
+impl<'a> IntoIterator for &'a ExprItems {
+    type Item = &'a Expr;
+    type IntoIter = core::slice::Iter<'a, Expr>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+/// Exactly one read-only expression; its storage remains release-owned.
+///
+/// The compiler alone constructs this cardinality invariant. Dereferencing
+/// borrows the child as shown in [`ExprItems`]; equality compares its content.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ExprChild(crate::contract::ScratchVec<Expr>);
+impl core::ops::Deref for ExprChild {
+    type Target = Expr;
+    fn deref(&self) -> &Expr {
+        &self.0.as_slice()[0]
+    }
+}
+impl crate::contract::ScratchCharge for Expr {
+    const CHARGE: usize = 64;
+}
+const _: () = assert!(core::mem::size_of::<Expr>() <= 64);
+
 /// A compiled production expression, as written (references are not
 /// inlined), so a printer can interpret it in reverse.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Expr {
     /// A literal terminal.
     Literal(LiteralId),
@@ -289,16 +338,16 @@ pub enum Expr {
         /// What the capture records.
         kind: CaptureKind,
         /// The captured expression.
-        inner: Box<Self>,
+        inner: ExprChild,
     },
     /// Items in order.
-    Sequence(Vec<Self>),
+    Sequence(ExprItems),
     /// Alternatives.
-    Choice(Vec<Self>),
+    Choice(ExprItems),
     /// `inner` repeated between `min` and `max` (unbounded when `None`) times.
     Repeat {
         /// The repeated expression.
-        inner: Box<Self>,
+        inner: ExprChild,
         /// Minimum repetitions.
         min: u32,
         /// Maximum repetitions.
@@ -556,10 +605,18 @@ impl Grammar {
     /// Parser recursion and AST ownership height each have a native ceiling
     /// of 128 in addition to caller `Depth`, including postfix nesting.
     ///
-    /// Later resolution, instruction and table construction also charge work
-    /// and storage (see [`cost::K_COMPILE`]), but their allocations and native
-    /// pattern preparation are not completely governed. This syntax phase
-    /// does not establish complete cold compiler governance.
+    /// First-party declarations, source identity hashing, name/codec/capture
+    /// binding and retained expression storage also admit scans, copies,
+    /// diagnostics and fallible ownership. Source/expression owners remain live
+    /// through later failures and the compiled artifact lifetime. Public
+    /// [`ExprChild`]/[`ExprItems`] provide read-only borrowed views.
+    ///
+    /// The same cycle admission precedes layout traversal and caches expanded
+    /// reference heights, including finished shared tails. Caller depth and a
+    /// native aggregate ceiling of 128 apply before recursive backend use.
+    /// Native pattern/automaton preparation and later matcher, repair-table and
+    /// recognizer-program allocations retain their existing separate contracts;
+    /// complete cold backend governance remains under #36.
     ///
     /// # Errors
     /// Returns a typed [`GrammarError`] with the source offset for malformed
@@ -586,28 +643,32 @@ impl Grammar {
         governor: &mut Governor,
     ) -> Result<CompiledGrammar, GrammarError> {
         let document = syntax::parse(text, governor)?;
+        // The source identity is another first-party scan, separate from syntax.
+        let hash_work = u64::try_from(text.len())
+            .map_err(|_| governor.stop_resource(crate::contract::Resource::Work))?;
+        governor.charge(crate::contract::Resource::Work, hash_work)?;
         compile::compile(document, Digest::of(text.as_bytes()), governor)
     }
 }
 
 /// The literal spellings a closer class accepts, canonical first.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) struct CloserClass {
-    pub(crate) name: String,
-    pub(crate) spellings: Vec<Vec<u8>>,
+    pub(crate) name: crate::contract::ScratchString,
+    pub(crate) spellings: crate::contract::ScratchVec<crate::contract::ScratchVec<u8>>,
 }
 
 /// One literal terminal: its bytes and, for a closer reference, its class.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) struct Literal {
-    pub(crate) bytes: Vec<u8>,
+    pub(crate) bytes: crate::contract::ScratchVec<u8>,
     pub(crate) closer: Option<CloserId>,
 }
 
 /// One class terminal: its source and compiled automaton.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct ClassTerminal {
-    pub(crate) source: String,
+    pub(crate) source: crate::contract::ScratchString,
     pub(crate) automaton: ByteAutomaton,
 }
 
@@ -628,16 +689,16 @@ impl ClassTerminal {
 
 /// One delimiter set: the declared literals, and the matcher over them and
 /// their confusable spellings.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct DelimiterSet {
-    pub(crate) declared: Vec<Vec<u8>>,
+    pub(crate) declared: crate::contract::ScratchVec<crate::contract::ScratchVec<u8>>,
     pub(crate) matcher: automaton::Matcher,
 }
 
 /// One named production.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct Production {
-    pub(crate) name: String,
+    pub(crate) name: crate::contract::ScratchString,
     pub(crate) expr: Expr,
 }
 
@@ -667,26 +728,32 @@ pub struct CallEnd {
 /// reference, and the byte-level recognizer tables for `call` and `result`.
 /// Grammars are identified by their id and the SHA-256 digest of their
 /// source text.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct CompiledGrammar {
     pub(crate) id: String,
     pub(crate) digest: Digest,
-    pub(crate) literals: Vec<Literal>,
+    pub(crate) literals: crate::contract::ScratchVec<Literal>,
     pub(crate) literal_tables: Vec<LiteralTables>,
-    pub(crate) closers: Vec<CloserClass>,
-    pub(crate) confusables: Vec<(Vec<u8>, Vec<u8>)>,
-    pub(crate) classes: Vec<ClassTerminal>,
+    pub(crate) closers: crate::contract::ScratchVec<CloserClass>,
+    pub(crate) confusables: crate::contract::ScratchVec<(
+        crate::contract::ScratchVec<u8>,
+        crate::contract::ScratchVec<u8>,
+    )>,
+    pub(crate) classes: crate::contract::ScratchVec<ClassTerminal>,
     pub(crate) delimiters: Vec<DelimiterSet>,
-    pub(crate) productions: Vec<Production>,
+    pub(crate) productions: crate::contract::ScratchVec<Production>,
     pub(crate) call: ProductionId,
     pub(crate) call_ids: bool,
     pub(crate) declaration_content: bool,
     pub(crate) json_envelope: bool,
     pub(crate) result: ProductionId,
     pub(crate) declaration: ProductionId,
-    pub(crate) reasoning: Vec<(Vec<u8>, Vec<u8>)>,
+    pub(crate) reasoning: crate::contract::ScratchVec<(
+        crate::contract::ScratchVec<u8>,
+        crate::contract::ScratchVec<u8>,
+    )>,
     /// Per `reasoning` pair, whether it is declared `explicit`.
-    pub(crate) explicit_reasoning: Vec<bool>,
+    pub(crate) explicit_reasoning: crate::contract::ScratchVec<bool>,
     /// See [`Self::call_ends`].
     pub(crate) call_ends: Vec<CallEnd>,
     /// See [`Self::call_literals`].
@@ -697,11 +764,12 @@ pub struct CompiledGrammar {
     pub(crate) programs: [Program; 2],
     pub(crate) stray: automaton::Trie,
     pub(crate) longest: usize,
-    pub(crate) layouts: Vec<Option<Vec<u8>>>,
+    pub(crate) layouts: crate::contract::ScratchVec<Option<crate::contract::ScratchVec<u8>>>,
 }
 
 // Compiled grammars are shared across threads (`DialectId::Custom` holds an
-// `Arc`): every table they hold is plain, owned data.
+// `Arc`). Retained source owners are Send + Sync; their shared scratch meter
+// accounts for lifetime and does not participate in semantic reads.
 const _: fn() = || {
     const fn shareable<T: Send + Sync>() {}
     shareable::<CompiledGrammar>();
@@ -858,7 +926,7 @@ impl CompiledGrammar {
         self.productions
             .iter()
             .enumerate()
-            .find(|(_, production)| production.name == name)
+            .find(|(_, production)| production.name.as_str() == name)
             .map(|(index, production)| (ProductionId(index_u32(index)), &production.expr))
     }
 
@@ -898,7 +966,7 @@ impl CompiledGrammar {
     ///
     /// See the [module documentation](self) for an example.
     #[must_use]
-    pub fn closer_spellings(&self, id: CloserId) -> &[Vec<u8>] {
+    pub fn closer_spellings(&self, id: CloserId) -> &[crate::contract::ScratchVec<u8>] {
         &self.closers[id.index()].spellings
     }
 
@@ -936,10 +1004,10 @@ impl CompiledGrammar {
     /// let grammar = Grammar::compile_governed(text, &mut Governor::new(Budget::default())).unwrap();
     /// let Expr::Sequence(items) = grammar.call() else { unreachable!() };
     /// let Expr::Until(set) = items[1] else { unreachable!() };
-    /// assert_eq!(grammar.delimiters(set), [b"</c>".to_vec(), b"<c>".to_vec()]);
+    /// assert_eq!(grammar.delimiters(set).iter().map(|bytes| bytes.as_slice()).collect::<Vec<_>>(), [&b"</c>"[..], &b"<c>"[..]]);
     /// ```
     #[must_use]
-    pub fn delimiters(&self, id: DelimiterSetId) -> &[Vec<u8>] {
+    pub fn delimiters(&self, id: DelimiterSetId) -> &[crate::contract::ScratchVec<u8>] {
         &self.delimiters[id.index()].declared
     }
 
@@ -950,10 +1018,16 @@ impl CompiledGrammar {
     /// # use purrassist_core::{Budget, Governor};
     /// let text = "grammar \"g\"; confusable \"｜\" \"|\"; call = \"<｜c｜>\"; result = \"<r>\"; declaration = \"<d>\";";
     /// let grammar = Grammar::compile_governed(text, &mut Governor::new(Budget::default())).unwrap();
-    /// assert_eq!(grammar.confusables(), [("｜".as_bytes().to_vec(), b"|".to_vec())]);
+    /// assert_eq!(grammar.confusables()[0].0.as_slice(), "｜".as_bytes());
+    /// assert_eq!(grammar.confusables()[0].1.as_slice(), b"|");
     /// ```
     #[must_use]
-    pub fn confusables(&self) -> &[(Vec<u8>, Vec<u8>)] {
+    pub fn confusables(
+        &self,
+    ) -> &[(
+        crate::contract::ScratchVec<u8>,
+        crate::contract::ScratchVec<u8>,
+    )] {
         &self.confusables
     }
 
@@ -1002,10 +1076,16 @@ impl CompiledGrammar {
     /// let text = "grammar \"g\"; reasoning \"<think>\" \"</think>\"; reasoning \"[T]\" \"[/T]\"; call = \"<c>\"; result = \"<r>\"; declaration = \"<d>\";";
     /// let grammar = Grammar::compile_governed(text, &mut Governor::new(Budget::default())).unwrap();
     /// assert_eq!(grammar.reasoning_markers().len(), 2);
-    /// assert_eq!(grammar.reasoning_markers()[1], (b"[T]".to_vec(), b"[/T]".to_vec()));
+    /// assert_eq!(grammar.reasoning_markers()[1].0.as_slice(), b"[T]");
+    /// assert_eq!(grammar.reasoning_markers()[1].1.as_slice(), b"[/T]");
     /// ```
     #[must_use]
-    pub fn reasoning_markers(&self) -> &[(Vec<u8>, Vec<u8>)] {
+    pub fn reasoning_markers(
+        &self,
+    ) -> &[(
+        crate::contract::ScratchVec<u8>,
+        crate::contract::ScratchVec<u8>,
+    )] {
         &self.reasoning
     }
 
