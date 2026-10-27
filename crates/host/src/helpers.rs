@@ -40,16 +40,19 @@ impl std::fmt::Debug for Request {
     }
 }
 /// A prepared helper request, consuming one explicitly admitted helper call.
+///
 /// Complete it once with a response; it cannot alter its bound source or schema.
-pub struct Pending {
+/// The caller retains the prepared schema and keeps it alive until completion;
+/// preparation borrows it without cloning compiled patterns.
+pub struct Pending<'s> {
     request: Request,
     provider: Provider,
     model: String,
     original: String,
-    schema: Schema,
+    schema: &'s Schema,
     governor: Governor,
 }
-impl std::fmt::Debug for Pending {
+impl std::fmt::Debug for Pending<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Pending")
             .field("provider", &self.provider)
@@ -58,7 +61,7 @@ impl std::fmt::Debug for Pending {
             .finish_non_exhaustive()
     }
 }
-impl Pending {
+impl<'s> Pending<'s> {
     /// Prepare a JSON recovery proposal request with explicit model and token limit,
     /// charged against a caller-owned, shared governor.
     /// The full schema is supplied as context, without coercing it into a provider's
@@ -91,7 +94,7 @@ impl Pending {
         provider: Provider,
         model: &str,
         original: &str,
-        schema: &Schema,
+        schema: &'s Schema,
         max_output_tokens: u64,
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
@@ -103,7 +106,7 @@ impl Pending {
         governor.charge(Resource::HelperCalls, 1)?;
         governor.charge(Resource::EvidenceEntries, 1)?;
         governor.charge(Resource::InputBytes, size(original.len()))?;
-        // `schema.document().clone()`, this `Pending`'s own `schema.clone()`,
+        // `schema.document().clone()`,
         // the serialized `prompt`, and the serialized request `body` are each
         // bounded by the schema, input, and model size including repeated JSON
         // escaping; charge all of them using a non-serializing estimate before
@@ -136,7 +139,7 @@ impl Pending {
             provider,
             model: model.into(),
             original: original.into(),
-            schema: schema.clone(),
+            schema,
             governor: governor.clone(),
         })
     }
@@ -158,8 +161,9 @@ impl Pending {
     /// let token = CancellationToken::new();
     /// let mut governor = Governor::with_cancellation(
     ///     Budget { helper_calls: 1, ..Budget::default() }, token.clone());
+    /// let schema = Schema::compile("true")?;
     /// let pending = Pending::prepare(Provider::AnthropicMessages, "example-model",
-    ///     "42", &Schema::compile("true")?, 32, &mut governor)?;
+    ///     "42", &schema, 32, &mut governor)?;
     /// token.cancel();
     /// let result = pending.complete(200, "{}");
     /// assert_eq!(result.outcome, Outcome::Unresolved);

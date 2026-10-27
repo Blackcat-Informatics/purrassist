@@ -1109,8 +1109,9 @@ identifier ranges; missing generated fixed properties fail explicitly. Temporary
 metadata releases on every exit; returned diagnostic strings retain admission.
 The old uncharged scalar-count pass is removed. AST/interval/Box/Rc storage
 retains the separate `source.len() * 48 + 256` estimate; Unicode class expansion,
-AST classification, derivative artifact ownership/cloning and runtime allocation
-governance remain separate contracts. Public Clone behavior is unchanged.
+AST classification and runtime allocation governance remain separate contracts.
+Derivative artifacts now retain release-owned buffers and actual consumers borrow
+prepared patterns, as described below.
 
 ## Dense matcher and explicit prepared contexts — implemented prerequisite
 
@@ -1152,3 +1153,38 @@ governor. Native pattern preparation, engine/recovery runtime governance and ful
 #36 witness, GBNF, signature, projection, routing, ledger and graph integration
 remain separate required capabilities. No set-owned disallowed-signature table
 exists: detection filters static family rules at runtime through its allow-list.
+
+
+## Release-owned derivative artifacts and borrowed consumers
+
+Native Unicode and direct-byte compilation retain term/index scratch owners,
+class `Buffer` owners and cut storage through the compiled artifact lifetime.
+The old permanent-retention and class-table transfer paths are removed. Native
+translation uses the existing metered arena for lookup/shift work and admits
+traversal, interval comparisons/copies, canonical unions, boundary lookups, cut
+sorting/deduplication and final cancellation before publication. Translation
+root depth is one; each AST child adds one. Caller depth and a native recursive
+translation ceiling of 128 both apply and refuse with sticky typed exhaustion.
+Term IDs and finite repetition counts use checked encoding; an unrepresentable
+finite `max + 1` returns sticky work exhaustion without changing its language.
+The parser and earlier AST classification retain their separate boundaries.
+
+`Pattern` owns the existing `source.len() * 48 + 256` syntax-estimate lease.
+Dropping syntax, including `into_automaton`, releases it; the detached automaton
+keeps its original derivative owners until drop. Actual AST/interval/Box/Rc
+allocation, Unicode class expansion and AST classification remain unfinished.
+Runtime sessions retain their existing admitted mutable copies and contracts.
+
+Infallible `Clone` is removed from patterns/automata, schemas, compiled tools,
+tool sets and their pattern-bearing shape owners. Schema child preparation
+snapshots only vocabularies, document, route, pointer and base, without copying
+unused children/pattern tables. Generation and checking borrow existing patterns;
+`GenerateOptions::avoid` takes borrowed pattern references through admitted
+reference storage. Host `Pending` borrows the caller's schema through completion.
+Actual callers, examples and tests retain their schemas and exclusions in scope;
+request/provenance and language semantics are preserved.
+
+This prerequisite does not establish complete native compiler or runtime
+allocation governance. Lazy built-ins retain their separate governor. Full #36
+witness, GBNF, signature, projection, routing, ledger and graph integration remain
+required, alongside the remaining AST/range/classification preparation.

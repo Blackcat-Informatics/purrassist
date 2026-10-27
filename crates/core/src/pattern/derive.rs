@@ -58,6 +58,8 @@ pub(crate) enum Term {
 }
 const DEAD_ID: u32 = 0;
 const EMPTY_ID: u32 = 1;
+/// Recursive AST lowering is bounded independently of parser/classification phases.
+const NATIVE_TRANSLATION_DEPTH: u64 = 128;
 
 /// The zero-width context at one absolute text position, shared by every
 /// simultaneously-live derivation there (see the module doc).
@@ -87,10 +89,10 @@ trait Arena {
 /// Caller-retained, already-admitted compile arena. Its sorted index uses
 /// the same pairs as the temporary `ScratchMap`, so ownership transfer never
 /// copies or allocates and no source-length estimate bounds term growth.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct CompileArena {
-    items: Vec<Term>,
-    index: Vec<(Term, u32)>,
+    items: ScratchVec<Term>,
+    index: ScratchMap<Term, u32>,
 }
 
 /// Every state and transition discovered while matching or generating one
@@ -110,10 +112,10 @@ impl MatchArena {
         })
     }
 
-    fn into_retained(self) -> CompileArena {
+    fn into_compiled(self) -> CompileArena {
         CompileArena {
-            items: self.items.into_vec(),
-            index: self.index.into_pairs(),
+            items: self.items,
+            index: self.index,
         }
     }
 
@@ -125,7 +127,7 @@ impl MatchArena {
         let mut items = ScratchVec::new(governor);
         items.extend(base.items.iter().copied())?;
         let mut index = ScratchMap::new(governor);
-        for (term, id) in &base.index {
+        for (term, id) in base.index.iter() {
             index.insert(*term, *id)?;
         }
         Ok(Self { items, index })
@@ -145,7 +147,7 @@ impl MatchArena {
             return Ok(*id);
         }
         let id = u32::try_from(self.items.len())
-            .map_err(|_| StopReason::BudgetExceeded(Resource::ScratchBytes))?;
+            .map_err(|_| governor.stop_resource(Resource::ScratchBytes))?;
         if metered {
             map_work(self.index.len(), true, governor)?;
         }
@@ -270,8 +272,8 @@ fn intern_class(
         Resource::Work,
         u64::try_from(intervals.len()).unwrap_or(u64::MAX),
     )?;
-    let index = u32::try_from(classes.len())
-        .map_err(|_| StopReason::BudgetExceeded(Resource::ScratchBytes))?;
+    let index =
+        u32::try_from(classes.len()).map_err(|_| governor.stop_resource(Resource::ScratchBytes))?;
     let mut copied = ScratchVec::new(governor);
     copied.extend(intervals.iter().copied())?;
     classes.push(Buffer::from_scratch(copied, governor))?;
@@ -283,8 +285,16 @@ fn translate<A: Arena>(
     arena: &mut A,
     classes: &mut ScratchVec<Buffer<(u32, u32)>>,
     governor: &mut Governor,
+    depth: u64,
 ) -> Result<u32, StopReason> {
+    governor.charge(Resource::Depth, depth)?;
+    if depth > NATIVE_TRANSLATION_DEPTH {
+        return Err(governor.stop_resource(Resource::Depth));
+    }
     governor.charge(Resource::Work, 1)?;
+    let next_depth = depth
+        .checked_add(1)
+        .ok_or_else(|| governor.stop_resource(Resource::Depth))?;
     Ok(match node {
         Node::Empty => EMPTY_ID,
         // Neither `Backref` nor `Look` ever reaches this engine:
@@ -299,7 +309,7 @@ fn translate<A: Arena>(
         Node::Concat(items) => {
             let mut id = EMPTY_ID;
             for item in items {
-                let next = translate(item, arena, classes, governor)?;
+                let next = translate(item, arena, classes, governor, next_depth)?;
                 id = mk_concat(id, next, arena, governor)?;
             }
             id
@@ -307,23 +317,28 @@ fn translate<A: Arena>(
         Node::Alternate(items) => {
             let mut id = DEAD_ID;
             for item in items {
-                let next = translate(item, arena, classes, governor)?;
+                let next = translate(item, arena, classes, governor, next_depth)?;
                 id = mk_or(id, next, arena, governor)?;
             }
             id
         }
         Node::Repeat(repetition) => {
-            let inner = translate(&repetition.inner, arena, classes, governor)?;
-            let max_code = repetition.max.map_or(0, |max| {
-                u64::try_from(max).unwrap_or(u64::MAX - 1).saturating_add(1)
-            });
-            let min = u64::try_from(repetition.min).unwrap_or(u64::MAX);
+            let inner = translate(&repetition.inner, arena, classes, governor, next_depth)?;
+            let max_code = match repetition.max {
+                Some(max) => u64::try_from(max)
+                    .ok()
+                    .and_then(|max| max.checked_add(1))
+                    .ok_or_else(|| governor.stop_resource(Resource::Work))?,
+                None => 0,
+            };
+            let min = u64::try_from(repetition.min)
+                .map_err(|_| governor.stop_resource(Resource::Work))?;
             arena.intern(
                 Term::Repeat(inner, min, max_code, repetition.greedy),
                 governor,
             )?
         }
-        Node::Group(_, inner) => translate(inner, arena, classes, governor)?,
+        Node::Group(_, inner) => translate(inner, arena, classes, governor, next_depth)?,
         Node::Start => arena.intern(Term::Start, governor)?,
         Node::End => arena.intern(Term::End, governor)?,
         Node::Boundary(positive) => arena.intern(Term::Boundary(*positive), governor)?,
@@ -332,12 +347,12 @@ fn translate<A: Arena>(
 
 /// The pattern's static structure, built once at compile time and reused,
 /// read-only, by every `is_match`/`generate` call.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(super) struct Compiled {
     base: CompileArena,
     root: u32,
-    classes: Vec<Vec<(u32, u32)>>,
-    cuts: Vec<u32>,
+    classes: ScratchVec<Buffer<(u32, u32)>>,
+    cuts: Buffer<u32>,
 }
 
 fn collect_cuts(
@@ -359,20 +374,19 @@ fn collect_cuts(
     Ok(())
 }
 
-impl crate::contract::ScratchCharge for Vec<(u32, u32)> {
-    const CHARGE: usize = {
-        assert!(core::mem::size_of::<Self>() <= 24);
-        24
-    };
-}
-
 /// Build the pattern's derivative automaton structure. Translation and
 /// canonical union share the caller's work/cancellation budget; any failure
 /// propagates rather than substituting an empty-language term.
 pub(super) fn compile(node: &Node, governor: &mut Governor) -> Result<Compiled, StopReason> {
     let mut base = MatchArena::new(governor)?;
     let mut classes = ScratchVec::new(governor);
-    let root = translate(node, &mut base, &mut classes, governor)?;
+    let root = translate(
+        node,
+        &mut MeteredArena(&mut base),
+        &mut classes,
+        governor,
+        1,
+    )?;
     retain_compiled(base, classes, root, false, governor)
 }
 
@@ -385,9 +399,12 @@ fn retain_compiled(
 ) -> Result<Compiled, StopReason> {
     let mut cuts = ScratchVec::new(governor);
     collect_cuts(classes.as_slice(), &mut cuts, governor)?;
-    governor.charge(Resource::Work, 2)?;
-    // Direct byte programs cannot construct assertion terms. Unicode programs
-    // retain their established lookup and Work schedule.
+    if !byte_program {
+        map_work(base.index.len(), false, governor)?;
+        map_work(base.index.len(), false, governor)?;
+    }
+    // Direct byte programs cannot construct assertion terms; native Unicode
+    // compilation admits both fixed-key boundary lookups before inspecting.
     let has_boundary = !byte_program
         && (base.index.get(&Term::Boundary(true)).is_some()
             || base.index.get(&Term::Boundary(false)).is_some());
@@ -403,27 +420,21 @@ fn retain_compiled(
             .unwrap_or(u64::MAX)
             .saturating_mul(u64::from(
                 cuts.values.len().checked_ilog2().unwrap_or(0) + 1,
-            )),
+            ))
+            .saturating_mul(4),
     )?;
     cuts.values.sort_unstable();
-    cuts.values.dedup();
-    // Reserve the final outer vector before retaining any inner storage.
-    // After the last check ownership transfer has no allocation or failure.
-    let mut retained_classes = ScratchVec::new(governor);
-    retained_classes.reserve(classes.len())?;
     governor.charge(
         Resource::Work,
-        u64::try_from(classes.len()).unwrap_or(u64::MAX),
+        u64::try_from(cuts.values.len()).unwrap_or(u64::MAX),
     )?;
-    let mut retained_classes = Buffer::from_scratch(retained_classes, governor);
-    for class in Buffer::from_scratch(classes, governor) {
-        retained_classes.values.push(class.into_retained());
-    }
+    cuts.values.dedup();
+    governor.check()?;
     Ok(Compiled {
-        base: base.into_retained(),
+        base: base.into_compiled(),
         root,
-        classes: retained_classes.into_retained(),
-        cuts: cuts.into_retained(),
+        classes,
+        cuts,
     })
 }
 
@@ -766,7 +777,7 @@ impl crate::contract::ScratchCharge for StepFrame {
 
 fn step<A: Arena>(
     arena: &mut A,
-    classes: &[Vec<(u32, u32)>],
+    classes: &[Buffer<(u32, u32)>],
     id: u32,
     code: u32,
     ctx: Ctx,
@@ -786,14 +797,16 @@ fn step<A: Arena>(
                 }
                 Term::Class(class_id) => {
                     if arena.metered() {
-                        map_work(classes[class_id as usize].len(), false, governor)?;
+                        map_work(classes[class_id as usize].values.len(), false, governor)?;
                     }
-                    derived =
-                        if super::unicode::interval_contains(&classes[class_id as usize], code) {
-                            EMPTY_ID
-                        } else {
-                            DEAD_ID
-                        };
+                    derived = if super::unicode::interval_contains(
+                        &classes[class_id as usize].values,
+                        code,
+                    ) {
+                        EMPTY_ID
+                    } else {
+                        DEAD_ID
+                    };
                 }
                 Term::Concat(a, b) => {
                     push_frame(&mut stack, StepFrame::Concat(a, b), metered, governor)?;
@@ -876,7 +889,7 @@ struct Transition {
 
 fn cached_step<A: Arena>(
     arena: &mut A,
-    classes: &[Vec<(u32, u32)>],
+    classes: &[Buffer<(u32, u32)>],
     cache: &mut TransitionCache,
     transition: &Transition,
     governor: &mut Governor,
@@ -1179,7 +1192,7 @@ impl<'p> DerivativeDfa<'p> {
             return Ok(next.invalid());
         };
         if !next.matched {
-            let (minterm, code) = minterm_representative(&self.compiled.cuts, bits);
+            let (minterm, code) = minterm_representative(&self.compiled.cuts.values, bits);
             let ctx = state.context(false, is_word(character));
             let stepped = cached_step(
                 &mut self.session.arena,
@@ -1397,11 +1410,11 @@ const fn valid_prefix(bits: u32, remaining: u8, length: u8) -> bool {
 pub(super) const fn root(compiled: &Compiled) -> u32 {
     compiled.root
 }
-pub(super) fn classes(compiled: &Compiled) -> &[Vec<(u32, u32)>] {
+pub(super) fn classes(compiled: &Compiled) -> &[Buffer<(u32, u32)>] {
     &compiled.classes
 }
 pub(super) fn cuts(compiled: &Compiled) -> &[u32] {
-    &compiled.cuts
+    &compiled.cuts.values
 }
 
 /// A single generation/matching session's arena and step cache, exposed to
@@ -1457,7 +1470,7 @@ impl Session {
     }
     pub(super) fn step_bytes(
         &mut self,
-        classes: &[Vec<(u32, u32)>],
+        classes: &[Buffer<(u32, u32)>],
         state: u32,
         code: u32,
         minterm: usize,
@@ -1492,7 +1505,7 @@ impl Session {
     }
     pub(super) fn step(
         &mut self,
-        classes: &[Vec<(u32, u32)>],
+        classes: &[Buffer<(u32, u32)>],
         state: u32,
         code: u32,
         minterm: usize,
@@ -1599,7 +1612,7 @@ pub(super) const fn dead(state: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{Arena, Compiled, DEAD_ID, MatchArena, Session, Term};
-    use crate::contract::{Budget, CancellationToken, Governor, Resource, StopReason};
+    use crate::contract::{Budget, CancellationToken, Governor, Resource, ScratchVec, StopReason};
 
     fn interleaved_chains(width: usize) -> (Compiled, u32, u32) {
         // Construct valid canonical input chains once without repeatedly
@@ -1628,10 +1641,10 @@ mod tests {
         let b = chain(1);
         (
             Compiled {
-                base: base.into_retained(),
+                base: base.into_compiled(),
                 root: a,
-                classes: Vec::new(),
-                cuts: Vec::new(),
+                classes: ScratchVec::new(&governor),
+                cuts: super::Buffer::from_scratch(ScratchVec::new(&governor), &governor),
             },
             a,
             b,
@@ -1777,7 +1790,8 @@ mod tests {
                 return true;
             }
             let Some(character) = next_char else { break };
-            let (minterm, code) = minterm_representative(&compiled.cuts, u32::from(character));
+            let (minterm, code) =
+                minterm_representative(&compiled.cuts.values, u32::from(character));
             let stepped = cached_step(
                 &mut session.arena,
                 &compiled.classes,

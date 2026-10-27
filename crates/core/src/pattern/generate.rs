@@ -367,7 +367,7 @@ pub(super) fn generate_compiled(
     governor.check()?;
     let mut target = lane_of_compiled(compiled, governor)?;
     let mut avoids = ScratchVec::new(governor);
-    for avoid in options.avoid {
+    for &avoid in options.avoid {
         avoids.push(lane_of(avoid, governor)?)?;
     }
     let mut avoids = Buffer::from_scratch(avoids, governor);
@@ -647,7 +647,7 @@ fn generate_backtrack(
             continue;
         }
         let mut forbidden = false;
-        for avoid in options.avoid {
+        for &avoid in options.avoid {
             if avoid.is_match(text, governor)? {
                 forbidden = true;
                 break;

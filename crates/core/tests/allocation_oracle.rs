@@ -1106,10 +1106,14 @@ fn wide_pattern_source(width: usize) -> String {
 #[test]
 fn oracle_pattern_compile_admits_retained_canonical_arena_without_slack() {
     let _guard = exclusive();
+    let compile_budget = Budget {
+        work: 1_000_000_000,
+        ..Budget::default()
+    };
     let mut previous_peak = 0;
     for width in [8, 64, 128] {
         let source = wide_pattern_source(width);
-        let mut governor = Governor::new(Budget::default());
+        let mut governor = Governor::new(compile_budget);
         let (result, measured) = measured_pattern_operation(&mut governor, None, |governor| {
             Pattern::compile_governed(&source, governor)
         });
@@ -1132,7 +1136,7 @@ fn oracle_pattern_compile_admits_retained_canonical_arena_without_slack() {
         ] {
             let mut governor = Governor::new(Budget {
                 scratch_bytes,
-                ..Budget::default()
+                ..compile_budget
             });
             let (result, measured) = measured_pattern_operation(&mut governor, None, |governor| {
                 Pattern::compile_governed(&source, governor)
@@ -1155,8 +1159,12 @@ fn oracle_pattern_compile_admits_retained_canonical_arena_without_slack() {
 #[test]
 fn oracle_pattern_compile_exhaustion_and_cancellation_release_partial_owners() {
     let _guard = exclusive();
+    let compile_budget = Budget {
+        work: 1_000_000_000,
+        ..Budget::default()
+    };
     let source = wide_pattern_source(128);
-    let mut completed = Governor::new(Budget::default());
+    let mut completed = Governor::new(compile_budget);
     let (result, measured) = measured_pattern_operation(&mut completed, None, |governor| {
         Pattern::compile_governed(&source, governor)
     });
@@ -1165,11 +1173,11 @@ fn oracle_pattern_compile_exhaustion_and_cancellation_release_partial_owners() {
     for budget in [
         Budget {
             scratch_bytes: 140_000,
-            ..Budget::default()
+            ..compile_budget
         },
         Budget {
             work: completed.usage().work - 1,
-            ..Budget::default()
+            ..compile_budget
         },
     ] {
         let mut governor = Governor::new(budget);
@@ -1184,7 +1192,7 @@ fn oracle_pattern_compile_exhaustion_and_cancellation_release_partial_owners() {
     }
     for at in [0, 1024, measured.total] {
         let token = CancellationToken::new();
-        let mut governor = Governor::with_cancellation(Budget::default(), token.clone());
+        let mut governor = Governor::with_cancellation(compile_budget, token.clone());
         if at == 0 {
             token.cancel();
         }
@@ -1235,9 +1243,9 @@ fn generation_witness(result: Result<GenerateOutcome, StopReason>) -> String {
     }
 }
 
-fn assert_generated_match(pattern: &Pattern, avoids: &[Pattern], text: &str) {
+fn assert_generated_match(pattern: &Pattern, avoids: &[&Pattern], text: &str) {
     for (pattern, expected) in
-        std::iter::once((pattern, true)).chain(avoids.iter().map(|avoid| (avoid, false)))
+        std::iter::once((pattern, true)).chain(avoids.iter().map(|&avoid| (avoid, false)))
     {
         assert_eq!(
             pattern.is_match(text, &mut Governor::new(generation_budget())),
@@ -1363,6 +1371,7 @@ fn oracle_generation_frontiers_cycles_and_evidence_have_complete_ownership() {
             .iter()
             .map(|source| Pattern::compile(source).unwrap())
             .collect();
+        let avoids: Vec<_> = avoids.iter().collect();
         let mut governor = Governor::new(generation_budget());
         let (result, measured) = measured_generate(
             &pattern,
