@@ -10,7 +10,6 @@ use purrassist_core::grammar::{
 };
 use purrassist_core::tool_call::{ToolDefinition, ToolSet};
 use purrassist_core::{Budget, CancellationToken, Governor, StopReason, contract::Resource};
-use std::fmt::Write as _;
 
 fn governor() -> Governor {
     Governor::new(Budget::default())
@@ -179,28 +178,28 @@ fn check_temporary_then_refusal() {
 }
 
 fn check_native_ceiling() {
-    // Caller-large depth cannot bypass the operation's native traversal bound.
-    let mut source = String::from(
-        "grammar \"deep-print\"; call = \"<c>\"; declaration = \"<d>\"; result = \"prefix\" n0;",
-    );
-    for index in 0..130 {
-        write!(source, "n{index} = n{};", index + 1).unwrap();
+    // The compiler now bounds expanded expression depth. Original borrowed DOM
+    // input still needs the printer's independent native-depth admission.
+    let grammar = grammar(r#""<r>""#);
+    let mut node = purrassist_core::json::Node::new(purrassist_core::json::Value::Null);
+    for _ in 0..130 {
+        node = purrassist_core::json::Node::new(purrassist_core::json::Value::Array(vec![node]));
     }
-    source.push_str("n130 = \"tail\";");
-    let grammar = Grammar::compile_governed(
-        &source,
-        &mut Governor::new(Budget {
-            depth: 4096,
-            ..Budget::default()
-        }),
-    )
-    .unwrap();
+    let members = [purrassist_core::json::Member {
+        key: "nested".into(),
+        key_span: None,
+        value: node,
+    }];
+    let values = Values {
+        parameters: Some(&members),
+        ..Values::default()
+    };
     let mut g = Governor::new(Budget {
         depth: 4096,
         ..Budget::default()
     });
     assert_eq!(
-        canonical_governed(&grammar, Root::Result, Values::default(), &[], &mut g).unwrap_err(),
+        canonical_governed(&grammar, Root::Result, values, &[], &mut g).unwrap_err(),
         PrintError::Resource(StopReason::BudgetExceeded(Resource::Depth))
     );
     assert_eq!(g.check(), Err(StopReason::BudgetExceeded(Resource::Depth)));

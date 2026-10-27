@@ -991,11 +991,11 @@ fn arguments_text(
 fn xml_body(
     arguments: &Node,
     json: String,
-    delimiters: &[Vec<u8>],
+    delimiters: &[ScratchVec<u8>],
     shape: Option<&ArgumentShape>,
     governor: &mut Governor,
 ) -> Result<String, PrintError> {
-    let mut risky: Vec<&[u8]> = delimiters.iter().map(Vec::as_slice).collect();
+    let mut risky: Vec<&[u8]> = delimiters.iter().map(ScratchVec::as_slice).collect();
     risky.extend(PARAMETER_MARKUP);
     if let (Some(shape), Value::Object(members)) = (shape, &arguments.value) {
         let (body, expected) = parameter_body(members, &shape.arguments, &risky);
@@ -1524,7 +1524,7 @@ fn splice_call(
     let mut risky: Vec<&[u8]> = slot
         .map_or(&[][..], |(_, delimiters)| grammar.delimiters(delimiters))
         .iter()
-        .map(Vec::as_slice)
+        .map(ScratchVec::as_slice)
         .collect();
     if xml {
         risky.extend(PARAMETER_MARKUP);

@@ -101,19 +101,19 @@ pub(crate) fn misspells(token: &[u8], spelling: &[u8]) -> bool {
 /// misspells, when exactly one class does and no spelling of any class is
 /// `token` itself; otherwise `None` (an exact spelling, or a token close to
 /// two closers, is not a misspelling to repair).
-pub(crate) fn misspelled_class<'a>(
+pub(crate) fn misspelled_class<'a, B: AsRef<[u8]> + 'a>(
     token: &[u8],
-    classes: impl IntoIterator<Item = &'a [Vec<u8>]>,
+    classes: impl IntoIterator<Item = &'a [B]>,
 ) -> Option<usize> {
     let mut found = None;
     for (index, spellings) in classes.into_iter().enumerate() {
-        if spellings
-            .iter()
-            .any(|spelling| spelling.as_slice() == token)
-        {
+        if spellings.iter().any(|spelling| spelling.as_ref() == token) {
             return None;
         }
-        if spellings.iter().any(|spelling| misspells(token, spelling)) {
+        if spellings
+            .iter()
+            .any(|spelling| misspells(token, spelling.as_ref()))
+        {
             if found.is_some() {
                 return None;
             }

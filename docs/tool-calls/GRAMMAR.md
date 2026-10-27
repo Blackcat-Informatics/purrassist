@@ -385,6 +385,25 @@ caller. The per-byte recognition cost of a dialect is `K_THREAD` times its
 `configuration_bound()`; the published bound and the built-in values are in
 [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound).
 
+## Retained expression ownership and reference depth
+
+The compiler's declarations, names, original literal/closer/delimiter/marker
+bytes, layouts and retained expressions now use governed fallible owners.
+Public `Expr::Capture`/`Repeat` contain read-only `ExprChild`; sequence/choice
+contain `ExprItems`. Borrow them through Deref as expressions or slices. Their
+equality compares contents. Deep expression/compiled-grammar cloning is no
+longer available; dialects continue sharing compiled grammars through `Arc`.
+
+The existing cycle check precedes layout reference traversal. It also computes
+expanded heights from cached finished targets, admitting caller depth and an
+aggregate native ceiling of 128. A cyclic layout returns `GrammarError::Recursive`;
+excessive expansion returns the original sticky depth-resource cause. Successful
+recognition, canonical bytes and layout semantics remain unchanged.
+
+Native pattern/automaton preparation and later matcher, repair-table and
+recognizer-program allocation remain separate #36 requirements. These governed
+first-party phases do not establish complete cold compiler governance.
+
 ## Print a prepared grammar
 
 `grammar::print::canonical_governed` accepts a caller-prepared

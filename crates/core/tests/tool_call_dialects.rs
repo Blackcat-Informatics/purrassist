@@ -729,8 +729,8 @@ fn reasoning_markers_are_declared() {
         .iter()
         .map(|(open, close)| {
             (
-                String::from_utf8(open.clone()).expect("UTF-8"),
-                String::from_utf8(close.clone()).expect("UTF-8"),
+                String::from_utf8(open.as_slice().to_vec()).expect("UTF-8"),
+                String::from_utf8(close.as_slice().to_vec()).expect("UTF-8"),
             )
         })
         .collect();
@@ -759,7 +759,7 @@ fn reasoning_markers_are_declared() {
             .grammar()
             .reasoning_markers()
             .iter()
-            .cloned(),
+            .map(|(open, close)| (open.as_slice().to_vec(), close.as_slice().to_vec())),
     );
     expected.sort();
     assert_eq!(set.reasoning_markers(), expected);

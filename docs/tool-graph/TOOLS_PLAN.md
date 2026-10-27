@@ -1056,7 +1056,22 @@ original grammar identity is retained only after final fallible construction
 and cancellation checks. The existing `canonical_print` consumer exercises the
 actual public compiler path; there is no alternate public lexer or parser.
 
-This completes the private syntax phase, not the complete cold compiler. Public
-compiled `Expr`/`Box` storage, lowering/intern/table allocations and native
-pattern preparation remain under #36. Full witness, GBNF, CompactSignature,
-projection, routing, ledgers and graph integration also remain parent acceptance.
+## First-party grammar lowering — implemented prerequisite
+
+Declaration/namespace/source storage, symbol binding, parameter-pair checks and
+retained production expressions now use governed fallible owners through the
+existing public compiler path. `ExprChild` and `ExprItems` expose read-only
+borrowed expression/slice views, with content equality and no infallible deep
+clone. Original literal, closer, delimiter, marker and layout bytes remain
+release-owned through later failures and the compiled artifact lifetime.
+
+The existing cycle admission precedes layout traversal and caches expanded
+production heights. Finished shared DAG tails count toward caller depth and a
+native aggregate ceiling of 128. Cyclic layouts return typed refusal instead
+of an unbounded reference walk. Existing recognition/canonical/witness callers
+use these same retained expressions.
+
+Native pattern/automaton preparation and later matcher, repair-table and
+recognizer-program allocations retain separate contracts. Full cold backend
+governance, witness, GBNF, CompactSignature, projection, routing, ledgers and
+graph integration remain #36 acceptance.

@@ -21,11 +21,14 @@ use super::cost::K_COMPILE;
 use super::syntax::{Document, PExpr, Statement};
 use super::{
     CallEnd, CaptureKind, ClassId, ClassTerminal, CloserClass, CloserId, CompiledGrammar,
-    DelimiterSet, DelimiterSetId, Expr, GrammarError, Literal, LiteralId, Production, ProductionId,
-    index_u32,
+    DelimiterSet, DelimiterSetId, Expr, ExprChild, ExprItems, GrammarError, Literal, LiteralId,
+    Production, ProductionId, index_u32,
 };
 use crate::contract::saturating_size as size;
-use crate::contract::{Governor, Resource, ScratchCharge, ScratchVec, StopReason};
+use crate::contract::{
+    Governor, Resource, ScratchCharge, ScratchString, ScratchVec, StopReason,
+    format_scratch_governed,
+};
 use crate::digest::Digest;
 use crate::pattern::{Pattern, PatternCompileError};
 
@@ -193,106 +196,211 @@ impl Spellings {
     }
 }
 
+type Bytes = ScratchVec<u8>;
+type ByteList = ScratchVec<Bytes>;
+type BytePairs = ScratchVec<(Bytes, Bytes)>;
+
+struct Symbol {
+    name: ScratchString,
+    target: Name,
+}
+impl ScratchCharge for Symbol {
+    const CHARGE: usize = 48;
+}
+struct Body<'a> {
+    name: ScratchString,
+    expr: &'a PExpr,
+}
+impl ScratchCharge for Body<'_> {
+    const CHARGE: usize = 48;
+}
+struct Layout<'a> {
+    name: &'a str,
+    text: &'a [u8],
+    at: usize,
+}
+impl ScratchCharge for Layout<'_> {
+    const CHARGE: usize = 40;
+}
+impl ScratchCharge for Option<Bytes> {
+    const CHARGE: usize = 48;
+}
+impl ScratchCharge for Literal {
+    const CHARGE: usize = 48;
+}
+impl ScratchCharge for CloserClass {
+    const CHARGE: usize = 80;
+}
+impl ScratchCharge for ClassTerminal {
+    // Source owner (40), two compile-arena vectors (48), root/padding (8), two vectors (48).
+    const CHARGE: usize = 144;
+}
+impl ScratchCharge for Production {
+    const CHARGE: usize = 104;
+}
+const _: () = {
+    assert!(core::mem::size_of::<Symbol>() <= Symbol::CHARGE);
+    assert!(core::mem::size_of::<Literal>() <= Literal::CHARGE);
+    assert!(core::mem::size_of::<CloserClass>() <= CloserClass::CHARGE);
+    assert!(core::mem::size_of::<ClassTerminal>() <= ClassTerminal::CHARGE);
+    assert!(core::mem::size_of::<Production>() <= Production::CHARGE);
+};
 struct Builder<'g> {
     governor: &'g mut Governor,
-    literals: Vec<Literal>,
-    closers: Vec<CloserClass>,
-    classes: Vec<ClassTerminal>,
-    delimiter_sets: Vec<Vec<Vec<u8>>>,
-    names: Vec<(String, Name, usize)>,
-    production_offsets: Vec<usize>,
+    literals: ScratchVec<Literal>,
+    closers: ScratchVec<CloserClass>,
+    classes: ScratchVec<ClassTerminal>,
+    delimiter_sets: ScratchVec<ByteList>,
+    names: ScratchVec<Symbol>,
+    production_offsets: ScratchVec<usize>,
 }
-
 #[derive(Clone, Copy)]
 enum Name {
     Production(u32),
     Closer(u32),
 }
 
+// Later backend tables retain their existing coarser accounting contract.
 fn charge(governor: &mut Governor, work: u64, scratch: u64) -> Result<(), GrammarError> {
     governor.charge(Resource::Work, work.saturating_mul(K_COMPILE))?;
     governor.charge(Resource::ScratchBytes, scratch)?;
     Ok(())
 }
-
+fn visit(depth: u64, governor: &mut Governor) -> Result<(), GrammarError> {
+    if depth > 128 {
+        return Err(governor.stop_resource(Resource::Depth).into());
+    }
+    governor.charge(Resource::Depth, depth)?;
+    governor.charge(Resource::Work, K_COMPILE)?;
+    Ok(())
+}
+fn symbol_index(index: usize, governor: &mut Governor) -> Result<u32, GrammarError> {
+    u32::try_from(index).map_err(|_| governor.stop_resource(Resource::ScratchBytes).into())
+}
+fn work_for(
+    length: usize,
+    factor: u64,
+    extra: u64,
+    governor: &mut Governor,
+) -> Result<(), GrammarError> {
+    let work = u64::try_from(length)
+        .ok()
+        .and_then(|n| n.checked_mul(factor))
+        .and_then(|n| n.checked_add(extra))
+        .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+    governor.charge(Resource::Work, work)?;
+    Ok(())
+}
+fn owned_bytes(bytes: &[u8], g: &mut Governor) -> Result<Bytes, GrammarError> {
+    g.charge(Resource::InputBytes, size(bytes.len()))?;
+    work_for(bytes.len(), 1, 1, g)?;
+    let mut output = ScratchVec::new(g);
+    output.extend(bytes.iter().copied())?;
+    Ok(output)
+}
+fn owned_text(text: &str, g: &mut Governor) -> Result<ScratchString, GrammarError> {
+    g.charge(Resource::InputBytes, size(text.len()))?;
+    work_for(text.len(), 1, 1, g)?;
+    let mut output = ScratchString::new(g);
+    output.push_str(text)?;
+    Ok(output)
+}
+fn equal(left: &[u8], right: &[u8], g: &mut Governor) -> Result<bool, GrammarError> {
+    work_for(left.len().min(right.len()), 1, 1, g)?;
+    Ok(left == right)
+}
+fn diagnostic(text: &str, g: &mut Governor) -> Result<String, GrammarError> {
+    let owned = owned_text(text, g)?;
+    g.check()?;
+    Ok(owned.into_string())
+}
 impl<'g> Builder<'g> {
-    /// An empty builder charging `governor`.
-    const fn new(governor: &'g mut Governor) -> Self {
+    fn new(governor: &'g mut Governor) -> Self {
         Self {
+            literals: ScratchVec::new(governor),
+            closers: ScratchVec::new(governor),
+            classes: ScratchVec::new(governor),
+            delimiter_sets: ScratchVec::new(governor),
+            names: ScratchVec::new(governor),
+            production_offsets: ScratchVec::new(governor),
             governor,
-            literals: Vec::new(),
-            closers: Vec::new(),
-            classes: Vec::new(),
-            delimiter_sets: Vec::new(),
-            names: Vec::new(),
-            production_offsets: Vec::new(),
         }
     }
 }
+fn intern_literal(
+    literals: &mut ScratchVec<Literal>,
+    bytes: &[u8],
+    closer: Option<CloserId>,
+    governor: &mut Governor,
+) -> Result<u32, GrammarError> {
+    for (index, literal) in literals.iter().enumerate() {
+        if equal(&literal.bytes, bytes, governor)? && literal.closer == closer {
+            return symbol_index(index, governor);
+        }
+    }
+    let index = symbol_index(literals.len(), governor)?;
+    let bytes = owned_bytes(bytes, governor)?;
+    literals.push(Literal { bytes, closer })?;
+    Ok(index)
+}
 
 impl Builder<'_> {
-    fn intern_literal(
-        &mut self,
-        bytes: &[u8],
-        closer: Option<CloserId>,
-    ) -> Result<u32, GrammarError> {
-        if let Some(index) = self
-            .literals
-            .iter()
-            .position(|literal| literal.bytes == bytes && literal.closer == closer)
-        {
-            return Ok(index_u32(index));
+    fn intern_delimiters(&mut self, literals: &[Bytes]) -> Result<u32, GrammarError> {
+        for (index, set) in self.delimiter_sets.iter().enumerate() {
+            self.governor.charge(Resource::Work, 1)?;
+            if set.len() != literals.len() {
+                continue;
+            }
+            let mut same = true;
+            for (left, right) in set.iter().zip(literals) {
+                if !equal(left, right, self.governor)? {
+                    same = false;
+                    break;
+                }
+            }
+            if same {
+                return symbol_index(index, self.governor);
+            }
         }
-        charge(self.governor, 1, size(bytes.len()).saturating_add(48))?;
-        self.literals.push(Literal {
-            bytes: bytes.to_vec(),
-            closer,
-        });
-        Ok(index_u32(self.literals.len() - 1))
-    }
-
-    fn intern_delimiters(&mut self, literals: &[ScratchVec<u8>]) -> Result<u32, GrammarError> {
-        if let Some(index) = self.delimiter_sets.iter().position(|set| {
-            set.len() == literals.len()
-                && set
-                    .iter()
-                    .zip(literals)
-                    .all(|(left, right)| left.as_slice() == right.as_slice())
-        }) {
-            return Ok(index_u32(index));
+        let index = symbol_index(self.delimiter_sets.len(), self.governor)?;
+        let mut set = ScratchVec::new(self.governor);
+        for literal in literals {
+            set.push(owned_bytes(literal, self.governor)?)?;
         }
-        let bytes: usize = literals.iter().map(ScratchVec::len).sum();
-        charge(
-            self.governor,
-            size(literals.len()),
-            size(bytes).saturating_add(64),
-        )?;
-        self.delimiter_sets.push(
-            literals
-                .iter()
-                .map(|literal| literal.as_slice().to_vec())
-                .collect(),
-        );
-        Ok(index_u32(self.delimiter_sets.len() - 1))
+        self.delimiter_sets.push(set)?;
+        Ok(index)
     }
-
     fn intern_class(&mut self, source: &str, at: usize) -> Result<u32, GrammarError> {
-        if let Some(index) = self.classes.iter().position(|class| class.source == source) {
-            return Ok(index_u32(index));
+        for (index, class) in self.classes.iter().enumerate() {
+            if equal(class.source.as_bytes(), source.as_bytes(), self.governor)? {
+                return symbol_index(index, self.governor);
+            }
         }
-        let anchored = format!("^(?:{source})$");
-        let pattern =
-            Pattern::compile_governed(&anchored, self.governor).map_err(|error| match error {
-                PatternCompileError::Syntax(error) => GrammarError::InvalidClass {
+        let index = symbol_index(self.classes.len(), self.governor)?;
+        let source_copy = owned_text(source, self.governor)?;
+        work_for(source.len(), 1, 128, self.governor)?;
+        let anchored = format_scratch_governed(format_args!("^(?:{source})$"), self.governor)?;
+        // Native pattern parsing/automaton preparation remains a separate contract.
+        let pattern = match Pattern::compile_governed(anchored.as_str(), self.governor) {
+            Ok(pattern) => pattern,
+            Err(PatternCompileError::Resource(reason)) => return Err(reason.into()),
+            Err(PatternCompileError::Syntax(error)) => {
+                work_for(source.len(), 64, 128, self.governor)?;
+                let message =
+                    format_scratch_governed(format_args!("{error}"), self.governor)?.into_string();
+                return Err(GrammarError::InvalidClass {
                     offset: at,
-                    message: error.to_string(),
-                },
-                PatternCompileError::Resource(reason) => GrammarError::Resource(reason),
-            })?;
+                    message,
+                });
+            }
+        };
         let Some(automaton) = pattern.into_automaton() else {
             return Err(GrammarError::InvalidClass {
                 offset: at,
-                message: "backreferences and lookaround are not finite-state".into(),
+                message: diagnostic(
+                    "backreferences and lookaround are not finite-state",
+                    self.governor,
+                )?,
             });
         };
         let mut dfa = automaton.dfa(self.governor)?;
@@ -300,35 +408,57 @@ impl Builder<'_> {
         if dfa.accepting(start, self.governor)? {
             return Err(GrammarError::InvalidClass {
                 offset: at,
-                message: "a class must not match the empty string; use `?` or `*`".into(),
+                message: diagnostic(
+                    "a class must not match the empty string; use `?` or `*`",
+                    self.governor,
+                )?,
             });
         }
         drop(dfa);
         self.classes.push(ClassTerminal {
-            source: source.to_owned(),
+            source: source_copy,
             automaton,
-        });
-        Ok(index_u32(self.classes.len() - 1))
+        })?;
+        Ok(index)
     }
-
-    fn lookup(&self, name: &str) -> Option<Name> {
-        self.names
-            .iter()
-            .find(|(known, _, _)| known == name)
-            .map(|(_, target, _)| *target)
-    }
-
-    fn resolve(&mut self, expr: &PExpr) -> Result<Expr, GrammarError> {
-        charge(self.governor, 1, 64)?;
-        Ok(match expr {
-            PExpr::Literal { bytes, .. } => {
-                Expr::Literal(LiteralId(self.intern_literal(bytes.as_slice(), None)?))
+    fn lookup(&mut self, name: &str) -> Result<Option<Name>, GrammarError> {
+        for symbol in &self.names {
+            if equal(symbol.name.as_bytes(), name.as_bytes(), self.governor)? {
+                return Ok(Some(symbol.target));
             }
+        }
+        Ok(None)
+    }
+    fn resolve(&mut self, expr: &PExpr) -> Result<Expr, GrammarError> {
+        self.resolve_at(expr, 0)
+    }
+    fn resolve_child(&mut self, expr: &PExpr, depth: u64) -> Result<ExprChild, GrammarError> {
+        let value = self.resolve_at(expr, depth)?;
+        let mut values = ScratchVec::new(self.governor);
+        values.push(value)?;
+        Ok(ExprChild(values))
+    }
+    fn resolve_at(&mut self, expr: &PExpr, depth: u64) -> Result<Expr, GrammarError> {
+        visit(depth, self.governor)?;
+        let child = depth + 1;
+        Ok(match expr {
+            PExpr::Literal { bytes, .. } => Expr::Literal(LiteralId(intern_literal(
+                &mut self.literals,
+                bytes,
+                None,
+                self.governor,
+            )?)),
+            PExpr::Insert { bytes } => Expr::Insert(LiteralId(intern_literal(
+                &mut self.literals,
+                bytes,
+                None,
+                self.governor,
+            )?)),
             PExpr::Class { source, at } => {
                 Expr::Class(ClassId(self.intern_class(source.as_str(), *at)?))
             }
             PExpr::Until { literals, .. } => {
-                Expr::Until(DelimiterSetId(self.intern_delimiters(literals.as_slice())?))
+                Expr::Until(DelimiterSetId(self.intern_delimiters(literals)?))
             }
             PExpr::Slot {
                 codec,
@@ -336,34 +466,36 @@ impl Builder<'_> {
                 literals,
                 ..
             } => {
-                let codec = CodecKind::from_name(codec.as_str()).ok_or_else(|| {
-                    GrammarError::UnknownCodec {
+                work_for(codec.len(), 4, 4, self.governor)?;
+                let Some(codec_kind) = CodecKind::from_name(codec.as_str()) else {
+                    return Err(GrammarError::UnknownCodec {
                         offset: *codec_at,
-                        name: codec.as_str().to_owned(),
-                    }
-                })?;
+                        name: diagnostic(codec.as_str(), self.governor)?,
+                    });
+                };
                 Expr::Slot {
-                    codec,
-                    delimiters: DelimiterSetId(self.intern_delimiters(literals.as_slice())?),
+                    codec: codec_kind,
+                    delimiters: DelimiterSetId(self.intern_delimiters(literals)?),
                 }
             }
-            PExpr::Name { name, at } => match self.lookup(name.as_str()) {
+            PExpr::Name { name, at } => match self.lookup(name.as_str())? {
                 Some(Name::Production(index)) => Expr::Reference(ProductionId(index)),
                 Some(Name::Closer(index)) => Expr::Closer(CloserId(index)),
                 None => {
                     return Err(GrammarError::UnknownName {
                         offset: *at,
-                        name: name.as_str().to_owned(),
+                        name: diagnostic(name.as_str(), self.governor)?,
                     });
                 }
             },
             PExpr::Capture { kind, at, inner } => {
-                let kind = CaptureKind::from_name(kind.as_str()).ok_or_else(|| {
-                    GrammarError::UnknownCapture {
+                work_for(kind.len(), 8, 8, self.governor)?;
+                let Some(kind) = CaptureKind::from_name(kind.as_str()) else {
+                    return Err(GrammarError::UnknownCapture {
                         offset: *at,
-                        name: kind.as_str().to_owned(),
-                    }
-                })?;
+                        name: diagnostic(kind.as_str(), self.governor)?,
+                    });
+                };
                 if matches!(kind, CaptureKind::Arguments | CaptureKind::ParamValue)
                     && !matches!(inner.get(), PExpr::Slot { .. })
                 {
@@ -374,28 +506,22 @@ impl Builder<'_> {
                 }
                 Expr::Capture {
                     kind,
-                    inner: Box::new(self.resolve(inner.get())?),
+                    inner: self.resolve_child(inner.get(), child)?,
                 }
             }
-            PExpr::Sequence(items, _, _) => Expr::Sequence(
-                items
-                    .as_slice()
-                    .iter()
-                    .map(|item| self.resolve(item))
-                    .collect::<Result<_, _>>()?,
-            ),
-            PExpr::Choice(items, _, _) => Expr::Choice(
-                items
-                    .as_slice()
-                    .iter()
-                    .map(|item| self.resolve(item))
-                    .collect::<Result<_, _>>()?,
-            ),
+            PExpr::Sequence(items, _, _) | PExpr::Choice(items, _, _) => {
+                let mut values = ScratchVec::new(self.governor);
+                for item in items {
+                    values.push(self.resolve_at(item, child)?)?;
+                }
+                if matches!(expr, PExpr::Sequence(..)) {
+                    Expr::Sequence(ExprItems(values))
+                } else {
+                    Expr::Choice(ExprItems(values))
+                }
+            }
             PExpr::Commit => Expr::Commit,
             PExpr::Next { .. } => Expr::Next,
-            PExpr::Insert { bytes } => {
-                Expr::Insert(LiteralId(self.intern_literal(bytes.as_slice(), None)?))
-            }
             PExpr::Repeat { inner, op, .. } => {
                 let (min, max) = match op {
                     b'*' => (0, None),
@@ -403,7 +529,7 @@ impl Builder<'_> {
                     _ => (0, Some(1)),
                 };
                 Expr::Repeat {
-                    inner: Box::new(self.resolve(inner.get())?),
+                    inner: self.resolve_child(inner.get(), child)?,
                     min,
                     max,
                 }
@@ -414,19 +540,28 @@ impl Builder<'_> {
 
 /// Check that parameter captures appear only as adjacent
 /// `param-name`/`param-value` pairs among one sequence's items.
-fn check_pairs(expr: &PExpr, in_sequence: bool) -> Result<(), GrammarError> {
+fn check_pairs(
+    expr: &PExpr,
+    in_sequence: bool,
+    depth: u64,
+    governor: &mut Governor,
+) -> Result<(), GrammarError> {
+    visit(depth, governor)?;
+    let child = depth + 1;
     match expr {
         PExpr::Capture { kind, at, inner } => {
+            work_for(kind.len(), 2, 2, governor)?;
             let parameter = matches!(kind.as_str(), "param-name" | "param-value");
             if parameter && !in_sequence {
                 return Err(GrammarError::UnpairedParameter { offset: *at });
             }
-            check_pairs(inner.get(), false)
+            check_pairs(inner.get(), false, child, governor)
         }
         PExpr::Sequence(items, _, _) => {
             let mut expect_value: Option<usize> = None;
             for item in items.as_slice() {
                 if let PExpr::Capture { kind, at, .. } = item {
+                    work_for(kind.len(), 2, 2, governor)?;
                     match (kind.as_str(), expect_value) {
                         ("param-name", None) => expect_value = Some(*at),
                         ("param-value", Some(_)) => expect_value = None,
@@ -436,7 +571,7 @@ fn check_pairs(expr: &PExpr, in_sequence: bool) -> Result<(), GrammarError> {
                         _ => {}
                     }
                 }
-                check_pairs(item, true)?;
+                check_pairs(item, true, child, governor)?;
             }
             expect_value.map_or(Ok(()), |offset| {
                 Err(GrammarError::UnpairedParameter { offset })
@@ -445,8 +580,8 @@ fn check_pairs(expr: &PExpr, in_sequence: bool) -> Result<(), GrammarError> {
         PExpr::Choice(items, _, _) => items
             .as_slice()
             .iter()
-            .try_for_each(|item| check_pairs(item, false)),
-        PExpr::Repeat { inner, .. } => check_pairs(inner.get(), false),
+            .try_for_each(|item| check_pairs(item, false, child, governor)),
+        PExpr::Repeat { inner, .. } => check_pairs(inner.get(), false, child, governor),
         PExpr::Literal { .. }
         | PExpr::Class { .. }
         | PExpr::Until { .. }
@@ -458,24 +593,26 @@ fn check_pairs(expr: &PExpr, in_sequence: bool) -> Result<(), GrammarError> {
     }
 }
 
-fn references(expr: &Expr, into: &mut Vec<u32>) {
+fn references(
+    expr: &Expr,
+    into: &mut ScratchVec<u32>,
+    depth: u64,
+    governor: &mut Governor,
+) -> Result<(), GrammarError> {
+    visit(depth, governor)?;
     match expr {
-        Expr::Reference(id) => into.push(id.0),
-        Expr::Capture { inner, .. } | Expr::Repeat { inner, .. } => references(inner, into),
+        Expr::Reference(id) => into.push(id.0)?,
+        Expr::Capture { inner, .. } | Expr::Repeat { inner, .. } => {
+            references(inner, into, depth + 1, governor)?;
+        }
         Expr::Sequence(items) | Expr::Choice(items) => {
             for item in items {
-                references(item, into);
+                references(item, into, depth + 1, governor)?;
             }
         }
-        Expr::Literal(_)
-        | Expr::Closer(_)
-        | Expr::Class(_)
-        | Expr::Until(_)
-        | Expr::Slot { .. }
-        | Expr::Commit
-        | Expr::Next
-        | Expr::Insert(_) => {}
+        _ => {}
     }
+    Ok(())
 }
 
 /// Whether `expr` can reach a `next`, following references. Productions
@@ -550,7 +687,7 @@ fn check_next(
         {
             return Err(GrammarError::MisplacedNext {
                 offset: offsets[index],
-                name: production.name.clone(),
+                name: diagnostic(production.name.as_str(), governor)?,
             });
         }
     }
@@ -604,44 +741,104 @@ fn captures(productions: &[Production], root: ProductionId, kind: CaptureKind) -
 }
 
 /// Refuse a production reachable from itself.
+struct ReferenceFrame {
+    node: usize,
+    edges: ScratchVec<u32>,
+    next: usize,
+}
+impl ScratchCharge for ReferenceFrame {
+    const CHARGE: usize = 56;
+}
+const _: () = assert!(core::mem::size_of::<ReferenceFrame>() <= ReferenceFrame::CHARGE);
+
+// Compute expanded height in the same postorder admission: all referenced
+// targets are finished, including DAG tails visited from an earlier root.
+fn expanded_height(
+    expr: &Expr,
+    heights: &[u64],
+    depth: u64,
+    governor: &mut Governor,
+) -> Result<u64, GrammarError> {
+    visit(depth, governor)?;
+    let below = match expr {
+        Expr::Reference(id) => heights[id.index()],
+        Expr::Capture { inner, .. } | Expr::Repeat { inner, .. } => {
+            expanded_height(inner, heights, depth + 1, governor)?
+        }
+        Expr::Sequence(items) | Expr::Choice(items) => {
+            let mut tallest = 0;
+            for item in items {
+                tallest = tallest.max(expanded_height(item, heights, depth + 1, governor)?);
+            }
+            tallest
+        }
+        _ => 0,
+    };
+    let height = below
+        .checked_add(1)
+        .ok_or_else(|| governor.stop_resource(Resource::Depth))?;
+    visit(height, governor)?;
+    Ok(height)
+}
 fn check_acyclic(
     productions: &[Production],
     offsets: &[usize],
     governor: &mut Governor,
 ) -> Result<(), GrammarError> {
-    // 0 = unvisited, 1 = on the current path, 2 = finished.
-    let mut color = vec![0_u8; productions.len()];
+    let mut color = ScratchVec::new(governor);
+    let mut heights = ScratchVec::new(governor);
+    governor.charge(Resource::Work, size(productions.len()).saturating_mul(2))?;
+    color.extend(core::iter::repeat_n(0_u8, productions.len()))?;
+    heights.extend(core::iter::repeat_n(0_u64, productions.len()))?;
     for root in 0..productions.len() {
+        visit(0, governor)?;
         if color[root] != 0 {
             continue;
         }
-        let mut stack: Vec<(usize, Vec<u32>, usize)> = Vec::new();
-        let mut edges = Vec::new();
-        references(&productions[root].expr, &mut edges);
-        color[root] = 1;
-        stack.push((root, edges, 0));
-        while let Some((node, edges, next)) = stack.last_mut() {
-            charge(governor, 1, 0)?;
-            if let Some(&target) = edges.get(*next) {
-                *next += 1;
+        let mut stack = ScratchVec::new(governor);
+        let mut edges = ScratchVec::new(governor);
+        references(&productions[root].expr, &mut edges, 0, governor)?;
+        color.as_mut_slice()[root] = 1;
+        stack.push(ReferenceFrame {
+            node: root,
+            edges,
+            next: 0,
+        })?;
+        while !stack.is_empty() {
+            let path_depth = size(stack.len());
+            visit(path_depth, governor)?;
+            let frame = stack
+                .as_mut_slice()
+                .last_mut()
+                .expect("nonempty reference path");
+            if let Some(&target) = frame.edges.get(frame.next) {
+                frame.next += 1;
                 let target = target as usize;
                 match color[target] {
                     1 => {
                         return Err(GrammarError::Recursive {
                             offset: offsets[target],
-                            name: productions[target].name.clone(),
+                            name: diagnostic(productions[target].name.as_str(), governor)?,
                         });
                     }
                     0 => {
-                        color[target] = 1;
-                        let mut child = Vec::new();
-                        references(&productions[target].expr, &mut child);
-                        stack.push((target, child, 0));
+                        visit(path_depth + 1, governor)?;
+                        color.as_mut_slice()[target] = 1;
+                        let mut edges = ScratchVec::new(governor);
+                        references(&productions[target].expr, &mut edges, 0, governor)?;
+                        stack.push(ReferenceFrame {
+                            node: target,
+                            edges,
+                            next: 0,
+                        })?;
                     }
                     _ => {}
                 }
             } else {
-                color[*node] = 2;
+                let node = frame.node;
+                let height = expanded_height(&productions[node].expr, &heights, 0, governor)?;
+                heights.as_mut_slice()[node] = height;
+                color.as_mut_slice()[node] = 2;
                 stack.pop();
             }
         }
@@ -795,7 +992,7 @@ fn committed(
 /// canonical text by its variant.
 fn confusable_spellings(
     bytes: &[u8],
-    confusables: &[(Vec<u8>, Vec<u8>)],
+    confusables: &[(Bytes, Bytes)],
     governor: &mut Governor,
 ) -> Result<Vec<Vec<u8>>, GrammarError> {
     let present: Vec<usize> = (0..confusables.len())
@@ -908,15 +1105,19 @@ fn json_spellings(bytes: &[u8], key_at_end: bool) -> [Vec<Vec<u8>>; 3] {
 fn literal_tables(
     literal: &Literal,
     closers: &[CloserClass],
-    confusables: &[(Vec<u8>, Vec<u8>)],
+    confusables: &[(Bytes, Bytes)],
     json: Option<bool>,
     governor: &mut Governor,
 ) -> Result<LiteralTables, GrammarError> {
     let mut variants: Vec<Vec<u8>> = Vec::new();
     if let Some(closer) = literal.closer {
         for variant in closers[closer.index()].spellings.iter().skip(1) {
-            if *variant != literal.bytes && !variants.contains(variant) {
-                variants.push(variant.clone());
+            if variant.as_slice() != literal.bytes.as_slice()
+                && !variants
+                    .iter()
+                    .any(|value| value.as_slice() == variant.as_slice())
+            {
+                variants.push(variant.as_slice().to_vec());
             }
         }
     }
@@ -927,14 +1128,14 @@ fn literal_tables(
     let mut json_tables = [Vec::new(), Vec::new(), Vec::new()];
     if let Some(key_at_end) = json {
         let mut seen: Vec<Vec<u8>> = variants.iter().chain(&spellings).cloned().collect();
-        seen.push(literal.bytes.clone());
+        seen.push(literal.bytes.as_slice().to_vec());
         for (table, generated) in json_tables
             .iter_mut()
             .zip(json_spellings(&literal.bytes, key_at_end))
         {
             for spelling in generated {
                 if !seen.contains(&spelling) {
-                    seen.push(spelling.clone());
+                    seen.push(spelling.as_slice().to_vec());
                     table.push(spelling);
                 }
             }
@@ -964,9 +1165,9 @@ type Renames = Vec<Vec<(u32, u32)>>;
 /// the key uses to point at the copies.
 fn json_tables(
     programs: &[Program],
-    literals: &mut Vec<Literal>,
+    literals: &mut ScratchVec<Literal>,
     closers: &[CloserClass],
-    confusables: &[(Vec<u8>, Vec<u8>)],
+    confusables: &[(Bytes, Bytes)],
     governor: &mut Governor,
 ) -> Result<(Vec<LiteralTables>, Renames), GrammarError> {
     let (keys, renames) = split_keys(programs, literals, governor)?;
@@ -1029,7 +1230,7 @@ fn key_uses(programs: &[Program], literals: &[Literal]) -> Vec<Vec<(u32, u32, bo
 /// (`pc`, copy) to point at the copies.
 fn split_keys(
     programs: &[Program],
-    literals: &mut Vec<Literal>,
+    literals: &mut ScratchVec<Literal>,
     governor: &mut Governor,
 ) -> Result<KeySplit, GrammarError> {
     let uses = key_uses(programs, literals);
@@ -1056,7 +1257,14 @@ fn split_keys(
                 copy
             } else {
                 charge(governor, 1, size(literals[lit as usize].bytes.len()))?;
-                literals.push(literals[lit as usize].clone());
+                // Key uses deliberately need a distinct derived table identity;
+                // this is not another source interning path.
+                let copy_bytes = owned_bytes(&literals[lit as usize].bytes, governor)?;
+                let copy_closer = literals[lit as usize].closer;
+                literals.push(Literal {
+                    bytes: copy_bytes,
+                    closer: copy_closer,
+                })?;
                 keys.push(true);
                 let copy = index_u32(literals.len() - 1);
                 copies[lit as usize] = Some(copy);
@@ -1094,15 +1302,14 @@ fn compile_program(
             *lit = copy;
         }
     }
-    let invalid = || GrammarError::InvalidOpener {
-        offset,
-        production: productions[root.index()].name.clone(),
-    };
     let openers = epsilon_closure(&insts, start);
     let mut first = [0_u64; 4];
     for &pc in &openers {
         let Inst::Lit { lit, .. } = insts[pc as usize] else {
-            return Err(invalid());
+            return Err(GrammarError::InvalidOpener {
+                offset,
+                production: diagnostic(productions[root.index()].name.as_str(), governor)?,
+            });
         };
         let mut mark = |byte: u8| first[usize::from(byte >> 6)] |= 1 << (byte & 63);
         mark(tables.literals[lit as usize].bytes[0]);
@@ -1238,36 +1445,42 @@ impl Programs<'_> {
 /// The non-production statements of a document, and its production bodies
 /// in order (registered in the builder's namespace).
 struct Declared<'d> {
-    reasoning: Vec<(Vec<u8>, Vec<u8>)>,
-    /// Per `reasoning` pair, whether it is declared `explicit`.
-    explicit_reasoning: Vec<bool>,
-    confusables: Vec<(Vec<u8>, Vec<u8>)>,
-    bodies: Vec<(String, &'d PExpr)>,
-    layouts: Vec<(&'d str, &'d [u8], usize)>,
+    reasoning: BytePairs,
+    explicit_reasoning: ScratchVec<bool>,
+    confusables: BytePairs,
+    bodies: ScratchVec<Body<'d>>,
+    layouts: ScratchVec<Layout<'d>>,
     optional_id: bool,
     declaration_content: bool,
     json_envelope: bool,
 }
-
+impl Declared<'_> {
+    fn new(governor: &Governor) -> Self {
+        Self {
+            reasoning: ScratchVec::new(governor),
+            explicit_reasoning: ScratchVec::new(governor),
+            confusables: ScratchVec::new(governor),
+            bodies: ScratchVec::new(governor),
+            layouts: ScratchVec::new(governor),
+            optional_id: false,
+            declaration_content: false,
+            json_envelope: false,
+        }
+    }
+}
+fn duplicate(offset: usize, name: &str, g: &mut Governor) -> Result<GrammarError, GrammarError> {
+    Ok(GrammarError::DuplicateName {
+        offset,
+        name: diagnostic(name, g)?,
+    })
+}
 fn declare<'d>(
     builder: &mut Builder<'_>,
     statements: &'d [Statement],
 ) -> Result<Declared<'d>, GrammarError> {
-    let mut declared = Declared {
-        reasoning: Vec::new(),
-        explicit_reasoning: Vec::new(),
-        confusables: Vec::new(),
-        bodies: Vec::new(),
-        layouts: Vec::new(),
-        optional_id: false,
-        declaration_content: false,
-        json_envelope: false,
-    };
-    let duplicate = |offset: usize, name: &str| GrammarError::DuplicateName {
-        offset,
-        name: name.to_owned(),
-    };
+    let mut declared = Declared::new(builder.governor);
     for statement in statements {
+        visit(0, builder.governor)?;
         match statement {
             Statement::Reasoning {
                 open,
@@ -1275,71 +1488,87 @@ fn declare<'d>(
                 explicit,
                 at,
             } => {
-                let pair = (open.as_slice().to_vec(), close.as_slice().to_vec());
-                if declared.reasoning.contains(&pair) {
-                    return Err(duplicate(*at, "reasoning"));
+                for (left, right) in &declared.reasoning {
+                    if equal(left, open, builder.governor)?
+                        && equal(right, close, builder.governor)?
+                    {
+                        return Err(duplicate(*at, "reasoning", builder.governor)?);
+                    }
                 }
-                declared.reasoning.push(pair);
-                declared.explicit_reasoning.push(*explicit);
+                declared.reasoning.push((
+                    owned_bytes(open, builder.governor)?,
+                    owned_bytes(close, builder.governor)?,
+                ))?;
+                declared.explicit_reasoning.push(*explicit)?;
             }
             Statement::OptionalId { at } => {
                 if declared.optional_id {
-                    return Err(duplicate(*at, "optional-id"));
+                    return Err(duplicate(*at, "optional-id", builder.governor)?);
                 }
                 declared.optional_id = true;
             }
             Statement::DeclarationContent { at } => {
                 if declared.declaration_content {
-                    return Err(duplicate(*at, "declaration-content"));
+                    return Err(duplicate(*at, "declaration-content", builder.governor)?);
                 }
                 declared.declaration_content = true;
             }
             Statement::JsonEnvelope { at } => {
                 if declared.json_envelope {
-                    return Err(duplicate(*at, "json-envelope"));
+                    return Err(duplicate(*at, "json-envelope", builder.governor)?);
                 }
                 declared.json_envelope = true;
             }
-            Statement::Layout { name, text, at } => {
-                declared.layouts.push((name.as_str(), text.as_slice(), *at));
-            }
+            Statement::Layout { name, text, at } => declared.layouts.push(Layout {
+                name: name.as_str(),
+                text,
+                at: *at,
+            })?,
             Statement::Confusable {
                 canonical, variant, ..
-            } => declared
-                .confusables
-                .push((canonical.as_slice().to_vec(), variant.as_slice().to_vec())),
+            } => {
+                declared.confusables.push((
+                    owned_bytes(canonical, builder.governor)?,
+                    owned_bytes(variant, builder.governor)?,
+                ))?;
+            }
             Statement::Closer {
                 name,
                 spellings,
                 at,
             } => {
-                if builder.lookup(name.as_str()).is_some() {
-                    return Err(duplicate(*at, name.as_str()));
+                if builder.lookup(name.as_str())?.is_some() {
+                    return Err(duplicate(*at, name.as_str(), builder.governor)?);
                 }
-                let index = index_u32(builder.closers.len());
-                builder
-                    .names
-                    .push((name.as_str().to_owned(), Name::Closer(index), *at));
+                let index = symbol_index(builder.closers.len(), builder.governor)?;
+                builder.names.push(Symbol {
+                    name: owned_text(name.as_str(), builder.governor)?,
+                    target: Name::Closer(index),
+                })?;
+                let mut copies = ScratchVec::new(builder.governor);
+                for spelling in spellings {
+                    copies.push(owned_bytes(spelling, builder.governor)?)?;
+                }
                 builder.closers.push(CloserClass {
-                    name: name.as_str().to_owned(),
-                    spellings: spellings
-                        .as_slice()
-                        .iter()
-                        .map(|spelling| spelling.as_slice().to_vec())
-                        .collect(),
-                });
+                    name: owned_text(name.as_str(), builder.governor)?,
+                    spellings: copies,
+                })?;
             }
             Statement::Production { name, expr, at } => {
-                if builder.lookup(name.as_str()).is_some() {
-                    return Err(duplicate(*at, name.as_str()));
+                if builder.lookup(name.as_str())?.is_some() {
+                    return Err(duplicate(*at, name.as_str(), builder.governor)?);
                 }
-                check_pairs(expr, false)?;
-                let index = index_u32(declared.bodies.len());
-                builder
-                    .names
-                    .push((name.as_str().to_owned(), Name::Production(index), *at));
-                builder.production_offsets.push(*at);
-                declared.bodies.push((name.as_str().to_owned(), expr));
+                check_pairs(expr, false, 0, builder.governor)?;
+                let index = symbol_index(declared.bodies.len(), builder.governor)?;
+                builder.names.push(Symbol {
+                    name: owned_text(name.as_str(), builder.governor)?,
+                    target: Name::Production(index),
+                })?;
+                builder.production_offsets.push(*at)?;
+                declared.bodies.push(Body {
+                    name: owned_text(name.as_str(), builder.governor)?,
+                    expr,
+                })?;
             }
         }
     }
@@ -1348,27 +1577,19 @@ fn declare<'d>(
 
 /// Intern each closer class's canonical spelling as a closer-marked literal.
 fn closer_literals(
-    literals: &mut Vec<Literal>,
+    literals: &mut ScratchVec<Literal>,
     closers: &[CloserClass],
     governor: &mut Governor,
 ) -> Result<Vec<u32>, GrammarError> {
     let mut ids = Vec::with_capacity(closers.len());
     for (index, closer) in closers.iter().enumerate() {
-        let id = Some(CloserId(index_u32(index)));
-        let canonical = &closer.spellings[0];
-        let known = literals
-            .iter()
-            .position(|literal| literal.bytes == *canonical && literal.closer == id);
-        if let Some(known) = known {
-            ids.push(index_u32(known));
-        } else {
-            charge(governor, 1, size(canonical.len()).saturating_add(48))?;
-            literals.push(Literal {
-                bytes: canonical.clone(),
-                closer: id,
-            });
-            ids.push(index_u32(literals.len() - 1));
-        }
+        let id = Some(CloserId(symbol_index(index, governor)?));
+        ids.push(intern_literal(
+            literals,
+            &closer.spellings[0],
+            id,
+            governor,
+        )?);
     }
     Ok(ids)
 }
@@ -1394,7 +1615,7 @@ fn stray_spellings(
     let mut list: Vec<Vec<u8>> = Vec::new();
     for spelling in closers
         .iter()
-        .flat_map(|closer| closer.spellings.iter().map(Vec::as_slice))
+        .flat_map(|closer| closer.spellings.iter().map(Bytes::as_slice))
         .chain(codec.iter().copied())
     {
         if !list.iter().any(|listed| listed == spelling) {
@@ -1441,13 +1662,18 @@ fn xml_params(expr: &Expr) -> bool {
 /// Each delimiter set's matcher, over its literals and their confusable
 /// spellings.
 fn delimiter_sets(
-    sets: Vec<Vec<Vec<u8>>>,
-    confusables: &[(Vec<u8>, Vec<u8>)],
+    mut sets: ScratchVec<ByteList>,
+    confusables: &[(Bytes, Bytes)],
     governor: &mut Governor,
 ) -> Result<Vec<DelimiterSet>, GrammarError> {
     let mut delimiters = Vec::with_capacity(sets.len());
-    for declared in sets {
-        let mut expanded = declared.clone();
+    governor.charge(Resource::Work, size(sets.len()))?;
+    sets.as_mut_slice().reverse();
+    while let Some(declared) = sets.pop() {
+        let mut expanded: Vec<Vec<u8>> = declared
+            .iter()
+            .map(|bytes| bytes.as_slice().to_vec())
+            .collect();
         for literal in &declared {
             for spelling in confusable_spellings(literal, confusables, governor)? {
                 if !expanded.contains(&spelling) {
@@ -1467,21 +1693,25 @@ fn longest_literal(
     repairs: &[LiteralTables],
     stray: &Spellings,
     delimiters: &[DelimiterSet],
-    reasoning: &[(Vec<u8>, Vec<u8>)],
+    reasoning: &[(Bytes, Bytes)],
 ) -> usize {
     literals
         .iter()
-        .map(|literal| &literal.bytes)
-        .chain(repairs.iter().flat_map(|tables| {
-            tables
-                .variants
-                .list
+        .map(|literal| literal.bytes.len())
+        .chain(
+            repairs
                 .iter()
-                .chain(&tables.confusables.list)
-                .chain(tables.json.iter().flat_map(|json| &json.list))
-        }))
-        .chain(&stray.list)
-        .map(Vec::len)
+                .flat_map(|tables| {
+                    tables
+                        .variants
+                        .list
+                        .iter()
+                        .chain(&tables.confusables.list)
+                        .chain(tables.json.iter().flat_map(|json| &json.list))
+                })
+                .map(Vec::len),
+        )
+        .chain(stray.list.iter().map(Vec::len))
         .chain(delimiters.iter().map(|set| set.matcher.longest()))
         .chain(
             reasoning
@@ -1490,6 +1720,23 @@ fn longest_literal(
         )
         .max()
         .unwrap_or(0)
+}
+
+fn resolve_productions(
+    builder: &mut Builder<'_>,
+    bodies: ScratchVec<Body<'_>>,
+) -> Result<ScratchVec<Production>, GrammarError> {
+    let mut productions = ScratchVec::new(builder.governor);
+    let mut bodies = bodies;
+    builder
+        .governor
+        .charge(Resource::Work, size(bodies.len()))?;
+    bodies.as_mut_slice().reverse();
+    while let Some(Body { name, expr }) = bodies.pop() {
+        let expr = builder.resolve(expr)?;
+        productions.push(Production { name, expr })?;
+    }
+    Ok(productions)
 }
 
 /// Resolve, check and compile a parsed document.
@@ -1509,18 +1756,20 @@ pub(crate) fn compile(
         declaration_content,
         json_envelope,
     } = declare(&mut builder, document.statements.as_slice())?;
-    let mut productions = Vec::with_capacity(bodies.len());
-    for (name, expr) in bodies {
-        let expr = builder.resolve(expr)?;
-        productions.push(Production { name, expr });
-    }
+    let productions = resolve_productions(&mut builder, bodies)?;
+    check_acyclic(&productions, &builder.production_offsets, builder.governor)?;
     let layouts = layouts(&mut builder, &productions, &declared_layouts)?;
-    let required = |name: &'static str| {
-        productions
-            .iter()
-            .position(|production| production.name == name)
-            .map(|index| ProductionId(index_u32(index)))
-            .ok_or(GrammarError::MissingProduction { name })
+    let mut required = |name: &'static str| -> Result<ProductionId, GrammarError> {
+        for (index, production) in productions.iter().enumerate() {
+            if equal(
+                production.name.as_bytes(),
+                name.as_bytes(),
+                builder.governor,
+            )? {
+                return Ok(ProductionId(symbol_index(index, builder.governor)?));
+            }
+        }
+        Err(GrammarError::MissingProduction { name })
     };
     let call = required("call")?;
     let result = required("result")?;
@@ -1534,7 +1783,6 @@ pub(crate) fn compile(
         production_offsets,
         ..
     } = builder;
-    check_acyclic(&productions, &production_offsets, governor)?;
     check_next(
         &productions,
         &production_offsets,
@@ -1801,13 +2049,13 @@ fn call_literals(
     let mut spellings: Vec<Vec<u8>> = Vec::new();
     for lit in lits {
         let tables = &tables[lit as usize];
-        for spelling in core::iter::once(&literals[lit as usize].bytes)
-            .chain(&tables.variants.list)
-            .chain(&tables.confusables.list)
+        for spelling in core::iter::once(literals[lit as usize].bytes.as_slice())
+            .chain(tables.variants.list.iter().map(Vec::as_slice))
+            .chain(tables.confusables.list.iter().map(Vec::as_slice))
         {
             charge(governor, size(spellings.len()), size(spelling.len()))?;
-            if !spellings.contains(spelling) {
-                spellings.push(spelling.clone());
+            if !spellings.iter().any(|known| known.as_slice() == spelling) {
+                spellings.push(spelling.to_vec());
             }
         }
     }
@@ -1839,7 +2087,7 @@ fn call_ends(
     )?;
     let spellings = |lit: u32| {
         let tables = &tables[lit as usize];
-        core::iter::once(literals[lit as usize].bytes.clone())
+        core::iter::once(literals[lit as usize].bytes.as_slice().to_vec())
             .chain(tables.variants.list.iter().cloned())
             .chain(tables.confusables.list.iter().cloned())
             .collect::<Vec<_>>()
@@ -1913,50 +2161,84 @@ fn call_ends(
 
 /// Each production's printing layout: the text a `layout` statement gives
 /// it, checked to be a member of the class the production names.
+fn invalid_layout(
+    at: usize,
+    name: &str,
+    message: &str,
+    governor: &mut Governor,
+) -> Result<GrammarError, GrammarError> {
+    let name = owned_text(name, governor)?;
+    let message = owned_text(message, governor)?;
+    governor.check()?;
+    Ok(GrammarError::InvalidLayout {
+        offset: at,
+        name: name.into_string(),
+        message: message.into_string(),
+    })
+}
+
 fn layouts(
     builder: &mut Builder<'_>,
     productions: &[Production],
-    declared: &[(&str, &[u8], usize)],
-) -> Result<Vec<Option<Vec<u8>>>, GrammarError> {
-    let mut layouts: Vec<Option<Vec<u8>>> = vec![None; productions.len()];
-    for &(name, text, at) in declared {
-        let invalid = |message: &str| GrammarError::InvalidLayout {
-            offset: at,
-            name: name.to_owned(),
-            message: message.to_owned(),
-        };
-        let index = match builder.lookup(name) {
+    declared: &[Layout<'_>],
+) -> Result<ScratchVec<Option<Bytes>>, GrammarError> {
+    let mut layouts = ScratchVec::new(builder.governor);
+    builder
+        .governor
+        .charge(Resource::Work, size(productions.len()))?;
+    layouts.extend(core::iter::repeat_with(|| None).take(productions.len()))?;
+    for &Layout { name, text, at } in declared {
+        visit(0, builder.governor)?;
+        let index = match builder.lookup(name)? {
             Some(Name::Production(index)) => index as usize,
-            Some(Name::Closer(_)) => return Err(invalid("a closer has canonical spellings")),
+            Some(Name::Closer(_)) => {
+                return Err(invalid_layout(
+                    at,
+                    name,
+                    "a closer has canonical spellings",
+                    builder.governor,
+                )?);
+            }
             None => {
                 return Err(GrammarError::UnknownName {
                     offset: at,
-                    name: name.to_owned(),
+                    name: diagnostic(name, builder.governor)?,
                 });
             }
         };
         if layouts[index].is_some() {
+            work_for(name.len(), 1, 128, builder.governor)?;
             return Err(GrammarError::DuplicateName {
                 offset: at,
-                name: format!("layout {name}"),
+                name: format_scratch_governed(format_args!("layout {name}"), builder.governor)?
+                    .into_string(),
             });
         }
         let mut expr = &productions[index].expr;
+        let mut depth = 0;
         while let Expr::Reference(id) = expr {
+            visit(depth, builder.governor)?;
+            depth += 1;
             expr = &productions[id.index()].expr;
         }
         let Expr::Class(class) = expr else {
-            return Err(invalid("only a class production has a layout"));
+            return Err(invalid_layout(
+                at,
+                name,
+                "only a class production has a layout",
+                builder.governor,
+            )?);
         };
-        charge(
-            builder.governor,
-            size(text.len()).saturating_add(1),
-            size(text.len()),
-        )?;
+        // Native automaton matching is still the existing class authority.
         if !builder.classes[class.index()].accepts(text, builder.governor)? {
-            return Err(invalid("the layout text is not a member of the class"));
+            return Err(invalid_layout(
+                at,
+                name,
+                "the layout text is not a member of the class",
+                builder.governor,
+            )?);
         }
-        layouts[index] = Some(text.to_vec());
+        layouts.as_mut_slice()[index] = Some(owned_bytes(text, builder.governor)?);
     }
     Ok(layouts)
 }

@@ -23,7 +23,7 @@ retain their admitted messages and exact offsets.
 Syntax owners remain live throughout lowering and drop on its failures. Only
 the grammar ID is published after remaining fallible construction and a final
 cancellation check. The actual compiler consumer and existing syntax/grammar
-cases exercise this path. Later public `Expr`/`Box` allocations, intern/table
+cases exercise this path. Later backend table
 construction and native pattern parsing remain outside complete governance;
 their existing coarser charges do not establish full cold compiler admission.
 Parent #36 retains those requirements and the remaining generation/integration
@@ -83,6 +83,36 @@ location. Workload assertion failures, profiler failures, memory-error reports,
 missing summaries, and malformed snapshots fail the run. Reports are written only
 after every workload passes. `scripts/test-resource-report.py` checks the parsers
 and fail-closed behavior and runs before profiling through the Make target.
+
+## Grammar declarations and retained expressions
+
+`Grammar::compile_governed` also governs first-party declaration and namespace
+storage, duplicate/name comparisons, capture/codec/reference binding, parameter
+pair checks and source interning. Source identity hashing admits its byte scan
+before computation. Original declared byte buffers, class source,
+marker pairs, production names, layouts and expression storage remain owned by
+`ScratchString`/`ScratchVec` through all later failures and their actual compiled
+artifact lifetime. Temporary namespace, offset and graph-admission storage drops
+after use. Escaping diagnostics retain only their completed payloads.
+
+`ExprChild` enforces one child without an infallible `Box`; `ExprItems` owns a
+read-only list. Deref provides borrowed expression/slice views and equality
+compares contents, independent of budget identity. Unused deep `Clone` derives
+on expressions, productions and compiled grammars were removed; dialect `Arc`
+sharing remains. Actual readers borrow source bytes and existing recovery-owned
+copies stay explicit.
+
+The existing cycle admission runs before reference-following layouts. Its
+postorder caches expanded production heights, so already-finished shared DAG
+tails count toward both caller depth and the aggregate native ceiling of 128.
+A cyclic layout is a typed recursive-production refusal, rather than an
+unbounded traversal. Structural scans, byte comparisons, copies, diagnostics and
+fallible storage admit work before processing; resource causes remain sticky.
+
+Local class source/anchoring/diagnostics use governed buffers around the existing
+native pattern authority. Native pattern parsing/automaton preparation, later
+matchers, repair tables and recognizer programs retain their separate existing
+contracts. This is not complete cold compiler governance or completion of #36.
 
 ## Type-enforced scratch accounting
 
