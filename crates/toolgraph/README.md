@@ -70,3 +70,19 @@ counterexample; resource/cancellation refusal remains an error. Run
 `cargo run -p purrassist-toolgraph --example glob_containment` for the actual
 lowering and inclusion consumer. This is language containment, not complete
 permission/owner/deny analysis, hat admission or host confinement.
+
+`InternetRule` implements standalone governed Internet rule fragments from
+caller-prepared declarations. It validates numeric family, one documented socket
+type or protocol, nonempty access, audit/deny qualifiers and explicit endpoint
+scopes/ports. Standard IP parsing and formatting are reused. Numeric CIDRs stay
+symbolic until rendering; caller ceilings bound each endpoint and the complete
+local-by-peer product before output. Enumeration includes all mathematical
+addresses in numeric order, including IPv4 network/broadcast addresses. IPv6
+full-space or excessive counts return explicit limit errors, without truncation
+or widening. The shared governed formatter returns the complete fragment
+atomically and every artifact carries the `4.0-ip`/`network_v8/af_inet`
+requirement. This metadata is no running-kernel or loaded-policy attestation.
+Run `cargo run -p purrassist-toolgraph --example internet_rules` for the actual
+IPv4 CIDR/IPv6 consumer and its offline parser fixture. Graph admission, complete
+permission analysis, v3/v4 policy synthesis, Unix rules and host enforcement
+remain under the original parent contracts.
