@@ -21,9 +21,9 @@ pub enum GlobTokenKind {
     Literal,
     /// One literal byte with any punctuation escape already resolved.
     Byte(u8),
-    /// Any sequence excluding slash and NUL: `*`.
+    /// Repeat bytes excluding slash and NUL: `*`; component context may require a byte.
     Star,
-    /// Any sequence excluding NUL, including slash: `**`.
+    /// Repeat non-NUL bytes: `**`; component context may require a non-slash byte.
     RecursiveStar,
     /// One byte excluding slash and NUL: `?`.
     AnyByte,
@@ -203,7 +203,8 @@ pub struct LiteralPathBinding<'a> {
 /// Supports `*`, `**`, `?`, byte classes/ranges with `^` negation, nested brace
 /// alternatives including empty branches, and `@{NAME}`. ASCII punctuation
 /// escapes produce literal bytes. Alphabetic/numeric escapes, variable references
-/// inside classes, empty classes, bare class hyphens, descending ranges, singleton
+/// inside classes, unescaped class `*`/`?`, escaped class comma, empty classes,
+/// bare class hyphens, descending ranges, singleton
 /// brace groups, raw quotes and controls are refused. `!` in a class is literal.
 /// Escaped caret is refused as the first atom of a nonnegated class; escaped
 /// hyphen is admitted only as a leading literal, never a range endpoint. The policy parser
@@ -626,6 +627,18 @@ impl Parser<'_, '_> {
         }
     }
 
+    fn class_atom(&mut self) -> Result<u8, GlobError> {
+        let start = self.at;
+        if matches!(self.read()?, Some(b'*' | b'?'))
+            || self.input.as_bytes().get(start..start.saturating_add(2)) == Some(b"\\,")
+        {
+            // Native conversion expands these wildcards even inside classes;
+            // an escaped comma retains a backslash as an additional class byte.
+            return Err(GlobError::Unsupported { offset: start });
+        }
+        self.atom()
+    }
+
     fn class(&mut self, start: usize) -> Result<(), GlobError> {
         self.governor
             .charge(Resource::Depth, size(self.groups.len()).saturating_add(1))?;
@@ -653,7 +666,7 @@ impl Parser<'_, '_> {
                 return Ok(());
             }
             let atom_start = self.at;
-            let first = self.atom()?;
+            let first = self.class_atom()?;
             if (first == b'^' && count == 0 && !negated) || (first == b'-' && count != 0) {
                 return Err(GlobError::Unsupported { offset: atom_start });
             }
@@ -668,7 +681,7 @@ impl Parser<'_, '_> {
                     });
                 }
                 let last_start = self.at;
-                let last = self.atom()?;
+                let last = self.class_atom()?;
                 if last == b'-' {
                     return Err(GlobError::Unsupported { offset: last_start });
                 }

@@ -82,6 +82,92 @@ fn semantic_glob_lowering_preserves_byte_operators_classes_branches_and_empty_un
 }
 
 #[test]
+fn native_file_components_preserve_lexical_context_and_pattern_slash_normalization() {
+    // AppArmor 4.1.7 rule-expr and DFA probes: a whole star component needs
+    // an initial non-slash byte; braces and escaped following slashes differ.
+    for (source, yes, no) in [
+        ("/a/*", "/a/x", "/a/"),
+        ("/a/**", "/a/x//b", "/a//b"),
+        ("/a/**/b", "/a/x//b", "/a//b"),
+        ("/a/***", "/a/x/", "/a/"),
+        ("/a/****", "/a/x/", "/a//"),
+        ("/a/{**,x}", "/a//", "/b/"),
+        ("/a/{x,**}", "/a/", "/b/"),
+        ("/a/**{,x}", "/a/", "/b/"),
+        ("/a/**x", "/a//x", "/a/"),
+        ("/a/x**", "/a/x", "/a/"),
+        (r"/a/\***", "/a/*", "/a/"),
+        (r"/a/**\/b", "/a//b", "/a/b"),
+        (r"/a/\/**", "/a//x", "/a/x"),
+        (r"/a\//**", "/a/x", "/a//x"),
+        ("/a//**", "/a/x", "/a//x"),
+        ("//a/**", "//a/x", "/a/x"),
+        ("///a/**", "/a/x", "//a/x"),
+        ("//", "//", "/"),
+        ("**", "", "\0"),
+        ("*", "", "/"),
+        (r"/a/[\*\?\[\]{},.$+|()!\\]", "/a/*", "/a/x"),
+    ] {
+        let language = compile(&[source]);
+        assert!(
+            language
+                .accepts(yes.as_bytes(), &mut governor())
+                .expect("native positive"),
+            "{source:?}: {yes:?}"
+        );
+        assert!(
+            !language
+                .accepts(no.as_bytes(), &mut governor())
+                .expect("native negative"),
+            "{source:?}: {no:?}"
+        );
+    }
+    let broad = compile(&["/a/{**,x}"]);
+    let narrow = compile(&["/a/**"]);
+    assert_eq!(
+        narrow.included_in(&broad, &mut governor()),
+        Ok(GlobInclusion::Contained)
+    );
+    assert_eq!(
+        broad.included_in(&narrow, &mut governor()),
+        Ok(GlobInclusion::Counterexample(b"/a/".to_vec()))
+    );
+
+    for (source, root, yes, no) in [
+        ("@{ROOT}/*", "/a/", "/a/x", "/a/"),
+        ("@{ROOT}**", "/a/", "/a/x", "/a//x"),
+        ("/a/**@{ROOT}", "/b", "/a/x/b", "/a//b"),
+        ("@{ROOT}/**", "/", "//x", "/x"),
+        ("/@{ROOT}/**", "/", "/x", "//x"),
+    ] {
+        let glob = AppArmorGlob::parse(source, &["ROOT"], &mut governor()).expect("source");
+        let language = GlobLanguage::compile(
+            &[GlobLanguageInput {
+                glob: &glob,
+                bindings: &[LiteralPathBinding {
+                    name: "ROOT",
+                    path: root,
+                }],
+            }],
+            &mut governor(),
+        )
+        .expect("literal binding");
+        assert!(
+            language
+                .accepts(yes.as_bytes(), &mut governor())
+                .expect("native positive"),
+            "{source}: {root}"
+        );
+        assert!(
+            !language
+                .accepts(no.as_bytes(), &mut governor())
+                .expect("native negative"),
+            "{source}: {root}"
+        );
+    }
+}
+
+#[test]
 fn inclusion_and_literal_bindings_use_shared_validation_and_return_exact_witnesses() {
     let child = compile(&["/a/*", "/b/{x,y}"]);
     let parent = compile(&["/**"]);
@@ -231,7 +317,7 @@ fn lowering_resources_and_product_exhaustion_are_explicit_with_valid_neighbors()
     else {
         panic!("recursive star is broader");
     };
-    assert_eq!(witness, b"//");
+    assert_eq!(witness, b"/\x01/");
     assert!(
         left.accepts(&witness, &mut governor())
             .expect("left acceptance")

@@ -96,7 +96,11 @@ bindings into the core's `ByteLanguage`, a direct postfix/full-byte driver over
 the existing derivative arena/session. It proves exact language inclusion or
 returns a shortest counterexample as bytes, including invalid UTF-8. Exhaustion
 remains an explicit error. The `glob_containment` example exercises actual
-lowering and inclusion; complete permission/owner/deny analysis, hat admission,
+lowering and inclusion. Native file-rule component restrictions, lexical brace
+and escape context, expanded literal variables and raw pattern slash normalization
+are preserved; pathname bytes are never normalized. Unescaped class wildcards and
+escaped class comma are refused because native conversion changes their semantics.
+Complete permission/owner/deny analysis, hat admission,
 policy synthesis and host enforcement remain outstanding (#34/#35).
 
 ## Shared contracts

@@ -10,7 +10,7 @@ use purrassist_toolgraph::{
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut governor = Governor::new(Budget::default());
-    let child = AppArmorGlob::parse("@{ROOT}/{,cache/}*", &["ROOT"], &mut governor)?;
+    let child = AppArmorGlob::parse("@{ROOT}/{data,cache/}*", &["ROOT"], &mut governor)?;
     let parent = AppArmorGlob::parse("@{ROOT}/**", &["ROOT"], &mut governor)?;
     let bindings = [LiteralPathBinding {
         name: "ROOT",
