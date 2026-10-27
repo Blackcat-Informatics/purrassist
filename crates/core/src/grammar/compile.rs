@@ -25,7 +25,7 @@ use super::{
     index_u32,
 };
 use crate::contract::saturating_size as size;
-use crate::contract::{Governor, Resource, ScratchCharge, StopReason};
+use crate::contract::{Governor, Resource, ScratchCharge, ScratchVec, StopReason};
 use crate::digest::Digest;
 use crate::pattern::{Pattern, PatternCompileError};
 
@@ -251,17 +251,28 @@ impl Builder<'_> {
         Ok(index_u32(self.literals.len() - 1))
     }
 
-    fn intern_delimiters(&mut self, literals: &[Vec<u8>]) -> Result<u32, GrammarError> {
-        if let Some(index) = self.delimiter_sets.iter().position(|set| set == literals) {
+    fn intern_delimiters(&mut self, literals: &[ScratchVec<u8>]) -> Result<u32, GrammarError> {
+        if let Some(index) = self.delimiter_sets.iter().position(|set| {
+            set.len() == literals.len()
+                && set
+                    .iter()
+                    .zip(literals)
+                    .all(|(left, right)| left.as_slice() == right.as_slice())
+        }) {
             return Ok(index_u32(index));
         }
-        let bytes: usize = literals.iter().map(Vec::len).sum();
+        let bytes: usize = literals.iter().map(ScratchVec::len).sum();
         charge(
             self.governor,
             size(literals.len()),
             size(bytes).saturating_add(64),
         )?;
-        self.delimiter_sets.push(literals.to_vec());
+        self.delimiter_sets.push(
+            literals
+                .iter()
+                .map(|literal| literal.as_slice().to_vec())
+                .collect(),
+        );
         Ok(index_u32(self.delimiter_sets.len() - 1))
     }
 
@@ -311,11 +322,13 @@ impl Builder<'_> {
         charge(self.governor, 1, 64)?;
         Ok(match expr {
             PExpr::Literal { bytes, .. } => {
-                Expr::Literal(LiteralId(self.intern_literal(bytes, None)?))
+                Expr::Literal(LiteralId(self.intern_literal(bytes.as_slice(), None)?))
             }
-            PExpr::Class { source, at } => Expr::Class(ClassId(self.intern_class(source, *at)?)),
+            PExpr::Class { source, at } => {
+                Expr::Class(ClassId(self.intern_class(source.as_str(), *at)?))
+            }
             PExpr::Until { literals, .. } => {
-                Expr::Until(DelimiterSetId(self.intern_delimiters(literals)?))
+                Expr::Until(DelimiterSetId(self.intern_delimiters(literals.as_slice())?))
             }
             PExpr::Slot {
                 codec,
@@ -323,34 +336,36 @@ impl Builder<'_> {
                 literals,
                 ..
             } => {
-                let codec =
-                    CodecKind::from_name(codec).ok_or_else(|| GrammarError::UnknownCodec {
+                let codec = CodecKind::from_name(codec.as_str()).ok_or_else(|| {
+                    GrammarError::UnknownCodec {
                         offset: *codec_at,
-                        name: codec.clone(),
-                    })?;
+                        name: codec.as_str().to_owned(),
+                    }
+                })?;
                 Expr::Slot {
                     codec,
-                    delimiters: DelimiterSetId(self.intern_delimiters(literals)?),
+                    delimiters: DelimiterSetId(self.intern_delimiters(literals.as_slice())?),
                 }
             }
-            PExpr::Name { name, at } => match self.lookup(name) {
+            PExpr::Name { name, at } => match self.lookup(name.as_str()) {
                 Some(Name::Production(index)) => Expr::Reference(ProductionId(index)),
                 Some(Name::Closer(index)) => Expr::Closer(CloserId(index)),
                 None => {
                     return Err(GrammarError::UnknownName {
                         offset: *at,
-                        name: name.clone(),
+                        name: name.as_str().to_owned(),
                     });
                 }
             },
             PExpr::Capture { kind, at, inner } => {
-                let kind =
-                    CaptureKind::from_name(kind).ok_or_else(|| GrammarError::UnknownCapture {
+                let kind = CaptureKind::from_name(kind.as_str()).ok_or_else(|| {
+                    GrammarError::UnknownCapture {
                         offset: *at,
-                        name: kind.clone(),
-                    })?;
+                        name: kind.as_str().to_owned(),
+                    }
+                })?;
                 if matches!(kind, CaptureKind::Arguments | CaptureKind::ParamValue)
-                    && !matches!(**inner, PExpr::Slot { .. })
+                    && !matches!(inner.get(), PExpr::Slot { .. })
                 {
                     return Err(GrammarError::CaptureTarget {
                         offset: *at,
@@ -359,24 +374,28 @@ impl Builder<'_> {
                 }
                 Expr::Capture {
                     kind,
-                    inner: Box::new(self.resolve(inner)?),
+                    inner: Box::new(self.resolve(inner.get())?),
                 }
             }
-            PExpr::Sequence(items, _) => Expr::Sequence(
+            PExpr::Sequence(items, _, _) => Expr::Sequence(
                 items
+                    .as_slice()
                     .iter()
                     .map(|item| self.resolve(item))
                     .collect::<Result<_, _>>()?,
             ),
-            PExpr::Choice(items, _) => Expr::Choice(
+            PExpr::Choice(items, _, _) => Expr::Choice(
                 items
+                    .as_slice()
                     .iter()
                     .map(|item| self.resolve(item))
                     .collect::<Result<_, _>>()?,
             ),
             PExpr::Commit => Expr::Commit,
             PExpr::Next { .. } => Expr::Next,
-            PExpr::Insert { bytes } => Expr::Insert(LiteralId(self.intern_literal(bytes, None)?)),
+            PExpr::Insert { bytes } => {
+                Expr::Insert(LiteralId(self.intern_literal(bytes.as_slice(), None)?))
+            }
             PExpr::Repeat { inner, op, .. } => {
                 let (min, max) = match op {
                     b'*' => (0, None),
@@ -384,7 +403,7 @@ impl Builder<'_> {
                     _ => (0, Some(1)),
                 };
                 Expr::Repeat {
-                    inner: Box::new(self.resolve(inner)?),
+                    inner: Box::new(self.resolve(inner.get())?),
                     min,
                     max,
                 }
@@ -402,11 +421,11 @@ fn check_pairs(expr: &PExpr, in_sequence: bool) -> Result<(), GrammarError> {
             if parameter && !in_sequence {
                 return Err(GrammarError::UnpairedParameter { offset: *at });
             }
-            check_pairs(inner, false)
+            check_pairs(inner.get(), false)
         }
-        PExpr::Sequence(items, _) => {
+        PExpr::Sequence(items, _, _) => {
             let mut expect_value: Option<usize> = None;
-            for item in items {
+            for item in items.as_slice() {
                 if let PExpr::Capture { kind, at, .. } = item {
                     match (kind.as_str(), expect_value) {
                         ("param-name", None) => expect_value = Some(*at),
@@ -423,8 +442,11 @@ fn check_pairs(expr: &PExpr, in_sequence: bool) -> Result<(), GrammarError> {
                 Err(GrammarError::UnpairedParameter { offset })
             })
         }
-        PExpr::Choice(items, _) => items.iter().try_for_each(|item| check_pairs(item, false)),
-        PExpr::Repeat { inner, .. } => check_pairs(inner, false),
+        PExpr::Choice(items, _, _) => items
+            .as_slice()
+            .iter()
+            .try_for_each(|item| check_pairs(item, false)),
+        PExpr::Repeat { inner, .. } => check_pairs(inner.get(), false),
         PExpr::Literal { .. }
         | PExpr::Class { .. }
         | PExpr::Until { .. }
@@ -1253,7 +1275,7 @@ fn declare<'d>(
                 explicit,
                 at,
             } => {
-                let pair = (open.clone(), close.clone());
+                let pair = (open.as_slice().to_vec(), close.as_slice().to_vec());
                 if declared.reasoning.contains(&pair) {
                     return Err(duplicate(*at, "reasoning"));
                 }
@@ -1285,33 +1307,39 @@ fn declare<'d>(
                 canonical, variant, ..
             } => declared
                 .confusables
-                .push((canonical.clone(), variant.clone())),
+                .push((canonical.as_slice().to_vec(), variant.as_slice().to_vec())),
             Statement::Closer {
                 name,
                 spellings,
                 at,
             } => {
-                if builder.lookup(name).is_some() {
-                    return Err(duplicate(*at, name));
+                if builder.lookup(name.as_str()).is_some() {
+                    return Err(duplicate(*at, name.as_str()));
                 }
                 let index = index_u32(builder.closers.len());
-                builder.names.push((name.clone(), Name::Closer(index), *at));
+                builder
+                    .names
+                    .push((name.as_str().to_owned(), Name::Closer(index), *at));
                 builder.closers.push(CloserClass {
-                    name: name.clone(),
-                    spellings: spellings.clone(),
+                    name: name.as_str().to_owned(),
+                    spellings: spellings
+                        .as_slice()
+                        .iter()
+                        .map(|spelling| spelling.as_slice().to_vec())
+                        .collect(),
                 });
             }
             Statement::Production { name, expr, at } => {
-                if builder.lookup(name).is_some() {
-                    return Err(duplicate(*at, name));
+                if builder.lookup(name.as_str()).is_some() {
+                    return Err(duplicate(*at, name.as_str()));
                 }
                 check_pairs(expr, false)?;
                 let index = index_u32(declared.bodies.len());
                 builder
                     .names
-                    .push((name.clone(), Name::Production(index), *at));
+                    .push((name.as_str().to_owned(), Name::Production(index), *at));
                 builder.production_offsets.push(*at);
-                declared.bodies.push((name.clone(), expr));
+                declared.bodies.push((name.as_str().to_owned(), expr));
             }
         }
     }
@@ -1480,7 +1508,7 @@ pub(crate) fn compile(
         optional_id,
         declaration_content,
         json_envelope,
-    } = declare(&mut builder, &document.statements)?;
+    } = declare(&mut builder, document.statements.as_slice())?;
     let mut productions = Vec::with_capacity(bodies.len());
     for (name, expr) in bodies {
         let expr = builder.resolve(expr)?;
@@ -1527,12 +1555,7 @@ pub(crate) fn compile(
         stray_nodes: stray.bytes(),
         roots: [call, result],
     };
-    let compile_programs =
-        |literals: &[Literal],
-         tables: &[LiteralTables],
-         renames: &[Vec<(u32, u32)>],
-         governor: &mut Governor| { source.compile(literals, tables, renames, governor) };
-    let mut programs = compile_programs(&literals, &literal_tables, &[], governor)?;
+    let mut programs = source.compile(&literals, &literal_tables, &[], governor)?;
     if json_envelope {
         // The JSON spellings need to know which literals are member keys,
         // which the compiled programs tell; the programs are then compiled
@@ -1541,16 +1564,17 @@ pub(crate) fn compile(
         let renames;
         (literal_tables, renames) =
             json_tables(&programs, &mut literals, &closers, &confusables, governor)?;
-        programs = compile_programs(&literals, &literal_tables, &renames, governor)?;
+        programs = source.compile(&literals, &literal_tables, &renames, governor)?;
     }
     let longest = longest_literal(&literals, &literal_tables, &stray, &delimiters, &reasoning);
     let call_ends = call_ends(&programs[0], &literals, &literal_tables, governor)?;
     let call_literals = call_literals(&programs[0], &literals, &literal_tables, governor)?;
-    // An `optional-id` grammar reads a call id where a model adds one, but
-    // its markup does not provide for one.
+    // An optional-id grammar reads model-added ids absent from its markup.
     let call_ids = !optional_id && captures(&productions, call, CaptureKind::Id);
+    let call_markup = call_markup(&call_ends, governor)?;
+    governor.check()?;
     Ok(CompiledGrammar {
-        id: document.id,
+        id: document.id.into_string(),
         digest,
         literals,
         literal_tables,
@@ -1567,7 +1591,7 @@ pub(crate) fn compile(
         declaration,
         reasoning,
         explicit_reasoning,
-        call_markup: call_markup(&call_ends, governor)?,
+        call_markup,
         call_ends,
         call_literals,
         programs,

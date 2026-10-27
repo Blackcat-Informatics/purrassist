@@ -1043,3 +1043,20 @@ exact output from native parser saturation, wrapping and infinity sentinels.
 This standalone fragment is an offline target contract. Complete graph admission,
 static conflicts, permission/hat analysis, authenticated trust, original v3/v4
 integration and actual host confinement remain under #34/#35.
+
+## Private DSL syntax admission — implemented prerequisite
+
+The existing `Grammar::compile_governed` path admits complete raw DSL syntax
+into fallible owned scratch storage, preserving successful interpretation and
+exact syntax error offsets/text. Tokens move their payloads; unary AST children
+have one-element scratch-vector ownership. Native parser recursion and AST
+ownership/drop height each stop at 128 in addition to caller depth, including
+postfix chains. Syntax reservations release after lowering or refusal; the
+original grammar identity is retained only after final fallible construction
+and cancellation checks. The existing `canonical_print` consumer exercises the
+actual public compiler path; there is no alternate public lexer or parser.
+
+This completes the private syntax phase, not the complete cold compiler. Public
+compiled `Expr`/`Box` storage, lowering/intern/table allocations and native
+pattern preparation remain under #36. Full witness, GBNF, CompactSignature,
+projection, routing, ledgers and graph integration also remain parent acceptance.
