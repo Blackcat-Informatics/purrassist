@@ -51,6 +51,15 @@ arena and emits safe quoted policy words. Literal host bindings use the same
 renderer and explicitly refuse pattern metacharacters or policy injection.
 The `apparmor_path_words` example exercises actual parsed and bound output;
 it emits standalone read rules for parser qualification, not a synthesized
-confinement policy. Matching, containment, graph admission and host enforcement
+confinement policy. Full permission analysis, graph admission and host enforcement
 remain parent requirements. See `AppArmorGlob` Rustdoc for the admitted byte
 grammar and contextual class-escape refusals.
+
+`GlobLanguage` compiles a union of these semantic models with complete literal
+bindings into the core's existing derivative engine. Matching consumes complete
+non-NUL pathname byte strings, including invalid UTF-8. Exact inclusion returns
+either `Contained` after exhausting the reachable frontier or a shortest byte
+counterexample; resource/cancellation refusal remains an error. Run
+`cargo run -p purrassist-toolgraph --example glob_containment` for the actual
+lowering and inclusion consumer. This is language containment, not complete
+permission/owner/deny analysis, hat admission or host confinement.

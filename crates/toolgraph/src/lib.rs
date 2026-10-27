@@ -8,6 +8,7 @@ mod apparmor_glob;
 mod binding;
 mod context;
 mod field_mask;
+mod glob_language;
 mod vocab;
 
 pub use context::{
@@ -26,3 +27,4 @@ pub use apparmor_glob::{
     literal_path_word,
 };
 pub use binding::{BindingError, CallableBinding, ParameterBinding, ReturnBinding};
+pub use glob_language::{GlobInclusion, GlobLanguage, GlobLanguageError, GlobLanguageInput};

@@ -101,6 +101,9 @@ pub(super) struct Stack<T> {
 }
 
 impl<T: ScratchCharge> Stack<T> {
+    pub(super) const fn len(&self) -> usize {
+        self.values.len()
+    }
     pub(super) fn new(governor: &Governor) -> Self {
         Self {
             values: ScratchMap::new(governor),

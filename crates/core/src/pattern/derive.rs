@@ -80,7 +80,8 @@ struct Ctx {
 /// translation and every state discovered while matching or generating.
 trait Arena {
     fn term(&self, id: u32) -> Term;
-    fn intern(&mut self, term: Term) -> Result<u32, StopReason>;
+    fn intern(&mut self, term: Term, governor: &mut Governor) -> Result<u32, StopReason>;
+    fn metered(&self) -> bool;
 }
 
 /// Caller-retained, already-admitted compile arena. Its sorted index uses
@@ -130,22 +131,61 @@ impl MatchArena {
         Ok(Self { items, index })
     }
 }
-impl Arena for MatchArena {
-    fn term(&self, id: u32) -> Term {
-        self.items.as_slice()[id as usize]
-    }
-    fn intern(&mut self, term: Term) -> Result<u32, StopReason> {
+impl MatchArena {
+    fn intern_mode(
+        &mut self,
+        term: Term,
+        governor: &mut Governor,
+        metered: bool,
+    ) -> Result<u32, StopReason> {
+        if metered {
+            map_work(self.index.len(), false, governor)?;
+        }
         if let Some(id) = self.index.get(&term) {
             return Ok(*id);
         }
-        let id = u32::try_from(self.items.len()).unwrap_or(u32::MAX);
+        let id = u32::try_from(self.items.len())
+            .map_err(|_| StopReason::BudgetExceeded(Resource::ScratchBytes))?;
+        if metered {
+            map_work(self.index.len(), true, governor)?;
+        }
         self.items.push(term)?;
         self.index.insert(term, id)?;
         Ok(id)
     }
 }
+impl Arena for MatchArena {
+    fn term(&self, id: u32) -> Term {
+        self.items.as_slice()[id as usize]
+    }
+    fn intern(&mut self, term: Term, governor: &mut Governor) -> Result<u32, StopReason> {
+        self.intern_mode(term, governor, false)
+    }
+    fn metered(&self) -> bool {
+        false
+    }
+}
 
-fn mk_concat<A: Arena>(a: u32, b: u32, arena: &mut A) -> Result<u32, StopReason> {
+/// A temporary accounting policy, never stored in retained/session layouts.
+struct MeteredArena<'a>(&'a mut MatchArena);
+impl Arena for MeteredArena<'_> {
+    fn term(&self, id: u32) -> Term {
+        self.0.term(id)
+    }
+    fn intern(&mut self, term: Term, governor: &mut Governor) -> Result<u32, StopReason> {
+        self.0.intern_mode(term, governor, true)
+    }
+    fn metered(&self) -> bool {
+        true
+    }
+}
+
+fn mk_concat<A: Arena>(
+    a: u32,
+    b: u32,
+    arena: &mut A,
+    governor: &mut Governor,
+) -> Result<u32, StopReason> {
     if a == EMPTY_ID {
         return Ok(b);
     }
@@ -155,7 +195,7 @@ fn mk_concat<A: Arena>(a: u32, b: u32, arena: &mut A) -> Result<u32, StopReason>
     if a == DEAD_ID || b == DEAD_ID {
         return Ok(DEAD_ID);
     }
-    arena.intern(Term::Concat(a, b))
+    arena.intern(Term::Concat(a, b), governor)
 }
 
 /// Iteratively merge two canonical, sorted chains. Every visited head and
@@ -204,7 +244,7 @@ fn mk_or<A: Arena>(
         chain = if chain == DEAD_ID {
             head
         } else {
-            arena.intern(Term::Or(head, chain))?
+            arena.intern(Term::Or(head, chain), governor)?
         };
     }
     Ok(chain)
@@ -222,17 +262,20 @@ fn intern_class(
                 .unwrap_or(u64::MAX),
         )?;
         if class.values == intervals {
-            return Ok(u32::try_from(index).unwrap_or(u32::MAX));
+            return u32::try_from(index)
+                .map_err(|_| StopReason::BudgetExceeded(Resource::ScratchBytes));
         }
     }
     governor.charge(
         Resource::Work,
         u64::try_from(intervals.len()).unwrap_or(u64::MAX),
     )?;
+    let index = u32::try_from(classes.len())
+        .map_err(|_| StopReason::BudgetExceeded(Resource::ScratchBytes))?;
     let mut copied = ScratchVec::new(governor);
     copied.extend(intervals.iter().copied())?;
     classes.push(Buffer::from_scratch(copied, governor))?;
-    Ok(u32::try_from(classes.len() - 1).unwrap_or(u32::MAX))
+    Ok(index)
 }
 
 fn translate<A: Arena>(
@@ -251,13 +294,13 @@ fn translate<A: Arena>(
         Node::NoMatch | Node::Backref(_) | Node::Look { .. } => DEAD_ID,
         Node::Class(intervals) => {
             let class_id = intern_class(intervals, classes, governor)?;
-            arena.intern(Term::Class(class_id))?
+            arena.intern(Term::Class(class_id), governor)?
         }
         Node::Concat(items) => {
             let mut id = EMPTY_ID;
             for item in items {
                 let next = translate(item, arena, classes, governor)?;
-                id = mk_concat(id, next, arena)?;
+                id = mk_concat(id, next, arena, governor)?;
             }
             id
         }
@@ -275,12 +318,15 @@ fn translate<A: Arena>(
                 u64::try_from(max).unwrap_or(u64::MAX - 1).saturating_add(1)
             });
             let min = u64::try_from(repetition.min).unwrap_or(u64::MAX);
-            arena.intern(Term::Repeat(inner, min, max_code, repetition.greedy))?
+            arena.intern(
+                Term::Repeat(inner, min, max_code, repetition.greedy),
+                governor,
+            )?
         }
         Node::Group(_, inner) => translate(inner, arena, classes, governor)?,
-        Node::Start => arena.intern(Term::Start)?,
-        Node::End => arena.intern(Term::End)?,
-        Node::Boundary(positive) => arena.intern(Term::Boundary(*positive))?,
+        Node::Start => arena.intern(Term::Start, governor)?,
+        Node::End => arena.intern(Term::End, governor)?,
+        Node::Boundary(positive) => arena.intern(Term::Boundary(*positive), governor)?,
     })
 }
 
@@ -327,11 +373,24 @@ pub(super) fn compile(node: &Node, governor: &mut Governor) -> Result<Compiled, 
     let mut base = MatchArena::new(governor)?;
     let mut classes = ScratchVec::new(governor);
     let root = translate(node, &mut base, &mut classes, governor)?;
+    retain_compiled(base, classes, root, false, governor)
+}
+
+fn retain_compiled(
+    base: MatchArena,
+    classes: ScratchVec<Buffer<(u32, u32)>>,
+    root: u32,
+    byte_program: bool,
+    governor: &mut Governor,
+) -> Result<Compiled, StopReason> {
     let mut cuts = ScratchVec::new(governor);
     collect_cuts(classes.as_slice(), &mut cuts, governor)?;
     governor.charge(Resource::Work, 2)?;
-    let has_boundary = base.index.get(&Term::Boundary(true)).is_some()
-        || base.index.get(&Term::Boundary(false)).is_some();
+    // Direct byte programs cannot construct assertion terms. Unicode programs
+    // retain their established lookup and Work schedule.
+    let has_boundary = !byte_program
+        && (base.index.get(&Term::Boundary(true)).is_some()
+            || base.index.get(&Term::Boundary(false)).is_some());
     if has_boundary {
         // Cut points for the ASCII word class (`is_ascii_alphanumeric` or
         // `_`), so a minterm never straddles a word/non-word boundary.
@@ -368,6 +427,126 @@ pub(super) fn compile(node: &Node, governor: &mut Governor) -> Result<Compiled, 
     })
 }
 
+/// Direct postfix construction shares every term/class/storage authority with
+/// Unicode compilation, without constructing a textual regex or syntax AST.
+pub(super) fn compile_bytes(
+    instructions: &[super::ByteInstruction],
+    governor: &mut Governor,
+) -> Result<Compiled, super::ByteCompileError> {
+    use super::{ByteCompileError, ByteInstruction};
+    governor.charge(
+        Resource::InputBytes,
+        crate::contract::saturating_size(instructions.len()).saturating_mul(40),
+    )?;
+    let mut base = MatchArena::new(governor)?;
+    let mut arena = MeteredArena(&mut base);
+    let mut classes = ScratchVec::new(governor);
+    let mut stack: ScratchVec<(u32, u32)> = ScratchVec::new(governor);
+    for (index, instruction) in instructions.iter().enumerate() {
+        governor.charge(Resource::Work, 1)?;
+        let (root, depth) = match *instruction {
+            ByteInstruction::Empty => (EMPTY_ID, 0),
+            ByteInstruction::Dead => (DEAD_ID, 0),
+            ByteInstruction::Literal(byte) => {
+                let class = intern_class(
+                    &[(u32::from(byte), u32::from(byte))],
+                    &mut classes,
+                    governor,
+                )?;
+                (arena.intern(Term::Class(class), governor)?, 0)
+            }
+            ByteInstruction::Class(bits) => {
+                let class = byte_class(bits, &mut classes, governor)?;
+                (arena.intern(Term::Class(class), governor)?, 0)
+            }
+            ByteInstruction::Star => {
+                let Some((inner, depth)) = stack.pop() else {
+                    return Err(ByteCompileError::Arity {
+                        instruction: index,
+                        required: 1,
+                        available: 0,
+                    });
+                };
+                let depth = depth
+                    .checked_add(1)
+                    .ok_or(StopReason::BudgetExceeded(Resource::Depth))?;
+                governor.charge(Resource::Depth, u64::from(depth))?;
+                (
+                    arena.intern(Term::Repeat(inner, 0, 0, true), governor)?,
+                    depth,
+                )
+            }
+            ByteInstruction::Concat(count) | ByteInstruction::Alternate(count) => {
+                if count == 0 || stack.len() < count {
+                    return Err(ByteCompileError::Arity {
+                        instruction: index,
+                        required: count,
+                        available: stack.len(),
+                    });
+                }
+                governor.charge(
+                    Resource::Work,
+                    crate::contract::saturating_size(count).saturating_mul(3),
+                )?;
+                let start = stack.len() - count;
+                let mut depth = 0;
+                for &(_, child_depth) in &stack.as_slice()[start..] {
+                    depth = depth.max(child_depth);
+                }
+                let depth = depth
+                    .checked_add(1)
+                    .ok_or(StopReason::BudgetExceeded(Resource::Depth))?;
+                governor.charge(Resource::Depth, u64::from(depth))?;
+                let alternate = matches!(instruction, ByteInstruction::Alternate(_));
+                let mut root = if alternate { DEAD_ID } else { EMPTY_ID };
+                for &(child, _) in &stack.as_slice()[start..] {
+                    root = if alternate {
+                        mk_or(root, child, &mut arena, governor)?
+                    } else {
+                        mk_concat(root, child, &mut arena, governor)?
+                    };
+                }
+                for _ in 0..count {
+                    stack.pop();
+                }
+                (root, depth)
+            }
+        };
+        governor.charge(Resource::Depth, u64::from(depth))?;
+        stack.push((root, depth))?;
+    }
+    if stack.len() != 1 {
+        return Err(ByteCompileError::Roots {
+            remaining: stack.len(),
+        });
+    }
+    let root = stack.as_slice()[0].0;
+    governor.check()?;
+    Ok(retain_compiled(base, classes, root, true, governor)?)
+}
+
+fn byte_class(
+    bits: [u64; 4],
+    classes: &mut ScratchVec<Buffer<(u32, u32)>>,
+    governor: &mut Governor,
+) -> Result<u32, StopReason> {
+    let mut ranges = ScratchVec::new(governor);
+    let mut first = None;
+    for code in 0..=256_u32 {
+        governor.charge(Resource::Work, 1)?;
+        let present = code < 256 && bits[(code / 64) as usize] & (1 << (code % 64)) != 0;
+        match (first, present) {
+            (None, true) => first = Some(code),
+            (Some(start), false) => {
+                ranges.push((start, code - 1))?;
+                first = None;
+            }
+            _ => {}
+        }
+    }
+    intern_class(ranges.as_slice(), classes, governor)
+}
+
 fn minterm_representative(cuts: &[u32], code: u32) -> (usize, u32) {
     let bucket = cuts.partition_point(|&cut| cut <= code);
     let representative = if bucket == 0 { 0 } else { cuts[bucket - 1] };
@@ -401,10 +580,16 @@ fn cached_nullable(
         | (u32::from(ctx.next_word) << 3)
         | (u32::from(ctx.viable) << 4);
     let key = (id, flags);
+    if arena.metered() {
+        map_work(cache.len(), false, governor)?;
+    }
     if let Some(&value) = cache.get(&key) {
         return Ok(value);
     }
     let value = nullable(arena, id, ctx, governor)?;
+    if arena.metered() {
+        map_work(cache.len(), true, governor)?;
+    }
     cache.insert(key, value)?;
     governor.check()?;
     Ok(value)
@@ -502,12 +687,16 @@ fn nullable_cached(
     memo: &mut ScratchMap<u32, bool>,
     governor: &mut Governor,
 ) -> Result<bool, StopReason> {
+    let metered = arena.metered();
     let mut stack = Stack::new(governor);
     let mut next = Some(id);
     let mut value = false;
     loop {
         if let Some(id) = next.take() {
             governor.charge(Resource::Work, 1)?;
+            if arena.metered() {
+                map_work(memo.len(), false, governor)?;
+            }
             if let Some(&cached) = memo.get(&id) {
                 value = cached;
             } else {
@@ -517,18 +706,18 @@ fn nullable_cached(
                 } else {
                     match term {
                         Term::Concat(a, b) => {
-                            stack.push(NullFrame::And(id, b))?;
+                            push_frame(&mut stack, NullFrame::And(id, b), metered, governor)?;
                             next = Some(a);
                             continue;
                         }
                         Term::Or(a, b) => {
-                            stack.push(NullFrame::Or(id, b))?;
+                            push_frame(&mut stack, NullFrame::Or(id, b), metered, governor)?;
                             next = Some(a);
                             continue;
                         }
                         Term::Repeat(inner, min, _, _) => {
                             debug_assert!(min > 0);
-                            stack.push(NullFrame::Finish(id))?;
+                            push_frame(&mut stack, NullFrame::Finish(id), metered, governor)?;
                             next = Some(inner);
                             continue;
                         }
@@ -537,20 +726,23 @@ fn nullable_cached(
                 }
             }
         }
-        let Some(frame) = stack.pop() else {
+        let Some(frame) = pop_frame(&mut stack, metered, governor)? else {
             return Ok(value);
         };
         governor.charge(Resource::Work, 1)?;
         match frame {
             NullFrame::And(parent, right) if value => {
-                stack.push(NullFrame::Finish(parent))?;
+                push_frame(&mut stack, NullFrame::Finish(parent), metered, governor)?;
                 next = Some(right);
             }
             NullFrame::Or(parent, right) if !value => {
-                stack.push(NullFrame::Finish(parent))?;
+                push_frame(&mut stack, NullFrame::Finish(parent), metered, governor)?;
                 next = Some(right);
             }
             NullFrame::And(parent, _) | NullFrame::Or(parent, _) | NullFrame::Finish(parent) => {
+                if arena.metered() {
+                    map_work(memo.len(), true, governor)?;
+                }
                 memo.insert(parent, value)?;
             }
         }
@@ -580,6 +772,7 @@ fn step<A: Arena>(
     ctx: Ctx,
     governor: &mut Governor,
 ) -> Result<u32, StopReason> {
+    let metered = arena.metered();
     let mut stack = Stack::new(governor);
     let mut nullability = ScratchMap::new(governor);
     let mut next = Some(id);
@@ -592,6 +785,9 @@ fn step<A: Arena>(
                     derived = DEAD_ID;
                 }
                 Term::Class(class_id) => {
+                    if arena.metered() {
+                        map_work(classes[class_id as usize].len(), false, governor)?;
+                    }
                     derived =
                         if super::unicode::interval_contains(&classes[class_id as usize], code) {
                             EMPTY_ID
@@ -600,39 +796,49 @@ fn step<A: Arena>(
                         };
                 }
                 Term::Concat(a, b) => {
-                    stack.push(StepFrame::Concat(a, b))?;
+                    push_frame(&mut stack, StepFrame::Concat(a, b), metered, governor)?;
                     next = Some(a);
                     continue;
                 }
                 Term::Or(a, b) => {
-                    stack.push(StepFrame::Alternate(b))?;
+                    push_frame(&mut stack, StepFrame::Alternate(b), metered, governor)?;
                     next = Some(a);
                     continue;
                 }
                 Term::Repeat(inner, min, max_code, greedy) if max_code != 1 => {
-                    stack.push(StepFrame::Repeat(inner, min, max_code, greedy))?;
+                    push_frame(
+                        &mut stack,
+                        StepFrame::Repeat(inner, min, max_code, greedy),
+                        metered,
+                        governor,
+                    )?;
                     next = Some(inner);
                     continue;
                 }
                 Term::Repeat(_, _, _, _) => derived = DEAD_ID,
             }
         }
-        let Some(frame) = stack.pop() else {
+        let Some(frame) = pop_frame(&mut stack, metered, governor)? else {
             return Ok(derived);
         };
         governor.charge(Resource::Work, 1)?;
         match frame {
             StepFrame::Concat(left, right) => {
-                let consumed_left = mk_concat(derived, right, arena)?;
+                let consumed_left = mk_concat(derived, right, arena, governor)?;
                 if nullable_cached(arena, left, ctx, &mut nullability, governor)? {
-                    stack.push(StepFrame::Merge(consumed_left))?;
+                    push_frame(
+                        &mut stack,
+                        StepFrame::Merge(consumed_left),
+                        metered,
+                        governor,
+                    )?;
                     next = Some(right);
                 } else {
                     derived = mk_or(consumed_left, DEAD_ID, arena, governor)?;
                 }
             }
             StepFrame::Alternate(right) => {
-                stack.push(StepFrame::Merge(derived))?;
+                push_frame(&mut stack, StepFrame::Merge(derived), metered, governor)?;
                 next = Some(right);
             }
             StepFrame::Merge(left) => derived = mk_or(left, derived, arena, governor)?,
@@ -640,8 +846,9 @@ fn step<A: Arena>(
                 if derived != DEAD_ID {
                     let next_min = min.saturating_sub(1);
                     let next_max = if max_code == 0 { 0 } else { max_code - 1 };
-                    let tail = arena.intern(Term::Repeat(inner, next_min, next_max, greedy))?;
-                    derived = mk_concat(derived, tail, arena)?;
+                    let tail =
+                        arena.intern(Term::Repeat(inner, next_min, next_max, greedy), governor)?;
+                    derived = mk_concat(derived, tail, arena, governor)?;
                 }
             }
         }
@@ -667,8 +874,8 @@ struct Transition {
     ctx: Ctx,
 }
 
-fn cached_step(
-    arena: &mut MatchArena,
+fn cached_step<A: Arena>(
+    arena: &mut A,
     classes: &[Vec<(u32, u32)>],
     cache: &mut TransitionCache,
     transition: &Transition,
@@ -680,6 +887,9 @@ fn cached_step(
         (transition.state, minterm),
         (transition.ctx.prev_word, transition.ctx.at_start),
     );
+    if arena.metered() {
+        map_work(cache.len(), false, governor)?;
+    }
     if let Some(next) = cache.get(&key) {
         return Ok(*next);
     }
@@ -691,6 +901,9 @@ fn cached_step(
         transition.ctx,
         governor,
     )?;
+    if arena.metered() {
+        map_work(cache.len(), true, governor)?;
+    }
     cache.insert(key, next)?;
     Ok(next)
 }
@@ -1200,12 +1413,74 @@ pub(super) struct Session {
     nullability: NullableCache,
 }
 impl Session {
+    pub(super) fn new_bytes(
+        compiled: &Compiled,
+        governor: &mut Governor,
+    ) -> Result<Self, StopReason> {
+        // The base index is already sorted: each insertion appends, but its
+        // binary lookup still compares keys. Unicode sessions retain their
+        // established Work law; byte sessions opt into these additional costs.
+        let count = compiled.base.index.len();
+        governor.charge(
+            Resource::Work,
+            crate::contract::saturating_size(count)
+                .saturating_mul(u64::from(count.checked_ilog2().unwrap_or(0) + 2))
+                .saturating_mul(4),
+        )?;
+        Self::new(compiled, governor)
+    }
     pub(super) fn new(compiled: &Compiled, governor: &mut Governor) -> Result<Self, StopReason> {
         Ok(Self {
             arena: MatchArena::seeded(&compiled.base, governor)?,
             cache: ScratchMap::new(governor),
             nullability: NullableCache::new(governor),
         })
+    }
+    pub(super) fn nullable_bytes(
+        &mut self,
+        id: u32,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        cached_nullable(
+            &MeteredArena(&mut self.arena),
+            id,
+            NullCtx {
+                at_start: false,
+                at_end: false,
+                prev_word: false,
+                next_word: false,
+            }
+            .into(),
+            &mut self.nullability,
+            governor,
+        )
+    }
+    pub(super) fn step_bytes(
+        &mut self,
+        classes: &[Vec<(u32, u32)>],
+        state: u32,
+        code: u32,
+        minterm: usize,
+        governor: &mut Governor,
+    ) -> Result<u32, StopReason> {
+        cached_step(
+            &mut MeteredArena(&mut self.arena),
+            classes,
+            &mut self.cache,
+            &Transition {
+                state,
+                code,
+                minterm,
+                ctx: NullCtx {
+                    at_start: false,
+                    at_end: false,
+                    prev_word: false,
+                    next_word: false,
+                }
+                .into(),
+            },
+            governor,
+        )
     }
     pub(super) fn nullable(
         &mut self,
@@ -1276,6 +1551,51 @@ pub(super) fn minterm_of(cuts: &[u32], code: u32) -> (usize, u32) {
     minterm_representative(cuts, code)
 }
 
+/// Before-work bound for fixed-size map-key comparisons and shifted entries.
+/// Byte programs opt into this accounting without changing Unicode schedules.
+pub(super) fn map_work(
+    len: usize,
+    insertion: bool,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    let comparisons = u64::from(len.checked_ilog2().unwrap_or(0) + 2).saturating_mul(4);
+    governor.charge(
+        Resource::Work,
+        comparisons.saturating_add(if insertion {
+            crate::contract::saturating_size(len)
+        } else {
+            0
+        }),
+    )
+}
+
+fn push_frame<T: crate::contract::ScratchCharge>(
+    stack: &mut Stack<T>,
+    value: T,
+    metered: bool,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    // Stack keys are increasing: insertion appends without shifting entries.
+    if metered {
+        map_work(stack.len(), false, governor)?;
+    }
+    stack.push(value)
+}
+fn pop_frame<T: crate::contract::ScratchCharge>(
+    stack: &mut Stack<T>,
+    metered: bool,
+    governor: &mut Governor,
+) -> Result<Option<T>, StopReason> {
+    // Removal always targets the largest key and shifts no entries.
+    if metered {
+        map_work(stack.len(), false, governor)?;
+    }
+    Ok(stack.pop())
+}
+pub(super) const fn dead(state: u32) -> bool {
+    state == DEAD_ID
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Arena, Compiled, DEAD_ID, MatchArena, Session, Term};
@@ -1285,11 +1605,11 @@ mod tests {
         // Construct valid canonical input chains once without repeatedly
         // merging growing prefixes; the tested union receives caller-owned
         // compiled input just as a generation session does.
-        let governor = Governor::new(Budget::default());
+        let mut governor = Governor::new(Budget::default());
         let mut base = MatchArena::new(&governor).unwrap();
         let leaves: Vec<_> = (0..width * 2)
             .map(|index| {
-                base.intern(Term::Class(u32::try_from(index).unwrap()))
+                base.intern(Term::Class(u32::try_from(index).unwrap()), &mut governor)
                     .unwrap()
             })
             .collect();
@@ -1299,7 +1619,7 @@ mod tests {
                 tail = if tail == DEAD_ID {
                     leaf
                 } else {
-                    base.intern(Term::Or(leaf, tail)).unwrap()
+                    base.intern(Term::Or(leaf, tail), &mut governor).unwrap()
                 };
             }
             tail
