@@ -1085,9 +1085,14 @@ processing. Checked PCs, fixed-width bounds and recursive caller/native depth
 admission preserve the same ordinary/JSON compiler and instruction identities.
 Completed Program owners release on later compiler failure and grammar drop.
 
-Dense matcher construction/storage also retain governed owners. Other dialect-set
-metadata, public call-byte metadata, capture memo, closer-ID input preparation,
-longest metadata and native pattern preparation retain separate contracts.
+Dense matcher construction/storage and derived call metadata retain governed
+owners. Call alternatives, literal spellings and codec markup use fallible
+byte lists; closer IDs, capture memo and traversal temporaries release after use.
+Capture/next queries and longest-spelling scans admit each visited entry.
+Borrowed `CallEnd` getters, `call_literals` and `CodecContext` expose the same
+read-only owners. Recovery's existing runtime byte copies remain explicit.
+Other dialect-set metadata, native pattern preparation and engine/recovery
+runtime allocation governance retain separate contracts.
 Full cold backend governance, witness, GBNF,
 CompactSignature, projection, routing, ledgers and graph integration remain #36
 acceptance.
@@ -1104,6 +1109,8 @@ Recovery now accepts an explicit borrowed `DialectSet`. Built-in sets are
 static borrows, custom sets stay caller-owned, and owned cloneable request
 settings contain no set. Actual host/facade/derive/WASM/corpus/golden/fuzzer
 consumers preserve their chosen context through recovery. CLI/MCP selectors,
-results and provenance keep their original contracts. Other set metadata,
-call metadata and capture analyses, native pattern preparation and the remaining
-generation/projection/routing/integration acceptance remain under #36.
+results and provenance keep their original contracts. Derived call metadata and
+compiler metadata queries now use admitted work and fallible retained owners.
+Other set metadata, native pattern preparation, engine/recovery runtime allocation
+governance and remaining generation/projection/routing/integration acceptance
+remain under #36.

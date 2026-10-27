@@ -133,11 +133,39 @@ refusal keeps the original sticky resource cause. Ordinary and JSON-envelope
 recompilation share the same path and instruction identities. Shared backward
 reachability also admits its actual call-metadata callers.
 
-Dense matcher construction/storage also retain governed owners. Other dialect-set
-metadata, public call-byte metadata, capture memo, closer-ID input preparation,
-longest metadata and native pattern preparation retain separate contracts.
+Dense matcher construction/storage and derived call metadata retain governed
+owners. Call alternatives, literal spellings and codec markup use fallible
+byte lists; closer IDs, capture memo and traversal temporaries release after use.
+Capture/next queries and longest-spelling scans admit each visited entry.
+Borrowed `CallEnd` getters, `call_literals` and `CodecContext` expose the same
+read-only owners. Recovery's existing runtime byte copies remain explicit.
+Other dialect-set metadata, native pattern preparation and engine/recovery
+runtime allocation governance retain separate contracts.
 Delimiter expansion feeds the same governed dense matcher. Complete cold
 compiler governance and the remaining #36 capabilities are still required.
+
+
+## Derived call metadata admission
+
+`CallEnd` opener/closer/call-closer lists, `call_literals` and `call_markup`
+retain fallible nested scratch owners until the compiled grammar drops.
+Per-opener traversal flags/stacks and temporary literal/closer IDs release after
+use. Scans, byte copies, comparisons, deduplication, in-place sorting and growth
+admit work/storage before processing. The fixed two-slot successor iterator
+serves both compiler and engine callers without allocating a successor list.
+Capture memo initialization, capture/next traversal and longest-spelling scans
+admit work through the same compiler, including empty spelling groups. Recursive
+queries preserve caller/native depth limits and sticky resource causes.
+
+Read-only `CallEnd` getters and shared `ScratchVec<u8>` slices replace deep
+metadata cloning. The engine, emitter and XML codec borrow the retained markup;
+recovery's existing `Markup` and closer collections keep explicit ordinary byte
+copies. Those runtime allocations remain outside this compiler admission phase.
+Canonical-first openers, alternative/closer encounter order, longest-first literal
+ordering and lexical ties, markup deduplication and chained-call detection retain
+their original semantics. JSON repair spellings are not added to call metadata.
+Refusals drop unpublished partial tables and completed metadata from earlier
+steps; a successful borrow does not allocate or readmit the prepared bytes.
 
 ## Type-enforced scratch accounting
 
@@ -1501,6 +1529,7 @@ contains owned cloneable policy/budget settings, while `ToolSet::recover` and
 `recover_governed` take the prepared set explicitly. Sizing can borrow the same
 set through `sized_for`. The host retains custom preparation through recovery
 under its original shared governor; CLI/MCP selectors and outcome/provenance
-contracts are unchanged. Other existing dialect-set metadata preparation,
-call metadata/capture analyses and native pattern preparation remain outside
-these completed dense and Program phases under parent #36.
+contracts are unchanged. Derived call metadata and compiler queries also retain
+governed owners and admitted scans. Other existing dialect-set metadata, native
+pattern preparation and engine/recovery runtime allocation governance remain
+outside these completed compiler phases under parent #36.

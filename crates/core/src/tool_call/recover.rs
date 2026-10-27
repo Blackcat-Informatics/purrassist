@@ -1893,11 +1893,11 @@ pub(super) fn rejected_end(
     governor: &mut Governor,
 ) -> Result<usize, StopReason> {
     let ends = dialect.grammar().call_ends();
-    let at = |spellings: &[Vec<u8>], position: usize| {
+    let at = |spellings: &[ScratchVec<u8>], position: usize| {
         spellings
             .iter()
             .filter(|spelling| output[position..].starts_with(spelling))
-            .map(Vec::len)
+            .map(ScratchVec::len)
             .max()
     };
     // The alternatives the attempt opened (its longest opener spelling;
@@ -1907,7 +1907,7 @@ pub(super) fn rejected_end(
     let opened: Vec<&CallEnd> = {
         let matched: Vec<(usize, &CallEnd)> = ends
             .iter()
-            .filter_map(|end| at(&end.openers, span.start).map(|length| (length, end)))
+            .filter_map(|end| at(end.openers(), span.start).map(|length| (length, end)))
             .collect();
         let best = matched.iter().map(|(length, _)| *length).max();
         best.map_or_else(
@@ -1922,8 +1922,14 @@ pub(super) fn rejected_end(
         )
     };
     let markup = Markup {
-        openers: opened.iter().flat_map(|end| end.openers.clone()).collect(),
-        closers: opened.iter().flat_map(|end| end.closers.clone()).collect(),
+        openers: opened
+            .iter()
+            .flat_map(|end| end.openers().iter().map(|bytes| bytes.as_slice().to_vec()))
+            .collect(),
+        closers: opened
+            .iter()
+            .flat_map(|end| end.closers().iter().map(|bytes| bytes.as_slice().to_vec()))
+            .collect(),
         // A repeated opener nests a level, unless the alternative chains
         // several calls that each open with it.
         nests: !opened.iter().any(|end| end.chained),
@@ -1933,9 +1939,9 @@ pub(super) fn rejected_end(
         call_closers: {
             let mut closers: Vec<Vec<u8>> = ends
                 .iter()
-                .flat_map(|end| end.call_closers.iter())
+                .flat_map(|end| end.call_closers().iter())
                 .filter(|spelling| spelling.len() > 1)
-                .cloned()
+                .map(|bytes| bytes.as_slice().to_vec())
                 .collect();
             closers.sort();
             closers.dedup();
@@ -2547,7 +2553,7 @@ impl MarkupScan<'_> {
     fn complete_literal(
         &self,
         span: &Range<usize>,
-        literals: &[Vec<u8>],
+        literals: &[ScratchVec<u8>],
         limit: usize,
         governor: &mut Governor,
     ) -> Result<usize, StopReason> {
@@ -2583,7 +2589,7 @@ struct Markup<'g> {
     /// Every multi-byte literal that ends a call of the dialect.
     call_closers: Vec<Vec<u8>>,
     /// Every literal spelling of the dialect's `call` production.
-    literals: &'g [Vec<u8>],
+    literals: &'g [ScratchVec<u8>],
 }
 
 /// Whether `byte` continues a bare word (an ASCII letter, digit or `_`).
@@ -4076,14 +4082,18 @@ impl Recovery<'_> {
 
     /// The length of one of `closers` (multi-byte, exactly or with one
     /// slip, as [`MarkupScan`] reads them) written at `at`.
-    fn closer_at(&self, closers: &[Vec<u8>], at: usize) -> Option<usize> {
+    fn closer_at(&self, closers: &[impl AsRef<[u8]>], at: usize) -> Option<usize> {
         let markup = Markup {
             openers: Vec::new(),
-            closers: closers.to_vec(),
+            closers: closers
+                .iter()
+                .map(|bytes| bytes.as_ref().to_vec())
+                .collect(),
             nests: false,
             call_closers: Vec::new(),
             literals: &[],
         };
+        let closers = &markup.closers;
         closers
             .iter()
             .filter(|closer| closer.len() > 1 && self.output[at..].starts_with(closer))
@@ -4104,8 +4114,8 @@ impl Recovery<'_> {
             .grammar()
             .call_ends()
             .iter()
-            .filter(|end| end.openers.iter().any(|opener| raw.starts_with(opener)))
-            .flat_map(|end| end.closers.iter().cloned())
+            .filter(|end| end.openers().iter().any(|opener| raw.starts_with(opener)))
+            .flat_map(|end| end.closers().iter().map(|bytes| bytes.as_slice().to_vec()))
             .filter(|closer| closer.len() > 1)
             .collect()
     }
@@ -4261,25 +4271,27 @@ impl Recovery<'_> {
             for dialect in self.dialects.dialects() {
                 for end in dialect.grammar().call_ends() {
                     governor.charge(Resource::Work, size(inside.len()))?;
-                    let open = end
-                        .openers
-                        .iter()
-                        .filter(|opener| opener.len() > 1)
-                        .any(|opener| {
-                            inside
-                                .windows(opener.len())
-                                .rposition(|window| window == opener.as_slice())
-                                .is_some_and(|last| {
-                                    !end.closers.iter().filter(|closer| !closer.is_empty()).any(
-                                        |closer| {
-                                            inside[last..]
-                                                .windows(closer.len())
-                                                .any(|window| window == closer.as_slice())
-                                        },
-                                    )
-                                })
-                        });
-                    if let Some(length) = open.then(|| self.closer_at(&end.closers, at)).flatten() {
+                    let open =
+                        end.openers()
+                            .iter()
+                            .filter(|opener| opener.len() > 1)
+                            .any(|opener| {
+                                inside
+                                    .windows(opener.len())
+                                    .rposition(|window| window == opener.as_slice())
+                                    .is_some_and(|last| {
+                                        !end.closers()
+                                            .iter()
+                                            .filter(|closer| !closer.is_empty())
+                                            .any(|closer| {
+                                                inside[last..]
+                                                    .windows(closer.len())
+                                                    .any(|window| window == closer.as_slice())
+                                            })
+                                    })
+                            });
+                    if let Some(length) = open.then(|| self.closer_at(end.closers(), at)).flatten()
+                    {
                         dialects.push((dialect.clone(), length));
                     }
                 }
@@ -5041,7 +5053,7 @@ fn evidence<'a>(rejected: impl Iterator<Item = (usize, &'a DialectId, &'a [u8])>
     for (bytes_read, dialect, bytes) in rejected {
         reach += bytes_read;
         if dialect.grammar().call_ends().iter().any(|end| {
-            end.openers
+            end.openers()
                 .first()
                 .is_some_and(|opener| bytes.starts_with(opener))
         }) {

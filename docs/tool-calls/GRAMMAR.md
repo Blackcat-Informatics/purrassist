@@ -416,11 +416,17 @@ emission preserves caller/native depth limits. Ordinary and JSON-envelope
 programs use the same compiler and stable instruction identities; later failures
 release completed Program owners.
 
-Dense matcher construction/storage also retain governed owners. Other dialect-set
-metadata, public call-byte metadata, capture memo, closer-ID input preparation,
-longest metadata and native pattern preparation remain separate #36 requirements.
-These implemented phases do not establish
-complete cold compiler governance.
+Dense matcher construction/storage and derived call metadata retain governed
+owners. Call alternative spellings, literal lists and codec markup use fallible
+byte owners; closer-ID preparation and the capture memo use governed temporaries.
+Capture/next queries and longest-spelling scans admit work before processing.
+`CallEnd::openers`, `closers` and `call_closers` and `CompiledGrammar::call_literals`
+return read-only borrowed slices, without deep cloning. `CodecContext` and XML
+borrow those same owners; recovery's existing runtime copies remain explicit.
+Ordering, canonical opener identity, chained-call boundaries and spelling
+membership are preserved. Other dialect-set metadata, native pattern preparation
+and engine/recovery runtime allocation governance remain separate #36
+requirements. These phases do not establish complete cold compiler governance.
 
 ## Print a prepared grammar
 

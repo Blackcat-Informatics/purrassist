@@ -36,9 +36,14 @@ caller/native depth admission; checked PCs and fixed-width bound sums refuse
 resource overflow. Completed Program owners release on later compiler refusal
 or when the compiled grammar drops.
 
-Dense matcher construction/storage also retain governed owners. Other dialect-set
-metadata, public call-byte metadata, capture memo, closer-ID input preparation,
-longest metadata and native pattern preparation retain separate contracts.
+Dense matcher construction/storage and derived call metadata retain governed
+owners. Call alternatives, literal spellings and codec markup use fallible
+byte lists; closer IDs, capture memo and traversal temporaries release after use.
+Capture/next queries and longest-spelling scans admit each visited entry.
+Borrowed `CallEnd` getters, `call_literals` and `CodecContext` expose the same
+read-only owners. Recovery's existing runtime byte copies remain explicit.
+Other dialect-set metadata, native pattern preparation and engine/recovery
+runtime allocation governance retain separate contracts.
 Full cold backend governance remains #36
 acceptance, alongside witness, GBNF, CompactSignature, projection, routing,
 ledgers and graph integration.

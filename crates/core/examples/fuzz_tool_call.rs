@@ -417,9 +417,9 @@ fn dialect_closers(dialect: &DialectId) -> Vec<Vec<u8>> {
         .grammar()
         .call_ends()
         .iter()
-        .flat_map(|end| end.call_closers.iter())
+        .flat_map(|end| end.call_closers().iter())
         .filter(|closer| closer.len() > 1)
-        .cloned()
+        .map(|bytes| bytes.as_slice().to_vec())
         .collect();
     closers.sort();
     closers.dedup();
@@ -599,7 +599,7 @@ fn check_rejected_at(calls: &ToolCalls) {
             .grammar()
             .call_literals()
             .first()
-            .map_or(0, Vec::len);
+            .map_or(0, purrassist_core::ScratchVec::len);
         assert!(
             at >= rejected.span.start && at <= end + longest,
             "rejected attempt {:?} fails at {at}, beyond a literal past its end",
@@ -1089,7 +1089,7 @@ fn check_rejected_extension(output: &[u8], calls: &ToolCalls, read: &[(Range<usi
         let closed = grammar
             .call_ends()
             .iter()
-            .flat_map(|ends| &ends.call_closers)
+            .flat_map(purrassist_core::grammar::CallEnd::call_closers)
             .any(|closer| {
                 let trimmed = rejected.raw.trim_ascii_end();
                 if closer.len() > 1 {
@@ -1116,7 +1116,7 @@ fn check_rejected_extension(output: &[u8], calls: &ToolCalls, read: &[(Range<usi
         let misspelled = grammar
             .call_ends()
             .iter()
-            .flat_map(|ends| &ends.call_closers)
+            .flat_map(purrassist_core::grammar::CallEnd::call_closers)
             .filter(|closer| closer.len() > 1)
             .any(|closer| ends_with_slip(&rejected.raw, closer));
         // T4/T5: or to the next call of its attempt (a skipped call left
@@ -1261,7 +1261,7 @@ fn balanced_end(output: &[u8], start: usize, failed: usize, end: usize) -> bool 
 fn cut_by_marker(
     output: &[u8],
     calls: &ToolCalls,
-    literals: &[Vec<u8>],
+    literals: &[purrassist_core::ScratchVec<u8>],
     start: usize,
     failed: usize,
     end: usize,

@@ -7,7 +7,7 @@ use super::{
     Codec, CodecContext, CodecEnd, CodecFault, CodecKind, CodecValue, edit, lossy, uncut, value,
 };
 use crate::contract::saturating_size as size;
-use crate::contract::{Governor, Resource, StopReason};
+use crate::contract::{Governor, Resource, ScratchVec, StopReason};
 use crate::grammar::cost::K_CODEC;
 use crate::grammar::edit::{EditOperator, MarkupEdit};
 use crate::json::{Node, Value};
@@ -397,8 +397,8 @@ struct Reader<'b, 't, 'g> {
     frames: Vec<Frame<'t>>,
     edits: Vec<MarkupEdit>,
     /// The dialect's call openers and closers (see `CodecContext`).
-    openers: &'t [Vec<u8>],
-    closers: &'t [Vec<u8>],
+    openers: &'t [ScratchVec<u8>],
+    closers: &'t [ScratchVec<u8>],
     /// Which reading of a value holding text after an unpaired closer this
     /// pass reads (see [`Mode`]).
     mode: Mode,
@@ -684,7 +684,7 @@ impl<'t> Reader<'_, 't, '_> {
     fn tags(&self) -> impl Iterator<Item = &[u8]> {
         [CLOSER, CLOSER_VARIANT]
             .into_iter()
-            .chain(self.closers.iter().map(Vec::as_slice))
+            .chain(self.closers.iter().map(ScratchVec::as_slice))
             .filter_map(|spelling| spelling.strip_prefix(b"</")?.strip_suffix(b">"))
     }
 
@@ -739,13 +739,17 @@ impl<'t> Reader<'_, 't, '_> {
 
     /// The width of the longest of `spellings` at `at`, charging one `Work`
     /// unit per spelling compared.
-    fn markup(&mut self, spellings: &[Vec<u8>], at: usize) -> Result<Option<usize>, StopReason> {
+    fn markup(
+        &mut self,
+        spellings: &[ScratchVec<u8>],
+        at: usize,
+    ) -> Result<Option<usize>, StopReason> {
         self.charge(spellings.len())?;
         let rest = &self.body[at..];
         Ok(spellings
             .iter()
             .filter(|spelling| rest.starts_with(spelling))
-            .map(Vec::len)
+            .map(ScratchVec::len)
             .max())
     }
 
