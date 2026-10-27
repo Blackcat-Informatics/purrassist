@@ -8,6 +8,9 @@
 //! `vendor/unicode/manifest.json`).
 mod unicode_data;
 
+use crate::contract::{Governor, Resource, ScratchVec, StopReason, saturating_size as size};
+type Ranges = ScratchVec<(u32, u32)>;
+
 /// The domain of values a Rust `char` can hold: every Unicode scalar value
 /// except the surrogate range, which UTF-8 (and therefore `char`/`str`) can
 /// never encode. Every character class this module or `parse.rs` builds is
@@ -15,38 +18,95 @@ mod unicode_data;
 /// `\D`, `\P{...}`) never includes a codepoint no `char` can ever equal.
 pub(super) const SCALAR_DOMAIN: &[(u32, u32)] = &[(0x0, 0xD7FF), (0xE000, 0x10_FFFF)];
 
-/// Sort and coalesce overlapping/adjacent `(start, end)` pairs.
-pub(super) fn merge(mut intervals: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
-    intervals.sort_unstable();
-    let mut out: Vec<(u32, u32)> = Vec::with_capacity(intervals.len());
-    for (start, end) in intervals {
-        if let Some(last) = out.last_mut()
-            && start <= last.1.saturating_add(1)
-        {
-            last.1 = last.1.max(end);
-            continue;
-        }
-        out.push((start, end));
-    }
-    out
+/// Copy immutable generated intervals into fallible owned storage.
+pub(super) fn copy_ranges(
+    ranges: &[(u32, u32)],
+    governor: &mut Governor,
+) -> Result<Ranges, StopReason> {
+    governor.charge(Resource::Work, size(ranges.len()).saturating_add(1))?;
+    let mut out = ScratchVec::new(governor);
+    out.extend(ranges.iter().copied())?;
+    Ok(out)
 }
 
-/// `domain - ranges`, for `ranges` sorted and merged.
-pub(super) fn complement_within(ranges: &[(u32, u32)], domain: &[(u32, u32)]) -> Vec<(u32, u32)> {
-    let mut out = Vec::new();
+/// Fallible in-place heapsort: comparisons and swaps admit work individually.
+fn sift(
+    ranges: &mut [(u32, u32)],
+    mut root: usize,
+    end: usize,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    while root < end / 2 {
+        governor.charge(Resource::Work, 1)?;
+        let mut child = root * 2 + 1;
+        if child + 1 < end {
+            governor.charge(Resource::Work, 1)?;
+            if ranges[child] < ranges[child + 1] {
+                child += 1;
+            }
+        }
+        governor.charge(Resource::Work, 1)?;
+        if ranges[root] >= ranges[child] {
+            break;
+        }
+        governor.charge(Resource::Work, 1)?;
+        ranges.swap(root, child);
+        root = child;
+    }
+    Ok(())
+}
+
+/// Sort and coalesce overlapping/adjacent intervals without another allocation.
+pub(super) fn merge(mut ranges: Ranges, governor: &mut Governor) -> Result<Ranges, StopReason> {
+    let len = ranges.len();
+    for root in (0..len / 2).rev() {
+        sift(ranges.as_mut_slice(), root, len, governor)?;
+    }
+    for end in (1..len).rev() {
+        governor.charge(Resource::Work, 1)?;
+        ranges.as_mut_slice().swap(0, end);
+        sift(ranges.as_mut_slice(), 0, end, governor)?;
+    }
+    let mut unique = 0;
+    for read in 0..len {
+        governor.charge(Resource::Work, 1)?;
+        let (start, end) = ranges[read];
+        if unique > 0 && start <= ranges[unique - 1].1.saturating_add(1) {
+            let last = &mut ranges.as_mut_slice()[unique - 1];
+            last.1 = last.1.max(end);
+        } else {
+            ranges.as_mut_slice()[unique] = (start, end);
+            unique += 1;
+        }
+    }
+    while ranges.len() > unique {
+        governor.charge(Resource::Work, 1)?;
+        ranges.pop();
+    }
+    Ok(ranges)
+}
+
+/// `domain - ranges`, with sorted and merged inputs.
+pub(super) fn complement_within(
+    ranges: &[(u32, u32)],
+    domain: &[(u32, u32)],
+    governor: &mut Governor,
+) -> Result<Ranges, StopReason> {
+    let mut out = ScratchVec::new(governor);
     let mut iter = ranges.iter().copied().peekable();
     for &(dom_start, dom_end) in domain {
+        governor.charge(Resource::Work, 1)?;
         let mut pos = dom_start;
         while pos <= dom_end {
+            governor.charge(Resource::Work, 1)?;
             match iter.peek().copied() {
                 Some((_start, end)) if end < pos => {
                     iter.next();
                 }
                 Some((start, _end)) if start > dom_end => break,
-                Some((start, end)) if start > pos => {
-                    out.push((pos, start - 1));
+                Some((start, _end)) if start > pos => {
+                    out.push((pos, start - 1))?;
                     pos = start;
-                    let _ = end;
                 }
                 Some((_start, end)) => {
                     pos = end.saturating_add(1);
@@ -55,40 +115,42 @@ pub(super) fn complement_within(ranges: &[(u32, u32)], domain: &[(u32, u32)]) ->
                     }
                 }
                 None => {
-                    out.push((pos, dom_end));
+                    out.push((pos, dom_end))?;
                     pos = dom_end.saturating_add(1);
                 }
             }
         }
     }
-    merge(out)
+    merge(out, governor)
 }
 
-/// Full-Unicode complement (`0..=0x10_FFFF` minus `ranges`), used for `[^...]`,
-/// `\D`/`\W`/`\S`, and `\P{...}` before the final [`SCALAR_DOMAIN`] clip.
-pub(super) fn negate(ranges: &[(u32, u32)]) -> Vec<(u32, u32)> {
-    complement_within(ranges, &[(0x0, 0x10_FFFF)])
+pub(super) fn negate(ranges: &[(u32, u32)], governor: &mut Governor) -> Result<Ranges, StopReason> {
+    complement_within(ranges, &[(0, 0x10_FFFF)], governor)
 }
 
-/// Restrict `ranges` to values a `char` can hold. Every class this module
-/// returns must be passed through this before becoming a
-/// [`super::ast::Node::Class`].
-pub(super) fn clip_to_scalars(ranges: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
-    let merged = merge(ranges);
-    let mut out = Vec::with_capacity(merged.len());
+/// Restrict canonical ranges to Unicode scalar values.
+pub(super) fn clip_to_scalars(
+    ranges: Ranges,
+    governor: &mut Governor,
+) -> Result<Ranges, StopReason> {
+    let merged = merge(ranges, governor)?;
+    let mut out = ScratchVec::new(governor);
     for &(dom_start, dom_end) in SCALAR_DOMAIN {
+        governor.charge(Resource::Work, 1)?;
         for &(start, end) in &merged {
+            governor.charge(Resource::Work, 1)?;
             let lo = start.max(dom_start);
             let hi = end.min(dom_end);
             if lo <= hi {
-                out.push((lo, hi));
+                out.push((lo, hi))?;
             }
         }
     }
-    merge(out)
+    merge(out, governor)
 }
 
-/// `true` if `code` falls in one of `intervals` (sorted, disjoint, merged).
+/// Membership in a canonical interval set. Construction callers admit lookup
+/// work; runtime matching retains its separate contract.
 pub(super) fn interval_contains(intervals: &[(u32, u32)], code: u32) -> bool {
     let position = intervals.partition_point(|(start, _)| *start <= code);
     position > 0 && intervals[position - 1].1 >= code
@@ -156,24 +218,156 @@ fn category_matches(target: &str, actual: &str) -> bool {
     }
 }
 
-/// `General_Category`/`gc` value or group ranges, including the `Cn`
-/// (unassigned) gaps the table represents by omission (see
-/// `crate::text::general_category`).
-pub(super) fn category_ranges(name: &str) -> Option<Vec<(u32, u32)>> {
-    let target = category_alias(name)?;
-    let mut out = Vec::new();
+fn lookup_work(name: &str, entries: usize, governor: &mut Governor) -> Result<(), StopReason> {
+    let comparisons = u64::from(entries.checked_ilog2().unwrap_or(0) + 2);
+    let work = size(name.len())
+        .checked_add(1)
+        .and_then(|n| n.checked_mul(comparisons))
+        .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+    governor.charge(Resource::Work, work)
+}
+
+pub(super) fn category_ranges(
+    name: &str,
+    governor: &mut Governor,
+) -> Result<Option<Ranges>, StopReason> {
+    // The fixed match has fewer than 128 aliases; each comparison reads at
+    // most the query bytes. The following table compares two-byte categories.
+    let work = size(name.len())
+        .checked_add(1)
+        .and_then(|n| n.checked_mul(128))
+        .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+    governor.charge(Resource::Work, work)?;
+    let Some(target) = category_alias(name) else {
+        return Ok(None);
+    };
+    let mut out = ScratchVec::new(governor);
     let table = crate::text::general_categories();
-    for (start, end, actual) in table {
+    for &(start, end, actual) in table {
+        governor.charge(Resource::Work, 16)?;
         if category_matches(target, actual) {
-            out.push((*start, *end));
+            out.push((start, end))?;
         }
     }
     if matches!(target, "C" | "Cn") {
-        let assigned = merge(table.iter().map(|(start, end, _)| (*start, *end)).collect());
-        let gaps = complement_within(&assigned, &[(0x0, 0x10_FFFF)]);
-        out.extend(gaps);
+        let mut assigned = ScratchVec::new(governor);
+        for &(start, end, _) in table {
+            governor.charge(Resource::Work, 1)?;
+            assigned.push((start, end))?;
+        }
+        let assigned = merge(assigned, governor)?;
+        let mut gaps = complement_within(&assigned, &[(0, 0x10_FFFF)], governor)?;
+        governor.charge(Resource::Work, size(gaps.len()))?;
+        out.append(&mut gaps)?;
     }
-    Some(merge(out))
+    Ok(Some(merge(out, governor)?))
+}
+
+fn script_alias(name: &str) -> Option<&'static str> {
+    unicode_data::SCRIPT_ALIASES
+        .binary_search_by_key(&name, |(alias, _)| alias)
+        .ok()
+        .map(|index| unicode_data::SCRIPT_ALIASES[index].1)
+}
+
+pub(super) fn script_ranges(
+    name: &str,
+    governor: &mut Governor,
+) -> Result<Option<Ranges>, StopReason> {
+    lookup_work(name, unicode_data::SCRIPT_ALIASES.len(), governor)?;
+    let Some(canonical) = script_alias(name) else {
+        return Ok(None);
+    };
+    let mut out = ScratchVec::new(governor);
+    for &(start, end, script) in unicode_data::SCRIPTS {
+        governor.charge(
+            Resource::Work,
+            size(script.len().min(canonical.len())).saturating_add(1),
+        )?;
+        if script == canonical {
+            out.push((start, end))?;
+        }
+    }
+    Ok(Some(out))
+}
+
+pub(super) fn script_extension_ranges(
+    name: &str,
+    governor: &mut Governor,
+) -> Result<Option<Ranges>, StopReason> {
+    lookup_work(name, unicode_data::SCRIPT_ALIASES.len(), governor)?;
+    let Some(canonical) = script_alias(name) else {
+        return Ok(None);
+    };
+    lookup_work(canonical, unicode_data::SCRIPT_EXTENSIONS.len(), governor)?;
+    let Some(index) = unicode_data::SCRIPT_EXTENSIONS
+        .binary_search_by_key(&canonical, |(script, _)| *script)
+        .ok()
+    else {
+        return Ok(None);
+    };
+    Ok(Some(copy_ranges(
+        unicode_data::SCRIPT_EXTENSIONS[index].1,
+        governor,
+    )?))
+}
+
+fn binary_property_alias(name: &str) -> Option<&'static str> {
+    unicode_data::BINARY_PROPERTY_ALIASES
+        .binary_search_by_key(&name, |(alias, _)| alias)
+        .ok()
+        .map(|index| unicode_data::BINARY_PROPERTY_ALIASES[index].1)
+}
+const _: () = assert!(unicode_data::BINARY_PROPERTIES.len() <= 128);
+const _: () = assert!(unicode_data::BINARY_PROPERTY_ALIASES.len() <= 128);
+
+/// Borrow the required generated identifier-start property without copying.
+pub(super) fn identifier_start() -> &'static [(u32, u32)] {
+    binary_property_intervals("ID_Start")
+        .expect("generated Unicode data contains required ID_Start property")
+}
+/// Borrow the required generated identifier-continue property without copying.
+pub(super) fn identifier_continue() -> &'static [(u32, u32)] {
+    binary_property_intervals("ID_Continue")
+        .expect("generated Unicode data contains required ID_Continue property")
+}
+fn binary_property_intervals(name: &str) -> Option<&'static [(u32, u32)]> {
+    let canonical = binary_property_alias(name)?;
+    unicode_data::BINARY_PROPERTIES
+        .binary_search_by_key(&canonical, |(prop, _)| *prop)
+        .ok()
+        .map(|index| unicode_data::BINARY_PROPERTIES[index].1)
+}
+
+pub(super) fn binary_property_ranges(
+    name: &str,
+    governor: &mut Governor,
+) -> Result<Option<Ranges>, StopReason> {
+    lookup_work(name, unicode_data::BINARY_PROPERTY_ALIASES.len(), governor)?;
+    let Some(canonical) = binary_property_alias(name) else {
+        return Ok(None);
+    };
+    lookup_work(canonical, unicode_data::BINARY_PROPERTIES.len(), governor)?;
+    let Some(index) = unicode_data::BINARY_PROPERTIES
+        .binary_search_by_key(&canonical, |(prop, _)| *prop)
+        .ok()
+    else {
+        return Ok(None);
+    };
+    Ok(Some(copy_ranges(
+        unicode_data::BINARY_PROPERTIES[index].1,
+        governor,
+    )?))
+}
+
+pub(super) fn lone_property_ranges(
+    name: &str,
+    governor: &mut Governor,
+) -> Result<Option<Ranges>, StopReason> {
+    binary_property_ranges(name, governor)?.map_or_else(
+        || category_ranges(name, governor),
+        |ranges| Ok(Some(ranges)),
+    )
 }
 
 /// Every canonical `Script`/`Script_Extensions` value name (Unicode 17):
@@ -200,123 +394,46 @@ pub(super) fn script_of(code: u32) -> &'static str {
         .map_or("Unknown", |(_, _, name)| *name)
 }
 
-fn script_alias(name: &str) -> Option<&'static str> {
-    unicode_data::SCRIPT_ALIASES
-        .binary_search_by_key(&name, |(alias, _)| alias)
-        .ok()
-        .map(|index| unicode_data::SCRIPT_ALIASES[index].1)
-}
-
-/// `Script`/`sc` value ranges (UAX #24); accepts either the long value name
-/// (as `Scripts.txt` spells it, e.g. `Greek`) or its short alias (`Grek`),
-/// per `PropertyValueAliases.txt`.
-pub(super) fn script_ranges(name: &str) -> Option<Vec<(u32, u32)>> {
-    let canonical = script_alias(name)?;
-    Some(
-        unicode_data::SCRIPTS
-            .iter()
-            .filter(|(_, _, script)| *script == canonical)
-            .map(|(start, end, _)| (*start, *end))
-            .collect(),
-    )
-}
-
-/// `Script_Extensions`/`scx` value ranges (UAX #24): the precomputed union of
-/// each codepoint's default `{Script}` singleton (for codepoints
-/// `ScriptExtensions.txt` does not override) and every codepoint the
-/// override lists as including this script.
-pub(super) fn script_extension_ranges(name: &str) -> Option<Vec<(u32, u32)>> {
-    let canonical = script_alias(name)?;
-    unicode_data::SCRIPT_EXTENSIONS
-        .binary_search_by_key(&canonical, |(script, _)| *script)
-        .ok()
-        .map(|index| unicode_data::SCRIPT_EXTENSIONS[index].1.to_vec())
-}
-
-fn binary_property_alias(name: &str) -> Option<&'static str> {
-    unicode_data::BINARY_PROPERTY_ALIASES
-        .binary_search_by_key(&name, |(alias, _)| alias)
-        .ok()
-        .map(|index| unicode_data::BINARY_PROPERTY_ALIASES[index].1)
-}
-
-const _: () = assert!(unicode_data::BINARY_PROPERTIES.len() <= 128);
-const _: () = assert!(unicode_data::BINARY_PROPERTY_ALIASES.len() <= 128);
-
-/// Borrow the required generated identifier-start property without copying.
-pub(super) fn identifier_start() -> &'static [(u32, u32)] {
-    binary_property_intervals("ID_Start")
-        .expect("generated Unicode data contains required ID_Start property")
-}
-/// Borrow the required generated identifier-continue property without copying.
-pub(super) fn identifier_continue() -> &'static [(u32, u32)] {
-    binary_property_intervals("ID_Continue")
-        .expect("generated Unicode data contains required ID_Continue property")
-}
-fn binary_property_intervals(name: &str) -> Option<&'static [(u32, u32)]> {
-    let canonical = binary_property_alias(name)?;
-    unicode_data::BINARY_PROPERTIES
-        .binary_search_by_key(&canonical, |(prop, _)| *prop)
-        .ok()
-        .map(|index| unicode_data::BINARY_PROPERTIES[index].1)
-}
-
-/// Every ECMA-262 binary Unicode property (`22.2.2.9`): `ASCII`,
-/// `ASCII_Hex_Digit`, `Alphabetic`, `Any`, `Assigned`, `Bidi_Control`,
-/// `Bidi_Mirrored`, `Case_Ignorable`, `Cased`, the six `Changes_When_*`
-/// properties, `Dash`, `Default_Ignorable_Code_Point`, `Deprecated`,
-/// `Diacritic`, the six `Emoji*` properties, `Extended_Pictographic`,
-/// `Extender`, `Grapheme_Base`, `Grapheme_Extend`, `Hex_Digit`,
-/// `IDS_Binary_Operator`, `IDS_Trinary_Operator`, `ID_Continue`, `ID_Start`,
-/// `Ideographic`, `Join_Control`, `Logical_Order_Exception`, `Lowercase`,
-/// `Math`, `Noncharacter_Code_Point`, `Pattern_Syntax`,
-/// `Pattern_White_Space`, `Quotation_Mark`, `Radical`, `Regional_Indicator`,
-/// `Sentence_Terminal`, `Soft_Dotted`, `Terminal_Punctuation`,
-/// `Unified_Ideograph`, `Uppercase`, `Variation_Selector`, `White_Space`,
-/// `XID_Continue`, and `XID_Start`, plus every property alias
-/// (`PropertyAliases.txt`).
-pub(super) fn binary_property_ranges(name: &str) -> Option<Vec<(u32, u32)>> {
-    binary_property_intervals(name).map(<[_]>::to_vec)
-}
-
-/// A bare `\p{Name}`/`\P{Name}`: a recognized binary property, or (per
-/// ECMA-262) a `General_Category` value/group name used without the
-/// `General_Category=`/`gc=` prefix.
-pub(super) fn lone_property_ranges(name: &str) -> Option<Vec<(u32, u32)>> {
-    binary_property_ranges(name).or_else(|| category_ranges(name))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Budget;
     #[test]
     fn complement_and_scalar_clip_exclude_surrogates() {
-        let all = negate(&[]);
-        assert_eq!(all, vec![(0x0, 0x10_FFFF)]);
-        let clipped = clip_to_scalars(all);
-        assert_eq!(clipped, vec![(0x0, 0xD7FF), (0xE000, 0x10_FFFF)]);
+        let mut governor = Governor::new(Budget::default());
+        let all = negate(&[], &mut governor).unwrap();
+        assert_eq!(all.as_slice(), [(0, 0x10_FFFF)]);
+        let clipped = clip_to_scalars(all, &mut governor).unwrap();
+        assert_eq!(clipped.as_slice(), [(0, 0xD7FF), (0xE000, 0x10_FFFF)]);
     }
     #[test]
     fn every_script_name_has_a_script_extensions_entry() {
+        let mut governor = Governor::new(Budget::default());
         for name in script_names() {
             assert!(
-                script_extension_ranges(name).is_some(),
+                script_extension_ranges(name, &mut governor)
+                    .unwrap()
+                    .is_some(),
                 "{name} has no Script_Extensions entry"
             );
         }
     }
     #[test]
     fn script_and_alias_agree() {
-        let by_long = script_ranges("Greek").unwrap();
-        let by_short = script_ranges("Grek").unwrap();
+        let mut governor = Governor::new(Budget::default());
+        let by_long = script_ranges("Greek", &mut governor).unwrap().unwrap();
+        let by_short = script_ranges("Grek", &mut governor).unwrap().unwrap();
         assert_eq!(by_long, by_short);
         assert!(by_long.contains(&(0x370, 0x373)));
     }
     #[test]
     fn script_extensions_are_a_superset_of_script() {
-        let script = script_ranges("Greek").unwrap();
-        let scx = script_extension_ranges("Greek").unwrap();
-        let missing: Vec<_> = complement_within(&scx, &script);
+        let mut governor = Governor::new(Budget::default());
+        let script = script_ranges("Greek", &mut governor).unwrap().unwrap();
+        let scx = script_extension_ranges("Greek", &mut governor)
+            .unwrap()
+            .unwrap();
+        let missing = complement_within(&scx, &script, &mut governor).unwrap();
         assert!(
             missing.is_empty(),
             "Script(Greek) - Scx(Greek) = {missing:?}"
@@ -324,32 +441,43 @@ mod tests {
     }
     #[test]
     fn binary_property_aliases_agree() {
+        let mut governor = Governor::new(Budget::default());
         assert_eq!(
-            binary_property_ranges("Alphabetic"),
-            binary_property_ranges("Alpha")
+            binary_property_ranges("Alphabetic", &mut governor).unwrap(),
+            binary_property_ranges("Alpha", &mut governor).unwrap()
         );
         assert!(
-            binary_property_ranges("ASCII")
+            binary_property_ranges("ASCII", &mut governor)
                 .unwrap()
-                .contains(&(0x0, 0x7F))
+                .unwrap()
+                .contains(&(0, 0x7F))
         );
-        assert_eq!(binary_property_ranges("Any"), Some(vec![(0x0, 0x10_FFFF)]));
+        assert_eq!(
+            binary_property_ranges("Any", &mut governor)
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            [(0, 0x10_FFFF)]
+        );
     }
     #[test]
     fn category_group_lc_is_the_three_cased_letter_categories() {
-        let lc = category_ranges("LC").unwrap();
-        let lu = category_ranges("Lu").unwrap();
-        // Every `Lu` codepoint is also `LC` (`LC` = `Lu` | `Ll` | `Lt`).
-        assert_eq!(complement_within(&lc, &lu), [] as [(u32, u32); 0]);
-        // `a` is `Ll` (lowercase letter), so it is `LC` but not `Lu`.
+        let mut governor = Governor::new(Budget::default());
+        let lc = category_ranges("LC", &mut governor).unwrap().unwrap();
+        let lu = category_ranges("Lu", &mut governor).unwrap().unwrap();
+        assert!(
+            complement_within(&lc, &lu, &mut governor)
+                .unwrap()
+                .is_empty()
+        );
         let a = u32::from('a');
         assert!(lc.iter().any(|&(s, e)| s <= a && a <= e));
         assert!(!lu.iter().any(|&(s, e)| s <= a && a <= e));
     }
     #[test]
     fn unassigned_covers_a_known_noncharacter_gap() {
-        let cn = category_ranges("Cn").unwrap();
-        // U+0378 is an unassigned Greek-block codepoint in Unicode 17.
+        let mut governor = Governor::new(Budget::default());
+        let cn = category_ranges("Cn", &mut governor).unwrap().unwrap();
         assert!(cn.iter().any(|&(s, e)| s <= 0x378 && 0x378 <= e));
     }
 }

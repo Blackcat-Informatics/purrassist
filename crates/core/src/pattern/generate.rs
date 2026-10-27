@@ -726,7 +726,8 @@ fn collect_candidates(
             out.values.truncate(16);
             return Ok(out);
         }
-        Node::Repeat(repetition) => {
+        Node::Repeat(owned) => {
+            let repetition = &owned[0];
             for count in [repetition.min, repetition.min.saturating_add(1)] {
                 if repetition.max.is_some_and(|max| count > max) {
                     continue;
@@ -745,7 +746,7 @@ fn collect_candidates(
         }
         Node::Group(index, inner) => {
             let start_len = prefix.text.0.len();
-            for mut candidate in collect_candidates(inner, prefix, budget, governor)? {
+            for mut candidate in collect_candidates(&inner[0], prefix, budget, governor)? {
                 let captured = copy_text(&candidate.text.0.as_str()[start_len..], governor)?;
                 candidate.captures.insert(*index, captured)?;
                 out.push(candidate)?;

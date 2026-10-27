@@ -322,7 +322,8 @@ fn translate<A: Arena>(
             }
             id
         }
-        Node::Repeat(repetition) => {
+        Node::Repeat(owned) => {
+            let repetition = &owned[0];
             let inner = translate(&repetition.inner, arena, classes, governor, next_depth)?;
             let max_code = match repetition.max {
                 Some(max) => u64::try_from(max)
@@ -338,7 +339,7 @@ fn translate<A: Arena>(
                 governor,
             )?
         }
-        Node::Group(_, inner) => translate(inner, arena, classes, governor, next_depth)?,
+        Node::Group(_, inner) => translate(&inner[0], arena, classes, governor, next_depth)?,
         Node::Start => arena.intern(Term::Start, governor)?,
         Node::End => arena.intern(Term::End, governor)?,
         Node::Boundary(positive) => arena.intern(Term::Boundary(*positive), governor)?,

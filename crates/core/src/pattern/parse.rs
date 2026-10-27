@@ -14,9 +14,49 @@ use crate::contract::{
     Governor, Resource, ScratchCharge, ScratchString, ScratchVec, StopReason,
     format_scratch_governed, saturating_size as size,
 };
-use std::rc::Rc;
 
 use super::{PatternCompileError, PatternError};
+
+const NATIVE_DEPTH: u64 = 128;
+
+/// Builder metadata stays temporary; retained nodes have a single owner path.
+struct Parsed {
+    node: Node,
+    height: u64,
+    backtracking: bool,
+}
+fn admit_height(height: u64, governor: &mut Governor) -> Result<(), StopReason> {
+    governor.charge(Resource::Work, 1)?;
+    governor.charge(Resource::Depth, height)?;
+    if height > NATIVE_DEPTH {
+        return Err(governor.stop_resource(Resource::Depth));
+    }
+    Ok(())
+}
+fn parent_height(height: u64, governor: &mut Governor) -> Result<u64, StopReason> {
+    let height = height
+        .checked_add(1)
+        .ok_or_else(|| governor.stop_resource(Resource::Depth))?;
+    admit_height(height, governor)?;
+    Ok(height)
+}
+fn child(node: Node, governor: &Governor) -> Result<ScratchVec<Node>, StopReason> {
+    let mut owned = ScratchVec::new(governor);
+    owned.push(node)?;
+    Ok(owned)
+}
+fn leaf(
+    node: Node,
+    backtracking: bool,
+    governor: &mut Governor,
+) -> Result<Parsed, PatternCompileError> {
+    admit_height(1, governor)?;
+    Ok(Parsed {
+        node,
+        height: 1,
+        backtracking,
+    })
+}
 
 struct NamedGroup {
     name: ScratchString,
@@ -61,7 +101,7 @@ fn syntax<T>(
 pub(super) fn parse(
     source: &str,
     governor: &mut Governor,
-) -> Result<(Node, usize), PatternCompileError> {
+) -> Result<(Node, usize, bool), PatternCompileError> {
     governor.charge(Resource::Work, size(source.len()))?;
     let mut chars = ScratchVec::new(governor);
     chars.extend(source.chars())?;
@@ -91,7 +131,7 @@ pub(super) fn parse(
         }
     }
     parser.governor.check()?;
-    Ok((node, parser.captures))
+    Ok((node.node, parser.captures, node.backtracking))
 }
 
 /// One character class atom: either a single scalar (usable as one end of a
@@ -99,7 +139,7 @@ pub(super) fn parse(
 /// end — a class range ending in a class escape is a `u`-mode `SyntaxError`).
 enum ClassAtom {
     Literal(u32),
-    Set(Vec<(u32, u32)>),
+    Set(ScratchVec<(u32, u32)>),
 }
 
 const fn identity_escape_allowed(character: char) -> bool {
@@ -108,51 +148,60 @@ const fn identity_escape_allowed(character: char) -> bool {
         '^' | '$' | '\\' | '.' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '/'
     )
 }
-fn ascii_digit_ranges() -> Vec<(u32, u32)> {
-    vec![(0x30, 0x39)]
+fn ascii_digit_ranges(governor: &mut Governor) -> Result<ScratchVec<(u32, u32)>, StopReason> {
+    unicode::copy_ranges(&[(0x30, 0x39)], governor)
 }
-fn ascii_word_ranges() -> Vec<(u32, u32)> {
-    vec![(0x30, 0x39), (0x41, 0x5A), (0x5F, 0x5F), (0x61, 0x7A)]
+fn ascii_word_ranges(governor: &mut Governor) -> Result<ScratchVec<(u32, u32)>, StopReason> {
+    unicode::copy_ranges(
+        &[(0x30, 0x39), (0x41, 0x5A), (0x5F, 0x5F), (0x61, 0x7A)],
+        governor,
+    )
 }
 /// The ECMA-262 `WhiteSpace`/`LineTerminator` set `\s` matches; identical
 /// under every mode (unlike `\p{White_Space}`, which is the Unicode
 /// property of the same name and can differ).
-fn ascii_space_ranges() -> Vec<(u32, u32)> {
-    vec![
-        (0x9, 0xD),
-        (0x20, 0x20),
-        (0xA0, 0xA0),
-        (0x1680, 0x1680),
-        (0x2000, 0x200A),
-        (0x2028, 0x2029),
-        (0x202F, 0x202F),
-        (0x205F, 0x205F),
-        (0x3000, 0x3000),
-        (0xFEFF, 0xFEFF),
-    ]
+fn ascii_space_ranges(governor: &mut Governor) -> Result<ScratchVec<(u32, u32)>, StopReason> {
+    unicode::copy_ranges(
+        &[
+            (0x9, 0xD),
+            (0x20, 0x20),
+            (0xA0, 0xA0),
+            (0x1680, 0x1680),
+            (0x2000, 0x200A),
+            (0x2028, 0x2029),
+            (0x202F, 0x202F),
+            (0x205F, 0x205F),
+            (0x3000, 0x3000),
+            (0xFEFF, 0xFEFF),
+        ],
+        governor,
+    )
 }
-fn dot_ranges() -> Vec<(u32, u32)> {
-    unicode::negate(&[(0xA, 0xA), (0xD, 0xD), (0x2028, 0x2028), (0x2029, 0x2029)])
+fn dot_ranges(governor: &mut Governor) -> Result<ScratchVec<(u32, u32)>, StopReason> {
+    unicode::negate(
+        &[(0xA, 0xA), (0xD, 0xD), (0x2028, 0x2028), (0x2029, 0x2029)],
+        governor,
+    )
 }
 
-fn class_from_ranges(ranges: Vec<(u32, u32)>, negated: bool) -> Node {
-    // `unicode::negate`/`complement_within` walk their `ranges` argument with
-    // a single forward-advancing iterator, so it must already be sorted and
-    // merged; a character class built from several atoms (e.g. `[^\s\S]`,
-    // where `\s`'s ranges and `\S`'s already-negated ranges are simply
-    // concatenated by `class()`) is not sorted on its own.
-    let merged = unicode::merge(ranges);
+fn class_from_ranges(
+    ranges: ScratchVec<(u32, u32)>,
+    negated: bool,
+    governor: &mut Governor,
+) -> Result<Parsed, PatternCompileError> {
+    let merged = unicode::merge(ranges, governor)?;
     let resolved = if negated {
-        unicode::negate(&merged)
+        unicode::negate(&merged, governor)?
     } else {
         merged
     };
-    let clipped = unicode::clip_to_scalars(resolved);
-    if clipped.is_empty() {
+    let clipped = unicode::clip_to_scalars(resolved, governor)?;
+    let node = if clipped.is_empty() {
         Node::NoMatch
     } else {
-        Node::Class(Rc::new(clipped))
-    }
+        Node::Class(clipped)
+    };
+    leaf(node, false, governor)
 }
 
 /// Scan names before parsing so references can resolve forward capture indices.
@@ -357,7 +406,7 @@ impl Parser<'_> {
             .charge(Resource::Work, size(message.len()).saturating_add(1))?;
         syntax(offset, format_args!("{message}"), self.governor)
     }
-    fn alternate(&mut self, depth: usize) -> Result<Node, PatternCompileError> {
+    fn alternate(&mut self, depth: usize) -> Result<Parsed, PatternCompileError> {
         self.governor
             .charge(Resource::Depth, u64::try_from(depth).unwrap_or(u64::MAX))?;
         self.governor.charge(Resource::Work, 1)?;
@@ -366,13 +415,22 @@ impl Parser<'_> {
             .next_alt_id
             .checked_add(1)
             .ok_or_else(|| self.governor.stop_resource(Resource::Work))?;
-        let mut choices = Vec::new();
+        if size(depth) > NATIVE_DEPTH {
+            return Err(self.governor.stop_resource(Resource::Depth).into());
+        }
+        let mut choices = ScratchVec::new(self.governor);
+        let mut height = 0;
+        let mut backtracking = false;
         let mut branch = 0u32;
         loop {
             self.path.push((alt_id, branch))?;
             let choice = self.sequence(depth);
             self.path.pop();
-            choices.push(choice?);
+            let choice = choice?;
+            self.governor.charge(Resource::Work, 1)?;
+            height = height.max(choice.height);
+            backtracking |= choice.backtracking;
+            choices.push(choice.node)?;
             if self.current() == Some('|') {
                 self.advance(1)?;
                 branch = branch
@@ -383,14 +441,25 @@ impl Parser<'_> {
             }
         }
         if choices.len() == 1 {
-            Ok(choices.remove(0))
+            Ok(Parsed {
+                node: choices.pop().expect("one choice"),
+                height,
+                backtracking,
+            })
         } else {
-            Ok(Node::Alternate(choices))
+            let height = parent_height(height, self.governor)?;
+            Ok(Parsed {
+                node: Node::Alternate(choices),
+                height,
+                backtracking,
+            })
         }
     }
-    fn sequence(&mut self, depth: usize) -> Result<Node, PatternCompileError> {
+    fn sequence(&mut self, depth: usize) -> Result<Parsed, PatternCompileError> {
         self.governor.charge(Resource::Work, 1)?;
-        let mut items = Vec::new();
+        let mut items = ScratchVec::new(self.governor);
+        let mut height = 0;
+        let mut backtracking = false;
         while !matches!(self.current(), None | Some('|' | ')')) {
             let atom = self.atom(depth)?;
             let repeat = match self.current() {
@@ -426,24 +495,47 @@ impl Parser<'_> {
                 }
                 _ => None,
             };
-            if let Some((min, max)) = repeat {
-                items.push(Node::Repeat(Box::new(Repetition {
-                    inner: atom,
+            let parsed = if let Some((min, max)) = repeat {
+                let height = parent_height(atom.height, self.governor)?;
+                let backtracking = atom.backtracking;
+                let mut owned = ScratchVec::new(self.governor);
+                owned.push(Repetition {
+                    inner: atom.node,
                     min,
                     max,
                     greedy: self.current() != Some('?'),
-                })));
+                })?;
                 if self.current() == Some('?') {
                     self.advance(1)?;
                 }
+                Parsed {
+                    node: Node::Repeat(owned),
+                    height,
+                    backtracking,
+                }
             } else {
-                items.push(atom);
-            }
+                atom
+            };
+            self.governor.charge(Resource::Work, 1)?;
+            height = height.max(parsed.height);
+            backtracking |= parsed.backtracking;
+            items.push(parsed.node)?;
         }
         match items.len() {
-            0 => Ok(Node::Empty),
-            1 => Ok(items.remove(0)),
-            _ => Ok(Node::Concat(items)),
+            0 => leaf(Node::Empty, false, self.governor),
+            1 => Ok(Parsed {
+                node: items.pop().expect("one item"),
+                height,
+                backtracking,
+            }),
+            _ => {
+                let height = parent_height(height, self.governor)?;
+                Ok(Parsed {
+                    node: Node::Concat(items),
+                    height,
+                    backtracking,
+                })
+            }
         }
     }
     /// A lone `{` (not the start of a valid `{n}`/`{n,}`/`{n,m}` quantifier)
@@ -491,21 +583,24 @@ impl Parser<'_> {
         }
         Ok(count)
     }
-    fn atom(&mut self, depth: usize) -> Result<Node, PatternCompileError> {
+    fn atom(&mut self, depth: usize) -> Result<Parsed, PatternCompileError> {
         self.governor.charge(Resource::Work, 1)?;
         match self.next()? {
-            Some('^') => Ok(Node::Start),
-            Some('$') => Ok(Node::End),
-            Some('.') => Ok(class_from_ranges(dot_ranges(), false)),
+            Some('^') => leaf(Node::Start, false, self.governor),
+            Some('$') => leaf(Node::End, false, self.governor),
+            Some('.') => {
+                let ranges = dot_ranges(self.governor)?;
+                class_from_ranges(ranges, false, self.governor)
+            }
             Some('[') => self.class(),
             Some('\\') => self.escape(false),
             Some('(') => self.group(depth),
             Some('*' | '+' | '?' | '{' | '}') => self.fail("quantifier without an atom"),
-            Some(character) => Ok(literal(character)),
+            Some(character) => literal(character, self.governor),
             None => self.fail("expected an atom"),
         }
     }
-    fn group(&mut self, depth: usize) -> Result<Node, PatternCompileError> {
+    fn group(&mut self, depth: usize) -> Result<Parsed, PatternCompileError> {
         let mut capture = true;
         let mut look = None;
         let mut name = None;
@@ -571,45 +666,81 @@ impl Parser<'_> {
         let depth = depth
             .checked_add(1)
             .ok_or_else(|| self.governor.stop_resource(Resource::Depth))?;
+        if size(depth) > NATIVE_DEPTH {
+            return Err(self.governor.stop_resource(Resource::Depth).into());
+        }
         let inner = self.alternate(depth)?;
         if self.next()? != Some(')') {
             return self.fail("unterminated group");
         }
         if let Some((positive, behind)) = look {
-            Ok(Node::Look {
-                inner: Box::new(inner),
-                positive,
-                behind,
+            let height = parent_height(inner.height, self.governor)?;
+            let inner = child(inner.node, self.governor)?;
+            Ok(Parsed {
+                node: Node::Look {
+                    inner,
+                    positive,
+                    behind,
+                },
+                height,
+                backtracking: true,
             })
         } else if capture {
-            Ok(Node::Group(index, Box::new(inner)))
+            let height = parent_height(inner.height, self.governor)?;
+            let backtracking = inner.backtracking;
+            let inner = child(inner.node, self.governor)?;
+            Ok(Parsed {
+                node: Node::Group(index, inner),
+                height,
+                backtracking,
+            })
         } else {
             Ok(inner)
         }
     }
-    fn escape(&mut self, in_class: bool) -> Result<Node, PatternCompileError> {
+    fn escape(&mut self, in_class: bool) -> Result<Parsed, PatternCompileError> {
         let escape_start = self.position - 1;
         match self.next()? {
-            Some('d') => Ok(class_from_ranges(ascii_digit_ranges(), false)),
-            Some('D') => Ok(class_from_ranges(ascii_digit_ranges(), true)),
-            Some('w') => Ok(class_from_ranges(ascii_word_ranges(), false)),
-            Some('W') => Ok(class_from_ranges(ascii_word_ranges(), true)),
-            Some('s') => Ok(class_from_ranges(ascii_space_ranges(), false)),
-            Some('S') => Ok(class_from_ranges(ascii_space_ranges(), true)),
+            Some('d') => {
+                let ranges = ascii_digit_ranges(self.governor)?;
+                class_from_ranges(ranges, false, self.governor)
+            }
+            Some('D') => {
+                let ranges = ascii_digit_ranges(self.governor)?;
+                class_from_ranges(ranges, true, self.governor)
+            }
+            Some('w') => {
+                let ranges = ascii_word_ranges(self.governor)?;
+                class_from_ranges(ranges, false, self.governor)
+            }
+            Some('W') => {
+                let ranges = ascii_word_ranges(self.governor)?;
+                class_from_ranges(ranges, true, self.governor)
+            }
+            Some('s') => {
+                let ranges = ascii_space_ranges(self.governor)?;
+                class_from_ranges(ranges, false, self.governor)
+            }
+            Some('S') => {
+                let ranges = ascii_space_ranges(self.governor)?;
+                class_from_ranges(ranges, true, self.governor)
+            }
             Some('b') => {
                 if in_class {
-                    Ok(literal('\u{8}'))
+                    literal('\u{8}', self.governor)
                 } else {
-                    Ok(Node::Boundary(true))
+                    leaf(Node::Boundary(true), false, self.governor)
                 }
             }
-            Some('B') if !in_class => Ok(Node::Boundary(false)),
-            Some('n') => Ok(literal('\n')),
-            Some('r') => Ok(literal('\r')),
-            Some('t') => Ok(literal('\t')),
-            Some('f') => Ok(literal('\u{c}')),
-            Some('v') => Ok(literal('\u{b}')),
-            Some('0') if !self.current().is_some_and(|c| c.is_ascii_digit()) => Ok(literal('\0')),
+            Some('B') if !in_class => leaf(Node::Boundary(false), false, self.governor),
+            Some('n') => literal('\n', self.governor),
+            Some('r') => literal('\r', self.governor),
+            Some('t') => literal('\t', self.governor),
+            Some('f') => literal('\u{c}', self.governor),
+            Some('v') => literal('\u{b}', self.governor),
+            Some('0') if !self.current().is_some_and(|c| c.is_ascii_digit()) => {
+                literal('\0', self.governor)
+            }
             Some('x') => self.hex_escape(2),
             Some('u') => self.unicode_escape(),
             Some('k') if !in_class => self.named_backref(),
@@ -630,22 +761,27 @@ impl Parser<'_> {
                 }
                 self.backrefs.push((start, index))?;
                 self.governor.charge(Resource::Work, 1)?;
-                Ok(Node::Backref(vec![index]))
+                let mut indices = ScratchVec::new(self.governor);
+                indices.push(index)?;
+                leaf(Node::Backref(indices), true, self.governor)
             }
             Some(kind @ ('p' | 'P')) => self.property_escape(kind == 'p'),
             Some('c') => {
                 let Some(letter) = self.next()?.filter(char::is_ascii_alphabetic) else {
                     return self.fail("control escape requires an ASCII letter");
                 };
-                Ok(literal(char::from(
-                    u8::try_from(u32::from(letter)).expect("ASCII letter") % 32,
-                )))
+                literal(
+                    char::from(u8::try_from(u32::from(letter)).expect("ASCII letter") % 32),
+                    self.governor,
+                )
             }
-            Some(character) if identity_escape_allowed(character) => Ok(literal(character)),
+            Some(character) if identity_escape_allowed(character) => {
+                literal(character, self.governor)
+            }
             _ => self.fail_at(escape_start, "invalid identity escape under Unicode mode"),
         }
     }
-    fn named_backref(&mut self) -> Result<Node, PatternCompileError> {
+    fn named_backref(&mut self) -> Result<Parsed, PatternCompileError> {
         if self.next()? != Some('<') {
             return self.fail("expected a group name after \\k");
         }
@@ -679,10 +815,11 @@ impl Parser<'_> {
         let indices = &self.names[record].indices;
         self.governor
             .charge(Resource::Work, size(indices.len()).saturating_add(1))?;
-        // The retained AST copy stays under the existing syntax estimate.
-        Ok(Node::Backref(indices.as_slice().to_vec()))
+        let mut owned = ScratchVec::new(self.governor);
+        owned.extend(indices.iter().copied())?;
+        leaf(Node::Backref(owned), true, self.governor)
     }
-    fn hex_escape(&mut self, count: usize) -> Result<Node, PatternCompileError> {
+    fn hex_escape(&mut self, count: usize) -> Result<Parsed, PatternCompileError> {
         let start = self.position;
         let mut value = 0u32;
         for _ in 0..count {
@@ -693,7 +830,7 @@ impl Parser<'_> {
         }
         self.finish_code_point(value, start)
     }
-    fn unicode_escape(&mut self) -> Result<Node, PatternCompileError> {
+    fn unicode_escape(&mut self) -> Result<Parsed, PatternCompileError> {
         if self.current() == Some('{') {
             self.advance(1)?;
             let start = self.position;
@@ -755,19 +892,20 @@ impl Parser<'_> {
         }
         Ok(value)
     }
-    fn finish_code_point(&mut self, value: u32, start: usize) -> Result<Node, PatternCompileError> {
-        char::from_u32(value).map_or_else(
-            || {
-                self.fail_at(
-                    start,
-                    "escape names an unpaired surrogate, not a Unicode scalar value",
-                )
-            },
-            |character| Ok(literal(character)),
-        )
+    fn finish_code_point(
+        &mut self,
+        value: u32,
+        start: usize,
+    ) -> Result<Parsed, PatternCompileError> {
+        let Some(character) = char::from_u32(value) else {
+            return self.fail_at(
+                start,
+                "escape names an unpaired surrogate, not a Unicode scalar value",
+            );
+        };
+        literal(character, self.governor)
     }
-
-    fn property_escape(&mut self, positive: bool) -> Result<Node, PatternCompileError> {
+    fn property_escape(&mut self, positive: bool) -> Result<Parsed, PatternCompileError> {
         if self.next()? != Some('{') {
             return self.fail("property escape requires braces");
         }
@@ -783,13 +921,15 @@ impl Parser<'_> {
         }
         let ranges = if let Some((name, value)) = text.as_str().split_once('=') {
             match name {
-                "General_Category" | "gc" => unicode::category_ranges(value),
-                "Script" | "sc" => unicode::script_ranges(value),
-                "Script_Extensions" | "scx" => unicode::script_extension_ranges(value),
+                "General_Category" | "gc" => unicode::category_ranges(value, self.governor)?,
+                "Script" | "sc" => unicode::script_ranges(value, self.governor)?,
+                "Script_Extensions" | "scx" => {
+                    unicode::script_extension_ranges(value, self.governor)?
+                }
                 _ => None,
             }
         } else {
-            unicode::lone_property_ranges(text.as_str())
+            unicode::lone_property_ranges(text.as_str(), self.governor)?
         };
         let Some(ranges) = ranges else {
             self.governor
@@ -800,20 +940,27 @@ impl Parser<'_> {
                 self.governor,
             );
         };
-        Ok(class_from_ranges(ranges, !positive))
+        class_from_ranges(ranges, !positive, self.governor)
     }
     fn class_atom(&mut self) -> Result<ClassAtom, PatternCompileError> {
         if self.current() == Some('\\') {
+            self.governor.charge(Resource::Work, 1)?;
+            let class_escape = self
+                .chars
+                .get(self.position + 1)
+                .is_some_and(|c| matches!(c, 'd' | 'D' | 'w' | 'W' | 's' | 'S' | 'p' | 'P'));
             self.advance(1)?;
             let node = self.escape(true)?;
-            return Ok(match node {
+            return Ok(match node.node {
                 Node::Class(intervals)
-                    if intervals.len() == 1 && intervals[0].0 == intervals[0].1 =>
+                    if !class_escape
+                        && intervals.len() == 1
+                        && intervals[0].0 == intervals[0].1 =>
                 {
                     ClassAtom::Literal(intervals[0].0)
                 }
-                Node::Class(intervals) => ClassAtom::Set(intervals.as_ref().clone()),
-                Node::NoMatch => ClassAtom::Set(Vec::new()),
+                Node::Class(intervals) => ClassAtom::Set(intervals),
+                Node::NoMatch => ClassAtom::Set(ScratchVec::new(self.governor)),
                 _ => return self.fail("invalid character class atom"),
             });
         }
@@ -822,12 +969,12 @@ impl Parser<'_> {
         };
         Ok(ClassAtom::Literal(u32::from(character)))
     }
-    fn class(&mut self) -> Result<Node, PatternCompileError> {
+    fn class(&mut self) -> Result<Parsed, PatternCompileError> {
         let negative = self.current() == Some('^');
         if negative {
             self.advance(1)?;
         }
-        let mut ranges = Vec::new();
+        let mut ranges = ScratchVec::new(self.governor);
         while self.current() != Some(']') {
             if self.current().is_none() {
                 return self.fail("unterminated character class");
@@ -842,7 +989,7 @@ impl Parser<'_> {
                         if start > end {
                             return self.fail_at(dash_offset, "character class range out of order");
                         }
-                        ranges.push((start, end));
+                        ranges.push((start, end))?;
                     }
                     _ => {
                         return self.fail_at(
@@ -853,19 +1000,23 @@ impl Parser<'_> {
                 }
             } else {
                 match first {
-                    ClassAtom::Literal(code) => ranges.push((code, code)),
-                    ClassAtom::Set(set) => ranges.extend(set),
+                    ClassAtom::Literal(code) => ranges.push((code, code))?,
+                    ClassAtom::Set(mut set) => {
+                        self.governor.charge(Resource::Work, size(set.len()))?;
+                        ranges.append(&mut set)?;
+                    }
                 }
             }
         }
         self.advance(1)?;
-        Ok(class_from_ranges(ranges, negative))
+        class_from_ranges(ranges, negative, self.governor)
     }
 }
 
-fn literal(character: char) -> Node {
+fn literal(character: char, governor: &mut Governor) -> Result<Parsed, PatternCompileError> {
     let code = u32::from(character);
-    Node::Class(Rc::new(vec![(code, code)]))
+    let ranges = unicode::copy_ranges(&[(code, code)], governor)?;
+    leaf(Node::Class(ranges), false, governor)
 }
 
 #[cfg(test)]
@@ -874,7 +1025,7 @@ mod tests {
     use crate::pattern::{Pattern, PatternCompileError};
 
     /// Temporary names, branch paths and references release on early, partial
-    /// and final parser refusal; the existing retained AST estimate is separate.
+    /// and final parser refusal, alongside the actual retained AST owners.
     #[test]
     fn parser_metadata_refusals_release_partial_owners() {
         let source = r"^(?:(?<α>a)|(?<α>b))(?<tail>c)\k<α>\k<tail>\1$";
