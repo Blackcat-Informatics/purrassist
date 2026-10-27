@@ -626,8 +626,9 @@ impl Grammar {
     /// Dense matcher construction/storage and derived call metadata retain
     /// governed owners. Closer IDs, capture memo and metadata query scans admit
     /// fallible storage/work; [`CallEnd`] getters borrow read-only byte owners.
-    /// Other dialect-set metadata, native pattern preparation and engine/recovery
-    /// runtime allocations remain separate; full cold governance remains #36.
+    /// Dialect-set metadata preparation also admits scans and retained storage.
+    /// Native pattern preparation and engine/recovery runtime allocations remain
+    /// separate; full cold governance remains #36.
     ///
     /// # Errors
     /// Returns a typed [`GrammarError`] with the source offset for malformed

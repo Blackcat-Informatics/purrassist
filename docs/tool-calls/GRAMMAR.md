@@ -424,8 +424,9 @@ Capture/next queries and longest-spelling scans admit work before processing.
 return read-only borrowed slices, without deep cloning. `CodecContext` and XML
 borrow those same owners; recovery's existing runtime copies remain explicit.
 Ordering, canonical opener identity, chained-call boundaries and spelling
-membership are preserved. Other dialect-set metadata, native pattern preparation
-and engine/recovery runtime allocation governance remain separate #36
+membership are preserved. Dialect-set metadata preparation also retains governed
+owners. Native pattern preparation and engine/recovery runtime allocation
+governance remain separate #36
 requirements. These phases do not establish complete cold compiler governance.
 
 ## Print a prepared grammar
@@ -603,3 +604,26 @@ of this paragraph, so the walkthrough cannot drift from the engine.
 - Check printing round trips: `grammar::witness::generate` prints seeded
   well-formed calls for the tools' argument shapes, and recognizing them must
   give back the same calls with no repair.
+
+
+## Prepared dialect metadata admission
+
+`DialectSet::new` admits collection, canonical `(id, digest)` comparisons,
+duplicate diagnostics, marker-byte copies, lexical ordering/deduplication and
+explicit-marker scans before processing. Dialects, marker pairs and flags retain
+fallible scratch owners through errors and set lifetime; temporary storage
+releases on refusal. A returned duplicate diagnostic retains its admitted
+String charge. Shared pairs are explicit
+only when every declaration is explicit. Fallible borrowed byte-view handles feed
+the existing matcher in flattened opener/closer order without cloning marker
+buffers. Temporary handles end before the completed set moves its owners.
+
+Lookbehind arithmetic and the aggregate configuration bound are checked before
+publication, followed by cancellation admission. `reasoning_markers` borrows the
+same read-only byte owners. Existing recognizer runtime copies remain explicit.
+Caller-prepared custom grammar/Arc construction and the input iterator belong to
+the caller; lazy built-in grammar/cache preparation keeps its own default
+governor. Native pattern preparation, engine/recovery runtime governance and full
+#36 witness, GBNF, signature, projection, routing, ledger and graph integration
+remain separate required capabilities. No set-owned disallowed-signature table
+exists: detection filters static family rules at runtime through its allow-list.

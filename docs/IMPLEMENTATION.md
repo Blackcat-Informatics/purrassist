@@ -42,8 +42,9 @@ byte lists; closer IDs, capture memo and traversal temporaries release after use
 Capture/next queries and longest-spelling scans admit each visited entry.
 Borrowed `CallEnd` getters, `call_literals` and `CodecContext` expose the same
 read-only owners. Recovery's existing runtime byte copies remain explicit.
-Other dialect-set metadata, native pattern preparation and engine/recovery
-runtime allocation governance retain separate contracts.
+Dialect-set metadata preparation also uses retained fallible owners and
+admitted scans. Native pattern preparation and engine/recovery runtime
+allocation governance retain separate contracts.
 Full cold backend governance remains #36
 acceptance, alongside witness, GBNF, CompactSignature, projection, routing,
 ledgers and graph integration.
