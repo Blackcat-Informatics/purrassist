@@ -57,7 +57,14 @@ grammar and contextual class-escape refusals.
 
 `GlobLanguage` compiles a union of these semantic models with complete literal
 bindings into the core's existing derivative engine. Matching consumes complete
-non-NUL pathname byte strings, including invalid UTF-8. Exact inclusion returns
+non-NUL pathname byte strings, including invalid UTF-8. Native [AppArmor](https://apparmor.net/) 4.1.7
+file-rule semantics require a non-slash first byte for a whole star component;
+brace and escape boundaries affect that restriction. Raw pattern slash runs are
+normalized after literal binding, preserving an initial exactly-two-slash
+namespace; candidate pathname bytes are unchanged. Unescaped `*`/`?` inside
+classes and escaped class comma are explicitly unsupported because native
+conversion gives them different semantics from literal class bytes.
+Exact inclusion returns
 either `Contained` after exhausting the reachable frontier or a shortest byte
 counterexample; resource/cancellation refusal remains an error. Run
 `cargo run -p purrassist-toolgraph --example glob_containment` for the actual

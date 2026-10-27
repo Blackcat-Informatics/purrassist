@@ -651,10 +651,32 @@ Static conflict closure includes imports and child tools through rules. Hat
 containment uses a bounded automaton over the first-party AppArmor glob AST;
 a failed containment proof refuses admission. Network scopes are canonical exact
 IP addresses or bounded explicit enumeration. Host names and unenumerated CIDRs
-are `UnenforceableNetworkScope`. Socket type and protocol are alternatives.
+are `UnenforceableNetworkScope`. Network access is printed before the domain
+and its exclusive socket-type or protocol selector, followed by local and peer conditions. Reject address-family
+mismatches and local-only accesses combined with peer conditions, even when a
+parser accepts other inconsistent forms. Socket type and protocol are alternatives.
+The worked scoped-IP policy declares `abi <abi/4.0-ip>,` and requires its
+fine-grained
+`network_v8/af_inet` and `network/af_unix` mediation. Offline qualification uses
+AppArmor 4.1.7 with explicit matching target features, `--warn=all --Werror` and
+`-QK`; record the feature file's SHA-256/provenance and inspect exact scoped DFA
+output. Default parser acceptance may omit all network enforcement. An offline
+feature file is not evidence of running-kernel support or loaded policy: the
+host must verify both and hard-refuse unavailable required mediation. The
+original v3/v4 synthesis target contract remains intact; this scoped worked
+policy is not evidence that a less capable target can enforce the same scopes.
+
+Unix `addr` conditions name abstract or anonymous sockets. The worked
+`@@{TOOL_TMP}/ipc` retains a literal abstract marker before the trusted variable;
+with its binding it denotes `@/run/purrassist/session-17/ipc`. The corresponding
+peer address ends in `/host`. A sole variable prefix loses the leading slash
+during abstract-address compilation. Filesystem Unix sockets require file rules;
+validate expanded addresses and never reinterpret a filesystem path silently.
+
 The dangerous-capability deny set and file/mount baseline are TOOLS.md's
 normative set. Abstractions come only from a pinned, inspected caller document
-closure; an uncontrolled host include must not introduce unreviewed permissions.
+closure and render with current `include <abstractions/name>` syntax; an
+uncontrolled host include must not introduce unreviewed permissions.
 
 GBNF lowering reads `CompiledSchema`; required object keys precede optional keys
 in source schema order. It lowers bounded arrays, string bounds, enums, constants,
@@ -868,10 +890,10 @@ tracker until all five children are complete; #40 remains open through #39.
 
 | Issue / prerequisite | Complete behavior | Focused executable acceptance before its full gate |
 |---|---|---|
-| #32 | Reviewed specification and plan | Extract every Turtle/SRL/JSON/GBNF/AppArmor block from TOOLS.md. Parse Turtle through `purrdf_rdf::parse_dataset` as Turtle 1.2, SRL through `srl::check`, JSON through a strict parser, GBNF through llama.cpp's grammar parser or an explicitly recorded equivalent, and AppArmor through parser 4.1.x `apparmor_parser -QK` without loading policy. Record parser version and exact check scope. Both documents pass `prose-check`. Specification delivery is complete; implementation is authorized. |
+| #32 | Reviewed specification and plan | Extract every Turtle/SRL/JSON/GBNF/AppArmor block from TOOLS.md. Parse Turtle through `purrdf_rdf::parse_dataset` as Turtle 1.2, SRL through `srl::check`, JSON through a strict parser, GBNF through llama.cpp's grammar parser or an explicitly recorded equivalent, and AppArmor through parser 4.1.7 with explicit `4.0-ip` target features, `--warn=all --Werror` and `-QK` without loading policy. Record parser version, feature-file SHA-256/provenance and exact IP/port/abstract-address DFA evidence; default parser success is insufficient. Both documents pass `prose-check`. Specification delivery is complete; implementation is authorized. |
 | #33; completed #32, upstream #747/#748 and G7 | Pure graph loader and bidirectional MCP codec | Worked example loads to exact typed graph and manifest golden; original graph/reifier scopes preserved; `decode(encode(g))` dataset isomorphism modulo exactly the sound registered ledger on example and generated vocabulary corpus; every `LoadError` variant has invalid input plus neighbouring valid input; v2 manifest round trips preserve exact byte units and enforcement mode, while legacy token fields, v1 bundles, absent/unknown modes and duplicate context fields fail explicitly; field-mask refusals and direct production metadata-augmented `ToolSet` caller exercised, including alias recovery, unchanged unmodeled-schema validation and exact declaration render-back; upstream G7 plain-profile caller tests with exact bare input/output scalar/object/array/closedness semantics and retained original SHACL validation; all-target dependency registry audit; `cargo build -p purrassist-toolgraph --target wasm32-unknown-unknown`; add crate to required WASM build list. |
 | #34; #33, upstream #749 | Static security admission and governed authorization | One negative plus valid neighbour per conflict class (read-only/write and mount, forbidden egress including unix peers, unconfined transitions, dangerous capabilities, hat containment); deterministic SARIF including both source rules and proof; matching user/active tenant permit, foreign user/inactive tenant deny; protected decision-head injection refused; missing or mismatched policy trust registry binding refused and matching binding admitted; tiny ceiling and pre-tripped stop exhaust without permit/deny; deterministic proof/usage and explicit-time/entropy paths. |
-| #35; #33/#34 | Deterministic policy synthesis and Linux confined execution | Worked profiles/hats byte-exact, every golden parsed with `apparmor_parser -QK` 4.1.x; absent parser visibly reports named unmet parser evidence; `/8` refusal and exact-host valid neighbour; root containing `{`, `*` and `@{` escaped or refused; each host failure has typed remedy and proves no invocation occurred; operator-loaded smoke test denies SSH secrets and allows root reads/writes; failed restoration poisons worker. |
+| #35; #33/#34 | Deterministic policy synthesis and Linux confined execution | Worked profiles/hats byte-exact, every golden parsed with AppArmor 4.1.7, explicit `4.0-ip` target features and `--warn=all --Werror -QK`, with exact scoped DFA evidence; absent parser visibly reports named unmet parser evidence; `/8` refusal and exact-host valid neighbour; root containing `{`, `*` and `@{` escaped or refused; each host failure has typed remedy and proves no invocation occurred; operator-loaded smoke test denies SSH secrets and allows root reads/writes; failed restoration poisons worker. |
 | #36; #33 | GBNF, compact/prompt lanes and deterministic routing | Worked goldens for every family and complete registered ledgers; parser accepts every GBNF; generated accepted JSON validates or fails only named ledgered constraints, including `oneOf` overlap and noninteger numeric restrictions; exact current declaration/envelope reuse; fixed-point route order and id tie-break; complete prompt bytes at most the explicit byte ceiling, distinct exact-byte and conservative-token receipt fields, refusal of token-bound claims without applicable tokenizer assumptions, mandatory-tool over-budget refusal, named optional omission losses. |
 | #37; #34/#35/#36 | Real recovery → post-check → authorization → confined dispatch path | Misspelled tool/stringified integer recovery stays within hint tolerances; pattern failure caught; foreign customer denied with proof; valid call has pinned receipt; mutating guesses never executable; deleted post-check fails at load; root/path and stale witness failures prevent execution; manifest graph/artifact substitution fails; field masks and history losses recorded; complete projected result bytes obey the exact limit with Bytes/ExactBytes/limit/measured receipts; a result exceeding N bytes with deterministic token count at most N is refused, exactly N bytes is accepted by this check, and N + 1 bytes fails without releasing truncated output; graph-backed registry includes metadata; `gate_tool_calls` fixture executes identically through CLI and MCP, and generated `docs/TOOLS.md` still matches registry. |
 | #39; #38 | Cross-cutting conformance qualification | Full vocabulary and v2 byte-policy manifest round trips; legacy-token/mode rejection and result-byte boundary witnesses through the actual host/CLI/MCP path; separate prompt-token assumption evidence; remove emitted constraint mutation detected by ledger checks; per-family GBNF goldens and accepted-value property; AppArmor/SARIF static negatives and `/8` refusal; repeated/reordered-triples byte identities; named worked-example artifact transcript in `make wasm-test` equals frozen native bytes; enabled-host AppArmor smoke record and exact environment in `docs/QUALIFICATION.md`. |

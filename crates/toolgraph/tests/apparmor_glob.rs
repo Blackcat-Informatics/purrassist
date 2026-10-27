@@ -107,6 +107,10 @@ fn malformed_unsupported_and_undeclared_sources_report_original_byte_offsets() {
         (r"/tmp/[a\-]", GlobError::Unsupported { offset: 7 }),
         (r"/tmp/[\--z]", GlobError::Unsupported { offset: 6 }),
         ("/tmp/[@{ROOT}]", GlobError::Unsupported { offset: 6 }),
+        ("/tmp/[*]", GlobError::Unsupported { offset: 6 }),
+        ("/tmp/[a?]", GlobError::Unsupported { offset: 7 }),
+        ("/tmp/[a-*]", GlobError::Unsupported { offset: 8 }),
+        (r"/tmp/[a\,]", GlobError::Unsupported { offset: 7 }),
         (r"/tmp/\x41", GlobError::Unsupported { offset: 5 }),
         (r"/tmp/\1", GlobError::Unsupported { offset: 5 }),
         ("/tmp/\\", GlobError::Syntax { offset: 6 }),
@@ -129,6 +133,7 @@ fn malformed_unsupported_and_undeclared_sources_report_original_byte_offsets() {
     for source in [
         r"/tmp/\*",
         r"/tmp/[\-a]",
+        r"/tmp/[\*\?\[\]{},.$+|()!\\]",
         "/tmp/[a-z]",
         "/tmp/[!a]",
         "/tmp/{,a}",

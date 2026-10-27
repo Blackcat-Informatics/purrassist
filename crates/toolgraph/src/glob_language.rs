@@ -70,8 +70,13 @@ impl From<StopReason> for GlobLanguageError {
 /// Union of admitted [`AppArmorGlob`] languages over arbitrary non-NUL pathname bytes.
 ///
 /// Literal UTF-8 text is lowered into its individual bytes. `?` consumes one
-/// non-slash byte, `*` any number of non-slash bytes and `**` any number of bytes;
-/// explicit classes may contain slash. Every class excludes NUL. The original
+/// non-slash byte, `*` repeats non-slash bytes and `**` repeats non-NUL bytes.
+/// A raw star run immediately after a lexical slash and before slash/end must
+/// first consume one non-slash byte, matching the native file-rule compiler.
+/// Brace boundaries and escaped following slashes retain their lexical meaning.
+/// Pattern slash runs are normalized as native file rules do; candidate bytes
+/// are never normalized. Explicit classes may contain slash. Every class excludes
+/// NUL. The original
 /// parsed semantics and common literal-binding validator are used directly,
 /// without rendering or reparsing a policy word or regex.
 ///
@@ -154,14 +159,124 @@ fn finish_sequence(count: usize, output: &mut ScratchVec<I>) -> Result<(), StopR
     Ok(())
 }
 
-fn literal(
-    bytes: &[u8],
-    output: &mut ScratchVec<I>,
+// Native file rules collapse raw consecutive slashes, preserving an initial
+// exactly-two-slash namespace. This is pattern preparation, never pathname cleanup.
+// AppArmor v4.1.7 parser/parser_regex.c: filter_slashes runs on file entry names
+// before convert_aaregex_to_pcre; its star case tests the emitted regex suffix.
+struct LexicalContext {
+    namespace: bool,
+    raw_bytes: usize,
+    raw_slash: bool,
+    emitted_slash: bool,
+}
+
+impl LexicalContext {
+    fn wildcard(
+        &mut self,
+        input: &GlobLanguageInput<'_>,
+        at: usize,
+        output: &mut ScratchVec<I>,
+        governor: &mut Governor,
+    ) -> Result<usize, StopReason> {
+        let token = &input.glob.tokens()[at];
+
+        let mut bits = [u64::MAX; 4];
+        bits[0] &= !1;
+        if !matches!(token.kind, GlobTokenKind::RecursiveStar) {
+            bits[0] &= !(1 << b'/');
+        }
+        let component = !matches!(token.kind, GlobTokenKind::AnyByte)
+            && self.emitted_slash
+            && star_component_end(input, at, governor)?;
+        if component {
+            let mut first = [u64::MAX; 4];
+            first[0] &= !1 & !(1 << b'/');
+            output.push(I::Class(first))?;
+        }
+        self.syntax(token.span.len());
+        output.push(I::Class(bits))?;
+        if !matches!(token.kind, GlobTokenKind::AnyByte) {
+            output.push(I::Star)?;
+        }
+        Ok(1 + usize::from(component))
+    }
+
+    const fn syntax(&mut self, raw_bytes: usize) {
+        self.emitted_slash = false;
+        self.raw_slash = false;
+        self.raw_bytes = self.raw_bytes.saturating_add(raw_bytes);
+    }
+
+    fn literal(
+        &mut self,
+        bytes: &[u8],
+        output: &mut ScratchVec<I>,
+        governor: &mut Governor,
+    ) -> Result<usize, StopReason> {
+        governor.charge(Resource::Work, size(bytes.len()))?;
+        let mut added = 0;
+        for &byte in bytes {
+            let slash = byte == b'/';
+            if !slash || !self.raw_slash || (self.namespace && self.raw_bytes == 1) {
+                output.push(I::Literal(byte))?;
+                self.emitted_slash = slash;
+                added += 1;
+            }
+            self.raw_slash = slash;
+            self.raw_bytes = self.raw_bytes.saturating_add(1);
+        }
+        Ok(added)
+    }
+}
+
+fn namespace_prefix(
+    input: &GlobLanguageInput<'_>,
+    positions: &[usize],
     governor: &mut Governor,
-) -> Result<usize, StopReason> {
-    governor.charge(Resource::Work, size(bytes.len()))?;
-    output.extend(bytes.iter().copied().map(I::Literal))?;
-    Ok(bytes.len())
+) -> Result<bool, StopReason> {
+    let mut prefix = [0; 3];
+    let mut used = 0;
+    for token in input.glob.tokens() {
+        let bytes = if let GlobTokenKind::Variable { declaration } = token.kind {
+            input.bindings[positions[declaration]].path.as_bytes()
+        } else {
+            &input.glob.source().as_bytes()[token.span.clone()]
+        };
+        for &byte in bytes {
+            governor.charge(Resource::Work, 1)?;
+            prefix[used] = byte;
+            used += 1;
+            if used == 3 {
+                return Ok(prefix[0] == b'/' && prefix[1] == b'/' && prefix[2] != b'/');
+            }
+        }
+    }
+    Ok(used == 2 && prefix[..2] == *b"//")
+}
+
+// AppArmor's component restriction depends on lexical context, not on whether
+// a semantic alternative could end with slash. Escapes and braces stay visible.
+fn star_component_end(
+    input: &GlobLanguageInput<'_>,
+    at: usize,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    let mut end = at;
+    let tokens = input.glob.tokens();
+    while end < tokens.len()
+        && matches!(
+            tokens[end].kind,
+            GlobTokenKind::Star | GlobTokenKind::RecursiveStar
+        )
+    {
+        governor.charge(Resource::Work, 1)?;
+        end += 1;
+    }
+    Ok(tokens.get(end).is_none_or(|token| match token.kind {
+        GlobTokenKind::Variable { .. } => true, // Every admitted binding starts '/'.
+        GlobTokenKind::Literal => input.glob.source().as_bytes()[token.span.start] == b'/',
+        _ => false,
+    }))
 }
 
 fn lower(
@@ -171,6 +286,12 @@ fn lower(
 ) -> Result<(), GlobLanguageError> {
     governor.charge(Resource::InputBytes, size(input.glob.source().len()))?;
     let positions = input.glob.prepare_bindings(input.bindings, governor)?;
+    let mut context = LexicalContext {
+        namespace: namespace_prefix(input, positions.as_slice(), governor)?,
+        raw_bytes: 0,
+        raw_slash: false,
+        emitted_slash: false,
+    };
     let mut frames: ScratchVec<(usize, usize)> = ScratchVec::new(governor);
     frames.push((0, 0))?;
     let tokens = input.glob.tokens();
@@ -179,16 +300,19 @@ fn lower(
         governor.charge(Resource::Work, 1)?;
         let token = &tokens[at];
         let added = match token.kind {
-            GlobTokenKind::Literal => literal(
+            GlobTokenKind::Literal => context.literal(
                 &input.glob.source().as_bytes()[token.span.clone()],
                 output,
                 governor,
             )?,
             GlobTokenKind::Byte(byte) => {
                 output.push(I::Literal(byte))?;
+                context.emitted_slash = byte == b'/';
+                context.raw_slash = input.glob.source().as_bytes()[token.span.end - 1] == b'/';
+                context.raw_bytes = context.raw_bytes.saturating_add(token.span.len());
                 1
             }
-            GlobTokenKind::Variable { declaration } => literal(
+            GlobTokenKind::Variable { declaration } => context.literal(
                 input.bindings[positions.as_slice()[declaration]]
                     .path
                     .as_bytes(),
@@ -196,30 +320,24 @@ fn lower(
                 governor,
             )?,
             GlobTokenKind::AnyByte | GlobTokenKind::Star | GlobTokenKind::RecursiveStar => {
-                let mut bits = [u64::MAX; 4];
-                bits[0] &= !1;
-                if !matches!(token.kind, GlobTokenKind::RecursiveStar) {
-                    bits[0] &= !(1 << b'/');
-                }
-                output.push(I::Class(bits))?;
-                if !matches!(token.kind, GlobTokenKind::AnyByte) {
-                    output.push(I::Star)?;
-                }
-                1
+                context.wildcard(input, at, output, governor)?
             }
             GlobTokenKind::ClassStart { negated, end } => {
                 let bits = class_bits(&tokens[at + 1..end], negated, governor)?;
                 output.push(I::Class(bits))?;
+                context.syntax(1);
                 at = end;
                 1
             }
             GlobTokenKind::AlternationStart { .. } => {
+                context.syntax(1);
                 governor.charge(Resource::Depth, size(frames.len()))?;
                 frames.push((0, 0))?;
                 at += 1;
                 continue;
             }
             GlobTokenKind::Branch { .. } => {
+                context.syntax(1);
                 // The immutable admitted model guarantees the enclosing frame.
                 let frame = frames
                     .as_mut_slice()
@@ -232,6 +350,7 @@ fn lower(
                 continue;
             }
             GlobTokenKind::AlternationEnd { .. } => {
+                context.syntax(1);
                 let frame = frames.pop().expect("INVARIANT: admitted group frame");
                 finish_sequence(frame.0, output)?;
                 output.push(I::Alternate(frame.1 + 1))?;
