@@ -13,6 +13,7 @@ mod glob_language;
 mod internet;
 mod ipc;
 mod privilege_rule;
+mod resource_limits;
 mod socket_access;
 mod unix;
 mod vocab;
@@ -59,4 +60,9 @@ pub use ipc::{
 pub use privilege_rule::{
     CapabilityBaseline, CapabilityFragment, CapabilityRule, MountFragment, MountRule,
     PrivilegeError, PrivilegeRequirement, dangerous_capability_denials,
+};
+
+pub use resource_limits::{
+    ResourceLimitError, ResourceLimitField, ResourceLimitFragment, ResourceLimitProblem,
+    ResourceLimitRequirement, ResourceLimits,
 };

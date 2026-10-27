@@ -1320,3 +1320,24 @@ The private partial buffer is discarded on refusal and a final cancellation
 check precedes complete artifact publication. Source/field/peer identities and
 original binding offsets or governor causes remain available on typed errors.
 Original source preparation and actual host mediation are separate contracts.
+
+## Standalone exact profile resource limits
+
+`ResourceLimits::render` admits the original source identity against the current
+input ceiling, then reserves 512 work units before bounded numeric computation:
+five validations, two possible exact byte divisions and five u64 decimal
+displays of at most twenty digits each. Fixed-size caller numbers require no
+ambient queries, string parsing or dynamic intermediate storage. All five
+values are validated before any output allocation. Byte values above the bare
+decimal range require exact divisibility by 1024; the quotient is emitted with
+`K`. Counts and whole CPU seconds have explicit selected-parser ceilings.
+
+The existing `format_output_governed` admits each actual byte write and fallible
+scratch growth. A final cancellation check precedes atomic publication of all
+five declarations. Exact input/work/scratch ceilings pass; one-below ceilings
+and pre-cancellation return their original causes with all input numbers and
+source identity retained. Private partial storage is dropped on refusal.
+No native parser runs in production. Parser acceptance can mask saturation or
+overflow, so qualification checks serialized values rather than exit status
+alone. These are selected representation limits; host enforcement and graph/
+policy admission remain separate requirements.

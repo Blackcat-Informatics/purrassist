@@ -960,8 +960,8 @@ caller requests, never defaults. The atomic artifact carries ABI `3.0` and its
 signal/ptrace mediation requirement; it is neither a peer authorization nor
 running-kernel/loaded-policy evidence. `ipc_rules` is the public consumer.
 Full #34/#35 graph admission, static conflicts, permission/hat analysis, complete
-synthesis, trust and host confinement remain required. Mount/capability/rlimit
-and import handling remain separate original requirements.
+synthesis, trust and host confinement remain required. Import handling remains
+a separate original requirement.
 
 ## Named capabilities and mount denials — standalone fragments
 
@@ -993,4 +993,23 @@ overlapping allow baselines. Parser success alone is insufficient: strict ABI
 These standalone fragments do not complete #35. Admitted-graph synthesis, full
 baseline composition, permission/owner/deny/hat analysis, authenticated policy
 trust, original v3/v4 integration and actual confinement remain #34/#35
-requirements. Rlimit and import families remain separate original requirements.
+requirements. Import handling remains a separate original requirement.
+
+## Standalone exact resource-limit fragments — implemented
+
+`ResourceLimits` renders one complete five-field value in fixed declaration
+order: `as`, `fsize`, `nproc`, `cpu`, `nofile`. Original source and all numbers
+survive success and typed refusal. Zero and infinity have no admitted encoding.
+Counts admit through 9223372036854775807; CPU admits through 9223372036854
+whole seconds, printed with explicit `seconds`. Byte values through
+9223372036854775807 print bare decimal; larger values require exact multiples
+of 1024 and print quotient `K`, through 18446744073709550592 bytes.
+
+All representation checks precede formatting. The existing governed sink
+admits actual writes/storage and publishes atomically after cancellation checks.
+`resource_limits` exercises the actual API with a default or five decimal
+arguments. Strict AppArmor ABI `3.0` serialized rlimit masks/values distinguish
+exact output from native parser saturation, wrapping and infinity sentinels.
+This standalone fragment is an offline target contract. Complete graph admission,
+static conflicts, permission/hat analysis, authenticated trust, original v3/v4
+integration and actual host confinement remain under #34/#35.

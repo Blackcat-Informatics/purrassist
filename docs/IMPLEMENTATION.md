@@ -252,7 +252,7 @@ or Unix-address interpretation. The `ipc_rules` consumer exercises both APIs and
 literal bindings. ABI `3.0` signal/ptrace metadata is an offline target contract;
 it establishes no peer permission, authenticated admission or loaded policy.
 Full #34/#35 graph, conflict, synthesis, trust and confinement acceptance remains
-open, along with the separate mount/capability/rlimit/import rule families.
+open; import handling remains a separate original requirement.
 
 Standalone `CapabilityRule` and `MountRule` now render governed named capability
 and unscoped mount-denial fragments. The explicit ABI `3.0` vocabulary admits
@@ -262,4 +262,15 @@ forty names, refuses all fourteen normative dangerous grants, and refuses
 Mount requests admit only explicit denials for the four graph operations. The
 `privilege_rules` consumer uses these actual public operations. Full graph-wide
 baseline composition, static admission, v3/v4 synthesis, trust and host
-confinement remain #34/#35; rlimit and import families remain required.
+confinement remain #34/#35; import handling remains required.
+
+Standalone `ResourceLimits` now emits the five mandatory positive finite profile
+limits through the existing governed formatter, preserving original numeric
+values and source identity in complete artifacts and typed refusals. Selected
+AppArmor 4.1.7 ABI `3.0` representations use exact decimal bytes or exact `K`
+quotients, bounded counts and explicit whole CPU seconds. Unsupported values,
+including native sentinel/saturation/wrap cases, are refused before output.
+The `resource_limits` example is the actual five-field consumer. Offline rlimit
+metadata and native serialization checks do not establish actual host support,
+loaded policy or enforcement. Full admitted-graph synthesis, static permission/
+hat analysis, trust and original v3/v4 integration remain under #34/#35.

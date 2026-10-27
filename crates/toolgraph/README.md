@@ -182,5 +182,22 @@ Run `cargo run -p purrassist-toolgraph --example privilege_rules` for the actual
 consumer: all named denials, every safe grant, the complete dangerous-capability
 baseline and all four mount denials. The executable owns its offline fixture
 envelopes. Graph-wide baseline composition, static admission, full v3/v4 synthesis,
-authenticated trust and host confinement remain under #34/#35. Rlimit and import
-families remain required by the parent contract.
+authenticated trust and host confinement remain under #34/#35. Import handling
+remains required by the parent contract.
+
+`ResourceLimits::render` emits all five exact positive finite profile limits in
+fixed order: `as`, `fsize`, `nproc`, `cpu`, `nofile`. Every field is mandatory.
+The complete artifact and typed refusals retain the source identity and all
+original numbers. Counts admit through 9223372036854775807; CPU admits through
+9223372036854 whole seconds and always prints explicit `seconds`. Byte values
+through 9223372036854775807 use bare decimal; larger values require exact
+divisibility by 1024 and use the quotient with `K`. The largest supported byte
+value is 18446744073709550592. Zero, infinity and unsupported representations
+are refused before formatting, without rounding, clamping or wrapping.
+
+Run `cargo run -p purrassist-toolgraph --example resource_limits` for the actual
+consumer, or supply five decimal arguments in the documented field order.
+The existing governed formatter publishes the complete five-declaration fragment
+atomically. Its ABI `3.0`/`rlimit` requirement is an offline target selection;
+it establishes neither loaded policy nor actual process enforcement. Full graph
+admission, policy composition, trust and host confinement remain under #34/#35.
