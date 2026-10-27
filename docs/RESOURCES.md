@@ -110,9 +110,22 @@ unbounded traversal. Structural scans, byte comparisons, copies, diagnostics and
 fallible storage admit work before processing; resource causes remain sticky.
 
 Local class source/anchoring/diagnostics use governed buffers around the existing
-native pattern authority. Native pattern parsing/automaton preparation, later
-matchers, repair tables and recognizer programs retain their separate existing
-contracts. This is not complete cold compiler governance or completion of #36.
+native pattern authority.
+
+Derived closer/confusable/JSON/stray spellings and their sparse repair tries now
+use retained `ScratchVec` owners, including the outer repair/delimiter tables.
+Spelling comparisons, copying, deduplication, trie binary searches and sorted
+edge insertion shifts admit work before processing. Trie construction borrows
+labelled bytes instead of making a labelled deep copy. Its iterative flat
+storage admits one caller depth frame; byte-prefix length has no recursive
+128-byte ceiling. Temporary JSON key-use flags/counts/copies/renames and expanded
+delimiter spellings remain governed until use completes and release on refusal.
+
+Dense matcher construction/storage and dialect-set sharing, recognizer programs,
+call metadata/capture analyses and native pattern parsing/automaton preparation
+retain their separate existing contracts. Delimiter expansion feeds the same
+dense matcher without claiming its internal buffers are governed. Complete cold
+compiler governance and the remaining #36 capabilities are still required.
 
 ## Type-enforced scratch accounting
 

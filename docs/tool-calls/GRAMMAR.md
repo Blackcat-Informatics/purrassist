@@ -400,9 +400,18 @@ aggregate native ceiling of 128. A cyclic layout returns `GrammarError::Recursiv
 excessive expansion returns the original sticky depth-resource cause. Successful
 recognition, canonical bytes and layout semantics remain unchanged.
 
-Native pattern/automaton preparation and later matcher, repair-table and
-recognizer-program allocation remain separate #36 requirements. These governed
-first-party phases do not establish complete cold compiler governance.
+Derived closer, confusable, JSON and stray spellings and sparse repair tries
+also use retained fallible owners, including outer repair/delimiter tables.
+Their scans, copies, comparisons, deduplication, trie search/insertion shifts
+and JSON key-use classification admit work before processing. Trie construction
+borrows labelled spellings; its flat iterative storage admits one depth frame
+and preserves literal byte lengths greater than 128. Temporary JSON flags and
+renames and delimiter expansions release on later failure.
+
+Dense matcher construction/storage and dialect-set sharing, recognizer programs,
+call metadata/capture analyses and native pattern parsing/automaton preparation
+remain separate #36 requirements. These implemented phases do not establish
+complete cold compiler governance.
 
 ## Print a prepared grammar
 

@@ -8,8 +8,9 @@
 //! time (closer variants, confusable spellings, stray closers). A
 //! [`Matcher`] finds the first occurrence of any literal of a delimiter set
 //! in a byte stream in O(1) per byte; it drives `until(...)` bodies, codec
-//! slots, and reasoning markers. Both are built once, charged to the
-//! compiling governor, and retained with the compiled grammar.
+//! slots, and reasoning markers. Sparse trie nodes/edges retain fallible
+//! scratch ownership. Dense matcher construction/storage retain their existing
+//! coarser accounting contract and remain separate cold-governance scope.
 // `unreachable_pub` and `redundant_pub_crate` disagree on the right
 // visibility for items of a crate-private module
 // (https://github.com/rust-lang/rust-clippy/issues/6188); these items are
@@ -19,58 +20,75 @@
 use super::cost::K_COMPILE;
 use super::index_u32;
 use crate::contract::saturating_size as size;
-use crate::contract::{Governor, Resource, StopReason};
+use crate::contract::{Governor, Resource, ScratchCharge, ScratchVec, StopReason};
 
 /// Byte-identical node id of a trie or matcher root.
 pub(crate) const ROOT: u32 = 0;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 struct TrieNode {
-    children: Vec<(u8, u32)>,
+    children: ScratchVec<(u8, u32)>,
     accept: Option<u32>,
 }
+impl ScratchCharge for TrieNode {
+    const CHARGE: usize = 48;
+}
+const _: () = assert!(core::mem::size_of::<TrieNode>() <= TrieNode::CHARGE);
 
-/// A sparse trie of labelled byte spellings.
-#[derive(Clone, Debug, PartialEq, Eq)]
+impl TrieNode {
+    fn new(governor: &Governor) -> Self {
+        Self {
+            children: ScratchVec::new(governor),
+            accept: None,
+        }
+    }
+}
+
+/// A sparse trie of labelled byte spellings, with release-owned nodes and edges.
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Trie {
-    nodes: Vec<TrieNode>,
+    nodes: ScratchVec<TrieNode>,
 }
 
 impl Trie {
-    /// A trie holding `spellings`, each with its label; the first label
-    /// inserted for a spelling wins.
-    pub(crate) fn build(
-        spellings: &[(Vec<u8>, u32)],
+    /// A trie holding borrowed `spellings`; the first label inserted wins.
+    /// Scans, comparisons and insertion shifts are admitted before processing.
+    pub(crate) fn build<'a>(
+        spellings: impl IntoIterator<Item = (&'a [u8], u32)>,
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
-        let total: usize = spellings.iter().map(|(bytes, _)| bytes.len()).sum();
-        governor.charge(
-            Resource::Work,
-            size(total.saturating_add(1)).saturating_mul(K_COMPILE),
-        )?;
-        governor.charge(
-            Resource::ScratchBytes,
-            size(total.saturating_add(1)).saturating_mul(48),
-        )?;
-        let mut nodes = vec![TrieNode::default()];
+        // Flat storage and iteration require one frame, independent of byte length.
+        governor.charge(Resource::Depth, 1)?;
+        governor.charge(Resource::Work, K_COMPILE)?;
+        let mut nodes = ScratchVec::new(governor);
+        nodes.push(TrieNode::new(governor))?;
         for (bytes, label) in spellings {
+            governor.charge(Resource::Work, K_COMPILE)?;
             let mut node = ROOT as usize;
             for &byte in bytes {
-                node = match nodes[node]
-                    .children
-                    .binary_search_by_key(&byte, |(key, _)| *key)
-                {
-                    Ok(index) => nodes[node].children[index].1 as usize,
+                let children = &nodes[node].children;
+                let comparisons = u64::from(children.len().bit_width()) + 1;
+                governor.charge(Resource::Work, comparisons * K_COMPILE)?;
+                node = match children.binary_search_by_key(&byte, |(key, _)| *key) {
+                    Ok(index) => children[index].1 as usize,
                     Err(index) => {
                         let next = nodes.len();
-                        nodes[node].children.insert(index, (byte, index_u32(next)));
-                        nodes.push(TrieNode::default());
+                        let id = u32::try_from(next)
+                            .map_err(|_| governor.stop_resource(Resource::ScratchBytes))?;
+                        governor
+                            .charge(Resource::Work, size(children.len() - index + 1) * K_COMPILE)?;
+                        // Fallible growth precedes allocation-free sorted insertion.
+                        nodes.push(TrieNode::new(governor))?;
+                        let children = &mut nodes.as_mut_slice()[node].children;
+                        children.push((byte, id))?;
+                        children.as_mut_slice()[index..].rotate_right(1);
                         next
                     }
                 };
             }
-            nodes[node].accept.get_or_insert(*label);
+            nodes.as_mut_slice()[node].accept.get_or_insert(label);
         }
+        governor.check()?;
         Ok(Self { nodes })
     }
 
@@ -140,8 +158,11 @@ pub(crate) struct Matcher {
 
 impl Matcher {
     /// Build the matcher; `literals` must be non-empty byte strings.
-    pub(crate) fn build(literals: &[Vec<u8>], governor: &mut Governor) -> Result<Self, StopReason> {
-        let total: usize = literals.iter().map(Vec::len).sum();
+    pub(crate) fn build<B: AsRef<[u8]>>(
+        literals: &[B],
+        governor: &mut Governor,
+    ) -> Result<Self, StopReason> {
+        let total: usize = literals.iter().map(|literal| literal.as_ref().len()).sum();
         let states = total.saturating_add(1);
         governor.charge(
             Resource::Work,
@@ -156,6 +177,7 @@ impl Matcher {
         let mut depth = vec![0_u32];
         let mut own: Vec<Option<(u32, u32)>> = vec![None];
         for (index, literal) in literals.iter().enumerate() {
+            let literal = literal.as_ref();
             let mut node = 0_usize;
             for &byte in literal {
                 node = match goto[node].binary_search_by_key(&byte, |(key, _)| *key) {
@@ -206,7 +228,11 @@ impl Matcher {
             delta,
             depth,
             found,
-            longest: literals.iter().map(Vec::len).max().unwrap_or(0),
+            longest: literals
+                .iter()
+                .map(|literal| literal.as_ref().len())
+                .max()
+                .unwrap_or(0),
         })
     }
 
@@ -265,7 +291,7 @@ mod tests {
     fn trie_labels_and_admission() {
         let mut governor = Governor::new(Budget::default());
         let trie = Trie::build(
-            &[(b"</a>".to_vec(), 1), (b"</ab>".to_vec(), 2)],
+            [(b"</a>".as_slice(), 1), (b"</ab>".as_slice(), 2)],
             &mut governor,
         )
         .unwrap();
@@ -279,5 +305,59 @@ mod tests {
         assert_eq!(trie.accept(node), Some(1));
         assert!(!trie.has_children(node));
         assert_eq!(trie.first_bytes().collect::<Vec<_>>(), [b'<']);
+    }
+
+    #[test]
+    fn sparse_trie_refusals_release_nodes_and_edges_without_limiting_byte_length() {
+        use crate::contract::{CancellationToken, Resource, StopReason};
+        let long = [b'x'; 256];
+        let spellings = [(b"z".as_slice(), 1), (b"a".as_slice(), 2), (&long, 3)];
+        let mut measured = Governor::new(Budget::default());
+        let trie = Trie::build(spellings, &mut measured).unwrap();
+        let usage = measured.usage();
+        let mut node = ROOT;
+        for byte in long {
+            node = trie.step(node, byte).unwrap();
+        }
+        assert_eq!(trie.accept(node), Some(3));
+        drop(trie);
+        assert_eq!(measured.scratch_meter().live(), 0);
+        for (budget, resource) in [
+            (
+                Budget {
+                    work: usage.work - 1,
+                    ..Budget::default()
+                },
+                Resource::Work,
+            ),
+            (
+                Budget {
+                    scratch_bytes: usage.peak_scratch_bytes - 1,
+                    ..Budget::default()
+                },
+                Resource::ScratchBytes,
+            ),
+            (
+                Budget {
+                    depth: 0,
+                    ..Budget::default()
+                },
+                Resource::Depth,
+            ),
+        ] {
+            let mut g = Governor::new(budget);
+            let reason = StopReason::BudgetExceeded(resource);
+            assert_eq!(Trie::build(spellings, &mut g).unwrap_err(), reason);
+            assert_eq!(g.check(), Err(reason));
+            assert_eq!(g.scratch_meter().live(), 0);
+        }
+        let token = CancellationToken::new();
+        token.cancel();
+        let mut g = Governor::with_cancellation(Budget::default(), token);
+        assert_eq!(
+            Trie::build(spellings, &mut g).unwrap_err(),
+            StopReason::Cancelled
+        );
+        assert_eq!(g.scratch_meter().live(), 0);
     }
 }

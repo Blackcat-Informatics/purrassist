@@ -614,9 +614,14 @@ impl Grammar {
     /// The same cycle admission precedes layout traversal and caches expanded
     /// reference heights, including finished shared tails. Caller depth and a
     /// native aggregate ceiling of 128 apply before recursive backend use.
-    /// Native pattern/automaton preparation and later matcher, repair-table and
-    /// recognizer-program allocations retain their existing separate contracts;
-    /// complete cold backend governance remains under #36.
+    /// Derived spellings, sparse repair tries, JSON key flags/renames and outer
+    /// repair/delimiter tables use governed fallible owners. Trie construction
+    /// borrows labels, admitting searches and insertion shifts before processing;
+    /// its iterative storage preserves byte lengths beyond 128. Temporary
+    /// delimiter expansions release after the existing dense matcher call.
+    /// Dense matcher construction/storage and dialect-set sharing, recognizer
+    /// programs, call metadata/capture analyses and native pattern/automaton
+    /// preparation retain separate contracts; full cold governance remains #36.
     ///
     /// # Errors
     /// Returns a typed [`GrammarError`] with the source offset for malformed
@@ -733,14 +738,14 @@ pub struct CompiledGrammar {
     pub(crate) id: String,
     pub(crate) digest: Digest,
     pub(crate) literals: crate::contract::ScratchVec<Literal>,
-    pub(crate) literal_tables: Vec<LiteralTables>,
+    pub(crate) literal_tables: crate::contract::ScratchVec<LiteralTables>,
     pub(crate) closers: crate::contract::ScratchVec<CloserClass>,
     pub(crate) confusables: crate::contract::ScratchVec<(
         crate::contract::ScratchVec<u8>,
         crate::contract::ScratchVec<u8>,
     )>,
     pub(crate) classes: crate::contract::ScratchVec<ClassTerminal>,
-    pub(crate) delimiters: Vec<DelimiterSet>,
+    pub(crate) delimiters: crate::contract::ScratchVec<DelimiterSet>,
     pub(crate) productions: crate::contract::ScratchVec<Production>,
     pub(crate) call: ProductionId,
     pub(crate) call_ids: bool,

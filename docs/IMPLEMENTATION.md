@@ -21,10 +21,18 @@ expanded production heights, including finished DAG tails. Caller depth and an
 aggregate native ceiling of 128 refuse excessive reference expansion; cyclic
 layouts return a typed recursive-production error.
 
-Native pattern/automaton preparation and later matcher, repair-table and
-recognizer-program allocations retain their existing separate contracts. Full
-cold backend governance remains #36 acceptance, alongside witness, GBNF,
-CompactSignature, projection, routing, ledgers and graph integration.
+Derived closer, confusable, JSON and stray spellings, sparse repair tries and
+outer repair/delimiter tables now retain fallible scratch owners as well.
+Comparisons, copies, deduplication, trie searches/insertion shifts and JSON key
+classification admit work before processing. Trie construction borrows labelled
+spellings; its flat storage preserves literals longer than 128 bytes. Temporary
+JSON flags/renames and delimiter expansions release on every later refusal.
+
+Dense matcher construction/storage and dialect-set sharing, recognizer programs,
+call metadata/capture analyses and native pattern parsing/automaton preparation
+retain their separate contracts. Full cold backend governance remains #36
+acceptance, alongside witness, GBNF, CompactSignature, projection, routing,
+ledgers and graph integration.
 
 Status: merged to `main` (PR #2, `699d9ff`); tool-call recovery (#3, #8) and
 `purrassist-derive` (#15) merged since; published as `rust-v0.1.0`. Executable

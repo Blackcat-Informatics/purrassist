@@ -1071,7 +1071,15 @@ native aggregate ceiling of 128. Cyclic layouts return typed refusal instead
 of an unbounded reference walk. Existing recognition/canonical/witness callers
 use these same retained expressions.
 
-Native pattern/automaton preparation and later matcher, repair-table and
-recognizer-program allocations retain separate contracts. Full cold backend
-governance, witness, GBNF, CompactSignature, projection, routing, ledgers and
-graph integration remain #36 acceptance.
+Derived closer/confusable/JSON/stray spellings, sparse repair tries and outer
+repair/delimiter tables now have governed fallible ownership. Scans, comparisons,
+copies, deduplication, trie search/insertion shifts and JSON key-use metadata
+admit work before processing. Trie labels borrow spelling bytes; flat iterative
+storage preserves byte lengths above 128. Temporary JSON flags/counts/renames
+and expanded delimiter bytes release on refusal.
+
+Dense matcher construction/storage and dialect-set sharing, recognizer programs,
+call metadata/capture analyses and native pattern parsing/automaton preparation
+retain separate contracts. Full cold backend governance, witness, GBNF,
+CompactSignature, projection, routing, ledgers and graph integration remain #36
+acceptance.
