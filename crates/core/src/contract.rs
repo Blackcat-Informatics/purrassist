@@ -1218,6 +1218,8 @@ impl Governor {
     }
 
     /// Preserve a first resource/cancellation refusal for an internal hard bound.
+    #[cold]
+    #[inline(never)]
     pub(crate) fn stop_resource(&mut self, resource: Resource) -> StopReason {
         let reason = self
             .check()
