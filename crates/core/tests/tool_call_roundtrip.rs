@@ -76,8 +76,9 @@ fn set(dialects: &[DialectId]) -> DialectSet {
 }
 
 fn recover_in(tools: &ToolSet, output: &[u8], dialect: &DialectId) -> ToolCalls {
-    let request = ToolRecoveryRequest::default().dialects(set(core::slice::from_ref(dialect)));
-    value(tools.recover(output, &request).outcome)
+    let dialects = set(core::slice::from_ref(dialect));
+    let request = ToolRecoveryRequest::default();
+    value(tools.recover(output, &request, &dialects).outcome)
 }
 
 fn value(outcome: Outcome<ToolCalls>) -> ToolCalls {
@@ -331,7 +332,15 @@ fn openai_shape_exact() {
     }
     // Ids match the recovery that used the same policy.
     let request = ToolRecoveryRequest::default().ids(prefix);
-    let recovered = value(tools.recover(PAYMENTS.as_bytes(), &request).outcome);
+    let recovered = value(
+        tools
+            .recover(
+                PAYMENTS.as_bytes(),
+                &request,
+                purrassist_core::tool_call::DialectSet::built_in(),
+            )
+            .outcome,
+    );
     let ids: Vec<&str> = recovered
         .calls
         .iter()
@@ -363,10 +372,13 @@ fn finish_reason_mapping() {
     }
     let tools = payment_tools();
     let finish = |output: &str, stop: GenerationStop| {
-        let request = ToolRecoveryRequest::default()
-            .stop(stop)
-            .dialects(set(&[DialectId::Hermes]));
-        let calls = value(tools.recover(output.as_bytes(), &request).outcome);
+        let dialects = set(&[DialectId::Hermes]);
+        let request = ToolRecoveryRequest::default().stop(stop);
+        let calls = value(
+            tools
+                .recover(output.as_bytes(), &request, &dialects)
+                .outcome,
+        );
         (calls.finish, calls.openai_finish_reason())
     };
     let call = r#"<tool_call>{"name": "pay", "arguments": {"amount": 1}}</tool_call>"#;
@@ -897,8 +909,9 @@ const MIXED: &str = "<tool_call>{\"name\": \"pay\", \"arguments\": {\"amount\": 
 #[test]
 fn emit_option_end_to_end() {
     let tools = payment_tools();
-    let hermes = || ToolRecoveryRequest::default().dialects(set(&[DialectId::Hermes]));
-    let plain = tools.recover(MIXED.as_bytes(), &hermes());
+    let dialects = set(&[DialectId::Hermes]);
+    let hermes = ToolRecoveryRequest::default;
+    let plain = tools.recover(MIXED.as_bytes(), &hermes(), &dialects);
     assert!(
         plain
             .to_node()
@@ -914,7 +927,7 @@ fn emit_option_end_to_end() {
     ] {
         let request = hermes().emit(target);
         let mut governor = Governor::new(Budget::default());
-        let result = tools.recover_governed(MIXED.as_bytes(), &request, &mut governor);
+        let result = tools.recover_governed(MIXED.as_bytes(), &request, &dialects, &mut governor);
         let calls = value(result.outcome);
         let emission = calls.emitted.clone().expect("emitted");
         let skipped = emission.skipped();
@@ -965,7 +978,7 @@ fn emit_option_end_to_end() {
         assert_eq!(wire.to_json(), plain.to_node().to_json());
         // Printing is charged to the recovery's governor.
         let mut quiet = Governor::new(Budget::default());
-        let _ = tools.recover_governed(MIXED.as_bytes(), &hermes(), &mut quiet);
+        let _ = tools.recover_governed(MIXED.as_bytes(), &hermes(), &dialects, &mut quiet);
         assert!(governor.usage().work > quiet.usage().work);
     }
 }
@@ -977,9 +990,8 @@ fn emission_never_emits_unresolved_silently() {
         tools
             .recover(
                 MIXED.as_bytes(),
-                &ToolRecoveryRequest::default()
-                    .dialects(set(&[DialectId::Hermes]))
-                    .ids(IdPolicy::Source),
+                &ToolRecoveryRequest::default().ids(IdPolicy::Source),
+                &set(&[DialectId::Hermes]),
             )
             .outcome,
     );
@@ -1054,10 +1066,10 @@ fn mutating_guess_never_emitted() {
             Budget::default(),
         )
         .expect("tools");
-        let base = ToolRecoveryRequest::default()
-            .dialects(set(&[DialectId::Hermes]))
-            .policy(PolicySelection::All(RepairPolicy::Tolerant));
-        let Outcome::BestGuess(calls) = tools.recover(output, &base).outcome else {
+        let dialects = set(&[DialectId::Hermes]);
+        let base =
+            ToolRecoveryRequest::default().policy(PolicySelection::All(RepairPolicy::Tolerant));
+        let Outcome::BestGuess(calls) = tools.recover(output, &base, &dialects).outcome else {
             panic!("a near-miss name is a best guess")
         };
         let call = &calls.calls[0];
@@ -1098,7 +1110,7 @@ fn mutating_guess_never_emitted() {
             EmitTarget::Dialect(DialectId::Qwen3CoderXml),
         ] {
             let request = base.clone().emit(target);
-            let recovered = value(tools.recover(output, &request).outcome);
+            let recovered = value(tools.recover(output, &request, &dialects).outcome);
             let emission = recovered.emitted.expect("emitted");
             let (printed, skipped) = match &emission {
                 Emission::OpenAiToolCalls(emitted) => (&emitted.calls, &emitted.skipped),

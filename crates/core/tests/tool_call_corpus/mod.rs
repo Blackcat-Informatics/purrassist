@@ -597,7 +597,7 @@ fn object(members: Vec<(&str, Node)>) -> Node {
 /// record's dialect allow-list, policy and stop, every other setting the
 /// default.
 #[must_use]
-pub fn request(record: &Node) -> ToolRecoveryRequest {
+pub fn request(record: &Node) -> (ToolRecoveryRequest, DialectSet) {
     let field = |key: &str| {
         record
             .get(key)
@@ -611,10 +611,10 @@ pub fn request(record: &Node) -> ToolRecoveryRequest {
         .collect();
     let set = DialectSet::new(dialects, &mut Governor::new(Budget::default()))
         .expect("a valid dialect allow-list");
-    ToolRecoveryRequest::new(Effort::Standard)
-        .dialects(set)
+    let request = ToolRecoveryRequest::new(Effort::Standard)
         .policy(Policy::parse(field("policy").as_str().expect("policy")).selection())
-        .stop(Ending::generation_stop(field("stop")))
+        .stop(Ending::generation_stop(field("stop")));
+    (request, set)
 }
 
 /// The JSON Lines text of `cases`: one compact record per line, ASCII

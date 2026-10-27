@@ -56,10 +56,8 @@ fn recover(input: &str, effects: Effects) -> ToolCalls {
         &mut Governor::new(Budget::default()),
     )
     .expect("dialect set");
-    let result = tools(effects).recover(
-        input.as_bytes(),
-        &ToolRecoveryRequest::default().dialects(dialects),
-    );
+    let result =
+        tools(effects).recover(input.as_bytes(), &ToolRecoveryRequest::default(), &dialects);
     match result.outcome {
         Outcome::Resolved(calls) | Outcome::BestGuess(calls) => calls,
         other => panic!("{input:?}: expected one reading, got {other:?}"),
@@ -313,8 +311,11 @@ fn json_content_without_call_evidence_is_content() {
     ] {
         for effects in PROFILES {
             for stop in [GenerationStop::Stop, GenerationStop::Length] {
-                let result = tools(effects)
-                    .recover(input.as_bytes(), &ToolRecoveryRequest::default().stop(stop));
+                let result = tools(effects).recover(
+                    input.as_bytes(),
+                    &ToolRecoveryRequest::default().stop(stop),
+                    purrassist_core::tool_call::DialectSet::built_in(),
+                );
                 let Outcome::Resolved(calls) = result.outcome else {
                     panic!("{input:?}: {:?}", result.outcome)
                 };

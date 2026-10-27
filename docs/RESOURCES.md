@@ -121,10 +121,10 @@ storage admits one caller depth frame; byte-prefix length has no recursive
 128-byte ceiling. Temporary JSON key-use flags/counts/copies/renames and expanded
 delimiter spellings remain governed until use completes and release on refusal.
 
-Dense matcher construction/storage and dialect-set sharing, recognizer programs,
+Dense matcher construction/storage now retain exact governed owners. Recognizer programs,
 call metadata/capture analyses and native pattern parsing/automaton preparation
-retain their separate existing contracts. Delimiter expansion feeds the same
-dense matcher without claiming its internal buffers are governed. Complete cold
+retain their separate existing contracts. Other dialect-set metadata preparation
+also remains separate. Delimiter expansion feeds the same governed dense matcher. Complete cold
 compiler governance and the remaining #36 capabilities are still required.
 
 ## Type-enforced scratch accounting
@@ -692,7 +692,7 @@ anchor (at most 29.5 units per byte, for `to=functions.` on every line),
 linear within 1.05x and under 32 units per byte. A turn that is a single
 call has no content to scan.
 
-Each dialect `d` of the request's allow-list keeps at most `B_d`
+Each dialect `d` of the explicit prepared allow-list keeps at most `B_d`
 configurations live per input byte, where `B_d` is
 `CompiledGrammar::configuration_bound()` (one per program location plus one
 per byte position of each literal spelling: canonical, closer variant,
@@ -1469,3 +1469,27 @@ separate. This operation accepts no token ceiling, reports no token count and
 manufactures no graph projection or ledger. Qualified tokenizer evidence, exact
 external token accounting, selection, routing and complete lane ledgers remain
 under #36 and #47. Tool-result `OutputByteLimit` remains its separate contract.
+
+## Governed dense delimiter and marker matching
+
+The existing dense byte `Matcher` owns transitions, depths and matches in
+fallible scratch vectors. Construction borrows admitted literals, reuses the
+fallible sparse trie as its sole goto/prefix authority, checks literal/state
+IDs and row sizes, and admits zero initialization, parent/child scans, binary
+searches, fallback processing and queue growth before work. Temporary trie,
+failure links and breadth-first queue release on every exit. A final check
+precedes the complete matcher; its final buffers release with their grammar or
+prepared dialect set. Byte-prefix length is iterative and has no 128-byte
+recursion ceiling. Duplicate labels, earliest-ending matches and longest-match
+priority keep their original meaning.
+
+`DialectSet` and `Matcher` no longer deep-clone. The cached built-in set returns
+a static borrow; custom sets remain owned by the caller. `ToolRecoveryRequest`
+contains owned cloneable policy/budget settings, while `ToolSet::recover` and
+`recover_governed` take the prepared set explicitly. Sizing can borrow the same
+set through `sized_for`. The host retains custom preparation through recovery
+under its original shared governor; CLI/MCP selectors and outcome/provenance
+contracts are unchanged. Other existing dialect-set metadata preparation,
+program/closure/reachability/insertion tables, call metadata/capture analyses
+and native pattern preparation remain outside this completed dense phase and
+under parent #36.

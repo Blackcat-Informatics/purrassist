@@ -27,15 +27,16 @@ fn compile(definitions: impl IntoIterator<Item = Definition>) -> ToolSet {
     ToolSet::compile(definitions, Budget::default()).expect("tools compile")
 }
 
-fn request(dialect: DialectId) -> ToolRecoveryRequest {
+fn request(dialect: DialectId) -> (ToolRecoveryRequest, DialectSet) {
     let set = DialectSet::new([dialect], &mut Governor::new(Budget::default())).expect("dialects");
-    ToolRecoveryRequest::default().dialects(set)
+    (ToolRecoveryRequest::default(), set)
 }
 
 /// The arguments of the single call `markup` carries, which must have
 /// resolved without a guess.
 fn recovered(tools: &ToolSet, dialect: DialectId, markup: &str) -> Node {
-    let result = tools.recover(markup.as_bytes(), &request(dialect));
+    let (request, dialects) = request(dialect);
+    let result = tools.recover(markup.as_bytes(), &request, &dialects);
     let Outcome::Resolved(calls) = &result.outcome else {
         panic!("not resolved: {:#?}", result.outcome);
     };
@@ -1449,10 +1450,8 @@ mod nested_default {
 /// Recover `NESTED_TURN` for the tool `name` with the real pipeline.
 fn recover_nested(definition: Definition, name: &str) -> purrassist_core::AssistResult<ToolCalls> {
     let tools = compile([definition]);
-    tools.recover(
-        hermes(name, NESTED_TURN).as_bytes(),
-        &request(DialectId::Hermes),
-    )
+    let (request, dialects) = request(DialectId::Hermes);
+    tools.recover(hermes(name, NESTED_TURN).as_bytes(), &request, &dialects)
 }
 
 /// The recorded `drop-unknown` losses of the single call, as

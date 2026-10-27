@@ -54,7 +54,7 @@
 //! // Recover a model turn against it, and read the arguments as the struct.
 //! let tools = ToolSet::compile([Search::tool_definition()], Budget::default()).unwrap();
 //! let turn = "<tool_call>\n{\"name\": \"search\", \"arguments\": {\"query\": \"cats\"}}\n</tool_call>";
-//! let result = tools.recover(turn.as_bytes(), &ToolRecoveryRequest::default());
+//! let result = tools.recover(turn.as_bytes(), &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in());
 //! let Outcome::Resolved(calls) = &result.outcome else { panic!("{:?}", result.outcome) };
 //! assert_eq!(
 //!     Search::from_node(&calls.calls[0].arguments),

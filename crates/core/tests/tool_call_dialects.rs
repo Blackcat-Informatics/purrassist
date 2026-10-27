@@ -1155,8 +1155,12 @@ fn every_canonical_fixture_in_one_mixed_turn() {
         .expect("bare-json single call")
         .tools;
     let request = ToolRecoveryRequest::sized(Effort::Standard, markup.as_bytes());
-    assert_eq!(request.dialects.dialects(), DialectId::BUILT_IN);
-    let result = tools.recover(markup.as_bytes(), &request);
+    assert_eq!(DialectSet::built_in().dialects(), DialectId::BUILT_IN);
+    let result = tools.recover(
+        markup.as_bytes(),
+        &request,
+        purrassist_core::tool_call::DialectSet::built_in(),
+    );
     let Outcome::Resolved(calls) = &result.outcome else {
         panic!("{:?}", result.outcome)
     };

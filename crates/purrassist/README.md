@@ -46,7 +46,7 @@ use purrassist::tool_call::{ToolRecoveryRequest, ToolSet};
 let declarations = r#"[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}]"#;
 let tools = ToolSet::from_openai(declarations, purrassist::Budget::default()).unwrap();
 let turn = br#"[TOOL_CALLS] [{"name": "get_weather", "arguments": {"city": "Oslo"}}]"#;
-let result = tools.recover(turn, &ToolRecoveryRequest::default());
+let result = tools.recover(turn, &ToolRecoveryRequest::default(), purrassist::tool_call::DialectSet::built_in());
 let Outcome::Resolved(calls) = result.outcome else { panic!("unexpected outcome") };
 assert_eq!(calls.calls[0].tool.as_deref(), Some("get_weather"));
 assert_eq!(calls.calls[0].dialect.id(), "mistral-v3.v1");

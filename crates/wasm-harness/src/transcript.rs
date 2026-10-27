@@ -101,7 +101,11 @@ fn tool_call_transcript() -> Node {
         b"<tool_call>\n{\"name\": \"read_fiel\", \"arguments\": {\"path\": \"a.rs\", \"limit\": 5}}\n</tool_call>\n\
           <tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n</parameter>\n</parameter>\n</function>\n</tool_call>",
     );
-    let result = tools.recover(&output, &ToolRecoveryRequest::default());
+    let result = tools.recover(
+        &output,
+        &ToolRecoveryRequest::default(),
+        purrassist_core::tool_call::DialectSet::built_in(),
+    );
     assert!(matches!(result.outcome, Outcome::BestGuess(_)));
     let mut dialects = Vec::new();
     for case in DIALECT_CASES {
@@ -120,10 +124,8 @@ fn tool_call_transcript() -> Node {
                 case.repair_digest,
             ),
         ] {
-            let request = ToolRecoveryRequest::default()
-                .dialects(set.clone())
-                .emit(EmitTarget::OpenAiToolCalls);
-            let result = tools.recover(turn.as_bytes(), &request);
+            let request = ToolRecoveryRequest::default().emit(EmitTarget::OpenAiToolCalls);
+            let result = tools.recover(turn.as_bytes(), &request, &set);
             let (actual, calls) = match &result.outcome {
                 Outcome::Resolved(calls) => ("resolved", calls),
                 Outcome::BestGuess(calls) => ("best_guess", calls),

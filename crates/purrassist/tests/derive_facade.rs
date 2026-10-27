@@ -62,10 +62,10 @@ fn compile_recover_and_convert_through_the_facade() {
     let tools = ToolSet::compile([ReadFile::tool_definition()], Budget::default()).unwrap();
     let dialects =
         DialectSet::new([DialectId::Hermes], &mut Governor::new(Budget::default())).unwrap();
-    let request = ToolRecoveryRequest::default().dialects(dialects);
+    let request = ToolRecoveryRequest::default();
     let turn = "<tool_call>\n{\"name\": \"read_file\", \"arguments\": \
                 {\"path\": \"a.txt\", \"unit\": \"em\", \"tags\": [\"x\"]}}\n</tool_call>";
-    let result = tools.recover(turn.as_bytes(), &request);
+    let result = tools.recover(turn.as_bytes(), &request, &dialects);
     let Outcome::Resolved(calls) = &result.outcome else {
         panic!("not resolved: {:#?}", result.outcome);
     };

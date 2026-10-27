@@ -200,8 +200,8 @@ impl ScratchCharge for LiteralTables {
     const CHARGE: usize = 400;
 }
 impl ScratchCharge for DelimiterSet {
-    // Includes the existing dense matcher's handle, whose buffers remain separate.
-    const CHARGE: usize = 120;
+    // Declared bytes owner plus the dense matcher's three exact buffer owners.
+    const CHARGE: usize = 40 + Matcher::CHARGE;
 }
 const _: () = {
     assert!(core::mem::size_of::<LiteralTables>() <= LiteralTables::CHARGE);
@@ -1770,8 +1770,7 @@ fn xml_params(expr: &Expr, depth: u64, governor: &mut Governor) -> Result<bool, 
     })
 }
 
-/// Declared delimiters and governed expansion, around the separately prepared
-/// dense matcher. Dense matcher buffers retain their existing accounting.
+/// Declared delimiters and governed expansion feed the same governed dense matcher.
 fn delimiter_sets(
     mut sets: ScratchVec<ByteList>,
     confusables: &[(Bytes, Bytes)],

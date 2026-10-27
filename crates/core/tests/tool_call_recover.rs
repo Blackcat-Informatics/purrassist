@@ -36,8 +36,8 @@ fn set(dialects: &[DialectId]) -> DialectSet {
     .expect("dialect set")
 }
 
-fn request(dialect: DialectId) -> ToolRecoveryRequest {
-    ToolRecoveryRequest::default().dialects(set(&[dialect]))
+fn request(dialect: DialectId) -> (ToolRecoveryRequest, DialectSet) {
+    (ToolRecoveryRequest::default(), set(&[dialect]))
 }
 
 /// The single value of a `Resolved` or `BestGuess` outcome.
@@ -103,13 +103,17 @@ fn assert_anchor_fixtures_resolve(effort: Effort, dialects: &[DialectId], all: b
             else {
                 panic!("{file}: expected_calls");
             };
+            let pinned;
+            let dialects = if all {
+                DialectSet::built_in()
+            } else {
+                pinned = set(core::slice::from_ref(&dialect));
+                &pinned
+            };
             let result = tools.recover(
                 markup.as_bytes(),
-                &ToolRecoveryRequest::new(effort).dialects(if all {
-                    DialectSet::built_in()
-                } else {
-                    set(core::slice::from_ref(&dialect))
-                }),
+                &ToolRecoveryRequest::new(effort),
+                dialects,
             );
             assert_eq!(result.receipt.stopped, StopReason::Completed, "{file}");
             for evidence in &result.receipt.evidence {
@@ -149,7 +153,11 @@ fn assert_anchor_fixtures_resolve(effort: Effort, dialects: &[DialectId], all: b
 fn operation_id_is_tool_call_recover_v1() {
     let tools = compile([ToolDefinition::new("ls").effects(Effects::ReadOnly)]);
     let output = hermes("ls", "{}");
-    let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+    let result = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
     assert_eq!(result.receipt.operation, "tool_call.recover.v1");
     assert_eq!(
         result.receipt.operation,
@@ -180,9 +188,10 @@ fn length_vs_stop_truncation() {
     let tools = read_tool();
     let complete = hermes("read", r#"{"path": "a.rs"}"#);
     let partial = "<tool_call>\n{\"name\": \"read\", \"arguments\": {\"path\": \"b";
-    let length = request(DialectId::Hermes).stop(GenerationStop::Length);
+    let dialects = set(&[DialectId::Hermes]);
+    let length = ToolRecoveryRequest::default().stop(GenerationStop::Length);
     // A length stop with only a cut-off call.
-    let result = tools.recover(partial.as_bytes(), &length);
+    let result = tools.recover(partial.as_bytes(), &length, &dialects);
     let calls = value(&result);
     assert_eq!(calls.finish, Finish::Truncated);
     assert_eq!(calls.openai_finish_reason(), "length");
@@ -198,19 +207,23 @@ fn length_vs_stop_truncation() {
     assert_eq!(calls.usable().len(), 0);
     // A length stop after a complete call.
     let both = format!("{complete}\n{partial}");
-    let result = tools.recover(both.as_bytes(), &length);
+    let result = tools.recover(both.as_bytes(), &length, &dialects);
     let calls = value(&result);
     assert_eq!(calls.finish, Finish::TruncatedWithCalls);
     assert_eq!(calls.usable().len(), 1);
     assert_eq!(calls.calls.len(), 2);
     // A length stop with no call at all is still not a clean finish.
-    let result = tools.recover(b"Hello", &length);
+    let result = tools.recover(b"Hello", &length, &dialects);
     assert_eq!(value(&result).finish, Finish::Truncated);
     // The same text under a natural stop is malformed, never truncated.
     // `finish_reason` names the emitted calls: nothing for the cut call
     // alone, the complete call beside the rejected attempt.
     for (text, reason) in [(partial.to_owned(), "stop"), (both, "tool_calls")] {
-        let result = tools.recover(text.as_bytes(), &request(DialectId::Hermes));
+        let result = tools.recover(
+            text.as_bytes(),
+            &ToolRecoveryRequest::default(),
+            &set(&[DialectId::Hermes]),
+        );
         let calls = value(&result);
         assert_eq!(calls.finish, Finish::Unresolved, "{text}");
         assert_eq!(calls.openai_finish_reason(), reason, "{text}");
@@ -252,7 +265,9 @@ fn stop_sequence_consumed_closer() {
     let text = "<tool_call>\n{\"name\": \"read\", \"arguments\": {\"path\": \"a.rs\"}}\n";
     let result = tools.recover(
         text.as_bytes(),
-        &request(DialectId::Hermes).stop(GenerationStop::StopSequence(b"</tool_call>".to_vec())),
+        &ToolRecoveryRequest::default()
+            .stop(GenerationStop::StopSequence(b"</tool_call>".to_vec())),
+        &set(&[DialectId::Hermes]),
     );
     let Outcome::Resolved(calls) = &result.outcome else {
         panic!("{:#?}", result.outcome)
@@ -283,7 +298,8 @@ fn unknown_stop_is_conservative() {
     ] {
         let result = tools.recover(
             partial.as_bytes(),
-            &request(DialectId::Hermes).stop(stop.clone()),
+            &ToolRecoveryRequest::default().stop(stop.clone()),
+            &set(&[DialectId::Hermes]),
         );
         let calls = value(&result);
         assert_eq!(calls.finish, Finish::Unresolved, "{stop:?}");
@@ -303,6 +319,7 @@ fn unknown_stop_is_conservative() {
 /// Every resource a recovery charges, with the budget that exhausts it.
 #[test]
 fn exhaustion_is_explicit_every_resource() {
+    let built_in = DialectSet::built_in();
     let tools = compile([ToolDefinition::new("read_file")
         .effects(Effects::ReadOnly)
         .param("path", Param::string().required())]);
@@ -310,7 +327,7 @@ fn exhaustion_is_explicit_every_resource() {
     // evidence are all charged.
     let output = format!("{}</tool_call>", hermes("read_fiel", r#"{"path": "a.rs"}"#));
     let output = output.as_bytes();
-    let baseline = tools.recover(output, &ToolRecoveryRequest::default());
+    let baseline = tools.recover(output, &ToolRecoveryRequest::default(), built_in);
     assert!(matches!(baseline.outcome, Outcome::BestGuess(_)));
     let usage = baseline.receipt.usage;
     assert!(usage.work > 0 && usage.candidates > 0 && usage.evidence_entries > 0);
@@ -360,7 +377,11 @@ fn exhaustion_is_explicit_every_resource() {
         ),
     ];
     for (resource, budget) in budgets {
-        let result = tools.recover(output, &ToolRecoveryRequest::default().budget(budget));
+        let result = tools.recover(
+            output,
+            &ToolRecoveryRequest::default().budget(budget),
+            built_in,
+        );
         assert_eq!(result.outcome, Outcome::Unresolved, "{resource:?}");
         assert_eq!(
             result.receipt.stopped,
@@ -382,6 +403,11 @@ fn exhaustion_is_explicit_every_resource() {
             Some("budget_exceeded")
         );
     }
+    assert_source_retention_limits(&tools, output, built_in);
+}
+
+fn assert_source_retention_limits(tools: &ToolSet, output: &[u8], built_in: &DialectSet) {
+    let defaults = Budget::default();
     // Retention runs first: an input over the byte limit is identified by
     // digest but not retained.
     let result = tools.recover(
@@ -390,6 +416,7 @@ fn exhaustion_is_explicit_every_resource() {
             input_bytes: 1,
             ..defaults
         }),
+        built_in,
     );
     assert_eq!(result.receipt.sources.len(), 0);
     // A budget that only retention fits is reported as the search's
@@ -401,6 +428,7 @@ fn exhaustion_is_explicit_every_resource() {
             work: retained,
             ..defaults
         }),
+        built_in,
     );
     assert_eq!(
         result.receipt.stopped,
@@ -421,6 +449,7 @@ fn exhaustion_is_explicit_every_resource() {
 #[test]
 fn nested_item_depth_is_a_stack_guard() {
     use purrassist_core::grammar::codec::{Codec, CodecContext, CodecEnd, XmlParamsCodec};
+    let built_in = DialectSet::built_in();
     // A recursive `$ref` schema: its compile cost does not grow with the
     // output's nesting.
     let tools = ToolSet::from_openai(
@@ -495,7 +524,7 @@ fn nested_item_depth_is_a_stack_guard() {
             ..Budget::default()
         });
         if fits > 0 {
-            let result = tools.recover(turn(fits).as_bytes(), &request);
+            let result = tools.recover(turn(fits).as_bytes(), &request, built_in);
             let Outcome::Resolved(calls) = &result.outcome else {
                 panic!("depth {d}: {fits} nested items: {:#?}", result.outcome);
             };
@@ -506,7 +535,7 @@ fn nested_item_depth_is_a_stack_guard() {
             );
             assert_eq!(result.receipt.stopped, StopReason::Completed, "depth {d}");
         }
-        let result = tools.recover(turn(fits + 1).as_bytes(), &request);
+        let result = tools.recover(turn(fits + 1).as_bytes(), &request, built_in);
         assert_eq!(result.outcome, Outcome::Unresolved, "depth {d}");
         assert_eq!(
             result.receipt.stopped,
@@ -539,6 +568,7 @@ fn cancelled_before_recover() {
     let result = tools.recover_governed(
         output.as_bytes(),
         &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
         &mut governor,
     );
     assert_eq!(result.outcome, Outcome::Unresolved);
@@ -563,7 +593,11 @@ fn strict_ambiguity_rejects() {
     // Per-call ambiguity: a repeated parameter has a first and a last reading.
     let tools = read_tool();
     let output = hermes("read", r#"{"path": "a.rs", "path": "b.rs"}"#);
-    let report = tools.recover(output.as_bytes(), &request(DialectId::Hermes));
+    let report = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        &set(&[DialectId::Hermes]),
+    );
     let calls = value(&report);
     assert_eq!(calls.calls[0].outcome, CallOutcome::Ambiguous);
     assert_ne!(calls.calls[0].distinguishing.len(), 0);
@@ -571,7 +605,8 @@ fn strict_ambiguity_rejects() {
     assert_eq!(report.receipt.alternatives.len(), 0);
     let reject = tools.recover(
         output.as_bytes(),
-        &request(DialectId::Hermes).ambiguity(AmbiguityPolicy::Reject),
+        &ToolRecoveryRequest::default().ambiguity(AmbiguityPolicy::Reject),
+        &set(&[DialectId::Hermes]),
     );
     assert_eq!(reject.outcome, Outcome::Unresolved);
     assert_eq!(reject.receipt.stopped, StopReason::NoCandidate);
@@ -596,7 +631,8 @@ fn strict_ambiguity_rejects() {
     // No ambiguity under Reject: the check passes.
     let clean = tools.recover(
         hermes("read", r#"{"path": "a.rs"}"#).as_bytes(),
-        &request(DialectId::Hermes).ambiguity(AmbiguityPolicy::Reject),
+        &ToolRecoveryRequest::default().ambiguity(AmbiguityPolicy::Reject),
+        &set(&[DialectId::Hermes]),
     );
     assert!(matches!(clean.outcome, Outcome::Resolved(_)));
     assert!(
@@ -610,10 +646,7 @@ fn strict_ambiguity_rejects() {
     let tools = compile([ToolDefinition::new("f").effects(Effects::ReadOnly)]);
     let both = set(&[custom(MINI), custom(OVERLAP)]);
     let output = b"say <tool><call=f></call></tool> done";
-    let report = tools.recover(
-        output,
-        &ToolRecoveryRequest::default().dialects(both.clone()),
-    );
+    let report = tools.recover(output, &ToolRecoveryRequest::default(), &both);
     let Outcome::Ambiguous(values) = &report.outcome else {
         panic!("{:#?}", report.outcome)
     };
@@ -632,9 +665,8 @@ fn strict_ambiguity_rejects() {
     }
     let reject = tools.recover(
         output,
-        &ToolRecoveryRequest::default()
-            .dialects(both.clone())
-            .ambiguity(AmbiguityPolicy::Reject),
+        &ToolRecoveryRequest::default().ambiguity(AmbiguityPolicy::Reject),
+        &both,
     );
     assert_eq!(reject.outcome, Outcome::Unresolved);
     assert_eq!(reject.receipt.stopped, StopReason::NoCandidate);
@@ -644,10 +676,7 @@ fn strict_ambiguity_rejects() {
     let many: Vec<u8> = (0..20)
         .flat_map(|index| format!("call {index} <tool><call=f></call></tool>\n").into_bytes())
         .collect();
-    let result = tools.recover(
-        &many,
-        &ToolRecoveryRequest::new(Effort::Maximum).dialects(both),
-    );
+    let result = tools.recover(&many, &ToolRecoveryRequest::new(Effort::Maximum), &both);
     assert_eq!(result.outcome, Outcome::Unresolved);
     assert_eq!(
         result.receipt.stopped,
@@ -669,7 +698,11 @@ fn per_call_repairs_itemized() {
         "{}\n<tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n</parameter>\n</parameter>\n</function>\n</tool_call>",
         hermes("read_fiel", r#"{"path": "a.rs"}"#)
     );
-    let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+    let result = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
     let Outcome::BestGuess(calls) = &result.outcome else {
         panic!("{:#?}", result.outcome)
     };
@@ -724,7 +757,11 @@ fn single_policy_override_applies_to_all() {
         hermes("read_fiel", "{}"),
         hermes("delete_recrod", "{}")
     );
-    let per_tool = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+    let per_tool = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
     let calls = value(&per_tool);
     assert_eq!(calls.calls[0].outcome, CallOutcome::BestGuess);
     assert!(matches!(
@@ -734,6 +771,7 @@ fn single_policy_override_applies_to_all() {
     let tolerant = tools.recover(
         output.as_bytes(),
         &ToolRecoveryRequest::default().policy(PolicySelection::All(RepairPolicy::Tolerant)),
+        DialectSet::built_in(),
     );
     for call in &value(&tolerant).calls {
         assert_eq!(call.outcome, CallOutcome::BestGuess, "{call:#?}");
@@ -742,6 +780,7 @@ fn single_policy_override_applies_to_all() {
     let structural = tools.recover(
         output.as_bytes(),
         &ToolRecoveryRequest::default().policy(PolicySelection::All(RepairPolicy::Structural)),
+        DialectSet::built_in(),
     );
     for call in &value(&structural).calls {
         assert!(
@@ -801,7 +840,8 @@ fn deterministic_pinned_digest() {
             .collect();
         let result = tools.recover(
             output.as_bytes(),
-            &ToolRecoveryRequest::default().dialects(set(&dialects)),
+            &ToolRecoveryRequest::default(),
+            &set(&dialects),
         );
         assert!(matches!(result.outcome, Outcome::BestGuess(_)));
         digests.push(wire_digest(&result));
@@ -818,12 +858,11 @@ fn deterministic_pinned_digest() {
     let all = definitions();
     let prefixed = compile(all).recover(
         output.as_bytes(),
-        &ToolRecoveryRequest::default()
-            .dialects(set(&PINNED_DIALECTS))
-            .ids(IdPolicy::Prefix {
-                prefix: "call_".into(),
-                start: 0,
-            }),
+        &ToolRecoveryRequest::default().ids(IdPolicy::Prefix {
+            prefix: "call_".into(),
+            start: 0,
+        }),
+        &set(&PINNED_DIALECTS),
     );
     assert_eq!(wire_digest(&prefixed), PINNED_PREFIX_DIGEST);
     // The Ambiguous wire form is pinned too.
@@ -832,7 +871,8 @@ fn deterministic_pinned_digest() {
     for pair in [[MINI, OVERLAP], [OVERLAP, MINI]] {
         let result = tools.recover(
             b"say <tool><call=f></call></tool> done",
-            &ToolRecoveryRequest::default().dialects(set(&[custom(pair[0]), custom(pair[1])])),
+            &ToolRecoveryRequest::default(),
+            &set(&[custom(pair[0]), custom(pair[1])]),
         );
         ambiguous.push(wire_digest(&result));
     }
@@ -840,12 +880,11 @@ fn deterministic_pinned_digest() {
     assert_eq!(ambiguous[0], PINNED_AMBIGUOUS_DIGEST);
     let prefixed = tools.recover(
         b"say <tool><call=f></call></tool> done",
-        &ToolRecoveryRequest::default()
-            .dialects(set(&[custom(MINI), custom(OVERLAP)]))
-            .ids(IdPolicy::Prefix {
-                prefix: "call_".into(),
-                start: 0,
-            }),
+        &ToolRecoveryRequest::default().ids(IdPolicy::Prefix {
+            prefix: "call_".into(),
+            start: 0,
+        }),
+        &set(&[custom(MINI), custom(OVERLAP)]),
     );
     assert_eq!(wire_digest(&prefixed), PINNED_PREFIX_AMBIGUOUS_DIGEST);
 }
@@ -866,7 +905,11 @@ fn invalid_utf8_is_loss_and_bytes_retained() {
     let at = output.len();
     output.extend_from_slice(hermes("ls", "{}").as_bytes());
     output.extend_from_slice(b"\n\xc3");
-    let result = tools.recover(&output, &ToolRecoveryRequest::default());
+    let result = tools.recover(
+        &output,
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
     let Outcome::BestGuess(calls) = &result.outcome else {
         panic!("{:#?}", result.outcome)
     };
@@ -911,7 +954,7 @@ fn forced_tool_choice_violation_recorded() {
         hermes("list", "{}")
     );
     let forced = ToolRecoveryRequest::default().tool_choice(ToolChoice::Forced("read".into()));
-    let result = tools.recover(output.as_bytes(), &forced);
+    let result = tools.recover(output.as_bytes(), &forced, DialectSet::built_in());
     let calls = value(&result);
     assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
     assert_eq!(
@@ -935,27 +978,32 @@ fn forced_tool_choice_violation_recorded() {
     assert_eq!(validation.diagnostics.len(), 1);
     // No call at all also violates a forced choice; a forced undeclared tool
     // is a request error.
-    let result = tools.recover(b"no calls", &forced);
+    let result = tools.recover(b"no calls", &forced, DialectSet::built_in());
     assert!(!value(&result).tool_choice.passed);
     assert_eq!(value(&result).finish, Finish::Unresolved);
     let result = tools.recover(
         output.as_bytes(),
         &ToolRecoveryRequest::default().tool_choice(ToolChoice::Forced("write".into())),
+        DialectSet::built_in(),
     );
     assert!(
         matches!(result.receipt.stopped, StopReason::InvalidInput(ref detail) if detail.contains("`write`"))
     );
     assert_eq!(result.outcome, Outcome::Unresolved);
     // Satisfied: only the forced tool is called.
-    let result = tools.recover(hermes("read", "{}").as_bytes(), &forced);
+    let result = tools.recover(
+        hermes("read", "{}").as_bytes(),
+        &forced,
+        DialectSet::built_in(),
+    );
     assert!(value(&result).tool_choice.passed);
     assert_eq!(value(&result).finish, Finish::Calls);
     // Required.
     let required = ToolRecoveryRequest::default().tool_choice(ToolChoice::Required);
-    let result = tools.recover(b"no calls", &required);
+    let result = tools.recover(b"no calls", &required, DialectSet::built_in());
     assert!(!value(&result).tool_choice.passed);
     assert_eq!(value(&result).finish, Finish::Unresolved);
-    let result = tools.recover(output.as_bytes(), &required);
+    let result = tools.recover(output.as_bytes(), &required, DialectSet::built_in());
     assert!(value(&result).tool_choice.passed);
     assert_eq!(value(&result).finish, Finish::Calls);
 }
@@ -965,7 +1013,7 @@ fn tool_choice_none_with_calls() {
     let tools = compile([ToolDefinition::new("list").effects(Effects::ReadOnly)]);
     let output = format!("Text.\n{}", hermes("list", "{}"));
     let none = ToolRecoveryRequest::default().tool_choice(ToolChoice::None);
-    let result = tools.recover(output.as_bytes(), &none);
+    let result = tools.recover(output.as_bytes(), &none, DialectSet::built_in());
     let calls = value(&result);
     assert_eq!(calls.calls.len(), 1);
     assert_eq!(calls.calls[0].tool.as_deref(), Some("list"));
@@ -985,7 +1033,7 @@ fn tool_choice_none_with_calls() {
             .iter()
             .any(|validation| validation.constraint == "tool_choice=none" && !validation.passed)
     );
-    let result = tools.recover(b"Only text.", &none);
+    let result = tools.recover(b"Only text.", &none, DialectSet::built_in());
     assert!(value(&result).tool_choice.passed);
     assert_eq!(value(&result).finish, Finish::ContentOnly);
 }
@@ -1018,7 +1066,7 @@ fn ids_never_collide_each_policy() {
             prefix: "call_".into(),
             start,
         });
-        let result = tools.recover(two.as_bytes(), &request);
+        let result = tools.recover(two.as_bytes(), &request, DialectSet::built_in());
         let calls = value(&result);
         for call in &calls.calls {
             assert!(seen.insert(call.id.clone()), "{} repeats", call.id);
@@ -1032,6 +1080,7 @@ fn ids_never_collide_each_policy() {
     let result = tools.recover(
         two.as_bytes(),
         &ToolRecoveryRequest::default().ids(IdPolicy::Generator(Arc::new(Numbered))),
+        DialectSet::built_in(),
     );
     let ids: Vec<&str> = value(&result)
         .calls
@@ -1042,6 +1091,7 @@ fn ids_never_collide_each_policy() {
     let result = tools.recover(
         two.as_bytes(),
         &ToolRecoveryRequest::default().ids(IdPolicy::Generator(Arc::new(Constant))),
+        DialectSet::built_in(),
     );
     assert_eq!(result.outcome, Outcome::Unresolved);
     assert!(
@@ -1068,7 +1118,8 @@ fn ids_never_collide_each_policy() {
     );
     let result = tools.recover(
         output.as_bytes(),
-        &request(DialectId::OpenAiToolCalls).ids(IdPolicy::Source),
+        &ToolRecoveryRequest::default().ids(IdPolicy::Source),
+        &set(&[DialectId::OpenAiToolCalls]),
     );
     let calls = value(&result);
     let ids: Vec<&str> = calls.calls.iter().map(|call| call.id.as_str()).collect();
@@ -1136,7 +1187,11 @@ fn default_ids_are_disjoint_across_turns() {
     );
     let mut seen = std::collections::BTreeSet::new();
     for output in [&first, &second] {
-        let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+        let result = tools.recover(
+            output.as_bytes(),
+            &ToolRecoveryRequest::default(),
+            DialectSet::built_in(),
+        );
         let calls = value(&result);
         let tag = turn_id_prefix(&calls.turn);
         assert_eq!(calls.turn, result.receipt.source);
@@ -1158,8 +1213,16 @@ fn default_ids_are_disjoint_across_turns() {
 fn default_ids_are_deterministic_per_turn() {
     let tools = compile([ToolDefinition::new("list").effects(Effects::ReadOnly)]);
     let output = format!("Listing.\n{}", hermes("list", "{}"));
-    let once = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
-    let twice = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+    let once = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
+    let twice = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
     assert_eq!(ids(&once), ids(&twice));
     assert_eq!(once.to_node().to_json(), twice.to_node().to_json());
     // The tag is the output digest's leading 12 hex digits.
@@ -1190,6 +1253,7 @@ fn explicit_prefix_is_unchanged() {
     let result = tools.recover(
         hermes_two.as_bytes(),
         &ToolRecoveryRequest::default().ids(prefix),
+        DialectSet::built_in(),
     );
     assert_eq!(ids(&result), ["call_0", "call_1"]);
     assert_eq!(value(&result).next_id_start, 2);
@@ -1198,10 +1262,11 @@ fn explicit_prefix_is_unchanged() {
     let openai = r#"[{"id": "m1", "type": "function", "function": {"name": "get_weather", "arguments": "{\"city\": \"Lima\"}"}}]"#;
     let result = tools.recover(
         openai.as_bytes(),
-        &request(DialectId::OpenAiToolCalls).ids(IdPolicy::Prefix {
+        &ToolRecoveryRequest::default().ids(IdPolicy::Prefix {
             prefix: "t".into(),
             start: 7,
         }),
+        &set(&[DialectId::OpenAiToolCalls]),
     );
     let calls = value(&result);
     assert_eq!(ids(&result), ["t7"]);
@@ -1212,6 +1277,7 @@ fn explicit_prefix_is_unchanged() {
 
 #[test]
 fn default_ids_preserve_model_ids_and_repair_duplicates() {
+    let dialects = set(&[DialectId::OpenAiToolCalls]);
     let tools = compile([ToolDefinition::new("get_weather")
         .effects(Effects::ReadOnly)
         .param("city", Param::string().required())]);
@@ -1227,7 +1293,11 @@ fn default_ids_preserve_model_ids_and_repair_duplicates() {
         element(Some("call_lima"), "Lima"),
         element(Some("call_oslo"), "Oslo")
     );
-    let result = tools.recover(output.as_bytes(), &request(DialectId::OpenAiToolCalls));
+    let result = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        &dialects,
+    );
     let calls = value(&result);
     assert_eq!(ids(&result), ["call_lima", "call_oslo"]);
     for call in &calls.calls {
@@ -1249,7 +1319,11 @@ fn default_ids_preserve_model_ids_and_repair_duplicates() {
         element(Some("c1"), "Oslo"),
         element(None, "Rome")
     );
-    let result = tools.recover(output.as_bytes(), &request(DialectId::OpenAiToolCalls));
+    let result = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        &dialects,
+    );
     let calls = value(&result);
     let tag = turn_id_prefix(&calls.turn);
     assert_eq!(
@@ -1298,7 +1372,11 @@ fn default_ids_preserve_model_ids_and_repair_duplicates() {
     // the carried id is set on recovered calls and numbered by emission,
     // which shares recovery's assignment.)
     let output = format!("[{}, {}]", element(None, "Lima"), element(None, "Oslo"));
-    let result = tools.recover(output.as_bytes(), &request(DialectId::OpenAiToolCalls));
+    assert_emitted_id_collision(&tools, output.as_bytes(), &dialects);
+}
+
+fn assert_emitted_id_collision(tools: &ToolSet, output: &[u8], dialects: &DialectSet) {
+    let result = tools.recover(output, &ToolRecoveryRequest::default(), dialects);
     let mut calls = value(&result).clone();
     let tag = turn_id_prefix(&calls.turn);
     calls.calls[1].source_id = Some(format!("{tag}0"));
@@ -1329,7 +1407,11 @@ fn effects_override_per_tool() {
     let tools = adapter_read_file();
     let output = hermes("read_fiel", r#"{"path": "a.rs"}"#);
     // An adapter tool is mutating, hence structural: a near-miss is refused.
-    let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+    let result = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
     let call = &value(&result).calls[0];
     assert_eq!(
         call.outcome,
@@ -1343,6 +1425,7 @@ fn effects_override_per_tool() {
     let exact = tools.recover(
         hermes("read_file", r#"{"path": "a.rs"}"#).as_bytes(),
         &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
     );
     let call = &value(&exact).calls[0];
     assert_eq!(
@@ -1357,6 +1440,7 @@ fn effects_override_per_tool() {
     let result = tools.recover(
         output.as_bytes(),
         &ToolRecoveryRequest::default().effects("read_file", Effects::ReadOnly),
+        DialectSet::built_in(),
     );
     let call = &value(&result).calls[0];
     assert_eq!(
@@ -1369,6 +1453,7 @@ fn effects_override_per_tool() {
     let result = tools.recover(
         output.as_bytes(),
         &ToolRecoveryRequest::default().effects("read", Effects::ReadOnly),
+        DialectSet::built_in(),
     );
     assert_eq!(result.outcome, Outcome::Unresolved);
     assert!(
@@ -1485,6 +1570,7 @@ fn strict_forced_constraint_strings() {
 
 #[test]
 fn strict_forced_cardinality_content_and_reasoning() {
+    let built_in = DialectSet::built_in();
     let tools = compile([
         ToolDefinition::new("read")
             .effects(Effects::ReadOnly)
@@ -1495,11 +1581,12 @@ fn strict_forced_cardinality_content_and_reasoning() {
     let request = |strict: StrictForced| {
         ToolRecoveryRequest::default().tool_choice(ToolChoice::ForcedStrict(strict))
     };
+    let exactly_one = || request(StrictForced::exactly_one("read"));
     let one = hermes("read", r#"{"path": "a"}"#);
     let two = format!("{one}\n{}", hermes("cat", r#"{"path": "b"}"#));
     // Exactly one: the second call (an alias of the forced tool) is the
     // cardinality violation, the first stays Resolved.
-    let result = tools.recover(two.as_bytes(), &request(StrictForced::exactly_one("read")));
+    let result = tools.recover(two.as_bytes(), &exactly_one(), built_in);
     let calls = value(&result);
     assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
     assert_eq!(
@@ -1526,14 +1613,11 @@ fn strict_forced_cardinality_content_and_reasoning() {
     let lenient = StrictForced::exactly_one("read")
         .with_exactly_one(false)
         .allow_content(true);
-    let result = tools.recover(two.as_bytes(), &request(lenient));
+    let result = tools.recover(two.as_bytes(), &request(lenient), built_in);
     assert!(value(&result).tool_choice.passed);
     // A call to another tool is the Forced violation, not a cardinality one.
     let mixed = format!("{one}\n{}", hermes("list", "{}"));
-    let result = tools.recover(
-        mixed.as_bytes(),
-        &request(StrictForced::exactly_one("read")),
-    );
+    let result = tools.recover(mixed.as_bytes(), &exactly_one(), built_in);
     assert_eq!(
         value(&result).calls[1].outcome,
         CallOutcome::Unresolved {
@@ -1543,43 +1627,39 @@ fn strict_forced_cardinality_content_and_reasoning() {
         }
     );
     // No call at all fails, as under Forced.
-    let result = tools.recover(b"nothing", &request(StrictForced::exactly_one("read")));
+    let result = tools.recover(b"nothing", &exactly_one(), built_in);
     assert!(!value(&result).tool_choice.passed);
     // An undeclared name is a request error for the strict form too.
-    let result = tools.recover(one.as_bytes(), &request(StrictForced::exactly_one("write")));
+    let result = tools.recover(
+        one.as_bytes(),
+        &request(StrictForced::exactly_one("write")),
+        built_in,
+    );
     assert!(
         matches!(result.receipt.stopped, StopReason::InvalidInput(ref detail) if detail.contains("`write`"))
     );
     assert_eq!(result.outcome, Outcome::Unresolved);
     // Content: ASCII whitespace frames, anything else (U+00A0 included) fails.
     let framed = format!(" \t\r\n\x0c{one}\n");
-    let result = tools.recover(
-        framed.as_bytes(),
-        &request(StrictForced::exactly_one("read")),
-    );
+    let result = tools.recover(framed.as_bytes(), &exactly_one(), built_in);
     assert!(value(&result).tool_choice.passed);
     for prose in ["Sure.\n", "\u{a0}", "\u{2003}"] {
         let output = format!("{prose}{one}");
-        let result = tools.recover(
-            output.as_bytes(),
-            &request(StrictForced::exactly_one("read")),
-        );
+        let result = tools.recover(output.as_bytes(), &exactly_one(), built_in);
         assert!(!value(&result).tool_choice.passed, "{prose:?}");
         let allowed = StrictForced::exactly_one("read").allow_content(true);
-        let result = tools.recover(output.as_bytes(), &request(allowed));
+        let result = tools.recover(output.as_bytes(), &request(allowed), built_in);
         assert!(value(&result).tool_choice.passed, "{prose:?}");
     }
     // Reasoning: an embedded call is not counted; the block is what fails.
     let thought = format!("<think>maybe {}</think>\n{one}", hermes("read", "{}"));
-    let result = tools.recover(
-        thought.as_bytes(),
-        &request(StrictForced::exactly_one("read")),
-    );
+    let result = tools.recover(thought.as_bytes(), &exactly_one(), built_in);
     assert!(value(&result).tool_choice.passed);
     assert_eq!(value(&result).embedded.len(), 1);
     let result = tools.recover(
         thought.as_bytes(),
         &request(StrictForced::exactly_one("read").allow_reasoning(false)),
+        built_in,
     );
     assert!(!value(&result).tool_choice.passed);
     assert!(
@@ -1607,11 +1687,10 @@ fn strict_forced_counts_rejected_attempts_of_any_reason() {
         let output = format!("{first}\n{second}");
         let result = tools.recover(
             output.as_bytes(),
-            &ToolRecoveryRequest::default()
-                .dialects(hermes_only.clone())
-                .tool_choice(ToolChoice::ForcedStrict(
-                    StrictForced::exactly_one("read_file").allow_reasoning(true),
-                )),
+            &ToolRecoveryRequest::default().tool_choice(ToolChoice::ForcedStrict(
+                StrictForced::exactly_one("read_file").allow_reasoning(true),
+            )),
+            &hermes_only,
         );
         let calls = value(&result);
         assert_eq!(calls.rejected.len(), 1, "{second:?}");
@@ -1642,9 +1721,8 @@ fn strict_forced_counts_rejected_attempts_of_any_reason() {
         let only_cardinality = StrictForced::exactly_one("read_file").allow_content(true);
         let result = tools.recover(
             output.as_bytes(),
-            &ToolRecoveryRequest::default()
-                .dialects(hermes_only.clone())
-                .tool_choice(ToolChoice::ForcedStrict(only_cardinality)),
+            &ToolRecoveryRequest::default().tool_choice(ToolChoice::ForcedStrict(only_cardinality)),
+            &hermes_only,
         );
         assert!(
             !value(&result).tool_choice.passed,
@@ -1654,8 +1732,8 @@ fn strict_forced_counts_rejected_attempts_of_any_reason() {
         let result = tools.recover(
             output.as_bytes(),
             &ToolRecoveryRequest::default()
-                .dialects(hermes_only.clone())
                 .tool_choice(ToolChoice::ForcedStrict(only_content.clone())),
+            &hermes_only,
         );
         assert!(
             !value(&result).tool_choice.passed,
@@ -1665,9 +1743,8 @@ fn strict_forced_counts_rejected_attempts_of_any_reason() {
         let lenient = only_content.allow_content(true);
         let result = tools.recover(
             output.as_bytes(),
-            &ToolRecoveryRequest::default()
-                .dialects(hermes_only.clone())
-                .tool_choice(ToolChoice::ForcedStrict(lenient)),
+            &ToolRecoveryRequest::default().tool_choice(ToolChoice::ForcedStrict(lenient)),
+            &hermes_only,
         );
         assert!(value(&result).tool_choice.passed, "lenient: {second:?}");
     }
@@ -1683,6 +1760,7 @@ fn strict_forced_counts_rejected_attempts_of_any_reason() {
     let result = tools.recover(
         output.as_bytes(),
         &ToolRecoveryRequest::default().tool_choice(anthropic),
+        DialectSet::built_in(),
     );
     let calls = value(&result);
     assert!(matches!(
@@ -1698,6 +1776,7 @@ fn strict_forced_counts_rejected_attempts_of_any_reason() {
         &ToolRecoveryRequest::default().tool_choice(ToolChoice::ForcedStrict(
             StrictForced::exactly_one("read_file").allow_content(true),
         )),
+        DialectSet::built_in(),
     );
     assert!(value(&result).tool_choice.passed);
 }
@@ -1732,8 +1811,8 @@ fn strict_forced_contested_second_body_is_order_independent() {
             let result = tools.recover(
                 output.as_bytes(),
                 &ToolRecoveryRequest::default()
-                    .dialects(set(&dialects))
                     .tool_choice(ToolChoice::ForcedStrict(strict.clone())),
+                &set(&dialects),
             );
             let calls = value(&result);
             assert_eq!(calls.rejected.len(), 1, "{calls:#?}");
@@ -1767,9 +1846,8 @@ fn strict_forced_diagnostics_are_capped() {
     let strict = StrictForced::exactly_one("read_file").allow_reasoning(false);
     let result = tools.recover(
         output.as_bytes(),
-        &ToolRecoveryRequest::default()
-            .dialects(set(&[DialectId::Hermes]))
-            .tool_choice(ToolChoice::ForcedStrict(strict)),
+        &ToolRecoveryRequest::default().tool_choice(ToolChoice::ForcedStrict(strict)),
+        &set(&[DialectId::Hermes]),
     );
     let calls = value(&result);
     assert_eq!(calls.calls.len(), 40);
@@ -1812,7 +1890,7 @@ fn strict_no_reasoning_under_reasoning_as_content_is_invalid_input() {
     let request = ToolRecoveryRequest::default()
         .reasoning(ReasoningPolicy::AsContent)
         .tool_choice(ToolChoice::ForcedStrict(strict.clone()));
-    let result = tools.recover(output.as_bytes(), &request);
+    let result = tools.recover(output.as_bytes(), &request, DialectSet::built_in());
     assert_eq!(result.outcome, Outcome::Unresolved);
     assert!(
         matches!(result.receipt.stopped, StopReason::InvalidInput(ref detail) if detail.contains("allow_reasoning")),
@@ -1827,12 +1905,14 @@ fn strict_no_reasoning_under_reasoning_as_content_is_invalid_input() {
             strict.clone().allow_reasoning(true).allow_content(true),
         ));
     assert!(matches!(
-        tools.recover(output.as_bytes(), &allowed).outcome,
+        tools
+            .recover(output.as_bytes(), &allowed, DialectSet::built_in())
+            .outcome,
         Outcome::Resolved(_)
     ));
     let separate = ToolRecoveryRequest::default().tool_choice(ToolChoice::ForcedStrict(strict));
     assert!(
-        !value(&tools.recover(output.as_bytes(), &separate))
+        !value(&tools.recover(output.as_bytes(), &separate, DialectSet::built_in()))
             .tool_choice
             .passed
     );
@@ -1856,6 +1936,7 @@ fn failed_tool_choice_has_no_usable_calls() {
         let result = tools.recover(
             output.as_bytes(),
             &ToolRecoveryRequest::default().tool_choice(choice.clone()),
+            DialectSet::built_in(),
         );
         let calls = value(&result);
         let wire = result.to_node();
@@ -1927,8 +2008,9 @@ fn calls_an_attempt_reads_inside_a_closed_block_stay_embedded() {
     ] {
         let result = tools.recover(
             output.as_bytes(),
-            &request(DialectId::MistralV11)
+            &ToolRecoveryRequest::default()
                 .reasoning(ReasoningPolicy::Separate { starts_open: true }),
+            &set(&[DialectId::MistralV11]),
         );
         let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = &result.outcome else {
             panic!("{output:?}: {:#?}", result.outcome)
@@ -1974,8 +2056,8 @@ fn starts_open_reasoning_separated() {
     let output = format!("{reasoning}{content}{call}");
     let result = tools.recover(
         output.as_bytes(),
-        &request(DialectId::Qwen3CoderXml)
-            .reasoning(ReasoningPolicy::Separate { starts_open: true }),
+        &ToolRecoveryRequest::default().reasoning(ReasoningPolicy::Separate { starts_open: true }),
+        &set(&[DialectId::Qwen3CoderXml]),
     );
     let Outcome::Resolved(calls) = &result.outcome else {
         panic!("{:#?}", result.outcome)
@@ -2026,7 +2108,11 @@ fn blocks<'a>(
 fn reasoning_blocks_two_adjacent_blocks_are_never_merged() {
     let tools = compile([ToolDefinition::new("ls").effects(Effects::ReadOnly)]);
     let output = format!("<think>a</think><think>b</think>\n{}", hermes("ls", "{}"));
-    let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+    let result = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
     let calls = value(&result);
     // The outer ranges merge, the blocks do not.
     assert_eq!(calls.reasoning, vec![0..32]);
@@ -2048,7 +2134,11 @@ fn reasoning_blocks_two_adjacent_blocks_are_never_merged() {
 fn reasoning_blocks_closed_block_before_a_call() {
     let tools = compile([ToolDefinition::new("ls").effects(Effects::ReadOnly)]);
     let output = format!("<think>abc</think>\n{}", hermes("ls", "{}"));
-    let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+    let result = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
     let calls = value(&result);
     assert_eq!(calls.reasoning, vec![0..18]);
     assert_eq!(
@@ -2065,6 +2155,7 @@ fn reasoning_blocks_starts_open_text_begins_at_zero() {
     let result = tools.recover(
         output.as_bytes(),
         &ToolRecoveryRequest::default().reasoning(ReasoningPolicy::Separate { starts_open: true }),
+        DialectSet::built_in(),
     );
     let calls = value(&result);
     // No opener is stripped: the text starts with the block, and ends at the
@@ -2081,7 +2172,11 @@ fn reasoning_blocks_starts_open_text_begins_at_zero() {
 fn reasoning_blocks_closed_at_a_call_opener() {
     let tools = compile([ToolDefinition::new("ls").effects(Effects::ReadOnly)]);
     let output = format!("<think>abc{}", hermes("ls", "{}"));
-    let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+    let result = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
     let calls = value(&result);
     // No closer: the block ends at the opener, so the text ends with the
     // span.
@@ -2105,7 +2200,11 @@ fn reasoning_blocks_closed_at_a_call_opener() {
 fn reasoning_blocks_unterminated_runs_to_the_end_of_output() {
     let tools = compile([ToolDefinition::new("ls").effects(Effects::ReadOnly)]);
     let output = "<think>abc";
-    let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+    let result = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
     let calls = value(&result);
     assert_eq!(calls.reasoning, vec![0..10]);
     assert_eq!(
@@ -2128,7 +2227,11 @@ fn reasoning_blocks_harmony_analysis_channel() {
     let tools = compile([ToolDefinition::new("ls").effects(Effects::ReadOnly)]);
     // `<|channel|>analysis<|message|>` is 30 bytes, `<|end|>` 7.
     let output = "<|channel|>analysis<|message|>think hard<|end|>done";
-    let result = tools.recover(output.as_bytes(), &request(DialectId::Harmony));
+    let result = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        &set(&[DialectId::Harmony]),
+    );
     let calls = value(&result);
     assert_eq!(calls.reasoning, vec![0..47]);
     assert_eq!(
@@ -2143,7 +2246,11 @@ fn reasoning_blocks_other_pairs_and_policies() {
     let tools = compile([ToolDefinition::new("ls").effects(Effects::ReadOnly)]);
     // Mistral's `[THINK]` pair.
     let output = "[THINK]x[/THINK]";
-    let result = tools.recover(output.as_bytes(), &request(DialectId::MistralV11));
+    let result = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        &set(&[DialectId::MistralV11]),
+    );
     assert_eq!(
         blocks(output.as_bytes(), value(&result)),
         vec![(0..16, 7..8, &b"x"[..])]
@@ -2151,7 +2258,11 @@ fn reasoning_blocks_other_pairs_and_policies() {
     // A second opener inside a block is text; only the stripped edges are
     // markers.
     let output = "<think><think>x</think>";
-    let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+    let result = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
     assert_eq!(
         blocks(output.as_bytes(), value(&result)),
         vec![(0..23, 7..15, &b"<think>x"[..])]
@@ -2161,11 +2272,13 @@ fn reasoning_blocks_other_pairs_and_policies() {
     let result = tools.recover(
         b"<think>a</think>",
         &ToolRecoveryRequest::default().reasoning(ReasoningPolicy::AsContent),
+        DialectSet::built_in(),
     );
     assert_eq!(value(&result).reasoning_blocks.len(), 0);
     let result = tools.recover(
         b"",
         &ToolRecoveryRequest::default().reasoning(ReasoningPolicy::Separate { starts_open: true }),
+        DialectSet::built_in(),
     );
     assert_eq!(value(&result).reasoning_blocks.len(), 0);
 }
@@ -2190,6 +2303,7 @@ fn anyof_ref_enforced_on_recovered_call() {
         let result = tools.recover(
             hermes("set_mode", arguments).as_bytes(),
             &ToolRecoveryRequest::default(),
+            DialectSet::built_in(),
         );
         let call = &value(&result).calls[0];
         let schema = result
@@ -2227,7 +2341,11 @@ fn anyof_ref_enforced_on_recovered_call() {
         let output = format!(
             "<tool_call>\n<function=set_mode>\n<parameter=mode>\n{text}\n</parameter>\n</function>\n</tool_call>"
         );
-        let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+        let result = tools.recover(
+            output.as_bytes(),
+            &ToolRecoveryRequest::default(),
+            DialectSet::built_in(),
+        );
         let call = &value(&result).calls[0];
         assert_eq!(call.outcome, CallOutcome::Resolved, "{text}");
         assert_eq!(
@@ -2271,7 +2389,11 @@ fn arguments_as_typed() {
         hermes("read", r#"{"path": "a.rs", "limit": 1e1}"#),
         hermes("read", r#"{"path": "b.rs"}"#)
     );
-    let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+    let result = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
     let calls = value(&result);
     assert_eq!(
         calls.calls[0].arguments_as::<Read>(),
@@ -2301,6 +2423,7 @@ fn keywords_reported_used_or_ignored() {
     let result = tools.recover(
         hermes("tag", r#"{"url": "https://example.com"}"#).as_bytes(),
         &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
     );
     let call = &value(&result).calls[0];
     assert_eq!(call.outcome, CallOutcome::Resolved);
@@ -2357,6 +2480,7 @@ fn keywords_reported_used_or_ignored() {
     let result = tools.recover(
         hermes("ls", "{}").as_bytes(),
         &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
     );
     assert_eq!(value(&result).calls[0].keywords.len(), 0);
 }
@@ -2377,6 +2501,7 @@ fn usable_never_yields_mutating_guess() {
     let result = tools.recover(
         output.as_bytes(),
         &ToolRecoveryRequest::default().policy(PolicySelection::All(RepairPolicy::Tolerant)),
+        DialectSet::built_in(),
     );
     let calls = value(&result);
     assert_eq!(calls.calls[1].outcome, CallOutcome::BestGuess);
@@ -2405,7 +2530,11 @@ fn usable_never_yields_mutating_guess() {
 fn motivating_case_closers_only() {
     let output = b"<tool_call><function=f></parameters></parameters></function></tool_call>";
     let tools = compile([ToolDefinition::new("f").param("path", Param::string())]);
-    let result = tools.recover(output, &ToolRecoveryRequest::default());
+    let result = tools.recover(
+        output,
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
     let Outcome::Resolved(calls) = &result.outcome else {
         panic!("{:#?}", result.outcome)
     };
@@ -2418,7 +2547,11 @@ fn motivating_case_closers_only() {
     assert_eq!(result.receipt.losses.len(), 1);
     assert_eq!(calls.finish, Finish::Calls);
     let tools = compile([ToolDefinition::new("f").param("path", Param::string().required())]);
-    let result = tools.recover(output, &ToolRecoveryRequest::default());
+    let result = tools.recover(
+        output,
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
     let call = &value(&result).calls[0];
     assert!(
         matches!(call.outcome, CallOutcome::Unresolved { .. }),
@@ -2453,10 +2586,7 @@ fn exact_effort_all_dialects_qwen_resolves() {
         .collect();
     let both = set(&[custom(MINI), custom(OVERLAP)]);
     for effort in [Effort::Exact, Effort::Maximum] {
-        let result = tools.recover(
-            &many,
-            &ToolRecoveryRequest::new(effort).dialects(both.clone()),
-        );
+        let result = tools.recover(&many, &ToolRecoveryRequest::new(effort), &both);
         assert_eq!(
             result.receipt.stopped,
             StopReason::BudgetExceeded(Resource::Candidates),
@@ -2467,6 +2597,7 @@ fn exact_effort_all_dialects_qwen_resolves() {
 
 #[test]
 fn exact_effort_never_repairs() {
+    let built_in = DialectSet::built_in();
     let tools = compile([
         ToolDefinition::new("read_file")
             .effects(Effects::ReadOnly)
@@ -2476,41 +2607,30 @@ fn exact_effort_never_repairs() {
             .param("path", Param::string().required())
             .param("depth", Param::integer()),
     ]);
-    let cases = [
-        (
-            "<tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n</parameter>\n</parameter>\n</function>\n</tool_call>".to_owned(),
-            "tool_call.markup.stray-closer",
-            DialectId::Qwen3CoderXml,
-        ),
-        (
-            "<tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n<parameter=depth>\n2\n</parameter>\n</function>\n</tool_call>".to_owned(),
-            "tool_call.markup.missing-parameter-close",
-            DialectId::Qwen3CoderXml,
-        ),
-        (
-            "<tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n</function>\n</tool_call>".to_owned(),
-            "tool_call.markup.parameter-closed-by-element",
-            DialectId::Qwen3CoderXml,
-        ),
-        (
-            hermes("read_fiel", r#"{"path": "a.rs"}"#),
-            "tool_call.name.match",
-            DialectId::Hermes,
-        ),
-    ];
+    let cases = exact_repair_cases();
     // With the model's one dialect, and with every built-in dialect allowed.
     let requests = |dialect: &DialectId| {
         [
-            ToolRecoveryRequest::new(Effort::Exact).dialects(set(core::slice::from_ref(dialect))),
-            ToolRecoveryRequest::new(Effort::Exact),
+            (
+                ToolRecoveryRequest::new(Effort::Exact),
+                set(core::slice::from_ref(dialect)),
+            ),
+            (
+                ToolRecoveryRequest::new(Effort::Exact),
+                set(&DialectId::BUILT_IN),
+            ),
         ]
     };
-    for ((output, rule, _), exact) in cases
+    for ((output, rule, _), (exact, dialects)) in cases
         .iter()
         .flat_map(|case| requests(&case.2).map(|request| (case, request)))
     {
         // Every other effort repairs it.
-        let quick = tools.recover(output.as_bytes(), &ToolRecoveryRequest::new(Effort::Quick));
+        let quick = tools.recover(
+            output.as_bytes(),
+            &ToolRecoveryRequest::new(Effort::Quick),
+            built_in,
+        );
         let repaired = &value(&quick).calls[0];
         assert!(
             matches!(
@@ -2525,7 +2645,7 @@ fn exact_effort_never_repairs() {
             rules(repaired)
         );
         // Exact does not.
-        let result = tools.recover(output.as_bytes(), &exact);
+        let result = tools.recover(output.as_bytes(), &exact, &dialects);
         let calls = value(&result);
         let call = &calls.calls[0];
         assert_eq!(
@@ -2573,6 +2693,31 @@ fn exact_effort_never_repairs() {
     }
 }
 
+fn exact_repair_cases() -> [(String, &'static str, DialectId); 4] {
+    [
+        (
+            "<tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n</parameter>\n</parameter>\n</function>\n</tool_call>".to_owned(),
+            "tool_call.markup.stray-closer",
+            DialectId::Qwen3CoderXml,
+        ),
+        (
+            "<tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n<parameter=depth>\n2\n</parameter>\n</function>\n</tool_call>".to_owned(),
+            "tool_call.markup.missing-parameter-close",
+            DialectId::Qwen3CoderXml,
+        ),
+        (
+            "<tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n</function>\n</tool_call>".to_owned(),
+            "tool_call.markup.parameter-closed-by-element",
+            DialectId::Qwen3CoderXml,
+        ),
+        (
+            hermes("read_fiel", r#"{"path": "a.rs"}"#),
+            "tool_call.name.match",
+            DialectId::Hermes,
+        ),
+    ]
+}
+
 /// A segmentation that itself needs a repair (a reasoning block closed at a
 /// call opener) has no exact reading at all.
 #[test]
@@ -2581,7 +2726,11 @@ fn exact_effort_rejects_segmentation_repair() {
         .effects(Effects::ReadOnly)
         .param("path", Param::string().required())]);
     let output = format!("<think>plan{}", hermes("read_file", r#"{"path": "a.rs"}"#));
-    let quick = tools.recover(output.as_bytes(), &ToolRecoveryRequest::new(Effort::Quick));
+    let quick = tools.recover(
+        output.as_bytes(),
+        &ToolRecoveryRequest::new(Effort::Quick),
+        DialectSet::built_in(),
+    );
     assert!(
         quick
             .receipt
@@ -2589,11 +2738,17 @@ fn exact_effort_rejects_segmentation_repair() {
             .iter()
             .any(|evidence| evidence.rule == "tool_call.reasoning.unclosed")
     );
-    for exact in [
-        ToolRecoveryRequest::new(Effort::Exact).dialects(set(&[DialectId::Hermes])),
-        ToolRecoveryRequest::new(Effort::Exact),
+    for (exact, dialects) in [
+        (
+            ToolRecoveryRequest::new(Effort::Exact),
+            set(&[DialectId::Hermes]),
+        ),
+        (
+            ToolRecoveryRequest::new(Effort::Exact),
+            set(&DialectId::BUILT_IN),
+        ),
     ] {
-        let result = tools.recover(output.as_bytes(), &exact);
+        let result = tools.recover(output.as_bytes(), &exact, &dialects);
         assert_eq!(result.outcome, Outcome::Unresolved);
         assert_eq!(result.receipt.stopped, StopReason::NoCandidate);
         assert_eq!(result.receipt.evidence.len(), 0);
@@ -2664,10 +2819,9 @@ fn held_reports_are_charged_and_exhaust_explicitly() {
         Err(StopReason::BudgetExceeded(Resource::ScratchBytes))
     );
     // Through the operation: an explicit exhaustion, no value.
-    let mut request =
-        ToolRecoveryRequest::sized_for(Effort::Standard, held.as_bytes(), dialects.clone());
+    let mut request = ToolRecoveryRequest::sized_for(Effort::Standard, held.as_bytes(), &dialects);
     request.budget.scratch_bytes = tight;
-    let result = tools.recover(held.as_bytes(), &request);
+    let result = tools.recover(held.as_bytes(), &request, &dialects);
     assert_eq!(result.outcome, Outcome::Unresolved);
     assert_eq!(
         result.receipt.stopped,
@@ -2675,9 +2829,8 @@ fn held_reports_are_charged_and_exhaust_explicitly() {
     );
     // With enough scratch the operation completes: the call is the
     // before-text guess and every block is reasoning (merged ranges).
-    let request =
-        ToolRecoveryRequest::sized_for(Effort::Standard, held.as_bytes(), dialects.clone());
-    let result = tools.recover(held.as_bytes(), &request);
+    let request = ToolRecoveryRequest::sized_for(Effort::Standard, held.as_bytes(), &dialects);
+    let result = tools.recover(held.as_bytes(), &request, &dialects);
     let Outcome::BestGuess(calls) = &result.outcome else {
         panic!("{:?}", result.receipt.stopped)
     };
@@ -2724,7 +2877,11 @@ fn rejected_span_never_splits_a_character_a_class_cannot_consume() {
             true,
         ),
     ] {
-        let result = tools.recover(input.as_bytes(), &ToolRecoveryRequest::default());
+        let result = tools.recover(
+            input.as_bytes(),
+            &ToolRecoveryRequest::default(),
+            DialectSet::built_in(),
+        );
         let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = result.outcome else {
             panic!("{input:?}: one reading expected");
         };
@@ -2757,7 +2914,11 @@ fn rejected_wrapper_covers_the_call_recovered_inside_it() {
     )
     .expect("tools");
     let input = "<tool_call>{\"name\": \"f\", \"arguments\": {\"a\": \"b\"}} junk junk</tool_call>";
-    let result = tools.recover(input.as_bytes(), &ToolRecoveryRequest::default());
+    let result = tools.recover(
+        input.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
     let readings: Vec<&ToolCalls> = match &result.outcome {
         Outcome::Resolved(calls) | Outcome::BestGuess(calls) => vec![calls],
         Outcome::Ambiguous(alternatives) => alternatives.iter().collect(),
@@ -2818,7 +2979,11 @@ fn body_evidence_selects_the_dialect_of_a_shared_opener() {
             &["json.syntax.trailing-comma"][..],
         ),
     ] {
-        let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+        let result = tools.recover(
+            output.as_bytes(),
+            &ToolRecoveryRequest::default(),
+            DialectSet::built_in(),
+        );
         let Outcome::Resolved(calls) = &result.outcome else {
             panic!("{output:?}: {:#?}", result.outcome);
         };
@@ -2860,7 +3025,11 @@ fn rejected_attempts_over_a_shared_opener_are_one_reading() {
             DialectId::Qwen3CoderXml,
         ),
     ] {
-        let result = tools.recover(output.as_bytes(), &ToolRecoveryRequest::default());
+        let result = tools.recover(
+            output.as_bytes(),
+            &ToolRecoveryRequest::default(),
+            DialectSet::built_in(),
+        );
         assert!(
             result.receipt.alternatives.is_empty(),
             "{output:?}: {:#?}",
@@ -2889,7 +3058,8 @@ fn rejected_attempts_over_a_shared_opener_are_one_reading() {
     // A pinned dialect attempts alone.
     let result = tools.recover(
         b"<tool_call>\n<function=f>\n<parameter=p>\nx",
-        &request(DialectId::Qwen3CoderXml),
+        &ToolRecoveryRequest::default(),
+        &set(&[DialectId::Qwen3CoderXml]),
     );
     assert_eq!(
         value(&result).rejected[0].candidate_dialects,
@@ -2910,7 +3080,7 @@ fn same_call_from_two_dialects_names_both() {
         [first.clone(), second.clone()],
         [second.clone(), first.clone()],
     ] {
-        let result = tools.recover(output, &ToolRecoveryRequest::default().dialects(set(&pair)));
+        let result = tools.recover(output, &ToolRecoveryRequest::default(), &set(&pair));
         let calls = value(&result);
         assert_eq!(calls.calls.len(), 1);
         let call = &calls.calls[0];
@@ -2946,7 +3116,8 @@ fn same_call_from_two_dialects_names_both() {
     // One dialect reads the call alone.
     let result = tools.recover(
         output,
-        &ToolRecoveryRequest::default().dialects(set(std::slice::from_ref(&first))),
+        &ToolRecoveryRequest::default(),
+        &set(std::slice::from_ref(&first)),
     );
     assert_eq!(value(&result).calls[0].candidate_dialects, [first]);
 }
@@ -2969,7 +3140,8 @@ fn different_calls_from_two_dialects_are_distinguished_by_dialect() {
     );
     let result = tools.recover(
         b"<x>fg</x>",
-        &ToolRecoveryRequest::default().dialects(set(&[whole, tail])),
+        &ToolRecoveryRequest::default(),
+        &set(&[whole, tail]),
     );
     let Outcome::Ambiguous(values) = &result.outcome else {
         panic!("{:#?}", result.outcome);
@@ -3023,6 +3195,7 @@ fn resync_that_gave_up_is_not_restarted() {
     let result = tools.recover(
         input.as_bytes(),
         &ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes()),
+        DialectSet::built_in(),
     );
     let Outcome::Resolved(calls) = &result.outcome else {
         panic!("unexpected outcome {:?}", result.outcome);
@@ -3089,13 +3262,15 @@ fn canonical_values_with_near_closer_text_resolve() {
             for variant in variants {
                 let content = format!("x {variant} y");
                 let input = near_closer_input(&dialect, &content);
-                for request in [
+                for (request, dialects) in [
                     request(dialect.clone()),
-                    ToolRecoveryRequest::default(),
-                    ToolRecoveryRequest::sized(Effort::Exact, input.as_bytes())
-                        .dialects(set(std::slice::from_ref(&dialect))),
+                    (ToolRecoveryRequest::default(), set(&DialectId::BUILT_IN)),
+                    (
+                        ToolRecoveryRequest::sized(Effort::Exact, input.as_bytes()),
+                        set(std::slice::from_ref(&dialect)),
+                    ),
                 ] {
-                    let result = tools.recover(input.as_bytes(), &request);
+                    let result = tools.recover(input.as_bytes(), &request, &dialects);
                     let Outcome::Resolved(calls) = &result.outcome else {
                         panic!("{input:?}: {:#?}", result.outcome);
                     };

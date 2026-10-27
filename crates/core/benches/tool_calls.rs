@@ -161,21 +161,69 @@ fn dialects(ids: &[DialectId]) -> DialectSet {
 }
 
 /// The output, its request, and the argument values it must recover.
-fn workload(shape: &str, size: usize) -> (String, ToolRecoveryRequest, Vec<String>) {
+fn workload(shape: &str, size: usize) -> (String, ToolRecoveryRequest, Vec<String>, DialectSet) {
     let content = argument(size);
     let (output, expected, set) = match shape {
-        "qwen_xml" => (qwen(&content), vec![content], DialectSet::built_in()),
-        "hermes" => (hermes(&content), vec![content], DialectSet::built_in()),
-        "openai_stringified" => (openai(&content), vec![content], DialectSet::built_in()),
-        "llama3_json" => (llama3(&content), vec![content], DialectSet::built_in()),
-        "mistral_v3" => (mistral(&content), vec![content], DialectSet::built_in()),
-        "mistral_v11" => (mistral11(&content), vec![content], DialectSet::built_in()),
-        "deepseek_v31" => (deepseek31(&content), vec![content], DialectSet::built_in()),
-        "deepseek_v3" => (deepseek3(&content), vec![content], DialectSet::built_in()),
-        "kimi_k2" => (kimi(&content), vec![content], DialectSet::built_in()),
-        "anthropic_tool_use" => (anthropic(&content), vec![content], DialectSet::built_in()),
-        "harmony" => (harmony(&content), vec![content], DialectSet::built_in()),
-        "bare_json" => (bare(&content), vec![content], DialectSet::built_in()),
+        "qwen_xml" => (
+            qwen(&content),
+            vec![content],
+            dialects(&DialectId::BUILT_IN),
+        ),
+        "hermes" => (
+            hermes(&content),
+            vec![content],
+            dialects(&DialectId::BUILT_IN),
+        ),
+        "openai_stringified" => (
+            openai(&content),
+            vec![content],
+            dialects(&DialectId::BUILT_IN),
+        ),
+        "llama3_json" => (
+            llama3(&content),
+            vec![content],
+            dialects(&DialectId::BUILT_IN),
+        ),
+        "mistral_v3" => (
+            mistral(&content),
+            vec![content],
+            dialects(&DialectId::BUILT_IN),
+        ),
+        "mistral_v11" => (
+            mistral11(&content),
+            vec![content],
+            dialects(&DialectId::BUILT_IN),
+        ),
+        "deepseek_v31" => (
+            deepseek31(&content),
+            vec![content],
+            dialects(&DialectId::BUILT_IN),
+        ),
+        "deepseek_v3" => (
+            deepseek3(&content),
+            vec![content],
+            dialects(&DialectId::BUILT_IN),
+        ),
+        "kimi_k2" => (
+            kimi(&content),
+            vec![content],
+            dialects(&DialectId::BUILT_IN),
+        ),
+        "anthropic_tool_use" => (
+            anthropic(&content),
+            vec![content],
+            dialects(&DialectId::BUILT_IN),
+        ),
+        "harmony" => (
+            harmony(&content),
+            vec![content],
+            dialects(&DialectId::BUILT_IN),
+        ),
+        "bare_json" => (
+            bare(&content),
+            vec![content],
+            dialects(&DialectId::BUILT_IN),
+        ),
         "mixed_qwen_hermes" => {
             let first = argument(size / 2);
             let second = argument(size - size / 2);
@@ -187,8 +235,8 @@ fn workload(shape: &str, size: usize) -> (String, ToolRecoveryRequest, Vec<Strin
         }
         other => panic!("unknown shape {other}"),
     };
-    let request = ToolRecoveryRequest::sized_for(Effort::Standard, output.as_bytes(), set);
-    (output, request, expected)
+    let request = ToolRecoveryRequest::sized_for(Effort::Standard, output.as_bytes(), &set);
+    (output, request, expected, set)
 }
 
 const fn samples(size: usize) -> usize {
@@ -245,13 +293,13 @@ impl Row {
 }
 
 fn recover(tools: &ToolSet, shape: &str, label: &str, size: usize) -> Row {
-    let (output, request, expected) = workload(shape, size);
+    let (output, request, expected, dialects) = workload(shape, size);
     let count = samples(size);
     let mut times = Vec::with_capacity(count);
     let mut usage = None;
     for _ in 0..count {
         let start = Instant::now();
-        let result = tools.recover(black_box(output.as_bytes()), &request);
+        let result = tools.recover(black_box(output.as_bytes()), &request, &dialects);
         times.push(u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX));
         let Outcome::Resolved(calls) = &result.outcome else {
             panic!("{shape} {label}: {:?}", result.receipt.stopped);
@@ -279,8 +327,7 @@ fn recover(tools: &ToolSet, shape: &str, label: &str, size: usize) -> Row {
 fn push_chunked(tools: &ToolSet, chunk: usize) -> Row {
     let output = qwen(&argument(1 << 16));
     let set = dialects(&[DialectId::Qwen3CoderXml]);
-    let budget =
-        ToolRecoveryRequest::sized_for(Effort::Standard, output.as_bytes(), set.clone()).budget;
+    let budget = ToolRecoveryRequest::sized_for(Effort::Standard, output.as_bytes(), &set).budget;
     let count = 30;
     let mut times = Vec::with_capacity(count);
     let mut usage = None;

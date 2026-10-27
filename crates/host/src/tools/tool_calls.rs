@@ -105,16 +105,19 @@ pub(super) fn recover(
         }
         Err(error) => return Err(error.to_string()),
     };
-    if let Some(dialects) = dialects {
-        match DialectSet::new(dialects, &mut governor) {
-            Ok(set) => request = request.dialects(set),
+    let prepared = if let Some(dialects) = dialects {
+        Some(match DialectSet::new(dialects, &mut governor) {
+            Ok(set) => set,
             Err(DialectSetError::Resource(reason)) => {
                 return Ok(stopped(output, effort, reason, &governor));
             }
             Err(error) => return Err(error.to_string()),
-        }
-    }
-    Ok(tools.recover_governed(output, &request, &mut governor))
+        })
+    } else {
+        None
+    };
+    let dialects = prepared.as_ref().unwrap_or_else(|| DialectSet::built_in());
+    Ok(tools.recover_governed(output, &request, dialects, &mut governor))
 }
 
 /// The declaration text the adapters read, whose exact bytes their

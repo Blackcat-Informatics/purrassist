@@ -404,7 +404,7 @@ impl From<StopReason> for DialectSetError {
 }
 
 /// A compiled, canonical dialect allow-list for one model.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct DialectSet {
     pub(crate) dialects: Vec<DialectId>,
     pub(crate) markers: Vec<(Vec<u8>, Vec<u8>)>,
@@ -537,7 +537,7 @@ impl DialectSet {
     /// The allow-list of every built-in dialect ([`DialectId::BUILT_IN`]).
     ///
     /// Like a built-in grammar, the set is built once, on first use, under
-    /// its own governor with a default [`Budget`], and cloned: building it is
+    /// its own governor with a default [`Budget`], and borrowed: building it is
     /// never charged to a caller's governor.
     ///
     /// # Panics
@@ -549,14 +549,12 @@ impl DialectSet {
     /// assert_eq!(DialectSet::built_in().dialects(), DialectId::BUILT_IN);
     /// ```
     #[must_use]
-    pub fn built_in() -> Self {
+    pub fn built_in() -> &'static Self {
         static BUILT_IN: OnceLock<DialectSet> = OnceLock::new();
-        BUILT_IN
-            .get_or_init(|| {
-                Self::new(DialectId::BUILT_IN, &mut Governor::new(Budget::default()))
-                    .expect("the built-in dialect set builds under the default budget")
-            })
-            .clone()
+        BUILT_IN.get_or_init(|| {
+            Self::new(DialectId::BUILT_IN, &mut Governor::new(Budget::default()))
+                .expect("the built-in dialect set builds under the default budget")
+        })
     }
 
     /// The dialects, in canonical order.

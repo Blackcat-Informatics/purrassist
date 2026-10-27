@@ -134,7 +134,7 @@ use purrassist_core::tool_call::{emit, DialectId, IdPolicy, Param, ToolDefinitio
 use purrassist_core::{Budget, Outcome};
 let tools = ToolSet::compile([ToolDefinition::new("read").param("path", Param::string().required())], Budget::default()).unwrap();
 let output = b"<tool_call>\n<function=read>\n<parameter=path>\nsrc/a b.rs\n</parameter>\n</function>\n</tool_call>";
-let Outcome::Resolved(calls) = tools.recover(output, &ToolRecoveryRequest::default()).outcome else { unreachable!() };
+let Outcome::Resolved(calls) = tools.recover(output, &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in()).outcome else { unreachable!() };
 let hermes = emit::emit(&tools, &calls, &DialectId::Hermes, &IdPolicy::default())?;
 assert_eq!(hermes.output, b"<tool_call>\n{\"name\":\"read\",\"arguments\":{\"path\":\"src/a b.rs\"}}\n</tool_call>");
 assert_eq!((hermes.calls.as_slice(), hermes.skipped.len()), (&[0][..], 0));
@@ -156,7 +156,7 @@ read-only tool (the `ToolCalls::usable_accepting_guesses` doctest):
 use purrassist_core::tool_call::{Effects, Param, ToolDefinition, ToolRecoveryRequest, ToolSet};
 use purrassist_core::{Budget, Outcome};
 let tools = ToolSet::compile([ToolDefinition::new("read_file").effects(Effects::ReadOnly)], Budget::default()).unwrap();
-let result = tools.recover(br#"<tool_call>{"name": "read_fiel", "arguments": {}}</tool_call>"#, &ToolRecoveryRequest::default());
+let result = tools.recover(br#"<tool_call>{"name": "read_fiel", "arguments": {}}</tool_call>"#, &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in());
 let Outcome::BestGuess(calls) = result.outcome else { unreachable!() };
 assert!(calls.usable().is_empty());
 assert_eq!(calls.usable_accepting_guesses()[0].tool.as_deref(), Some("read_file"));
@@ -431,3 +431,11 @@ are in [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound).
   the 16,438-case correction evaluation, per rule and per dialect.
 - [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound): the cost
   bound, budgets for large outputs, and throughput.
+
+Recovery borrows its prepared dialect context explicitly:
+`tools.recover(output, &request, DialectSet::built_in())`, or
+`tools.recover_governed(output, &request, &custom_set, &mut governor)`.
+`ToolRecoveryRequest` is owned cloneable settings; it does not own or select a
+set. `sized_for(effort, output, &custom_set)` uses that set for budget sizing.
+Keep the same custom set alive through recovery. The built-in set is a cached
+static borrow; neither set nor dense matcher has an infallible deep clone.

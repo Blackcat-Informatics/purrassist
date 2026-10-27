@@ -522,7 +522,7 @@ fn tool_call_corpus_tally() -> ToolCallEvaluation {
         unresolved_abstained: 0,
     };
     for case in &cases {
-        let request = tool_call_corpus::request(case);
+        let (request, dialects) = tool_call_corpus::request(case);
         let set = tool_call_corpus::tools_for(case, &tools, &adapter);
         // A case whose output is not well-formed UTF-8 carries its exact
         // bytes as `input_hex`.
@@ -535,7 +535,7 @@ fn tool_call_corpus_tally() -> ToolCallEvaluation {
                     .collect()
             },
         );
-        let result = set.recover(&bytes, &request);
+        let result = set.recover(&bytes, &request, &dialects);
         let answer: Option<Vec<(String, Node)>> = match &result.outcome {
             Outcome::Resolved(calls) | Outcome::BestGuess(calls) => {
                 let usable = calls.usable_accepting_guesses();

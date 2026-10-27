@@ -9,8 +9,8 @@
 //! [`Matcher`] finds the first occurrence of any literal of a delimiter set
 //! in a byte stream in O(1) per byte; it drives `until(...)` bodies, codec
 //! slots, and reasoning markers. Sparse trie nodes/edges retain fallible
-//! scratch ownership. Dense matcher construction/storage retain their existing
-//! coarser accounting contract and remain separate cold-governance scope.
+//! scratch ownership. Dense matcher construction and final tables use the same
+//! fallible ownership and explicit resource admission.
 // `unreachable_pub` and `redundant_pub_crate` disagree on the right
 // visibility for items of a crate-private module
 // (https://github.com/rust-lang/rust-clippy/issues/6188); these items are
@@ -18,7 +18,6 @@
 // `unreachable_pub`) wins, as in `pattern::derive`.
 #![allow(clippy::redundant_pub_crate)]
 use super::cost::K_COMPILE;
-use super::index_u32;
 use crate::contract::saturating_size as size;
 use crate::contract::{Governor, Resource, ScratchCharge, ScratchVec, StopReason};
 
@@ -148,13 +147,25 @@ impl Trie {
 /// literals ending together the one starting first), and
 /// [`Matcher::depth`] the length of the longest suffix that is still a
 /// proper prefix of some literal: the bytes a caller must hold back.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Matcher {
-    delta: Vec<u32>,
-    depth: Vec<u32>,
-    found: Vec<Option<(u32, u32)>>,
+    delta: ScratchVec<u32>,
+    depth: ScratchVec<u32>,
+    found: ScratchVec<Option<(u32, u32)>>,
     longest: usize,
 }
+
+impl ScratchCharge for Matcher {
+    // Three exact scratch owners (40 each) and the portable usize slot (8).
+    const CHARGE: usize = 128;
+}
+impl ScratchCharge for Option<(u32, u32)> {
+    const CHARGE: usize = 16;
+}
+const _: () = assert!(
+    core::mem::size_of::<Option<(u32, u32)>>() <= <Option<(u32, u32)> as ScratchCharge>::CHARGE
+);
+const _: () = assert!(core::mem::size_of::<Matcher>() <= Matcher::CHARGE);
 
 impl Matcher {
     /// Build the matcher; `literals` must be non-empty byte strings.
@@ -162,77 +173,99 @@ impl Matcher {
         literals: &[B],
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
-        let total: usize = literals.iter().map(|literal| literal.as_ref().len()).sum();
-        let states = total.saturating_add(1);
-        governor.charge(
-            Resource::Work,
-            size(states).saturating_mul(256).saturating_mul(K_COMPILE),
+        governor.charge(Resource::Depth, 1)?;
+        governor.charge(Resource::Work, size(literals.len()))?;
+        u32::try_from(literals.len())
+            .map_err(|_| governor.stop_resource(Resource::ScratchBytes))?;
+        let mut longest = 0;
+        for literal in literals {
+            let bytes = literal.as_ref();
+            governor.charge(Resource::InputBytes, size(bytes.len()))?;
+            governor.charge(Resource::Work, size(bytes.len()).saturating_add(1))?;
+            u32::try_from(bytes.len())
+                .map_err(|_| governor.stop_resource(Resource::ScratchBytes))?;
+            longest = longest.max(bytes.len());
+        }
+        // The existing fallible trie is the only goto/prefix authority.
+        let goto = Trie::build(
+            literals.iter().enumerate().map(|(index, literal)| {
+                (
+                    literal.as_ref(),
+                    u32::try_from(index).expect("admitted literal index"),
+                )
+            }),
+            governor,
         )?;
-        governor.charge(
-            Resource::ScratchBytes,
-            size(states).saturating_mul(256 * 4 + 32),
-        )?;
-        // Goto function as a sparse trie first.
-        let mut goto: Vec<Vec<(u8, u32)>> = vec![Vec::new()];
-        let mut depth = vec![0_u32];
-        let mut own: Vec<Option<(u32, u32)>> = vec![None];
-        for (index, literal) in literals.iter().enumerate() {
-            let literal = literal.as_ref();
-            let mut node = 0_usize;
-            for &byte in literal {
-                node = match goto[node].binary_search_by_key(&byte, |(key, _)| *key) {
-                    Ok(position) => goto[node][position].1 as usize,
-                    Err(position) => {
-                        let next = goto.len();
-                        goto[node].insert(position, (byte, index_u32(next)));
-                        goto.push(Vec::new());
-                        depth.push(depth[node] + 1);
-                        own.push(None);
-                        next
-                    }
-                };
+        let count = goto.nodes.len();
+        let cells = count
+            .checked_mul(256)
+            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+        // Admit zero initialization of all final and temporary table elements.
+        let work = size(cells)
+            .checked_add(
+                size(count)
+                    .checked_mul(3)
+                    .ok_or_else(|| governor.stop_resource(Resource::Work))?,
+            )
+            .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+        governor.charge(Resource::Work, work)?;
+        let mut delta = ScratchVec::new(governor);
+        delta.extend(core::iter::repeat_n(0_u32, cells))?;
+        let mut depth = ScratchVec::new(governor);
+        depth.extend(core::iter::repeat_n(0_u32, count))?;
+        let mut fail = ScratchVec::new(governor);
+        fail.extend(core::iter::repeat_n(0_u32, count))?;
+        let mut found = ScratchVec::new(governor);
+        found.extend(core::iter::repeat_n(None, count))?;
+        // Trie insertion always assigns a parent before its children.
+        for (state, node) in goto.nodes.iter().enumerate() {
+            governor.charge(Resource::Work, size(node.children.len()).saturating_add(1))?;
+            for &(_, child) in &node.children {
+                let next = depth[state]
+                    .checked_add(1)
+                    .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+                depth.as_mut_slice()[child as usize] = next;
             }
-            let length = index_u32(literal.len());
-            own[node].get_or_insert_with(|| (index_u32(index), length));
+            found.as_mut_slice()[state] = node.accept.map(|label| (label, depth[state]));
         }
-        let count = goto.len();
-        let mut delta = vec![0_u32; count * 256];
-        let mut fail = vec![0_u32; count];
-        let mut found: Vec<Option<(u32, u32)>> = own.clone();
-        let mut queue = std::collections::VecDeque::new();
-        for &(byte, child) in &goto[0] {
-            delta[usize::from(byte)] = child;
-            queue.push_back(child as usize);
+        let mut queue = ScratchVec::new(governor);
+        governor.charge(Resource::Work, size(goto.nodes[0].children.len()))?;
+        for &(byte, child) in &goto.nodes[0].children {
+            delta.as_mut_slice()[usize::from(byte)] = child;
+            queue.push(child)?;
         }
-        while let Some(state) = queue.pop_front() {
+        let mut cursor = 0;
+        while let Some(&state) = queue.as_slice().get(cursor) {
+            governor.charge(Resource::Work, 1)?;
+            cursor += 1;
+            let state = state as usize;
             let fallback = fail[state] as usize;
-            // Longest literal ending here: this state's own, else the
-            // fail chain's (already final, since BFS visits shallower first).
             if found[state].is_none() {
-                found[state] = found[fallback];
+                found.as_mut_slice()[state] = found[fallback];
             }
+            let children = &goto.nodes[state].children;
+            let comparisons = u64::from(children.len().bit_width()) + 1;
             for byte in 0..=255_u8 {
+                governor.charge(Resource::Work, comparisons + 3)?;
                 let slot = state * 256 + usize::from(byte);
-                match goto[state].binary_search_by_key(&byte, |(key, _)| *key) {
+                let fallback_state = delta[fallback * 256 + usize::from(byte)];
+                match children.binary_search_by_key(&byte, |(key, _)| *key) {
                     Ok(position) => {
-                        let child = goto[state][position].1 as usize;
-                        fail[child] = delta[fallback * 256 + usize::from(byte)];
-                        delta[slot] = index_u32(child);
-                        queue.push_back(child);
+                        let child = children[position].1;
+                        fail.as_mut_slice()[child as usize] = fallback_state;
+                        delta.as_mut_slice()[slot] = child;
+                        queue.push(child)?;
                     }
-                    Err(_) => delta[slot] = delta[fallback * 256 + usize::from(byte)],
+                    Err(_) => delta.as_mut_slice()[slot] = fallback_state,
                 }
             }
         }
+        governor.check()?;
         Ok(Self {
             delta,
             depth,
             found,
-            longest: literals
-                .iter()
-                .map(|literal| literal.as_ref().len())
-                .max()
-                .unwrap_or(0),
+            longest,
         })
     }
 
@@ -268,7 +301,12 @@ mod tests {
     #[test]
     fn matcher_reports_earliest_end_then_longest() {
         let mut governor = Governor::new(Budget::default());
-        let literals = vec![b"</arg>".to_vec(), b"</args>".to_vec(), b"g>".to_vec()];
+        let literals = vec![
+            b"</arg>".to_vec(),
+            b"</args>".to_vec(),
+            b"g>".to_vec(),
+            b"</arg>".to_vec(),
+        ];
         let matcher = Matcher::build(&literals, &mut governor).unwrap();
         let mut state = ROOT;
         let mut hits = Vec::new();
@@ -285,6 +323,73 @@ mod tests {
         }
         assert_eq!(matcher.depth(state), 5);
         assert_eq!(matcher.found(matcher.step(state, b'>')), Some((0, 6)));
+    }
+
+    #[test]
+    fn dense_matcher_admission_releases_partial_tables_and_retains_final_ownership() {
+        use crate::contract::{CancellationToken, Resource, StopReason};
+        let long = [b'x'; 256];
+        let literals = [long.as_slice(), b"tail", b"ai"];
+        let mut measured = Governor::new(Budget::default());
+        let matcher = Matcher::build(&literals, &mut measured).unwrap();
+        let usage = measured.usage();
+        let state = long
+            .iter()
+            .fold(ROOT, |state, byte| matcher.step(state, *byte));
+        assert_eq!(matcher.found(state), Some((0, 256)));
+        drop(matcher);
+        assert_eq!(measured.scratch_meter().live(), 0);
+        let exact = Budget {
+            work: usage.work,
+            scratch_bytes: usage.peak_scratch_bytes,
+            input_bytes: 256,
+            depth: 1,
+            ..Budget::default()
+        };
+        let mut g = Governor::new(exact);
+        drop(Matcher::build(&literals, &mut g).unwrap());
+        assert_eq!(g.scratch_meter().live(), 0);
+        for (budget, resource) in [
+            (
+                Budget {
+                    work: exact.work - 1,
+                    ..exact
+                },
+                Resource::Work,
+            ),
+            (
+                Budget {
+                    scratch_bytes: exact.scratch_bytes - 1,
+                    ..exact
+                },
+                Resource::ScratchBytes,
+            ),
+            (
+                Budget {
+                    input_bytes: exact.input_bytes - 1,
+                    ..exact
+                },
+                Resource::InputBytes,
+            ),
+            (Budget { depth: 0, ..exact }, Resource::Depth),
+        ] {
+            let mut g = Governor::new(budget);
+            assert_eq!(
+                Matcher::build(&literals, &mut g).unwrap_err(),
+                StopReason::BudgetExceeded(resource)
+            );
+            assert_eq!(g.check(), Err(StopReason::BudgetExceeded(resource)));
+            assert_eq!(g.scratch_meter().live(), 0);
+        }
+        let token = CancellationToken::new();
+        token.cancel();
+        let mut g = Governor::with_cancellation(exact, token);
+        assert_eq!(
+            Matcher::build(&literals, &mut g).unwrap_err(),
+            StopReason::Cancelled
+        );
+        assert_eq!(g.usage().work, 0);
+        assert_eq!(g.scratch_meter().live(), 0);
     }
 
     #[test]
