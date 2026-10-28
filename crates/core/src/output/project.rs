@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use purrassist_core::{
+use crate::{
     Governor, ScratchCharge, ScratchString, ScratchVec, StopReason,
     contract::{Resource, saturating_size as size},
     json::{self, JsonField, JsonLine, Node, Value},
@@ -13,7 +13,7 @@ use purrassist_core::{
 };
 
 use super::{ContextManagement, OutputLimitError, OutputMeasurement};
-use crate::{FieldMask, FieldMaskKind};
+use super::{FieldMask, FieldMaskKind};
 
 /// The last pipeline stage attempted, retained on every outcome.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -183,7 +183,7 @@ impl ContextManagement {
     ///
     /// ```
     /// use purrassist_core::{Budget, Governor, json, schema::Schema};
-    /// use purrassist_toolgraph::{ContextManagement, FieldMask, LoadingStrategy, OutputByteLimit};
+    /// use purrassist_core::output::{ContextManagement, FieldMask, LoadingStrategy, OutputByteLimit};
     /// let context = ContextManagement::new(FieldMask::parse(".orders[]?").unwrap(), OutputByteLimit::new(32).unwrap(), 0, vec![], LoadingStrategy::Always);
     /// let schema = Schema::compile(r#"{"type":"object"}"#).unwrap();
     /// let original = json::parse(r#"{"orders":[1.00e2,true]}"#).unwrap();

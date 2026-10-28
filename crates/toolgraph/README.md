@@ -271,3 +271,10 @@ The actual `policy_document` example prints a complete compiled document. Full
 RDF/SRL/static admission, permission/owner/deny proofs, abstraction imports and
 trust, nested graph profile synthesis, transition-target existence, graph CLI,
 loaded mediation and host confinement remain #33/#34/#35/#39 requirements.
+
+
+Field masks, context metadata and validated result projection are reexported
+from `purrassist_core::output`. The shipped facade exposes these same types
+through `purrassist::output`; the read-only host `project_result` operation is
+available through CLI `call` and MCP. These are result-processing surfaces,
+without graph-backed dispatch or release authority.

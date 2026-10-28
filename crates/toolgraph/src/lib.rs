@@ -6,8 +6,6 @@
 
 mod apparmor_glob;
 mod binding;
-mod context;
-mod field_mask;
 mod file_rule;
 mod glob_language;
 mod internet;
@@ -20,13 +18,13 @@ mod socket_access;
 mod unix;
 mod vocab;
 
-pub use context::{
+pub use purrassist_core::output::{
     ContextCodecError, ContextManagement, LoadingStrategy, MCP_CONTEXT_FORMAT, NullSelection,
     OutputByteLimit, OutputEnforcement, OutputLimitError, OutputMeasurement, OutputTransform,
     OutputUnit, ProjectedResult, ProjectionFailure, ProjectionStage, ProjectionTrace,
     ResultProjectionError,
 };
-pub use field_mask::{FieldMask, FieldMaskError, FieldMaskKind};
+pub use purrassist_core::output::{FieldMask, FieldMaskError, FieldMaskKind};
 pub use vocab::{
     BindingProblem, BindingSection, LOSS_PROFILE_ID, ModelFamily, PrefixTable, ProjectionTarget,
     SOURCE_REPRESENTATION, TERM_NAMES, TermBindings, Vocabulary, VocabularyError,

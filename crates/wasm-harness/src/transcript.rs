@@ -83,6 +83,7 @@ pub fn transcript_json() -> String {
     transcript.push(list_transcript());
     transcript.push(reference_transcript());
     transcript.push(tool_call_transcript());
+    transcript.push(output_projection_transcript());
     array(transcript).to_json()
 }
 
@@ -725,6 +726,55 @@ fn list_transcript() -> Node {
         ("operation", string("list items")),
         ("results", array(results)),
     ])
+}
+
+/// The published pure result pipeline has the same artifact and refusal on each target.
+fn output_projection_transcript() -> Node {
+    use purrassist_core::{
+        json,
+        output::{
+            ContextManagement, FieldMask, LoadingStrategy, OutputByteLimit, ProjectionFailure,
+        },
+    };
+    let mut results = Vec::new();
+    for limit in [12, 11] {
+        let mut governor = Governor::new(Budget::default());
+        let context = ContextManagement::new(
+            FieldMask::parse_governed(".orders[]?", &mut governor).expect("mask"),
+            OutputByteLimit::new(limit).expect("positive ceiling"),
+            0,
+            vec![],
+            LoadingStrategy::Always,
+        );
+        let schema =
+            Schema::compile_governed(r#"{"type":"object"}"#, &mut governor).expect("schema");
+        let original =
+            json::parse_with(r#"{"orders":[1.00e2,true]}"#, &mut governor).expect("original");
+        match context.project_result(&schema, &original, &mut governor) {
+            Ok(value) => {
+                assert_eq!(value.bytes.as_str(), "1.00e2\ntrue\n");
+                results.push(object([
+                    ("text", string(value.bytes.as_str())),
+                    ("measured", integer(value.measurement.measured)),
+                ]));
+            }
+            Err(error) => {
+                let ProjectionFailure::OutputLimit(
+                    purrassist_core::output::OutputLimitError::Exceeded(measured),
+                ) = error.reason
+                else {
+                    panic!("exact byte refusal")
+                };
+                assert_eq!(measured.measured, 12);
+                results.push(object([
+                    ("stage", string(format!("{:?}", error.trace.stage))),
+                    ("limit", integer(measured.limit)),
+                    ("measured", integer(measured.measured)),
+                ]));
+            }
+        }
+    }
+    array(results)
 }
 
 #[cfg(test)]

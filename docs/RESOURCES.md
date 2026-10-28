@@ -1728,3 +1728,39 @@ search nor contradiction detection converts refusal into a semantic answer.
 Ordinary public comparison remains an explicitly ordinary operation. This does
 not extend scratch ownership to caller DOM construction, full witness algebra,
 XML decoding or higher-level emitter preparation.
+
+
+## Validated result projection through shipped surfaces
+
+The pure `output` module now owns the existing field-mask parser, context codec,
+exact output-byte checker and validated result pipeline. Toolgraph reexports the
+same types. The published facade exposes `purrassist::output`, with no dependency
+on the unpublished graph crate. Core keeps its zero-dependency and ambient-access
+contracts; the six-crate release set is unchanged.
+
+The read-only `project_result` registry operation accepts exact `result_json`,
+`output_schema`, `format`, the complete `context`, and optional `effort`. The
+existing CLI `call` and MCP `tools/call` routes use that handler. Accepted
+processing decodes context, emits and compiles the schema under the governor,
+strictly parses the original JSON, then validates the entire original before
+applying its mask. It performs no recovery or stringified-JSON unwrapping.
+
+Replies retain exact original JSON, requested context JSON and every requested
+mask occurrence, the actual preparation/pipeline stage, available validation and
+transformations, a typed failure or complete artifact, and a receipt. Unavailable
+validation is null. Native resource stops remain native receipt terminations.
+Generic invocation validation, cancellation before handler entry and malformed
+protocol messages keep the existing transport policy.
+
+Only successful replies contain `application/x-ndjson` artifact text: one LF per
+compact JSON value, no outer array, and zero bytes for zero selected values.
+The exact byte measurement applies to decoded UTF-8 artifact text. JSON string
+escaping, receipt and control fields, the CLI envelope LF and MCP wrappers are
+outside that measurement and retain the existing host materialization policy.
+A valid processing-refusal envelope uses the ordinary CLI `call` success exit;
+its `status`, typed `error` and receipt describe the unresolved operation.
+
+This is caller-requested result processing. It grants no graph authority, tool
+execution, authorization, confinement or proof-bound release. Loading, intent and
+history metadata is decoded without implementing those policies. Full
+#33/#34/#35/#36/#37/#39/#47 acceptance remains required.

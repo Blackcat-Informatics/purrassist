@@ -219,6 +219,24 @@ fn fx(
 fn fixtures() -> Vec<Fixture> {
     vec![
         fx(
+            "project_result",
+            |_| project_arguments(r#" {"orders":[1.00e2,true]} "#, ".orders[]?", 12, "true"),
+            |reply| {
+                assert_eq!(reply.get("status").and_then(Node::as_str), Some("resolved"));
+                assert_eq!(
+                    reply.pointer("/artifact/text").and_then(Node::as_str),
+                    Some("1.00e2\ntrue\n")
+                );
+                assert_eq!(
+                    reply
+                        .pointer("/artifact/measurement/measured")
+                        .unwrap()
+                        .to_json(),
+                    "12"
+                );
+            },
+        ),
+        fx(
             "match_embeddings",
             |_| {
                 r#"{"space":"caller-v1","query":[1,0],"candidates":[{"id":"tea","vector":[1,0]},{"id":"other","vector":[0,1]}]}"#.into()
@@ -1345,4 +1363,68 @@ fn tools_reference_matches_registry() {
          PURRASSIST_BLESS=1 cargo test -p purrassist-cli --test protocol tools_reference_matches_registry\n{}",
         line_diff(&expected, actual)
     );
+}
+
+fn project_arguments(raw: &str, mask: &str, limit: u64, schema: &str) -> String {
+    format!(
+        r#"{{"result_json":{},"output_schema":{schema},"format":"purrassist-toolgraph-v2","context":{{"outputProjectionJq":{},"maxOutputBytes":{limit},"outputEnforcement":"exact-bytes","historyRetentionTurns":0,"intentTags":[],"loadingStrategy":"always"}}}}"#,
+        json::quote(raw),
+        json::quote(mask)
+    )
+}
+
+/// Artifact boundaries and typed processing refusals survive both real transports.
+#[test]
+fn project_result_cli_mcp_keep_checked_bytes_and_structured_refusals() {
+    let output = output_schema_of("project_result");
+    for (raw, mask, limit, schema, status, kind) in [
+        (r#"["é\n",true]"#, ".[]", 12, "true", "resolved", None),
+        (
+            r#"["é\n",true]"#,
+            ".[]",
+            11,
+            "true",
+            "unresolved",
+            Some("output_limit"),
+        ),
+        (
+            r#"{"hidden":false,"a":1}"#,
+            ".a",
+            64,
+            r#"{"properties":{"hidden":{"const":true}}}"#,
+            "unresolved",
+            Some("schema_rejected"),
+        ),
+        (
+            r#"{"a":1,"a":2}"#,
+            ".a",
+            64,
+            "true",
+            "unresolved",
+            Some("projection_ambiguous_member"),
+        ),
+        ("{bad", ".a", 64, "true", "unresolved", Some("json_syntax")),
+    ] {
+        let args = project_arguments(raw, mask, limit, schema);
+        let root = fresh_dir("project-result-parity");
+        let cli = run_cli("project_result", &args, &root);
+        let mcp = run_mcp("project_result", &args, &root);
+        assert_eq!(cli.to_json(), mcp.to_json());
+        assert!(output.validate(&cli).unwrap().valid, "{cli:?}");
+        assert_eq!(cli.get("status").and_then(Node::as_str), Some(status));
+        assert_eq!(cli.get("original_json").and_then(Node::as_str), Some(raw));
+        if let Some(kind) = kind {
+            assert_eq!(
+                cli.pointer("/error/kind").and_then(Node::as_str),
+                Some(kind)
+            );
+            assert!(matches!(cli.get("artifact").unwrap().value, Value::Null));
+        } else {
+            assert_eq!(
+                cli.pointer("/artifact/text").and_then(Node::as_str),
+                Some("\"é\\n\"\ntrue\n")
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 }

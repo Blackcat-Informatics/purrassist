@@ -54,3 +54,9 @@ structural edits and explicit resource outcomes. See the
 
 First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0. Unicode and HTML entity tables,
 schema meta-schemas, and test corpora retain the upstream notices included with them.
+
+
+The `output` module provides the complete governed field-mask/context codec and
+validated JSON Lines result pipeline. Validate the full original against its
+schema before projecting; exact byte ceilings apply to the complete artifact.
+Original input, transformations and typed refusal stages remain available.

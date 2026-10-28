@@ -9,6 +9,7 @@ mod inspect;
 mod intent;
 mod markdown;
 mod paths;
+mod project_result;
 mod registry;
 mod tool_calls;
 mod validate;
@@ -234,6 +235,31 @@ impl Tools {
 /// Returns the same errors `Tools::call("validate_json", args)` would.
 pub fn validate_json(args: &Node) -> Result<Node, String> {
     validate::call(args, None)
+}
+
+/// Validate a complete original JSON result, apply its context mask, and check
+/// the resulting compact JSON Lines artifact's exact UTF-8 byte ceiling.
+///
+/// This is the same read-only `project_result` operation exposed by CLI `call`
+/// and MCP. Accepted processing refusals are structured replies retaining the
+/// original source, controls, stage and typed cause. Protocol and receipt bytes
+/// are separate from the artifact measurement.
+///
+/// # Errors
+/// This direct helper checks required processing fields, rather than validating
+/// the full registry envelope. Use `Tools::call` for registry schema validation.
+/// Missing required fields are invocation errors. Domain and native resource
+/// refusals are returned in the structured processing reply.
+///
+/// ```
+/// use purrassist::json;
+/// let args = json::parse(r#"{"result_json":"{\"items\":[1.00e2,true]}","output_schema":{"type":"object"},"format":"purrassist-toolgraph-v2","context":{"outputProjectionJq":".items[]?","maxOutputBytes":64,"outputEnforcement":"exact-bytes","historyRetentionTurns":0,"intentTags":[],"loadingStrategy":"always"}}"#)?;
+/// let reply = purrassist_host::tools::project_result(&args)?;
+/// assert_eq!(reply.pointer("/artifact/text").and_then(json::Node::as_str), Some("1.00e2\ntrue\n"));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn project_result(args: &Node) -> Result<Node, String> {
+    project_result::call(args, None)
 }
 
 /// Recover the tool calls of one model turn from raw output bytes.

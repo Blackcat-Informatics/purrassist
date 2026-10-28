@@ -23,6 +23,16 @@ pub fn object(fields: impl IntoIterator<Item = (impl Into<String>, Node)>) -> No
             .collect(),
     ))
 }
+/// Construct JSON null without inferring or validating a missing value.
+///
+/// ```
+/// use purrassist_core::wire;
+/// assert_eq!(wire::object([("missing", wire::null())]).to_json(), r#"{"missing":null}"#);
+/// ```
+#[must_use]
+pub const fn null() -> Node {
+    Node::new(Value::Null)
+}
 /// Construct a JSON string.
 #[must_use]
 pub fn string(value: impl Into<String>) -> Node {
@@ -240,8 +250,20 @@ pub(crate) fn byte_range(range: &core::ops::Range<usize>) -> Node {
     ])
 }
 
-/// One validation result in the receipt's wire representation.
-pub(crate) fn validation(entry: &Validation) -> Node {
+/// Encode a supplied validation using the receipt's wire representation.
+///
+/// This preserves validator, constraint, outcome and ordered diagnostics;
+/// it neither reruns the validator nor adds an output-artifact byte claim.
+///
+/// ```
+/// use purrassist_core::{contract::Validation, wire};
+/// let check = Validation { validator: "caller.check.v1".into(), constraint: "positive".into(), passed: false, diagnostics: vec!["value was zero".into()] };
+/// let encoded = wire::validation(&check);
+/// assert_eq!(encoded.get("passed").unwrap().to_json(), "false");
+/// assert_eq!(encoded.get("diagnostics").unwrap().to_json(), r#"["value was zero"]"#);
+/// ```
+#[must_use]
+pub fn validation(entry: &Validation) -> Node {
     object([
         ("validator", string(&entry.validator)),
         ("constraint", string(&entry.constraint)),

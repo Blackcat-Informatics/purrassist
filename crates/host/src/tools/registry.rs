@@ -179,6 +179,14 @@ pub(super) static ENTRIES: &[Entry] = &[
         |_, _, args, cancellation| super::tool_calls::call(args, cancellation)
     ),
     entry!(
+        "project_result",
+        "Validate the complete original JSON result against its output schema, apply the closed context field mask, and emit an exact-byte checked JSON Lines artifact; structured refusals retain original source, requested controls, stage and typed cause. The byte limit covers only decoded artifact text, excluding protocol and receipt framing; no tool is executed or authorized",
+        super::project_result::INPUT_SCHEMA,
+        super::project_result::OUTPUT_SCHEMA,
+        false,
+        |_, _, args, cancellation| super::project_result::call(args, cancellation)
+    ),
+    entry!(
         "validate_json",
         "Validate a JSON instance against a schema, reporting violations, always-evaluated format/pattern evidence, and unsupported-vocabulary evidence",
         r#"{"type":"object","required":["schema","instance"],"properties":{"schema":{"type":["object","boolean"]},"instance":true,"effort":{"enum":["exact","quick","standard","deep","maximum"]}},"additionalProperties":false}"#,
