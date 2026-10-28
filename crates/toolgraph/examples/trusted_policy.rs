@@ -1,0 +1,300 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Synthetic host grants followed by the actual native SRL syntax/import checker.
+//! Native parsing/checking has its own allocation contract, outside this API's
+//! governor. This consumer performs no evaluation or protected-head admission.
+use purrassist_core::{Budget, Governor};
+use purrassist_toolgraph::{
+    MatchedPolicyContract, PolicyContractInput, PolicyGrant, PolicyScope, PolicySource,
+    PreparedPolicyContract, TrustedPolicyRegistry,
+};
+use purrdf_shapes::srl::{self, CheckLevel, SrlError};
+
+fn verify(matched: &MatchedPolicyContract<'_>) -> Result<(), Box<dyn std::error::Error>> {
+    let input = matched.input();
+    for source in input.documents {
+        if source.location != input.root && source.external_base != Some(source.location) {
+            return Err("native import checker cannot preserve the recorded external base".into());
+        }
+        let parsed = srl::parse(source.text, source.external_base)?;
+        let actual: Vec<_> = parsed
+            .imports()
+            .iter()
+            .map(purrdf_shapes::term::NamedNode::as_str)
+            .collect();
+        if actual != source.imports {
+            return Err("declared ordered edges differ from native imports".into());
+        }
+    }
+    let root = input
+        .documents
+        .iter()
+        .find(|source| source.location == input.root)
+        .ok_or("root absent")?;
+    // Native resolution uses each import's location as its external base.
+    // Refuse any recorded-base mismatch rather than changing admitted meaning.
+    let table: Vec<_> = input
+        .documents
+        .iter()
+        .filter(|source| source.location != input.root)
+        .map(|source| (source.location, source.text))
+        .collect();
+    // A cyclic root is already read when its recorded base is its location.
+    if input
+        .documents
+        .iter()
+        .any(|source| source.imports.contains(&input.root))
+        && root.external_base != Some(root.location)
+    {
+        return Err(
+            "native cyclic-root checker requires recorded base equal to root location".into(),
+        );
+    }
+    let checked = srl::check(root.text, root.external_base, &table, CheckLevel::Syntax)?;
+    assert_eq!(checked.imported().len(), table.len());
+    if !table.is_empty() {
+        assert!(matches!(
+            srl::check(root.text, root.external_base, &[], CheckLevel::Syntax),
+            Err(SrlError::Import { .. })
+        ));
+        let mut duplicate = table.clone();
+        duplicate.push(table[0]);
+        assert!(matches!(
+            srl::check(
+                root.text,
+                root.external_base,
+                &duplicate,
+                CheckLevel::Syntax
+            ),
+            Err(SrlError::Import { .. })
+        ));
+    }
+    let mut extra = table;
+    extra.push(("https://example.test/unused", ""));
+    assert!(matches!(
+        srl::check(root.text, root.external_base, &extra, CheckLevel::Syntax),
+        Err(SrlError::UnreachedImports { .. })
+    ));
+    Ok(())
+}
+
+fn run(
+    documents: &[PolicySource<'_>],
+    approved: &[([u8; 32], [u8; 32])],
+    expected_native: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut governor = Governor::new(Budget::default());
+    let prepared = PreparedPolicyContract::prepare(
+        PolicyContractInput {
+            root: documents[0].location,
+            documents,
+        },
+        &mut governor,
+    )
+    .map_err(|error| error.to_string())?;
+    let scope = PolicyScope {
+        tool: "https://example.test/tool",
+        vocabulary: [7; 32],
+        session_schema: [42; 32],
+    };
+    // These externally stored synthetic approvals are independent of candidate
+    // preparation; changes in original bytes or closure are refused by bind().
+    let grants: Vec<_> = approved
+        .iter()
+        .map(|&(document, contract)| PolicyGrant {
+            document,
+            contract,
+            scope,
+            issuer: "host",
+            provenance: "synthetic host configuration",
+        })
+        .collect();
+    let registry = TrustedPolicyRegistry::prepare(&grants, &mut governor)
+        .map_err(|error| error.to_string())?;
+    let matched = prepared
+        .bind(&registry, scope, &mut governor)
+        .map_err(|error| error.to_string())?;
+    let verified = verify(&matched);
+    if expected_native {
+        verified?;
+    } else {
+        assert!(
+            verified
+                .unwrap_err()
+                .to_string()
+                .contains("recorded external base")
+        );
+    }
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let leaf = PolicySource {
+        location: "https://example.test/leaf",
+        external_base: Some("https://example.test/leaf"),
+        issuer: "host",
+        text: "DATA { <subject> <https://example.test/p> <https://example.test/o> }",
+        imports: &[],
+    };
+    run(&[leaf], &LEAF_APPROVAL, true).map_err(|e| e.to_string())?;
+    let shared = [
+        PolicySource {
+            location: "https://example.test/root",
+            external_base: Some("https://example.test/root"),
+            issuer: "host",
+            text: "IMPORTS <leaf> IMPORTS <middle> IMPORTS <leaf>",
+            imports: &[
+                "https://example.test/leaf",
+                "https://example.test/middle",
+                "https://example.test/leaf",
+            ],
+        },
+        leaf,
+        PolicySource {
+            location: "https://example.test/middle",
+            external_base: Some("https://example.test/middle"),
+            issuer: "host",
+            text: "IMPORTS <leaf>",
+            imports: &["https://example.test/leaf"],
+        },
+    ];
+    run(&shared, &SHARED_APPROVAL, true).map_err(|e| e.to_string())?;
+    let cyclic = [
+        PolicySource {
+            location: "https://example.test/root",
+            external_base: Some("https://example.test/root"),
+            issuer: "host",
+            text: "IMPORTS <child>",
+            imports: &["https://example.test/child"],
+        },
+        PolicySource {
+            location: "https://example.test/child",
+            external_base: Some("https://example.test/child"),
+            issuer: "host",
+            text: "IMPORTS <root>",
+            imports: &["https://example.test/root"],
+        },
+    ];
+    run(&cyclic, &CYCLIC_APPROVAL, true).map_err(|e| e.to_string())?;
+    let mut mismatched = shared;
+    mismatched[1].external_base = None;
+    run(&mismatched, &MISMATCH_APPROVAL, false).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// Independently encoded fixture transcripts, cross-checked with Python hashlib.
+const LEAF_APPROVAL: [([u8; 32], [u8; 32]); 1] = [(
+    [
+        0xce, 0x83, 0x25, 0x76, 0x5c, 0x46, 0x6a, 0x22, 0x8b, 0x0f, 0xef, 0xb4, 0xc4, 0x6b, 0x9a,
+        0xb9, 0xa7, 0xc6, 0xaf, 0x74, 0x7e, 0xc6, 0xcf, 0x97, 0x66, 0xcf, 0x15, 0x73, 0xa2, 0x39,
+        0xb6, 0xf6,
+    ],
+    [
+        0x53, 0x17, 0x7f, 0xd5, 0xa1, 0x18, 0xfa, 0x18, 0xcd, 0x7a, 0xd7, 0xbc, 0x79, 0xde, 0xe4,
+        0x5d, 0x28, 0x65, 0x53, 0xc0, 0x00, 0xe9, 0x2e, 0xbe, 0x08, 0x3b, 0xee, 0x4e, 0x82, 0x60,
+        0x9e, 0xb9,
+    ],
+)];
+const SHARED_APPROVAL: [([u8; 32], [u8; 32]); 3] = [
+    (
+        [
+            0x81, 0x2b, 0x77, 0x68, 0x16, 0x7f, 0x7c, 0x98, 0x56, 0xe3, 0x3b, 0x57, 0x4d, 0xa1,
+            0x9b, 0xc6, 0x64, 0xb5, 0x0c, 0x8c, 0x41, 0xb3, 0x9e, 0x1a, 0x4c, 0x66, 0xaf, 0x09,
+            0x97, 0xdf, 0x2c, 0xf9,
+        ],
+        [
+            0x45, 0x8a, 0xfe, 0x05, 0x04, 0xfc, 0x37, 0x19, 0x4d, 0x4d, 0x7d, 0xc8, 0x51, 0x75,
+            0x6d, 0x6f, 0x70, 0xd4, 0xc6, 0x69, 0xb0, 0x73, 0x08, 0x2e, 0x2b, 0xb2, 0xdc, 0xf7,
+            0x85, 0x35, 0x4b, 0xf1,
+        ],
+    ),
+    (
+        [
+            0xce, 0x83, 0x25, 0x76, 0x5c, 0x46, 0x6a, 0x22, 0x8b, 0x0f, 0xef, 0xb4, 0xc4, 0x6b,
+            0x9a, 0xb9, 0xa7, 0xc6, 0xaf, 0x74, 0x7e, 0xc6, 0xcf, 0x97, 0x66, 0xcf, 0x15, 0x73,
+            0xa2, 0x39, 0xb6, 0xf6,
+        ],
+        [
+            0x53, 0x17, 0x7f, 0xd5, 0xa1, 0x18, 0xfa, 0x18, 0xcd, 0x7a, 0xd7, 0xbc, 0x79, 0xde,
+            0xe4, 0x5d, 0x28, 0x65, 0x53, 0xc0, 0x00, 0xe9, 0x2e, 0xbe, 0x08, 0x3b, 0xee, 0x4e,
+            0x82, 0x60, 0x9e, 0xb9,
+        ],
+    ),
+    (
+        [
+            0x07, 0xe3, 0x63, 0x7b, 0xdd, 0x24, 0x24, 0x26, 0xae, 0xfb, 0x73, 0xc3, 0x67, 0x3f,
+            0x3e, 0x54, 0x42, 0xb6, 0xae, 0xb2, 0x73, 0xdf, 0x82, 0x6d, 0x91, 0xb4, 0x72, 0xb7,
+            0x2a, 0xba, 0x4a, 0x32,
+        ],
+        [
+            0xc0, 0xcd, 0x8c, 0x0d, 0x09, 0x5a, 0x65, 0xbf, 0x3d, 0xf1, 0x29, 0x8b, 0x50, 0x7b,
+            0xe6, 0x14, 0x73, 0x3d, 0x84, 0x00, 0xda, 0x29, 0xbd, 0x57, 0x9d, 0x07, 0x9c, 0xb0,
+            0x1e, 0x4b, 0x3c, 0x9c,
+        ],
+    ),
+];
+const CYCLIC_APPROVAL: [([u8; 32], [u8; 32]); 2] = [
+    (
+        [
+            0x63, 0x1f, 0xa1, 0xe7, 0x7d, 0xd5, 0xeb, 0x5e, 0xc8, 0xc4, 0x28, 0xa6, 0x50, 0x39,
+            0xeb, 0xfb, 0x83, 0x2a, 0xa9, 0xb6, 0x59, 0xf0, 0x85, 0xa3, 0xd4, 0x8c, 0x82, 0xc0,
+            0x4f, 0x94, 0x07, 0x25,
+        ],
+        [
+            0x33, 0x63, 0x97, 0x6a, 0xb9, 0x1e, 0x26, 0xa5, 0xf1, 0x9e, 0x1d, 0x06, 0x6c, 0x39,
+            0x8e, 0x37, 0x0f, 0x3a, 0xf3, 0x1b, 0x5b, 0x2c, 0x1e, 0x6c, 0x9f, 0x27, 0xcb, 0x0e,
+            0x2f, 0xae, 0xba, 0xcc,
+        ],
+    ),
+    (
+        [
+            0x35, 0x45, 0x87, 0x9c, 0x45, 0xda, 0x43, 0x6f, 0x2c, 0x45, 0x19, 0x8b, 0x2d, 0xa4,
+            0xdb, 0x6d, 0xff, 0x06, 0x57, 0x0f, 0x88, 0x60, 0x32, 0xa0, 0xa5, 0x0a, 0x22, 0x2f,
+            0xac, 0x25, 0xa3, 0x56,
+        ],
+        [
+            0xfe, 0x9b, 0x9e, 0x64, 0x73, 0x9c, 0xa6, 0x08, 0x73, 0xa1, 0x74, 0xb4, 0xa0, 0xb8,
+            0xbe, 0xff, 0x91, 0xef, 0x0b, 0x1d, 0x1b, 0xd7, 0x37, 0xa6, 0x8c, 0xdb, 0xd9, 0xaf,
+            0xe9, 0x84, 0xd4, 0xf0,
+        ],
+    ),
+];
+const MISMATCH_APPROVAL: [([u8; 32], [u8; 32]); 3] = [
+    (
+        [
+            0x81, 0x2b, 0x77, 0x68, 0x16, 0x7f, 0x7c, 0x98, 0x56, 0xe3, 0x3b, 0x57, 0x4d, 0xa1,
+            0x9b, 0xc6, 0x64, 0xb5, 0x0c, 0x8c, 0x41, 0xb3, 0x9e, 0x1a, 0x4c, 0x66, 0xaf, 0x09,
+            0x97, 0xdf, 0x2c, 0xf9,
+        ],
+        [
+            0x86, 0xd8, 0xea, 0x7a, 0x26, 0xc3, 0xf2, 0xb7, 0xcc, 0xda, 0x4c, 0x11, 0x1a, 0xfc,
+            0x86, 0x7f, 0x0a, 0xca, 0xea, 0xb1, 0xdf, 0xca, 0xd4, 0xda, 0x3e, 0xf1, 0x1b, 0x80,
+            0xcc, 0xc9, 0xce, 0x39,
+        ],
+    ),
+    (
+        [
+            0xce, 0x83, 0x25, 0x76, 0x5c, 0x46, 0x6a, 0x22, 0x8b, 0x0f, 0xef, 0xb4, 0xc4, 0x6b,
+            0x9a, 0xb9, 0xa7, 0xc6, 0xaf, 0x74, 0x7e, 0xc6, 0xcf, 0x97, 0x66, 0xcf, 0x15, 0x73,
+            0xa2, 0x39, 0xb6, 0xf6,
+        ],
+        [
+            0x42, 0x1f, 0x43, 0xc7, 0x67, 0x16, 0x6d, 0xed, 0xe1, 0x20, 0xc7, 0x11, 0x26, 0x83,
+            0xa0, 0x37, 0x24, 0x2d, 0xc5, 0x68, 0x73, 0x20, 0xc0, 0xba, 0x17, 0xff, 0x60, 0x37,
+            0xe5, 0xbd, 0xff, 0xf6,
+        ],
+    ),
+    (
+        [
+            0x07, 0xe3, 0x63, 0x7b, 0xdd, 0x24, 0x24, 0x26, 0xae, 0xfb, 0x73, 0xc3, 0x67, 0x3f,
+            0x3e, 0x54, 0x42, 0xb6, 0xae, 0xb2, 0x73, 0xdf, 0x82, 0x6d, 0x91, 0xb4, 0x72, 0xb7,
+            0x2a, 0xba, 0x4a, 0x32,
+        ],
+        [
+            0x92, 0x09, 0x15, 0x0d, 0x9a, 0xdf, 0x34, 0xd8, 0x2a, 0xb3, 0x2e, 0x80, 0x8a, 0x33,
+            0xb6, 0xbe, 0x8a, 0x71, 0xfe, 0x0e, 0x94, 0x0d, 0x68, 0x3e, 0xbd, 0xd8, 0x2f, 0xbe,
+            0xff, 0x2c, 0xda, 0x70,
+        ],
+    ),
+];

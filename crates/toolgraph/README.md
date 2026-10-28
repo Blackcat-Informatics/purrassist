@@ -305,3 +305,31 @@ from `purrassist_core::output`. The shipped facade exposes these same types
 through `purrassist::output`; the read-only host `project_result` operation is
 available through CLI `call` and MCP. These are result-processing surfaces,
 without graph-backed dispatch or release authority.
+
+## Exact prepared policy trust
+
+`PreparedPolicyContract::prepare` retains a complete original SRL document table
+and computes each document's exact-text SHA-256 and finite rooted import-contract
+SHA-256. Ordered first-use/back-reference transcripts preserve repeated imports,
+sharing and cycles, and bind original locations and optional external bases.
+Missing, duplicate or unreachable records fail explicitly.
+
+`TrustedPolicyRegistry::prepare` receives immutable host grant records with
+independently supplied SHA-256 approvals and one exact tool, opaque vocabulary,
+issuer and session-schema scope. Its canonical complete SHA-256 includes every
+grant field and provenance label; ambiguous duplicate authority is refused.
+`bind` requires every reachable document's exact grant and publishes only a
+complete matched handle after final cancellation admission. New scans and
+release-owned storage share the supplied governor; failures preserve originals,
+registry context, usage and native causes.
+
+Run `cargo run -p purrassist-toolgraph --example trusted_policy` for independent
+synthetic approvals followed by actual native SRL syntax/import checks over the
+matched original text and bases. This includes shared/repeated and cyclic imports
+and native missing, duplicate and unused table refusals. The consumer refuses
+recorded bases that native imported-document checking cannot preserve. Native
+parsing/checking allocation is separate from this preparation API.
+
+Matching grants no dispatch authority. Authenticated host configuration, native
+closure/protected-head admission, governed rule evaluation, graph admission,
+execution and result release remain required under the existing tracking issues.

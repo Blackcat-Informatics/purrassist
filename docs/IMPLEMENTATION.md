@@ -599,3 +599,47 @@ existing host registry's declarations supply admitted output validators for
 actual tool results. Admission alone does not enforce runtime output release,
 authorize execution or provide graph/proof binding. CompactSignature, TypeScript,
 full graph and remaining parent requirements remain separate.
+
+## Exact prepared trusted-policy contracts
+
+`PreparedPolicyContract::prepare` admits complete caller-owned SRL document
+records with exact location, optional external base, explicit issuer, original
+UTF-8 text and ordered direct references. Unique identities, root resolution,
+all references and complete reachability are required. Every document receives
+an exact-text SHA-256 and its own rooted ordered graph SHA-256. Versioned,
+length-framed first-use and back-reference transcripts preserve repeated edges,
+sharing and cycles without recursive hashes. Document-table order is immaterial;
+location, base presence and bytes, issuer, text and ordered closure are bound.
+The exact transcript is documented in `policy_trust.rs` and independently
+cross-checked for a synthetic cyclic fixture.
+
+`TrustedPolicyRegistry::prepare` retains original host grant records and a
+canonical complete registry SHA-256. Independently supplied 32-byte approvals
+bind document SHA-256, rooted contract SHA-256, one tool, opaque host vocabulary
+identity, issuer and session-fact-schema SHA-256. Provenance labels also affect
+the registry identity. Duplicate authority tuples are refused even when labels
+differ. Registry order changes neither identity nor which original grants match.
+Issuer names identify audited sources; strings alone do not authenticate them.
+
+`bind` requires an exact grant for every reachable document under one selected
+scope. It publishes an immutable matched handle only after final cancellation
+admission, retaining original table bytes and bases, matched grants and registry
+identity. Scans, comparisons, hashing, graph traversal, retained manifests and
+match indices share the supplied governor and fallible release-owned storage.
+Typed refusals retain original request and registry context, usage and exact
+native resource causes. No partial handle accompanies a refusal.
+
+The actual `trusted_policy` consumer loads independent synthetic host approvals,
+uses matched originals and recorded bases with native `srl::parse().imports()`,
+checks declared ordered edges and calls native `srl::check` at `Syntax` with an
+explicit complete source table. It exercises no-import, shared/repeated and
+cyclic tables plus missing, duplicate and unused native import refusals. Native
+imports use their locations as external bases; the consumer explicitly refuses
+recorded-base mismatches rather than changing admitted meaning. Native parsing
+and checking retain their own allocation contract, outside this API's governor.
+
+This completes prepared-contract matching only. It authenticates no host
+configuration, verifies no native closure or protected-head property in the
+library, evaluates no rules and grants no dispatch authority. Native governed
+preparation/evaluation, graph admission, real dispatch and result release remain
+required under #33/#34/#35/#36/#37/#39/#43/#47.

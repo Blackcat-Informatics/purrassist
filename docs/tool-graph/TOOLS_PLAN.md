@@ -1376,3 +1376,29 @@ This supplies a missing prepared output operand for future compiler/result
 callers. It does not implement CompactSignature, TypeScript projection, graph
 admission, loss/check binding, authorization, confinement, manifest/history or
 proof-bound release. Those parent requirements remain open.
+
+## Exact prepared trusted-policy contracts — implemented
+
+`PreparedPolicyContract`, `TrustedPolicyRegistry` and `bind` now implement the
+caller-prepared exact registry boundary. Complete document tables retain original
+UTF-8, location, explicit optional external base, issuer and ordered direct
+references. Every reachable document needs its own exact grant for its text
+SHA-256 and finite rooted import-contract SHA-256 under one tool, opaque host
+vocabulary identity and session-schema SHA-256. Graph first-use/back-reference
+transcripts preserve sharing, repeated references and cycles; table order does
+not affect their identity. Grant order does not affect the complete registry
+SHA-256, which includes provenance; duplicate authority records are refused.
+
+New manifest, traversal and match owners are fallible and release-owned under
+the actual governor. Matching publishes only a complete immutable handle after
+final cancellation admission, retaining original request, bases, matched grants
+and registry identity. Refusals preserve original context and native stop causes.
+The `trusted_policy` consumer demonstrates independent host approvals followed
+by actual native syntax/import checks with complete explicit source tables.
+Native import bases must match their recorded locations in that consumer;
+a mismatch fails explicitly. Native parsing/checking allocations are separate.
+
+This does not complete the policy gate or authenticate the configuration source.
+Declared edges still need native verification; protected heads, governed native
+preparation/evaluation, actual execution and result release remain required.
+All remaining #33/#34/#35/#36/#37/#39/#43/#47 tracking contracts stay open.
