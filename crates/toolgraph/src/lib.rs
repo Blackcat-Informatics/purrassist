@@ -20,8 +20,10 @@ mod unix;
 mod vocab;
 
 pub use context::{
-    ContextCodecError, ContextManagement, LoadingStrategy, MCP_CONTEXT_FORMAT, OutputByteLimit,
-    OutputEnforcement, OutputLimitError, OutputMeasurement, OutputUnit,
+    ContextCodecError, ContextManagement, LoadingStrategy, MCP_CONTEXT_FORMAT, NullSelection,
+    OutputByteLimit, OutputEnforcement, OutputLimitError, OutputMeasurement, OutputTransform,
+    OutputUnit, ProjectedResult, ProjectionFailure, ProjectionStage, ProjectionTrace,
+    ResultProjectionError,
 };
 pub use field_mask::{FieldMask, FieldMaskError, FieldMaskKind};
 pub use vocab::{

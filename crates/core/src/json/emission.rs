@@ -5,7 +5,7 @@
 
 use std::convert::Infallible;
 
-use super::{JsonOutput as Governed, Node, Value};
+use super::{JsonField, JsonLine, JsonOutput as Governed, Node, Value};
 use crate::contract::{
     Governor, Resource, ScratchCharge, ScratchString, ScratchVec, StopReason, saturating_size,
 };
@@ -52,7 +52,7 @@ impl<'a> Frame<'a> {
         }
     }
 
-    fn next_event(&mut self) -> Option<Event<'a>> {
+    fn next_event(&mut self, fields: Option<&'a [JsonField<'a>]>) -> Option<Event<'a>> {
         let token = match self.phase {
             Phase::Start => {
                 self.phase = Phase::Done;
@@ -80,10 +80,10 @@ impl<'a> Frame<'a> {
                     }
                     self.close()
                 }
-                Value::Object(members) => {
-                    if let Some(member) = members.get(self.index) {
+                Value::Object(_) => {
+                    if let Some((key, _)) = self.member(fields) {
                         self.phase = Phase::Colon;
-                        Token::Quoted(&member.key)
+                        Token::Quoted(key)
                     } else {
                         self.close()
                     }
@@ -95,12 +95,10 @@ impl<'a> Frame<'a> {
                 Token::Raw(":")
             }
             Phase::Value => {
-                // Only object members enter this phase; the key was emitted at
-                // this same index, and the immutable source cannot change length.
-                let Value::Object(members) = &self.node.value else {
-                    unreachable!("object member value phase");
-                };
-                let child = &members[self.index].value;
+                // This immutable member's key was emitted at the same index.
+                let (_, child) = self
+                    .member(fields)
+                    .expect("INVARIANT: member value follows its key");
                 self.index += 1;
                 self.phase = Phase::Separator;
                 return Some(Event::Child(child));
@@ -108,7 +106,7 @@ impl<'a> Frame<'a> {
             Phase::Separator => {
                 let length = match &self.node.value {
                     Value::Array(items) => items.len(),
-                    Value::Object(members) => members.len(),
+                    Value::Object(members) => fields.map_or(members.len(), <[JsonField<'_>]>::len),
                     _ => unreachable!("only containers have separators"),
                 };
                 if self.index < length {
@@ -121,6 +119,24 @@ impl<'a> Frame<'a> {
             Phase::Done => return None,
         };
         Some(Event::Token(token))
+    }
+
+    fn member(&self, fields: Option<&'a [JsonField<'a>]>) -> Option<(&'a str, &'a Node)> {
+        fields.map_or_else(
+            || {
+                let Value::Object(members) = &self.node.value else {
+                    unreachable!("object member phase");
+                };
+                members
+                    .get(self.index)
+                    .map(|member| (member.key.as_str(), &member.value))
+            },
+            |fields| {
+                fields
+                    .get(self.index)
+                    .map(|field| (field.key, field.value.unwrap_or(&NULL)))
+            },
+        )
     }
 
     fn close(&mut self) -> Token<'a> {
@@ -243,7 +259,7 @@ const fn infallible(result: Result<(), Infallible>) {
 pub(super) fn append(node: &Node, output: &mut String) {
     fn recurse(node: &Node, sink: &mut Plain<'_>) {
         let mut frame = Frame::new(node);
-        while let Some(event) = frame.next_event() {
+        while let Some(event) = frame.next_event(None) {
             match event {
                 Event::Child(child) => recurse(child, sink),
                 Event::Token(value) => infallible(token(value, sink)),
@@ -270,26 +286,60 @@ pub(super) fn to_json_scratch(
     let mut frames = ScratchVec::new(governor);
     frames.push(Frame::new(node))?;
     let mut sink = Governed { governor, output };
+    emit_frames(&mut frames, None, &mut sink)?;
+    sink.finish_scratch()
+}
+
+static NULL: Node = Node::new(Value::Null);
+static OBJECT: Node = Node::new(Value::Object(Vec::new()));
+
+fn emit_frames<'a>(
+    frames: &mut ScratchVec<Frame<'a>>,
+    fields: Option<&'a [JsonField<'a>]>,
+    sink: &mut Governed<'_>,
+) -> Result<(), StopReason> {
     while !frames.is_empty() {
         sink.governor.charge(Resource::Work, 1)?;
         // The loop condition proves a frame exists, and next_event borrows only
         // immutable source nodes; growing the cursor stack cannot invalidate it.
+        let root_fields = if frames.len() == 1 { fields } else { None };
         let event = frames
             .as_mut_slice()
             .last_mut()
             .expect("INVARIANT: nonempty frame stack")
-            .next_event();
+            .next_event(root_fields);
         match event {
             Some(Event::Child(child)) => {
                 sink.governor
                     .charge(Resource::Depth, saturating_size(frames.len()))?;
                 frames.push(Frame::new(child))?;
             }
-            Some(Event::Token(value)) => token(value, &mut sink)?,
+            Some(Event::Token(value)) => token(value, sink)?,
             None => {
                 frames.pop();
             }
         }
+    }
+    Ok(())
+}
+
+pub(super) fn lines_to_json_scratch(
+    lines: &[JsonLine<'_>],
+    governor: &mut Governor,
+) -> Result<ScratchString, StopReason> {
+    governor.check()?;
+    let mut frames = ScratchVec::new(governor);
+    let mut sink = Governed::new(governor)?;
+    for line in lines {
+        sink.governor.charge(Resource::Work, 1)?;
+        sink.governor.charge(Resource::Depth, 0)?;
+        let (node, fields) = match line {
+            JsonLine::Value(value) => (value.unwrap_or(&NULL), None),
+            JsonLine::Object(fields) => (&OBJECT, Some(*fields)),
+        };
+        frames.push(Frame::new(node))?;
+        emit_frames(&mut frames, fields, &mut sink)?;
+        sink.raw("\n")?;
     }
     sink.finish_scratch()
 }

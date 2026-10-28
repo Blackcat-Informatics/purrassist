@@ -1627,3 +1627,47 @@ and governed metadata keep their existing contracts.
 Runtime/backtracking allocation governance, lazy built-ins under their separate
 governor and full #36 witness, GBNF, signature, projection, routing, ledger and
 graph integration remain separate requirements.
+
+
+## Validated single-result projection — implemented
+
+`ContextManagement::project_result` accepts a caller-prepared output `Schema`,
+an immutable original JSON `Node` and its governor. It validates the complete
+original before masking, applies the existing four-form `FieldMask`, serializes
+the complete projected stream through core's shared JSON cursor/escaping writer,
+and calls the canonical `OutputByteLimit` once before publishing any artifact.
+
+The explicit representation is compact JSON Lines: every emitted value has one
+trailing LF, while zero values produce zero bytes. There is no outer array.
+D6 fixes the four mask forms but did not fix a stream delimiter; this callable
+path fixes LF framing explicitly. Quotes, escapes, UTF-8 and every LF count.
+A path or field object emits one value. Missing/null named lookups propagate
+null; other non-object traversal fails. Field objects retain mask key order.
+`.[]` emits root-array members in order. `.name[]?` emits a selected array's
+members, or zero values for a missing/null/non-array selection. Selected duplicate
+names fail as ambiguous rather than choosing a first/last value or emitting null.
+Whole selected values preserve nested duplicate occurrences and numeric spelling.
+
+Success and refusal retain the original node, original mask, full validation
+report when available, last attempted stage and explicit transformations for
+null insertion, optional omission and completed mask application. These are
+transformations rather than inferred source facts. Source DOM/schema/context
+preparation is caller-owned. Native resource/cancellation refusal is distinct
+from the exact-byte semantic ceiling. Oversize output is refused intact; no
+partial or truncated stream is returned. Token evidence cannot override it.
+New projection/trace/output buffers use admitted scratch owners; a refused
+unpublished serialized stream releases its storage.
+
+Core's narrow `JsonField`/`JsonLine` borrowed views and
+`json::lines_to_json_scratch` reuse the same cursor and escaping authority as
+ordinary node emission. They copy no input DOM and preserve existing node
+serialization bytes and resource scheduling. The `project_result` example reads
+a bounded stdin envelope containing `format`, `context`, `outputSchema` and
+`result`, delegates version/legacy/mode validation to the existing context codec,
+and writes only complete checked bytes to stdout. Refusals go to stderr. This
+input envelope is not an admitted graph manifest.
+
+History pruning, full RDF/SHACL/SRL/GTS bundle admission/roundtrip, graph-backed
+registry/dispatch, authorization/confinement, graph/proof-bound receipts and all
+remaining #33/#36/#37/#47/#39 acceptance remain required. This operation provides
+no graph authority and adds no host/facade dependency on the unpublished crate.

@@ -213,3 +213,27 @@ The existing governed formatter publishes the complete five-declaration fragment
 atomically. Its ABI `3.0`/`rlimit` requirement is an offline target selection;
 it establishes neither loaded policy nor actual process enforcement. Full graph
 admission, policy composition, trust and host confinement remain under #34/#35.
+
+
+`ContextManagement::project_result` is the complete caller-prepared result path:
+full original output-schema validation, all four mask forms, canonical compact
+JSON Lines emission and one exact complete-stream byte check. Every value has
+one trailing LF; zero values emit zero bytes, with no outer array. Original node,
+mask, validation/stage evidence and explicit transformations survive success and
+refusal. Selected duplicate names refuse ambiguity; whole selected values retain
+nested duplicates and numeric spelling. Oversize/native resource failures publish
+no partial or truncated stream. Source/schema/context preparation, history,
+graph admission, authorization and host release remain separate.
+
+Run the bounded stdin consumer with:
+
+```sh
+cargo run --locked -p purrassist-toolgraph --example project_result <<'JSON'
+{"format":"purrassist-toolgraph-v2","context":{"outputProjectionJq":".orders[]?","maxOutputBytes":64,"outputEnforcement":"exact-bytes","historyRetentionTurns":0,"intentTags":[],"loadingStrategy":"always"},"outputSchema":{"type":"object"},"result":{"orders":[1.00e2,true]}}
+JSON
+```
+
+The complete stdout artifact is `1.00e2` followed by LF and `true` followed by
+LF. Typed refusals and exact measurements appear on stderr, before any stdout.
+This envelope demonstrates the callable result pipeline; it is not a complete
+MCP/RDF bundle or an execution grant.
