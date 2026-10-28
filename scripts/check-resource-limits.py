@@ -17,7 +17,7 @@ DOC = ROOT / 'docs/RESOURCES.md'
 
 REQUIRED_TOP_LEVEL_KEYS = (
     'format', 'source', 'platform', 'tools', 'scope', 'rss_observation', 'runtime',
-    'builds', 'workloads', 'artifact_sizes', 'latency_workloads', 'syntax_latency_workloads',
+    'builds', 'workloads', 'latency_workloads', 'syntax_latency_workloads',
     'recovery_benchmark', 'cold_build',
 )
 REQUIRED_WORKLOAD_KEYS = (
@@ -59,8 +59,6 @@ LATENCY_CASES = {
 }
 SYNTAX_CASES = {'python', 'rust', 'javascript', 'typescript', 'tsx'}
 RECOVERY_CASES = {'exact', 'nested', 'composed', 'duplicate', 'inferred', 'no_candidate'}
-ARTIFACTS = {'native_cli', 'purrassist_core_wasm32_wasip1', 'purrassist_syntax_wasm32_wasip1',
-             'purrassist_host_wasm32_wasip1', 'wasm_harness_wasm32_unknown_unknown'}
 RECOVERY_KEYS = ('case', 'samples', 'correct', 'wrong_corrections', 'median_ns', 'p95_ns',
                  'governor_peak_scratch_bytes', 'governor_peak_work')
 
@@ -89,8 +87,7 @@ def digest(value, where, length=64):
 
 
 def artifact(entry, where):
-    require_keys(entry, ('bytes', 'sha256'), where)
-    unsigned(entry['bytes'], where + '.bytes', positive=True)
+    require_keys(entry, ('sha256',), where)
     digest(entry['sha256'], where + '.sha256')
 
 
@@ -157,9 +154,8 @@ def check_schema(report):
     targets = []
     for row in report['builds']:
         require_keys(row, ('target', 'command', 'elapsed_ns', 'cache_state', 'fresh_artifacts',
-                           'built_artifacts', 'profile', 'executable_bytes', 'executable_sha256'), 'builds')
-        for key in ('elapsed_ns', 'executable_bytes'):
-            unsigned(row[key], 'builds.' + key, positive=True)
+                           'built_artifacts', 'profile', 'executable_sha256'), 'builds')
+        unsigned(row['elapsed_ns'], 'builds.elapsed_ns', positive=True)
         for key in ('fresh_artifacts', 'built_artifacts'):
             unsigned(row[key], 'builds.' + key)
         if not row['fresh_artifacts'] + row['built_artifacts']:
@@ -185,11 +181,6 @@ def check_schema(report):
     for row in report['syntax_latency_workloads']:
         if row['retained_bytes'] > row['peak_bytes']:
             raise SystemExit('syntax_latency_workloads: retained heap exceeds peak heap')
-    require_keys(report['artifact_sizes'], ARTIFACTS, 'artifact_sizes')
-    if set(report['artifact_sizes']) != ARTIFACTS:
-        raise SystemExit('artifact_sizes: unexpected artifact')
-    for name, entry in report['artifact_sizes'].items():
-        artifact(entry, 'artifact_sizes.' + name)
     require_keys(report['cold_build'], ('method', 'elapsed_ns', 'fresh_target_directory',
                  'fresh_build_directory', 'compiler_cache_disabled', 'fresh_artifacts',
                  'built_artifacts', 'artifact'), 'cold_build')
@@ -216,9 +207,6 @@ def check_limits(report, limits):
         if actual > limit:
             violations.append(f'{where}: {actual} exceeds limit {limit}')
 
-    for name, limit in limits['artifact_sizes'].items():
-        key = name.removesuffix('_bytes')
-        check(report['artifact_sizes'][key]['bytes'], limit, f'artifact_sizes.{key}')
     check(report['cold_build']['elapsed_ns'], limits['cold_build_elapsed_ns'], 'cold_build.elapsed_ns')
     for workload in report['latency_workloads']:
         for field, limit in limits['latency_workloads'].items():

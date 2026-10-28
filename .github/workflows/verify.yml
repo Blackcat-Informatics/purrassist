@@ -121,7 +121,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - run: rustup toolchain install nightly-2026-09-14 --profile minimal --target wasm32-wasip1,wasm32-unknown-unknown
+      - run: rustup toolchain install nightly-2026-09-14 --profile minimal
       - name: Install pinned Node for independent oracles
         run: python3 scripts/install-qualification-tool.py node >> "$GITHUB_PATH"
       - name: Install pinned Valgrind for resource measurement
