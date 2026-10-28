@@ -134,11 +134,13 @@ fn complete_document_is_canonical_and_maps_all_rules_and_defaults() {
                 source: "empty-hat",
                 name: "zeta",
                 rules: &[],
+                imports: &[],
             },
             PolicyBody {
                 source: "worker-hat",
                 name: "worker",
                 rules: caller_rules,
+                imports: &[],
             },
         ];
         let reverse_hats = [hats[1], hats[0]];
@@ -148,12 +150,14 @@ fn complete_document_is_canonical_and_maps_all_rules_and_defaults() {
                     source: "standalone",
                     name: "purrassist.standalone",
                     rules: caller_rules,
+                    imports: &[],
                 }),
                 PolicyProfile::Parent {
                     body: PolicyBody {
                         source: "parent",
                         name: "purrassist.tools",
                         rules: &[],
+                        imports: &[],
                     },
                     hats,
                 },
@@ -165,6 +169,7 @@ fn complete_document_is_canonical_and_maps_all_rules_and_defaults() {
                     target: PolicyTarget::Abi4Ip,
                     home: "/home/example",
                     profiles,
+                    dependencies: &[],
                 };
                 let document = PolicyDocument::prepare(input, &mut g).unwrap();
                 let output = document.compile(&mut g).unwrap();
@@ -173,7 +178,11 @@ fn complete_document_is_canonical_and_maps_all_rules_and_defaults() {
                     include_str!("data/policy_document.apparmor")
                 );
                 assert_eq!(
-                    output.requirements.mediation().collect::<Vec<_>>(),
+                    output
+                        .requirements
+                        .complete_mediation()
+                        .unwrap()
+                        .collect::<Vec<_>>(),
                     [
                         "file",
                         "caps",
@@ -218,6 +227,7 @@ fn baseline_home_neighbors_are_literal_and_baseline_only_documents_are_complete(
             source: "empty",
             name: "baseline_only",
             rules: &[],
+            imports: &[],
         })];
         let mut g = Governor::new(Budget::default());
         let input = PolicyInput {
@@ -225,6 +235,7 @@ fn baseline_home_neighbors_are_literal_and_baseline_only_documents_are_complete(
             target: PolicyTarget::Abi3,
             home,
             profiles: &profiles,
+            dependencies: &[],
         };
         let document = PolicyDocument::prepare(input, &mut g).unwrap();
         let output = document.compile(&mut g).unwrap();
@@ -250,6 +261,7 @@ fn baseline_home_neighbors_are_literal_and_baseline_only_documents_are_complete(
         source: "unsafe-home",
         name: "baseline_only",
         rules: &[],
+        imports: &[],
     })];
     for home in ["/home/{*}", "/home/@{literal}"] {
         let mut g = Governor::new(Budget::default());
@@ -258,6 +270,7 @@ fn baseline_home_neighbors_are_literal_and_baseline_only_documents_are_complete(
             target: PolicyTarget::Abi3,
             home,
             profiles: &profiles,
+            dependencies: &[],
         };
         let refusal = PolicyDocument::prepare(input, &mut g).unwrap_err();
         assert_eq!(refusal.input.home, home);
@@ -278,6 +291,7 @@ fn document_structural_and_native_refusals_keep_original_inputs() {
         target: PolicyTarget::Abi3,
         home: "/home/example",
         profiles: &[],
+        dependencies: &[],
     };
     let mut g = Governor::new(Budget::default());
     let document = PolicyDocument::prepare(empty, &mut g).unwrap();
@@ -312,11 +326,9 @@ fn document_structural_and_native_refusals_keep_original_inputs() {
         source: "body",
         name: "root",
         rules: &[],
+        imports: &[],
     };
-    let duplicates = [
-        PolicyProfile::Standalone(base),
-        PolicyProfile::Standalone(base),
-    ];
+    let duplicates = [PolicyProfile::Standalone(base); 2];
     let document = PolicyDocument::prepare(
         PolicyInput {
             profiles: &duplicates,
@@ -524,6 +536,7 @@ fn document_resource_refusals_and_cancellation_never_publish_partial_text() {
         source: "caller:body",
         name: "budget",
         rules: &[],
+        imports: &[],
     })];
     let mut preparation = Governor::new(Budget::default());
     let document = PolicyDocument::prepare(
@@ -532,6 +545,7 @@ fn document_resource_refusals_and_cancellation_never_publish_partial_text() {
             target: PolicyTarget::Abi3,
             home: "/home/example",
             profiles: &profiles,
+            dependencies: &[],
         },
         &mut preparation,
     )

@@ -74,7 +74,8 @@ pub use prompt_bytes::{
 };
 
 pub use policy_document::{
-    CompiledPolicy, PolicyBaseline, PolicyBody, PolicyCause, PolicyDocument, PolicyDuplicateScope,
-    PolicyError, PolicyInput, PolicyOrigin, PolicyPrepareError, PolicyProfile, PolicyRequirements,
-    PolicyRule, PolicySpan, PolicyTarget,
+    BoundPolicyDependency, CompiledPolicy, PolicyBaseline, PolicyBody, PolicyCause,
+    PolicyDependency, PolicyDocument, PolicyDuplicateScope, PolicyError, PolicyImport, PolicyInput,
+    PolicyOrigin, PolicyPrepareError, PolicyProfile, PolicyRequirements, PolicyRule, PolicySpan,
+    PolicyTarget, UnresolvedPolicyImports,
 };

@@ -267,10 +267,37 @@ remain available on refusal. ABI 3.0 refuses fine-grained Internet rules instead
 of dropping scope. Aggregated ABI/mediation metadata describes an offline target,
 not running-kernel, loaded-policy or dispatch evidence.
 
-The actual `policy_document` example prints a complete compiled document. Full
-RDF/SRL/static admission, permission/owner/deny proofs, abstraction imports and
-trust, nested graph profile synthesis, transition-target existence, graph CLI,
-loaded mediation and host confinement remain #33/#34/#35/#39 requirements.
+The same compiler also emits mandatory abstraction imports from ordered
+`PolicyImport` occurrences and opaque `PolicyDependency` files. Paths must be
+normalized relative `abstractions/...` files; traversal, variables, wildcards,
+include delimiters and control bytes are refused. Every direct import must bind
+to one declared file. Duplicate dependency paths, including unused transitive
+records and identical contents, are a typed conflict preserving both records.
+Repeated import occurrences with distinct source identities remain in caller
+order, with exact profile/hat spans and manifest indices.
+
+Dependency bytes remain separate external files. Governed SHA-256 computation
+records their exact identities; the library never reads the filesystem, parses
+imported permissions, or concatenates those bytes into a profile body. All
+original declared records remain available, including opaque transitive files.
+Their presence does not prove that the caller supplied a complete import closure.
+`local_mediation()` describes local typed rules only. `complete_mediation()`
+returns a typed refusal pointing to the first import span whenever imports are
+opaque. No caller boolean can turn that source artifact into complete feature
+requirements or dispatch authority.
+
+The actual `policy_document` consumer retains its full/baseline modes with
+unchanged no-import bytes. `--bound-imports NEW_INCLUDE_ROOT` compiles through the
+same production path and materializes first-party synthetic dependency files in
+a fresh caller-selected directory. Offline qualification uses an explicit isolated
+include root, matching ABI/features and fatal warnings; missing required direct
+or transitive files fail rather than becoming optional includes. This establishes
+no compatibility claim for installed standard abstractions.
+
+Full RDF/SRL/static admission, permission/owner/deny proofs, graph import closure
+and imported-permission trust, nested graph profile synthesis, transition-target
+existence, graph CLI, loaded mediation and host confinement remain
+#33/#34/#35/#39 requirements.
 
 
 Field masks, context metadata and validated result projection are reexported

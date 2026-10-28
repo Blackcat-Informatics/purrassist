@@ -1,0 +1,4 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+include <abstractions/purrassist-imports/child>
+/srv/purrassist-imports/parent r,

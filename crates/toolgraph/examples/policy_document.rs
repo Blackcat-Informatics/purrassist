@@ -6,11 +6,12 @@ use purrassist_core::{Budget, Governor};
 use purrassist_toolgraph::{
     AppArmorGlob, CapabilityRule, FilePermissions, FileRule, InternetAccessSet, InternetEndpoint,
     InternetFamily, InternetLimits, InternetPorts, InternetRule, InternetScope, InternetSelector,
-    LiteralPathBinding, MountRule, PolicyBody, PolicyDocument, PolicyInput, PolicyProfile,
-    PolicyRule, PolicyTarget, PtraceAccessSet, PtraceRule, ResourceLimits, SignalAccessSet,
-    SignalRule, SignalSet, UnixAccessSet, UnixAddress, UnixLabel, UnixPattern, UnixPeer, UnixRule,
-    UnixSocketType,
+    LiteralPathBinding, MountRule, PolicyBody, PolicyDependency, PolicyDocument, PolicyImport,
+    PolicyInput, PolicyProfile, PolicyRule, PolicyTarget, PtraceAccessSet, PtraceRule,
+    ResourceLimits, SignalAccessSet, SignalRule, SignalSet, UnixAccessSet, UnixAddress, UnixLabel,
+    UnixPattern, UnixPeer, UnixRule, UnixSocketType,
 };
+use std::fmt::Write as _;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut g = Governor::new(Budget::default());
@@ -18,8 +19,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args == ["--baseline-only"] {
         return baseline_only(&mut g);
     }
+    if let [mode, root] = args.as_slice()
+        && mode == "--bound-imports"
+    {
+        return bound_imports(std::path::Path::new(root), &mut g);
+    }
     if !args.is_empty() {
-        return Err("usage: policy_document [--baseline-only]".into());
+        return Err(
+            "usage: policy_document [--baseline-only | --bound-imports INCLUDE_ROOT]".into(),
+        );
     }
 
     let workspace = AppArmorGlob::parse("@{ROOT}/**", &["ROOT"], &mut g)?;
@@ -138,11 +146,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             source: "empty-hat",
             name: "zeta",
             rules: &[],
+            imports: &[],
         },
         PolicyBody {
             source: "worker-hat",
             name: "worker",
             rules: &rules,
+            imports: &[],
         },
     ];
     let profiles = [
@@ -150,12 +160,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             source: "standalone",
             name: "purrassist.standalone",
             rules: &rules,
+            imports: &[],
         }),
         PolicyProfile::Parent {
             body: PolicyBody {
                 source: "parent",
                 name: "purrassist.tools",
                 rules: &[],
+                imports: &[],
             },
             hats: &hats,
         },
@@ -165,6 +177,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         target: PolicyTarget::Abi4Ip,
         home: "/home/example",
         profiles: &profiles,
+        dependencies: &[],
     };
     // This executable owns diagnostics; the library preserves exact borrowed errors.
     let document = PolicyDocument::prepare(input, &mut g).map_err(|e| e.to_string())?;
@@ -178,15 +191,80 @@ fn baseline_only(g: &mut Governor) -> Result<(), Box<dyn std::error::Error>> {
         source: "baseline",
         name: "baseline_only",
         rules: &[],
+        imports: &[],
     })];
     let input = PolicyInput {
         source: "caller:baseline",
         target: PolicyTarget::Abi3,
         home: "/home/example/",
         profiles: &profiles,
+        dependencies: &[],
     };
     let document = PolicyDocument::prepare(input, g).map_err(|e| e.to_string())?;
     let output = document.compile(g).map_err(|e| e.to_string())?;
+    print!("{}", output.text.as_str());
+    Ok(())
+}
+
+fn bound_imports(
+    root: &std::path::Path,
+    g: &mut Governor,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dependencies = [
+        PolicyDependency {
+            source: "fixture:parent",
+            path: "abstractions/purrassist-imports/parent",
+            bytes: include_bytes!("data/policy_import_parent.apparmor"),
+        },
+        PolicyDependency {
+            source: "fixture:child",
+            path: "abstractions/purrassist-imports/child",
+            bytes: include_bytes!("data/policy_import_child.apparmor"),
+        },
+    ];
+    let imports = [PolicyImport {
+        source: "caller:include",
+        path: dependencies[0].path,
+    }];
+    let profiles = [PolicyProfile::Standalone(PolicyBody {
+        source: "caller:body",
+        name: "purrassist.imports",
+        rules: &[],
+        imports: &imports,
+    })];
+    let document = PolicyDocument::prepare(
+        PolicyInput {
+            source: "caller:imports",
+            target: PolicyTarget::Abi4Ip,
+            home: "/home/example",
+            profiles: &profiles,
+            dependencies: &dependencies,
+        },
+        g,
+    )
+    .map_err(|e| e.to_string())?;
+    let output = document.compile(g).map_err(|e| e.to_string())?;
+    let unresolved = output
+        .requirements
+        .complete_mediation()
+        .err()
+        .ok_or("opaque imports falsely reported complete requirements")?;
+    if !matches!(
+        output.spans[unresolved.first_import_span].origin,
+        purrassist_toolgraph::PolicyOrigin::Import { .. }
+    ) {
+        return Err("opaque requirements must retain their import source span".into());
+    }
+    // Require a fresh caller-selected root; never reuse ambient include files.
+    std::fs::create_dir(root)?;
+    let mut manifest = String::new();
+    for bound in &output.dependencies {
+        let path = root.join(bound.dependency.path);
+        std::fs::create_dir_all(path.parent().ok_or("dependency has no parent")?)?;
+        std::fs::write(&path, bound.dependency.bytes)?;
+        writeln!(manifest, "{} {}", bound.digest, bound.dependency.path)?;
+    }
+    std::fs::write(root.join("dependency-identities.txt"), manifest)?;
     print!("{}", output.text.as_str());
     Ok(())
 }
