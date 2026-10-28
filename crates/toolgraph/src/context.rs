@@ -4,7 +4,12 @@
 //! Exact output byte bounds, separate from prompt token estimates.
 
 mod codec;
+mod project;
 pub use codec::{ContextCodecError, ContextManagement, LoadingStrategy, MCP_CONTEXT_FORMAT};
+pub use project::{
+    NullSelection, OutputTransform, ProjectedResult, ProjectionFailure, ProjectionStage,
+    ProjectionTrace, ResultProjectionError,
+};
 
 use std::{fmt, num::NonZeroU64};
 

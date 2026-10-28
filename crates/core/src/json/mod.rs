@@ -20,6 +20,67 @@ pub(crate) struct JsonOutput<'g> {
     output: ScratchString,
 }
 
+/// One borrowed member of a projected JSON object.
+///
+/// `None` emits JSON null; keys retain supplied order and duplicates. The
+/// caller prepares this small view without cloning any child value.
+#[derive(Clone, Copy, Debug)]
+pub struct JsonField<'a> {
+    /// Decoded member name, escaped by the canonical JSON writer.
+    pub key: &'a str,
+    /// Original value occurrence, or an explicit generated null.
+    pub value: Option<&'a Node>,
+}
+
+impl ScratchCharge for JsonField<'_> {
+    const CHARGE: usize = 24;
+}
+const _: () = assert!(core::mem::size_of::<JsonField<'_>>() <= JsonField::CHARGE);
+
+/// One borrowed value in an explicitly framed JSON Lines stream.
+///
+/// Values preserve original number spelling and nested duplicate members.
+/// Objects select only the supplied borrowed fields; `Value(None)` emits null.
+#[derive(Clone, Copy, Debug)]
+pub enum JsonLine<'a> {
+    /// An existing value occurrence, or an explicit generated null.
+    Value(Option<&'a Node>),
+    /// An object with fields in the supplied order.
+    Object(&'a [JsonField<'a>]),
+}
+
+impl ScratchCharge for JsonLine<'_> {
+    const CHARGE: usize = 24;
+}
+const _: () = assert!(core::mem::size_of::<JsonLine<'_>>() <= JsonLine::CHARGE);
+
+/// Serialize a complete borrowed JSON Lines stream with governed ownership.
+///
+/// Each value has exactly one trailing LF. An empty sequence emits no bytes;
+/// there is no outer array. The original values are never changed or cloned.
+/// The returned scratch owner releases its reservation on drop, including a
+/// caller's later semantic refusal. Existing JSON cursors and escaping serve
+/// this operation and ordinary [`Node::to_json_governed`] alike.
+///
+/// # Errors
+/// Returns resource/cancellation refusal without successful partial output.
+/// Each root has depth zero, and child values add one level.
+///
+/// ```
+/// use purrassist_core::{Budget, Governor, json::{self, JsonField, JsonLine}};
+/// let node = json::parse(r#"{"x":1.00e2}"#).unwrap();
+/// let fields = [JsonField { key: "n", value: node.get("x") }];
+/// let lines = [JsonLine::Object(&fields), JsonLine::Value(None)];
+/// let output = json::lines_to_json_scratch(&lines, &mut Governor::new(Budget::default())).unwrap();
+/// assert_eq!(output.as_str(), "{\"n\":1.00e2}\nnull\n");
+/// ```
+pub fn lines_to_json_scratch(
+    lines: &[JsonLine<'_>],
+    governor: &mut Governor,
+) -> Result<ScratchString, StopReason> {
+    emission::lines_to_json_scratch(lines, governor)
+}
+
 /// One source edit made by tolerant syntax recovery
 /// ([`incremental::IncrementalRecovery`]).
 ///
