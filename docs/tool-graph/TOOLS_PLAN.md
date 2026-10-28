@@ -562,11 +562,27 @@ byte ceiling and publishes output atomically under the core governor. The
 `framed_prompt_bytes` consumer prepares real wire declarations through the
 existing renderer and validates the complete tools array.
 
-This prerequisite accepts no token limit and reports no token count. Tokenizer
-qualification, exact external accounting, actual model-family placement and
-selection, graph loading, routing and complete lane ledgers remain original
-#36/#47 acceptance. Arbitrary supplied framing is not a graph projection and
-receives no invented empty ledger. See [RESOURCES.md](../RESOURCES.md).
+`FramedPrompt::assemble_accounted` uses that same assembler for independent
+byte and token ceilings. A deterministic caller `TokenCounter` counts the complete
+representation once, with its original tokenizer and configuration identities.
+The counter must be pure and govern its work and storage; the caller establishes
+its applicability. Alternatively, `ByteLevelTokenContract` records caller
+assertions of at most one token per input byte, no uncounted implicit special
+tokens and no representation-expanding preprocessing. That mode reports a
+conservative byte-derived bound, never an exact token count or library qualification.
+
+`AccountedPrompt` retains immutable complete bytes and the distinct measurement.
+Missing accounting, unavailable counters, empty identities, byte/token excess
+and native failures refuse explicitly without fallback or truncated output.
+Errors preserve original inputs and accounting labels, plus any completed
+measurement. Unpublished output storage releases on refusal, including a callback
+that returns success after stopping its governor. The real wire-declaration
+consumer exercises a documented scalar encoding and distinct byte/token limits.
+
+Tokenizer qualification, actual model-family placement and selection, graph
+loading, routing and complete lane ledgers remain original #36/#47 acceptance.
+Arbitrary supplied framing is not a graph projection and receives no invented
+empty ledger. See [RESOURCES.md](../RESOURCES.md).
 
 ## Governed JSON emission — implemented
 

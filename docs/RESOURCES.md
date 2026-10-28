@@ -1519,11 +1519,35 @@ native cause. A final cancellation check precedes complete String publication;
 no partial prompt or successful measurement escapes on failure. Both outcomes
 retain the original borrowed source, named parts and framing.
 
-Caller preparation and actual model-family framing/placement selection remain
-separate. This operation accepts no token ceiling, reports no token count and
-manufactures no graph projection or ledger. Qualified tokenizer evidence, exact
-external token accounting, selection, routing and complete lane ledgers remain
-under #36 and #47. Tool-result `OutputByteLimit` remains its separate contract.
+The byte-only operation retains that contract. `assemble_accounted` adds a
+separate token ceiling through the same assembler. The exact mode calls a
+caller-supplied deterministic `TokenCounter` once over the complete assembled
+bytes, after byte-ceiling admission. Original tokenizer and configuration labels
+are captured before the call; empty identities fail without normalization.
+Callbacks must be pure, use the supplied governor for work/storage and count the
+entire named configuration, including implicit tokens. Applicability and callback
+correctness remain caller obligations, not library qualification.
+
+The conservative mode records a `ByteLevelTokenContract`: the caller asserts at
+most one token per input byte, no uncounted implicit special tokens, and no
+representation-expanding preprocessing, with original encoding identity and
+admission basis. It bounds tokens by exact complete UTF-8 bytes, including all
+framing. It never labels that bound an exact count. Missing accounting and
+unavailable counters refuse explicitly; neither mode silently selects the other.
+
+Accounted output stays in its `ScratchString` through counting, token-ceiling
+admission and the final governor check. A callback cannot conceal a stopped
+governor by returning success. Failures release unpublished storage and retain
+the original inputs, original accounting labels once captured, and any completed
+measurement. Successful `AccountedPrompt` exposes immutable bytes alongside the
+separate exact-byte and token quantities. Neither quantity relaxes the other's
+ceiling. The wire-declaration consumer uses an explicit scalar encoding to show
+an exact count below its byte count and a conservative refusal at the same token
+ceiling; this example does not qualify a model tokenizer.
+
+Caller preparation, actual model-family placement/selection, qualified tokenizer
+evidence, graph projection, routing and complete lane ledgers remain under #36
+and #47. Tool-result `OutputByteLimit` remains its separate contract.
 
 ## Governed dense delimiter and marker matching
 

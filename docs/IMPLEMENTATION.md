@@ -146,9 +146,15 @@ byte ceiling. Success and typed refusals retain the original source/part
 identities. Checked sizing, fallible output storage and final cancellation keep
 publication atomic. The `framed_prompt_bytes` consumer prepares two real wire
 declarations separately, assembles their tools-array bytes and validates the JSON.
-This byte-only operation does not establish token admission, model acceptance,
-family placement/selection, graph loading, routing or complete projection ledgers;
-those requirements remain under #36 and #47.
+The companion `assemble_accounted` operation now uses the same assembler for
+independent byte/token admission. It records either an exact deterministic caller
+counter with tokenizer/configuration identity, or a conservative byte-derived
+bound under explicit caller encoding assumptions. Complete immutable bytes retain
+all framing; unavailable accounting and native or semantic refusals preserve the
+original input and any completed measurement, releasing unpublished storage.
+The scalar-encoding example demonstrates these separate quantities without a
+model-tokenizer qualification claim. Model acceptance, family placement/selection,
+graph loading, routing and complete projection ledgers remain under #36 and #47.
 
 The internal tool-graph crate also admits complete callable FnO bindings from
 caller-prepared upstream catalogs. Its governed checker preserves original

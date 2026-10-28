@@ -7,7 +7,34 @@ use purrassist_core::{
     Budget, Governor, json,
     tool_call::{DeclarationForm, ToolSet},
 };
-use purrassist_toolgraph::{FramedPrompt, PromptByteFailure, PromptBytePart};
+use purrassist_toolgraph::{
+    ByteLevelTokenContract, FramedPrompt, PromptByteFailure, PromptBytePart, PromptTokenAccounting,
+    PromptTokenFailure, TokenCountError, TokenCounter,
+};
+
+/// An executable example encoding, not a tokenizer qualification claim.
+#[derive(Debug)]
+struct ScalarEncoding;
+
+impl TokenCounter for ScalarEncoding {
+    fn identity(&self) -> &'static str {
+        "example-unicode-scalar.v1"
+    }
+
+    fn configuration(&self) -> &'static str {
+        "one-scalar-per-token; no-preprocessing; no-special-tokens"
+    }
+
+    fn count(&self, bytes: &[u8], governor: &mut Governor) -> Result<u64, TokenCountError> {
+        let bytes_len = purrassist_core::contract::saturating_size(bytes.len());
+        governor.charge(
+            purrassist_core::contract::Resource::Work,
+            bytes_len.saturating_mul(2),
+        )?;
+        let text = core::str::from_utf8(bytes).map_err(|_| TokenCountError::Unavailable)?;
+        u64::try_from(text.chars().count()).map_err(|_| TokenCountError::Unavailable)
+    }
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let source = r#"[{"name":"read","description":"Read Ω files","inputSchema":{"type":"object"}},{"name":"write","description":"Write \"quoted\" text","inputSchema":{"type":"object"}}]"#;
@@ -69,6 +96,66 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             required_bytes: exact,
             max_bytes: exact - 1
         }
+    );
+    token_admission(input, &expected, exact)?;
+    Ok(())
+}
+
+fn token_admission(
+    input: FramedPrompt<'_>,
+    expected: &str,
+    exact: u64,
+) -> Result<(), core::num::TryFromIntError> {
+    // Token admission sees these same wire bytes, including every framing byte.
+    let token_limit = u64::try_from(expected.chars().count())?;
+    assert!(
+        token_limit < exact,
+        "the declaration contains multibyte text"
+    );
+    let encoding = ScalarEncoding;
+    let counted = input
+        .assemble_accounted(
+            exact,
+            token_limit,
+            PromptTokenAccounting::Exact(&encoding),
+            &mut Governor::new(Budget::default()),
+        )
+        .expect("exact scalar count fits independently of UTF-8 bytes");
+    assert_eq!(counted.bytes().text, expected);
+    assert_eq!(counted.measurement().tokens, token_limit);
+    let byte_refusal = input
+        .assemble_accounted(
+            token_limit,
+            token_limit,
+            PromptTokenAccounting::Exact(&encoding),
+            &mut Governor::new(Budget::default()),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        byte_refusal.reason,
+        PromptTokenFailure::Bytes(PromptByteFailure::ByteCeiling { .. })
+    ));
+    let conservative = PromptTokenAccounting::ByteLevel(ByteLevelTokenContract {
+        encoding_identity: "example-unicode-scalar.v1/no-special-tokens",
+        admission_basis: "each UTF-8 scalar occupies at least one byte; no preprocessing or implicit tokens",
+    });
+    let token_refusal = input
+        .assemble_accounted(
+            exact,
+            token_limit,
+            conservative,
+            &mut Governor::new(Budget::default()),
+        )
+        .unwrap_err();
+    assert_eq!(
+        token_refusal.reason,
+        PromptTokenFailure::TokenCeiling {
+            max_tokens: token_limit
+        }
+    );
+    assert_eq!(
+        token_refusal.measurement.expect("complete bound").tokens,
+        exact
     );
     Ok(())
 }

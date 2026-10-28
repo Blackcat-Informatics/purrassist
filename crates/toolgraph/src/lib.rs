@@ -14,6 +14,7 @@ mod policy_document;
 mod policy_trust;
 mod privilege_rule;
 mod prompt_bytes;
+mod prompt_tokens;
 mod resource_limits;
 mod socket_access;
 mod unix;
@@ -85,4 +86,10 @@ pub use policy_trust::{
     MatchedPolicyContract, PolicyContractInput, PolicyGrant, PolicyScope, PolicySource,
     PolicyTrustCause, PolicyTrustContext, PolicyTrustError, PreparedPolicyContract,
     PreparedPolicyDocument, TrustedPolicyRegistry,
+};
+
+pub use prompt_tokens::{
+    AccountedPrompt, ByteLevelTokenContract, PromptTokenAccounting, PromptTokenBasis,
+    PromptTokenError, PromptTokenFailure, PromptTokenIdentity, PromptTokenMeasurement,
+    TokenCountError, TokenCounter,
 };
