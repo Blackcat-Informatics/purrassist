@@ -11,6 +11,9 @@ crates share one version.
 
 ### Fixed
 
+- Remove artifact-size measurement, reporting and qualification limits. Resource
+  qualification retains runtime, memory, correctness and build-time checks.
+
 - Recursive schema recovery factors certified independent mandatory array wraps
   through shared schema/occurrence states, avoiding combinations of unrelated
   unwraps. Minimum costs are solved before choosing edits; the existing search

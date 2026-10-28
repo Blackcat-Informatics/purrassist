@@ -92,19 +92,18 @@ class Reports(unittest.TestCase):
 
 
 class ExtendedSchema(unittest.TestCase):
-    """Task 13 additions: artifact sizes, latency/recovery bench capture,
+    """Latency/recovery bench capture,
     and cold-build cost. Only the pure, no-subprocess pieces are exercised
     here (this file's own contract is parsing/fail-closed behavior without
     invoking profilers, builders, or the network); the full pipeline is
     exercised by actually running `make resources`."""
 
-    def test_identity_reports_size_and_digest(self):
+    def test_identity_reports_digest(self):
         with tempfile.NamedTemporaryFile() as handle:
             handle.write(b'purrassist')
             handle.flush()
             report = RESOURCES.identity(Path(handle.name))
         self.assertEqual(report, {
-            'bytes': 10,
             'sha256': hashlib.sha256(b'purrassist').hexdigest(),
         })
 
@@ -248,10 +247,10 @@ class ResourceGate(unittest.TestCase):
             lambda r: r['latency_workloads'][0].update(allocation_calls=True),
             lambda r: r['latency_workloads'][0].update(peak_live_bytes=float('nan')),
             lambda r: r['latency_workloads'][0].update(p95_ns=0),
-            lambda r: r['artifact_sizes']['native_cli'].update(sha256='unverified'),
+            lambda r: r['cold_build']['artifact'].update(sha256='unverified'),
             lambda r: r['source'].update(engine_source_tree_sha256='unverified'),
             lambda r: r['builds'][0].update(command='cargo build'),
-            lambda r: r['builds'][0].update(executable_bytes=True),
+            lambda r: r['builds'][0].update(executable_sha256='unverified'),
             lambda r: r['platform'].update(libc='glibc'),
             lambda r: r['cold_build'].update(compiler_cache_disabled=False),
             lambda r: r['cold_build'].update(fresh_artifacts=1),

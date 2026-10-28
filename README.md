@@ -299,7 +299,7 @@ make syntax-oracles  # compare fixed syntax probes to independent compilers
 make benchmark  # recovery quality assertions and latency baseline
 make fuzz       # ten coverage-guided targets and independent pattern/Markdown oracles
 make fuzz-hosted  # the CI and pre-tag fuzz gate (longer timeout for issue #11)
-make resources  # allocations, heap/RSS, latency, artifact size, and uncached build cost
+make resources  # allocations, heap/RSS, latency, and uncached build cost
 make package    # Cargo verification and registered source/license archive audit
 make release-gate  # the one release gate, run on the release toolchain by pull requests and release qualification
 ```
