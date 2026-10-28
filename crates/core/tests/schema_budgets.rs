@@ -106,14 +106,62 @@ fn reference_and_dialect_loading_share_the_same_governor() {
     );
 }
 #[test]
-fn unused_resources_are_admitted_before_identity_hashing() {
-    let resources = BTreeMap::from([("urn:unused".into(), " ".repeat(2000))]);
-    let mut governor = Governor::new(Budget {
+fn unused_resource_hashing_has_exact_work_boundaries_without_framing_storage() {
+    // Cross multiple hashing checkpoints without parsing these unused bytes.
+    let resources = BTreeMap::from([("urn:unused".into(), " ".repeat(8193))]);
+    let mut measured = Governor::new(Budget::default());
+    let schema = Schema::with_resources_governed("true", &resources, &mut measured).unwrap();
+    let complete = measured.usage();
+    let mut without_resources = Governor::new(Budget::default());
+    Schema::compile_governed("true", &mut without_resources).unwrap();
+    // Bundle identity adds no heap storage even for unused external documents.
+    assert_eq!(
+        complete.total_scratch_charged,
+        without_resources.usage().total_scratch_charged
+    );
+    assert_eq!(
+        complete.peak_scratch_bytes,
+        without_resources.usage().peak_scratch_bytes
+    );
+    let mut exact = Governor::new(Budget {
+        work: complete.work,
+        ..Budget::default()
+    });
+    assert_eq!(
+        Schema::with_resources_governed("true", &resources, &mut exact)
+            .unwrap()
+            .digest(),
+        schema.digest()
+    );
+    let mut limited = Governor::new(Budget {
+        work: complete.work - 1,
+        ..Budget::default()
+    });
+    // Refuse at final bundle publication, never returning a root-only identity.
+    assert_eq!(
+        Schema::with_resources_governed("true", &resources, &mut limited).unwrap_err(),
+        CompilationError::Resource(StopReason::BudgetExceeded(Resource::Work))
+    );
+    assert_eq!(
+        limited.check(),
+        Err(StopReason::BudgetExceeded(Resource::Work))
+    );
+    let mut short = Governor::new(Budget {
         work: 1000,
         ..Budget::default()
     });
     assert_eq!(
-        Schema::with_resources_governed("true", &resources, &mut governor).unwrap_err(),
+        Schema::with_resources_governed("true", &resources, &mut short).unwrap_err(),
         CompilationError::Resource(StopReason::BudgetExceeded(Resource::Work))
     );
+    // Original unused-document input admission still precedes parsing or hashing.
+    let mut input = Governor::new(Budget {
+        input_bytes: 8192,
+        ..Budget::default()
+    });
+    assert_eq!(
+        Schema::with_resources_governed("true", &resources, &mut input).unwrap_err(),
+        CompilationError::Resource(StopReason::BudgetExceeded(Resource::InputBytes))
+    );
+    assert_eq!(input.usage().total_scratch_charged, 0);
 }

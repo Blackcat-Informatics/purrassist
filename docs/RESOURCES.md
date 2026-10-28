@@ -182,6 +182,30 @@ their original semantics. JSON repair spellings are not added to call metadata.
 Refusals drop unpublished partial tables and completed metadata from earlier
 steps; a successful borrow does not allocate or readmit the prepared bytes.
 
+## Schema bundle identity construction
+
+`Schema::compile_governed` and `with_resources_governed` stream their complete
+bundle identity through the existing `DigestBuilder`. The identity protocol is
+unchanged: versioned dialect prefix, exact root digest, then fixed-width digests
+of each supplied URI and document in sorted URI order. Unused resources remain
+part of the identity; caller insertion order does not affect it.
+
+Every hash update admits its byte length and one control work unit before
+processing each chunk of at most 4,096 bytes. Finalization admits 128 work units
+for at most two SHA-256 padding blocks. Native exhaustion/cancellation remains
+`CompilationError::Resource`; a final governor check precedes publication.
+Original unused-document `InputBytes` admission remains before parsing. Root
+hashing occurs once, after the root's parsing/index walk; its private intermediate
+identity cannot escape before linkage and final complete bundle hashing succeed.
+
+The identity path allocates no framing buffer and adds no scratch storage. Its
+obsolete nominal buffer charge and upfront hash-work estimates are removed;
+actual hashing work is admitted where it occurs. Other compiler allocations,
+source parsing, index/reference ownership and algebra preparation remain separate
+unfinished governance work. This does not claim complete schema compilation or
+tool-graph loading governance. The real plain FnO consumer exercises this core
+compiler path without replacing the upstream schema compiler.
+
 ## Type-enforced scratch accounting
 
 `crates/core/src/contract.rs` charges scratch through a shared, atomic

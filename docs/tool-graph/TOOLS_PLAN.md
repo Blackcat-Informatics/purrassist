@@ -477,6 +477,14 @@ JSON-LD schema/OpenAPI goldens are retained from the previous pin; compiling
 plain profiles also preserves the neighboring original JSON-LD schema and
 OpenAPI artifacts.
 
+The first-party `Schema::compile_governed` consumer now prepares its bundle
+identity with allocation-free streaming SHA-256, bounded admitted hashing work
+and a final governor check before complete schema publication. Exact dialect,
+root and ordered supplied-resource identity bytes remain unchanged, including
+unused resources. This completes bundle identity construction only; source
+parsing, schema index/reference ownership, algebra preparation and graph/compiler
+integration remain required under #33 and #36.
+
 This adopts the supported upstream profile only. Full G7 qualification still
 requires exact plain-number semantics upstream and downstream executable
 evidence; no local compiler or schema rewriting can satisfy that requirement.

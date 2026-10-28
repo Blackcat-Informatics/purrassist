@@ -13,7 +13,7 @@ mod layout;
 pub mod recovery;
 mod uri;
 mod vocabulary;
-use crate::digest::Digest;
+use crate::digest::{Digest, DigestBuilder};
 use crate::json::{Node, Value};
 use crate::{Budget, Governor, StopReason};
 use core::fmt;
@@ -259,6 +259,9 @@ impl Schema {
     /// Unused supplied resources still count toward identity hashing work. No I/O
     /// occurs. Dialect loading, reference indexing, and pattern preparation share
     /// this governor; failure leaves it stopped when a resource limit was exceeded.
+    /// Bundle identity hashing uses bounded admitted updates without a framing
+    /// allocation. A final governor check precedes complete schema publication;
+    /// source/index/reference ownership retains its separate preparation contract.
     ///
     /// ```
     /// use std::collections::BTreeMap;
@@ -515,21 +518,62 @@ fn pointer_token(token: &str) -> Option<String> {
 /// Draft-07 meta-schema (with the dialect's rules) only when the root is
 /// Draft-07 or the built-in Draft-07 meta-schema was loaded, so every bundle
 /// that compiled before Draft-07 support keeps its exact identity.
-fn bundle_digest(source: &str, resources: &BTreeMap<String, String>, draft07: bool) -> Digest {
-    let mut identity =
-        b"purrassist.schema.bundle.v1\0draft2020-12.601a66c8b0f25246bf0e1fb488c5b5f030a79b72\0"
-            .to_vec();
+fn bundle_digest(
+    root: Digest,
+    resources: &BTreeMap<String, String>,
+    draft07: bool,
+    governor: &mut Governor,
+) -> Result<Digest, StopReason> {
+    let mut identity = DigestBuilder::new();
+    hash_chunks(
+        &mut identity,
+        b"purrassist.schema.bundle.v1\0draft2020-12.601a66c8b0f25246bf0e1fb488c5b5f030a79b72\0",
+        governor,
+    )?;
     if draft07 {
-        identity.extend_from_slice(b"draft-07.20a3fee852db88519dcb3bb329b7a872ebad8953\0");
+        hash_chunks(
+            &mut identity,
+            b"draft-07.20a3fee852db88519dcb3bb329b7a872ebad8953\0",
+            governor,
+        )?;
     }
-    identity.extend_from_slice(Digest::of(source.as_bytes()).as_bytes());
+    hash_chunks(&mut identity, root.as_bytes(), governor)?;
     for (uri, document) in resources {
-        // Fixed-width hashes make the framing unambiguous, even for arbitrary URIs.
-        identity.extend_from_slice(Digest::of(uri.as_bytes()).as_bytes());
-        identity.extend_from_slice(Digest::of(document.as_bytes()).as_bytes());
+        // Fixed-width hashes preserve the existing unambiguous identity protocol.
+        for bytes in [uri.as_bytes(), document.as_bytes()] {
+            let digest = hash_schema_bytes(bytes, governor)?;
+            hash_chunks(&mut identity, digest.as_bytes(), governor)?;
+        }
     }
-    Digest::of(&identity)
+    governor.charge(crate::contract::Resource::Work, 128)?;
+    Ok(identity.finish())
 }
+
+/// Hash original schema/resource bytes without retaining a framing allocation.
+fn hash_schema_bytes(bytes: &[u8], governor: &mut Governor) -> Result<Digest, StopReason> {
+    let mut hash = DigestBuilder::new();
+    hash_chunks(&mut hash, bytes, governor)?;
+    // SHA-256 finalization processes at most two 64-byte padding blocks.
+    governor.charge(crate::contract::Resource::Work, 128)?;
+    Ok(hash.finish())
+}
+
+/// Bound cancellation latency while admitting bytes and per-chunk control work.
+fn hash_chunks(
+    hash: &mut DigestBuilder,
+    bytes: &[u8],
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    for chunk in bytes.chunks(4096) {
+        governor.charge(
+            crate::contract::Resource::Work,
+            crate::contract::saturating_size(chunk.len()).saturating_add(1),
+        )?;
+        hash.update(chunk);
+    }
+    Ok(())
+}
+
 fn at_route<'a>(mut node: &'a Node, route: &[usize]) -> &'a Node {
     for &index in route {
         node = match &node.value {
