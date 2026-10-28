@@ -1767,12 +1767,30 @@ mod tests {
             assert!(
                 matches!(OutputSchema::compile("result",source,true,&mut governor),Err(ToolSetError::Resource(reason)) if reason==StopReason::BudgetExceeded(resource))
             );
-            assert_eq!(governor.scratch_meter().live(), 0);
             if resource == Resource::Work {
+                // Retaining the output text consumes this work allowance. The
+                // native compiler can now enter parsing before hashing starts;
+                // its legacy parser charges are separate from the owned text.
+                let mut native = Governor::new(Budget {
+                    work: 0,
+                    ..Budget::default()
+                });
+                assert!(matches!(
+                    crate::schema::Schema::compile_governed(source, &mut native),
+                    Err(crate::schema::CompilationError::Resource(
+                        StopReason::BudgetExceeded(Resource::Work)
+                    ))
+                ));
+                assert_eq!(
+                    governor.scratch_meter().live(),
+                    native.scratch_meter().live()
+                );
                 assert!(
-                    governor.usage().peak_scratch_bytes > 0,
+                    governor.usage().peak_scratch_bytes > native.usage().peak_scratch_bytes,
                     "text was retained before native compilation refused"
                 );
+            } else {
+                assert_eq!(governor.scratch_meter().live(), 0);
             }
         }
         let cancellation = CancellationToken::new();

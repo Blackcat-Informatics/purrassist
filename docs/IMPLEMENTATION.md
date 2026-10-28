@@ -57,6 +57,15 @@ classification construction now use actual admitted owners, as described below.
 Derivative artifacts retain release-owned buffers and actual consumers borrow
 prepared patterns.
 
+Schema bundle identity construction now streams through the existing SHA-256
+builder without a framing allocation. Root, URI and resource hashes retain the
+same dialect-prefixed identity bytes, including unused supplied resources in
+sorted URI order. Hashing admits byte/control work at bounded checkpoints and
+finalization work before processing; complete schema publication checks the
+shared governor once more. The actual plain FnO consumer uses this compiler.
+Source parsing, index/reference ownership and algebra preparation retain their
+separate unfinished governance contracts under #33 and #36.
+
 Full cold backend governance remains #36
 acceptance, alongside witness, GBNF, CompactSignature, projection, routing,
 ledgers and graph integration.

@@ -3,6 +3,7 @@
 //! Governed schema bundle compilation and typed failure propagation.
 use super::{
     DRAFT_07, Dialect, Index, Schema, SchemaError, at_route, builtin, bundle_digest, compile,
+    hash_schema_bytes,
 };
 use crate::{
     Governor, StopReason,
@@ -110,15 +111,11 @@ pub(super) fn compile(
         resources,
         governor,
     };
-    // Admission precedes bundle hashing and its temporary hash framing buffer.
-    context.charge(Resource::Work, source.len())?;
-    context.charge(
-        Resource::ScratchBytes,
-        resources.len().saturating_mul(64).saturating_add(256),
-    )?;
-    for (uri, text) in resources {
+    // Even unused supplied documents must satisfy input admission. Their actual
+    // hashing work is admitted separately, at each bounded hashing checkpoint.
+    for text in resources.values() {
+        context.charge(Resource::Work, 1)?;
         context.charge(Resource::InputBytes, text.len())?;
-        context.charge(Resource::Work, uri.len().saturating_add(text.len()))?;
     }
     let root = context.parse(source, "")?;
     let mut index = Index::default();
@@ -131,13 +128,14 @@ pub(super) fn compile(
         &mut index,
         &mut context,
     )?;
+    let root_digest = hash_schema_bytes(source.as_bytes(), context.governor)?;
     let mut schema = Schema {
         documents: vec![root],
         index,
         root: 0,
-        // Final identity depends on which built-in dialect data the
-        // completed bundle observed; it is hashed once, after linkage.
-        digest: crate::digest::Digest::of(&[]),
+        // Private root identity until linkage determines the complete bundle's
+        // dialect prefix. No partially prepared Schema leaves this function.
+        digest: root_digest,
     };
     let mut cursor = 0;
     while cursor < schema.index.locations.len() {
@@ -189,9 +187,11 @@ pub(super) fn compile(
         cursor += 1;
     }
     schema.digest = bundle_digest(
-        source,
+        root_digest,
         resources,
         schema.dialect() == Dialect::Draft07 || schema.index.resources.contains_key(DRAFT_07),
-    );
+        context.governor,
+    )?;
+    context.governor.check()?;
     Ok(schema)
 }

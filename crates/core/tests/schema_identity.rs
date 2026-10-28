@@ -14,6 +14,15 @@ fn external_constraint_changes_cannot_share_receipt_identity() {
     let value = parse("42").unwrap();
     assert!(accepting.validate(&value).unwrap().valid);
     assert!(!rejecting.validate(&value).unwrap().valid);
+    // Frozen before streaming identity construction; receipt identities must not drift.
+    assert_eq!(
+        accepting.digest().to_string(),
+        "sha256:8d27ba1bcac65eac263ef9ca377b239cdcd9a76316014b4b8b637505b3b2e4c5"
+    );
+    assert_eq!(
+        rejecting.digest().to_string(),
+        "sha256:7759e30a80be266db2b3a82ceb97364cae82015fac9237b9dcf1d4adb79fa27e"
+    );
     assert_ne!(accepting.digest(), rejecting.digest());
     assert_eq!(
         rejecting.digest(),
@@ -34,4 +43,39 @@ fn custom_dialect_bytes_are_bound_even_without_ref() {
     assert_ne!(first.digest(), second.digest());
     assert!(!first.validate(&parse("1").unwrap()).unwrap().valid);
     assert!(second.validate(&parse("1").unwrap()).unwrap().valid);
+}
+
+#[test]
+fn dialect_prefixes_and_unused_resources_keep_frozen_order_independent_identities() {
+    let forward = BTreeMap::from([
+        ("urn:unused:a".into(), "true".into()),
+        ("urn:unused:b".into(), "false".into()),
+    ]);
+    let reverse = BTreeMap::from([
+        ("urn:unused:b".into(), "false".into()),
+        ("urn:unused:a".into(), "true".into()),
+    ]);
+    for (source, frozen) in [
+        (
+            "true",
+            "sha256:21b4ead4bf8fe964abfa8c7edf3a495ae36fb5d5a9b91f688ecc780ef6140fac",
+        ),
+        (
+            r#"{"$schema":"http://json-schema.org/draft-07/schema","type":"integer"}"#,
+            "sha256:f72dee7e819423662650a0b2cef0145771fcc4014cc31ac298a1f1b63453c82c",
+        ),
+    ] {
+        let original = Schema::with_resources(source, &forward).unwrap();
+        assert_eq!(original.digest().to_string(), frozen);
+        assert_eq!(
+            Schema::with_resources(source, &reverse).unwrap().digest(),
+            original.digest()
+        );
+        let mut changed = forward.clone();
+        changed.insert("urn:unused:b".into(), "true".into());
+        assert_ne!(
+            Schema::with_resources(source, &changed).unwrap().digest(),
+            original.digest()
+        );
+    }
 }
