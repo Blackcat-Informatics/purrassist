@@ -1286,3 +1286,16 @@ The actual `policy_document` example prints a complete compiled document. Full
 RDF/SRL/static admission, permission/owner/deny proofs, abstraction imports and
 trust, nested graph profile synthesis, transition-target existence, graph CLI,
 loaded mediation and host confinement remain #33/#34/#35/#39 requirements.
+
+### Governed semantic JSON comparison prerequisite
+
+`Node::equivalent_governed` now supplies the existing schema, recovery, witness
+merge/exclusion and emitter roundtrip consumers with one exact semantic JSON
+comparison authority and their actual governor. Ordered duplicate occurrences,
+independent object key-group order, mathematical decimals, root-zero depth,
+fallible temporary ownership and native refusals are part of this operation.
+Ordinary and governed comparison share structural and decimal arithmetic rules.
+This prerequisite completes comparison governance; it does not complete XML
+codec ownership, emitter preparation, witness construction or any remaining
+#33/#36/#37/#39 graph, GBNF, signature, family-projection, routing, authorization
+or loss-ledger acceptance.

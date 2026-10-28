@@ -3,8 +3,10 @@
 
 //! Ordered, source-addressed JSON with exact decimal values.
 mod emission;
+mod equivalence;
 pub mod incremental;
 mod number;
+mod operation;
 mod parser;
 use crate::contract::saturating_size as size;
 use crate::contract::{Governor, Resource, ScratchCharge, ScratchString, StopReason};
@@ -274,30 +276,40 @@ impl Node {
     /// Object duplicates compare as ordered occurrences instead of disappearing.
     #[must_use]
     pub fn equivalent(&self, other: &Self) -> bool {
-        match (&self.value, &other.value) {
-            (Value::Null, Value::Null) => true,
-            (Value::Bool(a), Value::Bool(b)) => a == b,
-            (Value::Number(a), Value::Number(b)) => a == b,
-            (Value::String(a), Value::String(b)) => a == b,
-            (Value::Array(a), Value::Array(b)) => {
-                a.len() == b.len() && a.iter().zip(b).all(|(a, b)| a.equivalent(b))
-            }
-            (Value::Object(a), Value::Object(b)) => {
-                a.len() == b.len()
-                    && a.iter().all(|member| {
-                        let left: Vec<_> =
-                            a.iter().filter(|entry| entry.key == member.key).collect();
-                        let right: Vec<_> =
-                            b.iter().filter(|entry| entry.key == member.key).collect();
-                        left.len() == right.len()
-                            && left
-                                .iter()
-                                .zip(right)
-                                .all(|(a, b)| a.value.equivalent(&b.value))
-                    })
-            }
-            _ => false,
-        }
+        operation::ordinary(equivalence::compare(
+            self,
+            other,
+            &mut operation::Operation(None),
+        ))
+    }
+
+    /// Compare exact JSON values using the caller's resource and cancellation policy.
+    ///
+    /// Object key groups may be reordered, while duplicate values retain their
+    /// occurrence order within each key. Numbers compare mathematically, including
+    /// arbitrary decimal exponents and negative zero. Spans do not affect equality.
+    /// Original DOM construction is caller-owned; neither original is changed.
+    /// Root depth is zero. All comparison scans and temporary buffers are admitted
+    /// and temporary reservations release on both equality and refusal.
+    ///
+    /// # Errors
+    /// Returns native work/depth/storage or cancellation refusal, never inequality
+    /// as a substitute for an unfinished comparison.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget,Governor,json};
+    /// let left=json::parse(r#"{"a":1,"b":true,"a":2}"#).unwrap();
+    /// let right=json::parse(r#"{"b":true,"a":1.0,"a":2e0}"#).unwrap();
+    /// assert!(left.equivalent_governed(&right,&mut Governor::new(Budget::default())).unwrap());
+    /// ```
+    pub fn equivalent_governed(
+        &self,
+        other: &Self,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        let equal = equivalence::compare(self, other, &mut operation::Operation(Some(governor)))?;
+        governor.check()?;
+        Ok(equal)
     }
 
     /// Serialize to compact JSON, preserving member order and number spelling.
@@ -473,4 +485,18 @@ fn array_index(token: &str) -> Option<usize> {
 #[must_use]
 pub fn pointer_segment(input: &str) -> String {
     input.replace('~', "~0").replace('/', "~1")
+}
+
+pub(crate) fn equivalent_any(
+    values: &[Node],
+    node: &Node,
+    governor: &mut crate::Governor,
+) -> Result<bool, StopReason> {
+    for value in values {
+        if value.equivalent_governed(node, governor)? {
+            return Ok(true);
+        }
+    }
+    governor.check()?;
+    Ok(false)
 }

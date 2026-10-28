@@ -487,3 +487,28 @@ The actual `policy_document` example prints a complete compiled document. Full
 RDF/SRL/static admission, permission/owner/deny proofs, abstraction imports and
 trust, nested graph profile synthesis, transition-target existence, graph CLI,
 loaded mediation and host confinement remain #33/#34/#35/#39 requirements.
+
+## Governed semantic JSON equivalence
+
+`Node::equivalent_governed` compares caller-prepared immutable JSON values under
+one supplied governor. It preserves mathematical decimal equality, independent
+object key-group order, ordered duplicate occurrences within each key, and array
+order. Source spans do not affect the result. Its iterative traversal admits
+actual value depth with the root at zero. Key/string comparisons, mantissa
+normalization and arbitrary-length signed decimal exponent arithmetic admit
+work before processing. Temporary traversal and decimal buffers use fallible,
+release-owned storage; resource refusal and cancellation never become inequality.
+Ordinary equality and governed equality share the same structural and numeric
+comparison authority, without constructing a default governor.
+
+Schema const/enum/uniqueness evaluation, recovery no-op detection, witness
+exclusion/merge checks and emitter XML/splice roundtrip checks use this operation
+with their actual caller governor. Merge and conditional preparation propagate
+native refusals without manufacturing a contradiction or an unsatisfiability
+claim. Source-spelling syntax fallback remains distinct from native refusal.
+
+This completes comparison governance. Original DOM construction, general schema
+algebra storage, XML decoding and full emitter preparation retain their separate
+ownership requirements. It supplies no graph admission, execution authority,
+complete witness, GBNF, signature, family-projection or routing implementation;
+remaining parent requirements stay open.

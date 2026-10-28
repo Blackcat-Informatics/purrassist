@@ -1705,3 +1705,26 @@ The actual `policy_document` example prints a complete compiled document. Full
 RDF/SRL/static admission, permission/owner/deny proofs, abstraction imports and
 trust, nested graph profile synthesis, transition-target existence, graph CLI,
 loaded mediation and host confinement remain #33/#34/#35/#39 requirements.
+
+## Semantic JSON comparison
+
+`Node::equivalent_governed` accepts an explicit caller governor. Its stack holds
+borrowed node pairs and their actual value depths, with root depth zero. Every
+stack growth is admitted before allocation and releases on success, inequality
+or refusal. No input DOM is copied. Distinct object keys can be reordered;
+duplicate values compare in their original occurrence order within each key.
+Key and string scans are charged before byte comparison.
+
+Exact decimal comparison shares ordinary normalization and signed decimal
+arithmetic. Mantissa and exponent buffers retain their scratch owners until the
+comparison releases them. Exponent storage scales with the spelling's digit
+count, rather than the exponent's mathematical magnitude. Negative zero, large
+exponents and cancellation between mantissa zeros and exponent digits preserve
+mathematical equality. Both semantic outcomes pass a final cancellation check.
+
+Schema evaluation/recovery/algebra and emitter roundtrip consumers propagate
+native comparison refusal through their real governor. Neither enum/exclusion
+search nor contradiction detection converts refusal into a semantic answer.
+Ordinary public comparison remains an explicitly ordinary operation. This does
+not extend scratch ownership to caller DOM construction, full witness algebra,
+XML decoding or higher-level emitter preparation.

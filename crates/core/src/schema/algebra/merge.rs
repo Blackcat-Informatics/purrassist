@@ -10,6 +10,7 @@
 //! ever tries to build a value.
 use super::canon::{Facet, NumKind, PatternRef, TypeSet};
 use crate::json::Node;
+use crate::{Governor, StopReason};
 
 /// Everything a search path has merged so far. `And`-merging is simply
 /// [`Requirements::apply`] folded over every [`Facet`] encountered while
@@ -112,11 +113,15 @@ impl Requirements {
     }
     /// Fold one [`Facet`] into this merged obligation set (the `and`-merge
     /// step, stage 3).
-    pub(super) fn apply(&mut self, facet: &Facet) {
-        self.merge_one(facet);
-        self.check_contradictions();
+    pub(super) fn apply(
+        &mut self,
+        facet: &Facet,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        self.merge_one(facet, governor)?;
+        self.check_contradictions(governor)
     }
-    fn merge_one(&mut self, facet: &Facet) {
+    fn merge_one(&mut self, facet: &Facet, governor: &mut Governor) -> Result<(), StopReason> {
         match facet {
             Facet::Type(set) => {
                 self.types = self.types.intersect(*set);
@@ -126,7 +131,7 @@ impl Requirements {
             }
             Facet::Const(value) => {
                 if let Some(existing) = &self.const_value {
-                    if !existing.equivalent(value) {
+                    if !existing.equivalent_governed(value, governor)? {
                         self.fail("two incompatible const values");
                     }
                 } else {
@@ -135,15 +140,23 @@ impl Requirements {
             }
             Facet::Excluded(values) => self.excluded.extend(values.iter().cloned()),
             Facet::Enum(values) => {
-                let merged = self.enum_values.take().map_or_else(
-                    || values.clone(),
-                    |existing| {
-                        existing
-                            .into_iter()
-                            .filter(|value| values.iter().any(|other| other.equivalent(value)))
-                            .collect()
-                    },
-                );
+                let merged = if let Some(mut existing) = self.enum_values.take() {
+                    // Keep the accepted prefix in its original order without
+                    // allocating another Requirements-owned candidate vector.
+                    let mut kept = 0;
+                    for index in 0..existing.len() {
+                        governor.charge(crate::contract::Resource::Work, 1)?;
+                        if crate::json::equivalent_any(values, &existing[index], governor)? {
+                            governor.charge(crate::contract::Resource::Work, 1)?;
+                            existing.swap(kept, index);
+                            kept += 1;
+                        }
+                    }
+                    existing.truncate(kept);
+                    existing
+                } else {
+                    values.clone()
+                };
                 if merged.is_empty() {
                     self.fail("enum intersection is empty");
                 }
@@ -210,11 +223,12 @@ impl Requirements {
             Facet::UnevaluatedProperties(id) => self.unevaluated_properties.push(*id),
             Facet::UnevaluatedItems(id) => self.unevaluated_items.push(*id),
         }
+        Ok(())
     }
     /// Crossed shape-specific bounds exclude only that shape. They prove
     /// a branch contradictory when no admitted shape remains; literals and
     /// enum members are still checked against the resulting type set.
-    fn check_contradictions(&mut self) {
+    fn check_contradictions(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
         if let (Some((min, min_exclusive)), Some((max, max_exclusive))) =
             (&self.minimum, &self.maximum)
         {
@@ -253,27 +267,67 @@ impl Requirements {
             self.fail("no admitted type satisfies its shape-specific bounds");
         }
         if let Some(const_value) = self.const_value.clone() {
-            if self
-                .excluded
-                .iter()
-                .any(|excluded| excluded.equivalent(&const_value))
-            {
+            if crate::json::equivalent_any(&self.excluded, &const_value, governor)? {
                 self.fail("const value is excluded");
             }
             if let Some(values) = self.enum_values.clone()
-                && !values.iter().any(|value| value.equivalent(&const_value))
+                && !crate::json::equivalent_any(&values, &const_value, governor)?
             {
                 self.fail("const value is not in enum");
             }
         }
-        if let Some(values) = self.enum_values.clone()
-            && values.iter().all(|value| {
-                self.excluded
-                    .iter()
-                    .any(|excluded| excluded.equivalent(value))
-            })
-        {
-            self.fail("every enum value is excluded");
+        if let Some(values) = self.enum_values.clone() {
+            let mut all_excluded = true;
+            for value in &values {
+                if !crate::json::equivalent_any(&self.excluded, value, governor)? {
+                    all_excluded = false;
+                    break;
+                }
+            }
+            if all_excluded {
+                self.fail("every enum value is excluded");
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Facet, Requirements};
+    use crate::{Budget, Governor, StopReason, contract::Resource, json};
+
+    #[test]
+    fn comparison_refusal_in_const_and_enum_merge_never_marks_a_contradiction() {
+        let first = json::parse(r#"{"x":1}"#).unwrap();
+        let equivalent = json::parse(r#"{"x":1.0}"#).unwrap();
+        for (initial, next) in [
+            (
+                Facet::Const(first.clone()),
+                Facet::Const(equivalent.clone()),
+            ),
+            (Facet::Enum(vec![first]), Facet::Enum(vec![equivalent])),
+        ] {
+            let mut requirements = Requirements::default();
+            requirements
+                .apply(&initial, &mut Governor::new(Budget::default()))
+                .unwrap();
+            // Preparation completed above. This governor sees only the second
+            // merge, whose first semantic comparison must reserve its stack.
+            let mut governor = Governor::new(Budget {
+                scratch_bytes: 0,
+                ..Budget::default()
+            });
+            assert_eq!(
+                requirements.apply(&next, &mut governor),
+                Err(StopReason::BudgetExceeded(Resource::ScratchBytes))
+            );
+            assert!(!requirements.is_contradictory());
+            assert_eq!(
+                governor.check(),
+                Err(StopReason::BudgetExceeded(Resource::ScratchBytes))
+            );
+            assert_eq!(governor.scratch_meter().live(), 0);
         }
     }
 }
