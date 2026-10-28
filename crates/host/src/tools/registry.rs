@@ -6,14 +6,13 @@
 //! command, and MCP `tools/list`/`tools/call` all derive from [`ENTRIES`];
 //! there is no second, hand-maintained dispatch path. Input arguments are
 //! validated by this crate's own schema engine before a handler ever runs;
-//! `crates/cli/tests/protocol.rs` validates every registered output schema
-//! against a real fixture for every entry.
+//! complete returned nodes pass their registered output schema before release.
 use super::Tools;
 use purrassist::{
-    Budget, CancellationToken,
+    Budget, CancellationToken, Effort, Governor, Receipt, StopReason,
     json::{self, Node, Value},
     schema::Schema,
-    wire::{array, object, string},
+    wire::{array, null, object, string},
 };
 
 pub(super) type Handler =
@@ -397,35 +396,105 @@ pub(super) fn contains(name: &str) -> bool {
     ENTRIES.iter().any(|entry| entry.name == name)
 }
 
-/// Validate `args` against `name`'s registered input schema, then run its
-/// handler. The single dispatch path shared by `Tools::call`,
-/// `Tools::call_with_cancellation`, and (through those) the CLI and MCP.
-///
-/// # Errors
-/// Rejects unknown operations, schema-invalid arguments, and every error the
-/// selected handler itself returns.
+/// Prepare both selected schemas and validate arguments before invoking once.
+/// Complete returned nodes pass their output schema before successful release.
+/// This is the single dispatch path used by Rust, CLI and MCP callers.
 pub(super) fn call(
     tools: &Tools,
     name: &str,
     args: &Node,
     cancellation: Option<&CancellationToken>,
 ) -> Result<Node, String> {
-    let mut validation_governor = super::governor(Budget::default(), cancellation);
-    validation_governor.check().map_err(|e| e.to_string())?;
+    let mut admission = super::governor(Budget::default(), cancellation);
+    admission.check().map_err(|e| e.to_string())?;
     let entry = ENTRIES
         .iter()
         .find(|entry| entry.name == name)
         .ok_or_else(|| format!("unknown tool {name:?}"))?;
-    let schema = Schema::compile_governed(entry.input_schema, &mut validation_governor)
-        .map_err(|e| e.to_string())?;
-    let validation = schema
-        .validate_with(args, &mut validation_governor)
-        .map_err(|e| e.to_string())?;
-    if !validation.valid {
-        return Err(format!(
-            "tool arguments violate schema: {:?}",
-            validation.violations
-        ));
-    }
-    (entry.handler)(tools, name, args, cancellation)
+    // Once a handler returns, bounded validation completes despite late signals.
+    // In particular, a completed journaled transaction must retain its outcome.
+    let mut output = Governor::new(Budget::default());
+    entry.invoke(tools, args, cancellation, &mut admission, &mut output)
 }
+
+impl Entry {
+    fn invoke(
+        &self,
+        tools: &Tools,
+        args: &Node,
+        cancellation: Option<&CancellationToken>,
+        admission: &mut Governor,
+        output: &mut Governor,
+    ) -> Result<Node, String> {
+        admission.check().map_err(|e| e.to_string())?;
+        let input_schema = Schema::compile_governed(self.input_schema, admission)
+            .map_err(|error| error.to_string())?;
+        let output_schema = Schema::compile_governed(self.output_schema, admission)
+            .map_err(|error| error.to_string())?;
+        let validation = input_schema
+            .validate_with(args, admission)
+            .map_err(|error| error.to_string())?;
+        if !validation.valid {
+            return Err(format!(
+                "tool arguments violate schema: {:?}",
+                validation.violations
+            ));
+        }
+        admission.check().map_err(|error| error.to_string())?;
+        let original = (self.handler)(tools, self.name, args, cancellation)?;
+        match output_schema.validate_with(&original, output) {
+            Ok(report) if report.valid => Ok(original),
+            verdict => {
+                let (reason, report, stop) = match verdict {
+                    Ok(report) => (
+                        object([("kind", string("schema_violation"))]),
+                        super::validate::report_node(&report),
+                        StopReason::InvalidInput(
+                            "registered output schema rejected returned result".into(),
+                        ),
+                    ),
+                    Err(reason) => (
+                        super::validate::resource(&reason, "output_validation"),
+                        null(),
+                        reason,
+                    ),
+                };
+                let mut admitted = Receipt::new(
+                    self.input_schema.as_bytes(),
+                    "host.registry.admission.v1",
+                    Effort::Standard,
+                    *admission.limits(),
+                );
+                admitted.usage = admission.usage();
+                let mut checked = Receipt::new(
+                    self.output_schema.as_bytes(),
+                    "host.registry.output-validation.v1",
+                    Effort::Standard,
+                    *output.limits(),
+                );
+                checked.usage = output.usage();
+                checked.stopped = stop;
+                // Host error materialization remains outside these phase budgets,
+                // including after a native stop. Move the original node intact:
+                // no serialize/parse round trip can collapse duplicate members.
+                Err(object([
+                    ("code", string("registered_output_refused")),
+                    ("stage", string("output_validation")),
+                    ("tool", string(self.name)),
+                    ("schema", string(output_schema.digest().to_string())),
+                    ("handler_returned", Node::new(Value::Bool(true))),
+                    ("effects_may_have_occurred", Node::new(Value::Bool(self.writes))),
+                    ("message", string("handler returned successfully; result refused; effects may already have occurred; no retry or rollback was performed")),
+                    ("reason", reason),
+                    ("validation", report),
+                    ("admission", admitted.to_node()),
+                    ("output_validation", checked.to_node()),
+                    ("original_output", original),
+                ]).to_json())
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

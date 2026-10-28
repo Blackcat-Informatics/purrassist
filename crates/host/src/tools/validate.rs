@@ -5,9 +5,10 @@
 //! evidence. The shipped CLI's `purrassist validate` command emits this same
 //! tool's output.
 use purrassist::{
-    CancellationToken, Receipt,
+    CancellationToken, Receipt, StopReason,
+    contract::Resource,
     json::{Node, Value},
-    schema::{CompilationError, Schema},
+    schema::{CompilationError, Schema, ValidationReport},
     wire::{array, evidence, object, string, validation},
 };
 
@@ -92,6 +93,60 @@ pub(super) fn violation(entry: &purrassist::schema::Violation) -> Node {
         ("schema_path", string(&entry.schema_path)),
         ("keyword", string(&entry.keyword)),
         ("message", string(&entry.message)),
+    ])
+}
+
+pub(super) fn resource(reason: &StopReason, origin: &str) -> Node {
+    let (stop, detail) = match reason {
+        StopReason::Completed => ("completed", String::new()),
+        StopReason::NoCandidate => ("no_candidate", String::new()),
+        StopReason::BudgetExceeded(resource) => (
+            "budget_exceeded",
+            match resource {
+                Resource::Work => "work",
+                Resource::Candidates => "candidates",
+                Resource::InputBytes => "input_bytes",
+                Resource::ScratchBytes => "scratch_bytes",
+                Resource::Depth => "depth",
+                Resource::EvidenceEntries => "evidence_entries",
+                Resource::HelperCalls => "helper_calls",
+            }
+            .into(),
+        ),
+        StopReason::Cancelled => ("cancelled", String::new()),
+        StopReason::InvalidInput(message) => ("invalid_input", message.clone()),
+    };
+    object([
+        ("kind", string("resource")),
+        ("origin", string(origin)),
+        ("stop", string(stop)),
+        ("detail", string(detail)),
+    ])
+}
+pub(super) fn report_node(report: &ValidationReport) -> Node {
+    object([
+        ("schema", string(report.schema.to_string())),
+        ("dialect", string(report.dialect.uri())),
+        ("valid", Node::new(Value::Bool(report.valid))),
+        ("violations", array(report.violations.iter().map(violation))),
+        (
+            "format_evidence",
+            array(
+                report
+                    .format_evidence
+                    .iter()
+                    .map(purrassist::wire::validation),
+            ),
+        ),
+        (
+            "pattern_evidence",
+            array(
+                report
+                    .pattern_evidence
+                    .iter()
+                    .map(purrassist::wire::evidence),
+            ),
+        ),
     ])
 }
 
