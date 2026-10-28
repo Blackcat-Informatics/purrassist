@@ -58,6 +58,7 @@ pub mod emit;
 mod from_node;
 mod ir;
 mod metadata;
+mod output;
 mod recognizer;
 pub mod recover;
 pub mod resolve;

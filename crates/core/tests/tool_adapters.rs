@@ -822,7 +822,7 @@ fn observable(tools: &ToolSet) -> Vec<String> {
                 DeclarationForm::Anthropic,
             ]
             .into_iter()
-            .map(|form| tool.render_declaration(form).expect("wire forms render"))
+            .map(|form| tool.render_declaration(form))
             .collect();
             format!(
                 "{}|{:?}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
@@ -923,14 +923,10 @@ fn cross_form_rendering() {
     let mcp_tools = ToolSet::from_mcp(MCP, Budget::default()).unwrap();
     let input_schema = mcp_tools.render_json_schema("search_docs").unwrap();
     assert!(input_schema.contains(r#""x-mcp-hint": "\u0041""#));
-    assert_eq!(
-        mcp_tools
-            .render_declaration("search_docs", DeclarationForm::OpenAi)
-            .unwrap(),
-        format!(
-            r#"{{"type":"function","function":{{"name":"search_docs","description":"Search the docs / wiki","parameters":{input_schema}}}}}"#
-        )
-    );
+    assert!(matches!(
+        mcp_tools.render_declaration("search_docs", DeclarationForm::OpenAi),
+        Err(purrassist_core::tool_call::EmitError::Unsupported { .. })
+    ));
     let anthropic_tools = ToolSet::from_anthropic(ANTHROPIC, Budget::default()).unwrap();
     let count = anthropic_tools.render_json_schema("count").unwrap();
     assert_eq!(

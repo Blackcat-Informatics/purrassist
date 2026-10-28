@@ -18,7 +18,17 @@
 //!    for `http://json-schema.org/draft-07/schema#`, common in MCP
 //!    servers); and
 //! 4. the `(schema pointer, keyword)` list of every keyword the typed model
-//!    does not represent ([`super::CompiledTool::unmodeled_keywords`]).
+//!    does not represent ([`super::CompiledTool::unmodeled_keywords`]); and
+//! 5. for MCP, an optional exact `outputSchema` fragment and independently
+//!    compiled output validator, without projecting it into the argument shape.
+//!
+//! MCP output schemas require one root `type: "object"`; missing, duplicate or
+//! incompatible root types and boolean roots are invalid definitions. Nested
+//! boolean schemas remain supported. Invalid schemas/dialects/references carry
+//! output-schema context; native resource and cancellation errors stay native.
+//! Output fragments include adjacent JSON whitespace for exact source identity.
+//! A present output contract makes non-MCP declaration targets unsupported;
+//! rendering never silently discards it.
 //!
 //! Rendering back in the source form ([`super::CompiledTool::render_declaration`])
 //! returns the original declaration bytes exactly; unknown declaration
@@ -426,6 +436,7 @@ pub struct ToolDeclaration {
     text: String,
     span: Range<usize>,
     parameters: Option<Range<usize>>,
+    output_schema: Option<Range<usize>>,
 }
 
 impl ToolDeclaration {
@@ -496,9 +507,44 @@ impl ToolDeclaration {
     /// ```
     #[must_use]
     pub fn parameters_text(&self) -> Option<&str> {
-        self.parameters
-            .as_ref()
-            .map(|range| &self.text[range.start - self.span.start..range.end - self.span.start])
+        self.parameters_span()
+            .map(|range| self.fragment_text(range))
+    }
+
+    /// Exact output fragment range in the original MCP input, or absence.
+    ///
+    /// Includes adjacent JSON whitespace between the colon, schema value and
+    /// next member/outer delimiter, preserving an explicit builder source.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget,tool_call::{ToolSet,ToolSource}};
+    /// let source=r#"{"name":"x","outputSchema":{"type":"object"}}"#;
+    /// let tools=ToolSet::from_mcp(source,Budget::default()).unwrap();
+    /// let ToolSource::Declaration(declaration)=tools.tool("x").unwrap().source() else {unreachable!()};
+    /// assert_eq!(&source[declaration.output_schema_span().unwrap()],r#"{"type":"object"}"#);
+    /// ```
+    #[must_use]
+    pub fn output_schema_span(&self) -> Option<Range<usize>> {
+        self.output_schema.clone()
+    }
+
+    /// Exact output schema text retained inside the source declaration.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget,tool_call::{ToolSet,ToolSource}};
+    /// let tools=ToolSet::from_mcp(r#"{"name":"x"}"#,Budget::default()).unwrap();
+    /// let ToolSource::Declaration(declaration)=tools.tool("x").unwrap().source() else {unreachable!()};
+    /// assert!(declaration.output_schema_text().is_none());
+    /// ```
+    #[must_use]
+    pub fn output_schema_text(&self) -> Option<&str> {
+        self.output_schema_span()
+            .map(|range| self.fragment_text(range))
+    }
+
+    /// Convert either admitted absolute fragment range into its source view.
+    fn fragment_text(&self, range: Range<usize>) -> &str {
+        &self.text[range.start - self.span.start..range.end - self.span.start]
     }
 }
 
@@ -665,6 +711,7 @@ pub(super) fn render_canonical(
     name: &str,
     description: Option<&str>,
     parameters: Option<&str>,
+    output_schema: Option<&str>,
     governor: &mut Governor,
 ) -> Result<String, StopReason> {
     let mut output = json::JsonOutput::new(governor)?;
@@ -688,6 +735,10 @@ pub(super) fn render_canonical(
         output.raw(",\"")?;
         output.raw(form.parameters_key())?;
         output.raw("\":")?;
+        output.raw(schema)?;
+    }
+    if let Some(schema) = output_schema {
+        output.raw(r#","outputSchema":"#)?;
         output.raw(schema)?;
     }
     output.raw(if wrapped { "}}" } else { "}" })?;
@@ -779,23 +830,17 @@ fn span_of(node: &Node, tool: &str) -> Result<Range<usize>, ToolSetError> {
         .ok_or_else(|| invalid(tool, "a declaration node has no source span".into()))
 }
 
-/// Read one declaration into a pending tool.
-fn declare(
-    input: &str,
+/// Select the existing wire declaration body without duplicating its form rules.
+fn declaration_fields<'n>(
+    node: &'n Node,
     form: DeclarationForm,
-    index: usize,
-    node: &Node,
-    governor: &mut Governor,
-) -> Result<Pending, ToolSetError> {
-    let owner = format!("declaration {index}");
-    if !matches!(node.value, Value::Object(_)) {
-        return Err(invalid("", format!("{owner} must be a JSON object")));
-    }
-    let fields = if form == DeclarationForm::OpenAi {
-        if field(node, "type", "", &owner)?.and_then(Node::as_str) != Some("function") {
+    owner: &str,
+) -> Result<&'n Node, ToolSetError> {
+    Ok(if form == DeclarationForm::OpenAi {
+        if field(node, "type", "", owner)?.and_then(Node::as_str) != Some("function") {
             return Err(invalid("", format!("{owner}: `type` must be \"function\"")));
         }
-        match field(node, "function", "", &owner)? {
+        match field(node, "function", "", owner)? {
             Some(
                 function @ Node {
                     value: Value::Object(_),
@@ -811,7 +856,22 @@ fn declare(
         }
     } else {
         node
-    };
+    })
+}
+
+/// Read one declaration into a pending tool.
+fn declare(
+    input: &str,
+    form: DeclarationForm,
+    index: usize,
+    node: &Node,
+    governor: &mut Governor,
+) -> Result<Pending, ToolSetError> {
+    let owner = format!("declaration {index}");
+    if !matches!(node.value, Value::Object(_)) {
+        return Err(invalid("", format!("{owner} must be a JSON object")));
+    }
+    let fields = declaration_fields(node, form, &owner)?;
     let Some(name) = field(fields, "name", "", &owner)?.and_then(Node::as_str) else {
         return Err(invalid("", format!("{owner}: `name` must be a string")));
     };
@@ -839,6 +899,20 @@ fn declare(
             ));
         }
     };
+    let output_node = if form == DeclarationForm::Mcp {
+        super::output::field(fields, "outputSchema", name, governor)?
+    } else {
+        None
+    };
+    let output_span = output_node
+        .map(|node| super::output::fragment_span(input, node, name, governor))
+        .transpose()?;
+    let output_schema = output_span
+        .as_ref()
+        .map(|range| {
+            super::output::OutputSchema::compile(name, &input[range.clone()], true, governor)
+        })
+        .transpose()?;
     let span = span_of(node, name)?;
     let parameters_span = parameters.map(|schema| span_of(schema, name)).transpose()?;
     let schema_text = parameters_span
@@ -876,6 +950,7 @@ fn declare(
             effects: Effects::Mutating,
             policy: None,
             arguments,
+            output_schema: None,
         },
         declaration: Some(Box::new(Declared {
             source: ToolDeclaration {
@@ -883,9 +958,11 @@ fn declare(
                 text: input[span.clone()].to_owned(),
                 span,
                 parameters: parameters_span,
+                output_schema: output_span,
             },
             schema_text: schema_text.to_owned(),
             schema,
+            output_schema,
             unmodeled_keywords,
             locations,
         })),
@@ -1648,5 +1725,93 @@ fn represented(member: &Member, position: Position, tag: Tag) -> bool {
             matches!(tag, Tag::Object { .. }) && matches!(member.value.value, Value::Bool(_))
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::output::OutputSchema;
+    use crate::{
+        Budget, CancellationToken, Governor, ScratchString, ScratchVec, StopReason,
+        contract::Resource,
+        tool_call::{DeclarationForm, ToolSet, ToolSetError},
+    };
+
+    #[test]
+    fn prepared_output_refusals_release_new_text_and_preserve_native_causes() {
+        let source = r#"{"type":"object"}"#;
+        for (resource, budget) in [
+            (
+                Resource::Work,
+                Budget {
+                    work: source.len() as u64,
+                    ..Budget::default()
+                },
+            ),
+            (
+                Resource::ScratchBytes,
+                Budget {
+                    scratch_bytes: 0,
+                    ..Budget::default()
+                },
+            ),
+            (
+                Resource::InputBytes,
+                Budget {
+                    input_bytes: 0,
+                    ..Budget::default()
+                },
+            ),
+        ] {
+            let mut governor = Governor::new(budget);
+            assert!(
+                matches!(OutputSchema::compile("result",source,true,&mut governor),Err(ToolSetError::Resource(reason)) if reason==StopReason::BudgetExceeded(resource))
+            );
+            assert_eq!(governor.scratch_meter().live(), 0);
+            if resource == Resource::Work {
+                assert!(
+                    governor.usage().peak_scratch_bytes > 0,
+                    "text was retained before native compilation refused"
+                );
+            }
+        }
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let mut governor = Governor::with_cancellation(Budget::default(), cancellation);
+        assert!(matches!(
+            OutputSchema::compile("result", source, true, &mut governor),
+            Err(ToolSetError::Resource(StopReason::Cancelled))
+        ));
+        assert_eq!(governor.scratch_meter().live(), 0);
+
+        let input = r#"{"name":"bad name","inputSchema":{},"outputSchema":{"type":"object"}}"#;
+        let node = crate::json::parse(input).unwrap();
+        let mut governor = Governor::new(Budget::default());
+        let pending = super::declare(input, DeclarationForm::Mcp, 0, &node, &mut governor).unwrap();
+        let text = pending
+            .declaration
+            .as_ref()
+            .unwrap()
+            .output_schema
+            .as_ref()
+            .unwrap()
+            .text
+            .as_str();
+        let before = governor.scratch_meter().live();
+        let mut probe = ScratchString::new(&governor);
+        probe.push_str(text).unwrap();
+        let text_bytes = governor.scratch_meter().live() - before;
+        drop(probe);
+        let retained = governor.scratch_meter().live();
+        let mut entries = ScratchVec::new(&governor);
+        entries.push(pending).unwrap();
+        // Output preparation succeeded, but actual assembly rejects the name.
+        // Its Pending/Declared transfer must release the new text reservation;
+        // legacy compiler/catalog charges remain independently accounted.
+        assert!(matches!(
+            ToolSet::assemble(entries, &mut governor),
+            Err(ToolSetError::InvalidDefinition { .. })
+        ));
+        assert_eq!(governor.scratch_meter().live(), retained - text_bytes);
     }
 }
