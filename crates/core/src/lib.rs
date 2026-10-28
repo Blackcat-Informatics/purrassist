@@ -9,6 +9,7 @@ pub mod digest;
 pub mod grammar;
 pub mod json;
 pub mod matching;
+pub mod output;
 pub mod pattern;
 pub mod schema;
 pub mod text;

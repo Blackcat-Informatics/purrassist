@@ -4,6 +4,8 @@
 //! Exact output byte bounds, separate from prompt token estimates.
 
 mod codec;
+mod field_mask;
+pub use field_mask::{FieldMask, FieldMaskError, FieldMaskKind};
 mod project;
 pub use codec::{ContextCodecError, ContextManagement, LoadingStrategy, MCP_CONTEXT_FORMAT};
 pub use project::{
@@ -13,7 +15,7 @@ pub use project::{
 
 use std::{fmt, num::NonZeroU64};
 
-use purrassist_core::{Governor, StopReason, contract::Resource};
+use crate::{Governor, StopReason, contract::Resource};
 
 /// Unit measured in an output-bound receipt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,7 +80,7 @@ impl std::error::Error for OutputLimitError {}
 ///
 /// ```
 /// use purrassist_core::{Budget, Governor};
-/// use purrassist_toolgraph::{OutputByteLimit, OutputLimitError};
+/// use purrassist_core::output::{OutputByteLimit, OutputLimitError};
 /// let bound = OutputByteLimit::new(4).unwrap();
 /// let mut governor = Governor::new(Budget::default());
 /// assert_eq!(bound.check(b"null", &mut governor).unwrap().measured, 4);
@@ -122,7 +124,7 @@ impl OutputByteLimit {
         serialized_output: &[u8],
         governor: &mut Governor,
     ) -> Result<OutputMeasurement, OutputLimitError> {
-        let measured = purrassist_core::contract::saturating_size(serialized_output.len());
+        let measured = crate::contract::saturating_size(serialized_output.len());
         governor
             .charge(Resource::InputBytes, measured)
             .map_err(OutputLimitError::Resource)?;

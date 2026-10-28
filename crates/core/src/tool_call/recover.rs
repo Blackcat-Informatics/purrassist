@@ -165,7 +165,7 @@ use crate::grammar::edit::LossKind;
 use crate::json::{Node, Value, pointer_segment};
 use crate::provenance::{Derivation, Forest, NodeId, ProvenanceNode, permute};
 use crate::wire::{
-    self, WireValue, array, byte_range, exact_bytes, inferences, integer, object, string,
+    self, WireValue, array, byte_range, exact_bytes, inferences, integer, null, object, string,
 };
 use core::fmt;
 use core::ops::Range;
@@ -1781,10 +1781,6 @@ fn policy_code(policy: Option<RepairPolicy>) -> Node {
             RepairPolicy::Tolerant => "tolerant",
         })
     })
-}
-
-const fn null() -> Node {
-    Node::new(Value::Null)
 }
 
 fn optional_string(value: Option<&str>) -> Node {

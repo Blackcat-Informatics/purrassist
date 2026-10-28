@@ -5,8 +5,8 @@
 
 use std::fmt;
 
-use purrassist_core::contract::{Resource, saturating_size as size};
-use purrassist_core::{Budget, Governor, ScratchString, ScratchVec, StopReason};
+use crate::contract::{Resource, saturating_size as size};
+use crate::{Budget, Governor, ScratchString, ScratchVec, StopReason};
 
 /// A validated context mask. Construction accepts only the four documented forms.
 ///
@@ -16,7 +16,7 @@ use purrassist_core::{Budget, Governor, ScratchString, ScratchVec, StopReason};
 /// Quoted keys, indexes, functions and general jq expressions are refused.
 ///
 /// ```
-/// use purrassist_toolgraph::{FieldMask, FieldMaskKind};
+/// use purrassist_core::output::{FieldMask, FieldMaskKind};
 /// let mask = FieldMask::parse(" {name, total} ").unwrap();
 /// assert_eq!(mask.to_string(), "{name, total}");
 /// assert!(matches!(mask.kind(), FieldMaskKind::Fields(names) if names.len() == 2));
@@ -105,7 +105,7 @@ impl FieldMask {
     ///
     /// ```
     /// use purrassist_core::{Budget, Governor};
-    /// use purrassist_toolgraph::FieldMask;
+    /// use purrassist_core::output::FieldMask;
     /// let mut governor = Governor::new(Budget::default());
     /// assert_eq!(FieldMask::parse_governed(".customer.name", &mut governor).unwrap().to_string(), ".customer.name");
     /// assert!(governor.usage().work > 0);
@@ -185,7 +185,7 @@ impl FieldMask {
     ///
     /// ```
     /// use purrassist_core::{Budget, Governor};
-    /// use purrassist_toolgraph::FieldMask;
+    /// use purrassist_core::output::FieldMask;
     /// let mask = FieldMask::parse("{a,b}").unwrap();
     /// assert_eq!(mask.render_governed(&mut Governor::new(Budget::default())).unwrap(), "{a, b}");
     /// ```
@@ -196,7 +196,7 @@ impl FieldMask {
             Mask::Elements | Mask::OptionalElements(_) => 1,
         };
         governor.charge(Resource::Work, size(members))?;
-        purrassist_core::contract::format_output_governed(format_args!("{self}"), governor)
+        crate::contract::format_output_governed(format_args!("{self}"), governor)
             .map_err(FieldMaskError::Resource)
     }
 

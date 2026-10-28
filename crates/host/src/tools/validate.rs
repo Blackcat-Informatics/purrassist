@@ -8,7 +8,7 @@ use purrassist::{
     CancellationToken, Receipt,
     json::{Node, Value},
     schema::{CompilationError, Schema},
-    wire::{array, object, string},
+    wire::{array, evidence, object, string, validation},
 };
 
 struct Report {
@@ -65,27 +65,10 @@ pub(super) fn call(args: &Node, cancellation: Option<&CancellationToken>) -> Res
     receipt.usage = governor.usage();
     Ok(object([
         ("valid", Node::new(Value::Bool(report.valid))),
-        (
-            "violations",
-            array(report.violations.iter().map(|violation| {
-                object([
-                    ("instance_path", string(&violation.instance_path)),
-                    ("schema_path", string(&violation.schema_path)),
-                    ("keyword", string(&violation.keyword)),
-                    ("message", string(&violation.message)),
-                ])
-            })),
-        ),
+        ("violations", array(report.violations.iter().map(violation))),
         (
             "format_evidence",
-            array(report.format_evidence.iter().map(|entry| {
-                object([
-                    ("validator", string(&entry.validator)),
-                    ("constraint", string(&entry.constraint)),
-                    ("passed", Node::new(Value::Bool(entry.passed))),
-                    ("diagnostics", array(entry.diagnostics.iter().map(string))),
-                ])
-            })),
+            array(report.format_evidence.iter().map(validation)),
         ),
         (
             "pattern_evidence",
@@ -103,34 +86,12 @@ pub(super) fn call(args: &Node, cancellation: Option<&CancellationToken>) -> Res
         ("receipt", receipt.to_node()),
     ]))
 }
-fn evidence(entry: &purrassist::contract::Evidence) -> Node {
+pub(super) fn violation(entry: &purrassist::schema::Violation) -> Node {
     object([
-        ("rule", string(&entry.rule)),
-        ("explanation", string(&entry.explanation)),
-        ("destination", string(&entry.destination)),
-        (
-            "span",
-            entry.span.as_ref().map_or_else(
-                || Node::new(Value::Null),
-                |span| {
-                    object([
-                        ("source", string(span.source.to_string())),
-                        (
-                            "start",
-                            purrassist::wire::integer(
-                                u64::try_from(span.bytes.start).unwrap_or(u64::MAX),
-                            ),
-                        ),
-                        (
-                            "end",
-                            purrassist::wire::integer(
-                                u64::try_from(span.bytes.end).unwrap_or(u64::MAX),
-                            ),
-                        ),
-                    ])
-                },
-            ),
-        ),
+        ("instance_path", string(&entry.instance_path)),
+        ("schema_path", string(&entry.schema_path)),
+        ("keyword", string(&entry.keyword)),
+        ("message", string(&entry.message)),
     ])
 }
 

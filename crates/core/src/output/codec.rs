@@ -3,9 +3,9 @@
 
 //! The complete context fragment over caller-owned JSON values.
 
+use super::{FieldMask, FieldMaskError};
 use super::{OutputByteLimit, OutputEnforcement};
-use crate::{FieldMask, FieldMaskError};
-use purrassist_core::{
+use crate::{
     Governor, ScratchString, ScratchVec, StopReason,
     contract::{Resource, saturating_size},
     json::{IntegerReading, Member, Node, Number, Value},
@@ -119,7 +119,7 @@ impl std::error::Error for ContextCodecError {
 ///
 /// ```
 /// use purrassist_core::{Budget, Governor, json};
-/// use purrassist_toolgraph::{ContextManagement, MCP_CONTEXT_FORMAT};
+/// use purrassist_core::output::{ContextManagement, MCP_CONTEXT_FORMAT};
 /// let source = json::parse(r#"{"outputProjectionJq":".orders","maxOutputBytes":1e2,"outputEnforcement":"exact-bytes","historyRetentionTurns":0,"intentTags":[],"loadingStrategy":"always"}"#).unwrap();
 /// let context = ContextManagement::decode_mcp(Some(MCP_CONTEXT_FORMAT), &source, &mut Governor::new(Budget::default())).unwrap();
 /// assert_eq!(context.output_limit().max_bytes(), 100);
@@ -329,7 +329,7 @@ impl ContextManagement {
     ///
     /// ```
     /// use purrassist_core::{Budget, Governor};
-    /// use purrassist_toolgraph::{ContextManagement, FieldMask, OutputByteLimit, LoadingStrategy, MCP_CONTEXT_FORMAT};
+    /// use purrassist_core::output::{ContextManagement, FieldMask, OutputByteLimit, LoadingStrategy, MCP_CONTEXT_FORMAT};
     /// let context = ContextManagement::new(FieldMask::parse(".orders").unwrap(), OutputByteLimit::new(100).unwrap(), 0, vec![], LoadingStrategy::Always);
     /// assert!(context.encode_json(Some(MCP_CONTEXT_FORMAT), &mut Governor::new(Budget::default())).unwrap().contains(r#""outputEnforcement":"exact-bytes""#));
     /// ```

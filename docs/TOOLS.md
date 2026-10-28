@@ -275,6 +275,26 @@ Generated from `Tools::definitions()` by the test `tools_reference_matches_regis
     - `value`: one of several shapes, required
     - `alternatives`: array, required
     - `receipt`: object, required
+- **`project_result`**: Validate the complete original JSON result against its output schema, apply the closed context field mask, and emit an exact-byte checked JSON Lines artifact; structured refusals retain original source, requested controls, stage and typed cause. The byte limit covers only decoded artifact text, excluding protocol and receipt framing; no tool is executed or authorized
+  - MCP: `tools/call` with name `project_result`
+  - CLI: `purrassist call project_result --root DIR < args.json`
+  - Writes files under the root: no
+  - Input:
+    - `result_json`: string, required
+    - `output_schema`: object or boolean, required
+    - `format`: string, required
+    - `context`: object, required
+    - `effort`: one of "exact", "quick", "standard", "deep", "maximum"
+  - Output:
+    - `status`: one of "resolved", "unresolved", required
+    - `original_json`: string, required
+    - `requested`: object, required
+    - `stage`: one of "context", "schema_serialization", "schema_compilation", "result_parsing", "validation", "selection", "serialization", "byte_limit", "complete", required
+    - `error`: one of several shapes, required
+    - `validation`: one of several shapes, required
+    - `transformations`: array, required
+    - `artifact`: one of several shapes, required
+    - `receipt`: object, required
 - **`validate_json`**: Validate a JSON instance against a schema, reporting violations, always-evaluated format/pattern evidence, and unsupported-vocabulary evidence
   - MCP: `tools/call` with name `validate_json`
   - CLI: `purrassist call validate_json --root DIR < args.json`
@@ -539,7 +559,7 @@ and `candidates` containing unique `id`/`vector` pairs. No model is loaded.
 A unique qualifying cosine winner is a best guess, ties/near ties remain
 ambiguous, and weak matches remain unresolved. Scores are not probabilities.
 Vectors must be finite, nonzero, and dimensionally consistent. JSON decimals are
-converted to binary64; overflow and nonzero underflow are rejected. Admitted
+converted to `binary64`; overflow and nonzero underflow are rejected. Admitted
 requests retain their structured JSON input in receipts, with separate ledgers
 for ambiguous alternatives. Admission failures can return a tool error before
 retention. `embeddings::EmbeddingIndex` provides reusable normalized vectors to
@@ -874,3 +894,39 @@ string with no network I/O performed here.
 
 `complete_helper` resumes with the caller-observed HTTP status/body once the
 caller's own transport has sent the request prepared by `prepare_helper`.
+
+
+### `project_result`
+
+`project_result` is a read-only data-processing operation. The same handler is
+available through `purrassist_host::tools::project_result`, CLI `call`, and MCP
+`tools/call`. For example:
+
+```sh
+purrassist call project_result --root . <<'JSON'
+{"result_json":" {\"orders\":[1.00e2,true]} ","output_schema":{"type":"object"},"format":"purrassist-toolgraph-v2","context":{"outputProjectionJq":".orders[]?","maxOutputBytes":12,"outputEnforcement":"exact-bytes","historyRetentionTurns":0,"intentTags":[],"loadingStrategy":"always"}}
+JSON
+```
+
+The reply's `artifact.text` is `1.00e2` followed by LF and `true` followed by LF:
+12 UTF-8 bytes, with media type `application/x-ndjson`. The measurement counts
+this decoded artifact text. JSON escaping, receipt and requested-control fields,
+the CLI envelope LF and MCP wrappers are outside its ceiling. The protocol
+reply can therefore exceed `maxOutputBytes` while its artifact meets that bound.
+
+`original_json` retains the exact request string, including whitespace, duplicate
+members and numeric spelling. `requested.context_json` retains all context
+occurrences; `requested.output_schema_json` and `requested.effort` retain the
+requested schema and optional effort. `requested.masks` lists every projection value without
+choosing a duplicate winner. `stage` identifies the last preparation or pipeline
+stage attempted. Validation is null until available. Success has status
+`resolved`; a processing refusal has status `unresolved`, a stable typed `error`,
+artifact null and a receipt preserving the native resource stop where applicable.
+A syntactically valid refusal reply follows the existing CLI `call` exit policy.
+Invocation validation and cancellation before handler entry retain the existing
+transport-error policy.
+
+The complete original is schema-validated before masking. This operation neither
+recovers invalid JSON nor executes or authorizes a tool. History retention,
+loading and intent values remain metadata; graph, confinement and actual release
+policies remain separate requirements.
