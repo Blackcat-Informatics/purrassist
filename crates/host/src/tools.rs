@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-//! Shared Rust, CLI, and MCP operations with schema-validated arguments.
+//! Shared Rust, CLI, and MCP operations with schema-validated arguments and outputs.
 mod edits;
 mod embeddings;
 mod files;
@@ -57,7 +57,17 @@ impl Tools {
     /// Invoke the same operation exposed through CLI `call` and MCP `tools/call`.
     ///
     /// # Errors
-    /// Rejects unknown operations, schema-invalid arguments, stale writes, and execution errors.
+    /// Rejects unknown operations, schema preparation or validation failures,
+    /// stale writes and execution errors. Both selected schemas are prepared
+    /// before the handler runs. The complete returned node must satisfy the
+    /// registered output contract before successful release.
+    ///
+    /// A post-handler refusal is a JSON diagnostic in the returned error string,
+    /// with code `registered_output_refused`, original output, tool/schema
+    /// identity, reason/report, separate boundary receipts and effect context.
+    /// The handler has already returned; a file mutation may have completed.
+    /// Refusal neither retries nor rolls back it. Successful bytes and engine
+    /// receipts remain unchanged; those receipts exclude registry validation.
     pub fn call(&self, name: &str, args: &Node) -> Result<Node, String> {
         registry::call(self, name, args, None)
     }
@@ -68,6 +78,10 @@ impl Tools {
     /// and charges. File reads may finish their current OS operation. Mutations
     /// check before entering the journaled commit/undo; once entered, they finish
     /// that transaction and report its actual outcome rather than imply rollback.
+    /// Once a handler returns, output validation runs under its own bounded
+    /// governor without observing late cancellation. A completed transaction
+    /// therefore retains either its validated result or an explicit output
+    /// refusal containing its original result and commit/undo identity.
     /// This method starts no thread or listener.
     ///
     /// ```no_run
@@ -85,7 +99,9 @@ impl Tools {
     /// # Errors
     /// Returns the same errors as `call`, plus cancellation during argument
     /// validation or before a filesystem operation. Engine receipts preserve
-    /// their typed cancellation outcome.
+    /// their typed cancellation outcome. Post-handler schema or resource
+    /// refusals retain complete output and phase usage in the JSON diagnostic
+    /// described by [`Self::call`]; they never masquerade as cancellation.
     pub fn call_with_cancellation(
         &self,
         name: &str,

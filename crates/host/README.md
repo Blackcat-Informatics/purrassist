@@ -22,6 +22,28 @@ Helper transports, endpoints, authentication, and timeouts belong to the caller.
 No model is required. Returned helper proposals undergo local validation and
 remain explicit guesses. No live provider qualification is claimed.
 
+## Registered result contracts
+
+The shared `Tools::call` and `call_with_cancellation` path prepares the selected
+entry's exact input and output schemas before invoking its handler once.
+Complete returned nodes, including array roots, must satisfy the registered
+output schema before successful Rust, CLI or MCP release. Validation applies
+to the declared envelope; unconstrained operation values remain unconstrained.
+
+Admission observes cancellation. After a handler returns, a separate bounded
+output-validation phase completes without late cancellation, preserving actual
+completed file transactions. Successful bytes and engine receipts are unchanged;
+registry costs are separate from handler receipt accounting.
+
+Post-handler schema or native resource failures use the existing String error
+transport, containing a JSON diagnostic with `registered_output_refused`, the
+original complete output, tool/schema identity, reason/report, separate boundary
+receipts and explicit effect context. An invalid result is not released as a
+successful CLI/MCP result. A mutation may already have completed: its retained
+commit/undo identity remains available, and refusal performs no retry or rollback.
+Diagnostic materialization follows existing host policy outside schema budgets.
+This adds no graph authorization, confinement or proof-bound release claim.
+
 ## Tool-call recovery
 
 The `recover_tool_calls` tool (MCP `tools/call`, CLI `purrassist call` and

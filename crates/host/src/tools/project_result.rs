@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! One host adapter for the core's validated JSON Lines artifact.
+use super::validate::{report_node as validation, resource};
 use purrassist::{
     CancellationToken, Governor, Receipt, StopReason,
-    contract::Resource,
     json::{self, Node, Value},
     output::{
         ContextCodecError, ContextManagement, FieldMaskError, NullSelection, OutputLimitError,
         OutputMeasurement, OutputTransform, ProjectionFailure, ProjectionStage, ProjectionTrace,
     },
-    schema::{CompilationError, Schema, ValidationReport},
+    schema::{CompilationError, Schema},
     wire::{array, integer, null, object, string},
 };
 
@@ -285,33 +285,6 @@ fn named_error(name: &str, field: &str) -> Node {
 fn count(value: usize) -> Node {
     integer(u64::try_from(value).unwrap_or(u64::MAX))
 }
-fn resource(reason: &StopReason, origin: &str) -> Node {
-    let (stop, detail) = match reason {
-        StopReason::Completed => ("completed", String::new()),
-        StopReason::NoCandidate => ("no_candidate", String::new()),
-        StopReason::BudgetExceeded(resource) => (
-            "budget_exceeded",
-            match resource {
-                Resource::Work => "work",
-                Resource::Candidates => "candidates",
-                Resource::InputBytes => "input_bytes",
-                Resource::ScratchBytes => "scratch_bytes",
-                Resource::Depth => "depth",
-                Resource::EvidenceEntries => "evidence_entries",
-                Resource::HelperCalls => "helper_calls",
-            }
-            .into(),
-        ),
-        StopReason::Cancelled => ("cancelled", String::new()),
-        StopReason::InvalidInput(message) => ("invalid_input", message.clone()),
-    };
-    object([
-        ("kind", string("resource")),
-        ("origin", string(origin)),
-        ("stop", string(stop)),
-        ("detail", string(detail)),
-    ])
-}
 fn measurement(value: OutputMeasurement) -> Node {
     object([
         ("limit", integer(value.limit)),
@@ -342,36 +315,6 @@ fn transformation(value: &OutputTransform<'_>) -> Node {
         OutputTransform::OptionalOmitted { field } => named_error("optional_omitted", field),
     }
 }
-fn validation(report: &ValidationReport) -> Node {
-    object([
-        ("schema", string(report.schema.to_string())),
-        ("dialect", string(report.dialect.uri())),
-        ("valid", Node::new(Value::Bool(report.valid))),
-        (
-            "violations",
-            array(report.violations.iter().map(super::validate::violation)),
-        ),
-        (
-            "format_evidence",
-            array(
-                report
-                    .format_evidence
-                    .iter()
-                    .map(purrassist::wire::validation),
-            ),
-        ),
-        (
-            "pattern_evidence",
-            array(
-                report
-                    .pattern_evidence
-                    .iter()
-                    .map(purrassist::wire::evidence),
-            ),
-        ),
-    ])
-}
-
 // These schemas describe protocol materialization, not the measured artifact.
 pub(super) const INPUT_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["result_json","output_schema","format","context"],"properties":{"result_json":{"type":"string"},"output_schema":{"type":["object","boolean"]},"format":{"type":"string"},"context":{"type":"object"},"effort":{"enum":["exact","quick","standard","deep","maximum"]}}}"#;
 pub(super) const OUTPUT_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["status","original_json","requested","stage","error","validation","transformations","artifact","receipt"],"properties":{"status":{"enum":["resolved","unresolved"]},"original_json":{"type":"string"},"requested":{"type":"object","additionalProperties":false,"required":["format","context_json","masks","output_schema_json","effort"],"properties":{"format":{"type":"string"},"context_json":{"type":"string"},"masks":{"type":"array"},"output_schema_json":{"type":"string"},"effort":{"type":["string","null"]}}},"stage":{"enum":["context","schema_serialization","schema_compilation","result_parsing","validation","selection","serialization","byte_limit","complete"]},"error":{"oneOf":[{"type":"null"},{"oneOf":[{"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"enum":["context_missing_format","context_unsupported_format","context_legacy_token_limit","context_enforcement","context_loading","schema_rejected","output_zero_limit"]}}},{"type":"object","additionalProperties":false,"required":["kind","field"],"properties":{"kind":{"enum":["context_duplicate_field","context_missing_field","context_wrong_type","context_quantity","projection_ambiguous_member"]},"field":{"type":"string"}}},{"type":"object","additionalProperties":false,"required":["kind","index"],"properties":{"kind":{"enum":["context_unknown_field","context_tag_type"]},"index":{"type":"integer","minimum":0}}},{"type":"object","additionalProperties":false,"required":["kind","offset"],"properties":{"kind":{"enum":["mask_syntax","mask_duplicate_field"]},"offset":{"type":"integer","minimum":0}}},{"type":"object","additionalProperties":false,"required":["kind","offset","message"],"properties":{"kind":{"enum":["json_syntax"]},"offset":{"type":"integer","minimum":0},"message":{"type":"string"}}},{"type":"object","additionalProperties":false,"required":["kind","location","message"],"properties":{"kind":{"enum":["schema_compilation"]},"location":{"type":"string"},"message":{"type":"string"}}},{"type":"object","additionalProperties":false,"required":["kind","field"],"properties":{"kind":{"enum":["projection_wrong_type"]},"field":{"oneOf":[{"type":"null"},{"type":"string"}]}}},{"type":"object","additionalProperties":false,"required":["kind","measurement"],"properties":{"kind":{"enum":["output_limit"]},"measurement":{"type":"object","additionalProperties":false,"required":["limit","measured","unit","enforcement"],"properties":{"limit":{"type":"integer","minimum":1},"measured":{"type":"integer","minimum":0},"unit":{"const":"bytes"},"enforcement":{"const":"exact-bytes"}}}}},{"type":"object","additionalProperties":false,"required":["kind","stop","detail","origin"],"properties":{"kind":{"enum":["resource"]},"stop":{"enum":["completed","no_candidate","budget_exceeded","cancelled","invalid_input"]},"detail":{"type":"string"},"origin":{"enum":["context","mask","schema_serialization","schema_compilation","result_parsing","projection","output_limit"]}}}]}]},"validation":{"oneOf":[{"type":"null"},{"type":"object","additionalProperties":false,"required":["schema","dialect","valid","violations","format_evidence","pattern_evidence"],"properties":{"schema":{"type":"string"},"dialect":{"type":"string"},"valid":{"type":"boolean"},"violations":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["instance_path","schema_path","keyword","message"],"properties":{"instance_path":{"type":"string"},"schema_path":{"type":"string"},"keyword":{"type":"string"},"message":{"type":"string"}}}},"format_evidence":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["validator","constraint","passed","diagnostics"],"properties":{"validator":{"type":"string"},"constraint":{"type":"string"},"passed":{"type":"boolean"},"diagnostics":{"type":"array","items":{"type":"string"}}}}},"pattern_evidence":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["rule","explanation","destination","span"],"properties":{"rule":{"type":"string"},"explanation":{"type":"string"},"destination":{"type":"string"},"span":{"oneOf":[{"type":"null"},{"type":"object","additionalProperties":false,"required":["source","start","end"],"properties":{"source":{"type":"string"},"start":{"type":"integer","minimum":0},"end":{"type":"integer","minimum":0}}}]}}}}}}]},"transformations":{"type":"array","items":{"oneOf":[{"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"mask_applied"}}},{"type":"object","additionalProperties":false,"required":["kind","field","index","cause"],"properties":{"kind":{"const":"null_inserted"},"field":{"type":"string"},"index":{"type":"integer","minimum":0},"cause":{"enum":["missing","propagated"]}}},{"type":"object","additionalProperties":false,"required":["kind","field"],"properties":{"kind":{"const":"optional_omitted"},"field":{"type":"string"}}}]}},"artifact":{"oneOf":[{"type":"null"},{"type":"object","additionalProperties":false,"required":["media_type","text","measurement"],"properties":{"media_type":{"const":"application/x-ndjson"},"text":{"type":"string"},"measurement":{"type":"object","additionalProperties":false,"required":["limit","measured","unit","enforcement"],"properties":{"limit":{"type":"integer","minimum":1},"measured":{"type":"integer","minimum":0},"unit":{"const":"bytes"},"enforcement":{"const":"exact-bytes"}}}}}]},"receipt":{"type":"object","required":["version","source","sources","alternatives","ambiguity","operation","effort","budget","usage","evidence","losses","inferences","validations","termination"],"properties":{"version":{"type":"integer","minimum":0},"source":{"type":"string"},"sources":{"type":"array"},"alternatives":{"type":"array"},"ambiguity":true,"operation":{"const":"output.project-result.v1"},"effort":{"enum":["exact","quick","standard","deep","maximum"]},"budget":{"type":"object"},"usage":{"type":"object"},"evidence":{"type":"array"},"losses":{"type":"array"},"inferences":{"type":"array"},"validations":{"type":"array"},"termination":{"type":"object","additionalProperties":false,"required":["kind","detail"],"properties":{"kind":{"enum":["completed","no_candidate","budget_exceeded","cancelled","invalid_input"]},"detail":{"type":"string"}}}}}}}"#;

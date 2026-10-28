@@ -16,9 +16,12 @@ Every operation PurRAssist exposes to a host is one entry of a single registry
 
 Both `mcp` and `call` open the root as a file store, which creates a
 `.purrassist/` journal directory in `DIR` if it is absent, even for tools that
-read no file. Arguments are validated against the tool's input schema before
-its handler runs; the result is validated against its output schema in the
-tests. The CLI and MCP results of every tool are the same, as the test
+read no file. The selected input and output schemas are prepared before the
+handler runs, and arguments must satisfy the input schema. Its complete returned
+node must satisfy the registered output schema before successful Rust, CLI or
+MCP release. This validates the declared envelope, including array roots;
+fields declared as `true`, such as some operation values, remain unconstrained.
+The CLI and MCP results of every tool are the same, as the test
 `every_registry_entry_has_a_fixture_validated_through_cli_and_mcp` runs each
 tool through both with a fixture and compares their JSON serializations for
 equality. The
@@ -530,6 +533,26 @@ Generated from `Tools::definitions()` by the test `tools_reference_matches_regis
 <!-- tools-reference:end -->
 
 ## Common behavior
+
+Registry admission and output validation each use explicit default budgets,
+separately from handler engines. Admission observes cancellation. After a handler
+returns, bounded output validation completes without late cancellation so a
+completed transaction is not reported as cancelled. Successful payload bytes
+and existing engine receipts are unchanged; engine receipts do not include
+registry validation costs.
+
+If a returned result violates its schema or output validation exhausts a native
+resource, Rust receives an error string containing a JSON diagnostic with code
+`registered_output_refused`. CLI `call` exits nonzero, writes the diagnostic to
+stderr and emits no successful stdout result. MCP emits text with `isError: true`
+and no successful `structuredContent`. The diagnostic retains `original_output`,
+selected tool and schema identity, reason or full validation report, and separate
+`admission` and `output_validation` boundary receipts with their budgets and usage.
+It explicitly records that the handler returned and effects may already have
+occurred. Inspect the retained transaction/undo identity before deciding what
+to do; this failure performs no retry or rollback. Original duplicate members
+and numeric spelling survive in the diagnostic. Error materialization follows
+the existing host policy, outside these schema-phase budgets.
 
 The Markdown operations take exact `source` and optional `effort`, retain
 admitted source, and return receipts. Edit plans in `value` bind to the source

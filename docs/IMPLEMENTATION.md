@@ -643,3 +643,40 @@ configuration, verifies no native closure or protected-head property in the
 library, evaluates no rules and grants no dispatch authority. Native governed
 preparation/evaluation, graph admission, real dispatch and result release remain
 required under #33/#34/#35/#36/#37/#39/#43/#47.
+
+
+## Runtime registered host output enforcement
+
+The actual shared host registry dispatch now compiles both selected exact
+schemas and validates arguments before invoking the handler once. It uses the
+existing native governed schema engine directly, including array-root output
+contracts. The whole returned node is validated before successful Rust, CLI or
+MCP release; a declared unconstrained field is not strengthened implicitly.
+
+Cancellable admission has its own default budget. Once a handler returns,
+output validation uses a separate default-budget governor without a cancellation
+token, preserving completed transaction outcomes despite late signals. Existing
+handler payloads and receipts are unchanged and do not claim registry costs.
+
+A post-handler schema violation or native validation stop returns the existing
+String error transport containing a structured JSON diagnostic. It retains the
+complete original returned node without duplicate-member collapse, selected tool
+and compiled schema identity, native reason or full report, and separate admission
+and output-validation receipts with their own source, budget, usage and termination.
+The diagnostic states that the handler returned and effects may already have
+occurred. It retains transaction/undo identities and performs no retry or rollback.
+CLI releases no successful stdout result on refusal; MCP returns an error result
+without successful structured content. Diagnostic materialization follows the
+existing host policy, outside the bounded schema phases.
+
+Three combined production-entry regression cases cover pre-effect admission,
+complete result enforcement and native stops, and actual journaled mutation with
+late cancellation and successful or refused output release. Existing complete
+registry fixtures exercise real CLI/MCP object/array results and parity.
+
+This completes registered host schema enforcement only. Graph-backed registry
+metadata, authorization, confinement, admitted-graph recovery, ledger-driven
+checks, manifests, bound receipts and proof-bound projection/release remain
+required under #37 and their original tracking contracts. The existing
+`project_result` operation still validates its supplied original before its own
+field mask; outer registry validation checks that operation's reply envelope.
