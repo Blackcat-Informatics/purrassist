@@ -237,3 +237,37 @@ The complete stdout artifact is `1.00e2` followed by LF and `true` followed by
 LF. Typed refusals and exact measurements appear on stderr, before any stdout.
 This envelope demonstrates the callable result pipeline; it is not a complete
 MCP/RDF bundle or an execution grant.
+
+
+## Caller-prepared `AppArmor` policy documents
+
+`PolicyDocument::prepare` accepts an explicit `PolicyInput`: offline ABI 3.0 or
+4.0-ip, a literal absolute HOME and caller-owned standalone profiles or parents
+with flat hats. Bodies contain the existing typed file, Internet, Unix, signal,
+ptrace, capability, mount and resource-limit declarations. Existing per-rule
+literal bindings and Internet enumeration ceilings remain authoritative inputs.
+Preparation owns only the fixed baseline globs/access sets and borrows the exact
+original input. It grants no graph, session or execution authority.
+
+`compile` validates names with `FileTarget`, rejects duplicate root names, local
+hat names and caller rule identities within a body, and sorts those scopes by
+original byte identities. Identical rules with different identities survive.
+Every execution body receives the SSH/environment-file, dangerous-capability,
+broad ptrace and four mount-operation denials through the existing rule
+renderers. HOME uses existing literal escaping and unsafe-path refusals; root
+and trailing slash inputs add no accidental separator. Compiler additions have explicit
+baseline origins rather than fabricated caller provenance.
+
+The complete ABI/profile/hat document and source spans publish together after
+final cancellation admission. New indices, text and spans use fallible scratch
+owners. Existing String-returning renderers retain their documented conservative
+reservations; this compiler does not claim prompt release of their detached
+intermediate charges. Original input and exact native rule/resource errors
+remain available on refusal. ABI 3.0 refuses fine-grained Internet rules instead
+of dropping scope. Aggregated ABI/mediation metadata describes an offline target,
+not running-kernel, loaded-policy or dispatch evidence.
+
+The actual `policy_document` example prints a complete compiled document. Full
+RDF/SRL/static admission, permission/owner/deny proofs, abstraction imports and
+trust, nested graph profile synthesis, transition-target existence, graph CLI,
+loaded mediation and host confinement remain #33/#34/#35/#39 requirements.

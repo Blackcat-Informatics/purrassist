@@ -12,6 +12,7 @@ mod file_rule;
 mod glob_language;
 mod internet;
 mod ipc;
+mod policy_document;
 mod privilege_rule;
 mod prompt_bytes;
 mod resource_limits;
@@ -72,4 +73,10 @@ pub use resource_limits::{
 
 pub use prompt_bytes::{
     FramedPrompt, FramedPromptBytes, PromptByteError, PromptByteFailure, PromptBytePart,
+};
+
+pub use policy_document::{
+    CompiledPolicy, PolicyBaseline, PolicyBody, PolicyCause, PolicyDocument, PolicyDuplicateScope,
+    PolicyError, PolicyInput, PolicyOrigin, PolicyPrepareError, PolicyProfile, PolicyRequirements,
+    PolicyRule, PolicySpan, PolicyTarget,
 };
