@@ -11,6 +11,24 @@ crates share one version.
 
 ### Fixed
 
+- Recursive schema recovery factors certified independent mandatory array wraps
+  through shared schema/occurrence states, avoiding combinations of unrelated
+  unwraps. Minimum costs are solved before choosing edits; the existing search
+  still validates and publishes the result and retains the same accepted wrap
+  evidence, losses, ordering and source spans. Work and candidate accounting now
+  include chart preparation, including unsuccessful certification, and omit
+  discarded combinations. Rejected validation diagnostics and finite-budget
+  exhaustion points change with that exploration. The certificate currently
+  covers static references and typed
+  object/array/string products with guesses disabled. Coupled constraints,
+  ambiguous optimal transformations, decoded strings and unproved name or
+  relocation interactions retain the exact joint search; no universal polynomial
+  complexity claim is made for that fallback.
+
+- Refresh CLI and MCP receipt usage fixtures after governed schema bundle
+  identity hashing. The captured responses change only numeric usage counters;
+  requests, answers, schema identities and transformation evidence are unchanged.
+
 - Rejected tool-call spans retain only demonstrated markup before a reasoning
   marker. Resynchronized groups report each rejected part's own failure.
   The fresh call-body oracle has regression seeds and an injected-overrun

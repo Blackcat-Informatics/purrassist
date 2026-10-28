@@ -382,8 +382,8 @@ impl Walk<'_, '_> {
                 path,
                 (
                     Node::new(Value::Array(vec![node.clone()])),
-                    "json.shape.wrap-array",
-                    5,
+                    super::factor::WRAP_RULE,
+                    super::factor::WRAP_COST,
                     false,
                 ),
             )?;
