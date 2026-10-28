@@ -1284,6 +1284,7 @@ impl Governor {
     ///
     /// # Errors
     /// Returns a sticky exhaustion or cancellation without incrementing usage.
+    #[inline(never)]
     pub fn charge(&mut self, resource: Resource, amount: u64) -> Result<(), StopReason> {
         self.check()?;
         if resource == Resource::ScratchBytes {
