@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Composed, best-first recovery with whole-schema validation and explicit guesses.
+mod factor;
 mod proposals;
 use super::Schema;
 use crate::contract::saturating_size as size;
@@ -44,6 +45,8 @@ struct Recovery<'a> {
     /// Pattern-engine wiring: deduplicated by destination (one distinct compiled
     /// pattern), across every candidate this search actually validated.
     pattern_evidence: BTreeMap<String, Evidence>,
+    factored: Option<ScratchVec<factor::Edit>>,
+    factor_pending: bool,
 }
 /// One candidate JSON document; its deduplication key and output identity
 /// are its compact JSON bytes, and equal-cost candidates keep enqueue order.
@@ -82,6 +85,10 @@ impl SearchState for Repair {
         if recovery.request.effort == Effort::Exact {
             return Ok(());
         }
+        if recovery.factor_pending {
+            recovery.factor_pending = false;
+            recovery.factored = factor::prepare(recovery.schema, &self.0, governor)?;
+        }
         let mut walk = Walk {
             schema: recovery.schema,
             request: recovery.request,
@@ -90,6 +97,22 @@ impl SearchState for Repair {
             proposals,
             parent: &self.0,
         };
+        if let Some(edits) = &recovery.factored {
+            if let Some(edit) = edits.get(walk.proposals.parent().evidence.len()) {
+                let original = at(&self.0, &edit.route);
+                walk.change(
+                    &edit.route,
+                    &edit.path,
+                    (
+                        Node::new(Value::Array(vec![original.clone()])),
+                        factor::WRAP_RULE,
+                        factor::WRAP_COST,
+                        false,
+                    ),
+                )?;
+            }
+            return Ok(());
+        }
         walk.propose(
             &self.0,
             recovery.schema.root,
@@ -148,12 +171,25 @@ impl Schema {
         request: RecoveryRequest,
         governor: &mut Governor,
     ) -> AssistResult<Node> {
+        self.recover_impl(input, request, governor, true)
+    }
+    // The test oracle selects the unchanged joint engine through this private
+    // seam; callers always use the certified production strategy.
+    fn recover_impl(
+        &self,
+        input: &str,
+        request: RecoveryRequest,
+        governor: &mut Governor,
+        factoring: bool,
+    ) -> AssistResult<Node> {
         let budget = *governor.limits();
         let mut recovery = Recovery {
             schema: self,
             request,
             receipt: Receipt::new(input.as_bytes(), "json.recover.v1", request.effort, budget),
             pattern_evidence: BTreeMap::new(),
+            factored: None,
+            factor_pending: factoring && !request.allow_guesses,
         };
         let mut search = Search::new(governor);
         let outcome = match recovery
@@ -225,7 +261,10 @@ impl Recovery<'_> {
             Err(ParseFailure::Syntax(error)) if self.request.effort == Effort::Exact => {
                 return Err(StopReason::InvalidInput(error.to_string()));
             }
-            Err(ParseFailure::Syntax(_)) => self.syntax(search, input, governor)?,
+            Err(ParseFailure::Syntax(_)) => {
+                self.factor_pending = false;
+                self.syntax(search, input, governor)?;
+            }
         }
         let accepted = search.run(self, governor)?;
         let outcome = search.finish(accepted, &mut self.receipt, governor)?;
@@ -752,4 +791,187 @@ fn at_mut<'a>(mut node: &'a mut Node, route: &[usize]) -> &'a mut Node {
         };
     }
     node
+}
+
+#[cfg(test)]
+mod factoring_tests {
+    use super::*;
+
+    const TREE: &str = r##"{"type":"object","properties":{"children":{"type":"array","items":{"$ref":"#/$defs/node"}}},"required":["children"],"$defs":{"node":{"type":"object","properties":{"name":{"type":"string"},"children":{"type":"array","items":{"$ref":"#/$defs/node"}}},"required":["name"]}}}"##;
+
+    fn unlimited() -> Budget {
+        Budget {
+            work: u64::MAX,
+            candidates: u64::MAX,
+            input_bytes: u64::MAX,
+            scratch_bytes: u64::MAX,
+            depth: u32::MAX,
+            evidence_entries: u64::MAX,
+            helper_calls: u64::MAX,
+        }
+    }
+    fn request() -> RecoveryRequest {
+        RecoveryRequest {
+            effort: Effort::Quick,
+            budget: None,
+            allow_guesses: false,
+        }
+    }
+    fn nested(levels: usize) -> String {
+        let mut node = r#"{"name":"leaf","children":{"name":"wrapped"}}"#.to_owned();
+        for _ in 1..levels {
+            node = format!(r#"{{"name":"branch","children":[{node}]}}"#);
+        }
+        format!(r#"{{"children":[{node}]}}"#)
+    }
+    fn outputs(outcome: &Outcome<Node>) -> Vec<String> {
+        match outcome {
+            Outcome::Resolved(node) | Outcome::BestGuess(node) => vec![node.to_json()],
+            Outcome::Ambiguous(nodes) => nodes.iter().map(Node::to_json).collect(),
+            Outcome::Unresolved => Vec::new(),
+        }
+    }
+    fn same_answers(schema: &Schema, input: &str) {
+        let fast = schema.recover_impl(input, request(), &mut Governor::new(unlimited()), true);
+        let joint = schema.recover_impl(input, request(), &mut Governor::new(unlimited()), false);
+        assert_eq!(
+            core::mem::discriminant(&fast.outcome),
+            core::mem::discriminant(&joint.outcome)
+        );
+        assert_eq!(outputs(&fast.outcome), outputs(&joint.outcome));
+        assert_eq!(fast.receipt.evidence, joint.receipt.evidence);
+        assert_eq!(fast.receipt.losses, joint.receipt.losses);
+        assert_eq!(fast.receipt.inferences, joint.receipt.inferences);
+        assert_eq!(
+            fast.receipt.alternatives.len(),
+            joint.receipt.alternatives.len()
+        );
+        for (fast, joint) in fast
+            .receipt
+            .alternatives
+            .iter()
+            .zip(&joint.receipt.alternatives)
+        {
+            assert_eq!(fast.output, joint.output);
+            assert_eq!(fast.cost, joint.cost);
+            assert_eq!(fast.evidence, joint.evidence);
+            assert_eq!(fast.losses, joint.losses);
+            assert_eq!(fast.inferences, joint.inferences);
+        }
+    }
+
+    #[test]
+    fn mandatory_wrap_chart_matches_joint_search_and_keeps_uncertified_ties() {
+        let schema = Schema::compile(TREE).unwrap();
+        for levels in 1..=4 {
+            same_answers(&schema, &nested(levels));
+        }
+        same_answers(
+            &schema,
+            r#"{"children":[{"name":"left","children":{"name":"a"}},{"name":"right","children":{"name":"b"}}]}"#,
+        );
+        same_answers(
+            &schema,
+            r#"{"children":{"name":"outer","children":{"name":"inner"}}}"#,
+        );
+        let ambiguous = Schema::compile(
+            r#"{"type":"object","properties":{"x":{"type":"string"}},"required":["x"]}"#,
+        )
+        .unwrap();
+        same_answers(&ambiguous, r#"{"x":"a","x":"b"}"#);
+    }
+
+    #[test]
+    fn deep_recursive_mandatory_wraps_have_polynomial_work() {
+        let schema = Schema::compile(TREE).unwrap();
+        let input = nested(24);
+        // Exact stops after the same initial rejection, before chart preparation.
+        // One further work unit admits neither the certificate nor joint fallback.
+        let initial = schema.recover_governed(
+            &input,
+            RecoveryRequest {
+                effort: Effort::Exact,
+                ..request()
+            },
+            &mut Governor::new(unlimited()),
+        );
+        assert!(matches!(initial.outcome, Outcome::Unresolved));
+        assert_eq!(initial.receipt.validations.len(), 1);
+        let limited = Budget {
+            work: initial.receipt.usage.work + 1,
+            ..unlimited()
+        };
+        let refused = schema.recover_governed(&input, request(), &mut Governor::new(limited));
+        assert!(matches!(refused.outcome, Outcome::Unresolved));
+        assert_eq!(
+            refused.receipt.stopped,
+            StopReason::BudgetExceeded(Resource::Work)
+        );
+        assert_eq!(refused.receipt.validations.len(), 1);
+        assert_eq!(refused.receipt.sources[0].bytes, input.as_bytes());
+        let mut prior = None;
+        for levels in [12, 24, 48] {
+            let input = nested(levels);
+            let result =
+                schema.recover_governed(&input, request(), &mut Governor::new(unlimited()));
+            let Outcome::Resolved(ref repaired) = result.outcome else {
+                panic!("{levels}: {:?}", result.receipt.stopped)
+            };
+            assert!(
+                schema
+                    .validate_with(repaired, &mut Governor::new(unlimited()))
+                    .unwrap()
+                    .valid
+            );
+            assert_eq!(result.receipt.evidence.len(), 1);
+            assert_eq!(result.receipt.evidence[0].rule, factor::WRAP_RULE);
+            assert!(
+                result.receipt.usage.candidates <= 2,
+                "one mandatory repair must not enumerate unrelated unwraps"
+            );
+            eprintln!(
+                "WRAP_CHART depth={levels} candidates={} work={}",
+                result.receipt.usage.candidates, result.receipt.usage.work
+            );
+            if let Some(work) = prior {
+                assert!(
+                    result.receipt.usage.work <= work * 5,
+                    "doubling depth exceeded quadratic work tolerance"
+                );
+            }
+            prior = Some(result.receipt.usage.work);
+        }
+        let mut prior = None;
+        for siblings in [12, 24, 48] {
+            let leaf = r#"{"name":"leaf","children":{"name":"wrapped"}}"#;
+            let input = format!(r#"{{"children":[{}]}}"#, vec![leaf; siblings].join(","));
+            let result =
+                schema.recover_governed(&input, request(), &mut Governor::new(unlimited()));
+            let Outcome::Resolved(ref repaired) = result.outcome else {
+                panic!("{siblings}: {:?}", result.receipt.stopped)
+            };
+            assert!(
+                schema
+                    .validate_with(repaired, &mut Governor::new(unlimited()))
+                    .unwrap()
+                    .valid
+            );
+            assert_eq!(result.receipt.evidence.len(), siblings);
+            assert!(
+                result.receipt.usage.candidates <= u64::try_from(siblings).unwrap() + 1,
+                "independent mandatory repairs must not enumerate subsets"
+            );
+            eprintln!(
+                "WRAP_CHART siblings={siblings} candidates={} work={}",
+                result.receipt.usage.candidates, result.receipt.usage.work
+            );
+            if let Some(work) = prior {
+                assert!(
+                    result.receipt.usage.work <= work * 5,
+                    "doubling independent repairs exceeded quadratic work tolerance"
+                );
+            }
+            prior = Some(result.receipt.usage.work);
+        }
+    }
 }
