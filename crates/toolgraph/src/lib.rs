@@ -11,6 +11,7 @@ mod glob_language;
 mod internet;
 mod ipc;
 mod policy_document;
+mod policy_trust;
 mod privilege_rule;
 mod prompt_bytes;
 mod resource_limits;
@@ -78,4 +79,10 @@ pub use policy_document::{
     PolicyDependency, PolicyDocument, PolicyDuplicateScope, PolicyError, PolicyImport, PolicyInput,
     PolicyOrigin, PolicyPrepareError, PolicyProfile, PolicyRequirements, PolicyRule, PolicySpan,
     PolicyTarget, UnresolvedPolicyImports,
+};
+
+pub use policy_trust::{
+    MatchedPolicyContract, PolicyContractInput, PolicyGrant, PolicyScope, PolicySource,
+    PolicyTrustCause, PolicyTrustContext, PolicyTrustError, PreparedPolicyContract,
+    PreparedPolicyDocument, TrustedPolicyRegistry,
 };
