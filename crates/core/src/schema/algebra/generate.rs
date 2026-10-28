@@ -171,7 +171,7 @@ impl<'s> Gen<'s, '_> {
             Canon::True => self.attempt_and(rest, req, path, depth),
             Canon::False => Ok(Attempt::Unsatisfiable(refute("boolean false schema"))),
             Canon::Local(facet) => {
-                req.apply(facet);
+                req.apply(facet, self.governor)?;
                 if req.is_contradictory() {
                     return Ok(Attempt::Unsatisfiable(refute(
                         req.contradiction.unwrap_or("contradiction"),
@@ -354,14 +354,14 @@ impl<'s> Gen<'s, '_> {
         depth: u32,
     ) -> Result<Attempt, StopReason> {
         let cond_canon = self.scoped_build(cond, negate_cond)?;
-        match self.try_simple_merge(&cond_canon, req.clone()) {
+        match self.try_simple_merge(&cond_canon, req.clone())? {
             SimpleMerge::Contradiction => Ok(Attempt::Unsatisfiable(refute(
                 "if-condition branch is unsatisfiable",
             ))),
             SimpleMerge::Merged(merged_req) => match then_or_else {
                 Some(id) => {
                     let branch_canon = self.scoped_build(id, false)?;
-                    match self.try_simple_merge(&branch_canon, (*merged_req).clone()) {
+                    match self.try_simple_merge(&branch_canon, (*merged_req).clone())? {
                         SimpleMerge::Contradiction => {
                             Ok(Attempt::Unsatisfiable(refute("if-branch is unsatisfiable")))
                         }
@@ -397,12 +397,16 @@ impl<'s> Gen<'s, '_> {
     /// backtracking search to resolve (trying one branch can depend on what
     /// happens afterward), so those report [`SimpleMerge::TooComplex`]
     /// rather than guessing.
-    fn try_simple_merge(&mut self, canon: &Canon, mut req: Requirements) -> SimpleMerge {
-        match canon {
+    fn try_simple_merge(
+        &mut self,
+        canon: &Canon,
+        mut req: Requirements,
+    ) -> Result<SimpleMerge, StopReason> {
+        Ok(match canon {
             Canon::True => SimpleMerge::Merged(Box::new(req)),
             Canon::False => SimpleMerge::Contradiction,
             Canon::Local(facet) => {
-                req.apply(facet);
+                req.apply(facet, self.governor)?;
                 if req.is_contradictory() {
                     SimpleMerge::Contradiction
                 } else {
@@ -415,9 +419,9 @@ impl<'s> Gen<'s, '_> {
             }
             Canon::And(items) => {
                 for item in items {
-                    match self.try_simple_merge(item, req) {
+                    match self.try_simple_merge(item, req)? {
                         SimpleMerge::Merged(updated) => req = *updated,
-                        other => return other,
+                        other => return Ok(other),
                     }
                 }
                 SimpleMerge::Merged(Box::new(req))
@@ -432,7 +436,7 @@ impl<'s> Gen<'s, '_> {
                 if entered {
                     self.scope.pop();
                 }
-                result
+                result?
             }
             Canon::Or(_)
             | Canon::OneOf(_)
@@ -441,7 +445,7 @@ impl<'s> Gen<'s, '_> {
             | Canon::NegatedRef(_)
             | Canon::DynamicRef(_, _)
             | Canon::NegatedDynamicRef(_, _) => SimpleMerge::TooComplex,
-        }
+        })
     }
     /// Build `id`'s (positive, or negated) canon and wrap it in
     /// `Canon::Scoped(id, ..)`, for a branch (`if`/`then`/`else`) canon
@@ -519,11 +523,7 @@ impl<'s> Gen<'s, '_> {
         if let Some(values) = req.enum_values.clone() {
             let mut any_checked = false;
             for value in &values {
-                if req
-                    .excluded
-                    .iter()
-                    .any(|excluded| excluded.equivalent(value))
-                {
+                if crate::json::equivalent_any(&req.excluded, value, self.governor)? {
                     continue;
                 }
                 any_checked = true;
@@ -847,7 +847,7 @@ impl<'s> Gen<'s, '_> {
                         .cloned()
                         .unwrap_or_else(|| Node::new(Value::Null)),
                 );
-            } else if !has_duplicate(&items) {
+            } else if !has_duplicate(&items, self.governor)? {
                 items.push(items[0].clone());
             }
         }
@@ -1041,11 +1041,7 @@ impl<'s> Gen<'s, '_> {
         req: &Requirements,
     ) -> Result<Option<&'static str>, StopReason> {
         self.governor.charge(Resource::Work, 1)?;
-        if req
-            .excluded
-            .iter()
-            .any(|excluded| excluded.equivalent(node))
-        {
+        if crate::json::equivalent_any(&req.excluded, node, self.governor)? {
             return Ok(Some("candidate equals an excluded value"));
         }
         if let Some(reason) = match &node.value {
@@ -1179,13 +1175,13 @@ impl<'s> Gen<'s, '_> {
             for i in 0..items.len() {
                 for j in 0..i {
                     self.governor.charge(Resource::Work, 1)?;
-                    if items[i].equivalent(&items[j]) {
+                    if items[i].equivalent_governed(&items[j], self.governor)? {
                         return Ok(Some("duplicate item violates uniqueItems"));
                     }
                 }
             }
         }
-        if req.require_duplicate && !has_duplicate(items) {
+        if req.require_duplicate && !has_duplicate(items, self.governor)? {
             return Ok(Some("array must contain a duplicate item"));
         }
         Ok(None)
@@ -1361,13 +1357,14 @@ fn step_integer(text: &str, delta: i8) -> Option<String> {
 fn fresh_scalar(index: usize) -> Node {
     Node::new(Value::Number(crate::json::Number::from_count(index)))
 }
-fn has_duplicate(items: &[Node]) -> bool {
+fn has_duplicate(items: &[Node], governor: &mut Governor) -> Result<bool, StopReason> {
     for i in 0..items.len() {
         for j in 0..i {
-            if items[i].equivalent(&items[j]) {
-                return true;
+            if items[i].equivalent_governed(&items[j], governor)? {
+                return Ok(true);
             }
         }
     }
-    false
+    governor.check()?;
+    Ok(false)
 }

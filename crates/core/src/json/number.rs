@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Exact decimal JSON numbers, including exponents outside machine ranges.
+mod decimal;
+use super::operation::{Operation, ordinary};
 use crate::contract::{
     Governor, Resource, ScratchString, StopReason, format_output_governed, saturating_size,
 };
@@ -103,58 +105,19 @@ impl Number {
     /// Mathematical ordering, preserving precision for arbitrarily large exponents.
     #[must_use]
     pub fn compare(&self, other: &Self) -> Ordering {
-        let left = self.parts();
-        let right = other.parts();
-        if left.digits == "0" || right.digits == "0" {
-            match (left.digits == "0", right.digits == "0") {
-                (true, true) => Ordering::Equal,
-                (true, false) => {
-                    if right.negative {
-                        Ordering::Greater
-                    } else {
-                        Ordering::Less
-                    }
-                }
-                (false, true) => {
-                    if left.negative {
-                        Ordering::Less
-                    } else {
-                        Ordering::Greater
-                    }
-                }
-                (false, false) => unreachable!(),
-            }
-        } else if left.negative != right.negative {
-            if left.negative {
-                Ordering::Less
-            } else {
-                Ordering::Greater
-            }
-        } else {
-            let magnitude = left
-                .exponent
-                .add(&Integer::from_usize(left.digits.len()))
-                .cmp(&right.exponent.add(&Integer::from_usize(right.digits.len())))
-                .then_with(|| {
-                    let length = left.digits.len().max(right.digits.len());
-                    left.digits
-                        .bytes()
-                        .chain(core::iter::repeat(b'0'))
-                        .take(length)
-                        .cmp(
-                            right
-                                .digits
-                                .bytes()
-                                .chain(core::iter::repeat(b'0'))
-                                .take(length),
-                        )
-                });
-            if left.negative {
-                magnitude.reverse()
-            } else {
-                magnitude
-            }
-        }
+        ordinary(decimal::compare(
+            self.as_str(),
+            other.as_str(),
+            &mut Operation(None),
+        ))
+    }
+
+    pub(super) fn compare_admitted(
+        &self,
+        other: &Self,
+        operation: &mut Operation<'_>,
+    ) -> Result<Ordering, StopReason> {
+        decimal::compare(self.as_str(), other.as_str(), operation)
     }
 
     /// Read a nonnegative machine-sized integer, when representable exactly.
@@ -272,34 +235,13 @@ impl Number {
     }
 
     pub(super) fn parts(&self) -> Parts {
-        let (mantissa, exponent) = self.0.split_once(['e', 'E']).unwrap_or((&self.0, "0"));
-        let negative = mantissa.starts_with('-');
-        let fraction = mantissa
-            .split_once('.')
-            .map_or(0, |(_, digits)| digits.len());
-        let mut digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
-        let leading = digits.bytes().take_while(|byte| *byte == b'0').count();
-        if leading == digits.len() {
-            return Parts {
-                negative: false,
-                digits: "0".into(),
-                exponent: Integer::parse("0"),
-            };
-        }
-        digits.drain(..leading);
-        let trailing = digits
-            .bytes()
-            .rev()
-            .take_while(|byte| *byte == b'0')
-            .count();
-        digits.truncate(digits.len() - trailing);
-        let exponent = Integer::parse(exponent)
-            .add(&Integer::from_usize(trailing))
-            .subtract(&Integer::from_usize(fraction));
+        let parts = ordinary(decimal::parts(self.as_str(), &mut Operation(None)));
         Parts {
-            negative,
-            digits,
-            exponent,
+            digits: parts.digits.into_string(),
+            exponent: Integer {
+                negative: parts.exponent.negative,
+                digits: parts.exponent.digits.into_string(),
+            },
         }
     }
 }
@@ -521,7 +463,6 @@ impl fmt::Display for NumberError {
 impl std::error::Error for NumberError {}
 
 pub(super) struct Parts {
-    pub negative: bool,
     pub digits: String,
     pub exponent: Integer,
 }
@@ -533,68 +474,26 @@ pub(super) struct Integer {
 }
 impl Integer {
     fn parse(input: &str) -> Self {
-        let digits = input.trim_start_matches(['+', '-']).trim_start_matches('0');
+        let value = ordinary(decimal::integer(input, &mut Operation(None)));
         Self {
-            negative: input.starts_with('-') && !digits.is_empty(),
-            digits: if digits.is_empty() {
-                "0".into()
-            } else {
-                digits.into()
-            },
+            negative: value.negative,
+            digits: value.digits.into_string(),
         }
     }
     fn from_usize(value: usize) -> Self {
         Self::parse(&value.to_string())
     }
     pub(super) fn add(&self, other: &Self) -> Self {
-        if self.negative == other.negative {
-            let mut out = Vec::new();
-            let mut carry = 0_u8;
-            let mut left = self.digits.bytes().rev();
-            let mut right = other.digits.bytes().rev();
-            loop {
-                let a = left.next();
-                let b = right.next();
-                if a.is_none() && b.is_none() && carry == 0 {
-                    break;
-                }
-                let sum = a.map_or(0, |v| v - b'0') + b.map_or(0, |v| v - b'0') + carry;
-                out.push(b'0' + sum % 10);
-                carry = sum / 10;
-            }
-            let digits: String = out.into_iter().rev().map(char::from).collect();
-            Self {
-                negative: self.negative && digits != "0",
-                digits,
-            }
-        } else {
-            let comparison = magnitude_cmp(&self.digits, &other.digits);
-            let (large, small) = if comparison.is_lt() {
-                (other, self)
-            } else {
-                (self, other)
-            };
-            let mut borrow = 0_i16;
-            let mut right = small.digits.bytes().rev();
-            let mut out = Vec::new();
-            for digit in large.digits.bytes().rev() {
-                let mut value = i16::from(digit - b'0')
-                    - i16::from(right.next().map_or(0, |v| v - b'0'))
-                    - borrow;
-                borrow = i16::from(value < 0);
-                if value < 0 {
-                    value += 10;
-                }
-                out.push(char::from_digit(u32::try_from(value).unwrap_or(0), 10).unwrap_or('0'));
-            }
-            while out.len() > 1 && out.last() == Some(&'0') {
-                out.pop();
-            }
-            let digits: String = out.into_iter().rev().collect();
-            Self {
-                negative: large.negative && digits != "0",
-                digits,
-            }
+        let value = ordinary(decimal::add(
+            self.negative,
+            &self.digits,
+            other.negative,
+            &other.digits,
+            &mut Operation(None),
+        ));
+        Self {
+            negative: value.negative,
+            digits: value.digits.into_string(),
         }
     }
     pub(super) fn subtract(&self, other: &Self) -> Self {
@@ -637,7 +536,7 @@ fn remove_decimal_factors(
 }
 
 fn magnitude_cmp(left: &str, right: &str) -> Ordering {
-    left.len().cmp(&right.len()).then_with(|| left.cmp(right))
+    ordinary(decimal::magnitude(left, right, &mut Operation(None)))
 }
 impl Ord for Integer {
     fn cmp(&self, other: &Self) -> Ordering {

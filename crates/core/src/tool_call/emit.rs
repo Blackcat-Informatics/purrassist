@@ -1101,7 +1101,7 @@ fn reads_back(
             Ok(value) => {
                 value.tree.is_resolved()
                     && value.alternative.is_none()
-                    && value.tree.root.equivalent(expected)
+                    && value.tree.root.equivalent_governed(expected, governor)?
                     && value.edits.iter().all(|edit| {
                         edit.operator == allowed
                             || matches!(
@@ -1692,16 +1692,23 @@ impl Spelling<'_> {
         let json = || guard_json(new.to_json(), &self.risky);
         if self.stringified {
             // Escaped JSON inside the arguments string.
-            let decoded = json::parse_with(&format!("\"{text}\""), governor)
-                .ok()
-                .and_then(|node| node.as_str().map(str::to_owned));
-            let spelled = decoded.and_then(|inner| json::parse_with(&inner, governor).ok());
-            return Ok(spelled.filter(|parsed| parsed.equivalent(old)).map(|_| {
+            let decoded = parse_spelling(&format!("\"{text}\""), governor)?;
+            let spelled = if let Some(inner) = decoded.as_ref().and_then(Node::as_str) {
+                parse_spelling(inner, governor)?
+            } else {
+                None
+            };
+            if let Some(parsed) = spelled
+                && parsed.equivalent_governed(old, governor)?
+            {
                 let quoted = json::quote(&json());
-                (span, quoted[1..quoted.len() - 1].to_owned())
-            }));
+                return Ok(Some((span, quoted[1..quoted.len() - 1].to_owned())));
+            }
+            return Ok(None);
         }
-        if json::parse_with(text, governor).is_ok_and(|parsed| parsed.equivalent(old)) {
+        if let Some(parsed) = parse_spelling(text, governor)?
+            && parsed.equivalent_governed(old, governor)?
+        {
             return Ok(Some((span, json())));
         }
         match (&old.value, &new.value) {
@@ -1725,5 +1732,15 @@ impl Spelling<'_> {
             }
             _ => Ok(None),
         }
+    }
+}
+
+// Invalid source spelling may use the existing replacement path; native stops
+// must leave that path immediately rather than looking like a spelling mismatch.
+fn parse_spelling(text: &str, governor: &mut Governor) -> Result<Option<Node>, StopReason> {
+    match json::parse_with(text, governor) {
+        Ok(node) => Ok(Some(node)),
+        Err(json::ParseFailure::Syntax(_)) => Ok(None),
+        Err(json::ParseFailure::Resource(reason)) => Err(reason),
     }
 }

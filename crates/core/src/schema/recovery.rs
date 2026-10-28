@@ -698,7 +698,7 @@ impl Walk<'_, '_> {
         self.governor.charge(Resource::EvidenceEntries, 1)?;
         let parent = self.parent;
         let original = at(parent, route);
-        if original.equivalent(&replacement) {
+        if original.equivalent_governed(&replacement, self.governor)? {
             return Ok(());
         }
         // Cloning the parent duplicates the whole candidate (node tree and

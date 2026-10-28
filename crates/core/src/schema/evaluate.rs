@@ -488,7 +488,7 @@ impl Evaluator<'_, '_> {
             }
         }
         if let Some(expected) = body.get("const")
-            && !instance.equivalent(expected)
+            && !instance.equivalent_governed(expected, self.governor)?
         {
             self.violation(result, id, path, "const", "instance differs from const")?;
         }
@@ -501,7 +501,7 @@ impl Evaluator<'_, '_> {
                 Resource::Work,
                 u64::try_from(values.len()).unwrap_or(u64::MAX),
             )?;
-            if !values.iter().any(|value| instance.equivalent(value)) {
+            if !crate::json::equivalent_any(values, instance, self.governor)? {
                 self.violation(result, id, path, "enum", "instance is not an enum member")?;
             }
         }
@@ -963,7 +963,7 @@ impl Evaluator<'_, '_> {
             for (position, item) in items.iter().enumerate() {
                 for previous in &items[..position] {
                     self.governor.charge(Resource::Work, 1)?;
-                    if previous.equivalent(item) {
+                    if previous.equivalent_governed(item, self.governor)? {
                         self.violation(
                             result,
                             id,
