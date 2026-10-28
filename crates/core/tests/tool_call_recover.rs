@@ -2693,8 +2693,13 @@ fn exact_effort_never_repairs() {
     }
 }
 
-fn exact_repair_cases() -> [(String, &'static str, DialectId); 4] {
+fn exact_repair_cases() -> [(String, &'static str, DialectId); 5] {
     [
+        (
+            "<tool_call>\n<function=list_dir>\n<path>src</path>\n</function>\n</tool_call>".to_owned(),
+            "tool_call.markup.bare-parameter-element",
+            DialectId::Qwen3CoderXml,
+        ),
         (
             "<tool_call>\n<function=list_dir>\n<parameter=path>\nsrc\n</parameter>\n</parameter>\n</function>\n</tool_call>".to_owned(),
             "tool_call.markup.stray-closer",
