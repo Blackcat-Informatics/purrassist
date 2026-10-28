@@ -501,6 +501,7 @@ pub struct ToolDefinition {
     pub(super) effects: Effects,
     pub(super) policy: Option<RepairPolicy>,
     pub(super) arguments: ObjectSpec,
+    pub(super) output_schema: Option<String>,
 }
 
 impl ToolDefinition {
@@ -522,7 +523,26 @@ impl ToolDefinition {
             effects: Effects::Mutating,
             policy: None,
             arguments: ObjectSpec::new(),
+            output_schema: None,
         }
+    }
+
+    /// Supply an exact optional output schema, admitted when the tool is compiled.
+    ///
+    /// Accepts any core object or boolean schema. Absence is distinct from
+    /// explicit `true` or `false`. Caller source construction is separate;
+    /// invalid schemas and native refusals are reported by tool-set compilation.
+    /// A target that cannot carry the output contract refuses declaration export.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget,json,tool_call::{ToolDefinition,ToolSet}};
+    /// let tools=ToolSet::compile([ToolDefinition::new("count").output_schema(r#"{"type":"integer"}"#)],Budget::default()).unwrap();
+    /// assert!(tools.tool("count").unwrap().output_schema().unwrap().validate(&json::parse("3").unwrap()).unwrap().valid);
+    /// ```
+    #[must_use]
+    pub fn output_schema(mut self, source: impl Into<String>) -> Self {
+        self.output_schema = Some(source.into());
+        self
     }
 
     /// The canonical name, exactly as supplied.

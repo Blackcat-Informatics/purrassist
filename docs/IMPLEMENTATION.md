@@ -548,3 +548,32 @@ This is caller-requested result processing. It grants no graph authority, tool
 execution, authorization, confinement or proof-bound release. Loading, intent and
 history metadata is decoded without implementing those policies. Full
 #33/#34/#35/#36/#37/#39/#47 acceptance remains required.
+
+## Exact prepared output contracts
+
+Prepared tools now retain optional exact output-schema source and an independent
+core validator. `ToolDefinition::output_schema` accepts caller-provided object
+or boolean schema text, admitted during compilation. Explicit `true` and `false`
+remain present contracts; absence remains `None`. Output schemas do not change
+argument projection, defaults or input validation, and no output DOM is cloned.
+
+MCP `outputSchema` requires an object with one root `type` equal to `object`.
+Nested boolean schemas remain valid. Missing, duplicated or incompatible root
+fields, malformed schemas, unsupported dialects and unresolved references fail
+explicitly. Compilation and all new retention/scanning/diagnostic work use the
+actual caller governor; native refusal never becomes an absent contract.
+
+`CompiledTool::output_schema` borrows the validator and `output_schema_text`
+borrows its exact source. `ToolDeclaration` exposes exact output text and its
+original input range. The output fragment includes adjacent JSON whitespace
+between the colon, value and next member/outer delimiter. This preserves explicit
+builder whitespace and schema identity through MCP rendering and reimport.
+Same-form MCP declarations remain byte-exact. MCP export carries eligible output
+contracts verbatim; other targets, and non-object builder outputs exported to
+MCP, return typed unsupported errors before emitting declaration bytes.
+
+The facade `output_contract` example validates a caller-prepared result. The
+existing host registry's declarations supply admitted output validators for
+actual tool results. Admission alone does not enforce runtime output release,
+authorize execution or provide graph/proof binding. CompactSignature, TypeScript,
+full graph and remaining parent requirements remain separate.

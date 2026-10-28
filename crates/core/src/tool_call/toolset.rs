@@ -8,6 +8,7 @@ use super::definition::{
     UnknownParameters,
 };
 use super::emit::{self, EmitError};
+use super::output::OutputSchema;
 use super::scope::{Nesting, ScopeCompiler, ScopeGraph};
 use super::shape::{
     ArgumentShape, NameLiteral, ObjectShape, ParameterDefault, ParameterShape, PatternConstraint,
@@ -37,13 +38,13 @@ const RENDER_OVERHEAD: u64 = 1024;
 const ESCAPED_COPIES: u64 = 12;
 
 impl ScratchCharge for ToolDefinition {
-    const CHARGE: usize = 160;
+    const CHARGE: usize = 184;
 }
 impl ScratchCharge for CompiledTool {
     const CHARGE: usize = 1024;
 }
 impl ScratchCharge for Pending {
-    const CHARGE: usize = 176;
+    const CHARGE: usize = 200;
 }
 impl ScratchCharge for Declared {
     const CHARGE: usize = 1024;
@@ -183,6 +184,9 @@ impl std::error::Error for ToolSetError {}
 /// [`ToolSet::from_mcp`], [`ToolSet::from_anthropic`]) carries its exact
 /// source declaration and a schema compiled from the exact parameters text
 /// (see [`Self::source`]).
+/// Optional output schemas are independently admitted and exposed through
+/// [`Self::output_schema`]. MCP retains their exact source; declaration targets
+/// unable to carry them return typed unsupported errors before emission.
 ///
 /// The repair policy is resolved from [`Self::effects`] when it is read, so
 /// it always agrees with the effects the tool carries; unknown-parameter
@@ -209,6 +213,7 @@ pub struct CompiledTool {
     schema_document: Node,
     schema_text: String,
     schema: Schema,
+    output_schema: Option<OutputSchema>,
     shape: ArgumentShape,
     defaults: Vec<ParameterDefault>,
     source: ToolSource,
@@ -381,6 +386,36 @@ impl CompiledTool {
         &self.schema
     }
 
+    /// The independently admitted output validator, or `None` when absent.
+    ///
+    /// No output schema is inferred from arguments or a missing declaration.
+    /// Borrow this validator with the caller's governor to validate an original
+    /// result; retaining a schema confers no execution or release authority.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget,tool_call::{ToolDefinition,ToolSet}};
+    /// let tools=ToolSet::compile([ToolDefinition::new("noop")],Budget::default()).unwrap();
+    /// assert!(tools.tool("noop").unwrap().output_schema().is_none());
+    /// ```
+    #[must_use]
+    pub fn output_schema(&self) -> Option<&Schema> {
+        self.output_schema.as_ref().map(|output| &output.schema)
+    }
+
+    /// Exact admitted output-schema source text, without normalization.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget,tool_call::{ToolDefinition,ToolSet}};
+    /// let tools=ToolSet::compile([ToolDefinition::new("anything").output_schema(" true ")],Budget::default()).unwrap();
+    /// assert_eq!(tools.tool("anything").unwrap().output_schema_text(),Some(" true "));
+    /// ```
+    #[must_use]
+    pub fn output_schema_text(&self) -> Option<&str> {
+        self.output_schema
+            .as_ref()
+            .map(|output| output.text.as_str())
+    }
+
     /// The engine-independent argument shape.
     ///
     /// ```
@@ -548,6 +583,9 @@ impl CompiledTool {
         form: DeclarationForm,
         governor: &mut Governor,
     ) -> Result<String, EmitError> {
+        if let Some(output) = &self.output_schema {
+            output.admit_target(form, governor)?;
+        }
         let parameters = match &self.source {
             ToolSource::Declaration(declaration) if declaration.form() == form => {
                 let mut output = json::JsonOutput::new(governor)?;
@@ -562,8 +600,15 @@ impl CompiledTool {
             Some(dialect) => {
                 emit::declaration(&dialect, &self.name, description, parameters, governor)
             }
-            None => adapter::render_canonical(form, &self.name, description, parameters, governor)
-                .map_err(EmitError::Resource),
+            None => adapter::render_canonical(
+                form,
+                &self.name,
+                description,
+                parameters,
+                self.output_schema_text(),
+                governor,
+            )
+            .map_err(EmitError::Resource),
         }
     }
 }
@@ -906,6 +951,8 @@ pub(super) struct Declared {
     pub(super) schema_text: String,
     /// The validator compiled from `schema_text`.
     pub(super) schema: Schema,
+    /// Exact optional output contract, independently compiled.
+    pub(super) output_schema: Option<OutputSchema>,
     /// `(schema pointer, keyword)` pairs the typed model does not represent.
     pub(super) unmodeled_keywords: Vec<(String, String)>,
     /// The schema locations the root projection read its `properties` from.
@@ -1018,43 +1065,51 @@ fn compile_tool(entry: Pending, governor: &mut Governor) -> Result<CompiledTool,
             .map_err(ToolSetError::Resource)?,
         None => ScopeGraph::default(),
     };
-    let (schema_document, schema_text, schema, source, unmodeled_keywords, locations) =
-        if let Some(declared) = declaration {
-            let Declared {
-                source,
-                schema_text,
-                schema,
-                unmodeled_keywords,
-                locations,
-            } = *declared;
-            governor
-                .charge(Resource::ScratchBytes, schema.document().estimated_bytes())
-                .map_err(ToolSetError::Resource)?;
-            (
-                schema.document().clone(),
-                schema_text,
-                schema,
-                ToolSource::Declaration(source),
-                unmodeled_keywords,
-                locations,
-            )
-        } else {
-            let (schema_document, schema_text, schema) =
-                generated_schema(&definition, unknown, governor)?;
-            (
-                schema_document,
-                schema_text,
-                schema,
-                ToolSource::Builder,
-                Vec::new(),
-                RootLocations::inline(),
-            )
-        };
-    let mut aliases = definition.aliases.clone();
-    aliases.sort();
+    let (
+        schema_document,
+        schema_text,
+        schema,
+        source,
+        unmodeled_keywords,
+        locations,
+        output_schema,
+    ) = if let Some(declared) = declaration {
+        let Declared {
+            source,
+            schema_text,
+            schema,
+            unmodeled_keywords,
+            locations,
+            output_schema,
+        } = *declared;
+        governor
+            .charge(Resource::ScratchBytes, schema.document().estimated_bytes())
+            .map_err(ToolSetError::Resource)?;
+        (
+            schema.document().clone(),
+            schema_text,
+            schema,
+            ToolSource::Declaration(source),
+            unmodeled_keywords,
+            locations,
+            output_schema,
+        )
+    } else {
+        let (schema_document, schema_text, schema) =
+            generated_schema(&definition, unknown, governor)?;
+        (
+            schema_document,
+            schema_text,
+            schema,
+            ToolSource::Builder,
+            Vec::new(),
+            RootLocations::inline(),
+            OutputSchema::from_builder(&definition, governor)?,
+        )
+    };
     Ok(CompiledTool {
         name: definition.name.clone(),
-        aliases,
+        aliases: sorted_aliases(&definition.aliases),
         description: definition.description.clone(),
         effects: definition.effects,
         explicit_policy: definition.policy,
@@ -1062,6 +1117,7 @@ fn compile_tool(entry: Pending, governor: &mut Governor) -> Result<CompiledTool,
         schema_document,
         schema_text,
         schema,
+        output_schema,
         shape: ArgumentShape {
             tool: definition.name.clone(),
             arguments,
@@ -1072,6 +1128,13 @@ fn compile_tool(entry: Pending, governor: &mut Governor) -> Result<CompiledTool,
         unmodeled_keywords,
         locations,
     })
+}
+
+/// Publish the existing canonical alias ordering after construction admission.
+fn sorted_aliases(aliases: &[String]) -> Vec<String> {
+    let mut aliases = aliases.to_vec();
+    aliases.sort();
+    aliases
 }
 
 /// The schema document, text, and validator generated from a typed

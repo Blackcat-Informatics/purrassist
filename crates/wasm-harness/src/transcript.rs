@@ -746,11 +746,19 @@ fn output_projection_transcript() -> Node {
             vec![],
             LoadingStrategy::Always,
         );
-        let schema =
-            Schema::compile_governed(r#"{"type":"object"}"#, &mut governor).expect("schema");
+        let tools = purrassist_core::tool_call::ToolSet::from_mcp_governed(
+            r#"{"name":"orders","inputSchema":{},"outputSchema":{"type":"object"}}"#,
+            &mut governor,
+        )
+        .expect("prepared output declaration");
+        let schema = tools
+            .tool("orders")
+            .expect("orders tool")
+            .output_schema()
+            .expect("declared output schema");
         let original =
             json::parse_with(r#"{"orders":[1.00e2,true]}"#, &mut governor).expect("original");
-        match context.project_result(&schema, &original, &mut governor) {
+        match context.project_result(schema, &original, &mut governor) {
             Ok(value) => {
                 assert_eq!(value.bytes.as_str(), "1.00e2\ntrue\n");
                 results.push(object([

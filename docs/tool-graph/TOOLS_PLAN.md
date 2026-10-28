@@ -1335,3 +1335,17 @@ This is caller-requested result processing. It grants no graph authority, tool
 execution, authorization, confinement or proof-bound release. Loading, intent and
 history metadata is decoded without implementing those policies. Full
 #33/#34/#35/#36/#37/#39/#47 acceptance remains required.
+
+### Exact prepared output-schema prerequisite
+
+Prepared `ToolDefinition`/`ToolSet` construction now admits optional exact output
+schemas through the existing core compiler and caller governor. MCP uses its
+explicit object-root contract; builders retain object and boolean schemas.
+Borrowed `CompiledTool` output validation is separate from input projection.
+Exact source fragments, including adjacent JSON whitespace, survive MCP
+roundtrip. Targets unable to carry an output contract refuse explicitly.
+
+This supplies a missing prepared output operand for future compiler/result
+callers. It does not implement CompactSignature, TypeScript projection, graph
+admission, loss/check binding, authorization, confinement, manifest/history or
+proof-bound release. Those parent requirements remain open.

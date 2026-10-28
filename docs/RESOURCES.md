@@ -1764,3 +1764,23 @@ This is caller-requested result processing. It grants no graph authority, tool
 execution, authorization, confinement or proof-bound release. Loading, intent and
 history metadata is decoded without implementing those policies. Full
 #33/#34/#35/#36/#37/#39/#47 acceptance remains required.
+
+## Prepared output-schema admission
+
+New output source retention uses `ScratchString` owners through successful tool
+construction, later refusal and drop. Field/fragment/type scans and new copies
+admit work before processing; exact schema compilation shares the construction
+governor through `Schema::compile_governed`. Contextual output diagnostics use
+fallible governed formatting and tool-name storage. Published owned diagnostics
+retain their admitted charge under the existing error contract.
+
+The optional caller-owned builder string adds 24 portable bytes to the
+`ToolDefinition` and `Pending` record charges, now 184 and 200 respectively.
+Existing `CompiledTool` and declaration record bounds cover their new inline
+output contract and remain checked against actual layouts. Output validation
+borrows the compiler's existing DOM rather than allocating a second copy.
+
+No default governor, result schema or wire extension is inferred. Unsupported
+declaration targets fail before output publication. This extends the existing
+schema compiler's native admission contract; broader legacy catalog/schema
+allocator ownership remains a separate requirement.
