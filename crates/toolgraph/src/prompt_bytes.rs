@@ -149,17 +149,22 @@ impl<'a> FramedPrompt<'a> {
         governor: &mut Governor,
     ) -> Result<FramedPromptBytes<'a>, PromptByteError<'a>> {
         self.assemble(max_bytes, governor)
+            .map(|(text, exact_bytes)| FramedPromptBytes {
+                input: self,
+                text: text.into_string(),
+                exact_bytes,
+            })
             .map_err(|reason| PromptByteError {
                 input: self,
                 reason,
             })
     }
 
-    fn assemble(
+    pub(crate) fn assemble(
         self,
         max_bytes: u64,
         governor: &mut Governor,
-    ) -> Result<FramedPromptBytes<'a>, PromptByteFailure> {
+    ) -> Result<(ScratchString, u64), PromptByteFailure> {
         governor.check()?;
         for text in [
             self.source_identity,
@@ -210,11 +215,7 @@ impl<'a> FramedPrompt<'a> {
         }
         output.push_str(self.suffix)?;
         governor.check()?;
-        Ok(FramedPromptBytes {
-            input: self,
-            text: output.into_string(),
-            exact_bytes: required_bytes,
-        })
+        Ok((output, required_bytes))
     }
 }
 

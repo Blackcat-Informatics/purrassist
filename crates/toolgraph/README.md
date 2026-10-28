@@ -28,9 +28,20 @@ and publishes complete output only after governed sizing, copying, storage and
 cancellation checks. Run
 `cargo run -p purrassist-toolgraph --example framed_prompt_bytes` for a consumer
 that prepares real wire declarations separately and validates the complete array.
-This operation accepts no token limit and reports no token count. Tokenizer
-qualification, model-family placement/selection, graph loading, routing and
-complete projection ledgers remain under #36 and #47. Tool-result byte limits
+`FramedPrompt::assemble_accounted` extends that same assembler with independent
+token admission. A deterministic, pure caller `TokenCounter` supplies an exact
+count under recorded tokenizer/configuration identities; it must govern its work
+and storage. A separate `ByteLevelTokenContract` supplies a conservative bound
+only under explicit caller assertions: at most one token per input byte, no
+uncounted implicit special tokens, and no representation-expanding preprocessing.
+The caller's encoding identity and admission basis remain visible; these labels
+are not library qualification. Accounted output keeps immutable complete bytes
+and the separate measurement. Missing/unavailable accounting, empty identities,
+independent byte/token excess, cancellation and resource failures refuse without
+fallback or truncation, preserving original inputs and any completed measurement.
+The same example exercises a documented scalar encoding on the real declarations.
+Tokenizer qualification, model-family placement/selection, graph loading, routing
+and complete projection ledgers remain under #36 and #47. Tool-result byte limits
 remain the separate `OutputByteLimit` contract.
 
 The direct `plain_tool_schemas` example adopts the supported upstream profile of
