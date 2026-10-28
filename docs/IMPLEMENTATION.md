@@ -474,19 +474,41 @@ renderers. HOME uses existing literal escaping and unsafe-path refusals; root
 and trailing slash inputs add no accidental separator. Compiler additions have explicit
 baseline origins rather than fabricated caller provenance.
 
-The complete ABI/profile/hat document and source spans publish together after
-final cancellation admission. New indices, text and spans use fallible scratch
-owners. Existing String-returning renderers retain their documented conservative
-reservations; this compiler does not claim prompt release of their detached
-intermediate charges. Original input and exact native rule/resource errors
-remain available on refusal. ABI 3.0 refuses fine-grained Internet rules instead
-of dropping scope. Aggregated ABI/mediation metadata describes an offline target,
-not running-kernel, loaded-policy or dispatch evidence.
+Bodies also accept ordered mandatory `PolicyImport` occurrences bound to opaque
+`PolicyDependency` records on the input. Imports follow fixed baselines and precede
+caller rules; repeated paths with distinct occurrence identities remain in order.
+Paths must be normalized relative `abstractions/...` file names. Absolute paths,
+traversal, empty components, variables, wildcards, delimiters, controls and
+unsupported syntax fail explicitly. Direct imports require a declared binding;
+duplicate dependency paths fail even for unreferenced or byte-identical records.
+Errors retain the complete input and conflicting original records.
 
-The actual `policy_document` example prints a complete compiled document. Full
-RDF/SRL/static admission, permission/owner/deny proofs, abstraction imports and
-trust, nested graph profile synthesis, transition-target existence, graph CLI,
-loaded mediation and host confinement remain #33/#34/#35/#39 requirements.
+The output retains every declared dependency, including transitive records, in
+input order with SHA-256 identities computed from its exact supplied bytes.
+Import source spans identify the original occurrence and bound manifest index.
+The compiler performs no filesystem lookup, dependency-content interpolation,
+imported-permission analysis or transitive-closure proof. `local_mediation`
+reports classes from local rules only. `complete_mediation` returns a typed
+refusal identifying the first import span whenever opaque imports are emitted.
+Neither accessor grants execution authority or attests running-kernel support.
+
+The complete ABI/profile/hat document, dependency manifest and source spans
+publish together after final cancellation admission. New scans, comparisons,
+hashing, indices, text, manifests and spans use the actual governor and fallible
+scratch owners for retained storage. Existing String-returning renderers retain
+their documented conservative reservations; this compiler does not claim prompt
+release of their detached intermediate charges. Original input and exact native
+rule/resource errors remain available on refusal. ABI 3.0 refuses fine-grained
+Internet rules instead of dropping scope. The selected ABI describes an offline target, not
+running-kernel, loaded-policy or dispatch evidence.
+
+The actual `policy_document` example prints a complete compiled document. Its
+`--bound-imports` mode materializes first-party synthetic dependency files under
+a fresh caller-selected include root. Native resolution and required transitive
+files remain the external parser's responsibility. Full RDF/SRL/static admission,
+permission/owner/deny proofs, graph import closure and trust, nested graph profile
+synthesis, transition-target existence, graph CLI, loaded mediation and host
+confinement remain #33/#34/#35/#39 requirements.
 
 ## Governed semantic JSON equivalence
 

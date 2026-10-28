@@ -7,6 +7,7 @@ use std::fmt;
 use purrassist_core::{
     Governor, ScratchCharge, ScratchString, ScratchVec, StopReason,
     contract::{Resource, saturating_size as size},
+    digest::Digest,
 };
 
 use crate::apparmor_glob::emit;
@@ -133,6 +134,60 @@ struct Rendered {
     mediation: &'static str,
 }
 
+/// One mandatory include occurrence, in the exact caller-prepared order.
+/// The path names a declared dependency; it is never resolved from the filesystem.
+///
+/// ```
+/// use purrassist_core::{Budget, Governor};
+/// use purrassist_toolgraph::{PolicyImport, PolicyDependency, PolicyBody, PolicyProfile,
+///     PolicyInput, PolicyTarget, PolicyDocument, PolicyOrigin};
+/// let dependencies = [PolicyDependency { source: "file:example",
+///     path: "abstractions/example", bytes: b"/srv/example r,\n" }];
+/// let imports = [PolicyImport { source: "include:example", path: dependencies[0].path }];
+/// let profiles = [PolicyProfile::Standalone(PolicyBody { source: "body", name: "worker",
+///     rules: &[], imports: &imports })];
+/// let mut g = Governor::new(Budget::default());
+/// let document = PolicyDocument::prepare(PolicyInput { source: "document",
+///     target: PolicyTarget::Abi3, home: "/home/worker", profiles: &profiles,
+///     dependencies: &dependencies }, &mut g).unwrap();
+/// let output = document.compile(&mut g).unwrap();
+/// assert!(output.text.contains("include <abstractions/example>"));
+/// let unknown = output.requirements.complete_mediation().err().unwrap();
+/// assert!(matches!(output.spans[unknown.first_import_span].origin, PolicyOrigin::Import { .. }));
+/// ```
+#[derive(Clone, Copy, Debug)]
+pub struct PolicyImport<'a> {
+    /// Original occurrence identity, unique among imports in this body.
+    pub source: &'a str,
+    /// Normalized `abstractions/...` relative file path.
+    pub path: &'a str,
+}
+
+/// One opaque caller-provided dependency file. Contents are hashed, never parsed
+/// as permissions or interpolated into the generated profile body.
+#[derive(Clone, Copy, Debug)]
+pub struct PolicyDependency<'a> {
+    /// Original file identity.
+    pub source: &'a str,
+    /// Normalized `abstractions/...` relative file path.
+    pub path: &'a str,
+    /// Exact external file bytes; further imports remain opaque.
+    pub bytes: &'a [u8],
+}
+
+/// Byte identity of one declared external file, including transitive records.
+#[derive(Clone, Copy, Debug)]
+pub struct BoundPolicyDependency<'a> {
+    /// Unchanged original dependency record.
+    pub dependency: PolicyDependency<'a>,
+    /// SHA-256 of the exact supplied bytes, without filesystem attestation.
+    pub digest: Digest,
+}
+impl ScratchCharge for BoundPolicyDependency<'_> {
+    const CHARGE: usize = 80;
+}
+const _: () = assert!(core::mem::size_of::<BoundPolicyDependency<'_>>() <= 80);
+
 /// One named body. Names are validated through the existing literal [`FileTarget`] API.
 #[derive(Clone, Copy, Debug)]
 pub struct PolicyBody<'a> {
@@ -142,6 +197,8 @@ pub struct PolicyBody<'a> {
     pub name: &'a str,
     /// Typed caller rules; identities must be unique within this body.
     pub rules: &'a [PolicyRule<'a>],
+    /// Mandatory import occurrences, emitted in caller order without deduplication.
+    pub imports: &'a [PolicyImport<'a>],
 }
 /// A complete standalone profile or a parent with flat hats.
 #[derive(Clone, Copy, Debug)]
@@ -174,6 +231,8 @@ pub struct PolicyInput<'a> {
     pub home: &'a str,
     /// At least one standalone or parent profile.
     pub profiles: &'a [PolicyProfile<'a>],
+    /// Opaque external files, including caller-prepared transitive dependencies.
+    pub dependencies: &'a [PolicyDependency<'a>],
 }
 
 /// Fixed compiler additions, distinguished from every caller-authored identity.
@@ -201,6 +260,13 @@ pub enum PolicyBaseline {
 pub enum PolicyOrigin<'a> {
     /// Unchanged caller identity.
     Caller(&'a str),
+    /// One import occurrence and its exact bound dependency manifest index.
+    Import {
+        /// Original occurrence identity.
+        source: &'a str,
+        /// Index in [`CompiledPolicy::dependencies`].
+        dependency: usize,
+    },
     /// A fixed addition; never presented as an original caller rule.
     Baseline(PolicyBaseline),
 }
@@ -235,11 +301,13 @@ const MEDIATION: [&str; 8] = [
     "mount",
     "rlimit",
 ];
-/// Aggregate offline ABI/classes; no kernel or loaded-policy evidence is implied.
+/// Local offline classes with an explicit opaque-import completeness barrier.
+/// No kernel or loaded-policy evidence is implied.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PolicyRequirements {
     target: PolicyTarget,
     classes: u8,
+    first_opaque_import: Option<usize>,
 }
 impl PolicyRequirements {
     /// Selected offline target, as supplied originally. See [`PolicyTarget`]'s example.
@@ -247,13 +315,27 @@ impl PolicyRequirements {
     pub const fn target(self) -> PolicyTarget {
         self.target
     }
-    /// Required native classes in fixed order, without inferred host support.
-    /// The [`PolicyDocument`] example shows compilation before reading these classes.
-    pub fn mediation(self) -> impl Iterator<Item = &'static str> {
+    /// Classes required by local typed rules only, excluding opaque dependencies.
+    /// These are not a complete requirement union when imports exist.
+    pub fn local_mediation(self) -> impl Iterator<Item = &'static str> {
         MEDIATION
             .into_iter()
             .enumerate()
             .filter_map(move |(i, name)| (self.classes & (1 << i) != 0).then_some(name))
+    }
+    /// Complete known classes, refusing to hide opaque imported requirements.
+    /// This offline result never establishes dispatch authority or kernel support.
+    ///
+    /// # Errors
+    /// Returns [`UnresolvedPolicyImports`] whenever an opaque import is emitted.
+    /// The [`PolicyDocument`] example covers the no-import success case.
+    pub fn complete_mediation(
+        self,
+    ) -> Result<impl Iterator<Item = &'static str>, UnresolvedPolicyImports> {
+        if let Some(first_import_span) = self.first_opaque_import {
+            return Err(UnresolvedPolicyImports { first_import_span });
+        }
+        Ok(self.local_mediation())
     }
     fn add<'a>(
         &mut self,
@@ -284,11 +366,49 @@ impl PolicyRequirements {
     }
 }
 
+/// Opaque imports prevent any complete feature-requirement claim.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnresolvedPolicyImports {
+    /// First opaque import's index in [`CompiledPolicy::spans`].
+    pub first_import_span: usize,
+}
+impl fmt::Display for UnresolvedPolicyImports {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "opaque import at source span {} requires external dependency and feature analysis",
+            self.first_import_span
+        )
+    }
+}
+impl std::error::Error for UnresolvedPolicyImports {}
+
 /// Typed original native refusal or document-structure error.
 #[derive(Debug)]
 pub enum PolicyCause<'a> {
     /// No profiles were supplied.
     Empty,
+    /// An import or dependency path is not an admitted literal relative file.
+    ImportPath {
+        /// Original occurrence or dependency identity.
+        source: &'a str,
+        /// Unchanged original path.
+        path: &'a str,
+        /// First refused original byte offset.
+        offset: usize,
+    },
+    /// A mandatory direct import has no declared dependency record.
+    MissingDependency {
+        /// Original import request.
+        import: PolicyImport<'a>,
+    },
+    /// Two declared files claim the same path; neither record was selected.
+    DependencyConflict {
+        /// First exact original record.
+        first: &'a PolicyDependency<'a>,
+        /// Conflicting exact original record, even when its bytes are identical.
+        second: &'a PolicyDependency<'a>,
+    },
     /// HOME is not an absolute literal directory.
     Home {
         /// Original input.
@@ -370,6 +490,8 @@ pub enum PolicyDuplicateScope {
     Hats,
     /// Caller rule identities inside one body; identical rules with distinct ids survive.
     Rules,
+    /// Import occurrence identities inside one body; order remains unchanged.
+    Imports,
 }
 /// Preparation refusal retaining the complete original caller input.
 #[derive(Debug)]
@@ -413,13 +535,13 @@ impl std::error::Error for PolicyError<'_, '_> {
 /// ```
 /// use purrassist_core::{Budget, Governor};
 /// use purrassist_toolgraph::{PolicyBody, PolicyDocument, PolicyInput, PolicyProfile, PolicyTarget};
-/// let profiles = [PolicyProfile::Standalone(PolicyBody { source: "worker", name: "purrassist.worker", rules: &[] })];
+/// let profiles = [PolicyProfile::Standalone(PolicyBody { source: "worker", name: "purrassist.worker", rules: &[], imports: &[] })];
 /// let mut g = Governor::new(Budget::default());
-/// let input = PolicyInput { source: "caller:policy", target: PolicyTarget::Abi3, home: "/home/worker", profiles: &profiles };
+/// let input = PolicyInput { source: "caller:policy", target: PolicyTarget::Abi3, home: "/home/worker", profiles: &profiles, dependencies: &[] };
 /// let prepared = PolicyDocument::prepare(input, &mut g).unwrap();
 /// let compiled = prepared.compile(&mut g).unwrap();
 /// assert!(compiled.text.starts_with("abi <abi/3.0>,\n"));
-/// assert!(compiled.requirements.mediation().any(|name| name == "ptrace"));
+/// assert!(compiled.requirements.complete_mediation().unwrap().any(|name| name == "ptrace"));
 /// ```
 #[derive(Debug)]
 pub struct PolicyDocument<'a> {
@@ -442,6 +564,9 @@ pub struct CompiledPolicy<'s, 'a> {
     pub spans: ScratchVec<PolicySpan<'s>>,
     /// Required offline target/classes, without host attestation.
     pub requirements: PolicyRequirements,
+    /// All original external files and computed byte identities, in declared order.
+    /// Native resolution/transitive completeness and feature support remain unproven.
+    pub dependencies: ScratchVec<BoundPolicyDependency<'s>>,
 }
 
 impl<'a> PolicyDocument<'a> {
@@ -503,13 +628,18 @@ impl<'a> PolicyDocument<'a> {
     /// renderer reservations stay conservatively retained, including on later refusal;
     /// this operation does not claim prompt release of those detached reservations.
     /// Names use [`FileTarget`]; roots/hats/rules sort by their original names/ids.
+    /// Imports retain caller order and bind to hashed opaque dependency records.
     /// No text is published until all bodies and final cancellation checks succeed.
     /// Complete new output/source-map storage releases when the artifact drops.
     ///
     /// # Errors
     /// Preserves original input and native rule errors; refuses empty documents,
     /// duplicate scoped identities, invalid names, incompatible selected ABI,
-    /// governance/cancellation failures and unknown internal target requirements.
+    /// invalid import/dependency paths, missing direct bindings, duplicate
+    /// dependency-path conflicts, governance/cancellation failures and unknown
+    /// internal target requirements. Opaque imports remain unresolved complete
+    /// requirements even when source generation succeeds; use
+    /// [`PolicyRequirements::complete_mediation`] to query that boundary.
     /// This does not establish graph admission, target existence or confinement.
     pub fn compile<'s>(
         &'s self,
@@ -534,13 +664,16 @@ impl<'a> PolicyDocument<'a> {
             PolicyDuplicateScope::Profiles,
             g,
         )?;
+        let dependencies = bind_dependencies(self.input.dependencies, g)?;
         let mut compiler = Compiler {
             document: self,
+            dependencies,
             output: ScratchString::new(g),
             spans: ScratchVec::new(g),
             requirements: PolicyRequirements {
                 target: self.input.target,
                 classes: 0,
+                first_opaque_import: None,
             },
         };
         emit(&mut compiler.output, "abi <abi/", g)?;
@@ -576,8 +709,77 @@ impl<'a> PolicyDocument<'a> {
             text: compiler.output,
             spans: compiler.spans,
             requirements: compiler.requirements,
+            dependencies: compiler.dependencies,
         })
     }
+}
+
+fn import_path<'a>(
+    source: &'a str,
+    path: &'a str,
+    g: &mut Governor,
+) -> Result<(), PolicyCause<'a>> {
+    admit_identity(path, g)?;
+    g.charge(Resource::Work, size(path.len()).saturating_add(1))?;
+    let invalid = |offset| PolicyCause::ImportPath {
+        source,
+        path,
+        offset,
+    };
+    let Some(rest) = path.strip_prefix("abstractions/") else {
+        return Err(invalid(0));
+    };
+    let mut offset = "abstractions/".len();
+    for component in rest.split('/') {
+        if component.is_empty() || matches!(component, "." | "..") {
+            return Err(invalid(offset));
+        }
+        if let Some(index) = component
+            .bytes()
+            .position(|byte| !(byte.is_ascii_alphanumeric() || b"_.+-".contains(&byte)))
+        {
+            return Err(invalid(offset + index));
+        }
+        offset += component.len() + 1;
+    }
+    Ok(())
+}
+fn equal(left: &str, right: &str, g: &mut Governor) -> Result<bool, StopReason> {
+    g.charge(
+        Resource::Work,
+        size(left.len().min(right.len())).saturating_add(1),
+    )?;
+    Ok(left == right)
+}
+fn bind_dependencies<'a>(
+    dependencies: &'a [PolicyDependency<'a>],
+    g: &mut Governor,
+) -> Result<ScratchVec<BoundPolicyDependency<'a>>, PolicyCause<'a>> {
+    let mut bound = ScratchVec::new(g);
+    for (index, dependency) in dependencies.iter().enumerate() {
+        admit_identity(dependency.source, g)?;
+        import_path(dependency.source, dependency.path, g)?;
+        for previous in &dependencies[..index] {
+            if equal(previous.path, dependency.path, g)? {
+                return Err(PolicyCause::DependencyConflict {
+                    first: previous,
+                    second: dependency,
+                });
+            }
+        }
+        g.charge(Resource::InputBytes, size(dependency.bytes.len()))?;
+        g.charge(
+            Resource::Work,
+            size(dependency.bytes.len()).saturating_add(1),
+        )?;
+        let digest = Digest::of(dependency.bytes);
+        bound.push(BoundPolicyDependency {
+            dependency: *dependency,
+            digest,
+        })?;
+    }
+    g.check()?;
+    Ok(bound)
 }
 
 fn admit_identity(value: &str, g: &mut Governor) -> Result<(), StopReason> {
@@ -634,6 +836,7 @@ struct Compiler<'s, 'a> {
     output: ScratchString,
     spans: ScratchVec<PolicySpan<'s>>,
     requirements: PolicyRequirements,
+    dependencies: ScratchVec<BoundPolicyDependency<'s>>,
 }
 impl<'s> Compiler<'s, '_> {
     fn append(
@@ -646,7 +849,7 @@ impl<'s> Compiler<'s, '_> {
         g: &mut Governor,
     ) -> Result<(), PolicyCause<'s>> {
         let source = match origin {
-            PolicyOrigin::Caller(id) => id,
+            PolicyOrigin::Caller(id) | PolicyOrigin::Import { source: id, .. } => id,
             PolicyOrigin::Baseline(_) => self.document.input.source,
         };
         self.requirements
@@ -684,6 +887,7 @@ impl<'s> Compiler<'s, '_> {
             g,
         )?;
         self.baselines(profile, hat, indent, g)?;
+        self.imports(body.imports, profile, hat, indent, g)?;
         for &index in &indices {
             g.charge(Resource::Work, 1)?;
             let rule = body.rules[index];
@@ -709,6 +913,55 @@ impl<'s> Compiler<'s, '_> {
         }
         Ok(())
     }
+    fn imports(
+        &mut self,
+        imports: &'s [PolicyImport<'s>],
+        profile: &'s str,
+        hat: Option<&'s str>,
+        indent: &str,
+        g: &mut Governor,
+    ) -> Result<(), PolicyCause<'s>> {
+        for (index, &import) in imports.iter().enumerate() {
+            admit_identity(import.source, g)?;
+            import_path(import.source, import.path, g)?;
+            for previous in &imports[..index] {
+                if equal(previous.source, import.source, g)? {
+                    return Err(PolicyCause::Duplicate {
+                        name: import.source,
+                        scope: PolicyDuplicateScope::Imports,
+                    });
+                }
+            }
+            let mut bound = None;
+            for (index, dependency) in self.dependencies.iter().enumerate() {
+                if equal(import.path, dependency.dependency.path, g)? {
+                    bound = Some(index);
+                    break;
+                }
+            }
+            let dependency = bound.ok_or(PolicyCause::MissingDependency { import })?;
+            let start = self.output.len();
+            emit(&mut self.output, indent, g)?;
+            emit(&mut self.output, "include <", g)?;
+            emit(&mut self.output, import.path, g)?;
+            emit(&mut self.output, ">\n", g)?;
+            self.spans.push(PolicySpan {
+                profile,
+                hat,
+                origin: PolicyOrigin::Import {
+                    source: import.source,
+                    dependency,
+                },
+                start,
+                end: self.output.len(),
+            })?;
+            self.requirements
+                .first_opaque_import
+                .get_or_insert(self.spans.len() - 1);
+        }
+        Ok(())
+    }
+
     fn baselines(
         &mut self,
         profile: &'s str,
