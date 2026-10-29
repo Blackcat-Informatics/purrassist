@@ -201,7 +201,7 @@ identity cannot escape before linkage and final complete bundle hashing succeed.
 The identity path allocates no framing buffer and adds no scratch storage. Its
 obsolete nominal buffer charge and upfront hash-work estimates are removed;
 actual hashing work is admitted where it occurs. Other compiler allocations,
-source parsing, index/reference ownership and algebra preparation remain separate
+source parsing and algebra preparation remain separate
 unfinished governance work. This does not claim complete schema compilation or
 tool-graph loading governance. The real plain FnO consumer exercises this core
 compiler path without replacing the upstream schema compiler.
@@ -224,6 +224,36 @@ independent scratch-meter snapshot; only a lease or collection issued *from
 one governor instance* shares that governor's live meter, so it keeps
 charging the governor's budget after the call that created it returns.
 
+Schema reference resolution uses release-owned URI, decoded fragment/token and
+pointer-route buffers. Already compiled anchors and resource roots return location
+IDs without copying their route, pointer or base. Reference-only linkage borrows the
+resolved URI through document loading and target lookup, then holds any needed
+pointer/base owners through compilation. URI and pointer scans, UTF-8 validation,
+member searches, dynamic overrides and diagnostic construction share the caller's
+governor. Validation and both witness signs use the same path as recovery.
+
+Compiled schema indexes use a private AVL tree whose nodes are stored in a
+fallible scratch arena. Stable numeric IDs survive arena growth and rotations.
+Each actual search step admits its query comparison; insertion admits the bounded
+ancestor/rotation work and any arena relocation before reserving and linking.
+Balancing then cannot allocate or refuse. Ordered metadata traversal admits each
+bounded tree step without a separate iterator allocation. Tree construction remains
+amortized logarithmic per insertion; it does not shift a sorted array on every insert.
+Caller-supplied resource maps retain the conservative standard-library lookup bound.
+
+Location routes, pointers, bases, dynamic anchors, child/pattern names, inherited
+dialects and optional-vocabulary metadata retain their actual owners with the schema.
+Temporary snapshots and child spellings release after construction. Dropping the
+schema or refusing after index preparation releases all these owners, including
+prepared patterns. The document container is admitted separately from the legacy
+parsed DOM. Keyword and vocabulary validation now admit actual lookup, duplicate
+index, numeric scan and diagnostic work. The conservative legacy compiler storage
+allowance is retained alongside parsed DOM admission; a failed compilation need
+not return total scratch to zero. Reference decoding reserves known buffer bounds,
+and string append/formatting charges existing-byte relocation when capacity grows.
+The public owned unsupported-vocabulary output remains outside governed construction;
+recovery borrows and traverses the retained metadata under its caller's governor.
+
 Recovery's per-candidate cloning (`schema/recovery.rs`, `schema/recovery/
 proposals.rs`), the evaluator's violation/active-path strings
 (`schema/evaluate.rs`), regex compilation (`pattern::Pattern::compile_governed`,
@@ -239,8 +269,7 @@ per-input-byte allowance), the lease/release sites in `matching.rs` and
 request preparation (`crates/host/src/helpers.rs::Pending::prepare`, which now
 takes the caller's own governor instead of building an unshared one
 internally) charge scratch before allocating rather than after, or not at
-all. Permanently retained output (a compiled schema or pattern, a receipt's
-retained source, a validation's diagnostic strings, an `EditPlan`'s
+all. Permanently published output (a receipt's retained source, a validation's diagnostic strings, an `EditPlan`'s
 replacement text) is still charged with a direct, never-released
 `Governor::charge` (or a `ScratchString`/`ScratchLease` whose charge is
 explicitly retained past the call, e.g. `ScratchString::into_string`),

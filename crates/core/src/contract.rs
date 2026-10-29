@@ -740,6 +740,11 @@ impl<T: ScratchCharge> ScratchVec<T> {
         Ok(())
     }
 
+    /// Capacity already admitted by this owner; used to admit relocation work.
+    pub(crate) const fn capacity(&self) -> usize {
+        self.inner.capacity()
+    }
+
     /// Number of elements.
     #[must_use]
     pub const fn len(&self) -> usize {
@@ -942,6 +947,11 @@ impl ScratchString {
     #[must_use]
     pub const fn len(&self) -> usize {
         self.inner.len()
+    }
+
+    /// Allocated bytes available without relocating the existing contents.
+    pub(crate) const fn capacity(&self) -> usize {
+        self.inner.capacity()
     }
 
     /// Whether there are no bytes.
@@ -1710,9 +1720,17 @@ pub(crate) fn format_scratch_governed(
             if self.cause.is_some() {
                 return Err(fmt::Error);
             }
+            let moved = if text.len() > self.output.capacity() - self.output.len() {
+                self.output.len()
+            } else {
+                0
+            };
             let result = self
                 .governor
-                .charge(Resource::Work, saturating_size(text.len()))
+                .charge(
+                    Resource::Work,
+                    saturating_size(text.len().saturating_add(moved)),
+                )
                 .and_then(|()| self.output.push_str(text));
             result.map_err(|reason| {
                 self.cause = Some(reason);

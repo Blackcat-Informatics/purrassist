@@ -1732,7 +1732,7 @@ fn represented(member: &Member, position: Position, tag: Tag) -> bool {
 mod tests {
     use super::super::output::OutputSchema;
     use crate::{
-        Budget, CancellationToken, Governor, ScratchString, ScratchVec, StopReason,
+        Budget, CancellationToken, Governor, ScratchVec, StopReason,
         contract::Resource,
         tool_call::{DeclarationForm, ToolSet, ToolSetError},
     };
@@ -1806,30 +1806,24 @@ mod tests {
         let node = crate::json::parse(input).unwrap();
         let mut governor = Governor::new(Budget::default());
         let pending = super::declare(input, DeclarationForm::Mcp, 0, &node, &mut governor).unwrap();
-        let text = pending
-            .declaration
-            .as_ref()
-            .unwrap()
-            .output_schema
-            .as_ref()
-            .unwrap()
-            .text
-            .as_str();
-        let before = governor.scratch_meter().live();
-        let mut probe = ScratchString::new(&governor);
-        probe.push_str(text).unwrap();
-        let text_bytes = governor.scratch_meter().live() - before;
+        let mut probe_governor = Governor::new(Budget::default());
+        let probe =
+            super::declare(input, DeclarationForm::Mcp, 0, &node, &mut probe_governor).unwrap();
+        let prepared = probe_governor.scratch_meter().live();
         drop(probe);
+        let owned_bytes = prepared - probe_governor.scratch_meter().live();
+        assert!(owned_bytes > 0);
         let retained = governor.scratch_meter().live();
         let mut entries = ScratchVec::new(&governor);
         entries.push(pending).unwrap();
         // Output preparation succeeded, but actual assembly rejects the name.
-        // Its Pending/Declared transfer must release the new text reservation;
+        // Its Pending/Declared transfer must release both schema owners and text,
+        // just as dropping an independently prepared declaration does;
         // legacy compiler/catalog charges remain independently accounted.
         assert!(matches!(
             ToolSet::assemble(entries, &mut governor),
             Err(ToolSetError::InvalidDefinition { .. })
         ));
-        assert_eq!(governor.scratch_meter().live(), retained - text_bytes);
+        assert_eq!(governor.scratch_meter().live(), retained - owned_bytes);
     }
 }

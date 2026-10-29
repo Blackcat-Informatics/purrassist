@@ -2,6 +2,30 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Compiled schema indexes now retain fallible owners for location/document arenas,
+routes, resource and anchor lookup, dialect inheritance, optional-vocabulary
+metadata, child tables and pattern tables. A private AVL arena preserves stable
+IDs and logarithmic tree operations; growth, searches, comparisons and balancing
+are admitted before mutation. Construction snapshots, escaped pointers and names
+release on every exit. Validation, witness generation and recovery borrow the same
+prepared metadata; dynamic scopes retain location IDs. Successful schema drop and
+late compilation refusal release the index and prepared pattern owners. Parsed DOM
+and conservative legacy storage admission remain separate and can retain charges.
+
+Schema reference preparation and runtime resolution now share one governed URI,
+fragment, pointer and dynamic-scope path. URI scanning and dot removal, decoded
+text, pointer routes, comparisons and diagnostics admit work and fallible storage
+through the caller's governor. Compiled anchors borrow location IDs; reference-only
+targets retain temporary owners through linkage, and algebra dynamic edges retain
+originating location IDs rather than duplicate reference strings. Validation,
+positive and negated witness generation, and recovery preserve native resource
+refusals. Compiler keyword lookups, duplicate sets, numeric constraints,
+vocabulary loading and diagnostic construction now admit their work explicitly.
+Temporary validation sets release their fallible owners; numeric sign and
+integrality checks preserve arbitrary exponents without constructing arithmetic
+intermediates. General schema parsing and its DOM ownership retain their separate
+contract; this does not complete #33 or #36.
+
 The existing `Grammar::compile_governed` path now admits complete private DSL
 syntax with governed scans/decoding/copies, fallible owned tokens and lists,
 and exact syntax diagnostics/offsets. Unary syntax children use one-element
@@ -63,7 +87,7 @@ same dialect-prefixed identity bytes, including unused supplied resources in
 sorted URI order. Hashing admits byte/control work at bounded checkpoints and
 finalization work before processing; complete schema publication checks the
 shared governor once more. The actual plain FnO consumer uses this compiler.
-Source parsing, index/reference ownership and algebra preparation retain their
+Source parsing and algebra preparation retain their
 separate unfinished governance contracts under #33 and #36.
 
 Full cold backend governance remains #36

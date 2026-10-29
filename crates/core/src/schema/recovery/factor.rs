@@ -339,11 +339,7 @@ impl<'a> Chart<'a> {
         let body = self.schema.body(schema_id);
         if let Some(reference) = body.get("$ref").and_then(Node::as_str) {
             let base = &self.schema.index.locations[schema_id].base;
-            work(governor, base.len().saturating_add(reference.len()))?;
-            let target = self
-                .schema
-                .resolve(base, reference)
-                .map_err(|error| StopReason::InvalidInput(error.to_string()))?;
+            let target = super::super::reference::resolve(self.schema, base, reference, governor)?;
             self.unary(id, Kind::Reference, 0, target, occurrence, governor)?;
             return Ok(true);
         }

@@ -21,8 +21,9 @@ does exactly that against a throwaway fixture workspace.
 response fixtures from the current workspace CLI instead of verifying a
 publication (used when the tool registry changes, e.g. Task 10's tool
 census). `scripts/test-verify-published.py` runs the ordinary (non-capture)
-transcript replay against the current workspace CLI as a freshness check, so
-a stale fixture can never be committed silently: regenerate with
+transcript replay against the current workspace CLI as a freshness check in
+the hosted native jobs and `make release-gate`. This check is separate from
+`make check`; regenerate stale fixtures with
 
     python3 scripts/verify-published.py --capture
 
@@ -460,7 +461,7 @@ def package_fresh(workspace: Path, cargo_home: Path, target_dir: Path) -> Path:
     `--workspace`, since the latter also tries to package and verify-build
     `publish = false` tooling crates that are not part of the release this
     script audits and may target an entirely different build (e.g.
-    `crates/wasm-harness`, wasm32-unknown-unknown only).
+    `crates/wasm-harness`, `wasm32-unknown-unknown` only).
 
     `--target-dir` is passed as a best-effort hint (some environments run
     `cargo` through a wrapper that silently strips `--target-dir` and

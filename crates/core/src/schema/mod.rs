@@ -9,15 +9,19 @@ pub use build::CompilationError;
 mod compile;
 mod evaluate;
 mod format;
+mod index;
 mod layout;
 pub mod recovery;
+mod reference;
 mod uri;
 mod vocabulary;
 use crate::digest::{Digest, DigestBuilder};
 use crate::json::{Node, Value};
 use crate::{Budget, Governor, StopReason};
+use crate::{ScratchString, ScratchVec};
 use core::fmt;
-use std::collections::{BTreeMap, BTreeSet};
+use index::{Arena, Map, Route};
+use std::collections::BTreeMap;
 pub use vocabulary::Dialect;
 use vocabulary::{Keywords, Vocabularies};
 
@@ -33,44 +37,50 @@ pub const DRAFT_07: &str = "http://json-schema.org/draft-07/schema";
 /// Borrow it for validation, generation, recovery and host helper lifetimes.
 #[derive(Debug)]
 pub struct Schema {
-    documents: Vec<Node>,
+    documents: Arena<Node>,
     index: Index,
     root: usize,
     digest: Digest,
 }
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Index {
-    locations: Vec<Location>,
-    by_route: BTreeMap<(usize, Vec<usize>), usize>,
-    resources: BTreeMap<String, usize>,
-    anchors: BTreeMap<String, usize>,
+    locations: Arena<Location>,
+    by_route: Map<Route, usize>,
+    resources: Map<ScratchString, usize>,
+    anchors: Map<ScratchString, usize>,
     /// Unsupported optional (`$vocabulary` ... `false`)
     /// vocabulary URIs discovered during compilation, mapped to the
     /// declaring schema resource's own keywords this engine does not
     /// otherwise recognize.
-    unsupported: BTreeMap<String, BTreeSet<String>>,
+    unsupported: Map<ScratchString, Map<ScratchString, ()>>,
     /// Dialect inherited by the root of a separately supplied document that
     /// does not declare `$schema`: the dialect of the location whose
     /// reference first loaded it, recorded only when that is Draft-07 (absent
     /// documents default to Draft 2020-12).
-    document_dialects: BTreeMap<usize, Vocabularies>,
+    document_dialects: Map<usize, Vocabularies>,
+}
+impl Index {
+    fn new(governor: &Governor) -> Self {
+        Self {
+            locations: Arena::new(governor),
+            by_route: Map::new(governor),
+            resources: Map::new(governor),
+            anchors: Map::new(governor),
+            unsupported: Map::new(governor),
+            document_dialects: Map::new(governor),
+        }
+    }
 }
 #[derive(Debug)]
 struct Location {
     vocabularies: Vocabularies,
     document: usize,
-    route: Vec<usize>,
-    pointer: String,
-    base: String,
-    children: BTreeMap<String, usize>,
-    patterns: BTreeMap<String, crate::pattern::Pattern>,
-    dynamic_anchor: Option<String>,
-}
-struct ReferenceTarget {
-    document: usize,
-    route: Vec<usize>,
-    pointer: String,
-    base: String,
+    route: ScratchVec<usize>,
+    pointer: ScratchString,
+    base: ScratchString,
+    children: Map<ScratchString, usize>,
+    patterns: Map<ScratchString, crate::pattern::Pattern>,
+    dynamic_anchor: Option<ScratchString>,
 }
 
 /// Invalid schema syntax, keyword use, or resource linkage.
@@ -325,8 +335,11 @@ impl Schema {
             .unsupported
             .iter()
             .map(|(uri, keywords)| UnsupportedVocabulary {
-                uri: uri.clone(),
-                keywords: keywords.iter().cloned().collect(),
+                uri: uri.as_str().to_owned(),
+                keywords: keywords
+                    .iter()
+                    .map(|(key, ())| key.as_str().to_owned())
+                    .collect(),
             })
             .collect()
     }
@@ -400,118 +413,6 @@ impl Schema {
     fn child(&self, id: usize, key: &str) -> usize {
         self.index.locations[id].children[key]
     }
-    fn resolve(&self, base: &str, reference: &str) -> Result<usize, SchemaError> {
-        let target = self.reference_target(base, reference)?;
-        self.index
-            .by_route
-            .get(&(target.document, target.route))
-            .copied()
-            .ok_or_else(|| SchemaError {
-                location: compile::resolve_uri(base, reference),
-                message: "reference does not identify a compiled schema".into(),
-            })
-    }
-    fn reference_target(
-        &self,
-        base: &str,
-        reference: &str,
-    ) -> Result<ReferenceTarget, SchemaError> {
-        let uri = compile::resolve_uri(base, reference);
-        if let Some(id) = self.index.anchors.get(&uri) {
-            let location = &self.index.locations[*id];
-            return Ok(ReferenceTarget {
-                document: location.document,
-                route: location.route.clone(),
-                pointer: location.pointer.clone(),
-                base: location.base.clone(),
-            });
-        }
-        let (resource, fragment) = uri.split_once('#').unwrap_or((&uri, ""));
-        let Some(&root) = self.index.resources.get(resource) else {
-            return Err(SchemaError {
-                location: uri,
-                message: "unresolved resource; supply it explicitly".into(),
-            });
-        };
-        if fragment.is_empty() {
-            let location = &self.index.locations[root];
-            return Ok(ReferenceTarget {
-                document: location.document,
-                route: location.route.clone(),
-                pointer: location.pointer.clone(),
-                base: location.base.clone(),
-            });
-        }
-        let pointer = decode_fragment(fragment).ok_or_else(|| SchemaError {
-            location: uri.clone(),
-            message: "invalid URI fragment".into(),
-        })?;
-        if !pointer.starts_with('/') {
-            return Err(SchemaError {
-                location: uri,
-                message: "unresolved anchor".into(),
-            });
-        }
-        let location = &self.index.locations[root];
-        let mut route = location.route.clone();
-        let mut node = self.body(root);
-        let mut effective_base = location.base.clone();
-        for token in pointer[1..].split('/') {
-            let token = pointer_token(token).ok_or_else(|| SchemaError {
-                location: uri.clone(),
-                message: "invalid JSON Pointer escape".into(),
-            })?;
-            let (position, next) = match &node.value {
-                Value::Object(members) => members
-                    .iter()
-                    .enumerate()
-                    .find(|(_, member)| member.key == token)
-                    .map(|(position, member)| (position, &member.value)),
-                Value::Array(items)
-                    if token == "0"
-                        || (!token.starts_with('0')
-                            && token.bytes().all(|byte| byte.is_ascii_digit())) =>
-                {
-                    token
-                        .parse::<usize>()
-                        .ok()
-                        .and_then(|position| items.get(position).map(|node| (position, node)))
-                }
-                _ => None,
-            }
-            .ok_or_else(|| SchemaError {
-                location: uri.clone(),
-                message: "reference pointer does not exist".into(),
-            })?;
-            route.push(position);
-            node = next;
-            if let Some(id) = self.index.by_route.get(&(location.document, route.clone())) {
-                effective_base.clone_from(&self.index.locations[*id].base);
-            }
-        }
-        Ok(ReferenceTarget {
-            document: location.document,
-            route,
-            pointer: format!("{}{pointer}", location.pointer),
-            base: effective_base,
-        })
-    }
-}
-fn pointer_token(token: &str) -> Option<String> {
-    let mut output = String::new();
-    let mut characters = token.chars();
-    while let Some(character) = characters.next() {
-        if character == '~' {
-            output.push(match characters.next()? {
-                '0' => '~',
-                '1' => '/',
-                _ => return None,
-            });
-        } else {
-            output.push(character);
-        }
-    }
-    Some(output)
 }
 /// Identity of a compiled bundle. The prefix names the built-in dialect data
 /// the bundle can observe: the Draft 2020-12 meta-schemas always, and the
@@ -583,21 +484,4 @@ fn at_route<'a>(mut node: &'a Node, route: &[usize]) -> &'a Node {
         };
     }
     node
-}
-fn decode_fragment(fragment: &str) -> Option<String> {
-    let bytes = fragment.as_bytes();
-    let mut output = Vec::new();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            let a = char::from(*bytes.get(index + 1)?).to_digit(16)?;
-            let b = char::from(*bytes.get(index + 2)?).to_digit(16)?;
-            output.push(u8::try_from(a * 16 + b).ok()?);
-            index += 3;
-        } else {
-            output.push(bytes[index]);
-            index += 1;
-        }
-    }
-    String::from_utf8(output).ok()
 }

@@ -48,10 +48,6 @@ pub(super) const NAMES: &[&str] = &[
     "regex",
 ];
 
-pub(super) fn known(name: &str) -> bool {
-    NAMES.contains(&name)
-}
-
 /// One evaluated `format` check against a string instance.
 pub(super) enum Outcome {
     Pass,

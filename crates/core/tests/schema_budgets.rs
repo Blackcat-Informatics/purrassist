@@ -6,7 +6,7 @@ use purrassist_core::{
     contract::Resource,
     schema::{CompilationError, Schema, recovery::RecoveryRequest},
 };
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt::Write as _};
 
 #[test]
 fn compilation_distinguishes_invalid_schemas_from_sticky_resource_failures() {
@@ -55,12 +55,40 @@ fn compilation_distinguishes_invalid_schemas_from_sticky_resource_failures() {
         Schema::compile_governed("true", &mut governor).unwrap_err(),
         CompilationError::Resource(StopReason::Cancelled)
     );
-    for source in ["{", r#"{"type":false}"#, r##"{"$ref":"#/absent"}"##] {
+    for source in [
+        "{",
+        r#"{"type":false}"#,
+        r#"{"required":["x","x"]}"#,
+        r#"{"type":["string","string"]}"#,
+        r#"{"type":"string","type":"number"}"#,
+        r#"{"multipleOf":-0}"#,
+        r#"{"minItems":1e-999999999999999999999999}"#,
+        r#"{"maxLength":-1e999999999999999999999999}"#,
+        r##"{"$ref":"#/absent"}"##,
+        r#"{"$ref":"urn:absent"}"#,
+        r##"{"$ref":"#absent"}"##,
+        r##"{"$ref":"#/%xx"}"##,
+        r##"{"$ref":"#/%ff"}"##,
+        r##"{"$ref":"#/~2"}"##,
+        r##"{"$ref":"#/hidden","hidden":17}"##,
+    ] {
         let mut governor = Governor::new(Budget::default());
         assert!(matches!(
             Schema::compile_governed(source, &mut governor),
             Err(CompilationError::InvalidSchema(_))
         ));
+        assert!(governor.check().is_ok());
+    }
+    // Keyword number checks must preserve exact sign/integrality even when
+    // exponents exceed machine integers; negative zero remains nonnegative.
+    for source in [
+        r#"{"multipleOf":1e-999999999999999999999999}"#,
+        r#"{"minItems":-0e-999999999999999999999999}"#,
+        r#"{"maxLength":1e999999999999999999999999}"#,
+        r#"{"required":["é","e"],"type":["string","number"]}"#,
+    ] {
+        let mut governor = Governor::new(Budget::default());
+        Schema::compile_governed(source, &mut governor).unwrap();
         assert!(governor.check().is_ok());
     }
 }
@@ -73,13 +101,27 @@ fn reference_and_dialect_loading_share_the_same_governor() {
         ),
         (
             "urn:dialect".into(),
-            r#"{"$vocabulary":{"https://json-schema.org/draft/2020-12/vocab/validation":true}}"#
+            r#"{"$vocabulary":{"https://json-schema.org/draft/2020-12/vocab/validation":true,"urn:optional:z":false,"urn:optional:a":false}}"#
                 .into(),
         ),
     ]);
-    let source = r#"{"$schema":"urn:dialect","$ref":"urn:external"}"#;
+    let source =
+        r#"{"$schema":"urn:dialect","$ref":"urn:external","customZ":true,"customA":false}"#;
     let mut governor = Governor::new(Budget::default());
     let schema = Schema::with_resources_governed(source, &resources, &mut governor).unwrap();
+    let unsupported = schema.unsupported_vocabularies();
+    assert_eq!(
+        unsupported
+            .iter()
+            .map(|item| item.uri.as_str())
+            .collect::<Vec<_>>(),
+        ["urn:optional:a", "urn:optional:z"]
+    );
+    assert!(
+        unsupported
+            .iter()
+            .all(|item| item.keywords == ["customA", "customZ"])
+    );
     let compiled_work = governor.usage().work;
     let result = schema.recover_governed("42", RecoveryRequest::default(), &mut governor);
     assert!(matches!(result.outcome, Outcome::Resolved(_)));
@@ -104,6 +146,113 @@ fn reference_and_dialect_loading_share_the_same_governor() {
         result.receipt.stopped,
         StopReason::BudgetExceeded(Resource::Work)
     );
+
+    // Duplicate declarations are not unique lookups: preserve Node::get's
+    // behavior rather than selecting either conflicting vocabulary object.
+    let duplicate = Schema::with_resources(
+        r#"{"$schema":"urn:duplicate","type":"string"}"#,
+        &BTreeMap::from([(
+            "urn:duplicate".into(),
+            r#"{"$vocabulary":{"urn:unknown":true},"$vocabulary":{}}"#.into(),
+        )]),
+    )
+    .unwrap();
+    assert!(
+        !duplicate
+            .validate(&purrassist_core::json::parse("42").unwrap())
+            .unwrap()
+            .valid
+    );
+
+    // A reference-only node inherits the effective base encountered while
+    // traversing a compiled resource boundary, not the root document's base.
+    let nested = Schema::with_resources(
+        r##"{"$id":"https://example.test/root","$defs":{"scope":{"$id":"sub/","hidden":{"$ref":"target"}}},"$ref":"#/$defs/scope/hidden"}"##,
+        &BTreeMap::from([("https://example.test/sub/target".into(), "true".into())]),
+    ).unwrap();
+    assert!(
+        nested
+            .validate(&purrassist_core::json::parse("42").unwrap())
+            .unwrap()
+            .valid
+    );
+
+    // A short anchor must not copy a long stored target pointer; a pointer
+    // reference must admit the actual wide-object search and its owned route.
+    let name = "long-name".repeat(512);
+    let anchored =
+        format!(r##"{{"$ref":"#x","$defs":{{"{name}":{{"$anchor":"x","type":"integer"}}}}}}"##);
+    let mut hidden = String::new();
+    for index in 0..96 {
+        write!(hidden, "\"unused{index}\":false,").unwrap();
+    }
+    hidden.push_str(r#""selected":{"type":"integer"}"#);
+    let pointer = format!(r##"{{"$ref":"#/hidden/selected","hidden":{{{hidden}}}}}"##);
+    for source in [&anchored, &pointer] {
+        assert_reference_boundaries(source);
+    }
+}
+
+fn assert_reference_boundaries(source: &str) {
+    let schema = Schema::compile(source).unwrap();
+    let instance = purrassist_core::json::parse("42").unwrap();
+    let mut measured = Governor::new(Budget::default());
+    assert!(
+        schema
+            .validate_with(&instance, &mut measured)
+            .unwrap()
+            .valid
+    );
+    assert_eq!(
+        measured.scratch_meter().live(),
+        0,
+        "successful reference scratch is temporary"
+    );
+    let usage = measured.usage();
+    for (resource, budget) in [
+        (
+            Resource::Work,
+            Budget {
+                work: usage.work - 1,
+                ..Budget::default()
+            },
+        ),
+        (
+            Resource::ScratchBytes,
+            Budget {
+                scratch_bytes: usage.peak_scratch_bytes - 1,
+                ..Budget::default()
+            },
+        ),
+    ] {
+        let mut limited = Governor::new(budget);
+        assert_eq!(
+            schema
+                .validate_with(&instance, &mut limited)
+                .map(|report| report.valid),
+            Err(StopReason::BudgetExceeded(resource))
+        );
+        assert_eq!(
+            limited.scratch_meter().live(),
+            0,
+            "reference owners release on refusal"
+        );
+    }
+    let mut exact = Governor::new(Budget {
+        work: usage.work,
+        scratch_bytes: usage.peak_scratch_bytes,
+        ..Budget::default()
+    });
+    assert!(schema.validate_with(&instance, &mut exact).unwrap().valid);
+    let mut cancelled = Governor::new(Budget::default());
+    cancelled.cancel();
+    assert_eq!(
+        schema
+            .validate_with(&instance, &mut cancelled)
+            .map(|report| report.valid),
+        Err(StopReason::Cancelled)
+    );
+    assert_eq!(cancelled.scratch_meter().live(), 0);
 }
 #[test]
 fn unused_resource_hashing_has_exact_work_boundaries_without_framing_storage() {

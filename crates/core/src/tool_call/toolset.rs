@@ -37,19 +37,32 @@ const RENDER_OVERHEAD: u64 = 1024;
 /// once for the schema node copy and once for its serialized text.
 const ESCAPED_COPIES: u64 = 12;
 
+// Portable bound shared by pending declarations and completed tools. Two schema
+// owners contribute 2 * 400 bytes (two 40-byte arenas, five 56-byte indexes,
+// root 8 and digest 32 per schema). The optional output wrapper adds at most
+// 56 (text 40, flag/alignment 8, optional discriminant 8). Remaining tool fields
+// contribute 488: six string/vector slots 144, flags/alignment 8, DOM node 56,
+// argument shape 128, source declaration/tag 104 and root locations 48.
+const TOOL_RECORD: usize = 1344;
+
 impl ScratchCharge for ToolDefinition {
     const CHARGE: usize = 184;
 }
 impl ScratchCharge for CompiledTool {
-    const CHARGE: usize = 1024;
+    const CHARGE: usize = TOOL_RECORD;
 }
 impl ScratchCharge for Pending {
     const CHARGE: usize = 200;
 }
 impl ScratchCharge for Declared {
-    const CHARGE: usize = 1024;
+    const CHARGE: usize = TOOL_RECORD;
 }
 const _: () = {
+    assert!(core::mem::size_of::<Schema>() <= 400);
+    assert!(core::mem::size_of::<Option<OutputSchema>>() <= 456);
+    assert!(core::mem::size_of::<ArgumentShape>() <= 128);
+    assert!(core::mem::size_of::<ToolSource>() <= 104);
+    assert!(core::mem::size_of::<RootLocations>() <= 48);
     assert!(core::mem::size_of::<ToolDefinition>() <= ToolDefinition::CHARGE);
     assert!(core::mem::size_of::<Pending>() <= Pending::CHARGE);
     assert!(core::mem::size_of::<Declared>() <= Declared::CHARGE);

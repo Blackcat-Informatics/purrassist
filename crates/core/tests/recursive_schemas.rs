@@ -102,6 +102,42 @@ fn dynamic_ref_recursion_resolves_against_the_live_scope() {
         panic!("expected a witness")
     };
     assert!(schema.validate(&node).unwrap().valid);
+    // Both signs of deferred dynamic edges retain the originating location.
+    // The outer resource overrides the base anchor; only the root wrapper
+    // requires `next`, so the positive recursive witness can terminate.
+    for negated in [false, true] {
+        let edge = if negated {
+            r##"{"not":{"$dynamicRef":"#node"}}"##
+        } else {
+            r##"{"$dynamicRef":"#node"}"##
+        };
+        let resources = std::collections::BTreeMap::from([
+            ("urn:test:base".into(), format!(r#"{{"$id":"urn:test:base","$dynamicAnchor":"node","type":"object","properties":{{"value":true,"next":{edge}}}}}"#)),
+            ("urn:test:outer".into(), r#"{"$id":"urn:test:outer","$dynamicAnchor":"node","$ref":"urn:test:base","properties":{"value":{"type":"integer"}},"required":["value"]}"#.into()),
+        ]);
+        let schema = Schema::with_resources(
+            r#"{"$ref":"urn:test:outer","required":["next"]}"#,
+            &resources,
+        )
+        .unwrap();
+        let WitnessOutcome::Witness(witness) = schema.generate_witness() else {
+            panic!("dynamic witness, negated={negated}");
+        };
+        assert!(schema.validate(&witness).unwrap().valid);
+        assert!(witness.get("next").is_some());
+        if !negated {
+            let input = r#"{"value":"2","next":{"value":"3"}}"#;
+            assert!(!schema.validate(&parse(input).unwrap()).unwrap().valid);
+            let recovered = schema.recover(
+                input,
+                purrassist_core::schema::recovery::RecoveryRequest::default(),
+            );
+            let purrassist_core::Outcome::Resolved(node) = recovered.outcome else {
+                panic!("dynamic recovery: {:?}", recovered.outcome);
+            };
+            assert_eq!(node.to_json(), r#"{"value":2,"next":{"value":3}}"#);
+        }
+    }
 }
 
 /// A schema whose `$ref` targets itself at the same instance path can never
@@ -161,6 +197,8 @@ fn deep_reference_chain_exhausts_depth_budget_during_evaluation() {
     );
     let mut governor = Governor::new(Budget {
         depth: 64,
+        // Lookup comparisons are admitted independently of recursive depth.
+        work: 10_000_000,
         ..Budget::default()
     });
     let schema =
@@ -169,7 +207,10 @@ fn deep_reference_chain_exhausts_depth_budget_during_evaluation() {
     let error = schema
         .validate_with(&parse("42").unwrap(), &mut governor)
         .unwrap_err();
-    assert!(matches!(error, StopReason::BudgetExceeded(_)));
+    assert_eq!(
+        error,
+        StopReason::BudgetExceeded(purrassist_core::contract::Resource::Depth)
+    );
 }
 
 /// A non-recursive but still deep `allOf` chain has no cycle at all; the

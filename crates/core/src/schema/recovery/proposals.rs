@@ -96,7 +96,7 @@ impl Walk<'_, '_> {
         site: (&[usize], &str),
         depth: u32,
         visited: &mut BTreeSet<(usize, Vec<usize>)>,
-        scope: &mut Vec<String>,
+        scope: &mut crate::ScratchVec<usize>,
     ) -> Result<(), StopReason> {
         let (route, path) = site;
         self.governor.charge(Resource::Depth, u64::from(depth))?;
@@ -105,11 +105,8 @@ impl Walk<'_, '_> {
             return Ok(());
         }
         self.shapes(node, route, path)?;
-        let base = self.schema.index.locations[schema_id].base.clone();
-        let entered = scope.last() != Some(&base);
-        if entered {
-            scope.push(base);
-        }
+        let entered =
+            super::super::index::enter_scope(self.schema, schema_id, scope, self.governor)?;
         let result = self.propose_body(node, schema_id, (route, path), depth, visited, scope);
         if entered {
             scope.pop();
@@ -123,7 +120,7 @@ impl Walk<'_, '_> {
         site: (&[usize], &str),
         depth: u32,
         visited: &mut BTreeSet<(usize, Vec<usize>)>,
-        scope: &mut Vec<String>,
+        scope: &mut crate::ScratchVec<usize>,
     ) -> Result<(), StopReason> {
         let (route, path) = site;
         let schema = self.schema;
@@ -172,33 +169,32 @@ impl Walk<'_, '_> {
     /// is overridden by the outermost matching `$dynamicAnchor` on the live
     /// `scope` stack, never resolved purely statically.
     fn resolve_reference(
-        &self,
+        &mut self,
         schema_id: usize,
         dynamic: bool,
         reference: &str,
-        scope: &[String],
+        scope: &[usize],
     ) -> Result<usize, StopReason> {
         let schema = self.schema;
-        let base = schema.index.locations[schema_id].base.clone();
-        let mut target = schema
-            .resolve(&base, reference)
-            .map_err(|error| StopReason::InvalidInput(error.to_string()))?;
-        if dynamic
-            && reference
-                .split_once('#')
-                .is_some_and(|(_, fragment)| !fragment.is_empty() && !fragment.starts_with('/'))
-            && let Some(name) = &schema.index.locations[target].dynamic_anchor
-        {
-            for scope_base in scope {
-                if let Some(&candidate) = schema.index.anchors.get(&format!("{scope_base}#{name}"))
-                    && schema.index.locations[candidate].dynamic_anchor.as_ref() == Some(name)
-                {
-                    target = candidate;
-                    break;
-                }
-            }
+        let target = super::super::reference::resolve(
+            schema,
+            &schema.index.locations[schema_id].base,
+            reference,
+            self.governor,
+        )?;
+        if dynamic {
+            super::super::reference::dynamic(
+                schema,
+                target,
+                reference,
+                scope
+                    .iter()
+                    .map(|&id| schema.index.locations[id].base.as_str()),
+                self.governor,
+            )
+        } else {
+            Ok(target)
         }
-        Ok(target)
     }
     /// `if`/`then`/`else` (witness-generation algebra): recurse into whichever of
     /// `then`/`else` currently applies to `node`, so nested local repairs
@@ -210,7 +206,7 @@ impl Walk<'_, '_> {
         site: (&[usize], &str),
         depth: u32,
         visited: &mut BTreeSet<(usize, Vec<usize>)>,
-        scope: &mut Vec<String>,
+        scope: &mut crate::ScratchVec<usize>,
     ) -> Result<(), StopReason> {
         let (route, path) = site;
         let schema = self.schema;
@@ -434,7 +430,7 @@ impl Walk<'_, '_> {
         site: (&[usize], &str),
         depth: u32,
         visited: &mut BTreeSet<(usize, Vec<usize>)>,
-        scope: &mut Vec<String>,
+        scope: &mut crate::ScratchVec<usize>,
     ) -> Result<(), StopReason> {
         let (route, path) = site;
         let schema = self.schema;
@@ -626,7 +622,7 @@ impl Walk<'_, '_> {
         site: (&[usize], &str),
         depth: u32,
         visited: &mut BTreeSet<(usize, Vec<usize>)>,
-        scope: &mut Vec<String>,
+        scope: &mut crate::ScratchVec<usize>,
     ) -> Result<(), StopReason> {
         let (route, path) = site;
         let schema = self.schema;
@@ -691,7 +687,7 @@ impl Walk<'_, '_> {
         site: (&[usize], &str),
         depth: u32,
         visited: &mut BTreeSet<(usize, Vec<usize>)>,
-        scope: &mut Vec<String>,
+        scope: &mut crate::ScratchVec<usize>,
     ) -> Result<(), StopReason> {
         let (route, path) = site;
         let schema = self.schema;
@@ -810,7 +806,7 @@ impl Walk<'_, '_> {
         site: (&[usize], &str),
         depth: u32,
         visited: &mut BTreeSet<(usize, Vec<usize>)>,
-        scope: &mut Vec<String>,
+        scope: &mut crate::ScratchVec<usize>,
     ) -> Result<(), StopReason> {
         let (route, path) = site;
         let schema = self.schema;

@@ -212,7 +212,11 @@ pub(super) fn run(
                 .saturating_add(64),
         )?;
         pattern_evidence.push(Evidence {
-            destination: format!("{}#{}/{keyword}", location.base, location.pointer),
+            destination: format!(
+                "{}#{}/{keyword}",
+                location.base.as_str(),
+                location.pointer.as_str()
+            ),
             ..evidence
         });
     }
@@ -355,23 +359,15 @@ impl Evaluator<'_, '_> {
             ));
         }
         self.active.insert(key.clone(), ())?;
-        let base = &self.schema.index.locations[id].base;
-        let entered = self
-            .scope
-            .as_slice()
-            .last()
-            .is_none_or(|&last| self.schema.index.locations[last].base != *base);
-        let result = if entered {
-            match self.scope.push(id) {
-                Ok(()) => {
-                    let result = self.evaluate_body(id, instance, path, depth);
-                    self.scope.pop();
-                    result
-                }
-                Err(reason) => Err(reason),
+        let entered = super::index::enter_scope(self.schema, id, &mut self.scope, self.governor);
+        let result = match entered {
+            Ok(true) => {
+                let result = self.evaluate_body(id, instance, path, depth);
+                self.scope.pop();
+                result
             }
-        } else {
-            self.evaluate_body(id, instance, path, depth)
+            Ok(false) => self.evaluate_body(id, instance, path, depth),
+            Err(reason) => Err(reason),
         };
         self.active.remove(&key);
         result
@@ -423,40 +419,18 @@ impl Evaluator<'_, '_> {
         for keyword in ["$ref", "$dynamicRef"] {
             if let Some(reference) = schema.keywords(id).get(keyword).and_then(Node::as_str) {
                 let base = &schema.index.locations[id].base;
-                // Resolution builds the absolute URI and copies the target's
-                // route, pointer, and base, each bounded by the base and the
-                // reference: the same allowance compilation charges for it.
-                let resolving = self.governor.lease_scratch(
-                    size(base.len())
-                        .saturating_add(size(reference.len()))
-                        .saturating_mul(8)
-                        .saturating_add(256),
-                )?;
-                let mut target = schema
-                    .resolve(base, reference)
-                    .map_err(|error| StopReason::InvalidInput(error.to_string()))?;
-                drop(resolving);
-                if keyword == "$dynamicRef"
-                    && reference.split_once('#').is_some_and(|(_, fragment)| {
-                        !fragment.is_empty() && !fragment.starts_with('/')
-                    })
-                    && let Some(name) = &schema.index.locations[target].dynamic_anchor
-                {
-                    for position in 0..self.scope.len() {
-                        let scope = self.scope.as_slice()[position];
-                        let (anchor, _lease) = self.key(&[
-                            Piece::Text(&schema.index.locations[scope].base),
-                            Piece::Text("#"),
-                            Piece::Text(name),
-                        ])?;
-                        if let Some(&candidate) = schema.index.anchors.get(&anchor)
-                            && schema.index.locations[candidate].dynamic_anchor.as_ref()
-                                == Some(name)
-                        {
-                            target = candidate;
-                            break;
-                        }
-                    }
+                let mut target = super::reference::resolve(schema, base, reference, self.governor)?;
+                if keyword == "$dynamicRef" {
+                    target = super::reference::dynamic(
+                        schema,
+                        target,
+                        reference,
+                        self.scope
+                            .as_slice()
+                            .iter()
+                            .map(|&id| schema.index.locations[id].base.as_str()),
+                        self.governor,
+                    )?;
                 }
                 result.merge(self.eval(target, instance, path, depth + 1)?)?;
             }
