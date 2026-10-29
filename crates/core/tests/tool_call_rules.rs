@@ -310,6 +310,7 @@ fn every_rule_declares_loss_kind() {
             "json.syntax.trailing-comma",
             "tool_call.markup.closer-misspelled",
             "tool_call.markup.token-misspelled",
+            "tool_call.markup.bare-parameter-element",
         ]
     );
     assert_eq!(
@@ -818,6 +819,128 @@ fn repeated_nested_array_items_are_objects() {
         call.arguments().to_json(),
         r#"{"tags":["<parameter=wearer>Alice</parameter>"]}"#
     );
+}
+
+fn note_tool() -> ToolSet {
+    compile([ToolDefinition::new("set_note")
+        .param("note", Param::string().required().alias("memo"))
+        .param("count", Param::integer())])
+}
+
+/// `tool_call.markup.bare-parameter-element`: an element named after a
+/// declared parameter, written directly in the function body without the
+/// `<parameter=NAME>` wrapper, is that parameter with the value a wrapped
+/// element would give (verbatim string, typed integer; an alias names its
+/// parameter, recorded as `tool_call.parameter.alias`), recorded on both
+/// tags as a single-reading repair the default `Structural` policy of a
+/// mutating tool admits.
+#[test]
+fn bare_parameter_element_reads_as_its_declared_parameter() {
+    let rule = rules::rule("tool_call.markup.bare-parameter-element").expect("rule");
+    assert!(rule.is_repair() && rule.admits(RepairPolicy::Structural));
+    assert_eq!(
+        (rule.readings, rule.grounding, rule.loss),
+        (
+            Readings::Single,
+            Grounding::Definition,
+            Some(LossKind::Markup)
+        )
+    );
+    let tools = note_tool();
+    let turn = run(
+        DialectId::Qwen3CoderXml,
+        &tools,
+        "<tool_call><function=set_note><note>remember this</note></function></tool_call>",
+    );
+    let call = one(&turn);
+    assert_eq!(call.outcome, CallOutcome::Resolved);
+    assert_eq!(call.arguments().to_json(), r#"{"note":"remember this"}"#);
+    assert_eq!(count(call, "tool_call.markup.bare-parameter-element"), 2);
+    // A `<note` with no tag end is text in the value, not another element.
+    let partial = run(
+        DialectId::Qwen3CoderXml,
+        &tools,
+        &qwen("set_note", "<note>a<note</note>"),
+    );
+    assert_eq!(one(&partial).arguments().to_json(), r#"{"note":"a<note"}"#);
+    let wrapped = "<parameter=note>\nremember\n</parameter>\n<parameter=count>\n3\n</parameter>";
+    let canonical = run(DialectId::Qwen3CoderXml, &tools, &qwen("set_note", wrapped));
+    let canonical = one(&canonical);
+    assert_eq!(
+        count(canonical, "tool_call.markup.bare-parameter-element"),
+        0
+    );
+    // Each row: the body, its bare-tag edits, its alias edits.
+    for (body, tags, aliased) in [
+        ("<note>\nremember\n</note>\n<count>\n3\n</count>", 4, 0),
+        (
+            "<note>\nremember\n</note>\n<parameter=count>\n3\n</parameter>",
+            2,
+            0,
+        ),
+        ("<memo>\nremember\n</memo>\n<count>\n3\n</count>", 4, 1),
+    ] {
+        let bare = run(DialectId::Qwen3CoderXml, &tools, &qwen("set_note", body));
+        let bare = one(&bare);
+        assert_eq!(bare.outcome, CallOutcome::Resolved, "{body}");
+        assert_eq!(
+            bare.arguments().to_json(),
+            r#"{"note":"remember","count":3}"#
+        );
+        assert_eq!(bare.arguments().to_json(), canonical.arguments().to_json());
+        assert_eq!(
+            count(bare, "tool_call.markup.bare-parameter-element"),
+            tags,
+            "{body}"
+        );
+        assert_eq!(count(bare, "tool_call.parameter.alias"), aliased, "{body}");
+    }
+}
+
+/// A body with more than one reading of a bare element stays malformed, as
+/// before the repair; and an envelope the reader already accepts keeps its
+/// meaning: a string value holding a declared parameter's element keeps it
+/// as text.
+#[test]
+fn ambiguous_bare_parameter_elements_stay_malformed() {
+    let tools = note_tool();
+    for body in [
+        // Not a declared parameter.
+        "<title>remember</title>",
+        // The same name twice (also through an alias).
+        "<note>a</note>\n<note>b</note>",
+        "<memo>a</memo>\n<note>b</note>",
+        // Beside stray text.
+        "<note>a</note>\nstray",
+        "stray\n<note>a</note>",
+        // Beside a wrapped element of the same parameter.
+        "<note>a</note>\n<parameter=note>\nb\n</parameter>",
+        "<parameter=note>\nb\n</parameter>\n<note>a</note>",
+        // A value holding parameter markup.
+        "<note>a <parameter=count>3</parameter></note>",
+    ] {
+        let turn = run(DialectId::Qwen3CoderXml, &tools, &qwen("set_note", body));
+        assert!(turn.calls().is_empty(), "{body}: {:#?}", turn.pieces);
+        assert!(
+            turn.selected().iter().any(|segment| matches!(
+                segment,
+                ResolvedSegment::Rejected {
+                    reason: Rejection::Malformed { .. },
+                    ..
+                }
+            )),
+            "{body}"
+        );
+    }
+    let held = "<parameter=note>\nsee <note>x</note>\n</parameter>";
+    let turn = run(DialectId::Qwen3CoderXml, &tools, &qwen("set_note", held));
+    let call = one(&turn);
+    assert_eq!(call.outcome, CallOutcome::Resolved);
+    assert_eq!(
+        call.arguments().to_json(),
+        r#"{"note":"see <note>x</note>"}"#
+    );
+    assert_eq!(count(call, "tool_call.markup.bare-parameter-element"), 0);
 }
 
 #[test]

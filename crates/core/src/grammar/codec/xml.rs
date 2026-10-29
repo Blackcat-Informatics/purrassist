@@ -16,6 +16,7 @@ use crate::tool_call::{
     ScopeNode, Spanned, UnknownParameters, UnresolvedArgument, ValueShape,
 };
 use core::ops::Range;
+use std::collections::BTreeSet;
 
 /// The parameter opener prefix; the name runs to the next `>`.
 const OPENER: &[u8] = b"<parameter=";
@@ -218,6 +219,49 @@ use super::{XML_CLOSER as CLOSER, XML_CLOSER_VARIANT as CLOSER_VARIANT};
 /// tool requires no parameter). Any other text between parameters is
 /// malformed.
 ///
+/// # Bare parameter elements
+///
+/// Between top-level parameters, an element named after a parameter (or an
+/// alias) the call's tool declares, written without the `<parameter=NAME>`
+/// wrapper (`<note>v</note>`), is that parameter: its value is read as the
+/// value of `<parameter=note>v</parameter>` would be (framing newlines,
+/// typing, an array item), and each of its two tags is recorded as
+/// `tool_call.markup.bare-parameter-element`, a single-reading markup
+/// repair grounded in the definition (refused under `Effort::Exact`). It
+/// mixes with `<parameter=` elements of other names. The body stays
+/// malformed, as without the repair, when the element could be read
+/// another way: no declared tool, a name the tool does not declare or a
+/// markup tag's (`parameter`, a call closer's), an element inside a nested
+/// object, no `</NAME>`, a value holding a `<parameter=` opener, a
+/// parameter or call closer, a call opener or another `<NAME` element, a
+/// name bound twice (two bare elements, or a bare element and a
+/// `<parameter=` element of the same parameter), or text outside the
+/// elements.
+///
+/// ```
+/// use purrassist_core::grammar::codec::{Codec, CodecContext, CodecEnd, XmlParamsCodec};
+/// use purrassist_core::{Budget, Governor, tool_call::{Param, ToolDefinition, ToolSet}};
+/// let tools = ToolSet::compile(
+///     [ToolDefinition::new("set_note").param("note", Param::string()).param("pin", Param::boolean())],
+///     Budget::default(),
+/// ).unwrap();
+/// let context = CodecContext { shape: tools.argument_shape("set_note"), ..CodecContext::default() };
+/// let read = |body: &[u8]| {
+///     let mut governor = Governor::new(Budget::default());
+///     XmlParamsCodec::begin(0, &mut governor)
+///         .unwrap()
+///         .finish(body, 0..body.len(), CodecEnd::Delimited, context, &mut governor)
+///         .unwrap()
+/// };
+/// let value = read(b"<note>remember this</note>\n<pin>true</pin>").unwrap();
+/// assert_eq!(value.tree.root.to_json(), r#"{"note":"remember this","pin":true}"#);
+/// let rules: Vec<_> = value.edits.iter().map(|edit| edit.rule().id).collect();
+/// assert_eq!(rules, ["tool_call.markup.bare-parameter-element"; 4]);
+/// // Undeclared, repeated: no single reading.
+/// assert!(read(b"<title>x</title>").is_err());
+/// assert!(read(b"<note>a</note><parameter=note>b</parameter>").is_err());
+/// ```
+///
 /// # Whole-JSON bodies
 ///
 /// A body whose first non-whitespace byte is `{` is one JSON object
@@ -405,6 +449,16 @@ struct Reader<'b, 't, 'g> {
     /// Whether some value of this pass held text after an unpaired closer
     /// (the body has a second reading).
     forked: bool,
+    /// The canonical names bound at the top level of the body, however
+    /// each was written.
+    top: BTreeSet<String>,
+    /// The canonical names among them a bare parameter element (see
+    /// `Reader::bare`) bound.
+    bare_names: BTreeSet<String>,
+    /// Where a bare element's name was bound a second time (by another bare
+    /// element or a `<parameter=` element), a body offset: no single
+    /// reading of either, so the body is malformed there.
+    repeated: Option<usize>,
     governor: &'g mut Governor,
 }
 
@@ -532,6 +586,9 @@ impl<'b, 't, 'g> Reader<'b, 't, 'g> {
             closers: context.closers,
             mode,
             forked: false,
+            top: BTreeSet::new(),
+            bare_names: BTreeSet::new(),
+            repeated: None,
             governor,
         }
     }
@@ -897,9 +954,40 @@ impl<'t> Reader<'_, 't, '_> {
             .last_mut()
             .expect("the top-level scope stays open");
         let canonical = parent.scope.canonical(&name.value).to_owned();
+        let start = name.span.start - self.base;
         parent
             .tree
             .adopt_keyed(name, &canonical, tree, frame.collect);
+        self.bound(canonical, start, false)
+    }
+
+    /// Note that `canonical` was just bound in the innermost open scope by
+    /// the occurrence at body offset `at` (`bare`: a bare parameter
+    /// element). At the top level it is one of the body's names: bound a
+    /// second time where either occurrence is bare, the body is malformed
+    /// at `at` (see `Reader::repeated`). Ordered-set lookups, so linear in
+    /// the names bound. Once the body holds a bare element, each lookup is
+    /// charged per key byte compared. Before that, the lookup is the same
+    /// bookkeeping as the argument tree's own per-name entry
+    /// (`ArgTree::adopt_keyed`), covered by the charge for reading the
+    /// name, so a body without a bare element is charged as before.
+    fn bound(&mut self, canonical: String, at: usize, bare: bool) -> Result<(), StopReason> {
+        if self.frames.len() != 1 || self.repeated.is_some() {
+            return Ok(());
+        }
+        if bare || !self.bare_names.is_empty() {
+            // Two lookups, each comparing at most `bit_width + 1` keys.
+            let depth = self.top.len().bit_width() as usize + 1;
+            self.charge(canonical.len().max(1).saturating_mul(2 * depth))?;
+        }
+        if self.bare_names.contains(&canonical) || (bare && self.top.contains(&canonical)) {
+            self.repeated = Some(at);
+            return Ok(());
+        }
+        if bare {
+            self.bare_names.insert(canonical.clone());
+        }
+        self.top.insert(canonical);
         Ok(())
     }
 
@@ -935,6 +1023,11 @@ impl<'t> Reader<'_, 't, '_> {
         });
         let mut at = 0;
         loop {
+            if let Some(repeated) = self.repeated {
+                return Ok(Err(CodecFault::Malformed {
+                    at: self.base + repeated,
+                }));
+            }
             at = self.skip_space(at)?;
             if at == self.body.len() {
                 break;
@@ -947,7 +1040,14 @@ impl<'t> Reader<'_, 't, '_> {
                 continue;
             }
             let Some((width, spelling)) = self.closer(at) else {
-                return Ok(Err(CodecFault::Malformed { at: self.base + at }));
+                match self.bare(at)? {
+                    Some(Ok(next)) => {
+                        at = next;
+                        continue;
+                    }
+                    Some(Err(fault)) => return Ok(Err(fault)),
+                    None => return Ok(Err(CodecFault::Malformed { at: self.base + at })),
+                }
             };
             if self.frames.len() > 1 {
                 self.respelled(at, width, spelling)?;
@@ -963,7 +1063,114 @@ impl<'t> Reader<'_, 't, '_> {
             }
             self.pop(at)?;
         }
+        if let Some(repeated) = self.repeated {
+            return Ok(Err(CodecFault::Malformed {
+                at: self.base + repeated,
+            }));
+        }
         Ok(Ok(self.frames.pop().expect("the top-level scope").tree))
+    }
+
+    /// A bare parameter element at `at`, between top-level parameters:
+    /// `<NAME>value</NAME>` where `NAME` is a parameter (or an alias) the
+    /// call's tool declares, written without the `<parameter=NAME>` wrapper.
+    /// It is read as that parameter, its value read as a `<parameter=NAME>`
+    /// value ending at a canonical closer would be, and each of its two tags
+    /// is recorded as `tool_call.markup.bare-parameter-element` (read as
+    /// `<parameter=NAME>` and `</parameter>`). The offset after it, or
+    /// `None` (the body is malformed there, as before) when it is no such
+    /// element: no declared tool, inside a nested object, a name the tool
+    /// does not declare or that is a markup tag's (`parameter`, a call
+    /// closer's), no `</NAME>`, or a value holding markup that could make
+    /// another reading (a `<parameter=` opener, a parameter or call closer, a
+    /// call opener, or another `<NAME` element). A name bound twice makes
+    /// the body malformed at its second occurrence (see `Reader::bound`).
+    fn bare(&mut self, at: usize) -> Result<Option<Result<usize, CodecFault>>, StopReason> {
+        if !self.known || self.frames.len() != 1 {
+            return Ok(None);
+        }
+        let body = self.body;
+        if body[at] != b'<' {
+            return Ok(None);
+        }
+        let length = body[at + 1..]
+            .iter()
+            .take_while(|&&byte| {
+                !matches!(byte, b'>' | b'<' | b'/' | b'=') && !byte.is_ascii_whitespace()
+            })
+            .count();
+        self.charge(length)?;
+        let open = at + 1 + length;
+        if length == 0 || body.get(open) != Some(&b'>') {
+            return Ok(None);
+        }
+        let tag = &body[at + 1..open];
+        let Ok(name) = core::str::from_utf8(tag) else {
+            return Ok(None);
+        };
+        self.charge(2 + self.closers.len())?;
+        if self.tags().any(|markup| markup == tag) {
+            return Ok(None);
+        }
+        let scope = self.frames[0].scope;
+        self.charge(1)?;
+        if !scope.declares(name) {
+            return Ok(None);
+        }
+        let from = open + 1;
+        // One pass over the `<` bytes after the tag: the first `</NAME>`
+        // ends the value; markup before it that could make another reading
+        // leaves no bare element.
+        let mut stop = from;
+        loop {
+            let Some(offset) = body[stop..].iter().position(|&byte| byte == b'<') else {
+                self.charge(body.len() - from)?;
+                return Ok(None);
+            };
+            stop += offset;
+            let rest = &body[stop..];
+            let named = |skip: usize| rest.get(skip..).is_some_and(|name| name.starts_with(tag));
+            if rest.get(1) == Some(&b'/') && named(2) && rest.get(2 + tag.len()) == Some(&b'>') {
+                break;
+            }
+            let element = named(1)
+                && rest
+                    .get(1 + tag.len())
+                    .is_none_or(|&byte| matches!(byte, b'>' | b'/') || byte.is_ascii_whitespace());
+            if element
+                || rest.starts_with(OPENER)
+                || rest.starts_with(CLOSER)
+                || rest.starts_with(CLOSER_VARIANT)
+                || self.markup(self.openers, stop)?.is_some()
+                || self.markup(self.closers, stop)?.is_some()
+            {
+                self.charge(stop - from)?;
+                return Ok(None);
+            }
+            stop += 1;
+        }
+        self.charge(stop - from)?;
+        let width = tag.len() + 3;
+        let member = scope.member(name);
+        let canonical = scope.canonical(name).to_owned();
+        let opening = [OPENER, tag, b">"].concat();
+        self.record(EditOperator::BareParameterElement, at..from, &opening)?;
+        let terminator = Terminator::Closer(width, Spelling::Canonical);
+        let tree = match self.value(member.declared, from, stop, terminator)? {
+            Ok(tree) => tree,
+            Err(fault) => return Ok(Some(Err(fault))),
+        };
+        let end = stop + width;
+        self.record(EditOperator::BareParameterElement, stop..end, CLOSER)?;
+        let key = Spanned {
+            value: name.to_owned(),
+            span: self.absolute(at + 1..open),
+        };
+        self.frames[0]
+            .tree
+            .adopt_keyed(key, &canonical, tree, member.collect);
+        self.bound(canonical, at, true)?;
+        Ok(Some(Ok(end)))
     }
 
     /// The scope the nested parameter elements of a member open, and
@@ -1106,6 +1313,7 @@ impl<'t> Reader<'_, 't, '_> {
         parent
             .tree
             .adopt_keyed(opener.name, &canonical, tree, collect);
+        self.bound(canonical, opener.start, false)?;
         Ok(Ok(match terminator {
             Terminator::Closer(width, spelling) => {
                 self.respelled(stop, width, spelling)?;

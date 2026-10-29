@@ -93,6 +93,24 @@ first-party; no chat-template text is copied into this repository.
   graph resolves local `$ref` pointers only (`#`, `#/...`); a remote or
   anchor reference leaves the scope open and, with no name, opaque.
   A body that is one whole JSON object is accepted as the arguments.
+  *Bare parameter elements.* An element named after a parameter (or an
+  alias) the tool declares, written directly in the body without the
+  `<parameter=NAME>` wrapper (`<function=set_note><note>remember
+  this</note></function>`), is read as that parameter, its value read as
+  the wrapped element's would be (framing newlines, typing). Each tag is
+  recorded as `tool_call.markup.bare-parameter-element`, a single-reading
+  markup repair grounded in the definition: admitted under `Structural`,
+  refused under `Effort::Exact`. Bare and wrapped elements of different
+  parameters mix. Where the element could be read another way the body
+  stays malformed, a rejected attempt as before: a name the tool does not
+  declare (or no declared tool), a name bound twice (two bare elements, or a
+  bare and a wrapped element of one parameter), text outside the elements,
+  an element inside a nested object, or a value holding a `<parameter=`
+  opener, a parameter or call closer, a call opener or another element of
+  the same name. Inside a wrapped string value such an element stays text.
+  *Proved by* `tool_call_rules::bare_parameter_element_reads_as_its_declared_parameter`,
+  `tool_call_rules::ambiguous_bare_parameter_elements_stay_malformed` and
+  the bare-element case of `tool_call_recover::exact_effort_never_repairs`.
   A string value may hold closer text (see
   [Closer text inside a value](#closer-text-inside-a-value)).
 - The `<tool_call>` opener is shared with [Hermes](hermes.v1.md). With both

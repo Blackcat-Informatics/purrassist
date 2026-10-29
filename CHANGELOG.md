@@ -9,6 +9,25 @@ crates share one version.
 
 ## [Unreleased]
 
+### Added
+
+- Qwen3-Coder XML recovery reads a function body element named after a
+  declared parameter, written without its `<parameter=NAME>` wrapper
+  (`<function=set_note><note>v</note></function>`), as that parameter. Such
+  a body used to be a `malformed` rejected attempt. The new rule
+  `tool_call.markup.bare-parameter-element` records the repair on each tag.
+  It is a single-reading markup repair: `Structural` admits it, and
+  `Effort::Exact` refuses it. A body that could be read another way is
+  still rejected: an undeclared name, a name bound twice, text outside the
+  elements, or markup inside the value.
+
+### Changed
+
+- Breaking: `grammar::edit::EditOperator` gains the variant
+  `BareParameterElement`, so exhaustive matches no longer compile.
+  `grammar::edit::OPERATOR_COUNT` and `OPERATORS.len()` go from 46 to 47, and
+  `tool_call::rules::RULE_COUNT` grows by one.
+
 ### Fixed
 
 - Remove artifact-size measurement, reporting and qualification limits. Resource

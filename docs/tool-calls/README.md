@@ -240,7 +240,7 @@ whatever it declares.
 | Repair | `Structural` | `Tolerant` |
 | --- | --- | --- |
 | Canonical parsing and records (framing newlines, nested parameters, stringified arguments, aliases, truncation, ids, invalid UTF-8) | admitted | admitted |
-| Single-reading repairs (missing, stray, and variant closers, confusables, the missing `</parameter>` before a declared parameter, non-guessed JSON syntax repairs in arguments and in a JSON call envelope, enum case/whitespace normalization) | admitted | admitted |
+| Single-reading repairs (missing, stray, and variant closers, confusables, the missing `</parameter>` before a declared parameter, an element named after a declared parameter written without its `<parameter=` wrapper, non-guessed JSON syntax repairs in arguments and in a JSON call envelope, enum case/whitespace normalization) | admitted | admitted |
 | Multiple-reading rules, the guesses (fuzzy tool and parameter names, approximate enum values, guessed JSON repairs, calls inside reasoning or code examples, a wrapper closed before text, repeated parameters) | not admitted: the call is `Unresolved` (`RuleNotAdmitted`) | admitted: the call is at most `BestGuess` |
 | A near-miss tool name | never matched; exact names and aliases only | a guess-flagged `tool_call.name.match` |
 | A near-miss parameter name | never renamed and never dropped in place of the rename (`UnknownParameter`) | renamed by `json.key.match`, a guess |

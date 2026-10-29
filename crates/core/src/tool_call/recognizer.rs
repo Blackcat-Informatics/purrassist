@@ -2285,8 +2285,8 @@ pub(super) fn escaped(bytes: &[u8]) -> String {
 }
 
 /// The explanation of an edit that keeps a call recoverable: an attempt
-/// split before the call it could not read, a misspelled closer, or a call
-/// cut at a reasoning marker.
+/// split before the call it could not read, a misspelled closer, a bare
+/// parameter element, or a call cut at a reasoning marker.
 fn explain_recovery(edit: &MarkupEdit, original: &str, replacement: &str) -> String {
     match edit.operator {
         EditOperator::ExtractProse => {
@@ -2308,6 +2308,9 @@ fn explain_recovery(edit: &MarkupEdit, original: &str, replacement: &str) -> Str
         EditOperator::TextAfterCloser => format!(
             "read the text after the unpaired closer at byte {} as text of the value, which ends at byte {}; the reading that ends the value at that closer and drops the text is as cheap, so the call is ambiguous",
             edit.span.start, edit.span.end
+        ),
+        EditOperator::BareParameterElement => format!(
+            "read tag `{original}` of an element named after a parameter the tool declares, written without the parameter wrapper, as `{replacement}`"
         ),
         EditOperator::UndeclaredParameterBoundary => format!(
             "ended the open parameter value at a parameter opener of a call that names no declared tool (inserted `{replacement}`); the opener may also be text of the value"
@@ -2409,6 +2412,7 @@ fn explain(edit: &MarkupEdit) -> String {
         | EditOperator::TextAfterCloser
         | EditOperator::TextBetweenParameters
         | EditOperator::UnmodeledScopeBoundary
+        | EditOperator::BareParameterElement
         | EditOperator::UndeclaredParameterBoundary
         | EditOperator::ReasoningMarkerCut => explain_recovery(edit, &original, &replacement),
         EditOperator::ContextFencedExample => {

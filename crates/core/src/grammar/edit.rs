@@ -58,6 +58,7 @@
 //! | [`TextAfterCloser`](EditOperator::TextAfterCloser) | `tool_call.value.text-after-closer` | 0 | yes | multiple | syntax | none | no |
 //! | [`TextBetweenParameters`](EditOperator::TextBetweenParameters) | `tool_call.markup.text-between-parameters` | 0 | yes | multiple | syntax | data | no |
 //! | [`UnmodeledScopeBoundary`](EditOperator::UnmodeledScopeBoundary) | `tool_call.markup.unmodeled-scope-boundary` | 2 | yes | multiple | syntax | none | yes |
+//! | [`BareParameterElement`](EditOperator::BareParameterElement) | `tool_call.markup.bare-parameter-element` | 1 | no | single | definition | markup | yes |
 //!
 //! The first seven operators are the engine's markup repairs: a missing
 //! closer inserted mid-message is a *function* close when more of the
@@ -117,6 +118,11 @@
 //! scope's membership is unknown, not empty, so the opener may as well be
 //! the scope's own member: the closing is a guess, never grounded in the
 //! definition as `tool_call.markup.missing-parameter-close` is.
+//! `tool_call.markup.bare-parameter-element` (appended last) reads an
+//! element named after a parameter the call's tool declares, written
+//! directly in the function body without the `<parameter=NAME>` wrapper
+//! (`<note>v</note>`), as that parameter: each of its two tags is one edit,
+//! read as `<parameter=NAME>` and `</parameter>`.
 //! Closers inserted at the
 //! end of output under a non-length stop are
 //! `tool_call.markup.missing-closers-at-end`, usable only when the call is
@@ -146,7 +152,7 @@
 //! assert_eq!(stray.id, "tool_call.markup.stray-closer");
 //! assert_eq!(stray.loss, Some(LossKind::Markup));
 //! assert!(!stray.guess && stray.repair);
-//! assert_eq!(OPERATORS.len(), 46);
+//! assert_eq!(OPERATORS.len(), 47);
 //! let framing = EditOperator::FramingNewline.rule();
 //! assert_eq!((framing.loss, framing.repair), (Some(LossKind::Markup), false));
 //! ```
@@ -335,6 +341,13 @@ pub enum EditOperator {
     /// the scope's membership is unknown, so the opener may be its own
     /// member, and the closing is a guess.
     UnmodeledScopeBoundary,
+    /// Read an element named after a parameter the call's tool declares,
+    /// written directly in an `xml-params` function body without the
+    /// `<parameter=NAME>` wrapper (`<note>v</note>`), as that parameter: one
+    /// edit per tag, the opening tag read as `<parameter=NAME>` and the
+    /// closing tag as `</parameter>`. The definition grounds it: only a
+    /// declared name, at the top level of the body, read once.
+    BareParameterElement,
 }
 
 /// Static metadata of one [`EditOperator`].
@@ -426,7 +439,7 @@ const fn guessed_repair(operator: EditOperator, id: &'static str, cost: u64) -> 
 }
 
 /// The number of [`EditOperator`]s.
-pub const OPERATOR_COUNT: usize = 46;
+pub const OPERATOR_COUNT: usize = 47;
 
 /// Every grammar edit operator, in [`EditOperator`] order, as a constant
 /// table (the tool-call rule registry is built from it at compile time).
@@ -737,6 +750,15 @@ pub(crate) const OPERATOR_TABLE: [OperatorRule; OPERATOR_COUNT] = [
         // grounding), unlike the definition-grounded
         // `tool_call.markup.missing-parameter-close`.
         cost::INSERT_CLOSER,
+    ),
+    repair(
+        EditOperator::BareParameterElement,
+        "tool_call.markup.bare-parameter-element",
+        // Per tag, as for a declared closer variant (a spelling read as the
+        // canonical one): an element's two tags cost one missing closer.
+        cost::CLOSER_VARIANT,
+        Grounding::Definition,
+        Some(LossKind::Markup),
     ),
 ];
 
