@@ -31,6 +31,14 @@ crates share one version.
   into its existing retained-candidate contract; later search retention and
   general assertion computation remain separate.
 
+- Exact numeric divisibility admits normalization, exponent arithmetic,
+  factor removal and remainder work through the caller governor. Temporary
+  arithmetic storage releases on success or refusal; zero-divisor diagnostics
+  retain only completed output. Shared decimal appends also admit buffer
+  relocation. Witness numeric type and bound checks reuse governed operations.
+  Numeric precision and error text are unchanged; usage counters
+  and finite-budget refusal points reflect the admitted operations.
+
 - Evaluator reports now own their strings, annotations and collection storage
   until publication or discard. Internal witness/recovery checks release reports;
   public validation retains completed output. Recovery moves format evidence,

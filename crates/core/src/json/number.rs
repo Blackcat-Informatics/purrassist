@@ -132,8 +132,7 @@ impl Number {
     /// Whether the mathematical value is an integer, without floating conversion.
     #[must_use]
     pub fn is_integer(&self) -> bool {
-        let parts = self.parts();
-        parts.digits == "0" || !parts.exponent.negative
+        !matches!(self.integer_magnitude(), IntegerReading::Fractional)
     }
 
     /// Mathematical ordering, preserving precision for arbitrarily large exponents.
@@ -241,69 +240,38 @@ impl Number {
 
     /// Test exact mathematical divisibility without allocating exponent-sized integers.
     ///
+    /// Normalization, arithmetic and temporary storage use the caller's governor.
+    /// All temporary reservations release on success or refusal; only a published
+    /// zero-divisor diagnostic retains its output reservation.
+    ///
     /// # Errors
-    /// Returns resource exhaustion or a zero divisor.
+    /// Returns the original resource/cancellation cause, or `InvalidInput` for a
+    /// zero divisor when the diagnostic can be published within the budget.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, json::Number};
+    /// let value: Number = "0.3".parse()?;
+    /// let divisor: Number = "0.1".parse()?;
+    /// assert!(value.is_multiple_of(&divisor, &mut Governor::new(Budget::default()))?);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn is_multiple_of(
         &self,
         divisor: &Self,
-        governor: &mut crate::Governor,
-    ) -> Result<bool, crate::StopReason> {
-        use crate::contract::Resource;
-        let numerator = self.parts();
-        let denominator = divisor.parts();
-        if denominator.digits == "0" {
-            return Err(crate::StopReason::InvalidInput(
-                "multipleOf divisor is zero".into(),
-            ));
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        let mut operation = Operation(Some(governor));
+        let numerator = decimal::parts(self.as_str(), &mut operation)?;
+        let denominator = decimal::parts(divisor.as_str(), &mut operation)?;
+        if denominator.digits.as_str() == "0" {
+            let message =
+                format_scratch_governed(format_args!("multipleOf divisor is zero"), governor)?;
+            governor.check()?;
+            return Err(StopReason::InvalidInput(message.into_string()));
         }
-        if numerator.digits == "0" {
-            return Ok(true);
-        }
-        let delta = numerator.exponent.subtract(&denominator.exponent);
-        if delta.negative {
-            return Ok(false);
-        }
-        let (top, top_two, top_five) = remove_decimal_factors(numerator.digits, governor)?;
-        let (bottom, bottom_two, bottom_five) =
-            remove_decimal_factors(denominator.digits, governor)?;
-        if delta < Integer::from_usize(bottom_two.saturating_sub(top_two))
-            || delta < Integer::from_usize(bottom_five.saturating_sub(top_five))
-        {
-            return Ok(false);
-        }
-        if bottom == "1" {
-            return Ok(true);
-        }
-        let mut remainder = String::from("0");
-        for digit in top.bytes() {
-            governor.charge(
-                Resource::Work,
-                u64::try_from(bottom.len())
-                    .unwrap_or(u64::MAX)
-                    .saturating_mul(10),
-            )?;
-            if remainder == "0" {
-                remainder.clear();
-            }
-            remainder.push(char::from(digit));
-            while magnitude_cmp(&remainder, &bottom).is_ge() {
-                remainder = Integer::parse(&remainder)
-                    .subtract(&Integer::parse(&bottom))
-                    .digits;
-            }
-        }
-        Ok(remainder == "0")
-    }
-
-    pub(super) fn parts(&self) -> Parts {
-        let parts = ordinary(decimal::parts(self.as_str(), &mut Operation(None)));
-        Parts {
-            digits: parts.digits.into_string(),
-            exponent: Integer {
-                negative: parts.exponent.negative,
-                digits: parts.exponent.digits.into_string(),
-            },
-        }
+        let result = decimal::multiple_of(numerator, denominator, &mut operation)?;
+        operation.check()?;
+        Ok(result)
     }
 }
 
@@ -523,98 +491,6 @@ impl fmt::Display for NumberError {
 }
 impl std::error::Error for NumberError {}
 
-pub(super) struct Parts {
-    pub digits: String,
-    pub exponent: Integer,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Integer {
-    pub negative: bool,
-    pub digits: String,
-}
-impl Integer {
-    fn parse(input: &str) -> Self {
-        let value = ordinary(decimal::integer(input, &mut Operation(None)));
-        Self {
-            negative: value.negative,
-            digits: value.digits.into_string(),
-        }
-    }
-    fn from_usize(value: usize) -> Self {
-        Self::parse(&value.to_string())
-    }
-    pub(super) fn add(&self, other: &Self) -> Self {
-        let value = ordinary(decimal::add(
-            self.negative,
-            &self.digits,
-            other.negative,
-            &other.digits,
-            &mut Operation(None),
-        ));
-        Self {
-            negative: value.negative,
-            digits: value.digits.into_string(),
-        }
-    }
-    pub(super) fn subtract(&self, other: &Self) -> Self {
-        let mut negated = other.clone();
-        if negated.digits != "0" {
-            negated.negative = !negated.negative;
-        }
-        self.add(&negated)
-    }
-}
-fn remove_decimal_factors(
-    mut digits: String,
-    governor: &mut crate::Governor,
-) -> Result<(String, usize, usize), crate::StopReason> {
-    let mut counts = [0, 0];
-    for (index, divisor) in [2_u32, 5].into_iter().enumerate() {
-        loop {
-            governor.charge(
-                crate::contract::Resource::Work,
-                u64::try_from(digits.len()).unwrap_or(u64::MAX),
-            )?;
-            let mut quotient = String::with_capacity(digits.len());
-            let mut remainder = 0;
-            for digit in digits.bytes() {
-                let value = remainder * 10 + u32::from(digit - b'0');
-                let next = value / divisor;
-                if next != 0 || !quotient.is_empty() {
-                    quotient.push(char::from_digit(next, 10).expect("decimal digit"));
-                }
-                remainder = value % divisor;
-            }
-            if remainder != 0 {
-                break;
-            }
-            digits = quotient;
-            counts[index] += 1;
-        }
-    }
-    Ok((digits, counts[0], counts[1]))
-}
-
-fn magnitude_cmp(left: &str, right: &str) -> Ordering {
-    ordinary(decimal::magnitude(left, right, &mut Operation(None)))
-}
-impl Ord for Integer {
-    fn cmp(&self, other: &Self) -> Ordering {
-        match (self.negative, other.negative) {
-            (true, false) => Ordering::Less,
-            (false, true) => Ordering::Greater,
-            (false, false) => magnitude_cmp(&self.digits, &other.digits),
-            (true, true) => magnitude_cmp(&self.digits, &other.digits).reverse(),
-        }
-    }
-}
-impl PartialOrd for Integer {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::Number;
@@ -649,6 +525,7 @@ mod tests {
     }
     #[test]
     fn exact_multiple_of() {
+        use crate::{Budget, Governor, StopReason, contract::Resource};
         for (a, b, expected) in [
             ("0.3", "0.1", true),
             ("0.0075", "0.0001", true),
@@ -658,16 +535,109 @@ mod tests {
             ("1e999999999999999999999999", "3", false),
             ("15", "3", true),
             ("25", "50", false),
+            ("0", "-7", true),
+            ("-21", "-3", true),
+            ("123456789123456790", "3", false),
+            ("1e2", "8", false),
+            ("1e3", "8", true),
+            ("1e2", "125", false),
+            ("1e3", "125", true),
+            (
+                "1e-999999999999999999999999",
+                "2e-999999999999999999999999",
+                false,
+            ),
+            (
+                "6e-999999999999999999999999",
+                "3e-999999999999999999999999",
+                true,
+            ),
+            ("1e-999999999999999999999999", "1", false),
         ] {
-            assert_eq!(
-                number(a).is_multiple_of(
-                    &number(b),
-                    &mut crate::Governor::new(crate::Budget::default())
+            let (a, b) = (number(a), number(b));
+            let mut governor = Governor::new(Budget::default());
+            assert_eq!(a.is_multiple_of(&b, &mut governor), Ok(expected), "{a}/{b}");
+            assert_eq!(governor.scratch_meter().live(), 0, "{a}/{b}");
+            let usage = governor.usage();
+            for (budget, reason) in [
+                (
+                    Budget {
+                        work: usage.work - 1,
+                        ..Budget::default()
+                    },
+                    StopReason::BudgetExceeded(Resource::Work),
                 ),
-                Ok(expected),
-                "{a}/{b}"
+                (
+                    Budget {
+                        scratch_bytes: usage.peak_scratch_bytes - 1,
+                        ..Budget::default()
+                    },
+                    StopReason::BudgetExceeded(Resource::ScratchBytes),
+                ),
+            ] {
+                let mut governor = Governor::new(budget);
+                assert_eq!(a.is_multiple_of(&b, &mut governor), Err(reason), "{a}/{b}");
+                assert_eq!(governor.scratch_meter().live(), 0, "{a}/{b}");
+            }
+            let mut cancelled = Governor::new(Budget::default());
+            cancelled.cancel();
+            assert_eq!(
+                a.is_multiple_of(&b, &mut cancelled),
+                Err(StopReason::Cancelled)
             );
+            assert_eq!(cancelled.scratch_meter().live(), 0);
         }
+    }
+
+    #[test]
+    fn zero_divisor_publishes_only_completed_diagnostic() {
+        use crate::{Budget, Governor, StopReason, contract::Resource};
+        let (value, divisor) = (number("0"), number("-0e99"));
+        let mut governor = Governor::new(Budget::default());
+        let error = value.is_multiple_of(&divisor, &mut governor);
+        assert_eq!(
+            error,
+            Err(StopReason::InvalidInput(
+                "multipleOf divisor is zero".into()
+            ))
+        );
+        let retained = governor.scratch_meter().live();
+        let Err(StopReason::InvalidInput(message)) = &error else {
+            unreachable!()
+        };
+        assert_eq!(retained, u64::try_from(message.capacity()).unwrap());
+        drop(error);
+        assert_eq!(governor.scratch_meter().live(), retained);
+        for (budget, resource) in [
+            (
+                Budget {
+                    work: governor.usage().work - 1,
+                    ..Budget::default()
+                },
+                Resource::Work,
+            ),
+            (
+                Budget {
+                    scratch_bytes: governor.usage().peak_scratch_bytes - 1,
+                    ..Budget::default()
+                },
+                Resource::ScratchBytes,
+            ),
+        ] {
+            let mut refused = Governor::new(budget);
+            assert_eq!(
+                value.is_multiple_of(&divisor, &mut refused),
+                Err(StopReason::BudgetExceeded(resource))
+            );
+            assert_eq!(refused.scratch_meter().live(), 0);
+        }
+        let mut cancelled = Governor::new(Budget::default());
+        cancelled.cancel();
+        assert_eq!(
+            value.is_multiple_of(&divisor, &mut cancelled),
+            Err(StopReason::Cancelled)
+        );
+        assert_eq!(cancelled.scratch_meter().live(), 0);
     }
 
     #[test]

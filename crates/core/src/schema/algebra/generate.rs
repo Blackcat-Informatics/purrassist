@@ -21,7 +21,7 @@ use super::storage::{self, CopyIn, push};
 use crate::contract::saturating_size as size;
 use crate::contract::{Governor, Resource, ScratchLease, StopReason};
 use crate::contract::{ScratchString, ScratchVec, format_scratch_governed};
-use crate::json::{Member, Node, NumberParseError, OwnedDocument, Value};
+use crate::json::{IntegerReading, Member, Node, NumberParseError, OwnedDocument, Value};
 use crate::pattern::{Engine, GenerateOptions, OwnedGenerateOutcome, Pattern};
 
 /// Every `items` occurrence in `req` that applies at array index `index` —
@@ -819,10 +819,20 @@ impl<'s> Gen<'s, '_> {
         for node in candidates {
             self.governor.charge(Resource::Work, 1)?;
             let candidate = candidate_number(&node);
-            if want_integer && !candidate.is_integer() {
+            if want_integer
+                && matches!(
+                    candidate.integer_magnitude_governed(self.governor)?,
+                    IntegerReading::Fractional
+                )
+            {
                 continue;
             }
-            if want_fraction_only && candidate.is_integer() {
+            if want_fraction_only
+                && !matches!(
+                    candidate.integer_magnitude_governed(self.governor)?,
+                    IntegerReading::Fractional
+                )
+            {
                 continue;
             }
             if self.check(node.root(), req)?.is_none() {
@@ -1217,7 +1227,10 @@ impl<'s> Gen<'s, '_> {
     where
         's: 'a,
     {
-        let integer = number.is_integer();
+        let integer = !matches!(
+            number.integer_magnitude_governed(self.governor)?,
+            IntegerReading::Fractional
+        );
         let admitted = match req.types.num {
             NumKind::None => false,
             NumKind::Any => true,
@@ -1228,13 +1241,13 @@ impl<'s> Gen<'s, '_> {
             return Ok(Some("number is not an admitted type"));
         }
         if let Some((bound, exclusive)) = &req.minimum {
-            let comparison = number.compare(bound);
+            let comparison = number.compare_governed(bound, self.governor)?;
             if (*exclusive && !comparison.is_gt()) || (!*exclusive && comparison.is_lt()) {
                 return Ok(Some("below minimum"));
             }
         }
         if let Some((bound, exclusive)) = &req.maximum {
-            let comparison = number.compare(bound);
+            let comparison = number.compare_governed(bound, self.governor)?;
             if (*exclusive && !comparison.is_lt()) || (!*exclusive && comparison.is_gt()) {
                 return Ok(Some("above maximum"));
             }

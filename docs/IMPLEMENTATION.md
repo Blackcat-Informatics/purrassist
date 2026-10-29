@@ -36,6 +36,18 @@ integrality checks preserve arbitrary exponents without constructing arithmetic
 intermediates. Strict schema parsing also admits scanning, decoding, copies and
 buffer relocation; this does not complete #33 or #36.
 
+Exact numeric divisibility now shares the admitted decimal normalization and
+signed arithmetic authority used by numeric comparison. Normalized coefficients,
+exponent differences, factor-removal quotients and remainders retain fallible
+temporary owners; arithmetic character appends admit relocation before growth.
+Success and refusal release all arithmetic reservations. Zero divisors preserve
+their diagnostic text and retain only the completed diagnostic after its final
+governor check. Arbitrarily large exponents remain exact without exponent-sized
+integer allocation. Witness numeric type filtering and bound checks use the same
+governed integer classification and comparison as validation, preserving seed
+order and native refusal causes. General format assertions and recovery candidate ownership
+remain separate contracts.
+
 Witness canonicalization, requirement merging and the existing branch driver
 share the caller's governor. Immutable schema operands and pattern names remain
 borrowed; synthesized canonical lists, requirement snapshots, child obligations,

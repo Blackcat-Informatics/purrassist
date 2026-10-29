@@ -1469,6 +1469,17 @@ Other parser paths remain outside this delivery's governance claims.
 JSON recovery receipts include the admitted numeric validation/copy work and
 retained numeric capacity in their existing usage counters.
 
+`Number::is_multiple_of` uses the same admitted decimal normalization and signed
+arithmetic as numeric comparison. Coefficients, exponent differences, factor
+quotients and remainders retain fallible temporary owners. Decimal character
+appends admit relocation before buffer growth. Success and refusal release all
+arithmetic storage; only a completed zero-divisor diagnostic retains its output
+reservation after the final governor check. Witness numeric type filtering and
+bound checks reuse the governed integer reader and comparator. Huge exponents
+remain exact without exponent-sized allocation; resource refusal remains distinct
+from a false assertion or an unsatisfiability result. General format computation
+and recovery candidate/search ownership remain separate contracts.
+
 `format_output_governed` admits emitted-byte work and actual output capacity,
 preserving the first writer failure even if a formatter ignores it. It does not
 govern arbitrary formatter computation. The numeric constructor pre-admits the
