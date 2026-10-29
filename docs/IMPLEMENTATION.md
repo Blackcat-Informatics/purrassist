@@ -44,9 +44,22 @@ dependency scans, exact numeric comparisons, copies, lookup and relocation admit
 work before processing. The evaluator and recovery use the same governed array
 layout and dependency view. Canonical construction/copying and live branch
 continuations enforce caller depth and a native ceiling of 128; refusal remains
-a resource outcome, never an unsatisfiability proof. Candidate-value construction,
-general assertion computation and witness-value publication retain their separate contracts.
-This does not complete witness or tool-graph governance.
+a resource outcome, never an unsatisfiability proof.
+
+Witness candidate trees now reuse the existing owned JSON document representation.
+Literal copying preserves number spelling, member order and node/member source
+spans. String and numeric seeds, integer-step temporaries, arrays, objects and
+duplicate-item copies hold actual fallible buffer reservations through branch
+selection and final schema revalidation. Literal copying checks caller Depth and
+a native ceiling of 128, with the copied root at depth zero. Rejected candidates
+and refused construction release their owners; public witness publication retains
+only completed output. Derivative and backtracking pattern generation share an
+internal owned result, while ordinary pattern generation publishes its output
+through one adapter. Required-property recovery explicitly transfers a completed
+witness into its existing retained-candidate contract without another clone.
+Subsequent recovery duplicate/discard retention, general assertion/format
+computation and host serialization remain separate. This does not complete
+witness computation, recovery ownership or tool-graph governance.
 
 Evaluator recursion and transient path/key state now use fallible owners on the
 same caller governor. One active stack retains schema-location/instance-path
@@ -73,7 +86,7 @@ final observation slots before commit. Refusal preserves committed observations;
 finalization after exhaustion or cancellation requires no allocation. Search
 results retain the existing evidence order and ambiguous-prefix replacement.
 Provisional Search/Forest publication retains its existing charges. General
-scalar/format computation, candidate/replacement construction and host
+scalar/format computation, recovery replacement construction and host
 serialization remain separate contracts.
 
 Final refutations are published only by the public governed witness boundary.
@@ -83,9 +96,8 @@ fallible reason/evidence buffers, retaining their storage only after every
 fallible operation and the final governor check succeed. Late refusal releases
 all temporary publication owners and preserves the native resource cause.
 Public types, reason text and evidence fields remain unchanged; successful
-ordinary output retains its admission even after the caller drops it. Candidate
-construction, recovery replacements and host serialization remain separate
-contracts.
+ordinary output retains its admission even after the caller drops it. Recovery
+replacements and host serialization remain separate contracts.
 
 The existing `Grammar::compile_governed` path now admits complete private DSL
 syntax with governed scans/decoding/copies, fallible owned tokens and lists,

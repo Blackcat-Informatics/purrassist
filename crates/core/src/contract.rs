@@ -488,6 +488,11 @@ impl ScratchLease {
         Self { meter, bytes }
     }
 
+    /// Start an aggregate owner without reserving any storage.
+    pub(crate) fn empty(governor: &Governor) -> Self {
+        Self::new(governor.scratch_meter(), 0)
+    }
+
     /// Bytes currently held by this lease.
     #[must_use]
     pub const fn bytes(&self) -> u64 {
@@ -681,6 +686,19 @@ pub struct ScratchVec<T> {
     inner: Vec<T>,
     meter: ScratchMeter,
     reserved: u64,
+}
+
+/// Admit one insertion and any relocation before growing a scratch vector.
+pub(crate) fn push_scratch<T: ScratchCharge>(
+    values: &mut ScratchVec<T>,
+    value: T,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    governor.charge(Resource::Work, 1)?;
+    if values.len() == values.capacity() {
+        governor.charge(Resource::Work, saturating_size(values.len()))?;
+    }
+    values.push(value)
 }
 
 impl<T: ScratchCharge> ScratchVec<T> {

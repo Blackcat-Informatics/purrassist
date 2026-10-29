@@ -767,7 +767,11 @@ impl Walk<'_, '_> {
                         schema.index.locations[schema_id].children.get(&key)
                     {
                         match super::super::algebra::generate(schema, child, self.governor)? {
-                            super::super::algebra::Attempt::Witness(node) => Some(node),
+                            super::super::algebra::Attempt::Witness(node) => {
+                                // Explicit handoff to recovery's existing retained-candidate
+                                // contract; later queue duplication/discard is separate.
+                                Some(node.into_node())
+                            }
                             super::super::algebra::Attempt::Unsatisfiable(_)
                             | super::super::algebra::Attempt::Exhausted => None,
                         }

@@ -43,6 +43,16 @@ use crate::contract::{
     Budget, Evidence, Governor, Resource, ScratchCharge, ScratchString, ScratchVec, StopReason,
 };
 
+/// Internal generator results keep their exact buffer reservations until the
+/// actual public pattern boundary or an internal consumer drops them.
+pub(crate) enum OwnedGenerateOutcome {
+    Witness(ScratchString),
+    NoCandidate {
+        rule: ScratchString,
+        explanation: ScratchString,
+    },
+}
+
 impl ScratchCharge for char {
     const CHARGE: usize = {
         assert!(core::mem::size_of::<Self>() <= 4);
@@ -111,8 +121,8 @@ impl ByteAutomaton {
                 avoid: &[],
             },
         )? {
-            generate::Generated::Witness(text) => Ok(Some(text)),
-            generate::Generated::NoCandidate { .. } => Ok(None),
+            OwnedGenerateOutcome::Witness(text) => Ok(Some(text)),
+            OwnedGenerateOutcome::NoCandidate { .. } => Ok(None),
         }
     }
 
@@ -563,6 +573,15 @@ impl Pattern {
         options: GenerateOptions<'_>,
     ) -> Result<GenerateOutcome, StopReason> {
         generate::generate(self, governor, options)
+    }
+
+    /// Keep generated text and diagnostics owned for internal consumers.
+    pub(crate) fn generate_owned(
+        &self,
+        governor: &mut Governor,
+        options: GenerateOptions<'_>,
+    ) -> Result<OwnedGenerateOutcome, StopReason> {
+        generate::generate_owned(self, governor, options)
     }
 }
 

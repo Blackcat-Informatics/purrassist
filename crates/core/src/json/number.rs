@@ -70,10 +70,18 @@ impl Number {
         Ok(Self(text))
     }
 
-    fn retained_spelling(
-        input: &str,
+    /// Validate an already owned spelling and transfer its reservation unchanged.
+    pub(super) fn adopt_owned(
+        text: ScratchString,
         governor: &mut Governor,
-    ) -> Result<ScratchString, NumberParseError> {
+    ) -> Result<(Self, ScratchLease), NumberParseError> {
+        Self::validate_spelling(text.as_str(), governor)?;
+        governor.check().map_err(NumberParseError::Resource)?;
+        let (text, lease) = text.into_owned_parts();
+        Ok((Self(text), lease))
+    }
+
+    fn validate_spelling(input: &str, governor: &mut Governor) -> Result<(), NumberParseError> {
         governor
             .charge(
                 Resource::Work,
@@ -81,6 +89,14 @@ impl Number {
             )
             .map_err(NumberParseError::Resource)?;
         validate(input).map_err(NumberParseError::Syntax)?;
+        Ok(())
+    }
+
+    fn retained_spelling(
+        input: &str,
+        governor: &mut Governor,
+    ) -> Result<ScratchString, NumberParseError> {
+        Self::validate_spelling(input, governor)?;
         governor
             .charge(Resource::Work, saturating_size(input.len()))
             .map_err(NumberParseError::Resource)?;

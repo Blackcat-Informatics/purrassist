@@ -606,17 +606,7 @@ pub(super) fn pointer(
     Ok(result)
 }
 
-pub(super) fn push<T: ScratchCharge>(
-    route: &mut ScratchVec<T>,
-    position: T,
-    governor: &mut Governor,
-) -> Result<(), StopReason> {
-    work(governor, 1)?;
-    if route.len() == route.capacity() {
-        work(governor, route.len())?;
-    }
-    route.push(position)
-}
+pub(super) use crate::contract::push_scratch as push;
 pub(super) fn enter_scope(
     schema: &super::Schema,
     id: usize,

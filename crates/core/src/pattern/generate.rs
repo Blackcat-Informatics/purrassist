@@ -15,7 +15,9 @@
 use super::ast::Node;
 use super::derive::{self, NullCtx};
 use super::storage::Buffer;
-use super::{Engine, GenerateOptions, GenerateOutcome, Pattern, is_word};
+use super::{
+    Engine, GenerateOptions, GenerateOutcome, OwnedGenerateOutcome as Generated, Pattern, is_word,
+};
 use crate::contract::{
     Evidence, Governor, Resource, ScratchCharge, ScratchMap, ScratchString, ScratchVec, StopReason,
 };
@@ -109,15 +111,6 @@ impl fmt::Write for EvidenceWriter<'_> {
     }
 }
 
-/// Internal generator results keep their exact buffer reservations until the
-/// actual public pattern boundary or an internal consumer drops them.
-pub(super) enum Generated {
-    Witness(ScratchString),
-    NoCandidate {
-        rule: ScratchString,
-        explanation: ScratchString,
-    },
-}
 impl Generated {
     fn into_public(self) -> GenerateOutcome {
         match self {
@@ -130,13 +123,6 @@ impl Generated {
             }),
         }
     }
-}
-
-fn no_candidate(
-    explanation: fmt::Arguments<'_>,
-    governor: &mut Governor,
-) -> Result<GenerateOutcome, StopReason> {
-    no_candidate_scratch(explanation, governor).map(Generated::into_public)
 }
 
 fn no_candidate_scratch(
@@ -167,6 +153,16 @@ pub(super) fn generate(
     governor: &mut Governor,
     options: GenerateOptions<'_>,
 ) -> Result<GenerateOutcome, StopReason> {
+    let generated = generate_owned(pattern, governor, options)?;
+    governor.check()?;
+    Ok(generated.into_public())
+}
+
+pub(super) fn generate_owned(
+    pattern: &Pattern,
+    governor: &mut Governor,
+    options: GenerateOptions<'_>,
+) -> Result<Generated, StopReason> {
     governor.check()?;
     let backtracking = matches!(pattern.engine, Engine::Backtrack)
         || options
@@ -184,7 +180,6 @@ pub(super) fn generate(
         governor,
         options,
     )
-    .map(Generated::into_public)
 }
 
 /// One automaton participating in the product search: its compiled
@@ -593,7 +588,7 @@ fn generate_backtrack(
     pattern: &Pattern,
     governor: &mut Governor,
     options: GenerateOptions<'_>,
-) -> Result<GenerateOutcome, StopReason> {
+) -> Result<Generated, StopReason> {
     let start = Candidate {
         text: Text(ScratchString::new(governor)),
         captures: ScratchMap::new(governor),
@@ -659,10 +654,10 @@ fn generate_backtrack(
                 &mut candidates.values[index].text.0,
                 ScratchString::new(governor),
             );
-            return Ok(GenerateOutcome::Witness(text.into_string()));
+            return Ok(Generated::Witness(text));
         }
     }
-    no_candidate(
+    no_candidate_scratch(
         format_args!(
             "the bounded backtracking candidate search (this pattern or an `avoid` pattern needs backreference/lookaround semantics that only structural enumeration plus verification can check) found no witness matching this pattern and none of the `avoid` patterns; this is exhaustion of a bounded search, not a proof that no witness exists"
         ),
