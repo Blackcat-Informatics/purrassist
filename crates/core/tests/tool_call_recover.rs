@@ -796,8 +796,11 @@ fn single_policy_override_applies_to_all() {
 }
 
 /// The digest of a result's complete wire form.
-fn wire_digest(result: &AssistResult<ToolCalls>) -> String {
-    Digest::of(result.to_node().to_json().as_bytes()).to_string()
+fn wire_digest(result: &AssistResult<ToolCalls>, wires: &mut Vec<String>) -> String {
+    let wire = result.to_node().to_json();
+    let digest = Digest::of(wire.as_bytes()).to_string();
+    wires.push(wire);
+    digest
 }
 
 /// The dialects the pinned digests were recorded with (permuted by the
@@ -831,6 +834,7 @@ fn deterministic_pinned_digest() {
     );
     let orders: [[usize; 3]; 3] = [[0, 1, 2], [2, 0, 1], [1, 2, 0]];
     let mut digests = Vec::new();
+    let mut wires = Vec::new();
     for order in orders {
         let all = definitions();
         let tools = compile(order.iter().map(|&index| all[index].clone()));
@@ -844,7 +848,7 @@ fn deterministic_pinned_digest() {
             &set(&dialects),
         );
         assert!(matches!(result.outcome, Outcome::BestGuess(_)));
-        digests.push(wire_digest(&result));
+        digests.push(wire_digest(&result, &mut wires));
     }
     assert!(
         digests.windows(2).all(|pair| pair[0] == pair[1]),
@@ -863,7 +867,7 @@ fn deterministic_pinned_digest() {
         }),
         &set(&PINNED_DIALECTS),
     );
-    let prefixed_digest = wire_digest(&prefixed);
+    let prefixed_digest = wire_digest(&prefixed, &mut wires);
     // The Ambiguous wire form is pinned too.
     let tools = compile([ToolDefinition::new("f").effects(Effects::ReadOnly)]);
     let mut ambiguous = Vec::new();
@@ -873,7 +877,7 @@ fn deterministic_pinned_digest() {
             &ToolRecoveryRequest::default(),
             &set(&[custom(pair[0]), custom(pair[1])]),
         );
-        ambiguous.push(wire_digest(&result));
+        ambiguous.push(wire_digest(&result, &mut wires));
     }
     assert_eq!(ambiguous[0], ambiguous[1]);
     let prefixed = tools.recover(
@@ -889,7 +893,7 @@ fn deterministic_pinned_digest() {
             digests[0].as_str(),
             prefixed_digest.as_str(),
             ambiguous[0].as_str(),
-            wire_digest(&prefixed).as_str(),
+            wire_digest(&prefixed, &mut wires).as_str(),
         ],
         [
             PINNED_DIGEST,
@@ -897,6 +901,7 @@ fn deterministic_pinned_digest() {
             PINNED_AMBIGUOUS_DIGEST,
             PINNED_PREFIX_AMBIGUOUS_DIGEST,
         ],
+        "complete wire values: {wires:?}",
     );
 }
 

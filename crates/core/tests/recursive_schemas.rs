@@ -150,7 +150,10 @@ fn dynamic_ref_recursion_resolves_against_the_live_scope() {
 fn non_progressing_cycle_is_an_explicit_outcome() {
     let schema = Schema::compile(r##"{"$ref":"#"}"##).unwrap();
     let error = schema.validate(&parse("42").unwrap()).unwrap_err();
-    assert!(matches!(error, StopReason::InvalidInput(_)));
+    assert_eq!(
+        error,
+        StopReason::InvalidInput("schema reference recurs without instance progress".into())
+    );
     assert_eq!(schema.generate_witness(), WitnessOutcome::Exhausted);
 }
 
@@ -204,13 +207,21 @@ fn deep_reference_chain_exhausts_depth_budget_during_evaluation() {
     let schema =
         Schema::with_resources_governed(r#"{"$ref":"urn:test:chain0"}"#, &resources, &mut governor)
             .unwrap();
-    let error = schema
-        .validate_with(&parse("42").unwrap(), &mut governor)
-        .unwrap_err();
-    assert_eq!(
-        error,
-        StopReason::BudgetExceeded(purrassist_core::contract::Resource::Depth)
-    );
+    // A larger caller limit cannot disable the evaluator's native stack ceiling.
+    for depth in [64, 512] {
+        let mut governor = Governor::new(Budget {
+            depth,
+            work: 10_000_000,
+            ..Budget::default()
+        });
+        let error = schema
+            .validate_with(&parse("42").unwrap(), &mut governor)
+            .unwrap_err();
+        assert_eq!(
+            error,
+            StopReason::BudgetExceeded(purrassist_core::contract::Resource::Depth)
+        );
+    }
 }
 
 /// A non-recursive but still deep `allOf` chain has no cycle at all; the

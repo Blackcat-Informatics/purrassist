@@ -235,6 +235,34 @@ return to zero after a public witness call; preparation ownership is checked
 independently of those publication and candidate paths. No complete witness,
 cold-backend or graph-loading governance claim follows from this boundary.
 
+## Evaluator control-state ownership
+
+The existing evaluator retains one fallible active-key stack, preserving cycle
+identity as compiled schema location plus exact instance path. Each visited
+entry admits its ID comparison and, when needed, path comparison; copying and
+stack relocation are admitted before processing. A non-progressing cycle keeps
+its InvalidInput diagnostic text, now built through governed output formatting.
+Active keys and dynamic scopes unwind unconditionally after recursive evaluation
+or scope-entry refusal. Caller `Depth` and an independent native ceiling of 128
+bound live recursion, even when callers supply larger limits.
+
+Transient combinator keys, escaped member paths, property-name paths and string
+instances, array indices, pattern-property keys and unevaluated paths use actual
+fallible owners. Pointer spelling comes from the shared pointer builder; decimal
+formatting and compiled-index searches use their existing admitted authorities.
+Route-dispatch metadata scans admit work too. The shared array-layout view now
+resolves child IDs for both evaluator and recovery, borrowing fixed rest keywords
+and owning only synthesized positional keys. No alternate evaluator or pointer
+encoder is introduced for this control path.
+
+The old nominal dependentSchemas key lease is removed: dependency preparation
+already owns its actual escaped keys. Work and scratch counters therefore change,
+including finite-budget refusal points. Annotation/report strings, branch-result
+merging, public reports, recovery receipt clones, remaining assertion computation,
+candidate construction and host serialization remain separate contracts. Tests
+of control-owner release distinguish those retained outputs; no total-zero claim
+is made for calls that publish diagnostics or reports.
+
 ## Final refutation publication
 
 Internal witness contradictions carry static reason descriptors. Discarded
@@ -317,7 +345,7 @@ The public owned unsupported-vocabulary output remains outside governed construc
 recovery borrows and traverses the retained metadata under its caller's governor.
 
 Recovery's per-candidate cloning (`schema/recovery.rs`, `schema/recovery/
-proposals.rs`), the evaluator's violation/active-path strings
+proposals.rs`), the evaluator's retained violation strings
 (`schema/evaluate.rs`), regex compilation (`pattern::Pattern::compile_governed`,
 which `Pattern::compile` now delegates to with a default governor), repeated
 `Pattern::is_match` searches (including the backtracking search's own
@@ -499,13 +527,13 @@ Measured on a generated two-string-parameter tool schema, validating
 against 170 charged (peak 112), so a scratch limit between them validated on
 uncharged memory. The `tool_call_recover` row's slack hid the gap: other
 charges of the same recovery exceed its allocation by far more. The
-evaluator (`schema/evaluate.rs`) now keeps those collections in
-`ScratchVec`/`ScratchMap` at portable element charges, charges the strings
-they hold while held, leases each child key, instance path, reference
-resolution and held branch evaluation before building it (keys at their
-exact lengths), and charges each violation message by its allocated
-capacity. The same input now allocates 374 bytes (peak live 318) against
-515 charged (peak 412).
+evaluator implementation measured below used `ScratchVec`/`ScratchMap` at
+portable element charges, charged held strings, leased child keys, instance
+paths, reference resolution and held branch evaluations, and charged violation
+messages by allocated capacity. At that measurement the same input allocated
+374 bytes (peak live 318) against 515 charged (peak 412). These figures are
+historical; the current control-state owner boundary is described above and
+requires its own execution evidence.
 `allocation_oracle::oracle_tool_call_validation_charges_its_working_set` is
 a zero-slack control over generated and declared (`$ref`, `anyOf`) tool
 schemas with valid and invalid arguments: every allocation is admitted by a

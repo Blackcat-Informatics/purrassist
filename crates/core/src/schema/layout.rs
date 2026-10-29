@@ -21,12 +21,24 @@ pub(super) struct ItemLayout {
 }
 
 impl ItemLayout {
-    /// Child key of the schema applying to element `position`, if any.
-    pub(super) fn keyword(&self, position: usize) -> Option<String> {
+    /// Resolve the applicable compiled child, borrowing fixed rest keywords.
+    pub(super) fn child(
+        &self,
+        schema: &Schema,
+        id: usize,
+        position: usize,
+        governor: &mut crate::Governor,
+    ) -> Result<Option<usize>, crate::StopReason> {
         if position < self.prefix_len {
-            Some(format!("{}/{position}", self.prefix))
+            let key = crate::contract::format_scratch_governed(
+                format_args!("{}/{position}", self.prefix),
+                governor,
+            )?;
+            super::index::child(schema, id, &key, governor).map(Some)
         } else {
-            self.rest.map(str::to_owned)
+            self.rest
+                .map(|key| super::index::child(schema, id, key, governor))
+                .transpose()
         }
     }
 }

@@ -48,6 +48,21 @@ a resource outcome, never an unsatisfiability proof. Candidate-value constructio
 evaluator storage and witness-value publication retain their separate contracts.
 This does not complete witness or tool-graph governance.
 
+Evaluator recursion and transient path/key state now use fallible owners on the
+same caller governor. One active stack retains schema-location/instance-path
+pairs; admitted comparisons preserve cycle identity without duplicate path
+copies. Shared pointer/formatting builders and compiled child lookups cover
+combinators, object members, property names, arrays and unevaluated paths.
+Array layout resolves child IDs through one governed path shared with recovery.
+Active and dynamic-scope entries unwind on every result, including scope-entry
+refusal. Caller Depth and a native ceiling of 128 bound evaluator recursion;
+cycle diagnostics retain their existing InvalidInput text through governed
+publication. Obsolete nominal dependency-key leases are removed now that the
+shared dependency view owns its actual temporary keys. Annotation/report
+construction, merging, publication and recovery receipt clones remain one
+separate ownership contract; assertion computation and candidate construction
+are not completed by this control-state boundary.
+
 Final refutations are published only by the public governed witness boundary.
 The existing driver and required-property recovery carry allocation-free static
 reason descriptors. The publisher admits one evidence entry, copying work and

@@ -638,6 +638,18 @@ pub(super) fn enter_scope(
     Ok(true)
 }
 
+pub(super) fn child(
+    schema: &super::Schema,
+    id: usize,
+    key: &str,
+    governor: &mut Governor,
+) -> Result<usize, StopReason> {
+    Ok(*schema.index.locations[id]
+        .children
+        .get_governed(key, governor)?
+        .expect("compiled child exists"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2,19 +2,19 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Schema evaluation of one instance.
 //!
-//! Every allocation the walk makes is charged to the caller's governor
-//! before it is made: the evaluation's own collections are
-//! [`ScratchVec`]/[`ScratchMap`]s (charged at portable element sizes,
-//! released when the evaluation drops them), the strings they hold are
-//! charged by length while held, and every transient lookup key or child
-//! path is built at its exact length under a [`ScratchLease`]. Violations and
-//! format evidence are the report's retained output and keep their charge.
+//! Recursion keys and transient paths/lookup keys retain fallible owners and
+//! admit copying, comparison, lookup and relocation through the caller governor.
+//! Active keys and dynamic scopes unwind on every result; recursion obeys both
+//! caller Depth and a native ceiling. Annotation/report construction, merging
+//! and publication retain their separate storage contract and are not claimed
+//! to have complete ownership governance here.
 use super::layout::Dependency;
 use super::{Schema, Violation};
+use super::{index, reference};
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Evidence, Governor, Resource, ScratchLease, ScratchMap, ScratchMeter, ScratchVec, StopReason,
-    Validation,
+    Evidence, Governor, Resource, ScratchMeter, ScratchString, ScratchVec, StopReason, Validation,
+    format_output_governed, format_scratch_governed,
 };
 use crate::json::{Member, Node, Value};
 
@@ -37,11 +37,6 @@ const _: () = assert!(core::mem::size_of::<Evidence>() as u64 <= EVIDENCE_BYTES)
 /// it decides (`allOf`, `anyOf`, `oneOf`): at least
 /// `size_of::<Option<Evaluation>>()` on every target.
 const EVALUATION_BYTES: u64 = 256;
-
-/// `ScratchBytes` for one transient array-item child key
-/// ([`super::layout::ItemLayout::keyword`]): `additionalItems`, or a
-/// positional prefix (`prefixItems/` at most) and a decimal index.
-const ITEM_KEY_BYTES: u64 = 32;
 
 /// Bytes charged while held for the contents of strings an evaluation
 /// keeps (member names, pattern keyword keys), released when dropped.
@@ -168,7 +163,7 @@ struct Evaluator<'s, 'g> {
     /// The `(location, instance path)` pairs being evaluated: the current
     /// recursion, so a reference that recurs without instance progress is
     /// detected.
-    active: ScratchMap<(usize, String), ()>,
+    active: ScratchVec<(usize, ScratchString)>,
     /// The dynamic scope: the locations whose base URIs were entered.
     scope: ScratchVec<usize>,
 }
@@ -181,7 +176,7 @@ pub(super) fn run(
 ) -> Result<EvalResult, StopReason> {
     let mut evaluator = Evaluator {
         schema,
-        active: ScratchMap::new(governor),
+        active: ScratchVec::new(governor),
         scope: ScratchVec::new(governor),
         governor,
     };
@@ -227,7 +222,7 @@ pub(super) fn run(
     })
 }
 
-/// The byte length of `key` as an RFC 6901 pointer segment.
+/// Report-path sizing; retained violation storage has a separate contract.
 fn escaped_len(key: &str) -> usize {
     key.len()
         + key
@@ -236,7 +231,7 @@ fn escaped_len(key: &str) -> usize {
             .count()
 }
 
-/// Append `key` escaped as an RFC 6901 pointer segment.
+/// Report-path encoding; traversal keys use the shared admitted pointer builder.
 fn push_segment(out: &mut String, key: &str) {
     for character in key.chars() {
         match character {
@@ -247,52 +242,18 @@ fn push_segment(out: &mut String, key: &str) {
     }
 }
 
-/// The decimal length of `value`.
-const fn digits(mut value: usize) -> usize {
-    let mut count = 1;
-    while value >= 10 {
-        value /= 10;
-        count += 1;
-    }
-    count
-}
-
-/// One piece of a transient key built by [`Evaluator::key`].
-enum Piece<'a> {
-    /// Text as it is.
-    Text(&'a str),
-    /// A member name, escaped as a pointer segment.
-    Segment(&'a str),
-    /// A decimal index.
-    Index(usize),
-}
-
 impl Evaluator<'_, '_> {
-    /// Build a transient key (a child lookup key or an instance path) at its
-    /// exact length, charged by a lease the caller holds while the key
-    /// lives.
-    fn key(&mut self, pieces: &[Piece<'_>]) -> Result<(String, ScratchLease), StopReason> {
-        let length: usize = pieces
-            .iter()
-            .map(|piece| match piece {
-                Piece::Text(text) => text.len(),
-                Piece::Segment(key) => escaped_len(key),
-                Piece::Index(index) => digits(*index),
-            })
-            .sum();
-        let lease = self.governor.lease_scratch(size(length))?;
-        let mut key = String::with_capacity(length);
-        for piece in pieces {
-            match piece {
-                Piece::Text(text) => key.push_str(text),
-                Piece::Segment(segment) => push_segment(&mut key, segment),
-                Piece::Index(index) => {
-                    use core::fmt::Write as _;
-                    let _ = write!(key, "{index}");
-                }
-            }
-        }
-        Ok((key, lease))
+    /// Resolve the compiled child before entering its evaluation frame.
+    fn eval_child(
+        &mut self,
+        id: usize,
+        key: &str,
+        instance: &Node,
+        path: &str,
+        depth: u32,
+    ) -> Result<Evaluation, StopReason> {
+        let child = index::child(self.schema, id, key, self.governor)?;
+        self.eval(child, instance, path, depth)
     }
     fn violation(
         &mut self,
@@ -345,20 +306,26 @@ impl Evaluator<'_, '_> {
     ) -> Result<Evaluation, StopReason> {
         self.governor.charge(Resource::Work, 1)?;
         self.governor.charge(Resource::Depth, u64::from(depth))?;
-        // The active-recursion key retains two `String` copies of `path`
-        // (one moved into the map, one kept here to remove it later);
-        // charge before allocating either. Released when this call returns,
-        // matching the unconditional removal below.
-        let _lease = self
-            .governor
-            .lease_scratch(size(path.len()).saturating_mul(2).saturating_add(48))?;
-        let key = (id, path.to_string());
-        if self.active.get(&key).is_some() {
-            return Err(StopReason::InvalidInput(
-                "schema reference recurs without instance progress".into(),
-            ));
+        if depth > 128 {
+            return Err(self.governor.stop_resource(Resource::Depth));
         }
-        self.active.insert(key.clone(), ())?;
+        for (known_id, known_path) in &self.active {
+            reference::work(self.governor, 1)?;
+            if *known_id == id {
+                reference::work(
+                    self.governor,
+                    path.len().min(known_path.len()).saturating_add(1),
+                )?;
+                if known_path.as_str() == path {
+                    return Err(StopReason::InvalidInput(format_output_governed(
+                        format_args!("schema reference recurs without instance progress"),
+                        self.governor,
+                    )?));
+                }
+            }
+        }
+        let key = reference::copy(path, self.governor)?;
+        index::push(&mut self.active, (id, key), self.governor)?;
         let entered = super::index::enter_scope(self.schema, id, &mut self.scope, self.governor);
         let result = match entered {
             Ok(true) => {
@@ -369,7 +336,7 @@ impl Evaluator<'_, '_> {
             Ok(false) => self.evaluate_body(id, instance, path, depth),
             Err(reason) => Err(reason),
         };
-        self.active.remove(&key);
+        self.active.pop();
         result
     }
     fn evaluate_body(
@@ -380,6 +347,7 @@ impl Evaluator<'_, '_> {
         depth: u32,
     ) -> Result<Evaluation, StopReason> {
         let schema = self.schema;
+        reference::work(self.governor, schema.index.locations[id].route.len())?;
         let body = schema.keywords(id);
         let mut result = Evaluation::new(self.governor);
         if let Value::Bool(accept) = body.value {
@@ -416,8 +384,13 @@ impl Evaluator<'_, '_> {
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
         let schema = self.schema;
+        reference::work(self.governor, schema.index.locations[id].route.len())?;
+        let body = schema.keywords(id);
         for keyword in ["$ref", "$dynamicRef"] {
-            if let Some(reference) = schema.keywords(id).get(keyword).and_then(Node::as_str) {
+            if let Some(reference) = body
+                .get_governed(keyword, self.governor)?
+                .and_then(Node::as_str)
+            {
                 let base = &schema.index.locations[id].base;
                 let mut target = super::reference::resolve(schema, base, reference, self.governor)?;
                 if keyword == "$dynamicRef" {
@@ -656,12 +629,13 @@ impl Evaluator<'_, '_> {
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
         let schema = self.schema;
+        reference::work(self.governor, schema.index.locations[id].route.len())?;
         let body = schema.keywords(id);
         for keyword in ["allOf", "anyOf", "oneOf"] {
             if let Some(Node {
                 value: Value::Array(children),
                 ..
-            }) = body.get(keyword)
+            }) = body.get_governed(keyword, self.governor)?
             {
                 // Every branch's evaluation is held until the keyword's
                 // outcome is known.
@@ -671,12 +645,11 @@ impl Evaluator<'_, '_> {
                 let mut branches: Vec<Option<Evaluation>> = Vec::with_capacity(children.len());
                 for position in 0..children.len() {
                     let child = {
-                        let (key, _lease) = self.key(&[
-                            Piece::Text(keyword),
-                            Piece::Text("/"),
-                            Piece::Index(position),
-                        ])?;
-                        schema.child(id, &key)
+                        let key = format_scratch_governed(
+                            format_args!("{keyword}/{position}"),
+                            self.governor,
+                        )?;
+                        index::child(schema, id, &key, self.governor)?
                     };
                     branches.push(Some(self.eval(child, instance, path, depth + 1)?));
                 }
@@ -718,15 +691,15 @@ impl Evaluator<'_, '_> {
                 }
             }
         }
-        if body.get("not").is_some() {
-            let mut branch = self.eval(schema.child(id, "not"), instance, path, depth + 1)?;
+        if body.get_governed("not", self.governor)?.is_some() {
+            let mut branch = self.eval_child(id, "not", instance, path, depth + 1)?;
             if branch.valid() {
                 self.violation(result, id, path, "not", "negated schema matched")?;
             }
             result.merge_evidence(&mut branch)?;
         }
-        if body.get("if").is_some() {
-            let mut condition = self.eval(schema.child(id, "if"), instance, path, depth + 1)?;
+        if body.get_governed("if", self.governor)?.is_some() {
+            let mut condition = self.eval_child(id, "if", instance, path, depth + 1)?;
             let branch = if condition.valid() {
                 result.merge(condition)?;
                 "then"
@@ -734,8 +707,8 @@ impl Evaluator<'_, '_> {
                 result.merge_evidence(&mut condition)?;
                 "else"
             };
-            if body.get(branch).is_some() {
-                result.merge(self.eval(schema.child(id, branch), instance, path, depth + 1)?)?;
+            if body.get_governed(branch, self.governor)?.is_some() {
+                result.merge(self.eval_child(id, branch, instance, path, depth + 1)?)?;
             }
         }
         Ok(())
@@ -794,20 +767,6 @@ impl Evaluator<'_, '_> {
                 }
             }
         }
-        // Each `dependentSchemas` entry's child key is built by
-        // `pointer_segment` and `format!`: at most two escaping passes and a
-        // formatting buffer, each at most twice the escaped key's length.
-        let _dependencies = match body.get("dependentSchemas").map(|node| &node.value) {
-            Some(Value::Object(entries)) => Some(
-                self.governor.lease_scratch(
-                    entries
-                        .iter()
-                        .map(|entry| size(entry.key.len()).saturating_mul(16).saturating_add(96))
-                        .fold(0, u64::saturating_add),
-                )?,
-            ),
-            _ => None,
-        };
         for dependency in schema.dependencies(id, self.governor)?.iter().copied() {
             match dependency {
                 Dependency::Required {
@@ -847,34 +806,31 @@ impl Evaluator<'_, '_> {
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
         let schema = self.schema;
+        reference::work(self.governor, schema.index.locations[id].route.len())?;
         let body = schema.keywords(id);
         let mut matched = false;
-        let (child_path, _child_path) = self.key(&[
-            Piece::Text(path),
-            Piece::Text("/"),
-            Piece::Segment(&member.key),
-        ])?;
-        if body.get("propertyNames").is_some() {
+        let child_path = index::pointer(path, &member.key, self.governor)?;
+        if body.get_governed("propertyNames", self.governor)?.is_some() {
             // The name as a string instance, and its instance path.
-            let _name = self.governor.lease_scratch(size(member.key.len()))?;
-            let name = Node::new(Value::String(member.key.clone()));
-            let (name_path, _name_path) =
-                self.key(&[Piece::Text(&child_path), Piece::Text("/@name")])?;
-            result.merge_child(self.eval(
-                schema.child(id, "propertyNames"),
+            let name = reference::copy(&member.key, self.governor)?;
+            let (name, _name_lease) = name.into_owned_parts();
+            let name = Node::new(Value::String(name));
+            let name_path = index::pointer(&child_path, "@name", self.governor)?;
+            result.merge_child(self.eval_child(
+                id,
+                "propertyNames",
                 &name,
                 &name_path,
                 depth + 1,
             )?)?;
         }
-        if let Some(properties) = body.get("properties")
-            && properties.get(&member.key).is_some()
+        if let Some(properties) = body.get_governed("properties", self.governor)?
+            && super::compile::member(properties, &member.key, self.governor)?.is_some()
         {
             matched = true;
             let child = {
-                let (key, _lease) =
-                    self.key(&[Piece::Text("properties/"), Piece::Segment(&member.key)])?;
-                schema.child(id, &key)
+                let key = index::pointer("properties", &member.key, self.governor)?;
+                index::child(schema, id, &key, self.governor)?
             };
             let branch = self.eval(child, &member.value, &child_path, depth + 1)?;
             result.merge_child(branch)?;
@@ -882,32 +838,33 @@ impl Evaluator<'_, '_> {
         if let Some(Node {
             value: Value::Object(patterns),
             ..
-        }) = body.get("patternProperties")
+        }) = body.get_governed("patternProperties", self.governor)?
         {
             for pattern in patterns {
-                let (name, _name) = self.key(&[
-                    Piece::Text("patternProperties/"),
-                    Piece::Segment(&pattern.key),
-                ])?;
+                let name = index::pointer("patternProperties", &pattern.key, self.governor)?;
                 result.pattern(id, &name)?;
-                if schema.index.locations[id].patterns[&name]
+                if schema.index.locations[id]
+                    .patterns
+                    .get_governed(name.as_str(), self.governor)?
+                    .expect("compiled pattern exists")
                     .is_match(&member.key, self.governor)?
                 {
                     matched = true;
-                    let branch = self.eval(
-                        schema.child(id, &name),
-                        &member.value,
-                        &child_path,
-                        depth + 1,
-                    )?;
+                    let branch =
+                        self.eval_child(id, &name, &member.value, &child_path, depth + 1)?;
                     result.merge_child(branch)?;
                 }
             }
         }
-        if !matched && body.get("additionalProperties").is_some() {
+        if !matched
+            && body
+                .get_governed("additionalProperties", self.governor)?
+                .is_some()
+        {
             matched = true;
-            let branch = self.eval(
-                schema.child(id, "additionalProperties"),
+            let branch = self.eval_child(
+                id,
+                "additionalProperties",
                 &member.value,
                 &child_path,
                 depth + 1,
@@ -928,6 +885,7 @@ impl Evaluator<'_, '_> {
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
         let schema = self.schema;
+        reference::work(self.governor, schema.index.locations[id].route.len())?;
         let body = schema.keywords(id);
         self.bounds(id, path, items.len(), "minItems", "maxItems", result)?;
         if body
@@ -952,27 +910,21 @@ impl Evaluator<'_, '_> {
         }
         let layout = schema.item_layout(id, self.governor)?;
         for (position, item) in items.iter().enumerate() {
-            let child = {
-                let _key = self.governor.lease_scratch(ITEM_KEY_BYTES)?;
-                layout
-                    .keyword(position)
-                    .map(|keyword| schema.child(id, &keyword))
-            };
+            let child = layout.child(schema, id, position, self.governor)?;
             if let Some(child) = child {
-                let (item_path, _item_path) =
-                    self.key(&[Piece::Text(path), Piece::Text("/"), Piece::Index(position)])?;
+                let item_path =
+                    format_scratch_governed(format_args!("{path}/{position}"), self.governor)?;
                 let branch = self.eval(child, item, &item_path, depth + 1)?;
                 result.merge_child(branch)?;
                 result.items.push(position)?;
             }
         }
-        if body.get("contains").is_some() {
+        if body.get_governed("contains", self.governor)?.is_some() {
             let mut matched: ScratchVec<usize> = ScratchVec::new(self.governor);
             for (position, item) in items.iter().enumerate() {
-                let (item_path, _item_path) =
-                    self.key(&[Piece::Text(path), Piece::Text("/"), Piece::Index(position)])?;
-                let mut branch =
-                    self.eval(schema.child(id, "contains"), item, &item_path, depth + 1)?;
+                let item_path =
+                    format_scratch_governed(format_args!("{path}/{position}"), self.governor)?;
+                let mut branch = self.eval_child(id, "contains", item, &item_path, depth + 1)?;
                 if branch.valid() {
                     matched.push(position)?;
                 }
@@ -1008,19 +960,21 @@ impl Evaluator<'_, '_> {
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
         let schema = self.schema;
+        reference::work(self.governor, schema.index.locations[id].route.len())?;
         let body = schema.keywords(id);
         match &instance.value {
-            Value::Object(members) if body.get("unevaluatedProperties").is_some() => {
+            Value::Object(members)
+                if body
+                    .get_governed("unevaluatedProperties", self.governor)?
+                    .is_some() =>
+            {
                 let pending = self.unevaluated_members(members, result)?;
                 for &index in pending.as_slice() {
                     let member = &members[index];
-                    let (member_path, _member_path) = self.key(&[
-                        Piece::Text(path),
-                        Piece::Text("/"),
-                        Piece::Segment(&member.key),
-                    ])?;
-                    let branch = self.eval(
-                        schema.child(id, "unevaluatedProperties"),
+                    let member_path = index::pointer(path, &member.key, self.governor)?;
+                    let branch = self.eval_child(
+                        id,
+                        "unevaluatedProperties",
                         &member.value,
                         &member_path,
                         depth + 1,
@@ -1031,7 +985,11 @@ impl Evaluator<'_, '_> {
                     result.property(&members[index].key)?;
                 }
             }
-            Value::Array(items) if body.get("unevaluatedItems").is_some() => {
+            Value::Array(items)
+                if body
+                    .get_governed("unevaluatedItems", self.governor)?
+                    .is_some() =>
+            {
                 result.items.as_mut_slice().sort_unstable();
                 let mut pending: ScratchVec<usize> = ScratchVec::new(self.governor);
                 for position in 0..items.len() {
@@ -1041,10 +999,11 @@ impl Evaluator<'_, '_> {
                     }
                 }
                 for &position in pending.as_slice() {
-                    let (item_path, _item_path) =
-                        self.key(&[Piece::Text(path), Piece::Text("/"), Piece::Index(position)])?;
-                    let branch = self.eval(
-                        schema.child(id, "unevaluatedItems"),
+                    let item_path =
+                        format_scratch_governed(format_args!("{path}/{position}"), self.governor)?;
+                    let branch = self.eval_child(
+                        id,
+                        "unevaluatedItems",
                         &items[position],
                         &item_path,
                         depth + 1,
@@ -1108,5 +1067,91 @@ fn matches_type(instance: &Node, kind: &str) -> bool {
         | ("string", Value::String(_)) => true,
         ("integer", Value::Number(number)) => number.is_integer(),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Evaluator, run};
+    use crate::{
+        Budget, Governor, ScratchVec, StopReason, contract::Resource, json, schema::Schema,
+    };
+
+    #[test]
+    fn control_paths_release_on_success_and_late_admission_refusal() {
+        let schema = Schema::compile(
+            r##"{"$defs":{"node":{"properties":{"雪/~":{"$ref":"#/$defs/node"}}}},"$ref":"#/$defs/node"}"##,
+        ).unwrap();
+        let instance = json::parse(r#"{"雪/~":{"雪/~":{}}}"#).unwrap();
+        let mut governor = Governor::new(Budget::default());
+        assert!(
+            run(&schema, schema.root, &instance, &mut governor)
+                .unwrap()
+                .violations
+                .is_empty()
+        );
+        let usage = governor.usage();
+        assert_eq!(governor.scratch_meter().live(), 0);
+        for (work, scratch_bytes, reason) in [
+            (usage.work, usage.peak_scratch_bytes, None),
+            (
+                usage.work - 1,
+                usage.peak_scratch_bytes,
+                Some(Resource::Work),
+            ),
+            (
+                usage.work,
+                usage.peak_scratch_bytes - 1,
+                Some(Resource::ScratchBytes),
+            ),
+        ] {
+            let mut governor = Governor::new(Budget {
+                work,
+                scratch_bytes,
+                ..Budget::default()
+            });
+            let result = run(&schema, schema.root, &instance, &mut governor);
+            if let Some(resource) = reason {
+                assert!(
+                    matches!(result, Err(StopReason::BudgetExceeded(actual)) if actual == resource)
+                );
+            } else {
+                assert!(result.unwrap().violations.is_empty());
+            }
+            assert_eq!(governor.scratch_meter().live(), 0);
+        }
+
+        // Reserve active capacity but leave no room for the first dynamic
+        // scope slot. Refusal occurs after the active key has been pushed.
+        let schema = Schema::compile("true").unwrap();
+        let mut governor = Governor::new(Budget::default());
+        let mut active = ScratchVec::new(&governor);
+        active.reserve(1).unwrap();
+        let remaining = governor.limits().scratch_bytes - governor.scratch_meter().live();
+        let occupied = governor.lease_scratch(remaining).unwrap();
+        let mut evaluator = Evaluator {
+            schema: &schema,
+            active,
+            scope: ScratchVec::new(&governor),
+            governor: &mut governor,
+        };
+        assert!(matches!(
+            evaluator.eval(schema.root, &instance, "", 0),
+            Err(StopReason::BudgetExceeded(Resource::ScratchBytes))
+        ));
+        assert!(evaluator.active.is_empty());
+        assert!(evaluator.scope.is_empty());
+        drop(evaluator);
+        assert_eq!(governor.scratch_meter().live(), remaining);
+        drop(occupied);
+        assert_eq!(governor.scratch_meter().live(), 0);
+
+        // Report strings are a separate retained-output contract; only their
+        // exact path bytes, not zero total output admission, are asserted here.
+        let schema = Schema::compile(r#"{"properties":{"雪/~":{"prefixItems":[false]}}}"#).unwrap();
+        let report = schema
+            .validate(&json::parse(r#"{"雪/~":[1]}"#).unwrap())
+            .unwrap();
+        assert_eq!(report.violations[0].instance_path, "/雪~1~0/0");
     }
 }

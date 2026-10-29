@@ -820,23 +820,16 @@ impl Walk<'_, '_> {
             let mut next = route.to_vec();
             next.push(position);
             let child_path = format!("{path}/{position}");
-            let key = layout.keyword(position).or_else(|| {
-                body.get("unevaluatedItems")
-                    .map(|_| "unevaluatedItems".to_owned())
-            });
-            if let Some(key) = key
-                && schema.index.locations[schema_id]
+            let child = match layout.child(schema, schema_id, position, self.governor)? {
+                Some(child) => Some(child),
+                None if body.get("unevaluatedItems").is_some() => schema.index.locations[schema_id]
                     .children
-                    .contains_key(&key)
-            {
-                self.propose(
-                    item,
-                    schema.child(schema_id, &key),
-                    (&next, &child_path),
-                    depth + 1,
-                    visited,
-                    scope,
-                )?;
+                    .get_governed("unevaluatedItems", self.governor)?
+                    .copied(),
+                None => None,
+            };
+            if let Some(child) = child {
+                self.propose(item, child, (&next, &child_path), depth + 1, visited, scope)?;
             }
             if body.get("contains").is_some() {
                 self.propose(
