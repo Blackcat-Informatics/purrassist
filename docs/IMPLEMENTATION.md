@@ -55,7 +55,9 @@ copies. Shared pointer/formatting builders and compiled child lookups cover
 combinators, object members, property names, arrays and unevaluated paths.
 Array layout resolves child IDs through one governed path shared with recovery.
 Active and dynamic-scope entries unwind on every result, including scope-entry
-refusal. Caller Depth and a distinct native ceiling of 256 bound evaluator recursion;
+refusal. Integer tests and numeric/count comparisons use admitted operations. Temporary
+violation messages and serialized type diagnostics hold fallible owners until
+collection succeeds. Caller Depth and a distinct native ceiling of 256 bound evaluator recursion;
 cycle diagnostics retain their existing InvalidInput text through governed
 publication. Obsolete nominal dependency-key leases are removed now that the
 shared dependency view owns its actual temporary keys. Annotation/report

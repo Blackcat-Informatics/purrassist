@@ -5,7 +5,9 @@
 //! Recursion keys and transient paths/lookup keys retain fallible owners and
 //! admit copying, comparison, lookup and relocation through the caller governor.
 //! Active keys and dynamic scopes unwind on every result; recursion obeys both
-//! caller Depth and a native ceiling. Annotation/report construction, merging
+//! caller Depth and a native ceiling. Integer tests, bound comparisons and
+//! transient violation messages also use admitted operations. Remaining
+//! annotation/report construction, merging
 //! and publication retain their separate storage contract and are not claimed
 //! to have complete ownership governance here.
 use super::layout::Dependency;
@@ -267,19 +269,18 @@ impl Evaluator<'_, '_> {
         id: usize,
         path: &str,
         keyword: &str,
-        message: impl Into<String>,
+        message: core::fmt::Arguments<'_>,
     ) -> Result<(), StopReason> {
         self.governor.charge(Resource::EvidenceEntries, 1)?;
         let location = &self.schema.index.locations[id];
-        let message = message.into();
+        let message = format_scratch_governed(message, self.governor)?;
         // A `Violation` may be a transient search diagnostic or the actual
         // output an external `Schema::validate` caller retains indefinitely.
         // Since that is not known here, its strings are charged directly and
         // never released, like `retain_source`: safe to over-count, never to
         // under-count or to release memory a caller may still be holding.
-        // The message is charged by its allocated capacity (a formatted
-        // message may hold more than its length); the other strings are
-        // built at their exact lengths.
+        // The message retains its temporary owner until transfer below; the
+        // other strings are built at their exact lengths.
         let schema_path_len =
             location.base.len() + location.pointer.len() + 2 + escaped_len(keyword);
         self.governor.charge(
@@ -287,7 +288,6 @@ impl Evaluator<'_, '_> {
             size(path.len())
                 .saturating_add(size(schema_path_len))
                 .saturating_add(size(keyword.len()))
-                .saturating_add(size(message.capacity()))
                 .saturating_add(64),
         )?;
         let mut schema_path = String::with_capacity(schema_path_len);
@@ -296,12 +296,15 @@ impl Evaluator<'_, '_> {
         schema_path.push_str(&location.pointer);
         schema_path.push('/');
         push_segment(&mut schema_path, keyword);
+        let (message, message_lease) = message.into_owned_parts();
         result.errors.push(Violation {
             instance_path: path.into(),
             schema_path,
             keyword: keyword.into(),
             message,
-        })
+        })?;
+        message_lease.retain();
+        Ok(())
     }
     fn eval(
         &mut self,
@@ -363,7 +366,7 @@ impl Evaluator<'_, '_> {
                     id,
                     path,
                     "false",
-                    "boolean schema rejects every instance",
+                    format_args!("boolean schema rejects every instance"),
                 )?;
             }
             return Ok(result);
@@ -427,23 +430,40 @@ impl Evaluator<'_, '_> {
         let body = schema.keywords(id);
         if let Some(expected) = body.get("type") {
             let valid = match &expected.value {
-                Value::String(kind) => matches_type(instance, kind),
-                Value::Array(kinds) => kinds
-                    .iter()
-                    .filter_map(Node::as_str)
-                    .any(|kind| matches_type(instance, kind)),
+                Value::String(kind) => matches_type(instance, kind, self.governor)?,
+                Value::Array(kinds) => {
+                    let mut matched = false;
+                    for kind in kinds.iter().filter_map(Node::as_str) {
+                        if matches_type(instance, kind, self.governor)? {
+                            matched = true;
+                            break;
+                        }
+                    }
+                    matched
+                }
                 _ => false,
             };
             if !valid {
-                let expected = expected.to_json();
-                let _expected = self.governor.lease_scratch(size(expected.capacity()))?;
-                self.violation(result, id, path, "type", format!("expected {expected}"))?;
+                let expected = expected.to_json_scratch(self.governor)?;
+                self.violation(
+                    result,
+                    id,
+                    path,
+                    "type",
+                    format_args!("expected {}", expected.as_str()),
+                )?;
             }
         }
         if let Some(expected) = body.get("const")
             && !instance.equivalent_governed(expected, self.governor)?
         {
-            self.violation(result, id, path, "const", "instance differs from const")?;
+            self.violation(
+                result,
+                id,
+                path,
+                "const",
+                format_args!("instance differs from const"),
+            )?;
         }
         if let Some(Node {
             value: Value::Array(values),
@@ -455,7 +475,13 @@ impl Evaluator<'_, '_> {
                 u64::try_from(values.len()).unwrap_or(u64::MAX),
             )?;
             if !crate::json::equivalent_any(values, instance, self.governor)? {
-                self.violation(result, id, path, "enum", "instance is not an enum member")?;
+                self.violation(
+                    result,
+                    id,
+                    path,
+                    "enum",
+                    format_args!("instance is not an enum member"),
+                )?;
             }
         }
         self.scalar(id, instance, path, result)
@@ -477,7 +503,7 @@ impl Evaluator<'_, '_> {
                         ..
                     }) = body.get(keyword)
                     {
-                        let comparison = number.compare(bound);
+                        let comparison = number.compare_governed(bound, self.governor)?;
                         let valid = match keyword {
                             "minimum" => !comparison.is_lt(),
                             "maximum" => !comparison.is_gt(),
@@ -490,7 +516,7 @@ impl Evaluator<'_, '_> {
                                 id,
                                 path,
                                 keyword,
-                                format!("{number} violates bound {bound}"),
+                                format_args!("{number} violates bound {bound}"),
                             )?;
                         }
                     }
@@ -506,7 +532,7 @@ impl Evaluator<'_, '_> {
                         id,
                         path,
                         "multipleOf",
-                        format!("{number} is not an exact multiple of {divisor}"),
+                        format_args!("{number} is not an exact multiple of {divisor}"),
                     )?;
                 }
             }
@@ -527,7 +553,7 @@ impl Evaluator<'_, '_> {
                             id,
                             path,
                             "pattern",
-                            "string does not match the pattern",
+                            format_args!("string does not match the pattern"),
                         )?;
                     }
                 }
@@ -591,7 +617,7 @@ impl Evaluator<'_, '_> {
                 id,
                 path,
                 "format",
-                format!("does not satisfy format {name:?}"),
+                format_args!("does not satisfy format {name:?}"),
             )?;
         }
         Ok(())
@@ -605,21 +631,20 @@ impl Evaluator<'_, '_> {
         maximum: &str,
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
-        let number = crate::json::Number::from_count(count);
         for (keyword, is_minimum) in [(minimum, true), (maximum, false)] {
             if let Some(Node {
                 value: Value::Number(bound),
                 ..
             }) = self.schema.keywords(id).get(keyword)
             {
-                let comparison = number.compare(bound);
-                if (is_minimum && comparison.is_lt()) || (!is_minimum && comparison.is_gt()) {
+                let comparison = bound.compare_count_governed(count, self.governor)?;
+                if (is_minimum && comparison.is_gt()) || (!is_minimum && comparison.is_lt()) {
                     self.violation(
                         result,
                         id,
                         path,
                         keyword,
-                        format!("count {count} violates bound {bound}"),
+                        format_args!("count {count} violates bound {bound}"),
                     )?;
                 }
             }
@@ -675,7 +700,7 @@ impl Evaluator<'_, '_> {
                         id,
                         path,
                         keyword,
-                        format!("{passed} of {} branches passed", children.len()),
+                        format_args!("{passed} of {} branches passed", children.len()),
                     )?;
                 }
                 // The branches whose annotations count come first: the
@@ -700,7 +725,13 @@ impl Evaluator<'_, '_> {
         if body.get_governed("not", self.governor)?.is_some() {
             let mut branch = self.eval_child(id, "not", instance, path, depth + 1)?;
             if branch.valid() {
-                self.violation(result, id, path, "not", "negated schema matched")?;
+                self.violation(
+                    result,
+                    id,
+                    path,
+                    "not",
+                    format_args!("negated schema matched"),
+                )?;
             }
             result.merge_evidence(&mut branch)?;
         }
@@ -753,7 +784,7 @@ impl Evaluator<'_, '_> {
                 id,
                 path,
                 "duplicate-members",
-                "object has ambiguous duplicate member occurrences",
+                format_args!("object has ambiguous duplicate member occurrences"),
             )?;
         }
         if let Some(Node {
@@ -768,7 +799,7 @@ impl Evaluator<'_, '_> {
                         id,
                         path,
                         "required",
-                        format!("missing required member {key:?}"),
+                        format_args!("missing required member {key:?}"),
                     )?;
                 }
             }
@@ -787,7 +818,7 @@ impl Evaluator<'_, '_> {
                                 id,
                                 path,
                                 keyword,
-                                format!("{trigger} requires member {key:?}"),
+                                format_args!("{trigger} requires member {key:?}"),
                             )?;
                         }
                     }
@@ -907,7 +938,7 @@ impl Evaluator<'_, '_> {
                             id,
                             path,
                             "uniqueItems",
-                            format!("duplicate array value at index {position}"),
+                            format_args!("duplicate array value at index {position}"),
                         )?;
                         break;
                     }
@@ -942,7 +973,7 @@ impl Evaluator<'_, '_> {
                     id,
                     path,
                     "contains",
-                    "no array member satisfies contains",
+                    format_args!("no array member satisfies contains"),
                 )?;
             }
             self.bounds(
@@ -1063,17 +1094,20 @@ impl Evaluator<'_, '_> {
         Ok(first)
     }
 }
-fn matches_type(instance: &Node, kind: &str) -> bool {
-    match (kind, &instance.value) {
+fn matches_type(instance: &Node, kind: &str, governor: &mut Governor) -> Result<bool, StopReason> {
+    Ok(match (kind, &instance.value) {
         ("null", Value::Null)
         | ("boolean", Value::Bool(_))
         | ("object", Value::Object(_))
         | ("array", Value::Array(_))
         | ("number", Value::Number(_))
         | ("string", Value::String(_)) => true,
-        ("integer", Value::Number(number)) => number.is_integer(),
+        ("integer", Value::Number(number)) => !matches!(
+            number.integer_magnitude_governed(governor)?,
+            crate::json::IntegerReading::Fractional
+        ),
         _ => false,
-    }
+    })
 }
 
 #[cfg(test)]

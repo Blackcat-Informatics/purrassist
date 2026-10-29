@@ -242,6 +242,9 @@ identity as compiled schema location plus exact instance path. Each visited
 entry admits its ID comparison and, when needed, path comparison; copying and
 stack relocation are admitted before processing. A non-progressing cycle keeps
 its InvalidInput diagnostic text, now built through governed output formatting.
+Integer tests and numeric/count comparisons also use admitted operations. Count
+text is allocated only for present bounds, through a temporary owner; diagnostic
+messages and serialized expected types retain temporary owners until collection.
 Active keys and dynamic scopes unwind unconditionally after recursive evaluation
 or scope-entry refusal. Caller `Depth` and an independent native ceiling of 256
 bound live recursion, even when callers supply larger limits. This ceiling counts
