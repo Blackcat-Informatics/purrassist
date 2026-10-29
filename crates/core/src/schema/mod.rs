@@ -37,7 +37,7 @@ pub const DRAFT_07: &str = "http://json-schema.org/draft-07/schema";
 /// Borrow it for validation, generation, recovery and host helper lifetimes.
 #[derive(Debug)]
 pub struct Schema {
-    documents: Arena<Node>,
+    documents: Arena<crate::json::OwnedDocument>,
     index: Index,
     root: usize,
     digest: Digest,
@@ -406,7 +406,7 @@ impl Schema {
     }
     fn body(&self, id: usize) -> &Node {
         at_route(
-            &self.documents[self.index.locations[id].document],
+            self.documents[self.index.locations[id].document].root(),
             &self.index.locations[id].route,
         )
     }

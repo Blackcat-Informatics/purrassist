@@ -7,13 +7,15 @@ snapshots through a private fallible AVL arena, including the actual reference,
 validation, witness and recovery consumers. Stable locations, ordered vocabulary
 metadata and prepared pattern ownership are preserved. Keyword and vocabulary
 validation use admitted lookups, temporary sets, numeric scans and diagnostics.
-DOM ownership, complete upstream preparation and graph integration remain under
-#33 and #36.
+Strict parsed documents now retain their actual buffer reservations through the
+same parser used by public JSON parsing. Root and referenced documents release
+with their schema; temporary meta-schemas and partial failures release immediately.
+Complete upstream preparation and graph integration remain under #33 and #36.
 
 Complete first-party schema reference resolution now shares caller governance across
 URI and identity preparation, pointer linkage, validation, dynamic witness edges
 and recovery. Temporary target ownership and diagnostics are admitted; native
-resource failures remain distinct from malformed linkage. General schema DOM ownership and full compiler preparation remain separate prerequisites. #33 and #36
+resource failures remain distinct from malformed linkage. Full compiler preparation, including the separate legacy storage allowance, remains an unfinished prerequisite. #33 and #36
 remain open for their source, graph, bridge and backend integration acceptance.
 
 Status: **pipeline specified; caller-input foundations implemented**. This document and [TOOLS.md](TOOLS.md)
@@ -496,8 +498,9 @@ identity with allocation-free streaming SHA-256, bounded admitted hashing work
 and a final governor check before complete schema publication. Exact dialect,
 root and ordered supplied-resource identity bytes remain unchanged, including
 unused resources. This completes bundle identity construction only; source
-parsing, schema index/reference ownership, algebra preparation and graph/compiler
-integration remain required under #33 and #36.
+parsing and schema index/reference ownership have since gained their own admitted
+owners. Algebra preparation and graph/compiler integration remain required under
+#33 and #36.
 
 This adopts the supported upstream profile only. Full G7 qualification still
 requires exact plain-number semantics upstream and downstream executable

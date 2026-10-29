@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Ordered, source-addressed JSON with exact decimal values.
+mod document;
 mod emission;
 mod equivalence;
 pub mod incremental;
@@ -9,12 +10,41 @@ mod number;
 mod operation;
 mod parser;
 use crate::contract::saturating_size as size;
-use crate::contract::{Governor, Resource, ScratchCharge, ScratchString, StopReason};
+use crate::contract::{Governor, Resource, ScratchCharge, ScratchLease, ScratchString, StopReason};
 use core::ops::Range;
 pub use incremental::recover_syntax;
 pub(crate) use incremental::{Region, recover_region};
 pub use number::{IntegerReading, Number, NumberError, NumberParseError};
 pub use parser::{ParseError, ParseFailure, parse, parse_with};
+
+/// Immutable parsed storage with transferred buffer reservations, not estimates.
+/// The root drops before its storage reservation releases.
+#[derive(Debug)]
+pub(crate) struct OwnedDocument {
+    root: Node,
+    lease: ScratchLease,
+}
+
+/// Internal syntax remains allocation-free until its final publication boundary.
+#[derive(Debug)]
+pub(crate) enum OwnedParseFailure {
+    Syntax(Syntax),
+    Resource(StopReason),
+}
+
+/// An allocation-free syntax descriptor, formatted only at publication.
+#[derive(Debug)]
+pub(crate) struct Syntax {
+    offset: usize,
+    message: SyntaxMessage,
+}
+
+#[derive(Debug)]
+enum SyntaxMessage {
+    Static(&'static str),
+    ExpectedByte(u8),
+    ExpectedLiteral(&'static str),
+}
 
 /// One internal output buffer using the shared JSON escaping authority.
 pub(crate) struct JsonOutput<'g> {

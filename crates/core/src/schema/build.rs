@@ -7,8 +7,8 @@ use super::{
 };
 use crate::{
     Governor, StopReason,
-    contract::Resource,
-    json::{self, Node, ParseFailure},
+    contract::{Resource, format_scratch_governed},
+    json::{Node, OwnedDocument, OwnedParseFailure},
 };
 use std::collections::BTreeMap;
 
@@ -46,15 +46,25 @@ pub(super) struct Context<'a> {
     pub initial_routes: Option<crate::ScratchVec<(index::Route, usize)>>,
 }
 impl Context<'_> {
-    pub(super) fn parse(&mut self, source: &str, location: &str) -> Result<Node, CompilationError> {
-        json::parse_with(source, self.governor).map_err(|error| match error {
-            ParseFailure::Syntax(error) => SchemaError {
-                location: location.into(),
-                message: error.to_string(),
+    pub(super) fn parse(
+        &mut self,
+        source: &str,
+        location: &str,
+    ) -> Result<OwnedDocument, CompilationError> {
+        match OwnedDocument::parse(source, self.governor) {
+            Ok(document) => Ok(document),
+            Err(OwnedParseFailure::Resource(reason)) => Err(reason.into()),
+            Err(OwnedParseFailure::Syntax(error)) => {
+                let location = reference::copy(location, self.governor)?;
+                let message = format_scratch_governed(format_args!("{error}"), self.governor)?;
+                self.governor.check()?;
+                Err(SchemaError {
+                    location: location.into_string(),
+                    message: message.into_string(),
+                }
+                .into())
             }
-            .into(),
-            ParseFailure::Resource(reason) => reason.into(),
-        })
+        }
     }
     pub(super) fn charge(
         &mut self,
@@ -104,7 +114,7 @@ fn load_document(
             .insert(document, vocabularies, context.governor)?;
     }
     let id = compile::walk(
-        &node,
+        node.root(),
         document,
         &[],
         "",
@@ -139,7 +149,7 @@ pub(super) fn compile(
     let root = context.parse(source, "")?;
     let mut index = Index::new(context.governor);
     compile::walk(
-        &root,
+        root.root(),
         0,
         &[],
         "",
@@ -209,7 +219,7 @@ fn link_references(schema: &mut Schema, context: &mut Context<'_>) -> Result<(),
                         context.governor,
                     )?;
                     reference::work(context.governor, target.key.1.len())?;
-                    let node = at_route(&schema.documents[target.key.0], &target.key.1);
+                    let node = at_route(schema.documents[target.key.0].root(), &target.key.1);
                     if !matches!(
                         node.value,
                         crate::json::Value::Bool(_) | crate::json::Value::Object(_)

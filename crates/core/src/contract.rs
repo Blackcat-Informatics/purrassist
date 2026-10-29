@@ -493,6 +493,22 @@ impl ScratchLease {
         self.bytes
     }
 
+    /// Transfer already admitted reservations from the same meter without
+    /// changing its live, peak or cumulative usage.
+    pub(crate) fn absorb(&mut self, mut other: Self) {
+        assert!(
+            Arc::ptr_eq(&self.meter.0, &other.meter.0),
+            "scratch owners must share a meter"
+        );
+        // Both reservations are part of the meter's checked live total, so
+        // their sum cannot overflow when ownership is transferred exactly once.
+        self.bytes = self
+            .bytes
+            .checked_add(other.bytes)
+            .expect("live scratch reservations fit the meter total");
+        other.bytes = 0;
+    }
+
     /// Keep the charge permanently instead of releasing it on drop, because
     /// the reservation turned out to back retained output rather than
     /// transient scratch (mirrors [`ScratchVec::into_vec`]).
@@ -502,6 +518,18 @@ impl ScratchLease {
         // would leak that handle and the meter allocation it keeps alive.
         self.bytes = 0;
     }
+}
+
+/// One transfer operation for both UTF-8 and element buffers. The typed owners
+/// supply their storage while this function moves its already admitted charge.
+fn transfer_buffer<T: Default>(
+    buffer: &mut T,
+    meter: &ScratchMeter,
+    reserved: &mut u64,
+) -> (T, ScratchLease) {
+    let buffer = mem::take(buffer);
+    let lease = ScratchLease::new(meter.clone(), mem::take(reserved));
+    (buffer, lease)
 }
 
 impl Drop for ScratchLease {
@@ -813,6 +841,11 @@ impl<T: ScratchCharge> ScratchVec<T> {
         self.inner.clear();
     }
 
+    /// Transfer the buffer and its exact reservation to an enclosing owner.
+    pub(crate) fn into_owned_parts(mut self) -> (Vec<T>, ScratchLease) {
+        transfer_buffer(&mut self.inner, &self.meter, &mut self.reserved)
+    }
+
     /// Take ownership of a plain `Vec<T>`, permanently retaining the charge
     /// (it no longer describes transient scratch, so it is never released).
     #[must_use]
@@ -958,6 +991,11 @@ impl ScratchString {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+
+    /// Transfer the buffer and its exact reservation to an enclosing owner.
+    pub(crate) fn into_owned_parts(mut self) -> (String, ScratchLease) {
+        transfer_buffer(&mut self.inner, &self.meter, &mut self.reserved)
     }
 
     /// Take ownership of a plain `String`, permanently retaining the charge

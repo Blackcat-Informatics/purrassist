@@ -527,12 +527,13 @@ impl Store {
     }
     const fn journal_budget(serialized_bytes: u64) -> Budget {
         Budget {
-            // Consuming n source bytes costs n work. Each numeric spelling of
-            // length m adds m + 1 validation work and m retained-copy work.
-            // Numeric spellings are nonempty and disjoint, so the total is at
-            // most n + 3n. The fixed journal shape and geometric string buffers
-            // fit the scratch allowance below.
-            work: serialized_bytes.saturating_mul(4),
+            // Scanning n source bytes costs n work. Disjoint string/number
+            // spellings add at most 3n for validation, copies and geometric
+            // relocation; container pushes and relocation add at most 3n.
+            // A syntax diagnostic has at most 32 bytes, so 96 more work covers
+            // its formatting and relocation even for an empty corrupt journal.
+            // The fixed journal shape fits the scratch allowance below.
+            work: serialized_bytes.saturating_mul(7).saturating_add(96),
             candidates: 1,
             input_bytes: serialized_bytes,
             scratch_bytes: serialized_bytes.saturating_mul(4).saturating_add(16_384),

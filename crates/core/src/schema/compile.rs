@@ -1111,8 +1111,8 @@ fn admit_location(
 ) -> Result<(), CompilationError> {
     context.charge(Resource::Depth, route.len())?;
     reference::work(context.governor, 1)?;
-    // Parsed DOM storage remains excluded. Preserve its existing admission;
-    // compiler lookups, validation sets and diagnostics now admit actual work.
+    // Preserve the separate conservative compiler storage allowance. Parsed
+    // documents own their actual buffers; preparation admits actual work.
     let mut spelling = 1usize;
     if let Value::Object(members) = &node.value {
         spelling = 0;

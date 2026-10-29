@@ -9,8 +9,15 @@ IDs and logarithmic tree operations; growth, searches, comparisons and balancing
 are admitted before mutation. Construction snapshots, escaped pointers and names
 release on every exit. Validation, witness generation and recovery borrow the same
 prepared metadata; dynamic scopes retain location IDs. Successful schema drop and
-late compilation refusal release the index and prepared pattern owners. Parsed DOM
-and conservative legacy storage admission remain separate and can retain charges.
+late compilation refusal release the index and prepared pattern owners. Strict
+JSON documents now own their actual string, number and container reservations.
+One existing parser transfers fallible buffers into an immutable document owner;
+root, external, built-in and temporary meta-schema documents share this path.
+Schema drop and parsing/compilation refusal release those reservations. Public
+strict JSON parsing explicitly retains them when publishing an ordinary Node.
+Syntax descriptors remain allocation-free until the final diagnostic boundary.
+The conservative legacy compiler storage allowance remains separate and can
+retain charges.
 
 Schema reference preparation and runtime resolution now share one governed URI,
 fragment, pointer and dynamic-scope path. URI scanning and dot removal, decoded
@@ -23,8 +30,8 @@ refusals. Compiler keyword lookups, duplicate sets, numeric constraints,
 vocabulary loading and diagnostic construction now admit their work explicitly.
 Temporary validation sets release their fallible owners; numeric sign and
 integrality checks preserve arbitrary exponents without constructing arithmetic
-intermediates. General schema parsing and its DOM ownership retain their separate
-contract; this does not complete #33 or #36.
+intermediates. Strict schema parsing also admits scanning, decoding, copies and
+buffer relocation; this does not complete #33 or #36.
 
 The existing `Grammar::compile_governed` path now admits complete private DSL
 syntax with governed scans/decoding/copies, fallible owned tokens and lists,
@@ -87,7 +94,7 @@ same dialect-prefixed identity bytes, including unused supplied resources in
 sorted URI order. Hashing admits byte/control work at bounded checkpoints and
 finalization work before processing; complete schema publication checks the
 shared governor once more. The actual plain FnO consumer uses this compiler.
-Source parsing and algebra preparation retain their
+Tolerant parsing and algebra preparation retain their
 separate unfinished governance contracts under #33 and #36.
 
 Full cold backend governance remains #36
