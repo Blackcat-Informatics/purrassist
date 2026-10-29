@@ -183,7 +183,7 @@ fn deeply_nested_schema_exhausts_compile_time_depth_budget() {
 /// `Depth` budget explicitly.
 #[test]
 fn deep_reference_chain_exhausts_depth_budget_during_evaluation() {
-    const HOPS: usize = 300;
+    const HOPS: usize = 256;
     let mut resources = std::collections::BTreeMap::new();
     for hop in 0..HOPS {
         resources.insert(
@@ -222,6 +222,23 @@ fn deep_reference_chain_exhausts_depth_budget_during_evaluation() {
             StopReason::BudgetExceeded(purrassist_core::contract::Resource::Depth)
         );
     }
+    // Root depth is zero. Entering node 1 and following through node 256
+    // reaches exactly 256, while the node-0 entry above needs 257 frames
+    // beyond the root. The native ceiling admits the exact boundary.
+    let mut governor = Governor::new(Budget {
+        depth: 512,
+        work: 10_000_000,
+        ..Budget::default()
+    });
+    let exact =
+        Schema::with_resources_governed(r#"{"$ref":"urn:test:chain1"}"#, &resources, &mut governor)
+            .unwrap();
+    assert!(
+        exact
+            .validate_with(&parse("42").unwrap(), &mut governor)
+            .unwrap()
+            .valid
+    );
 }
 
 /// A non-recursive but still deep `allOf` chain has no cycle at all; the

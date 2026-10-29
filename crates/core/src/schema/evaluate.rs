@@ -28,6 +28,12 @@ pub(super) struct EvalResult {
     pub pattern_evidence: Vec<Evidence>,
 }
 
+/// Bound native evaluator nesting, with the root at depth zero.
+/// Reference and applicator crossings count too: one data level can require
+/// object, array and reference-target frames. This safety ceiling is separate
+/// from the ordinary caller Depth preset.
+const NATIVE_EVALUATION_DEPTH: u32 = 256;
+
 /// `ScratchBytes` charged per retained pattern-evidence entry's struct, on
 /// top of its strings: at least `size_of::<Evidence>()` on every target.
 const EVIDENCE_BYTES: u64 = 160;
@@ -306,7 +312,7 @@ impl Evaluator<'_, '_> {
     ) -> Result<Evaluation, StopReason> {
         self.governor.charge(Resource::Work, 1)?;
         self.governor.charge(Resource::Depth, u64::from(depth))?;
-        if depth > 128 {
+        if depth > NATIVE_EVALUATION_DEPTH {
             return Err(self.governor.stop_resource(Resource::Depth));
         }
         for (known_id, known_path) in &self.active {
@@ -1084,11 +1090,11 @@ mod tests {
         ).unwrap();
         let instance = json::parse(r#"{"雪/~":{"雪/~":{}}}"#).unwrap();
         let mut governor = Governor::new(Budget::default());
-        assert!(
+        assert_eq!(
             run(&schema, schema.root, &instance, &mut governor)
                 .unwrap()
-                .violations
-                .is_empty()
+                .violations,
+            [] as [crate::schema::Violation; 0],
         );
         let usage = governor.usage();
         assert_eq!(governor.scratch_meter().live(), 0);
@@ -1116,7 +1122,10 @@ mod tests {
                     matches!(result, Err(StopReason::BudgetExceeded(actual)) if actual == resource)
                 );
             } else {
-                assert!(result.unwrap().violations.is_empty());
+                assert_eq!(
+                    result.unwrap().violations,
+                    [] as [crate::schema::Violation; 0]
+                );
             }
             assert_eq!(governor.scratch_meter().live(), 0);
         }

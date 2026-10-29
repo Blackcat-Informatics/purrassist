@@ -243,8 +243,11 @@ entry admits its ID comparison and, when needed, path comparison; copying and
 stack relocation are admitted before processing. A non-progressing cycle keeps
 its InvalidInput diagnostic text, now built through governed output formatting.
 Active keys and dynamic scopes unwind unconditionally after recursive evaluation
-or scope-entry refusal. Caller `Depth` and an independent native ceiling of 128
-bound live recursion, even when callers supply larger limits.
+or scope-entry refusal. Caller `Depth` and an independent native ceiling of 256
+bound live recursion, even when callers supply larger limits. This ceiling counts
+reference and applicator frames, not just nested data: a recursive object/array
+schema can require several frames per data level. It is distinct from the ordinary
+caller preset of 128 and preserves the existing deep mandatory-wrap recovery case.
 
 Transient combinator keys, escaped member paths, property-name paths and string
 instances, array indices, pattern-property keys and unevaluated paths use actual
