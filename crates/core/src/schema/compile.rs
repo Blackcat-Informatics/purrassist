@@ -459,7 +459,7 @@ pub(super) fn member<'a>(
     Ok(found)
 }
 
-fn applies(
+pub(super) fn applies(
     vocabularies: Vocabularies,
     node: &Node,
     keyword: &str,

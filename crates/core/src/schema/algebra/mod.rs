@@ -39,6 +39,9 @@
 mod canon;
 mod generate;
 mod merge;
+mod storage;
+#[cfg(test)]
+mod tests;
 
 use super::Schema;
 use crate::contract::{Evidence, Governor, StopReason};

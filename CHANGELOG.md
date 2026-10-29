@@ -23,6 +23,14 @@ crates share one version.
 
 ### Changed
 
+- Witness preparation and branch state now borrow immutable schema operands and
+  retain fallible owners for synthesized lists, snapshots and cycle paths.
+  Scans, copies, lookup and exact numeric comparisons share the caller governor;
+  recursive preparation and continuations enforce caller/native depth limits.
+  Resource refusal remains distinct from unsatisfiability. Shared dependency
+  views also govern evaluator and recovery callers. Candidate construction,
+  evaluator storage and final publication remain separate contracts.
+
 - Strict JSON parsing now owns decoded strings, exact number spellings and
   container buffers until document publication or release. Schema compilation
   retains root and referenced documents and releases temporary meta-schemas and

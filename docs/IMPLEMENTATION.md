@@ -33,6 +33,18 @@ integrality checks preserve arbitrary exponents without constructing arithmetic
 intermediates. Strict schema parsing also admits scanning, decoding, copies and
 buffer relocation; this does not complete #33 or #36.
 
+Witness canonicalization, requirement merging and the existing branch driver
+share the caller's governor. Immutable schema operands and pattern names remain
+borrowed; synthesized canonical lists, requirement snapshots, child obligations,
+cycle keys and paths use fallible owners that release on every exit. Keyword and
+dependency scans, exact numeric comparisons, copies, lookup and relocation admit
+work before processing. The evaluator and recovery use the same governed array
+layout and dependency view. Canonical construction/copying and live branch
+continuations enforce caller depth and a native ceiling of 128; refusal remains
+a resource outcome, never an unsatisfiability proof. Candidate-value construction,
+evaluator storage and final witness/refutation publication retain their separate
+contracts. This does not complete witness or tool-graph governance.
+
 The existing `Grammar::compile_governed` path now admits complete private DSL
 syntax with governed scans/decoding/copies, fallible owned tokens and lists,
 and exact syntax diagnostics/offsets. Unary syntax children use one-element
@@ -94,8 +106,8 @@ same dialect-prefixed identity bytes, including unused supplied resources in
 sorted URI order. Hashing admits byte/control work at bounded checkpoints and
 finalization work before processing; complete schema publication checks the
 shared governor once more. The actual plain FnO consumer uses this compiler.
-Tolerant parsing and algebra preparation retain their
-separate unfinished governance contracts under #33 and #36.
+Tolerant parsing and the remaining witness construction, evaluation and
+publication paths retain separate unfinished governance contracts under #33 and #36.
 
 Full cold backend governance remains #36
 acceptance, alongside witness, GBNF, CompactSignature, projection, routing,

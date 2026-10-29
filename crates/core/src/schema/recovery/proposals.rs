@@ -691,7 +691,7 @@ impl Walk<'_, '_> {
     ) -> Result<(), StopReason> {
         let (route, path) = site;
         let schema = self.schema;
-        for dependency in schema.dependencies(schema_id) {
+        for dependency in schema.dependencies(schema_id, self.governor)?.iter().copied() {
             if let Dependency::Schema { trigger, child } = dependency
                 && members.iter().any(|member| member.key == trigger)
             {
@@ -811,7 +811,7 @@ impl Walk<'_, '_> {
         let (route, path) = site;
         let schema = self.schema;
         let body = schema.keywords(schema_id);
-        let layout = schema.item_layout(schema_id);
+        let layout = schema.item_layout(schema_id, self.governor)?;
         for (position, item) in items.iter().enumerate() {
             let mut next = route.to_vec();
             next.push(position);

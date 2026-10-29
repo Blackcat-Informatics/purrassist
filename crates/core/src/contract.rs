@@ -591,7 +591,7 @@ scratch_charge!(u8, 1);
 scratch_charge!(u32, 4);
 scratch_charge!(u64, 8);
 scratch_charge!(usize, 8);
-scratch_charge!(&'static str, 16); // a `&str` is a two-word (ptr, len) fat pointer.
+scratch_charge!(&str, 16); // a `&str` is a two-word (ptr, len) fat pointer.
 scratch_charge!(String, 24); // `Vec<u8>`'s (ptr, len, cap) layout.
 scratch_charge!(crate::json::Node, 56);
 scratch_charge!(crate::json::Member, 104);

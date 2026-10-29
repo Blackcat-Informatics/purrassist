@@ -201,10 +201,39 @@ identity cannot escape before linkage and final complete bundle hashing succeed.
 The identity path allocates no framing buffer and adds no scratch storage. Its
 obsolete nominal buffer charge and upfront hash-work estimates are removed;
 actual hashing work is admitted where it occurs. Other compiler allocations,
-source parsing and algebra preparation remain separate
-unfinished governance work. This does not claim complete schema compilation or
+tolerant source parsing and witness candidate/evaluation/publication storage
+remain separate governance work. This does not claim complete schema compilation or
 tool-graph loading governance. The real plain FnO consumer exercises this core
 compiler path without replacing the upstream schema compiler.
+
+## Witness preparation and branch ownership
+
+The existing canonicalization, requirement merge and generation driver borrow
+immutable schema values, exact numbers and names. Synthesized canonical children,
+facets, requirement lists and snapshots retain fallible scratch owners. Cycle
+keys retain owned instance paths; active keys and dynamic scopes unwind on every
+result, including copy or scope-admission refusal. Preparation owners release on
+witness success, contradiction, exhausted search and resource refusal.
+
+Each keyword/member scan, dependency-key construction, compiled child/pattern
+lookup, exact numeric comparison, snapshot copy and buffer relocation admits
+work before processing. Ordered lists preserve branch and dependency order.
+The shared array layout and dependency view propagate native refusal to actual
+witness, evaluator and recovery callers. Numeric comparison delegates to the
+existing arbitrary-decimal implementation without narrowing operands.
+
+Canonical construction and copying check caller `Depth` and a native ceiling
+of 128. The driver also admits live recursive continuations: sibling scoped
+branches can accumulate native frames independently of canonical tree height.
+Exceeding either limit returns `BudgetExceeded(Depth)`; it is not a refutation.
+Linear facets advance iteratively. Finite Work and ScratchBytes refusal points
+change because actual preparation operations and owners are now admitted.
+
+Candidate-value construction, evaluator storage and final witness/refutation
+publication remain separate contracts. Total live scratch therefore need not
+return to zero after a public witness call; preparation ownership is checked
+independently of those publication and candidate paths. No complete witness,
+cold-backend or graph-loading governance claim follows from this boundary.
 
 ## Type-enforced scratch accounting
 

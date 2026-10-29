@@ -130,6 +130,15 @@ impl Number {
         ))
     }
 
+    /// Compare exact spellings through the caller's admitted decimal operations.
+    pub(crate) fn compare_governed(
+        &self,
+        other: &Self,
+        governor: &mut Governor,
+    ) -> Result<core::cmp::Ordering, StopReason> {
+        self.compare_admitted(other, &mut Operation(Some(governor)))
+    }
+
     pub(super) fn compare_admitted(
         &self,
         other: &Self,

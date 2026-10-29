@@ -8,7 +8,7 @@
 //! and `dependencies`. The evaluator, witness algebra, and recovery proposals
 //! read these views so each dialect has exactly one interpretation.
 use super::Schema;
-use crate::json::{Member, Node, Value, pointer_segment};
+use crate::json::{Member, Node, Value};
 
 /// Which compiled child schema applies to each array element.
 pub(super) struct ItemLayout {
@@ -32,6 +32,7 @@ impl ItemLayout {
 }
 
 /// One conditional object constraint triggered by a present member name.
+#[derive(Clone, Copy)]
 pub(super) enum Dependency<'a> {
     /// `dependentRequired` or array-form Draft-07 `dependencies`.
     Required {
@@ -64,64 +65,85 @@ fn entries(node: Option<&Node>) -> &[Member] {
 impl Schema {
     /// The positional/rest item schemas of location `id` under its dialect.
     /// Draft-07 `additionalItems` applies only beside tuple-form `items`.
-    pub(super) fn item_layout(&self, id: usize) -> ItemLayout {
+    pub(super) fn item_layout(
+        &self,
+        id: usize,
+        governor: &mut crate::Governor,
+    ) -> Result<ItemLayout, crate::StopReason> {
+        super::reference::work(governor, self.index.locations[id].route.len())?;
         let body = self.keywords(id);
-        match body.get("items").map(|items| &items.value) {
-            Some(Value::Array(tuple)) => ItemLayout {
-                prefix: "items",
-                prefix_len: tuple.len(),
-                rest: body.get("additionalItems").map(|_| "additionalItems"),
-            },
-            items => ItemLayout {
-                prefix: "prefixItems",
-                prefix_len: match body.get("prefixItems").map(|prefix| &prefix.value) {
-                    Some(Value::Array(prefix)) => prefix.len(),
-                    _ => 0,
+        Ok(
+            match body
+                .get_governed("items", governor)?
+                .map(|items| &items.value)
+            {
+                Some(Value::Array(tuple)) => ItemLayout {
+                    prefix: "items",
+                    prefix_len: tuple.len(),
+                    rest: body
+                        .get_governed("additionalItems", governor)?
+                        .map(|_| "additionalItems"),
                 },
-                rest: items.map(|_| "items"),
+                items => ItemLayout {
+                    prefix: "prefixItems",
+                    prefix_len: match body
+                        .get_governed("prefixItems", governor)?
+                        .map(|prefix| &prefix.value)
+                    {
+                        Some(Value::Array(prefix)) => prefix.len(),
+                        _ => 0,
+                    },
+                    rest: items.map(|_| "items"),
+                },
             },
-        }
+        )
     }
 
     /// Every dependency of location `id`: `dependentRequired`, then
     /// `dependentSchemas`, then Draft-07 `dependencies` in member order.
-    pub(super) fn dependencies(&self, id: usize) -> impl Iterator<Item = Dependency<'_>> + '_ {
+    pub(super) fn dependencies<'s>(
+        &'s self,
+        id: usize,
+        governor: &mut crate::Governor,
+    ) -> Result<crate::ScratchVec<Dependency<'s>>, crate::StopReason> {
+        super::reference::work(governor, self.index.locations[id].route.len())?;
         let body = self.keywords(id);
-        let required =
-            entries(body.get("dependentRequired"))
-                .iter()
-                .filter_map(|entry| match &entry.value.value {
-                    Value::Array(names) => Some(Dependency::Required {
-                        keyword: "dependentRequired",
-                        trigger: &entry.key,
-                        names,
-                    }),
-                    _ => None,
-                });
-        let schemas = entries(body.get("dependentSchemas"))
-            .iter()
-            .map(move |entry| Dependency::Schema {
-                trigger: &entry.key,
-                child: self.child(
-                    id,
-                    &format!("dependentSchemas/{}", pointer_segment(&entry.key)),
-                ),
-            });
-        let legacy =
-            entries(body.get("dependencies"))
-                .iter()
-                .map(move |entry| match &entry.value.value {
-                    Value::Array(names) => Dependency::Required {
-                        keyword: "dependencies",
+        let mut output = crate::ScratchVec::new(governor);
+        for keyword in ["dependentRequired", "dependentSchemas", "dependencies"] {
+            for entry in entries(body.get_governed(keyword, governor)?) {
+                super::reference::work(governor, 1)?;
+                let dependency = match &entry.value.value {
+                    Value::Array(names) if keyword != "dependentSchemas" => Dependency::Required {
+                        keyword,
                         trigger: &entry.key,
                         names,
                     },
-                    _ => Dependency::Schema {
-                        trigger: &entry.key,
-                        child: self
-                            .child(id, &format!("dependencies/{}", pointer_segment(&entry.key))),
-                    },
-                });
-        required.chain(schemas).chain(legacy)
+                    _ if keyword == "dependentRequired" => continue,
+                    _ => {
+                        let key = super::index::pointer(keyword, &entry.key, governor)?;
+                        let child = *self.index.locations[id]
+                            .children
+                            .get_governed(key.as_str(), governor)?
+                            .expect("compiled dependency child");
+                        Dependency::Schema {
+                            trigger: &entry.key,
+                            child,
+                        }
+                    }
+                };
+                super::reference::work(governor, 1)?;
+                if output.len() == output.capacity() {
+                    super::reference::work(governor, output.len())?;
+                }
+                output.push(dependency)?;
+            }
+        }
+        Ok(output)
     }
+}
+impl crate::contract::ScratchCharge for Dependency<'_> {
+    const CHARGE: usize = {
+        assert!(size_of::<Self>() <= 56);
+        56
+    };
 }

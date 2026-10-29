@@ -808,7 +808,7 @@ impl Evaluator<'_, '_> {
             ),
             _ => None,
         };
-        for dependency in schema.dependencies(id) {
+        for dependency in schema.dependencies(id, self.governor)?.iter().copied() {
             match dependency {
                 Dependency::Required {
                     keyword,
@@ -950,7 +950,7 @@ impl Evaluator<'_, '_> {
                 }
             }
         }
-        let layout = schema.item_layout(id);
+        let layout = schema.item_layout(id, self.governor)?;
         for (position, item) in items.iter().enumerate() {
             let child = {
                 let _key = self.governor.lease_scratch(ITEM_KEY_BYTES)?;
