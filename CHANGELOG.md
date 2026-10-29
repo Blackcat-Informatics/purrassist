@@ -18,6 +18,12 @@ crates share one version.
   Source spans, number spellings, answer order and guess semantics are preserved.
   Ledger and queue bookkeeping ownership remain separate contracts.
 
+- GLM 4.5 tool calls use the new `glm-4.5.v1` dialect and `kv-pairs`
+  codec. Declared strings retain their bytes, other values use inline JSON,
+  repeated parameters preserve collection or ambiguity, and missing or
+  misspelled argument tags record costed repairs. Canonical emission checks
+  representability against the same codec and exact schema typing.
+
 - Schema assertions admit keyword, route, scalar-length and witness member-name
   scans. Remaining format parsers admit documented scan bounds, regex format
   diagnostics release without publication, and every format outcome checks
@@ -160,7 +166,6 @@ matches its single source, [known-limitations.json](docs/known-limitations.json)
 - [#10](https://github.com/Blackcat-Informatics/purrassist/issues/10) Tool-call recovery: restarted DeepSeek-V3.1 sections cost quadratic work and super-quadratic time. A turn with many restarted DeepSeek-V3.1 sections costs quadratic work and super-quadratic time.
 - [#11](https://github.com/Blackcat-Informatics/purrassist/issues/11) Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes). One 192-byte mutated turn takes about 5 s in a release build, so the default `make fuzz` exceeds its timeout on `tool-call-ref`; the CLI and MCP sized budget ends it explicitly in 0.3 s.
 - [#12](https://github.com/Blackcat-Informatics/purrassist/issues/12) Tool-call recovery: add the pythonic.v1 dialect and pythonic codec. `pythonic.v1` is not built in, so its call markup is not recovered as a tool call.
-- [#13](https://github.com/Blackcat-Informatics/purrassist/issues/13) Tool-call recovery: add the glm-4.5.v1 dialect and kv-pairs codec. `glm-4.5.v1` is not built in, so its call markup is not recovered as a tool call.
 - [#14](https://github.com/Blackcat-Informatics/purrassist/issues/14) Tool-call recovery: add the gemma3-tool-code.v1 dialect. `gemma3-tool-code.v1` is not built in, so its call markup is not recovered as a tool call.
 - [#16](https://github.com/Blackcat-Informatics/purrassist/issues/16) Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress). There is no `ToolCallStream`, no stable-prefix events, no CLI `--stream` option and no MCP progress reporting for recovery.
 - [#17](https://github.com/Blackcat-Informatics/purrassist/issues/17) Tool-call recovery: reassemble provider streaming events (Anthropic SSE tool_use, OpenAI tool_calls deltas). Anthropic SSE `tool_use` and OpenAI `tool_calls` delta streams are not reassembled into a turn.

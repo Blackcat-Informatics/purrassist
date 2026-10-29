@@ -989,7 +989,7 @@ every value below to equal the code's.
 | `EXTRACT_PROSE` | 2 | Repair cost: prose dropped inside a call |
 | `EXTRACT_FENCE` | 1 | Repair cost: a fence marker dropped inside a call |
 | `UNDECLARED_NAME` | 4 | Selection weight of a call whose name denotes no declared tool |
-| `RECOVER_WORK_PER_BYTE` | 176 | `Work` per output byte `ToolRecoveryRequest::sized` adds |
+| `RECOVER_WORK_PER_BYTE` | 208 | `Work` per output byte `ToolRecoveryRequest::sized` adds |
 | `RECOVER_SCRATCH_PER_BYTE` | 368 | `ScratchBytes` per output byte `ToolRecoveryRequest::sized` adds |
 | `RECOVER_EVIDENCE_BYTES_PER_ENTRY` | 7 | `ToolRecoveryRequest::sized` adds `⌈n / 7⌉` `EvidenceEntries` |
 | `RECOVER_OPENER_CANDIDATE_DIVISOR` | 8 | `ToolRecoveryRequest::sized` adds `⌈preset.candidates / 8⌉` `Candidates` per call opener |
@@ -1000,6 +1000,7 @@ every value below to equal the code's.
 | `bare-json.v1` | 378 | 378 |
 | `deepseek-v3.1.v1` | 2945 | 2945 |
 | `deepseek-v3.v1` | 4793 | 4793 |
+| `glm-4.5.v1` | 107 | 107 |
 | `harmony.v1` | 3890 | 3890 |
 | `hermes.v1` | 1137 | 1137 |
 | `kimi-k2.v1` | 2436 | 2436 |
@@ -1009,8 +1010,14 @@ every value below to equal the code's.
 | `openai-tool-calls.v1` | 6665 | 6665 |
 | `qwen3-coder-xml.v1` | 971 | 971 |
 
-The default request allows all twelve, so its bound is
-`(2 + 1 + 29956)·n + 8·E = 29959·n + 8·E`.
+The default request allows all thirteen built-in dialects.
+Its bound is `(2 + 1 + 30063)·n + 8·E = 30066·n + 8·E`.
+
+The `kv-pairs` codec scans argument fields forward with a bounded tag
+comparison at each byte. Typed JSON boundaries use the native JSON cursor,
+then decode the bounded value once. Exact closers take precedence over fuzzy
+substrings in verbatim text. The shared linear, sized-budget and dense-markup
+checks include GLM calls.
 
 ### Budgets for large outputs and busy turns
 
@@ -1021,7 +1028,7 @@ turn with many calls needs a budget that grows with it.
 phases. First a linear, allocation-free pre-scan counts the output's call
 openers `m` (`DialectSet::call_openers`: each byte offset where a dialect's
 `call` production can open, counted once per such dialect, so the
-`<tool_call>` that Qwen3-Coder XML and Hermes share counts twice, and
+`<tool_call>` that Qwen3-Coder XML, Hermes and GLM share counts three times, and
 Qwen3-Coder XML counts every `<function=` too, since a bare function element
 is a call; Llama 3 JSON, Anthropic `tool_use` and bare JSON, whose attempts
 open at `{` and commit only on call-shaped evidence, each count every `{`). Then
@@ -1029,7 +1036,7 @@ open at `{` and commit only on call-shaped evidence, each count every `{`). Then
 preset, the output length `n`, and the constants above:
 
 ```text
-work             = preset.work          + RECOVER_WORK_PER_BYTE    · n   (176 per byte)
+work             = preset.work          + RECOVER_WORK_PER_BYTE    · n   (208 per byte)
 scratch_bytes    = preset.scratch_bytes + RECOVER_SCRATCH_PER_BYTE · n   (368 per byte)
 input_bytes      = max(preset.input_bytes, n)
 candidates       = preset.candidates
@@ -1130,7 +1137,7 @@ allow-list Hermes also attempts the `<tool_call>` and rejects it at the
 `<function=` body, and in that segmentation the bare function element is a
 call attempt of its own, kept until the wrapped call ends (6 of its 17 work
 per byte). All use the
-default request (all twelve built-in dialects); charging schema
+then-default request (twelve built-in dialects); charging schema
 validation's working set left these measurements unchanged, because
 validating one string argument peaks below the recognizer's buffers. The
 constants leave headroom over these fast-path measurements; inputs that need repair
@@ -1175,11 +1182,12 @@ one_mib_dense_markup_fits_published_budget` (`make corpus`; 19 s in a debug
 build) now recovers each of these shapes at 1 MiB under plain
 `sized(Effort::Standard, output)` with the stop `Completed` and every unit
 recovered; `tool_call_cost::dense_markup_fits_published_budget` (`make
-check`) runs the same shapes at 64 KiB. All use the default request (all
-twelve dialects).
+check`) runs the same shapes at 64 KiB. The GLM row uses the current thirteen-dialect request; the other recorded
+rows use the twelve-dialect request before GLM.
 
 | Dense shape (1 MiB) | Units | Work per byte | Peak scratch per byte | Evidence per byte |
 | --- | ---: | ---: | ---: | ---: |
+| GLM 4.5 calls | 13,107 | 106.0 | 88.8 | 0.012 |
 | Qwen3-Coder XML repeated nested items | 16,911 | 59.4 | 268.3 | 0.065 |
 | Qwen3-Coder XML repeated JSON-array items | 30,838 | 52.9 | 103.6 | 0.000 |
 | Qwen3-Coder XML repeated string items | 34,950 | 62.1 | 250.5 | 0.067 |
@@ -1207,15 +1215,20 @@ the same at 64 KiB and 1 MiB. `Work` binds first, then `EvidenceEntries`
 `ScratchBytes`. `Candidates` never bind in these shapes (the sized term
 grows with the openers), and `Depth` is not per-byte and is not reached.
 
-The constants are the maximum plus a margin: `RECOVER_WORK_PER_BYTE` = 176
-is 24% over the 142.3 of Kimi-K2, `RECOVER_SCRATCH_PER_BYTE` = 368 is 22%
-over the 301.6 of DeepSeek-V3 (Qwen3-Coder XML calls peak at
-281.6, repeated nested items at 268.3), and
-`RECOVER_EVIDENCE_BYTES_PER_ENTRY` = 7 is 41% over the 0.101 entries per
-byte of Qwen3-Coder XML calls (one entry per 9.9 bytes). A 1 MiB output
-therefore carries a budget of 185 million work, 432 MiB of scratch and
-215,000 evidence entries at `Effort::Standard`; the cost of the margin is that
-much more work and memory before a pathological input exhausts.
+The thirteen-dialect default uses `RECOVER_WORK_PER_BYTE` = 208. Adding
+GLM increases the existing 300-parameter nullable-integer Qwen schema-typing
+case from 2,725,162 to 3,052,372 Work for 10,032 bytes. The Standard preset
+plus 208 Work per byte admits 3,086,656 Work, preserving that case's complete
+result. This measured recipe does not bound arbitrary schema complexity.
+Explicit caller budgets and effort presets are unchanged.
+
+The other constants retain their measured margins:
+`RECOVER_SCRATCH_PER_BYTE` = 368 is 22% over the historical 301.6 of
+DeepSeek-V3, and `RECOVER_EVIDENCE_BYTES_PER_ENTRY` = 7 is 41% over the
+0.101 entries per byte of Qwen3-Coder XML calls. A 1 MiB output carries a
+budget of about 219 million Work, 432 MiB of scratch and 215,000 evidence
+entries at `Effort::Standard`. The larger Work allowance also permits more
+computation before pathological input exhausts.
 
 Not covered, by design, and still explicit exhaustions under `sized`:
 

@@ -55,6 +55,7 @@
         ],
         "dialect": "qwen3-coder-xml.v1",
         "candidate_dialects": [
+          "glm-4.5.v1",
           "hermes.v1",
           "qwen3-coder-xml.v1"
         ],

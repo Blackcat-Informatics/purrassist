@@ -11,11 +11,12 @@ call. The operation is `tool_call.recover.v1`, implemented in
 `recover_tool_calls` MCP tool, and the `purrassist recover-tool-calls` CLI
 command.
 
-Twelve dialects are built in:
+Thirteen dialects are built in:
 
 | Dialect | Shape | Reference |
 | --- | --- | --- |
 | `qwen3-coder-xml.v1` | `<tool_call><function=NAME><parameter=P>VALUE</parameter></function></tool_call>`, or the bare `<function=NAME>` element | [dialect](dialects/qwen3-coder-xml.v1.md) |
+| `glm-4.5.v1` | `<tool_call>NAME<arg_key>KEY</arg_key><arg_value>VALUE</arg_value></tool_call>` | [dialect](dialects/glm-4.5.v1.md) |
 | `hermes.v1` | `<tool_call>{"name": NAME, "arguments": {...}}</tool_call>` | [dialect](dialects/hermes.v1.md) |
 | `openai-tool-calls.v1` | `tool_calls` elements `{"id": ID, "type": "function", "function": {...}}` as text | [dialect](dialects/openai-tool-calls.v1.md) |
 | `llama3-json.v1` | `{"name": NAME, "parameters": {...}}`, optionally after `<\|python_tag\|>` | [dialect](dialects/llama3-json.v1.md) |
@@ -34,7 +35,7 @@ derived from Rust structs and enums with `#[derive(ToolDefinition)]` and
 `#[derive(ToolEnum)]` (the `purrassist-derive` crate, re-exported by the
 `purrassist` facade; see [INTEGRATION.md](INTEGRATION.md) and the crate's
 [README](../../crates/derive/README.md)). Still tracked: the `pythonic.v1`
-(#12), `glm-4.5.v1` (#13) and `gemma3-tool-code.v1` (#14) dialects, the
+(#12) and `gemma3-tool-code.v1` (#14) dialects, the
 `*-stripped` variants (#18), streaming recognition (#16), and provider
 streaming events (#17).
 
@@ -345,7 +346,7 @@ content. A linear detector (`detect_unparsed`) scans the turn's content for
 the distinctive openers and shapes of the families no built-in dialect
 parses yet (`pythonic.v1` call lists `[f(a=1)]` at the start of the turn or
 a line or after `<|python_start|>`, `gemma3-tool-code.v1` `` ```tool_code ``
-blocks, `glm-4.5.v1` `<arg_key>`/`<arg_value>` calls, and the stripped
+blocks, and the stripped
 renderings `kimi-k2-stripped.v1`, `harmony-stripped.v1`,
 `deepseek-v3-stripped.v1` and `name-arguments-stripped.v1`), and for the built-in dialects the
 allow-list leaves out. Each hit is a `RejectedCall` with
@@ -428,7 +429,7 @@ are in [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound).
 - [dialects/](dialects/): public sources, accepted forms, printing, and
   deliberate exclusions of each built-in dialect.
 - [MATCHING-QUALITY.md](../MATCHING-QUALITY.md#tool-call-recovery-evaluation):
-  the 16,438-case correction evaluation, per rule and per dialect.
+  the 18,184-case correction evaluation, per rule and per dialect.
 - [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound): the cost
   bound, budgets for large outputs, and throughput.
 

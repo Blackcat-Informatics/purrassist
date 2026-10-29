@@ -70,12 +70,12 @@ repository.
   (`tool_call.extract.prose`) that keeps the call at most a best guess. Other
   text after the object is never dropped, so trailing prose is not
   swallowed into a call.
-- The `<tool_call>` opener is shared with [Qwen3-Coder XML](qwen3-coder-xml.v1.md). With both
+- The `<tool_call>` opener is shared with [Qwen3-Coder XML](qwen3-coder-xml.v1.md). GLM also shares it. With all three
   dialects allowed (the default), each attempts a call there and the body
-  decides: a JSON object body is read by this dialect, and the other dialect's attempt
-  is rejected at the body's first byte. An attempt neither dialect reads
+  decides: a JSON object body is read by this dialect, and the other dialects' attempts
+  are rejected at the body's first byte. An attempt no dialect reads
   (dangling, cut off, or malformed) is one rejected attempt in the dialect
-  that read furthest, with both dialects in its `candidate_dialects`; see
+  that read furthest, with all three dialects in its `candidate_dialects`; see
   [the README](../README.md#design).
 - `result`: `<tool_response>CONTENT</tool_response>`.
 - `declaration`: one tool signature object

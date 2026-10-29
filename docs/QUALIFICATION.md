@@ -27,9 +27,9 @@ procedure in [RELEASE.md](RELEASE.md). Open limitations are listed under
 | Resource boundaries | `resource_accounting`, `schema_budgets`, `allocation_oracle`, syntax `allocation`, host `helpers` | Charge-before-allocation, cancellation, helper admission, measured allocator comparisons including zero-slack pattern compilation and generation, external parser accounts |
 | Filesystem transaction boundaries | host `files`, `crash_recovery`, `journal_limits`, `orphan_preservation`, `edit_tools` | Eight crash checkpoints; bounded escaped journals, retry/recovery, temporary ownership checks, stale plans, locks, conditional undo and explicit batch outcomes |
 | Shared Rust/CLI/MCP surface | host tests and CLI `protocol` | Single registry; every tool has CLI/MCP equivalence fixtures and schema-checked output |
-| Tool-call grammars and dialects | `grammar_engine`, `grammar_codecs`, `tool_call_dialects`, `tool_call_negative` | DSL compilation and errors; linear fast path; split-invariant push recognition; `commit` points (no rejection before call-shaped evidence); `next` (several calls in one attempt); `insert` (an omitted token read as inserted); `optional-id`, `declaration-content` and `json-envelope` statements (the JSON envelope syntax slips on all six JSON-envelope dialects); factorized ambiguity; `raw`/`json`/`json-args`/`xml-params` codecs; canonical anchor fixtures for `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`, `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1` and `bare-json.v1`, all twelve in one mixed turn; deliberate rejections; unparsed call markup reported |
+| Tool-call grammars and dialects | `grammar_engine`, `grammar_codecs`, `tool_call_dialects`, `tool_call_negative` | DSL compilation and errors; linear fast path; split-invariant push recognition; `commit` points (no rejection before call-shaped evidence); `next` (several calls in one attempt); `insert` (an omitted token read as inserted); `optional-id`, `declaration-content` and `json-envelope` statements (the JSON envelope syntax slips on all six JSON-envelope dialects); factorized ambiguity; `raw`/`json`/`json-args`/`xml-params`/`kv-pairs` codecs; canonical anchor fixtures for `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`, `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, `glm-4.5.v1` and `bare-json.v1`, all thirteen in one mixed turn; deliberate rejections; unparsed call markup reported |
 | Tool-call resolution and recovery | `tool_definitions`, `tool_adapters`, `tool_call_rules`, `tool_call_goldens`, `tool_call_recover`, `tool_call_roundtrip` | Typed definitions; byte-exact `OpenAI`/MCP/Anthropic render-back including Draft-07 MCP schemas; registry admission, costs and loss kinds; `RULES.md`/`GRAMMAR.md` checked against the code; one captured golden per rule; mutating-guess guards; `Exact` effort; stop-reason semantics; pinned order-independent result digest; print/recognize round trips for every dialect pair; `OpenAI` `tool_calls` shape |
-| Tool-call cost and quality | `tool_call_cost`, `tool_call_scale`, `correction_evaluation` | Published linear work bound and constants; 1 MiB arguments and 64-call busy turns under `ToolRecoveryRequest::sized`; 16,438 mutated turns with zero incorrect automatic answers and 100% abstention recall |
+| Tool-call cost and quality | `tool_call_cost`, `tool_call_scale`, `correction_evaluation` | Published linear work bound and constants; 1 MiB arguments and 64-call busy turns under `ToolRecoveryRequest::sized`; 18,184 model turns with zero incorrect automatic answers and 100% abstention recall |
 | Tool-call surfaces | host `tool_call_tools`, CLI `tool_calls_cli` and `protocol` | `recover_tool_calls` MCP tool and `recover-tool-calls` command equal direct core recovery; raw-byte input with invalid UTF-8 recorded; exit codes |
 | Independent syntax | `make syntax-oracles` | 15 positive/negative Python, Rust, JavaScript/JSX, TypeScript/TSX compiler probes |
 | Correction quality | `correction_evaluation`, `matching_oracle` | Four provenance-bound corpora, risk/coverage sweeps, exact distance and path oracles |
@@ -112,14 +112,14 @@ stop is truncation, and every other stop treats an open call as malformed.
 Emission prints only the calls `usable_accepting_guesses` selects and lists
 every other call and attempt as skipped. The integrator guarantees and the
 test proving each are mapped in
-[tool-calls/INTEGRATION.md](tool-calls/INTEGRATION.md); the 16,438-case
+[tool-calls/INTEGRATION.md](tool-calls/INTEGRATION.md); the 18,184-case
 evaluation is a deterministic generated corpus, so its zero-incorrect result
 establishes behavior on those cases rather than a production error rate.
-Twelve dialects ship (`qwen3-coder-xml.v1`, `hermes.v1`,
+Thirteen dialects ship (`qwen3-coder-xml.v1`, `hermes.v1`,
 `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`,
 `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`,
-`anthropic-tool-use.v1`, `harmony.v1`, `bare-json.v1`). Still tracked: the
-`pythonic.v1` (#12), `glm-4.5.v1` (#13) and `gemma3-tool-code.v1` (#14)
+`anthropic-tool-use.v1`, `harmony.v1`, `glm-4.5.v1`, `bare-json.v1`). Still tracked: the
+`pythonic.v1` (#12) and `gemma3-tool-code.v1` (#14)
 dialects, the `*-stripped` variants (#18), streaming recognition (#16), and
 provider streaming events (#17).
 
@@ -219,7 +219,6 @@ matches its single source, [known-limitations.json](known-limitations.json);
 - [#10](https://github.com/Blackcat-Informatics/purrassist/issues/10) Tool-call recovery: restarted DeepSeek-V3.1 sections cost quadratic work and super-quadratic time. A turn with many restarted DeepSeek-V3.1 sections costs quadratic work and super-quadratic time.
 - [#11](https://github.com/Blackcat-Informatics/purrassist/issues/11) Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes). One 192-byte mutated turn takes about 5 s in a release build, so the default `make fuzz` exceeds its timeout on `tool-call-ref`; the CLI and MCP sized budget ends it explicitly in 0.3 s.
 - [#12](https://github.com/Blackcat-Informatics/purrassist/issues/12) Tool-call recovery: add the pythonic.v1 dialect and pythonic codec. `pythonic.v1` is not built in, so its call markup is not recovered as a tool call.
-- [#13](https://github.com/Blackcat-Informatics/purrassist/issues/13) Tool-call recovery: add the glm-4.5.v1 dialect and kv-pairs codec. `glm-4.5.v1` is not built in, so its call markup is not recovered as a tool call.
 - [#14](https://github.com/Blackcat-Informatics/purrassist/issues/14) Tool-call recovery: add the gemma3-tool-code.v1 dialect. `gemma3-tool-code.v1` is not built in, so its call markup is not recovered as a tool call.
 - [#16](https://github.com/Blackcat-Informatics/purrassist/issues/16) Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress). There is no `ToolCallStream`, no stable-prefix events, no CLI `--stream` option and no MCP progress reporting for recovery.
 - [#17](https://github.com/Blackcat-Informatics/purrassist/issues/17) Tool-call recovery: reassemble provider streaming events (Anthropic SSE tool_use, OpenAI tool_calls deltas). Anthropic SSE `tool_use` and OpenAI `tool_calls` delta streams are not reassembled into a turn.

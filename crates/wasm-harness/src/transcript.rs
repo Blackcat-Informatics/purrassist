@@ -239,7 +239,7 @@ struct DialectCase {
 }
 
 /// One case per entry of `DialectId::BUILT_IN` (checked by the test below).
-const DIALECT_CASES: [DialectCase; 12] = [
+const DIALECT_CASES: [DialectCase; 13] = [
     DialectCase {
         dialect: DialectId::AnthropicToolUse,
         anchor: "{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"Write the file, then read the notes.\",\"signature\":\"EqQB\"},{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"write_file\",\"input\":{\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}},{\"type\":\"tool_use\",\"id\":\"toolu_02\",\"name\":\"read_file\",\"input\":{\"path\": \"notes.txt\", \"limit\": 10}}]}",
@@ -271,6 +271,14 @@ const DIALECT_CASES: [DialectCase; 12] = [
         repair: "<|tool_calls_begin|><|tool_call_begin|>function<|tool_sep|>read_file\n```\n{\"path\": \"src/lib.rs\", \"limit\": 40}\n<|tool_call_begin|>function<|tool_sep|>get_weather\n{\"city\": \"Oslo\", \"unit\": \"celsius\"}\n```<|tool_call_end|>",
         repair_status: "resolved",
         repair_digest: "sha256:8b47b741e93bd652782fbc8bb4b2a4f43d5277482a8a41558b187f060d1731e6",
+    },
+    DialectCase {
+        dialect: DialectId::Glm45,
+        anchor: "<think>Read the notes.</think><tool_call>read_file\n<arg_key>path</arg_key><arg_value>notes.txt</arg_value><arg_key>limit</arg_key><arg_value>10</arg_value></tool_call>",
+        anchor_digest: "sha256:f18fed4d8173d9547d8839041b6cc55b4b5f45c025e6d971e1d205f03f662a62",
+        repair: "<tool_call>read_file\n<arg_key>path<arg_value>src/lib.rs</arg_value><arg_key>limit</arg_key><arg_value>40</arg_value></tool_call>",
+        repair_status: "resolved",
+        repair_digest: "sha256:555ced96d3b3a9bd81c40409387a3b634c0251c674dc50a689b1150ec8abd766",
     },
     DialectCase {
         dialect: DialectId::Harmony,

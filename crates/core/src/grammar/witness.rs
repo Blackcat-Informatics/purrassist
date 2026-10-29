@@ -319,7 +319,11 @@ impl Plan<'_> {
     /// repeatable parameter printed once per item becomes one duplicate
     /// member per occurrence, and a `raw` value is its printed text.
     fn expected(&self, carrier: Carrier) -> Node {
-        let split = carrier.pairs || carrier.codec == Some(CodecKind::XmlParams);
+        let split = carrier.pairs
+            || matches!(
+                carrier.codec,
+                Some(CodecKind::XmlParams | CodecKind::KvPairs)
+            );
         let raw = carrier.codec == Some(CodecKind::Raw);
         let mut members = Vec::new();
         for parameter in &self.parameters {
@@ -415,7 +419,7 @@ impl<'g> Seeded<'g> {
     }
 
     /// The `xml-params` body of the current call.
-    fn xml_parameters(&self) -> Result<String, WitnessError> {
+    fn tagged_parameters(&self, kv: bool) -> Result<String, WitnessError> {
         let mut body = String::from("\n");
         for parameter in &self.plan().parameters {
             let items: Vec<&Node> = match &parameter.value.value {
@@ -424,14 +428,21 @@ impl<'g> Seeded<'g> {
             };
             for item in items {
                 let text = raw_text(item, &parameter.shape.value);
-                if text.contains("<parameter=") || text.contains("</parameter") {
+                if text.contains("<parameter=")
+                    || text.contains("</parameter")
+                    || (kv && (text.contains("<arg_") || text.contains("</arg_")))
+                {
                     return Err(PrintError::Unrepresentable { text });
                 }
-                body.push_str("<parameter=");
+                body.push_str(if kv { "<arg_key>" } else { "<parameter=" });
                 body.push_str(&parameter.name);
-                body.push_str(">\n");
+                body.push_str(if kv { "</arg_key>\n<arg_value>" } else { ">\n" });
                 body.push_str(&text);
-                body.push_str("\n</parameter>\n");
+                body.push_str(if kv {
+                    "</arg_value>\n"
+                } else {
+                    "\n</parameter>\n"
+                });
             }
         }
         Ok(body)
@@ -763,7 +774,8 @@ impl Fill for Seeded<'_> {
                     JsonArguments::Stringified => quote(&object),
                 })
             }
-            (Some(CaptureKind::Arguments), CodecKind::XmlParams) => self.xml_parameters(),
+            (Some(CaptureKind::Arguments), CodecKind::XmlParams) => self.tagged_parameters(false),
+            (Some(CaptureKind::Arguments), CodecKind::KvPairs) => self.tagged_parameters(true),
             (Some(CaptureKind::ParamValue), CodecKind::Raw) => {
                 let (parameter, occurrence) = self.current()?;
                 let value = occurrence_value(parameter, occurrence);

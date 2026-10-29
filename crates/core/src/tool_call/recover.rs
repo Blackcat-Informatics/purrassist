@@ -842,10 +842,10 @@ impl ToolRecoveryRequest {
     /// use purrassist_core::{Effort, tool_call::{DialectSet, ToolRecoveryRequest}};
     /// let output = b"<tool_call>\n{\"name\": \"ls\", \"arguments\": {}}\n</tool_call>";
     /// let request = ToolRecoveryRequest::sized(Effort::Standard, output);
-    /// // Two `<tool_call>` openers (Qwen3-Coder XML and Hermes) and two `{`
+    /// // Three `<tool_call>` openers (Qwen3-Coder XML, Hermes and GLM) and two `{`
     /// // where a Llama 3 JSON, an Anthropic `tool_use` and a bare JSON
     /// // attempt may open.
-    /// assert_eq!(request.budget, ToolRecoveryRequest::sized_budget(Effort::Standard, output.len(), 8));
+    /// assert_eq!(request.budget, ToolRecoveryRequest::sized_budget(Effort::Standard, output.len(), 9));
     /// ```
     #[must_use]
     pub fn sized(effort: Effort, output: &[u8]) -> Self {
@@ -1308,9 +1308,9 @@ pub struct KeywordUse {
 /// ```
 ///
 /// A complete call followed by a dangling `<tool_call>` under the default
-/// allow-list: Qwen3-Coder XML and Hermes both attempted the dangling call,
+/// allow-list: GLM, Qwen3-Coder XML and Hermes attempted the dangling call,
 /// the complete call stays usable, and the dangling remainder is one
-/// rejected attempt naming both dialects:
+/// rejected attempt naming all three dialects:
 ///
 /// ```
 /// use purrassist_core::tool_call::{DialectId, Param, ToolDefinition, ToolRecoveryRequest, ToolSet};
@@ -1320,7 +1320,7 @@ pub struct KeywordUse {
 /// let Outcome::BestGuess(calls) = tools.recover(output, &ToolRecoveryRequest::default(), purrassist_core::tool_call::DialectSet::built_in()).outcome else { unreachable!() };
 /// assert_eq!(calls.usable().len(), 1);
 /// assert_eq!(calls.rejected.len(), 1);
-/// assert_eq!(calls.rejected[0].candidate_dialects, [DialectId::Hermes, DialectId::Qwen3CoderXml]);
+/// assert_eq!(calls.rejected[0].candidate_dialects, [DialectId::Glm45, DialectId::Hermes, DialectId::Qwen3CoderXml]);
 /// ```
 ///
 /// A malformed call keeps its whole markup, closers included, and the

@@ -260,15 +260,15 @@ pub const UNDECLARED_NAME: u64 = 4;
 /// digest work. On the fast path (string arguments with no repair) that is
 /// 10 to 17 units per byte for the built-in dialects' arguments, and 26 for
 /// `OpenAI` stringified arguments. Output that is dense markup costs more:
-/// many small calls or many repeated parameters charge 52 to 139 units per
-/// byte over the built-in dialect set, the most for Kimi-K2 sections (138.3
-/// at 1 MiB) and Harmony messages (115.4), so this constant is that
-/// measured maximum plus a margin of about 25% (see `docs/RESOURCES.md`,
-/// "Dense markup"). Repair search beyond that stays bounded by the preset
-/// itself.
+/// many small calls or many repeated parameters use the measured bounds in
+/// `docs/RESOURCES.md`, "Dense markup". The thirteen-dialect default also
+/// admits the existing 300-parameter nullable-integer schema-typing case:
+/// 3,052,372 Work for 10,032 bytes, covered by the Standard preset plus
+/// 208 Work per byte. This is a measured sizing recipe, not a universal
+/// bound for arbitrary schemas or repair search.
 ///
 /// [`ToolRecoveryRequest::sized`]: crate::tool_call::ToolRecoveryRequest::sized
-pub const RECOVER_WORK_PER_BYTE: u64 = 176;
+pub const RECOVER_WORK_PER_BYTE: u64 = 208;
 
 /// `ScratchBytes` per output byte that [`ToolRecoveryRequest::sized`] adds
 /// to an effort preset's budget for tool-call recovery.

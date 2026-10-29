@@ -307,6 +307,53 @@ fn ref_scope_cases(cases: &mut Vec<Case>) {
 /// unmodeled parameters the exact schema types, alone and under every
 /// built-in dialect, a Hermes JSON control, and text no reading validates
 /// (abstain).
+/// GLM native key/value witnesses, independent of XML-specific mutations.
+fn glm_cases(cases: &mut Vec<Case>) {
+    for (variant, body, truth) in [
+        (
+            "canonical",
+            "<arg_key>path</arg_key><arg_value>lib.rs</arg_value><arg_key>limit</arg_key><arg_value>40</arg_value>",
+            Some(r#"{"path":"lib.rs","limit":40}"#),
+        ),
+        (
+            "missing-key-close",
+            "<arg_key>path<arg_value>lib.rs</arg_value>",
+            Some(r#"{"path":"lib.rs"}"#),
+        ),
+        (
+            "misspelled-value-close",
+            "<arg_key>path</arg_key><arg_value>lib.rs</arg_valu>",
+            Some(r#"{"path":"lib.rs"}"#),
+        ),
+        ("malformed-pair", "<arg_value>lib.rs</arg_value>", None),
+    ] {
+        for (label, dialect) in [("glm45", "glm-4.5.v1"), ("all", ALL_DIALECTS)] {
+            cases.push(Case {
+                id: format!("glm45/read_file/{label}/{variant}"),
+                category: match variant {
+                    "canonical" => "canonical",
+                    "missing-key-close" => "tool_call.markup.missing-parameter-close",
+                    "misspelled-value-close" => "tool_call.markup.closer-misspelled",
+                    _ => "tool_call.markup.missing-token",
+                }
+                .to_owned(),
+                dialect: dialect.to_owned(),
+                policy: Policy::PerTool,
+                stop: Ending::Stop,
+                input: format!("<tool_call>read_file\n{body}</tool_call>"),
+                truth: truth.map(|arguments| {
+                    vec![Call {
+                        name: "read_file".to_owned(),
+                        arguments: json::parse(arguments).expect("GLM truth"),
+                    }]
+                }),
+                tool_set: None,
+                invalid: None,
+            });
+        }
+    }
+}
+
 fn adapter_cases(cases: &mut Vec<Case>) {
     let qwen = |body: &str| {
         format!("<tool_call>\n<function=search_index>\n{body}</function>\n</tool_call>")
@@ -723,6 +770,7 @@ const fn dialect_label(dialect: &DialectId) -> &'static str {
         DialectId::DeepSeekV31 => "deepseek31",
         DialectId::DeepSeekV3 => "deepseek3",
         DialectId::Harmony => "harmony",
+        DialectId::Glm45 => "glm45",
         DialectId::Hermes => "hermes",
         DialectId::KimiK2 => "kimi",
         DialectId::Llama3Json => "llama3",
@@ -734,7 +782,8 @@ const fn dialect_label(dialect: &DialectId) -> &'static str {
     }
 }
 
-/// The built-in dialects, in corpus order.
+/// Dialects using the shared mutation driver, in corpus order.
+/// GLM uses native key/value cases in `glm_cases` instead of XML mutations.
 const DIALECTS: [DialectId; 12] = [
     DialectId::Qwen3CoderXml,
     DialectId::Hermes,
@@ -3471,7 +3520,7 @@ const fn policy_of(seed: u64) -> Policy {
     }
 }
 
-const ALL_DIALECTS: &str = "anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1";
+const ALL_DIALECTS: &str = "anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,glm-4.5.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1";
 
 /// The cases of every single-call mutation of `base`, appended to `cases`;
 /// with `under`, only those of categories with fewer than [`TARGET`] cases
@@ -3668,6 +3717,7 @@ pub fn generate() -> Vec<Case> {
     }
     deepseek_mixed_cases(&bases, &mut cases);
     adapter_cases(&mut cases);
+    glm_cases(&mut cases);
     let identities: BTreeSet<&str> = cases.iter().map(|case| case.id.as_str()).collect();
     assert_eq!(identities.len(), cases.len(), "case identities are unique");
     cases

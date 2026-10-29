@@ -2383,7 +2383,7 @@ fn hermes_and_qwen_xml_mixed() {
 /// G1: a complete Qwen3-Coder XML call and a complete Hermes call stay
 /// `Resolved` and usable under the default allow-list when a dangling
 /// `<tool_call>` follows them; the dangling attempt is one rejected attempt
-/// naming both dialects that share the opener.
+/// naming all three dialects that share the opener.
 #[test]
 fn mixed_complete_calls_then_dangling_opener() {
     let (golden, result) = golden("mixed_complete_calls_then_dangling_opener");
@@ -2404,7 +2404,11 @@ fn mixed_complete_calls_then_dangling_opener() {
     assert_eq!(rejected.raw, b"<tool_call>");
     assert_eq!(
         rejected.candidate_dialects,
-        [DialectId::Hermes, DialectId::Qwen3CoderXml]
+        [
+            DialectId::Glm45,
+            DialectId::Hermes,
+            DialectId::Qwen3CoderXml
+        ]
     );
     assert!(
         rejected
@@ -2426,15 +2430,11 @@ fn mixed_complete_calls_then_dangling_opener() {
 
 /// G1: the four goldens that lost their calls to a dialect-label tie under
 /// the default allow-list give their pinned result, with the rejected
-/// attempt the body evidences and both candidate dialects recorded.
+/// attempt the body evidences and all candidate dialects recorded.
 #[test]
 fn shared_opener_rejections_collapse_under_the_default_allow_list() {
     for (name, dialect, reach) in [
-        (
-            "dangling_trailing_tool_call",
-            DialectId::Qwen3CoderXml,
-            93..104,
-        ),
+        ("dangling_trailing_tool_call", DialectId::Glm45, 93..104),
         (
             "length_vs_stop_same_text_stop",
             DialectId::Qwen3CoderXml,
@@ -2465,7 +2465,11 @@ fn shared_opener_rejections_collapse_under_the_default_allow_list() {
         );
         assert_eq!(
             rejected.candidate_dialects,
-            [DialectId::Hermes, DialectId::Qwen3CoderXml],
+            [
+                DialectId::Glm45,
+                DialectId::Hermes,
+                DialectId::Qwen3CoderXml
+            ],
             "{name}"
         );
         assert_eq!(
@@ -4324,7 +4328,7 @@ fn unparsed_markup_is_reported() {
         ("unparsed_pythonic_list", MarkupFamily::Pythonic),
         ("unparsed_pythonic_after_prose", MarkupFamily::Pythonic),
         ("unparsed_gemma3_tool_code", MarkupFamily::Gemma3ToolCode),
-        ("unparsed_glm45", MarkupFamily::Glm45),
+        ("unparsed_glm45_not_allowed", MarkupFamily::Glm45),
         ("unparsed_kimi_k2_stripped", MarkupFamily::KimiK2Stripped),
         ("unparsed_harmony_stripped", MarkupFamily::HarmonyStripped),
         (
@@ -4371,12 +4375,6 @@ fn unparsed_markup_is_reported() {
             "{name}"
         );
     }
-    // The GLM <tool_call> opener is Hermes's and Qwen3-Coder XML's rejected
-    // attempt; only the body after it is reported.
-    let (_, result) = golden("unparsed_glm45");
-    let calls = reading(&result);
-    assert_eq!(calls.rejected.len(), 2);
-    assert!(calls.rejected[0].span.end <= calls.rejected[1].span.start);
     let (_, result) = golden("unparsed_negatives_stay_content");
     let calls = reading(&result);
     assert_eq!((calls.calls.len(), calls.rejected.len()), (0, 0));
@@ -5029,5 +5027,31 @@ fn issue6_resynced_rejected_tail_reports_own_failure() {
             part.reason,
             purrassist_core::tool_call::Rejection::Malformed { at: failed }
         );
+    }
+}
+
+/// Each GLM tag repair retains the intended declared string and is recorded.
+#[test]
+fn glm_key_value_repairs_preserve_declared_text() {
+    for name in [
+        "glm45_canonical",
+        "glm45_missing_key_close",
+        "glm45_missing_value_close",
+        "glm45_misspelled_key_open",
+        "glm45_misspelled_key_close",
+        "glm45_misspelled_value_open",
+        "glm45_misspelled_value_close",
+    ] {
+        let (_, result) = golden(name);
+        let call = the_call(&result);
+        assert_eq!(call.outcome, CallOutcome::Resolved, "{name}");
+        assert_eq!(
+            call.arguments.get("city").and_then(Node::as_str),
+            Some("Paris"),
+            "{name}"
+        );
+        if name != "glm45_canonical" {
+            assert!(!call.repairs.evidence.is_empty(), "{name}");
+        }
     }
 }

@@ -25,6 +25,7 @@
 //! | --- | --- | --- |
 //! | [`RawCodec`] | `raw` | the verbatim body as one string leaf |
 //! | [`JsonCodec`] | `json` | one JSON value, tolerant of syntax errors; a string holding JSON is decoded as stringified arguments |
+//! | [`KvPairsCodec`] | `kv-pairs` | alternating key/value elements, typed by the declared tool, with verbatim string content |
 //! | [`XmlParamsCodec`] | `xml-params` | `<parameter=NAME>value</parameter>` sequences, typed by the call's declared tool |
 //!
 //! # Context
@@ -74,10 +75,12 @@
 //! # Ok::<(), purrassist_core::StopReason>(())
 //! ```
 mod json;
+mod kv;
 mod raw;
 mod xml;
 
 pub use json::JsonCodec;
+pub use kv::KvPairsCodec;
 pub use raw::RawCodec;
 pub use xml::XmlParamsCodec;
 
@@ -107,11 +110,19 @@ pub enum CodecKind {
     JsonArgs,
     /// XML parameter elements (see [`XmlParamsCodec`]).
     XmlParams,
+    /// GLM key/value elements, typed by the declared tool (see [`KvPairsCodec`]).
+    KvPairs,
 }
 
 impl CodecKind {
     /// Every codec, in declaration order.
-    pub const ALL: [Self; 4] = [Self::Raw, Self::Json, Self::JsonArgs, Self::XmlParams];
+    pub const ALL: [Self; 5] = [
+        Self::Raw,
+        Self::Json,
+        Self::JsonArgs,
+        Self::XmlParams,
+        Self::KvPairs,
+    ];
 
     /// The slot name this codec is registered under.
     ///
@@ -127,6 +138,7 @@ impl CodecKind {
             Self::Json => "json",
             Self::JsonArgs => "json-args",
             Self::XmlParams => "xml-params",
+            Self::KvPairs => "kv-pairs",
         }
     }
 
@@ -145,6 +157,7 @@ impl CodecKind {
             "json" => Some(Self::Json),
             "json-args" => Some(Self::JsonArgs),
             "xml-params" => Some(Self::XmlParams),
+            "kv-pairs" => Some(Self::KvPairs),
             _ => None,
         }
     }
@@ -165,6 +178,7 @@ impl CodecKind {
             Self::Json => CodecState::Json(Box::new(JsonCodec::begin(at, governor)?)),
             Self::JsonArgs => CodecState::Json(Box::new(JsonCodec::begin_arguments(at, governor)?)),
             Self::XmlParams => CodecState::XmlParams(XmlParamsCodec::begin(at, governor)?),
+            Self::KvPairs => CodecState::KvPairs(KvPairsCodec::begin(at, governor)?),
         })
     }
 }
@@ -541,6 +555,8 @@ pub(crate) enum CodecState {
     Json(Box<JsonCodec>),
     /// An [`XmlParamsCodec`].
     XmlParams(XmlParamsCodec),
+    /// A [`KvPairsCodec`].
+    KvPairs(KvPairsCodec),
 }
 
 impl CodecState {
@@ -550,6 +566,7 @@ impl CodecState {
             Self::Json(codec) if codec.arguments_only() => CodecKind::JsonArgs,
             Self::Json(_) => CodecKind::Json,
             Self::XmlParams(_) => CodecKind::XmlParams,
+            Self::KvPairs(_) => CodecKind::KvPairs,
         }
     }
 
@@ -557,7 +574,7 @@ impl CodecState {
     pub(crate) const fn boxed_bytes(&self) -> u64 {
         match self {
             Self::Json(_) => super::cost::JSON_CODEC_STATE,
-            Self::Raw(_) | Self::XmlParams(_) => 0,
+            Self::Raw(_) | Self::XmlParams(_) | Self::KvPairs(_) => 0,
         }
     }
 
@@ -566,7 +583,7 @@ impl CodecState {
     pub(crate) const fn in_string(&self) -> bool {
         match self {
             Self::Json(codec) => codec.in_string(),
-            Self::Raw(_) | Self::XmlParams(_) => false,
+            Self::Raw(_) | Self::XmlParams(_) | Self::KvPairs(_) => false,
         }
     }
 
@@ -576,7 +593,7 @@ impl CodecState {
     pub(crate) const fn complete_end(&self) -> Option<usize> {
         match self {
             Self::Json(codec) => codec.complete_end(),
-            Self::Raw(_) | Self::XmlParams(_) => None,
+            Self::Raw(_) | Self::XmlParams(_) | Self::KvPairs(_) => None,
         }
     }
 
@@ -590,6 +607,7 @@ impl CodecState {
             Self::Raw(codec) => codec.feed(byte, at, governor),
             Self::Json(codec) => codec.feed(byte, at, governor),
             Self::XmlParams(codec) => codec.feed(byte, at, governor),
+            Self::KvPairs(codec) => codec.feed(byte, at, governor),
         }
     }
 
@@ -605,6 +623,7 @@ impl CodecState {
             Self::Raw(codec) => codec.finish(body, span, end, context, governor),
             Self::Json(codec) => codec.finish(body, span, end, context, governor),
             Self::XmlParams(codec) => codec.finish(body, span, end, context, governor),
+            Self::KvPairs(codec) => codec.finish(body, span, end, context, governor),
         }
     }
 }

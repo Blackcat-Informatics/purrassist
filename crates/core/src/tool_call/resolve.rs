@@ -1848,7 +1848,7 @@ impl<'a> Resolver<'a> {
             &arguments,
             "",
             "",
-            raw,
+            &raw.arguments,
             &mut sites,
             governor,
         )?;
@@ -3033,6 +3033,30 @@ struct SchemaSite {
     raw: Range<usize>,
 }
 
+/// Apply the resolver's exact schema typing to a codec readback. String
+/// branches retain verbatim text; refusing to evaluate a schema proves nothing.
+pub(super) fn schema_readback(
+    tool: &CompiledTool,
+    raw: &super::ArgTree,
+    governor: &mut Governor,
+) -> Result<Option<Node>, StopReason> {
+    let mut sites = Vec::new();
+    schema_sites(
+        tool,
+        &tool.argument_shape().arguments,
+        &raw.root,
+        "",
+        "",
+        raw,
+        &mut sites,
+        governor,
+    )?;
+    if sites.is_empty() {
+        return Ok(Some(raw.root.clone()));
+    }
+    Ok(schema_rounds(tool, &sites, raw.root.clone(), governor)?.map(|(typed, _, _)| typed))
+}
+
 /// Collect every XML-text string inside the unmodeled values of an object
 /// scope, walking the modeled scopes of `shape` down to them.
 #[allow(clippy::too_many_arguments)]
@@ -3042,7 +3066,7 @@ fn schema_sites(
     node: &Node,
     pointer: &str,
     schema: &str,
-    raw: &RawCall,
+    raw: &super::ArgTree,
     out: &mut Vec<SchemaSite>,
     governor: &mut Governor,
 ) -> Result<(), StopReason> {
@@ -3096,14 +3120,14 @@ fn unmodeled_sites(
     node: &Node,
     pointer: &str,
     root: (&str, &str),
-    raw: &RawCall,
+    raw: &super::ArgTree,
     out: &mut Vec<SchemaSite>,
     governor: &mut Governor,
 ) -> Result<(), StopReason> {
     governor.charge(Resource::Work, 1)?;
     match &node.value {
         Value::String(text) => {
-            let Some(leaf) = raw.arguments.leaves.iter().find(|leaf| {
+            let Some(leaf) = raw.leaves.iter().find(|leaf| {
                 leaf.origin == ArgOrigin::XmlText && node.span.as_ref() == Some(&leaf.raw)
             }) else {
                 return Ok(());

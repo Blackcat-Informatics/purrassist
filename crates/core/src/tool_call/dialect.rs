@@ -29,7 +29,7 @@ use std::sync::{Arc, OnceLock};
 /// One dialect grammar the recognizer can run.
 ///
 /// The set of variants is closed, so the recognizer dispatches statically.
-/// Twelve dialects are built in, each a first-party grammar embedded in the
+/// Thirteen dialects are built in, each a first-party grammar embedded in the
 /// crate (see `docs/tool-calls/dialects/` for each grammar's public sources
 /// and what it deliberately does not accept):
 ///
@@ -42,6 +42,7 @@ use std::sync::{Arc, OnceLock};
 /// | [`DialectId::DeepSeekV3`] | `deepseek-v3.v1` | `<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME` + a fenced `json` block + `<｜tool▁call▁end｜>...<｜tool▁calls▁end｜>` |
 /// | [`DialectId::KimiK2`] | `kimi-k2.v1` | `<\|tool_calls_section_begin\|><\|tool_call_begin\|>functions.NAME:IDX<\|tool_call_argument_begin\|>{...}<\|tool_call_end\|>...<\|tool_calls_section_end\|>` |
 /// | [`DialectId::Harmony`] | `harmony.v1` | `<\|channel\|>commentary to=functions.NAME <\|constrain\|>json<\|message\|>{...}<\|call\|>` |
+/// | [`DialectId::Glm45`] | `glm-4.5.v1` | `<tool_call>NAME<arg_key>KEY</arg_key><arg_value>VALUE</arg_value></tool_call>` |
 /// | [`DialectId::Hermes`] | `hermes.v1` | `<tool_call>{"name": NAME, "arguments": {...}}</tool_call>` |
 /// | [`DialectId::Llama3Json`] | `llama3-json.v1` | `{"name": NAME, "parameters": {...}}`, optionally after `<\|python_tag\|>` |
 /// | [`DialectId::MistralV11`] | `mistral-v11.v1` | `[TOOL_CALLS]NAME[CALL_ID]ID[ARGS]{...}`, the `[CALL_ID]` segment optional, repeatable |
@@ -85,6 +86,8 @@ pub enum DialectId {
     /// `deepseek-v3.v1`: DeepSeek-V3 / R1 tool-calls sections with fenced
     /// JSON arguments.
     DeepSeekV3,
+    /// `glm-4.5.v1`: GLM alternating key/value tag calls.
+    Glm45,
     /// `harmony.v1`: `OpenAI` Harmony (gpt-oss) assistant messages with a
     /// recipient.
     Harmony,
@@ -150,6 +153,7 @@ static DEEPSEEK_V3: BuiltIn = BuiltIn::new(
     "deepseek-v3.v1",
     include_str!("dialects/deepseek-v3.v1.grammar"),
 );
+static GLM45: BuiltIn = BuiltIn::new("glm-4.5.v1", include_str!("dialects/glm-4.5.v1.grammar"));
 static HARMONY: BuiltIn = BuiltIn::new("harmony.v1", include_str!("dialects/harmony.v1.grammar"));
 static HERMES: BuiltIn = BuiltIn::new("hermes.v1", include_str!("dialects/hermes.v1.grammar"));
 static KIMI_K2: BuiltIn = BuiltIn::new("kimi-k2.v1", include_str!("dialects/kimi-k2.v1.grammar"));
@@ -187,6 +191,7 @@ impl DialectId {
     ///         "bare-json.v1",
     ///         "deepseek-v3.1.v1",
     ///         "deepseek-v3.v1",
+    ///         "glm-4.5.v1",
     ///         "harmony.v1",
     ///         "hermes.v1",
     ///         "kimi-k2.v1",
@@ -198,11 +203,12 @@ impl DialectId {
     ///     ]
     /// );
     /// ```
-    pub const BUILT_IN: [Self; 12] = [
+    pub const BUILT_IN: [Self; 13] = [
         Self::AnthropicToolUse,
         Self::BareJson,
         Self::DeepSeekV31,
         Self::DeepSeekV3,
+        Self::Glm45,
         Self::Harmony,
         Self::Hermes,
         Self::KimiK2,
@@ -227,6 +233,7 @@ impl DialectId {
             Self::AnthropicToolUse => Some(&ANTHROPIC_TOOL_USE),
             Self::DeepSeekV31 => Some(&DEEPSEEK_V31),
             Self::DeepSeekV3 => Some(&DEEPSEEK_V3),
+            Self::Glm45 => Some(&GLM45),
             Self::Harmony => Some(&HARMONY),
             Self::Hermes => Some(&HERMES),
             Self::KimiK2 => Some(&KIMI_K2),
@@ -272,6 +279,7 @@ impl DialectId {
             Self::AnthropicToolUse => ANTHROPIC_TOOL_USE.id,
             Self::DeepSeekV31 => DEEPSEEK_V31.id,
             Self::DeepSeekV3 => DEEPSEEK_V3.id,
+            Self::Glm45 => GLM45.id,
             Self::Harmony => HARMONY.id,
             Self::Hermes => HERMES.id,
             Self::KimiK2 => KIMI_K2.id,
@@ -314,6 +322,7 @@ impl DialectId {
             Self::AnthropicToolUse => ANTHROPIC_TOOL_USE.grammar(),
             Self::DeepSeekV31 => DEEPSEEK_V31.grammar(),
             Self::DeepSeekV3 => DEEPSEEK_V3.grammar(),
+            Self::Glm45 => GLM45.grammar(),
             Self::Harmony => HARMONY.grammar(),
             Self::Hermes => HERMES.grammar(),
             Self::KimiK2 => KIMI_K2.grammar(),
@@ -588,8 +597,8 @@ impl DialectSet {
     /// The call openers of `output` summed over the dialects
     /// ([`CompiledGrammar::call_openers`]): every byte offset where a
     /// dialect's `call` production can open counts once for that dialect,
-    /// so an opener two dialects share (`<tool_call>` in Qwen3-Coder XML
-    /// and Hermes) counts twice, once per competing attempt. A dialect whose
+    /// so a shared opener (`<tool_call>` in Qwen3-Coder XML, Hermes and GLM)
+    /// counts once per competing attempt. A dialect whose
     /// attempts commit after their opener (`llama3-json.v1`,
     /// `anthropic-tool-use.v1` and `bare-json.v1` open at `{` and commit on
     /// call-shaped evidence) counts every opener, committed or not. It bounds the call attempts recovery can read or reject, and sizes the candidate
@@ -599,10 +608,10 @@ impl DialectSet {
     /// ```
     /// use purrassist_core::tool_call::DialectSet;
     /// let output = b"<tool_call>\n{\"name\": \"ls\", \"arguments\": {}}\n</tool_call>";
-    /// // Qwen3-Coder XML and Hermes both open with `<tool_call>`; a Llama 3
+    /// // Qwen3-Coder XML, Hermes and GLM open with `<tool_call>`; a Llama 3
     /// // JSON, an Anthropic `tool_use` and a bare JSON attempt may open at
     /// // each of the two `{`.
-    /// assert_eq!(DialectSet::built_in().call_openers(output), 8);
+    /// assert_eq!(DialectSet::built_in().call_openers(output), 9);
     /// assert_eq!(DialectSet::built_in().call_openers(b"no calls here"), 0);
     /// ```
     #[must_use]

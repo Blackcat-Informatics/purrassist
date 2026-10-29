@@ -1,0 +1,75 @@
+{
+  "description": "GLM canonical nested typed arguments: verbatim strings and inline JSON values.",
+  "markup": "<think>Write the file.</think>\n<tool_call>write_file\n<arg_key>path</arg_key><arg_value>src/main.rs</arg_value><arg_key>content</arg_key><arg_value>fn main() {\n    println!(\"hi\");\n\n\tlet  x = 1;  \n}\n</arg_value><arg_key>mode</arg_key><arg_value>create</arg_value><arg_key>ratio</arg_key><arg_value>2.50</arg_value><arg_key>count</arg_key><arg_value>1e3</arg_value><arg_key>tags</arg_key><arg_value>[]</arg_value><arg_key>options</arg_key><arg_value>{\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}</arg_value></tool_call>",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "description": "GLM canonical nested typed arguments: verbatim strings and inline JSON values.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "create",
+                "overwrite"
+              ]
+            },
+            "ratio": {
+              "type": "number"
+            },
+            "count": {
+              "type": "integer"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "options": {
+              "type": "object",
+              "properties": {
+                "backup": {
+                  "type": "boolean"
+                },
+                "retries": {
+                  "type": "integer"
+                },
+                "owner": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "uid": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "write_file",
+      "arguments": {"path": "src/main.rs", "content": "fn main() {\n    println!(\"hi\");\n\n\tlet  x = 1;  \n}\n", "mode": "create", "ratio": 2.50, "count": 1e3, "tags": [], "options": {"backup": false, "retries": 0, "owner": {"name": "ops", "uid": -7}}}
+    }
+  ]
+}

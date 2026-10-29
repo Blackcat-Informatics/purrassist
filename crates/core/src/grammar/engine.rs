@@ -1470,7 +1470,12 @@ impl<'s> Step<'_, 's> {
             Inst::Slot { codec, .. } => Some(codec),
             _ => None,
         };
-        if kind.is_some_and(|kind| !matches!(kind, CodecKind::Raw | CodecKind::XmlParams)) {
+        if kind.is_some_and(|kind| {
+            !matches!(
+                kind,
+                CodecKind::Raw | CodecKind::XmlParams | CodecKind::KvPairs
+            )
+        }) {
             return Ok(());
         }
         let grammar = self.grammar;
@@ -1557,7 +1562,10 @@ impl<'s> Step<'_, 's> {
             });
         }
         if let Inst::Slot { codec, .. } = self.program.insts[thread.pc as usize]
-            && !matches!(codec, CodecKind::Raw | CodecKind::XmlParams)
+            && !matches!(
+                codec,
+                CodecKind::Raw | CodecKind::XmlParams | CodecKind::KvPairs
+            )
         {
             // A delimiter written inside a string of a self-delimiting value:
             // ending the value here repairs it (an unterminated string), so
@@ -6651,7 +6659,7 @@ fn verbatim_slot(program: &Program, kind: ProductionKind, thread: &Thread) -> bo
         && matches!(
             program.insts[thread.pc as usize],
             Inst::Slot {
-                codec: CodecKind::Raw | CodecKind::XmlParams,
+                codec: CodecKind::Raw | CodecKind::XmlParams | CodecKind::KvPairs,
                 ..
             }
         )

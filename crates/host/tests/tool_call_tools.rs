@@ -118,7 +118,7 @@ fn default_ids_are_disjoint_across_turns() {
 
 /// G7: the default MCP request sizes its candidate budget to the turn. A
 /// 64-call turn whose every call needs a markup repair, with a stray
-/// `<tool_call>` line after each that two dialects contest, recovers every
+/// `<tool_call>` line after each that three dialects contest, recovers every
 /// call `Resolved` with no effort option.
 #[test]
 fn busy_turn_resolves_every_call_by_default() {
@@ -155,7 +155,7 @@ fn busy_turn_resolves_every_call_by_default() {
         actual
             .pointer("/receipt/budget/candidates")
             .map(Node::to_json),
-        Some((128 + 16 * 320).to_string())
+        Some((128 + 16 * 448).to_string())
     );
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -609,7 +609,7 @@ fn dangling_opener_after_a_call_keeps_the_call() {
             .pointer("/value/rejected/0/candidate_dialects")
             .map(Node::to_json)
             .as_deref(),
-        Some(r#"["hermes.v1","qwen3-coder-xml.v1"]"#)
+        Some(r#"["glm-4.5.v1","hermes.v1","qwen3-coder-xml.v1"]"#)
     );
     let definitions = Tools::definitions().unwrap();
     let json::Value::Array(definitions) = definitions.value else {

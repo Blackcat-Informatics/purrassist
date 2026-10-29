@@ -1,0 +1,62 @@
+{
+  "description": "GLM canonical multiple calls: verbatim strings and inline JSON values.",
+  "markup": "<tool_call>get_weather\n<arg_key>city</arg_key><arg_value>Oslo</arg_value></tool_call>\n<tool_call>read_file\n<arg_key>path</arg_key><arg_value>notes.txt</arg_value><arg_key>limit</arg_key><arg_value>10</arg_value></tool_call>",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "GLM canonical multiple calls: verbatim strings and inline JSON values.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "description": "GLM canonical multiple calls: verbatim strings and inline JSON values.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "get_weather",
+      "arguments": {"city": "Oslo"}
+    },
+    {
+      "name": "read_file",
+      "arguments": {"path": "notes.txt", "limit": 10}
+    }
+  ]
+}

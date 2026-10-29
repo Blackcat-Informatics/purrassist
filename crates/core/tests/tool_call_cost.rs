@@ -308,9 +308,9 @@ fn busy_turn(calls: usize) -> String {
 /// every call needs a markup repair, with a contested stray opener after
 /// each, exhausts the fixed `Effort::Standard` preset explicitly, and is
 /// recovered with every call `Resolved` under `ToolRecoveryRequest::sized`:
-/// `⌈128 / 8⌉ = 16` candidates for each of its 320 openers (64 calls, each
-/// opened at `<tool_call>` by two dialects and at `<function=` by one, and 64
-/// stray lines, each opened by two dialects). Competing segmentations of
+/// `⌈128 / 8⌉ = 16` candidates for each of its 448 openers (64 calls, each
+/// opened at `<tool_call>` by three dialects and at `<function=` by one, and 64
+/// stray lines, each opened by three dialects). Competing segmentations of
 /// the stray lines that recover the same calls are folded per span, so the
 /// readings charged grow with the calls instead of doubling per call.
 #[test]
@@ -330,9 +330,9 @@ fn busy_turn_resolves_every_call_under_sized() {
     assert!(preset.receipt.evidence.is_empty() && preset.receipt.alternatives.is_empty());
 
     let openers = DialectSet::built_in().call_openers(output.as_bytes());
-    assert_eq!(openers, 320);
+    assert_eq!(openers, 448);
     let request = ToolRecoveryRequest::sized(Effort::Standard, output.as_bytes());
-    assert_eq!(request.budget.candidates, 128 + 16 * 320);
+    assert_eq!(request.budget.candidates, 128 + 16 * 448);
     let result = tools.recover(
         output.as_bytes(),
         &request,
@@ -358,16 +358,20 @@ fn busy_turn_resolves_every_call_under_sized() {
         );
     }
     assert_eq!(calls.usable().len(), 64);
-    // Every stray opener is a recorded rejection naming both dialects.
+    // Every stray opener is a recorded rejection naming all three dialects.
     assert_eq!(calls.rejected.len(), 64);
     for rejected in &calls.rejected {
         assert_eq!(
             rejected.candidate_dialects,
-            [DialectId::Hermes, DialectId::Qwen3CoderXml]
+            [
+                DialectId::Glm45,
+                DialectId::Hermes,
+                DialectId::Qwen3CoderXml
+            ]
         );
     }
     // One reading per contested span plus the selected reading: linear.
-    assert_eq!(result.receipt.usage.candidates, 64 * 2 + 1);
+    assert_eq!(result.receipt.usage.candidates, 64 * 3 + 1);
     assert_eq!(result.receipt.alternatives.len(), 0);
 }
 
@@ -490,10 +494,10 @@ fn crafted_reading_explosion_exhausts_explicitly() {
 fn sized_budget_follows_the_published_formula() {
     let output = busy_turn(3);
     let openers = DialectSet::built_in().call_openers(output.as_bytes());
-    // Per call: `<tool_call>` (Qwen3-Coder XML and Hermes) and
+    // Per call: `<tool_call>` (GLM, Qwen3-Coder XML and Hermes) and
     // `<function=` (a bare Qwen3-Coder XML element); per stray line:
-    // `<tool_call>` twice.
-    assert_eq!(openers, 15);
+    // `<tool_call>` three times.
+    assert_eq!(openers, 21);
     for effort in [
         Effort::Exact,
         Effort::Quick,

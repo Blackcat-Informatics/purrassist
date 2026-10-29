@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+# First-party grammar derived from the public GLM-4.5 text-template contract.
+# Provenance and deliberate exclusions: docs/tool-calls/dialects/glm-4.5.v1.md.
+grammar "glm-4.5.v1";
+reasoning "<think>" "</think>";
+closer call-end = "</tool_call>";
+tool-name = /[A-Za-z0-9_.:-]+/;
+ws = /[ \t\r\n]+/;
+sp = /[ \t\r\n]+/;
+layout sp "\n";
+json-string = /"([^"\\\x00-\x1F]|\\["\\\/bfnrt]|\\u[0-9A-Fa-f]{4})*"/;
+call = "<tool_call>" ws? name:tool-name sp? arguments:slot(kv-pairs, "</tool_call>", "<tool_call>") call-end;
+result = "<tool_response>" content:until("</tool_response>") "</tool_response>";
+declaration = "{" ws? "\"type\"" ws? ":" ws? "\"function\"" ws? "," ws?
+              "\"function\"" ws? ":" ws? "{" ws?
+              "\"name\"" ws? ":" ws? "\"" name:tool-name "\""
+              (ws? "," ws? "\"description\"" ws? ":" content:json-string)?
+              (ws? "," ws? "\"parameters\"" ws? ":" arguments:slot(json, "\x00"))?
+              ws? "}" ws? "}";

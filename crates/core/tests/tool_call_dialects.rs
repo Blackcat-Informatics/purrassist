@@ -233,6 +233,7 @@ fn all_registered_dialects_have_anchor_fixtures() {
             "bare-json.v1",
             "deepseek-v3.1.v1",
             "deepseek-v3.v1",
+            "glm-4.5.v1",
             "harmony.v1",
             "hermes.v1",
             "kimi-k2.v1",
