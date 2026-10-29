@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! RFC 3986 `uri`/`uri-reference` and RFC 3987 `iri`/`iri-reference`.
 use super::{net::ipv6_literal, pct_encoded};
-use crate::contract::{Governor, Resource, StopReason};
+use crate::contract::{Governor, StopReason};
 use std::iter::Peekable;
 use std::str::Chars;
 
@@ -185,15 +185,20 @@ pub(super) fn is_reference(text: &str, iri: bool, require_scheme: bool) -> bool 
     true
 }
 
+// Admit the borrowed parser without replacing its percent-escape cursor.
+// For n input bytes: scheme discovery/validation uses at most 6n (two colon
+// searches, validation and three delimiter comparisons per byte); fragment
+// and query splitting 2n; authority boundary n; userinfo/host splitting 2n;
+// relative first-segment checks 2n; disjoint component scans n; ASCII check n.
+// A bracketed host additionally uses the IPv6 parser's bound 15n + 8
+// (including its embedded IPv4 parser). The remaining 24 units cover fixed
+// prefix/suffix and delimiter probes. These bounds also cover early exits.
 pub(super) fn is_uri(
     text: &str,
     allow_relative: bool,
     governor: &mut Governor,
 ) -> Result<bool, StopReason> {
-    governor.charge(
-        Resource::Work,
-        u64::try_from(text.len()).unwrap_or(u64::MAX),
-    )?;
+    super::admit_scans(text, 30, 32, governor)?;
     Ok(text.is_ascii() && is_reference(text, false, !allow_relative))
 }
 
@@ -202,9 +207,6 @@ pub(super) fn is_iri(
     allow_relative: bool,
     governor: &mut Governor,
 ) -> Result<bool, StopReason> {
-    governor.charge(
-        Resource::Work,
-        u64::try_from(text.len()).unwrap_or(u64::MAX),
-    )?;
+    super::admit_scans(text, 30, 32, governor)?;
     Ok(is_reference(text, true, !allow_relative))
 }

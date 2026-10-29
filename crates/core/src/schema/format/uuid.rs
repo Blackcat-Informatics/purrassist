@@ -7,7 +7,9 @@ use crate::contract::{Governor, Resource, StopReason};
 const GROUPS: [usize; 5] = [8, 4, 4, 4, 12];
 
 pub(super) fn is_uuid(text: &str, governor: &mut Governor) -> Result<bool, StopReason> {
-    governor.charge(Resource::Work, 1)?;
+    // Five group probes, 32 hex digits, four separators and one length check.
+    // Excess input is rejected by length without scanning its suffix.
+    governor.charge(Resource::Work, 42)?;
     let bytes = text.as_bytes();
     let mut cursor = 0;
     for (index, &width) in GROUPS.iter().enumerate() {

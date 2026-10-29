@@ -1077,10 +1077,7 @@ impl<'s> Gen<'s, '_> {
                 let candidate =
                     format_scratch_governed(format_args!("extra{counter}"), self.governor)?;
                 counter += 1;
-                if !members
-                    .iter()
-                    .any(|member| member.key == candidate.as_str())
-                {
+                if !contains_member(&members, candidate.as_str(), self.governor)? {
                     break candidate;
                 }
             };
@@ -1138,10 +1135,7 @@ impl<'s> Gen<'s, '_> {
         let name = loop {
             let candidate = format_scratch_governed(format_args!("extra{counter}"), self.governor)?;
             counter += 1;
-            if !members
-                .iter()
-                .any(|member| member.key == candidate.as_str())
-            {
+            if !contains_member(&members, candidate.as_str(), self.governor)? {
                 break candidate;
             }
         };
@@ -1197,7 +1191,7 @@ impl<'s> Gen<'s, '_> {
             Value::Number(number) => self.check_number(number, req)?,
             Value::String(text) => self.check_string(text, req)?,
             Value::Array(items) => self.check_array(items, req)?,
-            Value::Object(members) => check_object(members, req),
+            Value::Object(members) => check_object(members, req, self.governor)?,
         } {
             return Ok(Some(reason));
         }
@@ -1275,6 +1269,7 @@ impl<'s> Gen<'s, '_> {
         if !req.types.string {
             return Ok(Some("string is not an admitted type"));
         }
+        reference::work(self.governor, text.len())?;
         let length = size(text.chars().count());
         if length < req.min_length {
             return Ok(Some("shorter than minLength"));
@@ -1346,23 +1341,27 @@ impl<'s> Gen<'s, '_> {
         Ok(None)
     }
 }
-fn check_object(members: &[Member], req: &Requirements<'_>) -> Option<&'static str> {
+fn check_object(
+    members: &[Member],
+    req: &Requirements<'_>,
+    governor: &mut Governor,
+) -> Result<Option<&'static str>, StopReason> {
     if !req.types.object {
-        return Some("object is not an admitted type");
+        return Ok(Some("object is not an admitted type"));
     }
     let length = size(members.len());
     if length < req.min_properties {
-        return Some("fewer than minProperties");
+        return Ok(Some("fewer than minProperties"));
     }
     if req.max_properties.is_some_and(|bound| length > bound) {
-        return Some("more than maxProperties");
+        return Ok(Some("more than maxProperties"));
     }
     for name in &req.required {
-        if !members.iter().any(|member| member.key.as_str() == *name) {
-            return Some("missing required member");
+        if !contains_member(members, name, governor)? {
+            return Ok(Some("missing required member"));
         }
     }
-    None
+    Ok(None)
 }
 
 #[derive(Clone, Copy)]
@@ -1576,6 +1575,21 @@ fn contains_name(
     for name in names {
         reference::work(governor, name.len().min(wanted.len()).saturating_add(1))?;
         if *name == wanted {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Borrowed member-name search shared by required checks and synthetic names.
+fn contains_member(
+    members: &[Member],
+    wanted: &str,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    reference::work(governor, 1)?;
+    for member in members {
+        if super::super::report::compare(&member.key, wanted, governor)?.is_eq() {
             return Ok(true);
         }
     }

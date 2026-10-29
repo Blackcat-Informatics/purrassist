@@ -25,6 +25,8 @@ fn is_json_pointer_str(text: &str) -> bool {
 }
 
 pub(super) fn is_json_pointer(text: &str, governor: &mut Governor) -> Result<bool, StopReason> {
+    // One forward cursor consumes each scalar at most once; cached peeks
+    // do not rescan. Relative digits and the pointer suffix are disjoint.
     governor.charge(
         Resource::Work,
         u64::try_from(text.len()).unwrap_or(u64::MAX),
@@ -36,6 +38,8 @@ pub(super) fn is_relative_json_pointer(
     text: &str,
     governor: &mut Governor,
 ) -> Result<bool, StopReason> {
+    // One forward cursor consumes each scalar at most once; cached peeks
+    // do not rescan. Relative digits and the pointer suffix are disjoint.
     governor.charge(
         Resource::Work,
         u64::try_from(text.len()).unwrap_or(u64::MAX),

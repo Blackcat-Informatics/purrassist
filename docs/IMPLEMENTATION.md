@@ -45,8 +45,8 @@ their diagnostic text and retain only the completed diagnostic after its final
 governor check. Arbitrarily large exponents remain exact without exponent-sized
 integer allocation. Witness numeric type filtering and bound checks use the same
 governed integer classification and comparison as validation, preserving seed
-order and native refusal causes. General format assertions and recovery candidate ownership
-remain separate contracts.
+order and native refusal causes. Recovery candidate ownership remains a separate
+contract.
 
 Hostname and email format evaluation now admits Unicode mapping, normalization,
 Punycode, contextual and Bidi checks through the caller governor. Actual temporary
@@ -61,8 +61,18 @@ separately and reuses the governed IP validators. IPv6 group parsing is borrowed
 both IP validators admit documented scan bounds after their finite length guards
 and check cancellation before returning. Their standalone usage counters change
 as well. Pinned Unicode data, format language and annotation/assertion semantics
-remain unchanged. Other format validators, Unicode length assertions, required-name
-scans, regex-format diagnostic ownership and recovery candidates remain separate.
+remain unchanged.
+
+Remaining schema assertion scans now admit keyword and compiled-pattern lookups,
+repeated schema routes, Unicode scalar counts and witness member-name searches.
+URI/IRI, date/time/duration and UUID validation use documented bounds over their
+existing borrowed parsers; pointer and template validation retain forward cursors.
+Regex format validation drops owned syntax diagnostics without publishing them.
+Every format outcome checks cancellation, including unknown annotation formats.
+Exact results, witness seed order and dialect-driven assertion behavior remain
+unchanged; usage reflects the additional admitted computation. Repair-string
+construction, general recovery/search ownership and graph loading remain separate.
+These changes do not complete the full contracts of parent issues #33 and #36.
 
 Witness canonicalization, requirement merging and the existing branch driver
 share the caller's governor. Immutable schema operands and pattern names remain
@@ -85,9 +95,8 @@ only completed output. Derivative and backtracking pattern generation share an
 internal owned result, while ordinary pattern generation publishes its output
 through one adapter. Required-property recovery explicitly transfers a completed
 witness into its existing retained-candidate contract without another clone.
-Subsequent recovery duplicate/discard retention, general assertion/format
-computation and host serialization remain separate. This does not complete
-witness computation, recovery ownership or tool-graph governance.
+Subsequent recovery duplicate/discard retention and host serialization remain
+separate. This does not complete recovery ownership or tool-graph governance.
 
 Evaluator recursion and transient path/key state now use fallible owners on the
 same caller governor. One active stack retains schema-location/instance-path
@@ -113,9 +122,8 @@ indices, deduplicates individually owned patterns by destination, and reserves
 final observation slots before commit. Refusal preserves committed observations;
 finalization after exhaustion or cancellation requires no allocation. Search
 results retain the existing evidence order and ambiguous-prefix replacement.
-Provisional Search/Forest publication retains its existing charges. General
-scalar/format computation, recovery replacement construction and host
-serialization remain separate contracts.
+Provisional Search/Forest publication retains its existing charges. Recovery
+replacement construction and host serialization remain separate contracts.
 
 Final refutations are published only by the public governed witness boundary.
 The existing driver and required-property recovery carry allocation-free static
