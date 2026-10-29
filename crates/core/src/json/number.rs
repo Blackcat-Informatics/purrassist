@@ -6,7 +6,7 @@ mod decimal;
 use super::operation::{Operation, ordinary};
 use crate::contract::{
     Governor, Resource, ScratchLease, ScratchString, StopReason, format_output_governed,
-    saturating_size,
+    format_scratch_governed, saturating_size,
 };
 use core::{cmp::Ordering, fmt, str::FromStr};
 
@@ -137,6 +137,24 @@ impl Number {
         governor: &mut Governor,
     ) -> Result<core::cmp::Ordering, StopReason> {
         self.compare_admitted(other, &mut Operation(Some(governor)))
+    }
+
+    /// Compare this number with a count using only transient admitted storage.
+    pub(crate) fn compare_count_governed(
+        &self,
+        count: usize,
+        governor: &mut Governor,
+    ) -> Result<Ordering, StopReason> {
+        // Supported 32-bit and 64-bit counts fit within 20 decimal digits.
+        // Use the same target-independent allowance as from_unsigned_governed
+        // before the formatter produces the temporary spelling.
+        governor.charge(Resource::Work, 20)?;
+        let count = format_scratch_governed(format_args!("{count}"), governor)?;
+        decimal::compare(
+            self.as_str(),
+            count.as_str(),
+            &mut Operation(Some(governor)),
+        )
     }
 
     pub(super) fn compare_admitted(

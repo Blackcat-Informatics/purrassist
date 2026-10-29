@@ -23,6 +23,7 @@
 //! false unsatisfiability claim: see `super::generate::attempt` on
 //! [`Canon::Or`].
 use super::super::Schema;
+use super::super::index::child;
 use super::super::layout::Dependency;
 use super::super::{index, reference};
 use super::storage::{self, CopyIn, list, push};
@@ -1076,17 +1077,6 @@ fn get<'s>(
     governor: &mut Governor,
 ) -> Result<Option<&'s Node>, StopReason> {
     body.get_governed(key, governor)
-}
-fn child(
-    schema: &Schema,
-    id: usize,
-    key: &str,
-    governor: &mut Governor,
-) -> Result<usize, StopReason> {
-    Ok(*schema.index.locations[id]
-        .children
-        .get_governed(key, governor)?
-        .expect("compiled child exists"))
 }
 fn pattern_key<'s>(
     schema: &'s Schema,

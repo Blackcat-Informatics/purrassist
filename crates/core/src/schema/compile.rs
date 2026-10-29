@@ -449,7 +449,12 @@ pub(super) fn member<'a>(
     };
     let mut found = None;
     for entry in members {
-        reference::work(governor, key.len().min(entry.key.len()).saturating_add(1))?;
+        // Reject unequal lengths before admitting or comparing key bytes.
+        reference::work(governor, 1)?;
+        if entry.key.len() != key.len() {
+            continue;
+        }
+        reference::work(governor, key.len())?;
         if entry.key == key {
             if found.is_some() {
                 return Ok(None);

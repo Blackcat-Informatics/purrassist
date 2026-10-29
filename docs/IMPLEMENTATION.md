@@ -48,6 +48,23 @@ a resource outcome, never an unsatisfiability proof. Candidate-value constructio
 evaluator storage and witness-value publication retain their separate contracts.
 This does not complete witness or tool-graph governance.
 
+Evaluator recursion and transient path/key state now use fallible owners on the
+same caller governor. One active stack retains schema-location/instance-path
+pairs; admitted comparisons preserve cycle identity without duplicate path
+copies. Shared pointer/formatting builders and compiled child lookups cover
+combinators, object members, property names, arrays and unevaluated paths.
+Array layout resolves child IDs through one governed path shared with recovery.
+Active and dynamic-scope entries unwind on every result, including scope-entry
+refusal. Integer tests and numeric/count comparisons use admitted operations. Temporary
+violation messages and serialized type diagnostics hold fallible owners until
+collection succeeds. Caller Depth and a distinct native ceiling of 256 bound evaluator recursion;
+cycle diagnostics retain their existing InvalidInput text through governed
+publication. Obsolete nominal dependency-key leases are removed now that the
+shared dependency view owns its actual temporary keys. Annotation/report
+construction, merging, publication and recovery receipt clones remain one
+separate ownership contract; assertion computation and candidate construction
+are not completed by this control-state boundary.
+
 Final refutations are published only by the public governed witness boundary.
 The existing driver and required-property recovery carry allocation-free static
 reason descriptors. The publisher admits one evidence entry, copying work and
@@ -762,8 +779,15 @@ contracts. The whole returned node is validated before successful Rust, CLI or
 MCP release; a declared unconstrained field is not strengthened implicitly.
 
 Cancellable admission has its own default budget. Once a handler returns,
-output validation uses a separate default-budget governor without a cancellation
-token, preserving completed transaction outcomes despite late signals. Existing
+output validation uses a separate governor without a cancellation token,
+preserving completed transaction outcomes despite late signals. A bounded,
+allocation-free cursor traversal sizes its default Work allowance to the
+standard base plus 256 units per returned node; all other limits stay unchanged.
+The traversal admits cursor steps and depth under the original default limits,
+and carries its consumed Work into validation. Sizing refusal retains the
+original output and actual stopped governor. This structural allowance is a
+finite scheduling policy for registered schemas, not a universal completion
+guarantee; explicitly supplied governors keep their exact limits. Existing
 handler payloads and receipts are unchanged and do not claim registry costs.
 
 A post-handler schema violation or native validation stop returns the existing

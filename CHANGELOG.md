@@ -23,6 +23,13 @@ crates share one version.
 
 ### Changed
 
+- Schema evaluation now owns recursion keys and transient paths with fallible
+  storage, admitting comparisons, copies, lookup and relocation work. Active
+  and dynamic-scope entries unwind on refusal; caller/native depth checks bound
+  recursion. Shared array-layout child resolution also governs recovery callers.
+  Pointer and cycle-diagnostic text remain unchanged. The obsolete dependency-key
+  lease is removed; annotation/report ownership remains a separate contract.
+
 - Final witness refutations now admit evidence entries, copying work and
   fallible output storage before atomic publication. Internal contradiction
   branches and required-property recovery carry static reasons without

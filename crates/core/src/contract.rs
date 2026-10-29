@@ -152,10 +152,11 @@ pub struct Budget {
     pub scratch_bytes: u64,
     /// Maximum structural nesting depth. It is the stack guard for recursive
     /// evaluation of untrusted nesting (schemas, nested values, nested
-    /// markup): exceeding it is an explicit `BudgetExceeded(Depth)`, and a
-    /// caller who raises it far above the presets' value (128) risks
-    /// overflowing the thread's stack in the recursive schema evaluator;
-    /// the CLI and the MCP server fix it at that value. For nested XML tool
+    /// markup): exceeding it is an explicit `BudgetExceeded(Depth)`. The
+    /// recursive schema evaluator also enforces a native ceiling of 256,
+    /// independently of a higher caller limit. Reference and applicator
+    /// crossings each consume a level. The CLI and the MCP server fix the
+    /// caller limit at 128. For nested XML tool
     /// parameters the `xml-params` codec fits `depth - 1` object levels, and
     /// a whole recovered call about `(depth - 1) / 3` nested item levels
     /// (about 42 at 128), because depth is charged again where the value is
