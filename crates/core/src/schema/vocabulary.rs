@@ -141,9 +141,10 @@ impl Vocabularies {
                 context.governor,
             ));
         };
-        // DOM parsing and its syntax diagnostics retain their separate admission.
+        // Temporary meta-schema storage releases after vocabulary extraction.
         let meta = context.parse(source, uri)?;
-        let Some(declaration) = super::compile::member(&meta, "$vocabulary", context.governor)?
+        let Some(declaration) =
+            super::compile::member(meta.root(), "$vocabulary", context.governor)?
         else {
             return Ok((Self::default(), ScratchVec::new(context.governor)));
         };

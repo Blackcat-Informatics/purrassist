@@ -245,11 +245,19 @@ Location routes, pointers, bases, dynamic anchors, child/pattern names, inherite
 dialects and optional-vocabulary metadata retain their actual owners with the schema.
 Temporary snapshots and child spellings release after construction. Dropping the
 schema or refusing after index preparation releases all these owners, including
-prepared patterns. The document container is admitted separately from the legacy
-parsed DOM. Keyword and vocabulary validation now admit actual lookup, duplicate
-index, numeric scan and diagnostic work. The conservative legacy compiler storage
-allowance is retained alongside parsed DOM admission; a failed compilation need
-not return total scratch to zero. Reference decoding reserves known buffer bounds,
+prepared patterns. Strict JSON parsing uses fallible scratch strings and vectors
+for decoded strings, exact number spellings, array slots and object members.
+Growth admits relocation before allocation. Completed buffers transfer their
+actual reservations into one immutable document owner without releasing or
+charging again. Root and referenced documents retain these reservations until
+schema drop; temporary meta-schemas and partial failures release their buffers.
+Public strict parsing uses the same parser and explicitly retains reservations
+when publishing an ordinary Node. Syntax failures carry allocation-free descriptors
+until the final JSON or schema diagnostic is published. Manually constructed,
+cloned or mutated Nodes and tolerant parsing remain outside this ownership path.
+Keyword and vocabulary validation admit actual lookup, duplicate index, numeric
+scan and diagnostic work. The conservative legacy compiler storage allowance
+remains separate; a failed compilation need not return total scratch to zero. Reference decoding reserves known buffer bounds,
 and string append/formatting charges existing-byte relocation when capacity grows.
 The public owned unsupported-vocabulary output remains outside governed construction;
 recovery borrows and traverses the retained metadata under its caller's governor.

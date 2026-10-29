@@ -164,7 +164,7 @@ fn body<'a>(
     governor: &mut Governor,
 ) -> Result<&'a Node, StopReason> {
     let location = &schema.index.locations[id];
-    let mut node = &schema.documents[location.document];
+    let mut node = schema.documents[location.document].root();
     for &position in &location.route {
         work(governor, 1)?;
         node = match &node.value {

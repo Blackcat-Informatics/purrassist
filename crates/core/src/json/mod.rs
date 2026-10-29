@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Ordered, source-addressed JSON with exact decimal values.
+mod document;
 mod emission;
 mod equivalence;
 pub mod incremental;
@@ -11,9 +12,11 @@ mod parser;
 use crate::contract::saturating_size as size;
 use crate::contract::{Governor, Resource, ScratchCharge, ScratchString, StopReason};
 use core::ops::Range;
+pub(crate) use document::OwnedDocument;
 pub use incremental::recover_syntax;
 pub(crate) use incremental::{Region, recover_region};
 pub use number::{IntegerReading, Number, NumberError, NumberParseError};
+pub(crate) use parser::{OwnedParseFailure, parse_owned};
 pub use parser::{ParseError, ParseFailure, parse, parse_with};
 
 /// One internal output buffer using the shared JSON escaping authority.

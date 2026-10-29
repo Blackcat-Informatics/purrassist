@@ -23,6 +23,12 @@ crates share one version.
 
 ### Changed
 
+- Strict JSON parsing now owns decoded strings, exact number spellings and
+  container buffers until document publication or release. Schema compilation
+  retains root and referenced documents and releases temporary meta-schemas and
+  partial failures. Resource usage now reflects buffer growth and relocation;
+  parsed values, duplicate ordering, spans and numeric spellings are preserved.
+
 - Breaking: `grammar::edit::EditOperator` gains the variant
   `BareParameterElement`, so exhaustive matches no longer compile.
   `grammar::edit::OPERATOR_COUNT` and `OPERATORS.len()` go from 46 to 47, and

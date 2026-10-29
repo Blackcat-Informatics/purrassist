@@ -1,9 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use super::{Member, Node, Value};
+use super::{Member, Node, OwnedDocument, Value};
 use crate::contract::saturating_size as size;
-use crate::contract::{Budget, Governor, Resource, ScratchCharge, StopReason};
+use crate::contract::{
+    Budget, Governor, Resource, ScratchCharge, ScratchLease, ScratchString, ScratchVec, StopReason,
+    format_output_governed,
+};
 use core::fmt;
 
 /// A syntax error at an exact original byte offset.
@@ -67,65 +70,138 @@ pub fn parse(input: &str) -> Result<Node, ParseFailure> {
 
 /// Parse with a shared governor, charging before admitting source and tree storage.
 ///
+/// Construction buffers release on failure. A successful ordinary [`Node`]
+/// retains its storage admission because the caller may subsequently mutate it;
+/// dropping that node does not release the governor's published-output charge.
+/// Syntax diagnostics admit their own output storage after construction releases.
+///
+/// ```
+/// use purrassist_core::{Budget, Governor, json::parse_with};
+/// let mut governor = Governor::new(Budget::default());
+/// let node = parse_with(r#"{"x":1,"x":2}"#, &mut governor).unwrap();
+/// assert!(node.get("x").is_none()); // Duplicate occurrences remain ambiguous.
+/// assert!(governor.scratch_meter().live() > 0);
+/// ```
+///
 /// # Errors
 /// Returns syntax errors or a sticky governor failure. Unicode strings must decode
 /// to scalar values; isolated surrogate escapes are reported explicitly.
 pub fn parse_with(input: &str, governor: &mut Governor) -> Result<Node, ParseFailure> {
+    match parse_owned(input, governor) {
+        Ok(document) => Ok(document.into_node()),
+        Err(OwnedParseFailure::Resource(reason)) => Err(ParseFailure::Resource(reason)),
+        Err(OwnedParseFailure::Syntax(error)) => {
+            let message = format_output_governed(format_args!("{}", error.message), governor)?;
+            Err(ParseFailure::Syntax(ParseError {
+                offset: error.offset,
+                message,
+            }))
+        }
+    }
+}
+
+/// Strict parsing keeps every completed allocation in one document reservation.
+/// Partial trees and their reservations unwind together on any failure.
+pub(crate) fn parse_owned(
+    input: &str,
+    governor: &mut Governor,
+) -> Result<OwnedDocument, OwnedParseFailure> {
     governor.charge(Resource::InputBytes, size(input.len()))?;
+    let lease = governor.lease_scratch(0)?;
     let mut parser = Parser {
         input,
         position: 0,
         governor,
+        lease,
     };
     parser.whitespace()?;
-    let value = parser.value(0)?;
+    let root = parser.value(0)?;
     parser.whitespace()?;
     if parser.position != input.len() {
         return parser.fail("trailing input");
     }
-    Ok(value)
+    parser.governor.check()?;
+    Ok(OwnedDocument {
+        root,
+        lease: parser.lease,
+    })
+}
+
+#[derive(Debug)]
+pub(crate) enum OwnedParseFailure {
+    Syntax(Syntax),
+    Resource(StopReason),
+}
+impl From<StopReason> for OwnedParseFailure {
+    fn from(reason: StopReason) -> Self {
+        Self::Resource(reason)
+    }
+}
+/// An allocation-free syntax descriptor, formatted only at publication.
+#[derive(Debug)]
+pub(crate) struct Syntax {
+    offset: usize,
+    message: SyntaxMessage,
+}
+impl fmt::Display for Syntax {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} at byte {}", self.message, self.offset)
+    }
+}
+#[derive(Debug)]
+enum SyntaxMessage {
+    Static(&'static str),
+    ExpectedByte(u8),
+    ExpectedLiteral(&'static str),
+}
+impl fmt::Display for SyntaxMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Static(message) => f.write_str(message),
+            Self::ExpectedByte(byte) => write!(f, "expected '{}'", char::from(*byte)),
+            Self::ExpectedLiteral(literal) => write!(f, "expected {literal}"),
+        }
+    }
 }
 
 struct Parser<'a, 'g> {
     input: &'a str,
     position: usize,
     governor: &'g mut Governor,
+    lease: ScratchLease,
 }
 impl Parser<'_, '_> {
-    fn fail<T>(&self, message: &str) -> Result<T, ParseFailure> {
-        Err(ParseFailure::Syntax(ParseError {
+    fn fail<T>(&self, message: &'static str) -> Result<T, OwnedParseFailure> {
+        Err(self.syntax(SyntaxMessage::Static(message)))
+    }
+    const fn syntax(&self, message: SyntaxMessage) -> OwnedParseFailure {
+        OwnedParseFailure::Syntax(Syntax {
             offset: self.position,
-            message: message.into(),
-        }))
+            message,
+        })
     }
     fn byte(&self) -> Option<u8> {
         self.input.as_bytes().get(self.position).copied()
     }
-    fn advance(&mut self, count: usize) -> Result<(), ParseFailure> {
+    fn advance(&mut self, count: usize) -> Result<(), OwnedParseFailure> {
         self.governor.charge(Resource::Work, size(count))?;
         self.position += count;
         Ok(())
     }
-    fn whitespace(&mut self) -> Result<(), ParseFailure> {
+    fn whitespace(&mut self) -> Result<(), OwnedParseFailure> {
         while matches!(self.byte(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
             self.advance(1)?;
         }
         Ok(())
     }
-    fn expect(&mut self, byte: u8) -> Result<(), ParseFailure> {
+    fn expect(&mut self, byte: u8) -> Result<(), OwnedParseFailure> {
         if self.byte() != Some(byte) {
-            return self.fail(&format!("expected '{}'", char::from(byte)));
+            return Err(self.syntax(SyntaxMessage::ExpectedByte(byte)));
         }
         self.advance(1)
     }
-    fn value(&mut self, depth: u32) -> Result<Node, ParseFailure> {
+    fn value(&mut self, depth: u32) -> Result<Node, OwnedParseFailure> {
         self.governor.charge(Resource::Depth, u64::from(depth))?;
-        // `Node::CHARGE` is a portable, target-independent literal (see
-        // `ScratchCharge`): using `size_of::<Node>()` here would make this
-        // charge, and thus the governor's decision, differ between 64-bit
-        // native and 32-bit WASM builds for the same input.
-        self.governor
-            .charge(Resource::ScratchBytes, size(Node::CHARGE))?;
         let start = self.position;
         let value = match self.byte() {
             Some(b'n') => {
@@ -151,13 +227,13 @@ impl Parser<'_, '_> {
             span: Some(start..self.position),
         })
     }
-    fn literal(&mut self, literal: &str) -> Result<(), ParseFailure> {
+    fn literal(&mut self, literal: &'static str) -> Result<(), OwnedParseFailure> {
         if !self.input[self.position..].starts_with(literal) {
-            return self.fail(&format!("expected {literal}"));
+            return Err(self.syntax(SyntaxMessage::ExpectedLiteral(literal)));
         }
         self.advance(literal.len())
     }
-    fn number(&mut self) -> Result<Value, ParseFailure> {
+    fn number(&mut self) -> Result<Value, OwnedParseFailure> {
         let start = self.position;
         while matches!(
             self.byte(),
@@ -166,24 +242,26 @@ impl Parser<'_, '_> {
             self.advance(1)?;
         }
         let lexical = &self.input[start..self.position];
-        super::Number::retain_governed(lexical, self.governor)
+        super::Number::retain_owned(lexical, self.governor, &mut self.lease)
             .map(Value::Number)
             .map_err(|failure| match failure {
-                super::NumberParseError::Syntax(_) => ParseFailure::Syntax(ParseError {
+                super::NumberParseError::Syntax(_) => OwnedParseFailure::Syntax(Syntax {
                     offset: start,
-                    message: "invalid JSON number".into(),
+                    message: SyntaxMessage::Static("invalid JSON number"),
                 }),
-                super::NumberParseError::Resource(reason) => ParseFailure::Resource(reason),
+                super::NumberParseError::Resource(reason) => OwnedParseFailure::Resource(reason),
             })
     }
-    fn string(&mut self) -> Result<String, ParseFailure> {
+    fn string(&mut self) -> Result<String, OwnedParseFailure> {
         self.expect(b'"')?;
-        let mut output = String::new();
+        let mut output = ScratchString::new(self.governor);
         loop {
             match self.byte() {
                 Some(b'"') => {
                     self.advance(1)?;
-                    return Ok(output);
+                    let (text, lease) = output.into_owned_parts();
+                    self.lease.absorb(lease);
+                    return Ok(text);
                 }
                 Some(b'\\') => {
                     self.advance(1)?;
@@ -213,13 +291,13 @@ impl Parser<'_, '_> {
                             let Some(character) = char::from_u32(scalar) else {
                                 return self.fail("isolated surrogate escape");
                             };
-                            super::push_char(&mut output, character, self.governor)?;
+                            push_char(&mut output, character, self.governor)?;
                             continue;
                         }
                         _ => return self.fail("invalid string escape"),
                     };
                     self.advance(1)?;
-                    super::push_char(&mut output, character, self.governor)?;
+                    push_char(&mut output, character, self.governor)?;
                 }
                 Some(0..=0x1f) => return self.fail("unescaped control character"),
                 Some(_) => {
@@ -227,13 +305,13 @@ impl Parser<'_, '_> {
                         return self.fail("unterminated string");
                     };
                     self.advance(character.len_utf8())?;
-                    super::push_char(&mut output, character, self.governor)?;
+                    push_char(&mut output, character, self.governor)?;
                 }
                 None => return self.fail("unterminated string"),
             }
         }
     }
-    fn hex4(&mut self) -> Result<u32, ParseFailure> {
+    fn hex4(&mut self) -> Result<u32, OwnedParseFailure> {
         let mut value = 0;
         for _ in 0..4 {
             let Some(digit) = self.byte().and_then(|byte| char::from(byte).to_digit(16)) else {
@@ -244,18 +322,17 @@ impl Parser<'_, '_> {
         }
         Ok(value)
     }
-    fn array(&mut self, depth: u32) -> Result<Value, ParseFailure> {
+    fn array(&mut self, depth: u32) -> Result<Value, OwnedParseFailure> {
         self.expect(b'[')?;
         self.whitespace()?;
-        let mut items = Vec::new();
+        let mut items = ScratchVec::new(self.governor);
         if self.byte() == Some(b']') {
             self.advance(1)?;
-            return Ok(Value::Array(items));
+            return Ok(Value::Array(self.retain_vec(items)));
         }
         loop {
             let item = self.value(depth + 1)?;
-            super::reserve_one(&mut items, self.governor)?;
-            items.push(item);
+            push(&mut items, item, self.governor)?;
             self.whitespace()?;
             if self.byte() == Some(b']') {
                 self.advance(1)?;
@@ -264,15 +341,15 @@ impl Parser<'_, '_> {
             self.expect(b',')?;
             self.whitespace()?;
         }
-        Ok(Value::Array(items))
+        Ok(Value::Array(self.retain_vec(items)))
     }
-    fn object(&mut self, depth: u32) -> Result<Value, ParseFailure> {
+    fn object(&mut self, depth: u32) -> Result<Value, OwnedParseFailure> {
         self.expect(b'{')?;
         self.whitespace()?;
-        let mut members = Vec::new();
+        let mut members = ScratchVec::new(self.governor);
         if self.byte() == Some(b'}') {
             self.advance(1)?;
-            return Ok(Value::Object(members));
+            return Ok(Value::Object(self.retain_vec(members)));
         }
         loop {
             let start = self.position;
@@ -282,12 +359,15 @@ impl Parser<'_, '_> {
             self.expect(b':')?;
             self.whitespace()?;
             let value = self.value(depth + 1)?;
-            super::reserve_one(&mut members, self.governor)?;
-            members.push(Member {
-                key,
-                key_span,
-                value,
-            });
+            push(
+                &mut members,
+                Member {
+                    key,
+                    key_span,
+                    value,
+                },
+                self.governor,
+            )?;
             self.whitespace()?;
             if self.byte() == Some(b'}') {
                 self.advance(1)?;
@@ -296,14 +376,50 @@ impl Parser<'_, '_> {
             self.expect(b',')?;
             self.whitespace()?;
         }
-        Ok(Value::Object(members))
+        Ok(Value::Object(self.retain_vec(members)))
     }
+    fn retain_vec<T: ScratchCharge>(&mut self, values: ScratchVec<T>) -> Vec<T> {
+        let (values, lease) = values.into_owned_parts();
+        self.lease.absorb(lease);
+        values
+    }
+}
+
+fn push_char(
+    output: &mut ScratchString,
+    character: char,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    let moved = if character.len_utf8() > output.capacity() - output.len() {
+        output.len()
+    } else {
+        0
+    };
+    governor.charge(
+        Resource::Work,
+        size(moved).saturating_add(size(character.len_utf8())),
+    )?;
+    output.push(character)
+}
+
+fn push<T: ScratchCharge>(
+    values: &mut ScratchVec<T>,
+    value: T,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    let moved = if values.len() == values.capacity() {
+        values.len()
+    } else {
+        0
+    };
+    governor.charge(Resource::Work, size(moved).saturating_add(1))?;
+    values.push(value)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ParseFailure, parse, parse_with};
-    use crate::{Budget, Governor};
+    use super::{OwnedParseFailure, ParseFailure, parse, parse_owned, parse_with};
+    use crate::{Budget, Governor, StopReason, contract::Resource};
     #[test]
     fn duplicate_members_and_spans_survive() {
         let input = r#" {"a":1,"a":2,"nested":["\uD83D\uDE00",1.2300e4]} "#;
@@ -315,6 +431,60 @@ mod tests {
         );
         assert_eq!(root.to_json(), r#"{"a":1,"a":2,"nested":["😀",1.2300e4]}"#);
         assert_eq!(root.span, Some(1..input.len() - 1));
+        let mut governor = Governor::new(Budget::default());
+        let document = parse_owned(input, &mut governor).expect("owned valid");
+        assert_eq!(document.root(), &root);
+        assert!(governor.scratch_meter().live() > 0);
+        drop(document);
+        assert_eq!(governor.scratch_meter().live(), 0);
+    }
+    #[test]
+    fn owned_documents_release_on_syntax_and_resource_refusal() {
+        let input = r#"{"nested":[{"text":"é\uD83D\uDE00","number":1.2300e400},false]}"#;
+        let mut measured = Governor::new(Budget::default());
+        let document = parse_owned(input, &mut measured).expect("measure valid");
+        let usage = measured.usage();
+        drop(document);
+        assert_eq!(measured.scratch_meter().live(), 0);
+        for (work, scratch_bytes, refused) in [
+            (usage.work, usage.peak_scratch_bytes, None),
+            (
+                usage.work - 1,
+                usage.peak_scratch_bytes,
+                Some(Resource::Work),
+            ),
+            (
+                usage.work,
+                usage.peak_scratch_bytes - 1,
+                Some(Resource::ScratchBytes),
+            ),
+        ] {
+            let mut governor = Governor::new(Budget {
+                work,
+                scratch_bytes,
+                ..Budget::default()
+            });
+            let result = parse_owned(input, &mut governor);
+            if let Some(resource) = refused {
+                assert!(matches!(result, Err(OwnedParseFailure::Resource(
+                    StopReason::BudgetExceeded(actual)
+                )) if actual == resource));
+            } else {
+                assert!(result.is_ok(), "exact measured bounds admit the document");
+                drop(result);
+            }
+            assert_eq!(governor.scratch_meter().live(), 0);
+        }
+        for malformed in [format!("{input} trailing"), format!(r#"[{input},"bad\x"]"#)] {
+            let mut governor = Governor::new(Budget::default());
+            let failure = parse_owned(&malformed, &mut governor).unwrap_err();
+            assert!(matches!(failure, OwnedParseFailure::Syntax(_)));
+            assert!(governor.usage().peak_scratch_bytes > 0);
+            assert_eq!(governor.scratch_meter().live(), 0);
+        }
+        let mut published = Governor::new(Budget::default());
+        drop(parse_with(input, &mut published).expect("published valid"));
+        assert!(published.scratch_meter().live() > 0);
     }
     #[test]
     fn strict_rejection_and_pointer_rules() {

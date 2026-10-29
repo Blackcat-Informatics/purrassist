@@ -5,7 +5,8 @@
 mod decimal;
 use super::operation::{Operation, ordinary};
 use crate::contract::{
-    Governor, Resource, ScratchString, StopReason, format_output_governed, saturating_size,
+    Governor, Resource, ScratchLease, ScratchString, StopReason, format_output_governed,
+    saturating_size,
 };
 use core::{cmp::Ordering, fmt, str::FromStr};
 
@@ -56,6 +57,23 @@ impl Number {
         input: &str,
         governor: &mut Governor,
     ) -> Result<Self, NumberParseError> {
+        Self::retained_spelling(input, governor).map(|text| Self(text.into_string()))
+    }
+
+    pub(super) fn retain_owned(
+        input: &str,
+        governor: &mut Governor,
+        lease: &mut ScratchLease,
+    ) -> Result<Self, NumberParseError> {
+        let (text, reservation) = Self::retained_spelling(input, governor)?.into_owned_parts();
+        lease.absorb(reservation);
+        Ok(Self(text))
+    }
+
+    fn retained_spelling(
+        input: &str,
+        governor: &mut Governor,
+    ) -> Result<ScratchString, NumberParseError> {
         governor
             .charge(
                 Resource::Work,
@@ -71,7 +89,7 @@ impl Number {
             .push_str(input)
             .map_err(NumberParseError::Resource)?;
         governor.check().map_err(NumberParseError::Resource)?;
-        Ok(Self(retained.into_string()))
+        Ok(retained)
     }
 
     /// Construct the exact decimal spelling of a target-sized count.

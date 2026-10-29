@@ -314,3 +314,78 @@ fn unused_resource_hashing_has_exact_work_boundaries_without_framing_storage() {
     );
     assert_eq!(input.usage().total_scratch_charged, 0);
 }
+
+/// Parsed annotation buffers belong to their document, including external and
+/// temporary meta-schema documents; only the separate compiler allowance remains.
+#[test]
+fn schema_document_storage_releases_on_drop_and_late_refusal() {
+    let annotation = format!(
+        r#"[{{"text":"{}","number":1.2300e99999999999999999999}}]"#,
+        "é".repeat(4096)
+    );
+    let document = |payload: &str| format!(r#"{{"type":"string","annotation":{payload}}}"#);
+    let measure = |source: &str, resources: &BTreeMap<String, String>| {
+        let mut governor = Governor::new(Budget::default());
+        let schema = Schema::with_resources_governed(source, resources, &mut governor).unwrap();
+        let live = governor.scratch_meter().live();
+        let work = governor.usage().work;
+        drop(schema);
+        let remaining = governor.scratch_meter().live();
+        let mut limited = Governor::new(Budget {
+            work: work - 1,
+            ..Budget::default()
+        });
+        assert_eq!(
+            Schema::with_resources_governed(source, resources, &mut limited).unwrap_err(),
+            CompilationError::Resource(StopReason::BudgetExceeded(Resource::Work)),
+        );
+        assert_eq!(
+            limited.scratch_meter().live(),
+            remaining,
+            "late refusal releases the same owners as schema drop"
+        );
+        (live, remaining)
+    };
+    let empty = BTreeMap::new();
+    let small = measure(&document("[]"), &empty);
+    let large = measure(&document(&annotation), &empty);
+    assert!(
+        large.0 > small.0 + 8192,
+        "nested strings and number/container buffers stay admitted while borrowed"
+    );
+    assert_eq!(
+        large.1, small.1,
+        "annotation storage does not leak into the legacy allowance"
+    );
+
+    let source = r#"{"$ref":"urn:external"}"#;
+    let small = measure(
+        source,
+        &BTreeMap::from([("urn:external".into(), document("[]"))]),
+    );
+    let large = measure(
+        source,
+        &BTreeMap::from([("urn:external".into(), document(&annotation))]),
+    );
+    assert!(large.0 > small.0 + 8192);
+    assert_eq!(
+        large.1, small.1,
+        "referenced document buffers release with the schema"
+    );
+
+    let source = r#"{"$schema":"urn:meta","type":"string"}"#;
+    let meta = |payload: &str| {
+        format!(
+            r#"{{"$vocabulary":{{"https://json-schema.org/draft/2020-12/vocab/validation":true}},"annotation":{payload}}}"#
+        )
+    };
+    let small = measure(source, &BTreeMap::from([("urn:meta".into(), meta("[]"))]));
+    let large = measure(
+        source,
+        &BTreeMap::from([("urn:meta".into(), meta(&annotation))]),
+    );
+    assert_eq!(
+        large, small,
+        "temporary meta-schema buffers release before publication"
+    );
+}
