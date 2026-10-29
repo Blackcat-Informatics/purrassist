@@ -7,7 +7,6 @@ mod emission;
 mod equivalence;
 pub mod incremental;
 mod number;
-mod operation;
 mod parser;
 use crate::contract::saturating_size as size;
 use crate::contract::{Governor, Resource, ScratchCharge, ScratchLease, ScratchString, StopReason};
@@ -306,10 +305,10 @@ impl Node {
     /// Object duplicates compare as ordered occurrences instead of disappearing.
     #[must_use]
     pub fn equivalent(&self, other: &Self) -> bool {
-        operation::ordinary(equivalence::compare(
+        crate::contract::ordinary(equivalence::compare(
             self,
             other,
-            &mut operation::Operation(None),
+            &mut crate::contract::Operation(None),
         ))
     }
 
@@ -337,7 +336,8 @@ impl Node {
         other: &Self,
         governor: &mut Governor,
     ) -> Result<bool, StopReason> {
-        let equal = equivalence::compare(self, other, &mut operation::Operation(Some(governor)))?;
+        let equal =
+            equivalence::compare(self, other, &mut crate::contract::Operation(Some(governor)))?;
         governor.check()?;
         Ok(equal)
     }

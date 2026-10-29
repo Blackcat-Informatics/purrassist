@@ -132,7 +132,7 @@ pub(super) fn witness(name: &str) -> &'static str {
 }
 
 #[cfg(test)]
-mod percent_tests {
+mod tests {
     use super::pct_encoded;
 
     #[test]
@@ -150,6 +150,59 @@ mod percent_tests {
             let mut chars = source.chars().peekable();
             assert_eq!(pct_encoded(&mut chars), expected, "{source:?}");
             assert_eq!(chars.collect::<String>(), remaining, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn hostname_and_email_formats_release_temporary_owners() {
+        use crate::{Budget, Governor, StopReason, contract::Resource};
+        for (name, source, valid) in [
+            ("hostname", "xn--9n2bp8q.xn--9t4b11yi5a", true),
+            ("hostname", "xn--X", false),
+            ("idn-hostname", "cafe\u{301}.com", true),
+            ("idn-hostname", "0a.\u{5d0}", false),
+            ("email", "\"quoted@name\"@example.com", true),
+            ("idn-email", "δοκιμή@cafe\u{301}.com", true),
+            ("idn-email", "δοκιμή@-example.com", false),
+        ] {
+            let mut governor = Governor::new(Budget::default());
+            let outcome = super::evaluate(name, source, &mut governor).unwrap();
+            assert_eq!(
+                matches!(outcome, super::Outcome::Pass),
+                valid,
+                "{name}: {source}"
+            );
+            assert_eq!(governor.scratch_meter().live(), 0);
+            let usage = governor.usage();
+            for (budget, resource) in [
+                (
+                    Budget {
+                        work: usage.work - 1,
+                        ..Budget::default()
+                    },
+                    Resource::Work,
+                ),
+                (
+                    Budget {
+                        scratch_bytes: usage.peak_scratch_bytes - 1,
+                        ..Budget::default()
+                    },
+                    Resource::ScratchBytes,
+                ),
+            ] {
+                let mut refused = Governor::new(budget);
+                assert!(
+                    matches!(super::evaluate(name, source, &mut refused), Err(StopReason::BudgetExceeded(actual)) if actual == resource)
+                );
+                assert_eq!(refused.scratch_meter().live(), 0);
+            }
+            let mut cancelled = Governor::new(Budget::default());
+            cancelled.cancel();
+            assert!(matches!(
+                super::evaluate(name, source, &mut cancelled),
+                Err(StopReason::Cancelled)
+            ));
+            assert_eq!(cancelled.scratch_meter().live(), 0);
         }
     }
 }

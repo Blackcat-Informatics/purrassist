@@ -1,13 +1,38 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Shared ordinary and admitted storage/scans for exact JSON comparison.
-use crate::contract::{Governor, Resource, ScratchString, StopReason, saturating_size};
+//! Shared ordinary and admitted storage and scans for first-party algorithms.
+use crate::contract::{
+    Buffer, Operation, Resource, ScratchCharge, ScratchString, ScratchVec, StopReason, Storage,
+    Text, push_scratch, saturating_size,
+};
 use core::cmp::Ordering;
 
-pub(super) struct Operation<'g>(pub(super) Option<&'g mut Governor>);
-
 impl Operation<'_> {
+    /// Bound binary table lookup comparisons before invoking the shared lookup.
+    pub(super) fn lookup(&mut self, entries: usize) -> Result<(), StopReason> {
+        self.work(entries.checked_ilog2().map_or(0, |bits| bits as usize + 1))
+    }
+    pub(super) fn buffer<T: ScratchCharge>(&self) -> Buffer<T> {
+        Buffer(self.0.as_ref().map_or_else(
+            || Storage::Plain(Vec::new()),
+            |governor| Storage::Admitted(ScratchVec::new(governor)),
+        ))
+    }
+    pub(super) fn push_buffer<T: ScratchCharge>(
+        &mut self,
+        buffer: &mut Buffer<T>,
+        value: T,
+    ) -> Result<(), StopReason> {
+        match (&mut buffer.0, &mut self.0) {
+            (Storage::Plain(values), None) => {
+                values.push(value);
+                Ok(())
+            }
+            (Storage::Admitted(values), Some(governor)) => push_scratch(values, value, governor),
+            _ => unreachable!("INVARIANT: buffer and operation admission agree"),
+        }
+    }
     pub(super) fn work(&mut self, bytes: usize) -> Result<(), StopReason> {
         if let Some(governor) = &mut self.0 {
             governor.charge(Resource::Work, saturating_size(bytes).saturating_add(1))?;
@@ -65,12 +90,15 @@ impl Operation<'_> {
     }
 }
 
-// The same append authority serves decimal text and the comparison stack.
-pub(super) enum Storage<P, A> {
-    Plain(P),
-    Admitted(A),
-}
 impl<P, A> Storage<P, A> {
+    pub(super) fn into_admitted(self) -> A {
+        match self {
+            Self::Admitted(owner) => owner,
+            Self::Plain(_) => {
+                unreachable!("INVARIANT: governed operation returns admitted storage")
+            }
+        }
+    }
     pub(super) fn append<V>(
         &mut self,
         value: V,
@@ -86,7 +114,35 @@ impl<P, A> Storage<P, A> {
         }
     }
 }
-pub(super) type Text = Storage<String, ScratchString>;
+impl<T: ScratchCharge> Buffer<T> {
+    pub(super) fn into_admitted(self) -> ScratchVec<T> {
+        self.0.into_admitted()
+    }
+    pub(super) fn as_slice(&self) -> &[T] {
+        match &self.0 {
+            Storage::Plain(values) => values,
+            Storage::Admitted(values) => values.as_slice(),
+        }
+    }
+    pub(super) fn as_mut_slice(&mut self) -> &mut [T] {
+        match &mut self.0 {
+            Storage::Plain(values) => values,
+            Storage::Admitted(values) => values.as_mut_slice(),
+        }
+    }
+    pub(super) fn pop(&mut self) -> Option<T> {
+        match &mut self.0 {
+            Storage::Plain(values) => values.pop(),
+            Storage::Admitted(values) => values.pop(),
+        }
+    }
+    pub(super) fn clear(&mut self) {
+        match &mut self.0 {
+            Storage::Plain(values) => values.clear(),
+            Storage::Admitted(values) => values.clear(),
+        }
+    }
+}
 impl Text {
     pub(super) fn as_str(&self) -> &str {
         match self {
@@ -106,9 +162,4 @@ impl Text {
     pub(super) fn push(&mut self, value: char) -> Result<(), StopReason> {
         self.append(value, String::push, ScratchString::push)
     }
-}
-
-pub(super) fn ordinary<T>(result: Result<T, StopReason>) -> T {
-    // Ordinary operations have neither an admission gate nor fallible storage.
-    result.expect("INVARIANT: ordinary JSON comparison cannot produce a resource refusal")
 }

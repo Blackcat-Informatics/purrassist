@@ -23,6 +23,14 @@ crates share one version.
 
 ### Changed
 
+- Hostname and email formats now own temporary Unicode mapping, normalization,
+  Punycode and label storage, admitting scans, table lookups and buffer movement.
+  Normalization retains one algorithm for ordinary and governed callers, with
+  stable combining-class ordering and an explicit decomposition stack. Email
+  reuses governed IP validation; IPv6 parses borrowed groups, and both IP formats
+  admit documented scan bounds. Format results and Unicode data are unchanged;
+  usage counters and finite-budget refusals reflect the admitted operations.
+
 - Witness candidates now retain owned JSON trees through selection and final
   revalidation, preserving literal spelling and source spans. Rejected and
   refused candidates release their storage; completed public witnesses retain
