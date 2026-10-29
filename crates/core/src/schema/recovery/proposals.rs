@@ -767,9 +767,9 @@ impl Walk<'_, '_> {
                         schema.index.locations[schema_id].children.get(&key)
                     {
                         match super::super::algebra::generate(schema, child, self.governor)? {
-                            super::super::algebra::WitnessOutcome::Witness(node) => Some(node),
-                            super::super::algebra::WitnessOutcome::Unsatisfiable(_)
-                            | super::super::algebra::WitnessOutcome::Exhausted => None,
+                            super::super::algebra::Attempt::Witness(node) => Some(node),
+                            super::super::algebra::Attempt::Unsatisfiable(_)
+                            | super::super::algebra::Attempt::Exhausted => None,
                         }
                     } else {
                         Some(Node::new(Value::Null))

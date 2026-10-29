@@ -14,12 +14,12 @@
 //! deepens) or is reported as [`Attempt::Exhausted`] rather than looping.
 use super::super::Schema;
 use super::super::reference;
-use super::Refutation;
+use super::Attempt;
 use super::canon::{self, Canon, NumKind, PatternRef};
 use super::merge::Requirements;
 use super::storage::{self, CopyIn, push};
 use crate::contract::saturating_size as size;
-use crate::contract::{Evidence, Governor, Resource, StopReason};
+use crate::contract::{Governor, Resource, StopReason};
 use crate::contract::{ScratchString, ScratchVec, format_scratch_governed};
 use crate::json::{Member, Node, Value};
 use crate::pattern::{Engine, GenerateOptions, GenerateOutcome, Pattern};
@@ -39,12 +39,6 @@ fn applicable_items<'r>(
         .map(|&(id, _)| id)
 }
 
-pub(super) enum Attempt {
-    Witness(Node),
-    Unsatisfiable(Refutation),
-    Exhausted,
-}
-
 /// Outcome of [`Gen::try_simple_merge`]: either the merge succeeded (with
 /// the updated [`Requirements`]), proved a direct contradiction, or the
 /// canon contained a choice point too complex for a merge-only pass.
@@ -52,18 +46,6 @@ enum SimpleMerge<'a> {
     Merged(ScratchVec<Requirements<'a>>),
     Contradiction,
     TooComplex,
-}
-
-fn refute(reason: &str) -> Refutation {
-    Refutation {
-        reason: reason.to_string(),
-        evidence: vec![Evidence {
-            rule: "schema.algebra.unsatisfiable-v1".into(),
-            explanation: reason.to_string(),
-            span: None,
-            destination: String::new(),
-        }],
-    }
 }
 
 pub(super) fn run(
@@ -220,9 +202,9 @@ impl<'s> Gen<'s, '_> {
                 Canon::Local(facet) => {
                     req.apply(facet, self.governor)?;
                     if req.is_contradictory() {
-                        return Ok(Attempt::Unsatisfiable(refute(
+                        return Ok(Attempt::Unsatisfiable(
                             req.contradiction.unwrap_or("contradiction"),
-                        )));
+                        ));
                     }
                     items = rest;
                     continue;
@@ -238,7 +220,7 @@ impl<'s> Gen<'s, '_> {
                 Canon::True | Canon::Local(_) | Canon::OpaqueNot(_) => {
                     unreachable!("linear facets advanced above")
                 }
-                Canon::False => Ok(Attempt::Unsatisfiable(refute("boolean false schema"))),
+                Canon::False => Ok(Attempt::Unsatisfiable("boolean false schema")),
                 Canon::And(inner) => {
                     let mut combined = storage::copy(inner, self.governor)?;
                     storage::extend(&mut combined, rest, self.governor)?;
@@ -339,7 +321,7 @@ impl<'s> Gen<'s, '_> {
         's: 'a,
     {
         if branches.is_empty() {
-            return Ok(Attempt::Unsatisfiable(refute("empty disjunction")));
+            return Ok(Attempt::Unsatisfiable("empty disjunction"));
         }
         let mut any_exhausted = false;
         for branch in branches {
@@ -356,9 +338,7 @@ impl<'s> Gen<'s, '_> {
         if any_exhausted {
             Ok(Attempt::Exhausted)
         } else {
-            Ok(Attempt::Unsatisfiable(refute(
-                "every disjunct is unsatisfiable",
-            )))
+            Ok(Attempt::Unsatisfiable("every disjunct is unsatisfiable"))
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -383,9 +363,9 @@ impl<'s> Gen<'s, '_> {
         let branch_b = self.if_branch(cond, true, otherwise, rest, req, path, depth)?;
         Ok(match (branch_a, branch_b) {
             (Attempt::Witness(node), _) | (_, Attempt::Witness(node)) => Attempt::Witness(node),
-            (Attempt::Unsatisfiable(_), Attempt::Unsatisfiable(_)) => Attempt::Unsatisfiable(
-                refute("if/then and its else-complement are both unsatisfiable"),
-            ),
+            (Attempt::Unsatisfiable(_), Attempt::Unsatisfiable(_)) => {
+                Attempt::Unsatisfiable("if/then and its else-complement are both unsatisfiable")
+            }
             _ => Attempt::Exhausted,
         })
     }
@@ -430,16 +410,16 @@ impl<'s> Gen<'s, '_> {
         let cond_canon = self.scoped_build(cond, negate_cond)?;
         let condition_req = req.copy_in(self.governor)?;
         match self.try_simple_merge(&cond_canon, condition_req)? {
-            SimpleMerge::Contradiction => Ok(Attempt::Unsatisfiable(refute(
+            SimpleMerge::Contradiction => Ok(Attempt::Unsatisfiable(
                 "if-condition branch is unsatisfiable",
-            ))),
+            )),
             SimpleMerge::Merged(mut merged_req) => match then_or_else {
                 Some(id) => {
                     let branch_canon = self.scoped_build(id, false)?;
                     let branch_req = merged_req[0].copy_in(self.governor)?;
                     match self.try_simple_merge(&branch_canon, branch_req)? {
                         SimpleMerge::Contradiction => {
-                            Ok(Attempt::Unsatisfiable(refute("if-branch is unsatisfiable")))
+                            Ok(Attempt::Unsatisfiable("if-branch is unsatisfiable"))
                         }
                         SimpleMerge::Merged(mut final_req) => self.attempt_and(
                             rest,
@@ -570,7 +550,7 @@ impl<'s> Gen<'s, '_> {
         's: 'a,
     {
         if ids.is_empty() {
-            return Ok(Attempt::Unsatisfiable(refute("empty disjunction")));
+            return Ok(Attempt::Unsatisfiable("empty disjunction"));
         }
         let mut any_exhausted = false;
         for (position, &id) in ids.iter().enumerate() {
@@ -593,9 +573,9 @@ impl<'s> Gen<'s, '_> {
         if any_exhausted {
             Ok(Attempt::Exhausted)
         } else {
-            Ok(Attempt::Unsatisfiable(refute(
+            Ok(Attempt::Unsatisfiable(
                 "every oneOf branch, tried exclusively, is unsatisfiable",
-            )))
+            ))
         }
     }
 
@@ -613,10 +593,9 @@ impl<'s> Gen<'s, '_> {
         self.governor.charge(Resource::Work, 1)?;
         if let Some(value) = req.const_value {
             let outcome = self.check(value, req)?;
-            return Ok(outcome.map_or_else(
-                || Attempt::Witness(value.clone()),
-                |reason| Attempt::Unsatisfiable(refute(reason)),
-            ));
+            return Ok(
+                outcome.map_or_else(|| Attempt::Witness(value.clone()), Attempt::Unsatisfiable)
+            );
         }
         if let Some(values) = &req.enum_values {
             let mut any_checked = false;
@@ -630,9 +609,9 @@ impl<'s> Gen<'s, '_> {
                 }
             }
             return Ok(if any_checked {
-                Attempt::Unsatisfiable(refute("no enum member satisfies the merged constraints"))
+                Attempt::Unsatisfiable("no enum member satisfies the merged constraints")
             } else {
-                Attempt::Unsatisfiable(refute("every enum member is excluded"))
+                Attempt::Unsatisfiable("every enum member is excluded")
             });
         }
         let mut any_exhausted = false;
@@ -645,14 +624,12 @@ impl<'s> Gen<'s, '_> {
             }
         }
         if req.types.is_empty() {
-            return Ok(Attempt::Unsatisfiable(refute("no admitted type")));
+            return Ok(Attempt::Unsatisfiable("no admitted type"));
         }
         Ok(if any_exhausted {
             Attempt::Exhausted
         } else {
-            Attempt::Unsatisfiable(refute(
-                "no admitted type can satisfy the merged constraints",
-            ))
+            Attempt::Unsatisfiable("no admitted type can satisfy the merged constraints")
         })
     }
     fn build_kind<'a>(
@@ -751,9 +728,9 @@ impl<'s> Gen<'s, '_> {
                             },
                         )?;
                         if matches!(unbounded, GenerateOutcome::NoCandidate(_)) {
-                            return Ok(Attempt::Unsatisfiable(refute(
+                            return Ok(Attempt::Unsatisfiable(
                                 "pattern intersected with its avoided patterns is empty",
-                            )));
+                            ));
                         }
                     }
                     return Ok(Attempt::Exhausted);

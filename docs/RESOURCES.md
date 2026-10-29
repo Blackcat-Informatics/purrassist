@@ -229,11 +229,32 @@ Exceeding either limit returns `BudgetExceeded(Depth)`; it is not a refutation.
 Linear facets advance iteratively. Finite Work and ScratchBytes refusal points
 change because actual preparation operations and owners are now admitted.
 
-Candidate-value construction, evaluator storage and final witness/refutation
-publication remain separate contracts. Total live scratch therefore need not
+Candidate-value construction, evaluator storage and witness-value publication
+remain separate contracts. Total live scratch therefore need not
 return to zero after a public witness call; preparation ownership is checked
 independently of those publication and candidate paths. No complete witness,
 cold-backend or graph-loading governance claim follows from this boundary.
+
+## Final refutation publication
+
+Internal witness contradictions carry static reason descriptors. Discarded
+branches and required-property recovery do not materialize public refutation
+strings or evidence. The existing internal witness entry still revalidates every
+candidate with the real evaluator before recovery can consume it.
+
+Only `Schema::generate_witness_governed` constructs the final public `Refutation`.
+It admits one `EvidenceEntries` unit, string-copy work and fallible storage for
+the reason, rule, explanation and evidence vector. String reservations remain
+leased through vector construction and the final governor check. No reservation
+is retained until every fallible operation has completed; late Work or scratch
+refusal releases all temporary publication owners and returns the exact native
+cause. Complete public output retains its storage admission, including after the
+ordinary strings and vector are dropped by the caller.
+
+Reason text, rule identity, explanation, empty destination and absent span are
+unchanged. Witness Node construction/ownership, evaluator reports, recovery
+replacement storage and host receipt/wire serialization remain separate
+contracts. This boundary does not complete witness or tool-graph governance.
 
 ## Type-enforced scratch accounting
 
