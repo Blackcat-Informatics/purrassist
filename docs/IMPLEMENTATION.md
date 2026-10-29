@@ -81,6 +81,42 @@ The governing requirements are in `.goals`. Maximal utility, performance, and
 portability apply together. Native execution uses native capabilities while
 computational engines remain wasmable.
 
+## Schema recovery complexity
+
+Issue #128 guarantees polynomial recovery for certified independent mandatory
+array wraps in recursive tree schemas. It does not require polynomial recovery
+for arbitrary coupled JSON Schema constraints.
+
+The guarantee applies to syntactically valid JSON, with guesses disabled, when
+the repair chart proves a unique minimum-cost repaired value using mandatory
+array wraps.
+Every compiled schema location is either a static `$ref` without sibling
+assertions or an explicitly typed `object`, `array` or `string`. Objects may use
+`properties` and `required`; arrays may use homogeneous `items`. The additional
+allowed keywords are `$schema`, `$id`, `$defs` and `definitions`. Recursive
+references are supported. Required repairs must be independent: competing
+unwraps/coercions, duplicate-key ambiguity, key renaming, field relocation and
+decoded-string interactions prevent certification.
+
+The chart shares states by schema location and original input occurrence,
+solves minimum costs before selecting edits, and replays certified wraps through
+the normal validator and receipt publisher. State and edge counts, relaxation
+rounds and replay work are polynomial in the input and compiled schema sizes.
+This covers both the reported deeply nested leaf repair and arbitrarily many
+independent mandatory wraps; it is not a fixed nesting-depth shortcut. Caller
+resource limits still apply and exhaustion remains explicit.
+
+Outside that family, recovery retains exact governed search without the
+polynomial guarantee. Qwen and Hermes identify tool-call grammars, not argument
+schema complexity classes; neither name alone establishes this guarantee.
+Accepted answers, rankings, ambiguity/guess semantics and transformation
+provenance are preserved. Exploration diagnostics, usage counters and
+finite-budget exhaustion points can change, as recorded in the changelog.
+
+Executable coverage is in `schema::recovery::factoring_tests`: comparison with
+joint search, duplicate-key ambiguity, depths of 12/24/48, independent repair
+counts of 12/24/48, and explicit Work refusal retaining the original input.
+
 ## Agreed release scope
 
 - First-party JSON parsing, Draft 2020-12 and Draft-07 schema validation
