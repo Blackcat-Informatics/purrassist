@@ -3,11 +3,11 @@
 
 //! Exact decimal JSON numbers, including exponents outside machine ranges.
 mod decimal;
-use super::operation::{Operation, ordinary};
 use crate::contract::{
     Governor, Resource, ScratchLease, ScratchString, StopReason, format_output_governed,
     format_scratch_governed, saturating_size,
 };
+use crate::contract::{Operation, ordinary};
 use core::{cmp::Ordering, fmt, str::FromStr};
 
 /// An RFC 8259 number retaining its exact lexical spelling.

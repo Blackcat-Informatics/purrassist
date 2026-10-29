@@ -48,6 +48,22 @@ governed integer classification and comparison as validation, preserving seed
 order and native refusal causes. General format assertions and recovery candidate ownership
 remain separate contracts.
 
+Hostname and email format evaluation now admits Unicode mapping, normalization,
+Punycode, contextual and Bidi checks through the caller governor. Actual temporary
+string/vector owners replace per-label storage estimates and release on pass,
+fail or refusal. Normalization shares one ordinary/admitted algorithm: an explicit
+decomposition stack checks caller Depth, and stable counting preserves equal
+combining-class order while skipping already ordered runs. Punycode owns encoding
+and decoding buffers, admitting scans, growth and insertion movement. Ordinary
+public normalization preserves its output; this does not govern unrelated text
+matching or case-folding operations. Email admits delimiter and local-part scans
+separately and reuses the governed IP validators. IPv6 group parsing is borrowed;
+both IP validators admit documented scan bounds after their finite length guards
+and check cancellation before returning. Their standalone usage counters change
+as well. Pinned Unicode data, format language and annotation/assertion semantics
+remain unchanged. Other format validators, Unicode length assertions, required-name
+scans, regex-format diagnostic ownership and recovery candidates remain separate.
+
 Witness canonicalization, requirement merging and the existing branch driver
 share the caller's governor. Immutable schema operands and pattern names remain
 borrowed; synthesized canonical lists, requirement snapshots, child obligations,

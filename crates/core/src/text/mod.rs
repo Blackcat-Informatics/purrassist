@@ -3,6 +3,9 @@
 
 //! First-party Unicode normalization and text comparison foundations.
 mod idna_data;
+mod normalization;
+use crate::contract::{Operation, Text, ordinary};
+use crate::{Governor, ScratchString, StopReason};
 pub(crate) mod punycode;
 mod unicode_data;
 
@@ -28,26 +31,19 @@ pub enum Normalization {
 /// Panics only if generated, conformance-tested tables contain a non-scalar value.
 #[must_use]
 pub fn normalize(input: &str, form: Normalization) -> String {
-    let compatibility = matches!(form, Normalization::Nfkd | Normalization::Nfkc);
-    let mut decomposed = Vec::with_capacity(input.len());
-    for character in input.chars() {
-        decompose(u32::from(character), compatibility, &mut decomposed);
+    match ordinary(normalization::run(input, form, &mut Operation(None))) {
+        Text::Plain(output) => output,
+        Text::Admitted(_) => unreachable!("INVARIANT: ordinary normalization uses plain storage"),
     }
-    let mut start = 0;
-    for index in 1..decomposed.len() {
-        if combining(decomposed[index]) == 0 {
-            decomposed[start..index].sort_by_key(|point| combining(*point));
-            start = index;
-        }
-    }
-    decomposed[start..].sort_by_key(|point| combining(*point));
-    if matches!(form, Normalization::Nfc | Normalization::Nfkc) {
-        decomposed = compose(&decomposed);
-    }
-    decomposed
-        .into_iter()
-        .map(|point| char::from_u32(point).expect("Unicode tables contain scalar values"))
-        .collect()
+}
+
+/// Normalize into a temporary owner without publishing intermediate text.
+pub(crate) fn normalize_owned(
+    input: &str,
+    form: Normalization,
+    governor: &mut Governor,
+) -> Result<ScratchString, StopReason> {
+    normalization::run(input, form, &mut Operation(Some(governor))).map(Text::into_admitted)
 }
 
 /// Full default Unicode case folding (C and F mappings; no locale tailoring).
@@ -104,11 +100,6 @@ pub fn lexical_tokens(input: &str) -> Vec<String> {
         .collect()
 }
 
-fn combining(code: u32) -> u8 {
-    unicode_data::COMBINING
-        .binary_search_by_key(&code, |entry| entry.0)
-        .map_or(0, |index| unicode_data::COMBINING[index].1)
-}
 fn category(character: char) -> u8 {
     let code = u32::from(character);
     let index = unicode_data::CATEGORIES.partition_point(|entry| entry.0 <= code);
@@ -118,68 +109,6 @@ fn category(character: char) -> u8 {
         0
     }
 }
-fn decompose(code: u32, compatibility: bool, output: &mut Vec<u32>) {
-    if (0xac00..0xd7a4).contains(&code) {
-        let index = code - 0xac00;
-        output.push(0x1100 + index / 588);
-        output.push(0x1161 + (index % 588) / 28);
-        if !index.is_multiple_of(28) {
-            output.push(0x11a7 + index % 28);
-        }
-        return;
-    }
-    if let Ok(index) = unicode_data::DECOMPOSITION.binary_search_by_key(&code, |entry| entry.0) {
-        let (_, compat, mapping) = unicode_data::DECOMPOSITION[index];
-        if !compat || compatibility {
-            for point in mapping {
-                decompose(*point, compatibility, output);
-            }
-            return;
-        }
-    }
-    output.push(code);
-}
-fn pair(first: u32, second: u32) -> Option<u32> {
-    if (0x1100..0x1113).contains(&first) && (0x1161..0x1176).contains(&second) {
-        return Some(0xac00 + (first - 0x1100) * 588 + (second - 0x1161) * 28);
-    }
-    if (0xac00..0xd7a4).contains(&first)
-        && (first - 0xac00).is_multiple_of(28)
-        && (0x11a8..0x11c3).contains(&second)
-    {
-        return Some(first + second - 0x11a7);
-    }
-    unicode_data::COMPOSITION
-        .binary_search_by_key(&(first, second), |entry| (entry.0, entry.1))
-        .ok()
-        .map(|index| unicode_data::COMPOSITION[index].2)
-}
-fn compose(input: &[u32]) -> Vec<u32> {
-    let mut output = Vec::with_capacity(input.len());
-    // Keep the index defined before a starter exists: optimized bounds-check
-    // motion can inspect an Option payload before its discriminant guard.
-    let mut starter = 0;
-    let mut has_starter = false;
-    let mut last_class = 0;
-    for &code in input {
-        let class = combining(code);
-        if has_starter
-            && (last_class == 0 || last_class < class)
-            && let Some(composed) = pair(output[starter], code)
-        {
-            output[starter] = composed;
-            continue;
-        }
-        if class == 0 {
-            starter = output.len();
-            has_starter = true;
-        }
-        output.push(code);
-        last_class = class;
-    }
-    output
-}
-
 fn confusable_prototype(character: char, output: &mut Vec<u32>) {
     let code = u32::from(character);
     if let Ok(index) = unicode_data::CONFUSABLES.binary_search_by_key(&code, |entry| entry.0) {
@@ -234,6 +163,15 @@ pub fn general_category(character: char) -> &'static str {
         .map_or("Cn", |(_, _, category)| *category)
 }
 
+/// Admit the generated category lookup used by hostname checks.
+pub(crate) fn general_category_governed(
+    character: char,
+    governor: &mut Governor,
+) -> Result<&'static str, StopReason> {
+    Operation(Some(governor)).lookup(unicode_data::GENERAL_CATEGORIES.len())?;
+    Ok(general_category(character))
+}
+
 /// The same table `general_category` searches, for `pattern`'s
 /// `\p{General_Category=Assigned}` computation and Script/binary-property
 /// generation cross-checks; not part of the public API.
@@ -250,55 +188,64 @@ pub(crate) const fn general_categories() -> &'static [(u32, u32, &'static str)] 
 /// accessor only exposes the generated table; hostname/idn-hostname format
 /// validation that consumes it is implemented in the idn-hostname format
 /// validators, not here.
-pub(crate) fn idna_status(code: u32) -> (&'static str, &'static [u32]) {
+pub(crate) fn idna_status(
+    code: u32,
+    governor: &mut Governor,
+) -> Result<(&'static str, &'static [u32]), StopReason> {
+    Operation(Some(governor)).lookup(idna_data::IDNA_MAPPING.len())?;
     let entries = idna_data::IDNA_MAPPING;
     let position = entries.partition_point(|(_, end, _, _)| *end < code);
-    entries
+    Ok(entries
         .get(position)
         .filter(|(start, _, _, _)| *start <= code)
         .map_or(("disallowed", &[]), |(_, _, status, mapping)| {
             (status, mapping)
-        })
+        }))
 }
 
 /// `Canonical_Combining_Class` (UAX #44): non-zero exactly for combining marks;
 /// `9` identifies Virama, which the idn-hostname validator's RFC 5892
 /// Appendix A.1/A.2 CONTEXTJ rule for ZWNJ/ZWJ requires (the same generated
 /// table `normalize` uses for canonical reordering).
-pub(crate) fn canonical_combining_class(code: u32) -> u8 {
-    combining(code)
+pub(crate) fn canonical_combining_class(
+    code: u32,
+    governor: &mut Governor,
+) -> Result<u8, StopReason> {
+    normalization::combining(code, &mut Operation(Some(governor)))
 }
 
 /// `Bidi_Class` (UAX #44) as an explicit, gap-free partition of the whole
 /// scalar range (`@missing` defaults already expanded by the generator), for
 /// the idn-hostname validator's RFC 5893 Bidi rule.
-pub(crate) fn bidi_class(code: u32) -> &'static str {
+pub(crate) fn bidi_class(code: u32, governor: &mut Governor) -> Result<&'static str, StopReason> {
+    Operation(Some(governor)).lookup(idna_data::BIDI_CLASS.len())?;
     let entries = idna_data::BIDI_CLASS;
     let position = entries.partition_point(|(_, end, _)| *end < code);
-    entries
+    Ok(entries
         .get(position)
         .filter(|(start, _, _)| *start <= code)
-        .map_or("L", |(_, _, class)| *class)
+        .map_or("L", |(_, _, class)| *class))
 }
 
 /// `Joining_Type` (UAX #44) as an explicit, gap-free partition of the whole
 /// scalar range (`U` = `Non_Joining` where the source `@missing` default
 /// applies), for the idn-hostname validator's RFC 5892 Appendix A.1
 /// CONTEXTJ rule for ZWNJ.
-pub(crate) fn joining_type(code: u32) -> &'static str {
+pub(crate) fn joining_type(code: u32, governor: &mut Governor) -> Result<&'static str, StopReason> {
+    Operation(Some(governor)).lookup(idna_data::JOINING_TYPE.len())?;
     let entries = idna_data::JOINING_TYPE;
     let position = entries.partition_point(|(_, end, _)| *end < code);
-    entries
+    Ok(entries
         .get(position)
         .filter(|(start, _, _)| *start <= code)
-        .map_or("U", |(_, _, kind)| *kind)
+        .map_or("U", |(_, _, kind)| *kind))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        Normalization, case_fold, comparison_key, depunctuate, general_categories, idna_status,
-        normalize, skeleton,
+        Normalization, case_fold, comparison_key, depunctuate, general_categories, normalize,
+        skeleton,
     };
     #[test]
     fn canonical_compatibility_and_hangul() {
@@ -321,10 +268,67 @@ mod tests {
             ("\u{301}\u{300}", "\u{301}\u{300}"),
             ("\u{301}e\u{301}", "\u{301}é"),
             ("a\u{315}\u{300}", "à\u{315}"),
+            ("a\u{315}\u{301}\u{300}", "á\u{300}\u{315}"),
         ] {
             assert_eq!(normalize(source, Normalization::Nfc), expected);
             assert_eq!(normalize(source, Normalization::Nfkc), expected);
         }
+    }
+    #[test]
+    fn normalization_owns_buffers_and_preserves_refusals() {
+        use crate::{Budget, Governor, StopReason, contract::Resource};
+        for (source, form) in [
+            ("a\u{315}\u{301}\u{300}", Normalization::Nfc),
+            ("é각ﬃ", Normalization::Nfkd),
+            ("e\u{301}", Normalization::Nfc),
+        ] {
+            let mut governor = Governor::new(Budget::default());
+            let owned = super::normalize_owned(source, form, &mut governor).unwrap();
+            assert_eq!(owned.as_str(), normalize(source, form));
+            assert!(governor.scratch_meter().live() > 0);
+            let usage = governor.usage();
+            drop(owned);
+            assert_eq!(governor.scratch_meter().live(), 0);
+            for (budget, resource) in [
+                (
+                    Budget {
+                        work: usage.work - 1,
+                        ..Budget::default()
+                    },
+                    Resource::Work,
+                ),
+                (
+                    Budget {
+                        scratch_bytes: usage.peak_scratch_bytes - 1,
+                        ..Budget::default()
+                    },
+                    Resource::ScratchBytes,
+                ),
+            ] {
+                let mut refused = Governor::new(budget);
+                assert_eq!(
+                    super::normalize_owned(source, form, &mut refused).unwrap_err(),
+                    StopReason::BudgetExceeded(resource)
+                );
+                assert_eq!(refused.scratch_meter().live(), 0);
+            }
+            let mut cancelled = Governor::new(Budget::default());
+            cancelled.cancel();
+            assert_eq!(
+                super::normalize_owned(source, form, &mut cancelled).unwrap_err(),
+                StopReason::Cancelled
+            );
+            assert_eq!(cancelled.scratch_meter().live(), 0);
+        }
+        let mut governor = Governor::new(Budget {
+            depth: 0,
+            ..Budget::default()
+        });
+        assert_eq!(
+            super::normalize_owned("é", Normalization::Nfc, &mut governor).unwrap_err(),
+            StopReason::BudgetExceeded(Resource::Depth)
+        );
+        assert_eq!(governor.scratch_meter().live(), 0);
     }
     #[test]
     fn casing_does_not_depend_on_host_locale() {
@@ -355,13 +359,17 @@ mod tests {
     }
     #[test]
     fn idna_mapping_matches_published_examples() {
+        let idna_status = |code| {
+            super::idna_status(code, &mut crate::Governor::new(crate::Budget::default()))
+                .expect("within budget")
+        };
         // IdnaMappingTable.txt (Unicode 17): uppercase ASCII maps to lowercase.
         assert_eq!(idna_status(u32::from('A')), ("mapped", [0x61].as_slice()));
         // ASCII lowercase letters and digits are valid unchanged.
         assert_eq!(idna_status(u32::from('a')), ("valid", [].as_slice()));
         assert_eq!(idna_status(u32::from('0')), ("valid", [].as_slice()));
         // U+00DF LATIN SMALL LETTER SHARP S is a deviation code point (maps to
-        // "ss" under the non-transitional processing that IDNA2008 uses, but
+        // "ss" under the non-transitional processing that IDNA 2008 uses, but
         // is left as a deviation rather than an unconditional mapping).
         assert_eq!(idna_status(0x00DF), ("deviation", [0x73, 0x73].as_slice()));
         // Noncharacters are disallowed.

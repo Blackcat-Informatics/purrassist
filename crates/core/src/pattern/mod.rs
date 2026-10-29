@@ -40,7 +40,7 @@ pub use bytes::{ByteCompileError, ByteInclusion, ByteInstruction, ByteLanguage};
 pub use derive::{DerivativeDfa, DfaState};
 
 use crate::contract::{
-    Budget, Evidence, Governor, Resource, ScratchCharge, ScratchString, ScratchVec, StopReason,
+    Budget, Evidence, Governor, Resource, ScratchString, ScratchVec, StopReason,
 };
 
 /// Internal generator results keep their exact buffer reservations until the
@@ -51,13 +51,6 @@ pub(crate) enum OwnedGenerateOutcome {
         rule: ScratchString,
         explanation: ScratchString,
     },
-}
-
-impl ScratchCharge for char {
-    const CHARGE: usize = {
-        assert!(core::mem::size_of::<Self>() <= 4);
-        4
-    };
 }
 
 /// Admit the matcher's scalar buffer before collecting any input. Its owner
@@ -588,8 +581,8 @@ impl Pattern {
 /// The Unicode `Script` value of one code point, for the
 /// idn-hostname format validator's RFC 5892 Appendix A CONTEXTO rules; not
 /// part of the public API.
-pub(crate) fn script_of(code: u32) -> &'static str {
-    unicode::script_of(code)
+pub(crate) fn script_of(code: u32, governor: &mut Governor) -> Result<&'static str, StopReason> {
+    unicode::script_of(code, governor)
 }
 
 #[cfg(test)]

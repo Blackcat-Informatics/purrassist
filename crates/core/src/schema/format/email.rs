@@ -5,8 +5,7 @@
 //! `domain` reuses the `hostname`/`idn-hostname` validator, and `local-part`
 //! is a dot-atom or a quoted string.
 use super::host::is_hostname;
-use super::net::ipv4_literal;
-use super::net::ipv6_literal;
+use super::net::{is_ipv4, is_ipv6};
 use crate::contract::{Governor, Resource, StopReason};
 use std::iter::Peekable;
 use std::str::Chars;
@@ -103,8 +102,12 @@ fn is_domain_literal(text: &str, governor: &mut Governor) -> Result<bool, StopRe
     else {
         return Ok(false);
     };
-    governor.charge(Resource::Work, 1)?;
-    Ok(strip_ascii_case_prefix(inner, "ipv6:").map_or_else(|| ipv4_literal(inner), ipv6_literal))
+    governor.charge(Resource::Work, 5)?; // fixed ASCII tag comparison
+    if let Some(address) = strip_ascii_case_prefix(inner, "ipv6:") {
+        is_ipv6(address, governor)
+    } else {
+        is_ipv4(inner, governor)
+    }
 }
 
 fn strip_ascii_case_prefix<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
@@ -114,14 +117,32 @@ fn strip_ascii_case_prefix<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
 }
 
 pub(super) fn is_email(text: &str, idn: bool, governor: &mut Governor) -> Result<bool, StopReason> {
+    let result = email(text, idn, governor)?;
+    governor.check()?;
+    Ok(result)
+}
+fn email(text: &str, idn: bool, governor: &mut Governor) -> Result<bool, StopReason> {
+    // The quoted prefix scan and any following delimiter search visit disjoint
+    // input ranges; the unquoted case is one delimiter search.
     governor.charge(
         Resource::Work,
-        u64::try_from(text.len()).unwrap_or(u64::MAX),
+        u64::try_from(text.len())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1),
     )?;
     let Some(at) = find_unquoted_at(text) else {
         return Ok(false);
     };
     let (local, domain) = (&text[..at], &text[at + 1..]);
+    // Dot splitting and scalar classification each visit at most local.len()
+    // bytes. The quoted alternative and its initial peek fit the same bound.
+    governor.charge(
+        Resource::Work,
+        u64::try_from(local.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(2)
+            .saturating_add(2),
+    )?;
     if !is_local_part(local, idn) {
         return Ok(false);
     }
@@ -157,7 +178,10 @@ mod tests {
     use super::is_email;
     use crate::{Budget, Governor};
     fn check(text: &str, idn: bool) -> bool {
-        is_email(text, idn, &mut Governor::new(Budget::default())).expect("within budget")
+        let mut governor = Governor::new(Budget::default());
+        let valid = is_email(text, idn, &mut governor).expect("within budget");
+        assert_eq!(governor.scratch_meter().live(), 0);
+        valid
     }
     #[test]
     fn plain_email_enforces_ascii_dot_atom_and_quoting() {

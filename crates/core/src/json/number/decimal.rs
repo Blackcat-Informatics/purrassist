@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! One exact decimal normalization and signed arithmetic authority.
-use super::super::operation::{Operation, Text};
 use crate::StopReason;
+use crate::contract::{Operation, Text};
 use core::cmp::Ordering;
 
 pub(super) struct Integer {

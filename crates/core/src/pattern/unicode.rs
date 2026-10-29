@@ -386,12 +386,13 @@ pub(super) fn script_names() -> std::collections::BTreeSet<&'static str> {
 /// `Scripts.txt` range claims. Exposed crate-wide (via `pattern::script_of`)
 /// for the idn-hostname format validator's RFC 5892 Appendix A
 /// CONTEXTO rules (Greek/Hebrew/Hiragana/Katakana/Han membership checks).
-pub(super) fn script_of(code: u32) -> &'static str {
+pub(super) fn script_of(code: u32, governor: &mut Governor) -> Result<&'static str, StopReason> {
+    crate::contract::Operation(Some(governor)).lookup(unicode_data::SCRIPTS.len())?;
     let position = unicode_data::SCRIPTS.partition_point(|(_, end, _)| *end < code);
-    unicode_data::SCRIPTS
+    Ok(unicode_data::SCRIPTS
         .get(position)
         .filter(|(start, _, _)| *start <= code)
-        .map_or("Unknown", |(_, _, name)| *name)
+        .map_or("Unknown", |(_, _, name)| *name))
 }
 
 #[cfg(test)]

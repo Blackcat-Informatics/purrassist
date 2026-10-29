@@ -13,6 +13,24 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
+/// Shared ordinary or admitted execution for first-party algorithms.
+pub(crate) struct Operation<'g>(pub(crate) Option<&'g mut Governor>);
+
+/// The same append authority serves decimal text and comparison stacks.
+pub(crate) enum Storage<P, A> {
+    Plain(P),
+    Admitted(A),
+}
+pub(crate) type Text = Storage<String, ScratchString>;
+
+/// One vector owner for algorithms shared by ordinary and governed callers.
+pub(crate) struct Buffer<T: ScratchCharge>(pub(crate) Storage<Vec<T>, ScratchVec<T>>);
+
+pub(crate) fn ordinary<T>(result: Result<T, StopReason>) -> T {
+    // Ordinary operations have neither an admission gate nor fallible storage.
+    result.expect("INVARIANT: ordinary operations cannot produce a resource refusal")
+}
+
 /// Convert a target-sized count to the portable resource-counter width.
 ///
 /// Counts wider than `u64` saturate rather than wrap or undercount. This is
@@ -593,6 +611,7 @@ macro_rules! scratch_charge {
 // compiled for `wasm32`.
 scratch_charge!((), 0);
 scratch_charge!(bool, 1);
+scratch_charge!(char, 4);
 scratch_charge!(u8, 1);
 scratch_charge!(u32, 4);
 scratch_charge!(u64, 8);

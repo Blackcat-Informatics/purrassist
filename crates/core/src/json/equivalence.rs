@@ -2,10 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! One source-borrowing semantic comparison walk for ordinary and governed APIs.
-use super::{
-    Node, Value,
-    operation::{Operation, Storage},
-};
+use super::{Node, Value};
+use crate::contract::{Operation, Storage};
 use crate::contract::{ScratchCharge, ScratchVec, StopReason};
 
 struct Frame<'a> {

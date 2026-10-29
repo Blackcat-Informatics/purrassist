@@ -24,41 +24,49 @@ pub(super) fn ipv4_literal(text: &str) -> bool {
 }
 
 pub(super) fn is_ipv4(text: &str, governor: &mut Governor) -> Result<bool, StopReason> {
-    governor.charge(Resource::Work, 1)?;
-    Ok(ipv4_literal(text))
+    // The length guard precedes every scan. For admitted lengths, ASCII,
+    // dot counting, splitting, digit validation and integer parsing each visit
+    // at most n bytes; the sixth pass covers per-group predicates.
+    let work = if text.len() <= 15 {
+        6 * text.len() as u64 + 1
+    } else {
+        1
+    };
+    governor.charge(Resource::Work, work)?;
+    let valid = ipv4_literal(text);
+    governor.check()?;
+    Ok(valid)
 }
 
 fn is_hex_group(part: &str) -> bool {
     !part.is_empty() && part.len() <= 4 && part.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-/// Groups from one side of an (optional) `::` compression, `None` if any
-/// group is empty (a stray single colon, as opposed to the deliberate empty
-/// side of `::`).
-fn split_side(side: &str) -> Option<Vec<&str>> {
+/// Validate borrowed groups on one side of optional `::` compression.
+/// Only its final group may be an embedded IPv4 literal, counting as two slots.
+fn group_slots(side: &str) -> Option<usize> {
     if side.is_empty() {
-        return Some(Vec::new());
+        return Some(0);
     }
-    let groups: Vec<&str> = side.split(':').collect();
-    groups
-        .iter()
-        .all(|group| !group.is_empty())
-        .then_some(groups)
-}
-
-/// Every group must be 1-4 hex digits, except a trailing embedded IPv4
-/// literal (RFC 4291 section 2.2), which counts as two 16-bit groups.
-fn groups_valid(groups: &[&str]) -> Option<usize> {
-    match groups.split_last() {
-        None => Some(0),
-        Some((last, rest)) if last.contains('.') => (ipv4_literal(last)
-            && rest.iter().all(|group| is_hex_group(group)))
-        .then_some(rest.len() + 2),
-        Some(_) => groups
-            .iter()
-            .all(|group| is_hex_group(group))
-            .then_some(groups.len()),
+    let mut groups = side.split(':').peekable();
+    let mut slots = 0;
+    while let Some(group) = groups.next() {
+        if group.is_empty() {
+            return None;
+        }
+        if groups.peek().is_none() && group.contains('.') {
+            if !ipv4_literal(group) {
+                return None;
+            }
+            slots += 2;
+        } else {
+            if !is_hex_group(group) {
+                return None;
+            }
+            slots += 1;
+        }
     }
+    Some(slots)
 }
 
 /// `::1`, `2001:db8::1`, or an address with a trailing embedded IPv4 (RFC
@@ -67,7 +75,7 @@ fn groups_valid(groups: &[&str]) -> Option<usize> {
 pub(super) fn ipv6_literal(text: &str) -> bool {
     // The longest valid textual form is 45 octets
     // ("0000:0000:0000:0000:0000:0000:255.255.255.255"); this bound keeps
-    // every subsequent split/collect trivially small.
+    // every subsequent borrowed scan trivially small.
     if text.len() > 45 || !text.is_ascii() {
         return false;
     }
@@ -75,30 +83,30 @@ pub(super) fn ipv6_literal(text: &str) -> bool {
         if right.contains("::") {
             return false;
         }
-        let Some(left_groups) = split_side(left) else {
-            return false;
-        };
-        let Some(right_groups) = split_side(right) else {
-            return false;
-        };
-        let (Some(left_slots), Some(right_slots)) =
-            (groups_valid(&left_groups), groups_valid(&right_groups))
-        else {
+        let (Some(left_slots), Some(right_slots)) = (group_slots(left), group_slots(right)) else {
             return false;
         };
         // `::` must stand for at least one omitted 16-bit group.
         left_slots + right_slots < 8
     } else {
-        let Some(groups) = split_side(text) else {
-            return false;
-        };
-        !groups.is_empty() && groups_valid(&groups) == Some(8)
+        !text.is_empty() && group_slots(text) == Some(8)
     }
 }
 
 pub(super) fn is_ipv6(text: &str, governor: &mut Governor) -> Result<bool, StopReason> {
-    governor.charge(Resource::Work, 1)?;
-    Ok(ipv6_literal(text))
+    // For n <= 45: ASCII costs n; two two-byte delimiter searches cost at
+    // most 4n; group splitting and final-dot scans cost 2n; group validation
+    // including embedded IPv4 costs at most 6n; group predicates cost 2n + 8.
+    // Larger inputs stop at the constant-time length guard.
+    let work = if text.len() <= 45 {
+        15 * text.len() as u64 + 8
+    } else {
+        1
+    };
+    governor.charge(Resource::Work, work)?;
+    let valid = ipv6_literal(text);
+    governor.check()?;
+    Ok(valid)
 }
 
 #[cfg(test)]
@@ -106,7 +114,10 @@ mod tests {
     use super::{is_ipv4, is_ipv6};
     use crate::{Budget, Governor};
     fn governed<T>(call: impl FnOnce(&mut Governor) -> Result<T, crate::StopReason>) -> T {
-        call(&mut Governor::new(Budget::default())).expect("within budget")
+        let mut governor = Governor::new(Budget::default());
+        let value = call(&mut governor).expect("within budget");
+        assert_eq!(governor.scratch_meter().live(), 0);
+        value
     }
     #[test]
     fn ipv4_rejects_leading_zeros_and_wrong_shape() {
