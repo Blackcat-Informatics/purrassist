@@ -280,9 +280,6 @@ impl<K: Key, V: ScratchCharge> Map<K, V> {
         let id = self.search(query, Some(governor))?;
         Ok(id.map(|id| &mut self.nodes.as_mut_slice()[id].value))
     }
-    pub(super) fn contains_key<Q: Query<K> + ?Sized>(&self, query: &Q) -> bool {
-        self.get(query).is_some()
-    }
     pub(super) fn insert(
         &mut self,
         key: K,
