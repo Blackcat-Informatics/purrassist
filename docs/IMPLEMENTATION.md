@@ -45,7 +45,7 @@ work before processing. The evaluator and recovery use the same governed array
 layout and dependency view. Canonical construction/copying and live branch
 continuations enforce caller depth and a native ceiling of 128; refusal remains
 a resource outcome, never an unsatisfiability proof. Candidate-value construction,
-evaluator storage and witness-value publication retain their separate contracts.
+general assertion computation and witness-value publication retain their separate contracts.
 This does not complete witness or tool-graph governance.
 
 Evaluator recursion and transient path/key state now use fallible owners on the
@@ -60,10 +60,21 @@ violation messages and serialized type diagnostics hold fallible owners until
 collection succeeds. Caller Depth and a distinct native ceiling of 256 bound evaluator recursion;
 cycle diagnostics retain their existing InvalidInput text through governed
 publication. Obsolete nominal dependency-key leases are removed now that the
-shared dependency view owns its actual temporary keys. Annotation/report
-construction, merging, publication and recovery receipt clones remain one
-separate ownership contract; assertion computation and candidate construction
-are not completed by this control-state boundary.
+shared dependency view owns its actual temporary keys.
+
+Evaluator reports and annotations now retain fallible string/vector owners
+through construction, merge and discarded branches. Internal witness and
+recovery checks release their reports; public validation retains ordinary
+output only after fallible preparation and a final governor check. Annotation
+sorting, lookup, copies and moves admit Work before processing. Recovery commits
+whole-instance diagnostics and moved format annotations with stable validation
+indices, deduplicates individually owned patterns by destination, and reserves
+final observation slots before commit. Refusal preserves committed observations;
+finalization after exhaustion or cancellation requires no allocation. Search
+results retain the existing evidence order and ambiguous-prefix replacement.
+Provisional Search/Forest publication retains its existing charges. General
+scalar/format computation, candidate/replacement construction and host
+serialization remain separate contracts.
 
 Final refutations are published only by the public governed witness boundary.
 The existing driver and required-property recovery carry allocation-free static
@@ -73,8 +84,8 @@ fallible operation and the final governor check succeed. Late refusal releases
 all temporary publication owners and preserves the native resource cause.
 Public types, reason text and evidence fields remain unchanged; successful
 ordinary output retains its admission even after the caller drops it. Candidate
-construction, evaluator reports, recovery replacements and host serialization
-remain separate contracts.
+construction, recovery replacements and host serialization remain separate
+contracts.
 
 The existing `Grammar::compile_governed` path now admits complete private DSL
 syntax with governed scans/decoding/copies, fallible owned tokens and lists,

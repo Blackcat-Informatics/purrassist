@@ -58,12 +58,6 @@ pub(super) enum Outcome {
     Unknown,
 }
 
-/// This format's stable evidence/diagnostic rule identifier
-/// (`schema.format.<name>-v1`).
-pub(super) fn rule(name: &str) -> String {
-    format!("schema.format.{name}-v1")
-}
-
 pub(super) fn evaluate(
     name: &str,
     value: &str,

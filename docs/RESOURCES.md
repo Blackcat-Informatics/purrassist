@@ -229,8 +229,8 @@ Exceeding either limit returns `BudgetExceeded(Depth)`; it is not a refutation.
 Linear facets advance iteratively. Finite Work and ScratchBytes refusal points
 change because actual preparation operations and owners are now admitted.
 
-Candidate-value construction, evaluator storage and witness-value publication
-remain separate contracts. Total live scratch therefore need not
+Candidate-value construction and witness-value publication remain separate
+contracts. Internal evaluator reports use the ownership boundary below. Total live scratch therefore need not
 return to zero after a public witness call; preparation ownership is checked
 independently of those publication and candidate paths. No complete witness,
 cold-backend or graph-loading governance claim follows from this boundary.
@@ -271,11 +271,34 @@ encoder is introduced for this control path.
 
 The old nominal dependentSchemas key lease is removed: dependency preparation
 already owns its actual escaped keys. Work and scratch counters therefore change,
-including finite-budget refusal points. Annotation/report strings, branch-result
-merging, public reports, recovery receipt clones, remaining assertion computation,
-candidate construction and host serialization remain separate contracts. Tests
-of control-owner release distinguish those retained outputs; no total-zero claim
-is made for calls that publish diagnostics or reports.
+including finite-budget refusal points. Remaining assertion computation,
+candidate construction and host serialization retain separate contracts. Tests
+of control-owner release distinguish retained outputs; no total-zero claim is
+made for calls that publish diagnostics or reports.
+
+## Evaluator report and recovery observation ownership
+
+Violation strings, format diagnostics, annotation collections and exercised
+pattern records retain fallible owners through branch merging and rejection.
+Internal witness and recovery checks release discarded records. Public validation
+prepares all output collections and checks the governor before retaining their
+storage. Branch and annotation scans, sorting, lookup and moves admit Work.
+
+Recovery converts whole-instance diagnostics while the report remains temporary,
+then commits that validation and moves format annotations without cloning their
+payloads. Validation indices retain their established order. Individually owned
+pattern observations deduplicate by destination across all attempted candidates,
+including rejected candidates. Each observation reserves its final plain evidence
+slot before commit. Stopped finalization moves committed records into those slots
+without allocation or further fallible admission.
+
+Search publication is staged until its evidence can join the observations. Unique
+results append transformation evidence after the initial observation prefix;
+ambiguous results replace that prefix as before. Patterns remain the sorted suffix.
+Late refusal preserves committed observations and the native stop cause. Existing
+provisional Search/Forest retained charges are unchanged. General scalar/format
+computation, candidate/replacement construction and host serialization remain
+outside this boundary.
 
 ## Final refutation publication
 
@@ -294,8 +317,8 @@ cause. Complete public output retains its storage admission, including after the
 ordinary strings and vector are dropped by the caller.
 
 Reason text, rule identity, explanation, empty destination and absent span are
-unchanged. Witness Node construction/ownership, evaluator reports, recovery
-replacement storage and host receipt/wire serialization remain separate
+unchanged. Witness Node construction/ownership, recovery replacement storage
+and host receipt/wire serialization remain separate
 contracts. This boundary does not complete witness or tool-graph governance.
 
 ## Type-enforced scratch accounting

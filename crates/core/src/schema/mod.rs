@@ -13,6 +13,7 @@ mod index;
 mod layout;
 pub mod recovery;
 mod reference;
+mod report;
 mod uri;
 mod vocabulary;
 use crate::digest::{Digest, DigestBuilder};
@@ -354,14 +355,17 @@ impl Schema {
 
     /// Validate with caller-controlled limits shared with a recovery operation.
     ///
-    /// The whole working set is charged to `governor` before it is
-    /// allocated: `Work` per schema location visited, `Depth` per nesting
-    /// level, and `ScratchBytes` for the evaluation's collections (at
-    /// portable element sizes), the member names and pattern keys they hold,
-    /// every transient child key and instance path, and each held
-    /// applicator branch, released when the evaluation drops them. The
-    /// report's violations and format evidence are retained output and keep
-    /// their charge.
+    /// Evaluator control, annotation and report storage is admitted before
+    /// allocation. `Work` covers visited schema locations and admitted
+    /// operations; `Depth` bounds nesting. `ScratchBytes` covers collections
+    /// at portable element sizes, member names, pattern keys, transient child
+    /// keys and instance paths, and held applicator branches. Temporary owners
+    /// release their storage when the evaluation drops them. The
+    /// report's violations, format annotations and pattern evidence keep their
+    /// exact owners until all fallible preparation and the final governor check
+    /// succeed. Published output retains its charge; internal witness and
+    /// recovery checks release discarded reports. General scalar/format
+    /// computation retains its separate resource contract.
     ///
     /// # Errors
     /// Governor failure is distinct from an instance failing its schema:
@@ -387,15 +391,7 @@ impl Schema {
         instance: &Node,
         governor: &mut Governor,
     ) -> Result<ValidationReport, StopReason> {
-        let result = evaluate::run(self, self.root, instance, governor)?;
-        Ok(ValidationReport {
-            schema: self.digest,
-            dialect: self.dialect(),
-            valid: result.violations.is_empty(),
-            violations: result.violations,
-            format_evidence: result.format_evidence,
-            pattern_evidence: result.pattern_evidence,
-        })
+        evaluate::run(self, self.root, instance, governor)?.publish(self, governor)
     }
 
     fn keywords(&self, id: usize) -> Keywords<'_> {
