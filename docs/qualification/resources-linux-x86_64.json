@@ -62,7 +62,6 @@
         "overflow_checks": true,
         "test": true
       },
-      "executable_bytes": 12967216,
       "executable_sha256": "8e4ac85a0144034db1bfe27d86eaf747cd2a0ead75ee175879055353dbe246e9"
     },
     {
@@ -86,7 +85,6 @@
         "overflow_checks": true,
         "test": false
       },
-      "executable_bytes": 9757120,
       "executable_sha256": "2c67400a40ed3ee41bfb93ea0f14d8a2791d8e7ba1aded6783c8c151d5c9669f"
     }
   ],
@@ -191,28 +189,6 @@
       "snapshots": 875
     }
   ],
-  "artifact_sizes": {
-    "native_cli": {
-      "bytes": 9757120,
-      "sha256": "2c67400a40ed3ee41bfb93ea0f14d8a2791d8e7ba1aded6783c8c151d5c9669f"
-    },
-    "purrassist_core_wasm32_wasip1": {
-      "bytes": 1998277,
-      "sha256": "a4a33bdf5527d48e6c77fb3194b8b755a7ca764e82406d1247bc493df367f7a4"
-    },
-    "purrassist_syntax_wasm32_wasip1": {
-      "bytes": 5223153,
-      "sha256": "32e239c80b152e1b9fbc72ee3cdd232b42e11a165c89e540b08753be40cbca3d"
-    },
-    "purrassist_host_wasm32_wasip1": {
-      "bytes": 1467114,
-      "sha256": "b0ac6c5cba017337ef5e6fa2bf75b495fe9819848ea3a503be61a845f007fd9a"
-    },
-    "wasm_harness_wasm32_unknown_unknown": {
-      "bytes": 1937506,
-      "sha256": "227e5e34f3e57a49b75f40b169975ea6b70dd177e1be7bda51edb19985721613"
-    }
-  },
   "latency_workloads": [
     {
       "case": "schema_compile",
@@ -577,7 +553,6 @@
     "fresh_artifacts": 0,
     "built_artifacts": 35,
     "artifact": {
-      "bytes": 9668520,
       "sha256": "24ea7dd813a878666c1d304740ec49a43a5ef0c045b071d135055b8d6f3aa053"
     },
     "elapsed_ns": 27363807814

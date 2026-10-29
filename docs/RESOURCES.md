@@ -46,7 +46,7 @@ prepared patterns.
 
 `make resources` builds an assertion-backed resource benchmark and the release
 CLI, then profiles nine fixed workloads and measures core and syntax latency,
-allocation, RSS, artifact sizes and an uncached release build. It requires Linux,
+allocation, RSS and an uncached release build. It requires Linux,
 Python 3, Cargo, rustup and the Valgrind version registered in
 `vendor/tooling.json`. The benchmark counting allocators are confined to bench
 binaries. Syntax's production allocator accounting enforces its resource
@@ -67,7 +67,7 @@ The report records:
   measurement, so it does not inflate profiler allocation counts.
 - Native process elapsed time. Startup, construction, assertions,
   output, and teardown are included; this is not per-operation latency.
-- Executable byte sizes and SHA-256 identities, compiler/runtime identities,
+- Executable SHA-256 identities, compiler/runtime identities,
   source commit/dirty state/tree digest, build elapsed time, and Cargo's fresh
   versus rebuilt artifact counts.
 
@@ -616,7 +616,7 @@ recording depends on deallocations; observed peaks are not a universal memory
 bound. External profiling tool/runtime provenance is in `docs/DEPENDENCIES.md`
 and `vendor/tooling.json`.
 
-## Latency, artifact size, and cold-build measurements
+## Latency and cold-build measurements
 
 `make resources` also builds and runs `crates/core/benches/latency.rs` and
 `crates/syntax/benches/latency.rs` (each `harness = false`, matching the
@@ -641,16 +641,6 @@ fields:
   quality/latency cases, captured verbatim and also written to
   [`qualification/recovery-bench-linux-x86_64.json`](qualification/recovery-bench-linux-x86_64.json)
   as its own committed artifact.
-- `artifact_sizes`: byte size and SHA-256 identity of the native release
-  CLI, the `wasm32-wasip1` `portable-core`/`portable-syntax`/`portable-host`
-  example modules (the same fixed-transcript examples
-  `scripts/check-wasm.py` executes; the syntax/host builds use the same
-  pinned WASI C sysroot that script's `wasi_environment()` sets up, via a
-  small duplicated copy in `measure-resources.py` -- `check-wasm.py` runs its
-  own full build/execute/compare check as top-level code the instant it is
-  imported, so importing it here would trigger that check as a side effect
-  instead of reusing just the helper), and the `wasm32-unknown-unknown`
-  `wasm-harness` module.
 - `cold_build`: elapsed nanoseconds for a release CLI build using the real
   toolchain Cargo resolved through `rustup which cargo`. Both the target
   directory and Cargo's separate intermediate build directory are newly
@@ -658,7 +648,7 @@ fields:
   `RUSTC_WORKSPACE_WRAPPER`, and the
   corresponding Cargo environment/config values are cleared. Every Cargo
   compiler-artifact event must report `fresh: false`; the report records
-  those counts and the resulting CLI's byte size and SHA-256. Registry
+  those counts and the resulting CLI's SHA-256. Registry
   downloads and OS page caches remain available. This measures an uncached
   compilation and link, excluding dependency download time and page-cache
   flushing.
@@ -706,21 +696,9 @@ any flag the wrapper would otherwise add.
 
 Values include the full benchmark process as described above. They are not per-function allocation counts, portable guarantees, or a production sizing rule.
 
-The release CLI in this snapshot is 9,757,120 bytes. The instrumentable benchmark (12,967,216 bytes) includes retained debug information and is not a release CLI size comparison.
-
-### Artifact sizes
-
-| Artifact | Bytes |
-| --- | ---: |
-| Native release CLI (`purrassist-cli`) | 9,757,120 |
-| `purrassist-core` `wasm32-wasip1` (`portable-core`) | 1,998,277 |
-| `purrassist-syntax` `wasm32-wasip1` (`portable-syntax`) | 5,223,153 |
-| `purrassist-host` `wasm32-wasip1` (`portable-host`) | 1,467,114 |
-| `wasm-harness` `wasm32-unknown-unknown` | 1,937,506 |
-
 ### Cold build
 
-The recorded release CLI cold build took 27.364 seconds and produced 35 compiler artifacts, with 0 reused artifacts. Both compiler wrapper layers were disabled; the target and intermediate directories were new and empty. Registry sources and OS page caches remained available. The resulting executable is 9,668,520 bytes with SHA-256 `24ea7dd813a878666c1d304740ec49a43a5ef0c045b071d135055b8d6f3aa053`.
+The recorded release CLI cold build took 27.364 seconds and produced 35 compiler artifacts, with 0 reused artifacts. Both compiler wrapper layers were disabled; the target and intermediate directories were new and empty. Registry sources and OS page caches remained available. The resulting executable has SHA-256 `24ea7dd813a878666c1d304740ec49a43a5ef0c045b071d135055b8d6f3aa053`.
 
 ### Latency workload samples (selected)
 
@@ -1224,9 +1202,6 @@ checks that output instead.
 
 Rationale per category:
 
-- `artifact_sizes`: roughly 2x the measured byte size in this document's
-  "Artifact sizes" table, generous enough to absorb ordinary dependency and
-  toolchain growth between releases without masking an accidental doubling.
 - `cold_build_elapsed_ns`: 180 seconds. This limits the uncached release
   CLI compilation and link measured with empty build directories; 180s is a
   generous ceiling for an actually cold compile of this workspace's six
@@ -1244,13 +1219,6 @@ Rationale per category:
 
 ```json
 {
-  "artifact_sizes": {
-    "native_cli_bytes": 20000000,
-    "purrassist_core_wasm32_wasip1_bytes": 4000000,
-    "purrassist_syntax_wasm32_wasip1_bytes": 10000000,
-    "purrassist_host_wasm32_wasip1_bytes": 3000000,
-    "wasm_harness_wasm32_unknown_unknown_bytes": 4000000
-  },
   "cold_build_elapsed_ns": 180000000000,
   "latency_workloads": {
     "median_ns": 10000000,
@@ -1293,13 +1261,12 @@ measurement framework.
 The report records commit `66b3756776a072af1889596ae98a5faa5a50cea6` with a dirty documentation
 tree and guarded engine SHA-256
 `132196375955100e6f289a314d3f51cb1f41bf9e8d2d530fb5f1926f95d96a83`. Its nine profiles,
-25 core latency cases, five syntax cases, six recovery cases and five artifact
-sizes passed the unchanged documented limits. Strict native, Memcheck and Massif
+25 core latency cases, five syntax cases and six recovery cases passed the
+documented limits. Strict native, Memcheck and Massif
 startup/output checks completed, including every workload's correctness checks.
 
 The framework's cold CLI build took 21.671 seconds, built
-35 artifacts and reused 0. Its executable is 9,694,344 bytes
-with SHA-256 `f6621c50e03cc55e0cbf24fe715052eb4b9ebdfc19cfd24a0a230ffbd9be3190`. This is an
+35 artifacts and reused 0. Its executable has SHA-256 `f6621c50e03cc55e0cbf24fe715052eb4b9ebdfc19cfd24a0a230ffbd9be3190`. This is an
 observation of the recorded machine and build conditions, not a speedup claim.
 
 ## Governed JSON emission

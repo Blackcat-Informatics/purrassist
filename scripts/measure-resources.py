@@ -12,7 +12,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
 import time
 import urllib.request
@@ -66,7 +65,6 @@ def build(command, target, directory):
         'fresh_artifacts': sum(bool(event['fresh']) for event in artifacts),
         'built_artifacts': sum(not event['fresh'] for event in artifacts),
         'profile': selected[0]['profile'],
-        'executable_bytes': binary.stat().st_size,
         'executable_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
     }
 
@@ -224,88 +222,7 @@ def runtime(binary, portable):
 
 
 def identity(path):
-    return {'bytes': path.stat().st_size, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
-
-
-def wasi_environment():
-    """C sysroot environment for cross-compiling tree-sitter's C grammars to
-    wasm32-wasip1. A small, deliberately duplicated copy of
-    scripts/check-wasm.py's function of the same name: that script runs its
-    full build/execute/compare check as top-level code the moment it is
-    imported, so importing it here would trigger that whole check as a side
-    effect instead of reusing just this helper."""
-    manifest = json.loads((ROOT / 'vendor/wasi.json').read_text())
-    cache = ROOT / '.cache/wasi'
-    cache.mkdir(parents=True, exist_ok=True)
-    archive = cache / 'sysroot.tar.gz'
-    if not archive.exists():
-        with urllib.request.urlopen(manifest['url']) as response:
-            archive.write_bytes(response.read())
-    if hashlib.sha256(archive.read_bytes()).hexdigest() != manifest['sha256']:
-        raise SystemExit('WASI sysroot archive digest mismatch')
-    sysroot = cache / manifest['directory']
-    # Re-extract verified bytes; never trust an old, independently modified tree.
-    with tarfile.open(archive) as source:
-        source.extractall(cache, filter='data')
-    environment = os.environ.copy()
-    for name in ('CFLAGS', 'CXXFLAGS', 'TARGET_CFLAGS', 'TARGET_CXXFLAGS',
-                 'CFLAGS_wasm32-wasip1', 'CXXFLAGS_wasm32-wasip1'):
-        environment.pop(name, None)
-    for name in ('CFLAGS_wasm32_wasip1', 'CXXFLAGS_wasm32_wasip1'):
-        environment[name] = f'--sysroot={sysroot}'
-    return environment
-
-
-def cargo_json_artifacts(command, environment=None):
-    result = subprocess.run(command + ['--message-format=json'], cwd=ROOT, text=True,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment, check=False)
-    if result.returncode != 0:
-        raise SystemExit(f'{" ".join(command)} failed:\n{result.stderr}')
-    events = (json.loads(line) for line in result.stdout.splitlines())
-    return [event for event in events if event.get('reason') == 'compiler-artifact']
-
-
-def example_artifact(package, target=None, environment=None):
-    """Build the fixed transcript for the logical core/syntax/host engine.
-    Core's fixture belongs to the unpublished wasm-harness Cargo library;
-    syntax and host own their examples. Keep the tested-engine report keys.
-    """
-    example = 'portable-' + package.removeprefix('purrassist-')
-    cargo_package = 'wasm-harness' if package == 'purrassist-core' else package
-    command = ['cargo', 'build', '-p', cargo_package, '--example', example, '--release', '--locked']
-    if target:
-        command += ['--target', target]
-    artifacts = cargo_json_artifacts(command, environment)
-    paths = [event['executable'] for event in artifacts
-             if event.get('executable') and event['target']['name'] == example]
-    if len(paths) != 1:
-        raise SystemExit(f'expected one portable artifact for {package}, got {paths}')
-    return Path(paths[0])
-
-
-def wasm_harness_artifact():
-    command = ['cargo', 'build', '-p', 'wasm-harness', '--target', 'wasm32-unknown-unknown',
-               '--release', '--locked']
-    artifacts = cargo_json_artifacts(command)
-    paths = [filename for event in artifacts for filename in (event.get('filenames') or [])
-             if filename.endswith('.wasm')]
-    if len(paths) != 1:
-        raise SystemExit(f'expected one wasm-harness artifact, got {paths}')
-    return Path(paths[0])
-
-
-def artifact_sizes(native_cli):
-    """Native CLI plus wasm32-wasip1 core/syntax/host example modules and
-    the wasm32-unknown-unknown wasm-harness module, byte sizes and SHA-256
-    identities."""
-    sizes = {'native_cli': identity(native_cli)}
-    wasi_packages = {'purrassist-syntax', 'purrassist-host'}
-    for package in ('purrassist-core', 'purrassist-syntax', 'purrassist-host'):
-        environment = wasi_environment() if package in wasi_packages else None
-        path = example_artifact(package, target='wasm32-wasip1', environment=environment)
-        sizes[f'{package.replace("-", "_")}_wasm32_wasip1'] = identity(path)
-    sizes['wasm_harness_wasm32_unknown_unknown'] = identity(wasm_harness_artifact())
-    return sizes
+    return {'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
 def bench_executable(package, bench, directory):
@@ -455,7 +372,7 @@ def main():
             raise ValueError('engine source inputs changed during profiler preflight')
         print('Native, Memcheck and Massif startup/output/log checks passed; no measurement report written', flush=True)
         return
-    cli_binary, cli_build = build(['cargo', 'build', '-p', 'purrassist-cli', '--release', '--locked'], 'purrassist', directory)
+    _, cli_build = build(['cargo', 'build', '-p', 'purrassist-cli', '--release', '--locked'], 'purrassist', directory)
     cases = subprocess.check_output([str(binary), '--list'], text=True).splitlines()
     if not cases or len(set(cases)) != len(cases) or any(not re.fullmatch(r'[a-z_]+', case) for case in cases):
         raise ValueError('invalid workload inventory')
@@ -470,8 +387,6 @@ def main():
     for case in cases:
         print(f'Profiling {case}', flush=True)
         report['workloads'].append(profile(executable, case, directory, environment))
-    print('Measuring native CLI and wasm artifact sizes', flush=True)
-    report['artifact_sizes'] = artifact_sizes(cli_binary)
     print('Running core latency workloads', flush=True)
     report['latency_workloads'] = run_latency_bench('purrassist-core', directory)
     print('Running syntax latency workloads', flush=True)
