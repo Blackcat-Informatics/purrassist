@@ -900,6 +900,13 @@ resolution  = one unit per member, option, alternative and validation step,
             + (unparsed-markup scan: one unit per content byte read)
 ```
 
+Pythonic's finite-state framing and canonical decimal literal path scan
+linearly. Converting a binary, octal or hexadecimal integer with `n` digits
+to exact decimal uses O(n²) digit work, admitted before each multiplication
+pass. This typed conversion is additional codec work, outside the grammar's
+finite-state scan bound below. A finite caller budget can stop it explicitly;
+there is no universal linear completion claim for nondecimal Python integers.
+
 The unparsed-markup scan (`tool_call::detect_unparsed`) reads each reading's
 content once and, at each anchor, a bounded window (256 bytes, 64 for
 Harmony's message tokens); after a hit it resumes at the hit's end.
@@ -989,7 +996,7 @@ every value below to equal the code's.
 | `EXTRACT_PROSE` | 2 | Repair cost: prose dropped inside a call |
 | `EXTRACT_FENCE` | 1 | Repair cost: a fence marker dropped inside a call |
 | `UNDECLARED_NAME` | 4 | Selection weight of a call whose name denotes no declared tool |
-| `RECOVER_WORK_PER_BYTE` | 208 | `Work` per output byte `ToolRecoveryRequest::sized` adds |
+| `RECOVER_WORK_PER_BYTE` | 224 | `Work` per output byte `ToolRecoveryRequest::sized` adds |
 | `RECOVER_SCRATCH_PER_BYTE` | 368 | `ScratchBytes` per output byte `ToolRecoveryRequest::sized` adds |
 | `RECOVER_EVIDENCE_BYTES_PER_ENTRY` | 7 | `ToolRecoveryRequest::sized` adds `⌈n / 7⌉` `EvidenceEntries` |
 | `RECOVER_OPENER_CANDIDATE_DIVISOR` | 8 | `ToolRecoveryRequest::sized` adds `⌈preset.candidates / 8⌉` `Candidates` per call opener |
@@ -1008,10 +1015,11 @@ every value below to equal the code's.
 | `mistral-v11.v1` | 136 | 136 |
 | `mistral-v3.v1` | 2228 | 2228 |
 | `openai-tool-calls.v1` | 6665 | 6665 |
+| `pythonic.v1` | 129 | 129 |
 | `qwen3-coder-xml.v1` | 971 | 971 |
 
-The default request allows all thirteen built-in dialects.
-Its bound is `(2 + 1 + 30063)·n + 8·E = 30066·n + 8·E`.
+The default request allows all fourteen built-in dialects.
+Its framing bound is `(2 + 1 + 30192)·n + 8·E = 30195·n + 8·E`.
 
 The `kv-pairs` codec scans argument fields forward with a bounded tag
 comparison at each byte. Typed JSON boundaries use the native JSON cursor,
@@ -1036,7 +1044,7 @@ open at `{` and commit only on call-shaped evidence, each count every `{`). Then
 preset, the output length `n`, and the constants above:
 
 ```text
-work             = preset.work          + RECOVER_WORK_PER_BYTE    · n   (208 per byte)
+work             = preset.work          + RECOVER_WORK_PER_BYTE    · n   (224 per byte)
 scratch_bytes    = preset.scratch_bytes + RECOVER_SCRATCH_PER_BYTE · n   (368 per byte)
 input_bytes      = max(preset.input_bytes, n)
 candidates       = preset.candidates
@@ -1045,9 +1053,9 @@ evidence_entries = preset.evidence_entries
                  + ⌈n / RECOVER_EVIDENCE_BYTES_PER_ENTRY⌉
 ```
 
-The per-byte constants are the measured maximum over the densest markup the
-built-in dialects accept, up to 1 MiB, plus a margin (see "Dense markup"
-below), so output of any measured shape recovers under plain
+The per-byte constants and each preset's fixed allowances form a measured
+sizing recipe (see "Dense markup" below). The supplied shapes through
+1 MiB recover under plain
 `sized(effort, output)`. The budget stays linear in `n`; the published
 worst-case bound `work ≤ (2 + K_LEX + Σ_d K_d)·n + K_ERR·E` above is the
 analytical bound, and `RECOVER_WORK_PER_BYTE` is the measured sizing, not a
@@ -1137,7 +1145,7 @@ allow-list Hermes also attempts the `<tool_call>` and rejects it at the
 `<function=` body, and in that segmentation the bare function element is a
 call attempt of its own, kept until the wrapped call ends (6 of its 17 work
 per byte). All use the
-then-default request (twelve built-in dialects); charging schema
+default request of that capture (the twelve built-in dialects then available); charging schema
 validation's working set left these measurements unchanged, because
 validating one string argument peaks below the recognizer's buffers. The
 constants leave headroom over these fast-path measurements; inputs that need repair
@@ -1182,11 +1190,13 @@ one_mib_dense_markup_fits_published_budget` (`make corpus`; 19 s in a debug
 build) now recovers each of these shapes at 1 MiB under plain
 `sized(Effort::Standard, output)` with the stop `Completed` and every unit
 recovered; `tool_call_cost::dense_markup_fits_published_budget` (`make
-check`) runs the same shapes at 64 KiB. The GLM row uses the current thirteen-dialect request; the other recorded
-rows use the twelve-dialect request before GLM.
+check`) runs the same shapes at 64 KiB. The Pythonic row uses the fourteen-dialect
+request. The GLM row uses the thirteen-dialect request captured before Pythonic;
+the other recorded rows use the twelve-dialect request before GLM.
 
 | Dense shape (1 MiB) | Units | Work per byte | Peak scratch per byte | Evidence per byte |
 | --- | ---: | ---: | ---: | ---: |
+| Pythonic calls | 49,932 | 69.2 | 380.2 | 0.048 |
 | GLM 4.5 calls | 13,107 | 106.0 | 88.8 | 0.012 |
 | Qwen3-Coder XML repeated nested items | 16,911 | 59.4 | 268.3 | 0.065 |
 | Qwen3-Coder XML repeated JSON-array items | 30,838 | 52.9 | 103.6 | 0.000 |
@@ -1207,30 +1217,32 @@ rows use the twelve-dialect request before GLM.
 | Bare JSON calls with empty arguments | 34,952 | 101.4 | 165.6 | 0.033 |
 | Qwen3-Coder XML 1 MiB string (above) | 1 | 17.0 | 11.1 | 0.000 |
 
-Peak scratch per byte falls with size toward these values (a 4 KiB input
-shows up to 325 for DeepSeek-V3 and 143 work for Kimi-K2, which the preset's
-fixed part of the budget covers), and work and peak scratch per byte are
-the same at 64 KiB and 1 MiB. `Work` binds first, then `EvidenceEntries`
-(the preset's flat 65,536 against up to 0.101 entries per byte), then
-`ScratchBytes`. `Candidates` never bind in these shapes (the sized term
-grows with the openers), and `Depth` is not per-byte and is not reached.
+These are measured ratios, not per-input upper bounds. Fixed storage and
+capacity growth can change them at other input lengths. The supplied
+64 KiB and 1 MiB shapes complete under the sized budgets; larger or
+schema-heavy inputs can still exhaust explicitly. For the dense Pythonic
+case, scratch is closer to its budget than Work or evidence storage.
 
-The thirteen-dialect default uses `RECOVER_WORK_PER_BYTE` = 208. Adding
-GLM increases the existing 300-parameter nullable-integer Qwen schema-typing
-case from 2,725,162 to 3,052,372 Work for 10,032 bytes. The Standard preset
-plus 208 Work per byte admits 3,086,656 Work, preserving that case's complete
-result. This measured recipe does not bound arbitrary schema complexity.
-Explicit caller budgets and effort presets are unchanged.
+The fourteen-dialect default uses `RECOVER_WORK_PER_BYTE` = 224. In the
+current implementation, adding Pythonic to the prepared default set changes
+the existing 300-parameter nullable-integer Qwen schema-typing case from
+3,039,693 to 3,162,209 Work for 10,032 bytes. The Standard preset plus
+224 Work per byte admits 3,247,168 Work, preserving that case's complete
+result with 84,959 units remaining. This measured recipe neither bounds
+arbitrary schema complexity nor claims a marginal bound of 16 Work per
+input byte. Explicit caller budgets and effort presets retain their values.
 
-The other constants retain their measured margins:
-`RECOVER_SCRATCH_PER_BYTE` = 368 is 22% over the historical 301.6 of
-DeepSeek-V3, and `RECOVER_EVIDENCE_BYTES_PER_ENTRY` = 7 is 41% over the
-0.101 entries per byte of Qwen3-Coder XML calls. A 1 MiB output carries a
-budget of about 219 million Work, 432 MiB of scratch and 215,000 evidence
+`RECOVER_SCRATCH_PER_BYTE` remains 368. The fixed 64 MiB allowance covers
+the measured Pythonic peak of 380.2 scratch bytes per input byte through
+the supplied 1 MiB case; this does not qualify larger Pythonic inputs.
+`RECOVER_EVIDENCE_BYTES_PER_ENTRY` remains 7. A 1 MiB output carries a
+budget of about 236 million Work, 432 MiB of scratch and 215,000 evidence
 entries at `Effort::Standard`. The larger Work allowance also permits more
 computation before pathological input exhausts.
 
-Not covered, by design, and still explicit exhaustions under `sized`:
+Historical work-heavy shapes under the twelve-dialect sized recipe include
+the following explicit exhaustions. These measurements do not assert their
+current counters or termination under the fourteen-dialect recipe:
 
 - Text with no call in it that opens many attempts: a megabyte of `{` charges
   895 work per byte (every `{` may open a Llama 3 JSON, Anthropic `tool_use`

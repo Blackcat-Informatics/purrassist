@@ -261,14 +261,14 @@ pub const UNDECLARED_NAME: u64 = 4;
 /// 10 to 17 units per byte for the built-in dialects' arguments, and 26 for
 /// `OpenAI` stringified arguments. Output that is dense markup costs more:
 /// many small calls or many repeated parameters use the measured bounds in
-/// `docs/RESOURCES.md`, "Dense markup". The thirteen-dialect default also
+/// `docs/RESOURCES.md`, "Dense markup". The fourteen-dialect default also
 /// admits the existing 300-parameter nullable-integer schema-typing case:
-/// 3,052,372 Work for 10,032 bytes, covered by the Standard preset plus
-/// 208 Work per byte. This is a measured sizing recipe, not a universal
+/// 3,162,209 Work for 10,032 bytes, covered by the Standard preset plus
+/// 224 Work per byte. This is a measured sizing recipe, not a universal
 /// bound for arbitrary schemas or repair search.
 ///
 /// [`ToolRecoveryRequest::sized`]: crate::tool_call::ToolRecoveryRequest::sized
-pub const RECOVER_WORK_PER_BYTE: u64 = 208;
+pub const RECOVER_WORK_PER_BYTE: u64 = 224;
 
 /// `ScratchBytes` per output byte that [`ToolRecoveryRequest::sized`] adds
 /// to an effort preset's budget for tool-call recovery.
@@ -278,11 +278,11 @@ pub const RECOVER_WORK_PER_BYTE: u64 = 208;
 /// 8 to 12 bytes per byte on the fast path for the built-in dialects'
 /// arguments, and 45 for `OpenAI` stringified arguments, whose escaped
 /// string is also decoded, recorded as the decoding's replacement, and
-/// parsed again. Dense markup peaks higher: 80 to 293 bytes per byte at
-/// 1 MiB over the built-in dialect set, the most for DeepSeek-V3 sections
-/// (292.8), Qwen3-Coder XML calls (281.6) and repeated nested items (268),
-/// so this constant is that measured maximum plus a margin of about 25%
-/// (see `docs/RESOURCES.md`, "Dense markup").
+/// parsed again. Dense markup peaks higher: the supplied 1 MiB Pythonic
+/// case uses 380.2 scratch bytes per input byte. The preset's fixed 64 MiB
+/// plus this per-byte allowance covers that measured case; larger inputs
+/// remain subject to explicit exhaustion. See `docs/RESOURCES.md`,
+/// "Dense markup", for the measured scope and historical rows.
 ///
 /// [`ToolRecoveryRequest::sized`]: crate::tool_call::ToolRecoveryRequest::sized
 pub const RECOVER_SCRATCH_PER_BYTE: u64 = 368;

@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+# First-party Pythonic grammar; pinned sources and exclusions in its dialect doc.
+grammar "pythonic.v1";
+line-start "[";
+examples-content;
+closer call-end = ")";
+closer list-end = "]";
+name = /[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*/;
+ws = /[ \t\r\n]+/;
+sp = ws;
+layout sp " ";
+element = name:name ws? "(" commit arguments:slot(pythonic, "\x00") call-end;
+call = ("[" | ("<|python_start|>" | "<|python_tag|>") ws? "[") ws? element
+       (ws? "," sp? next element)* ws? list-end;
+result = "<|start_header_id|>ipython<|end_header_id|>\n\n" content:until("<|eot_id|>") "<|eot_id|>";
+json-string = /"([^"\\\x00-\x1F]|\\["\\\/bfnrt]|\\u[0-9A-Fa-f]{4})*"/;
+declaration = "{" ws? "\"name\"" ws? ":" ws? "\"" name:name "\""
+              (ws? "," ws? "\"description\"" ws? ":" content:json-string)?
+              (ws? "," ws? "\"parameters\"" ws? ":" arguments:slot(json, "\x00"))?
+              ws? "}";

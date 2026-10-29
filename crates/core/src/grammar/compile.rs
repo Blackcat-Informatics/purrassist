@@ -23,8 +23,8 @@ use super::cost::K_COMPILE;
 use super::syntax::{Document, PExpr, Statement};
 use super::{
     CallEnd, CaptureKind, ClassId, ClassTerminal, CloserClass, CloserId, CompiledGrammar,
-    DelimiterSet, DelimiterSetId, Expr, ExprChild, ExprItems, GrammarError, Literal, LiteralId,
-    Production, ProductionId, index_u32,
+    DelimiterSet, DelimiterSetId, ExamplePolicy, Expr, ExprChild, ExprItems, GrammarError, Literal,
+    LiteralId, Production, ProductionId, index_u32,
 };
 use crate::contract::saturating_size as size;
 use crate::contract::{
@@ -80,6 +80,8 @@ pub(crate) struct Program {
     pub(crate) start: u32,
     /// The literal instructions reachable from the start without input.
     pub(crate) openers: ScratchVec<u32>,
+    /// Initial opener PCs admitted only at a blank line prefix.
+    pub(crate) line_start_openers: ScratchVec<u32>,
     /// Bytes that can begin an opener (any spelling), as a 256-bit set.
     pub(crate) first: [u64; 4],
     /// The configuration bound (see `CompiledGrammar::configuration_bound`).
@@ -1507,6 +1509,7 @@ fn compile_program(
         insts,
         start,
         openers,
+        line_start_openers: ScratchVec::new(governor),
         first,
         bound,
         committed,
@@ -1657,10 +1660,31 @@ struct Declared<'d> {
     bodies: ScratchVec<Body<'d>>,
     layouts: ScratchVec<Layout<'d>>,
     optional_id: bool,
+    line_start: ScratchVec<(ScratchVec<u8>, usize)>,
+    examples: ExamplePolicy,
     declaration_content: bool,
     json_envelope: bool,
 }
 impl Declared<'_> {
+    fn add_reasoning(
+        &mut self,
+        open: &[u8],
+        close: &[u8],
+        explicit: bool,
+        at: usize,
+        governor: &mut Governor,
+    ) -> Result<(), GrammarError> {
+        for (left, right) in &self.reasoning {
+            if equal(left, open, governor)? && equal(right, close, governor)? {
+                return Err(duplicate(at, "reasoning", governor)?);
+            }
+        }
+        self.reasoning
+            .push((owned_bytes(open, governor)?, owned_bytes(close, governor)?))?;
+        self.explicit_reasoning.push(explicit)?;
+        Ok(())
+    }
+
     fn new(governor: &Governor) -> Self {
         Self {
             reasoning: ScratchVec::new(governor),
@@ -1669,6 +1693,8 @@ impl Declared<'_> {
             bodies: ScratchVec::new(governor),
             layouts: ScratchVec::new(governor),
             optional_id: false,
+            line_start: ScratchVec::new(governor),
+            examples: ExamplePolicy::Recover,
             declaration_content: false,
             json_envelope: false,
         }
@@ -1694,18 +1720,23 @@ fn declare<'d>(
                 explicit,
                 at,
             } => {
-                for (left, right) in &declared.reasoning {
-                    if equal(left, open, builder.governor)?
-                        && equal(right, close, builder.governor)?
-                    {
-                        return Err(duplicate(*at, "reasoning", builder.governor)?);
+                declared.add_reasoning(open, close, *explicit, *at, builder.governor)?;
+            }
+            Statement::LineStart { opener, at } => {
+                for (prior, _) in &declared.line_start {
+                    if equal(prior, opener, builder.governor)? {
+                        return Err(duplicate(*at, "line-start", builder.governor)?);
                     }
                 }
-                declared.reasoning.push((
-                    owned_bytes(open, builder.governor)?,
-                    owned_bytes(close, builder.governor)?,
-                ))?;
-                declared.explicit_reasoning.push(*explicit)?;
+                declared
+                    .line_start
+                    .push((owned_bytes(opener, builder.governor)?, *at))?;
+            }
+            Statement::ExamplesContent { at } => {
+                if declared.examples == ExamplePolicy::Content {
+                    return Err(duplicate(*at, "examples-content", builder.governor)?);
+                }
+                declared.examples = ExamplePolicy::Content;
             }
             Statement::OptionalId { at } => {
                 if declared.optional_id {
@@ -2019,6 +2050,37 @@ fn required_production(
     Err(GrammarError::MissingProduction { name })
 }
 
+fn line_start_openers(
+    program: &mut Program,
+    declarations: &[(ScratchVec<u8>, usize)],
+    literals: &[Literal],
+    governor: &mut Governor,
+) -> Result<(), GrammarError> {
+    for (opener, offset) in declarations {
+        let before = program.line_start_openers.len();
+        if !program.start_closure {
+            for &pc in &program.openers {
+                let Inst::Lit { lit, .. } = program.insts[pc as usize] else {
+                    unreachable!("literal opener")
+                };
+                if equal(&literals[lit as usize].bytes, opener, governor)? {
+                    program.line_start_openers.push(pc)?;
+                }
+            }
+        }
+        if before == program.line_start_openers.len() {
+            return Err(GrammarError::InvalidOpener {
+                offset: *offset,
+                production: diagnostic(
+                    "line-start requires an initial literal without preceding captures or effects",
+                    governor,
+                )?,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Resolve, check and compile a parsed document.
 pub(crate) fn compile(
     document: Document,
@@ -2033,6 +2095,8 @@ pub(crate) fn compile(
         bodies,
         layouts: declared_layouts,
         optional_id,
+        line_start,
+        examples,
         declaration_content,
         json_envelope,
     } = declare(&mut builder, document.statements.as_slice())?;
@@ -2079,6 +2143,7 @@ pub(crate) fn compile(
             json_tables(&programs, &mut literals, &closers, &confusables, governor)?;
         programs = source.compile(&literals, &literal_tables, &renames, governor)?;
     }
+    line_start_openers(&mut programs[0], &line_start, &literals, governor)?;
     let longest = longest_literal(
         &literals,
         &literal_tables,
@@ -2105,6 +2170,7 @@ pub(crate) fn compile(
         productions,
         call,
         call_ids,
+        examples,
         declaration_content,
         json_envelope,
         result,

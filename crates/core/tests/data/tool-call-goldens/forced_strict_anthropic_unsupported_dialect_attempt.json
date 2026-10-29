@@ -33,6 +33,58 @@
   },
   "emit": "openai",
   "input": "<tool_call>{\"name\":\"read_file\",\"arguments\":{\"path\":\"a\"}}</tool_call>\n[read_file(path=\"b\")]",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [
+      {
+        "tool": "read_file",
+        "arguments": {
+          "path": "a"
+        },
+        "candidate_dialects": [
+          "hermes.v1"
+        ],
+        "outcome": "resolved",
+        "rules": []
+      },
+      {
+        "tool": "read_file",
+        "arguments": {
+          "path": "b"
+        },
+        "candidate_dialects": [
+          "pythonic.v1"
+        ],
+        "outcome": "unresolved: tool_choice_cardinality: the request's tool choice forces exactly one call and this is not the first",
+        "rules": []
+      }
+    ],
+    "rejected": [],
+    "embedded": [],
+    "content": [
+      "\n"
+    ],
+    "reasoning_text": [],
+    "emitted": {
+      "calls": 0,
+      "skipped": [
+        "call 0: tool_choice_failed",
+        "call 1: unresolved"
+      ]
+    },
+    "failed_validations": [
+      "tool_choice=forced[exactly-one]:read_file"
+    ],
+    "ledger_rules": []
+  },
   "outcome": "resolved",
   "stopped": "completed",
   "finish": "unresolved",
@@ -61,7 +113,7 @@
         69,
         90
       ],
-      "dialect": null,
+      "dialect": "pythonic.v1",
       "candidate_dialects": [],
       "reason": "UnsupportedDialect { family: Pythonic }",
       "raw": "[read_file(path=\"b\")]"

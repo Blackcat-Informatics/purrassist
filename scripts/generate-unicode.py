@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 """Generate Unicode 17 data tables; explicit fetch, checked against a frozen manifest.
 
-Single source of truth for every Unicode-derived table `purrassist-core` uses:
+Generate the normalization, pattern and IDNA Unicode tables `purrassist-core` uses:
 normalization/case folding/General_Category (`crates/core/src/text/unicode_data.rs`),
 UTS #39 confusables (same file), Script/Script_Extensions/ECMA-262 binary
 properties (`crates/core/src/pattern/unicode_data.rs`), and the IDNA/UTS-46
@@ -489,10 +489,13 @@ idna_output.write_text('\n'.join(idna_out))
 
 for path in (text_output, pattern_output, idna_output):
     subprocess.run(['rustfmt', '--edition', '2024', str(path)], check=True, cwd=ROOT)
-(ROOT / 'vendor/unicode/generated.json').write_text(json.dumps({
+generated_path = ROOT / 'vendor/unicode/generated.json'
+generated = json.loads(generated_path.read_text())
+generated.update({
     str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
     for path in (text_output, pattern_output, idna_output)
-}, indent=2) + '\n')
+})
+generated_path.write_text(json.dumps(generated, indent=2) + '\n')
 print(
     f'generated {len(decompositions)} decompositions, {len(compositions)} compositions, '
     f'{len(folds)} folds, {len(confusables)} confusables, {len(script_names)} scripts, '

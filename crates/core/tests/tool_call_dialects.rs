@@ -241,6 +241,7 @@ fn all_registered_dialects_have_anchor_fixtures() {
             "mistral-v11.v1",
             "mistral-v3.v1",
             "openai-tool-calls.v1",
+            "pythonic.v1",
             "qwen3-coder-xml.v1"
         ]
     );
@@ -483,6 +484,51 @@ fn assert_anthropic_block(raw: &str, call: &RawCall, file: &str) {
     );
 }
 
+fn pythonic_literal(raw: &str) -> Node {
+    use purrassist_core::grammar::codec::{Codec, CodecContext, CodecEnd, PythonicCodec};
+    let body = format!("v={raw}");
+    let mut governor = Governor::new(Budget::default());
+    PythonicCodec::begin(0, &mut governor)
+        .expect("literal codec")
+        .finish(
+            body.as_bytes(),
+            0..body.len(),
+            CodecEnd::Delimited,
+            CodecContext::default(),
+            &mut governor,
+        )
+        .expect("literal budget")
+        .expect("native Python literal")
+        .tree
+        .root
+        .get("v")
+        .expect("literal value")
+        .clone()
+}
+
+fn assert_leaf_source(value: &Node, raw: &str, origin: ArgOrigin, context: &str) {
+    match origin {
+        ArgOrigin::Pythonic => {
+            let parsed = pythonic_literal(raw);
+            assert!(parsed.equivalent(value), "{context}");
+            assert_eq!(parsed.to_json(), value.to_json(), "{context}");
+        }
+        ArgOrigin::Json => {
+            let parsed = json::parse(raw).expect("leaf JSON");
+            assert!(parsed.equivalent(value), "{context}");
+            assert_eq!(parsed.to_json(), value.to_json(), "{context}");
+        }
+        ArgOrigin::XmlText | ArgOrigin::Raw => {
+            assert_eq!(Some(raw), value.as_str(), "{context}");
+        }
+        ArgOrigin::StringifiedJson => {
+            let parsed = json::parse(&unescape(raw)).expect("escaped leaf JSON");
+            assert!(parsed.equivalent(value), "{context}");
+            assert_eq!(parsed.to_json(), value.to_json(), "{context}");
+        }
+    }
+}
+
 #[test]
 fn ir_spans_slice_back_to_source() {
     for dialect in DialectId::BUILT_IN {
@@ -545,6 +591,13 @@ fn ir_spans_slice_back_to_source() {
                     DialectId::MistralV3 | DialectId::Llama3Json | DialectId::BareJson
                 ) {
                     assert_json_call_object(&dialect, raw, call, &fixture.file);
+                } else if dialect == DialectId::Pythonic {
+                    // A grouped call span can include its list framing and separator.
+                    assert!(
+                        raw.contains('(') && raw.contains(')'),
+                        "{}: {raw:?}",
+                        fixture.file
+                    );
                 } else {
                     assert!(raw.starts_with("<tool_call>"), "{}: {raw:?}", fixture.file);
                     assert!(raw.ends_with("</tool_call>"), "{}: {raw:?}", fixture.file);
@@ -570,21 +623,7 @@ fn ir_spans_slice_back_to_source() {
                         .expect("leaf pointer resolves");
                     let raw = &source[leaf.raw.clone()];
                     let context = format!("{} {} {raw:?}", fixture.file, leaf.pointer);
-                    match leaf.origin {
-                        ArgOrigin::Json => {
-                            let parsed = json::parse(raw).expect("leaf JSON");
-                            assert!(parsed.equivalent(value), "{context}");
-                            assert_eq!(parsed.to_json(), value.to_json(), "{context}");
-                        }
-                        ArgOrigin::XmlText | ArgOrigin::Raw => {
-                            assert_eq!(Some(raw), value.as_str(), "{context}");
-                        }
-                        ArgOrigin::StringifiedJson => {
-                            let parsed = json::parse(&unescape(raw)).expect("escaped leaf JSON");
-                            assert!(parsed.equivalent(value), "{context}");
-                            assert_eq!(parsed.to_json(), value.to_json(), "{context}");
-                        }
-                    }
+                    assert_leaf_source(value, raw, leaf.origin, &context);
                 }
             }
         }

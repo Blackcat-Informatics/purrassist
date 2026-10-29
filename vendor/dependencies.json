@@ -139,6 +139,13 @@
       "license": "Unicode-3.0",
       "manifest": "vendor/unicode/manifest.json",
       "justification": "First-party data for the Task 7 idn-hostname format validator's RFC 5893 Bidi rule and RFC 5892 Appendix A CONTEXTJ rule; generated lookup tables only, no third-party executable code."
+    },
+    {
+      "name": "Unicode character names and name aliases for Python literal escapes",
+      "version": "17.0.0",
+      "license": "Unicode-3.0",
+      "manifest": "vendor/unicode/python-names.json",
+      "justification": "Native Python named-character escape decoding requires canonical names, algorithmic names and aliases; generated static data only, with existing Unicode notice retained."
     }
   ],
   "test_data": [

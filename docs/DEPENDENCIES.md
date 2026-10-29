@@ -46,6 +46,12 @@ requires its normal and build closure to be empty and its dev closure to reach
 only `purrassist-core`, and scans `crates/derive/src` for ambient access.
 `purrassist-core` never depends on `purrassist-derive`.
 
+Pythonic literal decoding uses Unicode 17.0.0 character names and aliases.
+`scripts/generate-python-names.py` derives the static lookup from the pinned
+UnicodeData and NameAliases sources in `vendor/unicode/python-names.json`;
+the existing Unicode-3.0 notice is retained. This includes algorithmic Hangul
+and ideograph names and adds no third-party runtime code.
+
 Standards data remains third-party material. Unicode tables and conformance
 fixtures retain the Unicode-3.0 license. UTS #39 confusables data (Unicode
 17.0.0, published alongside the UCD release starting with that version) is

@@ -26,6 +26,7 @@
 //! | [`RawCodec`] | `raw` | the verbatim body as one string leaf |
 //! | [`JsonCodec`] | `json` | one JSON value, tolerant of syntax errors; a string holding JSON is decoded as stringified arguments |
 //! | [`KvPairsCodec`] | `kv-pairs` | alternating key/value elements, typed by the declared tool, with verbatim string content |
+//! | [`PythonicCodec`] | `pythonic` | keyword arguments with native Python literals, self-delimited before the call closer |
 //! | [`XmlParamsCodec`] | `xml-params` | `<parameter=NAME>value</parameter>` sequences, typed by the call's declared tool |
 //!
 //! # Context
@@ -76,11 +77,14 @@
 //! ```
 mod json;
 mod kv;
+mod python;
+mod python_names;
 mod raw;
 mod xml;
 
 pub use json::JsonCodec;
 pub use kv::KvPairsCodec;
+pub use python::PythonicCodec;
 pub use raw::RawCodec;
 pub use xml::XmlParamsCodec;
 
@@ -93,6 +97,14 @@ use super::edit::{EditOperator, MarkupEdit};
 use crate::contract::{Governor, Resource, ScratchVec, StopReason, saturating_size};
 use crate::tool_call::{ArgTree, ArgumentShape};
 use core::ops::Range;
+
+/// Canonical literal emission behind the codec module's crate-facing boundary.
+pub(crate) fn print_pythonic(
+    arguments: &crate::json::Node,
+    governor: &mut Governor,
+) -> Result<String, crate::grammar::print::PrintError> {
+    python::print(arguments, governor)
+}
 
 /// The closed set of argument codecs a slot can name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -112,16 +124,19 @@ pub enum CodecKind {
     XmlParams,
     /// GLM key/value elements, typed by the declared tool (see [`KvPairsCodec`]).
     KvPairs,
+    /// Native Python keyword arguments and literal values.
+    Pythonic,
 }
 
 impl CodecKind {
     /// Every codec, in declaration order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Raw,
         Self::Json,
         Self::JsonArgs,
         Self::XmlParams,
         Self::KvPairs,
+        Self::Pythonic,
     ];
 
     /// The slot name this codec is registered under.
@@ -139,6 +154,7 @@ impl CodecKind {
             Self::JsonArgs => "json-args",
             Self::XmlParams => "xml-params",
             Self::KvPairs => "kv-pairs",
+            Self::Pythonic => "pythonic",
         }
     }
 
@@ -158,6 +174,7 @@ impl CodecKind {
             "json-args" => Some(Self::JsonArgs),
             "xml-params" => Some(Self::XmlParams),
             "kv-pairs" => Some(Self::KvPairs),
+            "pythonic" => Some(Self::Pythonic),
             _ => None,
         }
     }
@@ -179,6 +196,7 @@ impl CodecKind {
             Self::JsonArgs => CodecState::Json(Box::new(JsonCodec::begin_arguments(at, governor)?)),
             Self::XmlParams => CodecState::XmlParams(XmlParamsCodec::begin(at, governor)?),
             Self::KvPairs => CodecState::KvPairs(KvPairsCodec::begin(at, governor)?),
+            Self::Pythonic => CodecState::Pythonic(PythonicCodec::begin(at, governor)?),
         })
     }
 }
@@ -205,6 +223,11 @@ pub enum CodecStep {
 /// [`ArgTree::unresolved`](crate::tool_call::ArgTree::unresolved)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CodecFault {
+    /// Pythonic calls require keyword arguments; a positional argument was found.
+    PythonicPositionalRejected {
+        /// Original source offset of the positional argument.
+        at: usize,
+    },
     /// The body is not well-formed UTF-8; `at` is the absolute offset of
     /// the first byte of the malformed sequence. No built-in codec
     /// produces it: they read malformed bytes as U+FFFD and record
@@ -557,6 +580,8 @@ pub(crate) enum CodecState {
     XmlParams(XmlParamsCodec),
     /// A [`KvPairsCodec`].
     KvPairs(KvPairsCodec),
+    /// A [`PythonicCodec`].
+    Pythonic(PythonicCodec),
 }
 
 impl CodecState {
@@ -567,6 +592,7 @@ impl CodecState {
             Self::Json(_) => CodecKind::Json,
             Self::XmlParams(_) => CodecKind::XmlParams,
             Self::KvPairs(_) => CodecKind::KvPairs,
+            Self::Pythonic(_) => CodecKind::Pythonic,
         }
     }
 
@@ -574,7 +600,7 @@ impl CodecState {
     pub(crate) const fn boxed_bytes(&self) -> u64 {
         match self {
             Self::Json(_) => super::cost::JSON_CODEC_STATE,
-            Self::Raw(_) | Self::XmlParams(_) | Self::KvPairs(_) => 0,
+            Self::Raw(_) | Self::XmlParams(_) | Self::KvPairs(_) | Self::Pythonic(_) => 0,
         }
     }
 
@@ -583,7 +609,7 @@ impl CodecState {
     pub(crate) const fn in_string(&self) -> bool {
         match self {
             Self::Json(codec) => codec.in_string(),
-            Self::Raw(_) | Self::XmlParams(_) | Self::KvPairs(_) => false,
+            Self::Raw(_) | Self::XmlParams(_) | Self::KvPairs(_) | Self::Pythonic(_) => false,
         }
     }
 
@@ -594,6 +620,7 @@ impl CodecState {
         match self {
             Self::Json(codec) => codec.complete_end(),
             Self::Raw(_) | Self::XmlParams(_) | Self::KvPairs(_) => None,
+            Self::Pythonic(codec) => codec.complete_end(),
         }
     }
 
@@ -608,6 +635,7 @@ impl CodecState {
             Self::Json(codec) => codec.feed(byte, at, governor),
             Self::XmlParams(codec) => codec.feed(byte, at, governor),
             Self::KvPairs(codec) => codec.feed(byte, at, governor),
+            Self::Pythonic(codec) => codec.feed(byte, at, governor),
         }
     }
 
@@ -624,6 +652,7 @@ impl CodecState {
             Self::Json(codec) => codec.finish(body, span, end, context, governor),
             Self::XmlParams(codec) => codec.finish(body, span, end, context, governor),
             Self::KvPairs(codec) => codec.finish(body, span, end, context, governor),
+            Self::Pythonic(codec) => codec.finish(body, span, end, context, governor),
         }
     }
 }

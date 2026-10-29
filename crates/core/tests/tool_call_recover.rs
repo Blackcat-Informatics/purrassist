@@ -906,13 +906,13 @@ fn deterministic_pinned_digest() {
 }
 
 const PINNED_DIGEST: &str =
-    "sha256:7be0b6f575e421fea511444427c4c0656ee65beb8aa9fa9d4e18c36141a84a3b";
+    "sha256:af701c4390904e836465fd5ef4c5173071369bb0ae482fbc3babdab8f2af3672";
 const PINNED_PREFIX_DIGEST: &str =
-    "sha256:5be8a1f19af7f94407524520e1879e1edfb72e5364bef57d5328bc5ef66b1da3";
+    "sha256:5583cdddfcf92fcee0d019be54512f3247cd4c4d844071af38f4c03f3d83ac41";
 const PINNED_AMBIGUOUS_DIGEST: &str =
-    "sha256:3046e92b9058e96101f641efbec6c293ab1a4b93a4d713853b0acd0470706a53";
+    "sha256:1a4a41f4b969fe2ab429f15b5c231d7afbbc26827b2ca678a6981ff1a3130efe";
 const PINNED_PREFIX_AMBIGUOUS_DIGEST: &str =
-    "sha256:30f8461da92db822420df45995830ae7a6aaf1dca2c15e2dfca6fd4b140327c8";
+    "sha256:70904369a6eb42ab4b5cecdd6a8e18666994f5a1a4721bf6997a687314f7817d";
 
 #[test]
 fn invalid_utf8_is_loss_and_bytes_retained() {
@@ -1776,7 +1776,7 @@ fn strict_forced_counts_rejected_attempts_of_any_reason() {
     let result = tools.recover(
         output.as_bytes(),
         &ToolRecoveryRequest::default().tool_choice(anthropic),
-        DialectSet::built_in(),
+        &hermes_only,
     );
     let calls = value(&result);
     assert!(matches!(

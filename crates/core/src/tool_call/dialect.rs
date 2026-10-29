@@ -109,6 +109,8 @@ pub enum DialectId {
     /// `bare-json.v1`: unwrapped JSON call objects, alone, in prose, in a
     /// code fence, or in an array.
     BareJson,
+    /// `pythonic.v1`: Python literal keyword calls inside a list.
+    Pythonic,
     /// A caller-compiled grammar.
     Custom(Arc<CompiledGrammar>),
 }
@@ -178,6 +180,9 @@ static OPENAI_TOOL_CALLS: BuiltIn = BuiltIn::new(
     include_str!("dialects/openai-tool-calls.v1.grammar"),
 );
 
+static PYTHONIC: BuiltIn =
+    BuiltIn::new("pythonic.v1", include_str!("dialects/pythonic.v1.grammar"));
+
 impl DialectId {
     /// Every built-in dialect, ordered by id.
     ///
@@ -199,11 +204,12 @@ impl DialectId {
     ///         "mistral-v11.v1",
     ///         "mistral-v3.v1",
     ///         "openai-tool-calls.v1",
+    ///         "pythonic.v1",
     ///         "qwen3-coder-xml.v1",
     ///     ]
     /// );
     /// ```
-    pub const BUILT_IN: [Self; 13] = [
+    pub const BUILT_IN: [Self; 14] = [
         Self::AnthropicToolUse,
         Self::BareJson,
         Self::DeepSeekV31,
@@ -216,6 +222,7 @@ impl DialectId {
         Self::MistralV11,
         Self::MistralV3,
         Self::OpenAiToolCalls,
+        Self::Pythonic,
         Self::Qwen3CoderXml,
     ];
 
@@ -230,6 +237,7 @@ impl DialectId {
     const fn built_in(&self) -> Option<&'static BuiltIn> {
         match self {
             Self::Qwen3CoderXml => Some(&QWEN3_CODER_XML),
+            Self::Pythonic => Some(&PYTHONIC),
             Self::AnthropicToolUse => Some(&ANTHROPIC_TOOL_USE),
             Self::DeepSeekV31 => Some(&DEEPSEEK_V31),
             Self::DeepSeekV3 => Some(&DEEPSEEK_V3),
@@ -276,6 +284,7 @@ impl DialectId {
     pub fn id(&self) -> &str {
         match self {
             Self::Qwen3CoderXml => QWEN3_CODER_XML.id,
+            Self::Pythonic => PYTHONIC.id,
             Self::AnthropicToolUse => ANTHROPIC_TOOL_USE.id,
             Self::DeepSeekV31 => DEEPSEEK_V31.id,
             Self::DeepSeekV3 => DEEPSEEK_V3.id,
@@ -319,6 +328,7 @@ impl DialectId {
     pub fn grammar(&self) -> &CompiledGrammar {
         match self {
             Self::Qwen3CoderXml => QWEN3_CODER_XML.grammar(),
+            Self::Pythonic => PYTHONIC.grammar(),
             Self::AnthropicToolUse => ANTHROPIC_TOOL_USE.grammar(),
             Self::DeepSeekV31 => DEEPSEEK_V31.grammar(),
             Self::DeepSeekV3 => DEEPSEEK_V3.grammar(),

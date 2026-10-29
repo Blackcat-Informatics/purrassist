@@ -136,6 +136,13 @@ pub(crate) enum Statement {
         text: ScratchVec<u8>,
         at: usize,
     },
+    LineStart {
+        opener: ScratchVec<u8>,
+        at: usize,
+    },
+    ExamplesContent {
+        at: usize,
+    },
     OptionalId {
         at: usize,
     },
@@ -162,8 +169,10 @@ pub(crate) struct Document {
     pub(crate) statements: ScratchVec<Statement>,
 }
 
-pub(crate) const KEYWORDS: [&str; 13] = [
+pub(crate) const KEYWORDS: [&str; 15] = [
     "grammar",
+    "line-start",
+    "examples-content",
     "optional-id",
     "declaration-content",
     "json-envelope",
@@ -609,6 +618,11 @@ impl Parser<'_, '_> {
                     at: name_at,
                 }
             }
+            "line-start" => Statement::LineStart {
+                opener: self.string()?.0,
+                at,
+            },
+            "examples-content" => Statement::ExamplesContent { at },
             "optional-id" => Statement::OptionalId { at },
             "declaration-content" => Statement::DeclarationContent { at },
             "json-envelope" => Statement::JsonEnvelope { at },
