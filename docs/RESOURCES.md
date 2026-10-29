@@ -256,8 +256,12 @@ when publishing an ordinary Node. Syntax failures carry allocation-free descript
 until the final JSON or schema diagnostic is published. Manually constructed,
 cloned or mutated Nodes and tolerant parsing remain outside this ownership path.
 Keyword and vocabulary validation admit actual lookup, duplicate index, numeric
-scan and diagnostic work. The conservative legacy compiler storage allowance
-remains separate; a failed compilation need not return total scratch to zero. Reference decoding reserves known buffer bounds,
+scan and diagnostic work. Cold compilation no longer charges a spelling-based
+permanent storage estimate. Successful schema drop and resource refusal release
+the covered owners completely. Pattern syntax diagnostics stay scratch-owned
+while schema compilation adds its context, so refusal during outer formatting
+releases the intermediate message as well. Only final published JSON, pattern
+or schema diagnostic buffers retain their documented output admission. Reference decoding reserves known buffer bounds,
 and string append/formatting charges existing-byte relocation when capacity grows.
 The public owned unsupported-vocabulary output remains outside governed construction;
 recovery borrows and traverses the retained metadata under its caller's governor.

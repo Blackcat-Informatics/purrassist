@@ -7,7 +7,7 @@ use super::{index, reference};
 use crate::contract::Resource;
 use crate::contract::format_scratch_governed;
 use crate::json::{Node, Value};
-use crate::pattern::{Pattern, PatternCompileError};
+use crate::pattern::{OwnedPatternCompileError, Pattern};
 use crate::{Governor, ScratchString, ScratchVec};
 
 pub(super) fn walk(
@@ -65,7 +65,8 @@ fn walk_at(
         pointer,
         base: parent_base,
     } = site;
-    admit_location(node, route, pointer, parent_base, context)?;
+    context.charge(Resource::Depth, route.len())?;
+    reference::work(context.governor, 1)?;
     if context.initial_routes.is_none()
         && let Some(id) = index
             .by_route
@@ -1091,49 +1092,17 @@ fn compile_pattern(
     context: &mut Context<'_>,
 ) -> Result<Pattern, CompilationError> {
     // Charged precisely, against the schema's own shared governor, by
-    // `compile_governed` itself; a separate flat precharge here would either
+    // `compile_owned` itself; a separate flat precharge here would either
     // double-count or under-bound the pattern's real chars/AST allocation.
-    match Pattern::compile_governed(pattern, context.governor) {
+    match Pattern::compile_owned(pattern, context.governor) {
         Ok(pattern) => Ok(pattern),
-        Err(PatternCompileError::Syntax(error)) => {
+        Err(OwnedPatternCompileError::Syntax(error)) => {
             Err(fail.error(format_args!("{error}"), context.governor))
         }
-        Err(PatternCompileError::Resource(reason)) => Err(CompilationError::Resource(reason)),
+        Err(OwnedPatternCompileError::Resource(reason)) => Err(CompilationError::Resource(reason)),
     }
 }
 
-fn admit_location(
-    node: &Node,
-    route: &[usize],
-    pointer: &str,
-    parent_base: &str,
-    context: &mut Context<'_>,
-) -> Result<(), CompilationError> {
-    context.charge(Resource::Depth, route.len())?;
-    reference::work(context.governor, 1)?;
-    // Preserve the separate conservative compiler storage allowance. Parsed
-    // documents own their actual buffers; preparation admits actual work.
-    let mut spelling = 1usize;
-    if let Value::Object(members) = &node.value {
-        spelling = 0;
-        for member in members {
-            reference::work(context.governor, 1)?;
-            spelling = spelling
-                .saturating_add(member.key.len())
-                .saturating_add(member.value.as_str().map_or(0, str::len))
-                .saturating_add(1);
-        }
-    }
-    context.charge(
-        Resource::ScratchBytes,
-        spelling
-            .saturating_mul(16)
-            .saturating_add(512)
-            .saturating_add(pointer.len().saturating_mul(8))
-            .saturating_add(parent_base.len().saturating_mul(8)),
-    )?;
-    Ok(())
-}
 fn index_error(
     base: &str,
     pointer: &str,

@@ -15,7 +15,7 @@ use crate::contract::{
     format_scratch_governed, saturating_size as size,
 };
 
-use super::{PatternCompileError, PatternError};
+use super::{OwnedPatternCompileError, OwnedPatternError};
 
 const NATIVE_DEPTH: u64 = 128;
 
@@ -49,7 +49,7 @@ fn leaf(
     node: Node,
     backtracking: bool,
     governor: &mut Governor,
-) -> Result<Parsed, PatternCompileError> {
+) -> Result<Parsed, OwnedPatternCompileError> {
     admit_height(1, governor)?;
     Ok(Parsed {
         node,
@@ -86,22 +86,22 @@ fn syntax<T>(
     offset: usize,
     message: core::fmt::Arguments<'_>,
     governor: &mut Governor,
-) -> Result<T, PatternCompileError> {
+) -> Result<T, OwnedPatternCompileError> {
     // Fixed formatter dispatch and numeric conversions; variable text scans
     // are admitted at their call sites before constructing these arguments.
     governor.charge(Resource::Work, 128)?;
     let message = format_scratch_governed(message, governor)?;
     governor.check()?;
-    Err(PatternCompileError::Syntax(PatternError {
+    Err(OwnedPatternCompileError::Syntax(OwnedPatternError {
         offset,
-        message: message.into_string(),
+        message,
     }))
 }
 
 pub(super) fn parse(
     source: &str,
     governor: &mut Governor,
-) -> Result<(Node, usize, bool), PatternCompileError> {
+) -> Result<(Node, usize, bool), OwnedPatternCompileError> {
     governor.charge(Resource::Work, size(source.len()))?;
     let mut chars = ScratchVec::new(governor);
     chars.extend(source.chars())?;
@@ -188,7 +188,7 @@ fn class_from_ranges(
     ranges: ScratchVec<(u32, u32)>,
     negated: bool,
     governor: &mut Governor,
-) -> Result<Parsed, PatternCompileError> {
+) -> Result<Parsed, OwnedPatternCompileError> {
     let merged = unicode::merge(ranges, governor)?;
     let resolved = if negated {
         unicode::negate(&merged, governor)?
@@ -208,7 +208,7 @@ fn class_from_ranges(
 fn scan_group_names(
     chars: &[char],
     governor: &mut Governor,
-) -> Result<ScratchVec<NamedGroup>, PatternCompileError> {
+) -> Result<ScratchVec<NamedGroup>, OwnedPatternCompileError> {
     let mut names: ScratchVec<NamedGroup> = ScratchVec::new(governor);
     let mut captures = 0_usize;
     let mut in_class = false;
@@ -307,7 +307,7 @@ fn validate_group_name(
     name: &str,
     offset: usize,
     governor: &mut Governor,
-) -> Result<(), PatternCompileError> {
+) -> Result<(), OwnedPatternCompileError> {
     governor.charge(Resource::Work, size(name.len()).saturating_add(1))?;
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
@@ -398,15 +398,15 @@ impl Parser<'_> {
         self.advance(1)?;
         Ok(Some(character))
     }
-    fn fail<T>(&mut self, message: &str) -> Result<T, PatternCompileError> {
+    fn fail<T>(&mut self, message: &str) -> Result<T, OwnedPatternCompileError> {
         self.fail_at(self.position, message)
     }
-    fn fail_at<T>(&mut self, offset: usize, message: &str) -> Result<T, PatternCompileError> {
+    fn fail_at<T>(&mut self, offset: usize, message: &str) -> Result<T, OwnedPatternCompileError> {
         self.governor
             .charge(Resource::Work, size(message.len()).saturating_add(1))?;
         syntax(offset, format_args!("{message}"), self.governor)
     }
-    fn alternate(&mut self, depth: usize) -> Result<Parsed, PatternCompileError> {
+    fn alternate(&mut self, depth: usize) -> Result<Parsed, OwnedPatternCompileError> {
         self.governor
             .charge(Resource::Depth, u64::try_from(depth).unwrap_or(u64::MAX))?;
         self.governor.charge(Resource::Work, 1)?;
@@ -455,7 +455,7 @@ impl Parser<'_> {
             })
         }
     }
-    fn sequence(&mut self, depth: usize) -> Result<Parsed, PatternCompileError> {
+    fn sequence(&mut self, depth: usize) -> Result<Parsed, OwnedPatternCompileError> {
         self.governor.charge(Resource::Work, 1)?;
         let mut items = ScratchVec::new(self.governor);
         let mut height = 0;
@@ -564,7 +564,7 @@ impl Parser<'_> {
         }
         Ok(self.chars.get(index) == Some(&'}'))
     }
-    fn count(&mut self) -> Result<usize, PatternCompileError> {
+    fn count(&mut self) -> Result<usize, OwnedPatternCompileError> {
         let mut count = 0_usize;
         let start = self.position;
         while let Some(digit) = self.current().and_then(|character| character.to_digit(10)) {
@@ -583,7 +583,7 @@ impl Parser<'_> {
         }
         Ok(count)
     }
-    fn atom(&mut self, depth: usize) -> Result<Parsed, PatternCompileError> {
+    fn atom(&mut self, depth: usize) -> Result<Parsed, OwnedPatternCompileError> {
         self.governor.charge(Resource::Work, 1)?;
         match self.next()? {
             Some('^') => leaf(Node::Start, false, self.governor),
@@ -600,7 +600,7 @@ impl Parser<'_> {
             None => self.fail("expected an atom"),
         }
     }
-    fn group(&mut self, depth: usize) -> Result<Parsed, PatternCompileError> {
+    fn group(&mut self, depth: usize) -> Result<Parsed, OwnedPatternCompileError> {
         let mut capture = true;
         let mut look = None;
         let mut name = None;
@@ -698,7 +698,7 @@ impl Parser<'_> {
             Ok(inner)
         }
     }
-    fn escape(&mut self, in_class: bool) -> Result<Parsed, PatternCompileError> {
+    fn escape(&mut self, in_class: bool) -> Result<Parsed, OwnedPatternCompileError> {
         let escape_start = self.position - 1;
         match self.next()? {
             Some('d') => {
@@ -781,7 +781,7 @@ impl Parser<'_> {
             _ => self.fail_at(escape_start, "invalid identity escape under Unicode mode"),
         }
     }
-    fn named_backref(&mut self) -> Result<Parsed, PatternCompileError> {
+    fn named_backref(&mut self) -> Result<Parsed, OwnedPatternCompileError> {
         if self.next()? != Some('<') {
             return self.fail("expected a group name after \\k");
         }
@@ -819,7 +819,7 @@ impl Parser<'_> {
         owned.extend(indices.iter().copied())?;
         leaf(Node::Backref(owned), true, self.governor)
     }
-    fn hex_escape(&mut self, count: usize) -> Result<Parsed, PatternCompileError> {
+    fn hex_escape(&mut self, count: usize) -> Result<Parsed, OwnedPatternCompileError> {
         let start = self.position;
         let mut value = 0u32;
         for _ in 0..count {
@@ -830,7 +830,7 @@ impl Parser<'_> {
         }
         self.finish_code_point(value, start)
     }
-    fn unicode_escape(&mut self) -> Result<Parsed, PatternCompileError> {
+    fn unicode_escape(&mut self) -> Result<Parsed, OwnedPatternCompileError> {
         if self.current() == Some('{') {
             self.advance(1)?;
             let start = self.position;
@@ -882,7 +882,7 @@ impl Parser<'_> {
             self.finish_code_point(high, start)
         }
     }
-    fn read_hex4(&mut self, start: usize) -> Result<u32, PatternCompileError> {
+    fn read_hex4(&mut self, start: usize) -> Result<u32, OwnedPatternCompileError> {
         let mut value = 0u32;
         for _ in 0..4 {
             let Some(digit) = self.next()?.and_then(|character| character.to_digit(16)) else {
@@ -896,7 +896,7 @@ impl Parser<'_> {
         &mut self,
         value: u32,
         start: usize,
-    ) -> Result<Parsed, PatternCompileError> {
+    ) -> Result<Parsed, OwnedPatternCompileError> {
         let Some(character) = char::from_u32(value) else {
             return self.fail_at(
                 start,
@@ -905,7 +905,7 @@ impl Parser<'_> {
         };
         literal(character, self.governor)
     }
-    fn property_escape(&mut self, positive: bool) -> Result<Parsed, PatternCompileError> {
+    fn property_escape(&mut self, positive: bool) -> Result<Parsed, OwnedPatternCompileError> {
         if self.next()? != Some('{') {
             return self.fail("property escape requires braces");
         }
@@ -942,7 +942,7 @@ impl Parser<'_> {
         };
         class_from_ranges(ranges, !positive, self.governor)
     }
-    fn class_atom(&mut self) -> Result<ClassAtom, PatternCompileError> {
+    fn class_atom(&mut self) -> Result<ClassAtom, OwnedPatternCompileError> {
         if self.current() == Some('\\') {
             self.governor.charge(Resource::Work, 1)?;
             let class_escape = self
@@ -969,7 +969,7 @@ impl Parser<'_> {
         };
         Ok(ClassAtom::Literal(u32::from(character)))
     }
-    fn class(&mut self) -> Result<Parsed, PatternCompileError> {
+    fn class(&mut self) -> Result<Parsed, OwnedPatternCompileError> {
         let negative = self.current() == Some('^');
         if negative {
             self.advance(1)?;
@@ -1013,7 +1013,7 @@ impl Parser<'_> {
     }
 }
 
-fn literal(character: char, governor: &mut Governor) -> Result<Parsed, PatternCompileError> {
+fn literal(character: char, governor: &mut Governor) -> Result<Parsed, OwnedPatternCompileError> {
     let code = u32::from(character);
     let ranges = unicode::copy_ranges(&[(code, code)], governor)?;
     leaf(Node::Class(ranges), false, governor)
@@ -1022,7 +1022,7 @@ fn literal(character: char, governor: &mut Governor) -> Result<Parsed, PatternCo
 #[cfg(test)]
 mod tests {
     use crate::contract::{Budget, CancellationToken, Governor, Resource, StopReason};
-    use crate::pattern::{Pattern, PatternCompileError};
+    use crate::pattern::{OwnedPatternCompileError, Pattern, PatternCompileError};
 
     /// Temporary names, branch paths and references release on early, partial
     /// and final parser refusal, alongside the actual retained AST owners.
@@ -1122,6 +1122,18 @@ mod tests {
                 panic!("expected syntax error");
             };
             assert_eq!((error.offset, error.message.as_str()), (offset, message));
+            let mut owned = Governor::new(Budget::default());
+            let failure = Pattern::compile_owned(source, &mut owned).unwrap_err();
+            let OwnedPatternCompileError::Syntax(diagnostic) = failure else {
+                panic!("expected owned syntax error");
+            };
+            assert_eq!(diagnostic.to_string(), error.to_string());
+            assert_eq!(owned.usage(), measured.usage());
+            assert!(owned.scratch_meter().live() > 0);
+            drop(diagnostic);
+            assert_eq!(owned.scratch_meter().live(), 0);
+            drop(error);
+            assert!(measured.scratch_meter().live() > 0);
             let mut governor = Governor::new(Budget {
                 work: measured.usage().work - 1,
                 ..Budget::default()

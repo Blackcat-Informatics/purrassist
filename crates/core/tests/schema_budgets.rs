@@ -316,7 +316,7 @@ fn unused_resource_hashing_has_exact_work_boundaries_without_framing_storage() {
 }
 
 /// Parsed annotation buffers belong to their document, including external and
-/// temporary meta-schema documents; only the separate compiler allowance remains.
+/// temporary meta-schema documents; no estimated compiler storage stays charged.
 #[test]
 fn schema_document_storage_releases_on_drop_and_late_refusal() {
     let annotation = format!(
@@ -331,6 +331,7 @@ fn schema_document_storage_releases_on_drop_and_late_refusal() {
         let work = governor.usage().work;
         drop(schema);
         let remaining = governor.scratch_meter().live();
+        assert_eq!(remaining, 0, "complete schema storage releases on drop");
         let mut limited = Governor::new(Budget {
             work: work - 1,
             ..Budget::default()
@@ -353,10 +354,7 @@ fn schema_document_storage_releases_on_drop_and_late_refusal() {
         large.0 > small.0 + 8192,
         "nested strings and number/container buffers stay admitted while borrowed"
     );
-    assert_eq!(
-        large.1, small.1,
-        "annotation storage does not leak into the legacy allowance"
-    );
+    assert_eq!(large.1, small.1, "annotation storage releases completely");
 
     let source = r#"{"$ref":"urn:external"}"#;
     let small = measure(
@@ -388,4 +386,38 @@ fn schema_document_storage_releases_on_drop_and_late_refusal() {
         large, small,
         "temporary meta-schema buffers release before publication"
     );
+}
+
+/// Reformatting pattern errors must not permanently retain an intermediate
+/// diagnostic, including refusal while constructing the final schema error.
+#[test]
+fn pattern_diagnostics_publish_only_the_final_schema_error() {
+    let pattern = purrassist_core::pattern::Pattern::compile("(").unwrap_err();
+    for source in [r#"{"pattern":"("}"#, r#"{"patternProperties":{"(":true}}"#] {
+        let mut governor = Governor::new(Budget::default());
+        let CompilationError::InvalidSchema(error) =
+            Schema::compile_governed(source, &mut governor).unwrap_err()
+        else {
+            panic!("invalid pattern remains a schema syntax error");
+        };
+        assert_eq!(error.message, pattern.to_string());
+        assert_eq!(
+            governor.scratch_meter().live(),
+            u64::try_from(error.location.capacity() + error.message.capacity()).unwrap(),
+            "only final diagnostic buffers retain their admission"
+        );
+        let mut limited = Governor::new(Budget {
+            work: governor.usage().work - 1,
+            ..Budget::default()
+        });
+        assert_eq!(
+            Schema::compile_governed(source, &mut limited).unwrap_err(),
+            CompilationError::Resource(StopReason::BudgetExceeded(Resource::Work))
+        );
+        assert_eq!(
+            limited.scratch_meter().live(),
+            0,
+            "outer diagnostic refusal releases the intermediate pattern error and schema owners"
+        );
+    }
 }

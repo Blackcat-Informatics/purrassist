@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Fallible, release-owned indexes for the compiled schema. No deletion is needed.
 use super::reference::work;
-use crate::contract::ScratchCharge;
+use crate::contract::{ScratchCharge, format_output_governed};
 use crate::{Governor, ScratchString, ScratchVec, StopReason};
 use core::{
     cmp::Ordering,
@@ -130,9 +130,10 @@ impl<K: Key, V: ScratchCharge> Map<K, V> {
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
         if !Self::strictly_ordered(&entries, governor)? {
-            return Err(StopReason::InvalidInput(
-                "sorted schema index requires strictly increasing unique keys".into(),
-            ));
+            return Err(StopReason::InvalidInput(format_output_governed(
+                format_args!("sorted schema index requires strictly increasing unique keys"),
+                governor,
+            )?));
         }
         Self::from_ordered(entries, governor)
     }
