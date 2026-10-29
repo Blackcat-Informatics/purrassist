@@ -7,9 +7,9 @@
 // `unreachable_pub`) wins, as in `pattern::derive`.
 #![allow(clippy::redundant_pub_crate)]
 use super::super::layout::Dependency;
-use super::{Walk, size};
+use super::{Walk, size, tree};
 use crate::contract::{Effort, Resource, StopReason};
-use crate::json::{Member, Node, ParseFailure, Value, pointer_segment};
+use crate::json::{Member, Node, OwnedDocument, OwnedParseFailure, Value, pointer_segment};
 use std::collections::BTreeSet;
 
 /// Cost of a name match whose comparison keys (case-folded, compatibility
@@ -253,14 +253,15 @@ impl Walk<'_, '_> {
             return Ok(());
         };
         for (position, member) in members.iter().enumerate() {
-            let key_node = Node::new(Value::String(member.key.clone()));
-            if super::super::evaluate::run(schema, names_id, &key_node, self.governor)?
+            let key_node =
+                OwnedDocument::string(super::super::reference::copy(&member.key, self.governor)?);
+            if super::super::evaluate::run(schema, names_id, key_node.root(), self.governor)?
                 .violations
                 .is_empty()
             {
                 continue;
             }
-            if let crate::pattern::GenerateOutcome::Witness(new_key) = pattern.generate(
+            if let crate::pattern::OwnedGenerateOutcome::Witness(new_key) = pattern.generate_owned(
                 self.governor,
                 crate::pattern::GenerateOptions {
                     min_len: 0,
@@ -268,19 +269,15 @@ impl Walk<'_, '_> {
                     avoid: &[],
                 },
             )? {
-                let _lease = self.governor.lease_scratch(members_weight(members))?;
-                let mut replacement = members.to_vec();
-                replacement[position].key = new_key;
-                replacement[position].key_span = None;
+                let replacement = tree::object(
+                    members,
+                    tree::Edit::Rename(position, new_key),
+                    self.governor,
+                )?;
                 self.change(
                     route,
                     path,
-                    (
-                        Node::new(Value::Object(replacement)),
-                        "json.schema.property-name-repair",
-                        30,
-                        true,
-                    ),
+                    (replacement, "json.schema.property-name-repair", 30, true),
                 )?;
             }
         }
@@ -320,7 +317,7 @@ impl Walk<'_, '_> {
                 route,
                 path,
                 (
-                    Node::new(Value::String(fixed)),
+                    OwnedDocument::string(fixed),
                     "json.schema.format-repair",
                     20,
                     true,
@@ -338,7 +335,8 @@ impl Walk<'_, '_> {
         let (route, path) = site;
         let body = self.schema.keywords(schema_id);
         if let Some(value) = body.get("const") {
-            self.change(route, path, (value.clone(), "json.schema.const", 100, true))?;
+            let replacement = OwnedDocument::copy_from(value, self.governor)?;
+            self.change(route, path, (replacement, "json.schema.const", 100, true))?;
         }
         if let Some(Node {
             value: Value::Array(values),
@@ -349,7 +347,8 @@ impl Walk<'_, '_> {
                 if let (Some(actual), Some(expected)) = (node.as_str(), value.as_str())
                     && let Some(cost) = self.name_cost(actual, expected)?
                 {
-                    self.change(route, path, (value.clone(), "json.enum.match", cost, false))?;
+                    let replacement = OwnedDocument::copy_from(value, self.governor)?;
+                    self.change(route, path, (replacement, "json.enum.match", cost, false))?;
                 }
             }
         }
@@ -359,25 +358,22 @@ impl Walk<'_, '_> {
                 Value::String(_) | Value::Object(_) | Value::Array(_)
             )
         {
+            let replacement = OwnedDocument::string(node.to_json_scratch(self.governor)?);
             self.change(
                 route,
                 path,
-                (
-                    Node::new(Value::String(node.to_json())),
-                    "json.type.stringify-scalar",
-                    8,
-                    false,
-                ),
+                (replacement, "json.type.stringify-scalar", 8, false),
             )?;
         }
         if body.get("type").and_then(Node::as_str) == Some("array")
             && !matches!(node.value, Value::Array(_))
         {
+            let replacement = tree::wrap(node, self.governor)?;
             self.change(
                 route,
                 path,
                 (
-                    Node::new(Value::Array(vec![node.clone()])),
+                    replacement,
                     super::factor::WRAP_RULE,
                     super::factor::WRAP_COST,
                     false,
@@ -388,33 +384,32 @@ impl Walk<'_, '_> {
     }
     fn shapes(&mut self, node: &Node, route: &[usize], path: &str) -> Result<(), StopReason> {
         match &node.value {
-            Value::Array(items) if items.len() == 1 => self.change(
-                route,
-                path,
-                (items[0].clone(), "json.shape.unwrap-array", 1, false),
-            )?,
+            Value::Array(items) if items.len() == 1 => {
+                let replacement = OwnedDocument::copy_from(&items[0], self.governor)?;
+                self.change(
+                    route,
+                    path,
+                    (replacement, "json.shape.unwrap-array", 1, false),
+                )?;
+            }
             Value::Object(members)
                 if members.len() == 1
                     && matches!(members[0].value.value, Value::Array(_) | Value::Object(_)) =>
             {
+                let replacement = OwnedDocument::copy_from(&members[0].value, self.governor)?;
                 self.change(
                     route,
                     path,
-                    (
-                        members[0].value.clone(),
-                        "json.shape.unwrap-object",
-                        4,
-                        false,
-                    ),
+                    (replacement, "json.shape.unwrap-object", 4, false),
                 )?;
             }
-            Value::String(text) => match crate::json::parse_with(text, self.governor) {
+            Value::String(text) => match OwnedDocument::parse(text, self.governor) {
                 Ok(mut decoded) => {
-                    clear_spans(&mut decoded);
+                    decoded.clear_spans(self.governor)?;
                     self.change(route, path, (decoded, "json.type.decode-string", 4, false))?;
                 }
-                Err(ParseFailure::Resource(reason)) => return Err(reason),
-                Err(ParseFailure::Syntax(_)) => {}
+                Err(OwnedParseFailure::Resource(reason)) => return Err(reason),
+                Err(OwnedParseFailure::Syntax(_)) => {}
             },
             _ => {}
         }
@@ -528,34 +523,22 @@ impl Walk<'_, '_> {
                 continue;
             }
             if let Some(cost) = self.name_cost(&members[position].key, candidate_name)? {
-                let _lease = self.governor.lease_scratch(members_weight(members))?;
-                let mut replacement = members.to_vec();
-                replacement[position].key.clone_from(candidate_name);
-                replacement[position].key_span = None;
-                self.change(
-                    route,
-                    path,
-                    (
-                        Node::new(Value::Object(replacement)),
-                        "json.key.match",
-                        cost,
-                        false,
-                    ),
-                )?;
+                let key = super::super::reference::copy(candidate_name, self.governor)?;
+                let replacement =
+                    tree::object(members, tree::Edit::Rename(position, key), self.governor)?;
+                self.change(route, path, (replacement, "json.key.match", cost, false))?;
             }
         }
         if body
             .get("additionalProperties")
             .is_some_and(|n| n.value == Value::Bool(false))
         {
-            let _lease = self.governor.lease_scratch(members_weight(members))?;
-            let mut replacement = members.to_vec();
-            replacement.remove(position);
+            let replacement = tree::object(members, tree::Edit::Remove(position), self.governor)?;
             self.change(
                 route,
                 path,
                 (
-                    Node::new(Value::Object(replacement)),
+                    replacement,
                     "json.key.remove-additional",
                     KEY_REMOVE_COST,
                     false,
@@ -588,18 +571,11 @@ impl Walk<'_, '_> {
         }
         for remove in 0..=position {
             if members[remove].key == members[position].key {
-                let _lease = self.governor.lease_scratch(members_weight(members))?;
-                let mut replacement = members.to_vec();
-                replacement.remove(remove);
+                let replacement = tree::object(members, tree::Edit::Remove(remove), self.governor)?;
                 self.change(
                     route,
                     path,
-                    (
-                        Node::new(Value::Object(replacement)),
-                        "json.key.resolve-duplicate",
-                        2,
-                        false,
-                    ),
+                    (replacement, "json.key.resolve-duplicate", 2, false),
                 )?;
             }
         }
@@ -700,7 +676,7 @@ impl Walk<'_, '_> {
                 && members.iter().any(|member| member.key == trigger)
             {
                 self.propose(
-                    &Node::new(Value::Object(members.to_vec())),
+                    super::at(self.parent, route),
                     child,
                     (route, path),
                     depth + 1,
@@ -732,31 +708,20 @@ impl Walk<'_, '_> {
                 // Relocation candidates retain the source value and remove its old occurrence.
                 for (position, member) in members.iter().enumerate() {
                     if let Value::Object(nested) = &member.value.value {
-                        for (nested_position, child) in nested
+                        for (nested_position, _child) in nested
                             .iter()
                             .enumerate()
                             .filter(|(_, child)| child.key == name)
                         {
-                            let _lease = self.governor.lease_scratch(
-                                members_weight(members)
-                                    .saturating_add(size(child.key.len()))
-                                    .saturating_add(child.value.estimated_bytes()),
+                            let replacement = tree::object(
+                                members,
+                                tree::Edit::Relocate(position, nested_position),
+                                self.governor,
                             )?;
-                            let mut replacement = members.to_vec();
-                            if let Value::Object(children) = &mut replacement[position].value.value
-                            {
-                                children.remove(nested_position);
-                            }
-                            replacement.push(child.clone());
                             self.change(
                                 route,
                                 path,
-                                (
-                                    Node::new(Value::Object(replacement)),
-                                    "json.key.relocate",
-                                    KEY_RELOCATE_COST,
-                                    false,
-                                ),
+                                (replacement, "json.key.relocate", KEY_RELOCATE_COST, false),
                             )?;
                         }
                     }
@@ -767,36 +732,21 @@ impl Walk<'_, '_> {
                         schema.index.locations[schema_id].children.get(&key)
                     {
                         match super::super::algebra::generate(schema, child, self.governor)? {
-                            super::super::algebra::Attempt::Witness(node) => {
-                                // Explicit handoff to recovery's existing retained-candidate
-                                // contract; later queue duplication/discard is separate.
-                                Some(node.into_node())
-                            }
+                            super::super::algebra::Attempt::Witness(node) => Some(node),
                             super::super::algebra::Attempt::Unsatisfiable(_)
                             | super::super::algebra::Attempt::Exhausted => None,
                         }
                     } else {
-                        Some(Node::new(Value::Null))
+                        Some(OwnedDocument::null(self.governor))
                     };
                     if let Some(value) = value {
-                        let _lease = self.governor.lease_scratch(
-                            members_weight(members).saturating_add(value.estimated_bytes()),
-                        )?;
-                        let mut replacement = members.to_vec();
-                        replacement.push(Member {
-                            key: name.into(),
-                            key_span: None,
-                            value,
-                        });
+                        let key = super::super::reference::copy(name, self.governor)?;
+                        let replacement =
+                            tree::object(members, tree::Edit::Append(key, value), self.governor)?;
                         self.change(
                             route,
                             path,
-                            (
-                                Node::new(Value::Object(replacement)),
-                                "json.required.invent",
-                                100,
-                                true,
-                            ),
+                            (replacement, "json.required.invent", 100, true),
                         )?;
                     }
                 }
@@ -847,35 +797,5 @@ impl Walk<'_, '_> {
             }
         }
         Ok(())
-    }
-}
-/// A conservative byte-size estimate for a member slice, used to charge
-/// scratch before `.to_vec()`-ing it to build a proposal.
-fn members_weight(members: &[Member]) -> u64 {
-    // Portable, target-independent charge: `Member::CHARGE`, not `size_of`.
-    let mut total = size(members.len())
-        .saturating_mul(size(<Member as crate::contract::ScratchCharge>::CHARGE));
-    for member in members {
-        total = total
-            .saturating_add(size(member.key.len()))
-            .saturating_add(member.value.estimated_bytes());
-    }
-    total
-}
-fn clear_spans(node: &mut Node) {
-    node.span = None;
-    match &mut node.value {
-        Value::Array(items) => {
-            for item in items {
-                clear_spans(item);
-            }
-        }
-        Value::Object(members) => {
-            for member in members {
-                member.key_span = None;
-                clear_spans(&mut member.value);
-            }
-        }
-        _ => {}
     }
 }

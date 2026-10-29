@@ -12,6 +12,45 @@ impl OwnedDocument {
         &self.root
     }
 
+    /// Change only the source span; tree storage stays under this owner.
+    pub(crate) const fn set_span(&mut self, span: Option<core::ops::Range<usize>>) {
+        self.root.span = span;
+    }
+
+    /// Decoded JSON has no byte coordinates in the surrounding source string.
+    pub(crate) fn clear_spans(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
+        clear_spans(&mut self.root, governor)?;
+        governor.check()
+    }
+
+    /// Admit the whole tree at its prospective nesting depth before attachment.
+    pub(crate) fn admit_depth(
+        &self,
+        depth: u32,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        admit_depth(&self.root, depth, governor)
+    }
+
+    /// Copy retained ancestors and siblings, transferring the replacement at route.
+    /// The removed subtree is never copied or charged to the new owner.
+    pub(crate) fn replace_from(
+        node: &Node,
+        route: &[usize],
+        replacement: Self,
+        governor: &mut Governor,
+    ) -> Result<Self, StopReason> {
+        let mut lease = ScratchLease::empty(governor);
+        let mut replacement = Some(replacement);
+        let root = copy_replacing(node, route, &mut replacement, governor, &mut lease, 0)?;
+        assert!(
+            replacement.is_none(),
+            "INVARIANT: replacement route consumed"
+        );
+        governor.check()?;
+        Ok(Self { root, lease })
+    }
+
     /// Ordinary public JSON nodes retain their published storage admission.
     pub(crate) fn into_node(self) -> Node {
         let Self { root, lease } = self;
@@ -99,6 +138,125 @@ impl OwnedDocument {
         governor.check()?;
         Ok(Self { root, lease })
     }
+}
+
+fn admit_depth(node: &Node, depth: u32, governor: &mut Governor) -> Result<(), StopReason> {
+    governor.charge(Resource::Depth, u64::from(depth))?;
+    governor.charge(Resource::Work, 1)?;
+    if depth > 128 {
+        return Err(governor.stop_resource(Resource::Depth));
+    }
+    match &node.value {
+        Value::Array(items) => {
+            for item in items {
+                admit_depth(item, depth + 1, governor)?;
+            }
+        }
+        Value::Object(members) => {
+            for member in members {
+                admit_depth(&member.value, depth + 1, governor)?;
+            }
+        }
+        _ => {}
+    }
+    governor.check()
+}
+
+fn clear_spans(node: &mut Node, governor: &mut Governor) -> Result<(), StopReason> {
+    governor.charge(Resource::Work, 1)?;
+    node.span = None;
+    match &mut node.value {
+        Value::Array(items) => {
+            for item in items {
+                clear_spans(item, governor)?;
+            }
+        }
+        Value::Object(members) => {
+            for member in members {
+                member.key_span = None;
+                clear_spans(&mut member.value, governor)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn copy_replacing(
+    node: &Node,
+    route: &[usize],
+    replacement: &mut Option<OwnedDocument>,
+    governor: &mut Governor,
+    lease: &mut ScratchLease,
+    depth: u32,
+) -> Result<Node, StopReason> {
+    governor.charge(Resource::Depth, u64::from(depth))?;
+    governor.charge(Resource::Work, 1)?;
+    if depth > 128 {
+        return Err(governor.stop_resource(Resource::Depth));
+    }
+    let Some((&selected, tail)) = route.split_first() else {
+        replacement
+            .as_ref()
+            .expect("INVARIANT: replacement exists")
+            .admit_depth(depth, governor)?;
+        let (root, owner) = replacement
+            .take()
+            .expect("INVARIANT: one replacement")
+            .into_owned_parts();
+        lease.absorb(owner);
+        return Ok(root);
+    };
+    let value = match &node.value {
+        Value::Array(items) => {
+            assert!(selected < items.len(), "INVARIANT: replacement array route");
+            let mut copied = ScratchVec::new(governor);
+            for (index, item) in items.iter().enumerate() {
+                let child = if index == selected {
+                    copy_replacing(item, tail, replacement, governor, lease, depth + 1)?
+                } else {
+                    copy_node(item, governor, lease, depth + 1)?
+                };
+                push(&mut copied, child, governor)?;
+            }
+            let (items, owner) = copied.into_owned_parts();
+            lease.absorb(owner);
+            Value::Array(items)
+        }
+        Value::Object(members) => {
+            assert!(
+                selected < members.len(),
+                "INVARIANT: replacement object route"
+            );
+            let mut copied = ScratchVec::new(governor);
+            for (index, member) in members.iter().enumerate() {
+                let (key, owner) = copy_text(&member.key, governor)?.into_owned_parts();
+                lease.absorb(owner);
+                let value = if index == selected {
+                    copy_replacing(&member.value, tail, replacement, governor, lease, depth + 1)?
+                } else {
+                    copy_node(&member.value, governor, lease, depth + 1)?
+                };
+                push(
+                    &mut copied,
+                    Member {
+                        key,
+                        key_span: member.key_span.clone(),
+                        value,
+                    },
+                    governor,
+                )?;
+            }
+            let (members, owner) = copied.into_owned_parts();
+            lease.absorb(owner);
+            Value::Object(members)
+        }
+        _ => unreachable!("INVARIANT: replacement route traverses containers"),
+    };
+    Ok(Node {
+        value,
+        span: node.span.clone(),
+    })
 }
 
 fn copy_text(text: &str, governor: &mut Governor) -> Result<ScratchString, StopReason> {
@@ -193,6 +351,40 @@ impl ScratchCharge for OwnedDocument {
 mod tests {
     use super::*;
     use crate::Budget;
+
+    #[test]
+    fn replacement_skips_removed_storage_and_admits_combined_depth() {
+        let source = super::super::parse(&format!(
+            r#"{{"remove":"{}","keep":1.00e+2}}"#,
+            "x".repeat(8192)
+        ))
+        .unwrap();
+        let mut governor = Governor::new(Budget {
+            scratch_bytes: 1024,
+            ..Budget::default()
+        });
+        let replacement = OwnedDocument::null(&governor);
+        let copied =
+            OwnedDocument::replace_from(&source, &[0], replacement, &mut governor).unwrap();
+        assert_eq!(copied.root().to_json(), r#"{"remove":null,"keep":1.00e+2}"#);
+        assert_eq!(copied.root().span, source.span);
+        assert_eq!(copied.root().get("keep"), source.get("keep"));
+        drop(copied);
+        assert_eq!(governor.scratch_meter().live(), 0);
+
+        let parent = super::super::parse("[null]").unwrap();
+        let replacement = super::super::parse("[0]").unwrap();
+        let mut governor = Governor::new(Budget {
+            depth: 1,
+            ..Budget::default()
+        });
+        let replacement = OwnedDocument::copy_from(&replacement, &mut governor).unwrap();
+        assert!(matches!(
+            OwnedDocument::replace_from(&parent, &[0], replacement, &mut governor),
+            Err(StopReason::BudgetExceeded(Resource::Depth))
+        ));
+        assert_eq!(governor.scratch_meter().live(), 0);
+    }
 
     #[test]
     fn copied_literals_preserve_provenance_and_release_partial_trees() {

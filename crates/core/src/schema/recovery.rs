@@ -3,6 +3,7 @@
 //! Composed, best-first recovery with whole-schema validation and explicit guesses.
 mod factor;
 mod proposals;
+mod tree;
 use super::Schema;
 use super::report::{Observations, Owned, Records};
 use crate::contract::saturating_size as size;
@@ -12,7 +13,7 @@ use crate::contract::{
 };
 use crate::contract::{Validation, format_scratch_governed};
 use crate::digest::Digest;
-use crate::json::{Node, ParseFailure, Value};
+use crate::json::{Node, OwnedDocument, OwnedParseFailure, Value};
 use crate::scan;
 use crate::search::{Acceptance, Change, Ledger, Proposals, Search, SearchState};
 pub(crate) use proposals::{
@@ -55,8 +56,7 @@ struct Recovery<'a> {
 }
 /// One candidate JSON document; its deduplication key and output identity
 /// are its compact JSON bytes, and equal-cost candidates keep enqueue order.
-#[derive(Clone)]
-struct Repair(Node);
+struct Repair(OwnedDocument);
 /// One expansion of a rejected [`Repair`]: the schema walk in `proposals`
 /// proposes local changes to `parent` through [`Walk::change`].
 struct Walk<'w, 'p> {
@@ -72,14 +72,14 @@ impl SearchState for Repair {
     type Context<'c> = Recovery<'c>;
     fn tie(&self) {}
     fn write_key(&self, key: &mut ScratchVec<u8>) -> Result<(), StopReason> {
-        write_node_key(&self.0, key)
+        write_node_key(self.0.root(), key)
     }
     fn accept(
         &self,
         recovery: &mut Recovery<'_>,
         governor: &mut Governor,
     ) -> Result<Acceptance, StopReason> {
-        recovery.validate(&self.0, governor)
+        recovery.validate(self.0.root(), governor)
     }
     fn expand(
         &self,
@@ -92,7 +92,7 @@ impl SearchState for Repair {
         }
         if recovery.factor_pending {
             recovery.factor_pending = false;
-            recovery.factored = factor::prepare(recovery.schema, &self.0, governor)?;
+            recovery.factored = factor::prepare(recovery.schema, self.0.root(), governor)?;
         }
         let mut scope = crate::ScratchVec::new(governor);
         let mut walk = Walk {
@@ -101,26 +101,22 @@ impl SearchState for Repair {
             source: recovery.receipt.source,
             governor,
             proposals,
-            parent: &self.0,
+            parent: self.0.root(),
         };
         if let Some(edits) = &recovery.factored {
             if let Some(edit) = edits.get(walk.proposals.parent().evidence.len()) {
-                let original = at(&self.0, &edit.route);
+                let original = at(self.0.root(), &edit.route);
+                let replacement = tree::wrap(original, walk.governor)?;
                 walk.change(
                     &edit.route,
                     &edit.path,
-                    (
-                        Node::new(Value::Array(vec![original.clone()])),
-                        factor::WRAP_RULE,
-                        factor::WRAP_COST,
-                        false,
-                    ),
+                    (replacement, factor::WRAP_RULE, factor::WRAP_COST, false),
                 )?;
             }
             return Ok(());
         }
         walk.propose(
-            &self.0,
+            self.0.root(),
             recovery.schema.root,
             (&[], ""),
             0,
@@ -287,13 +283,15 @@ impl Recovery<'_> {
     ) -> Result<Outcome<Node>, StopReason> {
         self.receipt.retain_source(input, governor)?;
         governor.charge(Resource::InputBytes, size(input.len()))?;
-        match crate::json::parse_with(input, governor) {
+        match OwnedDocument::parse(input, governor) {
             Ok(node) => search.seed(governor, Repair(node), Ledger::default())?,
-            Err(ParseFailure::Resource(reason)) => return Err(reason),
-            Err(ParseFailure::Syntax(error)) if self.request.effort == Effort::Exact => {
-                return Err(StopReason::InvalidInput(error.to_string()));
+            Err(OwnedParseFailure::Resource(reason)) => return Err(reason),
+            Err(OwnedParseFailure::Syntax(error)) if self.request.effort == Effort::Exact => {
+                return Err(StopReason::InvalidInput(
+                    crate::contract::format_output_governed(format_args!("{error}"), governor)?,
+                ));
             }
-            Err(ParseFailure::Syntax(_)) => {
+            Err(OwnedParseFailure::Syntax(_)) => {
                 self.factor_pending = false;
                 self.syntax(search, input, governor)?;
             }
@@ -306,13 +304,14 @@ impl Recovery<'_> {
         let mut staged = Receipt::new(&[], "", self.request.effort, *governor.limits());
         let outcome = search.finish(accepted, &mut staged, governor)?;
         self.observations.prepare(staged.evidence.len(), governor)?;
+        governor.check()?;
         self.include_observation_prefix = !matches!(outcome, Outcome::Ambiguous(_));
         self.staged_evidence = staged.evidence;
         self.receipt.losses = staged.losses;
         self.receipt.inferences = staged.inferences;
         self.receipt.alternatives = staged.alternatives;
         self.receipt.stopped = staged.stopped;
-        Ok(outcome.map(|repair| repair.0))
+        Ok(outcome.map(|repair| repair.0.into_node()))
     }
     /// Validate one candidate while its report remains temporary. Commit the
     /// whole-instance record, then move its format and unique pattern records.
@@ -496,7 +495,7 @@ impl Recovery<'_> {
             cost,
             |key| write_node_key(node, key),
             |governor| {
-                governor.charge(Resource::ScratchBytes, node.estimated_bytes())?;
+                let node = OwnedDocument::copy_from(node, governor)?;
                 let mut ledger = Ledger::default();
                 for edit in edits {
                     let range = edit.span.clone();
@@ -549,7 +548,7 @@ impl Recovery<'_> {
                         guess: None,
                     });
                 }
-                Ok((Repair(node.clone()), ledger))
+                Ok((Repair(node), ledger))
             },
         )?;
         Ok(())
@@ -754,7 +753,7 @@ impl Walk<'_, '_> {
         &mut self,
         route: &[usize],
         path: &str,
-        edit: (Node, &str, u64, bool),
+        edit: (OwnedDocument, &str, u64, bool),
     ) -> Result<(), StopReason> {
         let (replacement, rule, cost, guessed) = edit;
         if guessed && !self.request.allow_guesses {
@@ -764,24 +763,29 @@ impl Walk<'_, '_> {
         self.governor.charge(Resource::EvidenceEntries, 1)?;
         let parent = self.parent;
         let original = at(parent, route);
-        if original.equivalent_governed(&replacement, self.governor)? {
+        if original.equivalent_governed(replacement.root(), self.governor)? {
             return Ok(());
         }
-        // Cloning the parent duplicates the whole candidate (node tree and
-        // every ledger so far); `original`/`replacement` are each serialized
-        // at least once below. Charge a bound on all of it before any of
-        // those allocations happen, and release exactly that bound once this
-        // change either lands in the queue or is discarded as a duplicate.
-        let clone_bytes = parent
+        // Ledger construction/cloning retains its existing estimated contract.
+        // Candidate trees and serialization buffers have independent owners.
+        let original_text = original.to_json_scratch(self.governor)?;
+        let replacement_text = replacement.root().to_json_scratch(self.governor)?;
+        let ledger_bytes = self
+            .proposals
+            .parent()
             .estimated_bytes()
-            .saturating_add(self.proposals.parent().estimated_bytes())
-            .saturating_add(original.estimated_bytes())
-            .saturating_add(replacement.estimated_bytes().saturating_mul(3))
+            .saturating_add(size(original_text.len()))
+            .saturating_add(size(replacement_text.len()).saturating_mul(3))
+            .saturating_add(
+                size(rule.len())
+                    .saturating_add(size(path.len()))
+                    .saturating_mul(3),
+            )
             .saturating_add(512);
-        let _lease = self.governor.lease_scratch(clone_bytes)?;
+        let _lease = self.governor.lease_scratch(ledger_bytes)?;
         let evidence = Evidence {
             rule: rule.into(),
-            explanation: format!("replace with {}", replacement.to_json()),
+            explanation: format!("replace with {}", replacement_text.as_str()),
             destination: path.into(),
             span: original.span.clone().map(|bytes| SourceSpan {
                 source: self.source,
@@ -791,11 +795,10 @@ impl Walk<'_, '_> {
         let change = Change {
             evidence,
             cost,
-            original: Some(original.to_json()),
-            guess: guessed.then(|| replacement.to_json()),
+            original: Some(original_text.as_str().into()),
+            guess: guessed.then(|| replacement_text.as_str().into()),
         };
-        let mut node = parent.clone();
-        *at_mut(&mut node, route) = replacement;
+        let node = OwnedDocument::replace_from(parent, route, replacement, self.governor)?;
         self.proposals.commit(self.governor, Repair(node), change)
     }
 }
@@ -809,17 +812,6 @@ fn at<'a>(mut node: &'a Node, route: &[usize]) -> &'a Node {
     }
     node
 }
-fn at_mut<'a>(mut node: &'a mut Node, route: &[usize]) -> &'a mut Node {
-    for &index in route {
-        node = match &mut node.value {
-            Value::Array(items) => &mut items[index],
-            Value::Object(members) => &mut members[index].value,
-            _ => unreachable!("generated route"),
-        };
-    }
-    node
-}
-
 #[cfg(test)]
 mod factoring_tests {
     use super::*;

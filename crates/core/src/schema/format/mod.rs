@@ -122,7 +122,7 @@ pub(super) fn repair(
     name: &str,
     value: &str,
     governor: &mut Governor,
-) -> Result<Option<String>, StopReason> {
+) -> Result<Option<crate::ScratchString>, StopReason> {
     datetime::repair(name, value, governor)
 }
 
