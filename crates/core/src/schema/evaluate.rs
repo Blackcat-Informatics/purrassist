@@ -321,10 +321,12 @@ impl Evaluator<'_, '_> {
         for (known_id, known_path) in &self.active {
             reference::work(self.governor, 1)?;
             if *known_id == id {
-                reference::work(
-                    self.governor,
-                    path.len().min(known_path.len()).saturating_add(1),
-                )?;
+                reference::work(self.governor, 1)?;
+                // Deeper instance paths cannot match; avoid repeated prefix scans.
+                if known_path.len() != path.len() {
+                    continue;
+                }
+                reference::work(self.governor, path.len())?;
                 if known_path.as_str() == path {
                     return Err(StopReason::InvalidInput(format_output_governed(
                         format_args!("schema reference recurs without instance progress"),
