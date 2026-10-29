@@ -520,6 +520,18 @@ impl ScratchLease {
     }
 }
 
+/// One transfer operation for both UTF-8 and element buffers. The typed owners
+/// supply their storage while this function moves its already admitted charge.
+fn transfer_buffer<T: Default>(
+    buffer: &mut T,
+    meter: &ScratchMeter,
+    reserved: &mut u64,
+) -> (T, ScratchLease) {
+    let buffer = mem::take(buffer);
+    let lease = ScratchLease::new(meter.clone(), mem::take(reserved));
+    (buffer, lease)
+}
+
 impl Drop for ScratchLease {
     fn drop(&mut self) {
         let _ = self.meter.release(self.bytes);
@@ -831,9 +843,7 @@ impl<T: ScratchCharge> ScratchVec<T> {
 
     /// Transfer the buffer and its exact reservation to an enclosing owner.
     pub(crate) fn into_owned_parts(mut self) -> (Vec<T>, ScratchLease) {
-        let inner = mem::take(&mut self.inner);
-        let lease = ScratchLease::new(self.meter.clone(), mem::take(&mut self.reserved));
-        (inner, lease)
+        transfer_buffer(&mut self.inner, &self.meter, &mut self.reserved)
     }
 
     /// Take ownership of a plain `Vec<T>`, permanently retaining the charge
@@ -985,9 +995,7 @@ impl ScratchString {
 
     /// Transfer the buffer and its exact reservation to an enclosing owner.
     pub(crate) fn into_owned_parts(mut self) -> (String, ScratchLease) {
-        let inner = mem::take(&mut self.inner);
-        let lease = ScratchLease::new(self.meter.clone(), mem::take(&mut self.reserved));
-        (inner, lease)
+        transfer_buffer(&mut self.inner, &self.meter, &mut self.reserved)
     }
 
     /// Take ownership of a plain `String`, permanently retaining the charge
