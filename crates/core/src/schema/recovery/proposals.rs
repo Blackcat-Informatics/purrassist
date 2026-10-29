@@ -691,7 +691,11 @@ impl Walk<'_, '_> {
     ) -> Result<(), StopReason> {
         let (route, path) = site;
         let schema = self.schema;
-        for dependency in schema.dependencies(schema_id, self.governor)?.iter().copied() {
+        for dependency in schema
+            .dependencies(schema_id, self.governor)?
+            .iter()
+            .copied()
+        {
             if let Dependency::Schema { trigger, child } = dependency
                 && members.iter().any(|member| member.key == trigger)
             {
