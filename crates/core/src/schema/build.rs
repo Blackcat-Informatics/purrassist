@@ -8,7 +8,7 @@ use super::{
 use crate::{
     Governor, StopReason,
     contract::{Resource, format_scratch_governed},
-    json::{self, Node, OwnedDocument, OwnedParseFailure},
+    json::{Node, OwnedDocument, OwnedParseFailure},
 };
 use std::collections::BTreeMap;
 
@@ -51,7 +51,7 @@ impl Context<'_> {
         source: &str,
         location: &str,
     ) -> Result<OwnedDocument, CompilationError> {
-        match json::parse_owned(source, self.governor) {
+        match OwnedDocument::parse(source, self.governor) {
             Ok(document) => Ok(document),
             Err(OwnedParseFailure::Resource(reason)) => Err(reason.into()),
             Err(OwnedParseFailure::Syntax(error)) => {

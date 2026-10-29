@@ -1,16 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use super::Node;
-use crate::contract::{ScratchCharge, ScratchLease};
-
-/// Immutable parsed storage; the lease contains transferred buffer reservations,
-/// not a size estimate. The root drops before its storage reservation releases.
-#[derive(Debug)]
-pub(crate) struct OwnedDocument {
-    pub(super) root: Node,
-    pub(super) lease: ScratchLease,
-}
+use super::{Node, OwnedDocument};
+use crate::contract::ScratchCharge;
 
 impl OwnedDocument {
     pub(crate) const fn root(&self) -> &Node {
