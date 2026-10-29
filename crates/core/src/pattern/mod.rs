@@ -455,7 +455,18 @@ impl Pattern {
     /// ```
     #[must_use]
     pub fn engine_evidence(&self) -> Evidence {
-        let (rule, explanation) = match self.engine {
+        let (rule, explanation) = self.engine_metadata();
+        Evidence {
+            rule: rule.into(),
+            explanation: explanation.into(),
+            span: None,
+            destination: String::new(),
+        }
+    }
+
+    /// Borrow engine identities so governed consumers own their publication.
+    pub(crate) const fn engine_metadata(&self) -> (&'static str, &'static str) {
+        match self.engine {
             Engine::Derivative => (
                 "pattern.engine.derivative-v1",
                 "no backreference or lookaround; matched by the derivative automaton",
@@ -464,12 +475,6 @@ impl Pattern {
                 "pattern.engine.backtrack-v1",
                 "a backreference or lookaround requires exploration-based matching",
             ),
-        };
-        Evidence {
-            rule: rule.into(),
-            explanation: explanation.into(),
-            span: None,
-            destination: String::new(),
         }
     }
 

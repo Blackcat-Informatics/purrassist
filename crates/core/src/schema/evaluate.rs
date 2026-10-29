@@ -6,16 +6,17 @@
 //! admit copying, comparison, lookup and relocation through the caller governor.
 //! Active keys and dynamic scopes unwind on every result; recursion obeys both
 //! caller Depth and a native ceiling. Integer tests, bound comparisons and
-//! transient violation messages also use admitted operations. Remaining
-//! annotation/report construction, merging
-//! and publication retain their separate storage contract and are not claimed
-//! to have complete ownership governance here.
+//! transient report records also use admitted operations. Reports and annotations
+//! remain owned through merging, branch rejection and internal consumption.
+//! Public validation and recovery receipts retain transferred output storage;
+//! discarded internal records release it. General assertion computation keeps
+//! its separate contract.
 use super::layout::Dependency;
+use super::report::{Owned, Records};
 use super::{Schema, Violation};
-use super::{index, reference};
-use crate::contract::saturating_size as size;
+use super::{index, reference, report};
 use crate::contract::{
-    Evidence, Governor, Resource, ScratchMeter, ScratchString, ScratchVec, StopReason, Validation,
+    Evidence, Governor, Resource, ScratchString, ScratchVec, StopReason, Validation,
     format_output_governed, format_scratch_governed,
 };
 use crate::json::{Member, Node, Value};
@@ -25,9 +26,36 @@ use crate::json::{Member, Node, Value};
 /// `format` annotation evidence and the pattern-engine wiring
 /// check both require, regardless of which branch's assertions passed.
 pub(super) struct EvalResult {
-    pub violations: Vec<Violation>,
-    pub format_evidence: Vec<Validation>,
-    pub pattern_evidence: Vec<Evidence>,
+    pub violations: Records<Violation>,
+    pub format_evidence: Records<Validation>,
+    pub pattern_evidence: ScratchVec<Owned<Evidence>>,
+}
+
+impl EvalResult {
+    pub(super) fn publish(
+        self,
+        schema: &Schema,
+        governor: &mut Governor,
+    ) -> Result<super::ValidationReport, StopReason> {
+        let valid = self.violations.is_empty();
+        let mut patterns = Records::new(governor);
+        // Reserve before draining; any refusal drops every temporary owner.
+        patterns.values.reserve(self.pattern_evidence.len())?;
+        let (entries, entries_lease) = self.pattern_evidence.into_owned_parts();
+        for entry in entries {
+            patterns.push(entry, governor)?;
+        }
+        drop(entries_lease);
+        governor.check()?;
+        Ok(super::ValidationReport {
+            schema: schema.digest(),
+            dialect: schema.dialect(),
+            valid,
+            violations: self.violations.publish(),
+            format_evidence: self.format_evidence.publish(),
+            pattern_evidence: patterns.publish(),
+        })
+    }
 }
 
 /// Bound native evaluator nesting, with the root at depth zero.
@@ -36,133 +64,98 @@ pub(super) struct EvalResult {
 /// from the ordinary caller Depth preset.
 const NATIVE_EVALUATION_DEPTH: u32 = 256;
 
-/// `ScratchBytes` charged per retained pattern-evidence entry's struct, on
-/// top of its strings: at least `size_of::<Evidence>()` on every target.
-const EVIDENCE_BYTES: u64 = 160;
-const _: () = assert!(core::mem::size_of::<Evidence>() as u64 <= EVIDENCE_BYTES);
-
-/// `ScratchBytes` charged per branch evaluation an applicator holds while
-/// it decides (`allOf`, `anyOf`, `oneOf`): at least
-/// `size_of::<Option<Evaluation>>()` on every target.
-const EVALUATION_BYTES: u64 = 256;
-
-/// Bytes charged while held for the contents of strings an evaluation
-/// keeps (member names, pattern keyword keys), released when dropped.
-struct Held {
-    meter: ScratchMeter,
-    bytes: u64,
-}
-
-impl Held {
-    fn new(governor: &Governor) -> Self {
-        Self {
-            meter: governor.scratch_meter(),
-            bytes: 0,
-        }
-    }
-
-    fn charge(&mut self, bytes: u64) -> Result<(), StopReason> {
-        self.meter.charge(bytes)?;
-        self.bytes = self.bytes.saturating_add(bytes);
-        Ok(())
-    }
-
-    /// Take over `bytes` of `other`'s charge with the strings it describes.
-    fn transfer(&mut self, other: &mut Self, bytes: u64) {
-        let bytes = bytes.min(other.bytes);
-        other.bytes -= bytes;
-        self.bytes = self.bytes.saturating_add(bytes);
-    }
-}
-
-impl Drop for Held {
-    fn drop(&mut self) {
-        let _ = self.meter.release(self.bytes);
-    }
-}
-
-const _: () = assert!(core::mem::size_of::<Option<Evaluation>>() as u64 <= EVALUATION_BYTES);
-
 struct Evaluation {
-    errors: ScratchVec<Violation>,
+    errors: Records<Violation>,
     /// Member names evaluated at this instance scope (may repeat; sorted
     /// before lookup).
-    properties: ScratchVec<String>,
-    properties_held: Held,
+    properties: ScratchVec<ScratchString>,
     /// Array positions evaluated at this instance scope (may repeat).
     items: ScratchVec<usize>,
     /// Format annotation results, always recorded regardless
     /// of whether the enclosing branch's assertions passed.
-    format_evidence: ScratchVec<Validation>,
+    format_evidence: Records<Validation>,
     /// Pattern-engine wiring: `(location id, "pattern" | "patternProperties/<name>")`
     /// for every compiled pattern this evaluation actually exercised, each
     /// once.
-    pattern_ids: ScratchVec<(usize, String)>,
-    patterns_held: Held,
+    pattern_ids: ScratchVec<(usize, ScratchString)>,
 }
 impl Evaluation {
     fn new(governor: &Governor) -> Self {
         Self {
-            errors: ScratchVec::new(governor),
+            errors: Records::new(governor),
             properties: ScratchVec::new(governor),
-            properties_held: Held::new(governor),
             items: ScratchVec::new(governor),
-            format_evidence: ScratchVec::new(governor),
+            format_evidence: Records::new(governor),
             pattern_ids: ScratchVec::new(governor),
-            patterns_held: Held::new(governor),
         }
     }
     /// Merge a schema evaluated against this same instance scope.
-    fn merge(&mut self, mut other: Self) -> Result<(), StopReason> {
+    fn merge(&mut self, mut other: Self, governor: &mut Governor) -> Result<(), StopReason> {
         if other.errors.is_empty() {
-            let bytes = other.properties_held.bytes;
-            self.properties.append(&mut other.properties)?;
-            self.properties_held
-                .transfer(&mut other.properties_held, bytes);
-            self.items.append(&mut other.items)?;
+            report::append(&mut self.properties, &mut other.properties, governor)?;
+            report::append(&mut self.items, &mut other.items, governor)?;
         }
-        self.merge_child(other)
+        self.merge_child(other, governor)
     }
-    /// Child-instance annotations cannot mark members of the parent evaluated.
-    fn merge_child(&mut self, mut other: Self) -> Result<(), StopReason> {
-        self.merge_evidence(&mut other)?;
-        self.errors.append(&mut other.errors)
+    fn merge_child(&mut self, mut other: Self, governor: &mut Governor) -> Result<(), StopReason> {
+        self.merge_evidence(&mut other, governor)?;
+        self.errors.append(&mut other.errors, governor)
     }
-    /// Keep observations even when the branch's assertions are discarded.
-    fn merge_evidence(&mut self, other: &mut Self) -> Result<(), StopReason> {
-        self.format_evidence.append(&mut other.format_evidence)?;
-        let mut moved = 0_u64;
+    fn merge_evidence(
+        &mut self,
+        other: &mut Self,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        self.format_evidence
+            .append(&mut other.format_evidence, governor)?;
         while let Some(entry) = other.pattern_ids.pop() {
-            if self.pattern_ids.as_slice().contains(&entry) {
-                continue;
+            if !self.has_pattern(entry.0, &entry.1, governor)? {
+                index::push(&mut self.pattern_ids, entry, governor)?;
             }
-            moved = moved.saturating_add(size(entry.1.len()));
-            self.pattern_ids.push(entry)?;
         }
-        self.patterns_held.transfer(&mut other.patterns_held, moved);
         Ok(())
     }
-    /// Record that the compiled pattern `(id, key)` was exercised.
-    fn pattern(&mut self, id: usize, key: &str) -> Result<(), StopReason> {
-        if self
-            .pattern_ids
-            .as_slice()
-            .iter()
-            .any(|(known, name)| *known == id && name == key)
-        {
-            return Ok(());
+    fn has_pattern(
+        &self,
+        id: usize,
+        key: &str,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        for (known, name) in &self.pattern_ids {
+            reference::work(governor, 1)?;
+            if *known == id {
+                reference::work(governor, 1)?;
+                if name.len() == key.len() {
+                    reference::work(governor, key.len())?;
+                    if name.as_str() == key {
+                        return Ok(true);
+                    }
+                }
+            }
         }
-        self.patterns_held.charge(size(key.len()))?;
-        self.pattern_ids.push((id, key.to_owned()))
+        Ok(false)
     }
-    /// Record that the member named `key` was evaluated.
-    fn property(&mut self, key: &str) -> Result<(), StopReason> {
-        self.properties_held.charge(size(key.len()))?;
-        self.properties.push(key.to_owned())
+    fn pattern(&mut self, id: usize, key: &str, governor: &mut Governor) -> Result<(), StopReason> {
+        if !self.has_pattern(id, key, governor)? {
+            let name = reference::copy(key, governor)?;
+            index::push(&mut self.pattern_ids, (id, name), governor)?;
+        }
+        Ok(())
     }
-    const fn valid(&self) -> bool {
+    fn property(&mut self, key: &str, governor: &mut Governor) -> Result<(), StopReason> {
+        let key = reference::copy(key, governor)?;
+        index::push(&mut self.properties, key, governor)
+    }
+    fn valid(&self) -> bool {
         self.errors.is_empty()
     }
+}
+
+impl crate::ScratchCharge for Option<Evaluation> {
+    const CHARGE: usize = {
+        assert!(core::mem::size_of::<Self>() <= 256);
+        256
+    };
 }
 
 struct Evaluator<'s, 'g> {
@@ -196,58 +189,50 @@ pub(super) fn run(
         mut pattern_ids,
         ..
     } = evaluation;
-    // Sorted like the set of exercised patterns it is.
-    pattern_ids.as_mut_slice().sort_unstable();
-    governor.charge(
-        Resource::ScratchBytes,
-        size(pattern_ids.len()).saturating_mul(EVIDENCE_BYTES),
+    // Preserve the established location/key ordering of pattern observations.
+    report::sort_by(
+        pattern_ids.as_mut_slice(),
+        governor,
+        |left, right, governor| {
+            reference::work(governor, 1)?;
+            let order = left.0.cmp(&right.0);
+            if order.is_eq() {
+                report::compare(&left.1, &right.1, governor)
+            } else {
+                Ok(order)
+            }
+        },
     )?;
-    let mut pattern_evidence = Vec::with_capacity(pattern_ids.len());
+    let mut pattern_evidence = ScratchVec::new(governor);
     for (location_id, keyword) in pattern_ids.as_slice() {
         governor.charge(Resource::EvidenceEntries, 1)?;
         let location = &schema.index.locations[*location_id];
-        let pattern = &location.patterns[keyword];
-        let evidence = pattern.engine_evidence();
-        governor.charge(
-            Resource::ScratchBytes,
-            size(location.pointer.len())
-                .saturating_add(size(keyword.len()))
-                .saturating_add(64),
-        )?;
-        pattern_evidence.push(Evidence {
-            destination: format!(
-                "{}#{}/{keyword}",
-                location.base.as_str(),
-                location.pointer.as_str()
-            ),
-            ..evidence
-        });
+        let pattern = location
+            .patterns
+            .get_governed(keyword.as_str(), governor)?
+            .expect("INVARIANT: evaluated pattern is compiled");
+        let (rule, explanation) = pattern.engine_metadata();
+        let evidence = Owned::evidence(
+            reference::copy(rule, governor)?,
+            reference::copy(explanation, governor)?,
+            format_scratch_governed(
+                format_args!(
+                    "{}#{}/{}",
+                    location.base.as_str(),
+                    location.pointer.as_str(),
+                    keyword.as_str()
+                ),
+                governor,
+            )?,
+        );
+        index::push(&mut pattern_evidence, evidence, governor)?;
     }
+    governor.check()?;
     Ok(EvalResult {
-        violations: errors.into_vec(),
-        format_evidence: format_evidence.into_vec(),
+        violations: errors,
+        format_evidence,
         pattern_evidence,
     })
-}
-
-/// Report-path sizing; retained violation storage has a separate contract.
-fn escaped_len(key: &str) -> usize {
-    key.len()
-        + key
-            .bytes()
-            .filter(|&byte| byte == b'~' || byte == b'/')
-            .count()
-}
-
-/// Report-path encoding; traversal keys use the shared admitted pointer builder.
-fn push_segment(out: &mut String, key: &str) {
-    for character in key.chars() {
-        match character {
-            '~' => out.push_str("~0"),
-            '/' => out.push_str("~1"),
-            other => out.push(other),
-        }
-    }
 }
 
 impl Evaluator<'_, '_> {
@@ -273,39 +258,32 @@ impl Evaluator<'_, '_> {
     ) -> Result<(), StopReason> {
         self.governor.charge(Resource::EvidenceEntries, 1)?;
         let location = &self.schema.index.locations[id];
-        let message = format_scratch_governed(message, self.governor)?;
-        // A `Violation` may be a transient search diagnostic or the actual
-        // output an external `Schema::validate` caller retains indefinitely.
-        // Since that is not known here, its strings are charged directly and
-        // never released, like `retain_source`: safe to over-count, never to
-        // under-count or to release memory a caller may still be holding.
-        // The message retains its temporary owner until transfer below; the
-        // other strings are built at their exact lengths.
-        let schema_path_len =
-            location.base.len() + location.pointer.len() + 2 + escaped_len(keyword);
-        self.governor.charge(
-            Resource::ScratchBytes,
-            size(path.len())
-                .saturating_add(size(schema_path_len))
-                .saturating_add(size(keyword.len()))
-                .saturating_add(64),
+        let message = Owned::string(format_scratch_governed(message, self.governor)?);
+        let instance_path = Owned::string(reference::copy(path, self.governor)?);
+        let keyword_text = Owned::string(reference::copy(keyword, self.governor)?);
+        let prefix = format_scratch_governed(
+            format_args!("{}#{}", location.base.as_str(), location.pointer.as_str()),
+            self.governor,
         )?;
-        let mut schema_path = String::with_capacity(schema_path_len);
-        schema_path.push_str(&location.base);
-        schema_path.push('#');
-        schema_path.push_str(&location.pointer);
-        schema_path.push('/');
-        push_segment(&mut schema_path, keyword);
-        let (message, message_lease) = message.into_owned_parts();
-        result.errors.push(Violation {
-            instance_path: path.into(),
-            schema_path,
-            keyword: keyword.into(),
-            message,
-        })?;
-        message_lease.retain();
-        Ok(())
+        let schema_path = Owned::string(index::pointer(&prefix, keyword, self.governor)?);
+        let mut lease = message.lease;
+        lease.absorb(instance_path.lease);
+        lease.absorb(keyword_text.lease);
+        lease.absorb(schema_path.lease);
+        result.errors.push(
+            Owned {
+                value: Violation {
+                    instance_path: instance_path.value,
+                    schema_path: schema_path.value,
+                    keyword: keyword_text.value,
+                    message: message.value,
+                },
+                lease,
+            },
+            self.governor,
+        )
     }
+
     fn eval(
         &mut self,
         id: usize,
@@ -416,7 +394,7 @@ impl Evaluator<'_, '_> {
                         self.governor,
                     )?;
                 }
-                result.merge(self.eval(target, instance, path, depth + 1)?)?;
+                result.merge(self.eval(target, instance, path, depth + 1)?, self.governor)?;
             }
         }
         Ok(())
@@ -548,7 +526,7 @@ impl Evaluator<'_, '_> {
                     result,
                 )?;
                 if let Some(pattern) = schema.index.locations[id].patterns.get("pattern") {
-                    result.pattern(id, "pattern")?;
+                    result.pattern(id, "pattern", self.governor)?;
                     if !pattern.is_match(text, self.governor)? {
                         self.violation(
                             result,
@@ -582,37 +560,33 @@ impl Evaluator<'_, '_> {
     ) -> Result<(), StopReason> {
         let outcome = super::format::evaluate(name, text, self.governor)?;
         self.governor.charge(Resource::EvidenceEntries, 1)?;
-        let (validator, passed, diagnostics) = match outcome {
-            super::format::Outcome::Pass => (super::format::rule(name), true, Vec::new()),
-            super::format::Outcome::Fail => (
-                super::format::rule(name),
-                false,
-                vec![format!("{text:?} does not satisfy format {name:?}")],
-            ),
-            super::format::Outcome::Unknown => (
-                "schema.format.unknown-v1".into(),
-                true,
-                vec![format!("format {name:?} is not evaluated")],
-            ),
+        let passed = !matches!(outcome, super::format::Outcome::Fail);
+        let validator = if matches!(outcome, super::format::Outcome::Unknown) {
+            reference::copy("schema.format.unknown-v1", self.governor)?
+        } else {
+            format_scratch_governed(format_args!("schema.format.{name}-v1"), self.governor)?
         };
-        self.governor.charge(
-            Resource::ScratchBytes,
-            size(validator.len())
-                .saturating_add(size(path.len()))
-                .saturating_add(
-                    diagnostics
-                        .iter()
-                        .fold(0, |sum, line| sum.saturating_add(size(line.len()))),
-                )
-                .saturating_add(64),
-        )?;
+        let mut diagnostics = Records::new(self.governor);
+        let diagnostic = match outcome {
+            super::format::Outcome::Pass => None,
+            super::format::Outcome::Fail => Some(format_scratch_governed(
+                format_args!("{text:?} does not satisfy format {name:?}"),
+                self.governor,
+            )?),
+            super::format::Outcome::Unknown => Some(format_scratch_governed(
+                format_args!("format {name:?} is not evaluated"),
+                self.governor,
+            )?),
+        };
+        if let Some(line) = diagnostic {
+            diagnostics.push(Owned::string(line), self.governor)?;
+        }
+        let constraint = reference::copy(path, self.governor)?;
         let assert = !passed && self.schema.keywords(id).vocabularies.format_assert;
-        result.format_evidence.push(Validation {
-            validator,
-            constraint: path.into(),
-            passed,
-            diagnostics,
-        })?;
+        result.format_evidence.push(
+            Owned::validation(validator, constraint, passed, diagnostics),
+            self.governor,
+        )?;
         if assert {
             self.violation(
                 result,
@@ -672,10 +646,7 @@ impl Evaluator<'_, '_> {
             {
                 // Every branch's evaluation is held until the keyword's
                 // outcome is known.
-                let _branches = self
-                    .governor
-                    .lease_scratch(size(children.len()).saturating_mul(EVALUATION_BYTES))?;
-                let mut branches: Vec<Option<Evaluation>> = Vec::with_capacity(children.len());
+                let mut branches = ScratchVec::new(self.governor);
                 for position in 0..children.len() {
                     let child = {
                         let key = format_scratch_governed(
@@ -684,8 +655,10 @@ impl Evaluator<'_, '_> {
                         )?;
                         index::child(schema, id, &key, self.governor)?
                     };
-                    branches.push(Some(self.eval(child, instance, path, depth + 1)?));
+                    let branch = self.eval(child, instance, path, depth + 1)?;
+                    index::push(&mut branches, Some(branch), self.governor)?;
                 }
+                reference::work(self.governor, branches.len())?;
                 let passed = branches
                     .iter()
                     .flatten()
@@ -708,19 +681,23 @@ impl Evaluator<'_, '_> {
                 // The branches whose annotations count come first: the
                 // passed ones when the keyword holds, else the failed ones
                 // (whose errors explain the failure); each in order.
-                for slot in &mut branches {
+                reference::work(self.governor, branches.len())?;
+                for slot in branches.as_mut_slice() {
                     if slot.as_ref().is_some_and(|branch| branch.valid() == valid)
                         && let Some(branch) = slot.take()
                     {
                         if valid {
-                            result.merge(branch)?;
+                            result.merge(branch, self.governor)?;
                         } else {
-                            result.merge_child(branch)?;
+                            result.merge_child(branch, self.governor)?;
                         }
                     }
                 }
-                for mut branch in branches.into_iter().flatten() {
-                    result.merge_evidence(&mut branch)?;
+                reference::work(self.governor, branches.len())?;
+                for slot in branches.as_mut_slice() {
+                    if let Some(mut branch) = slot.take() {
+                        result.merge_evidence(&mut branch, self.governor)?;
+                    }
                 }
             }
         }
@@ -735,19 +712,22 @@ impl Evaluator<'_, '_> {
                     format_args!("negated schema matched"),
                 )?;
             }
-            result.merge_evidence(&mut branch)?;
+            result.merge_evidence(&mut branch, self.governor)?;
         }
         if body.get_governed("if", self.governor)?.is_some() {
             let mut condition = self.eval_child(id, "if", instance, path, depth + 1)?;
             let branch = if condition.valid() {
-                result.merge(condition)?;
+                result.merge(condition, self.governor)?;
                 "then"
             } else {
-                result.merge_evidence(&mut condition)?;
+                result.merge_evidence(&mut condition, self.governor)?;
                 "else"
             };
             if body.get_governed(branch, self.governor)?.is_some() {
-                result.merge(self.eval_child(id, branch, instance, path, depth + 1)?)?;
+                result.merge(
+                    self.eval_child(id, branch, instance, path, depth + 1)?,
+                    self.governor,
+                )?;
             }
         }
         Ok(())
@@ -771,16 +751,31 @@ impl Evaluator<'_, '_> {
             "maxProperties",
             result,
         )?;
-        // The member names, sorted for lookup: `&str` is two words on a
-        // 64-bit target.
-        let _names = self
-            .governor
-            .lease_scratch(size(members.len()).saturating_mul(16))?;
-        let mut names: Vec<&str> = Vec::with_capacity(members.len());
-        names.extend(members.iter().map(|member| member.key.as_str()));
-        names.sort_unstable();
-        let has = |key: &str| names.binary_search(&key).is_ok();
-        if names.windows(2).any(|pair| pair[0] == pair[1]) {
+        let mut names = ScratchVec::new(self.governor);
+        for member in members {
+            index::push(&mut names, member.key.as_str(), self.governor)?;
+        }
+        report::sort_by(
+            names.as_mut_slice(),
+            self.governor,
+            |left, right, governor| report::compare(left, right, governor),
+        )?;
+        let has = |key: &str, governor: &mut Governor| -> Result<bool, StopReason> {
+            Ok(
+                report::search_by(names.as_slice(), governor, |known, governor| {
+                    report::compare(known, key, governor)
+                })?
+                .is_ok(),
+            )
+        };
+        let mut duplicate = false;
+        for pair in names.windows(2) {
+            if report::compare(pair[0], pair[1], self.governor)?.is_eq() {
+                duplicate = true;
+                break;
+            }
+        }
+        if duplicate {
             self.violation(
                 result,
                 id,
@@ -795,7 +790,7 @@ impl Evaluator<'_, '_> {
         }) = body.get("required")
         {
             for key in required.iter().filter_map(Node::as_str) {
-                if !has(key) {
+                if !has(key, self.governor)? {
                     self.violation(
                         result,
                         id,
@@ -812,9 +807,9 @@ impl Evaluator<'_, '_> {
                     keyword,
                     trigger,
                     names: required,
-                } if has(trigger) => {
+                } if has(trigger, self.governor)? => {
                     for key in required.iter().filter_map(Node::as_str) {
-                        if !has(key) {
+                        if !has(key, self.governor)? {
                             self.violation(
                                 result,
                                 id,
@@ -825,8 +820,8 @@ impl Evaluator<'_, '_> {
                         }
                     }
                 }
-                Dependency::Schema { trigger, child } if has(trigger) => {
-                    result.merge(self.eval(child, instance, path, depth + 1)?)?;
+                Dependency::Schema { trigger, child } if has(trigger, self.governor)? => {
+                    result.merge(self.eval(child, instance, path, depth + 1)?, self.governor)?;
                 }
                 _ => {}
             }
@@ -855,13 +850,10 @@ impl Evaluator<'_, '_> {
             let (name, _name_lease) = name.into_owned_parts();
             let name = Node::new(Value::String(name));
             let name_path = index::pointer(&child_path, "@name", self.governor)?;
-            result.merge_child(self.eval_child(
-                id,
-                "propertyNames",
-                &name,
-                &name_path,
-                depth + 1,
-            )?)?;
+            result.merge_child(
+                self.eval_child(id, "propertyNames", &name, &name_path, depth + 1)?,
+                self.governor,
+            )?;
         }
         if let Some(properties) = body.get_governed("properties", self.governor)?
             && super::compile::member(properties, &member.key, self.governor)?.is_some()
@@ -872,7 +864,7 @@ impl Evaluator<'_, '_> {
                 index::child(schema, id, &key, self.governor)?
             };
             let branch = self.eval(child, &member.value, &child_path, depth + 1)?;
-            result.merge_child(branch)?;
+            result.merge_child(branch, self.governor)?;
         }
         if let Some(Node {
             value: Value::Object(patterns),
@@ -881,7 +873,7 @@ impl Evaluator<'_, '_> {
         {
             for pattern in patterns {
                 let name = index::pointer("patternProperties", &pattern.key, self.governor)?;
-                result.pattern(id, &name)?;
+                result.pattern(id, &name, self.governor)?;
                 if schema.index.locations[id]
                     .patterns
                     .get_governed(name.as_str(), self.governor)?
@@ -891,7 +883,7 @@ impl Evaluator<'_, '_> {
                     matched = true;
                     let branch =
                         self.eval_child(id, &name, &member.value, &child_path, depth + 1)?;
-                    result.merge_child(branch)?;
+                    result.merge_child(branch, self.governor)?;
                 }
             }
         }
@@ -908,10 +900,10 @@ impl Evaluator<'_, '_> {
                 &child_path,
                 depth + 1,
             )?;
-            result.merge_child(branch)?;
+            result.merge_child(branch, self.governor)?;
         }
         if matched {
-            result.property(&member.key)?;
+            result.property(&member.key, self.governor)?;
         }
         Ok(())
     }
@@ -954,8 +946,8 @@ impl Evaluator<'_, '_> {
                 let item_path =
                     format_scratch_governed(format_args!("{path}/{position}"), self.governor)?;
                 let branch = self.eval(child, item, &item_path, depth + 1)?;
-                result.merge_child(branch)?;
-                result.items.push(position)?;
+                result.merge_child(branch, self.governor)?;
+                index::push(&mut result.items, position, self.governor)?;
             }
         }
         if body.get_governed("contains", self.governor)?.is_some() {
@@ -965,9 +957,9 @@ impl Evaluator<'_, '_> {
                     format_scratch_governed(format_args!("{path}/{position}"), self.governor)?;
                 let mut branch = self.eval_child(id, "contains", item, &item_path, depth + 1)?;
                 if branch.valid() {
-                    matched.push(position)?;
+                    index::push(&mut matched, position, self.governor)?;
                 }
-                result.merge_evidence(&mut branch)?;
+                result.merge_evidence(&mut branch, self.governor)?;
             }
             if body.get("minContains").is_none() && matched.is_empty() {
                 self.violation(
@@ -986,7 +978,7 @@ impl Evaluator<'_, '_> {
                 "maxContains",
                 result,
             )?;
-            result.items.append(&mut matched)?;
+            report::append(&mut result.items, &mut matched, self.governor)?;
         }
         Ok(())
     }
@@ -1018,10 +1010,10 @@ impl Evaluator<'_, '_> {
                         &member_path,
                         depth + 1,
                     )?;
-                    result.merge_child(branch)?;
+                    result.merge_child(branch, self.governor)?;
                 }
                 for &index in pending.as_slice() {
-                    result.property(&members[index].key)?;
+                    result.property(&members[index].key, self.governor)?;
                 }
             }
             Value::Array(items)
@@ -1029,12 +1021,28 @@ impl Evaluator<'_, '_> {
                     .get_governed("unevaluatedItems", self.governor)?
                     .is_some() =>
             {
-                result.items.as_mut_slice().sort_unstable();
+                report::sort_by(
+                    result.items.as_mut_slice(),
+                    self.governor,
+                    |left, right, governor| {
+                        reference::work(governor, 1)?;
+                        Ok(left.cmp(right))
+                    },
+                )?;
                 let mut pending: ScratchVec<usize> = ScratchVec::new(self.governor);
                 for position in 0..items.len() {
                     self.governor.charge(Resource::Work, 1)?;
-                    if result.items.as_slice().binary_search(&position).is_err() {
-                        pending.push(position)?;
+                    if report::search_by(
+                        result.items.as_slice(),
+                        self.governor,
+                        |known, governor| {
+                            reference::work(governor, 1)?;
+                            Ok(known.cmp(&position))
+                        },
+                    )?
+                    .is_err()
+                    {
+                        index::push(&mut pending, position, self.governor)?;
                     }
                 }
                 for &position in pending.as_slice() {
@@ -1047,9 +1055,9 @@ impl Evaluator<'_, '_> {
                         &item_path,
                         depth + 1,
                     )?;
-                    result.merge_child(branch)?;
+                    result.merge_child(branch, self.governor)?;
                 }
-                result.items.append(&mut pending)?;
+                report::append(&mut result.items, &mut pending, self.governor)?;
             }
             _ => {}
         }
@@ -1063,36 +1071,54 @@ impl Evaluator<'_, '_> {
         members: &[Member],
         result: &mut Evaluation,
     ) -> Result<ScratchVec<usize>, StopReason> {
-        result.properties.as_mut_slice().sort_unstable();
+        report::sort_by(
+            result.properties.as_mut_slice(),
+            self.governor,
+            |left, right, governor| report::compare(left, right, governor),
+        )?;
         let mut pending: ScratchVec<usize> = ScratchVec::new(self.governor);
         for (index, member) in members.iter().enumerate() {
             self.governor.charge(Resource::Work, 1)?;
-            if result
-                .properties
-                .as_slice()
-                .binary_search(&member.key)
-                .is_err()
+            if report::search_by(
+                result.properties.as_slice(),
+                self.governor,
+                |key, governor| report::compare(key, &member.key, governor),
+            )?
+            .is_err()
             {
-                pending.push(index)?;
+                index::push(&mut pending, index, self.governor)?;
             }
         }
         // Keep the first member of each name, then restore member order.
-        pending.as_mut_slice().sort_unstable_by(|&left, &right| {
-            members[left]
-                .key
-                .cmp(&members[right].key)
-                .then(left.cmp(&right))
-        });
+        report::sort_by(
+            pending.as_mut_slice(),
+            self.governor,
+            |&left, &right, governor| {
+                let order = report::compare(&members[left].key, &members[right].key, governor)?;
+                reference::work(governor, 1)?;
+                Ok(order.then(left.cmp(&right)))
+            },
+        )?;
         let mut first: ScratchVec<usize> = ScratchVec::new(self.governor);
         let mut previous: Option<&str> = None;
         for &index in pending.as_slice() {
             let key = members[index].key.as_str();
-            if previous != Some(key) {
-                first.push(index)?;
+            if previous.is_none()
+                || !report::compare(previous.expect("previous name exists"), key, self.governor)?
+                    .is_eq()
+            {
+                index::push(&mut first, index, self.governor)?;
             }
             previous = Some(key);
         }
-        first.as_mut_slice().sort_unstable();
+        report::sort_by(
+            first.as_mut_slice(),
+            self.governor,
+            |left, right, governor| {
+                reference::work(governor, 1)?;
+                Ok(left.cmp(right))
+            },
+        )?;
         Ok(first)
     }
 }
@@ -1120,6 +1146,66 @@ mod tests {
     };
 
     #[test]
+    fn report_owners_release_rejected_branches_and_refused_publication() {
+        let schema = Schema::compile(
+            r#"{"allOf":[{"anyOf":[{"format":"email","pattern":"^x"},true]},false]}"#,
+        )
+        .unwrap();
+        let instance = json::parse(r#""bad""#).unwrap();
+        let mut governor = Governor::new(Budget::default());
+        let result = run(&schema, schema.root, &instance, &mut governor).unwrap();
+        assert_eq!(result.format_evidence.len(), 1);
+        assert_eq!(result.pattern_evidence.len(), 1);
+        assert!(!result.format_evidence[0].passed);
+        assert!(
+            result
+                .violations
+                .iter()
+                .all(|entry| entry.keyword != "pattern")
+        );
+        assert!(!result.violations.is_empty());
+        let usage = governor.usage();
+        assert!(governor.scratch_meter().live() > 0);
+        drop(result);
+        assert_eq!(governor.scratch_meter().live(), 0);
+
+        for (resource, limit) in [
+            (Resource::Work, usage.work - 1),
+            (Resource::ScratchBytes, usage.peak_scratch_bytes - 1),
+            (Resource::EvidenceEntries, usage.evidence_entries - 1),
+        ] {
+            let mut budget = Budget::default();
+            match resource {
+                Resource::Work => budget.work = limit,
+                Resource::ScratchBytes => budget.scratch_bytes = limit,
+                Resource::EvidenceEntries => budget.evidence_entries = limit,
+                _ => unreachable!(),
+            }
+            let mut governor = Governor::new(budget);
+            assert!(
+                matches!(run(&schema, schema.root, &instance, &mut governor), Err(StopReason::BudgetExceeded(actual)) if actual == resource)
+            );
+            assert_eq!(governor.scratch_meter().live(), 0);
+        }
+        let token = crate::CancellationToken::new();
+        let mut governor = Governor::with_cancellation(Budget::default(), token.clone());
+        let result = run(&schema, schema.root, &instance, &mut governor).unwrap();
+        token.cancel();
+        assert!(matches!(
+            result.publish(&schema, &mut governor),
+            Err(StopReason::Cancelled)
+        ));
+        assert_eq!(governor.scratch_meter().live(), 0);
+
+        let mut governor = Governor::new(Budget::default());
+        let report = schema.validate_with(&instance, &mut governor).unwrap();
+        let retained = governor.scratch_meter().live();
+        assert!(retained > 0);
+        drop(report);
+        assert_eq!(governor.scratch_meter().live(), retained);
+    }
+
+    #[test]
     fn control_paths_release_on_success_and_late_admission_refusal() {
         let schema = Schema::compile(
             r##"{"$defs":{"node":{"properties":{"雪/~":{"$ref":"#/$defs/node"}}}},"$ref":"#/$defs/node"}"##,
@@ -1129,7 +1215,9 @@ mod tests {
         assert_eq!(
             run(&schema, schema.root, &instance, &mut governor)
                 .unwrap()
-                .violations,
+                .violations
+                .values
+                .as_slice(),
             [] as [crate::schema::Violation; 0],
         );
         let usage = governor.usage();
@@ -1159,7 +1247,7 @@ mod tests {
                 );
             } else {
                 assert_eq!(
-                    result.unwrap().violations,
+                    result.unwrap().violations.values.as_slice(),
                     [] as [crate::schema::Violation; 0]
                 );
             }

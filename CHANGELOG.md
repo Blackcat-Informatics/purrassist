@@ -23,12 +23,21 @@ crates share one version.
 
 ### Changed
 
+- Evaluator reports now own their strings, annotations and collection storage
+  until publication or discard. Internal witness/recovery checks release reports;
+  public validation retains completed output. Recovery moves format evidence,
+  deduplicates owned pattern records and reserves final publication slots before
+  committing observations. Late refusal and cancellation preserve committed
+  records and validation indices without allocating during finalization. Answers,
+  rankings, guess semantics and diagnostic text are unchanged; resource counters
+  and finite-budget refusal points reflect the newly admitted operations.
+
 - Schema evaluation now owns recursion keys and transient paths with fallible
   storage, admitting comparisons, copies, lookup and relocation work. Active
   and dynamic-scope entries unwind on refusal; caller/native depth checks bound
   recursion. Shared array-layout child resolution also governs recovery callers.
   Pointer and cycle-diagnostic text remain unchanged. The obsolete dependency-key
-  lease is removed; annotation/report ownership remains a separate contract.
+  lease is removed.
 
 - Final witness refutations now admit evidence entries, copying work and
   fallible output storage before atomic publication. Internal contradiction

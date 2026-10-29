@@ -4,11 +4,13 @@
 mod factor;
 mod proposals;
 use super::Schema;
+use super::report::{Observations, Owned, Records};
 use crate::contract::saturating_size as size;
 use crate::contract::{
     AssistResult, Budget, Effort, Evidence, Governor, Outcome, Receipt, Resource, ScratchVec,
     SourceSpan, StopReason,
 };
+use crate::contract::{Validation, format_scratch_governed};
 use crate::digest::Digest;
 use crate::json::{Node, ParseFailure, Value};
 use crate::scan;
@@ -16,7 +18,7 @@ use crate::search::{Acceptance, Change, Ledger, Proposals, Search, SearchState};
 pub(crate) use proposals::{
     EDITED_NAME_COST, FOLDED_NAME_COST, KEY_RELOCATE_COST, KEY_REMOVE_COST, name_cost,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 /// Recovery policy; effort changes search bounds, never the schema's constraints.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,7 +46,10 @@ struct Recovery<'a> {
     receipt: Receipt,
     /// Pattern-engine wiring: deduplicated by destination (one distinct compiled
     /// pattern), across every candidate this search actually validated.
-    pattern_evidence: BTreeMap<String, Evidence>,
+    observations: Observations,
+    validations: Records<Validation>,
+    staged_evidence: Vec<Evidence>,
+    include_observation_prefix: bool,
     factored: Option<ScratchVec<factor::Edit>>,
     factor_pending: bool,
 }
@@ -206,7 +211,10 @@ impl Schema {
             schema: self,
             request,
             receipt: Receipt::new(input.as_bytes(), "json.recover.v1", request.effort, budget),
-            pattern_evidence: BTreeMap::new(),
+            observations: Observations::new(governor),
+            validations: Records::new(governor),
+            staged_evidence: Vec::new(),
+            include_observation_prefix: true,
             factored: None,
             factor_pending: factoring && !request.allow_guesses,
         };
@@ -222,12 +230,13 @@ impl Schema {
             }
         };
         drop(search);
-        // Pattern-engine wiring: every distinct pattern actually validated during
-        // this search, regardless of which candidate (if any) was accepted.
-        recovery
-            .receipt
-            .evidence
-            .extend(recovery.pattern_evidence.into_values());
+        // Slots and movement were admitted before each observation committed.
+        // This remains allocation-free even after exhaustion or cancellation.
+        recovery.receipt.evidence = recovery.observations.publish(
+            recovery.staged_evidence,
+            recovery.include_observation_prefix,
+        );
+        recovery.receipt.validations = recovery.validations.publish();
         recovery.receipt.usage = governor.usage();
         AssistResult {
             outcome,
@@ -265,14 +274,8 @@ impl Recovery<'_> {
             }
             let destination = super::reference::copy(uri, governor)?;
             let rule = super::reference::copy("schema.vocabulary.unsupported-v1", governor)?;
-            // Evidence collection ownership remains its existing separate contract.
-            governor.charge(Resource::ScratchBytes, 64)?;
-            self.receipt.evidence.push(Evidence {
-                rule: rule.into_string(),
-                explanation: explanation.into_string(),
-                span: None,
-                destination: destination.into_string(),
-            });
+            self.observations
+                .prefix(Owned::evidence(rule, explanation, destination), governor)?;
         }
         Ok(())
     }
@@ -296,70 +299,65 @@ impl Recovery<'_> {
             }
         }
         let accepted = search.run(self, governor)?;
-        let outcome = search.finish(accepted, &mut self.receipt, governor)?;
+        // Search publication remains provisional until its evidence can be
+        // combined with committed observations. Its own retained-allocation
+        // contract is unchanged; dropping a refused publication does not claim
+        // to undo those retained charges.
+        let mut staged = Receipt::new(&[], "", self.request.effort, *governor.limits());
+        let outcome = search.finish(accepted, &mut staged, governor)?;
+        self.observations.prepare(staged.evidence.len(), governor)?;
+        self.include_observation_prefix = !matches!(outcome, Outcome::Ambiguous(_));
+        self.staged_evidence = staged.evidence;
+        self.receipt.losses = staged.losses;
+        self.receipt.inferences = staged.inferences;
+        self.receipt.alternatives = staged.alternatives;
+        self.receipt.stopped = staged.stopped;
         Ok(outcome.map(|repair| repair.0))
     }
-    /// Validate one candidate against the whole schema, retaining its
-    /// validation, format, and pattern evidence in the receipt.
+    /// Validate one candidate while its report remains temporary. Commit the
+    /// whole-instance record, then move its format and unique pattern records.
     fn validate(&mut self, node: &Node, governor: &mut Governor) -> Result<Acceptance, StopReason> {
-        let report = self.schema.validate_with(node, governor)?;
+        let mut report = super::evaluate::run(self.schema, self.schema.root, node, governor)?;
+        let valid = report.violations.is_empty();
         governor.charge(Resource::EvidenceEntries, 1)?;
-        // Every violation's diagnostic line is permanently retained in the
-        // receipt (never released), so it is charged directly, before the
-        // `format!` calls that build it, like `retain_source`.
-        let diagnostic_bytes = report.violations.iter().fold(0_u64, |sum, violation| {
-            sum.saturating_add(size(violation.instance_path.len()))
-                .saturating_add(size(violation.message.len()))
-                .saturating_add(size(violation.schema_path.len()))
-                .saturating_add(8)
-        });
-        governor.charge(Resource::ScratchBytes, diagnostic_bytes)?;
-        let validation = self.receipt.validations.len();
-        self.receipt.validations.push(report.to_validation());
-        // Format annotation evidence and pattern-engine evidence are
-        // search-time signals, not tied to
-        // any one alternative, so they are retained unconditionally
-        // (after the index captured above) rather than routed through
-        // the derivation forest's per-alternative ledgers.
+        let mut diagnostics = Records::new(governor);
+        for violation in report.violations.iter() {
+            let line = format_scratch_governed(
+                format_args!(
+                    "{}: {} ({})",
+                    violation.instance_path, violation.message, violation.schema_path
+                ),
+                governor,
+            )?;
+            diagnostics.push(Owned::string(line), governor)?;
+        }
+        let validator = super::reference::copy(self.schema.dialect().validator(), governor)?;
+        let constraint =
+            format_scratch_governed(format_args!("{}", self.schema.digest()), governor)?;
+        let validation = self.validations.len();
+        self.validations.push(
+            Owned::validation(validator, constraint, valid, diagnostics),
+            governor,
+        )?;
+        // These observations survive rejected alternatives and any later refusal.
         governor.charge(
             Resource::EvidenceEntries,
             size(report.format_evidence.len()),
         )?;
-        let format_bytes = report.format_evidence.iter().fold(0_u64, |sum, entry| {
-            sum.saturating_add(size(entry.validator.len()))
-                .saturating_add(size(entry.constraint.len()))
-                .saturating_add(
-                    entry
-                        .diagnostics
-                        .iter()
-                        .fold(0, |inner, line| inner.saturating_add(size(line.len()))),
-                )
-                .saturating_add(32)
-        });
-        governor.charge(Resource::ScratchBytes, format_bytes)?;
-        self.receipt
-            .validations
-            .extend(report.format_evidence.iter().cloned());
-        for evidence in &report.pattern_evidence {
-            if !self.pattern_evidence.contains_key(&evidence.destination) {
-                governor.charge(Resource::EvidenceEntries, 1)?;
-                governor.charge(
-                    Resource::ScratchBytes,
-                    size(evidence.rule.len())
-                        .saturating_add(size(evidence.explanation.len()))
-                        .saturating_add(size(evidence.destination.len()))
-                        .saturating_add(32),
-                )?;
-                self.pattern_evidence
-                    .insert(evidence.destination.clone(), evidence.clone());
-            }
+        self.validations
+            .append(&mut report.format_evidence, governor)?;
+        let (patterns, patterns_lease) = report.pattern_evidence.into_owned_parts();
+        for evidence in patterns {
+            self.observations.pattern(evidence, governor)?;
         }
-        Ok(if report.valid {
+        drop(patterns_lease);
+        Ok(if valid {
             Acceptance::Accepted { validation }
         } else {
             Acceptance::Rejected
         })
     }
+
     /// Seed one candidate per bracketed value of the input, plus the value
     /// at offset 0, in ascending start order (see [`EXTRACT_WORK_PER_BYTE`]).
     ///
@@ -1001,6 +999,100 @@ mod factoring_tests {
                 );
             }
             prior = Some(result.receipt.usage.work);
+        }
+    }
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+
+    #[test]
+    fn committed_observations_survive_late_refusal_and_cancelled_finalization() {
+        let schema =
+            Schema::compile(r#"{"type":"string","format":"email","pattern":"^b"}"#).unwrap();
+        let node = crate::json::parse(r#""bad""#).unwrap();
+        for cancelled in [false, true] {
+            let token = crate::CancellationToken::new();
+            let mut governor = Governor::with_cancellation(Budget::default(), token.clone());
+            let mut recovery = Recovery {
+                schema: &schema,
+                request: RecoveryRequest::default(),
+                receipt: Receipt::new(&[], "json.recover.v1", Effort::Standard, Budget::default()),
+                observations: Observations::new(&governor),
+                validations: Records::new(&governor),
+                staged_evidence: Vec::new(),
+                include_observation_prefix: true,
+                factored: None,
+                factor_pending: false,
+            };
+            let prefix = Owned::evidence(
+                super::super::reference::copy("prefix", &mut governor).unwrap(),
+                super::super::reference::copy("committed observation", &mut governor).unwrap(),
+                super::super::reference::copy("root", &mut governor).unwrap(),
+            );
+            recovery.observations.prefix(prefix, &mut governor).unwrap();
+            assert_eq!(
+                recovery.validate(&node, &mut governor).unwrap(),
+                Acceptance::Accepted { validation: 0 }
+            );
+            assert_eq!(
+                recovery.validate(&node, &mut governor).unwrap(),
+                Acceptance::Accepted { validation: 2 }
+            );
+            let stopped = if cancelled {
+                token.cancel();
+                recovery.observations.prepare(0, &mut governor).unwrap_err()
+            } else {
+                recovery
+                    .observations
+                    .prepare(
+                        usize::try_from(
+                            Budget::default().scratch_bytes
+                                / <Evidence as crate::ScratchCharge>::CHARGE as u64
+                                + 1,
+                        )
+                        .expect("default scratch limit fits usize"),
+                        &mut governor,
+                    )
+                    .unwrap_err()
+            };
+            assert_eq!(
+                stopped,
+                if cancelled {
+                    StopReason::Cancelled
+                } else {
+                    StopReason::BudgetExceeded(Resource::ScratchBytes)
+                }
+            );
+            let before = governor.usage();
+            recovery.receipt.evidence = recovery.observations.publish(Vec::new(), true);
+            recovery.receipt.validations = recovery.validations.publish();
+            assert_eq!(
+                governor.usage(),
+                before,
+                "finalization uses only previously admitted slots and moves"
+            );
+            assert_eq!(recovery.receipt.validations.len(), 4);
+            assert!(recovery.receipt.validations[0].passed);
+            assert!(recovery.receipt.validations[2].passed);
+            assert!(!recovery.receipt.validations[1].passed);
+            assert!(!recovery.receipt.validations[3].passed);
+            assert_eq!(
+                recovery.receipt.evidence.len(),
+                2,
+                "repeated candidate pattern observations deduplicate"
+            );
+            assert_eq!(recovery.receipt.evidence[0].rule, "prefix");
+            assert_eq!(
+                recovery.receipt.evidence[1].rule,
+                "pattern.engine.derivative-v1"
+            );
+            assert_eq!(
+                recovery.receipt.evidence[1].destination,
+                "urn:purrassist:root#/pattern"
+            );
+            assert_eq!(governor.check(), Err(stopped));
         }
     }
 }
