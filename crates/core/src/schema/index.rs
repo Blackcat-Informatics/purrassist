@@ -722,14 +722,11 @@ mod tests {
             );
             let retained = governor.scratch_meter().live();
             drop(schema);
-            let legacy = governor.scratch_meter().live();
-            assert!(
-                retained > legacy,
-                "completed indexes retain their actual owners"
-            );
-            assert!(
-                legacy > 0,
-                "DOM and keyword admission remain separate contracts"
+            assert!(retained > 0, "completed indexes retain their actual owners");
+            assert_eq!(
+                governor.scratch_meter().live(),
+                0,
+                "schema documents, indexes and patterns release completely"
             );
             let mut refusing = Governor::new(Budget {
                 work: complete_work - 1,
@@ -743,7 +740,7 @@ mod tests {
             ));
             assert_eq!(
                 refusing.scratch_meter().live(),
-                legacy,
+                0,
                 "a late refusal drops every unpublished index and pattern owner"
             );
         }
@@ -778,11 +775,15 @@ mod tests {
             for key in keys {
                 entries.push((key, key)).unwrap();
             }
-            assert!(matches!(
-                Map::from_sorted(entries, &mut governor),
-                Err(StopReason::InvalidInput(_))
-            ));
-            assert_eq!(governor.scratch_meter().live(), 0);
+            let Err(StopReason::InvalidInput(message)) = Map::from_sorted(entries, &mut governor)
+            else {
+                panic!("invalid ordering remains an invariant failure");
+            };
+            assert_eq!(
+                governor.scratch_meter().live(),
+                u64::try_from(message.capacity()).unwrap(),
+                "only the published invariant diagnostic retains its admission"
+            );
         }
     }
 
