@@ -23,6 +23,10 @@ crates share one version.
 
 ### Changed
 
+- Cold schema compilation no longer retains a spelling-based storage allowance.
+  Actual schema owners release on drop or resource refusal, and intermediate
+  pattern diagnostics remain owned until the final error is published.
+
 - Strict JSON parsing now owns decoded strings, exact number spellings and
   container buffers until document publication or release. Schema compilation
   retains root and referenced documents and releases temporary meta-schemas and

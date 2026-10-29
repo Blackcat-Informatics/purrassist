@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Fallible, release-owned indexes for the compiled schema. No deletion is needed.
 use super::reference::work;
-use crate::contract::ScratchCharge;
+use crate::contract::{ScratchCharge, format_output_governed};
 use crate::{Governor, ScratchString, ScratchVec, StopReason};
 use core::{
     cmp::Ordering,
@@ -130,9 +130,10 @@ impl<K: Key, V: ScratchCharge> Map<K, V> {
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
         if !Self::strictly_ordered(&entries, governor)? {
-            return Err(StopReason::InvalidInput(
-                "sorted schema index requires strictly increasing unique keys".into(),
-            ));
+            return Err(StopReason::InvalidInput(format_output_governed(
+                format_args!("sorted schema index requires strictly increasing unique keys"),
+                governor,
+            )?));
         }
         Self::from_ordered(entries, governor)
     }
@@ -721,14 +722,11 @@ mod tests {
             );
             let retained = governor.scratch_meter().live();
             drop(schema);
-            let legacy = governor.scratch_meter().live();
-            assert!(
-                retained > legacy,
-                "completed indexes retain their actual owners"
-            );
-            assert!(
-                legacy > 0,
-                "DOM and keyword admission remain separate contracts"
+            assert!(retained > 0, "completed indexes retain their actual owners");
+            assert_eq!(
+                governor.scratch_meter().live(),
+                0,
+                "schema documents, indexes and patterns release completely"
             );
             let mut refusing = Governor::new(Budget {
                 work: complete_work - 1,
@@ -742,7 +740,7 @@ mod tests {
             ));
             assert_eq!(
                 refusing.scratch_meter().live(),
-                legacy,
+                0,
                 "a late refusal drops every unpublished index and pattern owner"
             );
         }
@@ -777,11 +775,15 @@ mod tests {
             for key in keys {
                 entries.push((key, key)).unwrap();
             }
-            assert!(matches!(
-                Map::from_sorted(entries, &mut governor),
-                Err(StopReason::InvalidInput(_))
-            ));
-            assert_eq!(governor.scratch_meter().live(), 0);
+            let Err(StopReason::InvalidInput(message)) = Map::from_sorted(entries, &mut governor)
+            else {
+                panic!("invalid ordering remains an invariant failure");
+            };
+            assert_eq!(
+                governor.scratch_meter().live(),
+                u64::try_from(message.capacity()).unwrap(),
+                "only the published invariant diagnostic retains its admission"
+            );
         }
     }
 

@@ -15,8 +15,12 @@ Complete upstream preparation and graph integration remain under #33 and #36.
 Complete first-party schema reference resolution now shares caller governance across
 URI and identity preparation, pointer linkage, validation, dynamic witness edges
 and recovery. Temporary target ownership and diagnostics are admitted; native
-resource failures remain distinct from malformed linkage. Full compiler preparation, including the separate legacy storage allowance, remains an unfinished prerequisite. #33 and #36
-remain open for their source, graph, bridge and backend integration acceptance.
+resource failures remain distinct from malformed linkage. Cold first-party schema
+compilation now retains actual storage owners without a permanent spelling-based
+allowance. Nested pattern errors stay owned until the final diagnostic boundary;
+successful schema drop and resource refusal release covered storage completely.
+#33 and #36 remain open for upstream source preparation, graph, bridge, runtime
+and backend integration acceptance.
 
 Status: **pipeline specified; caller-input foundations implemented**. This document and [TOOLS.md](TOOLS.md)
 are the Phase 2 deliverable completed in #32. Implementation and necessary
