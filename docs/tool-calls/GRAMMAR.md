@@ -19,7 +19,8 @@ into a `CompiledGrammar`. One compiled grammar serves three purposes:
   choices to print well-formed calls for given argument shapes, for tests and
   corpora.
 
-The twelve built-in dialects are written in this DSL:
+The thirteen built-in dialects are written in this DSL:
+[`glm-4.5.v1`](../../crates/core/src/tool_call/dialects/glm-4.5.v1.grammar),
 [`qwen3-coder-xml.v1`](../../crates/core/src/tool_call/dialects/qwen3-coder-xml.v1.grammar),
 [`hermes.v1`](../../crates/core/src/tool_call/dialects/hermes.v1.grammar),
 [`openai-tool-calls.v1`](../../crates/core/src/tool_call/dialects/openai-tool-calls.v1.grammar),
@@ -302,6 +303,7 @@ Under `ReasoningPolicy::AsContent` the markers are plain content.
 | `raw` | The verbatim body as one UTF-8 string leaf. Bytes that are not well-formed UTF-8 are read as U+FFFD, each run recorded as `tool_call.value.invalid-utf8` (a data loss); a character cut off by a length stop is dropped. It records no other edits. A `raw` value is always a string: a parameter declared as an integer, number, boolean, array, or object read through `raw` fails validation (`UnresolvedReason::SchemaValidation`), because no rule coerces a string into a typed value. |
 | `json` | One JSON value read by the push-based tolerant JSON parser: exact number spellings, each repair recorded with its `json.syntax.*` rule. Self-delimiting. A whole arguments value that is a JSON string holding JSON is decoded as stringified arguments and flagged (`tool_call.arguments.decode-string`). Under a length stop, a value that is already complete at the cut (only whitespace after it) ends there, as at a delimiter, when the production completes from the slot with no further input: a call that ends with its arguments value is then complete, not cut off. |
 | `json-args` | The `json` codec for an arguments value: the value must be an object, or a string that is empty or whose text begins with `{` after spaces (stringified arguments). Any other value (a number, an array, `null`, prose in a string) faults at its first byte, rejecting a committed attempt and leaving an uncommitted one as content, so a grammar whose only call evidence is the object itself (`bare-json.v1`) never reads `{"name": "pi", "arguments": 3}` as a call. |
+| `kv-pairs` | Alternating `<arg_key>KEY</arg_key><arg_value>VALUE</arg_value>` elements: strings verbatim, other declared values inline JSON, repeated keys preserved. See [GLM](dialects/glm-4.5.v1.md). |
 | `xml-params` | A sequence of `<parameter=NAME>value</parameter>` elements, typed by the declared tool the call names: verbatim strings with one framing newline consumed on each side, typed values parsed as JSON, nested parameter elements for object parameters, a whole-JSON body, and the `</parameters>` variant. See [the Qwen3-Coder XML dialect](dialects/qwen3-coder-xml.v1.md) for every reading. |
 
 Every codec reads bytes that are not well-formed UTF-8 as U+FFFD, one per
@@ -366,7 +368,7 @@ offset in the grammar source (`GrammarError::offset`).
 | `UnknownName` | A reference to an undefined production or closer. |
 | `Recursive` | A production that refers to itself, directly or indirectly. |
 | `UnknownCapture` | A capture kind that is not one of the eight above. |
-| `UnknownCodec` | A slot naming a codec other than `raw`, `json`, `json-args`, or `xml-params`. |
+| `UnknownCodec` | A slot naming a codec other than `raw`, `json`, `json-args`, `kv-pairs`, or `xml-params`. |
 | `InvalidClass` | A class pattern that is malformed, needs backtracking, or matches the empty string. |
 | `MissingProduction` | `call`, `result`, or `declaration` is missing. |
 | `InvalidOpener` | `call` or `result` does not begin with a literal opener, or matches the empty string. |

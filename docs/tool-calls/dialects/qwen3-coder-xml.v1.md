@@ -113,12 +113,12 @@ first-party; no chat-template text is copied into this repository.
   the bare-element case of `tool_call_recover::exact_effort_never_repairs`.
   A string value may hold closer text (see
   [Closer text inside a value](#closer-text-inside-a-value)).
-- The `<tool_call>` opener is shared with [Hermes](hermes.v1.md). With both
+- The `<tool_call>` opener is shared with [Hermes](hermes.v1.md). GLM also shares it. With all three
   dialects allowed (the default), each attempts a call there and the body
-  decides: a `<function=` body is read by this dialect, and the other dialect's attempt
-  is rejected at the body's first byte. An attempt neither dialect reads
+  decides: a `<function=` body is read by this dialect, and the other dialects' attempts
+  are rejected at the body's first byte. An attempt no dialect reads
   (dangling, cut off, or malformed) is one rejected attempt in the dialect
-  that read furthest, with both dialects in its `candidate_dialects`; see
+  that read furthest, with all three dialects in its `candidate_dialects`; see
   [the README](../README.md#design).
 - `result`: `<tool_response>CONTENT</tool_response>`, the rendering of a tool
   message.

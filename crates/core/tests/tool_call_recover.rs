@@ -3064,14 +3064,18 @@ fn rejected_attempts_over_a_shared_opener_are_one_reading() {
         assert_eq!(rejected.span.start, 0, "{output:?}");
         assert_eq!(
             rejected.candidate_dialects,
-            [DialectId::Hermes, DialectId::Qwen3CoderXml],
+            [
+                DialectId::Glm45,
+                DialectId::Hermes,
+                DialectId::Qwen3CoderXml
+            ],
             "{output:?}"
         );
         let wire = calls.to_node();
         assert_eq!(
             wire.pointer("/rejected/0/candidate_dialects")
                 .map(Node::to_json),
-            Some(r#"["hermes.v1","qwen3-coder-xml.v1"]"#.to_owned()),
+            Some(r#"["glm-4.5.v1","hermes.v1","qwen3-coder-xml.v1"]"#.to_owned()),
             "{output:?}"
         );
         assert_eq!(calls.finish, Finish::Unresolved, "{output:?}");

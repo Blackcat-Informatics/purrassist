@@ -1,0 +1,37 @@
+{
+  "description": "GLM canonical single call: verbatim strings and inline JSON values.",
+  "markup": "<tool_call>get_weather\n<arg_key>city</arg_key><arg_value>Paris</arg_value><arg_key>unit</arg_key><arg_value>celsius</arg_value></tool_call>",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "GLM canonical single call: verbatim strings and inline JSON values.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "get_weather",
+      "arguments": {"city": "Paris", "unit": "celsius"}
+    }
+  ]
+}

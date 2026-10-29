@@ -126,14 +126,16 @@
 //! ```
 use super::recover::{IdSource, assign_ids};
 use super::{
-    ArgumentShape, CallOutcome, DialectId, IdPolicy, ObjectShape, Rejection, ToolCall, ToolCalls,
-    ToolSet, UnresolvedReason, ValueShape,
+    ArgumentShape, CallOutcome, CompiledTool, DialectId, IdPolicy, ObjectShape, Rejection,
+    ToolCall, ToolCalls, ToolSet, UnresolvedReason, ValueShape,
 };
 use crate::contract::saturating_size as size;
 use crate::contract::{
     Budget, Governor, Resource, ScratchCharge, ScratchString, ScratchVec, StopReason,
 };
-use crate::grammar::codec::{Codec, CodecContext, CodecEnd, CodecKind, XmlParamsCodec};
+use crate::grammar::codec::{
+    Codec, CodecContext, CodecEnd, CodecKind, KvPairsCodec, XmlParamsCodec,
+};
 use crate::grammar::edit::EditOperator;
 use crate::grammar::print::{
     Canonical, PrintError, Printer, Root, ScratchPrintError, ScratchPrinted, Values,
@@ -749,14 +751,14 @@ fn dialect_markup<S: AsRef<str>>(
         if mark > 0 && !grouped {
             printer.emit(b"\n", governor)?;
         }
-        let shape = tools
+        let tool = tools
             .zip(call.tool.as_deref())
-            .and_then(|(tools, tool)| tools.argument_shape(tool));
+            .and_then(|(tools, name)| tools.lookup_exact(name));
         let id = ids.get(call.index).map(AsRef::as_ref);
         // A production that separates calls with `next` prints the whole
         // group in one instance; each call is first printed alone, so a
         // call it cannot carry is skipped rather than failing the group.
-        let outcome = prepare(&printer, call, id, shape, dialect, governor)
+        let outcome = prepare(&printer, call, id, tool, dialect, governor)
             .map_err(ScratchPrintError::from)
             .and_then(|prepared| {
                 let rendered = canonical_scratch(
@@ -926,7 +928,7 @@ fn prepare<'c>(
     printer: &Printer<'_>,
     call: &'c ToolCall,
     id: Option<&'c str>,
-    shape: Option<&ArgumentShape>,
+    tool: Option<&CompiledTool>,
     dialect: &DialectId,
     governor: &mut Governor,
 ) -> Result<Prepared<'c>, PrintError> {
@@ -955,7 +957,7 @@ fn prepare<'c>(
             codec,
             delimiters,
             &call.arguments,
-            shape,
+            tool,
             dialect,
             governor,
         )?);
@@ -969,10 +971,11 @@ fn arguments_text(
     codec: CodecKind,
     delimiters: DelimiterSetId,
     arguments: &Node,
-    shape: Option<&ArgumentShape>,
+    tool: Option<&CompiledTool>,
     dialect: &DialectId,
     governor: &mut Governor,
 ) -> Result<String, PrintError> {
+    let shape = tool.map(CompiledTool::argument_shape);
     let delimiters = printer.grammar.delimiters(delimiters);
     let json = arguments.to_json();
     governor.charge(Resource::Work, size(json.len()))?;
@@ -982,8 +985,105 @@ fn arguments_text(
         }
         CodecKind::Json | CodecKind::JsonArgs => Ok(guard_json(json, delimiters)),
         CodecKind::XmlParams => xml_body(arguments, json, delimiters, shape, governor),
+        CodecKind::KvPairs => kv_body(arguments, delimiters, tool, governor),
         CodecKind::Raw => Err(unsupported("a raw slot cannot carry an arguments object")),
     }
+}
+
+/// The public GLM template writes strings verbatim and other values as JSON.
+/// Read back the complete body before publication; no escaping convention is
+/// invented for text that collides with tag or call delimiters.
+fn kv_body(
+    arguments: &Node,
+    delimiters: &[ScratchVec<u8>],
+    tool: Option<&CompiledTool>,
+    governor: &mut Governor,
+) -> Result<String, PrintError> {
+    let shape = tool.map(CompiledTool::argument_shape);
+    let Value::Object(members) = &arguments.value else {
+        return Err(unsupported("key/value pairs carry an arguments object"));
+    };
+    let mut body = String::new();
+    let mut expected = Vec::new();
+    let mut risky: Vec<&[u8]> = delimiters.iter().map(ScratchVec::as_slice).collect();
+    risky.extend([
+        b"<arg_key>".as_slice(),
+        b"</arg_key>",
+        b"<arg_value>",
+        b"</arg_value>",
+    ]);
+    for member in members {
+        let repeatable = shape
+            .and_then(|shape| shape.arguments.parameter(&member.key))
+            .is_some_and(|parameter| parameter.repeatable);
+        let items = match &member.value.value {
+            Value::Array(items) if repeatable => items.as_slice(),
+            _ => core::slice::from_ref(&member.value),
+        };
+        for item in items {
+            let text = match &item.value {
+                Value::String(text) => text.clone(),
+                _ => guard_json(item.to_json(), &risky),
+            };
+            governor.charge(
+                Resource::Work,
+                size(member.key.len()).saturating_add(size(text.len())),
+            )?;
+            body.push_str("<arg_key>");
+            body.push_str(&member.key);
+            body.push_str("</arg_key>\n<arg_value>");
+            body.push_str(&text);
+            body.push_str("</arg_value>\n");
+            expected.push(Member {
+                key: member.key.clone(),
+                key_span: None,
+                value: item.clone(),
+            });
+        }
+    }
+    if contains_any(body.as_bytes(), delimiters) {
+        return Err(PrintError::Unrepresentable { text: body });
+    }
+    let context = CodecContext {
+        shape,
+        ..CodecContext::default()
+    };
+    let decoded = KvPairsCodec::begin(0, governor)?.finish(
+        body.as_bytes(),
+        0..body.len(),
+        CodecEnd::Delimited,
+        context,
+        governor,
+    )?;
+    let expected = Node::new(Value::Object(expected));
+    let matches = match decoded {
+        Ok(value) => {
+            let exact = value.tree.is_resolved()
+                && value.alternative.is_none()
+                && value
+                    .edits
+                    .iter()
+                    .all(|edit| edit.operator == EditOperator::JsonString);
+            if !exact {
+                false
+            } else if value.tree.root.equivalent_governed(&expected, governor)? {
+                true
+            } else if let Some(tool) = tool {
+                match super::resolve::schema_readback(tool, &value.tree, governor)? {
+                    Some(typed) => typed.equivalent_governed(&expected, governor)?,
+                    None => false,
+                }
+            } else {
+                false
+            }
+        }
+        Err(_) => false,
+    };
+    if !matches {
+        return Err(PrintError::Unrepresentable { text: body });
+    }
+    governor.check()?;
+    Ok(body)
 }
 
 /// The canonical `xml-params` body of `arguments` (see the module
@@ -1520,13 +1620,21 @@ fn splice_call(
     let grammar = call.dialect.grammar();
     let printer = Printer::new(grammar, governor);
     let slot = printer.arguments_slot(grammar.call(), governor)?;
-    let xml = slot.is_some_and(|(codec, _)| codec == CodecKind::XmlParams);
+    let xml =
+        slot.is_some_and(|(codec, _)| matches!(codec, CodecKind::XmlParams | CodecKind::KvPairs));
     let mut risky: Vec<&[u8]> = slot
         .map_or(&[][..], |(_, delimiters)| grammar.delimiters(delimiters))
         .iter()
         .map(ScratchVec::as_slice)
         .collect();
-    if xml {
+    if slot.is_some_and(|(codec, _)| codec == CodecKind::KvPairs) {
+        risky.extend([
+            b"<arg_key>".as_slice(),
+            b"</arg_key>",
+            b"<arg_value>",
+            b"</arg_value>",
+        ]);
+    } else if xml {
         risky.extend(PARAMETER_MARKUP);
     }
     let decoded = EditOperator::StringifiedArguments.rule().id;

@@ -30,12 +30,6 @@
       "blocks_release": false
     },
     {
-      "issue": 13,
-      "title": "Tool-call recovery: add the glm-4.5.v1 dialect and kv-pairs codec",
-      "impact": "`glm-4.5.v1` is not built in, so its call markup is not recovered as a tool call.",
-      "blocks_release": false
-    },
-    {
       "issue": 14,
       "title": "Tool-call recovery: add the gemma3-tool-code.v1 dialect",
       "impact": "`gemma3-tool-code.v1` is not built in, so its call markup is not recovered as a tool call.",

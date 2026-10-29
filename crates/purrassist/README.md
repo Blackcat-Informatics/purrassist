@@ -36,9 +36,9 @@ match answer.outcome {
 `tool_call` recovers the tool calls of one raw model turn against the `OpenAI`,
 MCP, or Anthropic declarations the model was shown (read byte for byte), with
 per-call outcomes, itemized repairs, the turn's finish, and a receipt; it never
-executes a call. Twelve dialects ship: `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`,
+executes a call. Thirteen dialects ship: `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`,
 `mistral-v3.v1`, `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`,
-`kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, and `bare-json.v1`.
+`kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, `glm-4.5.v1`, and `bare-json.v1`.
 
 ```rust
 use purrassist::Outcome;

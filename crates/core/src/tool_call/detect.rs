@@ -13,8 +13,8 @@
 //! and the bytes stay content). Two kinds of family are detected:
 //!
 //! - families no built-in dialect parses yet: Pythonic call lists
-//!   (`[get_weather(city="Paris")]`), Gemma 3 `` ```tool_code `` blocks, GLM-4.5
-//!   `<arg_key>`/`<arg_value>` calls, and the *stripped* renderings of
+//!   (`[get_weather(city="Paris")]`), Gemma 3 `` ```tool_code `` blocks,
+//!   and the *stripped* renderings of
 //!   built-in dialects whose special tokens a detokenizer removed and which
 //!   no built-in grammar reads (Kimi-K2 `functions.NAME:IDX{...}`, Harmony
 //!   `to=functions.NAME` without its tokens, DeepSeek-V3 `functionNAME` with
@@ -99,7 +99,7 @@ pub enum MarkupFamily {
     /// `gemma3-tool-code.v1` (not built in): a `` ```tool_code `` fenced
     /// block holding a call.
     Gemma3ToolCode,
-    /// `glm-4.5.v1` (not built in): `<arg_key>`/`<arg_value>` pairs in a
+    /// `glm-4.5.v1`: `<arg_key>`/`<arg_value>` pairs in a
     /// `<tool_call>`.
     Glm45,
     /// `kimi-k2-stripped.v1` (not built in): a Kimi-K2 call with its
@@ -158,6 +158,7 @@ impl MarkupFamily {
             Self::BareJson => DialectId::BareJson,
             Self::DeepSeekV31 => DialectId::DeepSeekV31,
             Self::DeepSeekV3 => DialectId::DeepSeekV3,
+            Self::Glm45 => DialectId::Glm45,
             Self::Harmony => DialectId::Harmony,
             Self::Hermes => DialectId::Hermes,
             Self::KimiK2 => DialectId::KimiK2,
@@ -168,7 +169,6 @@ impl MarkupFamily {
             Self::Qwen3CoderXml => DialectId::Qwen3CoderXml,
             Self::Pythonic
             | Self::Gemma3ToolCode
-            | Self::Glm45
             | Self::KimiK2Stripped
             | Self::HarmonyStripped
             | Self::DeepSeekV3Stripped
@@ -186,7 +186,6 @@ impl MarkupFamily {
             self,
             Self::Pythonic
                 | Self::Gemma3ToolCode
-                | Self::Glm45
                 | Self::KimiK2Stripped
                 | Self::HarmonyStripped
                 | Self::DeepSeekV3Stripped
@@ -201,7 +200,7 @@ impl MarkupFamily {
     /// use purrassist_core::tool_call::MarkupFamily;
     /// assert_eq!(
     ///     MarkupFamily::Glm45.message(),
-    ///     "call markup of glm-4.5.v1, which is not built in yet; its bytes stay content",
+    ///     "call markup of glm-4.5.v1, which is built in but not in the allow-list; its bytes stay content",
     /// );
     /// ```
     #[must_use]

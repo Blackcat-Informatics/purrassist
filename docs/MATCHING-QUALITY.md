@@ -144,7 +144,7 @@ test's assertions fails the build by design.
 | Path matching | 1594 | 1279 | 0 | 315 | 80.2% | 0.0% | 0.234% | 2% |
 | Phonetic ambiguity | 1408 | 1089 | 0 | 319 | 77.3% | 0.0% | 0.275% | 5% |
 | JSON recovery | 714 | 630 | 0 | 84 | 88.2% | 0.0% | 0.474% | 2% |
-| Tool-call recovery | 18176 | 12629 | 0 | 5547 | 69.5% | 0.0% | 0.024% | 1% |
+| Tool-call recovery | 18184 | 12635 | 0 | 5549 | 69.5% | 0.0% | 0.024% | 1% |
 
 "Coverage" is the fraction of cases an automatic decision was reached for at
 all (correct + incorrect, over the total); "risk" is the observed error rate
@@ -207,14 +207,14 @@ small oracle exhaustively proves the Unicode tables.
 
 ## Tool-call recovery evaluation
 
-`crates/core/tests/data/evaluation/tool-calls.jsonl` holds 18,166 mutated model
+`crates/core/tests/data/evaluation/tool-calls.jsonl` holds 18,184 model
 turns, each with its `id`, `category` (the rule expected to repair it),
 `dialect` (the request's dialect allow-list), `policy`, `stop`, `input` and
 `truth`. The `tool-call-corpus` example generates it deterministically: it
 prints well-formed calls to nine first-party tools (five read-only, four
 mutating; string, patterned, integer, boolean, enumeration, array,
 array-of-object and nested-object parameters, tool and parameter aliases) as grammar witnesses
-(`grammar::witness`, fixed seeds) in every built-in dialect, then applies
+(`grammar::witness`, fixed seeds) in the twelve pre-GLM dialects, then applies
 the inverse of one repair rule or edit operator per case: a dropped,
 variant or stray closer, a `</parameter>` dropped before a declared
 parameter, prose or a code fence inside or around the call, stringified
@@ -337,6 +337,11 @@ that is `Mutating`, or the repair loses data on a `Mutating` tool. The label
 follows from the mutation, the tool definition and the case's policy alone,
 never from running recovery.
 
+GLM adds eight native key/value witnesses: canonical calls, missing key
+closers, misspelled value closers, and malformed pairs, each under its own
+allow-list and the default set. Six recover the expected call and two malformed
+pairs abstain. These cases use the existing tool schema and repair categories.
+
 Each case runs `ToolSet::recover` at `Effort::Standard` with the case's
 allow-list, policy and stop. The answer is the turn's
 `usable_accepting_guesses()` calls: `Resolved` calls, and `BestGuess` calls on
@@ -348,13 +353,13 @@ any answer to a truth-`Unresolved` case. The test pins the totals above,
 asserts zero incorrect answers overall, per rule and per dialect, at least 20
 cases per rule, and abstention recall of 100%:
 
-Abstention recall: 5415 of 5415 truth-`Unresolved` cases abstained (100.0%).
+Abstention recall: 5417 of 5417 truth-`Unresolved` cases abstained (100.0%).
 
 The 132 other abstentions are coverage gaps, not errors: read-only calls whose
 required arguments were nested one level down (`DropWithLoss` drops the
 unknown wrapper before `json.key.relocate` can apply, so the call is missing a
 required argument). Calls followed by a dangling `<tool_call>` opener under
-the all-dialect allow-list are recovered: Qwen3-Coder XML and Hermes both
+the all-dialect allow-list are recovered: GLM, Qwen3-Coder XML and Hermes
 attempt the dangling opener, and the readings that differ only in which
 dialect's attempt was rejected recover the same calls and are one reading
 (see [the tool-call README](tool-calls/README.md#design)).
@@ -366,7 +371,7 @@ unassignable (`UnknownParameter`), so the call abstains.
 
 | Rule | Cases | Correct | Incorrect | Abstained | Truth `Unresolved` |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `canonical` | 1667 | 1667 | 0 | 0 | 0 |
+| `canonical` | 1669 | 1669 | 0 | 0 | 0 |
 | `json.enum.match` | 168 | 84 | 0 | 84 | 84 |
 | `json.key.match` | 420 | 180 | 0 | 240 | 240 |
 | `json.key.relocate` | 352 | 0 | 0 | 352 | 220 |
@@ -389,7 +394,7 @@ unassignable (`UnknownParameter`), so the call abstains.
 | `tool_call.extract.fence` | 108 | 108 | 0 | 0 | 0 |
 | `tool_call.extract.prose` | 180 | 100 | 0 | 80 | 80 |
 | `tool_call.id.dedup` | 72 | 72 | 0 | 0 | 0 |
-| `tool_call.markup.closer-misspelled` | 395 | 395 | 0 | 0 | 0 |
+| `tool_call.markup.closer-misspelled` | 397 | 397 | 0 | 0 | 0 |
 | `tool_call.markup.closer-variant` | 179 | 179 | 0 | 0 | 0 |
 | `tool_call.markup.closers-only-empty` | 33 | 1 | 0 | 32 | 32 |
 | `tool_call.markup.dangling-opener` | 432 | 432 | 0 | 0 | 0 |
@@ -397,8 +402,8 @@ unassignable (`UnknownParameter`), so the call abstains.
 | `tool_call.markup.json-body` | 36 | 36 | 0 | 0 | 0 |
 | `tool_call.markup.missing-closers-at-end` | 324 | 324 | 0 | 0 | 0 |
 | `tool_call.markup.missing-function-close` | 144 | 144 | 0 | 0 | 0 |
-| `tool_call.markup.missing-parameter-close` | 27 | 27 | 0 | 0 | 0 |
-| `tool_call.markup.missing-token` | 432 | 432 | 0 | 0 | 0 |
+| `tool_call.markup.missing-parameter-close` | 29 | 29 | 0 | 0 | 0 |
+| `tool_call.markup.missing-token` | 434 | 432 | 0 | 2 | 2 |
 | `tool_call.markup.missing-wrapper-close` | 324 | 324 | 0 | 0 | 0 |
 | `tool_call.markup.missing-wrapper-close.before-text` | 288 | 120 | 0 | 168 | 168 |
 | `tool_call.markup.nested-parameter` | 34 | 32 | 0 | 2 | 2 |
@@ -440,6 +445,7 @@ and by dialect allow-list:
 | `bare` | 1266 | 811 | 0 | 455 |
 | `deepseek3` | 1894 | 1423 | 0 | 471 |
 | `deepseek31` | 1642 | 1187 | 0 | 455 |
+| `glm45` | 8 | 6 | 0 | 2 |
 | `harmony` | 1708 | 1226 | 0 | 482 |
 | `hermes` | 1527 | 1021 | 0 | 506 |
 | `kimi` | 1750 | 1274 | 0 | 476 |
@@ -453,11 +459,12 @@ and by dialect allow-list:
 | Allow-list | Cases | Correct | Incorrect | Abstained |
 | --- | ---: | ---: | ---: | ---: |
 | `anthropic-tool-use.v1` | 666 | 459 | 0 | 207 |
-| `anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1` | 9734 | 6708 | 0 | 3026 |
+| `anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,glm-4.5.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1` | 9738 | 6711 | 0 | 3027 |
 | `bare-json.v1` | 576 | 369 | 0 | 207 |
 | `deepseek-v3.1.v1` | 764 | 557 | 0 | 207 |
 | `deepseek-v3.1.v1,deepseek-v3.v1` | 36 | 36 | 0 | 0 |
 | `deepseek-v3.v1` | 890 | 675 | 0 | 215 |
+| `glm-4.5.v1` | 4 | 3 | 0 | 1 |
 | `harmony.v1` | 797 | 579 | 0 | 218 |
 | `hermes.v1` | 720 | 481 | 0 | 239 |
 | `hermes.v1,qwen3-coder-xml.v1` | 72 | 72 | 0 | 0 |

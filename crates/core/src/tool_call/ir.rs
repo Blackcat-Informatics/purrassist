@@ -46,8 +46,8 @@ pub enum ArgOrigin {
     /// A JSON value read by the `json` codec (directly, or as a typed
     /// `xml-params` value): the raw bytes are the value's JSON spelling.
     Json,
-    /// A verbatim XML parameter string read by the `xml-params` codec: the
-    /// raw bytes are the string value (framing newlines excluded).
+    /// Verbatim parameter text from `xml-params` or `kv-pairs`: raw bytes
+    /// are the string value (only `xml-params` excludes framing newlines).
     XmlText,
     /// A JSON value decoded from inside a stringified-arguments JSON string:
     /// the raw bytes are the escaped source text that encodes the value (or

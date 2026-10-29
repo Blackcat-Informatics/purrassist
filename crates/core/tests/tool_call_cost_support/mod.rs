@@ -23,6 +23,12 @@ pub fn tools() -> ToolSet {
     .expect("tools compile")
 }
 
+pub fn glm(content: &str) -> String {
+    format!(
+        "<tool_call>write\n<arg_key>content</arg_key><arg_value>{content}</arg_value></tool_call>"
+    )
+}
+
 pub fn qwen(content: &str) -> String {
     format!(
         "<tool_call>\n<function=write>\n<parameter=content>\n{content}\n</parameter>\n</function>\n</tool_call>"
@@ -140,6 +146,7 @@ pub fn argument_work_bound(small: usize, large: usize) {
     );
     for (label, print) in [
         ("qwen", qwen as fn(&str) -> String),
+        ("glm45", glm as fn(&str) -> String),
         ("hermes", hermes),
         ("llama3", llama3),
         ("mistral", mistral),
@@ -203,6 +210,7 @@ pub fn argument_fits_published_budget(size: usize) {
     let content = "a".repeat(size);
     for (label, input, sixteen) in [
         ("qwen", qwen(&content), true),
+        ("glm45", glm(&content), true),
         ("hermes", hermes(&content), true),
         ("llama3", llama3(&content), true),
         ("mistral", mistral(&content), true),
@@ -354,7 +362,14 @@ fn dense_tools() -> ToolSet {
 /// output that is nothing but one small unit repeated, in every built-in
 /// dialect. Each is `(label, wrapper before, unit, wrapper after, what the
 /// units become)`.
-const DENSE: [(&str, &str, &str, &str, Dense); 17] = [
+const DENSE: [(&str, &str, &str, &str, Dense); 18] = [
+    (
+        "glm45-calls",
+        "",
+        "<tool_call>write\n<arg_key>content</arg_key><arg_value>a</arg_value></tool_call>\n",
+        "",
+        Dense::Calls,
+    ),
     (
         "qwen-nested-items",
         "<tool_call>\n<function=tree>\n",
