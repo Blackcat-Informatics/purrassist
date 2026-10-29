@@ -596,7 +596,7 @@ fn compile_children(
             continue;
         };
         let mut child_route = index::route(site.route, context.governor)?;
-        index::push_route(&mut child_route, position, context.governor)?;
+        index::push(&mut child_route, position, context.governor)?;
         let child_pointer = index::pointer(site.pointer, &member.key, context.governor)?;
         let child_site = site.child(&child_route, &child_pointer);
         match kind {
@@ -683,7 +683,7 @@ fn compile_object_children(
             )?;
         }
         let mut next_route = index::route(site.route, context.governor)?;
-        index::push_route(&mut next_route, position, context.governor)?;
+        index::push(&mut next_route, position, context.governor)?;
         let next_pointer = index::pointer(site.pointer, &child.key, context.governor)?;
         let child_id = walk_at(
             &child.value,
@@ -710,7 +710,7 @@ fn compile_array_children(
     let children = schema_array(&member.value, &member.key, fail, context.governor)?;
     for (position, child) in children.iter().enumerate() {
         let mut next_route = index::route(site.route, context.governor)?;
-        index::push_route(&mut next_route, position, context.governor)?;
+        index::push(&mut next_route, position, context.governor)?;
         let next_pointer = format_scratch_governed(
             format_args!("{}/{position}", site.pointer),
             context.governor,

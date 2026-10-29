@@ -4,17 +4,7 @@
 use super::super::reference::work;
 use crate::contract::{Governor, ScratchCharge, ScratchVec, StopReason};
 
-pub(super) fn push<T: ScratchCharge>(
-    list: &mut ScratchVec<T>,
-    value: T,
-    governor: &mut Governor,
-) -> Result<(), StopReason> {
-    work(governor, 1)?;
-    if list.len() == list.capacity() {
-        work(governor, list.len())?;
-    }
-    list.push(value)
-}
+pub(super) use super::super::index::push;
 pub(super) trait CopyIn: Sized {
     fn copy_in(&self, governor: &mut Governor) -> Result<Self, StopReason>;
 }
