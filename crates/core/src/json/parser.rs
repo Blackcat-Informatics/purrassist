@@ -103,10 +103,7 @@ pub fn parse_with(input: &str, governor: &mut Governor) -> Result<Node, ParseFai
 impl OwnedDocument {
     /// Strict parsing keeps every completed allocation in one document reservation.
     /// Partial trees and their reservations unwind together on any failure.
-    pub(crate) fn parse(
-        input: &str,
-        governor: &mut Governor,
-    ) -> Result<Self, OwnedParseFailure> {
+    pub(crate) fn parse(input: &str, governor: &mut Governor) -> Result<Self, OwnedParseFailure> {
         governor.charge(Resource::InputBytes, size(input.len()))?;
         let lease = governor.lease_scratch(0)?;
         let mut parser = Parser {
