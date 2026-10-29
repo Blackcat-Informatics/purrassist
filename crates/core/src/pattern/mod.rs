@@ -40,7 +40,7 @@ pub use bytes::{ByteCompileError, ByteInclusion, ByteInstruction, ByteLanguage};
 pub use derive::{DerivativeDfa, DfaState};
 
 use crate::contract::{
-    Budget, Evidence, Governor, Resource, ScratchCharge, ScratchVec, StopReason,
+    Budget, Evidence, Governor, Resource, ScratchCharge, ScratchString, ScratchVec, StopReason,
 };
 
 impl ScratchCharge for char {
@@ -183,6 +183,35 @@ impl From<StopReason> for PatternCompileError {
     }
 }
 
+/// A syntax diagnostic whose reservation remains temporary until publication.
+#[derive(Debug)]
+pub(crate) struct OwnedPatternError {
+    offset: usize,
+    message: ScratchString,
+}
+impl fmt::Display for OwnedPatternError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} at pattern character {}",
+            self.message.as_str(),
+            self.offset
+        )
+    }
+}
+
+/// Internal compilation keeps diagnostics owned while callers add context.
+#[derive(Debug)]
+pub(crate) enum OwnedPatternCompileError {
+    Syntax(OwnedPatternError),
+    Resource(StopReason),
+}
+impl From<StopReason> for OwnedPatternCompileError {
+    fn from(reason: StopReason) -> Self {
+        Self::Resource(reason)
+    }
+}
+
 /// Bounds and exclusions for [`Pattern::generate`].
 #[derive(Clone, Copy, Debug)]
 pub struct GenerateOptions<'a> {
@@ -285,6 +314,20 @@ impl Pattern {
         source: &str,
         governor: &mut Governor,
     ) -> Result<Self, PatternCompileError> {
+        Self::compile_owned(source, governor).map_err(|error| match error {
+            OwnedPatternCompileError::Syntax(error) => PatternCompileError::Syntax(PatternError {
+                offset: error.offset,
+                message: error.message.into_string(),
+            }),
+            OwnedPatternCompileError::Resource(reason) => PatternCompileError::Resource(reason),
+        })
+    }
+
+    /// Compile once while retaining temporary syntax storage for the final caller.
+    pub(crate) fn compile_owned(
+        source: &str,
+        governor: &mut Governor,
+    ) -> Result<Self, OwnedPatternCompileError> {
         let length = u64::try_from(source.len()).unwrap_or(u64::MAX);
         governor.charge(Resource::InputBytes, length)?;
         let (ast, captures, backtracking) = parse::parse(source, governor)?;

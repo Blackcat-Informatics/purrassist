@@ -16,8 +16,11 @@ root, external, built-in and temporary meta-schema documents share this path.
 Schema drop and parsing/compilation refusal release those reservations. Public
 strict JSON parsing explicitly retains them when publishing an ordinary Node.
 Syntax descriptors remain allocation-free until the final diagnostic boundary.
-The conservative legacy compiler storage allowance remains separate and can
-retain charges.
+Cold schema compilation now retains only actual governed owners. The old
+spelling-based compiler storage allowance is removed. Successful schema drop
+and resource refusal release those owners completely; only final published
+diagnostics retain their documented output admission. Nested pattern diagnostics
+stay scratch-owned until the public pattern or schema error boundary.
 
 Schema reference preparation and runtime resolution now share one governed URI,
 fragment, pointer and dynamic-scope path. URI scanning and dot removal, decoded
