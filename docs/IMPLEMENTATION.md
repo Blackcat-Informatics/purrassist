@@ -45,8 +45,19 @@ work before processing. The evaluator and recovery use the same governed array
 layout and dependency view. Canonical construction/copying and live branch
 continuations enforce caller depth and a native ceiling of 128; refusal remains
 a resource outcome, never an unsatisfiability proof. Candidate-value construction,
-evaluator storage and final witness/refutation publication retain their separate
-contracts. This does not complete witness or tool-graph governance.
+evaluator storage and witness-value publication retain their separate contracts.
+This does not complete witness or tool-graph governance.
+
+Final refutations are published only by the public governed witness boundary.
+The existing driver and required-property recovery carry allocation-free static
+reason descriptors. The publisher admits one evidence entry, copying work and
+fallible reason/evidence buffers, retaining their storage only after every
+fallible operation and the final governor check succeed. Late refusal releases
+all temporary publication owners and preserves the native resource cause.
+Public types, reason text and evidence fields remain unchanged; successful
+ordinary output retains its admission even after the caller drops it. Candidate
+construction, evaluator reports, recovery replacements and host serialization
+remain separate contracts.
 
 The existing `Grammar::compile_governed` path now admits complete private DSL
 syntax with governed scans/decoding/copies, fallible owned tokens and lists,

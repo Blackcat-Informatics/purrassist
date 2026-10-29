@@ -23,13 +23,20 @@ crates share one version.
 
 ### Changed
 
+- Final witness refutations now admit evidence entries, copying work and
+  fallible output storage before atomic publication. Internal contradiction
+  branches and required-property recovery carry static reasons without
+  allocating public refutation evidence. Public reason/evidence fields are
+  unchanged; resource refusal releases temporary publication storage and never
+  becomes an unsatisfiability claim.
+
 - Witness preparation and branch state now borrow immutable schema operands and
   retain fallible owners for synthesized lists, snapshots and cycle paths.
   Scans, copies, lookup and exact numeric comparisons share the caller governor;
   recursive preparation and continuations enforce caller/native depth limits.
   Resource refusal remains distinct from unsatisfiability. Shared dependency
   views also govern evaluator and recovery callers. Candidate construction,
-  evaluator storage and final publication remain separate contracts.
+  evaluator storage and witness-value publication remain separate contracts.
 
 - Cold schema compilation no longer retains a spelling-based storage allowance.
   Actual schema owners release on drop or resource refusal, and intermediate
