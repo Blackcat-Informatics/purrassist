@@ -4,7 +4,7 @@
 //! Byte-level, allocation-free parsing: every format here rejects any
 //! non-ASCII-digit input (including other decimal digit scripts) and any
 //! trailing content, matching the official test suite exactly.
-use crate::contract::{Governor, StopReason};
+use crate::contract::{Governor, ScratchString, StopReason, format_scratch_governed};
 
 /// One parsed RFC 3339 full-date, kept so callers (recovery's normalization
 /// repair) can re-render it with corrected separators/padding.
@@ -290,7 +290,7 @@ pub(super) fn repair(
     name: &str,
     value: &str,
     governor: &mut Governor,
-) -> Result<Option<String>, StopReason> {
+) -> Result<Option<ScratchString>, StopReason> {
     match name {
         "date" => repair_date(value, governor),
         "time" => repair_time(value, governor),
@@ -299,14 +299,14 @@ pub(super) fn repair(
     }
 }
 
-fn zero_padded_digits(field: &str, max_width: usize) -> Option<String> {
+fn padded_digits(field: &str, max_width: usize) -> Option<&str> {
     (!field.is_empty()
         && field.len() <= max_width
         && field.bytes().all(|byte| byte.is_ascii_digit()))
-    .then(|| format!("{field:0>max_width$}"))
+    .then_some(field)
 }
 
-fn repair_date(value: &str, governor: &mut Governor) -> Result<Option<String>, StopReason> {
+fn repair_date(value: &str, governor: &mut Governor) -> Result<Option<ScratchString>, StopReason> {
     let mut parts = value.split('-');
     let (Some(year), Some(month), Some(day)) = (parts.next(), parts.next(), parts.next()) else {
         return Ok(None);
@@ -315,17 +315,18 @@ fn repair_date(value: &str, governor: &mut Governor) -> Result<Option<String>, S
         return Ok(None);
     }
     let (Some(year), Some(month), Some(day)) = (
-        zero_padded_digits(year, 4),
-        zero_padded_digits(month, 2),
-        zero_padded_digits(day, 2),
+        padded_digits(year, 4),
+        padded_digits(month, 2),
+        padded_digits(day, 2),
     ) else {
         return Ok(None);
     };
-    let candidate = format!("{year}-{month}-{day}");
-    Ok((candidate != value && is_date(&candidate, governor)?).then_some(candidate))
+    let candidate =
+        format_scratch_governed(format_args!("{year:0>4}-{month:0>2}-{day:0>2}"), governor)?;
+    Ok((candidate.as_str() != value && is_date(&candidate, governor)?).then_some(candidate))
 }
 
-fn repair_time(value: &str, governor: &mut Governor) -> Result<Option<String>, StopReason> {
+fn repair_time(value: &str, governor: &mut Governor) -> Result<Option<ScratchString>, StopReason> {
     let mut parts = value.splitn(3, ':');
     let (Some(hour), Some(minute), Some(rest)) = (parts.next(), parts.next(), parts.next()) else {
         return Ok(None);
@@ -335,23 +336,29 @@ fn repair_time(value: &str, governor: &mut Governor) -> Result<Option<String>, S
         .unwrap_or(rest.len());
     let (second, suffix) = rest.split_at(split);
     let (Some(hour), Some(minute), Some(second)) = (
-        zero_padded_digits(hour, 2),
-        zero_padded_digits(minute, 2),
-        zero_padded_digits(second, 2),
+        padded_digits(hour, 2),
+        padded_digits(minute, 2),
+        padded_digits(second, 2),
     ) else {
         return Ok(None);
     };
-    let candidate = format!("{hour}:{minute}:{second}{suffix}");
-    Ok((candidate != value && is_time(&candidate, governor)?).then_some(candidate))
+    let candidate = format_scratch_governed(
+        format_args!("{hour:0>2}:{minute:0>2}:{second:0>2}{suffix}"),
+        governor,
+    )?;
+    Ok((candidate.as_str() != value && is_time(&candidate, governor)?).then_some(candidate))
 }
 
-fn repair_date_time(value: &str, governor: &mut Governor) -> Result<Option<String>, StopReason> {
+fn repair_date_time(
+    value: &str,
+    governor: &mut Governor,
+) -> Result<Option<ScratchString>, StopReason> {
     let Some(separator) = value.find(['T', 't', ' ']) else {
         return Ok(None);
     };
     let (date_part, time_part) = (&value[..separator], &value[separator + 1..]);
     let date_fixed = if is_date(date_part, governor)? {
-        date_part.to_string()
+        super::super::reference::copy(date_part, governor)?
     } else {
         let Some(fixed) = repair_date(date_part, governor)? else {
             return Ok(None);
@@ -359,15 +366,18 @@ fn repair_date_time(value: &str, governor: &mut Governor) -> Result<Option<Strin
         fixed
     };
     let time_fixed = if is_time(time_part, governor)? {
-        time_part.to_string()
+        super::super::reference::copy(time_part, governor)?
     } else {
         let Some(fixed) = repair_time(time_part, governor)? else {
             return Ok(None);
         };
         fixed
     };
-    let candidate = format!("{date_fixed}T{time_fixed}");
-    Ok((candidate != value && is_date_time(&candidate, governor)?).then_some(candidate))
+    let candidate = format_scratch_governed(
+        format_args!("{}T{}", date_fixed.as_str(), time_fixed.as_str()),
+        governor,
+    )?;
+    Ok((candidate.as_str() != value && is_date_time(&candidate, governor)?).then_some(candidate))
 }
 
 #[cfg(test)]
@@ -442,14 +452,24 @@ mod tests {
     #[test]
     fn repairs_normalize_common_slips() {
         assert_eq!(
-            repair("date", "2026-9-28", &mut governor()),
+            repair("date", "2026-9-28", &mut governor())
+                .map(|value| value.map(|text| text.as_str().to_owned())),
             Ok(Some("2026-09-28".into()))
         );
         assert_eq!(
-            repair("date-time", "2026-09-28 10:00:00Z", &mut governor()),
+            repair("date-time", "2026-09-28 10:00:00Z", &mut governor())
+                .map(|value| value.map(|text| text.as_str().to_owned())),
             Ok(Some("2026-09-28T10:00:00Z".into()))
         );
-        assert_eq!(repair("date", "2026-09-28", &mut governor()), Ok(None));
-        assert_eq!(repair("date", "not-a-date", &mut governor()), Ok(None));
+        assert!(
+            repair("date", "2026-09-28", &mut governor())
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            repair("date", "not-a-date", &mut governor())
+                .unwrap()
+                .is_none()
+        );
     }
 }

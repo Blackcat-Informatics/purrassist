@@ -43,7 +43,7 @@ use crate::contract::{
     ScratchMeter, ScratchVec, StopReason,
 };
 use crate::digest::Digest;
-use crate::provenance::{Derivation, Forest, permute};
+use crate::provenance::{Derivation, Forest};
 use core::fmt;
 use std::collections::BTreeMap;
 
@@ -493,10 +493,8 @@ impl<S: SearchState> Search<S> {
         accepted: Accepted<S>,
         receipt: &mut Receipt,
         governor: &mut Governor,
-    ) -> Result<Outcome<S>, StopReason>
-    where
-        S: Clone,
-    {
+    ) -> Result<Outcome<S>, StopReason> {
+        governor.check()?;
         let mut accepted = accepted.candidates;
         if accepted.len() > 1 {
             return self.publish(accepted, receipt, governor);
@@ -527,10 +525,7 @@ impl<S: SearchState> Search<S> {
         accepted: Vec<(S, Ledger, usize)>,
         receipt: &mut Receipt,
         governor: &mut Governor,
-    ) -> Result<Outcome<S>, StopReason>
-    where
-        S: Clone,
-    {
+    ) -> Result<Outcome<S>, StopReason> {
         let mut forest = Forest::new(governor);
         let mut derivations = Vec::with_capacity(accepted.len());
         let mut states = Vec::with_capacity(accepted.len());
@@ -553,13 +548,55 @@ impl<S: SearchState> Search<S> {
             states.push(state);
         }
         let published = forest.publish(&derivations, governor)?;
+        reorder_states(&mut states, &published.order, governor)?;
+        governor.check()?;
         receipt.evidence = published.evidence;
         receipt.losses = published.losses;
         receipt.inferences = published.inferences;
         receipt.alternatives = published.alternatives;
         // `Outcome::Ambiguous` shares `receipt.alternatives`' published order.
-        Ok(Outcome::Ambiguous(permute(&states, &published.order)))
+        Ok(Outcome::Ambiguous(states))
     }
+}
+
+/// Move accepted states into the forest's complete permutation without cloning.
+fn reorder_states<S>(
+    states: &mut [S],
+    order: &[usize],
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    assert_eq!(
+        states.len(),
+        order.len(),
+        "INVARIANT: complete forest permutation"
+    );
+    let mut inverse = ScratchVec::new(governor);
+    for _ in order {
+        crate::contract::push_scratch(&mut inverse, usize::MAX, governor)?;
+    }
+    for (destination, &source) in order.iter().enumerate() {
+        governor.charge(Resource::Work, 1)?;
+        assert!(
+            source < states.len(),
+            "INVARIANT: forest permutation index in range"
+        );
+        assert_eq!(
+            inverse[source],
+            usize::MAX,
+            "INVARIANT: forest permutation indices unique"
+        );
+        inverse.as_mut_slice()[source] = destination;
+    }
+    for index in 0..states.len() {
+        governor.charge(Resource::Work, 1)?;
+        while inverse[index] != index {
+            governor.charge(Resource::Work, 1)?;
+            let destination = inverse[index];
+            states.swap(index, destination);
+            inverse.as_mut_slice().swap(index, destination);
+        }
+    }
+    governor.check()
 }
 
 impl<S: SearchState> fmt::Debug for Search<S> {
@@ -606,6 +643,146 @@ mod tests {
     use crate::contract::{Budget, Effort, Evidence, Governor, Outcome, Receipt, StopReason};
     use crate::{ScratchVec, contract};
     use core::cmp::Reverse;
+
+    /// Candidate storage is deliberately move-only, like schema recovery trees.
+    struct OwnedState(crate::json::OwnedDocument);
+    impl SearchState for OwnedState {
+        type Tie = ();
+        type Context<'c> = ();
+        fn tie(&self) {}
+        fn write_key(&self, key: &mut ScratchVec<u8>) -> Result<(), StopReason> {
+            key.extend(self.0.root().as_str().unwrap().bytes())
+        }
+        fn accept(&self, (): &mut (), _: &mut Governor) -> Result<Acceptance, StopReason> {
+            Ok(Acceptance::Accepted { validation: 0 })
+        }
+        fn expand(
+            &self,
+            (): &mut (),
+            _: &mut Proposals<'_, Self>,
+            _: &mut Governor,
+        ) -> Result<(), StopReason> {
+            unreachable!("accepted state never expands")
+        }
+    }
+    fn owned_state(text: &str, governor: &Governor) -> OwnedState {
+        let mut value = crate::ScratchString::new(governor);
+        value.push_str(text).unwrap();
+        OwnedState(crate::json::OwnedDocument::string(value))
+    }
+
+    #[test]
+    fn candidate_owners_release_on_duplicate_stale_and_refused_publication() {
+        let mut governor = Governor::new(Budget::default());
+        let mut search = Search::new(&governor);
+        let state = owned_state("same", &governor);
+        search
+            .seed(
+                &mut governor,
+                state,
+                Ledger {
+                    cost: 5,
+                    ..Ledger::default()
+                },
+            )
+            .unwrap();
+        let live = governor.scratch_meter().live();
+        let duplicate = owned_state("same", &governor);
+        search
+            .seed(
+                &mut governor,
+                duplicate,
+                Ledger {
+                    cost: 5,
+                    ..Ledger::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            governor.scratch_meter().live(),
+            live,
+            "duplicate tree released"
+        );
+        let cheaper = owned_state("same", &governor);
+        search
+            .seed(
+                &mut governor,
+                cheaper,
+                Ledger {
+                    cost: 2,
+                    ..Ledger::default()
+                },
+            )
+            .unwrap();
+        let other = owned_state("other", &governor);
+        search
+            .seed(
+                &mut governor,
+                other,
+                Ledger {
+                    cost: 2,
+                    ..Ledger::default()
+                },
+            )
+            .unwrap();
+        let accepted = search.run(&mut (), &mut governor).unwrap();
+        assert_eq!(accepted.candidates.len(), 2);
+        let mut receipt =
+            Receipt::new(b"original", "owned.v1", Effort::Standard, Budget::default());
+        let unchanged = receipt.clone();
+        governor.cancel();
+        assert!(matches!(
+            search.finish(accepted, &mut receipt, &mut governor),
+            Err(StopReason::Cancelled)
+        ));
+        assert_eq!(receipt, unchanged, "refused publication is atomic");
+        drop(search);
+        assert_eq!(
+            governor.scratch_meter().live(),
+            0,
+            "stale and accepted trees released"
+        );
+    }
+
+    #[test]
+    fn ambiguity_moves_owned_states_into_published_order() {
+        let mut governor = Governor::new(Budget::default());
+        let mut states = vec![
+            owned_state("third", &governor),
+            owned_state("first", &governor),
+            owned_state("second", &governor),
+        ];
+        super::reorder_states(&mut states, &[1, 2, 0], &mut governor).unwrap();
+        assert_eq!(
+            states
+                .iter()
+                .map(|state| state.0.root().as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["first", "second", "third"]
+        );
+        let mut search = Search::new(&governor);
+        for state in states {
+            search
+                .seed(&mut governor, state, Ledger::default())
+                .unwrap();
+        }
+        let accepted = search.run(&mut (), &mut governor).unwrap();
+        let mut receipt =
+            Receipt::new(b"original", "owned.v1", Effort::Standard, Budget::default());
+        let Outcome::Ambiguous(states) = search
+            .finish(accepted, &mut receipt, &mut governor)
+            .unwrap()
+        else {
+            panic!("equal-cost states remain ambiguous")
+        };
+        assert_eq!(states.len(), receipt.alternatives.len());
+        for (state, alternative) in states.iter().zip(&receipt.alternatives) {
+            assert_eq!(
+                crate::digest::Digest::of(state.0.root().as_str().unwrap().as_bytes()),
+                alternative.output
+            );
+        }
+    }
 
     /// Synthetic search log: every accepted value, in call order.
     #[derive(Default)]

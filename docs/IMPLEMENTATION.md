@@ -70,8 +70,8 @@ existing borrowed parsers; pointer and template validation retain forward cursor
 Regex format validation drops owned syntax diagnostics without publishing them.
 Every format outcome checks cancellation, including unknown annotation formats.
 Exact results, witness seed order and dialect-driven assertion behavior remain
-unchanged; usage reflects the additional admitted computation. Repair-string
-construction, general recovery/search ownership and graph loading remain separate.
+unchanged; usage reflects the additional admitted computation. General
+recovery/search ownership and graph loading remain separate.
 These changes do not complete the full contracts of parent issues #33 and #36.
 
 Witness canonicalization, requirement merging and the existing branch driver
@@ -93,10 +93,29 @@ a native ceiling of 128, with the copied root at depth zero. Rejected candidates
 and refused construction release their owners; public witness publication retains
 only completed output. Derivative and backtracking pattern generation share an
 internal owned result, while ordinary pattern generation publishes its output
-through one adapter. Required-property recovery explicitly transfers a completed
-witness into its existing retained-candidate contract without another clone.
-Subsequent recovery duplicate/discard retention and host serialization remain
-separate. This does not complete recovery ownership or tool-graph governance.
+through one adapter. Required-property recovery transfers a completed witness
+owner directly into the candidate tree without early publication.
+
+Schema recovery now retains owned JSON trees from strict parsing or extracted
+seed copying through replacement construction, queue retention, rejected/stale
+candidate discard and acceptance. Every production proposal uses the same owned
+representation, including decoded strings, shape changes, renaming, removal,
+relocation, invented required values and date/time repair text. Route replacement
+copies only retained ancestors and siblings; removed subtrees are never cloned
+or charged to the replacement owner. Copying preserves lexical numbers, member
+order and source spans, while string decoding clears its inapplicable spans.
+Attachment checks caller Depth and the native ceiling of 128 against the combined
+tree depth. Only completed recovery output transfers its tree reservation into
+ordinary public nodes, after staged publication and its final governor check.
+
+Shared Search publication moves accepted states into the provenance forest's
+complete permutation using an admitted inverse-index buffer. It checks the
+permutation and cancellation before changing receipt fields; states need not be
+cloneable. Original input, equally ranked answers and Guess/BestGuess semantics
+remain unchanged. Ledger Change construction/cloning, queue and deduplication
+index estimates, Search/Forest receipt publication ownership, recovery traversal
+and name-cost scans, extraction storage and host serialization remain separate.
+This does not complete recovery ownership or parent issues #33 and #36.
 
 Evaluator recursion and transient path/key state now use fallible owners on the
 same caller governor. One active stack retains schema-location/instance-path
@@ -122,8 +141,8 @@ indices, deduplicates individually owned patterns by destination, and reserves
 final observation slots before commit. Refusal preserves committed observations;
 finalization after exhaustion or cancellation requires no allocation. Search
 results retain the existing evidence order and ambiguous-prefix replacement.
-Provisional Search/Forest publication retains its existing charges. Recovery
-replacement construction and host serialization remain separate contracts.
+Provisional Search/Forest receipt publication retains its existing charges;
+its ownership and host serialization remain separate contracts.
 
 Final refutations are published only by the public governed witness boundary.
 The existing driver and required-property recovery carry allocation-free static

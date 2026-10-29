@@ -11,6 +11,13 @@ crates share one version.
 
 ### Added
 
+- Schema recovery candidate trees retain fallible owners through construction,
+  queue discard and final publication. Replacements copy only retained nodes;
+  required witnesses and date/time repairs transfer owned values. Shared Search
+  moves ambiguous answers into provenance order without cloning candidate trees.
+  Source spans, number spellings, answer order and guess semantics are preserved.
+  Ledger and queue bookkeeping ownership remain separate contracts.
+
 - Schema assertions admit keyword, route, scalar-length and witness member-name
   scans. Remaining format parsers admit documented scan bounds, regex format
   diagnostics release without publication, and every format outcome checks
