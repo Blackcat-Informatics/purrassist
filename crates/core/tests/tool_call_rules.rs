@@ -856,6 +856,13 @@ fn bare_parameter_element_reads_as_its_declared_parameter() {
     assert_eq!(call.outcome, CallOutcome::Resolved);
     assert_eq!(call.arguments().to_json(), r#"{"note":"remember this"}"#);
     assert_eq!(count(call, "tool_call.markup.bare-parameter-element"), 2);
+    // A `<note` with no tag end is text in the value, not another element.
+    let partial = run(
+        DialectId::Qwen3CoderXml,
+        &tools,
+        &qwen("set_note", "<note>a<note</note>"),
+    );
+    assert_eq!(one(&partial).arguments().to_json(), r#"{"note":"a<note"}"#);
     let wrapped = "<parameter=note>\nremember\n</parameter>\n<parameter=count>\n3\n</parameter>";
     let canonical = run(DialectId::Qwen3CoderXml, &tools, &qwen("set_note", wrapped));
     let canonical = one(&canonical);

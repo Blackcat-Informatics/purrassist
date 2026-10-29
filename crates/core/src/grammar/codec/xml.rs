@@ -16,8 +16,7 @@ use crate::tool_call::{
     ScopeNode, Spanned, UnknownParameters, UnresolvedArgument, ValueShape,
 };
 use core::ops::Range;
-use std::collections::BTreeMap;
-use std::collections::btree_map::Entry;
+use std::collections::BTreeSet;
 
 /// The parameter opener prefix; the name runs to the next `>`.
 const OPENER: &[u8] = b"<parameter=";
@@ -451,15 +450,15 @@ struct Reader<'b, 't, 'g> {
     /// (the body has a second reading).
     forked: bool,
     /// The canonical names bound at the top level of the body, however
-    /// each was written, and whether a bare parameter element (see
-    /// `Reader::bare`) bound it.
-    top: BTreeMap<String, bool>,
+    /// each was written.
+    top: BTreeSet<String>,
+    /// The canonical names among them a bare parameter element (see
+    /// `Reader::bare`) bound.
+    bare_names: BTreeSet<String>,
     /// Where a bare element's name was bound a second time (by another bare
     /// element or a `<parameter=` element), a body offset: no single
     /// reading of either, so the body is malformed there.
     repeated: Option<usize>,
-    /// Whether the body has held a bare parameter element so far.
-    held_bare: bool,
     governor: &'g mut Governor,
 }
 
@@ -587,9 +586,9 @@ impl<'b, 't, 'g> Reader<'b, 't, 'g> {
             closers: context.closers,
             mode,
             forked: false,
-            top: BTreeMap::new(),
+            top: BTreeSet::new(),
+            bare_names: BTreeSet::new(),
             repeated: None,
-            held_bare: false,
             governor,
         }
     }
@@ -966,9 +965,9 @@ impl<'t> Reader<'_, 't, '_> {
     /// the occurrence at body offset `at` (`bare`: a bare parameter
     /// element). At the top level it is one of the body's names: bound a
     /// second time where either occurrence is bare, the body is malformed
-    /// at `at` (see `Reader::repeated`). One ordered-map lookup, so linear
-    /// in the names bound. Once the body holds a bare element, each lookup
-    /// is charged per key byte compared. Before that, the lookup is the same
+    /// at `at` (see `Reader::repeated`). Ordered-set lookups, so linear in
+    /// the names bound. Once the body holds a bare element, each lookup is
+    /// charged per key byte compared. Before that, the lookup is the same
     /// bookkeeping as the argument tree's own per-name entry
     /// (`ArgTree::adopt_keyed`), covered by the charge for reading the
     /// name, so a body without a bare element is charged as before.
@@ -976,22 +975,19 @@ impl<'t> Reader<'_, 't, '_> {
         if self.frames.len() != 1 || self.repeated.is_some() {
             return Ok(());
         }
-        if bare || self.held_bare {
-            self.held_bare = true;
+        if bare || !self.bare_names.is_empty() {
+            // Two lookups, each comparing at most `bit_width + 1` keys.
             let depth = self.top.len().bit_width() as usize + 1;
-            self.charge(canonical.len().max(1).saturating_mul(depth))?;
+            self.charge(canonical.len().max(1).saturating_mul(2 * depth))?;
         }
-        match self.top.entry(canonical) {
-            Entry::Vacant(entry) => {
-                entry.insert(bare);
-            }
-            Entry::Occupied(mut entry) => {
-                if bare || *entry.get() {
-                    self.repeated = Some(at);
-                }
-                *entry.get_mut() |= bare;
-            }
+        if self.bare_names.contains(&canonical) || (bare && self.top.contains(&canonical)) {
+            self.repeated = Some(at);
+            return Ok(());
         }
+        if bare {
+            self.bare_names.insert(canonical.clone());
+        }
+        self.top.insert(canonical);
         Ok(())
     }
 
@@ -1122,40 +1118,49 @@ impl<'t> Reader<'_, 't, '_> {
             return Ok(None);
         }
         let from = open + 1;
-        let closer = [b"</", tag, b">"].concat();
-        let Some(offset) = find(&body[from..], &closer) else {
-            self.charge(body.len() - from)?;
-            return Ok(None);
-        };
-        let stop = from + offset;
-        let value = &body[from..stop];
-        let markup = 4 + self.openers.len() + self.closers.len();
-        self.charge(offset.saturating_mul(markup))?;
-        let element = [b"<", tag].concat();
-        let nested = (0..value.len()).any(|index| {
-            value[index..].starts_with(&element)
-                && value
-                    .get(index + element.len())
-                    .is_none_or(|&byte| matches!(byte, b'>' | b'/') || byte.is_ascii_whitespace())
-        });
-        let held = [OPENER, CLOSER, CLOSER_VARIANT]
-            .into_iter()
-            .chain(self.openers.iter().map(ScratchVec::as_slice))
-            .chain(self.closers.iter().map(ScratchVec::as_slice))
-            .any(|spelling| find(value, spelling).is_some());
-        if nested || held {
-            return Ok(None);
+        // One pass over the `<` bytes after the tag: the first `</NAME>`
+        // ends the value; markup before it that could make another reading
+        // leaves no bare element.
+        let mut stop = from;
+        loop {
+            let Some(offset) = body[stop..].iter().position(|&byte| byte == b'<') else {
+                self.charge(body.len() - from)?;
+                return Ok(None);
+            };
+            stop += offset;
+            let rest = &body[stop..];
+            let named = |skip: usize| rest.get(skip..).is_some_and(|name| name.starts_with(tag));
+            if rest.get(1) == Some(&b'/') && named(2) && rest.get(2 + tag.len()) == Some(&b'>') {
+                break;
+            }
+            let element = named(1)
+                && rest
+                    .get(1 + tag.len())
+                    .is_none_or(|&byte| matches!(byte, b'>' | b'/') || byte.is_ascii_whitespace());
+            if element
+                || rest.starts_with(OPENER)
+                || rest.starts_with(CLOSER)
+                || rest.starts_with(CLOSER_VARIANT)
+                || self.markup(self.openers, stop)?.is_some()
+                || self.markup(self.closers, stop)?.is_some()
+            {
+                self.charge(stop - from)?;
+                return Ok(None);
+            }
+            stop += 1;
         }
+        self.charge(stop - from)?;
+        let width = tag.len() + 3;
         let member = scope.member(name);
         let canonical = scope.canonical(name).to_owned();
         let opening = [OPENER, tag, b">"].concat();
         self.record(EditOperator::BareParameterElement, at..from, &opening)?;
-        let terminator = Terminator::Closer(closer.len(), Spelling::Canonical);
+        let terminator = Terminator::Closer(width, Spelling::Canonical);
         let tree = match self.value(member.declared, from, stop, terminator)? {
             Ok(tree) => tree,
             Err(fault) => return Ok(Some(Err(fault))),
         };
-        let end = stop + closer.len();
+        let end = stop + width;
         self.record(EditOperator::BareParameterElement, stop..end, CLOSER)?;
         let key = Spanned {
             value: name.to_owned(),
@@ -1978,13 +1983,6 @@ impl<'t> Reader<'_, 't, '_> {
         }
         Ok(Ok(tree))
     }
-}
-
-/// The offset of the first occurrence of `needle` (non-empty) in `haystack`.
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
 }
 
 /// An item value as a one-element array, its leaves and unresolved values
