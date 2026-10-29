@@ -10,6 +10,7 @@
 use super::Tools;
 use purrassist::{
     Budget, CancellationToken, Effort, Governor, Receipt, StopReason,
+    contract::Resource,
     json::{self, Node, Value},
     schema::Schema,
     wire::{array, null, object, string},
@@ -413,18 +414,81 @@ pub(super) fn call(
         .ok_or_else(|| format!("unknown tool {name:?}"))?;
     // Once a handler returns, bounded validation completes despite late signals.
     // In particular, a completed journaled transaction must retain its outcome.
-    let mut output = Governor::new(Budget::default());
-    entry.invoke(tools, args, cancellation, &mut admission, &mut output)
+    entry.invoke(
+        tools,
+        args,
+        cancellation,
+        &mut admission,
+        OutputPolicy::Automatic,
+    )
+}
+
+/// Automatic output validation scales with returned structure, independently
+/// of the handler's input budget. Explicit governors retain their exact limits.
+enum OutputPolicy<'a> {
+    Automatic,
+    Explicit(&'a mut Governor),
+}
+
+impl<'a> From<&'a mut Governor> for OutputPolicy<'a> {
+    fn from(governor: &'a mut Governor) -> Self {
+        Self::Explicit(governor)
+    }
+}
+
+/// Size only the default output Work allowance with a bounded, allocation-free
+/// traversal. The 256 units per node are a scheduling policy for registered
+/// schemas, not a guarantee that every schema or output completes validation.
+/// All other limits stay at their defaults; sizing failures retain their
+/// original governor so the refusal reports the actual limit and usage.
+/// Each cursor step is admitted, including unwinding: a completed traversal
+/// charges twice the node count minus one. The fixed stack and the automatic
+/// governor both use the Standard default depth, with the root at depth zero.
+fn size_output_work(original: &Node, governor: &mut Governor) -> Result<(), StopReason> {
+    const DEPTH: usize = Effort::Standard.budget().depth as usize;
+    let mut cursors: [Option<(&Node, usize)>; DEPTH + 1] = [None; DEPTH + 1];
+    cursors[0] = Some((original, 0));
+    let mut depth = 0;
+    let mut maximum_depth = 0;
+    let mut nodes = 1_u64;
+    loop {
+        governor.charge(Resource::Work, 1)?;
+        let (node, next) = cursors[depth].expect("INVARIANT: active output cursor exists");
+        let child = match &node.value {
+            Value::Array(items) => items.get(next),
+            Value::Object(members) => members.get(next).map(|member| &member.value),
+            _ => None,
+        };
+        if let Some(child) = child {
+            cursors[depth] = Some((node, next + 1));
+            governor.charge(Resource::Depth, (depth + 1) as u64)?;
+            depth += 1;
+            maximum_depth = maximum_depth.max(depth);
+            nodes = nodes.saturating_add(1);
+            cursors[depth] = Some((child, 0));
+        } else if depth == 0 {
+            break;
+        } else {
+            cursors[depth] = None;
+            depth -= 1;
+        }
+    }
+    let sizing_work = governor.usage().work;
+    let mut limits = *governor.limits();
+    limits.work = limits.work.saturating_add(nodes.saturating_mul(256));
+    *governor = Governor::new(limits);
+    governor.charge(Resource::Work, sizing_work)?;
+    governor.charge(Resource::Depth, maximum_depth as u64)
 }
 
 impl Entry {
-    fn invoke(
+    fn invoke<'a>(
         &self,
         tools: &Tools,
         args: &Node,
         cancellation: Option<&CancellationToken>,
         admission: &mut Governor,
-        output: &mut Governor,
+        output: impl Into<OutputPolicy<'a>>,
     ) -> Result<Node, String> {
         admission.check().map_err(|e| e.to_string())?;
         let input_schema = Schema::compile_governed(self.input_schema, admission)
@@ -442,7 +506,15 @@ impl Entry {
         }
         admission.check().map_err(|error| error.to_string())?;
         let original = (self.handler)(tools, self.name, args, cancellation)?;
-        match output_schema.validate_with(&original, output) {
+        let mut automatic = Governor::new(Budget::default());
+        let (output, sized) = match output.into() {
+            OutputPolicy::Automatic => {
+                let sized = size_output_work(&original, &mut automatic);
+                (&mut automatic, sized)
+            }
+            OutputPolicy::Explicit(output) => (output, Ok(())),
+        };
+        match sized.and_then(|()| output_schema.validate_with(&original, output)) {
             Ok(report) if report.valid => Ok(original),
             verdict => {
                 let (reason, report, stop) = match verdict {

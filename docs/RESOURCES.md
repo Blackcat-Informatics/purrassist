@@ -252,6 +252,14 @@ reference and applicator frames, not just nested data: a recursive object/array
 schema can require several frames per data level. It is distinct from the ordinary
 caller preset of 128 and preserves the existing deep mandatory-wrap recovery case.
 
+Registered host output validation has a separate automatic Work policy: the
+standard base plus 256 units per returned node. A fixed cursor stack counts
+structure under the standard Work and Depth limits, without serialization or
+heap allocation, and carries consumed sizing work into validation. Other
+limits and explicit output governors remain unchanged. Sizing and validation
+refusals preserve the complete returned node and completed-effect context. This
+is a finite default allowance, not a bound for arbitrary schema complexity.
+
 Transient combinator keys, escaped member paths, property-name paths and string
 instances, array indices, pattern-property keys and unevaluated paths use actual
 fallible owners. Pointer spelling comes from the shared pointer builder; decimal

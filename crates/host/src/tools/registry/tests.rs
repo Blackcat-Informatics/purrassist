@@ -209,6 +209,7 @@ fn whole_output_checks_preserve_valid_objects_arrays_and_native_refusal_original
         );
     }
     assert_native_output_stops(&checked, &tools, &original);
+    assert_automatic_output_policy(&checked, &tools, &original);
     // The largest registered output schema is prepared through actual public
     // dispatch, with the real recovery handler and native returned envelope.
     let args=json::parse(r#"{"output":"<tool_call>{\"name\":\"ls\",\"arguments\":{}}</tool_call>","tools":[{"type":"function","function":{"name":"ls","parameters":{"type":"object","properties":{}}}}]}"#).unwrap();
@@ -225,7 +226,7 @@ fn whole_output_checks_preserve_valid_objects_arrays_and_native_refusal_original
 
 #[test]
 fn completed_file_effects_survive_late_cancellation_and_invalid_output_release() {
-    for valid in [true, false] {
+    for (valid, automatic) in [(true, false), (false, false), (true, true), (false, true)] {
         let root = Root::new();
         let tools = root.tools();
         let token = CancellationToken::new();
@@ -246,7 +247,11 @@ fn completed_file_effects_survive_late_cancellation_and_invalid_output_release()
             &replacement(),
             Some(&token),
             &mut admission,
-            &mut output,
+            if automatic {
+                super::OutputPolicy::Automatic
+            } else {
+                super::OutputPolicy::Explicit(&mut output)
+            },
         );
         assert!(token.is_cancelled());
         assert_eq!(root.text(), "coffee");
@@ -283,6 +288,89 @@ fn completed_file_effects_survive_late_cancellation_and_invalid_output_release()
         tools.call("undo_file", &undo).unwrap();
         assert_eq!(root.text(), "tea");
     }
+}
+
+/// Default sizing retains the result and the actual refusal governor, without
+/// invoking the producer again when either validation or sizing refuses.
+fn assert_automatic_output_policy(checked: &Entry, tools: &Tools, original: &Node) {
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    fn counted_echo(
+        tools: &Tools,
+        name: &str,
+        args: &Node,
+        token: Option<&CancellationToken>,
+    ) -> Result<Node, String> {
+        CALLS.fetch_add(1, Ordering::SeqCst);
+        echo(tools, name, args, token)
+    }
+    let checked = Entry {
+        handler: counted_echo,
+        ..*checked
+    };
+    let mut admission = Governor::new(Budget::default());
+    let refusal = json::parse(
+        &checked
+            .invoke(
+                tools,
+                original,
+                None,
+                &mut admission,
+                super::OutputPolicy::Automatic,
+            )
+            .unwrap_err(),
+    )
+    .unwrap();
+    assert_eq!(CALLS.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        refusal
+            .pointer("/output_validation/budget/work")
+            .unwrap()
+            .to_json(),
+        (Budget::default().work + 3 * 256).to_string()
+    );
+    assert_eq!(
+        refusal.get("original_output").unwrap().to_json(),
+        original.to_json()
+    );
+
+    let mut nested = Node::new(json::Value::Null);
+    for _ in 0..=Budget::default().depth {
+        nested = Node::new(json::Value::Array(vec![nested]));
+    }
+    let mut admission = Governor::new(Budget::default());
+    let text = checked
+        .invoke(
+            tools,
+            &nested,
+            None,
+            &mut admission,
+            super::OutputPolicy::Automatic,
+        )
+        .unwrap_err();
+    let refusal = json::parse_with(
+        &text,
+        &mut Governor::new(Budget {
+            depth: 256,
+            ..Budget::default()
+        }),
+    )
+    .unwrap();
+    assert_eq!(CALLS.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        refusal.get("original_output").unwrap().to_json(),
+        nested.to_json()
+    );
+    assert_eq!(
+        refusal.pointer("/reason/detail").unwrap().as_str(),
+        Some("depth")
+    );
+    assert_eq!(
+        refusal
+            .pointer("/output_validation/budget/work")
+            .unwrap()
+            .to_json(),
+        Budget::default().work.to_string()
+    );
 }
 
 fn assert_native_output_stops(checked: &Entry, tools: &Tools, original: &Node) {

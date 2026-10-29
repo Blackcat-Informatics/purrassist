@@ -61,6 +61,9 @@ impl Tools {
     /// stale writes and execution errors. Both selected schemas are prepared
     /// before the handler runs. The complete returned node must satisfy the
     /// registered output contract before successful release.
+    /// Output validation has a separate default Work allowance: the standard
+    /// base plus 256 units per returned node. Bounded, allocation-free sizing
+    /// carries its consumed work into validation; other limits stay unchanged.
     ///
     /// A post-handler refusal is a JSON diagnostic in the returned error string,
     /// with code `registered_output_refused`, original output, tool/schema

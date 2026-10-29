@@ -779,8 +779,15 @@ contracts. The whole returned node is validated before successful Rust, CLI or
 MCP release; a declared unconstrained field is not strengthened implicitly.
 
 Cancellable admission has its own default budget. Once a handler returns,
-output validation uses a separate default-budget governor without a cancellation
-token, preserving completed transaction outcomes despite late signals. Existing
+output validation uses a separate governor without a cancellation token,
+preserving completed transaction outcomes despite late signals. A bounded,
+allocation-free cursor traversal sizes its default Work allowance to the
+standard base plus 256 units per returned node; all other limits stay unchanged.
+The traversal admits cursor steps and depth under the original default limits,
+and carries its consumed Work into validation. Sizing refusal retains the
+original output and actual stopped governor. This structural allowance is a
+finite scheduling policy for registered schemas, not a universal completion
+guarantee; explicitly supplied governors keep their exact limits. Existing
 handler payloads and receipts are unchanged and do not claim registry costs.
 
 A post-handler schema violation or native validation stop returns the existing
