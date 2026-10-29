@@ -38,6 +38,17 @@ impl Operation<'_> {
         text.push_str(value)?;
         Ok(text)
     }
+    /// Admit relocation before an arithmetic append grows its existing buffer.
+    pub(super) fn push(&mut self, text: &mut Text, value: char) -> Result<(), StopReason> {
+        let capacity = match text {
+            Text::Plain(text) => text.capacity(),
+            Text::Admitted(text) => text.capacity(),
+        };
+        if value.len_utf8() > capacity - text.as_str().len() {
+            self.work(text.as_str().len())?;
+        }
+        text.push(value)
+    }
     pub(super) fn count(&mut self, count: usize) -> Result<Text, StopReason> {
         self.work(40)?;
         self.0.as_mut().map_or_else(
@@ -94,12 +105,6 @@ impl Text {
     }
     pub(super) fn push(&mut self, value: char) -> Result<(), StopReason> {
         self.append(value, String::push, ScratchString::push)
-    }
-    pub(super) fn into_string(self) -> String {
-        match self {
-            Self::Plain(text) => text,
-            Self::Admitted(text) => text.into_string(),
-        }
     }
 }
 

@@ -58,7 +58,7 @@ pub(super) fn add(
                 break;
             }
             let sum = a.map_or(0, |v| v - b'0') + b.map_or(0, |v| v - b'0') + carry;
-            reversed.push(char::from(b'0' + sum % 10))?;
+            operation.push(&mut reversed, char::from(b'0' + sum % 10))?;
             carry = sum / 10;
         }
     } else {
@@ -80,20 +80,23 @@ pub(super) fn add(
             if value < 0 {
                 value += 10;
             }
-            reversed.push(char::from(
-                b'0' + u8::try_from(value).expect("INVARIANT: decimal difference is 0..9"),
-            ))?;
+            operation.push(
+                &mut reversed,
+                char::from(
+                    b'0' + u8::try_from(value).expect("INVARIANT: decimal difference is 0..9"),
+                ),
+            )?;
         }
     }
     operation.work(reversed.as_str().len())?;
     let significant = reversed.as_str().trim_end_matches('0');
     let mut digits = operation.text();
     if significant.is_empty() {
-        digits.push('0')?;
+        operation.push(&mut digits, '0')?;
     } else {
         for digit in significant.bytes().rev() {
             operation.work(1)?;
-            digits.push(char::from(digit))?;
+            operation.push(&mut digits, char::from(digit))?;
         }
     }
     Ok(Integer {
@@ -129,7 +132,7 @@ pub(super) fn parts(input: &str, operation: &mut Operation<'_>) -> Result<Parts,
     let mut digits = operation.text();
     for byte in mantissa[first..=last].bytes().filter(u8::is_ascii_digit) {
         operation.work(1)?;
-        digits.push(char::from(byte))?;
+        operation.push(&mut digits, char::from(byte))?;
     }
     let exponent = integer(exponent, operation)?;
     let count = operation.count(trailing)?;
@@ -153,6 +156,84 @@ pub(super) fn parts(input: &str, operation: &mut Operation<'_>) -> Result<Parts,
         digits,
         exponent,
     })
+}
+
+/// Test divisibility after the public boundary has refused a zero denominator.
+pub(super) fn multiple_of(
+    numerator: Parts,
+    denominator: Parts,
+    operation: &mut Operation<'_>,
+) -> Result<bool, StopReason> {
+    if numerator.digits.as_str() == "0" {
+        return Ok(true);
+    }
+    let delta = add(
+        numerator.exponent.negative,
+        numerator.exponent.digits.as_str(),
+        !denominator.exponent.negative && denominator.exponent.digits.as_str() != "0",
+        denominator.exponent.digits.as_str(),
+        operation,
+    )?;
+    if delta.negative {
+        return Ok(false);
+    }
+    let (top, top_two, top_five) = remove_decimal_factors(numerator.digits, operation)?;
+    let (bottom, bottom_two, bottom_five) = remove_decimal_factors(denominator.digits, operation)?;
+    for required in [
+        bottom_two.saturating_sub(top_two),
+        bottom_five.saturating_sub(top_five),
+    ] {
+        let required = operation.count(required)?;
+        if magnitude(delta.digits.as_str(), required.as_str(), operation)?.is_lt() {
+            return Ok(false);
+        }
+    }
+    if bottom.as_str() == "1" {
+        return Ok(true);
+    }
+    let mut remainder = operation.copy("0")?;
+    for digit in top.as_str().bytes() {
+        operation.work(1)?;
+        if remainder.as_str() == "0" {
+            remainder = operation.text();
+        }
+        operation.push(&mut remainder, char::from(digit))?;
+        while magnitude(remainder.as_str(), bottom.as_str(), operation)?.is_ge() {
+            remainder = add(false, remainder.as_str(), true, bottom.as_str(), operation)?.digits;
+        }
+    }
+    Ok(remainder.as_str() == "0")
+}
+
+fn remove_decimal_factors(
+    mut digits: Text,
+    operation: &mut Operation<'_>,
+) -> Result<(Text, usize, usize), StopReason> {
+    let mut counts = [0, 0];
+    for (index, divisor) in [2_u32, 5].into_iter().enumerate() {
+        loop {
+            operation.work(digits.as_str().len())?;
+            let mut quotient = operation.text();
+            let mut remainder = 0;
+            for digit in digits.as_str().bytes() {
+                let value = remainder * 10 + u32::from(digit - b'0');
+                let next = value / divisor;
+                if next != 0 || !quotient.as_str().is_empty() {
+                    operation.push(
+                        &mut quotient,
+                        char::from_digit(next, 10).expect("INVARIANT: decimal digit"),
+                    )?;
+                }
+                remainder = value % divisor;
+            }
+            if remainder != 0 {
+                break;
+            }
+            digits = quotient;
+            counts[index] += 1;
+        }
+    }
+    Ok((digits, counts[0], counts[1]))
 }
 
 pub(super) fn compare(
