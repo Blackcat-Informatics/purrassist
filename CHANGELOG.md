@@ -23,6 +23,14 @@ crates share one version.
 
 ### Changed
 
+- Witness candidates now retain owned JSON trees through selection and final
+  revalidation, preserving literal spelling and source spans. Rejected and
+  refused candidates release their storage; completed public witnesses retain
+  their admission. Both pattern engines transfer owned results to schema
+  generation. Required-property recovery explicitly adopts completed witnesses
+  into its existing retained-candidate contract; later search retention and
+  general assertion computation remain separate.
+
 - Evaluator reports now own their strings, annotations and collection storage
   until publication or discard. Internal witness/recovery checks release reports;
   public validation retains completed output. Recovery moves format evidence,

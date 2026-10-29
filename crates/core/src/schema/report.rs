@@ -5,10 +5,6 @@ use super::{index, reference};
 use crate::contract::{Evidence, ScratchCharge, ScratchLease, Validation};
 use crate::{Governor, ScratchString, ScratchVec, StopReason};
 
-pub(super) fn empty_lease(governor: &Governor) -> ScratchLease {
-    ScratchString::new(governor).into_owned_parts().1
-}
-
 pub(super) struct Owned<T> {
     pub(super) value: T,
     pub(super) lease: ScratchLease,
@@ -81,7 +77,7 @@ impl<T: ScratchCharge> Records<T> {
     pub(super) fn new(governor: &Governor) -> Self {
         Self {
             values: ScratchVec::new(governor),
-            lease: empty_lease(governor),
+            lease: ScratchLease::empty(governor),
         }
     }
     pub(super) fn push(
@@ -99,8 +95,10 @@ impl<T: ScratchCharge> Records<T> {
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         append(&mut self.values, &mut other.values, governor)?;
-        self.lease
-            .absorb(core::mem::replace(&mut other.lease, empty_lease(governor)));
+        self.lease.absorb(core::mem::replace(
+            &mut other.lease,
+            ScratchLease::empty(governor),
+        ));
         Ok(())
     }
     pub(super) fn into_owned(self) -> Owned<Vec<T>> {

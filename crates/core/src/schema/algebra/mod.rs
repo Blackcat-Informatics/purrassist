@@ -45,7 +45,7 @@ mod tests;
 
 use super::Schema;
 use crate::contract::{Evidence, Governor, Resource, ScratchVec, StopReason};
-use crate::json::Node;
+use crate::json::{Node, OwnedDocument};
 
 /// Closed-form refutation evidence for [`WitnessOutcome::Unsatisfiable`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,7 +71,7 @@ pub enum WitnessOutcome {
 /// Internal results carry no public refutation storage. Recovery consumes
 /// these directly; only the public witness boundary materializes evidence.
 pub(super) enum Attempt {
-    Witness(Node),
+    Witness(OwnedDocument),
     Unsatisfiable(&'static str),
     Exhausted,
 }
@@ -123,7 +123,7 @@ pub(super) fn generate(
         Attempt::Unsatisfiable(refutation) => Attempt::Unsatisfiable(refutation),
         Attempt::Exhausted => Attempt::Exhausted,
         Attempt::Witness(node) => {
-            let checked = super::evaluate::run(schema, id, &node, governor)?;
+            let checked = super::evaluate::run(schema, id, node.root(), governor)?;
             if checked.violations.is_empty() {
                 Attempt::Witness(node)
             } else {
@@ -151,10 +151,14 @@ impl Schema {
 
     /// Generate a witness instance for this complete schema under a
     /// caller-owned governor, distinguishing resource exhaustion from every
-    /// [`WitnessOutcome`]. Final refutations admit one evidence entry, copying
-    /// work and owned output buffers. Only complete public refutations retain
-    /// their storage admission; discarded internal branches publish nothing.
-    /// Dropping ordinary public output does not release that retained admission.
+    /// [`WitnessOutcome`]. Candidate trees retain actual buffer owners through
+    /// selection and final revalidation. Literal copies preserve number spelling
+    /// and source spans, enforcing caller Depth and a native ceiling of 128.
+    /// Final refutations admit one evidence entry, copying work and owned output
+    /// buffers. Only completed public output retains its storage admission;
+    /// discarded internal candidates and refutations publish nothing. Dropping
+    /// ordinary public output does not release that retained admission. General
+    /// assertion/format computation retains its separate resource contract.
     ///
     /// ```
     /// use purrassist_core::{Budget, Governor, schema::{Schema, algebra::WitnessOutcome}};
@@ -176,7 +180,7 @@ impl Schema {
         let attempt = generate(self, self.root, governor)?;
         governor.check()?;
         Ok(match attempt {
-            Attempt::Witness(node) => WitnessOutcome::Witness(node),
+            Attempt::Witness(node) => WitnessOutcome::Witness(node.into_node()),
             Attempt::Unsatisfiable(reason) => {
                 WitnessOutcome::Unsatisfiable(Refutation::publish(reason, governor)?)
             }

@@ -20,7 +20,7 @@ fn branch_preparation_releases_on_each_outcome_and_refusal() {
             ..Budget::default()
         });
         let result = generate::run(&schema, schema.root, &mut governor).unwrap();
-        let actual = match result {
+        let actual = match &result {
             Attempt::Witness(_) => "witness",
             Attempt::Unsatisfiable(_) => "unsatisfiable",
             Attempt::Exhausted => "exhausted",
@@ -32,6 +32,10 @@ fn branch_preparation_releases_on_each_outcome_and_refusal() {
             "internal branches publish no evidence"
         );
         assert!(usage.peak_scratch_bytes > 0);
+        if actual == "witness" {
+            assert!(governor.scratch_meter().live() > 0);
+        }
+        drop(result);
         assert_eq!(governor.scratch_meter().live(), 0);
         for (work, scratch_bytes, reason) in [
             (usage.work, usage.peak_scratch_bytes, None),
@@ -59,6 +63,7 @@ fn branch_preparation_releases_on_each_outcome_and_refusal() {
             } else {
                 assert!(result.is_ok());
             }
+            drop(result);
             assert_eq!(governor.scratch_meter().live(), 0, "{source}");
         }
     }
@@ -169,4 +174,65 @@ fn final_refutation_publication_is_atomic_and_preserves_evidence() {
             );
         }
     }
+}
+
+#[test]
+fn candidate_trees_and_pattern_results_remain_owned_until_publication() {
+    for source in [
+        r#"{"const":{"n":1.00e2,"items":["雪",true]}}"#,
+        r#"{"type":"string","pattern":"^a+$","minLength":2}"#,
+        r#"{"type":"string","pattern":"^(a)\\1$"}"#,
+        r#"{"type":"array","minItems":2,"not":{"uniqueItems":true}}"#,
+        r#"{"type":"object","required":["x"],"properties":{"x":{"const":[1,2]}}}"#,
+    ] {
+        let schema = Schema::compile(source).unwrap();
+        let mut governor = Governor::new(Budget::default());
+        let attempt = super::generate(&schema, schema.root, &mut governor).unwrap();
+        assert!(matches!(attempt, Attempt::Witness(_)), "{source}");
+        assert!(governor.scratch_meter().live() > 0, "{source}");
+        let usage = governor.usage();
+        drop(attempt);
+        assert_eq!(governor.scratch_meter().live(), 0, "{source}");
+        for (budget, resource) in [
+            (
+                Budget {
+                    work: usage.work - 1,
+                    ..Budget::default()
+                },
+                Resource::Work,
+            ),
+            (
+                Budget {
+                    scratch_bytes: usage.peak_scratch_bytes - 1,
+                    ..Budget::default()
+                },
+                Resource::ScratchBytes,
+            ),
+        ] {
+            let mut governor = Governor::new(budget);
+            assert!(
+                matches!(super::generate(&schema, schema.root, &mut governor), Err(StopReason::BudgetExceeded(actual)) if actual == resource),
+                "{source}"
+            );
+            assert_eq!(governor.scratch_meter().live(), 0, "{source}");
+        }
+        let mut governor = Governor::new(Budget::default());
+        let published = schema.generate_witness_governed(&mut governor).unwrap();
+        assert!(matches!(published, super::WitnessOutcome::Witness(_)));
+        let retained = governor.scratch_meter().live();
+        assert!(retained > 0);
+        drop(published);
+        assert_eq!(governor.scratch_meter().live(), retained);
+    }
+    // Pattern generation succeeds, but the second pattern assertion rejects
+    // its candidate. Its string and pattern result are still temporary.
+    let schema =
+        Schema::compile(r#"{"type":"string","allOf":[{"pattern":"^a$"},{"pattern":"^b$"}]}"#)
+            .unwrap();
+    let mut governor = Governor::new(Budget::default());
+    assert!(matches!(
+        super::generate(&schema, schema.root, &mut governor).unwrap(),
+        Attempt::Exhausted
+    ));
+    assert_eq!(governor.scratch_meter().live(), 0);
 }

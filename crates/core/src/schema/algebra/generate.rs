@@ -19,10 +19,10 @@ use super::canon::{self, Canon, NumKind, PatternRef};
 use super::merge::Requirements;
 use super::storage::{self, CopyIn, push};
 use crate::contract::saturating_size as size;
-use crate::contract::{Governor, Resource, StopReason};
+use crate::contract::{Governor, Resource, ScratchLease, StopReason};
 use crate::contract::{ScratchString, ScratchVec, format_scratch_governed};
-use crate::json::{Member, Node, Value};
-use crate::pattern::{Engine, GenerateOptions, GenerateOutcome, Pattern};
+use crate::json::{Member, Node, NumberParseError, OwnedDocument, Value};
+use crate::pattern::{Engine, GenerateOptions, OwnedGenerateOutcome, Pattern};
 
 /// Every `items` occurrence in `req` that applies at array index `index` —
 /// i.e. every `(id, own_prefix_len)` pair whose own `prefixItems` (if any)
@@ -593,9 +593,10 @@ impl<'s> Gen<'s, '_> {
         self.governor.charge(Resource::Work, 1)?;
         if let Some(value) = req.const_value {
             let outcome = self.check(value, req)?;
-            return Ok(
-                outcome.map_or_else(|| Attempt::Witness(value.clone()), Attempt::Unsatisfiable)
-            );
+            return Ok(match outcome {
+                Some(reason) => Attempt::Unsatisfiable(reason),
+                None => Attempt::Witness(OwnedDocument::copy_from(value, self.governor)?),
+            });
         }
         if let Some(values) = &req.enum_values {
             let mut any_checked = false;
@@ -605,7 +606,10 @@ impl<'s> Gen<'s, '_> {
                 }
                 any_checked = true;
                 if self.check(value, req)?.is_none() {
-                    return Ok(Attempt::Witness(value.clone()));
+                    return Ok(Attempt::Witness(OwnedDocument::copy_from(
+                        value,
+                        self.governor,
+                    )?));
                 }
             }
             return Ok(if any_checked {
@@ -643,11 +647,14 @@ impl<'s> Gen<'s, '_> {
         's: 'a,
     {
         match kind {
-            Kind::Null => self.finalize(Node::new(Value::Null), req),
+            Kind::Null => self.finalize(OwnedDocument::null(self.governor), req),
             Kind::Boolean => {
                 for value in [false, true] {
                     if self.check(&Node::new(Value::Bool(value)), req)?.is_none() {
-                        return Ok(Attempt::Witness(Node::new(Value::Bool(value))));
+                        return Ok(Attempt::Witness(OwnedDocument::boolean(
+                            value,
+                            self.governor,
+                        )));
                     }
                 }
                 Ok(Attempt::Exhausted)
@@ -658,11 +665,15 @@ impl<'s> Gen<'s, '_> {
             Kind::Object => self.build_object(req, path, depth),
         }
     }
-    fn finalize<'a>(&mut self, node: Node, req: &Requirements<'a>) -> Result<Attempt, StopReason>
+    fn finalize<'a>(
+        &mut self,
+        node: OwnedDocument,
+        req: &Requirements<'a>,
+    ) -> Result<Attempt, StopReason>
     where
         's: 'a,
     {
-        Ok(match self.check(&node, req)? {
+        Ok(match self.check(node.root(), req)? {
             None => Attempt::Witness(node),
             Some(_) => Attempt::Exhausted,
         })
@@ -671,18 +682,12 @@ impl<'s> Gen<'s, '_> {
     where
         's: 'a,
     {
-        // Any witness for this facet set needs at least `min_length` bytes;
-        // charge that before attempting any construction, so an
-        // unrepresentably large `minLength` (clamped to `u64::MAX` by
-        // `canon::as_u64`) fails with an explicit `BudgetExceeded` instead
-        // of this function trying to materialize such a string.
-        self.governor
-            .charge(Resource::ScratchBytes, req.min_length.saturating_add(1))?;
         if req.patterns.is_empty() {
             if let Some(name) = &req.format {
-                let candidate = super::super::format::witness(name).to_string();
-                let node = Node::new(Value::String(candidate));
-                if self.check(&node, req)?.is_none() {
+                let candidate =
+                    reference::copy(super::super::format::witness(name), self.governor)?;
+                let node = OwnedDocument::string(candidate);
+                if self.check(node.root(), req)?.is_none() {
                     return Ok(Attempt::Witness(node));
                 }
             }
@@ -698,7 +703,7 @@ impl<'s> Gen<'s, '_> {
             let max_len = req
                 .max_length
                 .map(|bound| usize::try_from(bound).unwrap_or(usize::MAX));
-            match pattern.generate(
+            match pattern.generate_owned(
                 self.governor,
                 GenerateOptions {
                     min_len,
@@ -706,20 +711,20 @@ impl<'s> Gen<'s, '_> {
                     avoid: &avoid,
                 },
             )? {
-                GenerateOutcome::Witness(text) => {
-                    let node = Node::new(Value::String(text));
-                    return Ok(match self.check(&node, req)? {
+                OwnedGenerateOutcome::Witness(text) => {
+                    let node = OwnedDocument::string(text);
+                    return Ok(match self.check(node.root(), req)? {
                         None => Attempt::Witness(node),
                         Some(_) => Attempt::Exhausted,
                     });
                 }
-                GenerateOutcome::NoCandidate(_) => {
+                OwnedGenerateOutcome::NoCandidate { .. } => {
                     let all_derivative = pattern.engine() == Engine::Derivative
                         && avoid
                             .iter()
                             .all(|other| other.engine() == Engine::Derivative);
                     if all_derivative {
-                        let unbounded = pattern.generate(
+                        let unbounded = pattern.generate_owned(
                             self.governor,
                             GenerateOptions {
                                 min_len: 0,
@@ -727,7 +732,7 @@ impl<'s> Gen<'s, '_> {
                                 avoid: &avoid,
                             },
                         )?;
-                        if matches!(unbounded, GenerateOutcome::NoCandidate(_)) {
+                        if matches!(unbounded, OwnedGenerateOutcome::NoCandidate { .. }) {
                             return Ok(Attempt::Unsatisfiable(
                                 "pattern intersected with its avoided patterns is empty",
                             ));
@@ -738,11 +743,19 @@ impl<'s> Gen<'s, '_> {
             }
         }
         for base_char in ['a', 'b', '0', '_'] {
-            let text: String =
-                std::iter::repeat_n(base_char, usize::try_from(req.min_length).unwrap_or(0))
-                    .collect();
-            let node = Node::new(Value::String(text));
-            if self.check(&node, req)?.is_none() {
+            let mut text = ScratchString::new(self.governor);
+            let minimum = usize::try_from(req.min_length)
+                .map_err(|_| self.governor.stop_resource(Resource::ScratchBytes))?;
+            text.reserve(minimum)?;
+            for _ in 0..req.min_length {
+                reference::work(self.governor, 1)?;
+                if text.len() == text.capacity() {
+                    reference::work(self.governor, text.len())?;
+                }
+                text.push(base_char)?;
+            }
+            let node = OwnedDocument::string(text);
+            if self.check(node.root(), req)?.is_none() {
                 return Ok(Attempt::Witness(node));
             }
         }
@@ -760,27 +773,22 @@ impl<'s> Gen<'s, '_> {
     {
         let want_integer = matches!(req.types.num, NumKind::IntOnly);
         let want_fraction_only = matches!(req.types.num, NumKind::FracOnly);
-        let mut candidates: Vec<crate::json::Number> = Vec::new();
+        let mut candidates = ScratchVec::new(self.governor);
         for n in 0i64..=64 {
-            candidates.push(int_number(n));
+            let value = int_number(n, self.governor)?;
+            push(&mut candidates, value, self.governor)?;
             if n != 0 {
-                candidates.push(int_number(-n));
+                let value = int_number(-n, self.governor)?;
+                push(&mut candidates, value, self.governor)?;
             }
         }
-        if let Some((bound, _)) = &req.minimum {
-            candidates.push((*bound).clone());
-            if let Some(text) = step_integer(bound.as_str(), 1)
-                && let Ok(value) = text.parse()
-            {
-                candidates.push(value);
-            }
-        }
-        if let Some((bound, _)) = &req.maximum {
-            candidates.push((*bound).clone());
-            if let Some(text) = step_integer(bound.as_str(), -1)
-                && let Ok(value) = text.parse()
-            {
-                candidates.push(value);
+        for (bound, step) in [(req.minimum.as_ref(), 1), (req.maximum.as_ref(), -1)] {
+            if let Some((bound, _)) = bound {
+                let text = reference::copy(bound.as_str(), self.governor)?;
+                push_number(&mut candidates, text, self.governor)?;
+                if let Some(text) = step_integer(bound.as_str(), step, self.governor)? {
+                    push_number(&mut candidates, text, self.governor)?;
+                }
             }
         }
         if req.multiples_of.len() == 1
@@ -790,41 +798,39 @@ impl<'s> Gen<'s, '_> {
             for k in 0u64..2000 {
                 self.governor.charge(Resource::Work, 1)?;
                 let magnitude = k.saturating_mul(size(divisor));
-                if let Ok(value) = magnitude.to_string().parse() {
-                    candidates.push(value);
-                }
-                if k > 0
-                    && let Ok(value) = format!("-{magnitude}").parse()
-                {
-                    candidates.push(value);
+                let text = format_scratch_governed(format_args!("{magnitude}"), self.governor)?;
+                push_number(&mut candidates, text, self.governor)?;
+                if k > 0 {
+                    let text =
+                        format_scratch_governed(format_args!("-{magnitude}"), self.governor)?;
+                    push_number(&mut candidates, text, self.governor)?;
                 }
             }
         }
-        // Always seed fractional variants too (filtered below by
-        // `want_integer`/`want_fraction_only`, same as every other
-        // candidate): an admitted-but-not-integer-only numeric range can
-        // still exclude every integer (e.g. `exclusiveMinimum: 0,
-        // exclusiveMaximum: 1`), so integer candidates alone are not enough
-        // whenever `NumKind::Any` is in play, not only `NumKind::FracOnly`.
-        let bases: Vec<_> = candidates.clone();
-        for base in bases {
-            if let Ok(value) = format!("{base}.5").parse() {
-                candidates.push(value);
-            }
+        // Preserve the original seed prefix and fractional candidate ordering
+        // without cloning every owned base just to borrow its spelling.
+        let bases = candidates.len();
+        for index in 0..bases {
+            let base = candidate_number(&candidates[index]);
+            let text = format_scratch_governed(format_args!("{base}.5"), self.governor)?;
+            push_number(&mut candidates, text, self.governor)?;
         }
-        for candidate in candidates {
+        let (candidates, candidates_lease) = candidates.into_owned_parts();
+        for node in candidates {
             self.governor.charge(Resource::Work, 1)?;
+            let candidate = candidate_number(&node);
             if want_integer && !candidate.is_integer() {
                 continue;
             }
             if want_fraction_only && candidate.is_integer() {
                 continue;
             }
-            let node = Node::new(Value::Number(candidate));
-            if self.check(&node, req)?.is_none() {
+            if self.check(node.root(), req)?.is_none() {
                 return Ok(Attempt::Witness(node));
             }
         }
+        drop(candidates_lease);
+
         Ok(Attempt::Exhausted)
     }
     fn build_array<'a>(
@@ -836,7 +842,8 @@ impl<'s> Gen<'s, '_> {
     where
         's: 'a,
     {
-        let mut items: Vec<Node> = Vec::new();
+        let mut items_lease = ScratchLease::empty(self.governor);
+        let mut items = ScratchVec::new(self.governor);
         let minimum = req.min_items.max(if req.require_duplicate { 2 } else { 0 });
         // Preserve the established preference for materializing a usable
         // prefix, while retaining a shorter valid array when an optional
@@ -865,10 +872,6 @@ impl<'s> Gen<'s, '_> {
             .fold(minimum.max(preferred), |count, (_, min, _)| {
                 count.saturating_add(*min)
             });
-        self.governor.charge(
-            Resource::ScratchBytes,
-            construction_bound.saturating_mul(24).saturating_add(1),
-        )?;
         loop {
             let deficient = self.deficient_contains(req, &items)?;
             let optional = size(items.len()) >= minimum && deficient.is_empty();
@@ -909,9 +912,9 @@ impl<'s> Gen<'s, '_> {
                 }
                 if applicable.is_empty() {
                     if req.require_duplicate && !items.is_empty() {
-                        items[0].clone()
+                        OwnedDocument::copy_from(&items[0], self.governor)?
                     } else {
-                        fresh_scalar(index)
+                        fresh_scalar(index, self.governor)?
                     }
                 } else {
                     match self.attempt_many_excluding(
@@ -935,10 +938,10 @@ impl<'s> Gen<'s, '_> {
             } else {
                 return Ok(Attempt::Exhausted);
             };
-            items.push(value);
+            push_item(&mut items, &mut items_lease, value, self.governor)?;
         }
-        self.append_required_duplicate(&mut items, req.require_duplicate)?;
-        self.finalize(Node::new(Value::Array(items)), req)
+        self.append_required_duplicate(&mut items, &mut items_lease, req.require_duplicate)?;
+        self.finalize(OwnedDocument::array(items, items_lease), req)
     }
     /// Preserve the ordered prefix/items obligations for this position.
     fn array_obligations(
@@ -961,20 +964,17 @@ impl<'s> Gen<'s, '_> {
     }
     fn append_required_duplicate(
         &mut self,
-        items: &mut Vec<Node>,
+        items: &mut ScratchVec<Node>,
+        lease: &mut ScratchLease,
         required: bool,
     ) -> Result<(), StopReason> {
-        if required {
-            if items.len() < 2 {
-                items.push(
-                    items
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| Node::new(Value::Null)),
-                );
-            } else if !has_duplicate(items, self.governor)? {
-                items.push(items[0].clone());
-            }
+        if required && (items.len() < 2 || !has_duplicate(items, self.governor)?) {
+            let value = if let Some(first) = items.first() {
+                OwnedDocument::copy_from(first, self.governor)?
+            } else {
+                OwnedDocument::null(self.governor)
+            };
+            push_item(items, lease, value, self.governor)?;
         }
         Ok(())
     }
@@ -1037,7 +1037,8 @@ impl<'s> Gen<'s, '_> {
                 push(&mut req.positive_musts, *id, self.governor)?;
             }
         }
-        let mut members: Vec<Member> = Vec::new();
+        let mut members_lease = ScratchLease::empty(self.governor);
+        let mut members = ScratchVec::new(self.governor);
         for name in &required {
             let child_path = super::super::index::pointer(path, name, self.governor)?;
             let mut ids = ScratchVec::new(self.governor);
@@ -1057,43 +1058,24 @@ impl<'s> Gen<'s, '_> {
                 Attempt::Witness(node) => node,
                 other => return Ok(other),
             };
-            members.push(Member {
-                key: (*name).to_string(),
-                key_span: None,
-                value,
-            });
+            let key = reference::copy(name, self.governor)?;
+            push_member(&mut members, &mut members_lease, key, value, self.governor)?;
         }
-        // Charge before building `min_properties` members, so an
-        // unrepresentably large bound (clamped to `u64::MAX` by
-        // `canon::as_u64`) fails with an explicit `BudgetExceeded` instead
-        // of this loop attempting to build that many members.
-        self.governor.charge(
-            Resource::ScratchBytes,
-            req.min_properties.saturating_mul(32).saturating_add(1),
-        )?;
         let mut counter = 0usize;
         while size(members.len()) < req.min_properties {
             let name = loop {
-                let candidate = format!("extra{counter}");
+                let candidate =
+                    format_scratch_governed(format_args!("extra{counter}"), self.governor)?;
                 counter += 1;
-                if !members.iter().any(|member| member.key == candidate) {
+                if !members
+                    .iter()
+                    .any(|member| member.key == candidate.as_str())
+                {
                     break candidate;
                 }
             };
-            if !req.property_names.is_empty() {
-                let key_node = Node::new(Value::String(name.clone()));
-                let mut ok = true;
-                for &id in &req.property_names {
-                    let outcome =
-                        super::super::evaluate::run(self.schema, id, &key_node, self.governor)?;
-                    if !outcome.violations.is_empty() {
-                        ok = false;
-                        break;
-                    }
-                }
-                if !ok {
-                    continue;
-                }
+            if !self.accepts_property_name(&name, &req.property_names)? {
+                continue;
             }
             let mut ids = req.additional_properties.copy_in(self.governor)?;
             storage::extend(&mut ids, &req.unevaluated_properties, self.governor)?;
@@ -1102,17 +1084,21 @@ impl<'s> Gen<'s, '_> {
                 Attempt::Witness(node) => node,
                 other => return Ok(other),
             };
-            members.push(Member {
-                key: name,
-                key_span: None,
-                value,
-            });
+            push_member(&mut members, &mut members_lease, name, value, self.governor)?;
         }
-        let minimal = self.finalize(Node::new(Value::Object(members.clone())), &req)?;
+        let copy = OwnedDocument::copy_object(&members, self.governor)?;
+        let minimal = self.finalize(copy, &req)?;
         if !matches!(minimal, Attempt::Exhausted) || req.opaque_nots.is_empty() {
             return Ok(minimal);
         }
-        self.retry_object_with_extra_member(&req, members, required.len(), path, depth)
+        self.retry_object_with_extra_member(
+            &req,
+            members_lease,
+            members,
+            required.len(),
+            path,
+            depth,
+        )
     }
     /// The minimal candidate built by [`Gen::build_object`] failed a
     /// `Canon::OpaqueNot` obligation. That can happen even though nothing
@@ -1129,7 +1115,8 @@ impl<'s> Gen<'s, '_> {
     fn retry_object_with_extra_member<'a>(
         &mut self,
         req: &Requirements<'a>,
-        mut members: Vec<Member>,
+        mut members_lease: ScratchLease,
+        mut members: ScratchVec<Member>,
         required_len: usize,
         path: &str,
         depth: u32,
@@ -1139,21 +1126,17 @@ impl<'s> Gen<'s, '_> {
     {
         let mut counter = required_len;
         let name = loop {
-            let candidate = format!("extra{counter}");
+            let candidate = format_scratch_governed(format_args!("extra{counter}"), self.governor)?;
             counter += 1;
-            if !members.iter().any(|member| member.key == candidate) {
+            if !members
+                .iter()
+                .any(|member| member.key == candidate.as_str())
+            {
                 break candidate;
             }
         };
-        if !req.property_names.is_empty() {
-            let key_node = Node::new(Value::String(name.clone()));
-            for &id in &req.property_names {
-                let outcome =
-                    super::super::evaluate::run(self.schema, id, &key_node, self.governor)?;
-                if !outcome.violations.is_empty() {
-                    return Ok(Attempt::Exhausted);
-                }
-            }
+        if !self.accepts_property_name(&name, &req.property_names)? {
+            return Ok(Attempt::Exhausted);
         }
         let mut ids = req.additional_properties.copy_in(self.governor)?;
         storage::extend(&mut ids, &req.unevaluated_properties, self.governor)?;
@@ -1162,12 +1145,23 @@ impl<'s> Gen<'s, '_> {
             Attempt::Witness(node) => node,
             other => return Ok(other),
         };
-        members.push(Member {
-            key: name,
-            key_span: None,
-            value,
-        });
-        self.finalize(Node::new(Value::Object(members)), req)
+        push_member(&mut members, &mut members_lease, name, value, self.governor)?;
+        self.finalize(OwnedDocument::object(members, members_lease), req)
+    }
+    /// Check a synthetic key with the same owned temporary on both object paths.
+    fn accepts_property_name(&mut self, name: &str, ids: &[usize]) -> Result<bool, StopReason> {
+        if ids.is_empty() {
+            return Ok(true);
+        }
+        let key_node = OwnedDocument::string(reference::copy(name, self.governor)?);
+        for &id in ids {
+            let outcome =
+                super::super::evaluate::run(self.schema, id, key_node.root(), self.governor)?;
+            if !outcome.violations.is_empty() {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
     /// Every remaining assertion the merged [`Requirements`] carries against
     /// a fully-constructed candidate: excluded literals, kind-specific
@@ -1415,95 +1409,139 @@ fn type_preference(req: &Requirements<'_>) -> impl Iterator<Item = Kind> {
     })
 }
 
-fn int_number(value: i64) -> crate::json::Number {
-    if value >= 0 {
-        crate::json::Number::from_unsigned(u64::try_from(value).unwrap_or(0))
-    } else {
-        format!("-{}", value.unsigned_abs())
-            .parse()
-            .expect("valid integer spelling")
+fn push_item(
+    items: &mut ScratchVec<Node>,
+    lease: &mut ScratchLease,
+    value: OwnedDocument,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    let (node, child_lease) = value.into_owned_parts();
+    push(items, node, governor)?;
+    lease.absorb(child_lease);
+    Ok(())
+}
+fn push_member(
+    members: &mut ScratchVec<Member>,
+    lease: &mut ScratchLease,
+    key: ScratchString,
+    value: OwnedDocument,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    let (key, key_lease) = key.into_owned_parts();
+    let (value, value_lease) = value.into_owned_parts();
+    push(
+        members,
+        Member {
+            key,
+            key_span: None,
+            value,
+        },
+        governor,
+    )?;
+    lease.absorb(key_lease);
+    lease.absorb(value_lease);
+    Ok(())
+}
+fn candidate_number(node: &OwnedDocument) -> &crate::json::Number {
+    match &node.root().value {
+        Value::Number(number) => number,
+        _ => unreachable!("INVARIANT: numeric candidate contains a number"),
     }
 }
-fn increment_digits(digits: &str) -> String {
-    let mut bytes: Vec<u8> = digits.bytes().collect();
-    let mut index = bytes.len();
-    loop {
-        if index == 0 {
-            bytes.insert(0, b'1');
-            break;
-        }
-        index -= 1;
-        if bytes[index] == b'9' {
-            bytes[index] = b'0';
-        } else {
-            bytes[index] += 1;
-            break;
-        }
+fn push_number(
+    candidates: &mut ScratchVec<OwnedDocument>,
+    text: ScratchString,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    match OwnedDocument::number(text, governor) {
+        Ok(value) => push(candidates, value, governor),
+        Err(NumberParseError::Syntax(_)) => Ok(()), // Some fractional seed spellings are deliberately inapplicable.
+        Err(NumberParseError::Resource(reason)) => Err(reason),
     }
-    String::from_utf8(bytes).expect("ascii digits")
 }
-fn decrement_digits(digits: &str) -> Option<String> {
-    if digits == "0" {
-        return None;
-    }
-    let mut bytes: Vec<u8> = digits.bytes().collect();
-    let mut index = bytes.len();
-    loop {
-        index -= 1;
-        if bytes[index] == b'0' {
-            bytes[index] = b'9';
-        } else {
-            bytes[index] -= 1;
-            break;
+fn int_number(value: i64, governor: &mut Governor) -> Result<OwnedDocument, StopReason> {
+    let text = format_scratch_governed(format_args!("{value}"), governor)?;
+    valid_number(text, governor)
+}
+fn valid_number(text: ScratchString, governor: &mut Governor) -> Result<OwnedDocument, StopReason> {
+    OwnedDocument::number(text, governor).map_err(|error| match error {
+        NumberParseError::Resource(reason) => reason,
+        NumberParseError::Syntax(_) => {
+            unreachable!("INVARIANT: integer formatter emits valid JSON numbers")
         }
-    }
-    let text = String::from_utf8(bytes).expect("ascii digits");
-    let trimmed = text.trim_start_matches('0');
-    Some(if trimmed.is_empty() {
-        "0".to_string()
-    } else {
-        trimmed.to_string()
     })
 }
-/// A best-effort `+1`/`-1` step on an exact decimal integer spelling, used
-/// only to seed a numeric search anchor near a bound; `None` for a
-/// fractional or exponent spelling this helper does not need to handle
-/// exactly (the bounded scan around zero still applies).
-fn step_integer(text: &str, delta: i8) -> Option<String> {
+/// Keep the established integer-only +/-1 seed heuristic and its exact spelling.
+fn step_integer(
+    text: &str,
+    delta: i8,
+    governor: &mut Governor,
+) -> Result<Option<ScratchString>, StopReason> {
+    reference::work(governor, text.len().saturating_add(1))?;
     if text.is_empty() {
-        return None;
+        return Ok(None);
     }
     let negative = text.starts_with('-');
     let digits = if negative { &text[1..] } else { text };
     if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
+        return Ok(None);
     }
-    let magnitude_grows = (!negative && delta > 0) || (negative && delta < 0);
-    if magnitude_grows {
-        let bumped = increment_digits(digits);
-        Some(if negative {
-            format!("-{bumped}")
+    let grows = (!negative && delta > 0) || (negative && delta < 0);
+    if !grows && digits == "0" {
+        return reference::copy(if delta > 0 { "1" } else { "-1" }, governor).map(Some);
+    }
+    let mut bytes = ScratchVec::new(governor);
+    for byte in digits.bytes() {
+        push(&mut bytes, byte, governor)?;
+    }
+    let mut position = bytes.len();
+    let mut carry = false;
+    loop {
+        reference::work(governor, 1)?;
+        if position == 0 {
+            carry = true;
+            break;
+        }
+        position -= 1;
+        let byte = &mut bytes.as_mut_slice()[position];
+        if grows {
+            if *byte == b'9' {
+                *byte = b'0';
+            } else {
+                *byte += 1;
+                break;
+            }
+        } else if *byte == b'0' {
+            *byte = b'9';
         } else {
-            bumped
-        })
-    } else {
-        match decrement_digits(digits) {
-            Some(reduced) if reduced != "0" => Some(if negative {
-                format!("-{reduced}")
-            } else {
-                reduced
-            }),
-            Some(_zero) => Some("0".to_string()),
-            None => Some(if delta > 0 {
-                "1".to_string()
-            } else {
-                "-1".to_string()
-            }),
+            *byte -= 1;
+            break;
         }
     }
+    reference::work(governor, bytes.len())?;
+    let text =
+        core::str::from_utf8(bytes.as_slice()).expect("INVARIANT: decimal digits remain ASCII");
+    let text = if grows {
+        text
+    } else {
+        text.trim_start_matches('0')
+    };
+    if text.is_empty() {
+        return reference::copy("0", governor).map(Some);
+    }
+    let mut output = ScratchString::new(governor);
+    if negative {
+        reference::append(&mut output, "-", governor)?;
+    }
+    if carry {
+        reference::append(&mut output, "1", governor)?;
+    }
+    reference::append(&mut output, text, governor)?;
+    Ok(Some(output))
 }
-fn fresh_scalar(index: usize) -> Node {
-    Node::new(Value::Number(crate::json::Number::from_count(index)))
+fn fresh_scalar(index: usize, governor: &mut Governor) -> Result<OwnedDocument, StopReason> {
+    let text = format_scratch_governed(format_args!("{index}"), governor)?;
+    valid_number(text, governor)
 }
 fn has_duplicate(items: &[Node], governor: &mut Governor) -> Result<bool, StopReason> {
     for i in 0..items.len() {

@@ -229,11 +229,16 @@ Exceeding either limit returns `BudgetExceeded(Depth)`; it is not a refutation.
 Linear facets advance iteratively. Finite Work and ScratchBytes refusal points
 change because actual preparation operations and owners are now admitted.
 
-Candidate-value construction and witness-value publication remain separate
-contracts. Internal evaluator reports use the ownership boundary below. Total live scratch therefore need not
-return to zero after a public witness call; preparation ownership is checked
-independently of those publication and candidate paths. No complete witness,
-cold-backend or graph-loading governance claim follows from this boundary.
+Witness candidates retain owned JSON trees through selection and final schema
+revalidation. Literal copies preserve number spelling, member order and source
+spans. Numeric/string buffers and array/object composition release on rejection
+or refusal; public witness publication retains completed output. Both pattern
+engines transfer owned strings to schema generation. Required-property recovery
+transfers the completed witness into its existing retained-candidate contract
+without cloning. General assertion/format computation, later recovery retention
+and host serialization remain separate. Public output retains its admission,
+so live scratch need not return to zero after publication. This does not complete
+witness computation, cold-backend or graph-loading governance.
 
 ## Evaluator control-state ownership
 
@@ -297,7 +302,7 @@ results append transformation evidence after the initial observation prefix;
 ambiguous results replace that prefix as before. Patterns remain the sorted suffix.
 Late refusal preserves committed observations and the native stop cause. Existing
 provisional Search/Forest retained charges are unchanged. General scalar/format
-computation, candidate/replacement construction and host serialization remain
+computation, recovery replacement construction and host serialization remain
 outside this boundary.
 
 ## Final refutation publication
@@ -317,9 +322,8 @@ cause. Complete public output retains its storage admission, including after the
 ordinary strings and vector are dropped by the caller.
 
 Reason text, rule identity, explanation, empty destination and absent span are
-unchanged. Witness Node construction/ownership, recovery replacement storage
-and host receipt/wire serialization remain separate
-contracts. This boundary does not complete witness or tool-graph governance.
+unchanged. Witness candidate ownership is described above. Recovery replacement
+storage and host receipt/wire serialization remain separate contracts. This boundary does not complete witness or tool-graph governance.
 
 ## Type-enforced scratch accounting
 
